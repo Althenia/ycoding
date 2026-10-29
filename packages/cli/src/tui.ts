@@ -10,7 +10,10 @@ if (!runRegexProcess()) {
 
   const handlers = Runtime.handlers(TuiCommand, {
     api: () => import("./commands/handlers/api"),
-    decision: { list: () => import("./commands/handlers/decision/list") },
+    decision: {
+      list: () => import("./commands/handlers/decision/list"),
+      watch: () => import("./commands/handlers/decision/watch"),
+    },
     coordination: () => import("./commands/handlers/coordination"),
     dots: {
       attach: () => import("./commands/handlers/dots/attach"),

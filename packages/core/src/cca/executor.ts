@@ -22,7 +22,8 @@ import {
   type CcaDecisionTrace,
   type CcaRpcHandlerContext,
 } from "./errors"
-import { create as createCcaFsExtended, type Handlers as CcaFsExtendedHandlers, type OpenMode } from "./fs-extended"
+import { CcaFsExtended } from "./fs-extended"
+import type { Handlers as CcaFsExtendedHandlers, OpenMode } from "./fs-extended"
 import { CCA_HTTP_NETWORK_ACTION, createCcaHttpHandler, type CcaHttpHandler, type CcaHttpRequestContext } from "./http"
 import { createCcaCredentialBrokerCache } from "./credential-broker"
 import {
@@ -2017,7 +2018,7 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
       const key = JSON.stringify([active.id, active.roots, extraRoots])
       let handlers = fileSystems.get(key)
       if (handlers === undefined) {
-        handlers = createCcaFsExtended({
+        handlers = CcaFsExtended.create({
           roots: [...active.roots, ...extraRoots],
           authorize: extraRoots.length === 0 ? active.authorize : authorizeWithExternalDirectories(active),
           temporaryDirectories: defaultTemporaryDirectories,

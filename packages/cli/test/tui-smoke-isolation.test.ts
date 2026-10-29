@@ -32,7 +32,7 @@ if (args[0] === "--version") {
   process.exit(${mode === "version-failure" ? 7 : 0})
 }
 if (args.includes("--help")) {
-  console.log("YCoding TUI\\n  run\\n  update\\n  remote\\n  service\\nRun YCoding with a message --model\\nUpdate ycoding to a release --version\\nControl this machine's YCoding agent enroll\\nManage the background server restart")
+  console.log("YCoding TUI\\n  run\\n  update\\n  remote\\n  service\\n  api\\n  decision\\n  dots\\nRun YCoding with a message --model\\nUpdate ycoding to a release --version\\nControl this machine's YCoding agent enroll\\nManage the background server restart\\nMake a request to the running server --param\\nInspect pending decisions across all Sessions and Locations list\\nManage this computer's Dots connection attach")
   process.exit(0)
 }
 const env = Object.fromEntries(["HOME", "YCODING_TEST_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "TMPDIR", "TMP", "TEMP", "YCODING_DB", "YCODING_CONFIG_DIR", "YCODING_CONFIG", "YCODING_PASSWORD", "YCODING_REMOTE_URL"].map((key) => [key, process.env[key]]))

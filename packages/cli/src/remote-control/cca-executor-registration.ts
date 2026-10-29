@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { open, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { setTimeout as sleep } from "node:timers/promises"
+import { setTimeout } from "node:timers/promises"
 import { ycodingDotsSkillsRoot } from "./ycoding-operator-skill"
 
 export const ccaExecutorRegistrationURL = "https://chatgpt.com/backend-api/flora/cca/executor"
@@ -323,7 +323,7 @@ export async function reregisterCcaExecutor(input: {
     installationID: input.state.installationID,
     roots: input.roots,
   })
-  const wait = input.wait ?? ((ms, signal) => sleep(ms, undefined, { signal }))
+  const wait = input.wait ?? ((ms, signal) => setTimeout(ms, undefined, { signal }))
   const register = async (attempt: number): Promise<CcaRegistrationResponse> => {
     try {
       return await postCcaRegistration({ ...input, body })

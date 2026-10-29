@@ -1,7 +1,8 @@
 import { realpathSync, statSync, watch, type FSWatcher } from "node:fs"
 import { realpath, stat } from "node:fs/promises"
 import path from "node:path"
-import { isAlias, isMap, isScalar, isSeq, parseDocument, Scalar, type Document, type Node as YamlNode } from "yaml"
+import { isAlias, isMap, isScalar, isSeq, parseDocument, Scalar } from "yaml"
+import type { Document, Node as YamlNode } from "yaml"
 import { CcaPolicy } from "@ycoding-ai/core/cca/policy"
 import {
   discoverCcaCapabilityRoots,

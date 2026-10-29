@@ -7,8 +7,33 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.7 Code Mode, browser frames, prepared Usage and the usage migration first", () => {
+  test("lists v0.11.8 Dots executor, decision inspection and watch, and prompt-cache reuse first", () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.8", date: "2026-10-30", tags: ["Added", "Changed", "Fixed"] })
+    expect(entry?.changes).toHaveLength(14)
+    expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(7)
+    expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(5)
+    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(2)
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of [
+      "Dots executor", "while Dots access is On", "its own YCoding Session", "30 seconds",
+      "session.review.decide", "identical action", "hard reviews", "external_directory",
+      "ycoding decision list", "GET /api/decision", "loaded Locations",
+      "ycoding decision watch", "unknown", "never reported as succeeded", "--server", "--standalone", "never answers",
+      "ycoding dots attach", "POST /api/dots/computer", "detaches your other computers",
+      "existing local directory", "foreign-owned",
+      "ycoding-operator", "unverified",
+      "ycoding api", "HTTP <status>", "roots it has not opened", "macos", "windows",
+      "sandbox denial", "user account's access", "cannot confine", "Any local process", "600-second",
+      "cached prefixes", "chronological", "account identity", "no cache hit is guaranteed", "configuration watcher",
+    ]) expect(text).toContain(fragment)
+    for (const excluded of ["0.165", "Noise", "Flora", "node-forge", "proof script", "CCA"]) expect(text).not.toContain(excluded)
+    for (const historical of ["device grants", "MCP progress and blocker notifications", "Room and prompt text"]) expect(text).not.toContain(historical)
+    expect(after("0.11.8")?.version).toBe("0.11.7")
+  })
+
+  test("retains v0.11.7 Code Mode, browser frames, prepared Usage and the usage migration", () => {
+    const entry = RELEASES[1]
     expect(entry).toMatchObject({ version: "0.11.7", date: "2026-10-29", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(21)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
@@ -19,7 +44,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.11.6 global Dots controls and Antigravity updates", () => {
-    const entry = RELEASES[1]
+    const entry = RELEASES[2]
     expect(entry).toMatchObject({ version: "0.11.6", date: "2026-10-27", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(6)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
@@ -32,7 +57,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.11.5 native Dots and retirement migration", () => {
-    const entry = RELEASES[2]
+    const entry = RELEASES[3]
     expect(entry).toMatchObject({ version: "0.11.5", date: "2026-10-27", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(8)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
@@ -1821,7 +1846,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 52)).toEqual([
+    expect(versions.slice(0, 53)).toEqual([
+      "0.11.8",
       "0.11.7",
       "0.11.6",
       "0.11.5",

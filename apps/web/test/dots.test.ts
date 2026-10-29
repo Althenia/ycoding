@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { remoteDotsPeerLabel, type RemoteDotsStatus } from "@ycoding-ai/remote"
 import type { RemoteLink } from "../src/remote/queries"
 import { dotsClient } from "../src/remote/dots"
+import type { RemoteRequestOutcome } from "../src/remote/transport"
 
 const scope = { deviceID: "device-1", generation: 1 }
 const status = { access: { enabled: false, revision: 2 }, configuration: { ready: true, profile: "native-test" }, connection: { state: "off", hostname: "test-computer" } } satisfies RemoteDotsStatus
@@ -32,7 +33,7 @@ test("rejects malformed status and never replays an unknown mutation", async () 
 
 test("attaches this computer with the literal replaceOthers payload and parses the returned status", async () => {
   const calls: unknown[] = []
-  const attached = { ...status, access: { enabled: true, revision: 3 }, connection: { state: "connected" } }
+  const attached = { ...status, access: { enabled: true, revision: 3 }, connection: { state: "connected" } } satisfies RemoteDotsStatus
   const link: RemoteLink = { recoveries: () => 0, recovered: async () => false, request: async (_scope, operation, request) => {
     calls.push({ operation, sessionID: request?.sessionID, input: request?.input })
     return { status: "ok", value: { data: attached } }
@@ -42,7 +43,7 @@ test("attaches this computer with the literal replaceOthers payload and parses t
 })
 
 test("attach surfaces failed and unknown outcomes without replay and rejects malformed status", async () => {
-  const outcomes = [{ status: "unknown" as const, error: { code: "outcome_unknown", message: "unknown" } }, { status: "ok" as const, value: { data: { nonsense: true } } }]
+  const outcomes: RemoteRequestOutcome[] = [{ status: "unknown", error: { code: "outcome_unknown", message: "unknown" } }, { status: "ok", value: { data: { nonsense: true } } }]
   let calls = 0
   const link: RemoteLink = { recoveries: () => 0, recovered: async () => false, request: async () => outcomes[calls++]! }
   const client = dotsClient(link, scope)
