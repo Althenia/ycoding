@@ -220,8 +220,12 @@ test("retains the model rate across profile changes and hides only an empty popu
     expect(app.captureCharFrame()).not.toContain("5,000 tok/s")
     update({ ...speedDiagnostics, generationSpeed: { ...speedDiagnostics.generationSpeed!,
       live: { requestID: ProviderRequest.ID.make("prq_live"), attempt: 1, phase: "streaming" } } })
-    await app.waitForFrame((frame) => frame.includes("measuring"))
-    expect(app.captureCharFrame()).not.toContain("5,000 tok/s")
+    await app.waitForFrame((frame) => !frame.includes("≈ 42 tok/s") && frame.includes("5,000 tok/s"))
+    expect(app.captureCharFrame()).not.toMatch(/Waiting|N\/A|measuring/)
+    update({ ...speedDiagnostics, generationSpeed: { recent: [], live: {
+      requestID: ProviderRequest.ID.make("prq_live"), attempt: 1, phase: "tool" } } })
+    await app.waitForFrame((frame) => !frame.includes("Speed"))
+    expect(app.captureCharFrame()).not.toMatch(/tok\/s|Waiting|N\/A|measuring/)
     update({ ...speedDiagnostics, generationSpeed: {
       latest: { ...speedDiagnostics.generationSpeed!.latest!, estimated: true }, recent: [] } })
     select({ ...diagnostics.model, profile: "other" })

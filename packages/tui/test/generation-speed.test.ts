@@ -23,39 +23,78 @@ const live = (phase: Live["phase"], extra: Partial<Live> = {}): History => ({
 const label = (history: History, selected?: typeof model | typeof other) => generationSpeedDisplay(history, selected)?.label
 
 const rows: Array<[string, History, string | undefined]> = [
-  ["preparing without output", live("preparing"), "Waiting"],
-  ["waiting without output", live("waiting"), "Waiting"],
-  ["waiting with first output known", live("waiting", { firstOutputMs: 1_250 }), "Waiting · TTFT 1,250 ms"],
-  ["preparing never shows the settled rate", live("preparing", { sample: undefined }), "Waiting"],
+  ["preparing without output shows the settled rate", live("preparing"), "≈ 5,000 tok/s"],
+  ["waiting without output shows the settled rate", live("waiting"), "≈ 5,000 tok/s"],
+  ["waiting with first output known shows the settled rate", live("waiting", { firstOutputMs: 1_250 }), "≈ 5,000 tok/s"],
+  ["preparing ignores a stray sample", live("preparing", { sample: undefined }), "≈ 5,000 tok/s"],
   ["streaming with a sample", live("streaming", { sample: speed(42) }), "≈ 42 tok/s"],
   ["streaming with a measured non-estimated sample", live("streaming", { sample: speed(42, { estimated: false }) }), "42 tok/s"],
-  ["streaming without a sample", live("streaming", { firstOutputMs: 300 }), "measuring"],
+  ["streaming without a sample shows the settled rate", live("streaming", { firstOutputMs: 300 }), "≈ 5,000 tok/s"],
   ["reasoning with a sample", live("reasoning", { sample: speed(18.4) }), "≈ 18 tok/s reasoning"],
-  ["reasoning without a sample", live("reasoning"), "reasoning · measuring"],
+  ["reasoning without a sample shows the settled rate", live("reasoning"), "≈ 5,000 tok/s"],
   ["tool keeps this attempt's last sample", live("tool", { sample: speed(42) }), "≈ 42 tok/s tool"],
   ["tool falls back to this attempt's final", live("tool", { final: speed(30) }), "≈ 30 tok/s tool"],
   ["tool prefers the sample over the final", live("tool", { sample: speed(42), final: speed(30) }), "≈ 42 tok/s tool"],
-  ["tool with nothing measurable never borrows the settled rate", live("tool"), "N/A"],
+  ["tool with nothing measurable shows the settled rate", live("tool"), "≈ 5,000 tok/s"],
   ["completed shows the final rate", live("completed", { sample: speed(42), final: speed(37) }), "≈ 37 tok/s"],
-  ["completed without a final is insufficient data", live("completed", { sample: speed(42) }), "N/A"],
+  ["completed without a final shows the settled rate", live("completed", { sample: speed(42) }), "≈ 5,000 tok/s"],
   ["failed shows the last valid value with status", live("failed", { sample: speed(42) }), "≈ 42 tok/s · failed"],
   ["failed prefers the final", live("failed", { sample: speed(42), final: speed(40) }), "≈ 40 tok/s · failed"],
-  ["failed with nothing measurable", live("failed"), "N/A · failed"],
+  ["failed with nothing measurable shows the settled rate", live("failed"), "≈ 5,000 tok/s"],
   ["cancelled shows the last valid value with status", live("cancelled", { final: speed(12) }), "≈ 12 tok/s · cancelled"],
-  ["cancelled with nothing measurable", live("cancelled"), "N/A · cancelled"],
+  ["cancelled with nothing measurable shows the settled rate", live("cancelled"), "≈ 5,000 tok/s"],
   ["sub-1 rates keep two significant digits", live("streaming", { sample: speed(0.456) }), "≈ 0.46 tok/s"],
 ]
 
+const NO_RATE: Array<[string, Partial<Live> & Pick<Live, "phase">]> = [
+  ["preparing", { phase: "preparing" }],
+  ["waiting", { phase: "waiting", firstOutputMs: 1_250 }],
+  ["reasoning", { phase: "reasoning" }],
+  ["streaming", { phase: "streaming", firstOutputMs: 300 }],
+  ["tool", { phase: "tool" }],
+  ["completed", { phase: "completed", firstOutputMs: 120 }],
+  ["failed", { phase: "failed" }],
+  ["cancelled", { phase: "cancelled" }],
+]
+const withoutLatest = (history: History): History => {
+  const { latest: _, ...rest } = history
+  return rest
+}
+
 test.each(rows)("live attempt: %s", (_name, history, expected) => {
   expect(label(history)).toBe(expected)
-  expect(generationSpeedDisplay(history)?.settled).toBe(false)
-  expect(generationSpeedDisplay(history)?.trend).toBeUndefined()
 })
 
-test("a live attempt never displays the settled latest rate or history", () => {
-  const history = { ...live("streaming"), recent: [speed(1_000, { estimated: false }), speed(2_000, { estimated: false })] }
-  expect(label(history)).toBe("measuring")
-  expect(label(history)).not.toContain("5,000")
+test.each(NO_RATE)("a %s attempt without a rate shows the settled rate and trend", (_name, state) => {
+  const recent = [speed(3_000, { estimated: false }), speed(6_000, { estimated: false })]
+  const { phase, ...extra } = state
+  const history = { ...live(phase, extra), latest: speed(5_000, { estimated: false }), recent }
+  expect(generationSpeedDisplay(history)).toEqual({ label: "5,000 tok/s", settled: true, trend: "▄█" })
+  expect(generationSpeedDisplay({ ...history, latest: speed(5_000) })).toEqual({ label: "≈ 5,000 tok/s", settled: true })
+})
+
+test.each(NO_RATE)("a %s attempt without a rate and without a settled rate hides the speed", (_name, state) => {
+  const { phase, ...extra } = state
+  expect(generationSpeedDisplay(withoutLatest(live(phase, extra)))).toBeUndefined()
+})
+
+test("a no-rate live attempt hides the settled rate of another model", () => {
+  expect(label(live("streaming"), other)).toBeUndefined()
+})
+
+test("no live state ever renders a placeholder word", () => {
+  const states: History[] = [
+    ...NO_RATE.map(([, state]) => live(state.phase, state)),
+    ...NO_RATE.map(([, state]) => withoutLatest(live(state.phase, state))),
+    live("streaming", { sample: speed(42) }),
+    live("failed", { final: speed(40) }),
+  ]
+  for (const history of states) expect(label(history) ?? "").not.toMatch(/Waiting|N\/A|measuring/)
+})
+
+test("a live attempt shows its own rate and never the settled history", () => {
+  const history = { ...live("streaming", { sample: speed(42) }), recent: [speed(1_000, { estimated: false }), speed(2_000, { estimated: false })] }
+  expect(generationSpeedDisplay(history)).toEqual({ label: "≈ 42 tok/s", settled: false })
 })
 
 test("settled latest keeps its estimate marker and shows a trend only for measured history", () => {
@@ -66,7 +105,7 @@ test("settled latest keeps its estimate marker and shows a trend only for measur
   expect(generationSpeedDisplay({ model, recent: [speed(3_000, { estimated: false })], latest: speed(5_000, { estimated: false }) })?.trend).toBeUndefined()
 })
 
-test("insufficient settled data hides the speed instead of showing N/A", () => {
+test("insufficient settled data hides the speed", () => {
   expect(generationSpeedDisplay({ model, recent: [] })).toBeUndefined()
   expect(generationSpeedDisplay(undefined)).toBeUndefined()
   expect(generationSpeedDisplay(null)).toBeUndefined()
@@ -83,15 +122,14 @@ test("a live attempt keeps its own effective model's values when a fallback rero
   expect(label(live("reasoning", { sample: rerouted }), model)).toBe("≈ 42 tok/s reasoning")
   expect(label(live("completed", { final: rerouted }), model)).toBe("≈ 42 tok/s")
   expect(label(live("failed", { final: rerouted }), model)).toBe("≈ 42 tok/s · failed")
-  expect(label(live("waiting"), other)).toBe("Waiting")
+  expect(label(live("waiting"), other)).toBeUndefined()
   const settled: History = { model, recent: [], latest: speed(5_000) }
   expect(label(settled, other)).toBeUndefined()
 })
 
-test("a sub-1 s completed attempt reports N/A for that attempt while the settled rate returns once live clears", () => {
+test("a sub-1 s completed attempt shows the settled rate", () => {
   const sub = live("completed", { firstOutputMs: 120 })
-  expect(label(sub)).toBe("N/A")
-  expect(label(sub)).not.toContain("5,000")
+  expect(label(sub)).toBe("≈ 5,000 tok/s")
   const { live: _, ...settled } = sub
   expect(label(settled)).toBe("≈ 5,000 tok/s")
 })
@@ -101,11 +139,11 @@ test("after completion the whole-attempt final wins over the last rolling sample
   expect(label(live("cancelled", { sample: speed(90), final: speed(60) }))).toBe("≈ 60 tok/s · cancelled")
 })
 
-test("a retry attempt shows only its own state", () => {
+test("a retry attempt shows its own rate or the settled rate", () => {
   const first = live("failed", { sample: speed(42) })
   const retry: History = { ...first, live: { ...first.live!, attempt: 2, phase: "waiting" } }
   expect(label(first)).toBe("≈ 42 tok/s · failed")
-  expect(label(retry)).toBe("Waiting")
+  expect(label(retry)).toBe("≈ 5,000 tok/s")
 })
 
 test("rates and trends format deterministically", () => {

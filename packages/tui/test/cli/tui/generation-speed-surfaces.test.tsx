@@ -30,14 +30,14 @@ const diagnostics = (live?: Partial<Live> & Pick<Live, "phase">): SessionCacheDi
 const session = { model: { ...model, variant: "low" }, cost: 0.1, tokens: { input: 80, output: 20, reasoning: 0, cache: { read: 0, write: 0 } } }
 
 const states: Array<[string, SessionCacheDiagnostics, string]> = [
-  ["waiting with TTFT", diagnostics({ phase: "waiting", firstOutputMs: 1_250 }), "Waiting · TTFT 1,250 ms"],
-  ["streaming without a sample", diagnostics({ phase: "streaming" }), "measuring"],
+  ["waiting with TTFT", diagnostics({ phase: "waiting", firstOutputMs: 1_250 }), "≈ 5,000 tok/s"],
+  ["streaming without a sample", diagnostics({ phase: "streaming" }), "≈ 5,000 tok/s"],
   ["streaming", diagnostics({ phase: "streaming", sample: speed(42) }), "≈ 42 tok/s"],
   ["reasoning", diagnostics({ phase: "reasoning", sample: speed(18) }), "≈ 18 tok/s reasoning"],
   ["tool", diagnostics({ phase: "tool", sample: speed(42) }), "≈ 42 tok/s tool"],
   ["completed", diagnostics({ phase: "completed", final: speed(37) }), "≈ 37 tok/s"],
   ["failed", diagnostics({ phase: "failed", sample: speed(42) }), "≈ 42 tok/s · failed"],
-  ["cancelled without data", diagnostics({ phase: "cancelled" }), "N/A · cancelled"],
+  ["cancelled without data", diagnostics({ phase: "cancelled" }), "≈ 5,000 tok/s"],
   ["settled", diagnostics(), "≈ 5,000 tok/s"],
 ]
 
@@ -63,6 +63,7 @@ test("sidebar, child economics and child footer show identical speed text for ev
       const frame = app.captureCharFrame()
       expect({ name, surfaces: count(frame, expected) }).toEqual({ name, surfaces: 3 })
       expect(frame).toContain("Speed")
+      expect(frame).not.toMatch(/Waiting|N\/A|measuring/)
     }
   } finally { app.renderer.destroy() }
 })
@@ -87,6 +88,7 @@ test("a fallback-rerouted live attempt shows on every surface, while the settled
     await app.waitForFrame((frame) => count(frame, "≈ 42 tok/s") === 0)
     expect(app.captureCharFrame()).not.toContain("tok/s")
     update(diagnostics({ phase: "completed", firstOutputMs: 120 }))
-    await app.waitForFrame((frame) => count(frame, "N/A") >= 3)
+    await app.waitForFrame((frame) => count(frame, "≈ 5,000 tok/s") >= 3)
+    expect(app.captureCharFrame()).not.toMatch(/Waiting|N\/A|measuring/)
   } finally { app.renderer.destroy() }
 })

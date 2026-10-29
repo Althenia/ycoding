@@ -18,10 +18,6 @@ export function formatTokensPerSecond(rate: number, estimated?: boolean) {
   return `${estimated ? "≈ " : ""}${value} tok/s`
 }
 
-export function formatFirstOutput(ms: number) {
-  return `TTFT ${ms.toLocaleString("en-US")} ms`
-}
-
 export function speedTrend(values: readonly number[]) {
   const peak = Math.max(0, ...values)
   return values.map((value) => (peak <= 0 ? LEVELS[0] : LEVELS[Math.min(7, Math.floor((value / peak) * 7))])).join("")
@@ -32,17 +28,18 @@ const sameModel = (left: ModelIdentity, right: ModelIdentity) => left.providerID
 const rate = (speed: Speed) => formatTokensPerSecond(speed.tokensPerSecond, speed.estimated)
 
 function liveLabel(live: Live) {
-  if (live.phase === "preparing" || live.phase === "waiting")
-    return live.firstOutputMs === undefined ? "Waiting" : `Waiting · ${formatFirstOutput(live.firstOutputMs)}`
-  if (live.phase === "reasoning") return live.sample ? `${rate(live.sample)} reasoning` : "reasoning · measuring"
-  if (live.phase === "streaming") return live.sample ? rate(live.sample) : "measuring"
+  if (live.phase === "reasoning") return live.sample ? `${rate(live.sample)} reasoning` : undefined
+  if (live.phase === "streaming") return live.sample ? rate(live.sample) : undefined
   if (live.phase === "tool") {
     const value = live.sample ?? live.final
-    return value ? `${rate(value)} tool` : "N/A"
+    return value ? `${rate(value)} tool` : undefined
   }
-  if (live.phase === "completed") return live.final ? rate(live.final) : "N/A"
-  const value = live.final ?? live.sample
-  return `${value ? rate(value) : "N/A"} · ${live.phase}`
+  if (live.phase === "completed") return live.final ? rate(live.final) : undefined
+  if (live.phase === "failed" || live.phase === "cancelled") {
+    const value = live.final ?? live.sample
+    return value ? `${rate(value)} · ${live.phase}` : undefined
+  }
+  return undefined
 }
 
 export function generationSpeedDisplay(
@@ -50,7 +47,8 @@ export function generationSpeedDisplay(
   selected?: ModelIdentity,
 ): GenerationSpeedDisplay | undefined {
   if (!history) return undefined
-  if (history.live) return { label: liveLabel(history.live), settled: false }
+  const live = history.live ? liveLabel(history.live) : undefined
+  if (live !== undefined) return { label: live, settled: false }
   const latest = history.latest
   if (!latest) return undefined
   if (selected && !sameModel(latest.model, selected)) return undefined
