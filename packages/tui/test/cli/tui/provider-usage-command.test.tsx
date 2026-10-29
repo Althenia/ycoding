@@ -170,7 +170,7 @@ test("renders provider progress and unavailable states in a dedicated dialog", a
   }
 })
 
-test("renders missing local pricing as unreported", async () => {
+test("renders missing local pricing as an empty cost", async () => {
   const [{ ConfigProvider }, { ThemeProvider }, { Keymap }, { DialogProvider }, { ToastProvider }] = await Promise.all([
     import("../../../src/config"),
     import("../../../src/context/theme"),
@@ -216,8 +216,8 @@ test("renders missing local pricing as unreported", async () => {
   try {
     const frame = app.captureCharFrame()
     expect(frame).toContain("custom/custom")
-    expect(frame).toContain("Unknown/0")
-    expect(frame).toContain("unreported")
+    expect(frame).toContain("/0")
+    expect(frame).not.toMatch(/unreported|Unknown|Known|N\/A/)
     expect(frame).not.toContain("$0.00")
   } finally {
     app.renderer.destroy()
@@ -267,7 +267,7 @@ test("renders durable backend request usage after detailed records are compacted
     expect(frame).toContain("12,000")
     expect(frame).toContain("900")
     expect(frame).toContain("1,200")
-    expect(frame).toContain("unreported")
+    expect(frame).not.toContain("unreported")
     expect(frame).not.toContain("$0.00")
   } finally {
     app.renderer.destroy()
@@ -334,7 +334,8 @@ test("renders aggregate provider request usage on the screen", async () => {
     expect(frame).toContain("Usage")
     expect(frame).toContain("Total · 9,000 in")
     expect(frame).toContain("cache 4,000/300")
-    expect(frame).toContain("Total · 9,000 in · 600 out · Known $6.50")
+    expect(frame).toContain("Total · 9,000 in · 600 out · $6.50")
+    expect(frame).not.toContain("Known")
     expect(frame).toContain("anthropic/claude-sonnet-4-5 · selected effort thinking")
     expect(frame).toContain("openai/gpt-5.6-terra · selected effort high")
     expect(frame).toContain("0/0")

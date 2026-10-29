@@ -184,7 +184,9 @@ test("usage grouping, selected effort, measured populations and missing Session 
     await waitFor(app, (frame) => frame.includes("Usage details"), "measured details")
     expect(app.captureCharFrame()).toContain("median 30.0 tok/s")
     expect(app.captureCharFrame()).toContain("4 measured requests")
-    expect(app.captureCharFrame()).toContain("Known $10.00 + unreported")
+    expect(app.captureCharFrame()).toContain("Cost $10.00")
+    expect(app.captureCharFrame()).toContain("2 priced · 1 unpriced")
+    expect(app.captureCharFrame()).not.toMatch(/unreported|Unknown|Known|\+ \?|N\/A/)
     app.mockInput.pressEscape()
     await waitFor(app, (frame) => !frame.includes("Usage details"), "first details dismissal")
     app.mockInput.pressKey("e")
@@ -206,7 +208,8 @@ test("usage grouping, selected effort, measured populations and missing Session 
     await app.mockInput.typeText("Sessions")
     await waitFor(app, (frame) => frame.includes("Sessions") && !frame.includes("Provider / profile / model"), "filtered Session group")
     app.mockInput.pressEnter()
-    await waitFor(app, (frame) => frame.includes("Session ses_deleted · title unreported"), "retained deleted Session")
+    await waitFor(app, (frame) => frame.includes("Session ses_deleted"), "retained deleted Session")
+    expect(app.captureCharFrame()).not.toMatch(/title|unreported/)
     expect(calls.at(-1)?.group).toBe("session")
   } finally { app.renderer.destroy() }
 })
@@ -485,13 +488,13 @@ const compactText = [
   "OpenAI plan · Work · updated 30m", "Window five ████████░░ 80% used", "Estimated exhaustion 2026-09-22T15:00:00.000Z · medium evidence",
   "Window weekly ████░░░░░░ 40% used", "Forecast unavailable", "Window monthly ██████████ 100% used", "Exhausted", "No increase observed", "Forecast stale",
   "Forecast unavailable · No matching quota observation", "Recorded consumption · Backend",
-  "openai · Work · gpt-5", "1,235 tok/min", "~$0.42/hour partial", "openai · provider default · mini", "<0.1 tok/min", "$/hour unreported",
+  "openai · Work · gpt-5", "1,235 tok/min", "~$0.42/hour partial", "openai · provider default · mini", "<0.1 tok/min",
   `anthropic · 研究チーム · ${longModel}`, "2,500,001 tok/min", "~$1234.50/hour partial", "xai · provider default · grok-mini", "3 tok/min", "<$0.01/hour",
 ]
 const detailText = [
   "Source provider API · Stability stable", "Recent quota deltas · 15m half-life · 1h horizon · medium evidence", "Quota burn 20 percentage points/hour",
   "Observed 2026-09-22T10:30:00.000Z – 2026-09-22T11:30:00.000Z", "Updated 30m ago", "Warming up after restart, 3 samples", "Observation stale: 2h old",
-  "Recorded consumption 1234.567 tokens/min · 5m 1500 · 60m 1100", "Estimated cost $0.42/hour · 3 priced / 1 unpriced", "60m unreported", "provider default at request time",
+  "Recorded consumption 1234.567 tokens/min · 5m 1500 · 60m 1100", "Estimated cost $0.42/hour · 3 priced / 1 unpriced", "provider default at request time",
   `anthropic · profile 研究チーム · ${longModel}`, "Recorded consumption 2500000.5 tokens/min · 5m 2600000 · 60m 2400000", "Estimated cost $1234.5/hour · 9 priced / 2 unpriced",
   "Estimated cost $0.004/hour · 2 priced / 0 unpriced", "Observed 2026-09-22T11:00:00.000Z – 2026-09-22T12:00:00.000Z", "Local recorded consumption · not provider quota",
 ]
@@ -539,6 +542,9 @@ test.each([{ width: 60, mode: "dark" as const }, { width: 40, mode: "dark" as co
     await app.renderOnce()
     const expanded = await scrolledUsage(app)
     for (const text of [...compactText.filter((text) => !/^Estimated exhaustion|^Forecast (unavailable|stale)$|^No increase observed$/.test(text)), ...detailText]) expect(expanded).toContain(strip(text))
+    expect(expanded).toContain(strip("0 priced / 2 unpriced"))
+    expect(expanded).not.toContain("unreported")
+    expect(expanded).not.toContain("Known")
     app.mockInput.pressKey("d")
     await waitFor(app, (frame) => frame.includes("Details · d") && !frame.includes("Hide details"), "details collapsed")
     const frame = app.captureCharFrame()
@@ -555,7 +561,8 @@ test("recorded consumption rows align token and cost columns and keep the unavai
     const rows = app.captureCharFrame().split("\n").filter((row) => row.includes("tok/min"))
     expect(rows).toHaveLength(2)
     expect(new Set(rows.map((row) => row.indexOf("tok/min"))).size).toBe(1)
-    expect(new Set(rows.map((row) => row.search(/~\$|\$\/hour/))).size).toBe(1)
+    expect(rows.filter((row) => /~\$0\.42\/hour/.test(row))).toHaveLength(1)
+    expect(rows.filter((row) => /tok\/min\s*$/.test(row))).toHaveLength(1)
   } finally { app.renderer.destroy() }
 })
 

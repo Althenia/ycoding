@@ -23,6 +23,7 @@ type ReportInput = {
 }
 
 const now = Date.UTC(2026, 8, 22, 12)
+const placeholders = /unreported|Unknown|Known|\+ \?|N\/A/
 const metrics = (logical: number, input = logical * 1_000) => ({
   logical,
   physical: logical + 1,
@@ -153,10 +154,11 @@ test("defaults tables to all retained history and exposes normalized metrics plu
     for (const column of ["STEPS", "INPUT", "OUTPUT", "REASON", "CACHE READ", "CACHE WRITE", "TOTAL", "COST", "FIRST P50", "FIRST P95", "TOTAL P50", "TOTAL P95", "MEAN TOK/S", "AGG TOK/S", "ERR RATE"]) expect(frame).toContain(column)
     expect(frame).toContain("125ms")
     expect(frame.split("\n").find((line) => line.includes("Alpha"))).toMatch(/\s37\.4\s+42\.5\s+10\.0%/)
-    expect(frame.split("\n").find((line) => line.includes("Beta"))).toMatch(/unreported\s+unreported\s+unreported\s*$/)
-    expect(frame).toContain("unreported")
+    expect(frame.split("\n").find((line) => line.includes("Beta"))).toMatch(/\$0\.30\s*$/)
+    expect(frame).not.toMatch(placeholders)
     expect(frame).toContain("STEPS model calls")
-    expect(frame.split("\n").find((line) => line.includes("Alpha"))).toMatch(/\sUnknown\s.*\s≥5,540\s/)
+    expect(frame.split("\n").find((line) => line.includes("Alpha"))).toMatch(/4,000\s+1,200\s+300\s+40\s+≥5,540\s/)
+    expect(frame).toContain("≥ lower bound where not every cache read was reported")
     expect(frame.split("\n").find((line) => line.includes("Beta"))).toContain("$0.30")
     expect(frame).not.toContain("est.")
     expect(frame).not.toContain("output subset")
@@ -165,8 +167,12 @@ test("defaults tables to all retained history and exposes normalized metrics plu
     frame = await waitFor(app, (value) => value.includes("Usage details") && value.includes("Alpha"), "usage details")
     expect(frame).toContain("Visible output 1,200")
     expect(frame).toContain("Reasoning 300")
-    expect(frame).toContain("Cache read Unknown")
-    expect(frame).toContain("Total tokens ≥5,540 · Cost unreported")
+    expect(frame).toContain("Cache write 40")
+    expect(frame).not.toContain("Cache read")
+    expect(frame).toContain("Total tokens ≥5,540")
+    expect(frame).not.toContain("Cost")
+    expect(frame).toContain("0 priced · 5 unpriced")
+    expect(frame).not.toMatch(placeholders)
     expect(frame).not.toContain("Cost $0.00")
     expect(frame).toContain("≥ marks a lower bound")
     expect(frame).toContain("First output p50 125ms · p95 250ms")
@@ -192,6 +198,45 @@ test("defaults tables to all retained history and exposes normalized metrics plu
         value.includes("2026-09-01 → 2026-10-01"),
       "custom retained range",
     )
+  } finally {
+    app.renderer.destroy()
+  }
+}, 30_000)
+
+test("renders partial costs as the priced subtotal and omits missing values from totals", async () => {
+  const partial = { ...metrics(4), cost: 5, costCoverage: { pricedRequests: 2, unpricedRequests: 3 } }
+  const missing = { ...metrics(3), cost: undefined, costProvenance: undefined, cacheReadReported: undefined, costCoverage: undefined, tokens: { ...metrics(3).tokens, cache: { read: 0, write: 30 } } }
+  const app = await renderReports({
+    width: 240,
+    load: async (query) => ({
+      group: query.group,
+      rows: [{ key: "gamma", label: "Gamma", ...partial }, { key: "delta", label: "Delta", ...missing }],
+      total: { ...metrics(7), cost: 5, costCoverage: { pricedRequests: 2, unpricedRequests: 3 } },
+      rowCount: 2,
+    }),
+  })
+  try {
+    let frame = await waitFor(app, (value) => value.includes("Gamma") && value.includes("Delta"), "partial rows")
+    const gamma = frame.split("\n").find((line) => line.includes("Gamma"))!
+    const delta = frame.split("\n").find((line) => line.includes("Delta"))!
+    expect(gamma).toMatch(/\$5\.00(\s|$)/)
+    expect(delta).toMatch(/3,000\s+300\s+75\s+30\s+≥3,405\s*$/)
+    expect(frame).toContain("Total · 7 steps · 8,505 tokens · $5.00")
+    expect(frame).not.toMatch(placeholders)
+    app.mockInput.pressKey("RETURN")
+    frame = await waitFor(app, (value) => value.includes("Usage details"), "partial details")
+    expect(frame).toContain("Cost $5.00")
+    expect(frame).toContain("2 priced · 3 unpriced")
+    expect(frame).not.toMatch(placeholders)
+    app.mockInput.pressKey("ESCAPE")
+    await waitFor(app, (value) => !value.includes("Usage details"), "partial details dismissal")
+    app.mockInput.pressKey("ARROW_DOWN")
+    app.mockInput.pressKey("RETURN")
+    frame = await waitFor(app, (value) => value.includes("Usage details") && value.includes("Total tokens ≥3,405"), "missing details")
+    expect(frame).toContain("Total tokens ≥3,405")
+    expect(frame).not.toContain("Cost $")
+    expect(frame).not.toContain("priced")
+    expect(frame).not.toMatch(placeholders)
   } finally {
     app.renderer.destroy()
   }
@@ -305,7 +350,8 @@ test("removes the retention remark while preserving the empty-window message", a
     },
   })
   try {
-    const frame = await waitFor(populated, (value) => value.includes("Total cost: unreported"), "populated stats")
+    const frame = await waitFor(populated, (value) => value.includes("Total cost:"), "populated stats")
+    expect(frame).not.toMatch(placeholders)
     expect(frame).not.toContain("Usage before")
   } finally {
     populated.renderer.destroy()

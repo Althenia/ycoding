@@ -4,9 +4,9 @@ export function matchingQuotaForecast(provider: ProviderUsageListOutput["data"][
   return forecasts?.find((quota) => quota.providerID === provider.providerID && quota.profile === provider.profile && quota.windowID === window.id && quota.unit === window.unit && quota.updatedAt === provider.updatedAt)
 }
 
-export function reportLabel(row: UsageReportOutput["rows"][number], group?: UsageReportOutput["group"]) {
+export function reportLabel(row: Pick<UsageReportOutput["rows"][number], "key" | "label" | "model">, group?: UsageReportOutput["group"]) {
   if (group === "task") return `${row.label} (inclusive)`
-  if (group === "session" && (!row.label.trim() || row.label === row.key)) return `Session ${row.key} · title unreported`
+  if (group === "session" && (!row.label.trim() || row.label === row.key)) return `Session ${row.key}`
   if (row.model) return `${row.model.providerID}/${row.model.id}${row.model.variant ? ` · selected effort ${row.model.variant}` : ""}${row.model.profile ? ` · profile ${row.model.profile}` : ""}`
   return row.label
 }
@@ -40,18 +40,26 @@ export type UnitCostPresentation = {
   readonly reason?: string
 }
 
+function money(value: number) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: value > 0 && value < 0.01 ? 4 : 2 }).format(value)
+}
+
 export function costText(cost: CostPresentation | undefined) {
-  if (cost === undefined) return "unreported"
-  const money = (value: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: value > 0 && value < 0.01 ? 4 : 2 }).format(value)
+  if (cost === undefined) return ""
   if (cost.total !== undefined && cost.unpricedRequests === 0) return money(cost.total)
-  return cost.known === undefined ? "unreported" : `Known ${money(cost.known)} + unreported`
+  return cost.known === undefined ? "" : money(cost.known)
 }
 
 export function unitCostLines(unit: Omit<UnitCostPresentation, "inputID">, label = "Prompt cost") {
+  const labelled = (name: string, cost: CostPresentation) => costText(cost) === "" ? undefined : `${name} ${costText(cost)}`
+  const joined = (parts: readonly (string | undefined)[]) => parts.filter((part) => part !== undefined).join(" · ")
+  const qualifiers = `${unit.settled ? "" : " · so far"}${unit.complete ? "" : " · incomplete"}`
+  const headline = `${labelled(label, unit.cost) ?? label}${qualifiers}`
+  const split = joined([labelled("Main", unit.main), labelled("Children", unit.children)])
   return [
-    `${label} ${costText(unit.cost)}${unit.settled ? "" : " · so far"}${unit.complete ? "" : " · incomplete"}`,
-    `Main ${costText(unit.main)} · Children ${costText(unit.children)}`,
-    ...unit.helpers.map((helper) => `${helper.label} ${costText(helper.cost)}`),
+    ...(headline === label ? [] : [headline]),
+    ...(split === "" ? [] : [split]),
+    ...unit.helpers.flatMap((helper) => labelled(helper.label, helper.cost) ?? []),
     `${unit.cost.pricedRequests} priced · ${unit.cost.unpricedRequests} unpriced${unit.cost.provenance === "current_catalog" ? " · current-catalog estimate" : ""}`,
     ...(unit.reason ? [unit.reason] : []),
   ]
@@ -65,13 +73,13 @@ export type OutcomesPresentation = {
 
 export function errorRateText(outcomes: OutcomesPresentation | undefined) {
   const total = outcomes === undefined ? 0 : outcomes.completed + outcomes.failed + outcomes.cancelled
-  return outcomes === undefined || total === 0 ? "unreported" : `${((outcomes.failed / total) * 100).toFixed(1)}%`
+  return outcomes === undefined || total === 0 ? "" : `${((outcomes.failed / total) * 100).toFixed(1)}%`
 }
 
 export function outcomeLine(outcomes: OutcomesPresentation | undefined) {
-  return outcomes === undefined
-    ? "Outcomes unreported"
-    : `Outcomes ${outcomes.completed.toLocaleString("en-US")} completed · ${outcomes.failed.toLocaleString("en-US")} failed · ${outcomes.cancelled.toLocaleString("en-US")} cancelled · error rate ${errorRateText(outcomes)}`
+  if (outcomes === undefined) return undefined
+  const errorRate = errorRateText(outcomes)
+  return `Outcomes ${outcomes.completed.toLocaleString("en-US")} completed · ${outcomes.failed.toLocaleString("en-US")} failed · ${outcomes.cancelled.toLocaleString("en-US")} cancelled${errorRate ? ` · error rate ${errorRate}` : ""}`
 }
 
 export type SpeedPresentation = {
@@ -87,12 +95,17 @@ export type SpeedPresentation = {
 }
 
 export function measuredSpeedLines(speed: SpeedPresentation | undefined) {
-  const rate = (value: number | undefined) => value === undefined ? "unreported" : `${value.toFixed(1)} tok/s`
+  if (speed === undefined) return []
+  const rate = (label: string, value: number | undefined) => value === undefined ? undefined : `${label} ${value.toFixed(1)} tok/s`
+  const joined = (prefix: string, parts: readonly (string | undefined)[]) => {
+    const known = parts.filter((part) => part !== undefined)
+    return known.length === 0 ? undefined : `${prefix}${known.join(" · ")}`
+  }
   return [
-    `Measured generation median ${rate(speed?.generationP50TokensPerSecond)} · p90 ${rate(speed?.generationP90TokensPerSecond)}${speed?.generationP95TokensPerSecond === undefined ? "" : ` · p95 ${rate(speed.generationP95TokensPerSecond)}`}`,
-    speed === undefined ? "Generation sample coverage unreported" : `${speed.generationSamples} measured requests · ${speed.providerTimedSamples} provider-timed · ${speed.observedSamples} observed`,
-    `Aggregate throughput ${rate(speed?.outputTokensPerSecond)} · mean per request ${rate(speed?.meanTokensPerSecond)} · ${speed === undefined ? "unreported" : speed.samples} first-output latency samples`,
-  ]
+    joined("Measured generation ", [rate("median", speed.generationP50TokensPerSecond), rate("p90", speed.generationP90TokensPerSecond), rate("p95", speed.generationP95TokensPerSecond)]),
+    `${speed.generationSamples} measured requests · ${speed.providerTimedSamples} provider-timed · ${speed.observedSamples} observed`,
+    joined("", [rate("Aggregate throughput", speed.outputTokensPerSecond), rate("mean per request", speed.meanTokensPerSecond), `${speed.samples} first-output latency samples`]),
+  ].filter((line) => line !== undefined)
 }
 
 export type ForecastPresentation = {
@@ -183,7 +196,7 @@ export function recordedRateRow(rate: RecordedRatePresentation) {
 }
 
 function costPerHourText(value: number | undefined) {
-  if (value === undefined) return "$/hour unreported"
+  if (value === undefined) return ""
   if (value > 0 && value < 0.01) return "<$0.01/hour"
   return `~$${value.toFixed(2)}/hour`
 }
@@ -194,11 +207,11 @@ function tokensPerMinuteText(value: number) {
 }
 
 export function recordedRateLines(rate: RecordedRatePresentation) {
-  const perMinute = (value: number | undefined) => (value === undefined ? "unreported" : String(value))
+  const window = (label: string, value: number | undefined) => value === undefined ? [] : [`${label} ${value}`]
   return [
     `${rate.providerID}${rate.profile ? ` · profile ${rate.profile}` : " · provider default at request time"}${rate.modelID ? ` · ${rate.modelID}` : ""}`,
-    `Recorded consumption ${rate.tokensPerMinute} tokens/min · 5m ${perMinute(rate.tokensPerMinute5)} · 60m ${perMinute(rate.tokensPerMinute60)}`,
-    `Estimated cost ${rate.estimatedUSDPerHour === undefined ? "unreported" : `$${rate.estimatedUSDPerHour}/hour`} · ${rate.coverage.pricedRequests} priced / ${rate.coverage.unpricedRequests} unpriced`,
+    [`Recorded consumption ${rate.tokensPerMinute} tokens/min`, ...window("5m", rate.tokensPerMinute5), ...window("60m", rate.tokensPerMinute60)].join(" · "),
+    [...(rate.estimatedUSDPerHour === undefined ? [] : [`Estimated cost $${rate.estimatedUSDPerHour}/hour`]), `${rate.coverage.pricedRequests} priced / ${rate.coverage.unpricedRequests} unpriced`].join(" · "),
     `Observed ${new Date(rate.observedFrom).toISOString()} – ${new Date(rate.observedTo).toISOString()}`,
   ]
 }

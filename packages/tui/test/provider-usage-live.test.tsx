@@ -72,7 +72,8 @@ test("Overview shows active and streaming attempts, the labelled aggregate rate,
     const frame = app.captureCharFrame()
     expect(frame).toContain("3 active · 2 streaming · ≈ 142 tok/s aggregate ▁▄█")
     expect(frame).toContain("openai/gpt-5.6-terra · selected effort high · 2 active · 2 streaming · ≈ 120 tok/s")
-    expect(frame).toContain("anthropic/claude-opus-5 · 1 active · 0 streaming · N/A")
+    expect(frame).toContain("anthropic/claude-opus-5 · 1 active · 0 streaming")
+    expect(frame).not.toContain("N/A")
     expect(frame.indexOf("LIVE · YCODING BACKEND")).toBeLessThan(frame.indexOf("RETAINED MODEL BREAKDOWN"))
     expect(frame).not.toContain("Live updates paused")
   } finally { app.renderer.destroy() }
@@ -85,7 +86,9 @@ test("Overview follows live updates, reports idle without a rate, and flags paus
   try {
     await app.waitForFrame((frame) => frame.includes("3 active"))
     setLive({ asOf: 200, active: 0, streaming: 0, models: [], history: [] })
-    await app.waitForFrame((frame) => frame.includes("0 active · 0 streaming · N/A aggregate"))
+    await app.waitForFrame((frame) => frame.includes("0 active · 0 streaming"))
+    expect(app.captureCharFrame()).not.toContain("N/A")
+    expect(app.captureCharFrame()).not.toContain("aggregate")
     expect(app.captureCharFrame()).not.toContain("142")
     expect(app.captureCharFrame()).not.toContain("▁")
     setFailed(true)

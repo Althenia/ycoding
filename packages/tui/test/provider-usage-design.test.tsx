@@ -44,7 +44,7 @@ const usage: ProviderRequestSummary = {
   ],
 }
 
-test("renders an unreported cache read as a word instead of a bare placeholder", async () => {
+test("renders an unreported cache read as an empty cell without a placeholder", async () => {
   const config = createTuiResolvedConfig()
   const app = await testRender(() => <TestTuiContexts><ConfigProvider config={config}>
     <Keymap.Provider config={config}><ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
@@ -57,7 +57,8 @@ test("renders an unreported cache read as a word instead of a bare placeholder",
   try {
     await app.waitForFrame((frame) => frame.includes("RETAINED MODEL BREAKDOWN"))
     const frame = app.captureCharFrame()
-    expect(frame).toContain("Unknown/300")
+    expect(frame).toContain("/300")
+    expect(frame).not.toContain("Unknown")
     expect(frame).not.toMatch(/\s-\/300/)
   } finally { app.renderer.destroy() }
 })

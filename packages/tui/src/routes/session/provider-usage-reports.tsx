@@ -69,7 +69,7 @@ type ReportState = {
 }
 
 export const PAGE_SIZE = 100
-const REPORT_LEGEND = "Configured request-date analytics retention · STEPS model calls · OUTPUT visible text · REASON reasoning · CACHE prompt-cache tokens · ≥ lower bound where cache reads were unreported"
+const REPORT_LEGEND = "Configured request-date analytics retention · STEPS model calls · OUTPUT visible text · REASON reasoning · CACHE prompt-cache tokens · ≥ lower bound where not every cache read was reported"
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 const TIMING_COLUMNS = 7
@@ -437,6 +437,19 @@ function ProviderUsageTable(props: {
   )
 }
 
+function DetailLine(props: { text: string | undefined }) {
+  return <Show when={props.text}>{(text) => <text>{text()}</text>}</Show>
+}
+
+function joined(parts: readonly (string | undefined)[]) {
+  const known = parts.filter((part) => part !== undefined && part !== "")
+  return known.length === 0 ? undefined : known.join(" · ")
+}
+
+function labelled(label: string, value: string | undefined) {
+  return value === undefined || value === "" ? undefined : `${label} ${value}`
+}
+
 function UsageDetails(props: { row: UsageReportOutput["rows"][number]; group: UsageReportOutput["group"] }) {
   const dialog = useDialog()
   const { theme } = useTheme().contextual("elevated")
@@ -457,13 +470,13 @@ function UsageDetails(props: { row: UsageReportOutput["rows"][number]; group: Us
         <text>Helpers {formatNumber(props.row.helpers)} · continued {formatNumber(props.row.continued)} · fallback {formatNumber(props.row.fallback)}</text>
         <text>Input {formatNumber(props.row.tokens.input)} · Visible output {formatNumber(props.row.tokens.output)}</text>
         <text>Reasoning {formatNumber(props.row.tokens.reasoning)}</text>
-        <text>Cache read {cacheRead(props.row, formatNumber)} · write {formatNumber(props.row.tokens.cache.write)}</text>
-        <text>Total tokens {tokenTotalLabel(props.row, formatNumber)} · {props.group === "task" ? "Cost (inclusive)" : "Cost"} {costLabel(props.row)}</text>
-        <text>First output p50 {latency(props.row.speed?.firstOutputP50Ms)} · p95 {latency(props.row.speed?.firstOutputP95Ms)}</text>
-        <text>Total p50 {latency(props.row.speed?.totalP50Ms)} · p95 {latency(props.row.speed?.totalP95Ms)} · Aggregate {throughput(props.row.speed?.outputTokensPerSecond)}</text>
-        <text>{outcomeLine(props.row.outcomes)}</text>
+        <DetailLine text={cacheRead(props.row, formatNumber) ? `Cache read ${cacheRead(props.row, formatNumber)} · write ${formatNumber(props.row.tokens.cache.write)}` : `Cache write ${formatNumber(props.row.tokens.cache.write)}`} />
+        <DetailLine text={joined([labelled("Total tokens", tokenTotalLabel(props.row, formatNumber)), labelled(props.group === "task" ? "Cost (inclusive)" : "Cost", costLabel(props.row))])} />
+        <DetailLine text={labelled("First output", joined([labelled("p50", latency(props.row.speed?.firstOutputP50Ms)), labelled("p95", latency(props.row.speed?.firstOutputP95Ms))]))} />
+        <DetailLine text={joined([labelled("Total", joined([labelled("p50", latency(props.row.speed?.totalP50Ms)), labelled("p95", latency(props.row.speed?.totalP95Ms))])), labelled("Aggregate", throughput(props.row.speed?.outputTokensPerSecond))])} />
+        <DetailLine text={outcomeLine(props.row.outcomes)} />
         <UsageSpeedDetails speed={props.row.speed} />
-        <text>{props.row.costCoverage ? `${props.row.costCoverage.pricedRequests} priced · ${props.row.costCoverage.unpricedRequests} unpriced` : "Cost coverage unreported"}</text>
+        <DetailLine text={props.row.costCoverage && `${props.row.costCoverage.pricedRequests} priced · ${props.row.costCoverage.unpricedRequests} unpriced`} />
         <Show when={props.row.model?.variant}><text>Selected effort {props.row.model?.variant}</text></Show>
         <Show when={props.row.dimensions && "profileState" in props.row.dimensions}><text>{props.row.dimensions && "profileState" in props.row.dimensions && props.row.dimensions.profileState === "provider-default" ? "Provider default at request time" : "Recorded profile"}</text></Show>
         <Show when={props.row.cacheReadReported !== true}>
@@ -637,7 +650,7 @@ function ProviderUsageStats(props: {
                 <StatLine label="Longest streak" value={dayCount(summary().longest)} color={theme.text.feedback.info.default} />
                 <StatLine
                   label="Busiest day"
-                  value={summary().busiest ? `${summary().busiest!.key.slice(0, 10)} · ${tokenTotalLabel(summary().busiest!, compactNumber)} tokens` : "No usage yet"}
+                  value={summary().busiest ? busiestDay(summary().busiest!) : "No usage yet"}
                   color={theme.text.feedback.info.default}
                 />
               </box>
@@ -692,10 +705,8 @@ function CompactReportRow(props: {
       </text>
       <text>
         {"  "}<span>{formatNumber(props.row.logical)} steps</span>
-        <span style={{ fg: theme.text.subdued }}> · </span>
-        <span style={{ fg: theme.text.feedback.info.default }}>{tokenTotalLabel(props.row, compactNumber)} tokens</span>
-        <span style={{ fg: theme.text.subdued }}> · </span>
-        <span style={{ fg: theme.text.feedback.success.default }}>{tableCost(props.row)}</span>
+        <Show when={tokenTotalLabel(props.row, compactNumber)}>{(tokens) => <><span style={{ fg: theme.text.subdued }}> · </span><span style={{ fg: theme.text.feedback.info.default }}>{tokens()} tokens</span></>}</Show>
+        <Show when={tableCost(props.row)}>{(cost) => <><span style={{ fg: theme.text.subdued }}> · </span><span style={{ fg: theme.text.feedback.success.default }}>{cost()}</span></>}</Show>
       </text>
     </box>
   )
@@ -837,7 +848,7 @@ function sortLabel(sort: Sort, order: Order) {
 
 function cacheRead(value: ReportMetrics, format: (value: number) => string) {
   if (value.cacheReadReported === true) return format(value.tokens.cache.read)
-  return value.tokens.cache.read > 0 ? `≥${format(value.tokens.cache.read)}` : "Unknown"
+  return value.tokens.cache.read > 0 ? `≥${format(value.tokens.cache.read)}` : ""
 }
 
 function knownTokens(value: ReportMetrics | undefined) {
@@ -847,35 +858,40 @@ function knownTokens(value: ReportMetrics | undefined) {
 
 function tokenTotalLabel(value: ReportMetrics, format: (value: number) => string) {
   if (value.cacheReadReported === true) return format(knownTokens(value))
-  return knownTokens(value) > 0 ? `≥${format(knownTokens(value))}` : "Unknown"
+  return knownTokens(value) > 0 ? `≥${format(knownTokens(value))}` : ""
 }
 
 function tableCost(value: ReportMetrics) {
-  if (value.cost === undefined) return "unreported"
-  const price = value.cost >= 100_000 ? `$${compactNumber(value.cost)}` : `$${value.cost.toFixed(2)}`
-  return value.costCoverage?.unpricedRequests ? `${price} + ?` : value.costCoverage === undefined ? `Known ${price}` : price
+  if (value.cost === undefined) return ""
+  return value.cost >= 100_000 ? `$${compactNumber(value.cost)}` : `$${value.cost.toFixed(2)}`
 }
 
 function rate(value: number | undefined) {
-  return value === undefined ? "unreported" : value.toFixed(1)
+  return value === undefined ? "" : value.toFixed(1)
 }
 
 function latency(value: number | undefined) {
-  return value === undefined ? "unreported" : `${formatNumber(value)}ms`
+  return value === undefined ? "" : `${formatNumber(value)}ms`
 }
 
 function throughput(value: number | undefined) {
-  return value === undefined ? "unreported" : `${value.toFixed(1)} tok/s`
+  return value === undefined ? "" : `${value.toFixed(1)} tok/s`
 }
 
 function costLabel(value: ReportMetrics) {
-  if (value.costCoverage === undefined) return value.cost === undefined ? "unreported" : `Known $${value.cost.toFixed(2)} · coverage unreported`
+  if (value.costCoverage === undefined) return value.cost === undefined ? "" : `$${value.cost.toFixed(2)}`
   return costText({ ...value.costCoverage, known: value.cost, provenance: value.costProvenance,
     ...(value.costCoverage.unpricedRequests === 0 && value.cost !== undefined ? { total: value.cost } : {}) })
 }
 
+function busiestDay(day: UsageReportOutput["rows"][number]) {
+  const tokens = tokenTotalLabel(day, compactNumber)
+  return joined([day.key.slice(0, 10), tokens && `${tokens} tokens`])!
+}
+
 function reportTotal(value: UsageReportOutput["total"]) {
-  return `Total · ${formatNumber(value.logical)} steps · ${tokenTotalLabel(value, formatNumber)} tokens · ${costLabel(value)}`
+  const tokens = tokenTotalLabel(value, formatNumber)
+  return joined(["Total", `${formatNumber(value.logical)} steps`, tokens && `${tokens} tokens`, costLabel(value)])!
 }
 
 function pageLabel(offset: number, report: UsageReportOutput) {

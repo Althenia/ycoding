@@ -46,7 +46,7 @@ export function TaskCostDialog(props: { unit?: Omit<UnitCostPresentation, "input
   return <box flexDirection="column" paddingBottom={1}>
     <DialogHeader title={<DialogTitle>Recursive task cost (inclusive)</DialogTitle>} />
     <scrollbox ref={(value: ScrollBoxRenderable) => { scroll = value }} maxHeight={Math.max(3, dimensions().height - Math.floor(dimensions().height / 4) - 6)} scrollbarOptions={{ visible: false }}>
-      <box paddingLeft={3} paddingRight={3}><Show when={props.unit} fallback={<text fg={theme.text.subdued}>Task cost (inclusive) {props.loading ? "loading" : "unreported"}</text>}>{(unit) => <TaskCostDetails unit={unit()} />}</Show></box>
+      <box paddingLeft={3} paddingRight={3}><Show when={props.unit} fallback={<Show when={props.loading}><text fg={theme.text.subdued}>Task cost (inclusive) loading</text></Show>}>{(unit) => <TaskCostDetails unit={unit()} />}</Show></box>
     </scrollbox>
     <text paddingLeft={3} fg={theme.text.subdued}>Page Up/Page Down scroll · r refresh · Escape close</text>
   </box>

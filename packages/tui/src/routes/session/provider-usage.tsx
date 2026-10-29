@@ -461,7 +461,7 @@ function OverviewTable(props: {
     <Show when={!narrow()}><OverviewHeader geometry={geometry()} sorting={props.sorting} onSort={props.onSort} /></Show>
     <For each={orderedItems()}>{(item, index) => {
       const identity = index() === 0 ? "Total" : item.model
-      if (narrow()) return <box flexDirection="column" paddingTop={1}><text fg={index() === 0 ? theme.text.feedback.info.default : theme.text.default}>{identity} · {item.input} in · {item.output} out · {item.spent}</text><text fg={theme.text.subdued}>  steps {item.steps} · reasoning {item.reasoning} · cache {item.cacheRead}/{item.cacheWrite}</text></box>
+      if (narrow()) return <box flexDirection="column" paddingTop={1}><text fg={index() === 0 ? theme.text.feedback.info.default : theme.text.default}>{identity} · {item.input} in · {item.output} out{item.spent ? ` · ${item.spent}` : ""}</text><text fg={theme.text.subdued}>  steps {item.steps} · reasoning {item.reasoning} · cache {item.cacheRead}/{item.cacheWrite}</text></box>
       return <OverviewRow item={item} identity={identity} geometry={geometry()} total={index() === 0} />
     }}</For>
   </box>
@@ -470,7 +470,7 @@ function OverviewTable(props: {
 function LiveOverview(props: { live: UsageLive; failed: boolean; width: number }) {
   const { theme } = useTheme()
   const rule = () => "─".repeat(Math.max(1, Math.min(props.width - 6, 96)))
-  const rate = (value: number | undefined) => value === undefined ? "N/A" : formatTokensPerSecond(value, true)
+  const rate = (value: number | undefined) => value === undefined ? undefined : formatTokensPerSecond(value, true)
   const trend = createMemo(() => {
     const points = props.live.history.slice(-Math.max(1, Math.min(60, props.width - 20)))
     return points.some((point) => point.outputTokensPerSecond !== undefined)
@@ -487,12 +487,11 @@ function LiveOverview(props: { live: UsageLive; failed: boolean; width: number }
       <span style={{ fg: props.live.active > 0 ? theme.text.feedback.success.default : theme.text.subdued }}>{props.live.active.toLocaleString("en-US")} active</span>
       <span style={{ fg: theme.text.subdued }}> · </span>
       <span>{props.live.streaming.toLocaleString("en-US")} streaming</span>
-      <span style={{ fg: theme.text.subdued }}> · </span>
-      <span style={{ fg: theme.text.feedback.info.default }}>{rate(props.live.outputTokensPerSecond)} aggregate</span>
+      <Show when={rate(props.live.outputTokensPerSecond)}>{(value) => <><span style={{ fg: theme.text.subdued }}> · </span><span style={{ fg: theme.text.feedback.info.default }}>{value()} aggregate</span></>}</Show>
       <Show when={trend()}>{(value) => <span style={{ fg: theme.text.subdued }}> {value()}</span>}</Show>
     </text>
     <For each={props.live.models}>{(entry) =>
-      <text fg={theme.text.subdued}>{Locale.truncate(`  ${modelIdentity(entry.model)} · ${entry.active} active · ${entry.streaming} streaming · ${rate(entry.outputTokensPerSecond)}`, Math.max(1, props.width - 6))}</text>
+      <text fg={theme.text.subdued}>{Locale.truncate(`  ${modelIdentity(entry.model)} · ${entry.active} active · ${entry.streaming} streaming${rate(entry.outputTokensPerSecond) === undefined ? "" : ` · ${rate(entry.outputTokensPerSecond)}`}`, Math.max(1, props.width - 6))}</text>
     }</For>
   </box>
 }
@@ -578,7 +577,7 @@ function RecordedConsumption(props: { rates?: ProviderUsageForecastOutput["data"
           <For each={rates()} fallback={<text fg={theme.text.subdued}>No recorded consumption</text>}>
             {(rate) => {
               const row = recordedRateRow(rate)
-              const measures = `  ${padCells(row.tokens, tokensWidth(), "start")}  ${row.cost}`
+              const measures = `  ${padCells(row.tokens, tokensWidth(), "start")}${row.cost ? `  ${row.cost}` : ""}`
               return (
                 <box flexDirection="column">
                   <Show when={stacked()} fallback={<text fg={theme.text.subdued} wrapMode="word">{padCells(row.identity, identityWidth(), "end")}{measures}<Show when={row.partial}><span style={{ fg: theme.text.feedback.warning.default }}>{PARTIAL}</span></Show></text>}>
@@ -696,7 +695,7 @@ function summaryPresentation(summary: ProviderRequestSummary): OverviewItem {
     input: summary.tokens.input.toLocaleString("en-US"),
     output: summary.tokens.output.toLocaleString("en-US"),
     reasoning: summary.tokens.reasoning.toLocaleString("en-US"),
-    cacheRead: summary.cacheReadReported ? summary.tokens.cache.read.toLocaleString("en-US") : "Unknown",
+    cacheRead: summary.cacheReadReported ? summary.tokens.cache.read.toLocaleString("en-US") : "",
     cacheWrite: summary.tokens.cache.write.toLocaleString("en-US"),
     spent: money(summary.cost),
     values: { steps: summary.logical, input: summary.tokens.input, output: summary.tokens.output, reasoning: summary.tokens.reasoning, cacheRead: summary.tokens.cache.read, cacheWrite: summary.tokens.cache.write, tokens: summary.tokens.input + summary.tokens.output + summary.tokens.reasoning + summary.tokens.cache.read + summary.tokens.cache.write, cost: summary.cost ?? 0 },
@@ -704,7 +703,7 @@ function summaryPresentation(summary: ProviderRequestSummary): OverviewItem {
 }
 
 function money(value: number | undefined) {
-  return value === undefined ? "unreported" : `Known $${value.toFixed(2)}`
+  return value === undefined ? "" : `$${value.toFixed(2)}`
 }
 
 function modelIdentity(model: { providerID: string; id: string; variant?: string; profile?: string }) {
@@ -720,7 +719,7 @@ function spendPresentation(
     input: spend.tokens.input.toLocaleString("en-US"),
     output: spend.tokens.output.toLocaleString("en-US"),
     reasoning: spend.tokens.reasoning.toLocaleString("en-US"),
-    cacheRead: spend.cacheReadReported ? spend.tokens.cache.read.toLocaleString("en-US") : "Unknown",
+    cacheRead: spend.cacheReadReported ? spend.tokens.cache.read.toLocaleString("en-US") : "",
     cacheWrite: spend.tokens.cache.write.toLocaleString("en-US"),
     spent: money(spend.cost),
     values: { steps: spend.requests, input: spend.tokens.input, output: spend.tokens.output, reasoning: spend.tokens.reasoning, cacheRead: spend.tokens.cache.read, cacheWrite: spend.tokens.cache.write, tokens: spend.tokens.input + spend.tokens.output + spend.tokens.reasoning + spend.tokens.cache.read + spend.tokens.cache.write, cost: spend.cost ?? 0 },

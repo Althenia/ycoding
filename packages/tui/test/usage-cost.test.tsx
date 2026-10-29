@@ -26,12 +26,13 @@ test("task costs render unknown pricing, child tails and helper breakdown in nar
       await app.waitForFrame((frame) => frame.includes("Task cost (inclusive)"))
       const frame = app.captureCharFrame().replace(/\s+/g, " ")
       expect(frame).not.toContain("Prompt cost")
-      expect(frame).toContain("Known $2.00 + unreported")
+      expect(frame).toContain("Task cost (inclusive) $2.00")
       expect(frame).toContain("so far")
       expect(frame).toContain("incomplete")
       expect(frame).toContain("Main $0.00")
-      expect(frame).toContain("Children Known $2.00")
-      expect(frame).toContain("Decision unreported")
+      expect(frame).toContain("Main $0.00 · Children $2.00")
+      expect(frame).not.toContain("Decision")
+      expect(frame).not.toMatch(/unreported|Known|\+ \?/)
       expect(frame).toContain("2 priced · 1 unpriced")
       expect(frame).toContain("median 20.0 tok/s")
       expect(frame).toContain("p90 50.0 tok/s")
@@ -95,4 +96,23 @@ test("narrow recursive-cost dialogs keep keyboard paging, refresh and close reac
     await app.waitForFrame((frame) => !frame.includes("Recursive task cost"))
     expect(app.captureCharFrame()).toContain("Session background")
   } finally { app.renderer.destroy() }
+})
+
+test("a recursive-cost dialog without a result shows only the loading state", async () => {
+  for (const loading of [true, false]) {
+    function Open() {
+      const dialog = useDialog()
+      onMount(() => dialog.replace(() => <TaskCostDialog loading={loading} onRefresh={() => {}} />))
+      return <text>Session background</text>
+    }
+    const config = createTuiResolvedConfig()
+    const app = await testRender(() => <TestTuiContexts><ConfigProvider config={config}><Keymap.Provider config={config}><ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}><ToastProvider><DialogProvider><Open /></DialogProvider></ToastProvider></ThemeProvider></Keymap.Provider></ConfigProvider></TestTuiContexts>, { width: 80, height: 20 })
+    try {
+      app.renderer.start()
+      await app.waitForFrame((frame) => frame.includes("Recursive task cost (inclusive)"))
+      const frame = app.captureCharFrame()
+      expect(frame.includes("Task cost (inclusive) loading")).toBe(loading)
+      expect(frame).not.toContain("unreported")
+    } finally { app.renderer.destroy() }
+  }
 })

@@ -280,8 +280,10 @@ test("subagent list p toggles durable pin state and Ctrl+X then K cancels", asyn
   const calls = createFetch((url, request) => {
     if (url.pathname === "/api/session/ses_parent/usage/tasks") {
       const breakdown = (amount: number, requests: number) => ({ requests, tokens: { input: requests * 10, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: { known: amount, total: amount, pricedRequests: requests, unpricedRequests: 0 } })
-      const total = breakdown(23, 6)
-      return json({ data: { tasks: [{ sessionID: task.sessionID, status: "so-far", attribution: "complete", history: "retained", total, main: breakdown(13, 4), children: breakdown(10, 2), helpers: [] }], total, history: "retained" } })
+      const partial = (amount: number, requests: number) => ({ ...breakdown(amount, requests), cost: { known: amount, pricedRequests: requests, unpricedRequests: 1 } })
+      const total = partial(23, 6)
+      const helper = { source: "title", requests: 1, tokens: breakdown(0, 1).tokens, cost: { pricedRequests: 0, unpricedRequests: 1 } }
+      return json({ data: { tasks: [{ sessionID: task.sessionID, status: "so-far", attribution: "complete", history: "retained", total, main: breakdown(13, 4), children: partial(10, 2), helpers: [helper] }], total, history: "retained" } })
     }
     if (url.pathname === "/api/session/ses_parent/subagent")
       return json({ data: [{ ...task, ...(pinnedAt === undefined ? {} : { pinnedAt }) }], summary: { total: 1, active: 1, running: 0, waiting: 0 }, cursor: {} })
@@ -332,6 +334,8 @@ test("subagent list p toggles durable pin state and Ctrl+X then K cancels", asyn
     app.mockInput.pressKey("c")
     await app.waitForFrame((frame) => frame.includes("Recursive task cost (inclusive)") && frame.includes("Task cost (inclusive) $23.00"))
     expect(app.captureCharFrame()).toContain("Main $13.00 · Children $10.00")
+    expect(app.captureCharFrame()).toContain("6 priced · 1 unpriced")
+    expect(app.captureCharFrame()).not.toMatch(/unreported|Known|\+ \?|Title/)
     expect(app.captureCharFrame()).toContain("r refresh")
     app.mockInput.pressKey("ESCAPE")
     await app.waitForFrame((frame) => !frame.includes("Recursive task cost (inclusive)"))
