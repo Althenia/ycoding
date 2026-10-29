@@ -244,9 +244,10 @@ test("controls arbitrary tools through scoped SDK overlays", async () => {
           options: { codemode: false },
         }
         const locations = yield* LocationServiceMap.Service
+        const nodes = [PluginSupervisor.node, ToolRegistry.node] as const
         const [primary, secondary] = yield* Effect.all([
-          Layer.build(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory) }))),
-          Layer.build(locations.get(Location.Ref.make({ directory: AbsolutePath.make(secondDirectory) }))),
+          Layer.build(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory) }), nodes)),
+          Layer.build(locations.get(Location.Ref.make({ directory: AbsolutePath.make(secondDirectory) }), nodes)),
         ])
         yield* Effect.forEach([primary, secondary], (context) =>
           PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(Effect.provide(context)),

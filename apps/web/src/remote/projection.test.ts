@@ -605,7 +605,7 @@ describe("assistant streaming", () => {
         ran: 1,
         completed: 1,
         input: undefined,
-        structured: undefined,
+        structured: { toolCalls: [] },
         inputText: '{"code":"1"}',
         content: [{ kind: "text", text: "done" }],
       },
