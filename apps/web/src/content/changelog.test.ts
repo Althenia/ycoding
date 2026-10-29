@@ -7,8 +7,19 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.6 global Dots controls and Antigravity updates first", () => {
+  test("lists v0.11.7 Code Mode, browser frames, prepared Usage and the usage migration first", () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.7", date: "2026-10-29", tags: ["Added", "Changed", "Fixed"] })
+    expect(entry?.changes).toHaveLength(21)
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of ["Code Mode execute", "TimeoutExceeded", "cross-origin iframes", "WebMCP", "desktop.query", "completed, failed or was cancelled", "next Step boundary", "POST /api/usage/dashboard", "one-time startup migration", "database grows", "only known values", "three physical attempts", "bridge protocol version 5", "Reload", "Agent not found", "Attachment rejected", "tool_use.id"]) expect(text).toContain(fragment)
+    expect(entry?.changes.find((change) => change.text.startsWith("A one-time startup migration"))?.tag).toBe("Changed")
+    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(8)
+    expect(after("0.11.7")?.version).toBe("0.11.6")
+  })
+
+  test("retains v0.11.6 global Dots controls and Antigravity updates", () => {
+    const entry = RELEASES[1]
     expect(entry).toMatchObject({ version: "0.11.6", date: "2026-10-27", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(6)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
@@ -21,7 +32,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.11.5 native Dots and retirement migration", () => {
-    const entry = RELEASES[1]
+    const entry = RELEASES[2]
     expect(entry).toMatchObject({ version: "0.11.5", date: "2026-10-27", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(8)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
@@ -1810,7 +1821,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 51)).toEqual([
+    expect(versions.slice(0, 52)).toEqual([
+      "0.11.7",
       "0.11.6",
       "0.11.5",
       "0.11.4",
