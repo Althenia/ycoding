@@ -6,7 +6,7 @@ export const ANTHROPIC_EFFORT_BETA = "mid-conversation-output-config-2026-07-01"
 export type EffortProvider = "openai" | "anthropic" | "openrouter"
 
 export const gpt6EffortModel = (id: string) =>
-  /^(?:gpt-6-(?:luna|sol|astra)|gpt-6\.1-sol)(?:-\d{4}-\d{2}-\d{2})?$/.test(id)
+  /^(?:gpt-6-(?:luna|sol|astra)|gpt-6\.1-(?:sol|terra))(?:-\d{4}-\d{2}-\d{2})?$/.test(id)
 
 export const anthropicEffortModel = (id: string) =>
   /^claude-(?:(?:fable|mythos)-5-1|opus-5(?:-5)?|(?:sonnet|haiku)-5-5)(?:[-@]\d{8})?$/.test(

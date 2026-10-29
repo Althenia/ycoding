@@ -320,6 +320,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           apiModelID: model.id,
           sessionID: session.id,
           routeID: resolved.model.route.id,
+          endpointBaseURL: model.route.endpoint.baseURL,
           anthropicTtlSeconds: SessionRunnerCache.anthropicTtlSeconds({
             modelID: model.id,
             configured: efficiency.anthropicTtl,

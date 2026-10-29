@@ -6,13 +6,10 @@ import { Auth, LLMClient, RequestExecutor, WebSocketExecutor } from "../../src/r
 import * as Azure from "../../src/providers/azure"
 import * as GitHubCopilot from "../../src/providers/github-copilot"
 import * as OpenAI from "../../src/providers/openai"
+import * as OpenRouter from "../../src/providers/openrouter"
 import * as OpenAIResponses from "../../src/protocols/openai-responses"
 import * as ProviderShared from "../../src/protocols/shared"
-import {
-  continuationRequest,
-  continuationTool,
-  nativeOpenAIResponsesContinuation,
-} from "../continuation-scenarios"
+import { continuationRequest, continuationTool, nativeOpenAIResponsesContinuation } from "../continuation-scenarios"
 import { it } from "../lib/effect"
 import { dynamicResponse, fixedResponse } from "../lib/http"
 import { sseEvents } from "../lib/sse"
@@ -146,7 +143,9 @@ describe("OpenAI Responses route", () => {
           system: "Use the current tool contract.",
           messages: [
             Message.user("Check Paris."),
-            Message.assistant([ToolCallPart.make({ id: "call_weather_1", name: "get_weather", input: { city: "Paris" } })]),
+            Message.assistant([
+              ToolCallPart.make({ id: "call_weather_1", name: "get_weather", input: { city: "Paris" } }),
+            ]),
             Message.tool(
               ToolResultPart.make({ id: "call_weather_1", name: "get_weather", result: { temperature: 22 } }),
             ),
@@ -165,7 +164,7 @@ describe("OpenAI Responses route", () => {
       expect(prepared.body.previous_response_id).toBe("resp_previous_1")
       expect(prepared.body.input).toEqual([
         { role: "system", content: "Use the current tool contract." },
-        { type: "function_call_output", call_id: "call_weather_1", output: "{\"temperature\":22}" },
+        { type: "function_call_output", call_id: "call_weather_1", output: '{"temperature":22}' },
       ])
       expect(prepared.body.tools).toHaveLength(1)
       expect(prepared.body.tools?.[0]).toMatchObject({ type: "function", name: "get_weather" })
@@ -398,31 +397,31 @@ describe("OpenAI Responses route", () => {
 
   for (const route of ["openai-responses", "openai-responses-websocket", "github-copilot-responses"] as const) {
     for (const mode of [undefined, "explicit"] as const) {
-      it.effect(`preserves GPT-5.6 chronological system updates natively on ${route} with ${mode ?? "implicit"} cache mode`, () =>
-        Effect.gen(function* () {
-          const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-            LLM.request({
-              model: Model.update(model, {
-                id: "gpt-5.6",
-                route: model.route.with({ id: route }),
+      it.effect(
+        `preserves GPT-5.6 chronological system updates natively on ${route} with ${mode ?? "implicit"} cache mode`,
+        () =>
+          Effect.gen(function* () {
+            const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+              LLM.request({
+                model: Model.update(model, {
+                  id: "gpt-5.6",
+                  route: model.route.with({ id: route }),
+                }),
+                messages: [Message.user("Before."), Message.system("Trusted update."), Message.assistant("After.")],
+                providerOptions: mode ? { openai: { promptCacheOptions: { mode, ttl: "30m" } } } : undefined,
               }),
-              messages: [Message.user("Before."), Message.system("Trusted update."), Message.assistant("After.")],
-              providerOptions: mode
-                ? { openai: { promptCacheOptions: { mode, ttl: "30m" } } }
-                : undefined,
-            }),
-          )
+            )
 
-          expect(prepared.body.input.map((item) => ("role" in item ? item.role : item.type))).toEqual([
-            "user",
-            "system",
-            "assistant",
-          ])
-          expect(prepared.body.input[1]).toEqual({
-            role: "system",
-            content: [{ type: "input_text", text: "Trusted update." }],
-          })
-        }),
+            expect(prepared.body.input.map((item) => ("role" in item ? item.role : item.type))).toEqual([
+              "user",
+              "system",
+              "assistant",
+            ])
+            expect(prepared.body.input[1]).toEqual({
+              role: "system",
+              content: [{ type: "input_text", text: "Trusted update." }],
+            })
+          }),
       )
     }
   }
@@ -912,7 +911,9 @@ describe("OpenAI Responses route", () => {
         }),
       )
 
-      expect(JSON.stringify(prepared.body.input)).toContain("File (unnamed) (audio/mpeg) omitted: OpenAI Responses does not support media type audio/mpeg")
+      expect(JSON.stringify(prepared.body.input)).toContain(
+        "File (unnamed) (audio/mpeg) omitted: OpenAI Responses does not support media type audio/mpeg",
+      )
     }),
   )
 
@@ -1020,8 +1021,9 @@ describe("OpenAI Responses route", () => {
 
   it.effect("supports 24h prompt-cache retention for Meta Muse Spark", () =>
     Effect.gen(function* () {
-      const route = OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" })
-        .responses("muse-spark-1.3").route
+      const route = OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responses(
+        "muse-spark-1.3",
+      ).route
       const supported = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.request({
           model: Model.make({ id: "muse-spark-1.3", provider: "meta", route }),
@@ -1212,7 +1214,11 @@ describe("OpenAI Responses route", () => {
       const before = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(initial)
       const after = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.updateRequest(initial, {
-          messages: [...initial.messages, Message.system("State: goal active."), Message.user("TeamView: child completed.")],
+          messages: [
+            ...initial.messages,
+            Message.system("State: goal active."),
+            Message.user("TeamView: child completed."),
+          ],
         }),
       )
 
@@ -1225,7 +1231,9 @@ describe("OpenAI Responses route", () => {
         { role: "system", content: [{ type: "input_text", text: "State: goal active." }] },
         {
           role: "user",
-          content: [{ type: "input_text", text: "TeamView: child completed.", prompt_cache_breakpoint: { mode: "explicit" } }],
+          content: [
+            { type: "input_text", text: "TeamView: child completed.", prompt_cache_breakpoint: { mode: "explicit" } },
+          ],
         },
       ])
     }),
@@ -1263,13 +1271,13 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("retains early prepared anchors and bounds candidates as long history grows", () =>
+  it.effect("retains all prepared anchors as long history grows", () =>
     Effect.gen(function* () {
       const initial = LLM.request({
-        model: Model.update(model, { id: "gpt-5.6" }),
+        model: OpenAI.configure({ apiKey: "test" }).responses("gpt-5.6"),
         system: "Stable operator instructions.",
         messages: Array.from({ length: 60 }, (_, index) => Message.user(`History ${index}.`)),
-        cache: { system: true, messages: { tail: 50 } },
+        cache: { system: true, messages: { tail: Number.MAX_SAFE_INTEGER } },
         providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
       })
       const before = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(initial)
@@ -1286,15 +1294,62 @@ describe("OpenAI Responses route", () => {
               )
             : [],
         )
-        expect(marked).toHaveLength(50)
+        expect(marked).toEqual([
+          "Stable operator instructions.",
+          ...Array.from({ length: body === before.body ? 60 : 61 }, (_, index) => `History ${index}.`),
+        ])
         expect(marked.slice(0, 3)).toEqual(["Stable operator instructions.", "History 0.", "History 1."])
-        expect(marked).not.toContain("History 2.")
+        expect(marked).toContain("History 2.")
         expect(marked).toContain("History 59.")
       }
       expect(after.body.input.at(-1)).toEqual({
         role: "user",
         content: [{ type: "input_text", text: "History 60.", prompt_cache_breakpoint: { mode: "explicit" } }],
       })
+    }),
+  )
+
+  it.effect("keeps nonpublic long-history marker bounds and Codex key-only", () =>
+    Effect.gen(function* () {
+      const direct = OpenAI.configure({ apiKey: "test" }).responses("gpt-5.6")
+      const messages = Array.from({ length: 60 }, (_, index) => Message.user(`History ${index}.`))
+      for (const [routeID, endpoint] of [
+        ["openai-responses", "https://api.openai.test/v1"],
+        ["openrouter-responses", "https://openrouter.ai/api/v1"],
+        ["openai-codex-responses", "https://chatgpt.com/backend-api/codex"],
+      ] as const) {
+        const selected =
+          routeID === "openrouter-responses"
+            ? OpenRouter.configure({ apiKey: "test" }).model("gpt-5.6")
+            : Model.update(direct, { route: direct.route.with({ id: routeID, endpoint: { baseURL: endpoint } }) })
+        const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+          LLM.request({
+            model: selected,
+            system: "Stable system",
+            messages,
+            cache: { system: true, messages: { tail: 50 } },
+            providerOptions: {
+              openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" }, promptCacheKey: "fixture" },
+            },
+          }),
+        )
+        const marked = prepared.body.input.flatMap((item) =>
+          "content" in item && Array.isArray(item.content)
+            ? item.content.flatMap((part) =>
+                "prompt_cache_breakpoint" in part && part.prompt_cache_breakpoint && "text" in part ? [part.text] : [],
+              )
+            : [],
+        )
+        if (routeID === "openai-codex-responses") {
+          expect(marked).toEqual([])
+          expect(prepared.body.prompt_cache_options).toBeUndefined()
+        } else {
+          expect(marked).toHaveLength(50)
+          expect(marked.slice(0, 3)).toEqual(["Stable system", "History 0.", "History 1."])
+          expect(marked).not.toContain("History 2.")
+          expect(marked.at(-1)).toBe("History 59.")
+        }
+      }
     }),
   )
 
@@ -1790,17 +1845,28 @@ describe("OpenAI Responses route", () => {
         const part = { type: "output_text", text: "Recovered final answer" }
         const item = { type: "message", id: "msg_final", phase: "final_answer", content: [part] }
         const response = yield* LLMClient.generate(request).pipe(
-          Effect.provide(fixedResponse(sseEvents(
-            { type: "response.output_item.added", item: { type: "message", id: item.id, phase: item.phase } },
-            ...(boundary === "text" ? [{ type: "response.output_text.done", item_id: item.id, content_index: 0, text: part.text }] : []),
-            ...(boundary === "part" ? [{ type: "response.content_part.done", item_id: item.id, content_index: 0, part }] : []),
-            ...(boundary === "item" ? [{ type: "response.output_item.done", item }] : []),
-            { type: "response.completed", response: {
-              id: "resp_final",
-              ...(boundary === "response" ? { output: [item] } : {}),
-              usage: { input_tokens: 10, output_tokens: 6, output_tokens_details: { reasoning_tokens: 2 } },
-            } },
-          ))),
+          Effect.provide(
+            fixedResponse(
+              sseEvents(
+                { type: "response.output_item.added", item: { type: "message", id: item.id, phase: item.phase } },
+                ...(boundary === "text"
+                  ? [{ type: "response.output_text.done", item_id: item.id, content_index: 0, text: part.text }]
+                  : []),
+                ...(boundary === "part"
+                  ? [{ type: "response.content_part.done", item_id: item.id, content_index: 0, part }]
+                  : []),
+                ...(boundary === "item" ? [{ type: "response.output_item.done", item }] : []),
+                {
+                  type: "response.completed",
+                  response: {
+                    id: "resp_final",
+                    ...(boundary === "response" ? { output: [item] } : {}),
+                    usage: { input_tokens: 10, output_tokens: 6, output_tokens_details: { reasoning_tokens: 2 } },
+                  },
+                },
+              ),
+            ),
+          ),
         )
 
         expect(response.text).toBe(part.text)
@@ -1821,14 +1887,18 @@ describe("OpenAI Responses route", () => {
       const second = { type: "output_text", text: "Second answer" }
       const item = { type: "message", id: "msg_final", content: [first, second] }
       const response = yield* LLMClient.generate(request).pipe(
-        Effect.provide(fixedResponse(sseEvents(
-          { type: "response.output_text.delta", item_id: item.id, content_index: 0, delta: "First" },
-          { type: "response.output_text.done", item_id: item.id, content_index: 0, text: first.text },
-          { type: "response.content_part.done", item_id: item.id, content_index: 0, part: first },
-          { type: "response.output_text.done", item_id: item.id, content_index: 1, text: second.text },
-          { type: "response.output_item.done", item },
-          { type: "response.completed", response: { id: "resp_final", output: [item] } },
-        ))),
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.output_text.delta", item_id: item.id, content_index: 0, delta: "First" },
+              { type: "response.output_text.done", item_id: item.id, content_index: 0, text: first.text },
+              { type: "response.content_part.done", item_id: item.id, content_index: 0, part: first },
+              { type: "response.output_text.done", item_id: item.id, content_index: 1, text: second.text },
+              { type: "response.output_item.done", item },
+              { type: "response.completed", response: { id: "resp_final", output: [item] } },
+            ),
+          ),
+        ),
       )
 
       expect(response.message.content).toMatchObject([
@@ -1846,11 +1916,15 @@ describe("OpenAI Responses route", () => {
       const events: LLMEvent[] = []
       const error = yield* LLMClient.stream(request).pipe(
         Stream.runForEach((event) => Effect.sync(() => events.push(event))),
-        Effect.provide(fixedResponse(sseEvents(
-          { type: "response.output_text.delta", item_id: "msg_final", delta: "First" },
-          { type: "response.output_text.done", item_id: "msg_final", text: "Different" },
-          { type: "response.completed", response: { id: "resp_final" } },
-        ))),
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.output_text.delta", item_id: "msg_final", delta: "First" },
+              { type: "response.output_text.done", item_id: "msg_final", text: "Different" },
+              { type: "response.completed", response: { id: "resp_final" } },
+            ),
+          ),
+        ),
         Effect.flip,
       )
 
@@ -1864,13 +1938,23 @@ describe("OpenAI Responses route", () => {
     Effect.gen(function* () {
       const call = { type: "function_call", id: "fc_1", call_id: "call_1", name: "lookup", arguments: "{}" }
       const response = yield* LLMClient.generate(request).pipe(
-        Effect.provide(fixedResponse(sseEvents(
-          { type: "response.output_item.done", item: call },
-          { type: "response.completed", response: { id: "resp_final", output: [
-            call,
-            { type: "message", id: "msg_final", content: [{ type: "output_text", text: "Done" }] },
-          ] } },
-        ))),
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.output_item.done", item: call },
+              {
+                type: "response.completed",
+                response: {
+                  id: "resp_final",
+                  output: [
+                    call,
+                    { type: "message", id: "msg_final", content: [{ type: "output_text", text: "Done" }] },
+                  ],
+                },
+              },
+            ),
+          ),
+        ),
       )
 
       expect(response.text).toBe("Done")
@@ -1951,10 +2035,16 @@ describe("OpenAI Responses route", () => {
       const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
       expect(response.usage?.outputMayIncludeUnreportedReasoning).toBe(true)
       expect(response.usage?.outputTokens).toBe(12)
-      const textOnly = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(sseEvents(
-        { type: "response.output_text.delta", item_id: "msg_1", delta: "Answer" },
-        { type: "response.completed", response: { id: "resp_2", usage: { input_tokens: 5, output_tokens: 12 } } },
-      ))))
+      const textOnly = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.output_text.delta", item_id: "msg_1", delta: "Answer" },
+              { type: "response.completed", response: { id: "resp_2", usage: { input_tokens: 5, output_tokens: 12 } } },
+            ),
+          ),
+        ),
+      )
       expect(textOnly.usage?.outputMayIncludeUnreportedReasoning).toBeUndefined()
     }),
   )
@@ -2193,12 +2283,32 @@ describe("OpenAI Responses route", () => {
 
   it.effect("keeps retained users before an installed Codex remote checkpoint and uses the latest later boundary", () =>
     Effect.gen(function* () {
-      const first = { type: "reasoning" as const, text: "", providerMetadata: { openai: { opaqueCompactionItem: { type: "compaction", id: "old", encrypted_content: "old" } } } }
-      const remote = { type: "reasoning" as const, text: "", providerMetadata: { openai: { remoteCompactionV2: true, opaqueCompactionItem: { type: "compaction", id: "remote", encrypted_content: "remote" } } } }
+      const first = {
+        type: "reasoning" as const,
+        text: "",
+        providerMetadata: {
+          openai: { opaqueCompactionItem: { type: "compaction", id: "old", encrypted_content: "old" } },
+        },
+      }
+      const remote = {
+        type: "reasoning" as const,
+        text: "",
+        providerMetadata: {
+          openai: {
+            remoteCompactionV2: true,
+            opaqueCompactionItem: { type: "compaction", id: "remote", encrypted_content: "remote" },
+          },
+        },
+      }
       const direct = Model.update(model, { route: model.route.with({ id: "openai-codex-responses" }) })
       const request = LLM.request({
         model: direct,
-        messages: [Message.assistant([first]), Message.user("Retained real user"), Message.assistant([remote]), Message.user("Continue")],
+        messages: [
+          Message.assistant([first]),
+          Message.user("Retained real user"),
+          Message.assistant([remote]),
+          Message.user("Continue"),
+        ],
         providerOptions: { openai: { store: false } },
       })
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(request)
@@ -2210,35 +2320,47 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("selects a Copilot stateless compaction boundary for the shared context gate", () => Effect.sync(() => {
-    const request = LLM.request({
-      model: Model.update(model, { route: model.route.with({ id: "ai-sdk:@ai-sdk/github-copilot" }) }),
-      messages: [
-        Message.user("Old prefix"),
-        Message.assistant([{ type: "reasoning", text: "", providerMetadata: {
-          copilot: { opaqueCompactionItem: { type: "compaction", encrypted_content: "opaque" } },
-        } }]),
-        Message.user("New suffix"),
-      ],
-      providerOptions: { copilot: { store: false } },
-    })
-    expect(OpenAIResponses.pruneMessagesForServerCompaction(request).length).toBe(2)
-  }))
+  it.effect("selects a Copilot stateless compaction boundary for the shared context gate", () =>
+    Effect.sync(() => {
+      const request = LLM.request({
+        model: Model.update(model, { route: model.route.with({ id: "ai-sdk:@ai-sdk/github-copilot" }) }),
+        messages: [
+          Message.user("Old prefix"),
+          Message.assistant([
+            {
+              type: "reasoning",
+              text: "",
+              providerMetadata: {
+                copilot: { opaqueCompactionItem: { type: "compaction", encrypted_content: "opaque" } },
+              },
+            },
+          ]),
+          Message.user("New suffix"),
+        ],
+        providerOptions: { copilot: { store: false } },
+      })
+      expect(OpenAIResponses.pruneMessagesForServerCompaction(request).length).toBe(2)
+    }),
+  )
 
   it.effect("lowers the Codex remote-v2 trigger only on a Codex route", () =>
     Effect.gen(function* () {
       const trigger = Message.make({ role: "user", content: [], native: { openai: { compactionTrigger: true } } })
-      const codex = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(LLM.request({
-        model: Model.update(model, { route: model.route.with({ id: "openai-codex-responses" }) }),
-        messages: [Message.user("Earlier context"), trigger],
-        providerOptions: { openai: { parallelToolCalls: true } },
-      }))
+      const codex = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: Model.update(model, { route: model.route.with({ id: "openai-codex-responses" }) }),
+          messages: [Message.user("Earlier context"), trigger],
+          providerOptions: { openai: { parallelToolCalls: true } },
+        }),
+      )
       expect(codex.body.input.at(-1)).toEqual({ type: "compaction_trigger" })
       expect(codex.body.parallel_tool_calls).toBe(true)
-      const publicRoute = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(LLM.request({
-        model,
-        messages: [trigger],
-      })).pipe(Effect.flip)
+      const publicRoute = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          messages: [trigger],
+        }),
+      ).pipe(Effect.flip)
       expect(publicRoute).toBeInstanceOf(LLMError)
     }),
   )
@@ -2246,15 +2368,22 @@ describe("OpenAI Responses route", () => {
   it.effect("distinguishes completed remote compaction from incomplete response settlement", () =>
     Effect.gen(function* () {
       const codex = Model.update(model, { route: model.route.with({ id: "openai-codex-responses" }) })
-      const request = LLM.request({ model: codex, messages: [Message.make({ role: "user", content: [], native: { openai: { compactionTrigger: true } } })] })
-      const completed = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(sseEvents(
-        { type: "response.completed", response: {} },
-      ))))
-      const incomplete = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(sseEvents(
-        { type: "response.incomplete", response: {} },
-      ))))
-      expect(completed.events.find(LLMEvent.is.stepFinish)?.providerMetadata?.openai?.remoteCompactionCompleted).toBe(true)
-      expect(incomplete.events.find(LLMEvent.is.stepFinish)?.providerMetadata?.openai?.remoteCompactionCompleted).toBe(false)
+      const request = LLM.request({
+        model: codex,
+        messages: [Message.make({ role: "user", content: [], native: { openai: { compactionTrigger: true } } })],
+      })
+      const completed = yield* LLMClient.generate(request).pipe(
+        Effect.provide(fixedResponse(sseEvents({ type: "response.completed", response: {} }))),
+      )
+      const incomplete = yield* LLMClient.generate(request).pipe(
+        Effect.provide(fixedResponse(sseEvents({ type: "response.incomplete", response: {} }))),
+      )
+      expect(completed.events.find(LLMEvent.is.stepFinish)?.providerMetadata?.openai?.remoteCompactionCompleted).toBe(
+        true,
+      )
+      expect(incomplete.events.find(LLMEvent.is.stepFinish)?.providerMetadata?.openai?.remoteCompactionCompleted).toBe(
+        false,
+      )
     }),
   )
 
@@ -2267,9 +2396,7 @@ describe("OpenAI Responses route", () => {
         future_field: { version: 2 },
       }
       const stored = OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responses("gpt-5.6")
-      const response = yield* LLMClient.generate(
-        LLM.request({ model: stored, prompt: "Before compaction." }),
-      ).pipe(
+      const response = yield* LLMClient.generate(LLM.request({ model: stored, prompt: "Before compaction." })).pipe(
         Effect.provide(
           fixedResponse(
             sseEvents(
@@ -3022,7 +3149,9 @@ describe("OpenAI Responses route", () => {
         }),
       )
 
-      expect(JSON.stringify(prepared.body.input)).toContain("File (unnamed) (application/pdf) omitted: OpenAI Responses does not support media type application/pdf")
+      expect(JSON.stringify(prepared.body.input)).toContain(
+        "File (unnamed) (application/pdf) omitted: OpenAI Responses does not support media type application/pdf",
+      )
     }),
   )
 

@@ -83,7 +83,7 @@ export const prepare = Effect.fn("SessionEffort.prepare")(function* (input: {
       row.account !== (input.context.model.accountIdentityDigest ?? null) ||
       row.model.providerID !== input.context.model.ref.providerID ||
       row.model.id !== input.context.model.ref.id ||
-      row.model.profile !== input.context.model.ref.profile
+      (row.model.profile !== input.context.model.ref.profile && !input.context.model.accountIdentityDigest)
       ? []
       : [{ ...row, index }]
   })

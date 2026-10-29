@@ -66,6 +66,7 @@ const prepare = (
     apiModelID: "gpt-5.6",
     sessionID,
     routeID: "openai-responses",
+    endpointBaseURL: "https://api.openai.com/v1",
     accountIdentityDigest: "4".repeat(64),
     policyRevision: CACHE_POLICY_REVISION,
     permissions: [{ action: "read", resource: "**", effect: "allow" }],
@@ -151,7 +152,14 @@ const compileSelectedContext = async (
   })
   const prepared = await Effect.runPromise(
     LLMClient.prepare(
-      LLM.request({ model, system, tools, messages: lowered, providerOptions: cache.providerOptions, cache: cache.cache }),
+      LLM.request({
+        model,
+        system,
+        tools,
+        messages: lowered,
+        providerOptions: cache.providerOptions,
+        cache: cache.cache,
+      }),
     ),
   )
   return { body: prepared.body, lowered }
@@ -183,10 +191,7 @@ const markedText = (value: unknown, matching: (text: string) => boolean): string
 const inputTextBlocks = (value: unknown): Array<Record<string, unknown>> => {
   if (Array.isArray(value)) return value.flatMap(inputTextBlocks)
   if (!isRecord(value)) return []
-  return [
-    ...(value.type === "input_text" ? [value] : []),
-    ...Object.values(value).flatMap(inputTextBlocks),
-  ]
+  return [...(value.type === "input_text" ? [value] : []), ...Object.values(value).flatMap(inputTextBlocks)]
 }
 
 const recordsWithText = (value: unknown): Array<Record<string, unknown> & { readonly text: string }> => {
@@ -197,6 +202,48 @@ const recordsWithText = (value: unknown): Array<Record<string, unknown> & { read
     ...Object.values(value).flatMap(recordsWithText),
   ]
 }
+
+test("selects all managed endpoints only for official direct Responses", () => {
+  const input = {
+    projectID: "project",
+    directory: "/repo",
+    providerID: "openai",
+    modelID: "gpt-5.6",
+    apiModelID: "gpt-5.6",
+    sessionID: "session",
+    routeID: "openai-responses",
+    policyRevision: CACHE_POLICY_REVISION,
+    permissions: [],
+    system: [SystemPart.make("Stable")],
+    tools: [],
+    openaiMode: "explicit" as const,
+  }
+  for (const endpointBaseURL of ["https://api.openai.com/v1", "https://api.openai.com/v1/"]) {
+    expect(SessionRunnerCache.providerOptions({ ...input, endpointBaseURL }).cache?.messages).toEqual({
+      tail: Number.MAX_SAFE_INTEGER,
+    })
+    expect(
+      SessionRunnerCache.providerOptions({ ...input, endpointBaseURL, routeID: "openai-responses-websocket" }).cache
+        ?.messages,
+    ).toEqual({ tail: Number.MAX_SAFE_INTEGER })
+  }
+  for (const endpointBaseURL of [
+    undefined,
+    "https://api.openai.test/v1",
+    "https://api.openai.com/v1/other",
+    "https://api.openai.com/v1?x=1",
+  ]) {
+    expect(SessionRunnerCache.providerOptions({ ...input, endpointBaseURL }).cache?.messages).toEqual({ tail: 50 })
+  }
+  expect(
+    SessionRunnerCache.providerOptions({
+      ...input,
+      providerID: "openrouter",
+      routeID: "openrouter-responses",
+      endpointBaseURL: "https://api.openai.com/v1",
+    }).cache?.messages,
+  ).toEqual({ tail: 50 })
+})
 
 test("Dots appended state transitions preserve earlier wire input and cache configuration", async () => {
   const enabled = Message.system("Historical Dots reporting instruction.")
@@ -285,12 +332,23 @@ test("compiles one shared marked prefix and records offline wire metrics", async
   )
   expect(firstSharedWirePart?.prompt_cache_breakpoint).toEqual({ mode: "explicit" })
   expect(volatileWirePart?.prompt_cache_breakpoint).toBeUndefined()
-  expect(volatileInputText.filter((part) => part.prompt_cache_breakpoint !== undefined).length).toBe(50)
+  expect(
+    volatileInputText
+      .filter((part) => typeof part.text === "string" && part.text.startsWith("Later eligible message "))
+      .map((part) => [part.text, part.prompt_cache_breakpoint]),
+  ).toEqual(laterMessages.map((_, index) => [`Later eligible message ${index}`, { mode: "explicit" }]))
   expect(implicit.body.prompt_cache_options).toEqual({ mode: "implicit", ttl: "30m" })
-  expect(inputTextBlocks(implicit.body.input).filter((part) => part.prompt_cache_breakpoint !== undefined).length).toBe(49)
+  expect(
+    inputTextBlocks(implicit.body.input)
+      .filter((part) => typeof part.text === "string" && part.text.startsWith("Later eligible message "))
+      .map((part) => [part.text, part.prompt_cache_breakpoint]),
+  ).toEqual(laterMessages.map((_, index) => [`Later eligible message ${index}`, { mode: "explicit" }]))
   expect(
     inputTextBlocks(implicit.body.input).some(
-      (part) => typeof part.text === "string" && part.text.includes("<shared-context>") && part.prompt_cache_breakpoint !== undefined,
+      (part) =>
+        typeof part.text === "string" &&
+        part.text.includes("<shared-context>") &&
+        part.prompt_cache_breakpoint !== undefined,
     ),
   ).toBe(true)
 })
@@ -299,7 +357,10 @@ test("keeps selected-context wire controls unchanged for Codex, Anthropic, OpenR
   const openai = configure({ apiKey: "fixture-key" }).responses("gpt-5.6")
   const models = [
     Model.update(openai, {
-      route: openai.route.with({ id: "openai-codex-responses", endpoint: { baseURL: "https://chatgpt.com/backend-api/codex" } }),
+      route: openai.route.with({
+        id: "openai-codex-responses",
+        endpoint: { baseURL: "https://chatgpt.com/backend-api/codex" },
+      }),
     }),
     model("claude-sonnet-4-5", { apiKey: "fixture-key" }),
     responses("openai/gpt-5.6", { apiKey: "fixture-key" }),
@@ -329,7 +390,9 @@ test("keeps selected-context wire controls unchanged for Codex, Anthropic, OpenR
     )
     expect(selectedBody.match(/cache_control/g)?.length ?? 0).toBe(flattenedBody.match(/cache_control/g)?.length ?? 0)
     expect(
-      recordsWithText(selected.body).find((part) => part.text === composed.text.slice(0, composed.sharedContext.prefixLength))?.cache_control,
+      recordsWithText(selected.body).find(
+        (part) => part.text === composed.text.slice(0, composed.sharedContext.prefixLength),
+      )?.cache_control,
     ).toBeUndefined()
   }
 })

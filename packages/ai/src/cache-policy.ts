@@ -65,7 +65,8 @@ const COPILOT_KEY_ONLY_ROUTES = new Set(["github-copilot-chat", "github-copilot-
 const respectsInlineHints = (request: LLMRequest) =>
   RESPECTS_INLINE_HINTS.has(request.model.route.protocol) ||
   INLINE_HINT_ROUTES.has(request.model.route.id) ||
-  (request.model.route.id === "ai-sdk:@ai-sdk/github-copilot" && String(request.model.id).toLowerCase().includes("claude")) ||
+  (request.model.route.id === "ai-sdk:@ai-sdk/github-copilot" &&
+    String(request.model.id).toLowerCase().includes("claude")) ||
   (!COPILOT_KEY_ONLY_ROUTES.has(request.model.route.id) &&
     OpenAIOptions.supportsPromptCacheBreakpoints(request.model.route.id, request.model.id) &&
     (["openai-codex-responses", "openai-codex-websocket-responses"].includes(request.model.route.id) ||
@@ -121,8 +122,7 @@ const manualHints = (request: LLMRequest): ReadonlyArray<ManualHint> => [
 ]
 
 const coordinateAutoHints = (request: LLMRequest) => {
-  if (OpenAIOptions.supportsPromptCacheBreakpoints(request.model.route.id, request.model.id))
-    return () => true
+  if (OpenAIOptions.supportsPromptCacheBreakpoints(request.model.route.id, request.model.id)) return () => true
   const manual = manualHints(request)
   const state = { remaining: Math.max(0, INLINE_HINT_CAP - manual.length) }
   return (position: HintPosition, hint: CacheHint) => {
@@ -287,8 +287,9 @@ const markAutoMessages = (
   let next: Message[] | undefined
   // Ascending so the budget is spent in wire order: when manual hints leave
   // fewer slots than requested, the older anchor survives and the tail is shed.
-  for (const index of
-    gpt56Roles === undefined ? rollingMarkableMessages(messages, anchors) : lastMarkableMessages(messages, anchors, gpt56Roles)) {
+  for (const index of gpt56Roles === undefined
+    ? rollingMarkableMessages(messages, anchors)
+    : lastMarkableMessages(messages, anchors, gpt56Roles)) {
     const current = (next ?? messages)[index]!
     const marked = markMessage(current, index, hint, reserve, gpt56Roles)
     if (marked === current) continue
@@ -305,6 +306,7 @@ const markMessages = (
   reserve: (position: HintPosition, hint: CacheHint) => boolean,
   gpt56Roles: Gpt56MarkerRoles = undefined,
   gpt56Limit = Number.MAX_SAFE_INTEGER,
+  publicResponses = false,
 ): ReadonlyArray<Message> => {
   if (messages.length === 0) return messages
   if (strategy === "latest-user-message")
@@ -314,22 +316,19 @@ const markMessages = (
   if (gpt56Roles !== undefined) {
     const limit = Math.min(strategy.tail, gpt56Limit)
     if (limit <= 0) return messages
-    // Keep the stable earliest prefix breakpoint within the 50-window even after
-    // history grows beyond the provider read limit. Without this, newest-only
-    // selection evicts the early prefix and the hit drops to 0-20% and stays
-    // poisoned (generation is now stable at 0). Reserve up to 2 slots for the
-    // earliest markable messages to ensure the combined system + early prefix
-    // exceeds the provider's 1024-token minimum and remains cacheable; fill the
-    // remainder with the newest tail. Mainchat with 186k history was hitting
-    // 0-35% because a single early message (often <1024 tokens) was not
-    // cacheable, while short subagent histories stayed below the 50 limit and
-    // kept 80-100% hits.
-    const prefixReserve =
-      limit > 2 && limit === gpt56Limit && messages.length > gpt56Limit ? 2 : limit > 1 && messages.length > gpt56Limit ? 1 : 0
-    const tailCount = limit - prefixReserve
-    const prefixIndices = prefixReserve > 0 ? firstMarkableMessages(messages, prefixReserve, gpt56Roles) : []
-    const tailIndices = lastMarkableMessages(messages, tailCount, gpt56Roles)
-    const combined = [...new Set([...prefixIndices, ...tailIndices])].sort((a, b) => a - b)
+    const prefixReserve = publicResponses
+      ? 0
+      : limit > 2 && limit === gpt56Limit && messages.length > gpt56Limit
+        ? 2
+        : limit > 1 && messages.length > gpt56Limit
+          ? 1
+          : 0
+    const combined = [
+      ...new Set([
+        ...firstMarkableMessages(messages, prefixReserve, gpt56Roles),
+        ...lastMarkableMessages(messages, limit - prefixReserve, gpt56Roles),
+      ]),
+    ].sort((a, b) => a - b)
     let next: Message[] | undefined
     for (const index of combined) {
       const current = (next ?? messages)[index]!
@@ -351,11 +350,6 @@ const markMessages = (
   return next ?? messages
 }
 
-// Manual hints share OpenAI's read window with generated hints. Keep the stable
-// earliest prefix within the 50 window plus the newest tail, evicting the middle
-// when over limit. Previously only the newest were kept, so after history >50
-// the early prefix (system + first user) was evicted and the hit dropped to
-// 0-20% with no recovery (generation is now stable at 0).
 const boundGpt56Messages = (messages: ReadonlyArray<Message>, limit: number): ReadonlyArray<Message> => {
   if (limit <= 0) {
     let next: Message[] | undefined
@@ -410,13 +404,37 @@ const boundGpt56Messages = (messages: ReadonlyArray<Message>, limit: number): Re
   return next ?? messages
 }
 
+const publicResponsesEndpoint = (request: LLMRequest) => {
+  if (
+    request.model.provider !== "openai" ||
+    !["openai-responses", "openai-responses-websocket"].includes(request.model.route.id) ||
+    OpenAIOptions.publicPromptCacheCapability(request.model.route.id, request.model.id) !== "gpt-5.6"
+  )
+    return false
+  try {
+    const url = new URL(request.model.route.endpoint.baseURL ?? "")
+    return (
+      url.protocol === "https:" &&
+      url.hostname === "api.openai.com" &&
+      url.port === "" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.pathname.replace(/\/$/, "") === "/v1" &&
+      url.search === "" &&
+      url.hash === ""
+    )
+  } catch {
+    return false
+  }
+}
+
 export const applyCachePolicy = (request: LLMRequest): LLMRequest => {
   if (!respectsInlineHints(request)) return request
   const policy = resolve(request.cache)
   const auto = request.cache === undefined || request.cache === "auto"
   const gpt56 =
     !COPILOT_KEY_ONLY_ROUTES.has(request.model.route.id) &&
-    OpenAIOptions.supportsPromptCacheBreakpoints(request.model.route.id, request.model.id)
+    OpenAIOptions.publicPromptCacheCapability(request.model.route.id, request.model.id) === "gpt-5.6"
   if (!policy.tools && !policy.system && !policy.messages && !gpt56) return request
 
   // `auto` splits buckets by lifetime; an explicit policy is taken literally, so
@@ -444,25 +462,32 @@ export const applyCachePolicy = (request: LLMRequest): LLMRequest => {
         openai: { promptCacheOptions: { ...promptCacheOptions, mode: "explicit" } },
       })
     : request.providerOptions
-  // The provider-managed tail cannot honor YCoding's local volatility boundary.
-  // Volatile suffixes switch to explicit mode above; only remaining implicit
-  // requests reserve the managed breakpoint's read-candidate slot.
-  const managedImplicitBreakpoint = gpt56 && promptCacheOptions?.mode !== "explicit" && !explicitVolatileSuffix
-  const implicitReserved = managedImplicitBreakpoint ? 1 : 0
-  const gpt56MessageLimit = gpt56
-    ? Math.max(
-        0,
-        OPENAI_PROMPT_CACHE_READ_CANDIDATE_LIMIT -
-          implicitReserved -
-          (system.some((part) => part.cache !== undefined) ? 1 : 0),
-      )
-    : Number.MAX_SAFE_INTEGER
+  const publicResponses = publicResponsesEndpoint(request)
+  const implicitReserved = gpt56 && promptCacheOptions?.mode !== "explicit" && !explicitVolatileSuffix ? 1 : 0
+  const gpt56MessageLimit =
+    gpt56 && !publicResponses
+      ? Math.max(
+          0,
+          OPENAI_PROMPT_CACHE_READ_CANDIDATE_LIMIT -
+            implicitReserved -
+            (system.some((part) => part.cache !== undefined) ? 1 : 0),
+        )
+      : Number.MAX_SAFE_INTEGER
   const selectedMessages = !policy.messages
     ? request.messages
     : auto
       ? markAutoMessages(request.messages, AUTO_MESSAGE_ANCHORS, tailHint, reserve, gpt56Roles)
-      : markMessages(request.messages, policy.messages, tailHint, reserve, gpt56Roles, gpt56MessageLimit)
-  const messages = gpt56 ? boundGpt56Messages(selectedMessages, gpt56MessageLimit) : selectedMessages
+      : markMessages(
+          request.messages,
+          policy.messages,
+          tailHint,
+          reserve,
+          gpt56Roles,
+          gpt56MessageLimit,
+          publicResponses,
+        )
+  const messages =
+    gpt56 && !publicResponses ? boundGpt56Messages(selectedMessages, gpt56MessageLimit) : selectedMessages
 
   if (
     tools === request.tools &&

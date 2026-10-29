@@ -4,12 +4,20 @@ import { Anthropic, OpenAI, OpenRouter } from "../src/providers"
 import { anthropicEffortModel, defaultEffort, mechanism } from "../src/protocols/utils/effort-update"
 
 test("effort updates require an explicitly supported public endpoint and model configuration", () => {
-  for (const id of ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-sol-2026-10-01"]) {
+  for (const id of [
+    "gpt-6-luna",
+    "gpt-6-sol",
+    "gpt-6-astra",
+    "gpt-6.1-sol",
+    "gpt-6.1-sol-2026-10-01",
+    "gpt-6.1-terra",
+    "gpt-6.1-terra-2026-10-01",
+  ]) {
     expect(
       mechanism(LLM.request({ model: OpenAI.configure({ apiKey: "fixture" }).responses(id), prompt: "Input" })),
     ).toBe("openai")
   }
-  for (const id of ["gpt-5.6", "gpt-6-unknown", "gpt-7-sol", "gpt-6.2-sol"]) {
+  for (const id of ["gpt-5.6", "gpt-6-unknown", "gpt-7-sol", "gpt-6.2-sol", "gpt-6.1-terra-pro", "gpt-6.2-terra"]) {
     expect(
       mechanism(LLM.request({ model: OpenAI.configure({ apiKey: "fixture" }).responses(id), prompt: "Input" })),
     ).toBeUndefined()
@@ -62,6 +70,7 @@ test("Anthropic per-message effort uses the documented allow-list, adaptive thin
   expect(defaultEffort("claude-haiku-5-5")).toBe("medium")
   expect(defaultEffort("claude-sonnet-5-5")).toBe("high")
   expect(defaultEffort("gpt-6.1-sol")).toBe("medium")
+  expect(defaultEffort("gpt-6.1-terra")).toBe("medium")
   expect(defaultEffort("gpt-6-astra")).toBeUndefined()
   expect(defaultEffort("claude-opus-5-5@20260915")).toBe("medium")
 })

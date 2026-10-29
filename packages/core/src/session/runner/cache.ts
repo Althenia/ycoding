@@ -205,6 +205,7 @@ export interface ProviderOptionsInput extends PromptCacheNamespaceInput {
   readonly apiModelID: string
   readonly sessionID: string
   readonly routeID: string
+  readonly endpointBaseURL?: string
   readonly generation?: number
   readonly anthropicTtlSeconds?: 300 | 3600
   readonly openaiMode?: "auto" | "implicit" | "explicit"
@@ -246,9 +247,11 @@ export const providerOptions = (
 ) => {
   const baselineKey = prepared.promptCacheKey
   const experimentalKey = familyExperimentKey(input, baselineKey)
-  const wirePromptCacheKey = experimentalKey ?? (supportsPromptCacheKey(input.routeID)
-    ? promptCacheKeyForGeneration(input.sessionID, baselineKey, input.generation)
-    : baselineKey)
+  const wirePromptCacheKey =
+    experimentalKey ??
+    (supportsPromptCacheKey(input.routeID)
+      ? promptCacheKeyForGeneration(input.sessionID, baselineKey, input.generation)
+      : baselineKey)
   const providerSessionID = providerSessionNamespace({
     projectID: input.projectID,
     sessionID: input.sessionID,
@@ -300,9 +303,15 @@ export const providerOptions = (
     ? {
         tools: false,
         system: true,
-        // The AI lowerer reserves the system and managed implicit slots, then
-        // selects the newest eligible boundaries within this provider limit.
-        messages: { tail: OPENAI_PROMPT_CACHE_READ_CANDIDATE_LIMIT },
+        messages: {
+          tail:
+            input.providerID === "openai" &&
+            (input.routeID === "openai-responses" || input.routeID === "openai-responses-websocket") &&
+            openaiCacheCapability === "gpt-5.6" &&
+            isPublicOpenAIResponsesEndpoint(input.endpointBaseURL)
+              ? Number.MAX_SAFE_INTEGER
+              : OPENAI_PROMPT_CACHE_READ_CANDIDATE_LIMIT,
+        },
       }
     : copilotClaudeChat
       ? { tools: false, system: true, messages: { tail: 2 } }
