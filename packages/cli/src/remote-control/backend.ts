@@ -16,6 +16,11 @@ export function createRemoteControlBackend(input: { readonly channel: NativeDots
     pending: channel.pending,
     settle: channel.settle,
     subscribe: channel.subscribe,
+    renameThread: async (rootID, title) => { await channel.renameRoot({ rootID, title }) },
+    archiveThread: async (rootID) => { await channel.archiveRoot(rootID) },
+    unarchiveThread: channel.unarchiveRoot,
+    deleteThread: async (rootID) => { await channel.removeRoot(rootID) },
+    subscribeEscalations: channel.subscribeEscalations,
     retire: channel.retire,
   }
 }

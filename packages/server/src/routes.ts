@@ -29,6 +29,8 @@ import { SessionTitle } from "@ycoding-ai/core/session/title"
 import { Shell } from "@ycoding-ai/core/shell"
 import { Job } from "@ycoding-ai/core/job"
 import { Global } from "@ycoding-ai/core/global"
+import { KV } from "@ycoding-ai/core/kv"
+import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { InstructionDiscovery } from "@ycoding-ai/core/instruction-discovery"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { UsageViewStart } from "@ycoding-ai/core/usage-view-start"
@@ -67,6 +69,8 @@ import { RemoteConnection } from "./remote-connection"
 import { TelemetryConsent } from "@ycoding-ai/core/telemetry-consent"
 import { DotsAccess } from "@ycoding-ai/core/dots/access"
 import { RetentionSettings } from "@ycoding-ai/core/retention-settings"
+import { SessionDecisions } from "@ycoding-ai/core/session/decisions"
+import { DecisionHandler } from "./handlers/decision"
 
 const applicationServices = LayerNode.group([
   CoordinationRuntime.node,
@@ -74,6 +78,9 @@ const applicationServices = LayerNode.group([
   CoordinationSettings.node,
   Database.node,
   DotsAccess.node,
+  KV.node,
+  Global.node,
+  FSUtil.node,
   EventRuntime.node,
   EventLogger.node,
   httpClient,
@@ -101,6 +108,7 @@ const applicationServices = LayerNode.group([
   SessionExecution.node,
   SessionOrchestration.node,
   SessionReview.node,
+  SessionDecisions.node,
   SessionOrchestrationNotifier.node,
   KeepAwake.node,
   TelemetryConsent.node,
@@ -188,7 +196,7 @@ function makeRoutes<AuthError, AuthServices>(
         ServerInfo.layer(serviceURLs),
       )
       return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
-        Layer.provide(handlers.pipe(Layer.provide(services), Layer.provide(processIdentityLayer(sourceEpoch)), Layer.provide(Layer.succeed(RemoteConnection.Service, remote)))),
+        Layer.provide(Layer.merge(handlers, DecisionHandler).pipe(Layer.provide(services), Layer.provide(processIdentityLayer(sourceEpoch)), Layer.provide(Layer.succeed(RemoteConnection.Service, remote)))),
         Layer.provide(formLocationLayer),
         Layer.provide(sessionLocationLayer),
         Layer.provide(layer),

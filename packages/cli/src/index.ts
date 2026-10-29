@@ -9,7 +9,11 @@ if (!runRegexProcess()) {
   const { main } = await import("./main")
 
   const handlers = Runtime.handlers(Commands, {
+    decision: { list: () => import("./commands/handlers/decision/list") },
     coordination: () => import("./commands/handlers/coordination"),
+    dots: {
+      attach: () => import("./commands/handlers/dots/attach"),
+    },
     $: () => import("./commands/handlers/default"),
     api: () => import("./commands/handlers/api"),
     auth: {

@@ -27,6 +27,10 @@ export function DotsConnection(props: { readonly returnFocus: HTMLElement; reado
       queryFn: ({ signal }: { signal: AbortSignal }) => dotsClient(remote.store.link, owner!).get(signal),
     }
   })
+  const [confirmingAttach, setConfirmingAttach] = createSignal(false)
+  createEffect(() => {
+    if (!view().canAttach) setConfirmingAttach(false)
+  })
   createEffect(() => {
     if (mutation()?.key !== JSON.stringify(key())) setMutation(undefined)
   })
@@ -43,17 +47,16 @@ export function DotsConnection(props: { readonly returnFocus: HTMLElement; reado
     })
   }
   const refresh = () => { if (visible() && scope()) void query().refetch() }
-  const change = () => {
+  const run = (call: (client: ReturnType<typeof dotsClient>) => ReturnType<ReturnType<typeof dotsClient>["set"]>, subject: string) => {
     const owner = scope()
-    const status = query().data
-    if (!owner || !status || !visible() || !view().canChange) return
+    if (!owner || !visible()) return
     const pending = { key: JSON.stringify(key()), pending: true }
     setMutation(pending)
     const owns = () => visible() && mutation() === pending && pending.key === JSON.stringify(key())
-    void dotsClient(remote.store.link, owner).set(!status.access.enabled, status.access.revision).then(async (outcome) => {
+    void call(dotsClient(remote.store.link, owner)).then(async (outcome) => {
       if (!owns()) return
       if (outcome.status !== "ok") {
-        setMutation({ key: pending.key, pending: false, message: describeOutcome(outcome, "Dots access") })
+        setMutation({ key: pending.key, pending: false, message: describeOutcome(outcome, subject) })
         refresh()
         return
       }
@@ -61,9 +64,18 @@ export function DotsConnection(props: { readonly returnFocus: HTMLElement; reado
       if (owns()) setMutation(undefined)
     }, () => {
       if (!owns()) return
-      setMutation({ key: pending.key, pending: false, message: "Dots access outcome is unknown. Refresh to check; the change was not replayed." })
+      setMutation({ key: pending.key, pending: false, message: `${subject} outcome is unknown. Refresh to check; the change was not replayed.` })
       refresh()
     })
+  }
+  const change = () => {
+    const status = query().data
+    if (!status || !view().canChange) return
+    run((client) => client.set(!status.access.enabled, status.access.revision), "Dots access")
+  }
+  const attach = () => {
+    setConfirmingAttach(false)
+    if (view().canAttach) run((client) => client.attach(), "Dots computer")
   }
   return <Portal><Modal label="Dots connection" class="overlay--dialog overlay--dots" returnFocus={props.returnFocus} onDismiss={() => setVisible(false)} onClose={props.onClose}>
     <div class="stack dots-connection" aria-busy={mutation()?.pending === true}>
@@ -75,6 +87,7 @@ export function DotsConnection(props: { readonly returnFocus: HTMLElement; reado
           { label: "Configuration", value: view().configuration, message: view().configurationMessage },
           { label: "Access", value: view().access },
           { label: "Transport", value: view().transport, message: view().connectionMessage },
+          ...(view().executor ? [{ label: "Executor", value: view().executor!.label, message: view().executor!.message }] : []),
         ]}>{(row) => <div><dt class="field__label">{row.label}</dt><dd>{row.value}<Show when={row.message}><p class="field__hint">{row.message}</p></Show></dd></div>}</For>
       </dl>
       <Show when={view().notice}><p class="field__hint" role={query().isError ? "alert" : "status"}>{view().notice}</p></Show>
@@ -83,6 +96,17 @@ export function DotsConnection(props: { readonly returnFocus: HTMLElement; reado
         <button type="button" class="button button--primary" disabled={!view().canChange} onClick={change}>{view().action}</button>
         <button type="button" class="button button--secondary" disabled={!scope() || query().isFetching || mutation()?.pending} onClick={refresh}>Refresh</button>
       </div>
+      <Show when={view().executor?.label === "Not attached"}>
+        <Show when={confirmingAttach()} fallback={<div><button type="button" class="button button--secondary" disabled={!view().canAttach} onClick={() => setConfirmingAttach(true)}>{view().attachAction}</button></div>}>
+          <div class="stack" role="group" aria-label="Confirm computer change">
+            <p class="field__hint">{view().attachConfirmation}</p>
+            <div class="dots-connection__actions">
+              <button type="button" class="button button--primary" disabled={!view().canAttach} onClick={attach}>Detach others and use this computer</button>
+              <button type="button" class="button button--secondary" onClick={() => setConfirmingAttach(false)}>Cancel</button>
+            </div>
+          </div>
+        </Show>
+      </Show>
     </div>
   </Modal></Portal>
 }

@@ -1,12 +1,14 @@
 import { expect } from "bun:test"
 import type { ServerWebSocket } from "bun"
-import { DateTime, Effect, Schema, Stream } from "effect"
+import { NodeFileSystem } from "@effect/platform-node"
+import { DateTime, Effect, Layer, Schema, Stream } from "effect"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Database } from "@ycoding-ai/core/database/database"
 import { DotsAccess } from "@ycoding-ai/core/dots/access"
 import { NativeDots } from "@ycoding-ai/core/dots/native"
+import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { NativeDecisions } from "@ycoding-ai/core/dots/native-decisions"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
@@ -28,6 +30,7 @@ import { SessionReview } from "@ycoding-ai/core/session/review"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { Money } from "@ycoding-ai/schema/money"
 import { reviewLayer, reviewLocation } from "../../core/test/fixture/review"
+import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { testEffect } from "../../core/test/lib/effect"
 import { createRemoteControlHost } from "../src/remote-control/host"
 import { remoteControlTransport } from "../src/remote-control/bootstrap"
@@ -88,9 +91,17 @@ it.live("local native WebSocket composition admits prompts, settles real Forms a
     id: Credential.ID.make("cred_native_flow"), integrationID: Integration.ID.make("openai"), label: "synthetic-native-flow",
     value: { type: "oauth", methodID: Integration.MethodID.make("chatgpt-browser"), access: "synthetic-access", refresh: "synthetic-refresh", expires: 0, metadata: { accountID: "synthetic-account" } },
   })
+  const temporary = (prefix: string) => Effect.acquireRelease(
+    Effect.promise(() => tmpdir(prefix)),
+    (directory) => Effect.promise(() => directory[Symbol.asyncDispose]()),
+  )
+  const home = yield* temporary("ycoding-native-flow-home-")
+  const data = yield* temporary("ycoding-native-flow-data-")
+  const fsutil = yield* FSUtil.Service.pipe(Effect.provide(FSUtil.layer.pipe(Layer.provide(NodeFileSystem.layer))))
   let subscriptions = 0
   const native = yield* NativeDots.make({
-    db, store, sessions, execution, projects, access,
+    db, store, sessions, execution, projects, access, kv, reviews,
+    home: home.path, data: data.path, projectRoot: (directory) => Project.root(fsutil, directory),
     events: { ...events, listen: (listener) => events.listen(listener).pipe(Effect.map((stop) => {
       subscriptions++
       return Effect.sync(() => { subscriptions-- }).pipe(Effect.andThen(stop))
@@ -102,6 +113,9 @@ it.live("local native WebSocket composition admits prompts, settles real Forms a
     credentials: { list: () => Effect.succeed([credential]) },
     credential: () => Effect.succeed({ access: "synthetic-access", accountID: "synthetic-account", key: "synthetic-key", profile: credential.label, credentialID: credential.id, accountGeneration: credential.accountGeneration }),
     models: () => Effect.succeed([]), skills: () => Effect.succeed([]), selectedModel: (session) => Effect.succeed(session.model),
+    authorization: (session) => Effect.gen(function* () {
+      return { permission: yield* Permission.Service, guardrail: yield* SessionGuardrail.Service }
+    }).pipe(Effect.provide(locations.get(session.location, [Permission.node, SessionGuardrail.node]))),
     decisions: (session) => Effect.gen(function* () {
       const permission = yield* Permission.Service
       const guardrail = yield* SessionGuardrail.Service
@@ -136,7 +150,7 @@ it.live("local native WebSocket composition admits prompts, settles real Forms a
     fetchFn: async () => Response.json({ server_id: "synthetic-server", environment_id: "synthetic-environment", remote_control_token: "synthetic-token" }),
     connect: (_url, headers) => connectRemoteControlSocket(`ws://127.0.0.1:${server.port}`, headers),
   })
-  const unregister = native.attachTransport(remoteControlTransport(host.status))
+  const unregister = native.attachTransport(remoteControlTransport(host.status, { computer: async () => ({ state: "unavailable", problem: "configuration" }), attach: async () => ({ state: "unavailable", problem: "configuration" }) }))
   yield* Effect.addFinalizer(() => Effect.promise(async () => { unregister(); await host.shutdown() }))
   yield* Effect.promise(() => host.start())
   let peer = yield* Effect.promise(() => bounded(connected.promise, "WebSocket connection"))

@@ -29,6 +29,10 @@ export function dotsConnectionView(input: { readonly status?: RemoteDotsStatus; 
     connectionMessage: status?.connection.message,
     action: status?.access.enabled ? "Disconnect" : "Connect",
     canChange: input.online && !!status && !input.loading && !input.pending && !input.error && (status.access.enabled || status.configuration.ready),
+    executor: status?.access.enabled && status.computer ? { label: { attached: "Attached", detached: "Not attached", unavailable: "Unavailable" }[status.computer.state], ...(status.computer.message === undefined ? {} : { message: status.computer.message }) } : undefined,
+    canAttach: input.online && !input.loading && !input.pending && !input.error && status?.access.enabled === true && status.computer?.state === "detached",
+    attachAction: "Use this computer for Dots tasks",
+    attachConfirmation: "This detaches your other computers from your Dot, so Dots tasks run on this computer only. Continue?",
     notice: !input.online ? "Reconnect to this machine to read or change Dots."
       : input.pending ? "Changing Dots access…"
       : input.loading ? status ? "Refreshing Dots connection…" : "Loading Dots connection…"

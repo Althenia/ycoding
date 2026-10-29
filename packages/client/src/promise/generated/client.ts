@@ -418,6 +418,9 @@ import type {
   DotsGetOutput,
   DotsSetInput,
   DotsSetOutput,
+  DotsAttachInput,
+  DotsAttachOutput,
+  DecisionListOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -3398,6 +3401,25 @@ export function make(options: ClientOptions) {
             declaredStatuses: [409, 400, 401],
             empty: false,
           },
+          requestOptions,
+        ).then((value) => value.data),
+      attach: (input: DotsAttachInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: DotsAttachOutput }>(
+          {
+            method: "POST",
+            path: `/api/dots/computer`,
+            body: { replaceOthers: input["replaceOthers"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+    },
+    decision: {
+      list: (requestOptions?: RequestOptions) =>
+        request<{ readonly data: DecisionListOutput }>(
+          { method: "GET", path: `/api/decision`, successStatus: 200, declaredStatuses: [401, 400], empty: false },
           requestOptions,
         ).then((value) => value.data),
     },

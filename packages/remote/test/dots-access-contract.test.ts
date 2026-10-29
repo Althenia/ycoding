@@ -20,6 +20,14 @@ test("global Dots controls reject Session and Location scope and preserve exact 
   expect(remoteOperationAccess["dots.set"]).toBe("mutation")
 })
 
+test("computer attachment requires exact replacement consent without Session scope", () => {
+  expect(parse("dots.attach", { replaceOthers: true }).ok).toBe(true)
+  for (const input of [undefined, {}, { replaceOthers: false }, { replaceOthers: "true" }, { replaceOthers: true, environmentID: "env_other" }, { replaceOthers: true, directory: "/synthetic" }])
+    expect(parse("dots.attach", input).ok).toBe(false)
+  for (const sessionID of ["ses_test", null]) expect(parse("dots.attach", { replaceOthers: true }, sessionID).ok).toBe(false)
+  expect(remoteOperationAccess["dots.attach"]).toBe("mutation")
+})
+
 test("global Dots status validates access, configuration and every connection state without defaults", async () => {
   const { readDotsStatus } = await import("../src/index")
   const status: RemoteDotsStatus = { access: { enabled: false, revision: 0 }, configuration: { ready: false }, connection: { state: "off" } }
@@ -38,9 +46,21 @@ test("global Dots status validates access, configuration and every connection st
   expect(readDotsStatus({ ...status, credential: "discarded", configuration: { ...status.configuration, token: "discarded" } })).toEqual(status)
 })
 
-test("remote exposes only access administration for Dots", () => {
+test("global Dots status keeps a valid computer state and rejects an invalid one", async () => {
+  const { readDotsStatus } = await import("../src/index")
+  const status: RemoteDotsStatus = { access: { enabled: true, revision: 1 }, configuration: { ready: true }, connection: { state: "connected" } }
+  for (const state of ["attached", "detached", "unavailable"] as const) {
+    expect(readDotsStatus({ ...status, computer: { state } })).toEqual({ ...status, computer: { state } })
+    expect(readDotsStatus({ ...status, computer: { state, message: "m".repeat(500) } })).toEqual({ ...status, computer: { state, message: "m".repeat(500) } })
+  }
+  expect(readDotsStatus({ ...status, computer: { state: "attached", environmentID: "discarded" } })).toEqual({ ...status, computer: { state: "attached" } })
+  for (const computer of [null, "attached", {}, { state: "connected" }, { state: "detached", message: "" }, { state: "detached", message: "m".repeat(501) }, { state: "detached", message: "m\u001b" }, { state: "detached", message: 1 }])
+    expect(readDotsStatus({ ...status, computer })).toBeUndefined()
+})
+
+test("remote exposes only access administration and computer attachment for Dots", () => {
   expect(remoteOperations.filter((operation) => operation.startsWith("dots.") || operation.startsWith("session.dots."))).toEqual([
-    "dots.get", "dots.set",
+    "dots.get", "dots.set", "dots.attach",
   ])
   for (const operation of ["session.dots.access.get", "session.dots.access.set", "session.dots.bind", "session.dots.exchange.create", "dots.bind", "dots.prompt", "dots.settle", "local.app.open", "artifact.demo.preview", "mcp.request"])
     expect(parse(operation).ok).toBe(false)

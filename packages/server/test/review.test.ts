@@ -109,8 +109,13 @@ test("review HTTP routes list family items and map decide outcomes to typed fail
 test("a deferred Session shell reports the review item without an unhandled HTTP failure", async () => {
   const error = new SessionGuardrail.DeferredError({
     requestID: SessionGuardrail.RequestID.make("grq_shell_review"),
+    sessionID: rootID,
     itemID,
+    state: "open",
+    action: "shell",
+    resources: ["git reset --hard"],
     ruleIDs: ["standard.review.git-destructive"],
+    hardReview: false,
   })
   await using http = sessionHttp({ shell: () => Effect.fail(error) })
   const response = await http.json(`/api/session/${rootID}/shell`, "POST", { command: "git reset --hard" })

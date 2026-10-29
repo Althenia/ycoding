@@ -20,5 +20,10 @@ export function dotsClient(link: RemoteLink, scope: QueryScope) {
       if (outcome.status !== "ok") return outcome
       return { status: "ok" as const, value: read(outcome.value) }
     },
+    attach: async () => {
+      const outcome = await link.request(scope, "dots.attach", { input: { replaceOthers: true } })
+      if (outcome.status !== "ok") return outcome
+      return { status: "ok" as const, value: read(outcome.value) }
+    },
   }
 }

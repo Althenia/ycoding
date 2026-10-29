@@ -79,6 +79,7 @@ export type TelemetryRequestSample = {
     | "session.command"
     | "dots.get"
     | "dots.set"
+    | "dots.attach"
     | "session.skill"
     | "usage.providers"
     | "usage.summary"
@@ -369,7 +370,10 @@ export type SessionReviewKind = "question" | "subagent_question" | "guardrail" |
 
 export type GuardrailConfidence = number
 
-export type SessionReviewOrigin = { messageID: string; callID: string } | { questionID: string } | { requestID: string }
+export type SessionReviewOrigin =
+  | { messageID: string; callID: string }
+  | { questionID: string }
+  | { requestID: string; executor?: true }
 
 export type FormWhen = { key: string; op: "eq" | "neq"; value: string | number | boolean }
 
@@ -2768,6 +2772,7 @@ export type DotsNativeStatus = {
     hostname?: string
     message?: string
   }
+  computer?: { state: "attached" | "detached" | "unavailable"; message?: string }
 }
 
 export type TelemetryPage = { data: Array<{ receivedAt: number; sample: TelemetrySample }>; cursor: { next?: string } }
@@ -4222,6 +4227,14 @@ export type SessionReviewItem =
       child?: { agent: string; description: string }
     }
 
+export type SessionReviewPayload1 =
+  | SessionReviewFormPayload
+  | SessionReviewQuestionPayload
+  | SessionReviewSubagentQuestionPayload1
+  | SessionReviewGuardrailPayload
+  | SessionReviewPermissionPayload
+  | SessionReviewRecoveryPayload
+
 export type FormCreated = {
   id: string
   created: number
@@ -4499,6 +4512,17 @@ export type SessionReviewDeferred = {
     origin: SessionReviewOrigin
     payload: SessionReviewPayload
   }
+}
+
+export type DecisionItem = {
+  kind: "permission" | "guardrail" | "question" | "form" | "review"
+  sessionID: string
+  sessionTitle: string
+  directory: string
+  id: string
+  summary: string
+  options?: Array<QuestionInfo> | FormFields | SessionReviewPayload1
+  decide: Array<{ label: string; argv: Array<string>; template?: true; hint?: string }>
 }
 
 export type SessionLogItem =
@@ -6017,6 +6041,7 @@ export type ServerTelemetryAppendInput = {
             | "session.command"
             | "dots.get"
             | "dots.set"
+            | "dots.attach"
             | "session.skill"
             | "usage.providers"
             | "usage.summary"
@@ -12418,3 +12443,9 @@ export type DotsSetInput = {
 }
 
 export type DotsSetOutput = { data: DotsNativeStatus }["data"]
+
+export type DotsAttachInput = { readonly replaceOthers: { readonly replaceOthers: true }["replaceOthers"] }
+
+export type DotsAttachOutput = { data: DotsNativeStatus }["data"]
+
+export type DecisionListOutput = { data: Array<DecisionItem> }["data"]

@@ -7,6 +7,7 @@ export function createDotsConnection(input: {
   owner: () => unknown
   get: (signal: AbortSignal) => Promise<Dots.NativeStatus>
   set: (input: { enabled: boolean; expectedRevision: number }) => Promise<Dots.NativeStatus>
+  attach: (input: { replaceOthers: true }) => Promise<Dots.NativeStatus>
   error: (error: unknown) => void
 }) {
   const [opened, setOpened] = createSignal(false)
@@ -14,6 +15,8 @@ export function createDotsConnection(input: {
   const [ready, setReady] = createSignal(false)
   const [pending, setPending] = createSignal(false)
   const [failure, setFailure] = createSignal<string>()
+  const [attachFailure, setAttachFailure] = createSignal<string>()
+  const [confirming, setConfirming] = createSignal(false)
   let disposed = false
   let generation = 0
   let epoch = 0
@@ -22,6 +25,8 @@ export function createDotsConnection(input: {
   let revision = -1
   let reading: { controller: AbortController; promise: Promise<void> } | undefined
   let writing = false
+
+  const attachable = (value: Dots.NativeStatus | undefined) => !!value?.access.enabled && value.computer?.state === "detached"
 
   function invalidate() {
     generation++
@@ -36,6 +41,7 @@ export function createDotsConnection(input: {
     setStatus(next)
     setFailure(undefined)
     setReady(true)
+    if (!attachable(next)) setConfirming(false)
   }
 
   function refresh(): Promise<void> {
@@ -64,20 +70,20 @@ export function createDotsConnection(input: {
   const canToggle = () => opened() && input.connected() && ready() && !pending() &&
     !!status() && (status()!.access.enabled || status()!.configuration.ready)
 
-  async function toggle() {
-    const current = status()
-    if (disposed || !current || !canToggle() || writing) return
+  const canAttach = () => opened() && input.connected() && !pending() && !failure() && attachable(status())
+
+  async function mutate(run: () => Promise<Dots.NativeStatus>, fail: (error: unknown) => void) {
     const scope = epoch
     writing = true
     setPending(true)
     invalidate()
     try {
-      const next = await input.set({ enabled: !current.access.enabled, expectedRevision: current.access.revision })
+      const next = await run()
       if (disposed || scope !== epoch) return
       accept(next)
     } catch (error) {
       if (disposed || scope !== epoch) return
-      setFailure(errorMessage(error))
+      fail(error)
       input.error(error)
     } finally {
       writing = false
@@ -88,6 +94,28 @@ export function createDotsConnection(input: {
     }
   }
 
+  async function toggle() {
+    const current = status()
+    if (disposed || !current || !canToggle() || writing) return
+    await mutate(
+      () => input.set({ enabled: !current.access.enabled, expectedRevision: current.access.revision }),
+      (error) => setFailure(errorMessage(error)),
+    )
+  }
+
+  function requestAttach() {
+    if (disposed || writing || !canAttach()) return
+    setAttachFailure(undefined)
+    setConfirming(true)
+  }
+
+  async function attach() {
+    if (disposed || writing || !confirming() || !canAttach()) return
+    setConfirming(false)
+    setAttachFailure(undefined)
+    await mutate(() => input.attach({ replaceOthers: true }), (error) => setAttachFailure(errorMessage(error)))
+  }
+
   createEffect(on(
     () => [opened(), input.connected(), input.owner()] as const,
     ([open, nextConnected, nextOwner]) => {
@@ -96,7 +124,9 @@ export function createDotsConnection(input: {
         revision = -1
         setStatus(undefined)
         setFailure(undefined)
+        setAttachFailure(undefined)
       }
+      setConfirming(false)
       owner = nextOwner
       connected = nextConnected
       invalidate()
@@ -112,7 +142,9 @@ export function createDotsConnection(input: {
   })
 
   return {
-    status, ready, pending, failure, canToggle, refresh, toggle,
+    status, ready, pending, failure, attachFailure, canToggle, canAttach, refresh, toggle, requestAttach, attach,
+    confirmingAttach: () => confirming() && canAttach(),
+    cancelAttach: () => setConfirming(false),
     connected: input.connected,
     open: () => { if (!disposed) setOpened(true) },
     close: () => setOpened(false),

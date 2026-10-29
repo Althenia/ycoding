@@ -189,9 +189,10 @@ test("exposes every standard HTTP API group", () => {
     "review",
     "coordination",
     "dots",
+    "decision",
   ])
   expect(Object.keys(client.coordination)).toEqual(["settings", "list", "create", "get", "update", "delete"])
-  expect(Object.keys(client.dots)).toEqual(["get", "set"])
+  expect(Object.keys(client.dots)).toEqual(["get", "set", "attach"])
   expect(Object.keys(client.keepAwake)).toEqual(["get", "set"])
   expect(Object.keys(client.incident)).toEqual(["report", "recent", "guidance"])
   expect(Object.keys(client.incident.guidance)).toEqual(["get", "clear"])

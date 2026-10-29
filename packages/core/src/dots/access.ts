@@ -22,14 +22,34 @@ export interface TransportStatus {
   readonly problem?: "configuration" | "authentication" | "enrollment" | "connection"
 }
 
+export type ComputerProblem =
+  | "configuration"
+  | "authentication"
+  | "enrollment"
+  | "dot-unavailable"
+  | "not-listed"
+  | "admin-disabled"
+  | "not-connectable"
+  | "rejected"
+  | "unconfirmed"
+  | "connection"
+
+export interface ComputerStatus {
+  readonly state: "attached" | "detached" | "unavailable"
+  readonly problem?: ComputerProblem
+}
+
 export interface Transport {
   readonly status: () => Promise<TransportStatus>
+  readonly computer: () => Promise<ComputerStatus>
+  readonly attachComputer: () => Promise<ComputerStatus>
 }
 
 export interface Interface {
   readonly get: () => Effect.Effect<Dots.Access, Error>
   readonly set: (input: Dots.AccessSet) => Effect.Effect<Dots.Access, Error>
   readonly status: () => Effect.Effect<Dots.NativeStatus, Error>
+  readonly attachComputer: () => Effect.Effect<Dots.NativeStatus, Error>
   readonly subscribe: (listener: () => void) => () => void
   readonly attachTransport: (transport: Transport) => () => void
 }
@@ -50,6 +70,19 @@ const guidance = {
   enrollment: "Native enrollment failed. Check the selected profile and connection; the connector retries automatically.",
   connection: "The native connection failed. The connector retries automatically.",
 } satisfies Record<NonNullable<TransportStatus["problem"]>, string>
+const computerGuidance = {
+  configuration: "Turn on Dots access with a ready ChatGPT profile to attach this computer.",
+  authentication: "The selected ChatGPT profile could not be used. Check its sign-in.",
+  enrollment: "This computer's Dots executor is not enrolled for the selected account yet. Keep Dots access on and try again.",
+  "dot-unavailable": "No single active Dot was found for this account.",
+  "not-listed": "This computer is not among your Dot's computers yet. Keep Dots access on and try again.",
+  "admin-disabled": "Your workspace administrator has disabled local computer access.",
+  "not-connectable": "ChatGPT does not allow attaching this computer right now.",
+  rejected: "ChatGPT refused the attach request.",
+  unconfirmed: "ChatGPT did not confirm the attach. Check the state again before retrying.",
+  connection: "Your Dot's computers could not be read. Try again.",
+} satisfies Record<ComputerProblem, string>
+const computerFailure: ComputerStatus = { state: "unavailable", problem: "connection" }
 
 export function make(input: {
   readonly db: Database.Interface
@@ -63,6 +96,39 @@ export function make(input: {
     if (value === undefined) return { enabled: false, revision: 0 }
     return yield* Schema.decodeUnknownEffect(Dots.Access)(value).pipe(Effect.mapError(() =>
       new Error({ code: "unavailable", message: "The global Dots access preference is invalid" })))
+  })
+  const observe = Effect.fn("DotsAccess.status")(function* (read: (transport: Transport) => Promise<ComputerStatus>) {
+    const initial = yield* get()
+    const configuration = yield* input.configuration()
+    const owner = attached
+    const [observed, computed] = owner
+      ? yield* Effect.all([
+        Effect.tryPromise(() => owner.transport.status()).pipe(Effect.catch(() => Effect.succeed<TransportStatus>({ state: "error", problem: "connection" }))),
+        Effect.tryPromise(() => read(owner.transport)).pipe(Effect.catch(() => Effect.succeed(computerFailure))),
+      ], { concurrency: 2 })
+      : [undefined, undefined]
+    const access = yield* get()
+    const current = yield* input.configuration()
+    const profile = display(current.profile, 256)
+    const message = display(current.message, 500)
+    const hostname = owner === attached && initial.revision === access.revision ? display(observed?.hostname, 256) : undefined
+    const connection: Dots.NativeStatus["connection"] = !owner || owner !== attached ? { state: "unavailable" }
+      : !access.enabled || !current.ready ? { state: "off" }
+      : initial.revision !== access.revision || !isDeepStrictEqual(configuration, current) ? { state: "connecting" }
+      : observed ? {
+        state: observed.state,
+        ...(observed.problem ? { message: guidance[observed.problem] } : {}),
+      } : { state: "connecting" }
+    const computerMessage = computed?.problem !== undefined && Object.hasOwn(computerGuidance, computed.problem) ? computerGuidance[computed.problem] : undefined
+    const computer: Dots.NativeStatus["computer"] = !owner || owner !== attached ? undefined
+      : initial.revision !== access.revision || !computed ? { state: "unavailable" }
+      : { state: computed.state, ...(computerMessage ? { message: computerMessage } : {}) }
+    return {
+      access,
+      configuration: { ready: current.ready, ...(profile ? { profile } : {}), ...(message ? { message } : {}) },
+      connection: { ...connection, ...(hostname ? { hostname } : {}) },
+      ...(computer ? { computer } : {}),
+    }
   })
   return {
     get,
@@ -86,26 +152,16 @@ export function make(input: {
         Effect.uninterruptible,
       )
     }),
-    status: Effect.fn("DotsAccess.status")(function* () {
-      const initial = yield* get()
-      const configuration = yield* input.configuration()
+    status: () => observe((transport) => transport.computer()),
+    attachComputer: Effect.fn("DotsAccess.attachComputer")(function* () {
       const owner = attached
-      const observed = owner
-        ? yield* Effect.tryPromise(() => owner.transport.status()).pipe(Effect.catch(() => Effect.succeed<TransportStatus>({ state: "error", problem: "connection" })))
-        : undefined
+      if (!owner) return yield* new Error({ code: "unavailable", message: "The native transport is unavailable" })
       const access = yield* get()
-      const current = yield* input.configuration()
-      const profile = display(current.profile, 256)
-      const message = display(current.message, 500)
-      const hostname = owner === attached && initial.revision === access.revision ? display(observed?.hostname, 256) : undefined
-      const connection: Dots.NativeStatus["connection"] = !owner || owner !== attached ? { state: "unavailable" }
-        : !access.enabled || !current.ready ? { state: "off" }
-        : initial.revision !== access.revision || !isDeepStrictEqual(configuration, current) ? { state: "connecting" }
-        : observed ? {
-          state: observed.state,
-          ...(observed.problem ? { message: guidance[observed.problem] } : {}),
-        } : { state: "connecting" }
-      return { access, configuration: { ready: current.ready, ...(profile ? { profile } : {}), ...(message ? { message } : {}) }, connection: { ...connection, ...(hostname ? { hostname } : {}) } }
+      const ready = access.enabled && (yield* input.configuration()).ready
+      const result = ready
+        ? yield* Effect.tryPromise(() => owner.transport.attachComputer()).pipe(Effect.catch(() => Effect.succeed(computerFailure)))
+        : { state: "unavailable" as const, problem: "configuration" as const }
+      return yield* observe(() => Promise.resolve(result))
     }),
     subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
     attachTransport: (transport) => {

@@ -2,6 +2,7 @@ import type { NativeDots } from "@ycoding-ai/core/dots/native"
 import { Schema } from "effect"
 import { Session } from "@ycoding-ai/schema/session"
 import type { RemoteControlBackend } from "../src/remote-control/app-server"
+import { unexpectedExecutorHost } from "./fixture/cca-scope"
 
 export const pendingRequest = (threadID: string, id = "request"): NativeDots.NativeRequest => ({
   id, threadID, turnID: "turn", itemID: "item", handle: {} as NativeDots.Candidate,
@@ -14,7 +15,12 @@ export const requestBackend = {
   settle: async () => {},
   subscribe: async () => () => {},
   retire: () => {},
-} satisfies Pick<RemoteControlBackend, "readThread" | "pending" | "settle" | "subscribe" | "retire">
+  renameThread: async () => { throw Error("Unexpected rename") },
+  archiveThread: async () => { throw Error("Unexpected archive") },
+  unarchiveThread: async () => { throw Error("Unexpected unarchive") },
+  deleteThread: async () => { throw Error("Unexpected delete") },
+  subscribeEscalations: async () => () => {},
+} satisfies Pick<RemoteControlBackend, "readThread" | "pending" | "settle" | "subscribe" | "retire" | "renameThread" | "archiveThread" | "unarchiveThread" | "deleteThread" | "subscribeEscalations">
 
 export const sessionInfo = (thread: { id: string; title?: string; directory: string; updatedAt?: number }): Session.Info => Schema.decodeUnknownSync(Session.Info)({
   id: thread.id, title: thread.title ?? "Test", projectID: "global", location: { directory: thread.directory },
@@ -30,6 +36,7 @@ export function nativeHost(backend: RemoteControlBackend, credential = { access:
     credential: async () => ({ ...credential, credentialID: "credential", accountGeneration: 1 }),
     subscribeConfiguration: () => () => {},
     attachTransport: () => () => {},
+    ...unexpectedExecutorHost,
     attach: async () => ({
       retire: () => {},
       channel: () => ({
@@ -40,6 +47,8 @@ export function nativeHost(backend: RemoteControlBackend, credential = { access:
         prompt: ({ rootID, ...input }) => backend.prompt(rootID, input),
         interrupt: backend.interrupt,
         pending: async (id) => [...await backend.pending(id)], settle: backend.settle, subscribe: backend.subscribe, retire: backend.retire,
+        renameRoot: ({ rootID, title }) => backend.renameThread(rootID, title), archiveRoot: backend.archiveThread,
+        unarchiveRoot: backend.unarchiveThread, removeRoot: backend.deleteThread, subscribeEscalations: backend.subscribeEscalations,
         models: async () => (await backend.models()).map((model) => ({ ...model, providerID: model.providerID ?? "synthetic" })), skills: backend.skills,
       }),
     }),

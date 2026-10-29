@@ -3,6 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { OpenAICodex } from "@ycoding-ai/core/plugin/provider/openai-codex"
+import { Platform } from "@ycoding-ai/core/util/platform"
 import { Schema } from "effect"
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import {
@@ -37,8 +38,9 @@ describe("remote-control wire types", () => {
     expect(Object.keys(request)).toEqual(["name", "os", "arch", "app_server_version", "installation_id"])
     expect(request.name).toBe("box.local")
     expect(request.installation_id).toBe("install-1")
-    expect(request.app_server_version).toBe(OpenAICodex.catalogClientVersion)
+    expect(request.app_server_version).toBe("0.164.0-alpha.11.1")
     expect(request.os).toBe(enrollOs)
+    expect(enrollOs).toBe(Platform.upstreamOs())
     expect(request.arch).toBe(process.arch)
     expect("server_id" in request).toBe(false)
     expect(buildEnrollRequest({ name: "box.local", installationID: "install-1", serverID: "srv-1" }).server_id).toBe("srv-1")
@@ -102,7 +104,8 @@ describe("remote-control wire types", () => {
     expect(connect["x-codex-installation-id"]).toBe("install-1")
     expect(connect["chatgpt-account-id"]).toBe(credential.accountID)
     expect(connect.originator).toBe(OpenAICodex.headers().originator)
-    expect(connect["User-Agent"]).toBe(OpenAICodex.headers()["User-Agent"])
+    expect(connect["User-Agent"]).toBe(OpenAICodex.userAgent().replace(OpenAICodex.desktopVersion, "26.1023.50603"))
+    expect(connect["User-Agent"]).toStartWith("Codex Desktop/26.1023.50603 (")
     expect("x-codex-subscribe-cursor" in connect).toBe(false)
     const withCursor = buildConnectHeaders({
       serverID: "srv-1",
@@ -159,12 +162,22 @@ describe("remote-control envelope", () => {
     expect(reassembler.push(JSON.stringify(inbound))).toEqual({ kind: "message", ...address, seqID: 7, text })
   })
 
-  test("client_message requires seq_id and an address while inbound ack is unsupported", () => {
+  test("client_message requires seq_id and an address", () => {
     const reassembler = new Reassembler({ envID: "e" })
     expect(reassembler.push(JSON.stringify({ type: "client_message", client_id: "c", stream_id: "s", env_id: "e", message: "{}" })).kind).toBe("drop")
     expect(reassembler.push(JSON.stringify({ type: "client_message", client_id: "c", stream_id: "s", env_id: "e", seq_id: 1, message: "{}" })).kind).toBe("message")
     expect(reassembler.push(JSON.stringify({ type: "client_message", stream_id: "s", env_id: "e", message: "{}" })).kind).toBe("drop")
-    expect(reassembler.push(JSON.stringify({ type: "ack", client_id: "c", stream_id: "s", env_id: "e", seq_id: 1 })).kind).toBe("drop")
+  })
+
+  test("inbound ack is a distinct addressed event and rejects a foreign environment or missing address", () => {
+    const reassembler = new Reassembler({ envID: "e" })
+    expect(reassembler.push(JSON.stringify({ type: "ack", client_id: "c", stream_id: "s", env_id: "e", seq_id: 1 })))
+      .toEqual({ kind: "acknowledged", clientID: "c", streamID: "s", envID: "e" })
+    expect(reassembler.push(JSON.stringify({ type: "ack", client_id: "c", stream_id: "s", seq_id: 2 })).kind).toBe("acknowledged")
+    expect(reassembler.push(JSON.stringify({ type: "ack", client_id: "c", stream_id: "s", env_id: "other", seq_id: 1 })))
+      .toEqual({ kind: "drop", reason: "missing_address" })
+    expect(reassembler.push(JSON.stringify({ type: "ack", stream_id: "s", env_id: "e", seq_id: 1 })))
+      .toEqual({ kind: "drop", reason: "missing_address" })
   })
 
   test("slices messages above 102400 bytes into base64 chunks within the envelope bound and reassembles by stream", () => {
@@ -279,7 +292,8 @@ describe("remote-control app-server mapping", () => {
     })
     expect(init.result.userAgent).toBe(OpenAICodex.userAgent())
     expect(init.result.codexHome).toBe("/home/user/.codex")
-    expect(init.result.platformOs).toBe(process.platform)
+    expect(init.result.platformOs).toBe(Platform.upstreamOs())
+    expect(["darwin", "win32"]).not.toContain(init.result.platformOs)
     expect(typeof init.result.platformFamily).toBe("string")
 
     const again = await rpc(server, "initialize", { clientInfo: { name: "Codex Desktop" } })
@@ -460,6 +474,11 @@ describe("remote-control state and host lifecycle", () => {
       'Dropped remote-control frame: unknown_type {"type":"future_frame","keys":["client_id","extra","type"],"address":["client_id"]}',
       "Dropped remote-control frame: invalid_json",
     ])
+
+    const sentBeforeAck = sent.length
+    onMessage?.(JSON.stringify({ type: "ack", client_id: "client-1", stream_id: "s1", env_id: "env-1", seq_id: 0 }))
+    expect(sent).toHaveLength(sentBeforeAck)
+    expect(diagnostics).toHaveLength(3)
 
     onMessage?.(JSON.stringify({ type: "ping", client_id: "client-1", stream_id: "s1", env_id: "env-1", seq_id: 1, state: "foreground", skip_history: true }))
     const pong = sent.map((frame) => JSON.parse(frame)).find((frame) => frame.type === "pong")

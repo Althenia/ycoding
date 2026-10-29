@@ -12,7 +12,12 @@ test("Dots contracts compile for both clients", () => {
   expect(promise.operations).toEqual(effect.operations)
   expect(promise.operations).toEqual(shape.operations)
   expect(effect.files.find((file) => file.path === "client.ts")?.content).toContain("HttpApiClient.make(ClientApi")
-  expect(promise.operations.map((operation) => operation.name)).toEqual(["get", "set"])
+  expect(promise.operations.map((operation) => operation.name)).toEqual(["get", "set", "attach"])
+  const attach = ClientApi.groups["server.dots"].endpoints["dots.attach"].payload.values().next().value?.schemas[0]
+  if (!attach) throw new Error("Canonical Dots attach payload is missing")
+  expect(Schema.decodeUnknownSync(attach)({ replaceOthers: true })).toEqual({ replaceOthers: true })
+  for (const value of [{}, { replaceOthers: false }, { replaceOthers: "true" }, { replaceOthers: true, environmentID: "env" }])
+    expect(() => Schema.decodeUnknownSync(attach)(value)).toThrow()
   const access = ClientApi.groups["server.dots"].endpoints["dots.set"].payload.values().next().value?.schemas[0]
   if (!access) throw new Error("Canonical Dots access payload is missing")
   const setter = { enabled: true, expectedRevision: 0 }

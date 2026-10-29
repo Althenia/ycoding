@@ -24,13 +24,9 @@ test("every recordable remote request operation decodes as closed local telemetr
   expect(recordable).toHaveLength(remoteOperations.length - excluded.length)
   expect(recordable).toEqual(
     expect.arrayContaining([
-      "session.dots.targets",
-      "session.dots.status",
-      "session.dots.bind",
-      "session.dots.unbind",
-      "session.dots.send",
-      "session.dots.pause",
-      "session.dots.resume",
+      "dots.get",
+      "dots.set",
+      "dots.attach",
     ]),
   )
   for (const operation of recordable) {

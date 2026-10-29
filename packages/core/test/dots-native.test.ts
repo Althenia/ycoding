@@ -1,4 +1,8 @@
 import { expect } from "bun:test"
+import { existsSync, statSync } from "node:fs"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import { Effect, Schema, Stream } from "effect"
 import { NativeDots } from "../src/dots/native"
 import { NativeDecisions } from "../src/dots/native-decisions"
@@ -15,6 +19,7 @@ import { SessionGuardrail } from "../src/session/guardrail"
 import { Permission } from "../src/permission"
 import { Form } from "../src/form"
 import { Question } from "../src/question"
+import { PluginSupervisor } from "../src/plugin/supervisor"
 import { LocationServiceMap } from "../src/location-service-map"
 import { Database } from "../src/database/database"
 import { KV } from "../src/kv"
@@ -29,8 +34,11 @@ import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Agent } from "../src/agent"
 import { Project } from "../src/project"
 import { AbsolutePath } from "../src/schema"
+import { CcaAuthorizationCloseError, CcaAuthorizationDeniedError } from "../src/cca/authorization"
 import { reviewLayer } from "./fixture/review"
 import { testEffect } from "./lib/effect"
+
+const idleComputer = { computer: async () => ({ state: "detached" as const }), attachComputer: async () => ({ state: "detached" as const }) }
 
 const it = testEffect(reviewLayer())
 const metadataModel = CatalogModel.Info.make({
@@ -77,7 +85,22 @@ const setup = Effect.gen(function* () {
   let historyReads = 0
   let hasModels = true
   let admission = () => Effect.void
-  const host = yield* NativeDots.make({ access, db, execution: {
+  const recorded = new Set<string>()
+  const executorGrants: SessionGuardrail.EvaluateInput[] = []
+  let executorReleases = 0
+  let executorReleaseFails = false
+  const authorization = (session: Session.Info) => Effect.gen(function* () {
+    yield* (yield* PluginSupervisor.Service).flush
+    const permission = yield* Permission.Service
+    const guardrail = yield* SessionGuardrail.Service
+    return { permission, guardrail: { ...guardrail, assert: (input: SessionGuardrail.EvaluateInput) => guardrail.assert(input).pipe(Effect.map((reservation) => {
+      executorGrants.push(input)
+      return { release: reservation.release.pipe(Effect.andThen(Effect.sleep("5 millis")), Effect.andThen(Effect.suspend(() =>
+        executorReleaseFails ? Effect.die(new Error("synthetic-release-secret")) : Effect.sync(() => { executorReleases++ })))) }
+    })) } }
+  }).pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
+  const host = yield* NativeDots.make({ access, db, kv, reviews, home: directory, data: path.join(os.tmpdir(), "dots-native-data"),
+    projectRoot: () => Effect.succeed(undefined), authorization, execution: {
     ...execution, active: execution.active.pipe(Effect.map((current) => activity ?? current)),
     interrupt: (id) => execution.interrupt(id).pipe(Effect.tap(() => Effect.sync(() => { interruptions++ }))),
   }, decisions,
@@ -97,7 +120,9 @@ const setup = Effect.gen(function* () {
         defaultSelection: () => Effect.succeed(hasModels ? metadataRef : undefined), default: () => Effect.succeed(hasModels ? metadataModel : undefined), available: () => Effect.succeed(hasModels ? [metadataModel] : []),
       }))?.ref
     }),
-    projects: { ...projects, list: () => Effect.succeed([{ id: Project.ID.global, worktree: directory, sandboxes: [], time: { created: 0, updated: 0 } }]), directories: () => Effect.succeed([]) },
+    projects: { ...projects, list: () => Effect.succeed([{ id: Project.ID.global, worktree: directory, sandboxes: [], time: { created: 0, updated: 0 } }]),
+      directories: () => Effect.sync(() => [...recorded].map((item) => ({ directory: AbsolutePath.make(item) }))),
+      recordOpened: (opened) => Effect.sync(() => { if (existsSync(opened) && statSync(opened).isDirectory()) recorded.add(opened) }) },
     credentials: { list: () => Effect.succeed([credential]) }, credential: (profile, rejected) => resolveCredential(profile, rejected),
     config: { snapshot: () => Effect.sync(() => documents), subscribe: (callback) => { listeners.add(callback); return () => { listeners.delete(callback) } } },
   })
@@ -108,6 +133,9 @@ const setup = Effect.gen(function* () {
   return { root, access, sessions, store, events, forms, host, pins, connection, channel, modelReads, db, kv, reviews, orchestration, locations,
     historyReads: () => historyReads,
     interruptions: () => interruptions,
+    executorGrants: () => [...executorGrants],
+    executorReleases: () => executorReleases,
+    failExecutorReleases: () => { executorReleaseFails = true },
     onCredential: (read: NativeDots.Options["credential"]) => { resolveCredential = read },
     onAdmission: (read: () => Effect.Effect<void>) => { admission = read },
     withoutModels: () => { hasModels = false },
@@ -181,13 +209,13 @@ it.live("global Off during native candidate validation rejects settlement withou
 it.live("native Host scope closure unregisters its transport and rejects late attachment", () => Effect.gen(function* () {
   const f = yield* Effect.gen(function* () {
     const f = yield* setup
-    const release = f.host.attachTransport({ status: async () => ({ state: "connected", hostname: "Synthetic.local" }) })
+    const release = f.host.attachTransport({ ...idleComputer, status: async () => ({ state: "connected", hostname: "Synthetic.local" }) })
     expect((yield* f.access.status()).connection.state).toBe("connected")
     return { ...f, release }
   }).pipe(Effect.scoped)
   expect((yield* f.access.status()).connection.state).toBe("unavailable")
-  expect(() => f.host.attachTransport({ status: async () => ({ state: "connecting" }) })).toThrow()
-  const release = f.access.attachTransport({ status: async () => ({ state: "connecting" }) })
+  expect(() => f.host.attachTransport({ ...idleComputer, status: async () => ({ state: "connecting" }) })).toThrow()
+  const release = f.access.attachTransport({ ...idleComputer, status: async () => ({ state: "connecting" }) })
   f.release()
   expect((yield* f.access.status()).connection.state).toBe("connecting")
   release()
@@ -599,3 +627,257 @@ for (const boundary of ["permission", "guardrail"] as const) it.live(`missing Se
   const log = yield* f.events.log({ aggregateID: root.id, follow: false }).pipe(Stream.runCollect)
   expect(log.filter((event) => event.type === SessionEvent.DotsDecisionSettled.type || event.type === SessionEvent.Review.Decided.type)).toEqual([])
 }))
+
+const temporaryDirectory = Effect.acquireRelease(
+  Effect.promise(() => mkdtemp(path.join(os.tmpdir(), "dots-native-root-"))),
+  (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+)
+
+it.live("native createRoot accepts an existing unrecorded absolute directory and rejects relative, missing, or file locations", () => Effect.gen(function* () {
+  const f = yield* setup
+  const directory = yield* temporaryDirectory
+  const created = yield* Effect.promise(() => f.channel.createRoot({ directory: path.join(directory, "."), inputID: "unrecorded-create", title: "Synthetic root" }))
+  expect(created.session.location.directory).toBe(AbsolutePath.make(directory))
+  expect(created.session.title).toBe("Synthetic root")
+  expect((yield* Effect.promise(() => f.channel.createRoot({ directory, inputID: "unrecorded-create" }))).session.id).toBe(created.session.id)
+  const missing = path.join(directory, "missing")
+  const file = path.join(directory, "file.txt")
+  yield* Effect.promise(() => writeFile(file, "synthetic"))
+  for (const target of ["relative/synthetic", missing, file])
+    yield* Effect.promise(async () => { await expect(f.channel.createRoot({ directory: target, inputID: `reject-${target}` })).rejects.toBeInstanceOf(NativeDots.Error) })
+  expect(existsSync(missing)).toBe(false)
+  expect((yield* f.sessions.list({ parentID: null })).data.filter((session) => session.location.directory !== f.root.location.directory).map((session) => session.id)).toEqual([created.session.id])
+}).pipe(Effect.scoped))
+
+it.live("native rename stores the exact title only for a current eligible root", () => Effect.gen(function* () {
+  const f = yield* setup
+  const child = yield* f.sessions.create({ parentID: f.root.id })
+  yield* Effect.promise(() => f.channel.renameRoot({ rootID: f.root.id, title: "  Synthetic title  " }))
+  expect((yield* f.sessions.get(f.root.id)).title).toBe("  Synthetic title  ")
+  yield* Effect.promise(async () => { await expect(f.channel.renameRoot({ rootID: f.root.id, title: "   " })).rejects.toBeInstanceOf(NativeDots.Error) })
+  yield* Effect.promise(async () => { await expect(f.channel.renameRoot({ rootID: child.id, title: "Child title" })).rejects.toBeInstanceOf(NativeDots.Error) })
+  yield* f.sessions.archive(f.root.id)
+  yield* Effect.promise(async () => { await expect(f.channel.renameRoot({ rootID: f.root.id, title: "Archived title" })).rejects.toBeInstanceOf(NativeDots.Error) })
+  expect((yield* f.sessions.get(f.root.id)).title).toBe("  Synthetic title  ")
+  expect((yield* f.sessions.get(child.id)).title).not.toBe("Child title")
+}))
+
+it.live("native archive hides the root and retires its candidates while unarchive restores fresh access", () => Effect.gen(function* () {
+  const f = yield* setup
+  const other = yield* f.sessions.create({ location: f.root.location })
+  const child = yield* f.sessions.create({ parentID: f.root.id })
+  const form = yield* f.forms.create({ sessionID: f.root.id, title: "Archived decision", fields: [{ type: "string", key: "answer", required: true }] })
+  const stale = (yield* Effect.promise(() => f.channel.pending(f.root.id))).find((item) => item.itemID === form.id)!
+  yield* Effect.promise(async () => { await expect(f.channel.archiveRoot(child.id)).rejects.toBeInstanceOf(NativeDots.Error) })
+  yield* Effect.promise(() => f.channel.archiveRoot(f.root.id))
+  expect((yield* f.sessions.get(f.root.id)).time.archived).toBeDefined()
+  expect(yield* Effect.promise(() => f.channel.getRoot(f.root.id))).toBeUndefined()
+  expect((yield* Effect.promise(() => f.channel.listRoots())).map((item) => item.session.id)).toEqual([other.id])
+  yield* Effect.promise(async () => { await expect(f.channel.archiveRoot(f.root.id)).rejects.toBeInstanceOf(NativeDots.Error) })
+  yield* Effect.promise(async () => { await expect(f.channel.settle(stale.handle, { value: { answers: ["stale"] }, action: { answers: ["Continue"] } })).rejects.toThrow() })
+  expect(yield* f.forms.state(form.id)).toEqual({ status: "pending" })
+  yield* Effect.promise(async () => { await expect(f.channel.unarchiveRoot(child.id)).rejects.toBeInstanceOf(NativeDots.Error) })
+  const restored = yield* Effect.promise(() => f.channel.unarchiveRoot(f.root.id))
+  expect(restored.session.id).toBe(f.root.id)
+  expect(restored.session.time.archived).toBeUndefined()
+  expect(restored.waiting).toEqual(["user-input"])
+  expect((yield* Effect.promise(() => f.channel.unarchiveRoot(f.root.id))).session.id).toBe(f.root.id)
+  expect((yield* Effect.promise(() => f.channel.getRoot(f.root.id)))?.session.id).toBe(f.root.id)
+  yield* Effect.promise(async () => { await expect(f.channel.settle(stale.handle, { value: { answers: ["stale"] }, action: { answers: ["Continue"] } })).rejects.toThrow() })
+  const fresh = (yield* Effect.promise(() => f.channel.pending(f.root.id))).find((item) => item.itemID === form.id)!
+  expect(fresh.handle).not.toBe(stale.handle)
+  yield* Effect.promise(() => f.channel.settle(fresh.handle, { value: { answers: ["fresh"] }, action: { answers: ["Continue"] } }))
+  expect(yield* f.forms.state(form.id)).toEqual({ status: "answered", answer: { answer: "fresh" } })
+}))
+
+it.live("native remove deletes a root family including archived members and archived roots", () => Effect.gen(function* () {
+  const f = yield* setup
+  const child = yield* f.sessions.create({ parentID: f.root.id })
+  const grandchild = yield* f.sessions.create({ parentID: child.id })
+  yield* f.sessions.archive(child.id)
+  const archived = yield* f.sessions.create({ location: f.root.location })
+  yield* f.sessions.archive(archived.id)
+  yield* Effect.promise(async () => { await expect(f.channel.removeRoot(child.id)).rejects.toBeInstanceOf(NativeDots.Error) })
+  expect(yield* f.store.get(child.id)).toBeDefined()
+  yield* Effect.promise(() => f.channel.removeRoot(f.root.id))
+  for (const id of [f.root.id, child.id, grandchild.id]) expect(yield* f.store.get(id)).toBeUndefined()
+  yield* Effect.promise(() => f.channel.removeRoot(archived.id))
+  expect(yield* f.store.get(archived.id)).toBeUndefined()
+  yield* Effect.promise(async () => { await expect(f.channel.removeRoot(archived.id)).rejects.toBeInstanceOf(NativeDots.Error) })
+}))
+
+it.live("native remove refuses a family with a foreign-owned descendant before deleting anything", () => Effect.gen(function* () {
+  const f = yield* setup
+  const child = yield* f.sessions.create({ parentID: f.root.id })
+  const foreign = yield* f.sessions.create({ parentID: child.id })
+  yield* f.events.claim(foreign.id, "foreign-owner")
+  yield* Effect.promise(async () => { await expect(f.channel.removeRoot(f.root.id)).rejects.toBeInstanceOf(NativeDots.Error) })
+  for (const id of [f.root.id, child.id, foreign.id]) expect(yield* f.store.get(id)).toBeDefined()
+  expect((yield* Effect.promise(() => f.channel.getRoot(f.root.id)))?.session.id).toBe(f.root.id)
+}))
+
+it.live("native escalation subscription reports pending roots initially and later decision changes until stopped", () => Effect.gen(function* () {
+  const f = yield* setup
+  const quiet = yield* f.sessions.create({ location: f.root.location })
+  const other = yield* f.sessions.create({ location: f.root.location })
+  const child = yield* f.sessions.create({ parentID: other.id })
+  yield* f.forms.create({ sessionID: f.root.id, title: "Initial decision", fields: [{ type: "string", key: "answer", required: true }] })
+  const first: string[] = []
+  const second: string[] = []
+  const waiters: (() => void)[] = []
+  const stopFirst = yield* Effect.promise(() => f.channel.subscribeEscalations((rootID) => { first.push(rootID) }))
+  expect(first).toEqual([f.root.id])
+  const stopSecond = yield* Effect.promise(() => f.channel.subscribeEscalations((rootID) => { second.push(rootID); waiters.shift()?.() }))
+  expect(second).toEqual([f.root.id])
+  const next = () => new Promise<void>((resolve) => { waiters.push(resolve) })
+  const later = next()
+  yield* f.forms.create({ sessionID: child.id, title: "Later decision", fields: [{ type: "string", key: "answer", required: true }] })
+  yield* Effect.promise(() => later).pipe(Effect.timeout("2 seconds"))
+  expect(first).toContain(other.id)
+  expect(first).not.toContain(child.id)
+  expect(first).not.toContain(quiet.id)
+  stopFirst()
+  stopFirst()
+  const count = first.length
+  const after = next()
+  yield* f.forms.create({ sessionID: f.root.id, title: "After stop", fields: [{ type: "string", key: "answer", required: true }] })
+  yield* Effect.promise(() => after).pipe(Effect.timeout("2 seconds"))
+  expect(first).toHaveLength(count)
+  expect(second.at(-1)).toBe(f.root.id)
+  f.channel.retire()
+  stopSecond()
+  yield* Effect.promise(async () => { await expect(f.channel.subscribeEscalations(() => {})).rejects.toBeInstanceOf(NativeDots.Error) })
+}))
+
+type Fixture = Effect.Success<typeof setup>
+const openExecutor = (f: Fixture, directory: string) => Effect.promise(() => f.host.threadScope({ environmentID: "environment", threadID: "thread-synthetic", cwd: directory }))
+const executorRead = (directory: string) => ({ action: "read", resources: [path.join(directory, "synthetic.txt")] })
+const executorDenied = (operation: Promise<unknown>) => Effect.promise(async () => { await expect(operation).rejects.toBeInstanceOf(CcaAuthorizationDeniedError) })
+
+it.live("native thread scope rejects unavailable access or configuration and invalid input before creating a Session", () => Effect.gen(function* () {
+  const f = yield* setup
+  const directory = yield* temporaryDirectory
+  const rejects = (input: { readonly environmentID: string; readonly threadID: string; readonly cwd?: string }) => Effect.promise(async () => {
+    const error = await f.host.threadScope(input).then(() => undefined, (caught: unknown) => caught)
+    expect(error).toBeInstanceOf(NativeDots.Error)
+    expect((error as NativeDots.Error).message).not.toContain(directory)
+  })
+  yield* rejects({ environmentID: "environment", threadID: "thread-synthetic", cwd: "relative/synthetic" })
+  yield* rejects({ environmentID: "environment", threadID: "   ", cwd: directory })
+  yield* rejects({ environmentID: "", threadID: "thread-synthetic", cwd: directory })
+  f.configure({ enabled: false })
+  yield* rejects({ environmentID: "environment", threadID: "thread-synthetic", cwd: directory })
+  f.configure({ enabled: true, profile: "trusted" })
+  yield* f.kv.set("dots.native-access", { enabled: true, revision: -1 })
+  yield* rejects({ environmentID: "environment", threadID: "thread-synthetic", cwd: directory })
+  yield* f.kv.set("dots.native-access", { enabled: true, revision: 1 })
+  yield* f.access.set({ enabled: false, expectedRevision: 1 })
+  yield* rejects({ environmentID: "environment", threadID: "thread-synthetic", cwd: directory })
+  expect((yield* f.sessions.list({})).data.map((session) => session.id)).toEqual([f.root.id])
+}).pipe(Effect.scoped))
+
+it.live("native thread scope falls back to home when the first command's cwd is missing or a file", () => Effect.gen(function* () {
+  const f = yield* setup
+  const directory = yield* temporaryDirectory
+  const file = path.join(directory, "file.txt")
+  yield* Effect.promise(() => writeFile(file, "synthetic"))
+  for (const [threadID, cwd] of [["thread-missing", path.join(directory, "missing")], ["thread-file", file]] as const) {
+    const scope = yield* Effect.promise(() => f.host.threadScope({ environmentID: "environment", threadID, cwd }))
+    expect(scope.directory).toBe(f.root.location.directory)
+    yield* Effect.promise(() => scope.close())
+  }
+  expect(existsSync(path.join(directory, "missing"))).toBe(false)
+}).pipe(Effect.scoped))
+
+it.live("native thread scope creates a durable eligible root at the requested Location that receives native escalations", () => Effect.gen(function* () {
+  const f = yield* setup
+  const directory = yield* temporaryDirectory
+  const escalated: string[] = []
+  const waiters: (() => void)[] = []
+  const stop = yield* Effect.promise(() => f.channel.subscribeEscalations((rootID) => { escalated.push(rootID); waiters.shift()?.() }))
+  const scope = yield* Effect.promise(() => f.host.threadScope({ environmentID: "environment", threadID: "thread-synthetic", cwd: path.join(directory, ".") }))
+  const session = yield* f.store.get(Session.ID.make(scope.sessionID))
+  expect(session).toMatchObject({ id: scope.sessionID, title: `Dots · ${path.basename(directory)}`, location: { directory: AbsolutePath.make(directory) } })
+  expect(session?.parentID).toBeUndefined()
+  expect(session?.time.archived).toBeUndefined()
+  expect((yield* Effect.promise(() => f.channel.listRoots())).map((item) => item.session.id)).toContain(Session.ID.make(scope.sessionID))
+  const forms = yield* Form.Service.pipe(Effect.provide(f.locations.get(session!.location, [LocationServiceMap.full])))
+  const delivered = new Promise<void>((resolve) => { waiters.push(resolve) })
+  const form = yield* forms.create({ sessionID: session!.id, title: "Executor decision", fields: [{ type: "string", key: "answer", required: true }] })
+  yield* Effect.promise(() => delivered).pipe(Effect.timeout("2 seconds"))
+  expect(escalated).toEqual([scope.sessionID])
+  expect((yield* Effect.promise(() => f.channel.pending(scope.sessionID))).map((request) => request.itemID)).toEqual([form.id])
+  stop()
+  yield* Effect.promise(() => scope.close())
+}).pipe(Effect.scoped))
+
+it.live("native executor authorization grants an allowed operation for its Session and releases the grant once", () => Effect.gen(function* () {
+  const f = yield* setup
+  const directory = yield* temporaryDirectory
+  const scope = yield* openExecutor(f, directory)
+  const grant = yield* Effect.promise(() => scope.authorization.authorize(executorRead(directory)))
+  expect(f.executorGrants().map((input) => [input.sessionID, input.action, input.resources])).toEqual([[scope.sessionID, "read", executorRead(directory).resources]])
+  expect(f.executorGrants()[0]?.holder).toStartWith("cca:")
+  yield* Effect.promise(() => grant.release())
+  yield* Effect.promise(() => grant.release())
+  expect(f.executorReleases()).toBe(1)
+  yield* Effect.promise(() => scope.close())
+  expect(f.executorReleases()).toBe(1)
+}).pipe(Effect.scoped))
+
+for (const reason of ["access", "configuration"] as const) it.live(`native executor authorization denies the next operation after global ${reason} Off and stays denied after On`, () => Effect.gen(function* () {
+  const f = yield* setup
+  const directory = yield* temporaryDirectory
+  const scope = yield* openExecutor(f, directory)
+  yield* Effect.promise(() => scope.authorization.authorize(executorRead(directory)).then((grant) => grant.release()))
+  if (reason === "access") yield* f.access.set({ enabled: false, expectedRevision: 1 })
+  else f.configure({ enabled: false })
+  yield* executorDenied(scope.authorization.authorize(executorRead(directory)))
+  if (reason === "access") yield* f.access.set({ enabled: true, expectedRevision: 2 })
+  else f.configure({ enabled: true, profile: "trusted" })
+  yield* executorDenied(scope.authorization.authorize(executorRead(directory)))
+  expect(f.executorGrants()).toHaveLength(1)
+  yield* Effect.promise(() => scope.close())
+}).pipe(Effect.scoped))
+
+for (const change of ["archived", "deleted", "foreign-owned"] as const) it.live(`native executor authorization denies after its Session is ${change}`, () => Effect.gen(function* () {
+  const f = yield* setup
+  const directory = yield* temporaryDirectory
+  const scope = yield* openExecutor(f, directory)
+  const sessionID = Session.ID.make(scope.sessionID)
+  if (change === "archived") yield* f.sessions.archive(sessionID)
+  else if (change === "deleted") yield* f.sessions.remove(sessionID)
+  else yield* f.events.claim(sessionID, "foreign-owner")
+  yield* executorDenied(scope.authorization.authorize(executorRead(directory)))
+  expect(f.executorGrants()).toEqual([])
+  yield* Effect.promise(() => scope.close())
+}).pipe(Effect.scoped))
+
+it.live("native executor scope close is idempotent, awaits outstanding grant releases and denies later operations", () => Effect.gen(function* () {
+  const f = yield* setup
+  const directory = yield* temporaryDirectory
+  const scope = yield* openExecutor(f, directory)
+  const grants = yield* Effect.promise(() => Promise.all([scope.authorization.authorize(executorRead(directory)), scope.authorization.authorize(executorRead(directory))]))
+  const first = scope.close()
+  yield* Effect.promise(() => scope.close())
+  expect(f.executorReleases()).toBe(2)
+  yield* Effect.promise(() => first)
+  for (const grant of grants) yield* Effect.promise(() => grant.release())
+  yield* Effect.promise(() => scope.close())
+  expect(f.executorReleases()).toBe(2)
+  yield* executorDenied(scope.authorization.authorize(executorRead(directory)))
+  expect(f.executorGrants()).toHaveLength(2)
+}).pipe(Effect.scoped))
+
+it.live("native executor scope close reports a grant release failure as the same fixed error on every call", () => Effect.gen(function* () {
+  const f = yield* setup
+  const directory = yield* temporaryDirectory
+  const scope = yield* openExecutor(f, directory)
+  yield* Effect.promise(() => scope.authorization.authorize(executorRead(directory)))
+  f.failExecutorReleases()
+  for (const _ of [1, 2]) {
+    const error = yield* Effect.promise(() => scope.close().then(() => undefined, (caught: unknown) => caught))
+    expect(error).toBeInstanceOf(CcaAuthorizationCloseError)
+    expect((error as Error).message).toBe("CCA authorization cleanup failed")
+  }
+}).pipe(Effect.scoped))

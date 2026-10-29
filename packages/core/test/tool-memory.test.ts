@@ -39,7 +39,7 @@ test("R5-F exposes on-demand memory and enforces permissions/guardrail lifetime 
       expect(input.source).toEqual({ messageID: toolIdentity.messageID, callID: expect.stringMatching(/^call-/) })
       expect(input.metadata?.operationDigest).toMatch(/^[a-f0-9]{64}$/)
       if (typeof input.metadata?.operationDigest === "string") state.digests.push(input.metadata.operationDigest)
-      if (state.deferred) return yield* new SessionGuardrail.DeferredError({ requestID: Guardrail.RequestID.make("grq_memory_deferred"), itemID: SessionReview.ID.make("rvw_memory_deferred"), ruleIDs: ["review-memory"] })
+      if (state.deferred) return yield* new SessionGuardrail.DeferredError({ requestID: Guardrail.RequestID.make("grq_memory_deferred"), sessionID: input.sessionID, itemID: SessionReview.ID.make("rvw_memory_deferred"), state: "open", action: input.action, resources: [...input.resources], ruleIDs: ["review-memory"], hardReview: false })
       if (state.guardDenied) return yield* new SessionGuardrail.DeclinedError({ requestID: Guardrail.RequestID.make("grq_memory_test") })
       state.reservations++
       return { release: Effect.sync(() => { state.releases++ }) }

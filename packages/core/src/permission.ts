@@ -70,6 +70,7 @@ export const AssertInput = Schema.Struct({
   agent: Agent.ID.pipe(Schema.optional),
   consumeReview: Schema.Boolean.pipe(Schema.optional),
   requireExplicitDecision: Schema.Boolean.pipe(Schema.optional),
+  defer: Schema.Literal(true).pipe(Schema.optional),
 }).annotate({ identifier: "Permission.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
 
@@ -98,10 +99,17 @@ export class DeclinedError extends Schema.TaggedErrorClass<DeclinedError>()("Per
 
 export class DeferredError extends Schema.TaggedErrorClass<DeferredError>()("Permission.DeferredError", {
   requestID: ID,
-  itemID: SessionReviewFold.ID,
+  sessionID: SessionSchema.ID,
+  itemID: SessionReviewFold.ID.pipe(Schema.optional),
+  state: Schema.Literals(["open", "rejected", "full"]),
   action: Schema.String,
+  resources: Schema.Array(Schema.String),
 }) {
   override get message() {
+    if (this.state === "rejected")
+      return `This action did not run. Permission ${this.action} was rejected in review item ${this.itemID}; an identical request stays refused.`
+    if (this.state === "full")
+      return `This action did not run. Permission ${this.action} needs the user's decision, but the review box is full, so no review item was recorded.`
     return `This action did not run. Permission ${this.action} needs the user's decision and was added to the review box as item ${this.itemID} while the user is asleep. Do not retry it or work around it. If the user approves, you will be told to re-issue exactly this action. Continue with independent work.`
   }
 }
@@ -382,7 +390,7 @@ const layer = Layer.effect(
             return yield* Effect.die(new Error(`Duplicate pending permission ID: ${request.id}`))
           if (yield* asleep(request.sessionID)) {
             const review = yield* openReview(request).pipe(Effect.orDie)
-            yield* Deferred.fail(deferred, new DeferredError({ requestID: request.id, itemID: review.itemID, action: request.action }))
+            yield* Deferred.fail(deferred, deferredError(request, "open", review.itemID))
             return item
           }
           pending.set(request.id, item)
@@ -418,8 +426,8 @@ const layer = Layer.effect(
         .pipe(Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID })))
     })
 
-    const fingerprintOf = (input: Pick<Request, "action" | "resources" | "metadata"> & { readonly requireExplicitDecision?: boolean }) =>
-      SessionReviewFold.fingerprint({ action: input.action, resources: input.resources, workdir: location.directory, metadata: input.requireExplicitDecision ? { ...input.metadata, requireExplicitDecision: true } : input.metadata })
+    const fingerprintOf = (input: Pick<Request, "action" | "resources" | "metadata"> & { readonly requireExplicitDecision?: boolean; readonly defer?: true }) =>
+      (input.defer ? SessionReviewFold.deferredFingerprint : SessionReviewFold.fingerprint)({ action: input.action, resources: input.resources, workdir: location.directory, metadata: input.requireExplicitDecision ? { ...input.metadata, requireExplicitDecision: true } : input.metadata })
     const historicalFingerprintOf = (input: Pick<Request, "action" | "resources" | "metadata"> & { readonly requireExplicitDecision?: boolean }) => {
       if (!input.requireExplicitDecision && input.metadata?.requireExplicitDecision !== true) return undefined
       return SessionReviewFold.fingerprint({ action: input.action, resources: input.resources, workdir: location.directory,
@@ -472,10 +480,35 @@ const layer = Layer.effect(
     })
 
     const openReview = Effect.fnUntraced(function* (value: Request, conversion = false) {
+      return yield* SessionReviewFold.open(database.db, events, yield* reviewInput(value, conversion))
+    })
+
+    const deferredError = (value: Request, state: DeferredError["state"], itemID?: SessionReviewFold.ID) =>
+      new DeferredError({
+        requestID: value.id,
+        sessionID: value.sessionID,
+        ...(itemID === undefined ? {} : { itemID }),
+        state,
+        action: value.action,
+        resources: value.resources.map((resource) => DecisionChoice.redactText(resource)),
+      })
+
+    const deferReview = Effect.fnUntraced(function* (value: Request, fingerprint: string) {
+      const input = yield* reviewInput(value)
+      if (input.payload.type !== "permission") return yield* Effect.die(new Error("Expected a permission review payload"))
+      const outcome = yield* SessionReviewFold.deferOpen(database.db, events, {
+        ...input,
+        origin: { requestID: value.id, executor: true },
+        payload: { ...input.payload, fingerprint },
+      })
+      return deferredError(value, outcome.state, outcome.state === "full" ? undefined : outcome.itemID)
+    })
+
+    const reviewInput = Effect.fnUntraced(function* (value: Request, conversion = false) {
       const origin = value.source?.messageID.startsWith("msg_")
         ? { messageID: SessionMessage.ID.make(value.source.messageID), callID: value.source.callID }
         : { requestID: value.id }
-      return yield* SessionReviewFold.open(database.db, events, {
+      return {
         sessionID: value.sessionID,
         kind: "permission",
         reason: conversion ? (value.escalation?.reason ?? "sleep_entry") : (value.escalation?.reason ?? "disabled"),
@@ -495,7 +528,7 @@ const layer = Layer.effect(
         },
         limit: Config.latest(yield* config.entries(), "guardrails")?.max_pending_reviews ?? 16,
         conversion,
-      })
+      } satisfies SessionReviewFold.OpenInput
     })
 
     const asleep = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
@@ -511,7 +544,7 @@ const layer = Layer.effect(
           if (pending.get(item.request.id) !== item) return
           const review = yield* openReview(item.request, true).pipe(Effect.orDie)
           pending.delete(item.request.id)
-          yield* Deferred.fail(item.deferred, new DeferredError({ requestID: item.request.id, itemID: review.itemID, action: item.request.action }))
+          yield* Deferred.fail(item.deferred, deferredError(item.request, "open", review.itemID))
           yield* events.publish(Event.Deferred, { sessionID, requestID: item.request.id, itemID: review.itemID })
         }))), { discard: true })
     })
@@ -666,11 +699,12 @@ const layer = Layer.effect(
             yield* publishAssessed(value, { outcome: "deny", via: settled.provenance.authority!, reply: "reject", escalation: settled.provenance })
             return yield* new CorrectedError({ feedback: deniedFeedback("permission", settled.provenance) })
           }
+          if (input.defer) return yield* Effect.die(yield* deferReview(value, fingerprintOf(input)))
           if (yield* asleep(input.sessionID)) {
             const review = yield* openReview(value).pipe(
               Effect.catchTag("SessionReview.FullError", (error) => Effect.die(error)),
             )
-            return yield* Effect.die(new DeferredError({ requestID: value.id, itemID: review.itemID, action: value.action }))
+            return yield* Effect.die(deferredError(value, "open", review.itemID))
           }
           if (escalation) yield* publishAssessed(value, { outcome: "escalate", via: escalation.authority!, escalation })
           const item = yield* create(value, input.agent)

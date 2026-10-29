@@ -1,4 +1,6 @@
 import { OpenAICodex } from "@ycoding-ai/core/plugin/provider/openai-codex"
+import { Platform } from "@ycoding-ai/core/util/platform"
+import { ccaDesktopAppVersion } from "./cca-executor-registration"
 
 // Every value in this module that the installed-host evidence does not pin
 // exactly (wire field spellings, the websocket URL shape, the authorization
@@ -16,7 +18,13 @@ export const pongTimeoutMs = 600_000
 export const handshakeTimeoutMs = 10_000
 export const streamCloseCode = 4000
 /** Unproven literal for the enroll body's os field. */
-export const enrollOs = process.platform === "darwin" ? "macos" : process.platform
+export const enrollOs = Platform.upstreamOs()
+
+const appServerVersion = "0.164.0-alpha.11.1"
+const hostHeaders = () => ({
+  originator: OpenAICodex.originator,
+  "User-Agent": OpenAICodex.userAgent().replace(OpenAICodex.desktopVersion, ccaDesktopAppVersion),
+})
 
 const endpoint = (suffix: string) => `${baseURL}wham/remote/control/server/${suffix}`
 
@@ -51,7 +59,7 @@ export function buildEnrollRequest(input: {
     name: input.name,
     os: enrollOs,
     arch: process.arch,
-    app_server_version: OpenAICodex.catalogClientVersion,
+    app_server_version: appServerVersion,
     installation_id: input.installationID,
     ...(input.serverID === undefined ? {} : { server_id: input.serverID }),
   }
@@ -153,7 +161,7 @@ export function buildConnectHeaders(input: {
   readonly subscribeCursor?: string
 }) {
   return {
-    ...OpenAICodex.headers(),
+    ...hostHeaders(),
     "chatgpt-account-id": input.credential.accountID,
     "x-codex-server-id": input.serverID,
     "x-codex-name": input.serverName,

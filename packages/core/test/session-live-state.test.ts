@@ -65,6 +65,7 @@ const guardrails = Layer.succeed(
     escalate: () => Effect.die("unused"),
     deferPending: () => Effect.die("unused"),
     forSession: () => Effect.die("unused"),
+    list: () => Effect.succeed([]),
     status: () => Effect.die("unused"),
     snapshot: () => Effect.succeed({ sequence: 4, digest: guardrailDigest }),
     withSnapshot: (_sessionID, use) => use({ sequence: 4, digest: guardrailDigest }),

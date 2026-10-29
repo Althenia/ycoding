@@ -180,6 +180,7 @@ const nativeSetup = (customRule = false) => Effect.gen(function* () {
   const access = DotsAccess.make({ db, kv: yield* KV.Service, configuration: () => Effect.succeed({ ready: true, profile: credential.label }) })
   yield* access.set({ enabled: true, expectedRevision: 0 })
   const host = yield* NativeDots.make({ access, db, events, store, sessions: f.sessions, execution, projects,
+    kv: yield* KV.Service, reviews, home: location.directory, data: location.directory, projectRoot: () => Effect.succeed(undefined),
     config: { snapshot: () => Effect.succeed({ entries: [new Config.Document({ type: "document", scope: "global", info: new Config.Info({ dots: { enabled: true, profile: credential.label } }) })], diagnostics: [] }), subscribe: () => () => {} },
     credentials: { list: () => Effect.succeed([credential]) }, credential: () => Effect.succeed(undefined),
     models: () => Effect.succeed([]), skills: () => Effect.succeed([]), selectedModel: (session) => Effect.succeed(session.model),
@@ -189,6 +190,9 @@ const nativeSetup = (customRule = false) => Effect.gen(function* () {
       const forms = yield* Form.Service
       const questions = yield* Question.Service
       return NativeDecisions.make({ permission, guardrail, forms, questions, reviews, orchestration, sessions: f.sessions })
+    }).pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full]))),
+    authorization: session => Effect.gen(function* () {
+      return { permission: yield* Permission.Service, guardrail: yield* SessionGuardrail.Service }
     }).pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full]))),
   })
   const pins: NativeDots.Pins = { accessRevision: 1, profile: credential.label, credentialID: credential.id, accountID: "synthetic-native-account", accountGeneration: 0,

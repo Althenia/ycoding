@@ -38,7 +38,15 @@ export const NativeStatus = Schema.Struct({
     hostname: DisplayName.pipe(optional),
     message: DisplayMessage.pipe(optional),
   }),
+  computer: Schema.Struct({
+    state: Schema.Literals(["attached", "detached", "unavailable"]),
+    message: DisplayMessage.pipe(optional),
+  }).pipe(optional),
 }).annotate({ identifier: "Dots.NativeStatus" })
+
+export interface ComputerAttach extends Schema.Schema.Type<typeof ComputerAttach> {}
+export const ComputerAttach = Schema.Struct({ replaceOthers: Schema.Literal(true) })
+  .annotate({ identifier: "Dots.ComputerAttach", parseOptions: { onExcessProperty: "error" } })
 
 export interface Target extends Schema.Schema.Type<typeof Target> {}
 export const Target = Schema.Struct({

@@ -2215,9 +2215,22 @@ export type Endpoint39_1Input = {
 export type Endpoint39_1Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.set"]>>["data"]
 export type DotsSetOperation<E = never> = (input: Endpoint39_1Input) => Effect.Effect<Endpoint39_1Output, E>
 
+type Endpoint39_2Request = Parameters<RawClient["server.dots"]["dots.attach"]>[0]
+export type Endpoint39_2Input = { readonly replaceOthers: Endpoint39_2Request["payload"]["replaceOthers"] }
+export type Endpoint39_2Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.attach"]>>["data"]
+export type DotsAttachOperation<E = never> = (input: Endpoint39_2Input) => Effect.Effect<Endpoint39_2Output, E>
+
 export interface DotsApi<E = never> {
   readonly get: DotsGetOperation<E>
   readonly set: DotsSetOperation<E>
+  readonly attach: DotsAttachOperation<E>
+}
+
+export type Endpoint40_0Output = EffectValue<ReturnType<RawClient["server.decision"]["decision.list"]>>["data"]
+export type DecisionListOperation<E = never> = () => Effect.Effect<Endpoint40_0Output, E>
+
+export interface DecisionApi<E = never> {
+  readonly list: DecisionListOperation<E>
 }
 
 export interface AppApi<E = never> {
@@ -2261,4 +2274,5 @@ export interface AppApi<E = never> {
   readonly review: ReviewApi<E>
   readonly coordination: CoordinationApi<E>
   readonly dots: DotsApi<E>
+  readonly decision: DecisionApi<E>
 }

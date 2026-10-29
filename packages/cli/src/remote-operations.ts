@@ -803,6 +803,7 @@ async function run(input: OperationInput) {
   const validated = validate(request)
   if (validated.kind === "dots.get") return { data: await input.local.dotsGet() }
   if (validated.kind === "dots.set") return { data: await input.local.dotsSet(validated.input) }
+  if (validated.kind === "dots.attach") return { data: await input.local.dotsAttach() }
   if (validated.kind === "workspace.list") return { data: validated.sessionsOnly
     ? await sessionWorkspaces(input.local, input.sessions.snapshot(), input.cache)
     : await workspaceList(input) }
@@ -1146,6 +1147,7 @@ type Reply = "once" | "always" | "reject"
 type Validated =
   | { readonly kind: "dots.get" }
   | { readonly kind: "dots.set"; readonly input: Dots.AccessSet }
+  | { readonly kind: "dots.attach" }
   | { readonly kind: "latency.append"; readonly samples: readonly RemoteLatencySample[] }
   | { readonly kind: "latency.list"; readonly input: { readonly limit?: number; readonly before?: string } }
   | { readonly kind: "keepAwake.get" }
@@ -1365,11 +1367,15 @@ function dashboardReport(value: unknown, field: string): Readonly<Record<string,
 
 function validate(request: RemoteRequest): Validated {
   const fields = validateFields(request)
-  if (request.operation === "dots.get" || request.operation === "dots.set") {
+  if (request.operation === "dots.get" || request.operation === "dots.set" || request.operation === "dots.attach") {
     if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Dots controls do not accept a Session")
     if (request.operation === "dots.get") {
       if (request.input !== undefined) throw new OperationError("invalid_message", "Dots status does not accept input")
       return { kind: "dots.get" }
+    }
+    if (request.operation === "dots.attach") {
+      if (fields.replaceOthers !== true) throw new OperationError("invalid_message", "Attaching this computer requires replaceOthers: true")
+      return { kind: "dots.attach" }
     }
     const enabled = requireBoolean(fields.enabled, "enabled")
     if (typeof fields.expectedRevision !== "number" || !Number.isSafeInteger(fields.expectedRevision) || fields.expectedRevision < 0)
@@ -2195,6 +2201,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.command": ["id", "command", "arguments", "files", "agents", "delivery"],
   "dots.get": [],
   "dots.set": ["enabled", "expectedRevision"],
+  "dots.attach": ["replaceOthers"],
   "session.attachment.upload": ["uploadID", "index", "last", "data"],
   "session.skill": ["id", "skill", "resume"],
   "session.get": [],
@@ -2274,6 +2281,7 @@ const mutations: ReadonlySet<string> = new Set([
   "session.switchAgent",
   "session.command",
   "dots.set",
+  "dots.attach",
   "session.skill",
   "session.prompt",
   "session.interrupt",

@@ -2806,7 +2806,27 @@ const Endpoint39_1 = (raw: RawClient["server.dots"]) => (input: Endpoint39_1Inpu
     Effect.map((value) => value.data),
   )
 
-const adaptGroup39 = (raw: RawClient["server.dots"]) => ({ get: Endpoint39_0(raw), set: Endpoint39_1(raw) })
+type Endpoint39_2Request = Parameters<RawClient["server.dots"]["dots.attach"]>[0]
+type Endpoint39_2Input = { readonly replaceOthers: Endpoint39_2Request["payload"]["replaceOthers"] }
+const Endpoint39_2 = (raw: RawClient["server.dots"]) => (input: Endpoint39_2Input) =>
+  raw["dots.attach"]({ payload: { replaceOthers: input["replaceOthers"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+const adaptGroup39 = (raw: RawClient["server.dots"]) => ({
+  get: Endpoint39_0(raw),
+  set: Endpoint39_1(raw),
+  attach: Endpoint39_2(raw),
+})
+
+const Endpoint40_0 = (raw: RawClient["server.decision"]) => () =>
+  raw["decision.list"]({}).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+const adaptGroup40 = (raw: RawClient["server.decision"]) => ({ list: Endpoint40_0(raw) })
 
 const adaptClient = (raw: RawClient) => ({
   health: adaptGroup0(raw["server.health"]),
@@ -2849,6 +2869,7 @@ const adaptClient = (raw: RawClient) => ({
   review: adaptGroup37(raw["server.review"]),
   coordination: adaptGroup38(raw["server.coordination"]),
   dots: adaptGroup39(raw["server.dots"]),
+  decision: adaptGroup40(raw["server.decision"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

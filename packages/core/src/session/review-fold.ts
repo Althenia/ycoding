@@ -104,6 +104,18 @@ export function fingerprint(input: {
   }) as SessionReview.Fingerprint
 }
 
+export const deferredMetadataKeys = ["cwd", "workdir", "argv", "requireExplicitDecision"] as const
+
+export function deferredFingerprint(input: Parameters<typeof fingerprint>[0]): SessionReview.Fingerprint {
+  const metadata = input.metadata ?? {}
+  return fingerprint({
+    ...input,
+    metadata: Object.fromEntries(deferredMetadataKeys.flatMap((key) => (key in metadata ? [[key, metadata[key]]] : []))),
+  })
+}
+
+export const isExecutor = (item: Pick<Folded, "origin">) => "requestID" in item.origin && item.origin.executor === true
+
 export function promptID(itemID: ID): SessionMessage.ID {
   return SessionMessage.ID.make(`msg_review_${Hash.sha256(itemID).slice(0, 24)}`)
 }
@@ -274,47 +286,84 @@ export const open = Effect.fn("SessionReviewFold.open")(function* (
 ) {
   const rootID = input.rootID ?? (yield* rootOf(db, input.sessionID))
   if (!rootID) return yield* Effect.die(new Error(`Session not found: ${input.sessionID}`))
+  return yield* withFamilyLock(rootID)(openUnlocked(db, events, rootID, input))
+})
+
+export type DeferOutcome =
+  | { readonly state: "open"; readonly itemID: ID; readonly opened: boolean }
+  | { readonly state: "rejected"; readonly itemID: ID }
+  | { readonly state: "full" }
+
+export const deferOpen = Effect.fn("SessionReviewFold.deferOpen")(function* (
+  db: DatabaseClient,
+  events: EventRuntime.Interface,
+  input: OpenInput,
+) {
+  const rootID = input.rootID ?? (yield* rootOf(db, input.sessionID))
+  if (!rootID) return yield* Effect.die(new Error(`Session not found: ${input.sessionID}`))
+  if (!("fingerprint" in input.payload)) return yield* Effect.die(new Error("Deferred review items need a fingerprint"))
+  const expected = input.payload.fingerprint
   return yield* withFamilyLock(rootID)(
     Effect.gen(function* () {
-      const sessions = yield* familySessions(db, rootID)
-      const folded = yield* fold(db, sessions.map((session) => session.id))
-      if (!input.conversion && folded.filter(isOpen).length >= input.limit)
-        return yield* new FullError({ sessionID: input.sessionID, limit: input.limit })
-      const itemID = ID.create()
-      const time = yield* Clock.currentTimeMillis
-      const payload = input.payload
-      yield* events.publish(
-        SessionEvent.Review.Deferred,
-        {
-          sessionID: input.sessionID,
-          itemID,
-          kind: input.kind,
-          reason: input.reason,
-          ...(input.choice === undefined ? {} : { choice: input.choice }),
-          ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
-          ...(input.grades === undefined ? {} : { grades: input.grades }),
-          origin: input.origin,
-          payload,
-        } as SessionEvent.Review.Deferred["data"],
-        payload.type === "guardrail" && input.reason !== "sleep_entry" && input.reason !== "disabled"
-          ? {
-              commit: () =>
-                ModelIncident.recordEscalation(db, {
-                  sessionID: input.sessionID,
-                  requestID: payload.requestID,
-                  ...("messageID" in input.origin ? { messageID: input.origin.messageID } : {}),
-                  ruleIDs: payload.ruleIDs,
-                  hardReview: payload.hardReview,
-                  time,
-                }),
-            }
-          : undefined,
+      const matching = (yield* fold(db, [input.sessionID]))
+        .filter((item) => item.kind === input.kind && item.withdrawn === undefined && matchesFingerprint(item.payload, expected))
+        .toSorted((left, right) => left.created - right.created || (left.itemID < right.itemID ? -1 : 1))
+      const current = matching.find(isOpen)
+      if (current) return { state: "open", itemID: current.itemID, opened: false } satisfies DeferOutcome
+      const newest = matching.at(-1)
+      if (newest?.decision !== undefined && "reply" in newest.decision && newest.decision.reply === "reject")
+        return { state: "rejected", itemID: newest.itemID } satisfies DeferOutcome
+      return yield* openUnlocked(db, events, rootID, input).pipe(
+        Effect.map((item): DeferOutcome => ({ state: "open", itemID: item.itemID, opened: true })),
+        Effect.catchTag("SessionReview.FullError", () => Effect.succeed<DeferOutcome>({ state: "full" })),
       )
-      const created = (yield* fold(db, [input.sessionID])).find((item) => item.itemID === itemID)
-      if (!created) return yield* Effect.die(new Error(`Review item was not recorded: ${itemID}`))
-      return yield* toItem(db, rootID, sessions, created)
     }),
   )
+})
+
+const openUnlocked = Effect.fnUntraced(function* (
+  db: DatabaseClient,
+  events: EventRuntime.Interface,
+  rootID: Session.ID,
+  input: OpenInput,
+) {
+  const sessions = yield* familySessions(db, rootID)
+  const folded = yield* fold(db, sessions.map((session) => session.id))
+  if (!input.conversion && folded.filter(isOpen).length >= input.limit)
+    return yield* new FullError({ sessionID: input.sessionID, limit: input.limit })
+  const itemID = ID.create()
+  const time = yield* Clock.currentTimeMillis
+  const payload = input.payload
+  yield* events.publish(
+    SessionEvent.Review.Deferred,
+    {
+      sessionID: input.sessionID,
+      itemID,
+      kind: input.kind,
+      reason: input.reason,
+      ...(input.choice === undefined ? {} : { choice: input.choice }),
+      ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
+      ...(input.grades === undefined ? {} : { grades: input.grades }),
+      origin: input.origin,
+      payload,
+    } as SessionEvent.Review.Deferred["data"],
+    payload.type === "guardrail" && input.reason !== "sleep_entry" && input.reason !== "disabled"
+      ? {
+          commit: () =>
+            ModelIncident.recordEscalation(db, {
+              sessionID: input.sessionID,
+              requestID: payload.requestID,
+              ...("messageID" in input.origin ? { messageID: input.origin.messageID } : {}),
+              ruleIDs: payload.ruleIDs,
+              hardReview: payload.hardReview,
+              time,
+            }),
+        }
+      : undefined,
+  )
+  const created = (yield* fold(db, [input.sessionID])).find((item) => item.itemID === itemID)
+  if (!created) return yield* Effect.die(new Error(`Review item was not recorded: ${itemID}`))
+  return yield* toItem(db, rootID, sessions, created)
 })
 
 export const withdrawItem = Effect.fnUntraced(function* (

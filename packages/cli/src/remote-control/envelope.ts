@@ -4,6 +4,7 @@ import { chunkThresholdBytes, maxChunkEnvelopeBytes, maxMessageBytes, maxSegment
 export type EnvelopeEvent =
   | ({ readonly kind: "message"; readonly text: string } & Receipt)
   | ({ readonly kind: "pending" | "ack" | "ping" | "closed" } & Receipt)
+  | ({ readonly kind: "acknowledged" } & Address)
   | { readonly kind: "drop"; readonly reason: string }
 
 type Address = { readonly clientID: string; readonly streamID: string; readonly envID: string }
@@ -120,10 +121,11 @@ export class Reassembler {
       return { kind: "drop", reason: "invalid_json" }
     }
     if (!isRecord(parsed) || typeof parsed.type !== "string") return { kind: "drop", reason: "invalid_envelope" }
-    if (!["ping", "client_closed", "client_message", "client_message_chunk"].includes(parsed.type))
+    if (!["ack", "ping", "client_closed", "client_message", "client_message_chunk"].includes(parsed.type))
       return { kind: "drop", reason: "unknown_type" }
     const target = address(parsed, this.#envID)
     if (target === undefined) return { kind: "drop", reason: "missing_address" }
+    if (parsed.type === "ack") return { kind: "acknowledged", ...target }
     const seqID = parsed.seq_id
     if (typeof seqID !== "number" || !Number.isSafeInteger(seqID) || seqID < 0)
       return { kind: "drop", reason: "invalid_sequence" }

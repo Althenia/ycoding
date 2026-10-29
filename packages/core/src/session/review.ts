@@ -94,7 +94,7 @@ const layer = Layer.effect(
       const owner = item.sessionID
       const actor = source ? "The authenticated Dots client" : "The user"
       const prompt = (text: string) =>
-        admit ? admit(text) : source ? sessions.synthetic({
+        admit ? admit(text) : SessionReviewFold.isExecutor(item) ? Effect.void : source ? sessions.synthetic({
           id: promptID(item.itemID), sessionID: owner, text, delivery: "steer",
           description: "Dots deferred decision", metadata: { review: { itemID: item.itemID, kind: item.kind }, dotsSource: source },
         }).pipe(Effect.mapError((error) => new InvalidDecisionError({ itemID: item.itemID, message: error.message })), Effect.asVoid) :
@@ -266,12 +266,13 @@ const layer = Layer.effect(
               }),
             } : undefined
             if (dots) {
+              const executor = SessionReviewFold.isExecutor(item)
               return yield* deliver(family.rootID, item, input.decision, dots.source, (text) => Effect.gen(function* () {
                 const committed = yield* events.publishBatch([
-                  { definition: SessionEvent.InputAdmitted, data: { sessionID: item.sessionID, inputID: promptID(item.itemID),
+                  ...(executor ? [] : [{ definition: SessionEvent.InputAdmitted, data: { sessionID: item.sessionID, inputID: promptID(item.itemID),
                     input: SessionPending.Message.make({ type: "synthetic", delivery: "steer", data: {
                       text, description: "Dots deferred decision", metadata: { review: { itemID: item.itemID, kind: item.kind }, dotsSource: dots.source },
-                    } }) } },
+                    } }) } }]),
                   { definition: SessionEvent.Review.Decided, data: { sessionID: item.sessionID, itemID: item.itemID, decision: input.decision, source: dots.source }, options },
                   { definition: SessionEvent.DotsDecisionSettled, data: { sessionID: item.sessionID, source: dots.source, target: { kind: "review", itemID: item.itemID, fingerprint: dots.fingerprint } } },
                 ], { when: Effect.gen(function* () {
@@ -282,7 +283,7 @@ const layer = Layer.effect(
                     (yield* SessionPending.lookup(db, item.sessionID, promptID(item.itemID))) === undefined && (yield* dots.validate())
                 }) })
                 if (committed.length === 0) return yield* new ConflictError({ itemID: input.itemID, message: "Dots review changed before settlement" })
-                if (!(yield* sessions.get(item.sessionID)).revert) yield* execution.wake(item.sessionID)
+                if (!executor && !(yield* sessions.get(item.sessionID)).revert) yield* execution.wake(item.sessionID)
               }))
             }
             yield* events.publish(
@@ -306,7 +307,7 @@ const layer = Layer.effect(
         const family = yield* SessionReviewFold.familyFold(db, sessionID)
         if (!family) continue
         for (const item of family.folded) {
-          if (item.sessionID !== sessionID || item.decision === undefined || item.withdrawn !== undefined || item.kind === "recovery")
+          if (item.sessionID !== sessionID || item.decision === undefined || item.withdrawn !== undefined || item.kind === "recovery" || SessionReviewFold.isExecutor(item))
             continue
           if (item.kind === "subagent_question") {
             if ("questionID" in item.origin && (yield* SessionReviewFold.ownsQuestion(db, item.sessionID, item.origin.questionID)))

@@ -98,6 +98,7 @@ export const remoteOperations = [
   "session.command",
   "dots.get",
   "dots.set",
+  "dots.attach",
   "session.skill",
   "usage.providers",
   "usage.summary",
@@ -189,6 +190,7 @@ export type RemoteDotsStatus = {
   readonly access: { readonly enabled: boolean; readonly revision: number }
   readonly configuration: { readonly ready: boolean; readonly profile?: string; readonly message?: string }
   readonly connection: { readonly state: "unavailable" | "off" | "connecting" | "connected" | "error"; readonly hostname?: string; readonly message?: string }
+  readonly computer?: { readonly state: "attached" | "detached" | "unavailable"; readonly message?: string }
 }
 
 export function readDotsStatus(value: unknown): RemoteDotsStatus | undefined {
@@ -201,11 +203,22 @@ export function readDotsStatus(value: unknown): RemoteDotsStatus | undefined {
     !dotsDisplayValue(connection.hostname, 256) || !dotsDisplayValue(connection.message, 500)) return undefined
   const state = connection.state
   if (state !== "unavailable" && state !== "off" && state !== "connecting" && state !== "connected" && state !== "error") return undefined
+  const computer = readDotsComputer(value.computer)
+  if (computer === null) return undefined
   return {
     access: { enabled: access.enabled, revision: access.revision },
     configuration: { ready: configuration.ready, ...(configuration.profile === undefined ? {} : { profile: configuration.profile }), ...(configuration.message === undefined ? {} : { message: configuration.message }) },
     connection: { state, ...(connection.hostname === undefined ? {} : { hostname: connection.hostname }), ...(connection.message === undefined ? {} : { message: connection.message }) },
+    ...(computer === undefined ? {} : { computer }),
   }
+}
+
+function readDotsComputer(value: unknown): RemoteDotsStatus["computer"] | null {
+  if (value === undefined) return undefined
+  if (!isRecord(value) || !dotsDisplayValue(value.message, 500)) return null
+  const state = value.state
+  if (state !== "attached" && state !== "detached" && state !== "unavailable") return null
+  return { state, ...(value.message === undefined ? {} : { message: value.message }) }
 }
 
 function dotsDisplayValue(value: unknown, limit: number): value is string | undefined {
@@ -291,6 +304,7 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.command": "mutation",
   "dots.get": "read",
   "dots.set": "mutation",
+  "dots.attach": "mutation",
   "session.skill": "mutation",
   "usage.providers": "read",
   "usage.summary": "read",
@@ -850,7 +864,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
   if (operation === "usage.forecast" && (!isRecord(frame.input) ||
     (frame.input.localScope === "location") !== (frame.sessionID !== undefined)))
     return failRequest("invalid_message", "Forecast scope requires a backend-resolved Session Location or an unscoped backend")
-  if ((operation.startsWith("provider.auth.") || operation.startsWith("coordination.") || operation === "dots.get" || operation === "dots.set" || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
+  if ((operation.startsWith("provider.auth.") || operation.startsWith("coordination.") || operation === "dots.get" || operation === "dots.set" || operation === "dots.attach" || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
     operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report" || operation === "usage.dashboard" ||
     operation === "incident.report" || operation === "incident.recent" ||
     operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set" ||
@@ -895,6 +909,7 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
   if (operation === "dots.set") return isRecord(input) && Object.keys(input).length === 2 &&
     typeof input.enabled === "boolean" && typeof input.expectedRevision === "number" &&
     Number.isSafeInteger(input.expectedRevision) && input.expectedRevision >= 0
+  if (operation === "dots.attach") return isRecord(input) && Object.keys(input).length === 1 && input.replaceOthers === true
   if (operation === "session.delete") return input === undefined || isRecord(input) && Object.keys(input).length === 0
   if (operation.startsWith("coordination.")) return validCoordinationInput(operation, input)
   if (operation === "session.list") return input === undefined || isRecord(input) &&

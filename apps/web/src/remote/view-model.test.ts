@@ -59,6 +59,31 @@ describe("Dots connection display", () => {
     expect(dotsConnectionView({ ...input, online: false }).notice).toContain("Reconnect")
     expect(dotsConnectionView({ ...input, error: "Read failed" }).notice).toContain("Refresh")
   })
+  test("shows this computer's executor only while access is on", () => {
+    const view = (computer: { state: "attached" | "detached" | "unavailable"; message?: string } | undefined, enabled = true) =>
+      dotsConnectionView({ ...input, status: { ...status, access: { enabled, revision: 3 }, ...(computer ? { computer } : {}) } })
+    expect(view({ state: "attached" }).executor).toEqual({ label: "Attached" })
+    expect(view({ state: "detached" }).executor).toEqual({ label: "Not attached" })
+    expect(view({ state: "unavailable", message: "Executor is starting" }).executor).toEqual({ label: "Unavailable", message: "Executor is starting" })
+    expect(view({ state: "attached", message: "Ignored when healthy" }).executor).toEqual({ label: "Attached", message: "Ignored when healthy" })
+    expect(view({ state: "attached" }, false).executor).toBeUndefined()
+    expect(view({ state: "detached" }, false).executor).toBeUndefined()
+    expect(view(undefined).executor).toBeUndefined()
+    expect(dotsConnectionView({ ...input, status: undefined }).executor).toBeUndefined()
+  })
+  test("offers attach only when detached, idle and online, and states the consequence", () => {
+    const view = (state: "attached" | "detached" | "unavailable", override: Partial<typeof input> & { error?: string } = {}, enabled = true) =>
+      dotsConnectionView({ ...input, ...override, status: { ...status, access: { enabled, revision: 3 }, computer: { state } } })
+    expect(view("detached")).toMatchObject({ canAttach: true, attachAction: "Use this computer for Dots tasks" })
+    expect(view("detached").attachConfirmation).toContain("detach")
+    expect(view("detached").attachConfirmation).toContain("other computers")
+    expect(view("attached").canAttach).toBe(false)
+    expect(view("unavailable").canAttach).toBe(false)
+    expect(view("detached", {}, false).canAttach).toBe(false)
+    for (const override of [{ online: false }, { loading: true }, { pending: true }, { error: "Read failed" }]) expect(view("detached", override).canAttach).toBe(false)
+    expect(dotsConnectionView({ ...input, status: { ...status } }).canAttach).toBe(false)
+    expect(dotsConnectionView({ ...input, status: undefined }).canAttach).toBe(false)
+  })
 })
 
 test("keep-awake chrome is absent until settled or off and distinguishes active, held, unsupported, and failed states", () => {

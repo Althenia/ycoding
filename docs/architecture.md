@@ -248,8 +248,17 @@ Core owns account connector composition and ChatGPT discovery in `account-connec
 - **Core:** `dots/native.ts` owns the private Host and Channels; `native-decisions.ts` and `native-projection.ts` own exact typed decision handling and staged projection. The global `dots/access.ts` service owns the validated KV access preference, transactional revision changes, and safe status assembly. Native and HTTP consumers share this same service instance; it is not Location-scoped.
 - **Server:** builds the Host in global services and passes it as the fifth server-process callback argument. CLI consumes the Channel directly and registers one process-owned read-only transport status adapter through `Host.attachTransport`, unregistering it at shutdown. Core identity-fences attachment lifetime and maps closed problem categories to safe guidance. Effective native configuration drives the existing connector start/stop/retry lifecycle.
 - **Schema:** owns access, native source receipts, and historical Dots event/attribution decoders.
-- **Protocol, Client, Remote:** expose only sessionless `dots.get/set` for global Dots access and status. Server authentication and relay user/device ownership remain enforced. HTTP does not carry native task or settlement authority.
+- **Protocol, Client, Remote:** expose only sessionless `dots.get/set` for global Dots access and status and `dots.attach`, which attaches this computer's Dots executor to the account's Dot. Server authentication and relay user/device ownership remain enforced. HTTP does not carry native task or settlement authority.
 - **Promotion:** normal pending-input promotion rejects queued historical routine/delegated task authority with the existing durable rejection receipt, without rewriting stored history.
+
+## CCA executor
+
+The CCA executor is a separate process/filesystem JSON-RPC surface. It shares no transport, session identity, or authority with Native Dots Session-prompt Channels or with the browser relay.
+
+- **CLI:** owns the relay transport and wire handling in `remote-control/cca-noise.ts`, `cca-relay.ts`, `cca-executor-transport.ts`, and `cca-executor-rpc.ts` (executor registration in `cca-executor-registration.ts`; live-proof driver in `cca-connect-proof.ts`). The runnable entrypoints are the standalone scripts `script/cca-executor-register-proof.ts`, `script/cca-executor-connect-proof.ts`, and `script/cca-executor-task-proof.ts`. They are proof programs: no CCA module is constructed by the server process, and no Protocol, Schema, or product surface sits in front of them.
+- **Core:** `cca/policy.ts` (`CcaPolicy`) owns pure local policy — `PathUri` conversion, Location containment, sandbox-intent rejection, environment construction, and argv bounds. `cca/executor.ts` (`CcaExecutor`) owns the guarded executor service — per-operation Permission and SessionGuardrail assertion, process groups, filesystem operations, timeouts, and output retention. The CLI transport reaches side effects only through this service.
+
+YCoding owns every part of execution on this surface; the bundled Codex binary never runs as an exec-server. See [the CCA executor contract](../specs/dots-cca-executor.md).
 
 ## Task MCP gateway
 

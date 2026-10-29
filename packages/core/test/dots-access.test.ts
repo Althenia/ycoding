@@ -13,6 +13,8 @@ import { SessionEvent } from "../src/session/event"
 import { EventTable } from "../src/event/sql"
 import { SessionHistoryPruning } from "../src/session/history-pruning"
 
+const idleComputer = { computer: async () => ({ state: "detached" as const }), attachComputer: async () => ({ state: "detached" as const }) }
+
 const it = testEffect(reviewLayer())
 const setup = Effect.gen(function* () {
   const db = yield* Database.Service
@@ -93,7 +95,7 @@ it.live("historical family access remains decodable after pruning without granti
 it.live("native status distinguishes configuration, global access and attached transport", () => Effect.gen(function* () {
   const f = yield* setup
   expect(yield* f.access.status()).toEqual({ access: { enabled: false, revision: 0 }, configuration: { ready: true, profile: "trusted" }, connection: { state: "unavailable" } })
-  const release = f.access.attachTransport({ status: async () => ({ state: "connected", hostname: "Synthetic.local" }) })
+  const release = f.access.attachTransport({ ...idleComputer, status: async () => ({ state: "connected", hostname: "Synthetic.local" }) })
   expect((yield* f.access.status()).connection).toEqual({ state: "off", hostname: "Synthetic.local" })
   yield* f.access.set({ enabled: true, expectedRevision: 0 })
   expect((yield* f.access.status()).connection).toEqual({ state: "connected", hostname: "Synthetic.local" })
@@ -109,12 +111,12 @@ it.live("transport attachment rejects replacement and fences stale release and d
   yield* f.access.set({ enabled: true, expectedRevision: 0 })
   const entered = yield* Deferred.make<void>()
   const result = yield* Deferred.make<DotsAccess.TransportStatus>()
-  const release = f.access.attachTransport({ status: () => Effect.runPromise(Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(result)))) })
-  expect(() => f.access.attachTransport({ status: async () => ({ state: "off" }) })).toThrow()
+  const release = f.access.attachTransport({ ...idleComputer, status: () => Effect.runPromise(Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(result)))) })
+  expect(() => f.access.attachTransport({ ...idleComputer, status: async () => ({ state: "off" }) })).toThrow()
   const reading = yield* f.access.status().pipe(Effect.forkChild)
   yield* Deferred.await(entered)
   release()
-  const next = f.access.attachTransport({ status: async () => ({ state: "connecting" }) })
+  const next = f.access.attachTransport({ ...idleComputer, status: async () => ({ state: "connecting" }) })
   release()
   yield* Deferred.succeed(result, { state: "connected", hostname: "Old.local" })
   expect((yield* Fiber.join(reading)).connection).toEqual({ state: "unavailable" })
@@ -127,7 +129,7 @@ it.live("status discards a connected result delayed across global Off-On", () =>
   yield* f.access.set({ enabled: true, expectedRevision: 0 })
   const entered = yield* Deferred.make<void>()
   const result = yield* Deferred.make<DotsAccess.TransportStatus>()
-  const release = f.access.attachTransport({ status: () => Effect.runPromise(Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(result)))) })
+  const release = f.access.attachTransport({ ...idleComputer, status: () => Effect.runPromise(Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(result)))) })
   const reading = yield* f.access.status().pipe(Effect.forkChild)
   yield* Deferred.await(entered)
   yield* f.access.set({ enabled: false, expectedRevision: 1 })
@@ -141,7 +143,7 @@ it.live("native status bounds display strings and exposes fixed error guidance r
   const f = yield* setup
   const access = DotsAccess.make({ db: f.db, kv: f.kv, configuration: () => Effect.succeed({ ready: true, profile: "trusted\u001b\n" + "p".repeat(300) }) })
   yield* access.set({ enabled: true, expectedRevision: 0 })
-  const release = access.attachTransport({ status: async () => ({ state: "connecting", hostname: "Synthetic\u001b\n" + "h".repeat(300), problem: "authentication", message: "synthetic private provider payload" }) })
+  const release = access.attachTransport({ ...idleComputer, status: async () => ({ state: "connecting", hostname: "Synthetic\u001b\n" + "h".repeat(300), problem: "authentication", message: "synthetic private provider payload" }) })
   const status = yield* access.status()
   expect(status.configuration.profile!.length).toBeLessThanOrEqual(256)
   expect(status.connection.hostname!.length).toBeLessThanOrEqual(256)
@@ -154,10 +156,51 @@ it.live("native status bounds display strings and exposes fixed error guidance r
 it.live("a failed transport status read reports a safe connection error without exposing its failure", () => Effect.gen(function* () {
   const f = yield* setup
   yield* f.access.set({ enabled: true, expectedRevision: 0 })
-  const release = f.access.attachTransport({ status: async () => { throw new Error("synthetic private provider payload") } })
+  const release = f.access.attachTransport({ ...idleComputer, status: async () => { throw new Error("synthetic private provider payload") } })
   const status = yield* f.access.status()
   expect(status.connection.state).toBe("error")
   expect(status.connection.message).toContain("retries automatically")
   expect(JSON.stringify(status)).not.toContain("private provider")
+  release()
+}))
+
+it.live("native status reports the transport's computer state with fixed guidance only while a transport is attached", () => Effect.gen(function* () {
+  const f = yield* setup
+  yield* f.access.set({ enabled: true, expectedRevision: 0 })
+  let computer: () => Promise<DotsAccess.ComputerStatus> = async () => ({ state: "attached" })
+  const release = f.access.attachTransport({ ...idleComputer, status: async () => ({ state: "connected" }), computer: () => computer() })
+  expect((yield* f.access.status()).computer).toEqual({ state: "attached" })
+  computer = async () => ({ state: "detached", problem: "admin-disabled" })
+  expect((yield* f.access.status()).computer).toEqual({ state: "detached", message: "Your workspace administrator has disabled local computer access." })
+  computer = async () => { throw new Error("synthetic private provider payload") }
+  const failed = yield* f.access.status()
+  expect(failed.computer).toEqual({ state: "unavailable", message: "Your Dot's computers could not be read. Try again." })
+  expect(JSON.stringify(failed)).not.toContain("private provider")
+  release()
+  expect((yield* f.access.status()).computer).toBeUndefined()
+}))
+
+it.live("computer attachment requires a transport and enabled access and reports the attach outcome", () => Effect.gen(function* () {
+  const f = yield* setup
+  expect((yield* f.access.attachComputer().pipe(Effect.flip)).code).toBe("unavailable")
+  let attaches = 0
+  let outcome: DotsAccess.ComputerStatus = { state: "detached", problem: "rejected" }
+  const release = f.access.attachTransport({
+    status: async () => ({ state: "connected" }),
+    computer: async () => ({ state: "detached" }),
+    attachComputer: async () => { attaches++; return outcome },
+  })
+  expect((yield* f.access.attachComputer()).computer).toEqual({ state: "unavailable", message: "Turn on Dots access with a ready ChatGPT profile to attach this computer." })
+  expect(attaches).toBe(0)
+  yield* f.access.set({ enabled: true, expectedRevision: 0 })
+  expect((yield* f.access.attachComputer()).computer).toEqual({ state: "detached", message: "ChatGPT refused the attach request." })
+  outcome = { state: "attached" }
+  const attached = yield* f.access.attachComputer()
+  expect(attached.computer).toEqual({ state: "attached" })
+  expect(attached.connection.state).toBe("connected")
+  expect(attaches).toBe(2)
+  f.unavailable()
+  expect((yield* f.access.attachComputer()).computer?.state).toBe("unavailable")
+  expect(attaches).toBe(2)
   release()
 }))

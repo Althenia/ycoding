@@ -31,7 +31,7 @@ export type Reason = typeof Reason.Type
 export const Origin = Schema.Union([
   Schema.Struct({ messageID: SessionMessage.ID, callID: Schema.String }),
   Schema.Struct({ questionID: SessionOrchestration.QuestionID }),
-  Schema.Struct({ requestID: Schema.String.check(Schema.isNonEmpty()) }),
+  Schema.Struct({ requestID: Schema.String.check(Schema.isNonEmpty()), executor: Schema.Literal(true).pipe(optional) }),
 ]).annotate({ identifier: "SessionReview.Origin" })
 export type Origin = typeof Origin.Type
 

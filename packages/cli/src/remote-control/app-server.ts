@@ -1,4 +1,5 @@
 import { OpenAICodex } from "@ycoding-ai/core/plugin/provider/openai-codex"
+import { Platform } from "@ycoding-ai/core/util/platform"
 import { DateTime } from "effect"
 import { platformFamily } from "./types"
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
@@ -26,6 +27,11 @@ export interface RemoteControlBackend {
   readonly pending: (threadID: string) => Promise<readonly NativeDots.NativeRequest[]>
   readonly settle: NativeDots.Channel["settle"]
   readonly subscribe: NativeDots.Channel["subscribe"]
+  readonly renameThread: (threadID: string, title: string) => Promise<void>
+  readonly archiveThread: (threadID: string) => Promise<void>
+  readonly unarchiveThread: (threadID: string) => Promise<NativeDots.RootSnapshot>
+  readonly deleteThread: (threadID: string) => Promise<void>
+  readonly subscribeEscalations: NativeDots.Channel["subscribeEscalations"]
   readonly retire: () => void
 }
 
@@ -134,6 +140,8 @@ export function createRemoteControlAppServer(input: {
   const consumed = new Map<string, Set<string>>()
   const admissions = new Map<string, { count: number; events: EventManifest.ServerEvent[] }>()
   const revoked = new Set<string>()
+  let escalationsStarted = false
+  let stopEscalations: (() => void) | undefined
   const notify = (method: string, params: unknown) => {
     if (active) input.send(JSON.stringify({ jsonrpc: "2.0", method, params }))
   }
@@ -257,6 +265,42 @@ export function createRemoteControlAppServer(input: {
     await surfaceApprovals(threadID)
   }
 
+  function dropSubscription(threadID: string) {
+    const entry = subscriptions.get(threadID)
+    if (!entry) return
+    subscriptions.delete(threadID)
+    if (entry.stop) entry.stop()
+    else void entry.pending.then((stop) => stop(), () => {})
+  }
+
+  function restoreRoot(threadID: string) {
+    if (!revoked.delete(threadID)) return
+    dropSubscription(threadID)
+  }
+
+  function escalated(threadID: string) {
+    if (!active || revoked.has(threadID)) return
+    void watch(threadID).catch(() => {
+      dropSubscription(threadID)
+      revoked.add(threadID)
+    })
+  }
+
+  function startEscalations() {
+    if (escalationsStarted) return
+    escalationsStarted = true
+    let subscription: Promise<() => void>
+    try {
+      subscription = Promise.resolve(backend.subscribeEscalations(escalated))
+    } catch {
+      return
+    }
+    void subscription.then((stop) => {
+      if (active) stopEscalations = stop
+      else stop()
+    }, () => {})
+  }
+
   async function response(record: Record<string, unknown>): Promise<string | undefined> {
     const id = record.id
     if (typeof id !== "string") return failure(id ?? null, -32600, "Unknown native request")
@@ -311,7 +355,7 @@ export function createRemoteControlAppServer(input: {
         userAgent: OpenAICodex.userAgent(),
         codexHome: input.codexHome,
         platformFamily: platformFamily(),
-        platformOs: process.platform,
+        platformOs: Platform.upstreamOs(),
         serverInfo: { name: OpenAICodex.clientInfo.name, title: OpenAICodex.clientInfo.title, version: OpenAICodex.clientInfo.version },
         capabilities: {},
       })
@@ -339,7 +383,53 @@ export function createRemoteControlAppServer(input: {
           ...(typeof params.title === "string" ? { title: params.title } : {}),
         })
         await watch(thread.session.id)
-        return result(id, threadConfiguration(threadWire(thread)))
+        const started = threadWire(thread)
+        notify("thread/started", { thread: started })
+        return result(id, threadConfiguration(started))
+      }
+      case "thread/name/set": {
+        const threadID = typeof params.threadId === "string" ? params.threadId : undefined
+        const name = typeof params.name === "string" && params.name.trim().length > 0 ? params.name : undefined
+        if (threadID === undefined || name === undefined) return failure(id, -32602, "threadId and a nonempty name are required")
+        if (await backend.getThread(threadID) === undefined) return failure(id, -32602, "Thread is unavailable")
+        await backend.renameThread(threadID, name)
+        notify("thread/name/updated", { threadId: threadID, threadName: name })
+        return result(id, {})
+      }
+      case "thread/archive": {
+        const threadID = typeof params.threadId === "string" ? params.threadId : undefined
+        if (threadID === undefined) return failure(id, -32602, "threadId is required")
+        if (await backend.getThread(threadID) === undefined) return failure(id, -32602, "Thread is unavailable")
+        await backend.archiveThread(threadID)
+        retireRoot(threadID)
+        notify("thread/archived", { threadId: threadID })
+        return result(id, {})
+      }
+      case "thread/unarchive": {
+        const threadID = typeof params.threadId === "string" ? params.threadId : undefined
+        if (threadID === undefined) return failure(id, -32602, "threadId is required")
+        let thread: NativeDots.RootSnapshot
+        try {
+          thread = await backend.unarchiveThread(threadID)
+        } catch {
+          return failure(id, -32602, "Thread is unavailable")
+        }
+        restoreRoot(threadID)
+        notify("thread/unarchived", { threadId: threadID })
+        if (escalationsStarted) escalated(threadID)
+        return result(id, { thread: threadWire(thread) })
+      }
+      case "thread/delete": {
+        const threadID = typeof params.threadId === "string" ? params.threadId : undefined
+        if (threadID === undefined) return failure(id, -32602, "threadId is required")
+        try {
+          await backend.deleteThread(threadID)
+        } catch {
+          return failure(id, -32602, "Thread is unavailable")
+        }
+        retireRoot(threadID)
+        notify("thread/deleted", { threadId: threadID })
+        return result(id, {})
       }
       case "thread/resume": {
         const threadID = typeof params.threadId === "string" ? params.threadId : undefined
@@ -453,6 +543,7 @@ export function createRemoteControlAppServer(input: {
       const params = isRecord(parsed.params) ? parsed.params : {}
       if (parsed.method === "initialized") {
         ready = initialized
+        if (ready) startEscalations()
         return undefined
       }
       if (!("id" in parsed)) return undefined
@@ -473,6 +564,8 @@ export function createRemoteControlAppServer(input: {
       consumed.clear()
       admissions.clear()
       dirty.clear()
+      stopEscalations?.()
+      stopEscalations = undefined
       for (const subscription of subscriptions.values()) {
         if (subscription.stop) subscription.stop()
         else void subscription.pending.then((stop) => stop(), () => {})

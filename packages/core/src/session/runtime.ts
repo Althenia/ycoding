@@ -2009,7 +2009,23 @@ const layer = Layer.effect(
         if ("directory" in input) conditions.push(eq(SessionTable.directory, input.directory))
         if (input.workspaceID) conditions.push(eq(SessionTable.workspace_id, input.workspaceID))
         if ("project" in input) conditions.push(eq(SessionTable.project_id, input.project))
-        if (input.search) conditions.push(like(SessionTable.title, `%${input.search}%`))
+        if (input.search) {
+          const punctuation = Object.entries({
+            "’": "'",
+            "‘": "'",
+            "‛": "'",
+            "′": "'",
+            "“": '"',
+            "”": '"',
+            "″": '"',
+            "–": "-",
+            "—": "-",
+          })
+          const title = punctuation.reduce((title, [from, to]) => sql`replace(${title}, ${from}, ${to})`, sql`${SessionTable.title}`)
+          const search = punctuation.reduce((search, [from, to]) => search.replaceAll(from, to), input.search)
+            .replace(/[\\%_]/g, "\\$&")
+          conditions.push(sql`${like(title, `%${search}%`)} escape '\\'`)
+        }
         if (input.parentID !== undefined)
           conditions.push(
             input.parentID === null ? isNull(SessionTable.parent_id) : eq(SessionTable.parent_id, input.parentID),

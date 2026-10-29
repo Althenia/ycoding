@@ -26,6 +26,7 @@ function fixture(messages: readonly SessionMessage.Info[] = []) {
   const created: unknown[] = []
   const prompted: unknown[] = []
   const admitted = new Map<string, string>()
+  const mutations: unknown[] = []
   let stops = 0
   let listener: Parameters<NativeDots.Channel["subscribe"]>[1] | undefined
   let onRetire: (() => void) | undefined
@@ -58,12 +59,17 @@ function fixture(messages: readonly SessionMessage.Info[] = []) {
     },
     retire: () => { live = false },
     models: async () => [], skills: async () => [],
+    renameRoot: async (input) => { calls.push("rename"); mutations.push(["rename", input]) },
+    archiveRoot: async (id) => { calls.push("archive"); mutations.push(["archive", id]) },
+    unarchiveRoot: async (id) => { calls.push("unarchive"); mutations.push(["unarchive", id]); if (id !== root.id) throw Error("Unavailable"); return snapshot },
+    removeRoot: async (id) => { calls.push("remove"); mutations.push(["remove", id]); if (id !== root.id) throw Error("Unavailable") },
+    subscribeEscalations: async () => () => {},
   }
   const backend = createRemoteControlBackend({ channel, profile: "profile" })
   const server = createRemoteControlAppServer({ backend, codexHome: "/synthetic", requestScope: "client:stream", send: (text) => sent.push(JSON.parse(text)) })
   const rpc = async (method: string, params: unknown = {}, id = 1) => JSON.parse((await server.handle(JSON.stringify({ id, method, params })))!)
   const initialize = async () => { await rpc("initialize", { clientInfo: { name: "fixture" } }); await server.handle(JSON.stringify({ method: "initialized" })) }
-  return { server, sent, settled, created, prompted, calls, rpc, initialize, setSnapshot: (next: Partial<NativeDots.RootSnapshot>) => { snapshot = { ...snapshot, ...next } }, requests: () => requests, replace: (next: NativeDots.NativeRequest[]) => { requests = next }, listener: () => listener, stops: () => stops,
+  return { server, sent, settled, created, prompted, calls, mutations, rpc, initialize, setSnapshot: (next: Partial<NativeDots.RootSnapshot>) => { snapshot = { ...snapshot, ...next } }, requests: () => requests, replace: (next: NativeDots.NativeRequest[]) => { requests = next }, listener: () => listener, stops: () => stops,
     emit: (type: string, data: Record<string, unknown> = {}, createdAtMs = 1_700_000_000_000) => listener?.({ type, created: DateTime.makeUnsafe(createdAtMs), data: { sessionID: root.id, ...data } } as EventManifest.ServerEvent),
     revoke: () => onRetire?.(),
     holdSettlement: () => { settlement = { entered: Promise.withResolvers<void>(), released: Promise.withResolvers<void>() }; return settlement },
@@ -131,8 +137,8 @@ test.each(Object.entries(nativeOverrides))("native override %s is rejected befor
   const f = fixture()
   f.setSnapshot({ selectedModel: Schema.decodeUnknownSync(Session.Info.fields.model)({ id: "synthetic-model", providerID: "non-openai" }) })
   await f.initialize()
-  for (const method of ["thread/start", "thread/resume", "thread/read", "thread/list", "turn/start", "turn/steer", "turn/interrupt"]) {
-    const reply = await f.rpc(method, { threadId: root.id, cwd: "/recorded", input: [{ type: "text", text: "task" }], [field]: value })
+  for (const method of ["thread/start", "thread/resume", "thread/read", "thread/list", "thread/name/set", "thread/archive", "thread/unarchive", "thread/delete", "turn/start", "turn/steer", "turn/interrupt"]) {
+    const reply = await f.rpc(method, { threadId: root.id, name: "Renamed", cwd: "/recorded", input: [{ type: "text", text: "task" }], [field]: value })
     expect(reply.error?.code).toBe(-32602)
     expect(f.calls).toEqual([])
     expect(f.sent).toEqual([])
@@ -438,4 +444,123 @@ test.each([false, true])("concurrent reads await subscription ownership and late
   else expect(f.sent.filter((message) => message.method === "item/tool/requestUserInput")).toHaveLength(1)
   f.server.retire()
   expect(f.stops()).toBe(1)
+})
+
+test("thread/start publishes thread/started with the response Thread shape", async () => {
+  const f = fixture()
+  f.replace([])
+  await f.initialize()
+  const reply = await f.rpc("thread/start", { cwd: "/recorded" })
+  expect(f.sent.filter((message) => message.method === "thread/started")).toEqual([{ jsonrpc: "2.0", method: "thread/started", params: { thread: reply.result.thread } }])
+  f.server.retire()
+})
+
+test("thread/name/set renames a verified root and publishes the new name", async () => {
+  const f = fixture()
+  f.replace([])
+  await f.initialize()
+  expect(await f.rpc("thread/name/set", { threadId: root.id, name: "  Renamed " })).toEqual({ jsonrpc: "2.0", id: 1, result: {} })
+  expect(f.calls).toEqual(["get", "rename"])
+  expect(f.mutations).toEqual([["rename", { rootID: root.id, title: "  Renamed " }]])
+  expect(f.sent).toEqual([{ jsonrpc: "2.0", method: "thread/name/updated", params: { threadId: root.id, threadName: "  Renamed " } }])
+  f.server.retire()
+})
+
+test.each([
+  ["missing threadId", { name: "Renamed" }],
+  ["non-string name", { threadId: root.id, name: 7 }],
+  ["blank name", { threadId: root.id, name: "   " }],
+  ["unavailable root", { threadId: "ses_off", name: "Renamed" }],
+])("thread/name/set rejects %s without mutation", async (_case, params) => {
+  const f = fixture()
+  await f.initialize()
+  const reply = await f.rpc("thread/name/set", params)
+  expect(reply.error?.code).toBe(-32602)
+  expect(f.mutations).toEqual([])
+  expect(f.sent).toEqual([])
+  f.server.retire()
+})
+
+test("thread/archive archives a verified root, retires its displayed requests and publishes archival", async () => {
+  const f = fixture()
+  await f.initialize()
+  await f.rpc("thread/read", { threadId: root.id })
+  const before = f.sent.length
+  expect(await f.rpc("thread/archive", { threadId: root.id }, 2)).toEqual({ jsonrpc: "2.0", id: 2, result: {} })
+  expect(f.mutations).toEqual([["archive", root.id]])
+  expect(f.sent.slice(before)).toEqual([
+    { jsonrpc: "2.0", method: "serverRequest/resolved", params: { threadId: root.id, requestId: "request" } },
+    { jsonrpc: "2.0", method: "thread/archived", params: { threadId: root.id } },
+  ])
+  expect(JSON.parse((await f.server.handle(JSON.stringify({ id: "request", result: { answers: { choice: { answers: ["Reject"] } } } })))!).error).toBeDefined()
+  expect(f.settled).toEqual([])
+  f.server.retire()
+})
+
+test("thread/unarchive returns the restored Thread, publishes unarchival and allows later access", async () => {
+  const f = fixture()
+  f.replace([])
+  await f.initialize()
+  const listed = (await f.rpc("thread/list")).result.data[0]
+  await f.rpc("thread/archive", { threadId: root.id }, 2)
+  const before = f.sent.length
+  expect(await f.rpc("thread/unarchive", { threadId: root.id }, 3)).toEqual({ jsonrpc: "2.0", id: 3, result: { thread: listed } })
+  expect(f.mutations).toEqual([["archive", root.id], ["unarchive", root.id]])
+  expect(f.sent.slice(before)).toEqual([{ jsonrpc: "2.0", method: "thread/unarchived", params: { threadId: root.id } }])
+  expect(f.calls.slice(f.calls.indexOf("unarchive")).filter((call) => call === "get" || call === "read")).toEqual([])
+  expect((await f.rpc("thread/read", { threadId: root.id }, 4)).result.thread.id).toBe(root.id)
+  f.server.retire()
+})
+
+test("thread/unarchive surfaces a decision still pending from before archival without a thread read", async () => {
+  const f = fixture()
+  await f.initialize()
+  await f.rpc("thread/read", { threadId: root.id })
+  await f.rpc("thread/archive", { threadId: root.id }, 2)
+  const before = f.calls.length
+  await f.rpc("thread/unarchive", { threadId: root.id }, 3)
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  expect(f.calls.slice(before).filter((call) => call === "get" || call === "read")).toEqual([])
+  const requests = f.sent.filter((message) => message.method === "item/tool/requestUserInput")
+  expect(requests.map((message) => message.id)).toEqual(["request", "request"])
+  expect(requests[1]).toEqual(requests[0])
+  const handle = f.requests()[0]!.handle
+  const response = JSON.stringify({ id: "request", result: { answers: { choice: { answers: ["Reject"] } } } })
+  expect(await f.server.handle(response)).toBeUndefined()
+  expect(f.settled).toEqual([{ handle, answers: { choice: { answers: ["Reject"] } } }])
+  expect(JSON.parse((await f.server.handle(response))!).error).toBeDefined()
+  expect(f.settled).toHaveLength(1)
+  expect(f.sent.filter((message) => message.method === "item/tool/requestUserInput")).toHaveLength(2)
+  f.server.retire()
+})
+
+test("thread/delete removes the root, retires its displayed requests and publishes deletion", async () => {
+  const f = fixture()
+  await f.initialize()
+  await f.rpc("thread/read", { threadId: root.id })
+  const before = f.sent.length
+  expect(await f.rpc("thread/delete", { threadId: root.id }, 2)).toEqual({ jsonrpc: "2.0", id: 2, result: {} })
+  expect(f.mutations).toEqual([["remove", root.id]])
+  expect(f.sent.slice(before)).toEqual([
+    { jsonrpc: "2.0", method: "serverRequest/resolved", params: { threadId: root.id, requestId: "request" } },
+    { jsonrpc: "2.0", method: "thread/deleted", params: { threadId: root.id } },
+  ])
+  f.server.retire()
+})
+
+test.each([
+  ["thread/archive", { threadId: "ses_off" }, []],
+  ["thread/archive", {}, []],
+  ["thread/unarchive", { threadId: "ses_off" }, [["unarchive", "ses_off"]]],
+  ["thread/unarchive", { threadId: 7 }, []],
+  ["thread/delete", { threadId: "ses_off" }, [["remove", "ses_off"]]],
+  ["thread/delete", {}, []],
+])("%s rejects %j as an unavailable Thread without publishing", async (method, params, mutations) => {
+  const f = fixture()
+  await f.initialize()
+  const reply = await f.rpc(method, params)
+  expect(reply.error?.code).toBe(-32602)
+  expect(f.mutations).toEqual(mutations)
+  expect(f.sent).toEqual([])
+  f.server.retire()
 })

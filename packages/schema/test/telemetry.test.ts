@@ -43,6 +43,7 @@ test("accepts request telemetry for every Session Dots control in closed samples
   const names = [
     "dots.get",
     "dots.set",
+    "dots.attach",
   ] as const
   for (const operation of names) {
     expect(Schema.decodeUnknownSync(Telemetry.Operation)(operation)).toBe(operation)

@@ -869,6 +869,7 @@ describe("remote operations", () => {
       "session.command",
       "dots.get",
       "dots.set",
+      "dots.attach",
       "session.skill",
       "usage.providers",
       "usage.summary",

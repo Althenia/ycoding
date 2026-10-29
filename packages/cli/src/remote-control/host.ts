@@ -305,6 +305,7 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
         reassembler.forget(event)
         return
       }
+      if (event.kind === "acknowledged") return
       if (event.kind !== "drop") opened.send(encodeAck(event))
       if (event.kind === "ping") {
         const key = JSON.stringify([event.envID, event.clientID, event.streamID])

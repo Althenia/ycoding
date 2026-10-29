@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
 import { createRemoteControlHost, type RemoteControlSocket } from "../src/remote-control/host"
 import { nativeHost, requestBackend } from "./remote-control-fixture"
+import { unexpectedExecutorHost } from "./fixture/cca-scope"
 
 test("global native configuration alone starts and retires private connections with exact credential pins", async () => {
   let config: NativeDots.Configuration = { enabled: false }
@@ -21,6 +22,7 @@ test("global native configuration alone starts and retires private connections w
     },
     subscribeConfiguration: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
     attachTransport: () => () => {},
+    ...unexpectedExecutorHost,
     attach: async (pins) => {
       attached.push(pins)
       return { channel: () => { throw Error("No requests") }, retire: () => { retired.push(pins.connectionID) } }
@@ -134,6 +136,7 @@ test.each(["opening", "attached"] as const)("global Off then On retires the prio
       credential: async () => ({ access: "synthetic", key: "key", profile: "Pinned", accountID: "account", accountGeneration: 1, credentialID: "credential" }),
       subscribeConfiguration: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
       attachTransport: () => () => {},
+      ...unexpectedExecutorHost,
       attach: async (input) => { pins.push(input); return { channel: () => { throw Error("Unexpected channel") }, retire: () => {} } },
     },
     store: { load: async () => ({ installationID: "install", enrollments: {} }), enrollment: async () => undefined, saveEnrollment: async () => ({ installationID: "install", enrollments: {} }), deleteEnrollment: async () => ({ installationID: "install", enrollments: {} }) },
@@ -231,6 +234,7 @@ test("shutdown during configuration discovery cannot start a new connection", as
       configuration: () => { entered.resolve(); return configuration.promise },
       credential: async () => { reads++; return undefined },
       subscribeConfiguration: () => () => {}, attachTransport: () => () => {},
+      ...unexpectedExecutorHost,
       attach: async () => { throw Error("Unexpected attachment") },
     },
     store: { load: async () => ({ installationID: "install", enrollments: {} }), enrollment: async () => undefined, saveEnrollment: async () => ({ installationID: "install", enrollments: {} }), deleteEnrollment: async () => ({ installationID: "install", enrollments: {} }) },

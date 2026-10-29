@@ -1,0 +1,1177 @@
+{
+  "capabilityDiscoveryV2": true,
+  "inventory": {
+    "result": {
+      "plugins": [
+        {
+          "id": "badremote@market",
+          "displayName": "badremote",
+          "remotePluginId": null,
+          "version": "1.0.0",
+          "root": "file://{{REAL}}/codex/plugins/cache/market/badremote/1.0.0",
+          "files": {
+            "manifest": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/badremote/1.0.0/.codex-plugin/plugin.json",
+              "contents": "{\"name\":\"badremote\"}"
+            },
+            "mcpConfig": null,
+            "appsConfig": null
+          },
+          "skills": []
+        },
+        {
+          "id": "cal@market",
+          "displayName": "local",
+          "remotePluginId": null,
+          "version": "local",
+          "root": "file://{{REAL}}/codex/plugins/cache/market/cal/local",
+          "files": {
+            "manifest": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/cal/local/.codex-plugin/plugin.json",
+              "contents": "{\"name\":\" \",\"mcpServers\":{\"zeta\":{\"url\":\"https://example.invalid/z\"},\"alpha\":{\"command\":\"a\",\"args\":[\"x\"]}}}"
+            },
+            "mcpConfig": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/cal/local/.codex-plugin/plugin.json",
+              "contents": "{\"zeta\":{\"url\":\"https://example.invalid/z\"},\"alpha\":{\"command\":\"a\",\"args\":[\"x\"]}}"
+            },
+            "appsConfig": null
+          },
+          "skills": []
+        },
+        {
+          "id": "mail@market",
+          "displayName": "Mail",
+          "remotePluginId": null,
+          "version": "1.10.0",
+          "root": "file://{{REAL}}/codex/plugins/cache/market/mail/1.10.0",
+          "files": {
+            "manifest": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/mail/1.10.0/.codex-plugin/plugin.json",
+              "contents": "{\"name\":\"mail\",\"interface\":{\"displayName\":\" Mail \"}}"
+            },
+            "mcpConfig": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/mail/1.10.0/.mcp.json",
+              "contents": "{\"mcpServers\":{\"zeta\":{\"command\":\"z\"},\"alpha\":{\"command\":\"a\"}}}"
+            },
+            "appsConfig": null
+          },
+          "skills": [
+            {
+              "name": "mail:search",
+              "description": "Search mail",
+              "shortDescription": null,
+              "path": "file://{{REAL}}/codex/plugins/cache/market/mail/1.10.0/skills/search/SKILL.md",
+              "dependencies": null,
+              "policy": null
+            }
+          ]
+        },
+        {
+          "id": "odd@market",
+          "displayName": "odd",
+          "remotePluginId": null,
+          "version": "abc",
+          "root": "file://{{REAL}}/codex/plugins/cache/market/odd/abc",
+          "files": {
+            "manifest": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/odd/abc/.codex-plugin/plugin.json",
+              "contents": "{\"name\":\"odd\"}"
+            },
+            "mcpConfig": null,
+            "appsConfig": null
+          },
+          "skills": []
+        },
+        {
+          "id": "remote@market",
+          "displayName": "remote",
+          "remotePluginId": "plugins~remote",
+          "version": "1.0.0",
+          "root": "file://{{REAL}}/codex/plugins/cache/market/remote/1.0.0",
+          "files": {
+            "manifest": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/remote/1.0.0/.codex-plugin/plugin.json",
+              "contents": "{\"name\":\"remote\",\"apps\":\"./missing.app.json\"}"
+            },
+            "mcpConfig": null,
+            "appsConfig": null
+          },
+          "skills": []
+        }
+      ],
+      "skills": [
+        {
+          "name": "alpha",
+          "description": "Alpha skill",
+          "shortDescription": "Short alpha",
+          "path": "file://{{REAL}}/codex/skills/alpha/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": {
+            "tools": [
+              {
+                "type": "env_var",
+                "value": "ALPHA_TOKEN",
+                "description": "Token for alpha",
+                "transport": null,
+                "command": null,
+                "url": null,
+                "oauthCallbackPort": null
+              },
+              {
+                "type": "mcp",
+                "value": "alpha-mcp",
+                "description": null,
+                "transport": "streamable_http",
+                "command": null,
+                "url": "https://example.invalid/mcp",
+                "oauthCallbackPort": 4567
+              },
+              {
+                "type": "mcp",
+                "value": "deploy",
+                "description": null,
+                "transport": null,
+                "command": "deploy-mcp",
+                "url": null,
+                "oauthCallbackPort": 3118
+              }
+            ]
+          },
+          "policy": {
+            "allowImplicitInvocation": false,
+            "products": [
+              "codex",
+              "chatgpt"
+            ]
+          }
+        },
+        {
+          "name": "badmeta",
+          "description": "Bad metadata",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/badmeta/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "badproduct",
+          "description": "Bad product",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/badproduct/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "block",
+          "description": "Folded description",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/block/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "yes",
+          "description": "true",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/booleans/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "colon",
+          "description": "Build for AWS: ECS",
+          "shortDescription": "Nested: colon",
+          "path": "file://{{REAL}}/codex/skills/colon/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "team:inner",
+          "description": "Namespaced",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/ns/skills/inner/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "123",
+          "description": "1.0",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/scalars/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "spaced dir",
+          "description": "Default name",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/spaced%20%20dir/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "user-one",
+          "description": "User skill",
+          "shortDescription": null,
+          "path": "file://{{RAW}}/home/.agents/skills/user-one/SKILL.md",
+          "discoveryRoot": {
+            "id": "user-agent-skills",
+            "path": "file://{{RAW}}/home/.agents/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        }
+      ],
+      "warnings": [
+        "some capability locations could not be resolved; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete"
+      ]
+    }
+  },
+  "inventoryNullSandbox": {
+    "result": {
+      "plugins": [
+        {
+          "id": "badremote@market",
+          "displayName": "badremote",
+          "remotePluginId": null,
+          "version": "1.0.0",
+          "root": "file://{{REAL}}/codex/plugins/cache/market/badremote/1.0.0",
+          "files": {
+            "manifest": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/badremote/1.0.0/.codex-plugin/plugin.json",
+              "contents": "{\"name\":\"badremote\"}"
+            },
+            "mcpConfig": null,
+            "appsConfig": null
+          },
+          "skills": []
+        },
+        {
+          "id": "cal@market",
+          "displayName": "local",
+          "remotePluginId": null,
+          "version": "local",
+          "root": "file://{{REAL}}/codex/plugins/cache/market/cal/local",
+          "files": {
+            "manifest": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/cal/local/.codex-plugin/plugin.json",
+              "contents": "{\"name\":\" \",\"mcpServers\":{\"zeta\":{\"url\":\"https://example.invalid/z\"},\"alpha\":{\"command\":\"a\",\"args\":[\"x\"]}}}"
+            },
+            "mcpConfig": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/cal/local/.codex-plugin/plugin.json",
+              "contents": "{\"zeta\":{\"url\":\"https://example.invalid/z\"},\"alpha\":{\"command\":\"a\",\"args\":[\"x\"]}}"
+            },
+            "appsConfig": null
+          },
+          "skills": []
+        },
+        {
+          "id": "mail@market",
+          "displayName": "Mail",
+          "remotePluginId": null,
+          "version": "1.10.0",
+          "root": "file://{{REAL}}/codex/plugins/cache/market/mail/1.10.0",
+          "files": {
+            "manifest": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/mail/1.10.0/.codex-plugin/plugin.json",
+              "contents": "{\"name\":\"mail\",\"interface\":{\"displayName\":\" Mail \"}}"
+            },
+            "mcpConfig": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/mail/1.10.0/.mcp.json",
+              "contents": "{\"mcpServers\":{\"zeta\":{\"command\":\"z\"},\"alpha\":{\"command\":\"a\"}}}"
+            },
+            "appsConfig": null
+          },
+          "skills": [
+            {
+              "name": "mail:search",
+              "description": "Search mail",
+              "shortDescription": null,
+              "path": "file://{{REAL}}/codex/plugins/cache/market/mail/1.10.0/skills/search/SKILL.md",
+              "dependencies": null,
+              "policy": null
+            }
+          ]
+        },
+        {
+          "id": "odd@market",
+          "displayName": "odd",
+          "remotePluginId": null,
+          "version": "abc",
+          "root": "file://{{REAL}}/codex/plugins/cache/market/odd/abc",
+          "files": {
+            "manifest": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/odd/abc/.codex-plugin/plugin.json",
+              "contents": "{\"name\":\"odd\"}"
+            },
+            "mcpConfig": null,
+            "appsConfig": null
+          },
+          "skills": []
+        },
+        {
+          "id": "remote@market",
+          "displayName": "remote",
+          "remotePluginId": "plugins~remote",
+          "version": "1.0.0",
+          "root": "file://{{REAL}}/codex/plugins/cache/market/remote/1.0.0",
+          "files": {
+            "manifest": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/remote/1.0.0/.codex-plugin/plugin.json",
+              "contents": "{\"name\":\"remote\",\"apps\":\"./missing.app.json\"}"
+            },
+            "mcpConfig": null,
+            "appsConfig": null
+          },
+          "skills": []
+        }
+      ],
+      "skills": [
+        {
+          "name": "alpha",
+          "description": "Alpha skill",
+          "shortDescription": "Short alpha",
+          "path": "file://{{REAL}}/codex/skills/alpha/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": {
+            "tools": [
+              {
+                "type": "env_var",
+                "value": "ALPHA_TOKEN",
+                "description": "Token for alpha",
+                "transport": null,
+                "command": null,
+                "url": null,
+                "oauthCallbackPort": null
+              },
+              {
+                "type": "mcp",
+                "value": "alpha-mcp",
+                "description": null,
+                "transport": "streamable_http",
+                "command": null,
+                "url": "https://example.invalid/mcp",
+                "oauthCallbackPort": 4567
+              },
+              {
+                "type": "mcp",
+                "value": "deploy",
+                "description": null,
+                "transport": null,
+                "command": "deploy-mcp",
+                "url": null,
+                "oauthCallbackPort": 3118
+              }
+            ]
+          },
+          "policy": {
+            "allowImplicitInvocation": false,
+            "products": [
+              "codex",
+              "chatgpt"
+            ]
+          }
+        },
+        {
+          "name": "badmeta",
+          "description": "Bad metadata",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/badmeta/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "badproduct",
+          "description": "Bad product",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/badproduct/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "block",
+          "description": "Folded description",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/block/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "yes",
+          "description": "true",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/booleans/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "colon",
+          "description": "Build for AWS: ECS",
+          "shortDescription": "Nested: colon",
+          "path": "file://{{REAL}}/codex/skills/colon/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "team:inner",
+          "description": "Namespaced",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/ns/skills/inner/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "123",
+          "description": "1.0",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/scalars/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "spaced dir",
+          "description": "Default name",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/spaced%20%20dir/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "user-one",
+          "description": "User skill",
+          "shortDescription": null,
+          "path": "file://{{RAW}}/home/.agents/skills/user-one/SKILL.md",
+          "discoveryRoot": {
+            "id": "user-agent-skills",
+            "path": "file://{{RAW}}/home/.agents/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        }
+      ],
+      "warnings": [
+        "some capability locations could not be resolved; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete"
+      ]
+    }
+  },
+  "restrictedSkills": {
+    "result": {
+      "plugins": [],
+      "skills": [
+        {
+          "name": "alpha",
+          "description": "Alpha skill",
+          "shortDescription": "Short alpha",
+          "path": "file://{{REAL}}/codex/skills/alpha/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": {
+            "tools": [
+              {
+                "type": "env_var",
+                "value": "ALPHA_TOKEN",
+                "description": "Token for alpha",
+                "transport": null,
+                "command": null,
+                "url": null,
+                "oauthCallbackPort": null
+              },
+              {
+                "type": "mcp",
+                "value": "alpha-mcp",
+                "description": null,
+                "transport": "streamable_http",
+                "command": null,
+                "url": "https://example.invalid/mcp",
+                "oauthCallbackPort": 4567
+              },
+              {
+                "type": "mcp",
+                "value": "deploy",
+                "description": null,
+                "transport": null,
+                "command": "deploy-mcp",
+                "url": null,
+                "oauthCallbackPort": 3118
+              }
+            ]
+          },
+          "policy": {
+            "allowImplicitInvocation": false,
+            "products": [
+              "codex",
+              "chatgpt"
+            ]
+          }
+        },
+        {
+          "name": "badmeta",
+          "description": "Bad metadata",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/badmeta/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "badproduct",
+          "description": "Bad product",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/badproduct/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "block",
+          "description": "Folded description",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/block/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "yes",
+          "description": "true",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/booleans/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "colon",
+          "description": "Build for AWS: ECS",
+          "shortDescription": "Nested: colon",
+          "path": "file://{{REAL}}/codex/skills/colon/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "team:inner",
+          "description": "Namespaced",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/ns/skills/inner/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "123",
+          "description": "1.0",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/scalars/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "spaced dir",
+          "description": "Default name",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/spaced%20%20dir/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        }
+      ],
+      "warnings": [
+        "some capability locations could not be resolved; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete"
+      ]
+    }
+  },
+  "restrictedCodexHome": {
+    "result": {
+      "plugins": [
+        {
+          "id": "badremote@market",
+          "displayName": "badremote",
+          "remotePluginId": null,
+          "version": "1.0.0",
+          "root": "file://{{REAL}}/codex/plugins/cache/market/badremote/1.0.0",
+          "files": {
+            "manifest": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/badremote/1.0.0/.codex-plugin/plugin.json",
+              "contents": "{\"name\":\"badremote\"}"
+            },
+            "mcpConfig": null,
+            "appsConfig": null
+          },
+          "skills": []
+        },
+        {
+          "id": "cal@market",
+          "displayName": "local",
+          "remotePluginId": null,
+          "version": "local",
+          "root": "file://{{REAL}}/codex/plugins/cache/market/cal/local",
+          "files": {
+            "manifest": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/cal/local/.codex-plugin/plugin.json",
+              "contents": "{\"name\":\" \",\"mcpServers\":{\"zeta\":{\"url\":\"https://example.invalid/z\"},\"alpha\":{\"command\":\"a\",\"args\":[\"x\"]}}}"
+            },
+            "mcpConfig": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/cal/local/.codex-plugin/plugin.json",
+              "contents": "{\"zeta\":{\"url\":\"https://example.invalid/z\"},\"alpha\":{\"command\":\"a\",\"args\":[\"x\"]}}"
+            },
+            "appsConfig": null
+          },
+          "skills": []
+        },
+        {
+          "id": "mail@market",
+          "displayName": "Mail",
+          "remotePluginId": null,
+          "version": "1.10.0",
+          "root": "file://{{REAL}}/codex/plugins/cache/market/mail/1.10.0",
+          "files": {
+            "manifest": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/mail/1.10.0/.codex-plugin/plugin.json",
+              "contents": "{\"name\":\"mail\",\"interface\":{\"displayName\":\" Mail \"}}"
+            },
+            "mcpConfig": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/mail/1.10.0/.mcp.json",
+              "contents": "{\"mcpServers\":{\"zeta\":{\"command\":\"z\"},\"alpha\":{\"command\":\"a\"}}}"
+            },
+            "appsConfig": null
+          },
+          "skills": [
+            {
+              "name": "mail:search",
+              "description": "Search mail",
+              "shortDescription": null,
+              "path": "file://{{REAL}}/codex/plugins/cache/market/mail/1.10.0/skills/search/SKILL.md",
+              "dependencies": null,
+              "policy": null
+            }
+          ]
+        },
+        {
+          "id": "odd@market",
+          "displayName": "odd",
+          "remotePluginId": null,
+          "version": "abc",
+          "root": "file://{{REAL}}/codex/plugins/cache/market/odd/abc",
+          "files": {
+            "manifest": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/odd/abc/.codex-plugin/plugin.json",
+              "contents": "{\"name\":\"odd\"}"
+            },
+            "mcpConfig": null,
+            "appsConfig": null
+          },
+          "skills": []
+        },
+        {
+          "id": "remote@market",
+          "displayName": "remote",
+          "remotePluginId": "plugins~remote",
+          "version": "1.0.0",
+          "root": "file://{{REAL}}/codex/plugins/cache/market/remote/1.0.0",
+          "files": {
+            "manifest": {
+              "path": "file://{{REAL}}/codex/plugins/cache/market/remote/1.0.0/.codex-plugin/plugin.json",
+              "contents": "{\"name\":\"remote\",\"apps\":\"./missing.app.json\"}"
+            },
+            "mcpConfig": null,
+            "appsConfig": null
+          },
+          "skills": []
+        }
+      ],
+      "skills": [
+        {
+          "name": "alpha",
+          "description": "Alpha skill",
+          "shortDescription": "Short alpha",
+          "path": "file://{{REAL}}/codex/skills/alpha/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": {
+            "tools": [
+              {
+                "type": "env_var",
+                "value": "ALPHA_TOKEN",
+                "description": "Token for alpha",
+                "transport": null,
+                "command": null,
+                "url": null,
+                "oauthCallbackPort": null
+              },
+              {
+                "type": "mcp",
+                "value": "alpha-mcp",
+                "description": null,
+                "transport": "streamable_http",
+                "command": null,
+                "url": "https://example.invalid/mcp",
+                "oauthCallbackPort": 4567
+              },
+              {
+                "type": "mcp",
+                "value": "deploy",
+                "description": null,
+                "transport": null,
+                "command": "deploy-mcp",
+                "url": null,
+                "oauthCallbackPort": 3118
+              }
+            ]
+          },
+          "policy": {
+            "allowImplicitInvocation": false,
+            "products": [
+              "codex",
+              "chatgpt"
+            ]
+          }
+        },
+        {
+          "name": "badmeta",
+          "description": "Bad metadata",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/badmeta/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "badproduct",
+          "description": "Bad product",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/badproduct/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "block",
+          "description": "Folded description",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/block/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "yes",
+          "description": "true",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/booleans/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "colon",
+          "description": "Build for AWS: ECS",
+          "shortDescription": "Nested: colon",
+          "path": "file://{{REAL}}/codex/skills/colon/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "team:inner",
+          "description": "Namespaced",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/ns/skills/inner/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "123",
+          "description": "1.0",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/scalars/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        },
+        {
+          "name": "spaced dir",
+          "description": "Default name",
+          "shortDescription": null,
+          "path": "file://{{REAL}}/codex/skills/spaced%20%20dir/SKILL.md",
+          "discoveryRoot": {
+            "id": "codex-home-skills",
+            "path": "file://{{REAL}}/codex/skills"
+          },
+          "dependencies": null,
+          "policy": null
+        }
+      ],
+      "warnings": [
+        "some capability locations could not be resolved; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete"
+      ]
+    }
+  },
+  "restrictedNothing": {
+    "result": {
+      "plugins": [],
+      "skills": [],
+      "warnings": [
+        "some capability locations could not be resolved; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete",
+        "some capability metadata could not be loaded; discovery may be incomplete"
+      ]
+    }
+  },
+  "params": {
+    "absent params": {
+      "code": -32602,
+      "message": "invalid type: null, expected struct DiscoverV2CapabilitiesRequest"
+    },
+    "null params": {
+      "code": -32602,
+      "message": "invalid type: null, expected struct DiscoverV2CapabilitiesRequest"
+    },
+    "string params": {
+      "code": -32602,
+      "message": "invalid type: string \"x\", expected struct DiscoverV2CapabilitiesRequest"
+    },
+    "numeric params": {
+      "code": -32602,
+      "message": "invalid type: number, expected struct DiscoverV2CapabilitiesRequest"
+    },
+    "empty seq": {
+      "code": -32602,
+      "message": "invalid length 0, expected struct DiscoverV2CapabilitiesRequest with 2 elements"
+    },
+    "seq cwd only": null,
+    "seq cwd and null sandbox": null,
+    "seq three": {
+      "code": -32602,
+      "message": "invalid length 3, expected fewer elements in array"
+    },
+    "seq numeric": {
+      "code": -32602,
+      "message": "invalid type: number, expected a string"
+    },
+    "missing cwd": {
+      "code": -32602,
+      "message": "missing field `cwd`"
+    },
+    "numeric cwd": {
+      "code": -32602,
+      "message": "invalid type: number, expected a string"
+    },
+    "float cwd": {
+      "code": -32602,
+      "message": "invalid type: number, expected a string"
+    },
+    "boolean cwd": {
+      "code": -32602,
+      "message": "invalid type: boolean `true`, expected a string"
+    },
+    "null cwd": {
+      "code": -32602,
+      "message": "invalid type: null, expected a string"
+    },
+    "map cwd": {
+      "code": -32602,
+      "message": "invalid type: map, expected a string"
+    },
+    "seq cwd": {
+      "code": -32602,
+      "message": "invalid type: sequence, expected a string"
+    },
+    "relative cwd": {
+      "code": -32602,
+      "message": "invalid URI: relative URL without a base"
+    },
+    "empty cwd": {
+      "code": -32602,
+      "message": "invalid URI: relative URL without a base"
+    },
+    "colon cwd": {
+      "code": -32602,
+      "message": "invalid URI: relative URL without a base"
+    },
+    "https cwd": {
+      "code": -32602,
+      "message": "unsupported path URI scheme `https`"
+    },
+    "file relative": null,
+    "file host": null,
+    "file empty path": null,
+    "file only": null,
+    "file percent": null,
+    "file backslash": null,
+    "file dots": null,
+    "uppercase scheme": null,
+    "file query": {
+      "code": -32602,
+      "message": "query parameters are not allowed in path URIs"
+    },
+    "file empty query": {
+      "code": -32602,
+      "message": "query parameters are not allowed in path URIs"
+    },
+    "file fragment": {
+      "code": -32602,
+      "message": "fragments are not allowed in path URIs"
+    },
+    "unknown field": null,
+    "sandbox before missing cwd": {
+      "code": -32602,
+      "message": "invalid type: number, expected struct FileSystemSandboxContext"
+    },
+    "null sandbox": null,
+    "string sandbox": {
+      "code": -32602,
+      "message": "invalid type: string \"restricted\", expected struct FileSystemSandboxContext"
+    },
+    "boolean sandbox": {
+      "code": -32602,
+      "message": "invalid type: boolean `true`, expected struct FileSystemSandboxContext"
+    },
+    "negative sandbox": {
+      "code": -32602,
+      "message": "invalid type: number, expected struct FileSystemSandboxContext"
+    },
+    "empty seq sandbox": {
+      "code": -32602,
+      "message": "invalid length 0, expected struct FileSystemSandboxContext with 9 elements"
+    },
+    "empty sandbox": {
+      "code": -32602,
+      "message": "missing field `permissions`"
+    },
+    "sandbox missing cwd": {
+      "code": -32602,
+      "message": "missing field `cwd`"
+    },
+    "sandbox missing level": {
+      "code": -32602,
+      "message": "missing field `windowsSandboxLevel`"
+    },
+    "sandbox relative cwd": {
+      "code": -32602,
+      "message": "invalid URI: relative URL without a base"
+    },
+    "sandbox numeric permissions": {
+      "code": -32602,
+      "message": "invalid type: integer `5`, expected internally tagged enum ExecPermissionProfile"
+    },
+    "sandbox string permissions": {
+      "code": -32602,
+      "message": "invalid type: string \"x\", expected internally tagged enum ExecPermissionProfile"
+    },
+    "sandbox empty permissions": {
+      "code": -32602,
+      "message": "missing field `type`"
+    },
+    "sandbox seq permissions": {
+      "code": -32602,
+      "message": "missing field `type`"
+    },
+    "sandbox unknown permissions": {
+      "code": -32602,
+      "message": "unknown variant `bogus`, expected one of `managed`, `disabled`, `external`"
+    },
+    "sandbox unknown level": {
+      "code": -32602,
+      "message": "unknown variant `nope`, expected one of `disabled`, `restricted-token`, `elevated`, `mxc`"
+    },
+    "sandbox numeric level": {
+      "code": -32602,
+      "message": "invalid type: number, expected string or map"
+    },
+    "sandbox null level": {
+      "code": -32602,
+      "message": "invalid type: null, expected string or map"
+    },
+    "sandbox numeric roots": {
+      "code": -32602,
+      "message": "invalid type: number, expected a sequence"
+    },
+    "sandbox string landlock": {
+      "code": -32602,
+      "message": "invalid type: string \"x\", expected a boolean"
+    },
+    "sandbox unknown field": null,
+    "sandbox full access": null
+  },
+  "inventoryNotifications": [],
+  "lockedCache": {
+    "error": {
+      "code": -32603,
+      "message": "failed to scan plugin cache path file://{{REAL}}/codex/plugins/cache/locked: Permission denied (os error 13)"
+    }
+  },
+  "missingCodexHome": {
+    "error": {
+      "code": -32603,
+      "message": "CODEX_HOME points to \"{{RAW}}/missing-codex-home\", but that path does not exist"
+    }
+  },
+  "limits": {
+    "plugins": 410,
+    "pluginSkills": 1638,
+    "lastPlugin": {
+      "id": "p409@market",
+      "skills": [
+        "p409:s0",
+        "p409:s1"
+      ]
+    },
+    "skills": [],
+    "warnings": [
+      "capability discovery size limit reached",
+      "some capability locations could not be resolved; discovery may be incomplete"
+    ],
+    "bytes": 444225
+  }
+}

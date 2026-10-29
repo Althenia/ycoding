@@ -18,10 +18,11 @@ Local and web clients administer access through these operations only:
 | --- | --- | --- | --- |
 | `dots.get` | `GET /api/dots` | None | `{ data: Dots.NativeStatus }` |
 | `dots.set` | `PUT /api/dots` | `{ enabled, expectedRevision }` | Same status envelope |
+| `dots.attach` | `POST /api/dots/computer` | `{ replaceOthers: true }` | Same status envelope |
 
-Both operations require normal server authentication and authenticated relay user/device ownership. Neither accepts a Session ID or Location. Setters reject excess authority fields. Revisions are nonnegative integers; a stale revision conflicts before no-op handling. Repeating the same enabled state at the current revision does not increment it. Concurrent writes at one revision commit at most one change. Enabling requires available trusted configuration and the selected OpenAI OAuth profile. Turning access Off does not require those prerequisites.
+All three operations require normal server authentication and authenticated relay user/device ownership. Neither accepts a Session ID or Location. Setters reject excess authority fields. Revisions are nonnegative integers; a stale revision conflicts before no-op handling. Repeating the same enabled state at the current revision does not increment it. Concurrent writes at one revision commit at most one change. Enabling requires available trusted configuration and the selected OpenAI OAuth profile. Turning access Off does not require those prerequisites.
 
-`Dots.NativeStatus` has three independent fields:
+`Dots.NativeStatus` has independent fields:
 
 ```ts
 {
@@ -32,8 +33,11 @@ Both operations require normal server authentication and authenticated relay use
     hostname?: string,
     message?: string,
   },
+  computer?: { state: "attached" | "detached" | "unavailable", message?: string },
 }
 ```
+
+`computer` is present whenever a process-owned transport is attached and reports whether ChatGPT lists this computer's Dots executor as attached to the user's Dot. `dots.attach` requires the literal `replaceOthers: true` as explicit consent that attaching detaches the user's other computers from that Dot; any other payload is invalid input. Without an attached transport it fails as invalid input; otherwise it returns the status with `computer` set from the attach outcome.
 
 An absent process-owned transport is `unavailable`; an attached transport gated by configuration or access is `off`. `connected` means the native transport is attached, not that an external client has selected or opened a conversation. The profile and hostname are bounded to 256 characters and guidance to 500, without control characters. Guidance uses fixed categories, never raw provider messages, URLs, credential/account identifiers, tokens, or payloads.
 
@@ -41,7 +45,7 @@ The TUI and web command palette expose **Dots connection** from landing, root, a
 
 ## Private transport status
 
-The Host and HTTP handlers consume the same global `DotsAccess.Service`. `NativeDots.Host.attachTransport(transport)` installs one process-owned read-only status adapter and returns its unregister function. `transport.status()` returns a Promise of `{ state: "off" | "connecting" | "connected" | "error", hostname?, problem? }`; `problem` is one of `configuration`, `authentication`, `enrollment`, or `connection`. Core maps that category to fixed display guidance.
+The Host and HTTP handlers consume the same global `DotsAccess.Service`. `NativeDots.Host.attachTransport(transport)` installs one process-owned read-only status adapter and returns its unregister function. `transport.status()` returns a Promise of `{ state: "off" | "connecting" | "connected" | "error", hostname?, problem? }`; `problem` is one of `configuration`, `authentication`, `enrollment`, or `connection`. `transport.computer()` and `transport.attachComputer()` return a Promise of `{ state: "attached" | "detached" | "unavailable", problem? }` with `problem` one of `configuration`, `authentication`, `enrollment`, `dot-unavailable`, `not-listed`, `admin-disabled`, `not-connectable`, `rejected`, `unconfirmed`, or `connection`; a rejected read is `unavailable` with `connection`. Core maps each category to fixed display guidance.
 
 Reject an attachment while another owns the slot. Identity-fence unregister and asynchronous status reads so a retired attachment cannot clear or report for its replacement. Discard a connection observation spanning an access revision change. Host shutdown unregisters its adapter. The adapter exposes no Channel or execution operation and grants no authority.
 
@@ -55,6 +59,31 @@ Decision candidates bind an exact typed source and revision. Native projection s
 
 Prompt text cannot establish a typed decision, native source receipt, or delegation. Ordinary configured external MCP servers, provider tools, and elicitation retain their separate runtime paths.
 
+## Native thread lifecycle
+
+`thread/start` requires an absolute `cwd` naming an existing local directory. YCoding records and opens that directory as a project location before creating the root. It never creates a missing directory; a relative path, missing path, or file path is rejected before effects. An existing root cannot change `cwd` through resume, turn, or any other request. Root listings contain roots only.
+
+Lifecycle requests: `thread/name/set` `{ threadId, name }`, `thread/archive` `{ threadId }`, `thread/unarchive` `{ threadId }` returning `{ thread }`, and `thread/delete` `{ threadId }`. Notifications: `thread/started` `{ thread }`, `thread/name/updated` `{ threadId, threadName }`, and `thread/archived`, `thread/unarchived`, `thread/deleted` each with `{ threadId }`.
+
+Reads, prompts, and decisions exclude archived roots. Targeted `thread/unarchive` and `thread/delete` are the only operations that accept an archived root, and only after global access, configuration, ownership, and connection pins validate. Rename and archive require a non-archived eligible root. Delete removes the root family recursively through `Session.remove` only after the whole descendant tree passes ownership and root checks; a foreign-owned descendant blocks the request with no deletion. Managed children are not independent native threads and cannot be renamed, archived, or deleted directly.
+
+## Native escalation delivery
+
+After the app-server `initialized` notification, Core notifies the carrier of eligible roots with pending decisions: one initial scan, then internal decision lifecycle events. The carrier watches each such root and forwards its exact candidates immediately as `item/tool/requestUserInput`, including roots the stream has not opened or read. This covers permissions, guardrails, Forms, Questions, deferred reviews and recovery, and managed-child questions. Settlement and resolution still use `serverRequest/resolved` with exact candidate revalidation. Prompt text grants no authority.
+
+## Executor scope
+
+`NativeDots.Host.openExecutorScope({ directory, title })` returns `{ sessionID, authorization, close }` for one ChatGPT Dots CCA command executor hosted by the server process.
+
+- Opening requires effective native configuration (global access On, trusted configuration ready, selected profile credential), a nonblank `title`, and an absolute `directory` naming an existing directory, recorded as a project location as for `thread/start`. Otherwise it rejects with a fixed `NativeDots.Error` carrying no path, credential, or payload, and creates no Session.
+- Opening creates one durable root Session at that directory's Location with that title through the server's own Session, Permission, and SessionGuardrail services, after the Location's plugins load. The Session is an ordinary eligible root: native root listings include it and native escalation delivery covers it.
+- `authorization` is `createCcaAuthorization` bound to that Session with the default deadline. Its current-Session check fails for another Session ID, a missing, deleted, archived, or foreign-owned Session, or a change to the configuration or access revision captured at opening. Global access or configuration Off denies the next operation; turning it On again does not revive the scope.
+- `close()` is idempotent: every call awaits the same release of all outstanding grants, and later operations are denied. A release failure rejects every call with the fixed `CcaAuthorizationCloseError`. Closing keeps the Session.
+
+## Platform spelling
+
+Native `initialize` and CCA `environment/info` report the upstream `platformOs` spelling: `darwin` as `macos`, `win32` as `windows`, any other Node platform unchanged. The spelling does not establish live interoperability.
+
 ## Historical readability
 
 Historical Dots and RemoteMCP Session events, family access events, source metadata, peer labels, `Dots.DelegationReview`, database tables, and migrations remain readable. Their presence grants no active authority. Stored native receipts retain their recorded `rootSessionID` and `accessRevision`; new receipts use the global revision. Historical data is neither rewritten nor used to initialize global consent.
@@ -63,4 +92,4 @@ Normal queue and steer promotion inspect the stored `DotsExchangeCreated` record
 
 ## Verification
 
-Select the global access, native admission, native decision, Schema, Protocol, and HTTP contract files for access persistence/CAS/no-op conflicts, historical decoding without consent, global Off races, ownership/archive/deny/ceiling checks, attachment lifetime and safe status output. CLI transport checks cover authenticated environment binding, exact supplied-environment rejection, ACK/pong addressing, sequence and chunk state, and retirement. TUI rendered screens and web palette checks cover global availability and independent status display. Stubbed transports do not establish external conversation-picker interoperability.
+Select the global access, native admission, native decision, Schema, Protocol, and HTTP contract files for access persistence/CAS/no-op conflicts, historical decoding without consent, global Off races, ownership/archive/deny/ceiling checks, attachment lifetime and safe status output. CLI transport checks cover authenticated environment binding, exact supplied-environment rejection, ACK/pong addressing, sequence and chunk state, and retirement. Core `dots-native` and `cca-executor` files and CLI `remote-control-native`, escalation, and wire files cover any-folder thread creation, lifecycle safety, escalation reach into unopened roots, lifecycle notifications, and platform spelling. Core `dots-native` covers executor scope opening, eligibility, authorization denial, and close. TUI rendered screens and web palette checks cover global availability and independent status display. Stubbed transports do not establish external conversation-picker interoperability.

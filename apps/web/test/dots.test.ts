@@ -30,6 +30,27 @@ test("rejects malformed status and never replays an unknown mutation", async () 
   expect(calls).toEqual(["dots.get", "dots.set"])
 })
 
+test("attaches this computer with the literal replaceOthers payload and parses the returned status", async () => {
+  const calls: unknown[] = []
+  const attached = { ...status, access: { enabled: true, revision: 3 }, connection: { state: "connected" } }
+  const link: RemoteLink = { recoveries: () => 0, recovered: async () => false, request: async (_scope, operation, request) => {
+    calls.push({ operation, sessionID: request?.sessionID, input: request?.input })
+    return { status: "ok", value: { data: attached } }
+  } }
+  expect(await dotsClient(link, scope).attach()).toEqual({ status: "ok", value: attached })
+  expect(calls).toEqual([{ operation: "dots.attach", sessionID: undefined, input: { replaceOthers: true } }])
+})
+
+test("attach surfaces failed and unknown outcomes without replay and rejects malformed status", async () => {
+  const outcomes = [{ status: "unknown" as const, error: { code: "outcome_unknown", message: "unknown" } }, { status: "ok" as const, value: { data: { nonsense: true } } }]
+  let calls = 0
+  const link: RemoteLink = { recoveries: () => 0, recovered: async () => false, request: async () => outcomes[calls++]! }
+  const client = dotsClient(link, scope)
+  expect((await client.attach()).status).toBe("unknown")
+  await expect(client.attach()).rejects.toThrow("invalid Dots status")
+  expect(calls).toBe(2)
+})
+
 test("historical peer messages retain external attribution", () => {
   const peer = { origin: "dots-peer", profile: "p", dotID: "dot-1", threadID: "thread-1", itemID: "i" }
   expect(remoteDotsPeerLabel({ dots: peer })).toBe("Dot dot-1 · external peer · thread-1")

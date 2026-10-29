@@ -47,6 +47,7 @@ export interface EvaluateInput {
   /** Admit ordinary and hard review decisions without a request; deny decisions still block. */
   readonly skipReview?: boolean
   readonly holder?: string
+  readonly defer?: true
 }
 
 export interface Evaluation {
@@ -120,10 +121,19 @@ export class DeclinedError extends Schema.TaggedErrorClass<DeclinedError>()("Gua
 
 export class DeferredError extends Schema.TaggedErrorClass<DeferredError>()("Guardrail.DeferredError", {
   requestID: Guardrail.RequestID,
-  itemID: SessionReviewFold.ID,
+  sessionID: Session.ID,
+  itemID: SessionReviewFold.ID.pipe(optional),
+  state: Schema.Literals(["open", "rejected", "full"]),
+  action: Schema.String,
+  resources: Schema.Array(Schema.String),
   ruleIDs: Schema.Array(Schema.String),
+  hardReview: Schema.Boolean,
 }) {
   override get message() {
+    if (this.state === "rejected")
+      return `This action did not run. Guardrail rule(s) ${this.ruleIDs.join(", ")} were rejected in review item ${this.itemID}; an identical request stays refused.`
+    if (this.state === "full")
+      return `This action did not run. Guardrail rule(s) ${this.ruleIDs.join(", ")} need the user's decision, but the review box is full, so no review item was recorded.`
     return `This action did not run. Guardrail rule(s) ${this.ruleIDs.join(", ")} need the user's decision and were added to the review box as item ${this.itemID} while the user is asleep. Do not retry it or work around it. If the user approves, you will be told to re-issue exactly this action. Continue with independent work.`
   }
 }
@@ -180,6 +190,7 @@ export interface Interface {
   readonly forSession: (
     sessionID: Session.ID,
   ) => Effect.Effect<ReadonlyArray<Guardrail.Request>, SessionErrors.NotFoundError>
+  readonly list: () => Effect.Effect<ReadonlyArray<Guardrail.Request>>
   readonly status: (sessionID: Session.ID) => Effect.Effect<Guardrail.Status, SessionErrors.NotFoundError>
   readonly snapshot: (sessionID: Session.ID) => Effect.Effect<Snapshot, SessionErrors.NotFoundError>
   readonly withSnapshot: <A, E, R>(
@@ -532,7 +543,7 @@ export const layer = Layer.effect(
       )
 
     const reviewFingerprint = (input: EvaluateInput, result: Evaluation) =>
-      SessionReviewFold.fingerprint({
+      (input.defer ? SessionReviewFold.deferredFingerprint : SessionReviewFold.fingerprint)({
         action: input.action,
         resources: input.resources,
         workdir: typeof input.metadata?.workdir === "string" ? input.metadata.workdir : location.directory,
@@ -620,12 +631,25 @@ export const layer = Layer.effect(
       }
     })
 
-    const openReview = Effect.fnUntraced(function* (
-      item: Pending,
-      outcome: Omit<Guardrail.Escalation, "reason"> & { readonly reason: "disabled" | "escalated" | "sleep_entry" | "conflicting_grades" | DecisionChoice.UnsettledReason },
-      conversion = false,
-    ) {
-      return yield* SessionReviewFold.open(database.db, events, {
+    type ReviewOutcome = Omit<Guardrail.Escalation, "reason"> & { readonly reason: "disabled" | "escalated" | "sleep_entry" | "conflicting_grades" | DecisionChoice.UnsettledReason }
+
+    const openReview = (item: Pending, outcome: ReviewOutcome, conversion = false) =>
+      SessionReviewFold.open(database.db, events, reviewInput(item, outcome, conversion))
+
+    const deferredError = (request: Guardrail.Request, state: DeferredError["state"], itemID?: SessionReviewFold.ID) =>
+      new DeferredError({
+        requestID: request.id,
+        sessionID: request.sessionID,
+        ...(itemID === undefined ? {} : { itemID }),
+        state,
+        action: request.action,
+        resources: request.resources.map((resource) => DecisionChoice.redactText(resource)),
+        ruleIDs: [...request.ruleIDs],
+        hardReview: request.hardReview ?? false,
+      })
+
+    const reviewInput = (item: Pending, outcome: ReviewOutcome, conversion = false) =>
+      ({
         sessionID: item.request.sessionID,
         rootID: item.request.rootSessionID,
         kind: "guardrail",
@@ -648,8 +672,7 @@ export const layer = Layer.effect(
         },
         limit: settings?.max_pending_reviews ?? 16,
         conversion,
-      })
-    })
+      }) satisfies SessionReviewFold.OpenInput
 
     const assert = Effect.fn("SessionGuardrail.assert")((input: EvaluateInput) =>
       Effect.gen(function* () {
@@ -783,11 +806,11 @@ export const layer = Layer.effect(
               deferred,
               review,
               directories: classification.directories,
-              decisionModel: decisionEnabled,
+              decisionModel: decisionEnabled || input.defer === true,
               ...(input.source ? { source: input.source } : {}),
             })
             advanceUnlocked(result.rootSessionID)
-            if (!decisionEnabled && !asleep)
+            if (!decisionEnabled && !asleep && !input.defer)
               yield* events
                 .publish(Guardrail.Event.Asked, request)
                 .pipe(
@@ -795,7 +818,7 @@ export const layer = Layer.effect(
                     Effect.sync(() => removePendingUnlocked(request.id)).pipe(Effect.andThen(review.releaseUnlocked)),
                   ),
                 )
-            return decisionEnabled || asleep
+            return decisionEnabled || asleep || input.defer
               ? { type: "decision-review" as const, request, deferred, review, yolo: decisionEnabled, authorization }
               : { type: "review" as const, request, deferred, review }
           }),
@@ -913,6 +936,24 @@ export const layer = Layer.effect(
                 return { type: "applied" as const }
               }
               const reason = assessed === undefined ? ("disabled" as const) : provenance.reason ?? ("escalated" as const)
+              if (input.defer) {
+                const review = reviewInput(item, { ...provenance, reason })
+                const deferred = yield* SessionReviewFold.deferOpen(database.db, events, {
+                  ...review,
+                  origin: { requestID: item.request.id, executor: true },
+                  payload: { ...review.payload, fingerprint: reviewFingerprint(input, result) },
+                })
+                removePendingUnlocked(item.request.id)
+                if (deferred.state === "open" && deferred.opened)
+                  yield* events.publish(Guardrail.Event.Deferred, {
+                    rootSessionID: result.rootSessionID,
+                    sessionID: input.sessionID,
+                    requestID: item.request.id,
+                    itemID: deferred.itemID,
+                  })
+                yield* Deferred.fail(item.deferred, deferredError(item.request, deferred.state, deferred.state === "full" ? undefined : deferred.itemID))
+                return { type: "handed-off" as const }
+              }
               const asleep = yield* autonomy.isAsleep(result.rootSessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(true)))
               if (asleep) {
                 const opened = yield* openReview(item, {
@@ -935,7 +976,7 @@ export const layer = Layer.effect(
                   requestID: item.request.id,
                   itemID: opened.itemID,
                 })
-                yield* Deferred.fail(item.deferred, new DeferredError({ requestID: item.request.id, itemID: opened.itemID, ruleIDs: [...result.ruleIDs] }))
+                yield* Deferred.fail(item.deferred, deferredError(item.request, "open", opened.itemID))
                 return { type: "handed-off" as const }
               }
               if (assessed === undefined) {
@@ -1503,6 +1544,10 @@ export const layer = Layer.effect(
       )
     })
 
+    const list = Effect.fn("SessionGuardrail.list")(function* () {
+      return Array.from(pending.values()).filter((item) => !item.decisionModel).map((item) => item.request)
+    })
+
     const deferPending = Effect.fn("SessionGuardrail.deferPending")(function* (sessionID: Session.ID) {
       const requests = yield* forSession(sessionID)
       const rootSessionID = yield* root(sessionID)
@@ -1523,7 +1568,7 @@ export const layer = Layer.effect(
             requestID: request.id,
             itemID: opened.itemID,
           })
-          yield* Deferred.fail(item.deferred, new DeferredError({ requestID: request.id, itemID: opened.itemID, ruleIDs: [...request.ruleIDs] }))
+          yield* Deferred.fail(item.deferred, deferredError(request, "open", opened.itemID))
           yield* item.review.releaseUnlocked
         }), { discard: true }))
     })
@@ -1641,7 +1686,7 @@ export const layer = Layer.effect(
       withSnapshot(sessionID, Effect.succeed),
     )
 
-    return Service.of({ reviewPolicy, evaluate, assert, reply: (input) => reply(input), replyDelegated, delegatedEligible, requestSnapshot, reconsider, escalate, requestSnapshots, deferPending, forSession, status, snapshot, withSnapshot })
+    return Service.of({ reviewPolicy, evaluate, assert, reply: (input) => reply(input), replyDelegated, delegatedEligible, requestSnapshot, reconsider, escalate, requestSnapshots, deferPending, forSession, list, status, snapshot, withSnapshot })
   }),
 )
 

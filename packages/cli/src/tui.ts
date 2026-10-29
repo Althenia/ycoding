@@ -9,7 +9,12 @@ if (!runRegexProcess()) {
   const { main } = await import("./main")
 
   const handlers = Runtime.handlers(TuiCommand, {
+    api: () => import("./commands/handlers/api"),
+    decision: { list: () => import("./commands/handlers/decision/list") },
     coordination: () => import("./commands/handlers/coordination"),
+    dots: {
+      attach: () => import("./commands/handlers/dots/attach"),
+    },
     $: () => import("./commands/handlers/tui"),
     run: () => import("./commands/handlers/run"),
     update: () => import("./commands/handlers/update"),
