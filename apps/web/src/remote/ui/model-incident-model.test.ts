@@ -22,9 +22,9 @@ test("rows keep exact counts, one identity per provider, model, and agent, and t
   expect(incidentRowKey({ ...row, agent: "build" })).not.toBe(incidentRowKey({ ...row, agent: "plan" }))
 })
 
-test("timestamps are exact UTC and an absent time is unreported rather than the epoch", () => {
+test("timestamps are exact UTC and an absent time is empty rather than the epoch", () => {
   expect(incidentTime(row.last)).toBe("2026-10-16 08:09:07 UTC")
-  expect(incidentTime(0)).toBe("unreported")
+  expect(incidentTime(0)).toBe("")
 })
 
 test("page summary names the visible span of the exact group count", () => {
@@ -43,6 +43,7 @@ test("detail reads use the newest 20 incidents of the exact model and agent, and
 test("guidance indicator states enabled or disabled in words and keeps cleared time exact", () => {
   expect(guidanceIndicator({ enabled: true, text: "<model-guidance>\nx\n</model-guidance>" })).toEqual({ label: "Guidance enabled", enabled: true, preview: "<model-guidance>\nx\n</model-guidance>" })
   expect(guidanceIndicator({ enabled: false })).toEqual({ label: "Guidance disabled", enabled: false })
+  expect(guidanceIndicator({ enabled: true, clearedAt: 0 })).toEqual({ label: "Guidance enabled", enabled: true })
   expect(guidanceIndicator({ enabled: true, clearedAt: row.last })).toEqual({ label: "Guidance enabled", enabled: true, cleared: "Cleared 2026-10-16 08:09:07 UTC" })
 })
 

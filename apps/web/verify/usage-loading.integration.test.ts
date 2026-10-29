@@ -17,7 +17,7 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
-for (const [outcome, copy] of [["unsupported", "Update YCoding"], ["error", "Recorded consumption unreported"], ["empty", "No recorded consumption"]]) test(`Usage settles every region when the forecast is ${outcome}`, async () => {
+for (const [outcome, copy] of [["unsupported", "Update YCoding"], ["error", "Recorded consumption · Backend"], ["empty", "No recorded consumption"]]) test(`Usage settles every region when the forecast is ${outcome}`, async () => {
   const page = await browser!.openPage()
   try {
     const started = performance.now()
@@ -39,6 +39,7 @@ for (const [outcome, copy] of [["unsupported", "Update YCoding"], ["error", "Rec
     expect(settled.placeholders).toBe(0)
     expect(settled.text).toContain("Recorded consumption")
     expect(settled.text).toContain(copy!)
+    expect(settled.text).not.toContain("unreported")
   } finally { await page.close() }
 }, 30_000)
 

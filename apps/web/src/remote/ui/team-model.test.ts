@@ -96,7 +96,7 @@ test("Team pin controls name the action from durable pin state", () => {
   expect(pinAction({ ...task("ses_child", "running", 1_000), pinnedAt: 4_000 })).toEqual({ pinned: true, action: "unpin", label: "Unpin Review ses_child", title: "Unpin" })
 })
 
-test("usage always yields the same four slots and never turns an unreported value into zero", () => {
+test("usage always yields the same four slots and leaves absent accounting unreported", () => {
   const base = task("ses_a", "running", 3_000)
   const keys = (slots: ReturnType<typeof usageSlots>) => slots.map((slot) => slot.key)
   expect(keys(usageSlots(base, {}))).toEqual(["tokens", "cost", "context", "cache"])
@@ -110,8 +110,12 @@ test("usage always yields the same four slots and never turns an unreported valu
   expect(noLimit?.meter).toBeUndefined()
   expect(usageSlots({ ...reported, accounting: accountedTask(base.sessionID, 0, 0) }, {}).slice(0, 2).map((slot) => slot.value)).toEqual(["0", "$0.00"])
   const partial = accountedTask(base.sessionID)
-  expect(usageSlots({ ...reported, accounting: { ...partial, status: "so-far", attribution: "partial", total: { ...partial.total, cost: { known: 0.25, pricedRequests: 1, unpricedRequests: 1, provenance: "recorded" } } } }, {})[1]?.value).toBe("Known $0.25 + unreported · so far · incomplete")
+  expect(usageSlots({ ...reported, accounting: { ...partial, status: "so-far", attribution: "partial", total: { ...partial.total, cost: { known: 0.25, pricedRequests: 1, unpricedRequests: 1, provenance: "recorded" } } } }, {})[1]?.value).toBe("$0.25 · so far · incomplete")
   expect(usageSlots({ ...reported, contextTotal: 5_000, contextLimit: 2_000 }, {})[2]?.meter).toBe(1)
+  const unpriced = { ...partial, total: { ...partial.total, cost: { pricedRequests: 0, unpricedRequests: 1 } } }
+  expect(usageSlots({ ...reported, accounting: unpriced }, {})[1]).toMatchObject({ state: "value", value: "$0.00 · incomplete" })
+  expect(usageSlots({ ...reported, accounting: { ...unpriced, status: "so-far" } }, {})[1]?.value).toBe("$0.00 · so far · incomplete")
+  expect(usageSlots({ ...reported, accounting: undefined }, {})[1]).toMatchObject({ state: "unreported", value: "—" })
 })
 
 test("shell owners are labelled from family evidence, including a completed child missing from the loaded task page", () => {

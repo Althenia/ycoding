@@ -14,7 +14,7 @@ test("frozen accounting reads preserve zero and partial pricing and reject false
   expect(response?.units).toEqual([prompt])
   const view = accountingPresentation(prompt)
   expect(view.inputID).toBe("msg_first")
-  expect(unitCostLines(view)).toContain("Prompt cost Known $2.00 + unreported · so far · incomplete")
+  expect(unitCostLines(view)).toContain("Prompt cost $2.00 · so far · incomplete")
   expect(unitCostLines(view)).toContain("partial attribution · Incomplete retained history")
   expect(view.helpers[0]?.label).toBe("Decision")
   expect(accountingPresentation(accountedTask(), true)).toMatchObject({ complete: false, reason: "Latest lookup unavailable; showing previous result" })

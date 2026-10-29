@@ -56,10 +56,10 @@ test("provider token distributions preserve free, unpriced, partial and unpaged 
   const report = { group: "model" as const, rows, total, rowCount: 3 }
   const labels = new Map(providerDistribution(report, [], "tokens").segments.map((segment) => [segment.providerID, segment.costLabel]))
   expect(labels.get("free")).toBe("$0.00")
-  expect(labels.get("unknown")).toBe("unreported")
-  expect(labels.get("partial")).toBe("Known $1.00 + unreported")
+  expect(labels.get("unknown")).toBe("")
+  expect(labels.get("partial")).toBe("$1.00")
   const paged = providerDistribution({ ...report, rows: [rows[0], rows[2]], nextOffset: 2 }, [], "tokens")
-  expect(paged.segments.find((segment) => segment.providerID === "other")?.costLabel).toBe("unreported")
+  expect(paged.segments.find((segment) => segment.providerID === "other")?.costLabel).toBe("")
   expect(paged.total).toBe(4080)
 })
 
@@ -123,7 +123,7 @@ test("monthly model report groups encoded provider keys and puts only the unpage
 })
 
 test("donut geometry allocates one nonoverlapping circumference in report order", () => {
-  const geometry = donutGeometry([{ providerID: "a", label: "A", value: 2, share: 0.25 }, { providerID: "b", label: "B", value: 6, share: 0.75 }], 60)
+  const geometry = donutGeometry([{ providerID: "a", label: "A", value: 2, share: 0.25, costLabel: "" }, { providerID: "b", label: "B", value: 6, share: 0.75, costLabel: "$1.00" }], 60)
   expect(geometry).toHaveLength(2)
   expect(geometry[0]?.length).toBeCloseTo(30 * Math.PI)
   expect(geometry[0]?.offset).toBeCloseTo(0)
@@ -189,8 +189,8 @@ test("frozen report dimensions and filters preserve provider/profile identity an
   const base = row("mixed", 0)
   expect(reportIdentity({ ...base, dimensions: { group: "provider-profile-model", providerID: "openai", modelID: "shared", profileState: "provider-default" } }, [])).toMatchObject({ providerID: "openai", model: "shared · provider default at request time" })
   expect(reportIdentity({ ...base, dimensions: { group: "profile", providerID: "other", profile: "Work", profileState: "recorded" } }, [])).toMatchObject({ providerID: "other", model: "profile Work" })
-  expect(reportLabel({ key: "ses_deleted", label: "" }, "session")).toBe("Session ses_deleted · title unreported")
-  expect(reportLabel({ key: "ses_deleted", label: "ses_deleted" }, "session")).toBe("Session ses_deleted · title unreported")
+  expect(reportLabel({ key: "ses_deleted", label: "" }, "session")).toBe("Session ses_deleted")
+  expect(reportLabel({ key: "ses_deleted", label: "ses_deleted" }, "session")).toBe("Session ses_deleted")
   expect(reportLabel({ key: "ses_live", label: "Named session" }, "session")).toBe("Named session")
   const now = Date.UTC(2026, 9, 15)
   expect(usageReportInputs(now, undefined, { group: "prompt", range: "all", selectedEffort: "high", providerID: "openai", profile: "Work", modelID: "shared" }).breakdown).toEqual({ group: "prompt", selectedEffort: "high", providerID: "openai", profile: "Work", modelID: "shared", limit: 25, offset: undefined, sort: undefined, order: undefined })
@@ -198,13 +198,17 @@ test("frozen report dimensions and filters preserve provider/profile identity an
   expect(reportKey({ group: "model", selectedEffort: "high" })).not.toBe(reportKey({ group: "model", selectedEffort: "low" }))
 })
 
-test("report, daily and summary costs keep unknown prices qualified instead of showing complete zero", () => {
+test("report, daily and summary costs show the known amount, keep an explicit zero, and are empty when nothing is priced", () => {
   expect(reportCostText({ cost: 0, costCoverage: { pricedRequests: 1, unpricedRequests: 0 } })).toBe("$0.00")
-  expect(reportCostText({ cost: 0, costCoverage: { pricedRequests: 1, unpricedRequests: 1 } })).toBe("Known $0.00 + unreported")
-  expect(reportCostText({ costCoverage: { pricedRequests: 0, unpricedRequests: 1 } })).toBe("unreported")
+  expect(reportCostText({ cost: 0, costCoverage: { pricedRequests: 1, unpricedRequests: 1 } })).toBe("$0.00")
+  expect(reportCostText({ cost: 2.5, costCoverage: { pricedRequests: 1, unpricedRequests: 1 } })).toBe("$2.50")
+  expect(reportCostText({ cost: 2.5 })).toBe("$2.50")
+  expect(reportCostText({ costCoverage: { pricedRequests: 0, unpricedRequests: 1 } })).toBe("")
+  expect(reportCostText({})).toBe("")
   const days = dailySpend({ group: "day", rows: [{ ...row("2026-10-15"), costCoverage: { pricedRequests: 0, unpricedRequests: 3 } }], rowCount: 1, total: row("total") }, Date.UTC(2026, 9, 15))
-  expect(spendCostText(days.at(-1)!)).toBe("unreported")
-  expect(spendCostText(spendMetrics(days))).toBe("unreported")
+  expect(spendCostText(days.at(-1)!)).toBe("")
+  expect(spendCostText(spendMetrics(days))).toBe("")
+  expect(spendCostText(days.at(-2)!)).toBe("No retained requests")
 })
 
 test("chart detail stays beside its anchor but inside both card and viewport", () => {

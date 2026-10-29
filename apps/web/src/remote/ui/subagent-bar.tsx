@@ -5,7 +5,7 @@ import type { TeamActionOutcome, TeamSubagent } from "./team-model"
 import { accountingUnsupportedText, formatCacheHit } from "./team-model"
 import "./subagent-bar.css"
 import type { RemoteUsageTaskCost } from "@ycoding-ai/remote"
-import { accountingPresentation, costText } from "./usage-accounting"
+import { accountingPresentation, inclusiveCostText } from "./usage-accounting"
 import { TaskCostDetails } from "./usage-cost"
 import { tokenCount } from "./usage-model"
 
@@ -67,7 +67,7 @@ export function subagentMetrics(modelLabel: string | undefined, economics: Subag
     { key: "speed", label: "Speed", value: economics?.speed?.label },
     { key: "tokens", label: "Tokens (inclusive)", value: economics?.accounting === undefined ? undefined : count(tokenCount(economics.accounting.total.tokens)) },
     { key: "cache", label: "Cache", value: cache },
-    { key: "cost", label: "Cost (inclusive)", value: economics?.accounting === undefined ? undefined : `${costText(economics.accounting.total.cost)}${economics.accounting.status === "so-far" ? " · so far" : ""}${accountingPresentation(economics.accounting, economics.accountingUnavailable).complete ? "" : " · incomplete"}` },
+    { key: "cost", label: "Cost (inclusive)", value: economics?.accounting === undefined ? undefined : inclusiveCostText(economics.accounting, economics.accountingUnavailable) },
     { key: "context", label: "Context", value: economics?.contextTotal === undefined ? undefined : `${count(economics.contextTotal)} / ${economics.contextLimit === undefined ? "unreported" : count(economics.contextLimit)}` },
   ].flatMap((metric) => metric.value === undefined ? [] : [{ key: metric.key, label: metric.label, value: metric.value }])
 }

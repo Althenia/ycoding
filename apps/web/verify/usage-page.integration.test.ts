@@ -222,8 +222,8 @@ test("a run-out time already past reads as now, and an unavailable forecast read
     await wait(page, `[...document.querySelectorAll('.usage-window__details')].some((item) => item.textContent.includes('Forecast unavailable · lookup failed; refresh quotas to retry'))`)
     expect(await page.evaluate<boolean>(`document.querySelector('.usage-quota-forecast') === null && document.querySelector('.usage-page').textContent.includes('No recorded consumption in the observation window.')`)).toBe(true)
     await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?forecast=rates-absent`)
-    await wait(page, `document.querySelector('.usage-page')?.textContent?.includes('Recorded consumption unreported · lookup unavailable.') === true`)
-    expect(await page.evaluate<boolean>(`!document.querySelector('.usage-page').textContent.includes('No recorded consumption in the observation window.') && document.querySelector('.usage-quota-forecast') !== null`)).toBe(true)
+    await wait(page, `document.querySelector('.usage-quota-forecast') !== null && document.querySelector('.usage-consumption .loading-placeholder') === null`)
+    expect(await page.evaluate<boolean>(`(() => { const text = document.querySelector('.usage-page').textContent; return !text.includes('No recorded consumption in the observation window.') && !text.includes('Recorded consumption unreported') && !text.includes('lookup unavailable') && document.querySelector('.usage-consumption__row') === null && document.querySelector('.usage-consumption .usage-message') === null })()`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 
@@ -238,7 +238,8 @@ test("quota status stays concise, diagnostics open by keyboard, and exhausted, s
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
       const closed = await page.evaluate<string>(`document.querySelector('.usage-page').innerText`)
       for (const hidden of ["half-life", "Warming up after restart", "Source provider API", "5m 15,000.25", "Recorded requests on this backend", "Reason:"]) expect(closed).not.toContain(hidden)
-      for (const shown of ["Exhausted", "Forecast stale", "Forecast expired", "No increase observed", "Forecast unavailable", "low evidence", "12.3k tokens/min", "<1 tokens/min", "0 tokens/min", "$1.23/hour est.", "cost rate unreported", "Known $0.0042/hour est. + unreported"]) expect(closed).toContain(shown)
+      for (const shown of ["Exhausted", "Forecast stale", "Forecast expired", "No increase observed", "Forecast unavailable", "low evidence", "12.3k tokens/min", "<1 tokens/min", "0 tokens/min", "$1.23/hour est.", "$0.0042/hour est."]) expect(closed).toContain(shown)
+      for (const missing of ["cost rate unreported", "Known $0.0042/hour"]) expect(closed).not.toContain(missing)
       expect(closed).not.toContain("12,345.678")
       expect(await page.evaluate<boolean>(`!!document.querySelector('.usage-consumption__row button[aria-label*=" details"]') && !!document.querySelector('.usage-window--exhausted .usage-pace--exhausted')?.textContent.includes('exhausted') && !document.querySelector('dialog[open]')`)).toBe(true)
       const colors = await page.evaluate<{ exhausted: string; normal: string; danger: string }>(`(() => {
@@ -260,7 +261,8 @@ test("quota status stays concise, diagnostics open by keyboard, and exhausted, s
       await page.pressKey("Enter", "Enter", 13, "\r")
       await wait(page, `document.querySelector('dialog.overlay--usage-details[open]') !== null`)
       const unreportedRateDetails = await page.evaluate<string>(`document.querySelector('dialog.overlay--usage-details[open] .overlay__body')?.innerText ?? ''`)
-      for (const exact of ["5m unreported · 60m unreported", "Estimated cost rate unreported", "Profile provider default at request time", "0 priced · 7 unpriced"]) expect(unreportedRateDetails).toContain(exact)
+      for (const exact of ["Profile provider default at request time", "0 priced · 7 unpriced"]) expect(unreportedRateDetails).toContain(exact)
+      for (const missing of ["5m", "60m", "Estimated cost rate", "unreported"]) expect(unreportedRateDetails).not.toContain(missing)
       await page.pressEscape()
       await wait(page, `document.querySelector('dialog.overlay--usage-details') === null`)
       for (const index of [0, 1, 2]) {
@@ -339,7 +341,7 @@ test("quota and recorded-consumption Details open bounded dialogs without moving
         if (selector.includes("usage-provider")) {
           for (const line of ["Source response stream · stability observed", "Updated ", "5-hour window", "Weekly", "No supported method · insufficient evidence", "Muse quota observations are warming up"]) expect(body).toContain(line)
         } else {
-          for (const line of ["Rate 120 tokens/min", "5m 180 tokens/min · 60m 120 tokens/min", "Estimated cost rate unreported", "0 priced · 3 unpriced", "Observed ", "not account quota or generation speed"]) expect(body).toContain(line)
+          for (const line of ["Rate 120 tokens/min", "5m 180 tokens/min · 60m 120 tokens/min", "0 priced · 3 unpriced", "Observed ", "not account quota or generation speed"]) expect(body).toContain(line)
         }
         if (width === 390 || width === 1440) {
           await Bun.write(join(captures, `usage-details-${width}-${theme}-${reduced ? "reduced" : "normal"}-${selector.includes("usage-provider") ? "quota" : "recorded"}.png`), Buffer.from(await page.screenshot(), "base64"))
@@ -536,11 +538,12 @@ test("chart details respond to hover, keyboard focus, and tap inside each card",
       const daily = await page.evaluate<{ text: string; inside: boolean; distance: number; name: string | null }>(`(() => { const card = document.querySelector('.usage-chart'); const tip = card.querySelector('.usage-chart__tooltip'); const bar = card.querySelector('.usage-chart__bar:first-of-type'); const a = card.getBoundingClientRect(); const b = tip?.getBoundingClientRect(); const r = bar.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; return { text: tip?.textContent ?? '', inside: !!b && b.left >= a.left && b.right <= a.right && b.top >= a.top && b.bottom <= a.bottom && b.left >= 0 && b.right <= innerWidth && b.top >= 0 && b.bottom <= innerHeight, distance: b ? Math.hypot(Math.max(b.left - x, 0, x - b.right), Math.max(b.top - y, 0, y - b.bottom)) : Infinity, name: bar?.getAttribute('aria-label') ?? null }; })()`)
       expect(daily.text).toContain("requests")
       expect(daily.text).toContain("tokens")
-      expect(daily.text).toContain("unreported")
+      expect(daily.text).not.toMatch(/unreported|Estimated cost/)
       expect(daily.text).not.toContain("$0.00")
       expect(daily.inside).toBe(true)
       expect(daily.distance).toBeLessThan(25)
       expect(daily.name).toContain("requests")
+      expect(daily.name).not.toContain("unreported")
       if (width === 390 && theme === "light") {
         await page.evaluate(`document.querySelector('.usage-chart')?.scrollIntoView({ block: 'center' })`)
         await Bun.sleep(200)
@@ -846,14 +849,14 @@ test("performance trends render each daily series with exact values in a table a
       expect(await page.evaluate<number>(`document.querySelectorAll('[data-chart="ttft"] polyline[data-series="p95"]').length`)).toBeGreaterThan(1)
       await page.evaluate(`document.querySelector('[data-chart="ttft"] .usage-series__head button').click()`)
       expect(await page.evaluate<number>(`document.querySelectorAll('[data-chart="ttft"] tbody tr').length`)).toBe(30)
-      expect(await page.evaluate<string>(`document.querySelector('[data-chart="ttft"] tbody tr:nth-child(5) td')?.textContent ?? ''`)).toBe("N/A")
+      expect(await page.evaluate<string>(`document.querySelector('[data-chart="ttft"] tbody tr:nth-child(5) td')?.textContent ?? 'missing'`)).toBe("")
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`)).toBe(true)
       expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.usage-trends .usage-series')].every(item => item.getBoundingClientRect().right <= document.querySelector('.usage-trends').getBoundingClientRect().right + 1)`)).toBe(true)
     } finally { await page.close() }
   }
 }, 60_000)
 
-test("model speed comparison ranks measurable models, and the breakdown adds speed columns with N/A and provider drill-down", async () => {
+test("model speed comparison ranks measurable models, and the breakdown adds speed columns with empty cells and provider drill-down", async () => {
   const page = await browser!.openPage()
   try {
     await page.setViewport(1440, 900)
@@ -862,7 +865,7 @@ test("model speed comparison ranks measurable models, and the breakdown adds spe
     expect(await page.evaluate<string[]>(`[...document.querySelectorAll('[data-model-speed]')].map(item => item.dataset.modelSpeed)`)).toEqual(["openrouter/deepseek-v4", "openai/gpt-5", "openai/gpt-6-sol"])
     expect(await page.evaluate<string>(`document.querySelector('[data-model-speed] strong').textContent`)).toBe("37 tok/s")
     expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.usage-breakdown thead th')].map(item => item.textContent.replace(/[↑↓↕]/g, '').trim()).slice(-4)`)).toEqual(["Cost", "Avg tok/s", "Agg tok/s", "P95 TTFT"])
-    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.usage-breakdown tbody tr:nth-child(5) td')].slice(-3).map(item => item.textContent)`)).toEqual(["N/A", "N/A", "N/A"])
+    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.usage-breakdown tbody tr:nth-child(5) td')].slice(-3).map(item => item.textContent)`)).toEqual(["", "", ""])
     expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.usage-breakdown tbody tr:nth-child(1) td')].slice(-3).map(item => item.textContent)`)).toEqual(["35 tok/s", "33 tok/s", "900 ms"])
     await selectSessionGroup(page, "Provider")
     await wait(page, `document.querySelectorAll('.usage-drill').length > 0`)

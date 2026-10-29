@@ -1,3 +1,4 @@
+import { joinParts } from "./usage-accounting"
 import { dailySpend, modelIdentity, reportCostText, type UsageDashboardReady, type UsageReport, type UsageReportRow } from "./usage-model"
 
 export type UsageLive = UsageDashboardReady["live"]
@@ -6,19 +7,20 @@ const grouped = new Intl.NumberFormat("en-US")
 const oneDecimal = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 })
 
 export function rateLabel(value: number | undefined, estimated = false) {
-  if (value === undefined) return "N/A"
+  if (value === undefined) return ""
   return `${estimated ? "≈ " : ""}${value >= 100 ? grouped.format(Math.round(value)) : oneDecimal.format(value)} tok/s`
 }
 
 export function latencyLabel(milliseconds: number | undefined) {
-  if (milliseconds === undefined) return "N/A"
+  if (milliseconds === undefined) return ""
   return milliseconds < 1000 ? `${grouped.format(milliseconds)} ms` : `${oneDecimal.format(milliseconds / 1000)} s`
 }
 
-export function liveRate(live: Pick<UsageLive, "active" | "streaming" | "outputTokensPerSecond">) {
+export function liveRate(live: Pick<UsageLive, "active" | "outputTokensPerSecond"> & { readonly history?: UsageLive["history"] }) {
   if (live.active === 0) return "Idle"
   if (live.outputTokensPerSecond !== undefined) return rateLabel(live.outputTokensPerSecond, true)
-  return live.streaming > 0 ? "Measuring" : "Waiting"
+  const latest = live.history?.reduce<UsageLive["history"][number] | undefined>((best, point) => point.outputTokensPerSecond !== undefined && (best === undefined || point.at > best.at) ? point : best, undefined)
+  return rateLabel(latest?.outputTokensPerSecond, true)
 }
 
 export function agoLabel(seconds: number) {
@@ -39,7 +41,7 @@ export function liveModels(live: UsageLive) {
     return {
       key: `${entry.model.providerID}/${entry.model.id}/${entry.model.variant ?? ""}/${entry.model.profile ?? ""}`,
       provider: identity.provider, model: identity.model, active: entry.active, streaming: entry.streaming,
-      rate: liveRate({ active: entry.active, streaming: entry.streaming, outputTokensPerSecond: entry.outputTokensPerSecond }),
+      rate: liveRate({ active: entry.active, outputTokensPerSecond: entry.outputTokensPerSecond }),
     }
   }).sort((a, b) => b.active - a.active || a.key.localeCompare(b.key))
 }
@@ -60,22 +62,21 @@ export function generationFigures(live: UsageLive, monthly: UsageReport | undefi
   const firstOutput = speed?.firstOutputP50Ms !== undefined || speed?.firstOutputP95Ms !== undefined
   const outcomes = total?.outcomes
   const finished = outcomes === undefined ? 0 : outcomes.completed + outcomes.failed + outcomes.cancelled
-  const unreported = "unreported"
   return [
     { id: "active", label: "Active generations", value: grouped.format(live.active), note: `${grouped.format(live.streaming)} streaming now` },
     { id: "live", label: "Live output", value: liveRate(live), note: "Aggregate of the last 5 s · estimated from received text" },
     { id: "average", label: "Average generation speed", value: rateLabel(average),
       note: average === undefined ? "No measurable requests this month" : `Mean of ${grouped.format(samples)} per-request rates this month` },
-    { id: "ttft", label: "Time to first output", value: firstOutput ? `p50 ${latencyLabel(speed?.firstOutputP50Ms)} · p95 ${latencyLabel(speed?.firstOutputP95Ms)}` : "N/A",
+    { id: "ttft", label: "Time to first output", value: joinParts([speed?.firstOutputP50Ms === undefined ? undefined : `p50 ${latencyLabel(speed.firstOutputP50Ms)}`, speed?.firstOutputP95Ms === undefined ? undefined : `p95 ${latencyLabel(speed.firstOutputP95Ms)}`]),
       note: firstOutput ? "Percentiles of this month's requests" : "No first-output samples this month" },
-    { id: "requests", label: "Requests", value: total === undefined ? unreported : grouped.format(total.physical), note: "Provider requests this month" },
-    { id: "tokens", label: "Input and output tokens", value: total === undefined ? unreported : `${grouped.format(total.tokens.input)} in · ${grouped.format(total.tokens.output)} out`,
-      note: total === undefined ? "Tokens unreported" : `${grouped.format(total.tokens.reasoning)} reasoning tokens` },
-    { id: "cache", label: "Cache usage", value: total === undefined ? unreported : total.tokens.cache.read === 0 && total.cacheReadReported !== true ? `${unreported} read` : `${grouped.format(total.tokens.cache.read)} read`,
-      note: total === undefined ? "Cache unreported" : `${grouped.format(total.tokens.cache.write)} written` },
-    { id: "cost", label: "Estimated cost", value: total === undefined ? unreported : reportCostText(total),
+    { id: "requests", label: "Requests", value: total === undefined ? "" : grouped.format(total.physical), note: "Provider requests this month" },
+    { id: "tokens", label: "Input and output tokens", value: total === undefined ? "" : `${grouped.format(total.tokens.input)} in · ${grouped.format(total.tokens.output)} out`,
+      note: total === undefined ? "" : `${grouped.format(total.tokens.reasoning)} reasoning tokens` },
+    { id: "cache", label: "Cache usage", value: total === undefined || total.tokens.cache.read === 0 && total.cacheReadReported !== true ? "" : `${grouped.format(total.tokens.cache.read)} read`,
+      note: total === undefined ? "" : `${grouped.format(total.tokens.cache.write)} written` },
+    { id: "cost", label: "Estimated cost", value: total === undefined ? "" : reportCostText(total),
       note: total?.costProvenance === "current_catalog" ? "Estimate at current catalog prices" : total?.costProvenance === "recorded" ? "Recorded provider cost" : "An estimate, not a bill" },
-    { id: "outcomes", label: "Request outcomes", value: outcomes === undefined ? unreported : `${grouped.format(outcomes.completed)} completed · ${grouped.format(outcomes.failed)} failed · ${grouped.format(outcomes.cancelled)} cancelled`,
+    { id: "outcomes", label: "Request outcomes", value: outcomes === undefined ? "" : `${grouped.format(outcomes.completed)} completed · ${grouped.format(outcomes.failed)} failed · ${grouped.format(outcomes.cancelled)} cancelled`,
       note: outcomes === undefined ? "No outcome data recorded" : finished === 0 ? "No finished requests" : `${oneDecimal.format(outcomes.failed / finished * 100)}% failed` },
   ]
 }

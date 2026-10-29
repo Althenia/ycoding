@@ -1,23 +1,37 @@
 import { expect, test } from "bun:test"
-import { consumptionNeedsProfile, consumptionRow, costCoverage, costText, forecastDetails, forecastStatus, measuredSpeedLines, providerProvenanceLines, residentUnitCosts, unitCostLines, type UnitCostPresentation } from "./usage-accounting"
+import { consumptionNeedsProfile, consumptionRow, costCoverage, costText, forecastDetails, forecastStatus, joinParts, measuredSpeedLines, providerProvenanceLines, residentUnitCosts, unitCostLines, type UnitCostPresentation } from "./usage-accounting"
 
 const zero = { total: 0, known: 0, pricedRequests: 1, unpricedRequests: 0 }
 const partial = { known: 0, pricedRequests: 1, unpricedRequests: 2 }
 const unit: UnitCostPresentation = { inputID: "first", cost: partial, main: zero, children: partial, helpers: [{ label: "Decision", cost: zero }], settled: false, complete: false, reason: "Historical attribution is partial" }
 
-test("cost completeness preserves explicit zero and never calls a missing price complete", () => {
+test("cost shows the known amount, keeps an explicit zero, and is empty when nothing is priced", () => {
   expect(costText(zero)).toBe("$0.00")
-  expect(costText(partial)).toBe("Known $0.00 + unreported")
-  expect(costText({ pricedRequests: 0, unpricedRequests: 2 })).toBe("unreported")
-  expect(costText(undefined)).toBe("unreported")
-  expect(costText({ total: 5, known: 3, pricedRequests: 1, unpricedRequests: 1 })).toBe("Known $3.00 + unreported")
+  expect(costText(partial)).toBe("$0.00")
+  expect(costText({ total: 5, known: 3, pricedRequests: 1, unpricedRequests: 1 })).toBe("$3.00")
+  expect(costText({ total: 5, known: 5, pricedRequests: 2, unpricedRequests: 0 })).toBe("$5.00")
+  expect(costText({ pricedRequests: 0, unpricedRequests: 2 })).toBe("")
+  expect(costText(undefined)).toBe("")
   expect(costCoverage({ ...partial, provenance: "current_catalog" })).toBe("1 priced · 2 unpriced · current-catalog estimate")
 })
 
+test("joined parts drop empty values", () => {
+  expect(joinParts(["$5.00", "", undefined, "3 requests"])).toBe("$5.00 · 3 requests")
+  expect(joinParts(["", undefined])).toBe("")
+  expect(joinParts(["a", "b"], ", ")).toBe("a, b")
+})
+
 test("prompt cost separates children and helpers and qualifies running and historical coverage", () => {
-  expect(unitCostLines(unit)).toEqual(["Prompt cost Known $0.00 + unreported · so far · incomplete", "Main $0.00 · Children Known $0.00 + unreported", "Decision $0.00", "1 priced · 2 unpriced", "Historical attribution is partial"])
+  expect(unitCostLines(unit)).toEqual(["Prompt cost $0.00 · so far · incomplete", "Main $0.00 · Children $0.00", "Decision $0.00", "1 priced · 2 unpriced", "Historical attribution is partial"])
   expect(unitCostLines({ ...unit, settled: true, complete: true, cost: zero })[0]).toBe("Prompt cost $0.00")
-  expect(unitCostLines(unit, "Task cost (inclusive)")[0]).toBe("Task cost (inclusive) Known $0.00 + unreported · so far · incomplete")
+  expect(unitCostLines(unit, "Task cost (inclusive)")[0]).toBe("Task cost (inclusive) $0.00 · so far · incomplete")
+})
+
+test("prompt cost lines drop parts and helpers with no cost and keep the headline, coverage and reason", () => {
+  const missing = { pricedRequests: 0, unpricedRequests: 2 }
+  expect(unitCostLines({ ...unit, children: missing, helpers: [{ label: "Decision", cost: missing }, { label: "Title", cost: zero }] })).toEqual(["Prompt cost $0.00 · so far · incomplete", "Main $0.00", "Title $0.00", "1 priced · 2 unpriced", "Historical attribution is partial"])
+  expect(unitCostLines({ ...unit, cost: { ...missing, provenance: "current_catalog" }, main: missing, children: missing, helpers: [{ label: "Decision", cost: missing }], reason: "" })).toEqual(["Prompt cost · so far · incomplete", "0 priced · 2 unpriced · current-catalog estimate"])
+  expect(unitCostLines({ ...unit, settled: true, complete: true, cost: zero, main: missing, children: missing, helpers: [] })).toEqual(["Prompt cost $0.00", "1 priced · 0 unpriced", "Historical attribution is partial"])
 })
 
 test("pruned and synthetic anchors never mount or transfer to a newer resident prompt", () => {
@@ -29,14 +43,23 @@ test("pruned and synthetic anchors never mount or transfer to a newer resident p
 
 test("measured request percentiles, timing coverage, throughput and latency populations stay distinct", () => {
   expect(measuredSpeedLines({ generationSamples: 4, generationP50TokensPerSecond: 20, generationP90TokensPerSecond: 50, providerTimedSamples: 1, observedSamples: 3, outputTokensPerSecond: 32, samples: 2 })).toEqual(["Measured generation median 20 tok/s · p90 50 tok/s", "4 measured requests · 1 provider-timed · 3 observed", "Weighted throughput 32 tok/s · 2 first-output latency samples"])
-  expect(measuredSpeedLines({ generationSamples: 4, providerTimedSamples: 1, observedSamples: 3, samples: 2, meanTokensPerSecond: 27.5, generationP95TokensPerSecond: 61, firstOutputP50Ms: 300, firstOutputP95Ms: 1200, firstOutputP99Ms: 2500, totalP95Ms: 9000 }).slice(3)).toEqual([
+  expect(measuredSpeedLines({ generationSamples: 4, providerTimedSamples: 1, observedSamples: 3, samples: 2, meanTokensPerSecond: 27.5, generationP95TokensPerSecond: 61, firstOutputP50Ms: 300, firstOutputP95Ms: 1200, firstOutputP99Ms: 2500, totalP95Ms: 9000 })).toEqual([
+    "4 measured requests · 1 provider-timed · 3 observed",
+    "2 first-output latency samples",
     "Mean of per-request rates 27.5 tok/s · p95 61 tok/s",
     "First output p50 300 ms · p95 1.2 s · p99 2.5 s",
-    "Total request p50 unreported · p95 9 s · p99 unreported",
+    "Total request p95 9 s",
   ])
-  expect(measuredSpeedLines(undefined)).toHaveLength(3)
-  expect(measuredSpeedLines(undefined)[0]).toContain("median unreported · p90 unreported")
-  expect(measuredSpeedLines(undefined)[1]).toBe("Generation sample coverage unreported")
+  expect(measuredSpeedLines({ generationSamples: 1, generationP90TokensPerSecond: 50, providerTimedSamples: 0, observedSamples: 1, samples: 0 })[0]).toBe("Measured generation p90 50 tok/s")
+  expect(measuredSpeedLines(undefined)).toEqual([])
+})
+
+test("Usage accounting output never prints a missing-value placeholder", () => {
+  const placeholder = /unreported|unknown|known|n\/a|waiting|measuring|\?/i
+  const sparse = consumptionRow({ ...rate, profile: undefined, tokensPerMinute5: undefined, tokensPerMinute60: undefined, estimatedUSDPerHour: undefined, coverage: { pricedRequests: 0, unpricedRequests: 7 } })
+  const partialRate = consumptionRow({ ...rate, coverage: { pricedRequests: 3, unpricedRequests: 2 } })
+  for (const text of [...measuredSpeedLines(undefined), ...measuredSpeedLines({ generationSamples: 0, providerTimedSamples: 0, observedSamples: 0, samples: 0 }), sparse.cost, ...sparse.details, partialRate.cost, ...partialRate.details, costText(partial), costText(undefined), ...unitCostLines({ ...unit, children: { pricedRequests: 0, unpricedRequests: 1 }, helpers: [{ label: "Decision", cost: { pricedRequests: 0, unpricedRequests: 1 } }] })])
+    expect(text).not.toMatch(placeholder)
 })
 
 const cold = { state: "insufficient" as const, unit: "percent", evidence: "insufficient" as const, updatedAt: 0, reason: "Warming up after restart" }
@@ -94,10 +117,10 @@ test("a recorded consumption row aligns provider, model and profile with a whole
   expect(consumptionRow({ ...rate, tokensPerMinute: 2_500_000 }).tokens).toBe("2.5m tokens/min")
 })
 
-test("a recorded consumption row never turns a missing or partial cost rate into a complete zero", () => {
-  expect(consumptionRow({ ...rate, estimatedUSDPerHour: undefined }).cost).toBe("cost rate unreported")
+test("a recorded consumption row leaves a missing cost rate empty and shows only the known part of a partial one", () => {
+  expect(consumptionRow({ ...rate, estimatedUSDPerHour: undefined }).cost).toBe("")
   expect(consumptionRow({ ...rate, estimatedUSDPerHour: 0 }).cost).toBe("$0.00/hour est.")
-  expect(consumptionRow({ ...rate, coverage: { pricedRequests: 3, unpricedRequests: 2 } }).cost).toBe("Known $1.23/hour est. + unreported")
+  expect(consumptionRow({ ...rate, coverage: { pricedRequests: 3, unpricedRequests: 2 } }).cost).toBe("$1.23/hour est.")
 })
 
 test("recorded consumption details keep exact rates, windows, coverage, observation interval and profile default", () => {
@@ -108,10 +131,11 @@ test("recorded consumption details keep exact rates, windows, coverage, observat
   expect(lines).toContain("40 priced · 0 unpriced")
   expect(lines).toContain("Observed 1970-01-01T00:00:00.000Z – 1970-01-01T01:00:00.000Z")
   const sparse = consumptionRow({ ...rate, profile: undefined, tokensPerMinute5: undefined, tokensPerMinute60: undefined, estimatedUSDPerHour: undefined, coverage: { pricedRequests: 0, unpricedRequests: 7 } }).details
-  expect(sparse).toContain("5m unreported · 60m unreported")
-  expect(sparse).toContain("Estimated cost rate unreported")
+  expect(sparse.some((line) => line.startsWith("5m") || line.startsWith("Estimated cost rate"))).toBe(false)
   expect(sparse).toContain("Profile provider default at request time")
   expect(sparse).toContain("0 priced · 7 unpriced")
+  expect(consumptionRow({ ...rate, tokensPerMinute60: undefined }).details).toContain("5m 15,000.25 tokens/min")
+  expect(consumptionRow({ ...rate, tokensPerMinute5: undefined }).details).toContain("60m 9,876.5 tokens/min")
 })
 
 test("a recorded consumption row exposes provider, model and profile separately and asks for the profile only when rows would otherwise look identical", () => {

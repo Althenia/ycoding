@@ -28,7 +28,7 @@ export const incidentTotal = (row: Pick<IncidentRow, "fallbacks" | "escalated" |
 export const incidentModelLabel = (row: Pick<IncidentRow, "providerID" | "modelID">) => `${row.providerID}/${row.modelID}`
 export const incidentRowKey = (row: Pick<IncidentRow, "providerID" | "modelID" | "agent">) => JSON.stringify([row.providerID, row.modelID, row.agent ?? null])
 
-export const incidentTime = (time: number) => time > 0 ? new Date(time).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, " UTC") : "unreported"
+export const incidentTime = (time: number) => time > 0 ? new Date(time).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, " UTC") : ""
 
 export function incidentPageSummary(offset: number, shown: number, groups: number) {
   if (shown === 0) return undefined
@@ -46,7 +46,7 @@ export function guidanceIndicator(guidance: IncidentGuidance) {
     label: guidance.enabled ? "Guidance enabled" : "Guidance disabled",
     enabled: guidance.enabled,
     ...(guidance.text === undefined ? {} : { preview: guidance.text }),
-    ...(guidance.clearedAt === undefined ? {} : { cleared: `Cleared ${incidentTime(guidance.clearedAt)}` }),
+    ...(guidance.clearedAt === undefined || incidentTime(guidance.clearedAt) === "" ? {} : { cleared: `Cleared ${incidentTime(guidance.clearedAt)}` }),
   }
 }
 

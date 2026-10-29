@@ -15,22 +15,27 @@ const model = (key: string, extra: Record<string, unknown> = {}) => ({ key, labe
 const report = (rows: unknown[], total: Record<string, unknown> = {}, overall?: Record<string, unknown>) =>
   ({ group: "model", rows, total: { ...metrics, ...total }, rowCount: rows.length, ...(overall === undefined ? {} : { speed: overall }) }) as unknown as UsageReport
 
-test("rates and latencies keep unmeasurable values distinct from zero and mark estimates", () => {
-  expect(rateLabel(undefined)).toBe("N/A")
+test("rates and latencies keep unmeasurable values empty and distinct from zero and mark estimates", () => {
+  expect(rateLabel(undefined)).toBe("")
   expect(rateLabel(0)).toBe("0 tok/s")
   expect(rateLabel(42.46)).toBe("42.5 tok/s")
   expect(rateLabel(1234.6, true)).toBe("≈ 1,235 tok/s")
-  expect(latencyLabel(undefined)).toBe("N/A")
+  expect(latencyLabel(undefined)).toBe("")
   expect(latencyLabel(850)).toBe("850 ms")
   expect(latencyLabel(1250)).toBe("1.3 s")
 })
 
-test("aggregate live output reads Idle, Waiting, Measuring, or an estimated rate", () => {
-  expect(liveRate({ active: 0, streaming: 0 })).toBe("Idle")
-  expect(liveRate({ active: 2, streaming: 0 })).toBe("Waiting")
-  expect(liveRate({ active: 2, streaming: 1 })).toBe("Measuring")
-  expect(liveRate({ active: 2, streaming: 1, outputTokensPerSecond: 48.2 })).toBe("≈ 48.2 tok/s")
-  expect(liveRate({ active: 0, streaming: 0, outputTokensPerSecond: 12 })).toBe("Idle")
+test("aggregate live output reads Idle, an estimated rate, the latest history rate, or nothing", () => {
+  expect(liveRate({ active: 0 })).toBe("Idle")
+  expect(liveRate({ active: 2 })).toBe("")
+  expect(liveRate({ active: 2, history: [] })).toBe("")
+  expect(liveRate({ active: 2, outputTokensPerSecond: 48.2 })).toBe("≈ 48.2 tok/s")
+  expect(liveRate({ active: 0, outputTokensPerSecond: 12 })).toBe("Idle")
+  const history = [{ at: 90_000, active: 2, outputTokensPerSecond: 7 }, { at: 100_000, active: 2 }, { at: 95_000, active: 2, outputTokensPerSecond: 9 }]
+  expect(liveRate({ active: 2, history })).toBe("≈ 9 tok/s")
+  expect(liveRate({ active: 2, outputTokensPerSecond: 48.2, history })).toBe("≈ 48.2 tok/s")
+  expect(liveRate({ active: 2, history: [{ at: 100_000, active: 2 }] })).toBe("")
+  expect(liveRate({ active: 0, history })).toBe("Idle")
 })
 
 test("live history is labelled relative to its own snapshot and active models list only running work", () => {
@@ -46,7 +51,7 @@ test("live history is labelled relative to its own snapshot and active models li
   expect(liveHistory(snapshot).map((point) => [point.label, point.rate])).toEqual([["1m ago", undefined], ["5s ago", 8], ["now", 10]])
   expect(liveModels(snapshot).map((entry) => [entry.provider, entry.model, entry.rate])).toEqual([
     ["anthropic", "claude-opus · selected effort high", "≈ 30 tok/s"],
-    ["openai", "gpt-6-sol", "Waiting"],
+    ["openai", "gpt-6-sol", ""],
   ])
 })
 
@@ -67,19 +72,38 @@ test("overview figures label estimates, averages, percentiles, and unreported va
   expect(figures.get("outcomes")).toMatchObject({ value: "12 completed · 3 failed · 1 cancelled", note: "18.8% failed" })
 })
 
-test("absent speed, outcomes, cache, and totals stay N/A or unreported, never zero", () => {
+test("absent speed, outcomes, cache, and totals render empty values, never zero or a placeholder", () => {
   const bare = new Map(generationFigures(live(), report([model("openai/a")])).map((figure) => [figure.id, figure]))
-  expect(bare.get("average")).toMatchObject({ value: "N/A", note: "No measurable requests this month" })
-  expect(bare.get("ttft")).toMatchObject({ value: "N/A", note: "No first-output samples this month" })
-  expect(bare.get("outcomes")).toMatchObject({ value: "unreported", note: "No outcome data recorded" })
+  expect(bare.get("average")).toMatchObject({ value: "", note: "No measurable requests this month" })
+  expect(bare.get("ttft")).toMatchObject({ value: "", note: "No first-output samples this month" })
+  expect(bare.get("outcomes")).toMatchObject({ value: "", note: "No outcome data recorded" })
   expect(bare.get("live")!.value).toBe("Idle")
   expect(bare.get("cache")!.value).toBe("300 read")
-  expect(generationFigures(live(), report([], { tokens: { ...tokens, cache: { read: 0, write: 0 } } })).find((figure) => figure.id === "cache")!.value).toBe("unreported read")
+  expect(generationFigures(live(), report([], { tokens: { ...tokens, cache: { read: 0, write: 0 } } })).find((figure) => figure.id === "cache")).toMatchObject({ value: "", note: "0 written" })
   expect(generationFigures(live(), report([], { cacheReadReported: true, tokens: { ...tokens, cache: { read: 0, write: 0 } } })).find((figure) => figure.id === "cache")!.value).toBe("0 read")
-  expect(generationFigures(live(), report([], {}, speed({ generationSamples: 0 }))).find((figure) => figure.id === "average")!.value).toBe("N/A")
-  expect(generationFigures(live(), report([], {}, { samples: 0, generationSamples: 0, providerTimedSamples: 0, observedSamples: 0, firstOutputP95Ms: 900 })).find((figure) => figure.id === "ttft")!.value).toBe("p50 N/A · p95 900 ms")
-  const missing = new Map(generationFigures(live(), undefined).map((figure) => [figure.id, figure.value]))
-  expect(["requests", "tokens", "cache", "cost", "outcomes"].map((id) => missing.get(id))).toEqual(["unreported", "unreported", "unreported", "unreported", "unreported"])
+  expect(generationFigures(live(), report([], {}, speed({ generationSamples: 0 }))).find((figure) => figure.id === "average")!.value).toBe("")
+  expect(generationFigures(live(), report([], {}, { samples: 0, generationSamples: 0, providerTimedSamples: 0, observedSamples: 0, firstOutputP95Ms: 900 })).find((figure) => figure.id === "ttft")!.value).toBe("p95 900 ms")
+  const missing = new Map(generationFigures(live(), undefined).map((figure) => [figure.id, figure]))
+  expect(["requests", "tokens", "cache", "cost", "outcomes"].map((id) => missing.get(id)!.value)).toEqual(["", "", "", "", ""])
+  expect(["tokens", "cache"].map((id) => missing.get(id)!.note)).toEqual(["", ""])
+})
+
+test("the live figure shows the latest history rate while requests are active and no rate is measured yet", () => {
+  const history = [{ at: 95_000, active: 1, outputTokensPerSecond: 21 }, { at: 100_000, active: 1 }]
+  const figure = (snapshot: UsageLive) => generationFigures(snapshot, undefined).find((entry) => entry.id === "live")!.value
+  expect(figure(live({ active: 1, streaming: 0, history }))).toBe("≈ 21 tok/s")
+  expect(figure(live({ active: 1, streaming: 1, history: [] }))).toBe("")
+  expect(figure(live({ active: 0, history }))).toBe("Idle")
+})
+
+test("Usage speed output never prints a missing-value placeholder", () => {
+  const placeholder = /unreported|unknown|known|n\/a|waiting|measuring|\?/i
+  const sparse = generationFigures(live({ active: 2, streaming: 1 }), report([model("openai/a")], { tokens: { ...tokens, cache: { read: 0, write: 0 } } }))
+  const missing = generationFigures(live({ active: 2 }), undefined)
+  const days = trendDays(undefined, Date.UTC(2026, 9, 28, 12))
+  const cells = [speedCells(undefined), ...modelSpeedRows(report([model("openai/a")]), []).map((row) => ({ cost: row.cost }))]
+  for (const text of [...sparse, ...missing].flatMap((figure) => [figure.value, figure.note]).concat(cells.flatMap((entry) => Object.values(entry)), days.map((day) => day.key)))
+    expect(text).not.toMatch(placeholder)
 })
 
 test("the daily scope names the provider and model selection, and is absent when nothing is selected", () => {
@@ -133,8 +157,8 @@ test("model speed comparison ranks by mean per-request rate and leaves unmeasura
   expect(fastestModels(rows, 1)).toHaveLength(1)
 })
 
-test("breakdown speed cells show N/A for unmeasurable rows instead of zero", () => {
-  expect(speedCells(undefined)).toEqual({ average: "N/A", aggregate: "N/A", ttft: "N/A" })
+test("breakdown speed cells are empty for unmeasurable rows instead of zero", () => {
+  expect(speedCells(undefined)).toEqual({ average: "", aggregate: "", ttft: "" })
   expect(speedCells(speed() as never)).toEqual({ average: "40 tok/s", aggregate: "36 tok/s", ttft: "1.2 s" })
 })
 

@@ -1,5 +1,5 @@
 import type { SessionInfoView, TeamTaskView } from "../store"
-import { accountingPresentation, costText } from "./usage-accounting"
+import { inclusiveCostText } from "./usage-accounting"
 import { tokenCount } from "./usage-model"
 
 export type TeamSubagent = TeamTaskView & {
@@ -189,7 +189,7 @@ export function usageSlots(task: TeamSubagent, economics: { readonly loading?: b
   const cache = formatCacheHit(task.cacheHitRatio)
   return [
     slot("tokens", "Tokens (inclusive)", task.accounting === undefined ? undefined : tokenCount(task.accounting.total.tokens).toLocaleString("en-US"), undefined, true),
-    slot("cost", "Cost (inclusive)", task.accounting?.total.cost.known === undefined ? undefined : `${costText(task.accounting.total.cost)}${task.accounting.status === "so-far" ? " · so far" : ""}${accountingPresentation(task.accounting, task.accountingUnavailable).complete ? "" : " · incomplete"}`, undefined, true),
+    slot("cost", "Cost (inclusive)", task.accounting === undefined ? undefined : inclusiveCostText(task.accounting, task.accountingUnavailable), undefined, true),
     slot("context", "Context", context, meter),
     slot("cache", "Cache", task.cacheHitRatio === undefined || cache === "—" ? undefined : cache),
   ]

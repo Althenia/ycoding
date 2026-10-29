@@ -134,7 +134,7 @@ export function modelIdentity(key: string, providers: readonly Pick<UsageProvide
 }
 
 export function reportLabel(row: Pick<UsageReportRow, "key" | "label">, group: UsageReportInput["group"]) {
-  return group === "session" && (!row.label.trim() || row.label === row.key) ? `Session ${row.key} · title unreported` : row.label
+  return group === "session" && (!row.label.trim() || row.label === row.key) ? `Session ${row.key}` : row.label
 }
 
 export const visibleProviders = (providers: readonly UsageProvider[]) => providers.filter((provider) =>
@@ -142,7 +142,7 @@ export const visibleProviders = (providers: readonly UsageProvider[]) => provide
     ? provider.source === "response_stream" && provider.stability === "observed" && Boolean(provider.message?.trim())
     : provider.status === "unauthorized" || provider.windows.length > 0 || provider.status === "error" && Boolean(provider.message?.trim()))
 
-export type DistributionSegment = { readonly providerID: string; readonly label: string; readonly value: number; readonly share: number; readonly costLabel?: string }
+export type DistributionSegment = { readonly providerID: string; readonly label: string; readonly value: number; readonly share: number; readonly costLabel: string }
 
 export function providerDistribution(report: UsageReport | undefined, providers: readonly Pick<UsageProvider, "providerID" | "label">[], metric: "spend" | "tokens") {
   if (report === undefined) return { total: 0, segments: [] as DistributionSegment[] }
@@ -281,8 +281,9 @@ export function reportCost(value: Pick<UsageReportRow, "cost" | "costCoverage" |
 }
 
 export function reportCostText(value: Pick<UsageReportRow, "cost" | "costCoverage" | "costProvenance">) {
-  return value.costCoverage === undefined && value.cost !== undefined ? `Known ${money(value.cost)} · coverage unreported` : costText(reportCost(value))
+  return value.costCoverage === undefined && value.cost !== undefined ? money(value.cost) : costText(reportCost(value))
 }
+
 
 export function reportIdentity(row: UsageReportRow, providers: readonly Pick<UsageProvider, "providerID" | "label">[]) {
   if (row.dimensions === undefined) return modelIdentity(row.key, providers, row.model)
@@ -325,6 +326,6 @@ export function spendMetrics(days: readonly Spend[]): Spend {
 
 export function spendCostText(value: Spend) {
   if (value.requests === 0) return "No retained requests"
-  if (value.costReported === false) return "unreported"
+  if (value.costReported === false) return ""
   return reportCostText({ cost: value.cost, costCoverage: value.costCoverage })
 }

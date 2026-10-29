@@ -26,6 +26,15 @@ test("omits facts the machine has not reported and keeps a reported zero", () =>
   expect(read(subagentMetrics(undefined, { accounting: accountedTask("ses_child", 0, 0) }))).toEqual(["Tokens (inclusive): 0", "Cost (inclusive): $0.00"])
 })
 
+test("shows a partial cost as its known amount and an unpriced one as $0.00 with its qualifiers", () => {
+  const task = accountedTask("ses_child", 0.25, 20)
+  const withCost = (cost: typeof task.total.cost, status: typeof task.status = "so-far") => ({ accounting: { ...task, status, total: { ...task.total, cost } } })
+  const cost = (value: Parameters<typeof withCost>[0], status?: typeof task.status) => read(subagentMetrics(undefined, withCost(value, status))).at(-1)
+  expect(cost({ known: 0.25, pricedRequests: 1, unpricedRequests: 1, provenance: "recorded" })).toBe("Cost (inclusive): $0.25 · so far · incomplete")
+  expect(cost({ pricedRequests: 0, unpricedRequests: 1 })).toBe("Cost (inclusive): $0.00 · so far · incomplete")
+  expect(cost({ pricedRequests: 0, unpricedRequests: 1 }, "settled")).toBe("Cost (inclusive): $0.00 · incomplete")
+})
+
 test("shows the child's own speed once and keeps it absent before output", () => {
   expect(read(subagentMetrics(undefined, { speed: { label: "≈ 100 tok/s", description: "Estimated generation speed" } })))
     .toEqual(["Speed: ≈ 100 tok/s"])

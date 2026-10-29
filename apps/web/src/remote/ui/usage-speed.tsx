@@ -4,6 +4,7 @@ import {
   chartHeight, chartMax, chartWidth, fastestModels, generationFigureIDs, generationFigures, latencyLabel, liveHistory, liveModels, lineSegments, modelSpeedRows, rateLabel, stackedBars, trendDays,
   type UsageLive,
 } from "./usage-speed-model"
+import { joinParts } from "./usage-accounting"
 import type { UsageReport } from "./usage-model"
 import "./usage-speed.css"
 
@@ -53,7 +54,7 @@ function SeriesChart(props: {
       <ul class="usage-series__legend" aria-label={`${props.title} series`}><For each={ids()}>{(id, index) => <li><span class="usage-series__swatch" style={{ background: props.series[index()]?.color }} aria-hidden="true" />{props.series[index()]?.label ?? id}</li>}</For></ul>
       <Show when={open()}><div id={tableID} class="usage-table-wrap"><table><caption>{props.title}</caption>
         <thead><tr><th scope="col">Time</th><For each={props.series}>{(entry) => <th scope="col">{entry.label}</th>}</For></tr></thead>
-        <tbody><Index each={props.labels}>{(label, row) => <tr><th scope="row">{label()}</th><For each={props.series}>{(entry) => <td>{entry.values[row] === undefined ? "N/A" : props.format(entry.values[row]!)}</td>}</For></tr>}</Index></tbody>
+        <tbody><Index each={props.labels}>{(label, row) => <tr><th scope="row">{label()}</th><For each={props.series}>{(entry) => <td>{entry.values[row] === undefined ? "" : props.format(entry.values[row]!)}</td>}</For></tr>}</Index></tbody>
       </table></div></Show>
     </Show>
   </div>
@@ -75,7 +76,7 @@ export function GenerationOverview(props: { readonly live: UsageLive; readonly m
     <div class="usage-section-head"><h2 id="usage-generation-title"><Icon name="zap" />Generation</h2><p>Live figures are estimated from received output; monthly figures come from recorded requests</p></div>
     <dl class="usage-figures"><For each={generationFigureIDs}>{(id) => {
       const figure = () => figures().find((entry) => entry.id === id)!
-      return <div class="usage-figure" data-figure={id}><dt>{figure().label}</dt><dd class="usage-figure__value">{figure().value}</dd><dd class="usage-figure__note">{figure().note}</dd></div>
+      return <div class="usage-figure" data-figure={id}><dt>{figure().label}</dt><dd class="usage-figure__value">{figure().value}</dd><Show when={figure().note !== ""}><dd class="usage-figure__note">{figure().note}</dd></Show></div>
     }}</For></dl>
     <div class="usage-series-grid" data-group="live">
       <SeriesChart id="live-rate" title="Live output rate" icon="zap" note="Aggregate tok/s · 5 s resolution · estimated" labels={history().map((point) => point.label)}
@@ -122,13 +123,13 @@ export function ModelSpeedComparison(props: { readonly monthly: UsageReport | un
   const keys = createMemo(() => rows().map((row) => row.key))
   const peak = () => Math.max(1, ...rows().map((row) => row.mean ?? 0))
   return <section class="usage-model-speed" aria-labelledby="usage-model-speed-title" data-group="comparison">
-    <div class="usage-section-head"><h2 id="usage-model-speed-title"><Icon name="cpu" />Model speed · this month</h2><p>Average tok/s is the mean of per-request rates; N/A means no measurable request</p></div>
+    <div class="usage-section-head"><h2 id="usage-model-speed-title"><Icon name="cpu" />Model speed · this month</h2><p>Average tok/s is the mean of per-request rates</p></div>
     <Show when={keys().length > 0} fallback={<p class="usage-message">No measurable generation speed by model this month.</p>}>
       <ul class="usage-speed-bars"><For each={keys()}>{(key) => {
         const row = () => rows().find((entry) => entry.key === key)!
         return <li data-model-speed={key}><span class="usage-speed-bars__name">{row().model}<span class="usage-provider-chip">{row().provider}</span></span>
           <span class="usage-speed-bars__track" aria-hidden="true"><span style={{ width: `${(row().mean ?? 0) / peak() * 100}%` }} /></span>
-          <strong>{rateLabel(row().mean)}</strong><span class="usage-speed-bars__meta">P95 TTFT {latencyLabel(row().ttftP95)} · {grouped.format(row().requests)} requests</span></li>
+          <strong>{rateLabel(row().mean)}</strong><span class="usage-speed-bars__meta">{joinParts([row().ttftP95 === undefined ? undefined : `P95 TTFT ${latencyLabel(row().ttftP95)}`, `${grouped.format(row().requests)} requests`])}</span></li>
       }}</For></ul>
     </Show>
   </section>

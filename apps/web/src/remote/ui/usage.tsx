@@ -13,7 +13,7 @@ import { ProviderLogo } from "./provider-logo"
 import { QuotaForecastStatus, UsageDetails, UsageStatisticsDetails } from "./usage-cost"
 import { GenerationOverview, ModelSpeedComparison, UsageTrends } from "./usage-speed"
 import { dailyScopeLabel, dashboardBusy, speedCells } from "./usage-speed-model"
-import { consumptionNeedsProfile, consumptionRow, forecastDetails, providerProvenanceLines } from "./usage-accounting"
+import { consumptionNeedsProfile, consumptionRow, forecastDetails, joinParts, providerProvenanceLines } from "./usage-accounting"
 import { compactUsageTotal, dailySpend, donutGeometry, matchingQuotaForecast, reportIdentity, reportLabel, reportCost, reportCostText, money, providerDistribution, providerHeading, quotaGroupHeading, quotaWindow, relativeFreshness, spendMetrics, spendCostText, tokenCount, tooltipPosition, usageReportInputs, usageZoneKey, visibleProviders, type SpendDay, usageDashboardView, usageQuotaView, type UsageDashboardInput, type UsageDashboardReady, type UsageDashboardSlots, type UsageProvider, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
 import "./usage.css"
 
@@ -308,21 +308,21 @@ export function UsagePage() {
           <Show when={dailyData()} fallback={<Show when={view().kind === "unsupported"} fallback={<Show when={connected() && waiting()}><LoadingPlaceholder kind="chart" label={view().kind === "preparing" ? "Preparing daily spend…" : "Loading daily spend…"} /></Show>}>
             <p class="usage-message" role="status">Update YCoding on this machine to see usage.</p>
           </Show>}>
-            <p class="usage-chart__today">Today: {spendCostText(tileValue("today"))} · {count(days().at(-1)?.requests ?? 0)} requests</p>
+            <p class="usage-chart__today">Today: {joinParts([spendCostText(tileValue("today")), `${count(days().at(-1)?.requests ?? 0)} requests`])}</p>
             <svg viewBox="0 0 900 180" role="img" aria-label="Daily cost over the last 30 days, with exact values in the table" preserveAspectRatio="none">
               <line x1="0" y1="156" x2="900" y2="156" class="usage-chart__axis" />
               <For each={dayKeys()}>{(key, index) => {
                 const entry = () => days().find((item) => item.key === key)!
                 const height = () => entry().cost === 0 ? 2 : Math.max(4, entry().cost / Math.max(1, ...days().map((item) => item.cost)) * 138)
                 return <rect x={index() * 30 + 7} y={156 - height()} width="16" height={height()} rx="2" class={index() === 29 ? "usage-chart__bar usage-chart__bar--today" : "usage-chart__bar"}
-                  tabindex="0" role="img" data-cursor="action" aria-label={`${key}: estimated cost ${spendCostText(entry())}, ${count(entry().requests)} requests, ${count(entry().tokens)} tokens`}
+                  tabindex="0" role="img" data-cursor="action" aria-label={joinParts([`${key}:`, joinParts([spendCostText(entry()) === "" ? undefined : `estimated cost ${spendCostText(entry())}`, `${count(entry().requests)} requests`, `${count(entry().tokens)} tokens`], ", ")], " ")}
                   onPointerEnter={(event) => { if (event.pointerType !== "touch") { setActiveDay(entry()); queueMicrotask(() => placeDay(event.clientX, event.clientY)) } }}
                   onPointerMove={(event) => { if (event.pointerType !== "touch") placeDay(event.clientX, event.clientY) }} onPointerLeave={(event) => { if (event.pointerType !== "touch") setActiveDay(undefined) }}
                   onFocus={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setActiveDay(entry()); queueMicrotask(() => placeDay(rect.left + rect.width / 2, rect.top + rect.height / 2)) }}
                   onBlur={() => setActiveDay(undefined)} onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setActiveDay(entry()); queueMicrotask(() => placeDay(event.clientX || rect.left + rect.width / 2, event.clientY || rect.top + rect.height / 2)) }} />
               }}</For>
             </svg>
-            <Show when={activeDay()}>{(entry) => <div class="usage-chart__tooltip" ref={dayTooltip} style={{ left: `${dayPosition().left}px`, top: `${dayPosition().top}px` }} role="status"><strong>{entry().key}</strong><span>Estimated cost {spendCostText(entry())}</span><span>{count(entry().requests)} requests · {count(entry().tokens)} tokens</span></div>}</Show>
+            <Show when={activeDay()}>{(entry) => <div class="usage-chart__tooltip" ref={dayTooltip} style={{ left: `${dayPosition().left}px`, top: `${dayPosition().top}px` }} role="status"><strong>{entry().key}</strong><Show when={spendCostText(entry()) !== ""}><span>Estimated cost {spendCostText(entry())}</span></Show><span>{count(entry().requests)} requests · {count(entry().tokens)} tokens</span></div>}</Show>
             <div class="usage-chart__labels"><span>{days()[0]?.label}</span><span>{days()[14]?.label}</span><span>Today</span></div>
             <Show when={tableOpen()}><div id="usage-daily-table" class="usage-table-wrap"><table><caption>Daily usage, last 30 {zoneLabel()} days</caption><thead><tr><th scope="col">Day</th><th scope="col">Cost</th><th scope="col">Tokens</th><th scope="col">Requests</th></tr></thead><tbody><For each={[...days()].reverse()}>{(entry) => <tr><th scope="row">{entry.key}</th><td>{spendCostText(entry)}</td><td>{count(entry.tokens)}</td><td>{count(entry.requests)}</td></tr>}</For></tbody></table></div></Show>
           </Show>
@@ -334,10 +334,10 @@ export function UsagePage() {
               <button type="button" aria-pressed={distributionMetric() === "tokens"} onClick={() => setDistributionMetric("tokens")}><Icon name="hash" />Tokens</button>
             </div></div>
           </div>
-          <Show when={monthlyData()}>{(value) => <p class="usage-distribution__pricing">Pricing: {reportCostText(value().total)}</p>}</Show>
+          <Show when={monthlyData() && reportCostText(monthlyData()!.total) !== ""}><p class="usage-distribution__pricing">Pricing: {reportCostText(monthlyData()!.total)}</p></Show>
           <Show when={!monthlyData() && connected() && waiting()}><LoadingPlaceholder kind="chart" label={view().kind === "preparing" ? "Preparing monthly usage…" : "Loading monthly usage…"} /></Show>
           <Show when={!monthlyData() && view().kind === "unsupported"}><p class="usage-distribution__empty">Update YCoding on this machine to see monthly usage.</p></Show>
-          <Show when={monthlyData()}><Show when={distribution().total > 0} fallback={<p class="usage-distribution__empty">{distributionMetric() === "spend" ? `Cost ${reportCostText(monthlyData()!.total)} · no positive known spend this month.` : "No recorded tokens this month."}</p>}>
+          <Show when={monthlyData()}><Show when={distribution().total > 0} fallback={<p class="usage-distribution__empty">{distributionMetric() === "spend" ? reportCostText(monthlyData()!.total) === "" ? "No positive spend this month." : `Cost ${reportCostText(monthlyData()!.total)} · no positive spend this month.` : "No recorded tokens this month."}</p>}>
             <div class="usage-distribution__body">
               <div class="usage-distribution__chart" ref={distributionChart}>
               <svg class="usage-donut" viewBox="0 0 200 200" role="img" aria-label={`${distributionMetric() === "spend" ? "Estimated spend" : "Tokens"} by provider this ${zoneLabel()} month; exact values are available in the legend`}>
@@ -347,7 +347,7 @@ export function UsagePage() {
                   const segment = () => arcs().find((item) => item.providerID === id) ?? initial
                   return <circle class="usage-donut__arc" cx="100" cy="100" r="72" fill="none" stroke-width="26"
                     style={{ stroke: distributionColors[index() % distributionColors.length], "--usage-dash": `${segment().length} ${segment().circumference - segment().length}`, "--usage-circumference": segment().circumference, "stroke-dashoffset": segment().offset }}
-                    tabindex="0" role="img" data-cursor="action" aria-label={`${segment().label}: cost ${segment().costLabel ?? "unreported"}, ${Math.round(segment().share * 100)}% share${distributionMetric() === "tokens" ? `, ${count(segment().value)} tokens` : ""}`}
+                    tabindex="0" role="img" data-cursor="action" aria-label={`${segment().label}: ${joinParts([segment().costLabel === "" ? undefined : `cost ${segment().costLabel}`, `${Math.round(segment().share * 100)}% share`, distributionMetric() === "tokens" ? `${count(segment().value)} tokens` : undefined], ", ")}`}
                     onPointerEnter={(event) => { if (event.pointerType !== "touch") { setActiveProvider(id); queueMicrotask(() => placeProvider(event.clientX, event.clientY)) } }}
                     onPointerMove={(event) => { if (event.pointerType !== "touch") placeProvider(event.clientX, event.clientY) }} onPointerLeave={(event) => { if (event.pointerType !== "touch") setActiveProvider(undefined) }}
                     onFocus={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setActiveProvider(id); queueMicrotask(() => placeProvider(rect.left + rect.width / 2, rect.top + rect.height / 2)) }}
@@ -360,13 +360,13 @@ export function UsagePage() {
               </div>
               <span class="usage-donut__probe" ref={distributionProbe} aria-hidden="true">{distributionMetric() === "spend" ? money(distribution().total) : count(distribution().total)}</span>
               </div>
-              <Show when={activeSegment()}>{(segment) => <div class="usage-distribution__tooltip" ref={providerTooltip} style={{ left: `${providerPosition().left}px`, top: `${providerPosition().top}px` }} role="status"><strong>{segment().label}</strong><span>Cost {segment().costLabel ?? "unreported"} · {Math.round(segment().share * 100)}% share</span><Show when={distributionMetric() === "tokens"}><span>{count(segment().value)} tokens</span></Show></div>}</Show>
+              <Show when={activeSegment()}>{(segment) => <div class="usage-distribution__tooltip" ref={providerTooltip} style={{ left: `${providerPosition().left}px`, top: `${providerPosition().top}px` }} role="status"><strong>{segment().label}</strong><span>{joinParts([segment().costLabel === "" ? undefined : `Cost ${segment().costLabel}`, `${Math.round(segment().share * 100)}% share`])}</span><Show when={distributionMetric() === "tokens"}><span>{count(segment().value)} tokens</span></Show></div>}</Show>
               <ul class="usage-distribution__legend" aria-label={distributionMetric() === "spend" ? "Providers by estimated spend in USD" : "Providers by tokens"}><For each={segmentIDs()}>{(id, index) => {
                 const initial = distribution().segments.find((segment) => segment.providerID === id)!
                 const segment = () => distribution().segments.find((item) => item.providerID === id) ?? initial
                 return <li>
                 <span class="usage-distribution__swatch" style={{ background: distributionColors[index() % distributionColors.length] }} aria-hidden="true" />
-                <span class="usage-distribution__name"><ProviderLogo providerID={segment().providerID} />{segment().label}</span><span>{Math.round(segment().share * 100)}%</span><strong>{distributionMetric() === "spend" ? segment().costLabel ?? "unreported" : count(segment().value)}</strong>
+                <span class="usage-distribution__name"><ProviderLogo providerID={segment().providerID} />{segment().label}</span><span>{Math.round(segment().share * 100)}%</span><strong>{distributionMetric() === "spend" ? segment().costLabel : count(segment().value)}</strong>
               </li>
               }}</For></ul>
             </div>
@@ -388,7 +388,6 @@ export function UsagePage() {
         return <li class="usage-consumption__row" data-needs-profile={consumptionNeedsProfile(forecastData()?.localRates ?? [], rate) ? "" : undefined}><span class="usage-consumption__identity"><ProviderLogo providerID={rate.providerID} /><span class="usage-consumption__name"><span>{row.parts.provider}</span><Show when={row.parts.model}><span> · {row.parts.model}</span></Show><span class="usage-consumption__profile"> · {row.parts.profile}</span></span></span><span class="usage-consumption__rates"><span class="usage-consumption__tokens">{row.tokens}</span><span class="usage-consumption__cost">{row.cost}</span></span>
           <UsageDetails label={row.identity} groups={[{ lines: row.details }]} /></li>
       }}</For></ul></Show>
-      <Show when={forecastData()?.localRates === undefined}><p class="usage-message">Recorded consumption unreported · lookup unavailable.</p></Show>
       <Show when={forecastData()?.localRates?.length === 0}><p class="usage-message">No recorded consumption in the observation window.</p></Show>
       </Show>
     </section>
@@ -408,7 +407,7 @@ export function UsagePage() {
             const identity = () => shownInput().group === "model" || row.dimensions ? reportIdentity(row, providerData() ?? []) : undefined
             return <article class="usage-mobile-row"><div class="usage-mobile-row__top"><div><strong>{identity()?.model ?? reportLabel(row, shownInput().group)}</strong><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show></div><b>{reportCostText(row)}</b></div>
               <p>{count(row.physical)} requests · {count(row.tokens.input)} in / {count(row.tokens.output)} out<Show when={row.tokens.cache.read > 0}> · {count(row.tokens.cache.read)} cache read</Show></p>
-              <p class="usage-mobile-row__speed">{speedCells(row.speed).average} avg · P95 TTFT {speedCells(row.speed).ttft}</p>
+              <Show when={speedCells(row.speed).average !== "" || speedCells(row.speed).ttft !== ""}><p class="usage-mobile-row__speed">{joinParts([speedCells(row.speed).average === "" ? undefined : `${speedCells(row.speed).average} avg`, speedCells(row.speed).ttft === "" ? undefined : `P95 TTFT ${speedCells(row.speed).ttft}`])}</p></Show>
               <UsageStatisticsDetails tokens={row.tokens} speed={row.speed} cost={reportCost(row)} />
             </article>
           }}</For></div>
@@ -419,7 +418,7 @@ export function UsagePage() {
           }}</For></tbody></table></div>
           <div class="usage-breakdown__feedback" aria-live="polite"><Show when={updating()}><span role="status">{view().kind === "preparing" ? "Preparing" : "Loading"} {names[group()].toLowerCase()} report…</span></Show><Show when={view().kind === "error"}>{(() => { const current = view(); return <span role="alert">{current.kind === "error" ? current.message : ""} <button type="button" onClick={retry}>Retry</button></span> })()}</Show></div>
           <div class="usage-pagination"><span>Showing {(shownInput().offset ?? 0) + 1}–{(shownInput().offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)}</span><div><button type="button" aria-label="Previous breakdown page" title="Previous page" disabled={updating() || (shownInput().offset ?? 0) === 0} onClick={previousPage}><Icon name="arrow-left" /><span class="usage-action-label">Previous</span></button><button type="button" aria-label="Next breakdown page" title="Next page" disabled={updating() || displayed()?.nextOffset === undefined} onClick={nextPage}><span class="usage-action-label">Next</span><Icon name="arrow-right" /></button></div></div>
-          <p class="usage-scope-total">Full scope: {displayed() ? reportCostText(displayed()!.total) : "unreported"}</p>
+          <Show when={reportCostText(displayed()!.total) !== ""}><p class="usage-scope-total">Full scope: {reportCostText(displayed()!.total)}</p></Show>
         </Show></Show>
       </div>
     </section>

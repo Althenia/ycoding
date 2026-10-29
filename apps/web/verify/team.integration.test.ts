@@ -205,8 +205,8 @@ test("Team cards state known, partial, unreported and unsupported inclusive task
   if (!browser) throw new Error("Browser not started")
   const states: readonly (readonly [string, readonly string[]])[] = [
     ["known", ["value=20", "value=$0.25"]],
-    ["partial", ["value=20", "value=Known $0.25 + unreported · so far · incomplete"]],
-    ["unreported", ["value=20", "unreported=—"]],
+    ["partial", ["value=20", "value=$0.25 · so far · incomplete"]],
+    ["unreported", ["value=20", "value=$0.00 · incomplete"]],
     ["unsupported", ["unsupported=Update YCoding", "unsupported=Update YCoding"]],
   ]
   for (const [variant, expected] of states) for (const [width, height] of [[390, 844], [1440, 900]] as const) {
