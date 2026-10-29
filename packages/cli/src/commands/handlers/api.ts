@@ -1,6 +1,6 @@
 import { EOL } from "node:os"
 import { Effect, Option } from "effect"
-import { Commands } from "../commands"
+import { ApiCommand } from "../api"
 import { Runtime } from "../../framework/runtime"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
 import { ServerConnection } from "../../services/server-connection"
@@ -16,7 +16,7 @@ type OpenApi = {
 }
 
 export default Runtime.handler(
-  Commands.commands.api,
+  ApiCommand,
   Effect.fn("cli.api")(function* (input) {
     const server = yield* ServerConnection.resolve({
       server: Option.getOrUndefined(input.server),
