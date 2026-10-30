@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { declarationsWhere, readStylesheet, type Declarations, type Stylesheet } from "../../styles/css-rules"
 import { readReviewItems, type AssistantPart, type PendingRequestView, type SessionView } from "../projection"
 import { parseSessionStatus, readSessionInfo, type SessionInfoView } from "../store"
 import { sessionStateChips } from "../view-model"
@@ -407,5 +408,193 @@ describe("tool body expansion", () => {
   test("keeps the reader's explicit toggle across a status change", () => {
     expect(toolPartExpanded({ touched: true, manual: false, status: "completed" })).toBe(false)
     expect(toolPartExpanded({ touched: true, manual: true, status: "running" })).toBe(true)
+  })
+})
+
+const shell = () => Bun.file(new URL("./shell.tsx", import.meta.url)).text()
+const invite = () => Bun.file(new URL("./invite.tsx", import.meta.url)).text()
+const declared = (sheet: Stylesheet, selector: string, wrapped = false): Declarations =>
+  declarationsWhere(sheet, (rule) => (wrapped ? rule.conditions.length > 0 : rule.conditions.length === 0) && rule.header.split(",").map((part) => part.trim()).includes(selector))
+const boundaryFree = (declarations: Declarations) => {
+  expect(declarations.border === undefined || declarations.border === "0" || declarations.border === "none").toBe(true)
+  expect(declarations["border-radius"] === undefined || declarations["border-radius"] === "0").toBe(true)
+}
+
+describe("W88 ledger spine and phone navigation", () => {
+  test("paints the rail as a sunken spine and marks the current destination without fill, inset rule or halo", async () => {
+    const css = await readStylesheet("remote.css")
+    expect(declared(css, ".workspace__rail").background).toBe("var(--yc-surface-sunken)")
+    const active = declared(css, ".remote-nav__link--active")
+    expect(active["box-shadow"]).toBeUndefined()
+    expect(active.background === undefined || active.background === "transparent").toBe(true)
+    expect(active.color).toBe("var(--yc-text)")
+    expect(active["font-weight"]).toBe("var(--yc-weight-bold)")
+    expect(declared(css, ".remote-nav__link--active > svg").color).toBe("var(--yc-green-strong)")
+    expect(declared(css, ".remote-nav__link")["min-block-size"]).toBe("var(--yc-control-h-dense)")
+  })
+
+  test("keeps three labeled phone targets with the label under the icon and a heavier active label", async () => {
+    const css = await readStylesheet("remote.css")
+    const item = declared(css, ".bottom-nav__item")
+    expect(item["font-size"]).toBe("var(--yc-size-2xs)")
+    expect(item["min-height"]).toBe("var(--yc-bottom-nav-h)")
+    expect(declared(css, ".bottom-nav__item--active .bottom-nav__label")["font-weight"]).toBe("var(--yc-weight-bold)")
+    expect(await shell()).toContain('<span class="bottom-nav__label" aria-hidden="true">{item.label}</span>')
+  })
+})
+
+describe("W90 inset status bars", () => {
+  test("presents connection, notice and consent strips as flat bars with an inline-start tone bar", async () => {
+    const css = await readStylesheet("remote.css")
+    for (const selector of [".app .status-strip", ".app .notice-strip", ".telemetry-consent"]) {
+      const strip = declared(css, selector)
+      boundaryFree(strip)
+      expect(strip["border-inline-start"]).toMatch(/^3px solid var\(--yc-/)
+      expect(strip["border-block-end"]).toBe("var(--yc-border-width) solid var(--yc-border)")
+    }
+    expect(declared(css, ".app .status-strip--attention")["border-inline-start-color"]).toBe("var(--yc-yellow-strong)")
+    expect(declared(css, ".app .status-strip--offline")["border-inline-start-color"]).toBe("var(--yc-danger)")
+    expect(declared(css, ".app .notice-strip--warning")["border-inline-start-color"]).toBe("var(--yc-yellow-strong)")
+  })
+
+  test("keeps the strip text and actions", async () => {
+    const source = await shell()
+    expect(source).toContain("Help improve YCoding")
+    expect(source).toContain("onClick={() => void remote.store.setTelemetryConsent(true)}")
+    expect(source).toContain("Open settings")
+  })
+})
+
+describe("W89 flat sign-in and invitation column", () => {
+  test("lifts the top bar out of the panel and keeps the single-line access key field", async () => {
+    const [source, invitePage] = await Promise.all([shell(), invite()])
+    const screen = source.slice(source.indexOf("function SignInScreen"), source.indexOf("const noSessionTitle"))
+    expect(screen.indexOf('class="sign-in__bar"')).toBeGreaterThan(-1)
+    expect(screen.indexOf('class="sign-in__bar"')).toBeLessThan(screen.indexOf('class="sign-in__panel"'))
+    expect(screen.slice(screen.indexOf('class="sign-in__panel"'))).not.toContain("sign-in__bar")
+    expect(screen).toContain('class="sign-in__or"')
+    expect(screen).toContain('id="remote-access-key"')
+    expect(screen).toContain('autocapitalize="characters"')
+    expect(screen).not.toContain("<textarea")
+    expect(invitePage.indexOf('class="sign-in__bar"')).toBeLessThan(invitePage.indexOf('class="sign-in__panel"'))
+    expect(invitePage).toContain("Accept to create your remote account and its access key.")
+  })
+
+  test("draws no panel boundary and shows errors as an inline-start bar", async () => {
+    const css = await readStylesheet("remote.css")
+    const panel = declared(css, ".sign-in__panel")
+    boundaryFree(panel)
+    expect(panel.background).toBeUndefined()
+    expect(panel["inline-size"]).toContain("420px")
+    expect(declared(css, ".sign-in__bar")["border-block-end"]).toBe("var(--yc-border-width) solid var(--yc-border)")
+    const error = declared(css, ".sign-in__error")
+    boundaryFree(error)
+    expect(error["border-inline-start"]).toBe("3px solid var(--yc-danger)")
+    expect(error.background).toBe("var(--yc-danger-soft)")
+  })
+})
+
+describe("W84 ledger Sessions rows", () => {
+  test("draws the Sessions table as ruled rows without an enclosing frame or raised fill", async () => {
+    const css = await readStylesheet("remote.css")
+    boundaryFree(declared(css, ".sessions-results"))
+    expect(declared(css, ".sessions-table__row").background).toBe("transparent")
+    const head = declared(css, ".sessions-table__head")
+    expect(head.background).toBe("transparent")
+    expect(head["border-block-end"]).toBe("var(--yc-border-width) solid var(--yc-border)")
+  })
+
+  test("keeps windowed rows keyed and measured so they grow with their content", async () => {
+    const source = await shell()
+    expect(source).toContain("createRowVirtualizer")
+    expect(source).toContain("ref={props.measure}")
+    const css = await readStylesheet("remote.css")
+    expect(declared(css, ".sessions-table__row")["min-block-size"] ?? "").not.toMatch(/^\d+px$/)
+    expect(declared(css, ".sessions-table__row").height).toBeUndefined()
+  })
+
+  test("shows status filters as underline segments", async () => {
+    const css = await readStylesheet("remote.css")
+    const option = declared(css, ".session-filters__option")
+    expect(option["border-radius"]).toBe("0")
+    expect(option["border-block-end"]).toBe("2px solid transparent")
+    const active = declared(css, ".session-filters__option--active")
+    expect(active["border-block-end-color"]).toBe("var(--yc-text)")
+    expect(active.background === undefined || active.background === "transparent").toBe(true)
+  })
+})
+
+describe("W90 new-session outcome strip", () => {
+  test("states a failed or unknown creation as an inline-start status bar", async () => {
+    const css = await readStylesheet("remote.css")
+    const outcome = declared(css, ".new-session__outcome")
+    boundaryFree(outcome)
+    expect(outcome["border-inline-start"]).toMatch(/^3px solid var\(--yc-/)
+    expect(declared(css, '.new-session__outcome[role="alert"]')["border-inline-start-color"]).toBe("var(--yc-danger)")
+    expect(declared(css, ".new-session__outcome.new-session__outcome--unknown[role=\"alert\"]")["border-inline-start-color"]).toBe("var(--yc-yellow-strong)")
+  })
+})
+
+describe("W83 flat request forms", () => {
+  test("draws question options as ruled rows without frames, radius or fills", async () => {
+    const css = await readStylesheet("remote.css")
+    const option = declared(css, ".question__option")
+    boundaryFree(option)
+    expect(option.background).toBeUndefined()
+    expect(option["border-block-end"]).toBe("var(--yc-border-width) solid var(--yc-border)")
+    expect(option["min-block-size"]).toBe("var(--yc-hit-min)")
+    expect(declared(css, ".question__option + .question__option")["margin-block-start"]).toBeUndefined()
+    expect(declared(css, ".question__option:first-of-type")["border-start-start-radius"]).toBeUndefined()
+    expect(declared(css, ".question__option:last-of-type")["border-end-end-radius"]).toBeUndefined()
+    const checked = declared(css, ".question__option:has(input:checked)")
+    expect(checked.background).toBeUndefined()
+    expect(checked["box-shadow"]).toBeUndefined()
+    expect(checked["border-inline-start-color"]).toBe("var(--yc-green-strong)")
+    expect(checked["font-weight"]).toBe("var(--yc-weight-semibold)")
+  })
+
+  test("separates questions with single rules and keeps the field boundary and 44px target", async () => {
+    const css = await readStylesheet("remote.css")
+    boundaryFree(declared(css, ".question"))
+    boundaryFree(declared(css, ".fieldset"))
+    expect(declared(css, ".question + .question")["border-block-start"]).toBe("var(--yc-border-width) solid var(--yc-border)")
+    const field = declared(css, ".question__custom input")
+    expect(field.border).toBe("var(--yc-border-width) solid var(--yc-border-strong)")
+    expect(field["min-block-size"]).toBe("var(--yc-control-h)")
+  })
+
+  test("draws guardrail decision grades as ruled rows and leaves the hard-review outline alone", async () => {
+    const css = await readStylesheet("remote.css")
+    const grade = declared(css, ".decision-grades li")
+    boundaryFree(grade)
+    expect(grade.background).toBeUndefined()
+    expect(grade["border-block-end"]).toBe("var(--yc-border-width) solid var(--yc-border)")
+    expect(declared(css, '.decision-grades li[data-selected="true"]')["border-inline-start-color"]).toBe("var(--yc-green-strong)")
+    const hard = declared(css, ".request--hard")
+    expect(hard.border).toBe("2px solid var(--yc-danger)")
+    expect(hard["box-shadow"]).toBe("0 0 0 3px color-mix(in srgb, var(--yc-danger) 18%, transparent)")
+  })
+})
+
+describe("W83 flat Sessions status labels", () => {
+  test("shows Session status as scoped flat text without touching the shared chip", async () => {
+    const css = await readStylesheet("remote.css")
+    for (const selector of [".sessions-table__status .chip", ".session-row__status .chip"]) {
+      const chip = declared(css, selector)
+      expect(chip.border).toBe("0")
+      expect(chip["border-radius"]).toBe("0")
+      expect(chip.background).toBe("transparent")
+      expect(chip.padding).toBe("0")
+      expect(chip["min-block-size"]).toBe("0")
+      expect(chip["font-weight"]).toBe("var(--yc-weight-semibold)")
+    }
+    const shared = await Bun.file(new URL("../../styles/base.css", import.meta.url)).text()
+    expect(shared).toContain("border-radius: var(--yc-radius-pill);")
+  })
+
+  test("keeps the status label non-interactive so no boundary is owed", async () => {
+    const chip = await Bun.file(new URL("../../ui/chip.tsx", import.meta.url)).text()
+    expect(chip).toContain("<span class={`chip${tone()}`}>")
+    expect(chip).not.toContain("<button")
   })
 })

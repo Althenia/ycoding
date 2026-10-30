@@ -257,7 +257,6 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     }
     focusAfterSelection = view() !== "/remote/session" ? sessionID : undefined
     closeNav()
-    if (current !== sessionID) void remote.store.selectSession(sessionID)
     navigate({ to: "/remote/session", search: sessionSearch(sessionID, state().activeDeviceID), replace: newSessionOpen() })
   }
   createEffect(() => {
@@ -692,13 +691,13 @@ function SignInScreen(): JSX.Element {
   }
   return (
     <main id="remote-main" class="sign-in">
+      <header class="sign-in__bar">
+        <Link to="/" class="brand" title="YCoding home">
+          <BrandMark compact />
+        </Link>
+        <ThemeToggle />
+      </header>
       <div class="sign-in__panel">
-        <div class="sign-in__top">
-          <Link to="/" class="brand" title="YCoding home">
-            <BrandMark compact />
-          </Link>
-          <ThemeToggle />
-        </div>
         <div class="sign-in__head">
           <h1 class="sign-in__title">Sign in to your workspace</h1>
           <p class="sign-in__lede">
@@ -727,6 +726,7 @@ function SignInScreen(): JSX.Element {
             )}
           </For>
         </div>
+        <div class="sign-in__or" aria-hidden="true"><span>or</span></div>
         <form class="field" onSubmit={(event) => void signInWithKey(event)}>
           <label class="field__label" for="remote-access-key">Access key</label>
           <input id="remote-access-key" class="input" value={accessKey()} onInput={(event) => setAccessKey(event.currentTarget.value)}

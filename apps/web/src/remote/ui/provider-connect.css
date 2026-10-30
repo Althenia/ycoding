@@ -6,6 +6,12 @@
   overflow-wrap: anywhere;
 }
 
+.overlay--provider-connect .field__label {
+  font-size: var(--yc-size-2xs);
+  letter-spacing: var(--yc-tracking-wide);
+  text-transform: uppercase;
+}
+
 .overlay--provider-connect .input {
   max-inline-size: 100%;
 }

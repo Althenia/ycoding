@@ -577,6 +577,53 @@ describe("remote navigation", () => {
     } finally { await page.close() }
   }, 90_000)
 
+  test("opening a Team child selects it once, never re-selects or re-reads its stale parent, and Main restores the parent anchor and draft", async () => {
+    const page = await requireBrowser().openPage()
+    const frames = () => page.evaluate<boolean>(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))`)
+    try {
+      await page.setViewport(1440, 900)
+      await page.setReducedMotion(true)
+      for (let run = 1; run <= 3; run += 1) {
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&transcriptProbe=1&latency=20`)
+        await until(page, `document.querySelector('[data-message-id="probe_tail"]') !== null && document.querySelector('.mini-composer__mount textarea') !== null`)
+        await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden' })()`)
+        await frames()
+        await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true })); root.scrollTop = 400; root.dispatchEvent(new Event('scroll')) })()`)
+        await frames()
+        await frames()
+        const anchor = await page.evaluate<{ readonly id: string; readonly top: number }>(`(() => { const root = document.querySelector('.workspace__scroll'), bounds = root.getBoundingClientRect(); const row = [...document.querySelectorAll('[data-message-id]')].find(row => row.getBoundingClientRect().top >= bounds.top && row.getBoundingClientRect().top < bounds.bottom); if (!row) throw Error('No visible transcript anchor'); return { id: row.dataset.messageId, top: row.getBoundingClientRect().top } })()`)
+        await page.evaluate(`(() => { const draft = document.querySelector('.mini-composer__mount textarea'); draft.value = 'Parent draft remains'; draft.dispatchEvent(new Event('input', { bubbles: true })); window.parentDraft = draft })()`)
+        await page.evaluate(`(() => {
+          const record = { selections: [], stale: 0, mark: window.remoteDeviceRequests.length, stop: false }
+          window.childEntry = record
+          let last
+          const check = () => {
+            const active = window.providerAuthState().activeSessionID
+            if (active !== last) { record.selections.push(active); last = active }
+            if (document.querySelector('[aria-label="Main session"]') && active !== 'ses_second') record.stale += 1
+          }
+          new MutationObserver(() => { if (!record.stop) check() }).observe(document.body, { subtree: true, childList: true, attributes: true })
+          const tick = () => { check(); if (!record.stop) setTimeout(tick, 0) }
+          tick()
+        })()`)
+        await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
+        await until(page, `document.querySelector('.team-view__task[data-session-id="ses_second"] [data-action="open"]') !== null`)
+        await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_second"] [data-action="open"]').click()`)
+        await until(page, `(() => { const state = window.providerAuthState(); return state.activeSessionID === 'ses_second' && state.history?.status === 'idle' && document.querySelector('.subagent-bar [aria-label="Main session"]') !== null })()`)
+        await frames()
+        const entry = await page.evaluate<{ readonly selections: readonly string[]; readonly stale: number; readonly parentReads: readonly string[]; readonly url: string }>(`(() => { const record = window.childEntry; record.stop = true; return { selections: record.selections, stale: record.stale, parentReads: window.remoteDeviceRequests.slice(record.mark).filter(request => (request.operation === 'session.subscribe' || request.operation === 'session.snapshot') && request.sessionID === 'ses_fixture').map(request => request.operation), url: new URL(location.href).searchParams.get('session_id') } })()`)
+        expect({ run, ...entry }).toEqual({ run, selections: ["ses_fixture", "ses_second"], stale: 0, parentReads: [], url: "ses_second" })
+        await page.evaluate(`document.querySelector('.subagent-bar [aria-label="Main session"]').click()`)
+        await until(page, `document.querySelector('.mini-composer__mount textarea') !== null && document.querySelector('.subagent-bar') === null && document.querySelector('.conversation-pane [data-message-id="${anchor.id}"]') !== null`)
+        await frames()
+        await frames()
+        const restored = await page.evaluate<{ readonly shift: number; readonly sameDraft: boolean; readonly draft: string; readonly active: string | undefined }>(`({ shift: Math.abs(document.querySelector('[data-message-id="${anchor.id}"]').getBoundingClientRect().top - ${anchor.top}), sameDraft: window.parentDraft === document.querySelector('.mini-composer__mount textarea'), draft: window.parentDraft.value, active: window.providerAuthState().activeSessionID })`)
+        expect({ run, sameDraft: restored.sameDraft, draft: restored.draft, active: restored.active }).toEqual({ run, sameDraft: true, draft: "Parent draft remains", active: "ses_fixture" })
+        expect(restored.shift).toBeLessThanOrEqual(1)
+      }
+    } finally { await page.close() }
+  }, 120_000)
+
   test("Conversation re-enters at the latest message without showing a wrong position, then leaves a deliberate scroll-up alone", async () => {
     const page = await requireBrowser().openPage()
     try {

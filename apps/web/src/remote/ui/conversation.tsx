@@ -380,7 +380,15 @@ function ReasoningPart(props: { readonly text: () => string; readonly parts: () 
   )
 }
 
-export function MessageRow(props: { readonly message: () => RemoteMessageView; readonly continued?: boolean }): JSX.Element {
+function EntryHead(props: { readonly ordinal?: number; readonly role: string; readonly children?: JSX.Element }): JSX.Element {
+  return <header class="transcript-message__head">
+    <Show when={props.ordinal}>{(value) => <span class="transcript-message__ordinal" aria-hidden="true">§{String(value()).padStart(2, "0")}</span>}</Show>
+    <span class="transcript-message__role">{props.role}</span>
+    {props.children}
+  </header>
+}
+
+export function MessageRow(props: { readonly message: () => RemoteMessageView; readonly continued?: boolean; readonly ordinal?: number; readonly head?: boolean }): JSX.Element {
   const kind = () => props.message().kind
   const remote = useRemote()
   const selectedView = () => remote.state().view
@@ -419,6 +427,11 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
           <Show when={oversized()?.state === "error"}><button type="button" class="button button--ghost button--small" onClick={() => void remote.store.loadOversizedMessage(props.message().id)}>Retry full content</button></Show>
         </Show>
         <Show when={kind() === "user"}>
+          <EntryHead ordinal={props.ordinal} role="Directive">
+            <span class="transcript-message__receipt" role="status" aria-label={receipt().label}>
+              <Show when={receipt().mark === "✓"} fallback={<span aria-hidden="true">{receipt().mark}</span>}><Icon name="check" size={14} /></Show>{receipt().text}
+            </span>
+          </EntryHead>
           <Show when={userText(props.message()).trim() !== ""}><p class="transcript-message__bubble">{userText(props.message())}</p></Show>
           <For each={attachmentKeys()}>{(key) => {
             const attachment = () => attachments()[Number(key.slice(0, key.indexOf(":")))]!
@@ -427,9 +440,6 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
               ? <UserImage name={attachment().name} mime={attachment().mime} digest={attachment().digest} deviceID={remote.state().activeDeviceID ?? ""} sessionID={remote.state().activeSessionID ?? ""} />
               : <span class="transcript-file">{attachment().name} · {size()}</span>
           }}</For>
-          <span class="transcript-message__receipt" role="status" aria-label={receipt().label}>
-            <Show when={receipt().mark === "✓"} fallback={<span aria-hidden="true">{receipt().mark}</span>}><Icon name="check" size={14} /></Show>{receipt().text}
-          </span>
           <Show when={promptMutation()}>{(mutation) => <div class="transcript-message__send-error" role={mutation().state === "failed" ? "alert" : "status"}>
             <span>{mutation().state === "unknown" ? "Outcome unknown" : "Send failed"}: {mutation().detail}</span>
             <button type="button" class="button button--secondary button--small" onClick={() => void remote.store.retryMutation(mutation().id)}>Retry send</button>
@@ -437,11 +447,13 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
         </Show>
 
         <Show when={kind() === "assistant"}>
+          <Show when={props.head !== false}>
+            <EntryHead ordinal={props.ordinal} role="Execution"><span class="transcript-message__footer">{agent()}<Show when={assistantOf(props.message())?.model}>{(model) => <> · {modelDisplayLabel(model(), models())}<Show when={model().variant}> · {model().variant}</Show></>}</Show><Show when={assistantOf(props.message())?.completed}>{(end) => <> · {formatPartDuration(end() - (assistantOf(props.message())?.created ?? end()))}</>}</Show></span></EntryHead>
+          </Show>
           <Show when={assistantOf(props.message())?.parts.some((part) => part.kind === "text" && part.text.trim() !== "")}><h3 class="transcript-message__agent">{agent()}</h3></Show>
           <AssistantParts parts={() => assistantOf(props.message())?.parts ?? []} />
           <Show when={!props.continued}>
             <Show when={assistantOf(props.message())?.error}><p class="transcript-message__error" role="status">{assistantOf(props.message())?.error}</p></Show>
-            <footer class="transcript-message__footer">{agent()}<Show when={assistantOf(props.message())?.model}>{(model) => <> · {modelDisplayLabel(model(), models())}<Show when={model().variant}> · {model().variant}</Show></>}</Show><Show when={assistantOf(props.message())?.completed}>{(end) => <> · {formatPartDuration(end() - (assistantOf(props.message())?.created ?? end()))}</>}</Show></footer>
           </Show>
         </Show>
 

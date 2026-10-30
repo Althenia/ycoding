@@ -76,7 +76,7 @@ describe("quiet workspace", () => {
         for (const view of ["chat", "sessions", "usage", "settings"]) {
           await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=${view}&theme=light`)
           await until(page, `document.querySelector('.remote-connection-label')?.textContent.includes('Connected') && document.querySelector('.bottom-nav') !== null`)
-          const state = await page.evaluate<{ links: string[]; current: string; rail: number; headerLinks: number; overflow: boolean; undersized: number }>(`(() => {
+          const state = await page.evaluate<{ links: string[]; current: string; rail: number; headerLinks: number; overflow: boolean; undersized: number; minHeight: number }>(`(() => {
             const nav = document.querySelector(innerWidth < 768 ? '.bottom-nav' : '.workspace__rail .remote-nav')
             const links = [...(nav?.querySelectorAll('a') ?? [])]
             return {
@@ -85,7 +85,8 @@ describe("quiet workspace", () => {
               rail: document.querySelector('.workspace__rail')?.getBoundingClientRect().width ?? 0,
               headerLinks: document.querySelectorAll('.app-header .remote-nav a').length,
               overflow: document.documentElement.scrollWidth > innerWidth,
-              undersized: links.filter(link => { const box=link.getBoundingClientRect();return box.width < 44 || box.height < 44 }).length,
+              minHeight: innerWidth < 768 ? 44 : parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense')),
+              undersized: links.filter(link => { const box=link.getBoundingClientRect();return box.width < 44 || box.height < (innerWidth < 768 ? 44 : parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense'))) }).length,
             }
           })()`)
           expect(state.links).toEqual(["/remote/sessions", "/remote/usage", "/remote/settings"])
@@ -93,6 +94,7 @@ describe("quiet workspace", () => {
           expect(state.rail).toBe(width < 768 ? 0 : 288)
           expect(state.headerLinks).toBe(0)
           expect(state.overflow).toBe(false)
+          expect(state.minHeight).toBeGreaterThanOrEqual(36)
           expect(state.undersized).toBe(0)
         }
       }
@@ -136,7 +138,8 @@ describe("quiet workspace", () => {
         const rail=document.querySelector('.workspace__rail');const body=rail.querySelector('.workspace__rail-body');
         return {width:rail.getBoundingClientRect().width,links:rail.querySelectorAll('.remote-nav a').length,focus:document.activeElement?.getAttribute('aria-label') ?? '',picker:document.querySelector('.sessions-page__workspace-select').getBoundingClientRect().height>0,bodyHidden:body.inert && body.getClientRects().length===0}
       })()`)).toEqual({ width: 60, links: 3, focus: "Show workspace sidebar", picker: true, bodyHidden: true })
-      expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.workspace__rail .remote-nav a')].every(link => { const box=link.getBoundingClientRect();return box.width>=44&&box.height>=44 })`)).toBe(true)
+      expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.workspace__rail .remote-nav a')].every(link => { const box=link.getBoundingClientRect();return box.width>=44&&box.height>=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense')) })`)).toBe(true)
+      expect(await page.evaluate<boolean>(`parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense')) >= 36`)).toBe(true)
       await page.evaluate(`document.querySelector('.workspace__rail .remote-nav a[href="/remote/settings"]').click()`)
       await until(page, `document.querySelector('.app--settings') !== null`)
       expect(await page.evaluate<boolean>(`['.workspace-resume','.workspace-new-session button'].every(selector => {const element=document.querySelector('.workspace__rail '+selector),box=element.getBoundingClientRect();return box.width>=44&&box.height>=44&&box.right<=60})`)).toBe(true)

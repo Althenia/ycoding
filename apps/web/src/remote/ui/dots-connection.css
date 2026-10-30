@@ -6,8 +6,35 @@
   overflow-wrap: anywhere;
 }
 
+.dots-connection__facts > div {
+  display: grid;
+  grid-template-columns: minmax(0, 12ch) minmax(0, 1fr);
+  gap: var(--yc-space-3);
+  padding-block: var(--yc-space-2);
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+}
+
+.dots-connection__facts > div + div {
+  margin-block-start: 0;
+}
+
+.dots-connection__facts dt {
+  font-size: var(--yc-size-2xs);
+  letter-spacing: var(--yc-tracking-wide);
+  text-transform: uppercase;
+}
+
 .dots-connection__facts dd {
   margin: 0;
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
+}
+
+@media (max-width: 479px) {
+  .dots-connection__facts > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--yc-space-1);
+  }
 }
 
 .dots-connection__actions {

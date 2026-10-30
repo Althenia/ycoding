@@ -479,7 +479,7 @@ describe("remote responsive state behavior", () => {
     await page.close()
   }, 30_000)
 
-  test("frames permission and guardrail reviews choice rows without changing native answers or touch targets", async () => {
+  test("marks permission and guardrail review choices as ruled rows without changing native answers or touch targets", async () => {
     for (const [width, marker, optionCount, actionCount] of [
       [390, "Select Target Cluster", 2, 6],
       [768, "syslog daemon bridge", 3, 4],
@@ -492,8 +492,11 @@ describe("remote responsive state behavior", () => {
           readonly minHeight: number
           readonly selectedBorder: string
           readonly otherBorder: string
+          readonly selectedWeight: number
+          readonly otherWeight: number
           readonly selectedFill: string
           readonly otherFill: string
+          readonly selectedFrame: string
           readonly checked: number
           readonly actions: number
           readonly overflowing: boolean
@@ -505,10 +508,13 @@ describe("remote responsive state behavior", () => {
           return {
             options: options.length,
             minHeight: Math.min(...options.map(option => option.getBoundingClientRect().height)),
-            selectedBorder: getComputedStyle(selected).borderColor,
-            otherBorder: getComputedStyle(other).borderColor,
+            selectedBorder: getComputedStyle(selected).borderInlineStartColor,
+            otherBorder: getComputedStyle(other).borderInlineStartColor,
+            selectedWeight: Number(getComputedStyle(selected).fontWeight),
+            otherWeight: Number(getComputedStyle(other).fontWeight),
             selectedFill: getComputedStyle(selected).backgroundColor,
             otherFill: getComputedStyle(other).backgroundColor,
+            selectedFrame: getComputedStyle(selected).borderTopLeftRadius + getComputedStyle(selected).borderInlineStartWidth,
             checked: document.querySelectorAll('.request .question__option input:checked').length,
             actions: document.querySelectorAll('.request button').length,
             overflowing: document.documentElement.scrollWidth > innerWidth,
@@ -517,7 +523,10 @@ describe("remote responsive state behavior", () => {
         expect(state.options).toBe(optionCount)
         expect(state.minHeight).toBeGreaterThanOrEqual(44)
         expect(state.selectedBorder).not.toBe(state.otherBorder)
-        expect(state.selectedFill).not.toBe(state.otherFill)
+        expect(state.selectedWeight).toBeGreaterThan(state.otherWeight)
+        expect(state.selectedFill).toBe("rgba(0, 0, 0, 0)")
+        expect(state.otherFill).toBe("rgba(0, 0, 0, 0)")
+        expect(state.selectedFrame).toBe("0px2px")
         expect(state.checked).toBeGreaterThan(0)
         expect(state.actions).toBeGreaterThanOrEqual(actionCount)
         expect(state.overflowing).toBe(false)

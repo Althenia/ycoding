@@ -6,6 +6,7 @@ import {
 } from "./usage-speed-model"
 import { joinParts } from "./usage-accounting"
 import type { UsageReport } from "./usage-model"
+import { UsageHeading } from "./usage-sections"
 import "./usage-speed.css"
 
 const grouped = new Intl.NumberFormat("en-US")
@@ -19,6 +20,7 @@ function SeriesChart(props: {
   readonly title: string
   readonly icon: IconName
   readonly note: string
+  readonly ordinal?: number | undefined
   readonly labels: readonly string[]
   readonly series: readonly ChartSeries[]
   readonly mode: "line" | "stacked"
@@ -36,7 +38,7 @@ function SeriesChart(props: {
   const ticks = () => [props.labels[0], props.labels[Math.floor((props.labels.length - 1) / 2)], props.labels.at(-1)]
   const summary = () => `${props.title}: ${props.series.map((entry) => `${entry.label} peak ${props.format(Math.max(0, ...entry.values.flatMap((value) => value === undefined ? [] : [value])))}`).join(", ")}; exact values are in the table`
   return <div class="usage-series" data-chart={props.id}>
-    <div class="usage-series__head"><div><h3><Icon name={props.icon} />{props.title}</h3><p>{props.note}</p></div>
+    <div class="usage-series__head"><div><UsageHeading level={3} ordinal={props.ordinal}><Icon name={props.icon} />{props.title}</UsageHeading><p>{props.note}</p></div>
       <Show when={measured()}><button type="button" aria-expanded={open()} aria-controls={tableID} onClick={() => setOpen(!open())}><Icon name="sessions" />{open() ? "Hide table" : "View table"}</button></Show></div>
     <Show when={measured()} fallback={<p class="usage-series__empty">{props.empty}</p>}>
       <svg viewBox={`0 0 ${chartWidth} ${chartHeight + 4}`} role="img" aria-label={summary()} preserveAspectRatio="none">
@@ -67,13 +69,13 @@ const danger = "var(--yc-danger)"
 const soft = "var(--yc-green)"
 const border = "var(--yc-border-strong)"
 
-export function GenerationOverview(props: { readonly live: UsageLive; readonly monthly: UsageReport | undefined }) {
+export function GenerationOverview(props: { readonly live: UsageLive; readonly monthly: UsageReport | undefined; readonly ordinal: number }) {
   const figures = createMemo(() => generationFigures(props.live, props.monthly))
   const history = createMemo(() => liveHistory(props.live))
   const models = createMemo(() => liveModels(props.live))
   const modelKeys = createMemo(() => models().map((entry) => entry.key))
   return <section class="usage-generation" aria-labelledby="usage-generation-title">
-    <div class="usage-section-head"><h2 id="usage-generation-title"><Icon name="zap" />Generation</h2><p>Live figures are estimated from received output; monthly figures come from recorded requests</p></div>
+    <div class="usage-section-head"><UsageHeading level={2} id="usage-generation-title" ordinal={props.ordinal}><Icon name="zap" />Generation</UsageHeading><p>Live figures are estimated from received output; monthly figures come from recorded requests</p></div>
     <dl class="usage-figures"><For each={generationFigureIDs}>{(id) => {
       const figure = () => figures().find((entry) => entry.id === id)!
       return <div class="usage-figure" data-figure={id}><dt>{figure().label}</dt><dd class="usage-figure__value">{figure().value}</dd><Show when={figure().note !== ""}><dd class="usage-figure__note">{figure().note}</dd></Show></div>
@@ -91,12 +93,12 @@ export function GenerationOverview(props: { readonly live: UsageLive; readonly m
   </section>
 }
 
-export function UsageTrends(props: { readonly daily: UsageReport | undefined; readonly now: number; readonly timeZone: string | undefined; readonly zoneLabel: string; readonly scope?: string | undefined }) {
+export function UsageTrends(props: { readonly daily: UsageReport | undefined; readonly now: number; readonly timeZone: string | undefined; readonly zoneLabel: string; readonly scope?: string | undefined; readonly ordinal: number }) {
   const days = createMemo(() => trendDays(props.daily, props.now, props.timeZone))
   const labels = () => days().map((day) => day.key)
   const note = () => `${props.zoneLabel} days · last 30${props.scope === undefined ? "" : ` · ${props.scope}`}`
   return <section class="usage-trends" aria-label="Performance over time" data-group="trends">
-    <SeriesChart id="requests" title="Request volume" icon="sessions" note={note()} labels={labels()} series={[{ id: "requests", label: "Requests", values: days().map((day) => day.requests), color: green }]} mode="stacked" format={(value) => grouped.format(value)} empty="No requests in this period." />
+    <SeriesChart id="requests" title="Request volume" icon="sessions" note={note()} ordinal={props.ordinal} labels={labels()} series={[{ id: "requests", label: "Requests", values: days().map((day) => day.requests), color: green }]} mode="stacked" format={(value) => grouped.format(value)} empty="No requests in this period." />
     <SeriesChart id="tokens" title="Token consumption" icon="hash" note={note()} labels={labels()} mode="stacked" format={(value) => compact.format(value)} empty="No tokens recorded in this period."
       series={[
         { id: "input", label: "Input", values: days().map((day) => day.input), color: green },
@@ -118,12 +120,12 @@ export function UsageTrends(props: { readonly daily: UsageReport | undefined; re
   </section>
 }
 
-export function ModelSpeedComparison(props: { readonly monthly: UsageReport | undefined; readonly providers: readonly { readonly providerID: string; readonly label: string }[] }) {
+export function ModelSpeedComparison(props: { readonly monthly: UsageReport | undefined; readonly providers: readonly { readonly providerID: string; readonly label: string }[]; readonly ordinal: number }) {
   const rows = createMemo(() => fastestModels(modelSpeedRows(props.monthly, props.providers)))
   const keys = createMemo(() => rows().map((row) => row.key))
   const peak = () => Math.max(1, ...rows().map((row) => row.mean ?? 0))
   return <section class="usage-model-speed" aria-labelledby="usage-model-speed-title" data-group="comparison">
-    <div class="usage-section-head"><h2 id="usage-model-speed-title"><Icon name="cpu" />Model speed · this month</h2><p>Average tok/s is the mean of per-request rates</p></div>
+    <div class="usage-section-head"><UsageHeading level={2} id="usage-model-speed-title" ordinal={props.ordinal}><Icon name="cpu" />Model speed · this month</UsageHeading><p>Average tok/s is the mean of per-request rates</p></div>
     <Show when={keys().length > 0} fallback={<p class="usage-message">No measurable generation speed by model this month.</p>}>
       <ul class="usage-speed-bars"><For each={keys()}>{(key) => {
         const row = () => rows().find((entry) => entry.key === key)!

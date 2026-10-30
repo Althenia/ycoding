@@ -60,7 +60,7 @@ test("provider distribution keeps exact large values readable in one accessible 
             const exact = ${JSON.stringify(exact)};
             const canvas = document.createElement('canvas');
             const context = canvas.getContext('2d');
-            context.font = getComputedStyle(total).font;
+            const totalStyle = getComputedStyle(total); context.font = totalStyle.fontWeight + ' ' + totalStyle.fontSize + ' ' + totalStyle.fontFamily;
             const exactTooWide = context.measureText(exact).width > chart.width * 118 / 200;
             const innerRadius = chart.width * 59 / 200;
             const insideHole = [total, card.querySelector('.usage-donut__caption')].every(node => {
@@ -814,7 +814,7 @@ test("the generation overview states live, monthly, estimated, and unreported fi
       await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?live`)
       await wait(page, `document.querySelectorAll('.usage-figure').length === 9 && document.querySelectorAll('[data-chart="live-rate"] polyline').length > 0`)
       const figures = await page.evaluate<Record<string, string>>(`Object.fromEntries([...document.querySelectorAll('.usage-figure')].map(item => [item.dataset.figure, item.innerText.replace(/\\s+/g, ' ')]))`)
-      expect(figures.active).toContain("Active generations 2")
+      expect((figures.active ?? "").toLowerCase()).toContain("active generations 2")
       expect(figures.live).toContain("≈ 42.5 tok/s")
       expect(figures.average).toContain("36.1 tok/s")
       expect(figures.average).toContain("Mean of 15 per-request rates")

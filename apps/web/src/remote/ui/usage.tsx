@@ -12,6 +12,7 @@ import { ModelIncidents } from "./model-incidents"
 import { ProviderLogo } from "./provider-logo"
 import { QuotaForecastStatus, UsageDetails, UsageStatisticsDetails } from "./usage-cost"
 import { GenerationOverview, ModelSpeedComparison, UsageTrends } from "./usage-speed"
+import { UsageHeading, usageSectionNumbers } from "./usage-sections"
 import { dailyScopeLabel, dashboardBusy, speedCells } from "./usage-speed-model"
 import { consumptionNeedsProfile, consumptionRow, forecastDetails, joinParts, providerProvenanceLines } from "./usage-accounting"
 import { compactUsageTotal, dailySpend, donutGeometry, matchingQuotaForecast, reportIdentity, reportLabel, reportCost, reportCostText, money, providerDistribution, providerHeading, quotaGroupHeading, quotaWindow, relativeFreshness, spendMetrics, spendCostText, tokenCount, tooltipPosition, usageReportInputs, usageZoneKey, visibleProviders, type SpendDay, usageDashboardView, usageQuotaView, type UsageDashboardInput, type UsageDashboardReady, type UsageDashboardSlots, type UsageProvider, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
@@ -94,6 +95,7 @@ export function UsagePage() {
   }
   const busy = () => dashboardBusy(view(), manualRefresh())
   const waiting = () => view().kind === "loading" || view().kind === "preparing"
+  const numbers = createMemo(() => usageSectionNumbers(info() ? [] : ["generation", "trends", "speed"]))
   const retry = () => {
     const scope = remote.scope()
     if (scope === undefined) return
@@ -276,7 +278,7 @@ export function UsagePage() {
     <Show when={view().kind === "preparing"}><p class="usage-message" role="status">Preparing usage…</p></Show>
 
     <section class="usage-spend" aria-labelledby="usage-spend-title">
-      <h2 class="visually-hidden" id="usage-spend-title">Estimated spend overview</h2>
+      <div class="usage-section-head"><UsageHeading level={2} id="usage-spend-title" ordinal={numbers().spend}><Icon name="usage" />Estimated spend overview</UsageHeading></div>
       <Show when={dailyScope()}>{(scope) => <p class="usage-spend__scope">Spend, daily charts and trends filtered to {scope()}</p>}</Show>
       <Show when={dailyData()}>
         <div class="usage-tiles"><For each={tileIDs}>{(id) => <article class="usage-tile">
@@ -287,10 +289,10 @@ export function UsagePage() {
       </Show>
     </section>
 
-    <Show when={info()}>{(ready) => <GenerationOverview live={ready().live} monthly={monthlyData()} />}</Show>
+    <Show when={info()}>{(ready) => <GenerationOverview live={ready().live} monthly={monthlyData()} ordinal={numbers().generation} />}</Show>
 
     <section class="usage-quotas" aria-labelledby="usage-allowances">
-      <div class="usage-section-head"><h2 id="usage-allowances"><Icon name="usage" />Provider quotas</h2><p>Account-reported limits · separate from this backend's consumption</p></div>
+      <div class="usage-section-head"><UsageHeading level={2} id="usage-allowances" ordinal={numbers().quotas}><Icon name="usage" />Provider quotas</UsageHeading><p>Account-reported limits · separate from this backend's consumption</p></div>
       <Show when={!providerData() && view().kind === "unsupported"}><p class="usage-message" role="status">Update YCoding on this machine to see usage.</p></Show>
       <Show when={!providerData() && remote.state().transport.kind !== "open" && view().kind === "idle"}><p class="usage-message" role="status">Connect to a machine to see usage.</p></Show>
       <Show when={!providerData() && (waiting() || quotaPreparing())}><LoadingPlaceholder kind="usage" label={view().kind === "preparing" || quotaPreparing() ? "Preparing provider quotas…" : "Loading provider quotas…"} /></Show>
@@ -304,7 +306,7 @@ export function UsagePage() {
 
     <section class="usage-visuals" aria-label="Usage charts">
         <div class="usage-chart" ref={dayCard}>
-          <div class="usage-chart__head"><div><h3><Icon name="usage" />Daily spend (last 30 {zoneLabel()} days)</h3><p>{zoneLabel()} day boundary · Today highlighted<Show when={dailyScope()}> · {dailyScope()}</Show></p></div><button type="button" aria-expanded={tableOpen()} aria-controls="usage-daily-table" onClick={() => setTableOpen(!tableOpen())}><Icon name="sessions" />{tableOpen() ? "Hide table" : "View table"}</button></div>
+          <div class="usage-chart__head"><div><UsageHeading level={3} ordinal={numbers().charts}><Icon name="usage" />Daily spend (last 30 {zoneLabel()} days)</UsageHeading><p>{zoneLabel()} day boundary · Today highlighted<Show when={dailyScope()}> · {dailyScope()}</Show></p></div><button type="button" aria-expanded={tableOpen()} aria-controls="usage-daily-table" onClick={() => setTableOpen(!tableOpen())}><Icon name="sessions" />{tableOpen() ? "Hide table" : "View table"}</button></div>
           <Show when={dailyData()} fallback={<Show when={view().kind === "unsupported"} fallback={<Show when={connected() && waiting()}><LoadingPlaceholder kind="chart" label={view().kind === "preparing" ? "Preparing daily spend…" : "Loading daily spend…"} /></Show>}>
             <p class="usage-message" role="status">Update YCoding on this machine to see usage.</p>
           </Show>}>
@@ -374,9 +376,9 @@ export function UsagePage() {
         </div>
     </section>
 
-    <Show when={info()}><UsageTrends daily={dailyData()} now={now()} timeZone={selectedZone()} zoneLabel={zoneLabel()} scope={dailyScope()} /><ModelSpeedComparison monthly={monthlyData()} providers={providerData() ?? []} /></Show>
+    <Show when={info()}><UsageTrends daily={dailyData()} now={now()} timeZone={selectedZone()} zoneLabel={zoneLabel()} scope={dailyScope()} ordinal={numbers().trends} /><ModelSpeedComparison monthly={monthlyData()} providers={providerData() ?? []} ordinal={numbers().speed} /></Show>
 
-    <section class="usage-breakdown-section usage-consumption" aria-label="Recorded token consumption"><div class="usage-section-head"><h2><Icon name="zap" />Recorded consumption · Backend</h2></div>
+    <section class="usage-breakdown-section usage-consumption" aria-label="Recorded token consumption"><div class="usage-section-head"><UsageHeading level={2} ordinal={numbers().consumption}><Icon name="zap" />Recorded consumption · Backend</UsageHeading></div>
       <Show when={forecastData()} fallback={<>
         <Show when={waiting() || quotaPreparing() || view().kind === "idle" && connected()}><LoadingPlaceholder kind="usage" label={view().kind === "preparing" || quotaPreparing() ? "Preparing recorded consumption…" : "Loading recorded consumption…"} /></Show>
         <Show when={quotaError()}>{(message) => <p class="usage-message" role="alert">{message()}</p>}</Show>
@@ -393,7 +395,7 @@ export function UsagePage() {
     </section>
 
     <section class="usage-breakdown-section" aria-labelledby="usage-breakdown-title">
-      <div class="usage-breakdown__head"><h2 id="usage-breakdown-title"><Icon name="sessions" />Breakdown</h2><Show when={displayed()?.rows.length}><span class="usage-breakdown__summary">Showing {(shownInput().offset ?? 0) + 1}–{(shownInput().offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)} {names[shownInput().group].toLowerCase()}s</span></Show>
+      <div class="usage-breakdown__head"><UsageHeading level={2} id="usage-breakdown-title" ordinal={numbers().breakdown}><Icon name="sessions" />Breakdown</UsageHeading><Show when={displayed()?.rows.length}><span class="usage-breakdown__summary">Showing {(shownInput().offset ?? 0) + 1}–{(shownInput().offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)} {names[shownInput().group].toLowerCase()}s</span></Show>
       <Show when={!usagePhone.phone()}><UsageGroupControl value={group()} onChange={selectGroup} /></Show></div>
       <Show when={usagePhone.phone()} fallback={<UsageFilterControls value={filters()} providers={filterProviders()} onChange={(value) => { holdRows(); batch(() => { setFilters(value); setOffset(0) }) }} />}>
         <UsageFilterSummary group={group()} filters={filters()} providers={filterProviders()} onApply={applyFilters} />
@@ -422,7 +424,7 @@ export function UsagePage() {
         </Show></Show>
       </div>
     </section>
-    <ModelIncidents phone={usagePhone.phone()} />
+    <ModelIncidents phone={usagePhone.phone()} ordinal={numbers().incidents} />
     <footer class="usage-cost-note">Costs are estimates from recorded usage and model pricing, not provider bills. Analytics use configurable request-date retention (default 30 days), independently of Session deletion. Session-owned prompt and task views can have a shorter retained history.</footer>
   </div>
 }

@@ -200,6 +200,68 @@ test("sidebar collapse and reopen retain the actual virtual row and transcript a
   } finally { await page.close() }
 }, 60_000)
 
+const placeRow = (position: "above" | "across" | "below") => `(() => { const root=document.querySelector('.workspace__scroll'), reply=document.querySelector('[data-message-id="probe_reply_3"]'); const rect=reply.getBoundingClientRect(), bounds=root.getBoundingClientRect(); const top=rect.top-bounds.top+root.scrollTop; root.dispatchEvent(new WheelEvent('wheel',{deltaY:-500,bubbles:true})); root.scrollTop=${position === "above" ? "top+rect.height" : position === "across" ? "top+rect.height/2" : "top-rect.height"}; root.dispatchEvent(new Event('scroll')); })()`
+const readerState = `(() => { const root=document.querySelector('.workspace__scroll'), bounds=root.getBoundingClientRect(); const rows=[...document.querySelectorAll('.transcript-navigation__item')]; const anchor=rows.find(row=>row.getBoundingClientRect().top>=bounds.top); const reply=document.querySelector('[data-message-id="probe_reply_3"]'); const rect=reply.getBoundingClientRect(); return { anchor: anchor.dataset.messageId, top: anchor.getBoundingClientRect().top-bounds.top, replyHeight: rect.height, replyPosition: rect.bottom<=bounds.top ? "above" : rect.top<bounds.top ? "across" : "below" } })()`
+
+test("a width reflow keeps the reading anchor whether the re-wrapping row is above, across or below the fold", async () => {
+  const page = await browser.openPage()
+  try {
+    for (const width of [820, 1000, 1440]) {
+      for (const position of ["above", "across", "below"] as const) {
+        await page.setViewport(width, 900)
+        await page.setReducedMotion(true)
+        await open(page, "inventoryCount=150&pageRows=150")
+        await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel',{deltaY:-500,bubbles:true})); root.scrollTop=0; root.dispatchEvent(new Event('scroll')) })()`)
+        await wait(page, `document.querySelector('[data-message-id="probe_reply_3"]') !== null`)
+        await page.evaluate(placeRow(position))
+        await frames(page, 8)
+        const before = await page.evaluate<{ anchor: string; top: number; replyHeight: number; replyPosition: string }>(readerState)
+        expect(before.replyPosition, `${width} ${position}`).toBe(position)
+        await page.evaluate(`document.querySelector('[aria-label="Hide workspace sidebar"]').click()`)
+        await frames(page, 8)
+        const hidden = await page.evaluate<{ anchor: string; top: number; replyHeight: number }>(readerState)
+        if (width < 1440 && position !== "above") expect(hidden.replyHeight, `${width} ${position} wraps differently`).not.toBe(before.replyHeight)
+        expect(hidden.anchor, `${width} ${position} hide`).toBe(before.anchor)
+        expect(Math.abs(hidden.top - before.top), `${width} ${position} hide`).toBeLessThanOrEqual(1)
+        await page.evaluate(`document.querySelector('[aria-label="Show workspace sidebar"]').click()`)
+        await frames(page, 8)
+        const shown = await page.evaluate<{ anchor: string; top: number }>(readerState)
+        expect(shown.anchor, `${width} ${position} show`).toBe(before.anchor)
+        expect(Math.abs(shown.top - before.top), `${width} ${position} show`).toBeLessThanOrEqual(1)
+      }
+    }
+  } finally { await page.close() }
+}, 120_000)
+
+test("ordinary growth of a row across the fold does not drag the reader after a width change made while following", async () => {
+  const page = await browser.openPage()
+  try {
+    for (const resized of [false, true]) {
+      await page.setViewport(820, 900)
+      await page.setReducedMotion(true)
+      await open(page, "inventoryCount=150&pageRows=150")
+      for (let index = 0; index < 8; index++) {
+        await page.evaluate(delta)
+        await frames(page, 2)
+      }
+      if (resized) {
+        await page.evaluate(`document.querySelector('[aria-label="Hide workspace sidebar"]').click()`)
+        await frames(page, 8)
+      }
+      await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'), tail=document.querySelector('[data-message-id="probe_tail"]'); const rect=tail.getBoundingClientRect(), bounds=root.getBoundingClientRect(); root.dispatchEvent(new WheelEvent('wheel',{deltaY:-500,bubbles:true})); root.scrollTop=rect.top-bounds.top+root.scrollTop+rect.height/2; root.dispatchEvent(new Event('scroll')); })()`)
+      await frames(page, 8)
+      const tailTop = `(() => { const root=document.querySelector('.workspace__scroll'), tail=document.querySelector('[data-message-id="probe_tail"]'); const bounds=root.getBoundingClientRect(), rect=tail.getBoundingClientRect(); return { top: rect.top-bounds.top, height: rect.height, across: rect.top<bounds.top && rect.bottom>bounds.top } })()`
+      const before = await page.evaluate<{ top: number; height: number; across: boolean }>(tailTop)
+      expect(before.across, `resized ${resized}`).toBe(true)
+      await page.evaluate(delta)
+      await frames(page, 8)
+      const after = await page.evaluate<{ top: number; height: number }>(tailTop)
+      expect(after.height, `resized ${resized} grew`).toBeGreaterThan(before.height)
+      expect(Math.abs(after.top - before.top), `resized ${resized}`).toBeLessThanOrEqual(1)
+    }
+  } finally { await page.close() }
+}, 120_000)
+
 test("reading the last message above pending decisions does not enable virtual-list tail following", async () => {
   const page = await browser.openPage()
   try {

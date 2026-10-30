@@ -24,11 +24,11 @@ export function InvitePage(): JSX.Element {
   }
   return (
     <main id="remote-main" class="sign-in">
+      <header class="sign-in__bar">
+        <Link to="/" class="brand" title="YCoding home"><BrandMark compact /></Link>
+        <ThemeToggle />
+      </header>
       <div class="sign-in__panel">
-        <div class="sign-in__top">
-          <Link to="/" class="brand" title="YCoding home"><BrandMark compact /></Link>
-          <ThemeToggle />
-        </div>
         <div class="sign-in__head">
           <h1 class="sign-in__title">{view().title}</h1>
           <Show when={!view().showKey}><p class="sign-in__lede">Accept to create your remote account and its access key.</p></Show>

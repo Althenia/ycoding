@@ -73,8 +73,8 @@
 
 .yc-notification-panel__new {
   padding: var(--yc-space-1) var(--yc-space-2);
-  border: var(--yc-border-width) solid color-mix(in srgb, var(--yc-green-strong) 35%, var(--yc-border));
-  border-radius: var(--yc-radius-pill);
+  border: 0;
+  border-radius: var(--yc-radius-sm);
   background: var(--yc-green-soft);
   color: var(--yc-green-strong);
   font: var(--yc-weight-medium) var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono);
@@ -107,6 +107,7 @@
   gap: var(--yc-space-3);
   padding: var(--yc-space-3) var(--yc-space-4);
   border-block-end: var(--yc-border-width) solid var(--yc-border);
+  border-inline-start: 3px solid var(--yc-danger);
   background: var(--yc-danger-soft);
   color: var(--yc-text);
   font: var(--yc-weight-regular) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono);
@@ -186,8 +187,8 @@
   place-items: center;
   inline-size: 34px;
   block-size: 34px;
-  border: var(--yc-border-width) solid color-mix(in srgb, var(--yc-notification-tone) 35%, var(--yc-border));
-  border-radius: var(--yc-radius-md);
+  border: 0;
+  border-radius: var(--yc-radius-sm);
   background: var(--yc-notification-wash);
   color: var(--yc-notification-tone);
 }
@@ -305,7 +306,7 @@
   min-block-size: var(--yc-control-h-dense);
   padding-inline: var(--yc-space-3);
   border: var(--yc-border-width) solid var(--yc-border);
-  border-radius: var(--yc-radius-pill);
+  border-radius: var(--yc-radius-sm);
   background: var(--yc-surface);
   color: var(--yc-text);
   font: var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono);

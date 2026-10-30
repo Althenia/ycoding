@@ -64,6 +64,7 @@
   padding: var(--yc-space-3) var(--yc-space-4) var(--yc-space-1);
   font-size: var(--yc-size-2xs);
   font-weight: var(--yc-weight-semibold);
+  font-family: var(--yc-font-mono);
   letter-spacing: var(--yc-tracking-wide);
   text-transform: uppercase;
   color: var(--yc-text-muted);
@@ -76,6 +77,7 @@
   min-block-size: var(--yc-hit-min);
   min-inline-size: 0;
   padding: var(--yc-space-3) var(--yc-space-4);
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
   border-inline-start: 3px solid transparent;
   font-size: var(--yc-size-sm);
 }
@@ -112,6 +114,7 @@
 .command-palette__group-tag {
   flex: none;
   margin-inline-start: auto;
+  font-family: var(--yc-font-mono);
   font-size: var(--yc-size-2xs);
   color: var(--yc-text-muted);
 }

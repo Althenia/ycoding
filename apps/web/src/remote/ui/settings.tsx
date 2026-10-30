@@ -338,6 +338,7 @@ function Section(props: {
     <section class="settings__section" aria-labelledby={props.id}>
       <div class="settings__head">
         <p class="settings__category">{props.category}</p>
+        <span class="settings__ordinal" aria-hidden="true" />
         <h2 id={props.id}>{props.title}</h2>
         <p class="settings__hint">{props.hint}</p>
       </div>

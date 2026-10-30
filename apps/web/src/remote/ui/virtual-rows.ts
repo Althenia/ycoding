@@ -17,6 +17,10 @@ export function scrollParent(element: HTMLElement): HTMLElement | undefined {
   return document.scrollingElement instanceof HTMLElement ? document.scrollingElement : undefined
 }
 
+export function compensatesSizeChange(change: { readonly cached: boolean; readonly start: number; readonly end: number; readonly offset: number; readonly reflow: boolean }): boolean {
+  return change.reflow || !change.cached ? change.start < change.offset : change.end <= change.offset
+}
+
 export type RowVirtualizerInput = {
   readonly list: () => HTMLElement | undefined
   readonly scroller: () => HTMLElement | undefined
@@ -107,10 +111,22 @@ export function createRowVirtualizer(input: RowVirtualizerInput) {
   // A list inside an inert panel is off screen while a shared scroller shows another page; its window must not follow that scroller.
   const frozen = () => input.list()?.offsetParent === null || input.list()?.closest("[inert]") != null
 
+  let settledWidth: number | undefined
+  let settleFrame: number | undefined
+  const trackWidth = () => {
+    if (input.list()?.offsetWidth === settledWidth || settleFrame !== undefined) return
+    settleFrame = requestAnimationFrame(() => { settleFrame = undefined; settledWidth = input.list()?.offsetWidth })
+  }
+  const reflowing = () => {
+    trackWidth()
+    return input.list()?.offsetWidth !== settledWidth
+  }
+  onCleanup(() => { if (settleFrame !== undefined) cancelAnimationFrame(settleFrame) })
+
   virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
     if (frozen() || input.compensate?.() === false) return false
     const offset = input.scroller()?.scrollTop ?? instance.scrollOffset ?? 0
-    return instance.itemSizeCache.has(item.key) ? item.end <= offset : item.start < offset
+    return compensatesSizeChange({ cached: instance.itemSizeCache.has(item.key), start: item.start, end: item.end, offset, reflow: reflowing() })
   }
 
   const measureLayout = () => {
@@ -138,9 +154,11 @@ export function createRowVirtualizer(input: RowVirtualizerInput) {
     const root = input.scroller()
     if (!list || !root) return
     virtualizer._willUpdate()
+    settledWidth = list.offsetWidth
     measureLayout()
     let scheduled: number | undefined
     const observer = new ResizeObserver(() => {
+      trackWidth()
       if (scheduled !== undefined) return
       scheduled = requestAnimationFrame(() => {
         scheduled = undefined

@@ -11,13 +11,14 @@ import {
   incidentReportInput, incidentRowKey, incidentTime, incidentTotal, type IncidentGroup, type IncidentGuidance, type IncidentRange, type IncidentReport, type IncidentReportInput, type IncidentRow,
 } from "./model-incident-model"
 import { customUsageRange } from "./usage-filter-model"
+import { UsageHeading } from "./usage-sections"
 import "./model-incidents.css"
 
 const ranges = [{ value: "last7", label: "7 days" }, { value: "last30", label: "30 days" }, { value: "all", label: "All retained" }, { value: "custom", label: "Custom UTC" }] as const
 const groups = [{ value: "model", label: "Model" }, { value: "agent", label: "Agent" }] as const
 const unsupportedMessage = "Update YCoding on this machine to see model incidents."
 
-export function ModelIncidents(props: { readonly phone?: boolean }) {
+export function ModelIncidents(props: { readonly phone?: boolean; readonly ordinal: number }) {
   const remote = useRemote()
   const [group, setGroup] = createSignal<IncidentGroup>("model")
   const [range, setRange] = createSignal<IncidentRange>("all")
@@ -148,7 +149,7 @@ export function ModelIncidents(props: { readonly phone?: boolean }) {
     }}</Show>
 
   return <section class="incidents" aria-labelledby="incidents-title">
-    <div class="incidents__head"><h2 id="incidents-title"><Icon name="shield" />Model incidents</h2>
+    <div class="incidents__head"><UsageHeading level={2} id="incidents-title" ordinal={props.ordinal}><Icon name="shield" />Model incidents</UsageHeading>
       <p>Fallbacks and guardrail escalations or rejections retained by this backend. Guidance belongs to a model and applies across agents and Sessions.</p></div>
     <div class="incidents__controls">
       <div class={`usage-toggle${group() === "agent" ? " usage-toggle--tokens" : ""}`} role="group" aria-label="Incident grouping">

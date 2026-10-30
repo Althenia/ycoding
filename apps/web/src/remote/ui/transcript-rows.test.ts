@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { applySessionEvent, createSessionView, type RemoteMessageView } from "../projection"
 import type { GuardrailDecisionView } from "../decision-grades"
-import { transcriptRows } from "./transcript-rows"
+import { folioOrdinals, folioPositionKnown, transcriptRows } from "./transcript-rows"
 
 const decision = (requestID: string, created: number, reply: GuardrailDecisionView["reply"] = "reject"): GuardrailDecisionView => ({ sessionID: "ses_a", requestID, created, reply })
 const user = (id: string, created: number): Extract<RemoteMessageView, { kind: "user" }> => ({ kind: "user", id, created, text: id, state: "consumed" })
@@ -65,4 +65,82 @@ test("settled rows start at the first resident chat message, so compacted histor
   }
   expect(decisions.map((item) => item.requestID)).toEqual(["covered", "retained"])
   expect(keys([{ ...completed, status: "running" }, user("retained", 10)], decisions)).toEqual(["compact", "retained", "guardrail:retained"])
+})
+
+const assistant = (id: string, created: number): Extract<RemoteMessageView, { kind: "assistant" }> => ({ kind: "assistant", id, created, completed: created + 1, parts: [{ kind: "text", ordinal: 0, text: id }] })
+const ordinalsOf = (messages: readonly RemoteMessageView[], complete = true, assigned = new Map<string, number>()) => Object.fromEntries(folioOrdinals(messages, complete, assigned))
+
+test("folio ordinals count user and assistant turns from the Session start in resident order", () => {
+  const messages: readonly RemoteMessageView[] = [user("u1", 1), assistant("a1", 2), { kind: "shell", id: "sh", shellID: "s", command: "ls", status: "completed", created: 3 }, user("u2", 4), assistant("a2", 5)]
+  expect(ordinalsOf(messages)).toEqual({ u1: 1, a1: 2, u2: 3, a2: 4 })
+})
+
+test("folio ordinals stay put across a rerender and when later turns append", () => {
+  const assigned = new Map<string, number>()
+  const first: readonly RemoteMessageView[] = [user("u1", 1), assistant("a1", 2)]
+  const before = ordinalsOf(first, true, assigned)
+  expect(ordinalsOf(first, true, assigned)).toEqual(before)
+  const appended = ordinalsOf([...first, user("u2", 3), assistant("a2", 4)], true, assigned)
+  expect(Object.fromEntries(Object.keys(before).map((id) => [id, appended[id]]))).toEqual(before)
+  expect(appended).toEqual({ u1: 1, a1: 2, u2: 3, a2: 4 })
+})
+
+test("folio ordinals are omitted while the Session-start position has never been reported", () => {
+  expect(ordinalsOf([user("u1", 1), assistant("a1", 2)], false)).toEqual({})
+})
+
+test("a complete window assigns ordinals and an incomplete or stale window keeps the surviving proven ones", () => {
+  const assigned = new Map<string, number>()
+  const messages: readonly RemoteMessageView[] = [user("u1", 1), assistant("a1", 2), user("u2", 3)]
+  expect(ordinalsOf(messages, true, assigned)).toEqual({ u1: 1, a1: 2, u2: 3 })
+  expect(ordinalsOf(messages, false, assigned)).toEqual({ u1: 1, a1: 2, u2: 3 })
+  expect(ordinalsOf(messages.slice(1), false, assigned)).toEqual({ a1: 2, u2: 3 })
+})
+
+test("an unproven turn stays unnumbered while the position is unknown and never takes a guessed number", () => {
+  const assigned = new Map<string, number>()
+  const known: readonly RemoteMessageView[] = [user("u1", 1), assistant("a1", 2)]
+  ordinalsOf(known, true, assigned)
+  const grown = [...known, user("u2", 3), assistant("a2", 4)]
+  expect(ordinalsOf(grown, false, assigned)).toEqual({ u1: 1, a1: 2 })
+  expect(ordinalsOf([user("x1", 5), assistant("x2", 6)], false, assigned)).toEqual({})
+  expect(ordinalsOf(grown, true, assigned)).toEqual({ u1: 1, a1: 2, u2: 3, a2: 4 })
+})
+
+test("returning to a complete window keeps every number it showed before", () => {
+  const assigned = new Map<string, number>()
+  const messages: readonly RemoteMessageView[] = [user("u1", 1), assistant("a1", 2), user("u2", 3)]
+  const first = ordinalsOf(messages, true, assigned)
+  ordinalsOf(messages, false, assigned)
+  expect(ordinalsOf(messages, true, assigned)).toEqual(first)
+})
+
+test("another Session's turns take no ordinal from a fresh issued map", () => {
+  const first = new Map<string, number>()
+  ordinalsOf([user("u1", 1), assistant("a1", 2)], true, first)
+  expect(ordinalsOf([user("u1", 1), assistant("a1", 2)], false, new Map())).toEqual({})
+  expect(first.size).toBe(2)
+})
+
+test("trimming rows neither renumbers the remaining entries nor the turns that append afterwards", () => {
+  const assigned = new Map<string, number>()
+  ordinalsOf([user("u1", 1), assistant("a1", 2), user("u2", 3), assistant("a2", 4)], true, assigned)
+  expect(ordinalsOf([user("u2", 3), assistant("a2", 4)], true, assigned)).toEqual({ u2: 3, a2: 4 })
+  expect(ordinalsOf([user("u2", 3), assistant("a2", 4), user("u3", 5)], true, assigned)).toEqual({ u2: 3, a2: 4, u3: 5 })
+})
+
+test("a queued prompt takes no ordinal until it is admitted, and never shifts earlier entries", () => {
+  const assigned = new Map<string, number>()
+  const base: readonly RemoteMessageView[] = [user("u1", 1), assistant("a1", 2)]
+  const queued: RemoteMessageView = { ...user("u2", 3), state: "pending" }
+  expect(ordinalsOf([...base, queued], true, assigned)).toEqual({ u1: 1, a1: 2 })
+  expect(ordinalsOf([...base, { ...queued, state: "promoted" }], true, assigned)).toEqual({ u1: 1, a1: 2, u2: 3 })
+})
+
+test("the Session-start position is reported only for a settled, complete, uncompacted window", () => {
+  expect(folioPositionKnown({ status: "idle" }, false)).toBe(true)
+  expect(folioPositionKnown({ status: "idle", before: "cursor" }, false)).toBe(false)
+  expect(folioPositionKnown({ status: "idle" }, true)).toBe(false)
+  for (const status of ["loading", "error", "stale"]) expect(folioPositionKnown({ status }, false)).toBe(false)
+  expect(folioPositionKnown(undefined, false)).toBe(false)
 })

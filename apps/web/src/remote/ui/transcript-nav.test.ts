@@ -35,3 +35,8 @@ test("estimates rows so the compaction divider keeps its reserved height before 
   expect(estimateRowHeight({ kind: "compaction", id: "cmp_live", jobID: "cmp_live", status: "running", created: 1 })).toBeGreaterThanOrEqual(196)
   expect(estimateRowHeight(undefined)).toBeGreaterThan(0)
 })
+
+test("reserves a folio head's height for unmeasured user and assistant rows", () => {
+  expect(estimateRowHeight({ kind: "user", id: "u", text: "", state: "consumed", created: 1 })).toBeGreaterThanOrEqual(64)
+  expect(estimateRowHeight({ kind: "assistant", id: "a", parts: [], created: 1 })).toBeGreaterThanOrEqual(176)
+})
