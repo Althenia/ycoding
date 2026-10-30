@@ -13,6 +13,25 @@ test("enabled Dots configuration requires an explicit nonempty profile", () => {
   expect(decode({}).dots).toBeUndefined()
 })
 
+test("the Dots display name accepts only bounded printable single-line text", () => {
+  const decode = Schema.decodeUnknownSync(Config.Info)
+  for (const name of ["a", "Desk Mac (2)", "x".repeat(100), "~!@#$%^&*()_+{}|:<>?"])
+    expect(decode({ dots: { enabled: true, profile: "fixture", name } }, { onExcessProperty: "error" }).dots).toEqual({ enabled: true, profile: "fixture", name })
+  for (const name of ["", " ", " padded", "padded ", "x".repeat(101), "line\nbreak", "tab\tname", "caf\u00e9", "nul\u0000", "del\u007f", 1])
+    expect(() => decode({ dots: { enabled: true, profile: "fixture", name } }, { onExcessProperty: "error" })).toThrow()
+})
+
+test("only global configuration supplies the Dots display name and it never changes the access selection", () => {
+  const document = (name: string | undefined, scope?: "global") => new Config.Document({ type: "document", ...(scope ? { scope } : {}),
+    info: new Config.Info({ dots: { enabled: true, profile: "pinned", ...(name === undefined ? {} : { name }) } }) })
+  expect(Config.dotsName([document("Project desk")])).toBeUndefined()
+  expect(Config.dotsName([document("Global desk", "global"), document("Project desk")])).toBe("Global desk")
+  expect(Config.dotsName([document("Older desk", "global"), document("Newer desk", "global")])).toBe("Newer desk")
+  expect(Config.dotsName([document("Older desk", "global"), document(undefined, "global")])).toBeUndefined()
+  expect(Config.dots([document("Global desk", "global")])).toEqual({ enabled: true, profile: "pinned" })
+  expect(Config.dots([document("Global desk", "global")])).toEqual(Config.dots([document("Renamed desk", "global")]))
+})
+
 test("configured access requires the exact available ChatGPT profile, independent of refresh generation", () => {
   const entries = [new Config.Document({ type: "document", scope: "global", info: new Config.Info({ dots: { enabled: true, profile: "pinned" } }) })]
   const credential = new Credential.Info({ id: Credential.ID.create(), integrationID: Integration.ID.make("openai"), label: "pinned", value: {

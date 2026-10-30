@@ -23,6 +23,8 @@ import { Permission } from "../permission"
 import { PluginSupervisor } from "../plugin/supervisor"
 import { Question } from "../question"
 import { createCcaAuthorization, type CcaAuthorization } from "../cca/authorization"
+import type { CcaLibraryFactory, CcaLibraryProcess, CcaLibraryScope } from "../cca/library"
+import { AccountConnectors } from "../account-connectors"
 import type { CcaScopeFor } from "../cca/executor"
 import { CcaTranscript } from "../cca/transcript"
 import { Config } from "../config"
@@ -111,6 +113,8 @@ export interface ExecutorScope {
   readonly sessionID: string
   readonly authorization: CcaAuthorization
   readonly transcript: CcaTranscript.Recorder
+  readonly library?: CcaLibraryFactory
+  readonly librarySignal?: AbortSignal
   readonly close: () => Promise<void>
 }
 export interface Attribution {
@@ -135,6 +139,7 @@ export interface Host {
   readonly configuration: () => Promise<Configuration>
   readonly credential: (profile: string, rejectedAccessToken?: string) => Promise<RemoteControlCredential.Resolved | undefined>
   readonly subscribeConfiguration: (listener: () => void) => () => void
+  readonly name: () => Promise<string | undefined>
   readonly attach: (pins: Pins) => Promise<Connection>
   readonly threadScope: (input: { readonly environmentID: string; readonly threadID: string; readonly cwd?: string }) => Promise<ThreadScope>
   readonly unattributedScope: (input: { readonly environmentID: string }) => Promise<ThreadScope>
@@ -185,6 +190,7 @@ const eventSessionID = (data: Record<string, unknown>) => {
 }
 
 export interface Options {
+  readonly library?: (input: CcaLibraryScope, session: Session.Info) => Effect.Effect<CcaLibraryFactory, unknown>
   readonly access: DotsAccess.Interface
   readonly config: { readonly snapshot: () => Effect.Effect<Config.GlobalDocuments>; readonly subscribe: (listener: () => void) => () => void }
   readonly credentials: Pick<Credential.Interface, "list">
@@ -209,19 +215,25 @@ export interface Options {
 
 export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
   const select = (documents: Config.GlobalDocuments) => documents.diagnostics.length ? { enabled: false as const } : Config.dots(documents.entries)
-  let selected = select(yield* options.config.snapshot())
+  const label = (documents: Config.GlobalDocuments) => documents.diagnostics.length ? undefined : Config.dotsName(documents.entries)
+  const initial = yield* options.config.snapshot()
+  let selected = select(initial)
+  let displayName = label(initial)
   let available = true
   let previous: Configuration = { enabled: false }
   const connections = new Set<Connection>()
   const observers = new Set<EventRuntime.Subscriber>()
   const listeners = new Set<() => void>()
   const transportStops = new Set<() => void>()
-  const retire = () => { for (const connection of connections) connection.retire(); connections.clear() }
+  const libraryControllers = new Set<AbortController>()
+  const retire = () => { for (const connection of connections) connection.retire(); connections.clear(); for (const controller of libraryControllers) controller.abort(); libraryControllers.clear() }
   const notify = () => { for (const listener of listeners) listener() }
   yield* Effect.acquireRelease(Effect.sync(() => options.access.subscribe(() => { retire(); notify() })),
     (unsubscribe) => Effect.sync(() => { unsubscribe(); for (const stop of transportStops) stop() }))
   yield* Effect.acquireRelease(Effect.sync(() => options.config.subscribe(() => {
-    const next = select(Effect.runSync(options.config.snapshot()))
+    const documents = Effect.runSync(options.config.snapshot())
+    displayName = label(documents)
+    const next = select(documents)
     if (isDeepStrictEqual(selected, next)) return
     selected = next
     retire()
@@ -288,6 +300,10 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
     readonly authorization: CcaAuthorization
     readonly transcript: CcaTranscript.Recorder
     readonly pinned: () => Effect.Effect<boolean>
+    readonly libraryController: AbortController
+    readonly libraryProcesses: Set<CcaLibraryProcess>
+    readonly library?: CcaLibraryFactory
+    libraryFailed: boolean
     refs: number
     closing?: Promise<void>
   }
@@ -304,7 +320,14 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
   }
   const closeEntry = (entry: ScopeEntry) => {
     if (entries.get(entry.key) === entry) entries.delete(entry.key)
-    return (entry.closing ??= entry.transcript.flush().then(() => entry.authorization.close()))
+    return (entry.closing ??= (async () => {
+      const processes = [...entry.libraryProcesses]
+      entry.libraryController.abort()
+      libraryControllers.delete(entry.libraryController)
+      await Promise.allSettled(processes.map((process) => process.close()))
+      await entry.transcript.flush().finally(() => entry.authorization.close())
+      if (entry.libraryFailed) throw unavailable()
+    })())
   }
   const release = (entry: ScopeEntry) => {
     entry.refs--
@@ -345,7 +368,7 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
     readonly projectID?: string
   }) {
     const directory = yield* openedDirectory(input.directory)
-    const session = yield* options.sessions.create({ location: { directory }, title: input.title, native: { validate: input.pinned } })
+    const session = yield* options.sessions.create({ location: { directory }, title: input.title, origin: "dots-executor", native: { validate: input.pinned } })
       .pipe(Effect.mapError(unavailable))
     yield* options.kv.set(input.key, { sessionID: session.id, ...(input.projectID === undefined ? {} : { projectID: input.projectID }) })
     return session
@@ -362,7 +385,15 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
     yield* options.sessions.rename({ sessionID: session.id, title: `${session.title} · ${command.slice(0, 60)}` })
   })
   const makeEntry = Effect.fnUntraced(function* (key: string, kind: ScopeEntry["kind"], session: Session.Info, pinned: () => Effect.Effect<boolean>) {
+    const principal = yield* configuration()
+    if (!principal.enabled || !(yield* pinned())) return yield* unavailable()
     const services = yield* options.authorization(session).pipe(Effect.mapError(unavailable))
+    const libraryController = new AbortController()
+    const libraryProcesses = new Set<CcaLibraryProcess>()
+    libraryControllers.add(libraryController)
+    libraryController.signal.addEventListener("abort", () => {
+      for (const process of libraryProcesses) void process.close().catch(() => {})
+    }, { once: true })
     const transcript = CcaTranscript.make({
       sessionID: session.id,
       directory: () => entry.session.location.directory,
@@ -371,7 +402,37 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
       ...(kind === "thread" ? { command: (command: string) => retitle(entry, command) } : {}),
     })
     const entry: ScopeEntry = {
-      key, kind, session, pinned, refs: 0,
+      key, kind, session, pinned, refs: 0, libraryController, libraryProcesses, libraryFailed: false,
+      ...(options.library === undefined ? {} : { library: {
+        open: async (process) => {
+          const current = () => Effect.runPromise(Effect.gen(function* () {
+            if (libraryController.signal.aborted || !(yield* pinned())) return yield* unavailable()
+            yield* accessFor(entry.session.id)
+          }))
+          await current()
+          const factory = await Effect.runPromise(options.library!({
+            sessionID: entry.session.id, principal: { profile: principal.profile, credentialID: principal.credentialID, accountID: principal.accountID, accountGeneration: principal.accountGeneration, accessRevision: principal.accessRevision }, roots: kind === "unattributed" ? [options.home] : collapse([entry.session.location.directory, options.home]),
+            current, authorize: entry.authorization.authorize,
+          }, entry.session))
+          await current()
+          const backend = await factory.open(process)
+          try { await current() } catch (error) { await backend.close(); throw error }
+          let closing: Promise<void> | undefined
+          const wrapped: CcaLibraryProcess = {
+            tools: backend.tools,
+            check: async () => { if (closing) throw unavailable(); await current(); await backend.check(); await current() },
+            call: async (name, args) => {
+              await wrapped.check()
+              const result = await backend.call(name, args)
+              await wrapped.check()
+              return result
+            },
+            close: () => (closing ??= backend.close().catch(() => { entry.libraryFailed = true; throw unavailable() }).finally(() => { libraryProcesses.delete(wrapped) })),
+          }
+          libraryProcesses.add(wrapped)
+          return wrapped
+        },
+      } }),
       authorization: createCcaAuthorization({
         sessionID: session.id, permission: services.permission, guardrail: services.guardrail, events: options.events, defer: true,
         reviewDirectories: (sessionID, itemID) => options.reviews.list(Session.ID.make(sessionID)).pipe(
@@ -399,6 +460,7 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
       },
       authorization: entry.authorization,
       transcript: entry.transcript,
+      ...(entry.library === undefined ? {} : { library: entry.library, librarySignal: entry.libraryController.signal }),
       close: () => (released ??= release(entry)),
     }
   }
@@ -465,6 +527,7 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
       return credential
     })),
     subscribeConfiguration: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
+    name: () => Promise.resolve(displayName),
     attach: (input) => Effect.runPromise(Effect.gen(function* () {
       const pins = { ...input }
       const current = yield* configuration()
@@ -943,6 +1006,8 @@ export const live = Effect.gen(function* () {
   const reviews = yield* SessionReview.Service
   const orchestration = yield* SessionOrchestration.Service
   return yield* make({ access, config, credentials, db, kv, reviews, store, sessions, events, execution, projects,
+    library: (scope, session) => AccountConnectors.Service.use((connectors) => connectors.libraryFactory(scope)).pipe(
+      Effect.provide(locations.get(session.location, [AccountConnectors.node]))),
     home: os.homedir(), data: global.data, projectRoot: (directory) => Project.root(fsutil, directory),
     selectedModel: (session) => Catalog.Service.use((catalog) => SessionRunnerModel.selection(session, catalog.model)).pipe(
       Effect.map((selection) => selection?.ref), Effect.provide(locations.get(session.location, [LocationServiceMap.full]))),

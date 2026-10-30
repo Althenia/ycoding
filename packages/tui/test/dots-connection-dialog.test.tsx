@@ -15,7 +15,7 @@ import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
 for (const mode of ["dark", "light"] as const) for (const width of [60, 100]) {
   test(`${mode} ${width}-column Dots dialog separates permission, connection, and pending state`, async () => {
-    const initial: Dots.NativeStatus = { access: { enabled: true, revision: 4 }, configuration: { ready: true, profile: "fixture-profile" }, connection: { state: "connecting", hostname: "fixture-computer" } }
+    const initial: Dots.NativeStatus = { access: { enabled: true, revision: 4 }, configuration: { ready: true, profile: "fixture-profile" }, connection: { state: "connecting", hostname: "fixture-computer", name: "Native desk" }, computer: { state: "detached", name: "Executor desk" } }
     let current = initial
     let connection!: ReturnType<typeof createDotsConnection>
     let finish!: (value: Dots.NativeStatus) => void
@@ -39,6 +39,8 @@ for (const mode of ["dark", "light"] as const) for (const width of [60, 100]) {
     try {
       await app.waitForFrame((frame) => frame.includes("Connection: Connecting"))
       expect(app.captureCharFrame()).toContain("Access: On")
+      expect(app.captureCharFrame()).toContain("Name: Native desk")
+      expect(app.captureCharFrame()).toContain("Executor name: Executor desk")
       expect(app.captureCharFrame()).toContain("Disconnect")
       expect(app.captureCharFrame()).not.toContain("Connection: Connected")
       const pending = connection.toggle()

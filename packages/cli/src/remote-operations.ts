@@ -12,6 +12,7 @@ import { capturedChildSessionIDs, summarizeCapturedChanges } from "@ycoding-ai/c
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
 import {
   RemoteLimits,
+  readDotsComputerTarget,
   alertTitle,
   isRemoteLatencySample,
   isRemoteReviewItemID,
@@ -554,11 +555,12 @@ async function workspaceList(input: OperationInput): Promise<readonly RemoteWork
 
 async function sessionWorkspaces(local: LocalServer, sessions: readonly SessionInfo[], cache?: OperationCache): Promise<readonly RemoteWorkspaceInfo[]> {
   const projects = new Map((await local.projectList()).map((project) => [project.id, project]))
-  const directories = [...new Set(sessions.map((session) => resolve(session.location.directory)))]
+  const visible = sessions.filter((session) => session.origin === undefined)
+  const directories = [...new Set(visible.map((session) => resolve(session.location.directory)))]
   if (cache !== undefined) for (const [directory, entry] of cache.directories) if (entry.expiresAt <= cache.now()) cache.directories.delete(directory)
   const permitted = new Set((await Promise.all(directories.map(async (directory) => await cachedWorkspaceDirectory(directory, cache) ? directory : undefined)))
     .filter((directory): directory is string => directory !== undefined))
-  return [...new Map(sessions.filter((session) => permitted.has(resolve(session.location.directory))).map((session) => {
+  return [...new Map(visible.filter((session) => permitted.has(resolve(session.location.directory))).map((session) => {
     const projectID = session.projectID
     const directory = resolve(session.location.directory)
     const id = workspaceKey(projectID, directory, session.location.workspaceID)
@@ -803,7 +805,7 @@ async function run(input: OperationInput) {
   const validated = validate(request)
   if (validated.kind === "dots.get") return { data: await input.local.dotsGet() }
   if (validated.kind === "dots.set") return { data: await input.local.dotsSet(validated.input) }
-  if (validated.kind === "dots.attach") return { data: await input.local.dotsAttach() }
+  if (validated.kind === "dots.attach") return { data: await (validated.expectedTarget === undefined ? input.local.dotsAttach() : input.local.dotsAttach(validated.expectedTarget)) }
   if (validated.kind === "workspace.list") return { data: validated.sessionsOnly
     ? await sessionWorkspaces(input.local, input.sessions.snapshot(), input.cache)
     : await workspaceList(input) }
@@ -1147,7 +1149,7 @@ type Reply = "once" | "always" | "reject"
 type Validated =
   | { readonly kind: "dots.get" }
   | { readonly kind: "dots.set"; readonly input: Dots.AccessSet }
-  | { readonly kind: "dots.attach" }
+  | { readonly kind: "dots.attach"; readonly expectedTarget?: Dots.ComputerTarget }
   | { readonly kind: "latency.append"; readonly samples: readonly RemoteLatencySample[] }
   | { readonly kind: "latency.list"; readonly input: { readonly limit?: number; readonly before?: string } }
   | { readonly kind: "keepAwake.get" }
@@ -1375,7 +1377,9 @@ function validate(request: RemoteRequest): Validated {
     }
     if (request.operation === "dots.attach") {
       if (fields.replaceOthers !== true) throw new OperationError("invalid_message", "Attaching this computer requires replaceOthers: true")
-      return { kind: "dots.attach" }
+      const expectedTarget = fields.expectedTarget === undefined ? undefined : readDotsComputerTarget(fields.expectedTarget)
+      if (expectedTarget === null) throw new OperationError("invalid_message", "The Dots target receipt is invalid. Refresh and confirm the current computer.")
+      return { kind: "dots.attach", ...(expectedTarget === undefined ? {} : { expectedTarget }) }
     }
     const enabled = requireBoolean(fields.enabled, "enabled")
     if (typeof fields.expectedRevision !== "number" || !Number.isSafeInteger(fields.expectedRevision) || fields.expectedRevision < 0)
@@ -2023,6 +2027,7 @@ export type ListQuery = {
   readonly workspace?: string
   readonly status?: "waiting" | "running" | "idle"
   readonly parentID?: string | null
+  readonly background?: "include" | "exclude"
   readonly limit: number
   readonly anchor?: Cursor
   readonly around?: string
@@ -2045,6 +2050,7 @@ export function parseListQuery(fields: Readonly<Record<string, unknown>>): ListQ
     workspace: fields.workspace === undefined ? undefined : requireString(fields.workspace, "workspace", 128),
     status: fields.status === undefined ? undefined : literal(fields.status, ["waiting", "running", "idle"], "status"),
     parentID: fields.parentID === undefined ? undefined : fields.parentID === null ? null : sessionID(fields.parentID, "parentID"),
+    background: fields.background === undefined ? undefined : literal(fields.background, ["include", "exclude"], "background"),
     limit: fields.limit === undefined ? 50 : optionalInteger(fields.limit, "limit", 1, RemoteLimits.maxSessionListPage)!,
     anchor,
     around: fields.around === undefined ? undefined : sessionID(fields.around, "around"),
@@ -2066,6 +2072,7 @@ export function listPage(sessions: readonly SessionInfo[], query: ListQuery, run
     waiting: isWaiting(session), running: !isWaiting(session) && session.parentID === undefined && runningRoots.has(session.id) })
   const needle = search?.toLowerCase()
   const matching = sessions
+    .filter((session) => query.background !== "exclude" || session.origin === undefined)
     .filter((session) => query.workspace === undefined || workspaceKey(session.projectID, resolve(session.location.directory), session.location.workspaceID) === query.workspace)
     .filter((session) => needle === undefined || (query.searchFields === "summary"
       ? [session.title, session.agent ?? "", ...(session.model === undefined ? [] : [`${session.model.providerID}/${session.model.id}${session.model.variant === undefined ? "" : `#${session.model.variant}`}${session.model.profile === undefined ? "" : ` profile ${session.model.profile}`}`])]
@@ -2171,7 +2178,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "machine.telemetry.consent.get": [],
   "machine.telemetry.consent.set": ["enabled", "noticeVersion"],
   "workspace.list": ["sessionsOnly"],
-  "session.list": ["limit", "order", "search", "searchFields", "parentID", "cursor", "workspace", "status", "around", "before"],
+  "session.list": ["limit", "order", "search", "searchFields", "parentID", "background", "cursor", "workspace", "status", "around", "before"],
   "session.active": [],
   "usage.providers": ["refresh"],
   "usage.summary": [],
@@ -2201,7 +2208,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.command": ["id", "command", "arguments", "files", "agents", "delivery"],
   "dots.get": [],
   "dots.set": ["enabled", "expectedRevision"],
-  "dots.attach": ["replaceOthers"],
+  "dots.attach": ["replaceOthers", "expectedTarget"],
   "session.attachment.upload": ["uploadID", "index", "last", "data"],
   "session.skill": ["id", "skill", "resume"],
   "session.get": [],

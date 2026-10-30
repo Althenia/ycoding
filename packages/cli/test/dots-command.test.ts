@@ -46,6 +46,16 @@ test("dots attach confirms only explicit yes answers", () => {
   for (const answer of [undefined, "", "n", "no", "yess", "sure"]) expect(dotsAttachConfirmed(answer)).toBe(false)
 })
 
+test("dots attach displays the observed name and forwards its exact target receipt", async () => {
+  const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+  await withServer(status({ state: "detached", name: "Executor desk", target }), status({ state: "attached", name: "Executor desk", target }), async (url, seen) => {
+    const result = await cli(["attach", "--yes", "--server", url])
+    expect(result.exit).toBe(0)
+    expect(result.stdout).toContain("Executor desk")
+    expect(JSON.parse(seen[1]!.body)).toEqual({ replaceOthers: true, expectedTarget: target })
+  })
+}, 30000)
+
 test("dots attach posts explicit replacement consent with --yes and prints the re-read state", async () => {
   await withServer(status({ state: "detached" }), status({ state: "attached" }), async (url, seen) => {
     const result = await cli(["attach", "--yes", "--server", url])

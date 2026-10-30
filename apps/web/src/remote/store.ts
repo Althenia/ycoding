@@ -123,6 +123,7 @@ export type SessionInfoView = {
   readonly activeAt?: number
   readonly archived: boolean
   readonly pinnedAt?: number
+  readonly origin?: "dots-executor"
   /** Absent when the connection cannot report active sessions. */
   readonly running?: boolean
   readonly attention?: boolean
@@ -2124,7 +2125,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (container.state.sessionQuery.trim() !== "") return rows
     const root = openRootInfo
     const workspace = container.state.sessionGroups.find((group) => group.id === container.state.selectedWorkspaceID)
-    if (!root || !workspace || root.archived || root.projectID !== workspace.projectID || root.directory !== workspace.directory || root.workspaceID !== workspace.workspaceID || rows.some((row) => row.id === root.id)) return rows
+    if (!root || !workspace || root.archived || root.origin !== undefined || root.projectID !== workspace.projectID || root.directory !== workspace.directory || root.workspaceID !== workspace.workspaceID || rows.some((row) => row.id === root.id)) return rows
     return sortSessions([{ ...root, ...(status ? rowStatus(status, root.id) : {}) }, ...rows])
   }
 
@@ -2251,19 +2252,19 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       workspaceName: container.state.sessionGroups.find((group) => group.projectID === row.projectID && group.directory === row.directory && group.workspaceID === row.workspaceID)?.name
         ?? row.directory?.split("/").filter(Boolean).at(-1) ?? row.projectID ?? "Workspace" }))
     const waiting = container.state.sessionStatus !== undefined && !hasWaitingSession(container.state.sessionStatus) ? undefined
-      : await owner.request("session.list", { input: { limit: carouselLimit, order: "active", status: "waiting", parentID: null } })
+      : await owner.request("session.list", { input: { limit: carouselLimit, order: "active", status: "waiting", parentID: null, background: "exclude" } })
     if (!isCurrentConnection(owner) || revision !== carouselRevision) return
     const waitingUnavailable = waiting !== undefined && waiting.status !== "ok"
     if (waitingUnavailable) setState({ notice: describeOutcome(waiting, "Waiting Sessions") })
     const waitingRows = waiting?.status === "ok" ? rows(waiting.value, "waiting") : []
-    const current = waitingRows.length >= carouselLimit ? undefined : await owner.request("session.list", { input: { limit: carouselLimit, order: "active", status: "running", parentID: null } })
+    const current = waitingRows.length >= carouselLimit ? undefined : await owner.request("session.list", { input: { limit: carouselLimit, order: "active", status: "running", parentID: null, background: "exclude" } })
     if (!isCurrentConnection(owner) || revision !== carouselRevision) return
     if (current !== undefined && current.status !== "ok") {
       setState({ notice: describeOutcome(current, "Running Sessions"), carouselStatus: "error" })
       return
     }
     const running = sortSessions([...waitingRows, ...(current === undefined ? [] : rows(current.value, "running"))]).slice(0, carouselLimit)
-    const recent = running.length === carouselLimit ? undefined : await owner.request("session.list", { input: { limit: carouselLimit, order: "active", status: "idle", parentID: null } })
+    const recent = running.length === carouselLimit ? undefined : await owner.request("session.list", { input: { limit: carouselLimit, order: "active", status: "idle", parentID: null, background: "exclude" } })
     if (!isCurrentConnection(owner) || revision !== carouselRevision) return
     if (recent !== undefined && recent.status !== "ok") {
       setState({ notice: describeOutcome(recent, "Recent Sessions"), carouselSessions: withWorkspaceNames(running), carouselStatus: "error" })
@@ -2285,6 +2286,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       limit: sessionPageSize,
       order: "active",
       parentID: null,
+      background: "exclude",
       searchFields: "summary",
       ...(container.state.sessionQuery.trim() === "" ? {} : { search: container.state.sessionQuery.trim() }),
       ...(container.state.sessionFilter === "all" ? {} : { status: container.state.sessionFilter }),
@@ -4261,6 +4263,7 @@ export function readSessionInfo(value: unknown, options: { readonly running?: bo
     ...(typeof time.active === "number" && Number.isFinite(time.active) ? { activeAt: time.active } : {}),
     archived: typeof time.archived === "number",
     ...(typeof time.pinned === "number" ? { pinnedAt: time.pinned } : {}),
+    ...(record.origin === "dots-executor" ? { origin: record.origin } : {}),
     ...(options.running === undefined ? {} : { running: options.running }),
     ...(options.attention === undefined ? {} : { attention: options.attention }),
     ...(options.failed === undefined ? {} : { failed: options.failed }),

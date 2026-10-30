@@ -16,6 +16,74 @@ import { SessionHistoryPruning } from "../src/session/history-pruning"
 const idleComputer = { computer: async () => ({ state: "detached" as const }), attachComputer: async () => ({ state: "detached" as const }) }
 
 const it = testEffect(reviewLayer())
+
+for (const operation of ["status", "attach"] as const) for (const change of ["profile", "access", "owner"] as const)
+  it.live(`${operation} publication drops old details after ${change} changes during its transport read`, () => Effect.gen(function* () {
+    const f = yield* setup
+    let profile = "old-profile"
+    const access = DotsAccess.make({ db: f.db, kv: f.kv, configuration: () => Effect.succeed({ ready: true, profile }) })
+    yield* access.set({ enabled: true, expectedRevision: 0 })
+    const entered = yield* Deferred.make<void>()
+    const gate = yield* Deferred.make<void>()
+    const target = { dotID: "old-dot", threadID: "old-thread", environmentID: "old-env", revision: "a".repeat(64) }
+    const delayed = () => Effect.runPromise(Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(gate))))
+    const release = access.attachTransport({
+      status: async () => { if (operation === "status") await delayed(); return { state: "connected", hostname: "Old.local", name: "Old native" } },
+      computer: async () => ({ state: "attached", name: "Old executor", target }),
+      attachComputer: async () => { await delayed(); return { state: "attached", name: "Old executor", target } },
+    })
+    const pending = yield* (operation === "status" ? access.status() : access.attachComputer(target)).pipe(Effect.forkChild)
+    yield* Deferred.await(entered)
+    if (change === "profile") profile = "new-profile"
+    if (change === "access") yield* access.set({ enabled: false, expectedRevision: 1 })
+    let next: (() => void) | undefined
+    if (change === "owner") {
+      release()
+      next = access.attachTransport({ ...idleComputer, status: async () => ({ state: "connected", hostname: "New.local", name: "New native" }) })
+    }
+    yield* Deferred.succeed(gate, undefined)
+    const result = yield* Fiber.join(pending)
+    expect(result.connection.hostname).toBeUndefined()
+    expect(result.connection.name).toBeUndefined()
+    expect(result.computer?.name).toBeUndefined()
+    expect(result.computer?.target).toBeUndefined()
+    expect(result.computer?.state).not.toBe("attached")
+    if (change === "profile") expect(result.configuration.profile).toBe("new-profile")
+    release()
+    next?.()
+  }))
+
+it.live("status preserves separate names and exact target receipts through attachment", () => Effect.gen(function* () {
+  const f = yield* setup
+  yield* f.access.set({ enabled: true, expectedRevision: 0 })
+  const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+  let received: unknown
+  const release = f.access.attachTransport({
+    status: async () => ({ state: "connected", hostname: "box.local", name: "Native desk" }),
+    computer: async () => ({ state: "detached", name: "Executor desk", target }),
+    attachComputer: async (expected) => { received = expected; return { state: "attached", name: "Executor desk", target } },
+  })
+  const before = yield* f.access.status()
+  expect(before.connection).toEqual({ state: "connected", hostname: "box.local", name: "Native desk" })
+  expect(before.computer).toEqual({ state: "detached", name: "Executor desk", target })
+  expect((yield* f.access.attachComputer(target)).computer).toEqual({ state: "attached", name: "Executor desk", target })
+  expect(received).toEqual(target)
+  release()
+}))
+
+it.live("an unconfirmed attachment explains that the mutation must not be replayed", () => Effect.gen(function* () {
+  const f = yield* setup
+  yield* f.access.set({ enabled: true, expectedRevision: 0 })
+  let calls = 0
+  const release = f.access.attachTransport({
+    ...idleComputer,
+    status: async () => ({ state: "connected" }),
+    attachComputer: async () => { calls++; return { state: "unavailable", problem: "unconfirmed" } },
+  })
+  expect((yield* f.access.attachComputer()).computer?.message).toContain("Do not repeat")
+  expect(calls).toBe(1)
+  release()
+}))
 const setup = Effect.gen(function* () {
   const db = yield* Database.Service
   const kv = yield* KV.Service

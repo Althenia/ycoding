@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { chmod, mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { EventEmitter } from "node:events"
+import type { FSWatcher } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createCcaExecutor, type CcaAuthorizationInput } from "@ycoding-ai/core/cca/executor"
@@ -8,6 +10,7 @@ import type { CcaCapabilityFileSystem } from "../src/remote-control/cca-capabili
 import {
   ccaActivePluginVersion,
   createCcaCapabilityDiscoveryV2,
+  createNodeCcaCapabilityWatcher,
   nodeCcaCapabilityWatcher,
   parseCcaSkillFrontmatter,
   parseCcaSkillMetadata,
@@ -153,6 +156,9 @@ describe("capabilities/discoverV2 matches the official exec-server", () => {
       discoveryRoot: { id: "ycoding-dots-skills", path: CcaPolicy.toPathUri(root) },
     })])
     expect(result.warnings).toEqual([])
+    const instructions = await readFile(path.join(root, "ycoding-operator", "SKILL.md"), "utf8")
+    expect(instructions).toContain('{"env":{"CODEX_APPS_MCP_URL":"ycoding-library://process"}}')
+    expect(instructions).toContain("python3 <helper-path> < /approved/library-upload.json")
   })
 
   test("Dots skill discovery watches its root and preserves sandbox denials", async () => {
@@ -376,6 +382,37 @@ describe("watched discovery state", () => {
     })
   }
   const describeDemo = (result: { skills: readonly { name: string; description: string }[] }) => result.skills.map((skill) => `${skill.name}:${skill.description}`)
+
+  test("native watcher failure and rearm health invalidate cached discoveries", async () => {
+    for (const rearmFails of [true, false]) {
+      const f = await demoFixture()
+      const handles: Array<EventEmitter & { close: () => void }> = []
+      let fail = false
+      const watcher = createNodeCcaCapabilityWatcher(() => {
+        if (fail) throw new Error("synthetic watcher unavailable")
+        const handle = Object.assign(new EventEmitter(), { close: () => {} })
+        handles.push(handle)
+        return handle as FSWatcher
+      })
+      const registrations: ReturnType<CcaCapabilityWatcher>[] = []
+      const discover = discovery(f, { watcher: (paths, onChange) => {
+        const subscription = watcher(paths, onChange)
+        registrations.push(subscription)
+        return subscription
+      }, throttleMs: 0 })
+      const cwd = CcaPolicy.toPathUri(f.tree.project)
+      const original = await discover.discover({ cwd }, ctx)
+      expect(describeDemo(original)).toEqual(["demo:original"])
+      expect(registrations[0].registered).toBe(true)
+      await write(f.tree.root, "codex/skills/demo/SKILL.md", "---\nname: demo\ndescription: missed edit\n---\n")
+      fail = rearmFails
+      handles[0].emit("error", new Error("synthetic watch loss"))
+      expect(registrations[0].registered).toBe(!rearmFails)
+      expect(describeDemo(await discover.discover({ cwd }, ctx))).toEqual(["demo:missed edit"])
+      await discover.close()
+      await discover.close()
+    }
+  })
 
   test("responses are cached per sandbox context until a watch event invalidates them", async () => {
     const f = await demoFixture()

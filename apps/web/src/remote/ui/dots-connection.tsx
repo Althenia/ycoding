@@ -7,6 +7,7 @@ import { describeOutcome } from "../outcome"
 import { remoteKeys } from "../queries"
 import { createRemoteQuery } from "../query"
 import { dotsConnectionView } from "../view-model"
+import type { RemoteDotsComputerTarget } from "@ycoding-ai/remote"
 import "./dots-connection.css"
 
 export function DotsConnection(props: { readonly returnFocus: HTMLElement; readonly onClose: () => void }) {
@@ -28,6 +29,7 @@ export function DotsConnection(props: { readonly returnFocus: HTMLElement; reado
     }
   })
   const [confirmingAttach, setConfirmingAttach] = createSignal(false)
+  let attachTarget: RemoteDotsComputerTarget | undefined
   createEffect(() => {
     if (!view().canAttach) setConfirmingAttach(false)
   })
@@ -75,7 +77,7 @@ export function DotsConnection(props: { readonly returnFocus: HTMLElement; reado
   }
   const attach = () => {
     setConfirmingAttach(false)
-    if (view().canAttach) run((client) => client.attach(), "Dots computer")
+    if (view().canAttach) run((client) => client.attach(attachTarget), "Dots computer")
   }
   return <Portal><Modal label="Dots connection" class="overlay--dialog overlay--dots" returnFocus={props.returnFocus} onDismiss={() => setVisible(false)} onClose={props.onClose}>
     <div class="stack dots-connection" aria-busy={mutation()?.pending === true}>
@@ -83,6 +85,8 @@ export function DotsConnection(props: { readonly returnFocus: HTMLElement; reado
       <dl class="stack dots-connection__facts">
         <For each={[
           { label: "Computer", value: view().computer },
+          ...(view().name ? [{ label: "Name", value: view().name }] : []),
+          ...(view().executor?.name ? [{ label: "Executor name", value: view().executor!.name }] : []),
           { label: "Profile", value: view().profile },
           { label: "Configuration", value: view().configuration, message: view().configurationMessage },
           { label: "Access", value: view().access },
@@ -97,7 +101,7 @@ export function DotsConnection(props: { readonly returnFocus: HTMLElement; reado
         <button type="button" class="button button--secondary" disabled={!scope() || query().isFetching || mutation()?.pending} onClick={refresh}>Refresh</button>
       </div>
       <Show when={view().executor?.label === "Not attached"}>
-        <Show when={confirmingAttach()} fallback={<div><button type="button" class="button button--secondary" disabled={!view().canAttach} onClick={() => setConfirmingAttach(true)}>{view().attachAction}</button></div>}>
+        <Show when={confirmingAttach()} fallback={<div><button type="button" class="button button--secondary" disabled={!view().canAttach} onClick={() => { attachTarget = query().data?.computer?.target; setConfirmingAttach(true) }}>{view().attachAction}</button></div>}>
           <div class="stack" role="group" aria-label="Confirm computer change">
             <p class="field__hint">{view().attachConfirmation}</p>
             <div class="dots-connection__actions">

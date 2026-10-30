@@ -1404,7 +1404,7 @@ function sameFile(left: string, right: string) {
   }
 }
 
-export const nodeCcaCapabilityWatcher: CcaCapabilityWatcher = (paths, onChange) => {
+export const createNodeCcaCapabilityWatcher = (watchFile: typeof watch): CcaCapabilityWatcher => (paths, onChange) => {
   const handles = new Map<string, FSWatcher>()
   let registered = true
   let closed = false
@@ -1421,7 +1421,7 @@ export const nodeCcaCapabilityWatcher: CcaCapabilityWatcher = (paths, onChange) 
     }
     const direct = actual === requested.path || sameFile(actual, requested.path)
     try {
-      const handle = watch(actual, { recursive: direct && requested.recursive, persistent: false }, (_event, filename) => {
+      const handle = watchFile(actual, { recursive: direct && requested.recursive, persistent: false }, (_event, filename) => {
         if (closed) return
         const moved = nearestExisting(requested.path) !== actual
         if (direct) onChange([filename === null ? requested.path : path.join(requested.path, filename)])
@@ -1429,7 +1429,10 @@ export const nodeCcaCapabilityWatcher: CcaCapabilityWatcher = (paths, onChange) 
         if (moved) arm(requested)
       })
       handle.on("error", () => {
-        if (!closed) arm(requested)
+        if (!closed) {
+          onChange([requested.path])
+          arm(requested)
+        }
       })
       handles.set(key, handle)
     } catch {
@@ -1438,7 +1441,7 @@ export const nodeCcaCapabilityWatcher: CcaCapabilityWatcher = (paths, onChange) 
   }
   for (const requested of unique) arm(requested)
   return {
-    registered,
+    get registered() { return registered && !closed },
     close: () => {
       closed = true
       for (const handle of handles.values()) handle.close()
@@ -1446,3 +1449,5 @@ export const nodeCcaCapabilityWatcher: CcaCapabilityWatcher = (paths, onChange) 
     },
   }
 }
+
+export const nodeCcaCapabilityWatcher = createNodeCcaCapabilityWatcher(watch)

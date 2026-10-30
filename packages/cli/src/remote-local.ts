@@ -192,7 +192,7 @@ export type LocalServer = {
   readonly command: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly command: string; readonly arguments?: string; readonly files?: LocalPrompt["files"]; readonly agents?: LocalPrompt["agents"]; readonly delivery?: LocalPrompt["delivery"] }) => Promise<unknown>
   readonly dotsGet: () => Promise<Dots.NativeStatus>
   readonly dotsSet: (input: Dots.AccessSet) => Promise<Dots.NativeStatus>
-  readonly dotsAttach: () => Promise<Dots.NativeStatus>
+  readonly dotsAttach: (expectedTarget?: Dots.ComputerTarget) => Promise<Dots.NativeStatus>
   readonly skill: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly skill: string; readonly resume?: boolean }) => Promise<void>
   readonly interrupt: (sessionID: string, location: LocalLocation) => Promise<void>
   readonly deleteSession: (sessionID: string, location: LocalLocation) => Promise<void>
@@ -440,7 +440,7 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     command: (sessionID, location, input) => call(() => client.session.command({ sessionID, ...input } as Parameters<YCodingClient["session"]["command"]>[0], request(location, timeoutMs))),
     dotsGet: () => call(() => client.dots.get({ signal: AbortSignal.timeout(timeoutMs) })),
     dotsSet: (input) => call(() => client.dots.set(input, { signal: AbortSignal.timeout(timeoutMs) })),
-    dotsAttach: () => call(() => client.dots.attach({ replaceOthers: true }, { signal: AbortSignal.timeout(timeoutMs) })),
+    dotsAttach: (expectedTarget) => call(() => client.dots.attach({ replaceOthers: true, ...(expectedTarget === undefined ? {} : { expectedTarget }) }, { signal: AbortSignal.timeout(timeoutMs) })),
     skill: (sessionID, location, input) => call(async () => {
       await client.session.skill({ sessionID, ...input }, request(location, timeoutMs))
     }),

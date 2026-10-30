@@ -21,13 +21,13 @@ async function ask() {
 
 export default Runtime.handler(DotsCommand.commands.attach, Effect.fn("cli.dots.attach")(function* (input) {
   const connection = yield* ServerConnection.resolve({ server: Option.getOrUndefined(input.server), mismatch: "ignore" })
-  const request = (method: "GET" | "POST") => Effect.tryPromise(async () => {
+  const request = (method: "GET" | "POST", expectedTarget?: Dots.ComputerTarget) => Effect.tryPromise(async () => {
     const headers = new Headers(Service.headers(connection.endpoint))
     if (method === "POST") headers.set("content-type", "application/json")
     const response = await fetch(new URL(method === "GET" ? "/api/dots" : "/api/dots/computer", connection.endpoint.url), {
       method,
       headers,
-      ...(method === "POST" ? { body: JSON.stringify({ replaceOthers: true }) } : {}),
+      ...(method === "POST" ? { body: JSON.stringify({ replaceOthers: true, ...(expectedTarget === undefined ? {} : { expectedTarget }) }) } : {}),
     })
     const text = await response.text()
     if (!response.ok) throw new Error(`Dots request failed (${response.status}): ${text}`)
@@ -43,7 +43,7 @@ export default Runtime.handler(DotsCommand.commands.attach, Effect.fn("cli.dots.
     if (answer === undefined) return yield* Effect.fail(new Error("Confirmation requires an interactive terminal; rerun with --yes"))
     if (!dotsAttachConfirmed(answer)) return yield* Effect.fail(new Error("Attach cancelled"))
   }
-  const after = yield* request("POST")
+  const after = yield* request("POST", current.computer.target)
   process.stdout.write(`${dotsComputerLine(after)}\n`)
   if (after.computer?.state !== "attached") return yield* Effect.fail(new Error("This computer is not attached to your Dot"))
 }, Effect.catch((error) => Effect.sync(() => {

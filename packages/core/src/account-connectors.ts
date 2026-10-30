@@ -1,6 +1,7 @@
 export * as AccountConnectors from "./account-connectors"
 
 import type { FetchLike } from "@modelcontextprotocol/client"
+import { Credential } from "@ycoding-ai/schema/credential"
 import { Context, Effect, Layer } from "effect"
 import { join } from "node:path"
 import { AccountConnectorTools } from "./account-connectors/tools"
@@ -13,6 +14,7 @@ import { makeLocationNode } from "./effect/app-node"
 import { Integration } from "./integration"
 import { Global } from "./global"
 import { Location } from "./location"
+import { LocationMutation } from "./location-mutation"
 import { MCPClient } from "./mcp/client"
 import { Permission } from "./permission"
 import { SessionGuardrail } from "./session/guardrail"
@@ -21,11 +23,14 @@ import { OpenAICodex } from "./plugin/provider/openai-codex"
 import { createClaudeCodeCredentialStore } from "./plugin/provider/anthropic-claude-code-account"
 import { createManagedClaudeCodeCredentialSource } from "./plugin/provider/anthropic-claude-code-login"
 import type { Tools } from "./tool/tools"
+import type { CcaLibraryFactory, CcaLibraryScope } from "./cca/library"
+import { createLibraryFactory } from "./account-connectors/library-reservations"
 
 export const endpoint = "https://chatgpt.com/backend-api/ps/mcp"
 const integrationID = Integration.ID.make("openai")
 
 export interface Interface {
+  readonly libraryFactory: (input: CcaLibraryScope) => Effect.Effect<CcaLibraryFactory, Error>
   readonly tools: (input: {
     readonly profile?: string
     readonly binding?: Pick<SessionEvent.ProfileBinding, "credentialID" | "accountGeneration">
@@ -46,6 +51,7 @@ export function make(options: {
   readonly directory: string
   readonly fetch?: FetchLike
   readonly attachments?: AttachmentStore.Interface
+  readonly local?: Pick<LocationMutation.Interface, "resolve">
 }): Interface & { readonly library: Interface["tools"] } {
   const select = Effect.fn("AccountConnectors.select")(function* (input: Parameters<Interface["tools"]>[0]) {
     const settings = yield* options.settings()
@@ -85,7 +91,115 @@ export function make(options: {
     return { settings, connection, credential: snapshot.credential, value: snapshot.value, accountID }
   })
 
+  const nativeRequest = (
+    current: () => Effect.Effect<{ readonly accountID: string; readonly value: { readonly access: string } }, Error>,
+  ) =>
+    Effect.fn("AccountConnectors.library.request")(function* (
+      route: string,
+      init?: RequestInit,
+      onDispatch?: () => void,
+    ) {
+      const method = init?.method ?? "GET"
+      if (
+        !(
+          method === "POST" &&
+          ["/files", "/files/library", "/files/library/mounted/materialize", "/files/process_upload_stream"].includes(
+            route,
+          )
+        ) &&
+        !(method === "POST" && /^\/estuary\/upload_content_bytes(?:\?[^#]*)?$/.test(route)) &&
+        !(
+          method === "GET" &&
+          (/^\/files\/library\/files\/[^/?#]+\/download_url$/.test(route) ||
+            /^\/(?:estuary\/content|files\/library\/content_download)(?:\?[^#]*)?$/.test(route))
+        )
+      )
+        return yield* Effect.fail(new Error("Unsupported ChatGPT Library transport request"))
+      const before = yield* current()
+      const response = yield* Effect.tryPromise({
+        try: (signal) => {
+          onDispatch?.()
+          return (options.fetch ?? fetch)(`https://chatgpt.com/backend-api${route}`, {
+            ...init,
+            method,
+            signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]),
+            redirect: "error",
+            headers: {
+              ...OpenAICodex.headers(),
+              authorization: `Bearer ${before.value.access}`,
+              "ChatGPT-Account-Id": before.accountID,
+              ...(init?.body instanceof FormData ? {} : { "content-type": "application/json" }),
+            },
+          })
+        },
+        catch: () =>
+          new Error(
+            method === "POST" && route !== "/files/library"
+              ? "ChatGPT Library request failed; do not retry an uncertain write"
+              : "ChatGPT Library read request failed",
+          ),
+      })
+      yield* current().pipe(
+        Effect.onError(() =>
+          Effect.promise(async () => {
+            await response.body?.cancel()
+          }),
+        ),
+        Effect.mapError((error) =>
+          method === "POST" && route !== "/files/library" ? AccountConnectorLibrary.uncertainWrite() : error,
+        ),
+      )
+      if (!response.ok) {
+        yield* Effect.promise(async () => {
+          await response.body?.cancel()
+        })
+        return yield* Effect.fail(new AccountConnectorLibrary.RequestRejected(response.status))
+      }
+      return response
+    })
+
   return {
+    libraryFactory: Effect.fn("AccountConnectors.libraryFactory")(function* (scope: CcaLibraryScope) {
+      const current = Effect.fn("AccountConnectors.privateLibrary.current")(function* () {
+        yield* Effect.tryPromise({ try: scope.current, catch: () => new Error("Native Library scope is retired") })
+        const settings = yield* options.settings()
+        if (
+          settings?.enabled !== true ||
+          (settings.profile !== undefined && settings.profile !== scope.principal.profile)
+        )
+          return yield* Effect.fail(new Error("Native Library is disabled or selects a different profile"))
+        const selected = yield* select({
+          profile: scope.principal.profile,
+          binding: {
+            credentialID: Credential.ID.make(scope.principal.credentialID),
+            accountGeneration: scope.principal.accountGeneration,
+          },
+        })
+        if (
+          !selected ||
+          selected.connection.id !== scope.principal.credentialID ||
+          selected.accountID !== scope.principal.accountID ||
+          selected.credential.accountGeneration !== scope.principal.accountGeneration
+        )
+          return yield* Effect.fail(new Error("Native Library principal changed"))
+        yield* Effect.tryPromise({ try: scope.current, catch: () => new Error("Native Library scope is retired") })
+        return selected
+      })
+      yield* current()
+      const attachments = options.attachments
+      if (!attachments) return yield* Effect.fail(new Error("Native Library managed attachments are unavailable"))
+      return createLibraryFactory({
+        attachments,
+        files: AccountConnectorLibrary.nativeFiles({
+          current,
+          request: nativeRequest(current),
+          fetch: (url, init) => (options.fetch ?? fetch)(url, init),
+        }),
+        check: () => Effect.runPromise(current()).then(() => undefined),
+        authorization: { authorize: scope.authorize },
+        identity: JSON.stringify([scope.sessionID, scope.principal]),
+      })
+    }),
     library: Effect.fn("AccountConnectors.library")(function* (input) {
       const selected = yield* select(input)
       if (!selected) return []
@@ -103,58 +217,11 @@ export function make(options: {
           return yield* Effect.fail(new Error("The ChatGPT Library profile changed; refresh the tool catalog"))
         return value
       })
-      const request = Effect.fn("AccountConnectors.library.request")(function* (route: string, init?: RequestInit) {
-        const method = init?.method ?? "GET"
-        if (
-          !(
-            method === "POST" &&
-            ["/files", "/files/library", "/files/library/mounted/materialize", "/files/process_upload_stream"].includes(
-              route,
-            )
-          ) &&
-          !(method === "POST" && /^\/estuary\/upload_content_bytes(?:\?[^#]*)?$/.test(route)) &&
-          !(
-            method === "GET" &&
-            (/^\/files\/library\/files\/[^/?#]+\/download_url$/.test(route) ||
-              /^\/(?:estuary\/content|files\/library\/content_download)(?:\?[^#]*)?$/.test(route))
-          )
-        )
-          return yield* Effect.fail(new Error("Unsupported ChatGPT Library transport request"))
-        const before = yield* current()
-        const response = yield* Effect.tryPromise({
-          try: (signal) =>
-            (options.fetch ?? fetch)(`https://chatgpt.com/backend-api${route}`, {
-              ...init,
-              method,
-              signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]),
-              redirect: "error",
-              headers: {
-                ...OpenAICodex.headers(),
-                authorization: `Bearer ${before.value.access}`,
-                "ChatGPT-Account-Id": before.accountID,
-                ...(init?.body instanceof FormData ? {} : { "content-type": "application/json" }),
-              },
-            }),
-          catch: () => new Error("ChatGPT Library request failed; do not retry an uncertain write"),
-        })
-        yield* current().pipe(
-          Effect.onError(() =>
-            Effect.promise(async () => {
-              await response.body?.cancel()
-            }),
-          ),
-        )
-        if (!response.ok) {
-          yield* Effect.promise(async () => {
-            await response.body?.cancel()
-          })
-          return yield* Effect.fail(new Error(`ChatGPT Library request rejected (HTTP ${response.status})`))
-        }
-        return response
-      })
+      const request = nativeRequest(current)
       return [
         AccountConnectorLibrary.make({
           attachments,
+          local: options.local,
           current,
           request,
           permission: options.permission,
@@ -286,9 +353,11 @@ const layer = Layer.effect(
     const permission = yield* Permission.Service
     const guardrail = yield* SessionGuardrail.Service
     const location = yield* Location.Service
+    const local = yield* LocationMutation.Service
     const attachments = yield* AttachmentStore.Service
     const chatgpt = make({
       attachments,
+      local,
       integration,
       permission,
       guardrail,
@@ -310,6 +379,7 @@ const layer = Layer.effect(
         config.entries().pipe(Effect.map((entries) => Config.latest(entries, "account_connectors")?.claude)),
     })
     return Service.of({
+      libraryFactory: chatgpt.libraryFactory,
       tools: (input) =>
         Effect.gen(function* () {
           const native = yield* isolate("chatgpt-library", chatgpt.library(input))
@@ -337,5 +407,13 @@ export const isolate = <A>(server: string, catalog: Effect.Effect<ReadonlyArray<
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Config.node, Integration.node, Permission.node, SessionGuardrail.node, Location.node, AttachmentStore.node],
+  deps: [
+    Config.node,
+    Integration.node,
+    Permission.node,
+    SessionGuardrail.node,
+    Location.node,
+    LocationMutation.node,
+    AttachmentStore.node,
+  ],
 })

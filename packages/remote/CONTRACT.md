@@ -618,7 +618,7 @@ grouping and Session-list filters are derived from backend metadata.
 | `workspace.list` | no | `session.list`, `project.list`, `project.directories` | `GET /api/session`, `GET /api/project`, `GET /api/project/:projectID/directories` | `sessionsOnly?` |
 | `workspace.catalog` | no | Location-scoped catalog reads | `GET /api/agent`, `/api/model`, `/api/model/default`, `/api/provider`, `/api/command`, `/api/skill`, `/api/reference`, `/api/mcp/resource` | `workspace` |
 | `workspace.file.find` | no | `fs.find` | `GET /api/fs/find` | `workspace`, `query`, `limit?` |
-| `session.list` | no | `session.list`, `session.active` | `GET /api/session`, `GET /api/session/active` | `limit?`, `order?`, `search?`, `searchFields?`, `workspace?`, `status?`, `parentID?`, `cursor?` |
+| `session.list` | no | `session.list`, `session.active` | `GET /api/session`, `GET /api/session/active` | `limit?`, `order?`, `search?`, `searchFields?`, `workspace?`, `status?`, `parentID?`, `background?`, `cursor?` |
 | `session.active` | no | `session.active` | `GET /api/session/active` | — |
 | `usage.providers` | no | `providerUsage.list` | `GET /api/provider/usage` | `refresh?` boolean |
 | `usage.summary` | no | `usage.get` | `GET /api/usage` | — |
@@ -734,7 +734,17 @@ matches agent and `provider/model#variant` labels. `status: "running" | "idle"`
 uses current backend activity: a root Session is running while any Session in
 its family runs, and a child Session by its own activity; archived Sessions are
 not idle. Omitted status
-includes all states. `order` accepts `"asc"`, `"desc"` (default), `"pinned"`, or `"active"`.
+includes all states. `background: "exclude"` omits background Dots executor
+Sessions (Session `origin: "dots-executor"`) before ordering, cursors, and
+limits; omitted or `"include"` lists them. Only the durable `origin` classifies a
+Session: titles, host names, models, and renames never change it, and Sessions
+created through Dots `thread/start` or ordinary clients have no `origin`.
+Sessions recorded before `origin` existed are classified only when a valid Dots
+thread or unattributed executor mapping still names them; a background Session
+whose mapping was already replaced stays unclassified and listed. Exclusion
+changes no Session read by ID, transcript subscription, or Dots routing. An
+older connector rejects `background` as an unknown field with `invalid_message`,
+so a browser that sends it needs a connector that accepts it. `order` accepts `"asc"`, `"desc"` (default), `"pinned"`, or `"active"`.
 Session list/get data carries the optional `time.active` of the latest terminal Step or execution event. The connector refreshes that Session's recorded activity on settlement and invalidates its list consumers when the activity timestamp changes, including when the Session is not subscribed for transcript events. Metadata-only `time.updated` changes do not trigger streaming list invalidations.
 `session.pending.list` returns admitted but unpromoted user and synthetic inputs in admission order at the verified backend Session Location. The connector refuses more than 200 pending inputs or a response beyond the relay's bounded chunk limit rather than truncating the list. The browser reads it beside the projected Session window to restore processing and queued rows after reload or dropped events.
 Goal text sent through `session.goal.set` or `session.autonomy.set` has a five-minute browser and connector-local deadline for synchronous synthesis and starting steer. `session.switchModel` uses the same five-minute allowance as compaction in the browser and connector-local adapter. The generic request deadline is 30 seconds, with narrower per-operation read and control overrides; goal stop and non-text autonomy updates do not use the extended deadline. The browser relay imposes no per-request lifetime.
@@ -745,7 +755,7 @@ reported activity time (`time.active`, or `time.updated` when unreported), with
 ascending Session ID breaking equal-time ties. Pins do not override active
 order. Its cursors carry running state, the activity sort time, and Session ID
 in both directions; running membership is evaluated on each request. `limit` defaults to 50 and is capped
-at 200. Search, group, status,
+at 200. Search, group, status, background,
 and order changes start a new cursor traversal.
 
 `session.subagent.list` reads one existing Protocol task page (at most 10 direct
@@ -946,7 +956,8 @@ reconnect), `session.permission.list`, `session.guardrail.status`,
 rebuild running state, pending approvals, and autonomy state after a reconnect
 instead of relying on ephemeral events.
 
-`session.list` pages every Session in the connected backend, and `session.active`
+`session.list` pages every Session in the connected backend unless
+`background: "exclude"` is supplied, and `session.active`
 reports running state for that same inventory. The authenticated enrolled-device
 owner is the authorization boundary.
 

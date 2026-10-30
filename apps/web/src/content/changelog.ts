@@ -22,6 +22,33 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.9",
+    date: "2026-10-30",
+    title: "Editorial Ledger workspace, Dots computer labels and work assessments",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Settings and Usage sections carry a numbered §01, §02… marker before their headings. The numbers follow the sections actually shown, so Office on a phone leaves no gap, and screen readers skip the marker. Usage keeps its icon-led headings and the Group select." },
+      { tag: "Added", text: "Every transcript turn opens with a folio head: a §NN marker, a role label, and the turn's delivery receipt or response details. Markers keep their number as older history loads and the window scrolls, and a turn whose position from the start of the Session is not reported shows no marker." },
+      { tag: "Added", text: "Usage figures and labels use larger figure type with uppercase labels, so spend and generation values read at a glance." },
+      { tag: "Added", text: "dots.name in trusted global configuration sets the label this computer shows in ChatGPT's computer lists. Without it, a new registration uses the host name followed by a six-character suffix derived from this installation, such as studio.local (3f9a1c), so computers sharing a host name stay distinguishable; an existing registration keeps its label. A rename reuses the existing registration, retires no connection, and never selects which computer is attached. The TUI and web Dots connection views show the registered name and the executor name ChatGPT reports beside the host name." },
+      { tag: "Added", text: "ycoding decision watch settled and timeout results add a work assessment read once at exit: completed only with a current accepted work-completion receipt, otherwise needs-decision, running, lost, background, unconfirmed, incomplete or idle, with open todos, pending decisions, child tasks, running Sessions and pending inputs. Settled results include their start and end events and a command that watches the next transition. Exit 0 reports that an execution settled, never that the work is finished." },
+      { tag: "Added", text: "Code Mode tools.chatgpt.library.prepare reads an authorized local file of at most 20 MiB into managed attachment storage for a later Library upload without a network request. A Dots task command can also upload one file of up to 20 MiB to your ChatGPT Library through YCoding's private helper channel under the task's sandbox, Library permission and guardrails; credentials and signed transfer URLs are never returned, and uncertain writes are not replayed. Live Library delivery from a Dots task is unverified." },
+      { tag: "Changed", text: "The remote workspace uses flat sections separated by single rules instead of nested frames. Text fields, menus and sheets, the focus ring, and the hard-review outline keep their boundaries." },
+      { tag: "Changed", text: "The desktop sidebar is a sunken spine. The current destination shows with stronger text and an accent icon, without a green fill or halo. The phone bottom bar keeps three labelled destinations with the label under the icon." },
+      { tag: "Changed", text: "Connection, notice, and consent strips are flat bars with an inset status edge. Their text and actions are unchanged." },
+      { tag: "Changed", text: "Sign-in and invitation pages are one narrow column under a full-width top bar, with an or divider between Google and the access key. Errors appear as an inset bar." },
+      { tag: "Changed", text: "The Sessions list shows rows separated by rules, with plain status text and underline filters. Rows grow with their content. Appearance and Office choices in Settings use the same underline style, and Settings records, devices and notification choices are ruled rows." },
+      { tag: "Changed", text: "Question options and guardrail decision grades in request forms are ruled rows. The selected option shows a coloured start edge and heavier text. The hard-review outline is unchanged." },
+      { tag: "Changed", text: "The reading position stays steady when the sidebar collapses or the transcript re-wraps at a new width, including rows that gain a folio head." },
+      { tag: "Changed", text: "The Office roster, inspection card, and attention bar use the same flat rows. The Office floor is unchanged." },
+      { tag: "Changed", text: "Sessions that the Dots executor creates for its tasks no longer appear in TUI or web Session pickers, searches, pins, quick switches, recent and workspace lists, Project Session choices, or the web Session carousel. session.list with background: \"exclude\" omits them; without it every Session is listed, and opening one by ID and its history are unchanged. Roots started through Dots stay listed. A one-time startup migration marks existing executor Sessions that a current executor mapping still names. A YCoding service older than v0.11.9 rejects the web Session list requests, so update the service on each connected computer." },
+      { tag: "Changed", text: "dots.attach and ycoding dots attach forward the Dot, thread and environment shown before confirmation as expectedTarget, and the attachment is refused when that target has changed. The TUI and web ask for confirmation before replacing your other computers, and attaching still detaches them. Calls without expectedTarget remain valid." },
+      { tag: "Changed", text: "The service keeps one installation ID in remote-control.json and shares it between the native Dots connection and the Dots executor. A state file whose installation ID is missing or unreadable is an error and is never rewritten." },
+      { tag: "Fixed", text: "Dots capability discovery reloads after its file watcher fails instead of trusting a stale cached result." },
+      { tag: "Fixed", text: "Opening a subagent from Team selects it directly. Main is no longer offered for the previous parent while the subagent opens, the parent Session is not read again, and Main returns to the same reading position and draft." },
+    ],
+  },
+  {
     version: "0.11.8",
     date: "2026-10-30",
     title: "Dots executor, decision list and watch, and prompt-cache reuse",

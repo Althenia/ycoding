@@ -1,6 +1,14 @@
 import { Effect, Option } from "effect"
 import { Service } from "@ycoding-ai/client/effect/service"
-import { YCoding, type DecisionItem, type EventSubscribeOutput, type SessionLogOutput } from "@ycoding-ai/client/promise"
+import {
+  YCoding,
+  type DecisionItem,
+  type EventSubscribeOutput,
+  type SessionLogOutput,
+  type SessionOrchestrationSummary,
+  type SessionOrchestrationTask,
+  type SessionTodoInfo,
+} from "@ycoding-ai/client/promise"
 import { DecisionCommand, shellCommand, watchTimeout } from "../../decision"
 import { Runtime } from "../../../framework/runtime"
 import { ServerConnection } from "../../../services/server-connection"
@@ -9,6 +17,8 @@ type Client = ReturnType<typeof YCoding.make>
 type LogEvent = Exclude<SessionLogOutput, { type: "log.synced" }>
 type Terminal = Extract<LogEvent, { type: "session.execution.succeeded" | "session.execution.failed" | "session.execution.interrupted" }>
 type Status = "succeeded" | "failed" | "interrupted" | "rejected" | "unknown"
+type Ref = { readonly id: string; readonly seq: number }
+type Receipt = Ref & { readonly inputID: string; readonly assistantMessageID: string }
 
 type Options = {
   readonly sessionID: string
@@ -34,6 +44,8 @@ type Settled = {
   readonly inputIDs: string[]
   readonly startedAt?: string
   readonly settledAt?: string
+  readonly startEvent?: Ref
+  readonly endEvent?: Ref
   readonly error?: { readonly type: string; readonly message: string }
   readonly reason?: string
   readonly response?: string
@@ -42,10 +54,36 @@ type Settled = {
 
 type Oversized = { readonly kind: DecisionItem["kind"]; readonly id: string; readonly sessionID: string }
 
+type TaskRef = {
+  readonly sessionID: string
+  readonly parentID: string
+  readonly state: SessionOrchestrationTask["state"]
+  readonly revision: number
+  readonly description: string
+  readonly questionID?: string
+  readonly recoveryItemID?: string
+}
+
+type Work = {
+  readonly state: "running" | "needs-decision" | "lost" | "background" | "unconfirmed" | "completed" | "incomplete" | "idle"
+  readonly receipt?: Receipt & { readonly current: boolean }
+  readonly todos: { readonly sessionID: string; readonly open: number; readonly items: SessionTodoInfo[] }
+  readonly decisions: DecisionItem[]
+  readonly oversized?: Oversized[]
+  readonly omitted?: number
+  readonly tasks: TaskRef[]
+  readonly omittedTasks?: number
+  readonly children: SessionOrchestrationSummary
+  readonly omittedParents?: number
+  readonly running: string[]
+  readonly lost: string[]
+  readonly pending: number
+}
+
 type Outcome =
   | { readonly outcome: "decision"; readonly decisions: DecisionItem[]; readonly oversized: Oversized[]; readonly omitted: number }
-  | { readonly outcome: "settled"; readonly execution: Settled }
-  | { readonly outcome: "timeout" }
+  | { readonly outcome: "settled"; readonly execution: Settled; readonly work?: Work }
+  | { readonly outcome: "timeout"; readonly state: "running" | "unconfirmed" | "idle"; readonly work?: Work }
 
 const responseLimit = 4_000
 const latestLimit = 500
@@ -53,6 +91,11 @@ const decisionLimit = 20
 const decisionBytes = 256 * 1024
 const resubscribeLimit = 10
 const snapshotLimit = 200
+const todoLimit = 10
+const taskPageLimit = 10
+const taskParentLimit = 20
+const assessmentReserveMs = 5_000
+const activeTaskStates: readonly string[] = ["starting", "running", "waiting", "cancelling"]
 const exitCodes = { settled: 0, decision: 2, timeout: 3 } as const
 
 class InputBeforeCursor extends Error {}
@@ -85,9 +128,9 @@ function quiet(event: EventSubscribeOutput) {
   return event.type.endsWith(".delta") || event.type === "session.tool.progress"
 }
 
-export function resumeCommand(options: Options, after: number | undefined) {
+export function resumeCommand(options: Options, after: number | undefined, withInput = true) {
   return ["ycoding", "decision", "watch", options.sessionID, ...(options.family ? ["--family"] : []),
-    ...(options.input === undefined ? [] : ["--input", options.input]), ...(after === undefined ? [] : ["--after", String(after)]),
+    ...(!withInput || options.input === undefined ? [] : ["--input", options.input]), ...(after === undefined ? [] : ["--after", String(after)]),
     ...(options.server === undefined ? [] : ["--server", options.server]), ...(options.standalone ? ["--standalone"] : []),
     ...(options.timeout === watchTimeout ? [] : ["--timeout", String(options.timeout)]), ...(options.json ? ["--json"] : [])]
 }
@@ -149,6 +192,9 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
   let settled: Settled | undefined
   let located = false
   let promotionChecked = false
+  let receipt: Receipt | undefined
+  let superseded = false
+  let ended = false
 
   const descendants = async () => {
     const found = new Set([target.id])
@@ -185,6 +231,8 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
       inputIDs: attributed ? current?.inputIDs ?? [] : [],
       ...(attributed && current?.startedAt !== undefined ? { startedAt: iso(current.startedAt) } : {}),
       settledAt: iso(event.created),
+      ...(attributed && current?.start !== undefined ? { startEvent: { id: current.start.id, seq: current.start.seq } } : {}),
+      endEvent: { id: event.id, seq: event.durable.seq },
     }
     if (event.type === "session.execution.succeeded") return { status: "succeeded", ...details }
     if (event.type === "session.execution.interrupted") return { status: "interrupted", ...details, reason: event.data.reason }
@@ -208,7 +256,18 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
     check = { start: own.execution.start, result: outcome, unproven: unknown() }
   }
 
+  const track = (event: LogEvent) => {
+    if (event.type === "session.work.completed") {
+      receipt = { id: event.id, seq: event.durable.seq, inputID: event.data.inputID, assistantMessageID: event.data.assistantMessageID }
+      superseded = false
+      return
+    }
+    if (event.type === "session.input.admitted" || event.type === "session.execution.started") superseded ||= receipt !== undefined
+    if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed" || event.type === "session.execution.interrupted") ended = true
+  }
+
   const apply = (event: LogEvent) => {
+    track(event)
     switch (event.type) {
       case "session.deleted":
         throw new Error(`Session was deleted: ${target.id}`)
@@ -243,7 +302,7 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
         return
       case "session.dots.instruction.rejected":
         if (event.data.inputID === options.input && own === undefined)
-          settled = { status: "rejected", inputIDs: [event.data.inputID], settledAt: iso(event.created), reason: event.data.reason }
+          settled = { status: "rejected", inputIDs: [event.data.inputID], settledAt: iso(event.created), endEvent: { id: event.id, seq: event.durable.seq }, reason: event.data.reason }
         return
       case "session.execution.succeeded":
       case "session.execution.failed":
@@ -330,10 +389,94 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
     return !settled && own === undefined
   }
 
+  const untilDeadline = (error: unknown) => {
+    if (cancel.aborted || !signal.aborted) throw error
+    return undefined
+  }
+
+  const tail = async (from: number | undefined) => {
+    let reopened = false
+    for await (const item of client.session.log({ sessionID: target.id, follow: false, ...(from === undefined ? {} : { after: from }) }, { signal })) {
+      if (item.type === "log.synced" || item.durable.aggregateID !== target.id || (from !== undefined && item.durable.seq <= from)) continue
+      track(item)
+      if (item.type === "session.execution.started") reopened = true
+      if (item.type === "session.execution.succeeded" || item.type === "session.execution.failed" || item.type === "session.execution.interrupted") reopened = false
+    }
+    return reopened
+  }
+
+  const assess = async (settlement: { readonly settled: boolean; readonly reopened: boolean }) => {
+    const [active, outstanding, todos, pending, items, scope] = await Promise.all([
+      client.session.active({ signal }),
+      client.session.outstanding(undefined, { signal }),
+      client.session.todo.list({ sessionID: target.id }, { signal }),
+      client.session.pending.list({ sessionID: target.id }, { signal }),
+      client.decision.list({ signal }),
+      options.family ? descendants() : Promise.resolve(new Set([target.id])),
+    ])
+    const scoped = (ids: readonly string[]) => [...new Set(ids)].filter((id) => scope.has(id)).toSorted()
+    const running = scoped(outstanding.running)
+    const lost = scoped(outstanding.lost)
+    const parents = [target.id, ...scoped([...outstanding.data, ...outstanding.lost]).filter((id) => id !== target.id)]
+    const pages = await Promise.all(parents.slice(0, taskParentLimit).map((parentID) => client.session.subagent.list({ parentID, limit: taskPageLimit }, { signal })))
+    const tasks = pages.flatMap((page) => page.data)
+      .filter((task) => activeTaskStates.includes(task.state) || task.question !== undefined || task.stoppedRecovery !== undefined || (task.state === "lost" && lost.includes(task.parentID)))
+      .map((task): TaskRef => ({
+        sessionID: task.sessionID, parentID: task.parentID, state: task.state, revision: task.revision, description: bounded(task.description, latestLimit).text,
+        ...(task.question === undefined ? {} : { questionID: task.question.id }),
+        ...(task.stoppedRecovery === undefined ? {} : { recoveryItemID: task.stoppedRecovery.itemID }),
+      }))
+    const children = pages.reduce((sum, page) => ({ total: sum.total + page.summary.total, active: sum.active + page.summary.active,
+      running: sum.running + page.summary.running, waiting: sum.waiting + page.summary.waiting }), { total: 0, active: 0, running: 0, waiting: 0 })
+    const omittedTasks = children.active - tasks.filter((task) => activeTaskStates.includes(task.state)).length
+    const omittedParents = parents.length - Math.min(parents.length, taskParentLimit)
+    const open = todos.filter((item) => item.status === "pending" || item.status === "in_progress")
+    const selected = selectDecisions(items.filter((item) => scope.has(item.sessionID)), options.json)
+    const current = receipt !== undefined && !superseded
+    const executing = active[target.id] !== undefined || settlement.reopened
+    const blocked = selected.decisions.length + selected.oversized.length + selected.omitted > 0 || children.waiting > 0 ||
+      tasks.some((task) => task.state === "waiting" || task.questionID !== undefined || task.recoveryItemID !== undefined)
+    const state: Work["state"] = blocked ? "needs-decision"
+      : executing ? "running"
+      : lost.length ? "lost"
+      : running.length || pending.length || children.active > 0 ? "background"
+      : !settlement.settled && execution !== undefined ? "unconfirmed"
+      : current ? "completed"
+      : settlement.settled || receipt !== undefined || ended || open.length ? "incomplete"
+      : "idle"
+    const work: Work = {
+      state,
+      ...(receipt === undefined ? {} : { receipt: { ...receipt, current } }),
+      todos: { sessionID: target.id, open: open.length, items: open.slice(0, todoLimit).map((item) => ({ ...item, content: bounded(item.content, latestLimit).text })) },
+      decisions: selected.decisions,
+      ...(selected.oversized.length ? { oversized: selected.oversized } : {}),
+      ...(selected.omitted ? { omitted: selected.omitted } : {}),
+      tasks,
+      ...(omittedTasks > 0 ? { omittedTasks } : {}),
+      children,
+      ...(omittedParents > 0 ? { omittedParents } : {}),
+      running,
+      lost,
+      pending: pending.length,
+    }
+    return { work, executing }
+  }
+
   const report = async (execution: Settled): Promise<Outcome> => {
     const text = execution.status === "unknown" || execution.status === "rejected" ? undefined
-      : await response(execution).catch((error: unknown) => { if (cancel.aborted || !signal.aborted) throw error })
-    return { outcome: "settled", execution: text === undefined ? execution : { ...execution, response: text.text, ...(text.truncated ? { truncated: text.truncated } : {}) } }
+      : await response(execution).catch(untilDeadline)
+    const assessed = await tail(cursor).then((reopened) => assess({ settled: true, reopened })).catch(untilDeadline)
+    return {
+      outcome: "settled",
+      execution: text === undefined ? execution : { ...execution, response: text.text, ...(text.truncated ? { truncated: text.truncated } : {}) },
+      ...(assessed === undefined ? {} : { work: assessed.work }),
+    }
+  }
+
+  const timedOut = async (): Promise<Outcome> => {
+    const assessed = await assess({ settled: false, reopened: false }).catch(untilDeadline)
+    const state = assessed?.executing ? "running" as const : execution === undefined ? "idle" as const : "unconfirmed" as const
+    return { outcome: "timeout", state, ...(assessed === undefined ? {} : { work: assessed.work }) }
   }
 
   const evaluate = async (): Promise<Outcome | undefined> => {
@@ -363,7 +506,7 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
   }
 
   const next = async (iterator: AsyncIterator<EventSubscribeOutput>) => {
-    const remaining = deadline - Date.now()
+    const remaining = deadline - Math.min(assessmentReserveMs, options.timeout * 200) - Date.now()
     if (remaining <= 0) return "timeout" as const
     const pending = iterator.next()
     pending.catch(() => {})
@@ -388,13 +531,13 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
       const iterator = client.event.subscribe({ signal: AbortSignal.any([signal, stream.signal]) })[Symbol.asyncIterator]()
       try {
         const connected = await next(iterator)
-        if (connected === "timeout") return finish({ outcome: "timeout" })
+        if (connected === "timeout") return finish(await timedOut())
         if (connected.done || connected.value.type !== "server.connected") throw new Error("The server event stream is unavailable")
         const initial = await evaluate()
         if (initial) return finish(initial)
         for (;;) {
           const result = await next(iterator).catch(() => ({ done: true as const, value: undefined }))
-          if (result === "timeout") return finish({ outcome: "timeout" })
+          if (result === "timeout") return finish(await timedOut())
           if (result.done) break
           if (!relevant(result.value)) continue
           const outcome = await evaluate()
@@ -407,7 +550,7 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
     }
   } catch (error) {
     if (cancel.aborted || error instanceof InputBeforeCursor) throw error
-    if (signal.aborted) return finish({ outcome: "timeout" })
+    if (signal.aborted) return finish({ outcome: "timeout", state: execution === undefined ? "idle" : "unconfirmed" })
     throw new Error(`${message(error)}; resume with: ${shellCommand(resumeCommand(options, anchor()))}`)
   }
 }
@@ -420,17 +563,15 @@ function render(options: Options, result: Awaited<ReturnType<typeof watchSession
   if (outcome.outcome === "decision") {
     if (json) return { outcome: "decision", sessionID: target.id, ...(after === undefined ? {} : { after }), decisions: outcome.decisions,
       ...(outcome.oversized.length ? { oversized: outcome.oversized } : {}), ...(outcome.omitted ? { omitted: outcome.omitted } : {}), resume }
-    const lines = [`Pending decision in ${session}. A listed item can settle by its own mode or appear twice while it moves to the review box; each decide command rechecks it.`]
-    for (const item of outcome.decisions) lines.push(decisionText(item))
-    for (const item of outcome.oversized)
-      lines.push(`${item.kind} ${item.id} in ${item.sessionID} is too large to print here; run ycoding decision list --json for its decide commands.`)
-    if (outcome.omitted) lines.push(`${outcome.omitted} more decisions omitted; run ycoding decision list.`)
-    lines.push(`Resume after deciding: ${shellCommand(resume)}`)
+    const lines = [`Pending decision in ${session}. A listed item can settle by its own mode or appear twice while it moves to the review box; each decide command rechecks it.`,
+      ...decisionLines(outcome.decisions, outcome.oversized, outcome.omitted), `Resume after deciding: ${shellCommand(resume)}`]
     return lines.join("\n")
   }
   if (outcome.outcome === "settled") {
     const settled = outcome.execution
-    if (json) return { outcome: "settled", sessionID: target.id, ...(after === undefined ? {} : { after }), execution: settled }
+    const next = resumeCommand(options, after, false)
+    if (json) return { outcome: "settled", sessionID: target.id, ...(after === undefined ? {} : { after }), execution: settled,
+      ...(outcome.work === undefined ? {} : { work: outcome.work }), resume: next }
     const lines = [settled.status === "rejected" ? `Input rejected in ${session}.`
       : settled.status === "unknown" ? `The execution that ran input ${settled.inputIDs.join(", ")} in ${session} has ended, but its retained history no longer proves the result. Read message.list; do not treat it as succeeded.`
       : `Execution ${settled.status} in ${session}.`]
@@ -439,23 +580,75 @@ function render(options: Options, result: Awaited<ReturnType<typeof watchSession
     if (settled.settledAt) lines.push(`Settled: ${settled.settledAt}`)
     if (settled.error) lines.push(`Error: ${line(settled.error.type)}: ${line(settled.error.message)}`)
     if (settled.reason) lines.push(`Reason: ${settled.reason}`)
+    lines.push(...(outcome.work === undefined ? [unassessed] : workLines(outcome.work, options.family)))
     if (settled.response !== undefined) lines.push("Response:", block(settled.response))
     if (settled.truncated) lines.push(`[Response truncated to ${responseLimit} characters.]`)
+    lines.push(`Watch the next transition: ${shellCommand(next)}`)
     return lines.join("\n")
   }
   const latest = execution?.latest === undefined ? undefined : bounded(execution.latest, latestLimit).text
-  const progress = execution === undefined
-    ? { state: "idle" as const, ...(input === undefined ? {} : { input }) }
-    : { state: "running" as const, ...(execution.startedAt === undefined ? {} : { startedAt: iso(execution.startedAt) }), toolCalls: execution.toolCalls,
-        ...(input === undefined ? {} : { input }), ...(latest === undefined ? {} : { latest }) }
-  if (json) return { outcome: "timeout", sessionID: target.id, ...(after === undefined ? {} : { after }), progress, resume }
-  const state = progress.state === "idle" ? "idle" : `running${progress.startedAt ? ` since ${progress.startedAt}` : ""}; ${progress.toolCalls} tool calls`
+  const progress = {
+    state: outcome.state,
+    ...(execution?.startedAt === undefined ? {} : { startedAt: iso(execution.startedAt) }),
+    ...(execution === undefined ? {} : { toolCalls: execution.toolCalls }),
+    ...(input === undefined ? {} : { input }),
+    ...(latest === undefined ? {} : { latest }),
+  }
+  if (json) return { outcome: "timeout", sessionID: target.id, ...(after === undefined ? {} : { after }), progress,
+    ...(outcome.work === undefined ? {} : { work: outcome.work }), resume }
+  const since = `${progress.startedAt ? ` since ${progress.startedAt}` : ""}${progress.toolCalls === undefined ? "" : `; ${progress.toolCalls} tool calls`}`
+  const state = progress.state === "idle" ? "idle" : progress.state === "running" ? `running${since}`
+    : `unconfirmed; retained history shows an open execution${since}, but the connected service does not report it active`
   return [
     `No pending decision or settlement in ${session} within ${options.timeout}s.`,
     `State: ${state}${options.input === undefined ? "" : `; input ${options.input} ${input}`}`,
     ...(latest === undefined ? [] : [`Latest: ${line(latest)}`]),
+    ...(outcome.work === undefined ? [unassessed] : workLines(outcome.work, options.family)),
     `Resume: ${shellCommand(resume)}`,
   ].join("\n")
+}
+
+const unassessed = "Work not assessed: the Session state could not be read before the deadline."
+
+function decisionLines(decisions: readonly DecisionItem[], oversized: readonly Oversized[], omitted: number) {
+  return [
+    ...decisions.map(decisionText),
+    ...oversized.map((item) => `${item.kind} ${item.id} in ${item.sessionID} is too large to print here; run ycoding decision list --json for its decide commands.`),
+    ...(omitted ? [`${omitted} more decisions omitted; run ycoding decision list.`] : []),
+  ]
+}
+
+function workLines(work: Work, family: boolean) {
+  const open = `${work.todos.open} open todo${work.todos.open === 1 ? "" : "s"}`
+  const hiddenWaiting = work.children.waiting - work.tasks.filter((task) => task.state === "waiting").length
+  const childDecision = !family && (work.children.waiting > 0 || work.tasks.some((task) => task.questionID !== undefined || task.recoveryItemID !== undefined))
+  const summary = {
+    "needs-decision": `Work needs a decision before it can continue.${childDecision ? " Add --family to list child Session decisions." : ""}`,
+    running: "Work running: the Session is executing.",
+    lost: "Work lost: the service restarted while work was active and did not resume it. Resume or cancel it explicitly.",
+    background: "Work continues in the background without a decision.",
+    unconfirmed: "Work unconfirmed: retained history shows an open execution that the connected service does not report as active; it may run in another service process or have ended without a terminal event.",
+    completed: "Work completed: an accepted completion receipt is current.",
+    incomplete: `Work incomplete: ${[work.receipt?.current ? undefined : work.receipt ? "the completion receipt was superseded" : "no accepted completion receipt",
+      work.todos.open ? open : undefined].filter(Boolean).join("; ")}.`,
+    idle: "Work idle: nothing is running and no settlement was observed.",
+  }[work.state]
+  const lines = [summary]
+  if (work.receipt) lines.push(`Receipt: ${work.receipt.id} (seq ${work.receipt.seq}) accepted input ${work.receipt.inputID} with message ${work.receipt.assistantMessageID}.${work.receipt.current ? "" : " A later input or execution superseded it."}`)
+  if (work.todos.open) lines.push(`Open todos in ${work.todos.sessionID} (${work.todos.open}):`, ...work.todos.items.map((item) => `  [${item.status}] ${line(item.content)}`),
+    ...(work.todos.open > work.todos.items.length ? [`  ${work.todos.open - work.todos.items.length} more not listed; run ycoding api server.session.session.todo.list --param sessionID=${work.todos.sessionID}`] : []))
+  if (work.children.total) lines.push(`Child tasks: ${work.children.active} of ${work.children.total} active.`)
+  lines.push(...work.tasks.map((task) => `  ${task.sessionID} ${task.state} revision ${task.revision} (parent ${task.parentID}): ${line(task.description)}${task.questionID ? `; question ${task.questionID}` : ""}${task.recoveryItemID ? `; recovery review ${task.recoveryItemID}` : ""}`))
+  const subagents = family
+    ? `ycoding api session.subagent.list --param parentID=<parent-session-id> for each parent Session in the family, starting with ${work.todos.sessionID}, and follow cursor.next`
+    : `ycoding api session.subagent.list --param parentID=${work.todos.sessionID} and follow cursor.next`
+  if (work.omittedTasks) lines.push(`  ${work.omittedTasks} more active child task${work.omittedTasks === 1 ? "" : "s"} not listed${hiddenWaiting > 0 ? ` (${hiddenWaiting} waiting on a decision)` : ""}; run ${subagents}.`)
+  if (work.omittedParents) lines.push(`  Child tasks of ${work.omittedParents} more family Session${work.omittedParents === 1 ? " were" : "s were"} not read; run ${subagents}.`)
+  if (work.running.length) lines.push(`Running: ${work.running.join(", ")}`)
+  if (work.lost.length) lines.push(`Lost: ${work.lost.join(", ")}`)
+  if (work.pending) lines.push(`Pending inputs: ${work.pending}`)
+  lines.push(...decisionLines(work.decisions, work.oversized ?? [], work.omitted ?? 0))
+  return lines
 }
 
 export default Runtime.handler(DecisionCommand.commands.watch, Effect.fn("cli.decision.watch")(function* (input) {

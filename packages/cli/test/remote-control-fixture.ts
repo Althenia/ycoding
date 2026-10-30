@@ -35,6 +35,7 @@ export function nativeHost(backend: RemoteControlBackend, credential = { access:
     configuration: async () => ({ enabled: true, profile: credential.profile, credentialID: "credential", accountID: credential.accountID, accountGeneration: 1, accessRevision: 1 }),
     credential: async () => ({ ...credential, credentialID: "credential", accountGeneration: 1 }),
     subscribeConfiguration: () => () => {},
+    name: async () => undefined,
     attachTransport: () => () => {},
     ...unexpectedExecutorHost,
     attach: async () => ({

@@ -1393,6 +1393,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             title: event.data.title,
             location: event.data.location,
             subpath: event.data.subpath,
+            origin: event.data.origin,
           })
           registerSession(sessionID)
           result.session.invalidate(sessionID)
@@ -3173,6 +3174,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 limit: 50,
                 order: "desc",
                 parentID: null,
+                background: "exclude",
               })
             })
             .then((response) => {

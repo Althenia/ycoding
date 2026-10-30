@@ -27,7 +27,7 @@ export const dotsAttachWarning =
 
 export function dotsComputerLine(status: Dots.NativeStatus) {
   const computer = status.computer ?? { state: "unavailable" as const }
-  return `Computer: ${computer.state}${computer.message === undefined ? "" : ` (${computer.message})`}`
+  return `Computer: ${computer.state}${status.computer?.name === undefined ? "" : ` · ${status.computer.name}`}${computer.message === undefined ? "" : ` (${computer.message})`}`
 }
 
 export function dotsAttachConfirmed(answer: string | undefined) {

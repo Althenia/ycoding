@@ -82,6 +82,7 @@ const setup = Effect.gen(function* () {
   let activity: ReadonlySet<Session.ID> | undefined
   let interruptions = 0
   let resolveCredential: NativeDots.Options["credential"] = () => Effect.succeed(undefined)
+  let libraryFactory: NonNullable<NativeDots.Options["library"]> = () => Effect.fail(new Error("Library unavailable in fixture"))
   let historyReads = 0
   let hasModels = true
   let admission = () => Effect.void
@@ -100,6 +101,7 @@ const setup = Effect.gen(function* () {
     })) } }
   }).pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
   const host = yield* NativeDots.make({ access, db, kv, reviews, home: directory, data: path.join(os.tmpdir(), "dots-native-data"),
+    library: (scope, session) => libraryFactory(scope, session),
     projectRoot: () => Effect.succeed(undefined), authorization, execution: {
     ...execution, active: execution.active.pipe(Effect.map((current) => activity ?? current)),
     interrupt: (id) => execution.interrupt(id).pipe(Effect.tap(() => Effect.sync(() => { interruptions++ }))),
@@ -137,6 +139,7 @@ const setup = Effect.gen(function* () {
     executorReleases: () => executorReleases,
     failExecutorReleases: () => { executorReleaseFails = true },
     onCredential: (read: NativeDots.Options["credential"]) => { resolveCredential = read },
+    onLibrary: (factory: NonNullable<NativeDots.Options["library"]>) => { libraryFactory = factory },
     onAdmission: (read: () => Effect.Effect<void>) => { admission = read },
     withoutModels: () => { hasModels = false },
     setActivity: (ids: readonly Session.ID[]) => { activity = new Set(ids) },
@@ -164,6 +167,10 @@ it.live("global native access includes ordinary roots, hides child and foreign r
   for (const id of [child.id, remote.id]) expect(yield* Effect.promise(() => f.channel.getRoot(id))).toBeUndefined()
   yield* Effect.promise(async () => { await expect(f.channel.createRoot({ directory: "/unrecorded-native-location", inputID: "create" })).rejects.toThrow() })
   const created = yield* Effect.promise(() => f.channel.createRoot({ directory: f.root.location.directory, inputID: "create" }))
+  expect(created.session.origin).toBeUndefined()
+  expect((yield* f.sessions.get(created.session.id)).origin).toBeUndefined()
+  expect(yield* createdData(f, created.session.id)).not.toHaveProperty("origin")
+  expect((yield* f.sessions.list({ parentID: null, background: "exclude" })).data.map((session) => session.id)).toContain(created.session.id)
   expect((yield* f.access.get()).enabled).toBe(true)
   expect((yield* Effect.promise(() => f.channel.createRoot({ directory: f.root.location.directory, inputID: "create" }))).session.id).toBe(created.session.id)
   yield* f.sessions.archive(f.root.id)
@@ -191,6 +198,33 @@ it.live("global Off retires every channel without interrupting execution, consum
   yield* Effect.promise(async () => { await expect(f.channel.settle(request.handle, { value: { answers: ["invalid"] }, action: { answers: ["Continue"] } })).rejects.toThrow() })
   expect(yield* Effect.promise(() => f.host.configuration())).toEqual({ enabled: false })
   unsubscribe()
+}))
+
+it.live("a Dots display-name change keeps native pins, channels, candidates and configuration identity", () => Effect.gen(function* () {
+  const f = yield* setup
+  yield* f.forms.create({ sessionID: f.root.id, title: "Pending decision", fields: [{ type: "string", key: "answer", required: true }] })
+  const request = (yield* Effect.promise(() => f.channel.pending(f.root.id)))[0]!
+  const before = yield* Effect.promise(() => f.host.configuration())
+  let retired = 0
+  let notifications = 0
+  const stop = yield* Effect.promise(() => f.channel.subscribe(f.root.id, () => {}, () => { retired++ }))
+  const unsubscribe = f.host.subscribeConfiguration(() => { notifications++ })
+  expect(yield* Effect.promise(() => f.host.name())).toBeUndefined()
+  f.configure({ enabled: true, profile: "trusted", name: "Desk Mac" })
+  expect(yield* Effect.promise(() => f.host.name())).toBe("Desk Mac")
+  f.configure({ enabled: true, profile: "trusted", name: "Renamed Desk" })
+  expect(yield* Effect.promise(() => f.host.name())).toBe("Renamed Desk")
+  expect([retired, notifications]).toEqual([0, 0])
+  expect(yield* Effect.promise(() => f.host.configuration())).toEqual(before)
+  expect((yield* Effect.promise(() => f.channel.pending(f.root.id)))[0]!.handle).toBe(request.handle)
+  expect((yield* Effect.promise(() => f.channel.listRoots())).map((item) => item.session.id)).toContain(f.root.id)
+  f.configure({ enabled: true, profile: "trusted" })
+  expect(yield* Effect.promise(() => f.host.name())).toBeUndefined()
+  expect([retired, notifications]).toEqual([0, 0])
+  f.configure({ enabled: true, profile: "other", name: "Renamed Desk" })
+  expect([retired, notifications]).toEqual([1, 1])
+  unsubscribe()
+  stop()
 }))
 
 it.live("global Off during native candidate validation rejects settlement without answering its owner", () => Effect.gen(function* () {
@@ -750,9 +784,41 @@ it.live("native escalation subscription reports pending roots initially and late
 }))
 
 type Fixture = Effect.Success<typeof setup>
+const createdData = (f: Fixture, sessionID: Session.ID) => f.sessions.log({ sessionID }).pipe(
+  Stream.filter((item): item is SessionEvent.PublicDurableEvent => !EventRuntime.isSynced(item)),
+  Stream.runCollect,
+  Effect.map((events) => Array.from(events).find((event) => event.type === "session.created")?.data),
+)
+const listed = (f: Fixture, background?: "exclude") => f.sessions.list({ parentID: null, ...(background === undefined ? {} : { background }) }).pipe(
+  Effect.map((page) => page.data.map((session) => session.id)),
+)
 const openExecutor = (f: Fixture, directory: string) => Effect.promise(() => f.host.threadScope({ environmentID: "environment", threadID: "thread-synthetic", cwd: directory }))
 const executorRead = (directory: string) => ({ action: "read", resources: [path.join(directory, "synthetic.txt")] })
 const executorDenied = (operation: Promise<unknown>) => Effect.promise(async () => { await expect(operation).rejects.toBeInstanceOf(CcaAuthorizationDeniedError) })
+
+it.live("private Library factories bind the real Session and native principal and retire without reviving", () => Effect.gen(function* () {
+  const f = yield* setup
+  const seen: unknown[] = []
+  let closed = 0
+  f.onLibrary((scope, session) => Effect.sync(() => {
+    seen.push({ sessionID: scope.sessionID, principal: scope.principal, location: session.location })
+    return { open: async () => ({ tools: [], check: scope.current, call: async () => ({ result: "synthetic" }), close: async () => { closed++ } }) }
+  }))
+  const scope = yield* Effect.promise(() => f.host.threadScope({ environmentID: "environment", threadID: "library-thread", cwd: f.root.location.directory }))
+  const process = yield* Effect.promise(() => scope.library!.open({ processID: "process-one", cwd: scope.directory, readFile: async () => ({ canonical: "/synthetic", bytes: new Uint8Array() }) }))
+  expect(seen).toEqual([{ sessionID: scope.sessionID, principal: { profile: f.pins.profile, credentialID: f.pins.credentialID, accountID: f.pins.accountID, accountGeneration: f.pins.accountGeneration, accessRevision: f.pins.accessRevision }, location: (yield* f.sessions.get(Session.ID.make(scope.sessionID))).location }])
+  f.configure({ enabled: true, profile: "trusted", name: "Renamed desk" })
+  yield* Effect.promise(() => process.check())
+  expect(scope.librarySignal?.aborted).toBe(false)
+  yield* f.access.set({ enabled: false, expectedRevision: 1 })
+  expect(scope.librarySignal?.aborted).toBe(true)
+  expect(closed).toBe(1)
+  yield* Effect.promise(async () => { await expect(process.check()).rejects.toBeInstanceOf(NativeDots.Error) })
+  yield* f.access.set({ enabled: true, expectedRevision: 2 })
+  yield* Effect.promise(async () => { await expect(scope.library!.open({ processID: "process-two", cwd: scope.directory, readFile: async () => ({ canonical: "/synthetic", bytes: new Uint8Array() }) })).rejects.toBeInstanceOf(NativeDots.Error) })
+  yield* Effect.promise(() => scope.close())
+}))
+
 
 it.live("native thread scope rejects unavailable access or configuration and invalid input before creating a Session", () => Effect.gen(function* () {
   const f = yield* setup
@@ -800,6 +866,11 @@ it.live("native thread scope creates a durable eligible root at the requested Lo
   expect(session).toMatchObject({ id: scope.sessionID, title: `Dots · ${path.basename(directory)}`, location: { directory: AbsolutePath.make(directory) } })
   expect(session?.parentID).toBeUndefined()
   expect(session?.time.archived).toBeUndefined()
+  expect(session?.origin).toBe("dots-executor")
+  expect((yield* f.sessions.get(session!.id)).origin).toBe("dots-executor")
+  expect(yield* createdData(f, session!.id)).toMatchObject({ origin: "dots-executor" })
+  expect(yield* listed(f)).toContain(session!.id)
+  expect(yield* listed(f, "exclude")).not.toContain(session!.id)
   expect((yield* Effect.promise(() => f.channel.listRoots())).map((item) => item.session.id)).toContain(Session.ID.make(scope.sessionID))
   const forms = yield* Form.Service.pipe(Effect.provide(f.locations.get(session!.location, [LocationServiceMap.full])))
   const delivered = new Promise<void>((resolve) => { waiters.push(resolve) })
@@ -809,6 +880,41 @@ it.live("native thread scope creates a durable eligible root at the requested Lo
   expect((yield* Effect.promise(() => f.channel.pending(scope.sessionID))).map((request) => request.itemID)).toEqual([form.id])
   stop()
   yield* Effect.promise(() => scope.close())
+}).pipe(Effect.scoped))
+
+it.live("native executor Sessions keep their background classification when renamed, reused or replaced", () => Effect.gen(function* () {
+  const f = yield* setup
+  const directory = yield* temporaryDirectory
+  const unattributed = yield* Effect.promise(() => f.host.unattributedScope({ environmentID: "environment" }))
+  const unattributedID = Session.ID.make(unattributed.sessionID)
+  expect((yield* f.sessions.get(unattributedID)).origin).toBe("dots-executor")
+  expect(yield* createdData(f, unattributedID)).toMatchObject({ origin: "dots-executor" })
+  yield* Effect.promise(() => unattributed.close())
+
+  const first = yield* openExecutor(f, directory)
+  const firstID = Session.ID.make(first.sessionID)
+  yield* f.sessions.rename({ sessionID: firstID, title: "Renamed by the user" })
+  yield* Effect.promise(() => first.close())
+  const reused = yield* openExecutor(f, directory)
+  expect(reused.sessionID).toBe(first.sessionID)
+  expect(yield* f.sessions.get(firstID)).toMatchObject({ title: "Renamed by the user", origin: "dots-executor" })
+  yield* Effect.promise(() => reused.close())
+
+  yield* f.sessions.archive(firstID)
+  const replacement = yield* openExecutor(f, directory)
+  const replacementID = Session.ID.make(replacement.sessionID)
+  expect(replacementID).not.toBe(firstID)
+  expect(yield* f.kv.get("dots.cca.thread.environment.thread-synthetic")).toMatchObject({ sessionID: replacementID })
+  expect((yield* f.sessions.get(replacementID)).origin).toBe("dots-executor")
+  expect(yield* f.sessions.get(firstID)).toMatchObject({ title: "Renamed by the user", origin: "dots-executor" })
+  const history = Array.from(yield* Stream.runCollect(f.sessions.log({ sessionID: firstID }).pipe(
+    Stream.filter((item): item is SessionEvent.PublicDurableEvent => !EventRuntime.isSynced(item)))))
+  expect(history.map((event) => event.type)).toEqual(expect.arrayContaining(["session.created", "session.renamed", "session.archived"]))
+  expect(yield* listed(f)).toEqual(expect.arrayContaining([f.root.id, unattributedID, firstID, replacementID]))
+  const visible = yield* listed(f, "exclude")
+  expect(visible).toContain(f.root.id)
+  for (const id of [unattributedID, firstID, replacementID]) expect(visible).not.toContain(id)
+  yield* Effect.promise(() => replacement.close())
 }).pipe(Effect.scoped))
 
 it.live("native executor authorization grants an allowed operation for its Session and releases the grant once", () => Effect.gen(function* () {

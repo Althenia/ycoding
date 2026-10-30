@@ -76,6 +76,7 @@ export const SessionTable = sqliteTable(
     model: text({ mode: "json" }).$type<Model.Ref>(),
     profile_binding: text({ mode: "json" }).$type<SessionEvent.ProfileBinding>(),
     daybreak: text().$type<Model.Daybreak>(),
+    origin: text().$type<Session.Origin>(),
     ...Timestamps,
     time_archived: integer(),
     time_active: integer(),

@@ -229,6 +229,11 @@ export function dots(entries: readonly Entry[]): { readonly enabled: false } | {
     : { enabled: false }
 }
 
+export function dotsName(entries: readonly Entry[]) {
+  return entries.filter((entry): entry is Document => entry.type === "document" && entry.scope === "global")
+    .findLast((entry) => entry.info.dots !== undefined)?.info.dots?.name
+}
+
 export interface Interface {
   /** Returns location config documents and discovery sources from lowest to highest priority. */
   readonly entries: () => Effect.Effect<Entry[]>

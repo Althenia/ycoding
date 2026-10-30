@@ -146,6 +146,8 @@ export type FileDiffInfo = {
   status: "added" | "deleted" | "modified"
 }
 
+export type SessionOrigin = "dots-executor"
+
 export type SessionActive = { type: "running" }
 
 export type SessionWorkCompletionReceipt = {
@@ -866,6 +868,8 @@ export type CoordinationPausedReason = "interrupted" | "restart"
 export type CoordinationMemberState = "idle" | "running" | "waiting" | "failed"
 
 export type DotsAccess = { enabled: boolean; revision: number }
+
+export type DotsComputerTarget = { dotID: string; threadID: string; environmentID: string; revision: string }
 
 export type TelemetrySample = TelemetryRequestSample | TelemetryLongTaskSample | TelemetryClientSample
 
@@ -2770,9 +2774,15 @@ export type DotsNativeStatus = {
   connection: {
     state: "unavailable" | "off" | "connecting" | "connected" | "error"
     hostname?: string
+    name?: string
     message?: string
   }
-  computer?: { state: "attached" | "detached" | "unavailable"; message?: string }
+  computer?: {
+    state: "attached" | "detached" | "unavailable"
+    name?: string
+    target?: DotsComputerTarget
+    message?: string
+  }
 }
 
 export type TelemetryPage = { data: Array<{ receivedAt: number; sample: TelemetrySample }>; cursor: { next?: string } }
@@ -3591,6 +3601,7 @@ export type SessionInfo = {
   location: LocationRef
   subpath?: string
   revert?: SessionRevert
+  origin?: SessionOrigin
 }
 
 export type SessionCreated = {
@@ -3611,6 +3622,7 @@ export type SessionCreated = {
     permissionCeiling?: PermissionRuleset
     title: string
     subpath?: string
+    origin?: SessionOrigin
     created: number
   }
 }
@@ -4544,6 +4556,7 @@ export type SessionLogItem =
         permissionCeiling?: PermissionRuleset
         title: string
         subpath?: string
+        origin?: SessionOrigin
         created: number
       }
     }
@@ -6131,6 +6144,7 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly background?: "include" | "exclude" | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6142,6 +6156,7 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly background?: "include" | "exclude" | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6153,6 +6168,7 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly background?: "include" | "exclude" | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6164,6 +6180,7 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly background?: "include" | "exclude" | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6175,17 +6192,31 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly background?: "include" | "exclude" | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
     readonly cursor?: string | undefined
   }["parentID"]
+  readonly background?: {
+    readonly workspace?: string | undefined
+    readonly limit?: number | undefined
+    readonly order?: "asc" | "desc" | undefined
+    readonly search?: string | undefined
+    readonly parentID?: string | null | undefined
+    readonly background?: "include" | "exclude" | undefined
+    readonly directory?: string | undefined
+    readonly project?: string | undefined
+    readonly subpath?: string | undefined
+    readonly cursor?: string | undefined
+  }["background"]
   readonly directory?: {
     readonly workspace?: string | undefined
     readonly limit?: number | undefined
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly background?: "include" | "exclude" | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6197,6 +6228,7 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly background?: "include" | "exclude" | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6208,6 +6240,7 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly background?: "include" | "exclude" | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6219,6 +6252,7 @@ export type SessionListInput = {
     readonly order?: "asc" | "desc" | undefined
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
+    readonly background?: "include" | "exclude" | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -12444,7 +12478,26 @@ export type DotsSetInput = {
 
 export type DotsSetOutput = { data: DotsNativeStatus }["data"]
 
-export type DotsAttachInput = { readonly replaceOthers: { readonly replaceOthers: true }["replaceOthers"] }
+export type DotsAttachInput = {
+  readonly replaceOthers: {
+    readonly replaceOthers: true
+    readonly expectedTarget?: {
+      readonly dotID: string
+      readonly threadID: string
+      readonly environmentID: string
+      readonly revision: string
+    }
+  }["replaceOthers"]
+  readonly expectedTarget?: {
+    readonly replaceOthers: true
+    readonly expectedTarget?: {
+      readonly dotID: string
+      readonly threadID: string
+      readonly environmentID: string
+      readonly revision: string
+    }
+  }["expectedTarget"]
+}
 
 export type DotsAttachOutput = { data: DotsNativeStatus }["data"]
 

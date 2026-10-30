@@ -149,6 +149,7 @@ const ListInputBase = {
   order: Schema.Literals(["asc", "desc"]).pipe(Schema.optional),
   parentID: Schema.NullOr(SessionSchema.ID).pipe(Schema.optional),
   anchor: ListAnchor.pipe(Schema.optional),
+  background: Schema.Literals(["include", "exclude"]).pipe(Schema.optional),
 }
 
 const ListDirectoryInput = Schema.Struct({
@@ -175,6 +176,7 @@ type CreateBaseInput = {
   profileBinding?: SessionEvent.ProfileBinding
   permissionCeiling?: SessionSchema.Info["permissionCeiling"]
   native?: { readonly validate: () => Effect.Effect<boolean> }
+  origin?: SessionSchema.Info["origin"]
 }
 type CreateInput = CreateBaseInput &
   ({ location: Location.Ref; parentID?: never } | { parentID: SessionSchema.ID; location?: never })
@@ -1582,6 +1584,7 @@ const layer = Layer.effect(
                 permissionCeiling: permissionCeiling.length > 0 ? permissionCeiling : undefined,
                 title: input.title ?? `New session - ${new Date(now).toISOString()}`,
                 subpath: relative.length > 0 ? RelativePath.make(relative) : undefined,
+                origin: input.origin,
                 created: now,
               },
               options: { location },
@@ -2008,6 +2011,7 @@ const layer = Layer.effect(
         const conditions: SQL[] = []
         if ("directory" in input) conditions.push(eq(SessionTable.directory, input.directory))
         if (input.workspaceID) conditions.push(eq(SessionTable.workspace_id, input.workspaceID))
+        if (input.background === "exclude") conditions.push(isNull(SessionTable.origin))
         if ("project" in input) conditions.push(eq(SessionTable.project_id, input.project))
         if (input.search) {
           const punctuation = Object.entries({

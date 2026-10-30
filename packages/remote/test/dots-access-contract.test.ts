@@ -4,6 +4,17 @@ import { parseClientMessage, remoteOperationAccess, remoteOperations, type Remot
 const parse = (operation: string, input?: unknown, sessionID?: string | null) =>
   parseClientMessage(JSON.stringify({ type: "request", id: "req_test", operation, sessionID, input }))
 
+test("names and exact target receipts survive remote status and attachment validation", async () => {
+  const { readDotsStatus } = await import("../src/index")
+  const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+  const value = { access: { enabled: true, revision: 1 }, configuration: { ready: true }, connection: { state: "connected", hostname: "box.local", name: "Named desk" }, computer: { state: "detached", name: "Executor desk", target } } satisfies RemoteDotsStatus
+  expect(readDotsStatus(value)).toEqual(value)
+  expect(parse("dots.attach", { replaceOthers: true, expectedTarget: target }).ok).toBe(true)
+  for (const invalid of [{ ...target, revision: "short" }, { ...target, environmentID: "" }, { ...target, accountID: "extra" }])
+    expect(parse("dots.attach", { replaceOthers: true, expectedTarget: invalid }).ok).toBe(false)
+  expect(readDotsStatus({ ...value, computer: { ...value.computer, target: { ...target, revision: "short" } } })).toBeUndefined()
+})
+
 test("global Dots controls reject Session and Location scope and preserve exact revisions", () => {
   expect(parse("dots.get").ok).toBe(true)
   expect(parse("dots.set", { enabled: true, expectedRevision: 0 }).ok).toBe(true)

@@ -54,6 +54,7 @@ export function remoteControlTransport(status: () => Promise<RemoteControlStatus
       return {
         state: current.state === "on" ? "connected" : current.state,
         ...(current.serverName === undefined ? {} : { hostname: current.serverName }),
+        ...(current.name === undefined ? {} : { name: current.name }),
         ...(current.problem === undefined ? {} : { problem: current.problem }),
       }
     },

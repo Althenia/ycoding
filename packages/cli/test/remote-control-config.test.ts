@@ -21,6 +21,7 @@ test("global native configuration alone starts and retires private connections w
       return { access: "synthetic", key: "key", profile, accountID: config.accountID, accountGeneration: config.accountGeneration, credentialID: config.credentialID }
     },
     subscribeConfiguration: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
+    name: async () => undefined,
     attachTransport: () => () => {},
     ...unexpectedExecutorHost,
     attach: async (pins) => {
@@ -135,6 +136,7 @@ test.each(["opening", "attached"] as const)("global Off then On retires the prio
       configuration: async () => config,
       credential: async () => ({ access: "synthetic", key: "key", profile: "Pinned", accountID: "account", accountGeneration: 1, credentialID: "credential" }),
       subscribeConfiguration: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
+      name: async () => undefined,
       attachTransport: () => () => {},
       ...unexpectedExecutorHost,
       attach: async (input) => { pins.push(input); return { channel: () => { throw Error("Unexpected channel") }, retire: () => {} } },
@@ -233,7 +235,7 @@ test("shutdown during configuration discovery cannot start a new connection", as
     native: {
       configuration: () => { entered.resolve(); return configuration.promise },
       credential: async () => { reads++; return undefined },
-      subscribeConfiguration: () => () => {}, attachTransport: () => () => {},
+      subscribeConfiguration: () => () => {}, name: async () => undefined, attachTransport: () => () => {},
       ...unexpectedExecutorHost,
       attach: async () => { throw Error("Unexpected attachment") },
     },

@@ -19,6 +19,7 @@ export class Error extends Schema.TaggedErrorClass<Error>()("DotsAccess.Error", 
 export interface TransportStatus {
   readonly state: "off" | "connecting" | "connected" | "error"
   readonly hostname?: string
+  readonly name?: string
   readonly problem?: "configuration" | "authentication" | "enrollment" | "connection"
 }
 
@@ -33,23 +34,26 @@ export type ComputerProblem =
   | "rejected"
   | "unconfirmed"
   | "connection"
+  | "target-changed"
 
 export interface ComputerStatus {
   readonly state: "attached" | "detached" | "unavailable"
   readonly problem?: ComputerProblem
+  readonly name?: string
+  readonly target?: Dots.ComputerTarget
 }
 
 export interface Transport {
   readonly status: () => Promise<TransportStatus>
   readonly computer: () => Promise<ComputerStatus>
-  readonly attachComputer: () => Promise<ComputerStatus>
+  readonly attachComputer: (expectedTarget?: Dots.ComputerTarget) => Promise<ComputerStatus>
 }
 
 export interface Interface {
   readonly get: () => Effect.Effect<Dots.Access, Error>
   readonly set: (input: Dots.AccessSet) => Effect.Effect<Dots.Access, Error>
   readonly status: () => Effect.Effect<Dots.NativeStatus, Error>
-  readonly attachComputer: () => Effect.Effect<Dots.NativeStatus, Error>
+  readonly attachComputer: (expectedTarget?: Dots.ComputerTarget) => Effect.Effect<Dots.NativeStatus, Error>
   readonly subscribe: (listener: () => void) => () => void
   readonly attachTransport: (transport: Transport) => () => void
 }
@@ -79,8 +83,9 @@ const computerGuidance = {
   "admin-disabled": "Your workspace administrator has disabled local computer access.",
   "not-connectable": "ChatGPT does not allow attaching this computer right now.",
   rejected: "ChatGPT refused the attach request.",
-  unconfirmed: "ChatGPT did not confirm the attach. Check the state again before retrying.",
+  unconfirmed: "The attachment outcome is unconfirmed. Do not repeat the attach; refresh status and confirm the current computer before any new attempt.",
   connection: "Your Dot's computers could not be read. Try again.",
+  "target-changed": "The Dots computer or account changed. Refresh and confirm the current computer before attaching.",
 } satisfies Record<ComputerProblem, string>
 const computerFailure: ComputerStatus = { state: "unavailable", problem: "connection" }
 
@@ -97,10 +102,16 @@ export function make(input: {
     return yield* Schema.decodeUnknownEffect(Dots.Access)(value).pipe(Effect.mapError(() =>
       new Error({ code: "unavailable", message: "The global Dots access preference is invalid" })))
   })
-  const observe = Effect.fn("DotsAccess.status")(function* (read: (transport: Transport) => Promise<ComputerStatus>) {
-    const initial = yield* get()
-    const configuration = yield* input.configuration()
+  type Snapshot = { readonly owner: typeof attached; readonly access: Dots.Access; readonly configuration: Dots.NativeStatus["configuration"] }
+  const snapshot = Effect.fnUntraced(function* () {
     const owner = attached
+    const access = yield* get()
+    const configuration = yield* input.configuration()
+    return { owner, access, configuration }
+  })
+  const observe = Effect.fn("DotsAccess.status")(function* (read: (transport: Transport) => Promise<ComputerStatus>, baseline?: Snapshot) {
+    const initial = baseline ?? (yield* snapshot())
+    const owner = initial.owner
     const [observed, computed] = owner
       ? yield* Effect.all([
         Effect.tryPromise(() => owner.transport.status()).pipe(Effect.catch(() => Effect.succeed<TransportStatus>({ state: "error", problem: "connection" }))),
@@ -111,22 +122,27 @@ export function make(input: {
     const current = yield* input.configuration()
     const profile = display(current.profile, 256)
     const message = display(current.message, 500)
-    const hostname = owner === attached && initial.revision === access.revision ? display(observed?.hostname, 256) : undefined
+    const currentBinding = owner === attached && initial.access.revision === access.revision && isDeepStrictEqual(initial.configuration, current)
+    const hostname = currentBinding ? display(observed?.hostname, 256) : undefined
+    const name = currentBinding ? display(observed?.name, 256) : undefined
     const connection: Dots.NativeStatus["connection"] = !owner || owner !== attached ? { state: "unavailable" }
       : !access.enabled || !current.ready ? { state: "off" }
-      : initial.revision !== access.revision || !isDeepStrictEqual(configuration, current) ? { state: "connecting" }
+      : !currentBinding ? { state: "connecting" }
       : observed ? {
         state: observed.state,
         ...(observed.problem ? { message: guidance[observed.problem] } : {}),
       } : { state: "connecting" }
     const computerMessage = computed?.problem !== undefined && Object.hasOwn(computerGuidance, computed.problem) ? computerGuidance[computed.problem] : undefined
     const computer: Dots.NativeStatus["computer"] = !owner || owner !== attached ? undefined
-      : initial.revision !== access.revision || !computed ? { state: "unavailable" }
-      : { state: computed.state, ...(computerMessage ? { message: computerMessage } : {}) }
+      : !currentBinding || !computed ? { state: "unavailable" }
+      : !access.enabled || !current.ready ? { state: "unavailable", message: computerGuidance.configuration }
+      : { state: computed.state, ...(computerMessage ? { message: computerMessage } : {}),
+        ...(display(computed.name, 256) ? { name: display(computed.name, 256) } : {}),
+        ...(computed.target === undefined ? {} : { target: computed.target }) }
     return {
       access,
       configuration: { ready: current.ready, ...(profile ? { profile } : {}), ...(message ? { message } : {}) },
-      connection: { ...connection, ...(hostname ? { hostname } : {}) },
+      connection: { ...connection, ...(hostname ? { hostname } : {}), ...(name ? { name } : {}) },
       ...(computer ? { computer } : {}),
     }
   })
@@ -153,15 +169,15 @@ export function make(input: {
       )
     }),
     status: () => observe((transport) => transport.computer()),
-    attachComputer: Effect.fn("DotsAccess.attachComputer")(function* () {
-      const owner = attached
+    attachComputer: Effect.fn("DotsAccess.attachComputer")(function* (expectedTarget?: Dots.ComputerTarget) {
+      const initial = yield* snapshot()
+      const owner = initial.owner
       if (!owner) return yield* new Error({ code: "unavailable", message: "The native transport is unavailable" })
-      const access = yield* get()
-      const ready = access.enabled && (yield* input.configuration()).ready
+      const ready = owner === attached && initial.access.enabled && initial.configuration.ready
       const result = ready
-        ? yield* Effect.tryPromise(() => owner.transport.attachComputer()).pipe(Effect.catch(() => Effect.succeed(computerFailure)))
+        ? yield* Effect.tryPromise(() => owner.transport.attachComputer(expectedTarget)).pipe(Effect.catch(() => Effect.succeed(computerFailure)))
         : { state: "unavailable" as const, problem: "configuration" as const }
-      return yield* observe(() => Promise.resolve(result))
+      return yield* observe(() => Promise.resolve(result), initial)
     }),
     subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
     attachTransport: (transport) => {

@@ -9,6 +9,11 @@ import { unexpectedExecutorHost } from "./fixture/cca-scope"
 
 const computer = { computer: async () => ({ state: "attached" as const }), attach: async () => ({ state: "attached" as const }) }
 
+test("status keeps the registered name separate from hostname", async () => {
+  const transport = remoteControlTransport(async () => ({ state: "on", serverName: "box.local", name: "Registered desk" }), computer)
+  expect(await transport.status()).toEqual({ state: "connected", hostname: "box.local", name: "Registered desk" })
+})
+
 test.each([
   { state: "off", expected: "off" },
   { state: "connecting", expected: "connecting" },
@@ -38,6 +43,7 @@ test.each([false, true])("bootstrap registers the host status, follows configura
   const native: NativeDots.Host = {
     configuration: async () => ({ enabled: false }),
     credential: async () => undefined,
+    name: async () => undefined,
     subscribeConfiguration: () => {
       events.push("subscribe")
       if (fails) throw Error("Synthetic startup failure")

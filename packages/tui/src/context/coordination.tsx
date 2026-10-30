@@ -127,6 +127,7 @@ function createCoordination() {
       do {
         const page = await client.api.session.list({
           parentID: null,
+          background: "exclude",
           limit: 200,
           ...(cursor === undefined ? {} : { cursor }),
         })

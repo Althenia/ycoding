@@ -52,6 +52,8 @@ export function DialogDotsConnection(props: { connection: ReturnType<typeof crea
         `Configuration: ${status ? status.configuration.ready ? "Ready" : "Not ready" : "Unreported"}`,
         `Profile: ${status?.configuration.profile ?? "Unreported"}`,
         `Computer: ${status?.connection.hostname ?? "Unreported"}`,
+        ...(status?.connection.name ? [`Name: ${status.connection.name}`] : []),
+        ...(computer?.name ? [`Executor name: ${computer.name}`] : []),
         ...(computer ? [`Executor: ${computerLabels[computer.state]}`] : []),
         ...(computer?.message ? [computer.message] : []),
         `Connection: ${reported ? reported[0].toUpperCase() + reported.slice(1) : "Unreported"}${status && !connection.ready() && !connection.pending() ? " (last reported)" : ""}`,

@@ -443,7 +443,7 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
       staleTime: 10_000,
       retry: false,
       queryFn: async (): Promise<readonly SessionCandidate[]> => {
-        const outcome = await link.request(current, "session.list", { input: { limit: 25, order: "active", parentID: null, searchFields: "summary", ...(needle === "" ? {} : { search: needle }) }, timeoutMs: 10_000 })
+        const outcome = await link.request(current, "session.list", { input: { limit: 25, order: "active", parentID: null, background: "exclude", searchFields: "summary", ...(needle === "" ? {} : { search: needle }) }, timeoutMs: 10_000 })
         if (outcome.status !== "ok") throw new Error(describeOutcome(outcome, "Sessions"))
         return readSessionCandidates(outcome.value)
       },

@@ -24,6 +24,7 @@ import { useToast } from "../ui/toast"
 import { useRoute } from "./route"
 import { useData } from "./data"
 import { useLocation } from "./location"
+import { isBackgroundSession } from "../util/session"
 
 export function recentModels(model: ModelPreferenceModel, recent: ModelPreferenceModel[]) {
   const seen = new Set<string>()
@@ -519,7 +520,7 @@ export const {
       const pinned = createMemo(() =>
         data.session
           .list()
-          .filter((x) => x.parentID === undefined && x.time.pinned !== undefined)
+          .filter((x) => x.parentID === undefined && x.time.pinned !== undefined && !isBackgroundSession(x))
           .toSorted((a, b) => a.time.pinned! - b.time.pinned! || a.id.localeCompare(b.id))
           .map((x) => x.id),
       )

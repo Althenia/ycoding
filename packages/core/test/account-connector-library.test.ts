@@ -46,6 +46,8 @@ function fixture(
     stream?: () => Response
     requestFailure?: string
     uploadHeaders?: Record<string, string>
+    staleAt?: "creation" | "transfer" | "completion"
+    jsonResponse?: () => Response
   } = {},
 ) {
   const requests: Array<{ route: string; init?: RequestInit }> = []
@@ -67,7 +69,8 @@ function fixture(
       Effect.sync(() => {
         requests.push({ route, init })
         if (options.requestFailure) throw new Error(options.requestFailure)
-        if (route === "/files/library") return Response.json({ items: [], cursor: "opaque-page-2" })
+        if (route === "/files/library")
+          return options.jsonResponse?.() ?? Response.json({ items: [], cursor: "opaque-page-2" })
         if (route === "/files/library/mounted/materialize") return Response.json({ file_id: "file-materialized" })
         if (route.startsWith("/estuary/upload_content_bytes")) return new Response(null, { status: 201 })
         if (route.startsWith("/files/library/content_download")) return new Response(bytes)
@@ -75,13 +78,17 @@ function fixture(
           return Response.json({
             download_url: options.invalidURL ?? "https://synthetic.blob.core.windows.net/container/file?sig=synthetic",
           })
-        if (route === "/files")
+        if (route === "/files") {
+          if (options.staleAt === "creation") stale = true
+          if (options.jsonResponse) return options.jsonResponse()
           return Response.json({
             file_id: "file-upload",
             upload_url: options.invalidURL ?? "https://synthetic.blob.core.windows.net/container/file?sig=synthetic",
             upload_headers: options.uploadHeaders ?? { "x-ms-blob-type": "BlockBlob" },
           })
-        if (route === "/files/process_upload_stream")
+        }
+        if (route === "/files/process_upload_stream") {
+          if (options.staleAt === "completion") stale = true
           return new Response(
             [
               JSON.stringify({
@@ -98,10 +105,12 @@ function fixture(
                 : [JSON.stringify({ event: "file.processing.completed", file_id: "file-upload" })]),
             ].join("\n"),
           )
+        }
         throw new Error("unexpected route")
       }),
     fetch: async (url, init) => {
       requests.push({ route: url.toString(), init })
+      if (options.staleAt === "transfer") stale = true
       return init?.method === "PUT" ? new Response(null, { status: 201 }) : (options.stream?.() ?? new Response(bytes))
     },
   })
@@ -113,8 +122,58 @@ function fixture(
 }
 
 describe("native account Library", () => {
+  for (const failure of ["stream", "limit"] as const)
+    test(`a ${failure} failure reading a dispatched create response is uncertain while a list remains an ordinary read`, async () => {
+      const jsonResponse = () =>
+        failure === "stream"
+          ? new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.error(new Error("synthetic broken body"))
+                },
+              }),
+            )
+          : new Response(new Uint8Array(2 * 1024 * 1024 + 1))
+      const current = fixture({ jsonResponse })
+      const content = await Effect.runPromise(attachments.import(bytes))
+      const message = await rejected(
+        current.call("upload", {
+          attachmentURI: AttachmentStore.managedURI(content),
+          name: "fixture.txt",
+          mimeType: "text/plain",
+        }),
+      )
+      expect(message).toContain("uncertain")
+      expect(message).toContain("do not retry")
+      expect(current.requests.map((request) => request.route)).toEqual(["/files"])
+      const read = fixture({ jsonResponse })
+      expect(await rejected(read.call("list", {}))).not.toContain("uncertain")
+      expect(read.requests.map((request) => request.route)).toEqual(["/files/library"])
+    })
+  for (const staleAt of ["creation", "transfer", "completion"] as const)
+    test(`a principal change after ${staleAt} reports an uncertain upload and never replays writes`, async () => {
+      const current = fixture({ staleAt })
+      const content = await Effect.runPromise(attachments.import(bytes))
+      const message = await rejected(
+        current.call("upload", {
+          attachmentURI: AttachmentStore.managedURI(content),
+          name: "fixture.txt",
+          mimeType: "text/plain",
+        }),
+      )
+      expect(message).toContain("uncertain")
+      expect(message).toContain("do not retry")
+      expect(current.requests.filter((request) => request.route === "/files")).toHaveLength(1)
+      expect(current.requests.filter((request) => request.init?.method === "PUT")).toHaveLength(
+        staleAt === "creation" ? 0 : 1,
+      )
+      expect(current.requests.filter((request) => request.route === "/files/process_upload_stream")).toHaveLength(
+        staleAt === "completion" ? 1 : 0,
+      )
+    })
   test("registers native operations without a hosted tool catalog", () => {
     expect(fixture().registration.options.paths).toEqual({
+      chatgpt_library_prepare: "chatgpt.library.prepare",
       chatgpt_library_list: "chatgpt.library.list",
       chatgpt_library_materialize: "chatgpt.library.materialize",
       chatgpt_library_download: "chatgpt.library.download",
@@ -219,7 +278,7 @@ describe("native account Library", () => {
   test("rejects denied or changed-account calls before network dispatch", async () => {
     for (const option of [{ denied: true }, { stale: true }]) {
       const current = fixture(option)
-      await rejected(current.call("list", {}))
+      expect(await rejected(current.call("list", {}))).not.toContain("uncertain")
       expect(current.requests).toEqual([])
     }
   })

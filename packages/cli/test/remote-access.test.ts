@@ -5,6 +5,17 @@ import { createSessionRegistry, createSubscriptions, executeRemoteOperation } fr
 
 const status: RemoteDotsStatus = { access: { enabled: false, revision: 2 }, configuration: { ready: true, profile: "Synthetic" }, connection: { state: "off" } }
 
+test("remote attachment dispatch preserves the target receipt", async () => {
+  const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+  const calls: unknown[][] = []
+  const local = new Proxy({} as LocalServer, { get: (_target, name) => async (...args: unknown[]) => { calls.push([name, ...args]); return status } })
+  const result = await executeRemoteOperation({ local, sessions: createSessionRegistry({ local }), subscriptions: createSubscriptions(), request: {
+    type: "request", id: "req_target", operation: "dots.attach", input: { replaceOthers: true, expectedTarget: target },
+  } })
+  expect(result).toMatchObject([{ ok: true }])
+  expect(calls).toEqual([["dotsAttach", target]])
+})
+
 test("global Dots operations need no Session inventory and preserve exact revision and conflicts", async () => {
   const calls: unknown[][] = []
   let failure: LocalFailure | undefined
@@ -56,10 +67,13 @@ test("global Dots local adapter sends no Session or Location and only revision-f
     expect(await local.dotsGet()).toEqual(status)
     expect(await local.dotsSet({ enabled: true, expectedRevision: 2 })).toEqual(status)
     expect(await local.dotsAttach()).toEqual(status)
+    const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+    expect(await local.dotsAttach(target)).toEqual(status)
     expect(requests).toEqual([
       { path: "/api/dots", query: "", method: "GET", directory: null, workspace: null, body: undefined },
       { path: "/api/dots", query: "", method: "PUT", directory: null, workspace: null, body: { enabled: true, expectedRevision: 2 } },
       { path: "/api/dots/computer", query: "", method: "POST", directory: null, workspace: null, body: { replaceOthers: true } },
+      { path: "/api/dots/computer", query: "", method: "POST", directory: null, workspace: null, body: { replaceOthers: true, expectedTarget: target } },
     ])
   } finally { await server.stop(true) }
 })

@@ -22,7 +22,7 @@ function fixture() {
   const [owner, setOwner] = createSignal<object>({})
   const reads: { result: ReturnType<typeof deferred<Dots.NativeStatus>>; signal: AbortSignal }[] = []
   const writes: { input: { enabled: boolean; expectedRevision: number }; result: ReturnType<typeof deferred<Dots.NativeStatus>> }[] = []
-  const attaches: { input: { replaceOthers: true }; result: ReturnType<typeof deferred<Dots.NativeStatus>> }[] = []
+  const attaches: { input: Dots.ComputerAttach; result: ReturnType<typeof deferred<Dots.NativeStatus>> }[] = []
   const errors: unknown[] = []
   let dispose!: () => void
   const state = createRoot((release) => {
@@ -51,6 +51,20 @@ function fixture() {
 }
 
 const withComputer = (computer: Dots.NativeStatus["computer"], enabled = true, revision = 2): Dots.NativeStatus => ({ ...status(enabled, revision), computer })
+
+test("attachment confirms the displayed target even if refreshed status changes", async () => {
+  const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+  const view = await opened({ state: "detached", target })
+  try {
+    view.state.requestAttach()
+    const pending = view.state.attach()
+    expect(view.attaches[0]!.input).toEqual({ replaceOthers: true, expectedTarget: target })
+    view.attaches[0]!.result.resolve(withComputer({ state: "attached", target }))
+    await flush()
+    view.reads.at(-1)!.result.resolve(withComputer({ state: "attached", target }))
+    await pending
+  } finally { view.dispose() }
+})
 
 async function opened(computer: Dots.NativeStatus["computer"], enabled = true) {
   const view = fixture()

@@ -91,6 +91,7 @@ type Endpoint5_0Input = {
   readonly order?: Endpoint5_0Request["query"]["order"]
   readonly search?: Endpoint5_0Request["query"]["search"]
   readonly parentID?: Endpoint5_0Request["query"]["parentID"]
+  readonly background?: Endpoint5_0Request["query"]["background"]
   readonly directory?: Endpoint5_0Request["query"]["directory"]
   readonly project?: Endpoint5_0Request["query"]["project"]
   readonly subpath?: Endpoint5_0Request["query"]["subpath"]
@@ -104,6 +105,7 @@ const Endpoint5_0 = (raw: RawClient["server.session"]) => (input?: Endpoint5_0In
       order: input?.["order"],
       search: input?.["search"],
       parentID: input?.["parentID"],
+      background: input?.["background"],
       directory: input?.["directory"],
       project: input?.["project"],
       subpath: input?.["subpath"],
@@ -2807,9 +2809,14 @@ const Endpoint39_1 = (raw: RawClient["server.dots"]) => (input: Endpoint39_1Inpu
   )
 
 type Endpoint39_2Request = Parameters<RawClient["server.dots"]["dots.attach"]>[0]
-type Endpoint39_2Input = { readonly replaceOthers: Endpoint39_2Request["payload"]["replaceOthers"] }
+type Endpoint39_2Input = {
+  readonly replaceOthers: Endpoint39_2Request["payload"]["replaceOthers"]
+  readonly expectedTarget?: Endpoint39_2Request["payload"]["expectedTarget"]
+}
 const Endpoint39_2 = (raw: RawClient["server.dots"]) => (input: Endpoint39_2Input) =>
-  raw["dots.attach"]({ payload: { replaceOthers: input["replaceOthers"] } }).pipe(
+  raw["dots.attach"]({
+    payload: { replaceOthers: input["replaceOthers"], expectedTarget: input["expectedTarget"] },
+  }).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
   )

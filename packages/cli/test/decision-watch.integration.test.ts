@@ -111,6 +111,12 @@ test("a real Session's permission ask wakes the watch, stays pending, and the re
   expect(settled.outcome).toBe("settled")
   expect(settled.execution).toMatchObject({ status: "succeeded", inputIDs: ["msg_watch_target"], response: "Watched task finished." })
   expect(new Date(settled.execution.settledAt).getTime()).toBeGreaterThanOrEqual(new Date(settled.execution.startedAt).getTime())
+  expect(settled.execution.endEvent.seq).toBeGreaterThan(settled.execution.startEvent.seq)
+  expect(settled.work.receipt).toBeUndefined()
+  expect(["incomplete", "running"]).toContain(settled.work.state)
+  expect(settled.work).toMatchObject({ todos: { sessionID: "ses_watch_target", open: 0, items: [] }, decisions: [], tasks: [], lost: [], pending: 0 })
+  expect(JSON.stringify(settled.work)).not.toContain("ses_watch_other")
+  expect(settled.resume).toEqual(["ycoding", "decision", "watch", "ses_watch_target", "--after", String(settled.after), "--server", server.base, "--timeout", "45", "--json"])
   expect((await permissions(server, "ses_watch_other")).map((item) => item.id)).toEqual([unrelated.id])
 }, 120_000)
 

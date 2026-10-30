@@ -16,6 +16,7 @@ import { DialogSessionRename } from "./dialog-session-rename"
 import { Spinner } from "./spinner"
 import { errorMessage } from "../util/error"
 import { readableForeground } from "../theme/component"
+import { isBackgroundSession } from "../util/session"
 
 export function DialogSessionList(
   props: {
@@ -48,8 +49,9 @@ export function DialogSessionList(
         limit: 50,
         order: "desc",
         parentID: null,
+        background: "exclude",
       })
-      return { query, sessions: response.data, error: undefined }
+      return { query, sessions: response.data.filter((session) => !isBackgroundSession(session)), error: undefined }
     } catch (error) {
       // A transient transport failure must degrade search, not crash the TUI
       // through the root ErrorBoundary when the errored resource is read.
@@ -60,7 +62,7 @@ export function DialogSessionList(
   const currentSessionID = createMemo(() => (route.data.type === "session" ? route.data.sessionID : undefined))
   const localSessions = createMemo(() => {
     const query = filter().trim().toLowerCase()
-    const sessions = data.session.list()
+    const sessions = data.session.list().filter((session) => !isBackgroundSession(session))
     if (!query) return sessions
     return sessions.filter((session) => !session.parentID && session.title.toLowerCase().includes(query))
   })

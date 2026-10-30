@@ -72,6 +72,7 @@ export type CcaExperimentState = {
   readonly updatedAt: string
   readonly executorID?: string
   readonly customDisplayName?: string | null
+  readonly displayName?: string
   readonly errorClassification?: string
   readonly selectedCapabilityRoots?: readonly CcaCapabilityRoot[]
 }
@@ -297,6 +298,7 @@ export async function runCcaRegistration(input: RunCcaRegistrationInput): Promis
     status: "completed",
     executorID: decoded.executorID,
     customDisplayName: decoded.customDisplayName,
+    displayName: name.slice(0, 100),
     selectedCapabilityRoots: roots,
   })
 
@@ -317,9 +319,11 @@ export async function reregisterCcaExecutor(input: {
   readonly wait?: (ms: number, signal?: AbortSignal) => Promise<void>
   readonly timeoutMs?: number
   readonly signal?: AbortSignal
+  readonly preserveExecutor?: boolean
 }): Promise<{ readonly state: CcaExperimentState; readonly executorChanged: boolean }> {
+  const displayName = (input.displayName ?? os.hostname()).trim().slice(0, 100)
   const body = buildCcaRegistrationBody({
-    displayName: input.displayName ?? os.hostname(),
+    displayName,
     installationID: input.state.installationID,
     roots: input.roots,
   })
@@ -334,13 +338,16 @@ export async function reregisterCcaExecutor(input: {
     }
   }
   const decoded = await register(1)
+  const executorChanged = decoded.executorID !== input.state.executorID
+  if (executorChanged && input.preserveExecutor) return { state: input.state, executorChanged }
   const state: CcaExperimentState = {
     ...input.state,
     executorID: decoded.executorID,
     customDisplayName: decoded.customDisplayName,
+    displayName,
     selectedCapabilityRoots: input.roots,
     updatedAt: new Date().toISOString(),
   }
   await writeFile(input.statePath, JSON.stringify(state, null, 2), { mode: 0o600 })
-  return { state, executorChanged: decoded.executorID !== input.state.executorID }
+  return { state, executorChanged }
 }

@@ -34,6 +34,7 @@ import { acceptCcaNoiseHandshake, createCcaNoiseIdentity, type AcceptCcaNoiseHan
 import { awaitWebSocketOpen, waitForAbort, type CcaWebSocketConnector } from "./cca-proof-common"
 import type { CcaProofJournalRecordInput } from "./cca-proof-journal"
 import { answerCcaTaskWorkspace, type CcaTaskWorkspaceHost } from "./cca-task-workspace"
+import { defaultDotsLabel } from "./label"
 import { accountHash } from "./state"
 import { ensureYcodingOperatorSkill } from "./ycoding-operator-skill"
 
@@ -53,6 +54,7 @@ export const ccaExecutorHostDiagnostics = [
   "channel-failed",
   "channel-summary",
   "registration-executor-changed",
+  "registration-rename-rejected",
   "registration-update-failed",
   "cleanup-failed",
 ] as const
@@ -75,7 +77,7 @@ type EnabledConfiguration = Extract<NativeDots.Configuration, { readonly enabled
 type Attempt = { readonly retry: false } | { readonly retry: true; readonly connectedMs: number }
 
 export interface CcaExecutorHostDeps {
-  readonly native: Pick<NativeDots.Host, "configuration" | "credential" | "subscribeConfiguration" | "threadScope" | "unattributedScope"> &
+  readonly native: Pick<NativeDots.Host, "configuration" | "credential" | "subscribeConfiguration" | "name" | "threadScope" | "unattributedScope"> &
     CcaTaskWorkspaceHost
   readonly statePath: string
   readonly installationID: () => Promise<string>
@@ -107,6 +109,7 @@ export function ccaReconnectDelay(backoffMs: number, random: () => number = Math
 type ServeRun = {
   identity: CcaNoiseIdentity | undefined
   registration: { readonly executorID: string; readonly result: CcaRegistrationResult } | undefined
+  renameRejected: string | undefined
   readonly sessions: CcaSessionRegistry
 }
 
@@ -168,6 +171,7 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
     credential: RemoteControlCredential.Resolved,
     configuration: EnabledConfiguration,
     signal: AbortSignal,
+    run: ServeRun,
   ): Promise<string> {
     const roots = ccaExecutorCapabilityRoots(home, deps.dataDirectory)
     const refreshFloraCredential = async (rejected: CcaCredential) => {
@@ -181,46 +185,55 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
         return undefined
       return { access: refreshed.access, accountID: refreshed.accountID }
     }
+    const configuredName = await deps.native.name()
     let state = await readEnrollment()
     if (state?.status === "failed") {
       await rm(deps.statePath, { force: true })
       state = undefined
     }
-    state ??= await runCcaRegistration({
-      credential: { access: credential.access, accountID: credential.accountID },
-      installationID: await deps.installationID(),
-      displayName: hostname(),
-      statePath: deps.statePath,
-      roots,
-      fetch: fetchFn,
-      refreshCredential: refreshFloraCredential,
-    }).then(
-      (result) => result.state,
-      async (error: unknown) => {
-        const recorded = await readEnrollment()
-        if (recorded === undefined) throw error
-        return recorded
-      },
-    )
+    if (state === undefined) {
+      const installationID = await deps.installationID()
+      state = await runCcaRegistration({
+        credential: { access: credential.access, accountID: credential.accountID },
+        installationID,
+        displayName: configuredName ?? defaultDotsLabel(hostname(), installationID),
+        statePath: deps.statePath,
+        roots,
+        fetch: fetchFn,
+        refreshCredential: refreshFloraCredential,
+      }).then(
+        (result) => result.state,
+        async (error: unknown) => {
+          const recorded = await readEnrollment()
+          if (recorded === undefined) throw error
+          return recorded
+        },
+      )
+    }
     if (state.status === "failed") throw new EnrollmentProblem("enrollment-rejected")
     if (state.status === "pending" || state.status === "uncertain") throw new EnrollmentProblem("enrollment-uncertain")
     if (state.status !== "completed") throw new EnrollmentProblem("enrollment-unreadable")
     if (state.accountHash !== accountHash(credential.accountID)) throw new EnrollmentProblem("enrollment-account-mismatch")
     if (typeof state.executorID !== "string" || !state.executorID.trim()) throw new EnrollmentProblem("enrollment-unreadable")
-    if (!sameCcaCapabilityRoots(state.selectedCapabilityRoots, roots)) {
+    const registered = state.displayName ?? hostname()
+    const label = configuredName ?? registered
+    const rootsChanged = !sameCcaCapabilityRoots(state.selectedCapabilityRoots, roots)
+    if (rootsChanged || (label !== registered && label !== run.renameRejected)) {
       try {
         const updated = await reregisterCcaExecutor({
           credential: { access: credential.access, accountID: credential.accountID },
           state,
-          displayName: hostname(),
+          displayName: label,
           statePath: deps.statePath,
           roots,
           fetch: fetchFn,
           refreshCredential: refreshFloraCredential,
           wait: (ms) => wait(ms, signal),
           signal,
+          preserveExecutor: !rootsChanged,
         })
-        if (updated.executorChanged) report("registration-executor-changed")
+        if (updated.executorChanged) report(rootsChanged ? "registration-executor-changed" : "registration-rename-rejected")
+        if (updated.executorChanged && !rootsChanged) run.renameRejected = label
         state = updated.state
       } catch {
         report("registration-update-failed")
@@ -346,7 +359,7 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
 
     let executorID: string
     try {
-      executorID = await enrolledExecutorID(credential, configuration, signal)
+      executorID = await enrolledExecutorID(credential, configuration, signal, run)
     } catch (error) {
       return error instanceof EnrollmentProblem ? rejected(error.category) : retry("enrollment-failed")
     }
@@ -461,6 +474,7 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
     const run: ServeRun = {
       identity: undefined,
       registration: undefined,
+      renameRejected: undefined,
       sessions: createCcaSessionRegistry(deps.detachedSessionTtlMs === undefined ? {} : { ttlMs: deps.detachedSessionTtlMs }),
     }
     let backoff = ccaReconnectInitialMs

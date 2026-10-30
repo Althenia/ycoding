@@ -108,6 +108,31 @@ function harness(options: {
 const request = { action: "shell", resources: ["echo synthetic"], metadata: { processId: "p1" } }
 
 describe("createCcaAuthorization", () => {
+  test("trusted Library operations use their own permission with mcp_execute guardrails", async () => {
+    const f = harness({ guardrailEvents: [
+      { type: "guardrail.asked", data: { sessionID, id: "grq_library", action: "mcp_execute", resources: ["connector_openai_library"] } },
+      { type: "guardrail.replied", data: { sessionID, requestID: "grq_library", reply: "once", authority: "user" } },
+    ] })
+    const grant = await f.authorization.authorize({ action: "chatgpt_library_upload", guardrailAction: "mcp_execute", resources: ["connector_openai_library"] })
+    expect(f.permissionInputs[0]!.action).toBe("chatgpt_library_upload")
+    expect(f.guardrailInputs[0]!.action).toBe("mcp_execute")
+    expect(grant.trace).toContainEqual({ kind: "guardrail", requestID: "grq_library", reply: "once", by: "user" })
+    await grant.release()
+    await f.authorization.close()
+  })
+  test.each(["permission", "guardrail"] as const)("a denied Library %s prevents dispatch under the real Session binding", async (kind) => {
+    const f = harness({ permissionFails: kind === "permission", guardrailFails: kind === "guardrail" })
+    let dispatched = 0
+    const operation = async () => {
+      const grant = await f.authorization.authorize({ action: "chatgpt_library_upload", guardrailAction: "mcp_execute", resources: ["connector_openai_library"] })
+      try { dispatched++ } finally { await grant.release() }
+    }
+    await expect(operation()).rejects.toBeInstanceOf(CcaAuthorizationDeniedError)
+    expect(dispatched).toBe(0)
+    expect(f.permissionInputs[0]).toMatchObject({ sessionID, action: "chatgpt_library_upload" })
+    if (kind === "guardrail") expect(f.guardrailInputs[0]).toMatchObject({ sessionID, action: "mcp_execute" })
+    await f.authorization.close()
+  })
   test("checks current, permission, guardrail, current in order and releases exactly once", async () => {
     const h = harness()
     const grant = await h.authorization.authorize(request)

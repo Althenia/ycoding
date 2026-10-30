@@ -16,8 +16,8 @@ export const DotsHandler = HttpApiBuilder.group(Api, "server.dots", (handlers) =
         ? new ConflictError({ message: error.message, resource: "dots" }) : new InvalidRequestError({ message: error.message })))
       return { data: yield* access.status().pipe(Effect.mapError((error) => new InvalidRequestError({ message: error.message }))) }
     }))
-    .handle("dots.attach", Effect.fn(function* () {
+    .handle("dots.attach", Effect.fn(function* (ctx) {
       const access = yield* DotsAccess.Service
-      return { data: yield* access.attachComputer().pipe(Effect.mapError((error) => new InvalidRequestError({ message: error.message }))) }
+      return { data: yield* access.attachComputer(ctx.payload.expectedTarget).pipe(Effect.mapError((error) => new InvalidRequestError({ message: error.message }))) }
     })),
 )

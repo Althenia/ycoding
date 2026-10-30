@@ -33,6 +33,12 @@ describe("remote Session location metadata", () => {
     }
   })
 
+  test("preserves a recognized executor origin and ignores anything else", () => {
+    expect(readSessionInfo({ id: "ses_dots", title: "Dots", origin: "dots-executor", time: { updated: 1 } })).toMatchObject({ id: "ses_dots", origin: "dots-executor" })
+    for (const origin of [undefined, null, "", "other", 7, ["dots-executor"]])
+      expect(readSessionInfo({ id: "ses_dots", title: "Dots", origin, time: { updated: 1 } })).not.toHaveProperty("origin")
+  })
+
   test("reads activity separately from list update time", () => {
     expect(readSessionInfo({ id: "ses_api", title: "API", time: { updated: 42, active: 30 } })).toMatchObject({ updatedAt: 42, activeAt: 30 })
     expect(readSessionInfo({ id: "ses_api", title: "API", time: { updated: 42 } })?.activeAt).toBeUndefined()

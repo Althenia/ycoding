@@ -863,6 +863,7 @@ const layer = Layer.effectDiscard(
             title: event.data.title,
             agent: event.data.agent,
             model: event.data.model,
+            origin: event.data.origin,
             permission:
               event.data.permissionCeiling && event.data.permissionCeiling.length > 0
                 ? SessionPermissionCeiling.denyOnly(event.data.permissionCeiling)

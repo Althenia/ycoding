@@ -38,6 +38,26 @@ const action = ".dots-connection__actions button:first-child"
 const fact = (name: string) => `[...document.querySelectorAll('.dots-connection dt')].find(node => node.textContent === ${JSON.stringify(name)})?.nextElementSibling?.textContent.trim()`
 const changes = `window.remoteMutationReport().filter(entry => entry.operation === 'dots.set')`
 
+test("named Dots computers render distinct registered names and confirm their exact target once", async () => {
+  const page = await browser!.openPage()
+  try {
+    await open(page, "dots=on&dotsName=Native%20desk&dotsExecutorName=Executor%20desk")
+    await wait(page, `${fact("Name")} === 'Native desk' && ${fact("Executor name")} === 'Executor desk'`)
+    expect(await page.evaluate<string>(fact("Computer"))).toBe("Studio Mac")
+    expect(await page.evaluate<string>(fact("Executor"))).toBe("Not attached")
+    await page.evaluate(`[...document.querySelectorAll('.dots-connection button')].find(node => node.textContent === 'Use this computer for Dots tasks').click()`)
+    await wait(page, `document.querySelector('[aria-label="Confirm computer change"]') !== null`)
+    expect(await page.evaluate<number>(`window.remoteMutationReport().filter(entry => entry.operation === 'dots.attach').length`)).toBe(0)
+    await page.evaluate(`const button = document.querySelector('[aria-label="Confirm computer change"] .button--primary'); button.click(); button.click()`)
+    await wait(page, `${fact("Executor")} === 'Attached'`)
+    expect(await page.evaluate<unknown[]>(`window.remoteMutationReport().filter(entry => entry.operation === 'dots.attach').map(entry => entry.input)`)).toEqual([
+      { replaceOthers: true, expectedTarget: { dotID: "dot_fixture", threadID: "thread_fixture", environmentID: "env_dev_studio", revision: "a".repeat(64) } },
+    ])
+    expect(await page.evaluate<string>(fact("Name"))).toBe("Native desk")
+    expect(await page.evaluate<string>(fact("Executor name"))).toBe("Executor desk")
+  } finally { await page.close() }
+}, 60_000)
+
 test.each(["", "noSelection=1", "session_id=ses_child"])("backend Dots information and controls are available from %s", async (query) => {
   const page = await browser!.openPage()
   try {

@@ -9,6 +9,7 @@ import { Model } from "./model.js"
 import { NonNegativeInt, PositiveInt, RelativePath } from "./schema.js"
 import { FileAttachment } from "./prompt.js"
 import { SessionID } from "./session-id.js"
+import { Origin } from "./session-origin.js"
 import { Location } from "./location.js"
 import { SessionMessage } from "./session-message.js"
 import { Revert } from "./session-revert.js"
@@ -74,6 +75,7 @@ export const Created = Event.durable({
     permissionCeiling: Permission.Ruleset.pipe(optional),
     title: Schema.String,
     subpath: RelativePath.pipe(optional),
+    origin: Origin.pipe(optional),
     created: NonNegativeInt,
   },
 })

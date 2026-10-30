@@ -21,8 +21,8 @@ test("global Dots HTTP requires authentication without Session middleware and en
       if (state.enabled !== input.enabled) state = { enabled: input.enabled, revision: state.revision + 1 }
       return state
     }),
-    attachComputer: () => Effect.sync(() => {
-      calls.push("attach")
+    attachComputer: (target) => Effect.sync(() => {
+      calls.push(target ?? "attach")
       return { access: state, configuration: { ready: true, profile: "trusted" }, connection: { state: "connected" }, computer: { state: "attached" } }
     }),
     subscribe: () => () => {},
@@ -67,6 +67,11 @@ test("global Dots HTTP requires authentication without Session middleware and en
     expect(attached.status).toBe(200)
     expect(await attached.json()).toEqual({ data: { access: state, configuration: { ready: true, profile: "trusted" }, connection: { state: "connected" }, computer: { state: "attached" } } })
     expect(calls).toEqual(["attach"])
+    const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+    expect((await request("POST", { replaceOthers: true, expectedTarget: target }, "/api/dots/computer")).status).toBe(200)
+    expect(calls).toEqual(["attach", target])
+    expect((await request("POST", { replaceOthers: true, expectedTarget: { ...target, revision: "short" } }, "/api/dots/computer")).status).toBe(400)
+    expect(calls).toEqual(["attach", target])
   } finally {
     await handler.dispose()
   }

@@ -127,9 +127,21 @@ async function compileComputerHelper(plan: ComputerHelperBuild) {
 }
 
 // A stable identity keeps macOS privacy grants across rebuilds; an ad-hoc signature changes with every build.
-export function signingArguments(application: string, identity = process.env.YCODING_MACOS_SIGNING_IDENTITY) {
+export function signingArguments(
+  application: string,
+  identity = process.env.YCODING_MACOS_SIGNING_IDENTITY,
+  keychain = process.env.YCODING_MACOS_SIGNING_KEYCHAIN,
+) {
   if (!identity) return ["/usr/bin/codesign", "--force", "--sign", "-", application]
-  return ["/usr/bin/codesign", "--force", "--sign", identity, "--timestamp", application]
+  return [
+    "/usr/bin/codesign",
+    "--force",
+    ...(keychain ? ["--keychain", keychain] : []),
+    "--sign",
+    identity,
+    "--timestamp",
+    application,
+  ]
 }
 
 export async function verifyPackagedComputerHelper(binDirectory: string, platform: NodeJS.Platform = process.platform) {

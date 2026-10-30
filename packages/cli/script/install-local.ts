@@ -5,11 +5,18 @@ import os from "node:os"
 import path from "node:path"
 import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
 import { BUN_BINARY } from "../src/binary"
-import { COMPUTER_HELPER_APPLICATION } from "./computer-use"
+import { COMPUTER_HELPER_APPLICATION, verifyPackagedComputerHelper } from "./computer-use"
 
-export async function installLocalBuild(input: { source: string; destination: string; platform: NodeJS.Platform }) {
+export async function installLocalBuild(input: {
+  source: string
+  destination: string
+  platform: NodeJS.Platform
+  preserveComputerHelper?: boolean
+}) {
   if (input.platform === "win32") throw new Error("install:local supports macOS and Linux")
-  const items = [BUN_BINARY, ...(input.platform === "darwin" ? [COMPUTER_HELPER_APPLICATION] : []), BrowserExtension.directory]
+  if (input.preserveComputerHelper && input.platform !== "darwin") throw new Error("Preserving the computer helper requires macOS")
+  if (input.preserveComputerHelper) await verifyPackagedComputerHelper(input.destination, input.platform)
+  const items = [BUN_BINARY, ...(input.platform === "darwin" && !input.preserveComputerHelper ? [COMPUTER_HELPER_APPLICATION] : []), BrowserExtension.directory]
   await Promise.all(items.map((item) => requireBuilt(path.join(input.source, item))))
   const suffix = `.install-${process.pid}-${Date.now()}`
   const staged = items.map((item) => ({
@@ -22,7 +29,7 @@ export async function installLocalBuild(input: { source: string; destination: st
   await mkdir(input.destination, { recursive: true })
   try {
     for (const item of staged) await cp(item.source, item.candidate, { recursive: true, verbatimSymlinks: true })
-    if (input.platform === "darwin") verifySignature(path.join(input.destination, `.${COMPUTER_HELPER_APPLICATION}${suffix}`))
+    if (input.platform === "darwin" && !input.preserveComputerHelper) verifySignature(path.join(input.destination, `.${COMPUTER_HELPER_APPLICATION}${suffix}`))
     for (const item of staged) {
       if (await exists(item.target)) await rename(item.target, item.backup)
       committed.push(item)
@@ -77,7 +84,10 @@ if (import.meta.main) {
     "bin",
   )
   const destination = path.join(os.homedir(), ".local", "bin")
-  const installed = await installLocalBuild({ source, destination, platform: process.platform })
+  const preserveComputerHelper = process.argv.includes("--preserve-computer-helper")
+  const installed = await installLocalBuild({ source, destination, platform: process.platform, preserveComputerHelper })
   for (const file of installed) console.log(`installed ${file}`)
-  if (process.platform === "darwin") console.log(computerHelperSigningNotice(path.join(destination, COMPUTER_HELPER_APPLICATION)))
+  if (process.platform === "darwin") console.log(preserveComputerHelper
+    ? `retained ${path.join(destination, COMPUTER_HELPER_APPLICATION)}; signature and API compatibility verified`
+    : computerHelperSigningNotice(path.join(destination, COMPUTER_HELPER_APPLICATION)))
 }

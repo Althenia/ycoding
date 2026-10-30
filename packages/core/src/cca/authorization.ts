@@ -99,7 +99,7 @@ export function createCcaAuthorization(options: CreateCcaAuthorizationOptions): 
       const asked = event.type === "permission.asked" ? "permission" : event.type === "guardrail.asked" ? "guardrail" : undefined
       if (asked !== undefined) {
         if (stage !== asked || asks.has(asked) || typeof data.id !== "string" || claimed.has(data.id)) return
-        if (data.action !== input.action || !isDeepStrictEqual(data.resources, input.resources)) return
+        if (data.action !== (asked === "guardrail" ? input.guardrailAction ?? input.action : input.action) || !isDeepStrictEqual(data.resources, input.resources)) return
         claimed.add(data.id)
         asks.set(asked, { requestID: data.id })
         return
@@ -148,7 +148,7 @@ export function createCcaAuthorization(options: CreateCcaAuthorizationOptions): 
       stage = "guardrail"
       const reserved = yield* options.guardrail.assert({
         sessionID: options.sessionID,
-        action: input.action,
+        action: input.guardrailAction ?? input.action,
         resources: input.resources,
         ...(input.metadata === undefined ? {} : { metadata: { ...input.metadata } }),
         holder: `cca:${(options.holderID ?? randomUUID)()}`,
@@ -249,7 +249,7 @@ function deferred(
     kind,
     sessionID: typeof error.sessionID === "string" ? error.sessionID : sessionID,
     ...(typeof error.itemID === "string" ? { itemID: error.itemID } : {}),
-    action: typeof error.action === "string" ? error.action : input.action,
+    action: typeof error.action === "string" ? error.action : kind === "guardrail" ? input.guardrailAction ?? input.action : input.action,
     resources: Array.isArray(error.resources) ? error.resources.filter((item): item is string => typeof item === "string") : [...input.resources],
     hardReview: error.hardReview === true,
     state,

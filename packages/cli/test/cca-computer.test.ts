@@ -35,6 +35,7 @@ const computers = (rows: unknown[], fields: Record<string, unknown> = {}) =>
   json(200, { thread_id: threadID, computers: rows, local_computer_access_disabled_by_admin: false, ...fields })
 const dots = (items: unknown[], cursor: string | null = null) => json(200, { items, cursor })
 const activeDot = { id: dotID, status: "active" }
+const target = { dotID, threadID, environmentID: executorID, revision: expect.stringMatching(/^[a-f0-9]{64}$/) }
 
 const cleanups: (() => Promise<void>)[] = []
 afterEach(async () => {
@@ -101,7 +102,7 @@ function merge(...routes: Record<string, Reply[]>[]) {
 describe("computer status", () => {
   test("reads the active Dot, its root thread and the executor row with the CCA headers", async () => {
     const { control, seen } = await fixture({ routes: read([computers([row({ environment_id: "other" }), row({ is_attached: true })])]) })
-    expect(await control.computer()).toEqual({ state: "attached" })
+    expect(await control.computer()).toEqual({ state: "attached", target })
     expect(seen.map((item) => `${item.method} ${item.url}`)).toEqual([
       `GET ${base}/tbo?limit=25&include_room_preview=false`,
       `GET ${base}/tbo/${dotID}/root-thread`,
@@ -118,7 +119,7 @@ describe("computer status", () => {
 
   test("reports a listed detached executor as detached", async () => {
     const { control } = await fixture({ routes: read() })
-    expect(await control.computer()).toEqual({ state: "detached" })
+    expect(await control.computer()).toEqual({ state: "detached", target })
   })
 
   test("follows Dot list cursors and ignores inactive Dots", async () => {
@@ -130,7 +131,7 @@ describe("computer status", () => {
         [`GET ${listURL}`]: [computers([row({ is_attached: true })])],
       },
     })
-    expect(await control.computer()).toEqual({ state: "attached" })
+    expect(await control.computer()).toEqual({ state: "attached", target })
   })
 
   test("selects the primary Dot when several are active", async () => {
@@ -142,7 +143,7 @@ describe("computer status", () => {
         [`GET ${listURL}`]: [computers([row({ is_attached: true })])],
       },
     })
-    expect(await control.computer()).toEqual({ state: "attached" })
+    expect(await control.computer()).toEqual({ state: "attached", target })
   })
 
   test("fails with a fixed category when no single Dot can be chosen", async () => {
@@ -176,9 +177,9 @@ describe("computer status", () => {
     expect(await (await fixture({ routes: read([computers([row({ environment_id: "other" })])]) })).control.computer())
       .toEqual({ state: "unavailable", problem: "not-listed" })
     expect(await (await fixture({ routes: read([computers([row()], { local_computer_access_disabled_by_admin: true })]) })).control.computer())
-      .toEqual({ state: "detached", problem: "admin-disabled" })
+      .toEqual({ state: "detached", problem: "admin-disabled", target })
     expect(await (await fixture({ routes: read([computers([row({ can_connect: false })])]) })).control.computer())
-      .toEqual({ state: "detached", problem: "not-connectable" })
+      .toEqual({ state: "detached", problem: "not-connectable", target })
   })
 
   test("never calls ChatGPT without enabled access, a pinned credential and a completed enrollment for the account", async () => {
@@ -219,10 +220,10 @@ describe("computer status", () => {
   test("reuses one remote read for the cache window and shares a concurrent first read", async () => {
     const { control, seen, advance } = await fixture({ routes: read([computers([row()])]) })
     const [first, concurrent] = await Promise.all([control.computer(), control.computer()])
-    expect(first).toEqual({ state: "detached" })
-    expect(concurrent).toEqual({ state: "detached" })
+    expect(first).toEqual({ state: "detached", target })
+    expect(concurrent).toEqual({ state: "detached", target })
     advance(ccaComputerCacheMs - 1)
-    expect(await control.computer()).toEqual({ state: "detached" })
+    expect(await control.computer()).toEqual({ state: "detached", target })
     expect(seen.length).toBe(3)
   })
 
@@ -232,12 +233,12 @@ describe("computer status", () => {
     const { control, seen, advance, until } = await fixture({
       routes: merge(read([computers([row()])]), read([async () => { await gate; return computers([row({ is_attached: true })]) }])),
     })
-    expect(await control.computer()).toEqual({ state: "detached" })
+    expect(await control.computer()).toEqual({ state: "detached", target })
     advance(ccaComputerCacheMs)
-    expect(await control.computer()).toEqual({ state: "detached" })
-    expect(await control.computer()).toEqual({ state: "detached" })
+    expect(await control.computer()).toEqual({ state: "detached", target })
+    expect(await control.computer()).toEqual({ state: "detached", target })
     await until(() => seen.length === 6)
-    expect(await control.computer()).toEqual({ state: "detached" })
+    expect(await control.computer()).toEqual({ state: "detached", target })
     release()
     await until(async () => (await control.computer()).state === "attached")
     expect(seen.length).toBe(6)
@@ -247,15 +248,15 @@ describe("computer status", () => {
     const { control, seen, advance, until, diagnostics } = await fixture({
       routes: merge(read([computers([row({ is_attached: true })])]), read([json(502, { detail: "secret detail" })]), read([computers([row()])])),
     })
-    expect(await control.computer()).toEqual({ state: "attached" })
+    expect(await control.computer()).toEqual({ state: "attached", target })
     advance(ccaComputerCacheMs)
-    expect(await control.computer()).toEqual({ state: "attached" })
+    expect(await control.computer()).toEqual({ state: "attached", target })
     await until(() => diagnostics.length === 1)
     expect(diagnostics).toEqual(["CCA computer refresh-failed problem=connection"])
-    expect(await control.computer()).toEqual({ state: "attached" })
+    expect(await control.computer()).toEqual({ state: "attached", target })
     expect(seen.length).toBe(6)
     advance(ccaComputerCacheMs)
-    expect(await control.computer()).toEqual({ state: "attached" })
+    expect(await control.computer()).toEqual({ state: "attached", target })
     await until(async () => (await control.computer()).state === "detached")
     expect(seen.length).toBe(9)
   })
@@ -265,19 +266,19 @@ describe("computer status", () => {
     const { control, seen, reconfigure, statePath } = await fixture({
       routes: merge(read([computers([row({ is_attached: true })])]), read([computers([row()])]), read([computers([row(), row({ environment_id: other, is_attached: true })])])),
     })
-    expect(await control.computer()).toEqual({ state: "attached" })
+    expect(await control.computer()).toEqual({ state: "attached", target })
     reconfigure({ ...configuration, accessRevision: 2 })
-    expect(await control.computer()).toEqual({ state: "detached" })
+    expect(await control.computer()).toEqual({ state: "detached", target })
     expect(seen.length).toBe(6)
     await writeFile(statePath, JSON.stringify({ ...completed, executorID: other }), { mode: 0o600 })
-    expect(await control.computer()).toEqual({ state: "attached" })
+    expect(await control.computer()).toEqual({ state: "attached", target: { ...target, environmentID: other } })
     expect(seen.length).toBe(9)
   })
 
   test("exposes only the closed problem set", () => {
     expect([...ccaComputerProblems]).toEqual([
       "configuration", "authentication", "enrollment", "dot-unavailable", "not-listed",
-      "admin-disabled", "not-connectable", "rejected", "unconfirmed", "connection",
+      "admin-disabled", "not-connectable", "rejected", "unconfirmed", "connection", "target-changed",
     ])
   })
 })
@@ -287,14 +288,14 @@ describe("attach", () => {
     const { control, seen } = await fixture({
       routes: merge(read([computers([row()])]), { [`POST ${attachURL}`]: [new Response(null, { status: 204 })] }, read([computers([row({ is_attached: true })])])),
     })
-    expect(await control.attach()).toEqual({ state: "attached" })
+    expect(await control.attach()).toEqual({ state: "attached", target })
     const posts = seen.filter((item) => item.method === "POST")
     expect(posts.map((item) => item.url)).toEqual([attachURL])
     expect(posts[0]!.body).toBeUndefined()
     expect(posts[0]!.headers.authorization).toBe(`Bearer ${access}`)
     expect(posts[0]!.headers.originator).toBe("Codex Desktop")
     expect(seen.map((item) => item.method)).toEqual(["GET", "GET", "GET", "POST", "GET", "GET", "GET"])
-    expect(await control.computer()).toEqual({ state: "attached" })
+    expect(await control.computer()).toEqual({ state: "attached", target })
     expect(seen.length).toBe(7)
   })
 
@@ -302,8 +303,8 @@ describe("attach", () => {
     const { control, seen } = await fixture({
       routes: merge(read([computers([row()])]), read([computers([row({ is_attached: true })])])),
     })
-    expect(await control.computer()).toEqual({ state: "detached" })
-    expect(await control.attach()).toEqual({ state: "attached" })
+    expect(await control.computer()).toEqual({ state: "detached", target })
+    expect(await control.attach()).toEqual({ state: "attached", target })
     expect(seen.filter((item) => item.method === "POST")).toEqual([])
   })
 
@@ -317,7 +318,7 @@ describe("attach", () => {
     ]
     for (const item of cases) {
       const { control, seen } = await fixture({ routes: read([item.rows]) })
-      expect(await control.attach()).toEqual(item.expected)
+      expect(await control.attach()).toEqual({ ...item.expected, ...(item.expected.state === "unavailable" ? {} : { target }) })
       expect(seen.filter((entry) => entry.method === "POST")).toEqual([])
     }
   })
@@ -333,7 +334,7 @@ describe("attach", () => {
       routes: merge(read([computers([row()])]), { [`POST ${attachURL}`]: [json(409, { detail: "secret detail" })] }, read([computers([row()])])),
     })
     const status = await control.attach()
-    expect(status).toEqual({ state: "detached", problem: "rejected" })
+    expect(status).toEqual({ state: "detached", problem: "rejected", target })
     expect(JSON.stringify(status)).not.toContain("secret")
     expect(seen.filter((item) => item.method === "POST").length).toBe(1)
   })
@@ -342,24 +343,24 @@ describe("attach", () => {
     const network = await fixture({
       routes: merge(read([computers([row()])]), { [`POST ${attachURL}`]: [new Error("reset")] }, read([computers([row({ is_attached: true })])])),
     })
-    expect(await network.control.attach()).toEqual({ state: "attached" })
+    expect(await network.control.attach()).toEqual({ state: "attached", target })
     expect(network.seen.filter((item) => item.method === "POST").length).toBe(1)
 
     const server = await fixture({
       routes: merge(read([computers([row()])]), { [`POST ${attachURL}`]: [json(502, {})] }, read([computers([row()])])),
     })
-    expect(await server.control.attach()).toEqual({ state: "detached", problem: "unconfirmed" })
+    expect(await server.control.attach()).toEqual({ state: "detached", problem: "unconfirmed", target })
     expect(server.seen.filter((item) => item.method === "POST").length).toBe(1)
 
     const accepted = await fixture({
       routes: merge(read([computers([row()])]), { [`POST ${attachURL}`]: [new Response(null, { status: 204 })] }, read([computers([row()])])),
     })
-    expect(await accepted.control.attach()).toEqual({ state: "detached", problem: "unconfirmed" })
+    expect(await accepted.control.attach()).toEqual({ state: "detached", problem: "unconfirmed", target })
 
     const unreadable = await fixture({
       routes: merge(read([computers([row()])]), { [`POST ${attachURL}`]: [new Response(null, { status: 204 })] }, read([json(500, {})])),
     })
-    expect(await unreadable.control.attach()).toEqual({ state: "unavailable", problem: "connection" })
+    expect(await unreadable.control.attach()).toEqual({ state: "unavailable", problem: "unconfirmed" })
   })
 
   test("joins concurrent attach calls into one post", async () => {
@@ -376,7 +377,7 @@ describe("attach", () => {
     await until(() => seen.some((item) => item.method === "POST"))
     const second = control.attach()
     release()
-    expect(await Promise.all([first, second])).toEqual([{ state: "attached" }, { state: "attached" }])
+    expect(await Promise.all([first, second])).toEqual([{ state: "attached", target }, { state: "attached", target }])
     expect(seen.filter((item) => item.method === "POST").length).toBe(1)
   })
 
@@ -393,9 +394,9 @@ describe("attach", () => {
     })
     const stale = control.computer()
     await until(() => seen.some((item) => item.url === listURL))
-    expect(await control.attach()).toEqual({ state: "attached" })
+    expect(await control.attach()).toEqual({ state: "attached", target })
     release()
-    expect(await stale).toEqual({ state: "detached" })
-    expect(await control.computer()).toEqual({ state: "attached" })
+    expect(await stale).toEqual({ state: "detached", target })
+    expect(await control.computer()).toEqual({ state: "attached", target })
   })
 })

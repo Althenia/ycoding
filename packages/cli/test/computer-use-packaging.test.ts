@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import { MacOSComputer } from "@ycoding-ai/core/computer/macos"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { AppProcess } from "@ycoding-ai/core/process"
 import { Effect } from "effect"
+import { writeFileSync } from "node:fs"
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -126,6 +127,76 @@ describe("macOS computer helper packaging", () => {
       "-",
       "/tmp/bin/YCoding Computer Use.app",
     ])
+  })
+
+  test("passes an explicit signing keychain path as one argument with the configured identity", () => {
+    expect(signingArguments(
+      "/tmp/bin/YCoding Computer Use.app",
+      "SYNTHETIC-SIGNER",
+      "/tmp/Synthetic Keychains/login.keychain-db",
+    )).toEqual([
+      "/usr/bin/codesign",
+      "--force",
+      "--keychain",
+      "/tmp/Synthetic Keychains/login.keychain-db",
+      "--sign",
+      "SYNTHETIC-SIGNER",
+      "--timestamp",
+      "/tmp/bin/YCoding Computer Use.app",
+    ])
+  })
+
+  test("keeps ad hoc signing unchanged when a signing keychain is configured", () => {
+    expect(signingArguments("/tmp/bin/YCoding Computer Use.app", "", "/tmp/Synthetic Keychains/login.keychain-db")).toEqual([
+      "/usr/bin/codesign",
+      "--force",
+      "--sign",
+      "-",
+      "/tmp/bin/YCoding Computer Use.app",
+    ])
+  })
+
+  macTest("propagates signing environment defaults to the helper build native argv", async () => {
+    const bin = await mkdtemp(path.join(os.tmpdir(), "ycoding-signing-keychain-"))
+    const previousIdentity = process.env.YCODING_MACOS_SIGNING_IDENTITY
+    const previousKeychain = process.env.YCODING_MACOS_SIGNING_KEYCHAIN
+    const completed = Bun.spawnSync(["/usr/bin/true"], { stdout: "pipe", stderr: "pipe" })
+    const native = spyOn(Bun, "spawnSync").mockImplementation((command) => {
+      if (!Array.isArray(command)) throw new Error("Unexpected native invocation shape")
+      const args = command.map(String)
+      const output = args[args.indexOf(args[0] === "/usr/bin/sips" ? "--out" : "-o") + 1]
+      if (args[0] !== "/usr/bin/codesign" && output) writeFileSync(output, "synthetic native output")
+      return completed
+    })
+    process.env.YCODING_MACOS_SIGNING_IDENTITY = "SYNTHETIC-SIGNER"
+    process.env.YCODING_MACOS_SIGNING_KEYCHAIN = "/tmp/Synthetic Keychains/login.keychain-db"
+    try {
+      await buildComputerHelper({ platform: "darwin", arch: "arm64" }, bin)
+      const application = path.join(bin, "YCoding Computer Use.app")
+      const commands = native.mock.calls
+        .map(([command]) => (Array.isArray(command) ? command.map(String) : []))
+        .filter((args) => args[0] === "/usr/bin/codesign")
+      expect(commands).toEqual([
+        [
+          "/usr/bin/codesign",
+          "--force",
+          "--keychain",
+          "/tmp/Synthetic Keychains/login.keychain-db",
+          "--sign",
+          "SYNTHETIC-SIGNER",
+          "--timestamp",
+          application,
+        ],
+        ["/usr/bin/codesign", "--verify", "--deep", "--strict", application],
+      ])
+    } finally {
+      native.mockRestore()
+      if (previousIdentity === undefined) delete process.env.YCODING_MACOS_SIGNING_IDENTITY
+      else process.env.YCODING_MACOS_SIGNING_IDENTITY = previousIdentity
+      if (previousKeychain === undefined) delete process.env.YCODING_MACOS_SIGNING_KEYCHAIN
+      else process.env.YCODING_MACOS_SIGNING_KEYCHAIN = previousKeychain
+      await rm(bin, { recursive: true, force: true })
+    }
   })
 
   test("keeps only complete artifacts when the host cannot compile the macOS helper", () => {

@@ -302,6 +302,32 @@ describe("cca-executor-registration", () => {
     if (process.platform !== "win32") expect((await stat(statePath)).mode & 0o777).toBe(0o600)
   })
 
+  test("registration records the display name it registered", async () => {
+    const { value, stored } = await register(scriptedFetch([ok()]).fetch, { displayName: "  Desk Mac  " })
+    expect(value!.state.displayName).toBe("Desk Mac")
+    expect(stored!.displayName).toBe("Desk Mac")
+  })
+
+  test.each([
+    { name: "keeps the executor and records the label", returned: "ccarenv_b64_existing", changed: false },
+    { name: "returns another executor and writes nothing", returned: "ccarenv_b64_replacement", changed: true },
+  ])("a re-registration that must keep its executor $name", async ({ returned, changed }) => {
+    const { statePath, before } = await writeStored()
+    const scripted = scriptedFetch([ok(returned)])
+    const result = await reregisterCcaExecutor({
+      credential, state: storedState, displayName: "Desk Mac", statePath, roots: storedState.selectedCapabilityRoots, fetch: scripted.fetch, preserveExecutor: true,
+    })
+    expect(scripted.posts.map((post) => post.body)).toEqual([{ displayName: "Desk Mac", installation_id: experimentInstallationID, selected_capability_roots: storedState.selectedCapabilityRoots }])
+    expect(result.executorChanged).toBe(changed)
+    if (changed) {
+      expect(result.state).toEqual(storedState)
+      expect(await readFile(statePath, "utf8")).toBe(before)
+      return
+    }
+    expect(result.state).toEqual({ ...storedState, displayName: "Desk Mac", updatedAt: expect.any(String) })
+    expect(JSON.parse(await readFile(statePath, "utf8"))).toEqual({ ...storedState, displayName: "Desk Mac", updatedAt: expect.any(String) })
+  })
+
   test("re-registration retries a retryable failure once after 1 s", async () => {
     const { statePath } = await writeStored()
     const waits: number[] = []

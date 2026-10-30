@@ -5,7 +5,8 @@ import type { DotsAccess } from "@ycoding-ai/core/dots/access"
 import { createRemoteControlAppServer } from "./app-server"
 import { createRemoteControlBackend } from "./backend"
 import { Reassembler, encodeAck, encodeOutbound, encodePong } from "./envelope"
-import { accountHash, type RemoteControlStateStore } from "./state"
+import { defaultDotsLabel, serverNameForHost } from "./label"
+import { accountHash, type RemoteControlEnrollment, type RemoteControlStateStore } from "./state"
 import {
   buildConnectHeaders,
   buildEnrollHeaders,
@@ -40,6 +41,7 @@ export type RemoteControlStatus = {
   readonly profile?: string
   readonly environmentID?: string
   readonly serverName?: string
+  readonly name?: string
 }
 
 type FetchFn = (url: string, init?: RequestInit) => Promise<Response>
@@ -64,6 +66,8 @@ class HostError extends Error {
   }
 }
 
+class RenameRejected extends HostError {}
+
 function httpStatus(error: unknown) {
   if (typeof error === "object" && error !== null) {
     if ("status" in error && typeof error.status === "number") return error.status
@@ -74,11 +78,6 @@ function httpStatus(error: unknown) {
 
 function safeJSON(text: string): unknown {
   try { return JSON.parse(text) } catch { return undefined }
-}
-
-export function serverNameForHost(name: string) {
-  if (process.platform !== "darwin") return name
-  return name.includes(".") ? name : `${name}.local`
 }
 
 export function createRemoteControlHost(deps: RemoteControlHostDeps) {
@@ -98,9 +97,11 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
   let configurationWork = Promise.resolve()
   let selected = ""
   let cancelBackoff: (() => void) | undefined
+  let renameRejected: string | undefined
 
-  async function post(url: string, credential: Credential, installationID: string, serverID?: string) {
-    const name = serverNameForHost((deps.hostname ?? hostname)())
+  const machineName = () => (deps.hostname ?? hostname)()
+
+  async function post(url: string, credential: Credential, installationID: string, name: string, serverID?: string) {
     const response = await fetchFn(url, {
       method: "POST",
       headers: buildEnrollHeaders({ credential, installationID }),
@@ -119,46 +120,50 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
     return enrolled
   }
 
-  async function persist(enrolled: EnrollResponse, hash: string) {
+  async function persist(enrolled: EnrollResponse, hash: string, label: string) {
     await deps.store.saveEnrollment({
       websocketURL: websocketURL(),
       accountHash: hash,
       enrollment: {
         serverID: enrolled.serverID,
         environmentID: enrolled.environmentID,
-        serverName: serverNameForHost((deps.hostname ?? hostname)()),
+        serverName: label,
         remoteControlEnabled: true,
         updatedAt: now(),
       },
     })
   }
 
-  async function enroll(credential: Credential, installationID: string, hash: string): Promise<EnrollResponse> {
-    let outcome = await post(enrollURL(), credential, installationID)
+  async function enroll(credential: Credential, installationID: string, hash: string, label: string): Promise<EnrollResponse> {
+    let outcome = await post(enrollURL(), credential, installationID, label)
     if (!outcome.response.ok) {
       const action = nextActionForHttp({ phase: "enroll", status: outcome.response.status, recognizedMissingAppServer: recognizedMissingAppServer(outcome.text) })
       if (action === "delete_reenroll") {
         await deps.store.deleteEnrollment({ websocketURL: websocketURL(), accountHash: hash })
-        outcome = await post(enrollURL(), credential, installationID)
+        outcome = await post(enrollURL(), credential, installationID, label)
       }
     }
     if (!outcome.response.ok) throw new HostError(`Remote-control enrollment failed (${outcome.response.status})`, parseRetryAfterMs(outcome.response.headers.get("retry-after"), now()), outcome.response.status)
     const decoded = decodeEnrollResponse(safeJSON(outcome.text))
     if (decoded === undefined) throw new HostError("Remote-control enrollment returned an unexpected response")
-    await persist(decoded, hash)
+    await persist(decoded, hash, label)
     return adopted(decoded, credential)
   }
 
-  async function refresh(credential: Credential, installationID: string, hash: string, serverID: string): Promise<EnrollResponse> {
-    const outcome = await post(refreshURL(), credential, installationID, serverID)
+  async function refresh(credential: Credential, installationID: string, hash: string, label: string, existing: RemoteControlEnrollment): Promise<EnrollResponse> {
+    const renamed = existing.serverName !== label
+    const outcome = await post(refreshURL(), credential, installationID, label, existing.serverID)
     if (outcome.response.ok) {
       const decoded = decodeEnrollResponse(safeJSON(outcome.text))
       if (decoded === undefined) throw new HostError("Remote-control refresh returned an unexpected response")
-      await persist(decoded, hash)
+      if (renamed && (decoded.serverID !== existing.serverID || decoded.environmentID !== existing.environmentID))
+        throw new RenameRejected("Remote-control rename returned another enrollment")
+      await persist(decoded, hash, label)
       return adopted(decoded, credential)
     }
     const action = nextActionForHttp({ phase: "refresh", status: outcome.response.status, recognizedMissingAppServer: recognizedMissingAppServer(outcome.text) })
-    if (action === "delete_reenroll") return enroll(credential, installationID, hash)
+    if (action === "delete_reenroll" && renamed) throw new RenameRejected("Remote-control rename found no enrollment")
+    if (action === "delete_reenroll") return enroll(credential, installationID, hash, label)
     throw new HostError(`Remote-control refresh failed (${outcome.response.status})`, parseRetryAfterMs(outcome.response.headers.get("retry-after"), now()), outcome.response.status)
   }
 
@@ -168,16 +173,14 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
     return token.expiresAt > now() + 30_000
   }
 
-  async function ensureEnrolled(credential: Credential, installationID: string, hash: string) {
-    const existing = await deps.store.enrollment({ websocketURL: websocketURL(), accountHash: hash })
-    if (existing !== undefined && tokenUsable(credential))
+  async function ensureEnrolled(credential: Credential, installationID: string, hash: string, label: string, existing: RemoteControlEnrollment | undefined) {
+    if (existing !== undefined && existing.serverName === label && tokenUsable(credential))
       return { serverID: existing.serverID, environmentID: existing.environmentID, remoteControlToken: token!.value } satisfies EnrollResponse
-    if (existing !== undefined) return refresh(credential, installationID, hash, existing.serverID)
-    return enroll(credential, installationID, hash)
+    if (existing !== undefined) return refresh(credential, installationID, hash, label, existing)
+    return enroll(credential, installationID, hash, label)
   }
 
-  async function openSocket(enrolled: EnrollResponse, credential: Credential, installationID: string) {
-    const serverName = serverNameForHost((deps.hostname ?? hostname)())
+  async function openSocket(enrolled: EnrollResponse, credential: Credential, installationID: string, serverName: string) {
     const kind = deps.deviceKind === undefined ? undefined : await deps.deviceKind().catch(() => undefined)
     return deps.connect(websocketURL(), buildConnectHeaders({
       serverID: enrolled.serverID,
@@ -191,7 +194,12 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
 
   async function connectOnce(): Promise<void> {
     const connectingGeneration = generation
+    let requestedLabel: string | undefined
     const failed = (problem: NonNullable<RemoteControlStatus["problem"]>, error: unknown): never => {
+      if (error instanceof RenameRejected && connectingGeneration === generation) {
+        renameRejected = requestedLabel
+        deps.onDiagnostic?.("Remote-control rename rejected")
+      }
       const status = httpStatus(error)
       if (connectingGeneration === generation) current = { state: "error", problem: status === 401 || status === 403 ? "authentication" : problem }
       throw error
@@ -208,11 +216,16 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
     if (credential.accountID !== configuration.accountID || credential.credentialID !== configuration.credentialID || credential.accountGeneration !== configuration.accountGeneration)
       return failed("authentication", new HostError("The pinned ChatGPT profile changed"))
     const hash = accountHash(credential.accountID)
-    let enrolled = await ensureEnrolled(credential, state.installationID, hash).catch((error: unknown) => failed("enrollment", error))
+    const configuredName = await deps.native.name().catch((error: unknown) => failed("configuration", error))
+    const saved = await deps.store.enrollment({ websocketURL: websocketURL(), accountHash: hash }).catch((error: unknown) => failed("enrollment", error))
+    if (connectingGeneration !== generation) return
+    const label = (configuredName === renameRejected ? undefined : configuredName) ?? saved?.serverName ?? defaultDotsLabel(machineName(), state.installationID)
+    requestedLabel = label
+    let enrolled = await ensureEnrolled(credential, state.installationID, hash, label, saved).catch((error: unknown) => failed("enrollment", error))
     if (connectingGeneration !== generation) return
     let opened: RemoteControlSocket
     try {
-      opened = await openSocket(enrolled, credential, state.installationID)
+      opened = await openSocket(enrolled, credential, state.installationID, label)
     } catch (error) {
       if (connectingGeneration !== generation) return
       const status = httpStatus(error)
@@ -225,10 +238,10 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
       const existing = await deps.store.enrollment({ websocketURL: websocketURL(), accountHash: hash }).catch((error: unknown) => failed("enrollment", error))
       if (connectingGeneration !== generation) return
       token = undefined
-      enrolled = await (existing === undefined ? enroll(credential, state.installationID, hash) : refresh(credential, state.installationID, hash, existing.serverID))
+      enrolled = await (existing === undefined ? enroll(credential, state.installationID, hash, label) : refresh(credential, state.installationID, hash, label, existing))
         .catch((error: unknown) => failed("enrollment", error))
       if (connectingGeneration !== generation) return
-      opened = await openSocket(enrolled, credential, state.installationID).catch((error: unknown) => failed("connection", error))
+      opened = await openSocket(enrolled, credential, state.installationID, label).catch((error: unknown) => failed("connection", error))
     }
     if (connectingGeneration !== generation) { opened.close(); return }
     retireSocket?.()
@@ -336,7 +349,7 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
     }
     for (const text of buffered) dispatch(text)
     buffered.length = 0
-    current = { state: "on", profile: configuration.profile, environmentID: enrolled.environmentID, serverName: serverNameForHost((deps.hostname ?? hostname)()) }
+    current = { state: "on", profile: configuration.profile, environmentID: enrolled.environmentID, serverName: serverNameForHost(machineName()), name: label }
     startHeartbeat(opened, gen)
   }
 
@@ -379,11 +392,13 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
   }
 
   async function hostStatus(): Promise<RemoteControlStatus> {
-    const serverName = serverNameForHost((deps.hostname ?? hostname)())
+    const serverName = serverNameForHost(machineName())
     const state = await deps.native.configuration().catch(() => undefined)
     if (state === undefined) return { state: "error", problem: "configuration", serverName }
     if (!state.enabled) return { state: "off", serverName }
-    return current.state === "off" ? { state: "connecting", profile: state.profile, serverName } : { ...current, serverName }
+    const saved = await deps.store.enrollment({ websocketURL: websocketURL(), accountHash: accountHash(state.accountID) }).catch(() => undefined)
+    const name = saved?.serverName
+    return current.state === "off" ? { state: "connecting", profile: state.profile, serverName, ...(name ? { name } : {}) } : { ...current, serverName, name }
   }
 
   return {
@@ -420,6 +435,7 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
     running = false
     generation++
     selected = ""
+    renameRejected = undefined
     cancelBackoff?.()
     stopHeartbeat()
     retireSocket?.()

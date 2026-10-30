@@ -49,6 +49,31 @@ test("operator instructions retain refusal, delegation, pending-answer and stop 
   expect(ycodingOperatorSkill.indexOf("pgrep -fl")).toBeLessThan(ycodingOperatorSkill.indexOf("pkill -f"))
 })
 
+test("operator watch instructions never treat a settled execution as finished work", async () => {
+  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  for (const text of [
+    "work.state", "completed only when a current accepted completion receipt", "Every other state is unfinished",
+    "Watch the next transition", "never answers, approves, resumes or retries", "descendants' work and decisions",
+    "cannot wake an idle Dots conversation",
+  ]) expect(ycodingOperatorSkill).toContain(text)
+})
+
+test("operator Library instructions select only the private process channel and preserve its gates", async () => {
+  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  for (const text of [
+    "/usr/bin/env CODEX_APPS_MCP_URL=ycoding-library://process python3 <helper-path> < /approved/library-upload.json",
+    "beginning of the exec_command cmd, before launch", "a shell export inside an already running process does not select the channel", "account connectors enabled",
+    "exact Dots principal", "default model account", "chatgpt_library_upload", "mcp_execute",
+    "one create_library_file", "20 MiB", "process sandbox", "signed URLs or OAuth values",
+    "default or custom HostedApps endpoints", "never fall back", "runtime build implementing the private marker",
+    "python3 <helper-path> < /approved/library-upload.json", "not inline image display",
+  ]) expect(ycodingOperatorSkill).toContain(text)
+  expect(ycodingOperatorSkill).not.toContain('{"env":{"CODEX_APPS_MCP_URL":"ycoding-library://process"}}')
+  const example = ycodingOperatorSkill.match(/\{"uploads":\[\{"local_path":"\/approved\/output.png"[^\n]+/)
+  expect(example).not.toBeNull()
+  expect(JSON.parse(example![0])).toEqual({ uploads: [{ local_path: "/approved/output.png", purpose: "create_library_file" }] })
+})
+
 test("operator API operation ids and example bodies match the current Protocol", async () => {
   const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
   const spec = OpenApi.fromApi(ClientApi)

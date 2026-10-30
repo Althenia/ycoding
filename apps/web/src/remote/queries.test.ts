@@ -367,9 +367,10 @@ describe("Projects reads and changes", () => {
     const { calls, client, queries } = incidents(answers())
     const found = await client.fetchQuery(queries.projectCandidates(scope, true, "triage"))
     expect(found).toEqual([{ id: "ses_x", title: "Triage", directory: "/work/web", active: 2 }])
-    expect(calls.find((call) => call.operation === "session.list")?.request?.input).toEqual({ limit: 25, order: "active", parentID: null, searchFields: "summary", search: "triage" })
+    expect(calls.find((call) => call.operation === "session.list")?.request?.input).toEqual({ limit: 25, order: "active", parentID: null, searchFields: "summary", background: "exclude", search: "triage" })
     await client.fetchQuery(queries.projectCandidates(scope, true, ""))
     expect(calls.filter((call) => call.operation === "session.list").at(-1)?.request?.input).not.toHaveProperty("search")
+    expect(calls.filter((call) => call.operation === "session.list").at(-1)?.request?.input).toMatchObject({ background: "exclude" })
   })
 
   test("a replaced connection never reads or invalidates the new generation", async () => {

@@ -1144,6 +1144,7 @@ export default {
           \`model\` text,
           \`profile_binding\` text,
           \`daybreak\` text,
+          \`origin\` text,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL,
           \`time_archived\` integer,

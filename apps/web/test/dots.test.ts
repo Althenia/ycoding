@@ -2,9 +2,30 @@ import { expect, test } from "bun:test"
 import { remoteDotsPeerLabel, type RemoteDotsStatus } from "@ycoding-ai/remote"
 import type { RemoteLink } from "../src/remote/queries"
 import { dotsClient } from "../src/remote/dots"
+import { dotsConnectionView } from "../src/remote/view-model"
 import type { RemoteRequestOutcome } from "../src/remote/transport"
 
 const scope = { deviceID: "device-1", generation: 1 }
+
+test("connection presentation separates registered names from the machine hostname", () => {
+  const view = dotsConnectionView({ online: true, loading: false, pending: false, status: { ...status, access: { enabled: true, revision: 2 },
+    connection: { state: "connected", hostname: "box.local", name: "Native desk" }, computer: { state: "detached", name: "Executor desk" },
+  } })
+  expect(view.computer).toBe("box.local")
+  expect(view.name).toBe("Native desk")
+  expect(view.executor?.name).toBe("Executor desk")
+})
+
+test("attachment forwards the observed target without routing by display name", async () => {
+  const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+  let sent: unknown
+  const link: RemoteLink = { recoveries: () => 0, recovered: async () => false, request: async (_scope, _operation, request) => {
+    sent = request?.input
+    return { status: "ok", value: { data: status } }
+  } }
+  await dotsClient(link, scope).attach(target)
+  expect(sent).toEqual({ replaceOthers: true, expectedTarget: target })
+})
 const status = { access: { enabled: false, revision: 2 }, configuration: { ready: true, profile: "native-test" }, connection: { state: "off", hostname: "test-computer" } } satisfies RemoteDotsStatus
 
 test("reads and updates global Dots status without Session or Location", async () => {

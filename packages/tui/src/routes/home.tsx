@@ -24,6 +24,7 @@ import { errorMessage } from "../util/error"
 import { modelDaybreak } from "../util/session-daybreak"
 import type { ModelDaybreak, SessionAutonomyView } from "@ycoding-ai/client"
 import { localAutonomyView, type AutonomyChange } from "../util/session-autonomy"
+import { isBackgroundSession } from "../util/session"
 
 let once = false
 export const landingPlaceholder = { normal: ["Message YCoding…"] }
@@ -134,7 +135,7 @@ export function Home(props: { submitDisabled?: boolean } = {}) {
       palette: true,
       bind: false,
       run: () => {
-        const existing = data.session.list().find((item) => item.location.directory === data.location.default().directory)
+        const existing = data.session.list().find((item) => !isBackgroundSession(item) && item.location.directory === data.location.default().directory)
         const session = existing ? Promise.resolve(existing) : client.api.session.create({ location: { directory: data.location.default().directory } })
         void session
           .then((item) => dialog.replace(() => <DialogChromeConnection sessionID={item.id} />))

@@ -691,6 +691,7 @@ export function make(options: ClientOptions) {
               order: input?.["order"],
               search: input?.["search"],
               parentID: input?.["parentID"],
+              background: input?.["background"],
               directory: input?.["directory"],
               project: input?.["project"],
               subpath: input?.["subpath"],
@@ -3408,7 +3409,7 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/dots/computer`,
-            body: { replaceOthers: input["replaceOthers"] },
+            body: { replaceOthers: input["replaceOthers"], expectedTarget: input["expectedTarget"] },
             successStatus: 200,
             declaredStatuses: [400, 401],
             empty: false,

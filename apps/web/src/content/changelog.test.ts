@@ -7,8 +7,29 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.8 Dots executor, decision inspection and watch, and prompt-cache reuse first", () => {
+  test("lists v0.11.9 Editorial Ledger workspace, Dots computer labels, background Session filtering and work assessments first", () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.9", date: "2026-10-30", tags: ["Added", "Changed", "Fixed"] })
+    expect(entry?.changes).toHaveLength(19)
+    expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(6)
+    expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(11)
+    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(2)
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of [
+      "§01", "folio head", "figure type", "single rules", "sunken spine", "inset status edge", "narrow column", "ruled rows", "reading position", "Office floor is unchanged",
+      "dots.name", "studio.local (3f9a1c)", "never selects which computer is attached",
+      "work assessment", "completed", "work-completion receipt", "never that the work is finished",
+      "tools.chatgpt.library.prepare", "20 MiB", "uncertain writes are not replayed", "unverified",
+      "background: \"exclude\"", "Roots started through Dots stay listed", "one-time startup migration",
+      "expectedTarget", "Calls without expectedTarget remain valid", "remote-control.json", "never rewritten",
+      "older than v0.11.9", "file watcher", "Opening a subagent from Team",
+    ]) expect(text).toContain(fragment)
+    for (const excluded of ["CCA", "Flora", "SIGNING_KEYCHAIN", "install:local", "milestone"]) expect(text).not.toContain(excluded)
+    expect(after("0.11.9")?.version).toBe("0.11.8")
+  })
+
+  test("retains v0.11.8 Dots executor, decision inspection and watch, and prompt-cache reuse", () => {
+    const entry = RELEASES[1]
     expect(entry).toMatchObject({ version: "0.11.8", date: "2026-10-30", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(14)
     expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(7)
@@ -33,7 +54,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.11.7 Code Mode, browser frames, prepared Usage and the usage migration", () => {
-    const entry = RELEASES[1]
+    const entry = RELEASES[2]
     expect(entry).toMatchObject({ version: "0.11.7", date: "2026-10-29", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(21)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
@@ -44,7 +65,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.11.6 global Dots controls and Antigravity updates", () => {
-    const entry = RELEASES[2]
+    const entry = RELEASES[3]
     expect(entry).toMatchObject({ version: "0.11.6", date: "2026-10-27", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(6)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
@@ -57,7 +78,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.11.5 native Dots and retirement migration", () => {
-    const entry = RELEASES[3]
+    const entry = byVersion("0.11.5")
     expect(entry).toMatchObject({ version: "0.11.5", date: "2026-10-27", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(8)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
@@ -1846,7 +1867,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 53)).toEqual([
+    expect(versions.slice(0, 54)).toEqual([
+      "0.11.9",
       "0.11.8",
       "0.11.7",
       "0.11.6",

@@ -30,22 +30,33 @@ const DisplayName = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(
 const DisplayMessage = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(500), Schema.isPattern(/^[^\u0000-\u001f\u007f-\u009f]*$/))
 
 export interface NativeStatus extends Schema.Schema.Type<typeof NativeStatus> {}
+export interface ComputerTarget extends Schema.Schema.Type<typeof ComputerTarget> {}
+export const ComputerTarget = Schema.Struct({
+  dotID: Identity.check(Schema.isMaxLength(256)),
+  threadID: Identity.check(Schema.isMaxLength(256)),
+  environmentID: Identity.check(Schema.isMaxLength(256)),
+  revision: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+}).annotate({ identifier: "Dots.ComputerTarget", parseOptions: { onExcessProperty: "error" } })
+
 export const NativeStatus = Schema.Struct({
   access: Access,
   configuration: Schema.Struct({ ready: Schema.Boolean, profile: DisplayName.pipe(optional), message: DisplayMessage.pipe(optional) }),
   connection: Schema.Struct({
     state: Schema.Literals(["unavailable", "off", "connecting", "connected", "error"]),
     hostname: DisplayName.pipe(optional),
+    name: DisplayName.pipe(optional),
     message: DisplayMessage.pipe(optional),
   }),
   computer: Schema.Struct({
     state: Schema.Literals(["attached", "detached", "unavailable"]),
+    name: DisplayName.pipe(optional),
+    target: ComputerTarget.pipe(optional),
     message: DisplayMessage.pipe(optional),
   }).pipe(optional),
 }).annotate({ identifier: "Dots.NativeStatus" })
 
 export interface ComputerAttach extends Schema.Schema.Type<typeof ComputerAttach> {}
-export const ComputerAttach = Schema.Struct({ replaceOthers: Schema.Literal(true) })
+export const ComputerAttach = Schema.Struct({ replaceOthers: Schema.Literal(true), expectedTarget: ComputerTarget.pipe(optional) })
   .annotate({ identifier: "Dots.ComputerAttach", parseOptions: { onExcessProperty: "error" } })
 
 export interface Target extends Schema.Schema.Type<typeof Target> {}

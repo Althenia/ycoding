@@ -1,4 +1,4 @@
-import { readDotsStatus, type RemoteDotsStatus } from "@ycoding-ai/remote"
+import { readDotsStatus, type RemoteDotsStatus, type RemoteDotsComputerTarget } from "@ycoding-ai/remote"
 import type { RemoteLink, QueryScope } from "./queries"
 import { describeOutcome } from "./outcome"
 
@@ -20,8 +20,8 @@ export function dotsClient(link: RemoteLink, scope: QueryScope) {
       if (outcome.status !== "ok") return outcome
       return { status: "ok" as const, value: read(outcome.value) }
     },
-    attach: async () => {
-      const outcome = await link.request(scope, "dots.attach", { input: { replaceOthers: true } })
+    attach: async (expectedTarget?: RemoteDotsComputerTarget) => {
+      const outcome = await link.request(scope, "dots.attach", { input: { replaceOthers: true, ...(expectedTarget === undefined ? {} : { expectedTarget }) } })
       if (outcome.status !== "ok") return outcome
       return { status: "ok" as const, value: read(outcome.value) }
     },

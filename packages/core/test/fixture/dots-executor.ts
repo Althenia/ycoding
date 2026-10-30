@@ -42,7 +42,7 @@ export interface CatalogProject {
   readonly updated: number
 }
 
-export const dotsExecutorHostWith = (input: { readonly realAuthorization?: boolean }) => Effect.gen(function* () {
+export const dotsExecutorHostWith = (input: { readonly realAuthorization?: boolean; readonly library?: NativeDots.Options["library"] }) => Effect.gen(function* () {
   const db = yield* Database.Service
   const events = yield* EventRuntime.Service
   const sessions = yield* Session.Service
@@ -65,6 +65,7 @@ export const dotsExecutorHostWith = (input: { readonly realAuthorization?: boole
   const fsutil = yield* FSUtil.Service.pipe(Effect.provide(FSUtil.layer.pipe(Layer.provide(NodeFileSystem.layer))))
   const options = (): NativeDots.Options => ({
     access, db, kv, reviews, home, data, store, events, execution,
+    ...(input.library === undefined ? {} : { library: input.library }),
     projectRoot: (directory) => Project.root(fsutil, directory),
     sessions,
     authorization: (session) => input.realAuthorization ? Effect.gen(function* () {
@@ -102,7 +103,7 @@ export const dotsExecutorHostWith = (input: { readonly realAuthorization?: boole
   const messages = (sessionID: string) => sessions.messages({ sessionID: Session.ID.make(sessionID) })
   const log = (sessionID: string) => events.log({ aggregateID: sessionID }).pipe(Stream.runCollect, Effect.map((items) => [...items].filter((item): item is EventRuntime.Payload => !EventRuntime.isSynced(item))))
   return {
-    host, sessions, store, kv, events, home, data, catalog, messages, log, locations,
+    host, sessions, store, kv, events, home, data, catalog, messages, log, locations, access,
     deny: (value: boolean) => { denied = value },
     restart: () => NativeDots.make(options()),
   }

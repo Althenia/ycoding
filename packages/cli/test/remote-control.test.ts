@@ -26,6 +26,7 @@ import { createRemoteControlAppServer, type RemoteControlBackend } from "../src/
 import { accountHash, createRemoteControlStateStore } from "../src/remote-control/state"
 import { createRemoteControlHost, type RemoteControlSocket } from "../src/remote-control/host"
 import { connectRemoteControlSocket } from "../src/remote-control/socket"
+import { defaultDotsLabel } from "../src/remote-control/label"
 import { nativeHost, requestBackend, pendingRequest, rootSnapshot } from "./remote-control-fixture"
 
 const appInput = { requestScope: "fixture", send: (_text: string) => {} }
@@ -457,9 +458,13 @@ describe("remote-control state and host lifecycle", () => {
         return socket
       },
     })
+    const installationID = (await store.load()).installationID
     await host.connectOnce()
     expect(requests[0]!.url).toBe(enrollURL())
-    expect(JSON.parse(String(requests[0]!.init?.body))).toMatchObject({ name: "box.local", os: enrollOs })
+    expect(JSON.parse(String(requests[0]!.init?.body))).toMatchObject({ name: defaultDotsLabel("box.local", installationID), os: enrollOs, installation_id: installationID })
+    expect(connectHeaders?.["x-codex-name"]).toBe(defaultDotsLabel("box.local", installationID))
+    expect(await host.status()).toMatchObject({ name: defaultDotsLabel("box.local", installationID), serverName: "box.local" })
+    expect((await store.enrollment({ websocketURL: websocketURL(), accountHash: accountHash(credential.accountID) }))?.serverName).toBe(defaultDotsLabel("box.local", installationID))
     const enrollHeaders = new Headers(requests[0]!.init?.headers)
     expect(enrollHeaders.get("chatgpt-account-id")).toBe("account-id-value")
     expect(connectHeaders?.["x-codex-server-id"]).toBe("srv-1")
@@ -569,6 +574,155 @@ describe("remote-control state and host lifecycle", () => {
       },
     })
     await host.connectOnce()
+    await host.stop()
+  })
+
+  test("default Dots labels keep the machine name and distinguish installations that share it", () => {
+    const first = defaultDotsLabel("box.local", "synthetic-installation-a")
+    const second = defaultDotsLabel("box.local", "synthetic-installation-b")
+    expect(first).toMatch(/^box\.local \([0-9a-f]{6}\)$/)
+    expect(second).toMatch(/^box\.local \([0-9a-f]{6}\)$/)
+    expect(first).not.toBe(second)
+    expect(defaultDotsLabel("box.local", "synthetic-installation-a")).toBe(first)
+    const long = defaultDotsLabel("h".repeat(150), "synthetic-installation-a")
+    expect(long.length).toBeLessThanOrEqual(100)
+    expect(long).toMatch(/^h+.* \([0-9a-f]{6}\)$/)
+    expect(long).not.toBe(defaultDotsLabel("h".repeat(150), "synthetic-installation-b"))
+  })
+
+  test("a configured Dots label renames the saved enrollment through refresh without changing its identity or machine name", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "ycoding-rc-label-"))
+    const file = path.join(dir, "remote-control.json")
+    const store = createRemoteControlStateStore(file)
+    const installationID = (await store.load()).installationID
+    const hash = accountHash(credential.accountID)
+    await store.saveEnrollment({ websocketURL: websocketURL(), accountHash: hash, enrollment: {
+      serverID: "srv-1", environmentID: "env-1", serverName: defaultDotsLabel("box.local", installationID), remoteControlEnabled: true, updatedAt: 1,
+    } })
+    const bodies: Record<string, unknown>[] = []
+    let connectHeaders: Record<string, string> | undefined
+    const host = createRemoteControlHost({
+      store, native: { ...nativeHost(fakeBackend().backend, credential), name: async () => "Desk Mac" }, codexHome: "/h",
+      hostname: () => "box.local",
+      fetchFn: async (url, init) => {
+        expect(url).toBe(refreshURL())
+        bodies.push(JSON.parse(String(init?.body)))
+        expect(new Headers(init?.headers).get("x-codex-installation-id")).toBe(installationID)
+        return Response.json({ server_id: "srv-1", environment_id: "env-1", remote_control_token: "renamed" })
+      },
+      connect: async (_url, headers) => {
+        connectHeaders = headers
+        return { send: () => {}, close: () => {}, onMessage: () => {}, onClose: () => {}, onError: () => {} }
+      },
+    })
+    await host.connectOnce()
+    expect(bodies).toEqual([expect.objectContaining({ name: "Desk Mac", server_id: "srv-1", installation_id: installationID })])
+    expect(connectHeaders).toMatchObject({ "x-codex-name": "Desk Mac", "x-codex-server-id": "srv-1", "x-codex-installation-id": installationID })
+    expect(await store.enrollment({ websocketURL: websocketURL(), accountHash: hash })).toMatchObject({ serverID: "srv-1", environmentID: "env-1", serverName: "Desk Mac" })
+    expect((await createRemoteControlStateStore(file).load()).installationID).toBe(installationID)
+    expect(await host.status()).toMatchObject({ state: "on", environmentID: "env-1", serverName: "box.local", name: "Desk Mac" })
+    await host.stop()
+  })
+
+  test.each([
+    { name: "another server", reply: { server_id: "srv-2", environment_id: "env-1" } },
+    { name: "another environment", reply: { server_id: "srv-1", environment_id: "env-2" } },
+  ])("a rename refresh answered with $name is rejected without saving, adopting, or connecting, then reconnects under the saved name", async ({ reply }) => {
+    const dir = await mkdtemp(path.join(tmpdir(), "ycoding-rc-rename-rotation-"))
+    const file = path.join(dir, "remote-control.json")
+    const store = createRemoteControlStateStore(file)
+    const hash = accountHash(credential.accountID)
+    await store.saveEnrollment({ websocketURL: websocketURL(), accountHash: hash, enrollment: {
+      serverID: "srv-1", environmentID: "env-1", serverName: "Saved desk", remoteControlEnabled: true, updatedAt: 1,
+    } })
+    const before = await readFile(file, "utf8")
+    const posts: { url: string; body: Record<string, unknown> }[] = []
+    const connects: Record<string, string>[] = []
+    const diagnostics: string[] = []
+    const replies = [{ ...reply, remote_control_token: "rotated" }, { server_id: "srv-1", environment_id: "env-1", remote_control_token: "kept" }]
+    const host = createRemoteControlHost({
+      store, native: { ...nativeHost(fakeBackend().backend, credential), name: async () => "Desk Mac" }, codexHome: "/h", hostname: () => "box.local",
+      onDiagnostic: (message) => diagnostics.push(message),
+      fetchFn: async (url, init) => {
+        posts.push({ url: String(url), body: JSON.parse(String(init?.body)) })
+        return Response.json(replies.shift())
+      },
+      connect: async (_url, headers) => {
+        connects.push(headers)
+        return { send: () => {}, close: () => {}, onMessage: () => {}, onClose: () => {}, onError: () => {} }
+      },
+    })
+    await expect(host.connectOnce()).rejects.toThrow()
+    expect(posts).toEqual([{ url: refreshURL(), body: expect.objectContaining({ name: "Desk Mac", server_id: "srv-1" }) }])
+    expect(connects).toEqual([])
+    expect(await readFile(file, "utf8")).toBe(before)
+    expect(diagnostics).toContain("Remote-control rename rejected")
+    expect(await host.status()).toMatchObject({ state: "error", problem: "enrollment", name: "Saved desk" })
+
+    await host.connectOnce()
+    expect(posts.slice(1)).toEqual([{ url: refreshURL(), body: expect.objectContaining({ name: "Saved desk", server_id: "srv-1" }) }])
+    expect(connects).toEqual([expect.objectContaining({ "x-codex-name": "Saved desk", "x-codex-server-id": "srv-1", authorization: "Bearer kept" })])
+    expect(await store.enrollment({ websocketURL: websocketURL(), accountHash: hash })).toMatchObject({ serverID: "srv-1", environmentID: "env-1", serverName: "Saved desk" })
+    await host.stop()
+  })
+
+  test("a rename refresh that finds the enrollment missing neither deletes it nor re-enrolls; the ordinary refresh keeps its recovery", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "ycoding-rc-rename-missing-"))
+    const file = path.join(dir, "remote-control.json")
+    const store = createRemoteControlStateStore(file)
+    const hash = accountHash(credential.accountID)
+    await store.saveEnrollment({ websocketURL: websocketURL(), accountHash: hash, enrollment: {
+      serverID: "srv-1", environmentID: "env-1", serverName: "Saved desk", remoteControlEnabled: true, updatedAt: 1,
+    } })
+    const before = await readFile(file, "utf8")
+    const posts: { url: string; name: unknown }[] = []
+    const connects: Record<string, string>[] = []
+    const host = createRemoteControlHost({
+      store, native: { ...nativeHost(fakeBackend().backend, credential), name: async () => "Desk Mac" }, codexHome: "/h", hostname: () => "box.local",
+      fetchFn: async (url, init) => {
+        posts.push({ url: String(url), name: JSON.parse(String(init?.body)).name })
+        if (String(url) === refreshURL()) return new Response(JSON.stringify({ error: { code: "server_not_found" } }), { status: 404 })
+        return Response.json({ server_id: "srv-2", environment_id: "env-2", remote_control_token: "enrolled" })
+      },
+      connect: async (_url, headers) => {
+        connects.push(headers)
+        return { send: () => {}, close: () => {}, onMessage: () => {}, onClose: () => {}, onError: () => {} }
+      },
+    })
+    await expect(host.connectOnce()).rejects.toThrow()
+    expect(posts).toEqual([{ url: refreshURL(), name: "Desk Mac" }])
+    expect(connects).toEqual([])
+    expect(await readFile(file, "utf8")).toBe(before)
+
+    await host.connectOnce()
+    expect(posts.slice(1)).toEqual([{ url: refreshURL(), name: "Saved desk" }, { url: enrollURL(), name: "Saved desk" }])
+    expect(connects).toEqual([expect.objectContaining({ "x-codex-server-id": "srv-2" })])
+    expect(await store.enrollment({ websocketURL: websocketURL(), accountHash: hash })).toMatchObject({ serverID: "srv-2", environmentID: "env-2" })
+    await host.stop()
+  })
+
+  test("without a configured Dots label a saved enrollment keeps its registered name", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "ycoding-rc-legacy-label-"))
+    const store = createRemoteControlStateStore(path.join(dir, "remote-control.json"))
+    await store.saveEnrollment({ websocketURL: websocketURL(), accountHash: accountHash(credential.accountID), enrollment: {
+      serverID: "srv-1", environmentID: "env-1", serverName: "legacy-box.local", remoteControlEnabled: true, updatedAt: 1,
+    } })
+    const names: unknown[] = []
+    let header: string | undefined
+    const host = createRemoteControlHost({
+      store, native: nativeHost(fakeBackend().backend, credential), codexHome: "/h", hostname: () => "box.local",
+      fetchFn: async (_url, init) => {
+        names.push(JSON.parse(String(init?.body)).name)
+        return Response.json({ server_id: "srv-1", environment_id: "env-1", remote_control_token: "kept" })
+      },
+      connect: async (_url, headers) => {
+        header = headers["x-codex-name"]
+        return { send: () => {}, close: () => {}, onMessage: () => {}, onClose: () => {}, onError: () => {} }
+      },
+    })
+    await host.connectOnce()
+    expect([names, header]).toEqual([["legacy-box.local"], "legacy-box.local"])
+    expect(await host.status()).toMatchObject({ name: "legacy-box.local", serverName: "box.local" })
     await host.stop()
   })
 

@@ -316,6 +316,7 @@ beforeAll(async () => {
       configuration: async () => configuration,
       credential: async (profile) => ({ access, accountID, key: "credential-key-1", profile, credentialID: "credential-1", accountGeneration: 1 }),
       subscribeConfiguration: () => () => {},
+      name: async () => undefined,
       threadScope: async () => scope,
       unattributedScope: async () => scope,
       projectCatalog: unexpectedExecutorHost.projectCatalog,

@@ -1,4 +1,6 @@
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
+import type { Dots } from "@ycoding-ai/schema/dots"
+import { createHash } from "node:crypto"
 import type { RemoteControlCredential } from "@ycoding-ai/core/remote-control/credential"
 import { buildCcaHeaders, defaultTimeoutMs, loadCcaExperimentState, type CcaFetch } from "./cca-executor-registration"
 import { accountHash } from "./state"
@@ -19,6 +21,7 @@ export const ccaComputerProblems = [
   "rejected",
   "unconfirmed",
   "connection",
+  "target-changed",
 ] as const
 
 export type CcaComputerProblem = (typeof ccaComputerProblems)[number]
@@ -26,11 +29,13 @@ export type CcaComputerProblem = (typeof ccaComputerProblems)[number]
 export interface CcaComputerStatus {
   readonly state: "attached" | "detached" | "unavailable"
   readonly problem?: CcaComputerProblem
+  readonly name?: string
+  readonly target?: Dots.ComputerTarget
 }
 
 export interface CcaComputerControl {
   readonly computer: () => Promise<CcaComputerStatus>
-  readonly attach: () => Promise<CcaComputerStatus>
+  readonly attach: (expectedTarget?: Dots.ComputerTarget) => Promise<CcaComputerStatus>
 }
 
 export interface CcaComputerControlDeps {
@@ -48,6 +53,7 @@ type Target = {
   readonly threadID: string
   readonly environmentID: string
 }
+type Binding = { readonly key: string; readonly credential: RemoteControlCredential.Resolved; readonly environmentID: string }
 type Observation = { readonly status: CcaComputerStatus; readonly target?: Target }
 
 class Problem extends Error {
@@ -57,6 +63,8 @@ class Problem extends Error {
 }
 
 const unavailable = (problem: CcaComputerProblem): CcaComputerStatus => ({ state: "unavailable", problem })
+const sameTarget = (left: Dots.ComputerTarget | undefined, right: Dots.ComputerTarget | undefined) =>
+  left?.dotID === right?.dotID && left?.threadID === right?.threadID && left?.environmentID === right?.environmentID && left?.revision === right?.revision
 
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Problem("connection")
@@ -75,7 +83,7 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
   let cache: { readonly key: string; readonly at: number; readonly status: CcaComputerStatus } | undefined
   let latestKey: string | undefined
   let refreshing: { readonly key: string; readonly generation: number; readonly promise: Promise<CcaComputerStatus> } | undefined
-  let attaching: Promise<CcaComputerStatus> | undefined
+  const attaching = new Map<string, Promise<CcaComputerStatus>>()
 
   async function configuration(): Promise<EnabledConfiguration | undefined> {
     const current = await deps.native.configuration().catch(() => undefined)
@@ -94,13 +102,36 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
     return resolved
   }
 
-  async function executorID(accountID: string) {
+  async function enrollment(accountID: string) {
     const state = await loadCcaExperimentState(deps.statePath).catch(() => {
       throw new Problem("enrollment")
     })
     const id = typeof state.executorID === "string" ? state.executorID.trim() : ""
     if (state.status !== "completed" || state.accountHash !== accountHash(accountID) || !id) throw new Problem("enrollment")
-    return id
+    if (typeof state.installationID !== "string" || !state.installationID) throw new Problem("enrollment")
+    return { executorID: id, installationID: state.installationID, accountHash: state.accountHash, status: state.status }
+  }
+
+  async function binding(): Promise<Binding> {
+    const current = await configuration()
+    if (!current) throw new Problem("configuration")
+    const resolved = await credential(current)
+    const enrolled = await enrollment(resolved.accountID)
+    const latest = await configuration()
+    if (JSON.stringify(latest) !== JSON.stringify(current)) throw new Problem("configuration")
+    return { credential: resolved, environmentID: enrolled.executorID,
+      key: JSON.stringify([current, enrolled]) }
+  }
+
+  async function validate(owner: Binding) {
+    const latest = await binding()
+    if (latest.key !== owner.key) throw new Problem("target-changed")
+    return latest
+  }
+
+  function receipt(owner: Binding, target: Target): Dots.ComputerTarget {
+    const tuple = { dotID: target.dotID, threadID: target.threadID, environmentID: target.environmentID }
+    return { ...tuple, revision: createHash("sha256").update(JSON.stringify([owner.key, tuple])).digest("hex") }
   }
 
   function send(method: "GET" | "POST", path: string, query: Record<string, string | undefined>, resolved: RemoteControlCredential.Resolved) {
@@ -151,10 +182,10 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
     throw new Problem("connection")
   }
 
-  async function observe(configuration: EnabledConfiguration): Promise<Observation> {
+  async function observe(owner: Binding): Promise<Observation> {
     try {
-      const resolved = await credential(configuration)
-      const environmentID = await executorID(resolved.accountID)
+      const resolved = owner.credential
+      const environmentID = owner.environmentID
       const dotID = await dot(resolved)
       const root = await get(`/tbo/${encodeURIComponent(dotID)}/root-thread`, {}, resolved)
       if (root.root_thread_id === undefined || root.root_thread_id === null) throw new Problem("dot-unavailable")
@@ -164,11 +195,15 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
       if (list.thread_id !== threadID) throw new Problem("dot-unavailable")
       if (!Array.isArray(list.computers)) throw new Problem("connection")
       const row = list.computers.map(record).find((item) => item.environment_id === environmentID)
+      await validate(owner)
       if (row === undefined) return { status: unavailable("not-listed") }
-      if (row.is_attached === true) return { status: { state: "attached" } }
-      if (list.local_computer_access_disabled_by_admin === true) return { status: { state: "detached", problem: "admin-disabled" } }
-      if (row.can_connect !== true) return { status: { state: "detached", problem: "not-connectable" } }
-      return { status: { state: "detached" }, target: { credential: resolved, dotID, threadID, environmentID } }
+      const target = { credential: resolved, dotID, threadID, environmentID }
+      const name = typeof row.display_name === "string" ? row.display_name.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").trim().slice(0, 256) : undefined
+      const details = { target: receipt(owner, target), ...(name ? { name } : {}) }
+      if (row.is_attached === true) return { status: { state: "attached", ...details } }
+      if (list.local_computer_access_disabled_by_admin === true) return { status: { state: "detached", problem: "admin-disabled", ...details } }
+      if (row.can_connect !== true) return { status: { state: "detached", problem: "not-connectable", ...details } }
+      return { status: { state: "detached", ...details }, target }
     } catch (error) {
       if (error instanceof Problem) return { status: unavailable(error.problem) }
       return { status: unavailable("connection") }
@@ -185,14 +220,6 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
     return "rejected"
   }
 
-  async function keyOf(current: EnabledConfiguration) {
-    const executor = await loadCcaExperimentState(deps.statePath).then(
-      (state) => (typeof state.executorID === "string" ? state.executorID.trim() : null),
-      () => null,
-    )
-    return JSON.stringify([current, executor])
-  }
-
   function store(key: string, status: CcaComputerStatus) {
     if (key !== latestKey) return status
     if (status.problem === "connection" && cache?.key === key) {
@@ -204,10 +231,10 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
     return status
   }
 
-  function refresh(current: EnabledConfiguration, key: string) {
+  function refresh(owner: Binding, key: string) {
     if (refreshing?.key === key && refreshing.generation === generation) return refreshing.promise
     const started = generation
-    const promise = observe(current).then(({ status }) => (started === generation ? store(key, status) : status))
+    const promise = observe(owner).then(({ status }) => (started === generation ? store(key, status) : status))
     const entry = { key, generation: started, promise }
     refreshing = entry
     void promise.finally(() => {
@@ -217,43 +244,67 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
   }
 
   async function computer() {
-    const current = await configuration()
-    if (current === undefined) return unavailable("configuration")
-    const key = await keyOf(current)
-    latestKey = key
-    if (cache !== undefined && cache.key !== key) cache = undefined
-    if (cache === undefined) return refresh(current, key)
-    if (now() - cache.at >= ccaComputerCacheMs) void refresh(current, key)
-    return cache.status
+    try {
+      const current = await binding()
+      const key = current.key
+      latestKey = key
+      if (cache !== undefined && cache.key !== key) cache = undefined
+      if (cache === undefined) return refresh(current, key)
+      if (now() - cache.at >= ccaComputerCacheMs) void refresh(current, key)
+      return cache.status
+    } catch (error) {
+      cache = undefined
+      return unavailable(error instanceof Problem ? error.problem : "connection")
+    }
   }
 
-  async function attachOnce(): Promise<CcaComputerStatus> {
-    const current = await configuration()
-    if (current === undefined) return unavailable("configuration")
-    const key = await keyOf(current)
+  async function reconcile(owner: Binding, before: CcaComputerStatus, outcome: "ok" | "rejected" | "uncertain"): Promise<CcaComputerStatus> {
+    const unresolved = () => unavailable(outcome === "rejected" ? "rejected" : "unconfirmed")
+    try {
+      const current = await validate(owner)
+      const after = await observe(current)
+      if (!sameTarget(after.status.target, before.target) || after.status.state === "unavailable") return unresolved()
+      if (after.status.state === "attached") return after.status
+      return { ...after.status, problem: outcome === "rejected" ? "rejected" : "unconfirmed" }
+    } catch {
+      return unresolved()
+    }
+  }
+
+  async function attachOnce(owner: Binding, expectedTarget?: Dots.ComputerTarget): Promise<CcaComputerStatus> {
+    const key = owner.key
     latestKey = key
     generation++
-    const before = await observe(current)
+    const before = await observe(owner)
+    if (expectedTarget && !sameTarget(expectedTarget, before.status.target)) return unavailable("target-changed")
     if (before.target === undefined) {
       generation++
       store(key, before.status)
       return before.status
     }
-    const outcome = await connect(before.target)
-    const after = await observe(current)
+    const current = await validate(owner)
+    const outcome = await connect({ ...before.target, credential: current.credential })
+    const result = await reconcile(owner, before.status, outcome)
     generation++
-    store(key, after.status)
-    if (after.status.state !== "detached" || after.status.problem !== undefined) return after.status
-    return { state: "detached", problem: outcome === "rejected" ? "rejected" : "unconfirmed" }
+    store(key, result)
+    return result
   }
 
   return {
     computer,
-    attach: () => {
-      attaching ??= attachOnce().finally(() => {
-        attaching = undefined
-      })
-      return attaching
+    attach: async (expectedTarget) => {
+      try {
+        const owner = await binding()
+        const key = JSON.stringify([owner.key, expectedTarget === undefined ? null : [expectedTarget.dotID, expectedTarget.threadID, expectedTarget.environmentID, expectedTarget.revision]])
+        const existing = attaching.get(key)
+        if (existing) return existing
+        const pending = attachOnce(owner, expectedTarget).catch((error: unknown) => unavailable(error instanceof Problem ? error.problem : "connection"))
+        attaching.set(key, pending)
+        void pending.finally(() => { if (attaching.get(key) === pending) attaching.delete(key) })
+        return pending
+      } catch (error) {
+        return unavailable(error instanceof Problem ? error.problem : "connection")
+      }
     },
   }
 }

@@ -300,6 +300,7 @@ async function fixture(options: { readonly deny?: boolean; readonly ttlMs?: numb
         listeners.add(listener)
         return () => { listeners.delete(listener) }
       },
+      name: async () => undefined,
       threadScope: (input) => openScope(input),
       unattributedScope: (input) => openScope(input),
       projectCatalog: async (input) => {

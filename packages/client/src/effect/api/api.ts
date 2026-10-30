@@ -95,6 +95,7 @@ export type Endpoint5_0Input = {
   readonly order?: Endpoint5_0Request["query"]["order"]
   readonly search?: Endpoint5_0Request["query"]["search"]
   readonly parentID?: Endpoint5_0Request["query"]["parentID"]
+  readonly background?: Endpoint5_0Request["query"]["background"]
   readonly directory?: Endpoint5_0Request["query"]["directory"]
   readonly project?: Endpoint5_0Request["query"]["project"]
   readonly subpath?: Endpoint5_0Request["query"]["subpath"]
@@ -2216,7 +2217,10 @@ export type Endpoint39_1Output = EffectValue<ReturnType<RawClient["server.dots"]
 export type DotsSetOperation<E = never> = (input: Endpoint39_1Input) => Effect.Effect<Endpoint39_1Output, E>
 
 type Endpoint39_2Request = Parameters<RawClient["server.dots"]["dots.attach"]>[0]
-export type Endpoint39_2Input = { readonly replaceOthers: Endpoint39_2Request["payload"]["replaceOthers"] }
+export type Endpoint39_2Input = {
+  readonly replaceOthers: Endpoint39_2Request["payload"]["replaceOthers"]
+  readonly expectedTarget?: Endpoint39_2Request["payload"]["expectedTarget"]
+}
 export type Endpoint39_2Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.attach"]>>["data"]
 export type DotsAttachOperation<E = never> = (input: Endpoint39_2Input) => Effect.Effect<Endpoint39_2Output, E>
 

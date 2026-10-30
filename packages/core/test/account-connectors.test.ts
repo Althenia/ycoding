@@ -69,6 +69,7 @@ function backend(
     malformedIdentity?: boolean
     invalidOutput?: boolean
     hosted?: boolean
+    afterLibraryWrite?: () => Promise<void>
   } = {},
 ) {
   const requests: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = []
@@ -98,6 +99,10 @@ function backend(
     requests.push({ url: request.url, headers: request.headers, body })
     if (request.url === "https://chatgpt.com/backend-api/files/library")
       return Response.json({ items: [], cursor: "library-next" })
+    if (request.url === "https://chatgpt.com/backend-api/files/library/mounted/materialize") {
+      await options.afterLibraryWrite?.()
+      return Response.json({ file_id: "file-materialized" })
+    }
     if (options.status) return new Response("Synthetic denied response", { status: options.status })
     if (options.onceUnauthorized && requests.length === 1) return new Response(null, { status: 401 })
     if (options.hosted) return hosted(body)
@@ -225,12 +230,131 @@ function find(registrations: ReadonlyArray<{ tools: Readonly<Record<string, Tool
 }
 
 describe("account connectors", () => {
+  it.live(
+    "the private Library factory requires the native pinned principal and never substitutes the configured account",
+    () =>
+      Effect.gen(function* () {
+        const remote = backend({ status: 403 })
+        let selectedProfile: string | undefined
+        let live = true
+        const current = yield* client({
+          backend: remote,
+          settings: () => ({ ...settings, ...(selectedProfile ? { profile: selectedProfile } : {}) }),
+        })
+        const scope = {
+          sessionID: context.sessionID,
+          principal: {
+            profile: "fixture-a",
+            credentialID: current.first.id,
+            accountID: "fixture-account-a",
+            accountGeneration: current.first.accountGeneration,
+            accessRevision: 1,
+          },
+          roots: ["/synthetic-project"],
+          current: async () => {
+            if (!live) throw new Error("scope retired")
+          },
+          authorize: async () => ({ release: async () => {} }),
+        }
+        const factory = yield* current.service.libraryFactory(scope)
+        selectedProfile = "fixture-b"
+        expect(Exit.isFailure(yield* current.service.libraryFactory(scope).pipe(Effect.exit))).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* Effect.tryPromise(() =>
+              factory.open({
+                processID: "one",
+                cwd: "/synthetic-project",
+                readFile: async () => {
+                  throw new Error("unused")
+                },
+              }),
+            ).pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        selectedProfile = undefined
+        live = false
+        expect(
+          Exit.isFailure(
+            yield* Effect.tryPromise(() =>
+              factory.open({
+                processID: "two",
+                cwd: "/synthetic-project",
+                readFile: async () => {
+                  throw new Error("unused")
+                },
+              }),
+            ).pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(remote.requests).toEqual([])
+      }),
+  )
+  it.live("a native write followed by a profile replacement is uncertain, with no replay or foreign result", () =>
+    Effect.gen(function* () {
+      let replace = async () => {}
+      const remote = backend({ afterLibraryWrite: () => replace() })
+      const current = yield* client({ backend: remote })
+      replace = () => Effect.runPromise(current.credentials.activate(current.second.id)).then(() => undefined)
+      const registrations = yield* current.service.library({})
+      const result = yield* Tool.settle(
+        registrations[0].tools.chatgpt_library_materialize,
+        {
+          input: { fileID: "external-synthetic", name: "fixture.txt" },
+        },
+        context,
+      ).pipe(Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result))
+        expect(Cause.squash(result.cause)).toMatchObject({ message: expect.stringContaining("uncertain") })
+      expect(remote.requests).toHaveLength(1)
+    }),
+  )
+  it.live("the private Library factory retains the pinned principal across a same-account token refresh", () =>
+    Effect.gen(function* () {
+      const remote = backend({ status: 403 })
+      const current = yield* client({ backend: remote })
+      const factory = yield* current.service.libraryFactory({
+        sessionID: context.sessionID,
+        principal: {
+          profile: "fixture-a",
+          credentialID: current.first.id,
+          accountID: "fixture-account-a",
+          accountGeneration: current.first.accountGeneration,
+          accessRevision: 1,
+        },
+        roots: ["/synthetic-project"],
+        current: async () => {},
+        authorize: async () => ({ release: async () => {} }),
+      })
+      const value = current.first.value
+      if (value.type !== "oauth") return yield* Effect.die(new Error("Synthetic profile must use OAuth"))
+      const refreshed = yield* current.credentials.refresh(
+        current.first,
+        Effect.succeed(Credential.OAuth.make({ ...value, access: "fixture-rotated", expires: Date.now() + 3_600_000 })),
+      )
+      expect(refreshed?.accountGeneration).toBe(current.first.accountGeneration)
+      const process = yield* Effect.tryPromise(() =>
+        factory.open({
+          processID: "same-principal",
+          cwd: "/synthetic-project",
+          readFile: async () => {
+            throw new Error("unused")
+          },
+        }),
+      )
+      yield* Effect.tryPromise(process.check)
+      yield* Effect.tryPromise(process.close)
+      expect(remote.requests).toEqual([])
+    }),
+  )
   it.live("native Library is independent from a rejected hosted catalog and fences the selected profile", () =>
     Effect.gen(function* () {
       const remote = backend({ status: 403 })
       const current = yield* client({ backend: remote })
       const registrations = yield* current.service.library({})
       expect(remote.requests).toEqual([])
+      expect(registrations[0]?.options?.paths?.chatgpt_library_prepare).toBe("chatgpt.library.prepare")
       const tool = registrations[0].tools.chatgpt_library_list
       const result = yield* Tool.settle(tool, { input: { limit: 1 } }, context)
       expect(result.structured).toEqual({ items: [], cursor: "library-next" })
@@ -282,7 +406,9 @@ describe("account connectors", () => {
       expect(
         remote.requests.every((request) => request.headers.get("chatgpt-account-id") === "fixture-account-b"),
       ).toBe(true)
-      expect(remote.requests.every((request) => request.headers.get("user-agent")?.startsWith("Codex Desktop/"))).toBe(true)
+      expect(remote.requests.every((request) => request.headers.get("user-agent")?.startsWith("Codex Desktop/"))).toBe(
+        true,
+      )
       expect(remote.requests.every((request) => request.headers.get("originator") === "Codex Desktop")).toBe(true)
       expect(
         remote.requests.every(

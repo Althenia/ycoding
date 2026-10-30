@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { link, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { OpenAICodex } from "@ycoding-ai/core/plugin/provider/openai-codex"
 
@@ -28,6 +28,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
 }
 
+function errorCode(error: unknown) {
+  return typeof error === "object" && error !== null && "code" in error ? error.code : undefined
+}
+
 function decodeEnrollment(value: unknown): RemoteControlEnrollment | undefined {
   if (!isRecord(value)) return undefined
   if (
@@ -49,30 +53,35 @@ function decodeEnrollment(value: unknown): RemoteControlEnrollment | undefined {
 
 export function createRemoteControlStateStore(file: string) {
   let pending = Promise.resolve()
-  const installationID = randomUUID()
 
   async function read(): Promise<RemoteControlState> {
-    try {
-      const parsed: unknown = JSON.parse(await readFile(file, "utf8"))
-      if (!isRecord(parsed)) throw new SyntaxError("Invalid remote-control state")
-      const enrollments: Record<string, RemoteControlEnrollment> = {}
-      if (isRecord(parsed.enrollments))
-        for (const entry of Object.entries(parsed.enrollments)) {
-          const decoded = decodeEnrollment(entry[1])
-          if (decoded) enrollments[entry[0]] = decoded
-        }
-      return {
-        installationID:
-          typeof parsed.installationID === "string" && parsed.installationID.length > 0
-            ? parsed.installationID
-            : installationID,
-        enrollments,
-      }
-    } catch (error) {
-      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")
-        return { installationID, enrollments: {} }
+    const text = await readFile(file, "utf8").catch((error: unknown) => {
+      if (errorCode(error) === "ENOENT") return undefined
       throw error
-    }
+    })
+    if (text === undefined) return create()
+    const parsed: unknown = JSON.parse(text)
+    if (!isRecord(parsed) || typeof parsed.installationID !== "string" || parsed.installationID.length === 0)
+      throw new SyntaxError("Invalid remote-control state")
+    const enrollments: Record<string, RemoteControlEnrollment> = {}
+    if (isRecord(parsed.enrollments))
+      for (const entry of Object.entries(parsed.enrollments)) {
+        const decoded = decodeEnrollment(entry[1])
+        if (decoded) enrollments[entry[0]] = decoded
+      }
+    return { installationID: parsed.installationID, enrollments }
+  }
+
+  async function create(): Promise<RemoteControlState> {
+    const state: RemoteControlState = { installationID: randomUUID(), enrollments: {} }
+    await mkdir(path.dirname(file), { recursive: true })
+    const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
+    await writeFile(temporary, JSON.stringify(state), { mode: 0o600 })
+    const published = await link(temporary, file).then(() => true, (error: unknown) => error)
+    await rm(temporary, { force: true })
+    if (published === true) return state
+    if (errorCode(published) === "EEXIST") return read()
+    throw published
   }
 
   async function write(state: RemoteControlState) {

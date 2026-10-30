@@ -21,6 +21,7 @@ export function dotsConnectionView(input: { readonly status?: RemoteDotsStatus; 
   const status = input.status
   return {
     computer: status?.connection.hostname ?? input.computer ?? "Unreported",
+    name: status?.connection.name,
     profile: status?.configuration.profile ?? "Unreported",
     configuration: status ? status.configuration.ready ? "Ready" : "Not ready" : "Unreported",
     configurationMessage: status && !status.configuration.ready ? status.configuration.message ?? "Configure dots.enabled and dots.profile on this machine, then Refresh." : status?.configuration.message,
@@ -29,7 +30,7 @@ export function dotsConnectionView(input: { readonly status?: RemoteDotsStatus; 
     connectionMessage: status?.connection.message,
     action: status?.access.enabled ? "Disconnect" : "Connect",
     canChange: input.online && !!status && !input.loading && !input.pending && !input.error && (status.access.enabled || status.configuration.ready),
-    executor: status?.access.enabled && status.computer ? { label: { attached: "Attached", detached: "Not attached", unavailable: "Unavailable" }[status.computer.state], ...(status.computer.message === undefined ? {} : { message: status.computer.message }) } : undefined,
+    executor: status?.access.enabled && status.computer ? { label: { attached: "Attached", detached: "Not attached", unavailable: "Unavailable" }[status.computer.state], ...(status.computer.message === undefined ? {} : { message: status.computer.message }), ...(status.computer.name === undefined ? {} : { name: status.computer.name }) } : undefined,
     canAttach: input.online && !input.loading && !input.pending && !input.error && status?.access.enabled === true && status.computer?.state === "detached",
     attachAction: "Use this computer for Dots tasks",
     attachConfirmation: "This detaches your other computers from your Dot, so Dots tasks run on this computer only. Continue?",

@@ -75,6 +75,12 @@ const SessionsQueryFields = {
   }),
   search: Schema.optional(Schema.String),
   parentID: ParentIDFilter.pipe(Schema.optional),
+  background: Schema.Literals(["include", "exclude"])
+    .annotate({
+      description:
+        "Include or exclude background Dots executor sessions. Defaults to include; exclude is applied before ordering, cursors, and limits.",
+    })
+    .pipe(Schema.optional),
 }
 
 const SessionsDirectoryQuery = Schema.Struct({

@@ -8,6 +8,7 @@ import { Project } from "./project.js"
 import { DateTimeUtcFromMillis, NonNegativeInt, optional, RelativePath } from "./schema.js"
 import { SessionEvent } from "./session-event.js"
 import { SessionID } from "./session-id.js"
+import { Origin } from "./session-origin.js"
 import { SessionMessage } from "./session-message.js"
 import { Money } from "./money.js"
 import { Permission } from "./permission.js"
@@ -19,6 +20,8 @@ export const ID = SessionID
 export type ID = SessionID
 
 export const Event = SessionEvent
+
+export { Origin }
 
 export { Revert }
 
@@ -58,6 +61,7 @@ export const Info = Schema.Struct({
   location: Location.Ref,
   subpath: RelativePath.pipe(optional),
   revert: Revert.pipe(optional),
+  origin: Origin.pipe(optional),
 }).annotate({ identifier: "Session.Info" })
 
 export const ListAnchor = Schema.Struct({

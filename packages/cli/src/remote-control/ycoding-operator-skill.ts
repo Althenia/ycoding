@@ -92,11 +92,11 @@ Continue with \`ycoding run --session <session-id> "<text>"\`: it uses the store
 Instead capture session.snapshot before admission and keep its watermark seq (absent when the Session has no events), then send \`ycoding api session.prompt -d '{"text":"Continue the task"}'\` to the selected ID so pending decisions survive. Save the admitted input ID from the response. Then wait with \`ycoding decision watch <session-id> --input <input-id> --after <watermark-seq>\` (omit after when the watermark had no seq). It prints one result and exits:
 
 - Exit 2: the Session needs a decision. It prints up to 20 items with their exact decide commands and a resume command; an item too large to print is named with an instruction to run decision list --json. A listed item can settle by its own mode or appear twice while it moves to the review box; each decide command rechecks it. Ask the user, run the matching decide command, then run the printed resume command.
-- Exit 0: the execution that ran this input ended. Status succeeded, failed or interrupted is proven from retained history; rejected means the input never ran; unknown means pruned history no longer proves the result, so read message.list and never report it as succeeded. It prints the input IDs, start and settle times, any error and the final response (up to 4000 characters). Read message.list for the full transcript.
-- Exit 3: its timeout passed (default 300 seconds). It prints progress and a resume command; run that command to keep waiting.
+- Exit 0: the execution that ran this input ended; that is not the end of the work. Status succeeded, failed or interrupted is proven from retained history; rejected means the input never ran; unknown means pruned history no longer proves the result, so read message.list and never report it as succeeded. It prints the input IDs, start and settle times, any error, the final response (up to 4000 characters) and a work assessment. Read work.state (the Work line in text output): it is completed only when a current accepted completion receipt exists. Every other state is unfinished: needs-decision (ask the user about the listed items), running, background (children, shells or queued inputs still run), lost (the service restarted mid-work; resume or cancel explicitly), unconfirmed, incomplete (no current receipt) and idle. Open todos printed beside a current receipt do not cancel it, but report them. Report open todos, pending decisions, child tasks and running or lost Sessions as remaining work, then run the printed Watch the next transition command. Read message.list for the full transcript.
+- Exit 3: its timeout passed (default 300 seconds). It prints progress, the same work assessment and a resume command; run that command to keep waiting.
 - Exit 1: an error such as an unknown Session.
 
-The watch only reads; it never answers, approves or retries anything. It prints one bounded result when it exits, so do not rely on reading its output before then. Keep its timeout below V's 600-second command limit and re-run the resume command as needed. Nothing pushes another Session's messages or results to Dots; run the watch to learn them. Add --family on a root Session to include its subagents' decisions. Add --json for one JSON object. Without --input it returns when an execution settles after its starting point and lists that execution's inputs only when retained history proves them. Admission or disappearance from pending is not completion. \`ycoding api session.pending.list\` lists queued inputs and \`ycoding api session.log --param after=<event-sequence> --param follow=false\` reads raw events such as session.execution.succeeded, session.execution.failed and session.execution.interrupted. \`ycoding api session.wait\` waits for the agent loop to become idle, not for all family/background work to finish; then reread messages and failures. Never replay an uncertain prompt admission; inspect pending/history first.
+The watch only reads; it never answers, approves, resumes or retries anything. It prints one bounded result when it exits, so do not rely on reading its output before then. Keep its timeout below V's 600-second command limit and re-run the resume command as needed. Nothing pushes another Session's messages or results to Dots, and YCoding cannot wake an idle Dots conversation; run the watch to learn them. Add --family on a root Session to include its descendants' work and decisions. Add --json for one JSON object. Without --input it returns when an execution settles after its starting point and lists that execution's inputs only when retained history proves them. Admission or disappearance from pending is not completion. \`ycoding api session.pending.list\` lists queued inputs and \`ycoding api session.log --param after=<event-sequence> --param follow=false\` reads raw events such as session.execution.succeeded, session.execution.failed and session.execution.interrupted. \`ycoding api session.wait\` waits for the agent loop to become idle, not for all family/background work to finish; then reread messages and failures. Never replay an uncertain prompt admission; inspect pending/history first.
 
 ### Agents, models, providers and variants
 
@@ -191,6 +191,24 @@ ycoding api isolatedBrowser.stop
 \`\`\`
 
 Use isolatedBrowser.start/stop for its disposable page; it has no open/close operations.
+
+### Private ChatGPT Library upload
+
+Use a runtime build implementing the private marker, with account connectors enabled and the Library profile matching the exact Dots principal: profile, credential, account, account generation and access revision. Never substitute the default model account. If this executor lacks the marker or an eligible Library factory, stop; never fall back to HostedApps. These instructions do not activate an older runtime.
+
+Run the unchanged supplied library_upload.py at its discovered helper path. Send this JSON on stdin, or save it to /approved/library-upload.json and run the command below:
+
+\`\`\`json
+{"uploads":[{"local_path":"/approved/output.png","purpose":"create_library_file"}]}
+\`\`\`
+
+\`\`\`sh
+/usr/bin/env CODEX_APPS_MCP_URL=ycoding-library://process python3 <helper-path> < /approved/library-upload.json
+\`\`\`
+
+Put this exact selector at the beginning of the exec_command cmd, before launch; a shell export inside an already running process does not select the channel. Do not add reserved endpoint, authorization, account, header or NO_PROXY assignments after it. Replace the paths with the authorized local output and discovered helper, quoting paths when necessary. Support only one create_library_file of at most 20 MiB. The file must be readable under the Session roots, the process sandbox and read permission. Require chatgpt_library_upload permission and mcp_execute guardrails; resolve any decision through the refusal workflow above. Replacement and batch uploads are unsupported.
+
+Keep signed URLs or OAuth values out of commands, output and receipts; never copy the process capability or supply account/Session selectors. Unselected processes retain their default or custom HostedApps endpoints. Stop on an uncertain write; never replay it blindly. Report the helper's verified final status, real file identifiers and upload receipt, not inline image display.
 `
 
 export function ycodingDotsSkillsRoot(dataDirectory: string = Global.Path.data) {

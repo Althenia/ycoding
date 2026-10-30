@@ -31,7 +31,7 @@ export function make(options: {
   readonly settings: () => Effect.Effect<ConfigAccountConnectors.Claude | undefined>
   readonly directory: string
   readonly fetch?: FetchLike
-}): AccountConnectors.Interface {
+}): Pick<AccountConnectors.Interface, "tools"> {
   const select = Effect.fn("ClaudeAccountConnectors.select")(function* (
     input: Parameters<AccountConnectors.Interface["tools"]>[0],
   ) {
@@ -167,7 +167,12 @@ export function make(options: {
           options.directory,
           { fetch: send(id) },
         )
-      const entries: Array<{ id: string; label: string; tool: MCPClient.ToolDefinition; requireExplicitDecision: boolean }> = []
+      const entries: Array<{
+        id: string
+        label: string
+        tool: MCPClient.ToolDefinition
+        requireExplicitDecision: boolean
+      }> = []
       const ids = new Set<string>()
       for (const connector of catalog.data) {
         if ([".", ".."].includes(connector.id) || ids.has(connector.id))

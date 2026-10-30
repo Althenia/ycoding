@@ -7,7 +7,7 @@ export function createDotsConnection(input: {
   owner: () => unknown
   get: (signal: AbortSignal) => Promise<Dots.NativeStatus>
   set: (input: { enabled: boolean; expectedRevision: number }) => Promise<Dots.NativeStatus>
-  attach: (input: { replaceOthers: true }) => Promise<Dots.NativeStatus>
+  attach: (input: Dots.ComputerAttach) => Promise<Dots.NativeStatus>
   error: (error: unknown) => void
 }) {
   const [opened, setOpened] = createSignal(false)
@@ -25,6 +25,7 @@ export function createDotsConnection(input: {
   let revision = -1
   let reading: { controller: AbortController; promise: Promise<void> } | undefined
   let writing = false
+  let attachTarget: Dots.ComputerTarget | undefined
 
   const attachable = (value: Dots.NativeStatus | undefined) => !!value?.access.enabled && value.computer?.state === "detached"
 
@@ -106,6 +107,7 @@ export function createDotsConnection(input: {
   function requestAttach() {
     if (disposed || writing || !canAttach()) return
     setAttachFailure(undefined)
+    attachTarget = status()?.computer?.target
     setConfirming(true)
   }
 
@@ -113,7 +115,7 @@ export function createDotsConnection(input: {
     if (disposed || writing || !confirming() || !canAttach()) return
     setConfirming(false)
     setAttachFailure(undefined)
-    await mutate(() => input.attach({ replaceOthers: true }), (error) => setAttachFailure(errorMessage(error)))
+    await mutate(() => input.attach({ replaceOthers: true, ...(attachTarget === undefined ? {} : { expectedTarget: attachTarget }) }), (error) => setAttachFailure(errorMessage(error)))
   }
 
   createEffect(on(

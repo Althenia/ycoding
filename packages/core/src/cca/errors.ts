@@ -29,6 +29,7 @@ export interface CcaAuthorizationGrant {
 
 export interface CcaAuthorizationInput {
   readonly action: string
+  readonly guardrailAction?: string
   readonly resources: readonly string[]
   readonly metadata?: Readonly<Record<string, string>>
 }

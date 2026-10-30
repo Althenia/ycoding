@@ -186,11 +186,13 @@ export const remoteSessionOperations = [
 
 export type RemoteOperation = (typeof remoteOperations)[number]
 
+export type RemoteDotsComputerTarget = { readonly dotID: string; readonly threadID: string; readonly environmentID: string; readonly revision: string }
+
 export type RemoteDotsStatus = {
   readonly access: { readonly enabled: boolean; readonly revision: number }
   readonly configuration: { readonly ready: boolean; readonly profile?: string; readonly message?: string }
-  readonly connection: { readonly state: "unavailable" | "off" | "connecting" | "connected" | "error"; readonly hostname?: string; readonly message?: string }
-  readonly computer?: { readonly state: "attached" | "detached" | "unavailable"; readonly message?: string }
+  readonly connection: { readonly state: "unavailable" | "off" | "connecting" | "connected" | "error"; readonly hostname?: string; readonly name?: string; readonly message?: string }
+  readonly computer?: { readonly state: "attached" | "detached" | "unavailable"; readonly message?: string; readonly name?: string; readonly target?: RemoteDotsComputerTarget }
 }
 
 export function readDotsStatus(value: unknown): RemoteDotsStatus | undefined {
@@ -200,7 +202,7 @@ export function readDotsStatus(value: unknown): RemoteDotsStatus | undefined {
   const connection = value.connection
   if (typeof access.enabled !== "boolean" || typeof access.revision !== "number" || !Number.isSafeInteger(access.revision) || access.revision < 0 ||
     typeof configuration.ready !== "boolean" || !dotsDisplayValue(configuration.profile, 256) || !dotsDisplayValue(configuration.message, 500) ||
-    !dotsDisplayValue(connection.hostname, 256) || !dotsDisplayValue(connection.message, 500)) return undefined
+    !dotsDisplayValue(connection.hostname, 256) || !dotsDisplayValue(connection.name, 256) || !dotsDisplayValue(connection.message, 500)) return undefined
   const state = connection.state
   if (state !== "unavailable" && state !== "off" && state !== "connecting" && state !== "connected" && state !== "error") return undefined
   const computer = readDotsComputer(value.computer)
@@ -208,17 +210,30 @@ export function readDotsStatus(value: unknown): RemoteDotsStatus | undefined {
   return {
     access: { enabled: access.enabled, revision: access.revision },
     configuration: { ready: configuration.ready, ...(configuration.profile === undefined ? {} : { profile: configuration.profile }), ...(configuration.message === undefined ? {} : { message: configuration.message }) },
-    connection: { state, ...(connection.hostname === undefined ? {} : { hostname: connection.hostname }), ...(connection.message === undefined ? {} : { message: connection.message }) },
+    connection: { state, ...(connection.hostname === undefined ? {} : { hostname: connection.hostname }), ...(connection.name === undefined ? {} : { name: connection.name }), ...(connection.message === undefined ? {} : { message: connection.message }) },
     ...(computer === undefined ? {} : { computer }),
   }
 }
 
 function readDotsComputer(value: unknown): RemoteDotsStatus["computer"] | null {
   if (value === undefined) return undefined
-  if (!isRecord(value) || !dotsDisplayValue(value.message, 500)) return null
+  if (!isRecord(value) || !dotsDisplayValue(value.message, 500) || !dotsDisplayValue(value.name, 256)) return null
+  const target = value.target === undefined ? undefined : readDotsComputerTarget(value.target)
+  if (target === null) return null
   const state = value.state
   if (state !== "attached" && state !== "detached" && state !== "unavailable") return null
-  return { state, ...(value.message === undefined ? {} : { message: value.message }) }
+  return { state, ...(value.message === undefined ? {} : { message: value.message }), ...(value.name === undefined ? {} : { name: value.name }), ...(target === undefined ? {} : { target }) }
+}
+
+export function readDotsComputerTarget(value: unknown): RemoteDotsComputerTarget | null {
+  if (!isRecord(value) || Object.keys(value).some((key) => !["dotID", "threadID", "environmentID", "revision"].includes(key)) ||
+    !dotsTargetID(value.dotID) || !dotsTargetID(value.threadID) || !dotsTargetID(value.environmentID) ||
+    typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision)) return null
+  return { dotID: value.dotID, threadID: value.threadID, environmentID: value.environmentID, revision: value.revision }
+}
+
+function dotsTargetID(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 256
 }
 
 function dotsDisplayValue(value: unknown, limit: number): value is string | undefined {
@@ -909,7 +924,8 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
   if (operation === "dots.set") return isRecord(input) && Object.keys(input).length === 2 &&
     typeof input.enabled === "boolean" && typeof input.expectedRevision === "number" &&
     Number.isSafeInteger(input.expectedRevision) && input.expectedRevision >= 0
-  if (operation === "dots.attach") return isRecord(input) && Object.keys(input).length === 1 && input.replaceOthers === true
+  if (operation === "dots.attach") return isRecord(input) && Object.keys(input).every((key) => key === "replaceOthers" || key === "expectedTarget") && input.replaceOthers === true &&
+    (input.expectedTarget === undefined || readDotsComputerTarget(input.expectedTarget) !== null)
   if (operation === "session.delete") return input === undefined || isRecord(input) && Object.keys(input).length === 0
   if (operation.startsWith("coordination.")) return validCoordinationInput(operation, input)
   if (operation === "session.list") return input === undefined || isRecord(input) &&

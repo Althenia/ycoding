@@ -12,6 +12,8 @@ import path from "node:path"
 import { exec } from "node:child_process"
 import { Effect } from "effect"
 import { CcaAuthorizationDeniedError } from "./authorization"
+import type { CcaLibraryFactory } from "./library"
+import { CCA_LIBRARY_PROCESS_URL, createCcaLibraryProcessBridge, type CcaLibraryProcessLease } from "./library-process-bridge"
 import {
   CcaExecutorError,
   CcaRefusalError,
@@ -418,6 +420,8 @@ export interface CcaExecutorScope {
     readonly defers?: boolean
   }
   readonly transcript?: CcaTranscript.Recorder
+  readonly library?: CcaLibraryFactory
+  readonly librarySignal?: AbortSignal
   readonly close: () => Promise<void>
 }
 
@@ -478,6 +482,8 @@ interface ActiveScope {
   readonly roots: readonly string[]
   readonly authorize: (input: CcaAuthorizationInput) => Promise<CcaAuthorizationGrant>
   readonly record: (write: (transcript: CcaTranscript.Recorder) => void) => void
+  readonly library?: CcaLibraryFactory
+  readonly librarySignal?: AbortSignal
 }
 
 interface RunningProcessEntry {
@@ -509,6 +515,8 @@ interface RunningProcessEntry {
   networkProxy?: CcaNetworkProxyHandle
   networkShutdown?: AbortController
   releaseSnapshot?: () => void
+  library?: CcaLibraryProcessLease
+  libraryClosed?: Promise<void>
   releaseFailed: boolean
   readonly done: Promise<void>
   readonly resolveDone: () => void
@@ -670,6 +678,65 @@ function shellWrapperScript(argv: readonly string[]): string | undefined {
   return argv[2]
 }
 
+const librarySelector = `CODEX_APPS_MCP_URL=${CCA_LIBRARY_PROCESS_URL}`
+const libraryReserved = /^(?:CODEX_APPS_(?:MCP_URL|AUTHORIZATION|.*ACCOUNT.*|.*HEADERS.*)|CHATGPT_ACCOUNT_ID|OPENAI_ACCOUNT_ID|NO_PROXY)$/i
+
+function libraryCommand(argv: readonly string[]): { argv: readonly string[]; selected: boolean } {
+  const script = shellWrapperScript(argv)
+  if (script === undefined) {
+    if (argv[0] !== "/usr/bin/env" || argv[1] !== librarySelector) return { argv, selected: false }
+    let executable = false
+    for (const word of argv.slice(2)) {
+      const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(word)
+      if (!assignment) {
+        if (!word || word.startsWith("-") || word.includes("=")) throw new CcaExecutorError(-32602, "Private Library command requires an executable")
+        executable = true
+        break
+      }
+      if (libraryReserved.test(assignment[1])) throw new CcaExecutorError(-32602, "Reserved private Library environment assignment")
+    }
+    if (!executable) throw new CcaExecutorError(-32602, "Private Library command requires an executable")
+    return { argv: [argv[0], ...argv.slice(2)], selected: true }
+  }
+  const prefix = /^([ \t]*\/usr\/bin\/env[ \t]+)CODEX_APPS_MCP_URL=ycoding-library:\/\/process(?=[ \t]|$)/.exec(script)
+  if (!prefix) return { argv, selected: false }
+  const rest = script.slice(prefix[0].length)
+  let index = 0
+  let executable = false
+  while (index < rest.length) {
+    while (rest[index] === " " || rest[index] === "\t") index++
+    if (index >= rest.length || /[;|&<>\n]/.test(rest[index])) break
+    let word = ""
+    let quote = ""
+    let dynamic = false
+    while (index < rest.length) {
+      const c = rest[index]
+      if (!quote && /[ \t\n;|&<>]/.test(c)) break
+      index++
+      if (c === "\\" && quote !== "'") {
+        if (index >= rest.length || rest[index] === "\n") throw new CcaExecutorError(-32602, "Invalid private Library command")
+        word += rest[index++]
+      } else if (quote && c === quote) quote = ""
+      else if (!quote && (c === "'" || c === '"')) quote = c
+      else {
+        if ((quote !== "'" && (c === "$" || c === "`")) || (!quote && ("?*[]{}~()".includes(c) || (c === "#" && !word)))) dynamic = true
+        word += c
+      }
+    }
+    if (quote) throw new CcaExecutorError(-32602, "Invalid private Library command")
+    if (dynamic) throw new CcaExecutorError(-32602, "Private Library command must begin with a literal executable")
+    const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(word)
+    if (!assignment) {
+      if (!word || word.startsWith("-") || word.includes("=")) throw new CcaExecutorError(-32602, "Private Library command requires an executable")
+      executable = true
+      break
+    }
+    if (libraryReserved.test(assignment[1])) throw new CcaExecutorError(-32602, "Reserved private Library environment assignment")
+  }
+  if (!executable) throw new CcaExecutorError(-32602, "Private Library command requires an executable")
+  return { argv: [argv[0], argv[1], prefix[1] + rest], selected: true }
+}
+
 function releaseEntrySnapshot(entry: RunningProcessEntry): void {
   const release = entry.releaseSnapshot
   entry.releaseSnapshot = undefined
@@ -680,6 +747,12 @@ function finishEntry(entry: RunningProcessEntry): void {
   if (entry.doneResolved) return
   entry.doneResolved = true
   entry.resolveDone()
+}
+
+function releaseEntryLibrary(entry: RunningProcessEntry): Promise<void> {
+  if (!entry.library) return Promise.resolve()
+  entry.libraryClosed ??= entry.library.close().catch(() => { entry.releaseFailed = true })
+  return entry.libraryClosed
 }
 
 function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
@@ -715,6 +788,7 @@ function clearEntryTimers(entry: RunningProcessEntry): void {
 }
 
 function terminateEntryGraceful(entry: RunningProcessEntry): void {
+  void releaseEntryLibrary(entry)
   const child = entry.child
   if (!child || entry.exited) return
   killProcessGroup(child, "SIGTERM")
@@ -790,6 +864,7 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
   const notifyBySession = new Map<string, (method: string, params: unknown) => Promise<void> | void>()
   const callBySession = new Map<string, CcaSessionCall>()
   const credentialBrokers = createCcaCredentialBrokerCache()
+  const libraryBridge = createCcaLibraryProcessBridge()
   const processes = new Map<string, RunningProcessEntry>()
   const shellSnapshots = createCcaShellSnapshotCache({
     authorize: (input) => {
@@ -820,6 +895,8 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
         return scope.roots
       },
       record,
+      ...(scope.library === undefined ? {} : { library: scope.library }),
+      ...(scope.librarySignal === undefined ? {} : { librarySignal: scope.librarySignal }),
       authorize: async (input) => {
         try {
           return await scope.authorization.authorize(input)
@@ -1010,7 +1087,7 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
     entry.networkShutdown = undefined
     const proxy = entry.networkProxy
     entry.networkProxy = undefined
-    return proxy === undefined ? Promise.resolve() : proxy.close().catch(() => {})
+    return Promise.all([releaseEntryLibrary(entry), proxy?.close().catch(() => {})]).then(() => {})
   }
 
   const sessionCall = (sessionId: string): CcaSessionCall => (method, params, callOptions) => {
@@ -1285,7 +1362,28 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
       throw mapPolicyError(err)
     }
 
-    let argv = params.argv
+    const selectedCommand = libraryCommand(params.argv)
+    const channelKey = Object.keys(childEnv).find((key) => key.toUpperCase() === "CODEX_APPS_MCP_URL")
+    const channel = channelKey === undefined ? undefined : childEnv[channelKey]
+    const privateLibrary = selectedCommand.selected || channel === CCA_LIBRARY_PROCESS_URL
+    if (channel?.toLowerCase().startsWith("ycoding-library:") && channel !== CCA_LIBRARY_PROCESS_URL)
+      throw new CcaExecutorError(-32602, "Unsupported private Library channel")
+    if (privateLibrary) {
+      if (!active.library) throw new CcaExecutorError(-32603, "Private Library channel unavailable")
+      for (const key of Object.keys(childEnv)) {
+        if (libraryReserved.test(key) && key.toUpperCase() !== "NO_PROXY") delete childEnv[key]
+      }
+    }
+
+    let argv = selectedCommand.argv
+    const selectedScript = selectedCommand.selected ? shellWrapperScript(argv) : undefined
+    const libraryAliases = selectedScript === undefined ? undefined : (() => {
+      const prefix = `__YCODING_LIBRARY_${randomUUID().replaceAll("-", "")}`
+      return { url: `${prefix}_URL`, authorization: `${prefix}_AUTH`, noProxy: `${prefix}_NO_PROXY` }
+    })()
+    if (libraryAliases && selectedScript !== undefined) {
+      argv = [argv[0], argv[1], `set +x\nCODEX_APPS_MCP_URL="\${${libraryAliases.url}:?}" CODEX_APPS_AUTHORIZATION="\${${libraryAliases.authorization}:?}" NO_PROXY="\${${libraryAliases.noProxy}:?}" ${selectedScript}`]
+    }
     if (params.networkProxy !== undefined) {
       const shutdown = new AbortController()
       procEntry.networkShutdown = shutdown
@@ -1307,7 +1405,7 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
           credentialBrokers,
           ...(options.networkProxyCaDirectory === undefined ? {} : { caDirectory: options.networkProxyCaDirectory }),
           command: {
-            argv: params.argv,
+            argv,
             ...(params.arg0 === undefined ? {} : { arg0: params.arg0 }),
             ...(params.shellSnapshot === undefined ? {} : { shellSnapshot: { shell: params.shellSnapshot.shell } }),
           },
@@ -1329,7 +1427,7 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
           sessionId: ctx.sessionId,
           processId: params.processId,
           request: params.shellSnapshot,
-          argv: params.argv,
+          argv,
           ...(params.arg0 === undefined ? {} : { arg0: params.arg0 }),
           cwd: resolvedCwd,
           env: childEnv,
@@ -1353,6 +1451,56 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
     }
     if (snapshot !== undefined) procEntry.releaseSnapshot = snapshot.release
 
+    if (privateLibrary && active.library) {
+      const limitedNetwork = params.enforceManagedNetwork === true || sandbox?.metadata.sandboxNetwork === "restricted"
+      const loopbackPorts = field(params.managedNetwork, "loopbackPorts")
+      if (limitedNetwork && (!Array.isArray(loopbackPorts) || loopbackPorts.length === 0))
+        throw new CcaExecutorError(-32001, "Private Library loopback channel is not permitted by this process network policy")
+      procEntry.library = await libraryBridge.open(active.library, {
+        processID: params.processId, cwd: resolvedCwd,
+        readFile: async (requested) => {
+          if (closed || procEntry.exited || procEntry.terminationRequested) throw unavailableScope()
+          const opened = await authorizeFsPath(active, { path: CcaPolicy.toPathUri(path.resolve(resolvedCwd, requested)), sandbox: params.sandbox }, false, "read", "read")
+          return runWithGrant(opened.grant, async () => {
+            const handle = await fs.open(opened.resolvedPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0))
+            try {
+              const before = await handle.stat()
+              const limit = 20 * 1024 * 1024
+              if (!before.isFile() || before.size > limit) throw new CcaExecutorError(-32602, "Library source must be a regular file within the upload limit")
+              const buffer = Buffer.alloc(Math.min(before.size + 1, limit + 1))
+              let total = 0
+              while (total < buffer.length) {
+                const next = await handle.read(buffer, total, buffer.length - total, total)
+                if (next.bytesRead === 0) break
+                total += next.bytesRead
+              }
+              const canonical = await fs.realpath(opened.resolvedPath)
+              const after = await fs.stat(canonical)
+              if (closed || procEntry.exited || procEntry.terminationRequested || canonical !== opened.resolvedPath || total > limit || total !== before.size ||
+                before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs)
+                throw new CcaExecutorError(-32603, "Library source changed during its authorized read")
+              active.record((transcript) => transcript.read({ path: canonical, bytes: total }))
+              return { canonical, bytes: Uint8Array.from(buffer.subarray(0, total)) }
+            } finally { await handle.close() }
+          })
+        },
+      }, active.librarySignal === undefined ? ctx.signal : AbortSignal.any([ctx.signal, active.librarySignal]))
+      const endpoint = new URL(procEntry.library.env.CODEX_APPS_MCP_URL)
+      const port = Number(endpoint.port)
+      if (limitedNetwork && !(loopbackPorts as unknown[]).includes(port))
+        throw new CcaExecutorError(-32001, "Private Library loopback channel is not permitted by this process network policy")
+      const noProxy = Object.entries(childEnv).find(([key]) => key.toUpperCase() === "NO_PROXY")?.[1]
+      for (const key of Object.keys(childEnv)) {
+        if (libraryReserved.test(key)) delete childEnv[key]
+      }
+      childEnv = { ...childEnv, ...procEntry.library.env, NO_PROXY: [...(noProxy ? [noProxy] : []), endpoint.host].join(",") }
+      if (libraryAliases) {
+        childEnv[libraryAliases.url] = procEntry.library.env.CODEX_APPS_MCP_URL
+        childEnv[libraryAliases.authorization] = procEntry.library.env.CODEX_APPS_AUTHORIZATION
+        childEnv[libraryAliases.noProxy] = childEnv.NO_PROXY
+      }
+    }
+
     let child: ChildProcess
     try {
       const stdio: [StdioPipe, StdioPipe, StdioPipe] = [params.pipeStdin ? "pipe" : "ignore", "pipe", "pipe"]
@@ -1373,7 +1521,8 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
     child.stdout?.on("error", () => {})
     child.stderr?.on("error", () => {})
 
-    const onData = (stream: "stdout" | "stderr", data: Buffer) => {
+    const onData = (stream: "stdout" | "stderr", raw: Buffer, settled = false) => {
+      const data = procEntry.library?.redactOutput(stream, raw, settled) ?? raw
       let offset = 0
       while (offset < data.length) {
         const slice = data.subarray(offset, offset + CHUNK_SPLIT_SIZE)
@@ -1418,23 +1567,28 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
     if (!child.stdout) procEntry.stdoutEnded = true
     if (!child.stderr) procEntry.stderrEnded = true
     child.stdout?.on("end", () => {
+      onData("stdout", Buffer.alloc(0), true)
       procEntry.stdoutEnded = true
       maybeEmitExited()
     })
     child.stdout?.on("close", () => {
+      onData("stdout", Buffer.alloc(0), true)
       procEntry.stdoutEnded = true
       maybeEmitExited()
     })
     child.stderr?.on("end", () => {
+      onData("stderr", Buffer.alloc(0), true)
       procEntry.stderrEnded = true
       maybeEmitExited()
     })
     child.stderr?.on("close", () => {
+      onData("stderr", Buffer.alloc(0), true)
       procEntry.stderrEnded = true
       maybeEmitExited()
     })
 
     child.on("exit", (code, signal) => {
+      void releaseEntryLibrary(procEntry)
       procEntry.exited = true
       procEntry.exitCode = code !== null ? code : (signal ? 128 + ((os.constants.signals as Record<string, number>)[signal] ?? 1) : 1)
       clearEntryTimers(procEntry)
@@ -1700,9 +1854,11 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
     }
     if (!proc.child) {
       proc.pendingInterrupt = true
+      void releaseEntryLibrary(proc)
       return {}
     }
 
+    void releaseEntryLibrary(proc)
     killProcessGroup(proc.child, "SIGINT")
     return {}
     })
@@ -2150,6 +2306,7 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
     callBySession.clear()
     const entries = [...processes.values()]
     for (const proc of entries) {
+      void releaseEntryLibrary(proc)
       proc.terminationRequested = true
       if (proc.child && !proc.exited) {
         killProcessGroup(proc.child, "SIGKILL")
@@ -2161,6 +2318,7 @@ export function createCcaExecutor(options: CcaExecutorOptions): CcaExecutorHandl
     }
     await Promise.all(entries.map((proc) => proc.done))
     await Promise.all(entries.map((proc) => releaseNetwork(proc)))
+    await libraryBridge.close()
     await shellSnapshots.close()
     await Promise.all(entries.map((proc) => settleEntryGrant(proc)))
     processes.clear()

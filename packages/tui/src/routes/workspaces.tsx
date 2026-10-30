@@ -120,7 +120,7 @@ export function WorkspacesScreen() {
       return
     }
     setRecent({ directory: entry.directory, sessions: [], loading: true })
-    void client.api.session.list({ directory: entry.directory, limit: 3, order: "desc", parentID: null }).then(
+    void client.api.session.list({ directory: entry.directory, limit: 3, order: "desc", parentID: null, background: "exclude" }).then(
       (result) => {
         if (token === recentGeneration) setRecent({ directory: entry.directory, sessions: result.data, loading: false })
       },
