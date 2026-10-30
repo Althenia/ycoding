@@ -64,6 +64,13 @@ export function sameCcaCapabilityRoots(left: readonly CcaCapabilityRoot[] | unde
 
 export type CcaPrefixClass = "ccarenv_b64_" | "ccarenv_" | "env_e_" | "unknown"
 
+export type CcaRenameDeclined = {
+  readonly label: string
+  readonly outcome: "executor-changed" | "unconfirmed" | "uncertain"
+  readonly offeredExecutorID?: string
+  readonly at: string
+}
+
 export type CcaExperimentState = {
   readonly installationID: string
   readonly accountHash: string
@@ -75,6 +82,7 @@ export type CcaExperimentState = {
   readonly displayName?: string
   readonly errorClassification?: string
   readonly selectedCapabilityRoots?: readonly CcaCapabilityRoot[]
+  readonly renameDeclined?: CcaRenameDeclined
 }
 
 export type RunCcaRegistrationInput = {
@@ -308,25 +316,16 @@ export async function runCcaRegistration(input: RunCcaRegistrationInput): Promis
   }
 }
 
-export async function reregisterCcaExecutor(input: {
+type RegistrationRetryInput = {
   readonly credential: CcaCredential
-  readonly state: CcaExperimentState
-  readonly displayName?: string
-  readonly statePath: string
-  readonly roots: readonly CcaCapabilityRoot[]
   readonly fetch?: CcaFetch
   readonly refreshCredential?: CcaCredentialRefresh
   readonly wait?: (ms: number, signal?: AbortSignal) => Promise<void>
   readonly timeoutMs?: number
   readonly signal?: AbortSignal
-  readonly preserveExecutor?: boolean
-}): Promise<{ readonly state: CcaExperimentState; readonly executorChanged: boolean }> {
-  const displayName = (input.displayName ?? os.hostname()).trim().slice(0, 100)
-  const body = buildCcaRegistrationBody({
-    displayName,
-    installationID: input.state.installationID,
-    roots: input.roots,
-  })
+}
+
+async function postWithRetry(input: RegistrationRetryInput, body: string): Promise<CcaRegistrationResponse> {
   const wait = input.wait ?? ((ms, signal) => setTimeout(ms, undefined, { signal }))
   const register = async (attempt: number): Promise<CcaRegistrationResponse> => {
     try {
@@ -337,9 +336,23 @@ export async function reregisterCcaExecutor(input: {
       return register(attempt + 1)
     }
   }
-  const decoded = await register(1)
+  return register(1)
+}
+
+export async function reregisterCcaExecutor(input: RegistrationRetryInput & {
+  readonly state: CcaExperimentState
+  readonly displayName?: string
+  readonly statePath: string
+  readonly roots: readonly CcaCapabilityRoot[]
+}): Promise<{ readonly state: CcaExperimentState; readonly executorChanged: boolean }> {
+  const displayName = (input.displayName ?? os.hostname()).trim().slice(0, 100)
+  const body = buildCcaRegistrationBody({
+    displayName,
+    installationID: input.state.installationID,
+    roots: input.roots,
+  })
+  const decoded = await postWithRetry(input, body)
   const executorChanged = decoded.executorID !== input.state.executorID
-  if (executorChanged && input.preserveExecutor) return { state: input.state, executorChanged }
   const state: CcaExperimentState = {
     ...input.state,
     executorID: decoded.executorID,
@@ -350,4 +363,83 @@ export async function reregisterCcaExecutor(input: {
   }
   await writeFile(input.statePath, JSON.stringify(state, null, 2), { mode: 0o600 })
   return { state, executorChanged }
+}
+
+export type CcaRenameResult = {
+  readonly outcome: "confirmed" | "executor-changed" | "unconfirmed" | "uncertain" | "unrecorded"
+  readonly persisted: boolean
+  readonly state: CcaExperimentState
+}
+
+export async function renameCcaExecutor(input: {
+  readonly credential: CcaCredential
+  readonly state: CcaExperimentState
+  readonly label: string
+  readonly statePath: string
+  readonly fetch?: CcaFetch
+  readonly timeoutMs?: number
+  readonly signal?: AbortSignal
+}): Promise<CcaRenameResult> {
+  const label = input.label.trim().slice(0, 100)
+  if (!label) throw new Error("Display name is required")
+  input.signal?.throwIfAborted()
+  const body = JSON.stringify({ installation_id: input.state.installationID.trim(), custom_display_name: label })
+  const fenced = async () => {
+    const raw = await readFile(input.statePath, "utf8").catch(() => undefined)
+    if (raw === undefined) return undefined
+    const current = await loadCcaExperimentState(input.statePath).catch(() => undefined)
+    if (
+      current === undefined ||
+      current.accountHash !== input.state.accountHash ||
+      current.installationID !== input.state.installationID ||
+      current.executorID !== input.state.executorID
+    )
+      return undefined
+    return { raw, current }
+  }
+  const write = async (state: CcaExperimentState) => {
+    try {
+      await writeFile(input.statePath, JSON.stringify(state, null, 2), { mode: 0o600 })
+      return true
+    } catch {
+      return false
+    }
+  }
+  const declined = (record: Omit<CcaRenameDeclined, "label" | "at">): CcaRenameDeclined => ({ label, ...record, at: new Date().toISOString() })
+  const before = await fenced()
+  if (before === undefined) return { outcome: "unrecorded", persisted: false, state: input.state }
+  const intent: CcaExperimentState = { ...before.current, renameDeclined: declined({ outcome: "uncertain" }), updatedAt: new Date().toISOString() }
+  if (!(await write(intent))) return { outcome: "unrecorded", persisted: false, state: input.state }
+
+  let dispatched = false
+  const dispatch: CcaFetch = (url, init) => {
+    if (init?.signal?.aborted) return Promise.reject(Object.assign(new Error("Executor rename aborted"), { name: "AbortError" }))
+    dispatched = true
+    return (input.fetch ?? fetch)(url, init)
+  }
+  let decoded: CcaRegistrationResponse
+  try {
+    decoded = await postCcaRegistration({ credential: input.credential, body, fetch: dispatch, timeoutMs: input.timeoutMs, signal: input.signal })
+  } catch (error) {
+    if (!dispatched) {
+      await writeFile(input.statePath, before.raw, { mode: 0o600 }).catch(() => undefined)
+      throw error
+    }
+    return { outcome: "uncertain", persisted: true, state: intent }
+  }
+
+  const resolve = async (
+    outcome: "confirmed" | "executor-changed" | "unconfirmed",
+    update: (current: CcaExperimentState) => CcaExperimentState,
+  ): Promise<CcaRenameResult> => {
+    const latest = await fenced()
+    if (latest === undefined) return { outcome, persisted: false, state: intent }
+    const state = update(latest.current)
+    return { outcome, persisted: await write(state), state }
+  }
+  const stamp = (current: CcaExperimentState, record: CcaRenameDeclined): CcaExperimentState => ({ ...current, renameDeclined: record, updatedAt: new Date().toISOString() })
+  if (decoded.executorID !== input.state.executorID)
+    return resolve("executor-changed", (current) => stamp(current, declined({ outcome: "executor-changed", offeredExecutorID: decoded.executorID })))
+  if (decoded.customDisplayName !== label) return resolve("unconfirmed", (current) => stamp(current, declined({ outcome: "unconfirmed" })))
+  return resolve("confirmed", ({ renameDeclined: _intent, ...current }) => ({ ...current, customDisplayName: label, updatedAt: new Date().toISOString() }))
 }

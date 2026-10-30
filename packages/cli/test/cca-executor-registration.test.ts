@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
@@ -12,6 +12,7 @@ import {
   CcaRegistrationError,
   decodeCcaRegistrationResponse,
   loadCcaExperimentState,
+  renameCcaExecutor,
   reregisterCcaExecutor,
   runCcaRegistration,
   safeExecutorSummary,
@@ -308,24 +309,172 @@ describe("cca-executor-registration", () => {
     expect(stored!.displayName).toBe("Desk Mac")
   })
 
+  const renamed = (executorID: string | undefined, name: string | null | undefined) => () =>
+    new Response(JSON.stringify({ ...(executorID === undefined ? {} : { executor_id: executorID }), ...(name === undefined ? {} : { custom_display_name: name }) }), { status: 200 })
+  const renameInput = (statePath: string, fetch: CcaFetch, extra: Partial<Parameters<typeof renameCcaExecutor>[0]> = {}) =>
+    ({ credential, state: storedState, label: "Desk Mac", statePath, fetch, ...extra })
+
+  test("a rename sends exactly the installation and the trimmed label, never a display name or roots", async () => {
+    const { statePath } = await writeStored()
+    const scripted = scriptedFetch([renamed("ccarenv_b64_existing", "Desk Mac")])
+    await renameCcaExecutor(renameInput(statePath, scripted.fetch, { label: "  Desk Mac  " }))
+    expect(scripted.posts).toEqual([{
+      url: ccaExecutorRegistrationURL,
+      body: { installation_id: experimentInstallationID, custom_display_name: "Desk Mac" },
+      headers: buildCcaHeaders(credential),
+    }])
+    expect(Object.keys(scripted.posts[0]!.body as object).sort()).toEqual(["custom_display_name", "installation_id"])
+  })
+
+  test("a label longer than 100 characters is cut to 100 and compared as cut", async () => {
+    const { statePath } = await writeStored()
+    const long = "x".repeat(130)
+    const scripted = scriptedFetch([renamed("ccarenv_b64_existing", "x".repeat(100))])
+    const result = await renameCcaExecutor(renameInput(statePath, scripted.fetch, { label: long }))
+    expect((scripted.posts[0]!.body as { custom_display_name: string }).custom_display_name).toBe("x".repeat(100))
+    expect(result.outcome).toBe("confirmed")
+  })
+
+  test("a confirmed rename persists only the confirmed name", async () => {
+    const { statePath } = await writeStored()
+    const result = await renameCcaExecutor(renameInput(statePath, scriptedFetch([renamed("ccarenv_b64_existing", "Desk Mac")]).fetch))
+    expect(result).toEqual({ outcome: "confirmed", persisted: true, state: { ...storedState, customDisplayName: "Desk Mac", updatedAt: expect.any(String) } })
+    expect(JSON.parse(await readFile(statePath, "utf8"))).toEqual({ ...storedState, customDisplayName: "Desk Mac", updatedAt: expect.any(String) })
+    if (process.platform !== "win32") expect((await stat(statePath)).mode & 0o777).toBe(0o600)
+  })
+
+  test("a confirmed rename clears a stale declined record for another label", async () => {
+    const declined = { label: "Old", outcome: "unconfirmed", at: "2026-10-01T00:00:00.000Z" } as const
+    const statePath = path.join(await createTempDir(), "experiment.json")
+    await writeFile(statePath, JSON.stringify({ ...storedState, renameDeclined: declined }), { mode: 0o600 })
+    const result = await renameCcaExecutor(renameInput(statePath, scriptedFetch([renamed("ccarenv_b64_existing", "Desk Mac")]).fetch, { state: { ...storedState, renameDeclined: declined } }))
+    expect(result.outcome).toBe("confirmed")
+    expect(JSON.parse(await readFile(statePath, "utf8"))).toEqual({ ...storedState, customDisplayName: "Desk Mac", updatedAt: expect.any(String) })
+  })
+
   test.each([
-    { name: "keeps the executor and records the label", returned: "ccarenv_b64_existing", changed: false },
-    { name: "returns another executor and writes nothing", returned: "ccarenv_b64_replacement", changed: true },
-  ])("a re-registration that must keep its executor $name", async ({ returned, changed }) => {
-    const { statePath, before } = await writeStored()
-    const scripted = scriptedFetch([ok(returned)])
-    const result = await reregisterCcaExecutor({
-      credential, state: storedState, displayName: "Desk Mac", statePath, roots: storedState.selectedCapabilityRoots, fetch: scripted.fetch, preserveExecutor: true,
+    { name: "another name", response: renamed("ccarenv_b64_existing", "Other"), outcome: "unconfirmed" },
+    { name: "no name", response: renamed("ccarenv_b64_existing", undefined), outcome: "unconfirmed" },
+    { name: "a null name", response: renamed("ccarenv_b64_existing", null), outcome: "unconfirmed" },
+    { name: "an unparseable body", response: () => new Response("not json", { status: 200 }), outcome: "uncertain" },
+    { name: "an HTTP 404", response: status(404), outcome: "uncertain" },
+    { name: "an HTTP 503", response: status(503), outcome: "uncertain" },
+    { name: "an HTTP 429", response: status(429), outcome: "uncertain" },
+    { name: "an HTTP 401", response: status(401), outcome: "uncertain" },
+    { name: "a network failure", response: () => { throw new Error("synthetic network failure") }, outcome: "uncertain" },
+  ])("a rename answered with $name is sent once and recorded as $outcome without a label or any other change", async ({ response, outcome }) => {
+    const { statePath } = await writeStored()
+    const scripted = scriptedFetch([response])
+    const result = await renameCcaExecutor(renameInput(statePath, scripted.fetch))
+    expect(scripted.posts).toHaveLength(1)
+    expect(result.outcome).toBe(outcome)
+    expect(result.persisted).toBe(true)
+    const stored = JSON.parse(await readFile(statePath, "utf8"))
+    expect(stored).toEqual({ ...storedState, updatedAt: expect.any(String), renameDeclined: { label: "Desk Mac", outcome, at: expect.any(String) } })
+    expect(JSON.stringify(stored)).not.toContain("leaked-secret-body")
+  })
+
+  test("a rename answered with another executor keeps the enrolled one and records the offer", async () => {
+    const { statePath } = await writeStored()
+    const result = await renameCcaExecutor(renameInput(statePath, scriptedFetch([renamed("ccarenv_b64_replacement", "Desk Mac")]).fetch))
+    expect(result.outcome).toBe("executor-changed")
+    expect(result.state.executorID).toBe("ccarenv_b64_existing")
+    expect(JSON.parse(await readFile(statePath, "utf8"))).toEqual({
+      ...storedState, updatedAt: expect.any(String),
+      renameDeclined: { label: "Desk Mac", outcome: "executor-changed", offeredExecutorID: "ccarenv_b64_replacement", at: expect.any(String) },
     })
-    expect(scripted.posts.map((post) => post.body)).toEqual([{ displayName: "Desk Mac", installation_id: experimentInstallationID, selected_capability_roots: storedState.selectedCapabilityRoots }])
-    expect(result.executorChanged).toBe(changed)
-    if (changed) {
-      expect(result.state).toEqual(storedState)
-      expect(await readFile(statePath, "utf8")).toBe(before)
-      return
+  })
+
+  test("a rename is never re-sent after a 401", async () => {
+    const { statePath } = await writeStored()
+    const scripted = scriptedFetch([status(401), renamed("ccarenv_b64_existing", "Desk Mac")])
+    const result = await renameCcaExecutor(renameInput(statePath, scripted.fetch))
+    expect(scripted.posts).toHaveLength(1)
+    expect(result.outcome).toBe("uncertain")
+  })
+
+  test("a rename that times out is sent once and recorded as uncertain", async () => {
+    const { statePath } = await writeStored()
+    let calls = 0
+    const hanging: CcaFetch = async (_url, init) => {
+      calls++
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })))
+      })
     }
-    expect(result.state).toEqual({ ...storedState, displayName: "Desk Mac", updatedAt: expect.any(String) })
-    expect(JSON.parse(await readFile(statePath, "utf8"))).toEqual({ ...storedState, displayName: "Desk Mac", updatedAt: expect.any(String) })
+    const result = await renameCcaExecutor(renameInput(statePath, hanging, { timeoutMs: 20 }))
+    expect(calls).toBe(1)
+    expect(result.outcome).toBe("uncertain")
+    expect(JSON.parse(await readFile(statePath, "utf8")).renameDeclined.outcome).toBe("uncertain")
+  })
+
+  test("an abort after dispatch keeps a durable uncertain record and a later call sends nothing", async () => {
+    const { statePath } = await writeStored()
+    const controller = new AbortController()
+    let calls = 0
+    const dispatched: CcaFetch = async (_url, init) => {
+      calls++
+      controller.abort()
+      init?.signal?.throwIfAborted()
+      return renamed("ccarenv_b64_existing", "Desk Mac")()
+    }
+    const result = await renameCcaExecutor(renameInput(statePath, dispatched, { signal: controller.signal }))
+    expect(calls).toBe(1)
+    expect(result.outcome).toBe("uncertain")
+    expect(JSON.parse(await readFile(statePath, "utf8")).renameDeclined).toEqual({ label: "Desk Mac", outcome: "uncertain", at: expect.any(String) })
+  })
+
+  test("an abort before dispatch sends nothing, records nothing and the next call sends once", async () => {
+    const { statePath, before } = await writeStored()
+    const controller = new AbortController()
+    controller.abort()
+    const first = scriptedFetch([renamed("ccarenv_b64_existing", "Desk Mac")])
+    await expect(renameCcaExecutor(renameInput(statePath, first.fetch, { signal: controller.signal }))).rejects.toThrow()
+    expect(first.posts).toHaveLength(0)
+    expect(await readFile(statePath, "utf8")).toBe(before)
+    const second = scriptedFetch([renamed("ccarenv_b64_existing", "Desk Mac")])
+    expect((await renameCcaExecutor(renameInput(statePath, second.fetch))).outcome).toBe("confirmed")
+    expect(second.posts).toHaveLength(1)
+  })
+
+  test("an intent that cannot be recorded sends nothing and is reported as unrecorded", async () => {
+    const statePath = path.join(await createTempDir(), "experiment.json")
+    const mismatch = JSON.stringify({ ...storedState, executorID: "ccarenv_b64_other" })
+    await writeFile(statePath, mismatch, { mode: 0o600 })
+    const scripted = scriptedFetch([renamed("ccarenv_b64_existing", "Desk Mac")])
+    const fence = await renameCcaExecutor(renameInput(statePath, scripted.fetch))
+    expect(fence).toMatchObject({ outcome: "unrecorded", persisted: false })
+    expect(scripted.posts).toHaveLength(0)
+    expect(await readFile(statePath, "utf8")).toBe(mismatch)
+
+    const { statePath: locked, before } = await writeStored()
+    await chmod(locked, 0o400)
+    try {
+      const blocked = scriptedFetch([renamed("ccarenv_b64_existing", "Desk Mac")])
+      expect(await renameCcaExecutor(renameInput(locked, blocked.fetch))).toMatchObject({ outcome: "unrecorded", persisted: false })
+      expect(blocked.posts).toHaveLength(0)
+      expect(await readFile(locked, "utf8")).toBe(before)
+    } finally {
+      await chmod(locked, 0o600)
+    }
+  })
+
+  test("a resolution that cannot be written leaves the uncertain intent in place", async () => {
+    const { statePath } = await writeStored()
+    const locking: CcaFetch = async () => {
+      await chmod(statePath, 0o400)
+      return renamed("ccarenv_b64_existing", "Desk Mac")()
+    }
+    try {
+      const result = await renameCcaExecutor(renameInput(statePath, locking))
+      expect(result).toMatchObject({ outcome: "confirmed", persisted: false })
+      const stored = JSON.parse(await readFile(statePath, "utf8"))
+      expect(stored.renameDeclined).toEqual({ label: "Desk Mac", outcome: "uncertain", at: expect.any(String) })
+      expect(stored.executorID).toBe("ccarenv_b64_existing")
+      expect(stored.customDisplayName).toBeNull()
+    } finally {
+      await chmod(statePath, 0o600)
+    }
   })
 
   test("re-registration retries a retryable failure once after 1 s", async () => {

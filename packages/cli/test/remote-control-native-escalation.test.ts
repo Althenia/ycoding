@@ -2,7 +2,8 @@ import { expect, test } from "bun:test"
 import { DateTime } from "effect"
 import type { EventManifest } from "@ycoding-ai/schema/event-manifest"
 import { createRemoteControlAppServer, type RemoteControlBackend } from "../src/remote-control/app-server"
-import { pendingRequest, requestBackend, rootSnapshot } from "./remote-control-fixture"
+import { createRemoteControlHost, type RemoteControlSocket } from "../src/remote-control/host"
+import { nativeHost, pendingRequest, requestBackend, rootSnapshot } from "./remote-control-fixture"
 
 test("pending decisions use the native user-input request, not an invented approval notification", async () => {
   const messages: Array<{ method: string; params: unknown }> = []
@@ -33,11 +34,18 @@ function escalationServer(options: { readonly subscribe?: RemoteControlBackend["
   const escalation: { listener?: (rootID: string) => void; starts: number; stops: number; watched: string[] } = { starts: 0, stops: 0, watched: [] }
   const requests = new Map<string, ReturnType<typeof pendingRequest>>()
   const pending = { failures: options.pendingFailures ?? 0, empty: false, calls: 0 }
+  const status: { active: boolean; waiting: Array<"approval" | "user-input">; failGet: boolean; gate: Promise<void> | undefined; script: Array<{ active: boolean; waiting: Array<"approval" | "user-input"> }> } = { active: false, waiting: [], failGet: false, gate: undefined, script: [] }
+  const stream: { emit?: Parameters<RemoteControlBackend["subscribe"]>[1]; retire?: () => void } = {}
   const timers: Array<{ readonly delay: number; readonly run: () => void; cancelled: boolean; fired: boolean }> = []
   const backend: RemoteControlBackend = {
     ...requestBackend,
     createThread: async () => thread,
-    getThread: async () => thread,
+    getThread: async () => {
+      await status.gate
+      if (status.failGet) throw Error("Synthetic read failure")
+      const scripted = status.script.shift()
+      return { ...thread, active: scripted?.active ?? status.active, waiting: [...(scripted?.waiting ?? status.waiting)] }
+    },
     listThreads: async () => [thread],
     prompt: async () => ({ messageID: "msg_test" }),
     interrupt: async () => {},
@@ -55,6 +63,8 @@ function escalationServer(options: { readonly subscribe?: RemoteControlBackend["
     },
     subscribe: async (rootID, listener, retired) => {
       escalation.watched.push(rootID)
+      stream.emit = listener
+      stream.retire = retired
       return options.subscribe ? options.subscribe(rootID, listener, retired) : () => {}
     },
     subscribeEscalations: async (listener) => {
@@ -83,7 +93,7 @@ function escalationServer(options: { readonly subscribe?: RemoteControlBackend["
     await server.handle(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { clientInfo: { name: "fixture" } } }))
     await server.handle(JSON.stringify({ jsonrpc: "2.0", method: "initialized" }))
   }
-  return { server, messages, escalation, pending, timers, live, fireNext, open, settled }
+  return { server, messages, escalation, pending, status, stream, timers, live, fireNext, open, settled }
 }
 
 test("an escalation for a root this connection never opened surfaces the native user-input request", async () => {
@@ -445,4 +455,401 @@ test("an escalation subscription that resolves after retirement is stopped", asy
   gate.resolve(() => { stops++ })
   await new Promise<void>((resolve) => setImmediate(resolve))
   expect(stops).toBe(1)
+})
+
+const statusChanges = (f: ReturnType<typeof escalationServer>) =>
+  f.messages.filter((message) => message.method === "thread/status/changed").map((message) => message.params)
+const rpc = (f: ReturnType<typeof escalationServer>, id: number, method: string, params: Record<string, unknown> = {}) =>
+  f.server.handle(JSON.stringify({ jsonrpc: "2.0", id, method, params }))
+const waitingOnApproval = { threadId: "ses_unopened", status: { type: "active", activeFlags: ["waitingOnApproval"] } }
+const idle = { threadId: "ses_unopened", status: { type: "idle" } }
+const active = { threadId: "ses_unopened", status: { type: "active", activeFlags: [] } }
+
+test("a watched root reports one status notification per transition, in order", async () => {
+  const f = escalationServer()
+  await f.open()
+  await rpc(f, 2, "thread/read", { threadId: "ses_unopened" })
+  await f.settled()
+  expect(statusChanges(f)).toEqual([])
+  f.status.active = true
+  f.status.waiting = ["approval"]
+  f.stream.emit?.(event("session.execution.started"))
+  await f.settled()
+  expect(statusChanges(f)).toEqual([waitingOnApproval])
+  f.status.active = false
+  f.status.waiting = []
+  f.stream.emit?.(event("session.execution.succeeded"))
+  await f.settled()
+  expect(statusChanges(f)).toEqual([waitingOnApproval, idle])
+  f.server.retire()
+})
+
+test("an unchanged recomputed status sends nothing", async () => {
+  const f = escalationServer()
+  await f.open()
+  await rpc(f, 2, "thread/read", { threadId: "ses_unopened" })
+  f.stream.emit?.(event("session.execution.started"))
+  f.stream.emit?.(event("session.execution.succeeded"))
+  await f.settled()
+  f.status.active = true
+  f.stream.emit?.(event("session.execution.started"))
+  await f.settled()
+  f.stream.emit?.(event("session.execution.started"))
+  await f.settled()
+  expect(statusChanges(f)).toEqual([active])
+  f.server.retire()
+})
+
+test("an execution started by another client reports active and then idle", async () => {
+  const f = escalationServer()
+  await f.open()
+  f.escalation.listener?.("ses_unopened")
+  await f.settled()
+  expect(statusChanges(f)).toEqual([])
+  f.status.active = true
+  f.stream.emit?.(event("session.execution.started"))
+  await f.settled()
+  f.status.active = false
+  f.stream.emit?.(event("session.execution.interrupted"))
+  await f.settled()
+  expect(statusChanges(f)).toEqual([active, idle])
+  expect(f.messages.filter((message) => message.method.startsWith("turn/"))).toEqual([])
+  f.server.retire()
+})
+
+test("a completed pending read refreshes the status", async () => {
+  const f = escalationServer()
+  await f.open()
+  await rpc(f, 2, "thread/read", { threadId: "ses_unopened" })
+  f.status.waiting = ["user-input"]
+  f.stream.emit?.(event("session.question.asked"))
+  await f.settled()
+  expect(statusChanges(f)).toEqual([{ threadId: "ses_unopened", status: { type: "active", activeFlags: ["waitingOnUserInput"] } }])
+  f.server.retire()
+})
+
+test("no status notification follows archive, delete, backend retirement, or server retirement", async () => {
+  for (const method of ["thread/archive", "thread/delete"]) {
+    const f = escalationServer()
+    await f.open()
+    await rpc(f, 2, "thread/read", { threadId: "ses_unopened" })
+    await rpc(f, 3, method, { threadId: "ses_unopened" })
+    f.status.active = true
+    f.stream.emit?.(event("session.execution.started"))
+    f.escalation.listener?.("ses_unopened")
+    await f.settled()
+    expect(statusChanges(f)).toEqual([])
+    f.server.retire()
+  }
+  const retired = escalationServer()
+  await retired.open()
+  await rpc(retired, 2, "thread/read", { threadId: "ses_unopened" })
+  retired.stream.retire?.()
+  retired.status.active = true
+  retired.stream.emit?.(event("session.execution.started"))
+  await retired.settled()
+  expect(statusChanges(retired)).toEqual([])
+  retired.server.retire()
+
+  const closing = escalationServer()
+  await closing.open()
+  await rpc(closing, 2, "thread/read", { threadId: "ses_unopened" })
+  closing.status.active = true
+  closing.stream.emit?.(event("session.execution.started"))
+  closing.server.retire()
+  await closing.settled()
+  closing.stream.emit?.(event("session.execution.succeeded"))
+  await closing.settled()
+  expect(statusChanges(closing)).toEqual([])
+
+  const racing = escalationServer()
+  await racing.open()
+  await rpc(racing, 2, "thread/read", { threadId: "ses_unopened" })
+  const gate = Promise.withResolvers<void>()
+  racing.status.gate = gate.promise
+  racing.status.active = true
+  racing.stream.emit?.(event("session.execution.started"))
+  await racing.settled()
+  racing.stream.retire?.()
+  gate.resolve()
+  await racing.settled()
+  expect(statusChanges(racing)).toEqual([])
+  racing.server.retire()
+})
+
+test("a failing status read sends nothing, keeps the root, and recovers on the next trigger", async () => {
+  const f = escalationServer()
+  await f.open()
+  await rpc(f, 2, "thread/read", { threadId: "ses_unopened" })
+  f.status.active = true
+  f.status.failGet = true
+  f.stream.emit?.(event("session.execution.started"))
+  await f.settled()
+  expect(statusChanges(f)).toEqual([])
+  f.status.failGet = false
+  f.stream.emit?.(event("session.execution.started"))
+  await f.settled()
+  expect(statusChanges(f)).toEqual([active])
+  f.escalation.listener?.("ses_unopened")
+  await f.settled()
+  expect(userInputs(f)).toEqual(["ses_unopened"])
+  f.server.retire()
+})
+
+test("concurrent triggers share one recomputation and keep the latest status", async () => {
+  const f = escalationServer()
+  await f.open()
+  await rpc(f, 2, "thread/read", { threadId: "ses_unopened" })
+  f.status.active = true
+  for (let index = 0; index < 5; index++) f.stream.emit?.(event("session.execution.started"))
+  await f.settled()
+  expect(statusChanges(f)).toEqual([active])
+  f.server.retire()
+})
+
+test("the first observation after a watch is sent only when it differs from the last status this stream received", async () => {
+  const same = escalationServer()
+  await same.open()
+  await rpc(same, 2, "thread/list")
+  same.escalation.listener?.("ses_unopened")
+  await same.settled()
+  expect(statusChanges(same)).toEqual([])
+  same.server.retire()
+
+  const changed = escalationServer()
+  await changed.open()
+  await rpc(changed, 2, "thread/list")
+  changed.status.active = true
+  changed.escalation.listener?.("ses_unopened")
+  await changed.settled()
+  expect(statusChanges(changed)).toEqual([active])
+  changed.server.retire()
+})
+
+test("a decision that became pending after a thread/read snapshot is reported on the first pending read", async () => {
+  const f = escalationServer()
+  await f.open()
+  f.status.script = [{ active: true, waiting: [] }, { active: true, waiting: ["approval"] }]
+  const read = JSON.parse((await rpc(f, 2, "thread/read", { threadId: "ses_unopened" }))!)
+  expect(read.result.thread.status).toEqual({ type: "active", activeFlags: [] })
+  await f.settled()
+  expect(statusChanges(f)).toEqual([waitingOnApproval])
+  expect(userInputs(f)).toEqual(["ses_unopened"])
+  f.server.retire()
+})
+
+test("a decision pending when an unarchived root is restored is reported without a thread read", async () => {
+  const f = escalationServer()
+  await f.open()
+  await rpc(f, 2, "thread/read", { threadId: "ses_unopened" })
+  await rpc(f, 3, "thread/archive", { threadId: "ses_unopened" })
+  f.status.waiting = ["approval"]
+  f.status.active = true
+  const restored = JSON.parse((await rpc(f, 4, "thread/unarchive", { threadId: "ses_unopened" }))!)
+  expect(restored.result.thread.status).toEqual({ type: "idle" })
+  await f.settled()
+  expect(statusChanges(f)).toEqual([waitingOnApproval])
+  expect(userInputs(f)).toEqual(["ses_unopened", "ses_unopened"])
+  f.server.retire()
+})
+
+test("a thread/read whose pending read reports no change sends no status notification", async () => {
+  const f = escalationServer()
+  await f.open()
+  await rpc(f, 2, "thread/read", { threadId: "ses_unopened" })
+  await f.settled()
+  expect(statusChanges(f)).toEqual([])
+  expect(userInputs(f)).toEqual(["ses_unopened"])
+  f.server.retire()
+})
+
+const hostAddress = { client_id: "client-a", stream_id: "stream-a", env_id: "env" }
+const hostFrame = (seq: number, message: unknown) => JSON.stringify({ type: "client_message", ...hostAddress, seq_id: seq, message })
+
+async function hostFixture(options: { readonly script: Array<{ active: boolean; waiting: Array<"approval" | "user-input"> }>; readonly diagnostics?: string[] }) {
+  const sent: Array<Record<string, any>> = []
+  let receive = (_text: string) => {}
+  const thread = rootSnapshot({ id: "ses_thread", directory: "/synthetic" })
+  const script = [...options.script]
+  const latest = { ...options.script.at(-1)! }
+  const backend: RemoteControlBackend = {
+    ...requestBackend,
+    createThread: async () => thread,
+    getThread: async () => ({ ...thread, ...(script.shift() ?? latest) }),
+    listThreads: async () => [thread],
+    prompt: async () => ({ messageID: "message" }), interrupt: async () => {},
+    models: async () => [], skills: async () => [], account: async () => undefined,
+    pending: async () => [pendingRequest("ses_thread", "per_host")],
+  }
+  const state = { enabled: true, profile: "fixture", installationID: "install", enrollments: {} }
+  const host = createRemoteControlHost({
+    store: { load: async () => state, enrollment: async () => undefined, saveEnrollment: async () => state, deleteEnrollment: async () => state },
+    native: nativeHost(backend), codexHome: "/synthetic",
+    ...(options.diagnostics === undefined ? {} : { onDiagnostic: (message: string) => options.diagnostics!.push(message) }),
+    fetchFn: async () => Response.json({ server_id: "server", environment_id: "env", remote_control_token: "synthetic" }),
+    connect: async () => {
+      const socket: RemoteControlSocket = { send: (text) => { sent.push(JSON.parse(text)) }, close: () => {}, onMessage: (handler) => { receive = handler }, onClose: () => {}, onError: () => {} }
+      return socket
+    },
+  })
+  await host.connectOnce()
+  const flush = async () => { for (let index = 0; index < 4; index++) await new Promise<void>((resolve) => setImmediate(resolve)) }
+  const wire = () => sent.filter((frame) => frame.type === "server_message").map((frame) => frame.message as Record<string, any>)
+  return {
+    host, flush, wire,
+    send: (seq: number, message: unknown, stream = hostAddress.stream_id) => receive(JSON.stringify({ type: "client_message", ...hostAddress, stream_id: stream, seq_id: seq, message })),
+    close: (seq: number, stream: string) => receive(JSON.stringify({ type: "client_closed", ...hostAddress, stream_id: stream, seq_id: seq })),
+  }
+}
+
+test("on the wire a thread result is never older than a status notification already received for that root", async () => {
+  const f = await hostFixture({ script: [{ active: true, waiting: [] }, { active: true, waiting: ["approval"] }] })
+  try {
+    f.send(1, { id: 1, method: "initialize", params: { clientInfo: { name: "fixture" } } })
+    f.send(2, { jsonrpc: "2.0", method: "initialized" })
+    await f.flush()
+    f.send(3, { id: 2, method: "thread/read", params: { threadId: "ses_thread" } })
+    await f.flush()
+    const frames = f.wire()
+    let view: unknown
+    let seen: string[] = []
+    for (const message of frames) {
+      if (message.id === 2) { view = message.result.thread.status; seen.push("result") }
+      else if (message.method === "thread/status/changed") { view = message.params.status; seen.push("status") }
+    }
+    expect(seen).toEqual(["result", "status"])
+    expect(view).toEqual({ type: "active", activeFlags: ["waitingOnApproval"] })
+  } finally { await f.host.stop() }
+})
+
+test("a terminal execution event reports idle even while the backend registry still lists the execution", async () => {
+  const f = escalationServer()
+  await f.open()
+  await rpc(f, 2, "thread/read", { threadId: "ses_unopened" })
+  f.status.active = true
+  f.stream.emit?.(event("session.execution.started"))
+  await f.settled()
+  expect(statusChanges(f)).toEqual([active])
+  f.stream.emit?.(Object.assign(event("session.execution.succeeded"), { data: { sessionID: "ses_child" } }))
+  await f.settled()
+  expect(statusChanges(f)).toEqual([active])
+  f.stream.emit?.(event("session.execution.succeeded"))
+  await f.settled()
+  expect(statusChanges(f)).toEqual([active, idle])
+  f.stream.emit?.(event("session.execution.started"))
+  await f.settled()
+  expect(statusChanges(f)).toEqual([active, idle, active])
+  f.server.retire()
+})
+
+test("a thread result read after a terminal execution event uses the same active rule as the notification", async () => {
+  const f = escalationServer()
+  await f.open()
+  await rpc(f, 2, "thread/read", { threadId: "ses_unopened" })
+  f.status.active = true
+  f.stream.emit?.(event("session.execution.started"))
+  await f.settled()
+  f.stream.emit?.(event("session.execution.succeeded"))
+  await f.settled()
+  expect(statusChanges(f)).toEqual([active, idle])
+  const read = JSON.parse((await rpc(f, 3, "thread/read", { threadId: "ses_unopened" }))!)
+  expect(read.result.thread.status).toEqual({ type: "idle" })
+  await f.settled()
+  expect(statusChanges(f)).toEqual([active, idle])
+  f.server.retire()
+})
+
+test("stream counts are reported through the diagnostic sink on real transitions only, without identifiers", async () => {
+  const diagnostics: string[] = []
+  const f = await hostFixture({ script: [{ active: false, waiting: [] }], diagnostics })
+  const lines = () => diagnostics.filter((line) => line.startsWith("Remote-control streams"))
+  const counts = () => lines().map((line) => line.replace(/ at=\S+$/, ""))
+  try {
+    for (const stream of ["stream-one", "stream-two"]) {
+      f.send(1, { id: 1, method: "initialize", params: { clientInfo: { name: "fixture" } } }, stream)
+      f.send(2, { jsonrpc: "2.0", method: "initialized" }, stream)
+      await f.flush()
+    }
+    expect(counts()).toEqual(["Remote-control streams open=1 initialized=1", "Remote-control streams open=2 initialized=2"])
+    f.send(3, { id: 2, method: "thread/list" }, "stream-one")
+    await f.flush()
+    expect(lines()).toHaveLength(2)
+    f.close(4, "stream-one")
+    await f.flush()
+    expect(counts().at(-1)).toBe("Remote-control streams open=1 initialized=1")
+    expect(lines()).toHaveLength(3)
+  } finally { await f.host.stop() }
+  expect(counts().at(-1)).toBe("Remote-control streams open=0 initialized=0")
+  expect(lines()).toHaveLength(4)
+  f.send(5, { id: 3, method: "thread/list" }, "stream-two")
+  await f.flush()
+  expect(lines()).toHaveLength(4)
+  for (const line of lines()) {
+    expect(line).toMatch(/^Remote-control streams open=\d+ initialized=\d+ at=\d{4}-\d{2}-\d{2}T[\d:.]+Z$/)
+    for (const forbidden of ["client-a", "stream-one", "stream-two", "ses_thread", "env", "synthetic"]) expect(line).not.toContain(forbidden)
+  }
+})
+
+const resolutions = (f: ReturnType<typeof escalationServer>) =>
+  f.messages.filter((message) => message.method === "serverRequest/resolved").map((message) => (message.params as { requestId: string }).requestId)
+
+test.each([
+  ["form.replied", { id: "item" }],
+  ["form.cancelled", { id: "item" }],
+  ["form.timed_out", { id: "item" }],
+  ["question.replied", { requestID: "item" }],
+  ["question.rejected", { requestID: "item" }],
+  ["question.timed_out", { requestID: "item" }],
+  ["permission.replied", { requestID: "item" }],
+  ["permission.cancelled", { requestID: "item" }],
+  ["guardrail.replied", { requestID: "item" }],
+  ["guardrail.cancelled", { requestID: "item" }],
+] as const)("%s resolves a held request exactly once while the pending read still lists it", async (type, data) => {
+  const f = escalationServer()
+  await f.open()
+  f.escalation.listener?.("ses_unopened")
+  await f.settled()
+  expect(userInputs(f)).toEqual(["ses_unopened"])
+  f.stream.emit?.(event(type, data))
+  await f.settled()
+  expect(resolutions(f)).toEqual(["per_escalated"])
+  f.stream.emit?.(event("session.execution.started"))
+  f.stream.emit?.(event(type, data))
+  await f.settled()
+  expect(resolutions(f)).toEqual(["per_escalated"])
+  expect(userInputs(f)).toEqual(["ses_unopened"])
+  f.pending.empty = true
+  f.stream.emit?.(event("session.execution.started"))
+  await f.settled()
+  expect(resolutions(f)).toEqual(["per_escalated"])
+  f.server.retire()
+})
+
+test("a resolution event that arrives before the request was surfaced keeps the stale listing from being delivered", async () => {
+  const f = escalationServer()
+  f.pending.empty = true
+  await f.open()
+  f.escalation.listener?.("ses_unopened")
+  await f.settled()
+  f.stream.emit?.(event("form.replied", { id: "item" }))
+  await f.settled()
+  f.pending.empty = false
+  f.stream.emit?.(event("session.execution.started"))
+  f.escalation.listener?.("ses_unopened")
+  await f.settled()
+  expect(userInputs(f)).toEqual([])
+  expect(resolutions(f)).toEqual([])
+  f.server.retire()
+})
+
+test("an unrelated or still pending request is not resolved by another request's settlement event", async () => {
+  const f = escalationServer()
+  await f.open()
+  f.escalation.listener?.("ses_unopened")
+  await f.settled()
+  f.stream.emit?.(event("form.replied", { id: "per_other" }))
+  f.stream.emit?.(event("question.asked", { id: "item" }))
+  await f.settled()
+  expect(resolutions(f)).toEqual([])
+  f.server.retire()
 })

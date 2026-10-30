@@ -101,7 +101,9 @@ test("native Thread exposes the stable installed shape without creator or provid
   expect((await f.rpc("thread/resume", { threadId: root.id, excludeTurns: true })).result).toEqual({ ...wrapper, turnsBackwardsCursor: null, itemsBackwardsCursor: null })
   const beforeRead = f.calls.length
   const loaded = (await f.rpc("thread/read", { threadId: root.id, includeTurns: true })).result.thread
-  expect(f.calls.slice(beforeRead).filter((call) => call === "read" || call === "get")).toEqual(["read"])
+  expect(f.calls.slice(beforeRead).filter((call) => call === "read")).toEqual(["read"])
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  expect(f.sent.filter((message) => message.method === "thread/status/changed")).toEqual([])
   expect(loaded.preview).toBe("Actual Core user preview")
   expect("title" in loaded).toBe(false)
   expect(f.calls.filter((call) => call === "read")).toHaveLength(1)
@@ -506,8 +508,8 @@ test("thread/unarchive returns the restored Thread, publishes unarchival and all
   const before = f.sent.length
   expect(await f.rpc("thread/unarchive", { threadId: root.id }, 3)).toEqual({ jsonrpc: "2.0", id: 3, result: { thread: listed } })
   expect(f.mutations).toEqual([["archive", root.id], ["unarchive", root.id]])
+  await new Promise<void>((resolve) => setImmediate(resolve))
   expect(f.sent.slice(before)).toEqual([{ jsonrpc: "2.0", method: "thread/unarchived", params: { threadId: root.id } }])
-  expect(f.calls.slice(f.calls.indexOf("unarchive")).filter((call) => call === "get" || call === "read")).toEqual([])
   expect((await f.rpc("thread/read", { threadId: root.id }, 4)).result.thread.id).toBe(root.id)
   f.server.retire()
 })
@@ -517,10 +519,9 @@ test("thread/unarchive surfaces a decision still pending from before archival wi
   await f.initialize()
   await f.rpc("thread/read", { threadId: root.id })
   await f.rpc("thread/archive", { threadId: root.id }, 2)
-  const before = f.calls.length
   await f.rpc("thread/unarchive", { threadId: root.id }, 3)
   await new Promise<void>((resolve) => setImmediate(resolve))
-  expect(f.calls.slice(before).filter((call) => call === "get" || call === "read")).toEqual([])
+  expect(f.sent.filter((message) => message.method === "thread/status/changed")).toEqual([])
   const requests = f.sent.filter((message) => message.method === "item/tool/requestUserInput")
   expect(requests.map((message) => message.id)).toEqual(["request", "request"])
   expect(requests[1]).toEqual(requests[0])

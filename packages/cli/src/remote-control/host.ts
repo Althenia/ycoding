@@ -252,7 +252,7 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
     const gen = generation
     const envID = enrolled.environmentID
     const reassembler = new Reassembler({ envID })
-    const streams = new Map<string, { readonly server: ReturnType<typeof createRemoteControlAppServer>; seq: number }>()
+    const streams = new Map<string, { readonly server: ReturnType<typeof createRemoteControlAppServer>; seq: number; ready: boolean }>()
     const retired = new Set<string>()
     let active = true
     const isCurrent = () => active && gen === generation && socket === opened
@@ -260,13 +260,20 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
     let dispatch: ((text: string) => void) | undefined
     const buffered: string[] = []
     let bufferedBytes = 0
+    const reportStreams = () => {
+      let initialized = 0
+      for (const stream of streams.values()) if (stream.ready) initialized++
+      deps.onDiagnostic?.(`Remote-control streams open=${streams.size} initialized=${initialized} at=${new Date(now()).toISOString()}`)
+    }
     const retire = () => {
       if (!active) return
       active = false
       stopHeartbeat()
       buffered.length = 0
+      const hadStreams = streams.size > 0
       for (const stream of streams.values()) stream.server.retire()
       streams.clear(); retired.clear(); reassembler.clear()
+      if (hadStreams) reportStreams()
       connection?.retire()
     }
     retireSocket = retire
@@ -290,7 +297,7 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
       const key = JSON.stringify([event.envID, event.clientID, event.streamID])
       const existing = streams.get(key)
       if (existing) return existing
-      const current: { readonly server: ReturnType<typeof createRemoteControlAppServer>; seq: number } = { seq: 0, server: createRemoteControlAppServer({
+      const current: { readonly server: ReturnType<typeof createRemoteControlAppServer>; seq: number; ready: boolean } = { seq: 0, ready: false, server: createRemoteControlAppServer({
         backend: createRemoteControlBackend({ channel: connection!.channel({ clientID: event.clientID, streamID: event.streamID }), profile: configuration.profile }),
         codexHome: deps.codexHome,
         requestScope: JSON.stringify([event.clientID, event.streamID]),
@@ -313,8 +320,9 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
       if (event.kind === "closed") {
         const key = JSON.stringify([event.envID, event.clientID, event.streamID])
         streams.get(key)?.server.retire()
-        streams.delete(key)
+        const existed = streams.delete(key)
         retired.add(key)
+        if (existed) reportStreams()
         reassembler.forget(event)
         return
       }
@@ -343,7 +351,12 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
       if (retired.has(key)) return
       const owner = streamFor(event)
       void owner.server.handle(event.text).then((reply) => {
-        if (reply === undefined || !isCurrent() || streams.get(key) !== owner) return
+        if (!isCurrent() || streams.get(key) !== owner) return
+        if (!owner.ready && owner.server.ready()) {
+          owner.ready = true
+          reportStreams()
+        }
+        if (reply === undefined) return
         for (const frame of encodeOutbound({ text: reply, clientID: event.clientID, streamID: event.streamID, envID, seqID: owner.seq++ })) opened.send(frame)
       })
     }

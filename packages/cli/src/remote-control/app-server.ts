@@ -35,6 +35,14 @@ export interface RemoteControlBackend {
   readonly retire: () => void
 }
 
+const settlementEvents = new Set([
+  "form.replied", "form.cancelled", "form.timed_out",
+  "question.replied", "question.rejected", "question.timed_out",
+  "permission.replied", "permission.cancelled",
+  "guardrail.replied", "guardrail.cancelled",
+])
+const maxSettledRequests = 1024
+
 const refusedPrefixes = ["command/", "process/", "fs/", "permission/", "guardrail/", "question/", "form/"] as const
 const unsupportedOverrides = ["model", "modelProvider", "approvalPolicy", "approvalsReviewer", "sandbox", "sandboxPolicy", "config"] as const
 
@@ -44,6 +52,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function validHeaderValue(value: string) {
   return value.length > 0 && value.length <= 256 && !/[\0-\x1f\x7f]/.test(value)
+}
+
+function threadStatus(snapshot: NativeDots.RootSnapshot) {
+  return snapshot.active || snapshot.waiting.length > 0
+    ? { type: "active", activeFlags: snapshot.waiting.map((wait) => wait === "approval" ? "waitingOnApproval" : "waitingOnUserInput") }
+    : { type: "idle" }
 }
 
 function threadWire(snapshot: NativeDots.RootSnapshot, messages: readonly SessionMessage.Info[] = [], summaries: ReturnType<typeof transcriptSummaries> = []) {
@@ -65,9 +79,7 @@ function threadWire(snapshot: NativeDots.RootSnapshot, messages: readonly Sessio
     createdAt: Math.floor(DateTime.toEpochMillis(thread.time.created) / 1_000),
     updatedAt: Math.floor(DateTime.toEpochMillis(thread.time.updated) / 1_000),
     recencyAt: null,
-    status: snapshot.active || snapshot.waiting.length > 0
-      ? { type: "active", activeFlags: snapshot.waiting.map((wait) => wait === "approval" ? "waitingOnApproval" : "waitingOnUserInput") }
-      : { type: "idle" },
+    status: threadStatus(snapshot),
     path: null,
     cwd: thread.location.directory,
     cliVersion: "unknown",
@@ -148,10 +160,70 @@ export function createRemoteControlAppServer(input: {
   const consumed = new Map<string, Set<string>>()
   const admissions = new Map<string, { count: number; events: EventManifest.ServerEvent[] }>()
   const revoked = new Set<string>()
+  const knownStatus = new Map<string, string>()
+  const settledRequests = new Set<string>()
+  const statusRefreshing = new Set<string>()
+  const statusDirty = new Set<string>()
+  const statusHeld = new Map<string, number>()
+  const executionEnded = new Set<string>()
   let escalationsStarted = false
   let stopEscalations: (() => void) | undefined
   const notify = (method: string, params: unknown) => {
     if (active) input.send(JSON.stringify({ jsonrpc: "2.0", method, params }))
+  }
+
+  const observed = (snapshot: NativeDots.RootSnapshot): NativeDots.RootSnapshot =>
+    executionEnded.has(snapshot.session.id) ? { ...snapshot, active: false } : snapshot
+
+  const wire = (snapshot: NativeDots.RootSnapshot, messages: readonly SessionMessage.Info[] = [], summaries: ReturnType<typeof transcriptSummaries> = []) => {
+    const current = observed(snapshot)
+    knownStatus.set(current.session.id, JSON.stringify(threadStatus(current)))
+    return threadWire(current, messages, summaries)
+  }
+
+  function holdStatus(threadID: string) {
+    statusHeld.set(threadID, (statusHeld.get(threadID) ?? 0) + 1)
+    return () => {
+      setImmediate(() => {
+        const remaining = (statusHeld.get(threadID) ?? 1) - 1
+        if (remaining > 0) {
+          statusHeld.set(threadID, remaining)
+          return
+        }
+        statusHeld.delete(threadID)
+        if (active) void refreshStatus(threadID)
+      })
+    }
+  }
+
+  async function watchWith<T>(threadID: string, build: () => T): Promise<T> {
+    const release = holdStatus(threadID)
+    try {
+      await watch(threadID)
+      return build()
+    } finally {
+      release()
+    }
+  }
+
+  async function refreshStatus(threadID: string): Promise<void> {
+    statusDirty.add(threadID)
+    if (statusRefreshing.has(threadID)) return
+    statusRefreshing.add(threadID)
+    try {
+      while (statusDirty.delete(threadID)) {
+        if (statusHeld.has(threadID)) continue
+        const snapshot = await backend.getThread(threadID).catch(() => undefined)
+        if (!active || revoked.has(threadID) || !subscriptions.has(threadID) || snapshot === undefined || statusHeld.has(threadID)) continue
+        const status = threadStatus(observed(snapshot))
+        const key = JSON.stringify(status)
+        const known = knownStatus.get(threadID)
+        knownStatus.set(threadID, key)
+        if (known !== undefined && known !== key) notify("thread/status/changed", { threadId: threadID, status })
+      }
+    } finally {
+      statusRefreshing.delete(threadID)
+    }
   }
 
   const result = (id: unknown, value: unknown) => JSON.stringify({ jsonrpc: "2.0", id, result: value })
@@ -193,6 +265,8 @@ export function createRemoteControlAppServer(input: {
   function retireRoot(threadID: string) {
     const completedAtMs = Date.now()
     revoked.add(threadID)
+    knownStatus.delete(threadID)
+    executionEnded.delete(threadID)
     cancelRetry(threadID)
     for (const held of pending.values()) if (held.request.threadID === threadID) resolved(held.request)
     for (const [id, turn] of turns) if (turn.threadID === threadID) completeTurn(id, "interrupted", null, completedAtMs)
@@ -247,6 +321,15 @@ export function createRemoteControlAppServer(input: {
     }
   }
 
+  function noteSettlement(event: EventManifest.ServerEvent) {
+    const data: unknown = event.data
+    if (!settlementEvents.has(event.type) || !isRecord(data)) return
+    const id = typeof data.requestID === "string" ? data.requestID : typeof data.id === "string" ? data.id : undefined
+    if (id === undefined) return
+    settledRequests.add(id)
+    if (settledRequests.size > maxSettledRequests) for (const oldest of settledRequests) { settledRequests.delete(oldest); break }
+  }
+
   function surfaceApprovals(threadID: string): Promise<void> {
     if (revoked.has(threadID)) return Promise.reject(new Error("Native access retired"))
     dirty.add(threadID)
@@ -255,7 +338,7 @@ export function createRemoteControlAppServer(input: {
     const task = (async () => {
       do {
         dirty.delete(threadID)
-        const requests = await backend.pending(threadID)
+        const requests = (await backend.pending(threadID)).filter((item) => !settledRequests.has(item.itemID))
         if (!active || revoked.has(threadID)) return
         for (const held of pending.values())
           if (held.request.threadID === threadID && !held.settling && !requests.some((item) => item.id === held.request.id && item.handle === held.request.handle)) resolved(held.request)
@@ -268,6 +351,7 @@ export function createRemoteControlAppServer(input: {
           } }))
         }
       } while (dirty.has(threadID))
+      void refreshStatus(threadID)
     })()
     refreshing.set(threadID, task)
     void task.then(() => {
@@ -285,6 +369,12 @@ export function createRemoteControlAppServer(input: {
     if (!entry) {
       const subscription = backend.subscribe(threadID, (event) => {
         runtimeEvent(threadID, event)
+        noteSettlement(event)
+        if ("sessionID" in event.data && event.data.sessionID === threadID && event.type.startsWith("session.execution.")) {
+          if (event.type === "session.execution.started") executionEnded.delete(threadID)
+          else executionEnded.add(threadID)
+          void refreshStatus(threadID)
+        }
         void surfaceApprovals(threadID).catch(() => {})
       }, () => retireRoot(threadID))
       entry = { pending: subscription }
@@ -305,6 +395,7 @@ export function createRemoteControlAppServer(input: {
     const entry = subscriptions.get(threadID)
     if (!entry) return
     subscriptions.delete(threadID)
+    executionEnded.delete(threadID)
     if (entry.stop) entry.stop()
     else void entry.pending.then((stop) => stop(), () => {})
   }
@@ -415,8 +506,7 @@ export function createRemoteControlAppServer(input: {
           inputID: JSON.stringify([input.requestScope, method, id]),
           ...(typeof params.title === "string" ? { title: params.title } : {}),
         })
-        await watch(thread.session.id)
-        const started = threadWire(thread)
+        const started = await watchWith(thread.session.id, () => wire(thread))
         notify("thread/started", { thread: started })
         return result(id, threadConfiguration(started))
       }
@@ -449,8 +539,13 @@ export function createRemoteControlAppServer(input: {
         }
         restoreRoot(threadID)
         notify("thread/unarchived", { threadId: threadID })
-        if (escalationsStarted) escalated(threadID)
-        return result(id, { thread: threadWire(thread) })
+        const restored = wire(thread)
+        if (escalationsStarted) {
+          const release = holdStatus(threadID)
+          escalated(threadID)
+          release()
+        }
+        return result(id, { thread: restored })
       }
       case "thread/delete": {
         const threadID = typeof params.threadId === "string" ? params.threadId : undefined
@@ -472,12 +567,12 @@ export function createRemoteControlAppServer(input: {
         if (thread === undefined) return failure(id, -32602, "Thread is unavailable")
         if (changedDirectory(params, thread)) return failure(id, -32602, "cwd cannot change an existing YCoding Session")
         const messages = loaded?.messages ?? []
-        await watch(thread.session.id)
-        return result(id, { ...threadConfiguration(threadWire(thread, messages, transcriptSummaries(messages))), turnsBackwardsCursor: null, itemsBackwardsCursor: null })
+        const configured = await watchWith(thread.session.id, () => threadConfiguration(wire(thread, messages, transcriptSummaries(messages))))
+        return result(id, { ...configured, turnsBackwardsCursor: null, itemsBackwardsCursor: null })
       }
       case "thread/list": {
         const threads = await backend.listThreads()
-        return result(id, { data: threads.map((thread) => threadWire(thread)), nextCursor: null, backwardsCursor: null })
+        return result(id, { data: threads.map((thread) => wire(thread)), nextCursor: null, backwardsCursor: null })
       }
       case "thread/read": {
         const threadID = typeof params.threadId === "string" ? params.threadId : undefined
@@ -486,8 +581,8 @@ export function createRemoteControlAppServer(input: {
         const thread = params.includeTurns === true ? loaded : await backend.getThread(threadID)
         if (thread === undefined) return failure(id, -32602, "Thread is unavailable")
         const messages = loaded?.messages ?? []
-        await watch(threadID)
-        return result(id, { thread: threadWire(thread, messages, transcriptSummaries(messages)) })
+        const wired = await watchWith(threadID, () => wire(thread, messages, transcriptSummaries(messages)))
+        return result(id, { thread: wired })
       }
       case "turn/start":
       case "turn/steer": {

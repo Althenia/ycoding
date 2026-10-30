@@ -194,10 +194,22 @@ const layer = Layer.effect(
     const settle = Semaphore.makeUnsafe(1)
     const exclusive = <A, E, R>(effect: Effect.Effect<A, E, R>) => settle.withPermit(Effect.uninterruptible(effect))
 
+    const end = (entry: Pending) =>
+      exclusive(
+        Effect.gen(function* () {
+          if (pending.get(entry.request.id) !== entry) return
+          yield* events
+            .publish(Event.Rejected, { sessionID: entry.request.sessionID, requestID: entry.request.id })
+            .pipe(Effect.ensuring(Effect.sync(() => pending.delete(entry.request.id))))
+        }),
+      )
+
     yield* Effect.addFinalizer(() =>
-      Effect.forEach(pending.values(), (item) => Deferred.fail(item.deferred, new RejectedError()), {
-        discard: true,
-      }).pipe(
+      Effect.forEach(
+        Array.from(pending.values()),
+        (item) => end(item).pipe(Effect.ensuring(Deferred.fail(item.deferred, new RejectedError()))),
+        { discard: true },
+      ).pipe(
         Effect.ensuring(
           Effect.sync(() => {
             pending.clear()
@@ -408,6 +420,7 @@ const layer = Layer.effect(
           }
           return yield* Effect.suspend(() => pending.get(id) === entry ? events.publish(Event.Asked, request) : Effect.void).pipe(
             Effect.andThen(restore(Deferred.await(deferred))),
+            Effect.onInterrupt(() => end(entry)),
             Effect.ensuring(cancelPending),
           )
         }),

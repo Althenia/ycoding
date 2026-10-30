@@ -7,259 +7,25 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.10 steady Dots connection dialog, bounded status reads and reliable decision delivery first", () => {
+  test("lists v0.11.0 projects, autonomy modes, goal decisions and native Dots first", () => {
     const entry = RELEASES[0]
-    expect(entry).toMatchObject({ version: "0.11.10", date: "2026-10-30", tags: ["Fixed"] })
-    expect(entry?.changes).toHaveLength(3)
-    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(3)
-    expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(0)
-    expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(0)
+    expect(entry).toMatchObject({ version: "0.11.0", date: "2026-10-31", title: "Projects, autonomy modes, goal decisions and native Dots", tags: ["Added", "Changed", "Fixed"] })
+    expect(entry?.changes).toHaveLength(75)
+    expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(38)
+    expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(23)
+    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(14)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
     for (const fragment of [
-      "flickers", "every five seconds", "stays open through refreshes", "could not be read",
-      "20 seconds", "30 seconds", "90 seconds", "never repeats the change",
-      "1, 2, 4, 8 and 16 seconds", "still pending",
+      "Projects pair one Master Session", "recorded owner", "notification filters", "account connectors", "Library tools",
+      "Autonomous control", "Assessing options", "active goal", "no extra permission", "next Step boundary", "Antigravity", "Weekly limit",
+      "Code Mode `execute`", "cross-origin iframes", "desktop.query", "received-output throughput",
+      "global `dots.enabled: true`", "Dots connection", "within 20 seconds", "executor online", "decision watch", "work assessment", "expectedTarget",
+      "counts and a time", "thread status change", "older status", "ended", "exactly once", "ChatGPT's own rename request", "HTTP status", "does not send that rename again", "never adopts",
+      "Breaking Change: incoming Relay MCP/OAuth", "decision-input", "bridge protocol version 5", "prepared, render-ready data", "folio head", "flat sections",
+      "<data>/tasks/<task>", "account profiles, Session databases and keys", "Newly defined custom agents do not inherit", "configured overrides of built-in agents retain it",
+      "Restarting the service no longer fails running managed child Sessions", "Opening a subagent from Team",
     ]) expect(text).toContain(fragment)
     for (const excluded of ["CCA", "Flora", "milestone"]) expect(text).not.toContain(excluded)
-    expect(after("0.11.10")?.version).toBe("0.11.9")
-  })
-
-  test("retains v0.11.9 Editorial Ledger workspace, Dots computer labels, background Session filtering and work assessments", () => {
-    const entry = byVersion("0.11.9")
-    expect(entry).toMatchObject({ version: "0.11.9", date: "2026-10-30", tags: ["Added", "Changed", "Fixed"] })
-    expect(entry?.changes).toHaveLength(19)
-    expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(6)
-    expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(11)
-    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(2)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of [
-      "§01", "folio head", "figure type", "single rules", "sunken spine", "inset status edge", "narrow column", "ruled rows", "reading position", "Office floor is unchanged",
-      "dots.name", "studio.local (3f9a1c)", "never selects which computer is attached",
-      "work assessment", "completed", "work-completion receipt", "never that the work is finished",
-      "tools.chatgpt.library.prepare", "20 MiB", "uncertain writes are not replayed", "unverified",
-      "background: \"exclude\"", "Roots started through Dots stay listed", "one-time startup migration",
-      "expectedTarget", "Calls without expectedTarget remain valid", "remote-control.json", "never rewritten",
-      "older than v0.11.9", "file watcher", "Opening a subagent from Team",
-    ]) expect(text).toContain(fragment)
-    for (const excluded of ["CCA", "Flora", "SIGNING_KEYCHAIN", "install:local", "milestone"]) expect(text).not.toContain(excluded)
-    expect(after("0.11.9")?.version).toBe("0.11.8")
-  })
-
-  test("retains v0.11.8 Dots executor, decision inspection and watch, and prompt-cache reuse", () => {
-    const entry = byVersion("0.11.8")
-    expect(entry).toMatchObject({ version: "0.11.8", date: "2026-10-30", tags: ["Added", "Changed", "Fixed"] })
-    expect(entry?.changes).toHaveLength(14)
-    expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(7)
-    expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(5)
-    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(2)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of [
-      "Dots executor", "while Dots access is On", "its own YCoding Session", "30 seconds",
-      "session.review.decide", "identical action", "hard reviews", "external_directory",
-      "ycoding decision list", "GET /api/decision", "loaded Locations",
-      "ycoding decision watch", "unknown", "never reported as succeeded", "--server", "--standalone", "never answers",
-      "ycoding dots attach", "POST /api/dots/computer", "detaches your other computers",
-      "existing local directory", "foreign-owned",
-      "ycoding-operator", "unverified",
-      "ycoding api", "HTTP <status>", "roots it has not opened", "macos", "windows",
-      "sandbox denial", "user account's access", "cannot confine", "Any local process", "600-second",
-      "cached prefixes", "chronological", "account identity", "no cache hit is guaranteed", "configuration watcher",
-    ]) expect(text).toContain(fragment)
-    for (const excluded of ["0.165", "Noise", "Flora", "node-forge", "proof script", "CCA"]) expect(text).not.toContain(excluded)
-    for (const historical of ["device grants", "MCP progress and blocker notifications", "Room and prompt text"]) expect(text).not.toContain(historical)
-    expect(after("0.11.8")?.version).toBe("0.11.7")
-  })
-
-  test("retains v0.11.7 Code Mode, browser frames, prepared Usage and the usage migration", () => {
-    const entry = byVersion("0.11.7")
-    expect(entry).toMatchObject({ version: "0.11.7", date: "2026-10-29", tags: ["Added", "Changed", "Fixed"] })
-    expect(entry?.changes).toHaveLength(21)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["Code Mode execute", "TimeoutExceeded", "cross-origin iframes", "WebMCP", "desktop.query", "completed, failed or was cancelled", "next Step boundary", "POST /api/usage/dashboard", "one-time startup migration", "database grows", "only known values", "three physical attempts", "bridge protocol version 5", "Reload", "Agent not found", "Attachment rejected", "tool_use.id"]) expect(text).toContain(fragment)
-    expect(entry?.changes.find((change) => change.text.startsWith("A one-time startup migration"))?.tag).toBe("Changed")
-    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(8)
-    expect(after("0.11.7")?.version).toBe("0.11.6")
-  })
-
-  test("retains v0.11.6 global Dots controls and Antigravity updates", () => {
-    const entry = byVersion("0.11.6")
-    expect(entry).toMatchObject({ version: "0.11.6", date: "2026-10-27", tags: ["Added", "Changed", "Fixed"] })
-    expect(entry?.changes).toHaveLength(6)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["/dots", "Dots connection", "Computer", "Profile", "Configuration", "Access", "Transport", "Breaking Change:", "session.dots.access.get", "session.dots.access.set", "dots.get", "dots.set", "GET /api/dots", "PUT /api/dots", "expectedRevision", "Off", "old family grants", "enable it once", "every existing and future eligible Session", "exact OpenAI OAuth profile", "Connect", "Disconnect", "admitted work", "explicit denies", "guardrails", "not replayed", "authenticated socket", "env_id", "mismatching", "unverified"]) expect(text.toLowerCase()).toContain(fragment.toLowerCase())
-    for (const fragment of ["Antigravity Claude", "JSON Schema", "union-root", "effort variants", "Antigravity quota", "TUI and web Usage", "reported group headings", "Weekly limit", "Five hour limit", "failed refreshes", "substitute data", "live gateway"]) expect(text.toLowerCase()).toContain(fragment.toLowerCase())
-    expect(entry?.changes.find((change) => change.text.startsWith("Antigravity Claude"))?.tag).toBe("Fixed")
-    expect(entry?.changes.find((change) => change.text.startsWith("Antigravity quota"))?.tag).toBe("Changed")
-    for (const excluded of ["Rust", "performance passed", "under eight", "bypass", "picker succeeds"]) expect(text.toLowerCase()).not.toContain(excluded.toLowerCase())
-    expect(after("0.11.6")?.version).toBe("0.11.5")
-  })
-
-  test("retains v0.11.5 native Dots and retirement migration", () => {
-    const entry = byVersion("0.11.5")
-    expect(entry).toMatchObject({ version: "0.11.5", date: "2026-10-27", tags: ["Added", "Changed", "Fixed"] })
-    expect(entry?.changes).toHaveLength(8)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["private server-process Channels", "canonical Session events", "completed, failed and interrupted", "existing roots default off", "children inherit", "Enable Dots access", "revision", "Breaking Change:", "incoming Relay MCP/OAuth", "webhook Events", "local.app", "artifact.demo", "old Dots", "ycoding remote mcp", "/dots", "global", "dots.enabled", "dots.profile", "OpenAI OAuth", "ordinary browser Remote", "outbound MCP", "Task MCP", "exact typed candidate", "explicit denies", "ceilings", "autonomy", "not replayed", "not strict Codex policy equivalence", "no Codex-enforced OS sandbox", "non-null", "matching values", "before effects", "completed summary", "not original execution success", "user and assistant messages", "internal records", "stored history", "external ChatGPT decoder compatibility is unverified", "causal input origin", "direct ownership", "Step-boundary"]) expect(text.toLowerCase()).toContain(fragment.toLowerCase())
-    expect(entry?.changes.filter((change) => change.tag === "Fixed").map((change) => change.text)).toEqual([
-      "Usage speed percentiles batch repeated histogram updates while preserving exact results. Large Usage dashboards can still exceed the two-second warm-read target.",
-    ])
-    expect(after("0.11.5")?.version).toBe("0.11.4")
-  })
-
-  test("retains v0.11.4 device-scoped Dots decisions, keep-awake activity and received-output speed", () => {
-    const entry = byVersion("0.11.4")
-    expect(entry).toMatchObject({ version: "0.11.4", date: "2026-10-27", tags: ["Added", "Changed", "Fixed"] })
-    expect(entry?.changes).toHaveLength(9)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of [
-      "device-wide grant",
-      "nonarchived Session the device owns",
-      "no one-hour cap",
-      "survives runtime restart and MCP reconnect",
-      "session.dots.decisions.list",
-      "without a preceding task exchange",
-      "MCP progress and blocker notifications are captured immediately",
-      "identify client-originated decisions",
-      "Breaking Change: an authenticated Dots principal",
-      "hard and custom-rule guardrail reviews",
-      "one-shot once or reject",
-      "room and prompt text never settles a decision",
-      "revoke or unbind",
-      "Breaking Change: the human-input",
-      "decision-input",
-      "is not rewritten",
-      "holds display sleep",
-      "every second",
-      "does not report an unlocked screen",
-      "estimated received-output throughput",
-      "first output chunk is excluded",
-      "at least one second",
-      "trailing five-second window",
-      "restart for each provider attempt",
-      "without HTML details or summary wrappers",
-      "Captured changes (TUI) and Edited files (web)",
-      "no longer send client cache resources or cache breakpoints",
-    ])
-      expect(text).toContain(fragment)
-    expect(after("0.11.4")?.version).toBe("0.11.3")
-  })
-
-  test("retains v0.11.3 delegated decision forms and multi-Session Dots bindings", () => {
-    const entry = byVersion("0.11.3")
-    expect(entry).toMatchObject({ version: "0.11.3", date: "2026-10-26", tags: ["Added", "Changed", "Fixed"] })
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of [
-      "session_dots_decision_form",
-      "MCP 2026-07-28 form",
-      "decision scope",
-      "URL-only or unknown-only",
-      "never human approval",
-      "leave the native request pending",
-      "single-use",
-      "five minutes",
-      "requireHuman",
-      "Always grants stay human-only",
-      "no defaults",
-      "clientCapabilities",
-      "unreported, not unsupported",
-      "Bind several Sessions",
-      "Nothing is preselected",
-      "denied Session does not undo an approved one",
-      "exactly the displayed grant",
-      "never replayed",
-      "external-client source",
-      "keyboard-selected option",
-      "direct child",
-      "leading ~",
-      "Multiline free-text",
-    ])
-      expect(text.toLowerCase()).toContain(fragment.toLowerCase())
-    expect(after("0.11.3")?.version).toBe("0.11.2")
-  })
-
-  test("retains v0.11.2 Projects, Dots delegation, child model selection and graded questions", () => {
-    const entry = byVersion("0.11.2")
-    expect(entry).toMatchObject({ version: "0.11.2", date: "2026-10-25", tags: ["Changed", "Fixed"] })
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of [
-      "Add session",
-      "Members",
-      "confirmed new Session",
-      "display name",
-      "Unbind",
-      "keeps running",
-      "explicit Dots task exchanges",
-      "separate human-only approval",
-      "Continue or scoped presentation",
-      "existing human-authored task",
-      "one directly owned child Session",
-      "current logical Step finishes",
-      "without interrupting or replaying work; idle children remain idle",
-      "profile binding, questions, task state, permission ceiling, ownership and launch retry identity",
-      "stale expected selection or incompatible context, provider connection, profile or variant leaves the selection unchanged",
-      "Reading the selected model does not prove that a provider request was made with it",
-      "cannot admit new work",
-      "answer native Forms, permissions, guardrail reviews or managed-child questions",
-      "control child Sessions",
-      "expose Dots credentials or live native controls",
-      "program-stamped",
-      "without replay",
-      "pending-request",
-      "human-only",
-      "chronological transcript placement",
-      "malformed metadata reads as unavailable",
-      "TUI hides only unnamed canonical Remote MCP attribution",
-      "model context",
-      "web attribution",
-      "native Dot headers",
-      "YOLO option assessments show the evaluator-reported confidence and evidence for each actual option",
-      "unique highest-confidence option at or above 0.8",
-      "separately validated compatible set",
-      "weak, ambiguous, invalid, refused, failed or timed-out assessments",
-      "Manual and Auto make no model call and show Not assessed",
-      "Settled views distinguish automatic YOLO answers from answers supplied by you",
-      "Antigravity",
-      "build time",
-      "Up/Down",
-      "distinguishing action",
-      "move through choices",
-      "Cancel and Confirm visible",
-      "settle a selection once",
-    ])
-      expect(text).toContain(fragment)
-    expect(text).toContain(
-      "Short permission and guardrail details use natural height, preserving transcript space; longer reviews remain bounded and scrollable with decisions visible.",
-    )
-    expect(text).toContain(
-      "Short phone layouts move Session status, full-word autonomy-mode labels, sleep and review labels, and the active-goal preview into the conversation scroll area while keeping primary controls in the composer.",
-    )
-    expect(after("0.11.2")?.version).toBe("0.11.1")
-  })
-
-  test("retains v0.11.1 Project ownership, autonomy modes and Antigravity", () => {
-    const entry = byVersion("0.11.1")
-    expect(entry).toMatchObject({ version: "0.11.1", date: "2026-10-25", tags: ["Added", "Changed", "Fixed"] })
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["Manual", "YOLO", "Auto", "Autonomous", "no model call", "hard and custom-rule reviews", "asleep marker", "recorded owner", "Only the Master assigns or transfers ownership", "executor children inherit no Project control", "inspect, assign and release", "human-only", "Projects tab", "five-Session roster", "Antigravity", "effort variants", "unverified", "tools.chatgpt.ycoding.session_catalog", "duplicate Code Mode paths", "focused test files", "recorded text offsets", "forks", "reported zero hit ratio", "fragmented UTF-8", "Open actions", "a decline never approves", "under Manual", "match dismissals", "pending reviews", "pairing code"])
-      expect(text).toContain(fragment)
-    expect(after("0.11.1")?.version).toBe("0.11.0")
-    for (const fragment of ["single row", "normal header band", "semantic colors", "light and dark themes", "Typing indicator"]) expect(text).toContain(fragment)
-    for (const fragment of ["three-row band", "category and mode is one filled chip", "Manual is green, Auto red and YOLO yellow"]) expect(text).toContain(fragment)
-    for (const fragment of ["horizontal padding", "headers omit repeated titles", "available width without unselected-row chevrons"]) expect(text).toContain(fragment)
-    expect(text).toContain("Project name and role without the Master Session title")
-    for (const fragment of ["OAuth client ID and secret", "runtime environment", "not bundled"]) expect(text).toContain(fragment)
-    for (const fragment of ["current task context", "same tool and resource patterns", "native or local tools", "disabled connector"])
-      expect(text).toContain(fragment)
-    for (const fragment of ["Dots conversation peers", "dots.enabled: true", "Pause Dot", "Resume Dot", "autonomous runtime", "Native ChatGPT Library", "20 MiB", "Codex Desktop", "signed file transfers"])
-      expect(text).toContain(fragment)
-  })
-
-  test("retains v0.11.0 Projects and shared machine names", () => {
-    const entry = byVersion("0.11.0")
-    expect(entry).toMatchObject({ version: "0.11.0", date: "2026-10-23", tags: ["Added", "Changed"] })
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["Projects", "Master", "member Sessions", "desktop Sessions panel", "phone sheet", "interruption", "native", "human-only", "notification", "pending", "account", "hostname", "first-person", "audit", "ChatGPT", "Claude", "hosted MCP", "OAuth", "fresh human decisions", "user:mcp_servers", "unverified"])
-      expect(text).toContain(fragment)
     expect(after("0.11.0")?.version).toBe("0.10.25")
   })
 
@@ -1884,17 +1650,7 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 55)).toEqual([
-      "0.11.10",
-      "0.11.9",
-      "0.11.8",
-      "0.11.7",
-      "0.11.6",
-      "0.11.5",
-      "0.11.4",
-      "0.11.3",
-      "0.11.2",
-      "0.11.1",
+    expect(versions.slice(0, 45)).toEqual([
       "0.11.0",
       "0.10.25",
       "0.10.24",

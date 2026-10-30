@@ -219,6 +219,69 @@ describe("Question", () => {
     }),
   )
 
+  it.effect("an interrupted ask publishes exactly one rejection for its request and records no answer", () =>
+    Effect.gen(function* () {
+      const service = yield* Question.Service
+      const events = yield* EventRuntime.Service
+      const terminal: EventRuntime.Payload[] = []
+      const unsubscribe = yield* events.listen((event) =>
+        Effect.sync(() => {
+          if (event.type === Question.Event.Rejected.type || event.type === Question.Event.Replied.type) terminal.push(event)
+        }),
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const { fiber, request } = yield* waitForAsk(service, { sessionID, questions: [question] })
+      yield* Fiber.interrupt(fiber)
+      expect(terminal.map((event) => [event.type, event.data])).toEqual([[Question.Event.Rejected.type, { sessionID, requestID: request.id }]])
+      expect(yield* service.list()).toEqual([])
+      expect(yield* service.reply({ requestID: request.id, answers: [["Late"]] }).pipe(Effect.flip)).toEqual(
+        new Question.NotFoundError({ requestID: request.id }),
+      )
+      expect(terminal).toHaveLength(1)
+    }),
+  )
+
+  it.effect("finalizing the service scope publishes exactly one rejection per pending request", () =>
+    Effect.gen(function* () {
+      yield* setupAutonomy("normal")
+      const database = yield* Database.Service
+      const eventRuntime = yield* EventRuntime.Service
+      const layer = AppNodeBuilder.build(LayerNode.group([Database.node, Question.node]), [
+        [Config.node, Layer.succeed(Config.Service, yield* Config.Service)],
+        [Database.node, Layer.succeed(Database.Service, database)],
+        [EventRuntime.node, Layer.succeed(EventRuntime.Service, eventRuntime)],
+        [SessionAutonomy.node, Layer.succeed(SessionAutonomy.Service, yield* SessionAutonomy.Service)],
+        [Decision.node, Layer.succeed(Decision.Service, yield* Decision.Service)],
+      ])
+      const terminal: EventRuntime.Payload[] = []
+      const unsubscribe = yield* eventRuntime.listen((event) =>
+        Effect.sync(() => {
+          if (event.type === Question.Event.Rejected.type || event.type === Question.Event.Replied.type) terminal.push(event)
+        }),
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const service = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), Question.Service)
+      const first = yield* waitForAsk(service, { sessionID, questions: [question] })
+      const second = yield* waitForAsk(service, { sessionID, questions: [question] })
+      expect(first.request.id).not.toBe(second.request.id)
+      yield* Fiber.interrupt(second.fiber)
+      expect(terminal.map((event) => event.data)).toEqual([{ sessionID, requestID: second.request.id }])
+
+      yield* Scope.close(scope, Exit.void)
+      const exit = yield* Fiber.await(first.fiber)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(exit.cause.toString()).toContain("Question.RejectedError")
+      expect(terminal.map((event) => [event.type, event.data])).toEqual([
+        [Question.Event.Rejected.type, { sessionID, requestID: second.request.id }],
+        [Question.Event.Rejected.type, { sessionID, requestID: first.request.id }],
+      ])
+      yield* Scope.close(scope, Exit.void)
+      expect(terminal).toHaveLength(2)
+    }),
+  )
+
   it.effect("fresh service scopes on the same database do not restore ordinary pending questions", () =>
     Effect.gen(function* () {
       yield* setupAutonomy("normal")
@@ -446,14 +509,14 @@ describe("Question", () => {
       }),
     )
 
-    it.effect("interrupting the ask removes the pending question without a later settlement", () =>
+    it.effect("interrupting the ask rejects the pending question once and records no answer", () =>
       Effect.gen(function* () {
         const service = yield* Question.Service
         const published = yield* observe()
         const { fiber } = yield* waitForAsk(service, { sessionID, questions: [question] })
         yield* Fiber.interrupt(fiber)
         yield* TestClock.adjust("10 minutes")
-        expect(published.map((event) => event.type)).toEqual([Question.Event.Asked.type])
+        expect(published.map((event) => event.type)).toEqual([Question.Event.Asked.type, Question.Event.Rejected.type])
         expect(yield* service.list()).toEqual([])
       }),
     )
