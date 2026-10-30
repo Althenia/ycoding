@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { remoteDotsPeerLabel, type RemoteDotsStatus } from "@ycoding-ai/remote"
+import { RemoteLimits, remoteDotsPeerLabel, type RemoteDotsStatus } from "@ycoding-ai/remote"
 import type { RemoteLink } from "../src/remote/queries"
 import { dotsClient } from "../src/remote/dots"
 import { dotsConnectionView } from "../src/remote/view-model"
@@ -8,7 +8,7 @@ import type { RemoteRequestOutcome } from "../src/remote/transport"
 const scope = { deviceID: "device-1", generation: 1 }
 
 test("connection presentation separates registered names from the machine hostname", () => {
-  const view = dotsConnectionView({ online: true, loading: false, pending: false, status: { ...status, access: { enabled: true, revision: 2 },
+  const view = dotsConnectionView({ online: true, loading: false, refreshing: false, pending: false, status: { ...status, access: { enabled: true, revision: 2 },
     connection: { state: "connected", hostname: "box.local", name: "Native desk" }, computer: { state: "detached", name: "Executor desk" },
   } })
   expect(view.computer).toBe("box.local")
@@ -77,4 +77,19 @@ test("historical peer messages retain external attribution", () => {
   const peer = { origin: "dots-peer", profile: "p", dotID: "dot-1", threadID: "thread-1", itemID: "i" }
   expect(remoteDotsPeerLabel({ dots: peer })).toBe("Dot dot-1 · external peer · thread-1")
   expect(remoteDotsPeerLabel({ dots: { ...peer, itemID: "" } })).toBeUndefined()
+})
+
+test("every Dots request carries its explicit shared budget", async () => {
+  const timeouts: Record<string, number | undefined> = {}
+  const link: RemoteLink = { recoveries: () => 0, recovered: async () => false, request: async (_scope, operation, request) => {
+    timeouts[operation] = request?.timeoutMs
+    return { status: "ok", value: { data: status } }
+  } }
+  const client = dotsClient(link, scope)
+  await client.get()
+  await client.set(true, 2)
+  await client.attach()
+  for (const timeout of Object.values(timeouts)) expect(Number.isFinite(timeout) && timeout! > 0).toBe(true)
+  expect(timeouts).toEqual({ "dots.get": RemoteLimits.dotsStatusMs, "dots.set": RemoteLimits.dotsStatusMs, "dots.attach": RemoteLimits.dotsAttachMs })
+  expect(RemoteLimits.dotsAttachMs).toBeGreaterThan(RemoteLimits.dotsStatusMs)
 })

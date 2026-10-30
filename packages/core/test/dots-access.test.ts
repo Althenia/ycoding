@@ -248,6 +248,21 @@ it.live("native status reports the transport's computer state with fixed guidanc
   expect((yield* f.access.status()).computer).toBeUndefined()
 }))
 
+it.live("a connected transport never makes the computer attached and an unlisted or unread computer keeps its own fixed guidance", () => Effect.gen(function* () {
+  const f = yield* setup
+  yield* f.access.set({ enabled: true, expectedRevision: 0 })
+  let computer: () => Promise<DotsAccess.ComputerStatus> = async () => ({ state: "unavailable", problem: "not-listed" })
+  const release = f.access.attachTransport({ ...idleComputer, status: async () => ({ state: "connected" }), computer: () => computer() })
+  const unlisted = yield* f.access.status()
+  expect(unlisted.connection.state).toBe("connected")
+  expect(unlisted.computer).toEqual({ state: "unavailable", message: "This computer is not among your Dot's computers yet. Keep Dots access on and try again." })
+  computer = async () => ({ state: "unavailable", problem: "connection" })
+  const unread = yield* f.access.status()
+  expect(unread.connection.state).toBe("connected")
+  expect(unread.computer).toEqual({ state: "unavailable", message: "Your Dot's computers could not be read. Try again." })
+  release()
+}))
+
 it.live("computer attachment requires a transport and enabled access and reports the attach outcome", () => Effect.gen(function* () {
   const f = yield* setup
   expect((yield* f.access.attachComputer().pipe(Effect.flip)).code).toBe("unavailable")

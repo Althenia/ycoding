@@ -405,6 +405,18 @@ export type RemoteWorkspaceInfo = {
 export const RemoteLimits = {
   goalSetTimeoutMs: 5 * 60_000,
   compactionTimeoutMs: 5 * 60_000,
+  /**
+   * Browser outcome budget for one `dots.get` or `dots.set`. The native status read it
+   * covers finishes inside `dotsComputerObserveMs`, leaving the remainder of this budget for
+   * local configuration, credential and enrollment reads plus relay and serialization time.
+   */
+  dotsStatusMs: 30_000,
+  /** Overall deadline for one native Dot-computer observation, including every upstream request in it. */
+  dotsComputerObserveMs: 20_000,
+  /** Deadline for one upstream Dot attachment request. */
+  dotsConnectMs: 15_000,
+  /** Browser outcome budget for `dots.attach`, which observes, connects and observes again. */
+  dotsAttachMs: 90_000,
   maxClientMessageChars: 32_768,
   maxAttachmentChunkChars: 28_000,
   maxAttachmentChunks: 1_024,

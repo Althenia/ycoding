@@ -121,19 +121,27 @@ function inputText(params: Record<string, unknown>) {
   return texts.length > 0 ? texts.join("\n") : undefined
 }
 
+const retryDelaysMs = [1_000, 2_000, 4_000, 8_000, 16_000]
+
 export function createRemoteControlAppServer(input: {
   readonly backend: RemoteControlBackend
   readonly codexHome: string
   readonly requestScope: string
   readonly send: (text: string) => void
+  readonly schedule?: (run: () => void, delayMs: number) => () => void
 }) {
   const backend = input.backend
+  const schedule = input.schedule ?? ((run, delayMs) => {
+    const timer = setTimeout(run, delayMs)
+    return () => clearTimeout(timer)
+  })
   let initialized = false
   let ready = false
   let active = true
   const pending = new Map<string, { readonly request: NativeDots.NativeRequest; settling: boolean }>()
   const subscriptions = new Map<string, { readonly pending: Promise<() => void>; stop?: () => void }>()
   const refreshing = new Map<string, Promise<void>>()
+  const retries = new Map<string, { attempt: number; cancel?: () => void }>()
   const dirty = new Set<string>()
   type Item = { id: string; type: "agentMessage"; text: string; phase?: "commentary" | "final_answer" }
   const turns = new Map<string, { threadID: string; items: Map<string, Item>; completed: Set<string> }>()
@@ -164,9 +172,28 @@ export function createRemoteControlAppServer(input: {
     turns.delete(id)
   }
 
+  function cancelRetry(threadID: string) {
+    retries.get(threadID)?.cancel?.()
+    retries.delete(threadID)
+  }
+
+  function scheduleRetry(threadID: string) {
+    if (!active || revoked.has(threadID)) return
+    const entry = retries.get(threadID) ?? { attempt: 0 }
+    retries.set(threadID, entry)
+    if (entry.cancel || entry.attempt >= retryDelaysMs.length) return
+    const delay = retryDelaysMs[entry.attempt]
+    entry.attempt++
+    entry.cancel = schedule(() => {
+      entry.cancel = undefined
+      void watch(threadID).catch(() => scheduleRetry(threadID))
+    }, delay)
+  }
+
   function retireRoot(threadID: string) {
     const completedAtMs = Date.now()
     revoked.add(threadID)
+    cancelRetry(threadID)
     for (const held of pending.values()) if (held.request.threadID === threadID) resolved(held.request)
     for (const [id, turn] of turns) if (turn.threadID === threadID) completeTurn(id, "interrupted", null, completedAtMs)
     admissions.delete(threadID)
@@ -243,7 +270,13 @@ export function createRemoteControlAppServer(input: {
       } while (dirty.has(threadID))
     })()
     refreshing.set(threadID, task)
-    void task.then(() => { if (refreshing.get(threadID) === task) refreshing.delete(threadID) }, () => { if (refreshing.get(threadID) === task) refreshing.delete(threadID) })
+    void task.then(() => {
+      if (refreshing.get(threadID) === task) refreshing.delete(threadID)
+      cancelRetry(threadID)
+    }, () => {
+      if (refreshing.get(threadID) === task) refreshing.delete(threadID)
+      scheduleRetry(threadID)
+    })
     return task
   }
 
@@ -252,16 +285,19 @@ export function createRemoteControlAppServer(input: {
     if (!entry) {
       const subscription = backend.subscribe(threadID, (event) => {
         runtimeEvent(threadID, event)
-        void surfaceApprovals(threadID).catch(() => {
-          retireRoot(threadID)
-        })
+        void surfaceApprovals(threadID).catch(() => {})
       }, () => retireRoot(threadID))
       entry = { pending: subscription }
       subscriptions.set(threadID, entry)
     }
-    const stop = await entry.pending
-    if (!active || revoked.has(threadID)) throw new Error("Native access retired")
-    entry.stop = stop
+    try {
+      const stop = await entry.pending
+      if (!active || revoked.has(threadID)) throw new Error("Native access retired")
+      entry.stop = stop
+    } catch (error) {
+      if (subscriptions.get(threadID) === entry) dropSubscription(threadID)
+      throw error
+    }
     await surfaceApprovals(threadID)
   }
 
@@ -280,10 +316,7 @@ export function createRemoteControlAppServer(input: {
 
   function escalated(threadID: string) {
     if (!active || revoked.has(threadID)) return
-    void watch(threadID).catch(() => {
-      dropSubscription(threadID)
-      revoked.add(threadID)
-    })
+    void watch(threadID).catch(() => scheduleRetry(threadID))
   }
 
   function startEscalations() {
@@ -564,6 +597,7 @@ export function createRemoteControlAppServer(input: {
       consumed.clear()
       admissions.clear()
       dirty.clear()
+      for (const threadID of [...retries.keys()]) cancelRetry(threadID)
       stopEscalations?.()
       stopEscalations = undefined
       for (const subscription of subscriptions.values()) {

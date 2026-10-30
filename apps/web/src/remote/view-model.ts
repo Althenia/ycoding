@@ -7,7 +7,7 @@
  * or absent.
  */
 
-import type { CreateEnrollmentResponse, RemoteDotsStatus } from "@ycoding-ai/remote"
+import type { CreateEnrollmentResponse, RemoteDotsComputerTarget, RemoteDotsStatus } from "@ycoding-ai/remote"
 import { autonomySummary, autonomyTone, type AutonomyMode } from "./autonomy"
 import type { KeepAwakeState } from "./keep-awake"
 import type { RemoteRequestOutcome, RemoteTransportStatus } from "./transport"
@@ -17,7 +17,7 @@ import type { FormAnswerView, FormFieldView, FormView, SessionView, ShellOutputF
 
 export type FormDraft = Readonly<Record<string, FormAnswerView[string] | undefined>>
 
-export function dotsConnectionView(input: { readonly status?: RemoteDotsStatus; readonly computer?: string; readonly online: boolean; readonly loading: boolean; readonly pending: boolean; readonly error?: string }) {
+export function dotsConnectionView(input: { readonly status?: RemoteDotsStatus; readonly computer?: string; readonly online: boolean; readonly loading: boolean; readonly refreshing: boolean; readonly pending: boolean; readonly error?: string }) {
   const status = input.status
   return {
     computer: status?.connection.hostname ?? input.computer ?? "Unreported",
@@ -32,13 +32,22 @@ export function dotsConnectionView(input: { readonly status?: RemoteDotsStatus; 
     canChange: input.online && !!status && !input.loading && !input.pending && !input.error && (status.access.enabled || status.configuration.ready),
     executor: status?.access.enabled && status.computer ? { label: { attached: "Attached", detached: "Not attached", unavailable: "Unavailable" }[status.computer.state], ...(status.computer.message === undefined ? {} : { message: status.computer.message }), ...(status.computer.name === undefined ? {} : { name: status.computer.name }) } : undefined,
     canAttach: input.online && !input.loading && !input.pending && !input.error && status?.access.enabled === true && status.computer?.state === "detached",
+    refreshing: input.refreshing,
     attachAction: "Use this computer for Dots tasks",
     attachConfirmation: "This detaches your other computers from your Dot, so Dots tasks run on this computer only. Continue?",
     notice: !input.online ? "Reconnect to this machine to read or change Dots."
       : input.pending ? "Changing Dots access…"
-      : input.loading ? status ? "Refreshing Dots connection…" : "Loading Dots connection…"
+      : input.loading ? "Loading Dots connection…"
       : input.error ? `${input.error} Refresh to check the current state.` : undefined,
   }
+}
+
+export function attachConfirmationValid(input: { readonly status?: RemoteDotsStatus; readonly online: boolean; readonly error?: string; readonly target?: RemoteDotsComputerTarget }) {
+  const computer = input.status?.computer
+  const current = computer?.target
+  const same = current === input.target
+    || (current !== undefined && input.target !== undefined && current.dotID === input.target.dotID && current.threadID === input.target.threadID && current.environmentID === input.target.environmentID && current.revision === input.target.revision)
+  return input.online && !input.error && input.status?.access.enabled === true && computer?.state === "detached" && same
 }
 
 export function keepAwakeIndicator(awake: KeepAwakeState): { readonly label: string; readonly tone: "success" | "danger" | "attention"; readonly detail?: string } | undefined {

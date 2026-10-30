@@ -7,8 +7,25 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.9 Editorial Ledger workspace, Dots computer labels, background Session filtering and work assessments first", () => {
+  test("lists v0.11.10 steady Dots connection dialog, bounded status reads and reliable decision delivery first", () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.10", date: "2026-10-30", tags: ["Fixed"] })
+    expect(entry?.changes).toHaveLength(3)
+    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(3)
+    expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(0)
+    expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(0)
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of [
+      "flickers", "every five seconds", "stays open through refreshes", "could not be read",
+      "20 seconds", "30 seconds", "90 seconds", "never repeats the change",
+      "1, 2, 4, 8 and 16 seconds", "still pending",
+    ]) expect(text).toContain(fragment)
+    for (const excluded of ["CCA", "Flora", "milestone"]) expect(text).not.toContain(excluded)
+    expect(after("0.11.10")?.version).toBe("0.11.9")
+  })
+
+  test("retains v0.11.9 Editorial Ledger workspace, Dots computer labels, background Session filtering and work assessments", () => {
+    const entry = byVersion("0.11.9")
     expect(entry).toMatchObject({ version: "0.11.9", date: "2026-10-30", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(19)
     expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(6)
@@ -29,7 +46,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.11.8 Dots executor, decision inspection and watch, and prompt-cache reuse", () => {
-    const entry = RELEASES[1]
+    const entry = byVersion("0.11.8")
     expect(entry).toMatchObject({ version: "0.11.8", date: "2026-10-30", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(14)
     expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(7)
@@ -54,7 +71,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.11.7 Code Mode, browser frames, prepared Usage and the usage migration", () => {
-    const entry = RELEASES[2]
+    const entry = byVersion("0.11.7")
     expect(entry).toMatchObject({ version: "0.11.7", date: "2026-10-29", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(21)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
@@ -65,7 +82,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.11.6 global Dots controls and Antigravity updates", () => {
-    const entry = RELEASES[3]
+    const entry = byVersion("0.11.6")
     expect(entry).toMatchObject({ version: "0.11.6", date: "2026-10-27", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(6)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
@@ -1867,7 +1884,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 54)).toEqual([
+    expect(versions.slice(0, 55)).toEqual([
+      "0.11.10",
       "0.11.9",
       "0.11.8",
       "0.11.7",

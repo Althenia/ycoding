@@ -1,6 +1,7 @@
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
 import type { Dots } from "@ycoding-ai/schema/dots"
 import { createHash } from "node:crypto"
+import { RemoteLimits } from "@ycoding-ai/remote"
 import type { RemoteControlCredential } from "@ycoding-ai/core/remote-control/credential"
 import { buildCcaHeaders, defaultTimeoutMs, loadCcaExperimentState, type CcaFetch } from "./cca-executor-registration"
 import { accountHash } from "./state"
@@ -43,6 +44,7 @@ export interface CcaComputerControlDeps {
   readonly statePath: string
   readonly fetch?: CcaFetch
   readonly now?: () => number
+  readonly observeMs?: number
   readonly onDiagnostic?: (message: string) => void
 }
 
@@ -79,6 +81,7 @@ function identity(value: unknown) {
 export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaComputerControl {
   const fetchFn = deps.fetch ?? fetch
   const now = deps.now ?? Date.now
+  const observeMs = deps.observeMs ?? RemoteLimits.dotsComputerObserveMs
   let generation = 0
   let cache: { readonly key: string; readonly at: number; readonly status: CcaComputerStatus } | undefined
   let latestKey: string | undefined
@@ -134,7 +137,7 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
     return { ...tuple, revision: createHash("sha256").update(JSON.stringify([owner.key, tuple])).digest("hex") }
   }
 
-  function send(method: "GET" | "POST", path: string, query: Record<string, string | undefined>, resolved: RemoteControlCredential.Resolved) {
+  function send(method: "GET" | "POST", path: string, query: Record<string, string | undefined>, resolved: RemoteControlCredential.Resolved, signal: AbortSignal) {
     const search = new URLSearchParams()
     for (const [name, value] of Object.entries(query)) if (value !== undefined) search.set(name, value)
     const suffix = search.size ? `?${search}` : ""
@@ -142,12 +145,12 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
       method,
       headers: buildCcaHeaders({ access: resolved.access, accountID: resolved.accountID }),
       redirect: "error",
-      signal: AbortSignal.timeout(defaultTimeoutMs),
+      signal,
     })
   }
 
-  async function get(path: string, query: Record<string, string | undefined>, resolved: RemoteControlCredential.Resolved) {
-    const response = await send("GET", path, query, resolved).catch(() => {
+  async function get(path: string, query: Record<string, string | undefined>, resolved: RemoteControlCredential.Resolved, deadline: AbortSignal) {
+    const response = await send("GET", path, query, resolved, AbortSignal.any([AbortSignal.timeout(defaultTimeoutMs), deadline])).catch(() => {
       throw new Problem("connection")
     })
     if (response.status === 401 || response.status === 403) throw new Problem("authentication")
@@ -155,12 +158,12 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
     return record(await response.json().catch(() => undefined))
   }
 
-  async function dot(resolved: RemoteControlCredential.Resolved) {
+  async function dot(resolved: RemoteControlCredential.Resolved, deadline: AbortSignal) {
     const active: string[] = []
     const cursors = new Set<string>()
     let cursor: string | undefined
     for (let page = 0; page < maxDotPages; page++) {
-      const body = await get("/tbo", { cursor, limit: String(dotPageLimit), include_room_preview: "false" }, resolved)
+      const body = await get("/tbo", { cursor, limit: String(dotPageLimit), include_room_preview: "false" }, resolved, deadline)
       if (!Array.isArray(body.items)) throw new Problem("connection")
       for (const item of body.items) {
         const fields = record(item)
@@ -169,7 +172,7 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
       if (body.cursor === undefined || body.cursor === null) {
         if (active.length === 1) return active[0]!
         if (active.length === 0) throw new Problem("dot-unavailable")
-        const primary = await get("/tbo/primary", {}, resolved)
+        const primary = await get("/tbo/primary", {}, resolved, deadline)
         const profile = primary.profile === undefined || primary.profile === null ? undefined : record(primary.profile)
         const id = profile === undefined ? undefined : identity(profile.id)
         if (id === undefined || !active.includes(id)) throw new Problem("dot-unavailable")
@@ -182,15 +185,15 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
     throw new Problem("connection")
   }
 
-  async function observe(owner: Binding): Promise<Observation> {
+  async function read(owner: Binding, deadline: AbortSignal): Promise<Observation> {
     try {
       const resolved = owner.credential
       const environmentID = owner.environmentID
-      const dotID = await dot(resolved)
-      const root = await get(`/tbo/${encodeURIComponent(dotID)}/root-thread`, {}, resolved)
+      const dotID = await dot(resolved, deadline)
+      const root = await get(`/tbo/${encodeURIComponent(dotID)}/root-thread`, {}, resolved, deadline)
       if (root.root_thread_id === undefined || root.root_thread_id === null) throw new Problem("dot-unavailable")
       const threadID = identity(root.root_thread_id)
-      const list = await get(`/tbo/${encodeURIComponent(dotID)}/computers`, { expected_thread_id: threadID }, resolved)
+      const list = await get(`/tbo/${encodeURIComponent(dotID)}/computers`, { expected_thread_id: threadID }, resolved, deadline)
       if (typeof list.thread_id !== "string") throw new Problem("connection")
       if (list.thread_id !== threadID) throw new Problem("dot-unavailable")
       if (!Array.isArray(list.computers)) throw new Problem("connection")
@@ -210,9 +213,25 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
     }
   }
 
+  async function observe(owner: Binding): Promise<Observation> {
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const expired = new Promise<Observation>((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort()
+        resolve({ status: unavailable("connection") })
+      }, observeMs)
+    })
+    try {
+      return await Promise.race([read(owner, controller.signal), expired])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   async function connect(target: Target): Promise<"ok" | "rejected" | "uncertain"> {
     const path = `/tbo/${encodeURIComponent(target.dotID)}/computers/${encodeURIComponent(target.environmentID)}/connect-and-replace`
-    const response = await send("POST", path, { expected_thread_id: target.threadID }, target.credential).catch(() => undefined)
+    const response = await send("POST", path, { expected_thread_id: target.threadID }, target.credential, AbortSignal.timeout(RemoteLimits.dotsConnectMs)).catch(() => undefined)
     if (response === undefined) return "uncertain"
     await response.body?.cancel().catch(() => {})
     if (response.ok) return "ok"

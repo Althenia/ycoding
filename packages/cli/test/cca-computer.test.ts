@@ -4,6 +4,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
+import { RemoteLimits } from "@ycoding-ai/remote"
+import { defaultTimeoutMs } from "../src/remote-control/cca-executor-registration"
 import { ccaComputerCacheMs, ccaComputerProblems, createCcaComputerControl, type CcaComputerProblem, type CcaComputerStatus } from "../src/remote-control/cca-computer"
 
 const base = "https://chatgpt.com/backend-api"
@@ -25,7 +27,7 @@ const completed = {
 }
 
 type Reply = Response | Error | (() => Response | Error | Promise<Response | Error>)
-type Seen = { readonly method: string; readonly url: string; readonly headers: Record<string, string>; readonly body: unknown }
+type Seen = { readonly method: string; readonly url: string; readonly headers: Record<string, string>; readonly body: unknown; readonly signal: AbortSignal | null | undefined }
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 const row = (fields: Record<string, unknown> = {}) => ({
@@ -47,6 +49,7 @@ async function fixture(options: {
   readonly stored?: unknown
   readonly configuration?: NativeDots.Configuration
   readonly credential?: typeof resolved | undefined
+  readonly observeMs?: number
 }) {
   const directory = await mkdtemp(path.join(tmpdir(), "ycoding-cca-computer-"))
   cleanups.push(() => rm(directory, { recursive: true, force: true }))
@@ -65,14 +68,17 @@ async function fixture(options: {
     },
     statePath,
     now: () => clock,
+    ...(options.observeMs === undefined ? {} : { observeMs: options.observeMs }),
     fetch: async (url, init) => {
       const headers = Object.fromEntries(new Headers(init?.headers).entries())
-      seen.push({ method: init?.method ?? "GET", url, headers, body: init?.body })
+      seen.push({ method: init?.method ?? "GET", url, headers, body: init?.body, signal: init?.signal })
       expect(init?.redirect).toBe("error")
+      init?.signal?.throwIfAborted()
       const queue = options.routes[`${init?.method ?? "GET"} ${url}`]
       const next = queue?.shift()
       if (next === undefined) throw new Error(`unexpected request ${init?.method ?? "GET"} ${url}`)
-      const reply = typeof next === "function" ? await next() : next
+      const aborted = () => new Promise<never>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true }))
+      const reply = typeof next === "function" ? await Promise.race([Promise.resolve(next()), aborted()]) : next
       if (reply instanceof Error) throw reply
       return reply
     },
@@ -275,11 +281,93 @@ describe("computer status", () => {
     expect(seen.length).toBe(9)
   })
 
+  test("lists not-listed only when the persisted executor is absent from the selected Dot's computers", async () => {
+    const absent = await fixture({ routes: read([computers([row({ environment_id: "other", is_attached: true }), row({ environment_id: `${executorID}-suffix`, is_attached: true })])]) })
+    expect(await absent.control.computer()).toEqual({ state: "unavailable", problem: "not-listed" })
+    const present = await fixture({ routes: read([computers([row({ environment_id: "other", is_attached: true }), row()])]) })
+    expect(await present.control.computer()).toEqual({ state: "detached", target })
+    const empty = await fixture({ routes: read([computers([])]) })
+    expect(await empty.control.computer()).toEqual({ state: "unavailable", problem: "not-listed" })
+  })
+
   test("exposes only the closed problem set", () => {
     expect([...ccaComputerProblems]).toEqual([
       "configuration", "authentication", "enrollment", "dot-unavailable", "not-listed",
       "admin-disabled", "not-connectable", "rejected", "unconfirmed", "connection", "target-changed",
     ])
+  })
+})
+
+const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+const slow = (ms: number, reply: Response) => async () => { await pause(ms); return reply }
+const stalled = () => new Promise<Response>(() => {})
+const budgetMs = 70
+
+describe("observation deadline", () => {
+  test("a chain of slow successful reads that exceeds the overall budget settles as connection and cancels the rest", async () => {
+    const { control, seen } = await fixture({
+      observeMs: budgetMs,
+      routes: {
+        [`GET ${base}/tbo?limit=25&include_room_preview=false`]: [slow(40, dots([activeDot]))],
+        [`GET ${base}/tbo/${dotID}/root-thread`]: [slow(40, json(200, { root_thread_id: threadID }))],
+        [`GET ${listURL}`]: [slow(40, computers([row({ is_attached: true })]))],
+      },
+    })
+    const started = performance.now()
+    expect(await control.computer()).toEqual({ state: "unavailable", problem: "connection" })
+    expect(performance.now() - started).toBeLessThan(120)
+    expect(seen.map((item) => item.url)).toEqual([`${base}/tbo?limit=25&include_room_preview=false`, `${base}/tbo/${dotID}/root-thread`])
+    expect(seen[1]?.signal?.aborted).toBe(true)
+  })
+
+  test("a stalled read settles inside the budget and aborts the pending request", async () => {
+    const { control, seen } = await fixture({ observeMs: budgetMs, routes: read([stalled]) })
+    const started = performance.now()
+    expect(await control.computer()).toEqual({ state: "unavailable", problem: "connection" })
+    expect(performance.now() - started).toBeLessThan(500)
+    expect(seen.at(-1)?.url).toBe(listURL)
+    expect(seen.at(-1)?.signal?.aborted).toBe(true)
+  })
+
+  test("a stalled attach pre-read settles inside the budget without posting", async () => {
+    const { control, seen } = await fixture({ observeMs: budgetMs, routes: read([stalled]) })
+    expect(await control.attach()).toEqual({ state: "unavailable", problem: "connection" })
+    expect(seen.filter((item) => item.method === "POST")).toEqual([])
+  })
+
+  test("a cold deadline expiry is replaced by the next successful read after the cache window", async () => {
+    const { control, advance, until } = await fixture({
+      observeMs: budgetMs,
+      routes: merge(read([stalled]), read([computers([row({ is_attached: true })])])),
+    })
+    expect(await control.computer()).toEqual({ state: "unavailable", problem: "connection" })
+    advance(ccaComputerCacheMs)
+    expect(await control.computer()).toEqual({ state: "unavailable", problem: "connection" })
+    await until(async () => (await control.computer()).state === "attached")
+    expect(await control.computer()).toEqual({ state: "attached", target })
+  })
+
+  test("a deadline expiry after a successful read keeps the prior state and the next success replaces it", async () => {
+    const { control, advance, until, diagnostics } = await fixture({
+      observeMs: budgetMs,
+      routes: merge(read([computers([row({ is_attached: true })])]), read([stalled]), read([computers([row()])])),
+    })
+    expect(await control.computer()).toEqual({ state: "attached", target })
+    advance(ccaComputerCacheMs)
+    expect(await control.computer()).toEqual({ state: "attached", target })
+    await until(() => diagnostics.length === 1)
+    expect(await control.computer()).toEqual({ state: "attached", target })
+    advance(ccaComputerCacheMs)
+    await control.computer()
+    await until(async () => (await control.computer()).state === "detached")
+    expect(await control.computer()).toEqual({ state: "detached", target })
+  })
+
+  test("the default observation deadline is the shared limit, outlasts one request and fits the browser status budget", () => {
+    expect(defaultTimeoutMs).toBe(RemoteLimits.dotsConnectMs)
+    expect(RemoteLimits.dotsComputerObserveMs).toBeGreaterThan(defaultTimeoutMs)
+    expect(RemoteLimits.dotsComputerObserveMs).toBeLessThan(RemoteLimits.dotsStatusMs)
+    expect(2 * RemoteLimits.dotsComputerObserveMs + RemoteLimits.dotsConnectMs).toBeLessThan(RemoteLimits.dotsAttachMs)
   })
 })
 

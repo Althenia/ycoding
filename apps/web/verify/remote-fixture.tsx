@@ -665,8 +665,10 @@ function createFixtureStore(): Fixture {
     ...(accountParams.get("dotsExecutorName") ? { computer: { state: dotsAttached.has(deviceID) ? "attached" : "detached", name: accountParams.get("dotsExecutorName")!, target: dotsTarget(deviceID) } } : {}),
   })
   let releaseDotsRuntime: (() => void) | undefined
+  let holdNextDotsRead = false
   Object.assign(window, { dotsFixture: {
     release: () => releaseDotsRuntime?.(),
+    holdNextRead: () => { holdNextDotsRead = true },
     change: (enabled: boolean) => {
       const state = dotsState("dev_studio")
       state.enabled = enabled
@@ -689,6 +691,10 @@ function createFixtureStore(): Fixture {
     if (operation === "dots.get") {
       if (accountParams.get("dotsCapability") === "unavailable") return { status: "failed", error: { code: "agent_unavailable", message: "Dots status is unavailable" } }
       const value = { status: "ok" as const, value: { data: dotsStatus(deviceID) } }
+      if (holdNextDotsRead) {
+        holdNextDotsRead = false
+        return new Promise<RemoteRequestOutcome>((resolve) => { releaseDotsRuntime = () => resolve(value) })
+      }
       if (accountParams.get("dotsRead") === "hold" && ++dotsReadCount === 1) return new Promise<RemoteRequestOutcome>((resolve) => { releaseDotsRuntime = () => resolve(value) })
       return value
     }

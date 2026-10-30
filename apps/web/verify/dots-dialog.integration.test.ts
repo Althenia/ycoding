@@ -127,6 +127,29 @@ test("stale revision rereads authoritative access and polls external transport c
   } finally { await page.close() }
 }, 60_000)
 
+test("a background read keeps access and attach actionable and an open confirmation intact", async () => {
+  const page = await browser!.openPage()
+  try {
+    await open(page, "dots=on&dotsExecutorName=Executor%20desk")
+    await wait(page, `${fact("Access")} === 'On' && ${fact("Executor")} === 'Not attached' && document.querySelector('.dots-connection').getAttribute('aria-busy') === 'false'`)
+    const confirm = `document.querySelector('[aria-label="Confirm computer change"] .button--primary')`
+    const reads = `window.requestLog.filter(entry => entry.operation === 'dots.get').length`
+    await page.evaluate(`[...document.querySelectorAll('.dots-connection button')].find(node => node.textContent === 'Use this computer for Dots tasks').click()`)
+    await wait(page, `${confirm} !== null`)
+    const before = await page.evaluate<number>(reads)
+    await page.evaluate(`window.dotsFixture.holdNextRead(); [...document.querySelectorAll('.dots-connection button')].find(node => node.textContent === 'Refresh').click()`)
+    await wait(page, `${reads} > ${before} && document.querySelector('.dots-connection').getAttribute('aria-busy') === 'true'`)
+    expect(await page.evaluate<boolean>(`${confirm} !== null && !${confirm}.disabled`)).toBe(true)
+    expect(await page.evaluate<boolean>(`!document.querySelector('${action}').disabled`)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('.dots-connection [role="status"]') === null`)).toBe(true)
+    await page.evaluate(`window.dotsFixture.release()`)
+    await wait(page, `document.querySelector('.dots-connection').getAttribute('aria-busy') === 'false'`)
+    expect(await page.evaluate<boolean>(`${confirm} !== null && !${confirm}.disabled`)).toBe(true)
+    expect(await page.evaluate<boolean>(`!document.querySelector('${action}').disabled`)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('.dots-connection [role="status"]') === null`)).toBe(true)
+  } finally { await page.close() }
+}, 60_000)
+
 test("loading and reconnect discard obsolete pending feedback and reread without replay", async () => {
   const page = await browser!.openPage()
   try {

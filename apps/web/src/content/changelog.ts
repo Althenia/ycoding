@@ -22,6 +22,17 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.10",
+    date: "2026-10-30",
+    title: "Steady Dots connection dialog, bounded status reads and reliable decision delivery",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "The web Dots connection dialog no longer flickers while it refreshes every five seconds. Connect or Disconnect, Refresh, and the attach control stay usable and the status text stays in place during a background refresh, which is announced to assistive technology instead. A confirmation to use this computer for Dots tasks stays open through refreshes and closes only when the computer, access, connection or read actually changes." },
+      { tag: "Fixed", text: "Reading Dots status no longer outlasts the web request. The check of your Dot's computers finishes within 20 seconds and otherwise reports that your Dot's computers could not be read; it never reports a computer as attached or detached from a read that did not finish. Status reads and access changes allow 30 seconds and attaching a computer allows 90 seconds, so a slow read no longer turns Connect into a timeout. When a change's outcome is unknown, the dialog reads the current state again and never repeats the change." },
+      { tag: "Fixed", text: "Pending permission, guardrail, question, Form and review requests keep reaching a connected native Dots client after a temporary failure. A failed read of pending decisions no longer stops later requests for that Session on the connection, is retried after 1, 2, 4, 8 and 16 seconds, and no longer reports a request that is still pending as resolved." },
+    ],
+  },
+  {
     version: "0.11.9",
     date: "2026-10-30",
     title: "Editorial Ledger workspace, Dots computer labels and work assessments",

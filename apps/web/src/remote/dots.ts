@@ -1,4 +1,4 @@
-import { readDotsStatus, type RemoteDotsStatus, type RemoteDotsComputerTarget } from "@ycoding-ai/remote"
+import { RemoteLimits, readDotsStatus, type RemoteDotsStatus, type RemoteDotsComputerTarget } from "@ycoding-ai/remote"
 import type { RemoteLink, QueryScope } from "./queries"
 import { describeOutcome } from "./outcome"
 
@@ -11,17 +11,17 @@ export function dotsClient(link: RemoteLink, scope: QueryScope) {
   }
   return {
     get: async (signal?: AbortSignal) => {
-      const outcome = await link.request(scope, "dots.get", { signal })
+      const outcome = await link.request(scope, "dots.get", { signal, timeoutMs: RemoteLimits.dotsStatusMs })
       if (outcome.status !== "ok") throw new Error(describeOutcome(outcome, "Dots connection"))
       return read(outcome.value)
     },
     set: async (enabled: boolean, expectedRevision: number) => {
-      const outcome = await link.request(scope, "dots.set", { input: { enabled, expectedRevision } })
+      const outcome = await link.request(scope, "dots.set", { input: { enabled, expectedRevision }, timeoutMs: RemoteLimits.dotsStatusMs })
       if (outcome.status !== "ok") return outcome
       return { status: "ok" as const, value: read(outcome.value) }
     },
     attach: async (expectedTarget?: RemoteDotsComputerTarget) => {
-      const outcome = await link.request(scope, "dots.attach", { input: { replaceOthers: true, ...(expectedTarget === undefined ? {} : { expectedTarget }) } })
+      const outcome = await link.request(scope, "dots.attach", { input: { replaceOthers: true, ...(expectedTarget === undefined ? {} : { expectedTarget }) }, timeoutMs: RemoteLimits.dotsAttachMs })
       if (outcome.status !== "ok") return outcome
       return { status: "ok" as const, value: read(outcome.value) }
     },

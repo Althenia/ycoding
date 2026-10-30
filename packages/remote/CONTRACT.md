@@ -1205,6 +1205,8 @@ Configuration:
   Regenerate worker types after any change to that block. The web build output
   must exist before bundling, because the asset directory is read at build time.
 
+`RemoteLimits` carries two operation budgets that the browser passes explicitly and the local agent enforces. `dotsStatusMs` (30 s) bounds `dots.get` and `dots.set`; the native status read inside them is bounded by `dotsComputerObserveMs` (20 s). `dotsAttachMs` (90 s) bounds `dots.attach`, which observes, posts one connect request bounded by `dotsConnectMs` (15 s), and observes again. A deadline expiry is an unknown outcome, so a client re-reads rather than replaying the request.
+
 ## 6. Composed verification
 
 `infra/cloudflare/test/integration/real-flow.ts` composes real components: an

@@ -920,6 +920,14 @@ describe("remote operations", () => {
     expect(parseClientMessage('{"type":"request","id":"r","operation":"session.question.list","sessionID":"ses_1"}').ok).toBe(false)
   })
 
+  test("bounds Dots request budgets inside the client default and above the work they cover", () => {
+    const [observe, status, connect, attach] = [RemoteLimits.dotsComputerObserveMs, RemoteLimits.dotsStatusMs, RemoteLimits.dotsConnectMs, RemoteLimits.dotsAttachMs]
+    expect(observe).toBeLessThan(status)
+    expect(status).toBeLessThanOrEqual(30_000)
+    expect(attach).toBeGreaterThan(2 * observe + connect)
+    expect(attach).toBeLessThanOrEqual(2 * 60_000)
+  })
+
   test("validates a complete bounded unique status frame on the agent surface", () => {
     expect(RemoteLimits.maxStatusSessions).toBe(500)
     const status = { type: "status" as const, running: ["ses_a"], attention: ["ses_b"] }

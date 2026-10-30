@@ -23,6 +23,7 @@ import {
   sessionListRefreshNotice,
   sessionStateChips,
   keepAwakeIndicator,
+  attachConfirmationValid,
   dotsConnectionView,
   shellOutputPaging,
   sessionProjectLabel,
@@ -37,7 +38,7 @@ import {
 
 describe("Dots connection display", () => {
   const status = { access: { enabled: true, revision: 3 }, configuration: { ready: true, profile: "native-test" }, connection: { state: "connecting" as const, hostname: "test-computer" } }
-  const input = { status, online: true, loading: false, pending: false }
+  const input = { status, online: true, loading: false, refreshing: false, pending: false }
   test("separates access, configured profile and actual transport", () => {
     for (const state of ["unavailable", "off", "connecting", "connected", "error"] as const) {
       expect(dotsConnectionView({ ...input, status: { ...status, connection: { ...status.connection, state } } })).toMatchObject({
@@ -58,6 +59,33 @@ describe("Dots connection display", () => {
     expect(dotsConnectionView({ ...input, pending: true }).notice).toBe("Changing Dots access…")
     expect(dotsConnectionView({ ...input, online: false }).notice).toContain("Reconnect")
     expect(dotsConnectionView({ ...input, error: "Read failed" }).notice).toContain("Refresh")
+  })
+  test("a background refresh keeps retained status actionable and is reported separately", () => {
+    const attachable = { ...status, computer: { state: "detached" as const } }
+    const refreshed = dotsConnectionView({ ...input, status: attachable, refreshing: true })
+    expect(refreshed).toMatchObject({ refreshing: true, canChange: true, canAttach: true, notice: undefined })
+    expect(dotsConnectionView({ ...input, status: attachable })).toMatchObject({ refreshing: false, canChange: true, canAttach: true })
+    const initial = dotsConnectionView({ ...input, status: undefined, loading: true })
+    expect(initial).toMatchObject({ refreshing: false, canChange: false, canAttach: false, notice: "Loading Dots connection…" })
+    const blocked = (override: Partial<typeof input> & { error?: string }) => dotsConnectionView({ ...input, status: attachable, refreshing: true, ...override })
+    expect(blocked({ pending: true })).toMatchObject({ canChange: false, canAttach: false, notice: "Changing Dots access…" })
+    expect(blocked({ error: "Read failed" })).toMatchObject({ canChange: false, canAttach: false })
+    expect(blocked({ online: false })).toMatchObject({ canChange: false, canAttach: false })
+  })
+  test("an attach confirmation survives refreshes and is invalidated only by a settled change of target, access, connectivity or read", () => {
+    const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+    const detached = { ...status, computer: { state: "detached" as const, target } }
+    const valid = (override: Partial<Parameters<typeof attachConfirmationValid>[0]> = {}) => attachConfirmationValid({ status: detached, online: true, target, ...override })
+    expect(valid()).toBe(true)
+    expect(valid({ status: { ...detached, computer: { state: "detached", target: { ...target } } } })).toBe(true)
+    expect(valid({ status: { ...detached, computer: { state: "detached", target: { ...target, revision: "b".repeat(64) } } } })).toBe(false)
+    expect(valid({ status: { ...detached, computer: { state: "detached" } } })).toBe(false)
+    expect(valid({ status: { ...detached, computer: { state: "attached", target } } })).toBe(false)
+    expect(valid({ status: { ...detached, access: { enabled: false, revision: 4 } } })).toBe(false)
+    expect(valid({ status: undefined })).toBe(false)
+    expect(valid({ online: false })).toBe(false)
+    expect(valid({ error: "Read failed" })).toBe(false)
+    expect(attachConfirmationValid({ status: { ...status, computer: { state: "detached" } }, online: true })).toBe(true)
   })
   test("shows this computer's executor only while access is on", () => {
     const view = (computer: { state: "attached" | "detached" | "unavailable"; message?: string } | undefined, enabled = true) =>
