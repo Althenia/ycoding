@@ -230,7 +230,7 @@ export interface ReconsiderInput {
   readonly requestID: ID
   readonly fingerprint: string
   readonly actor: "coordinator"
-  readonly source: { readonly coordinatorSessionID: SessionSchema.ID; readonly groupID: string; readonly rationale: string }
+  readonly source: { readonly coordinatorSessionID: SessionSchema.ID; readonly groupID?: string; readonly rationale: string }
   readonly decision?: "approve" | "decline"
   readonly validate: (snapshot: Request) => Effect.Effect<boolean>
 }
@@ -556,7 +556,7 @@ const layer = Layer.effect(
         readonly via: "auto-permission" | "baseline" | "yolo" | "coordination"
         readonly reply?: Reply
         readonly escalation?: Guardrail.Escalation
-        readonly coordination?: { readonly coordinatorSessionID: SessionSchema.ID; readonly groupID: string; readonly rationale: string }
+        readonly coordination?: { readonly coordinatorSessionID: SessionSchema.ID; readonly groupID?: string; readonly rationale: string }
       },
     ) =>
       events.publish(SessionEvent.PermissionAssessed, {
@@ -574,7 +574,7 @@ const layer = Layer.effect(
           : {
               actor: "coordinator" as const,
               coordinatorSessionID: assessed.coordination.coordinatorSessionID,
-              groupID: assessed.coordination.groupID,
+              ...(assessed.coordination.groupID === undefined ? {} : { groupID: assessed.coordination.groupID }),
               rationale: assessed.coordination.rationale,
             }),
       })

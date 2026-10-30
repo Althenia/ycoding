@@ -1,7 +1,7 @@
 export * as SessionAutonomy from "./autonomy"
 
 import { and, eq, sql } from "drizzle-orm"
-import { Context, Effect, Layer, Schema, SchemaGetter } from "effect"
+import { Context, Effect, Layer, PubSub, Schema, SchemaGetter, Stream } from "effect"
 import { Category, DecisionMode, Decisions } from "@ycoding-ai/schema/session-autonomy"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
@@ -90,6 +90,7 @@ export function isAsleep(state: State): boolean {
 }
 
 export interface Interface {
+  readonly changes: Stream.Stream<SessionSchema.ID>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
   readonly snapshot: (
     sessionID: SessionSchema.ID,
@@ -161,7 +162,13 @@ export function makeGoal(input: { text: string; rawText?: string; maxNoProgress?
   }
 }
 
-export function make(input: { db: Database.Interface["db"] }): Interface {
+export function make(input: {
+  db: Database.Interface["db"]
+  changes?: PubSub.PubSub<SessionSchema.ID>
+}): Interface {
+  const notify = (sessionID: SessionSchema.ID) =>
+    input.changes === undefined ? Effect.void : PubSub.publish(input.changes, sessionID).pipe(Effect.asVoid)
+
   const snapshot: Interface["snapshot"] = (sessionID, options) =>
     Effect.gen(function* () {
       const row = yield* input.db
@@ -248,7 +255,10 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
           }),
         { behavior: "immediate" },
       )
-      .pipe(Effect.catchTag("SqlError", Effect.die))
+      .pipe(
+        Effect.catchTag("SqlError", Effect.die),
+        Effect.tap((result) => (result.applied ? notify(sessionID) : Effect.void)),
+      )
 
   const apply = (sessionID: SessionSchema.ID, transition: (state: State) => State | undefined) =>
     mutate(sessionID, transition).pipe(Effect.map((result) => result.state))
@@ -400,6 +410,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
     })
 
   return {
+    changes: input.changes === undefined ? Stream.empty : Stream.fromPubSub(input.changes),
     get: familyState,
     snapshot,
     effectiveDecisions,
@@ -449,7 +460,8 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
-    return Service.of(make({ db }))
+    const changes = yield* PubSub.unbounded<SessionSchema.ID>()
+    return Service.of(make({ db, changes }))
   }),
 )
 

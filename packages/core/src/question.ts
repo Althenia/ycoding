@@ -122,6 +122,24 @@ export interface ReplyInput {
   readonly answers: ReadonlyArray<Answer>
 }
 
+export interface ReconsiderInput {
+  readonly requestID: ID
+  readonly fingerprint: string
+  readonly actor: "coordinator"
+  readonly source: { readonly coordinatorSessionID: string; readonly groupID?: string; readonly rationale: string }
+  readonly validate: (request: Request) => Effect.Effect<boolean>
+}
+
+export interface ReconsiderResult {
+  readonly outcome: "allowed" | "escalated" | "stale"
+  readonly requestID: ID
+  readonly fingerprint: string
+  readonly settled: boolean
+  readonly via?: "auto-answer" | "yolo"
+  readonly confidence?: number
+  readonly reason?: string
+}
+
 export interface Interface {
   readonly rejectDelegated: (input: Omit<DelegatedReplyInput, "answers" | "source"> & { readonly source: Form.ClientReplySource }) => Effect.Effect<void, NotFoundError>
   readonly ask: (input: AskInput) => Effect.Effect<Outcome, RejectedError | SessionReviewFold.FullError>
@@ -129,6 +147,7 @@ export interface Interface {
   readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError | InvalidAnswerError>
   readonly replyDelegated: (input: DelegatedReplyInput) => Effect.Effect<void, NotFoundError | InvalidAnswerError>
   readonly reject: (requestID: ID) => Effect.Effect<void, NotFoundError>
+  readonly reconsider: (input: ReconsiderInput) => Effect.Effect<ReconsiderResult>
   readonly cancelPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
 }
@@ -155,6 +174,8 @@ const layer = Layer.effect(
     const autonomy = yield* SessionAutonomy.Service
     const decision = yield* Decision.Service
     const pending = new Map<ID, Pending>()
+    const evaluating = new Set<ID>()
+    const reconsidering = new Set<ID>()
     const asks = new Map<string, { epoch: number; count: number }>()
     const enter = (sessionID: string) => {
       const state = asks.get(sessionID) ?? { epoch: 0, count: 0 }
@@ -346,11 +367,12 @@ const layer = Layer.effect(
             if (pending.get(id) === entry) pending.delete(id)
           })
           if (auto && snapshot) {
+            evaluating.add(id)
             const outcome = yield* restore(
               evaluateAuto(input, id, { autoAnswer, yolo }, assessments).pipe(
                 Effect.raceFirst(Deferred.await(deferred).pipe(Effect.as(undefined))),
               ),
-            ).pipe(Effect.onInterrupt(() => cancelPending))
+            ).pipe(Effect.onInterrupt(() => cancelPending), Effect.ensuring(Effect.sync(() => void evaluating.delete(id))))
             if (outcome?.type === "answered") {
               const unchanged = yield* DecisionChoice.autonomyUnchanged(autonomy, input.sessionID, snapshot)
               const claimed = unchanged && (yield* exclusive(Effect.sync(() => {
@@ -449,6 +471,102 @@ const layer = Layer.effect(
       })), Effect.asVoid)
     }))
 
+    const reconsider = Effect.fn("Question.reconsider")((input: ReconsiderInput) =>
+      Effect.acquireUseRelease(
+        exclusive(
+          Effect.sync((): { readonly entry?: Pending; readonly result?: ReconsiderResult } => {
+            const entry = pending.get(input.requestID)
+            const base = { requestID: input.requestID, fingerprint: input.fingerprint, settled: false }
+            if (entry === undefined || fingerprint(entry.request) !== input.fingerprint) return { result: { ...base, outcome: "stale" } }
+            if (evaluating.has(input.requestID) || reconsidering.has(input.requestID))
+              return { result: { ...base, outcome: "escalated", reason: "native-assessment-in-progress" } }
+            reconsidering.add(input.requestID)
+            return { entry }
+          }),
+        ),
+        (acquired) =>
+          acquired.entry === undefined
+            ? Effect.succeed(acquired.result!)
+            : Effect.uninterruptibleMask((restore) =>
+                Effect.gen(function* () {
+                  const entry = acquired.entry!
+                  const sessionID = entry.request.sessionID
+                  const base = { requestID: input.requestID, fingerprint: input.fingerprint }
+                  const escalated = (reason: string): ReconsiderResult => ({ ...base, outcome: "escalated", settled: false, reason })
+                  const stale: ReconsiderResult = { ...base, outcome: "stale", settled: false }
+                  if (!(yield* input.validate(entry.request))) return escalated("delegation-invalid")
+                  const snapshot = yield* autonomy
+                    .snapshot(sessionID, { inherited: true })
+                    .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+                  if (snapshot === undefined) return stale
+                  const mode = yield* DecisionChoice.decisionMode(autonomy, sessionID, "answers")
+                  if (mode === "manual") return escalated("explicit-decision:manual-answers")
+                  const yolo = mode === "yolo"
+                  const assessments: Form.FieldAssessment[] = entry.request.questions.flatMap((question, index) =>
+                    question.options.length === 0
+                      ? []
+                      : [{
+                          key: `question_${index}`,
+                          status: yolo ? ("pending" as const) : ("not_assessed" as const),
+                          reason: yolo ? "Answers evaluator is assessing the options." : "Auto uses only a unique Recommended option; no model assessment.",
+                        }],
+                  )
+                  const outcome = yield* restore(
+                    evaluateAuto({ sessionID, questions: entry.request.questions }, input.requestID, { autoAnswer: mode === "auto", yolo }, assessments),
+                  )
+                  if (outcome.type === "unsettled") return escalated(outcome.reason)
+                  const effective = yield* autonomy
+                    .effectiveDecisions(sessionID)
+                    .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+                  return yield* exclusive(
+                    Effect.gen(function* () {
+                      if (pending.get(input.requestID) !== entry) return stale
+                      if (!(yield* input.validate(entry.request))) return escalated("delegation-invalid")
+                      if (!(yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot))) return escalated("stale-assessment")
+                      if (validateAnswers(entry.request.questions, outcome.answers)) return escalated("invalid-answer")
+                      const via = outcome.confidence === undefined ? ("auto-answer" as const) : ("yolo" as const)
+                      const assessment: Form.Assessment | undefined =
+                        assessments.length === 0 ? undefined : { mode, sourceSessionID: effective?.inherited.answers ?? sessionID, fields: assessments }
+                      yield* events.publish(Event.Replied, {
+                        sessionID,
+                        requestID: input.requestID,
+                        answers: outcome.answers.map((answer) => [...answer]),
+                      })
+                      yield* Deferred.succeed(entry.deferred, {
+                        status: "answered",
+                        answers: outcome.answers,
+                        automatic: true,
+                        via,
+                        ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+                        ...(assessment === undefined || !yolo ? {} : { assessment }),
+                        source: {
+                          kind: "coordinator",
+                          coordinatorSessionID: input.source.coordinatorSessionID,
+                          ...(input.source.groupID === undefined ? {} : { groupID: input.source.groupID }),
+                          via,
+                          rationale: input.source.rationale,
+                          ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+                        },
+                      })
+                      pending.delete(input.requestID)
+                      return {
+                        ...base,
+                        outcome: "allowed",
+                        settled: true,
+                        via,
+                        ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+                      } satisfies ReconsiderResult
+                    }),
+                  )
+                }),
+              ),
+        (acquired) =>
+          Effect.sync(() => {
+            if (acquired.entry !== undefined) reconsidering.delete(input.requestID)
+          }),
+      ),
+    )
+
     const reject = Effect.fn("Question.reject")((requestID: ID) =>
       exclusive(
         Effect.gen(function* () {
@@ -482,7 +600,7 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.request)
     })
 
-    return Service.of({ ask, deferPending, reply, replyDelegated, rejectDelegated, reject, cancelPending, list })
+    return Service.of({ ask, deferPending, reply, replyDelegated, rejectDelegated, reject, reconsider, cancelPending, list })
   }),
 )
 

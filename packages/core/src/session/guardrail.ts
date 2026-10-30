@@ -85,7 +85,7 @@ export interface ReconsiderInput {
   readonly requestID: Guardrail.RequestID
   readonly fingerprint: string
   readonly actor: "coordinator"
-  readonly source: { readonly coordinatorSessionID: Session.ID; readonly groupID: string; readonly rationale: string }
+  readonly source: { readonly coordinatorSessionID: Session.ID; readonly groupID?: string; readonly rationale: string }
   readonly decision?: "approve" | "decline"
   readonly validate: (snapshot: Guardrail.Request) => Effect.Effect<boolean>
 }
@@ -1034,7 +1034,7 @@ export const layer = Layer.effect(
       rootSessionID: Session.ID,
       input: ReplyInput,
       provenance?: Guardrail.Escalation,
-      coordination?: { readonly coordinatorSessionID: Session.ID; readonly groupID: string; readonly rationale: string },
+      coordination?: { readonly coordinatorSessionID: Session.ID; readonly groupID?: string; readonly rationale: string },
     ) =>
       Effect.gen(function* () {
         const item = pending.get(input.requestID)
@@ -1083,7 +1083,7 @@ export const layer = Layer.effect(
               ...(item.source ? { source: item.source } : {}),
               ...(coordination === undefined
                 ? {}
-                : { actor: "coordinator" as const, coordinatorSessionID: coordination.coordinatorSessionID, groupID: coordination.groupID, rationale: coordination.rationale }),
+                : { actor: "coordinator" as const, coordinatorSessionID: coordination.coordinatorSessionID, ...(coordination.groupID === undefined ? {} : { groupID: coordination.groupID }), rationale: coordination.rationale }),
             }, {
               commit: () => reply === "reject"
                 ? ModelIncident.recordRejection(database.db, { ...rejection, decidedBy: "decision-model", time })
@@ -1280,7 +1280,7 @@ export const layer = Layer.effect(
                             ...(item.source ? { source: item.source } : {}),
                             actor: "coordinator",
                             coordinatorSessionID: input.source.coordinatorSessionID,
-                            groupID: input.source.groupID,
+                            ...(input.source.groupID === undefined ? {} : { groupID: input.source.groupID }),
                             rationale: input.source.rationale,
                           })
                           yield* Deferred.fail(item.deferred, new DeclinedError({
@@ -1371,7 +1371,7 @@ export const layer = Layer.effect(
                             ...(item.source ? { source: item.source } : {}),
                             actor: "coordinator",
                             coordinatorSessionID: input.source.coordinatorSessionID,
-                            groupID: input.source.groupID,
+                            ...(input.source.groupID === undefined ? {} : { groupID: input.source.groupID }),
                             rationale: input.source.rationale,
                           })
                           yield* Deferred.succeed(item.deferred, undefined)

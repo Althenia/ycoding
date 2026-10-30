@@ -217,6 +217,7 @@ describe("SkillTool", () => {
                 switchModel: unavailable,
                 list: unavailable,
                 questionSnapshots: unavailable,
+                reconsiderQuestion: unavailable,
                 page: () =>
                   Effect.succeed({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} }),
                 send: unavailable,

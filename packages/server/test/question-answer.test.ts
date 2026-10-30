@@ -28,6 +28,7 @@ test("question validation returns a corrective client error and preserves Sessio
     replyDelegated: () => Effect.die("unused"),
     rejectDelegated: () => Effect.die("unused"),
     reject: () => Effect.die("unused"),
+    reconsider: () => Effect.die("unused"),
     deferPending: () => Effect.die("unused"),
     cancelPending: () => Effect.die("unused"),
   })).mapUnsafe)

@@ -75,7 +75,7 @@ export interface ReconsiderInput {
   readonly id: ID
   readonly fingerprint: string
   readonly actor: "coordinator"
-  readonly source: { readonly coordinatorSessionID: string; readonly groupID: string; readonly rationale: string }
+  readonly source: { readonly coordinatorSessionID: string; readonly groupID?: string; readonly rationale: string }
   readonly answer?: Answer
   readonly confidence?: number
   readonly validate: (snapshot: Info) => Effect.Effect<boolean>
@@ -612,7 +612,7 @@ export const layer = Layer.effect(
                       const source: ReplySource = {
                         kind: "coordinator",
                         coordinatorSessionID: input.source.coordinatorSessionID,
-                        groupID: input.source.groupID,
+                        ...(input.source.groupID === undefined ? {} : { groupID: input.source.groupID }),
                         via,
                         rationale: input.source.rationale,
                         ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),

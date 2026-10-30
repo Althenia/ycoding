@@ -354,6 +354,16 @@ export const authorize = Effect.fn("SessionOrchestration.authorize")(function* (
   })
 })
 
+export interface QuestionReconsiderResult {
+  readonly outcome: "allowed" | "escalated" | "stale"
+  readonly requestID: QuestionID
+  readonly fingerprint: string
+  readonly settled: boolean
+  readonly via?: "auto-answer" | "yolo"
+  readonly confidence?: number
+  readonly reason?: string
+}
+
 export interface Interface {
   readonly managed: (childID: SessionSchema.ID) => Effect.Effect<boolean>
   readonly get: (
@@ -414,6 +424,15 @@ export interface Interface {
     text: string,
     data?: Schema.Json,
   ) => Effect.Effect<{ readonly question: Question; readonly autoAnswered: boolean }, TaskNotFoundError | ConflictError>
+  readonly reconsiderQuestion: (input: {
+    readonly parentID: SessionSchema.ID
+    readonly childID: SessionSchema.ID
+    readonly questionID: QuestionID
+    readonly fingerprint: string
+    readonly actor: "coordinator"
+    readonly source: { readonly coordinatorSessionID: SessionSchema.ID; readonly groupID?: string; readonly rationale: string }
+    readonly validate: (task: Task) => Effect.Effect<boolean>
+  }) => Effect.Effect<QuestionReconsiderResult>
   readonly settle: (
     childID: SessionSchema.ID,
     result:
@@ -465,6 +484,7 @@ const layer = Layer.effect(
     const autonomy = yield* SessionAutonomy.Service
     const locations = yield* LocationServiceMap.Service
     const locks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
+    const reconsideringQuestions = new Set<SessionSchema.ID>()
 
     type SleepAnswerOutcome =
       | { readonly type: "answer"; readonly text: string; readonly confidence?: number }
@@ -1118,6 +1138,122 @@ const layer = Layer.effect(
           }),
         ),
       ),
+      reconsiderQuestion: (input) => {
+        const base = { requestID: input.questionID, fingerprint: input.fingerprint }
+        const stale: QuestionReconsiderResult = { ...base, outcome: "stale", settled: false }
+        const escalated = (reason: string): QuestionReconsiderResult => ({ ...base, outcome: "escalated", settled: false, reason })
+        const open = Effect.gen(function* () {
+          const row = yield* task(input.childID)
+          if (!row || row.parent_id !== input.parentID || row.state !== "waiting" || row.question_id !== input.questionID) return undefined
+          const view = (yield* withReviewState(db, [taskFromRow(row)]))[0]
+          if (view.question === undefined || view.question.deferred === true || questionFingerprint(view) !== input.fingerprint) return undefined
+          if (yield* SessionReviewFold.ownsQuestion(db, input.childID, input.questionID)) return undefined
+          const owner = yield* db.select({ archived: SessionTable.time_archived }).from(SessionTable).where(eq(SessionTable.id, input.childID)).get().pipe(Effect.orDie)
+          if (!owner || owner.archived !== null) return undefined
+          return { row, view, question: view.question }
+        })
+        const answerID = (row: { readonly parent_id: SessionSchema.ID; readonly parent_assistant_message_id: SessionMessage.ID; readonly tool_call_id: string }) =>
+          SessionOrchestrationIdentity.launch(row.parent_id, row.parent_assistant_message_id, row.tool_call_id).answer(input.questionID)
+        const admitted = (id: SessionMessage.ID) =>
+          SessionPending.lookup(db, input.childID, id).pipe(
+            Effect.catchDefect((defect) => (defect instanceof SessionPending.LifecycleConflict ? Effect.succeed(false as const) : Effect.die(defect))),
+          )
+        return Effect.acquireUseRelease(
+          Effect.sync(() => {
+            if (reconsideringQuestions.has(input.childID)) return false
+            reconsideringQuestions.add(input.childID)
+            return true
+          }),
+          (acquired) =>
+            !acquired
+              ? Effect.succeed(escalated("native-assessment-in-progress"))
+              : Effect.gen(function* () {
+                  const held = yield* locks.withLock(input.childID)(
+                    Effect.gen(function* () {
+                      const found = yield* open
+                      if (found === undefined) return stale
+                      if (!(yield* input.validate(found.view))) return escalated("delegation-invalid")
+                      const snapshot = yield* autonomy
+                        .snapshot(input.childID, { inherited: true })
+                        .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+                      if (snapshot === undefined) return stale
+                      const mode = yield* DecisionChoice.decisionMode(autonomy, input.childID, "answers")
+                      if (mode === "manual") return escalated("explicit-decision:manual-answers")
+                      return { found, snapshot, mode }
+                    }),
+                  )
+                  if ("outcome" in held) return held
+                  const outcome = yield* sleepAnswer({
+                    childID: input.childID,
+                    text: held.found.question.text,
+                    data: held.found.question.data,
+                    autoAnswer: held.mode === "auto",
+                    yolo: held.mode === "yolo",
+                    questionID: input.questionID,
+                  })
+                  if (outcome.type === "defer") return escalated(outcome.reason)
+                  return yield* locks.withLock(input.childID)(
+                    Effect.gen(function* () {
+                      const latest = yield* open
+                      if (latest === undefined || latest.row.revision !== held.found.row.revision) return stale
+                      const id = answerID(latest.row)
+                      if ((yield* admitted(id)) !== undefined) return stale
+                      const via = outcome.confidence === undefined ? ("auto-answer" as const) : ("yolo" as const)
+                      const data = {
+                        text: `Parent answer:\n${JSON.stringify({ questionID: input.questionID, text: outcome.text })}`,
+                        description: "Autonomous subagent answer",
+                        metadata: {
+                          source: "subagent_parent",
+                          parentID: input.parentID,
+                          childID: input.childID,
+                          kind: "answer",
+                          questionID: input.questionID,
+                          automatic: true,
+                          via,
+                          ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+                        },
+                      }
+                      const committed = yield* events.publishBatch(
+                        [
+                          {
+                            definition: SessionEvent.InputAdmitted,
+                            data: {
+                              sessionID: input.childID,
+                              inputID: id,
+                              causedBy: yield* SessionUsageAttribution.dispatch(db, input.childID),
+                              input: SessionPending.Message.make({ type: "synthetic", data, delivery: "steer" }),
+                            },
+                          },
+                          {
+                            definition: SessionEvent.Task.Updated,
+                            data: { sessionID: input.childID, change: { type: "question_answered" as const, answer: { questionID: input.questionID, text: outcome.text } } },
+                          },
+                        ],
+                        {
+                          when: Effect.gen(function* () {
+                            const again = yield* open
+                            if (again === undefined || again.row.revision !== held.found.row.revision) return false
+                            if (!(yield* DecisionChoice.autonomyUnchanged(autonomy, input.childID, held.snapshot))) return false
+                            if ((yield* admitted(id)) !== undefined) return false
+                            return yield* input.validate(again.view)
+                          }),
+                        },
+                      )
+                      if (committed.length === 0) return (yield* open) === undefined ? stale : escalated("stale-assessment")
+                      yield* execution.wake(input.childID)
+                      return {
+                        ...base,
+                        outcome: "allowed",
+                        settled: true,
+                        via,
+                        ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+                      } satisfies QuestionReconsiderResult
+                    }),
+                  )
+                }),
+          (acquired) => Effect.sync(() => void (acquired ? reconsideringQuestions.delete(input.childID) : undefined)),
+        )
+      },
       settle: Effect.fn("SessionOrchestration.settle")((childID, settlement) =>
         locks.withLock(childID)(
           Effect.gen(function* () {
@@ -1328,7 +1464,7 @@ export const node = makeGlobalNode({
   ],
 })
 
-function questionOptions(data: Schema.Json | undefined): string[] {
+export function questionOptions(data: Schema.Json | undefined): string[] {
   if (!data || typeof data !== "object" || Array.isArray(data)) return []
   const options = (data as Record<string, unknown>).options
   if (!Array.isArray(options)) return []

@@ -1,5 +1,6 @@
 import { Database } from "@ycoding-ai/core/database/database"
 import { CoordinationRuntime } from "@ycoding-ai/core/session/coordination-runtime"
+import { SessionGoalDecisions } from "@ycoding-ai/core/session/goal-decisions"
 import { CoordinationService } from "@ycoding-ai/core/coordination/index"
 import { CoordinationSettings } from "@ycoding-ai/core/coordination-settings"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -74,6 +75,7 @@ import { DecisionHandler } from "./handlers/decision"
 
 const applicationServices = LayerNode.group([
   CoordinationRuntime.node,
+  SessionGoalDecisions.node,
   CoordinationService.node,
   CoordinationSettings.node,
   Database.node,

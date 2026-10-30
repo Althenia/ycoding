@@ -53,6 +53,7 @@ describe("PluginRuntime", () => {
           switchModel: unavailable,
           list: unavailable,
           questionSnapshots: unavailable,
+          reconsiderQuestion: unavailable,
           page: unavailable,
           send: unavailable,
           answer: unavailable,
@@ -100,6 +101,25 @@ describe("PluginRuntime", () => {
       const result = yield* runtime.orchestration.questionSnapshots(Session.ID.make("ses_parent")).pipe(Effect.exit)
       expect(result._tag).toBe("Failure")
       if (result._tag === "Failure") expect(result.cause.toString()).toContain("Question snapshots require an authenticated device operation")
+    }),
+  )
+
+  unboundIt.effect("denies native question reconsideration without reaching the runtime", () =>
+    Effect.gen(function* () {
+      const runtime = yield* PluginRuntime.Service
+      const result = yield* runtime.orchestration
+        .reconsiderQuestion({
+          parentID: Session.ID.make("ses_parent"),
+          childID: Session.ID.make("ses_child"),
+          questionID: QuestionID.make("qst_pending"),
+          fingerprint: "f".repeat(64),
+          actor: "coordinator",
+          source: { coordinatorSessionID: Session.ID.make("ses_parent"), rationale: "Synthetic routine answer." },
+          validate: () => Effect.succeed(true),
+        })
+        .pipe(Effect.exit)
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") expect(result.cause.toString()).toContain("Question reconsideration requires the native goal decision loop")
     }),
   )
 

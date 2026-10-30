@@ -77,6 +77,7 @@ export const layerWithCell = (cell: Cell) =>
         switchModel: (input) => require(cell, (runtime) => runtime.orchestration.switchModel(input)),
         list: (parentID) => require(cell, (runtime) => runtime.orchestration.list(parentID)),
         questionSnapshots: () => Effect.die(new Error("Question snapshots require an authenticated device operation")),
+        reconsiderQuestion: () => Effect.die(new Error("Question reconsideration requires the native goal decision loop")),
         page: (input) => require(cell, (runtime) => runtime.orchestration.page(input)),
         send: (input) => require(cell, (runtime) => runtime.orchestration.send(input)),
         answer: (input) => input.dots
