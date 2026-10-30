@@ -19,9 +19,6 @@ import wittgensteinContent from "./agent/wittgenstein.md" with { type: "text" }
 import yangiContent from "./agent/yangi.md" with { type: "text" }
 import zeusContent from "./agent/zeus.md" with { type: "text" }
 
-// Combined output files written by the Shell service, e.g. `<data>/shell/<projectID>/<shellID>.out`.
-// Whitelisted so agents can read a command's full captured output without an external-directory prompt.
-const SHELL_OUTPUT_GLOB = path.join(Global.Path.data, "shell", "*", "*")
 const BuiltInMetadata = Schema.Struct({
   description: Schema.String.check(Schema.isNonEmpty()),
   mode: Schema.Literals(["primary", "subagent"]),
@@ -215,7 +212,7 @@ function sourceSystem(content: string, mode: "primary" | "subagent") {
 export const Plugin = define({
   id: "ycoding.agent",
   effect: Effect.fn(function* (ctx) {
-    const whitelistedDirs = [SHELL_OUTPUT_GLOB, path.join(Global.Path.data, "worktrees", "*"), path.join(Global.Path.tmp, "*")]
+    const whitelistedDirs = [path.join(Global.Path.data, "*"), path.join(Global.Path.tmp, "*")]
     const readonlyExternalDirectory: Permission.Ruleset = [
       { action: "external_directory", resource: "*", effect: "ask" },
       ...whitelistedDirs.map(

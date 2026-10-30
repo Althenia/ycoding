@@ -45,6 +45,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const location = yield* Location.Service
     const worktrees = path.join(Global.Path.data, "worktrees")
+    const scratch = `Put new ad-hoc agent scratch files, logs, snapshots and patches in a unique per-task directory \`${path.join(Global.Path.data, "tasks")}/<unique-task-name>\`, never in a repository \`.cache\` directory. Leave existing repository and tool-managed caches in place and never move or delete them automatically. Built-in agents need no outside-directory confirmation under \`${Global.Path.data}\`; your agent's permissions, explicit denies, permission ceilings and guardrail reviews still apply.`
     const decodeName = Schema.decodeUnknownSync(ConfigCapabilities.BuiltinInstruction)
     return Service.of({
       load: (input) =>
@@ -61,6 +62,7 @@ const layer = Layer.effect(
                   `  Is directory a git repo: ${location.vcs?.type === "git" ? "yes" : "no"}`,
                   `  Platform: ${process.platform}`,
                   "</env>",
+                  scratch,
                 ].join("\n"),
               ),
               render: {

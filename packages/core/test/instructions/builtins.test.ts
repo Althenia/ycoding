@@ -23,6 +23,7 @@ const sessionID = SessionSchema.ID.make("ses_builtin_test")
 const otherSessionID = SessionSchema.ID.make("ses_builtin_other")
 const localDate = (time: number) => new Date(time).toDateString()
 const worktrees = path.join(Global.Path.data, "worktrees")
+const scratch = `Put new ad-hoc agent scratch files, logs, snapshots and patches in a unique per-task directory \`${path.join(Global.Path.data, "tasks")}/<unique-task-name>\`, never in a repository \`.cache\` directory. Leave existing repository and tool-managed caches in place and never move or delete them automatically. Built-in agents need no outside-directory confirmation under \`${Global.Path.data}\`; your agent's permissions, explicit denies, permission ceilings and guardrail reviews still apply.`
 const gitAttribution =
   "When creating commits, use the user's existing Git author and committer identity and write messages without Co-authored-by trailers or AI, model, agent, or provider attribution. Do not set `user.name`, `user.email`, or `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, or pass `--author` or `--reset-author`, as part of committing. If Git reports a missing identity, report it and ask the user to configure their own identity; never invent one."
 const taskCompletion =
@@ -93,6 +94,7 @@ describe("InstructionBuiltIns", () => {
           "  Is directory a git repo: yes",
           `  Platform: ${process.platform}`,
           "</env>",
+          scratch,
           "",
           `Today's date: ${localDate(timestamp)}`,
           "",
@@ -113,6 +115,31 @@ describe("InstructionBuiltIns", () => {
           taskCompletion,
         ].join("\n"),
       )
+    }),
+  )
+
+  it.effect("directs new agent scratch to the resolved data tasks directory and away from repository caches", () =>
+    Effect.gen(function* () {
+      const builtins = yield* InstructionBuiltIns.Service
+      const first = yield* readInitial(yield* builtins.load(input(sessionID)))
+      const second = yield* readInitial(yield* builtins.load(input(otherSessionID)))
+      const tasks = `${path.join(Global.Path.data, "tasks")}/<unique-task-name>`
+
+      expect(first.text).toContain(tasks)
+      expect(first.text).toContain("never in a repository `.cache` directory")
+      expect(first.text).toContain("Leave existing repository and tool-managed caches in place and never move or delete them automatically")
+      expect(first.text).toContain(`Built-in agents need no outside-directory confirmation under \`${Global.Path.data}\`; your agent's permissions, explicit denies, permission ceilings and guardrail reviews still apply.`)
+      expect(first.text).not.toContain("needs no location confirmation")
+      expect(first.text.split(tasks)).toHaveLength(2)
+      expect(second.values["core/environment"]).toBe(first.values["core/environment"])
+      expect(first.values["core/environment"]).not.toContain(sessionID)
+      expect(second.values["core/environment"]).not.toContain(otherSessionID)
+      expect(first.values["core/environment"]).toContain(scratch)
+
+      const denied = yield* readInitial(
+        yield* builtins.load(input(sessionID, { capabilities: { builtin_instructions: { deny: ["environment"] } } })),
+      )
+      expect(denied.text).not.toContain(tasks)
     }),
   )
 

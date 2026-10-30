@@ -1,3 +1,4 @@
+import path from "path"
 import { describe, expect } from "bun:test"
 import matter from "gray-matter"
 import { Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
@@ -11,6 +12,7 @@ import { Location } from "@ycoding-ai/core/location"
 import { Permission } from "@ycoding-ai/core/permission"
 import { AgentPlugin } from "@ycoding-ai/core/plugin/agent"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
+import { Wildcard } from "@ycoding-ai/core/util/wildcard"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 import { agentHost, host } from "./plugin/host"
@@ -705,8 +707,7 @@ describe("Agent", () => {
         { action: "chatgpt_*", resource: "*", effect: "ask" },
         { action: "claude_*", resource: "*", effect: "ask" },
         { action: "external_directory", resource: "*", effect: "ask" },
-        { action: "external_directory", resource: `${Global.Path.data}/shell/*/*`, effect: "allow" },
-        { action: "external_directory", resource: `${Global.Path.data}/worktrees/*`, effect: "allow" },
+        { action: "external_directory", resource: `${Global.Path.data}/*`, effect: "allow" },
         { action: "external_directory", resource: `${Global.Path.tmp}/*`, effect: "allow" },
         { action: "question", resource: "*", effect: "deny" },
         { action: "plan_enter", resource: "*", effect: "deny" },
@@ -735,6 +736,44 @@ describe("Agent", () => {
       expect(evaluate(`${Global.Path.data}/worktrees/repo_other/feature/src/*`)).toBe("allow")
       expect(Permission.evaluate("external_directory", `${Global.Path.data}/memory/*`, permissions).resource).not.toContain("/worktrees/")
       expect(evaluate("/outside/project/*")).toBe("ask")
+    }),
+  )
+
+  it.effect("lets maintained built-in agents reach the data root and every descendant while outside paths still ask", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
+        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
+      )
+      const data = Global.Path.data
+      for (const id of ["god", "zeus"]) {
+        const permissions = (yield* agent.get(Agent.ID.make(id)))?.permissions ?? []
+        const matched = (resource: string, ...extra: Permission.Ruleset[]) =>
+          Permission.evaluate("external_directory", resource, permissions, ...extra)
+
+        for (const resource of [
+          `${data}/*`,
+          `${data}/tasks/review-1/*`,
+          `${data}/tasks/review-1/logs/deep/nested/*`,
+          `${data}/memory/*`,
+          `${data}/shell/project/*`,
+          `${data}/worktrees/repo_other/feature/src/*`,
+        ])
+          expect(matched(resource)).toEqual({ action: "external_directory", resource: `${data}/*`, effect: "allow" })
+
+        const allowed = permissions.filter((rule) => rule.action === "external_directory" && rule.effect === "allow")
+        for (const resource of [`${data}-other/*`, `${data}-other/tasks/*`, `${data}x/*`, `${path.dirname(data)}/*`, `${path.dirname(data)}/other/*`]) {
+          expect(allowed.filter((rule) => Wildcard.match(resource, rule.resource))).toEqual([])
+          expect(matched(resource).resource).toBe("*")
+        }
+        expect(matched("/outside/project/*")).toEqual({ action: "external_directory", resource: "*", effect: "ask" })
+        expect(matched(`${Global.Path.tmp}/scratch/*`)).toEqual({ action: "external_directory", resource: `${Global.Path.tmp}/*`, effect: "allow" })
+
+        const denyTask: Permission.Ruleset = [{ action: "external_directory", resource: `${data}/tasks/secret/*`, effect: "deny" }]
+        expect(matched(`${data}/tasks/secret/nested/*`, denyTask).effect).toBe("deny")
+        expect(matched(`${data}/tasks/review-1/*`, denyTask).effect).toBe("allow")
+        expect(matched(`${data}/tasks/review-1/*`, [{ action: "external_directory", resource: `${data}/*`, effect: "deny" }]).effect).toBe("deny")
+      }
     }),
   )
 
