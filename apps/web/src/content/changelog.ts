@@ -22,6 +22,18 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.1",
+    date: "2026-10-31",
+    title: "Continuous decision follow",
+    tags: ["Added", "Changed"],
+    changes: [
+      { tag: "Added", text: "`ycoding decision watch <root> --family --follow` keeps one native observer armed on a root Session and its descendants until you cancel it or it stops with an error. It stays armed through pending decisions, replies, an idle root with unfinished work and completed executions, and prints one JSON line per observation containing identifiers only: Session, request and event IDs, request kind, event type and sequence, whether the root is active, and a resolution when a request leaves the pending list. Request text, decide commands, answers and transcripts are never printed." },
+      { tag: "Added", text: "Follow covers pending permission, guardrail, question, form and review requests, observed replies, durable execution, step, input, work-completion, task and review events, and descendants created after the watch starts. When the native connection fails or a stream ends, it reconnects with backoff, rereads current pending requests and replays missed history from its saved positions, and stops with an error after ten consecutive failed attempts; a recovery that makes progress resets the count, and other failures such as an unauthorized or malformed response stop it immediately. It rereads current state only at startup, after a reconnect, for a newly created child and for review-box changes. A heartbeat line is printed at the `--timeout` interval (default 300 seconds, at most 3600); it shows only that the follow process is running, not that the native stream is connected." },
+      { tag: "Added", text: "Follow keeps a private state file, by default under the application data directory or at the path given with `--state`, holding a history cursor per Session that advances only after an observation is printed and saved, plus the pending requests and repeat-suppression records, so a restarted follow continues from them. The file is bound to the root Session, the server address and the server's process epoch, is created with owner-only permissions, is replaced atomically, and refuses symbolic links, files owned by another user or open to group or other access, and a concurrent writer. A failure prints only a classification such as `epoch-mismatch` or `state-lock-held`, never a path, server address, version or request content. After a server restart, start a new state file. Follow stops with an error when a safety limit is reached: 64 Sessions, 1 MiB of state, 8,192 request or terminal records, or ten consecutive failed reconnects. Replay depends on retained history; pruned history and requests that appeared and disappeared during a disconnect cannot be reconstructed." },
+      { tag: "Changed", text: "`--follow` requires `--family` and rejects `--input`, `--after` and `--checkpoint`; `--state` requires `--follow`. Follow never answers, approves, resumes or retries anything, runs only while its process runs, and does not wake an idle or completed external task, so keep a native follow process running, in the foreground or as an active background task that nothing restarts, while you need notifications. Delivery is at-least-once, not exactly-once: after a crash or a failed output write, a restarted follow can print an observation again, so use the stable identifiers to ignore repeats and reread current state before acting. Without `--follow`, `ycoding decision watch` is unchanged." },
+    ],
+  },
+  {
     version: "0.11.0",
     date: "2026-10-31",
     title: "Projects, autonomy modes, goal decisions and native Dots",

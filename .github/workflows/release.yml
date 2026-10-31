@@ -126,6 +126,13 @@ jobs:
           bun test --timeout 30000 ./test/remote-control.test.ts -t "remote-control wire types|remote-control envelope|remote-control app-server mapping|state store persists installation and enrollment without configuration or tokens|host enrolls, connects with headers, serves one RPC, and answers ping with pong|enabling reports connecting before credentials resolve|fresh host enrolls when only an old websocket URL key exists|fresh host refreshes saved enrollment and uses the refreshed token|refresh 404 deletes the enrollment and re-enrolls; unrecognized enroll 404 preserves and fails closed"
           bun test --timeout 30000 ./test/remote-access.test.ts -t "global Dots operations need no Session inventory and preserve exact revision and conflicts"
 
+      - name: Verify native decision follow
+        if: matrix.suite == 'cli'
+        working-directory: packages/cli
+        run: |
+          bun test --timeout 30000 ./test/decision-follow-state.test.ts ./test/decision-follow.test.ts ./test/decision-follow-command.test.ts
+          bun test --timeout 30000 ./test/decision-watch.test.ts -t "both entrypoints advertise|already pending decision|every decision kind|completion is reported only|failed, interrupted, and rejected|timeout reports progress|resume command keeps|root accepted receipt|a family checkpoint|checkpoint boundary: rejects invalid|explicit conflicting root cursor is rejected|zero cursor against absent watermark rejects"
+
       - name: Verify Antigravity provider and build fixture boundaries
         if: matrix.suite == 'cli'
         run: |

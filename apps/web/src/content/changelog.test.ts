@@ -7,8 +7,25 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.0 projects, autonomy modes, goal decisions and native Dots first", () => {
+  test("lists v0.11.1 continuous decision follow first with its public limits", () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.1", date: "2026-10-31", title: "Continuous decision follow", tags: ["Added", "Changed"] })
+    expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(3)
+    expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(1)
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of [
+      "decision watch <root> --family --follow", "until you cancel it", "identifiers only", "never printed",
+      "descendants created after the watch starts", "reconnects", "heartbeat", "`--timeout`", "`--state`",
+      "owner-only permissions", "replaced atomically", "symbolic links", "concurrent writer", "start a new state file",
+      "`epoch-mismatch`", "`state-lock-held`", "never a path, server address, version or request content", "work-completion, task and review events", "ten consecutive failed reconnects", "nothing restarts", "cannot be reconstructed", "rereads current state only at startup", "shows only that the follow process is running", "requires `--family`", "rejects `--input`, `--after` and `--checkpoint`", "never answers, approves, resumes or retries",
+      "does not wake an idle or completed external task", "native follow process", "at-least-once, not exactly-once", "can print an observation again", "stable identifiers", "is unchanged",
+    ]) expect(text).toContain(fragment)
+    for (const excluded of ["CCA", "Flora", "milestone", "ses_", "exactly once"]) expect(text).not.toContain(excluded)
+    expect(after("0.11.1")?.version).toBe("0.11.0")
+  })
+
+  test("lists v0.11.0 projects, autonomy modes, goal decisions and native Dots after v0.11.1", () => {
+    const entry = byVersion("0.11.0")
     expect(entry).toMatchObject({ version: "0.11.0", date: "2026-10-31", title: "Projects, autonomy modes, goal decisions and native Dots", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(75)
     expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(38)
@@ -1650,7 +1667,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 45)).toEqual([
+    expect(versions.slice(0, 46)).toEqual([
+      "0.11.1",
       "0.11.0",
       "0.10.25",
       "0.10.24",

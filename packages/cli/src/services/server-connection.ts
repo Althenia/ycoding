@@ -10,6 +10,7 @@ export type Args = {
   readonly server?: string
   readonly standalone?: boolean
   readonly mismatch?: "replace" | "ignore" | "error"
+  readonly diagnostics?: "sanitized"
   readonly onStart?: EnsureOptions["onStart"]
 }
 
@@ -34,7 +35,9 @@ export const resolve = Effect.fn("cli.server-connection.resolve")(function* (arg
     })
     if (health.version !== InstallationVersion)
       process.stderr.write(
-        `Warning: Server at ${endpoint.url} has version ${health.version}; this client is ${InstallationVersion}. Continuing anyway.\n`,
+        args.diagnostics === "sanitized"
+          ? "Warning: [server-version-mismatch] Native server version differs from this client; continuing without replacement.\n"
+          : `Warning: Server at ${endpoint.url} has version ${health.version}; this client is ${InstallationVersion}. Continuing anyway.\n`,
       )
     return { endpoint } satisfies Resolved
   }

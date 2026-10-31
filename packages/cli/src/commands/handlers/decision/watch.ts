@@ -1,4 +1,7 @@
 import { Effect, Option } from "effect"
+import { createHash } from "node:crypto"
+import path from "node:path"
+import { Global } from "@ycoding-ai/core/global"
 import { Service } from "@ycoding-ai/client/effect/service"
 import {
   YCoding,
@@ -13,6 +16,8 @@ import { DecisionCommand, shellCommand, watchTimeout } from "../../decision"
 import { Runtime } from "../../../framework/runtime"
 import { ServerConnection } from "../../../services/server-connection"
 import { createFamilyWatch, decodeCheckpoint, discoverFamily, FamilyCheckpointError, type FamilyChange } from "./family"
+import { followFamily } from "./follow"
+import { FollowError, followID, openFollowState } from "./follow-state"
 
 type Client = ReturnType<typeof YCoding.make>
 type LogEvent = Exclude<SessionLogOutput, { type: "log.synced" }>
@@ -702,6 +707,10 @@ export default Runtime.handler(DecisionCommand.commands.watch, Effect.fn("cli.de
     ...Option.match(input.after, { onNone: () => ({}), onSome: (value) => ({ after: value }) }),
     ...Option.match(input.checkpoint, { onNone: () => ({}), onSome: (value) => ({ checkpoint: value }) }),
   }
+  if (input.follow && !input.family) return yield* Effect.fail(new Error("--follow requires --family"))
+  if (Option.isSome(input.state) && !input.follow) return yield* Effect.fail(new Error("--state requires --follow"))
+  if (input.follow && (options.input !== undefined || options.after !== undefined || options.checkpoint !== undefined))
+    return yield* Effect.fail(new Error("--follow cannot use --input, --after or --checkpoint"))
   if (!options.sessionID.trim()) return yield* Effect.fail(new Error("A Session ID is required"))
   if (options.input !== undefined && !options.input.trim()) return yield* Effect.fail(new Error("--input requires an input ID"))
   if (options.after !== undefined && options.after < 0) return yield* Effect.fail(new Error("--after must be a nonnegative sequence"))
@@ -710,8 +719,40 @@ export default Runtime.handler(DecisionCommand.commands.watch, Effect.fn("cli.de
     if (!options.family) return yield* Effect.fail(new Error("--checkpoint requires --family"))
     yield* Effect.try({ try: () => decodeCheckpoint(options.checkpoint!, options.sessionID, options.after), catch: (error) => new Error(message(error)) })
   }
-  const connection = yield* ServerConnection.resolve({ server: options.server, standalone: options.standalone, mismatch: "ignore" })
+  const connection = yield* ServerConnection.resolve({ server: options.server, standalone: options.standalone, mismatch: "ignore", ...(input.follow ? { diagnostics: "sanitized" as const } : {}) }).pipe(
+    Effect.mapError((error) => input.follow ? new FollowError("observer-failed") : error),
+  )
   const client = YCoding.make({ baseUrl: connection.endpoint.url, headers: Service.headers(connection.endpoint) })
+  if (input.follow) {
+    if (!followID(options.sessionID) || !options.sessionID.startsWith("ses")) return yield* Effect.fail(new Error("Invalid follow root ID"))
+    const global = yield* Global.Service
+    const server = createHash("sha256").update(connection.endpoint.url).digest("hex")
+    const filename = Option.getOrElse(input.state, () => path.join(global.data, "tasks", "decision-follow", server, `${options.sessionID}.json`))
+    yield* Effect.callback<void, Error>((resume) => {
+      const controller = new AbortController()
+      const failure = (error: unknown) => error instanceof FollowError ? error : new FollowError("observer-failed")
+      const task = (async () => {
+        const store = await openFollowState(filename, options.sessionID, server)
+        try {
+          await followFamily(client, { state: store.state, signal: controller.signal, heartbeatSeconds: options.timeout, save: store.save,
+            emit: (receipt) => new Promise<void>((resolve, reject) => {
+              try {
+                process.stdout.write(`${JSON.stringify(receipt)}\n`, (error) => error ? reject(new FollowError("output-failed")) : resolve())
+              } catch { reject(new FollowError("output-failed")) }
+            }) })
+        } finally { await store.close() }
+      })()
+      task.then(() => resume(Effect.void), (error: unknown) => resume(Effect.fail(failure(error))))
+      return Effect.promise(async () => {
+        controller.abort()
+        try { await task } catch (error) {
+          process.stderr.write(`ycoding: ${failure(error).message}\n`)
+          process.exitCode = 1
+        }
+      })
+    })
+    return
+  }
   const result = yield* Effect.tryPromise({ try: (signal) => watchSession(client, options, signal), catch: (error) => new Error(message(error)) })
   const output = render(options, result)
   yield* Effect.sync(() => {

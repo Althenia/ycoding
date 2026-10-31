@@ -37,6 +37,24 @@ test("native archive finalization preserves both TUI shards and every accepted c
   }
 })
 
+test("source verification runs the native decision follow regression files in the CLI suite", async () => {
+  const verify = workflowJob(workflow, "verify-source")
+  const steps = verify.split("\n      - name: ").slice(1).filter((step) => step.startsWith("Verify native decision follow\n"))
+  expect(steps).toHaveLength(1)
+  const step = Bun.YAML.parse(`name: ${steps[0]!.replace(/^ {8}/gm, "")}`)
+  if (typeof step !== "object" || step === null || !("run" in step) || typeof step.run !== "string") throw new Error("Missing native decision follow command")
+  expect("if" in step ? step.if : undefined).toBe("matrix.suite == 'cli'")
+  expect("working-directory" in step ? step["working-directory"] : undefined).toBe("packages/cli")
+  const files = ["decision-follow-state", "decision-follow", "decision-follow-command"].map((name) => `./test/${name}.test.ts`)
+  const oneShot = "both entrypoints advertise|already pending decision|every decision kind|completion is reported only|failed, interrupted, and rejected|timeout reports progress|resume command keeps|root accepted receipt|a family checkpoint|checkpoint boundary: rejects invalid|explicit conflicting root cursor is rejected|zero cursor against absent watermark rejects"
+  expect(step.run).toBe([
+    `bun test --timeout 30000 ${files.join(" ")}`,
+    `bun test --timeout 30000 ./test/decision-watch.test.ts -t "${oneShot}"`,
+  ].join("\n") + "\n")
+  expect(await Bun.file(path.join(import.meta.dir, "../packages/cli/test/decision-watch.test.ts")).exists()).toBe(true)
+  for (const file of files) expect(await Bun.file(path.join(import.meta.dir, "../packages/cli", file)).exists()).toBe(true)
+})
+
 test("native archive finalization transfers each prepared archive once and leaves manual publication disabled", () => {
   const build = workflowJob(workflow, "build")
   const release = workflowJob(workflow, "release-tui")

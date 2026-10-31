@@ -85,6 +85,8 @@ describe("CLI frontend import boundaries", () => {
       expect(graph).toContain("packages/cli/src/commands/handlers/decision/list.ts")
       expect(graph).toContain("packages/cli/src/commands/handlers/decision/watch.ts")
       expect(graph).toContain("packages/cli/src/commands/handlers/decision/family.ts")
+      expect(graph).toContain("packages/cli/src/commands/handlers/decision/follow.ts")
+      expect(graph).toContain("packages/cli/src/commands/handlers/decision/follow-state.ts")
       expect(graph).toContain("packages/cli/src/commands/handlers/dots/attach.ts")
       expect(graph.some((file) => file.startsWith("packages/tui/src/"))).toBe(true)
       expect(graph.some((file) => file.startsWith("packages/server/src/"))).toBe(true)
@@ -124,6 +126,8 @@ describe("CLI frontend import boundaries", () => {
             file !== "packages/cli/src/commands/handlers/decision/list.ts" &&
             file !== "packages/cli/src/commands/handlers/decision/watch.ts" &&
             file !== "packages/cli/src/commands/handlers/decision/family.ts" &&
+            file !== "packages/cli/src/commands/handlers/decision/follow.ts" &&
+            file !== "packages/cli/src/commands/handlers/decision/follow-state.ts" &&
             file !== "packages/cli/src/commands/handlers/dots/attach.ts" &&
             file !== "packages/cli/src/commands/handlers/tui-serve.ts" &&
             file !== "packages/cli/src/commands/handlers/tui-shared.ts" &&
