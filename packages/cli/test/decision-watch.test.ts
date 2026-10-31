@@ -4,6 +4,8 @@ import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { ClientApi } from "@ycoding-ai/protocol/client"
 import { OpenApi } from "effect/unstable/httpapi"
 import { resolveOperation } from "../src/commands/handlers/api"
+import { YCoding } from "@ycoding-ai/client/promise"
+import { watchSession } from "../src/commands/handlers/decision/watch"
 
 type LogType = Exclude<SessionLogOutput["type"], "log.synced">
 type LogEvent = Exclude<SessionLogOutput, { type: "log.synced" }>
@@ -73,6 +75,7 @@ type Control = {
   decisions: (items: DecisionItem[]) => void
   push: (event: EventSubscribeOutput) => void
   drop: () => void
+  dropLogs: () => void
 }
 
 type Scenario = {
@@ -89,6 +92,11 @@ type Scenario = {
   readonly tasks?: Record<string, Task[]>
   readonly onSubscribe?: (control: Control) => void
   readonly onLog?: (logs: Map<string, LogEvent[]>, count: number) => void
+  readonly onFollow?: (sessionID: string, control: Control) => void
+  readonly onRead?: (path: string, control: Control) => void
+  readonly epoch?: () => string
+  readonly onSnapshot?: (sessionID: string, control: Control) => void
+  readonly readActive?: (control: Control) => Promise<readonly string[]>
 }
 
 const home = `${process.env.YCODING_TEST_XDG_ROOT}/home`
@@ -102,14 +110,28 @@ function stub(scenario: Scenario) {
   const requests: string[] = []
   let logReads = 0
   const streams = new Set<ReadableStreamDefaultController<Uint8Array>>()
+  const followers = new Map<string, Set<ReadableStreamDefaultController<Uint8Array>>>()
+  const closing = new Set<() => void>()
+  const openStreams = () => streams.size + [...followers.values()].reduce((sum, items) => sum + items.size, 0)
+  const closed = () => { if (openStreams() === 0) for (const resolve of closing) resolve() }
   const encoder = new TextEncoder()
   const frame = (value: unknown) => encoder.encode(`data: ${JSON.stringify(value)}\n\n`)
   const control: Control = {
     subscriptions: 0,
-    append: (sessionID, ...items) => logs.set(sessionID, [...(logs.get(sessionID) ?? []), ...items]),
+    append: (sessionID, ...items) => {
+      logs.set(sessionID, [...(logs.get(sessionID) ?? []), ...items])
+      for (const stream of followers.get(sessionID) ?? []) for (const item of items) stream.enqueue(frame(item))
+    },
     decisions: (items) => { decisions = items },
     push: (event) => { for (const stream of streams) stream.enqueue(frame(event)) },
-    drop: () => { for (const stream of streams) stream.close(); streams.clear() },
+    drop: () => { for (const stream of streams) stream.close(); streams.clear(); closed() },
+    dropLogs: () => {
+      for (const subscribed of followers.values()) {
+        for (const stream of subscribed) stream.close()
+        subscribed.clear()
+      }
+      closed()
+    },
   }
   const last = (id: string) => {
     const items = logs.get(id) ?? []
@@ -120,7 +142,10 @@ function stub(scenario: Scenario) {
     const path = url.pathname
     if (path === "/api/health") return Response.json({ healthy: true, version: InstallationVersion, pid: process.pid })
     requests.push(`${request.method} ${path}${url.search}`)
+    scenario.onRead?.(path, control)
     if (path === scenario.stall) return new Promise<Response>(() => {})
+    if (path === "/api/session/active" && scenario.readActive)
+      return scenario.readActive(control).then((active) => Response.json({ data: Object.fromEntries(active.map((id) => [id, { type: "running" }])) }))
     if (path === "/api/session/active")
       return Response.json({ data: Object.fromEntries((scenario.active ?? []).map((id) => [id, { type: "running" }])) })
     if (path === "/api/session/outstanding")
@@ -138,7 +163,7 @@ function stub(scenario: Scenario) {
     }
     if (path === "/api/session") {
       const parentID = url.searchParams.get("parentID")
-      return Response.json({ data: Object.entries(sessions).filter(([, session]) => session.parentID === parentID).map(([id, session]) => ({ id, title: session.title, parentID })), cursor: {} })
+      return Response.json({ data: Object.entries(sessions).filter(([, session]) => session.parentID === parentID).map(([id, session]) => ({ id, title: session.title, parentID })), cursor: { next: null } })
     }
     const sessionMatch = /^\/api\/session\/([^/]+)(\/snapshot)?$/.exec(path)
     if (sessionMatch) {
@@ -149,34 +174,61 @@ function stub(scenario: Scenario) {
         location: { directory: "/tmp/watched" }, time: { created: base, updated: base } }
       if (!sessionMatch[2]) return Response.json({ data: info })
       const seq = scenario.watermark ?? last(id)
-      return Response.json({ sourceEpoch: "epoch_synthetic", session: info, messages: scenario.messages ?? [], watermark: { type: "log.synced", aggregateID: id, ...(seq === undefined ? {} : { seq }) } })
+      scenario.onSnapshot?.(id, control)
+      return Response.json({ sourceEpoch: scenario.epoch?.() ?? "epoch_synthetic", session: info, messages: scenario.messages ?? [], watermark: { type: "log.synced", aggregateID: id, ...(seq === undefined ? {} : { seq }) } })
     }
     const logMatch = /^\/api\/experimental\/session\/([^/]+)\/log$/.exec(path)
     if (logMatch) {
       const id = decodeURIComponent(logMatch[1]!)
       if (!sessions[id]) return Response.json({ _tag: "SessionNotFoundError", sessionID: id, message: `Session not found: ${id}` }, { status: 404 })
-      expect(url.searchParams.get("follow")).toBe("false")
+      const follow = url.searchParams.get("follow") === "true"
       scenario.onLog?.(logs, ++logReads)
       const after = Number(url.searchParams.get("after") ?? -1)
       const items = (logs.get(id) ?? []).filter((item) => item.durable.seq > after)
       const seq = last(id)
-      const body = [...items, { type: "log.synced", aggregateID: id, ...(seq === undefined ? {} : { seq }), sourceEpoch: "epoch_synthetic" }].map((item) => `data: ${JSON.stringify(item)}\n\n`).join("")
+      const values = [...items, { type: "log.synced", aggregateID: id, ...(seq === undefined ? {} : { seq }), sourceEpoch: scenario.epoch?.() ?? "epoch_synthetic" }]
+      if (follow) {
+        const subscribed = followers.get(id) ?? new Set<ReadableStreamDefaultController<Uint8Array>>()
+        followers.set(id, subscribed)
+        let owned: ReadableStreamDefaultController<Uint8Array>
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            owned = controller
+            subscribed.add(controller)
+            for (const value of values) controller.enqueue(frame(value))
+            request.signal.addEventListener("abort", () => { subscribed.delete(controller); closed() }, { once: true })
+            queueMicrotask(() => scenario.onFollow?.(id, control))
+          },
+          cancel() { subscribed.delete(owned); closed() },
+        })
+        return new Response(stream, { headers: { "content-type": "text/event-stream" } })
+      }
+      const body = values.map((item) => `data: ${JSON.stringify(item)}\n\n`).join("")
       return new Response(body, { headers: { "content-type": "text/event-stream" } })
     }
     if (path === "/api/event") {
+      let owned: ReadableStreamDefaultController<Uint8Array>
       const stream = new ReadableStream<Uint8Array>({ start(controller) {
+        owned = controller
         streams.add(controller)
+        request.signal.addEventListener("abort", () => { streams.delete(controller); closed() }, { once: true })
         controller.enqueue(frame({ id: "evt_connected", type: "server.connected", data: {} }))
         Object.assign(control, { subscriptions: control.subscriptions + 1 })
         queueMicrotask(() => scenario.onSubscribe?.(control))
-      } })
+      }, cancel() { streams.delete(owned); closed() } })
       return new Response(stream, { headers: { "content-type": "text/event-stream" } })
     }
     if (path === "/api/decision") return Response.json({ data: decisions })
     return new Response("not found", { status: 404 })
   } })
   servers.push(server)
-  return { url: server.url.toString(), requests, control }
+  return { url: server.url.toString(), requests, control, openStreams,
+    closed: () => new Promise<void>((resolve, reject) => {
+      if (openStreams() === 0) return resolve()
+      const timer = setTimeout(() => { closing.delete(done); reject(new Error(`${openStreams()} streams remain open`)) }, 500)
+      const done = () => { clearTimeout(timer); closing.delete(done); resolve() }
+      closing.add(done)
+    }) }
 }
 
 async function watch(scenario: Scenario, args: string[], options: { entry?: "tui" | "index"; signalAfterSubscribe?: NodeJS.Signals } = {}) {
@@ -486,6 +538,373 @@ test("a resume command keeps the explicit server connection and output mode, and
 
 const ownerRun = (end: LogEvent) => ({ ses_target: [admitted(1, "msg_input"), started(2), promoted(3, "msg_input"), end] })
 
+async function familyBoundary(scenario: Scenario, options: { family?: boolean; input?: string; after?: number; checkpoint?: string; cancel?: AbortSignal } = {}) {
+  const server = stub(scenario)
+  const result = await watchSession(YCoding.make({ baseUrl: server.url }), {
+    sessionID: "ses_target", family: options.family ?? true, timeout: 0.3, standalone: false, json: true,
+    ...(options.input === undefined ? {} : { input: options.input }),
+    ...(options.after === undefined ? {} : { after: options.after }),
+    ...(options.checkpoint === undefined ? {} : { checkpoint: options.checkpoint }),
+  }, options.cancel ?? AbortSignal.timeout(2_000))
+  return { ...server, result }
+}
+
+test("family watch boundary: a child terminal without a global wake returns incomplete owner work, not root settlement", async () => {
+  const result = await familyBoundary({
+    sessions: family, todos: { ses_target: [todo("Finish owner validation", "pending")] },
+    onSubscribe: (control) => { setTimeout(() => control.append("ses_child", succeeded(1, "ses_child")), 20) },
+  })
+  expect(result.result.outcome).toMatchObject({ outcome: "family", work: { state: "incomplete", todos: { open: 1 } } })
+  expect(result.result.outcome).not.toHaveProperty("execution")
+  expect(result.requests.some((request) => request.includes("/ses_child/log?") && request.includes("follow=true"))).toBe(true)
+}, 5_000)
+
+test("family watch boundary: child drain after its terminal is reassessed without reporting root completion", async () => {
+  const active = ["ses_child"]
+  const tasks = { ses_target: [task("ses_child", "running", 1)] }
+  const result = await familyBoundary({
+    sessions: family, active, tasks, outstanding: { running: active },
+    todos: { ses_target: [todo("Finish owner validation", "pending")] },
+    onSubscribe: (control) => {
+      setTimeout(() => control.append("ses_child", succeeded(1, "ses_child")), 20)
+      setTimeout(() => {
+        active.splice(0)
+        tasks.ses_target = [task("ses_child", "completed", 2)]
+        control.push({ id: "evt_child_idle", created: base, type: "session.status", data: { sessionID: "ses_child", status: { type: "idle" } } })
+      }, 50)
+    },
+  })
+  expect(result.result.outcome).toMatchObject({ outcome: "family", work: { state: "incomplete", children: { active: 0 }, running: [] } })
+}, 5_000)
+
+test("family watch boundary: a child failure is incomplete work, not restart loss", async () => {
+  const failure = logEvent("session.execution.failed", 2, { sessionID: "ses_child", error: { type: "unknown", message: "Synthetic failure" } }, "ses_child")
+  const failed = await familyBoundary({
+    sessions: family, tasks: { ses_target: [task("ses_child", "failed", 2)] },
+    onSubscribe: (control) => { setTimeout(() => control.append("ses_child", failure), 20) },
+  })
+  expect(failed.result.outcome).toMatchObject({ outcome: "family", work: { state: "incomplete", lost: [] } })
+  expect(failed.result.outcome).toHaveProperty("changes", [expect.objectContaining({ sessionID: "ses_child", type: "session.execution.failed", id: failure.id, seq: 2 })])
+}, 5_000)
+
+test("family watch boundary: explicit restart loss is reported from outstanding work", async () => {
+  const failure = logEvent("session.execution.failed", 2, { sessionID: "ses_child", error: { type: "unknown", message: "Synthetic failure" } }, "ses_child")
+  const lost = await familyBoundary({
+    sessions: family, outstanding: { lost: ["ses_child"] }, tasks: { ses_target: [task("ses_child", "lost", 2)] },
+    onSubscribe: (control) => { setTimeout(() => control.append("ses_child", failure), 20) },
+  })
+  expect(lost.result.outcome).toMatchObject({ outcome: "family", work: { state: "lost", lost: ["ses_child"] } })
+}, 5_000)
+
+test("family watch boundary: a retained open root execution is unconfirmed, not lost", async () => {
+  const open = await familyBoundary({ sessions: family, log: { ses_target: [started(1)] } }, { input: "msg_input" })
+  expect(open.result.outcome).toMatchObject({ outcome: "timeout", state: "unconfirmed", work: { state: "unconfirmed", lost: [] } })
+}, 5_000)
+
+test("family watch boundary: child completion preserves the root input and its open execution", async () => {
+  const result = await familyBoundary({
+    sessions: family, log: { ses_target: [admitted(1, "msg_input"), started(2), promoted(3, "msg_input")] }, active: ["ses_target"],
+    onSubscribe: (control) => { setTimeout(() => control.append("ses_child", succeeded(20, "ses_child")), 20) },
+  }, { input: "msg_input", after: 0 })
+  expect(result.result.outcome).toMatchObject({ outcome: "family", work: { state: "running" } })
+  expect(result.result.outcome).not.toHaveProperty("execution")
+  expect(result.result.input).toBe("promoted")
+  expect(result.result.after).toBeLessThan(2)
+  expect(result.result.execution?.inputIDs).toEqual(["msg_input"])
+}, 5_000)
+
+test("family watch boundary: a child accepted receipt never completes owner work", async () => {
+  const childReceipt = logEvent("session.work.completed", 2, { sessionID: "ses_child", inputID: "msg_child", assistantMessageID: "msg_child_answer" }, "ses_child")
+  const child = await familyBoundary({ sessions: family, onSubscribe: (control) => {
+    setTimeout(() => control.append("ses_child", succeeded(1, "ses_child"), childReceipt), 20)
+  } })
+  expect(child.result.outcome).toMatchObject({ outcome: "family", work: { state: "incomplete" } })
+  expect(child.result.outcome).not.toHaveProperty("work.receipt")
+}, 5_000)
+
+test("family watch boundary: a root accepted receipt completes owner work without a new execution terminal", async () => {
+  const root = await familyBoundary({ sessions: family, onSubscribe: (control) => {
+    setTimeout(() => {
+      control.append("ses_target", receipt(1, "msg_input", "msg_answer"))
+      control.push(wake("ses_target"))
+    }, 20)
+  } })
+  expect(root.result.outcome).toMatchObject({ outcome: "family", work: { state: "completed", receipt: { inputID: "msg_input", current: true } } })
+}, 5_000)
+
+test("family watch boundary: ready and reconnect reconcile current ephemeral decisions with exact IDs", async () => {
+  for (const kind of ["permission", "guardrail", "question", "form"] as const) {
+    const item = decision(kind, "ses_child", `${kind}_current`)
+    const ready = await familyBoundary({ sessions: family, onSubscribe: (control) => control.decisions([item]) })
+    expect(ready.result.outcome).toEqual({ outcome: "decision", decisions: [item], oversized: [], omitted: 0 })
+    const reconnect = await familyBoundary({ sessions: family, onSubscribe: (control) => {
+      if (control.subscriptions !== 1) return
+      setTimeout(() => { control.decisions([item]); control.drop() }, 20)
+    } })
+    expect(reconnect.result.outcome).toEqual({ outcome: "decision", decisions: [item], oversized: [], omitted: 0 })
+  }
+}, 5_000)
+
+test("family watch boundary: duplicate child replay reports one transition after a log reconnect", async () => {
+  const terminal = succeeded(7, "ses_child")
+  let followed = 0
+  const result = await familyBoundary({ sessions: family, onFollow: (sessionID, control) => {
+    if (sessionID !== "ses_child") return
+    followed++
+    if (followed === 1) {
+      control.dropLogs()
+      control.append("ses_child", terminal)
+    } else control.append("ses_child", terminal)
+  } })
+  expect(result.result.outcome).toMatchObject({ outcome: "family" })
+  expect(result.result.outcome).toHaveProperty("changes", [{ sessionID: "ses_child", type: terminal.type, id: terminal.id, seq: 7 }])
+  expect(followed).toBeGreaterThan(1)
+}, 5_000)
+
+test("family watch boundary: epoch replacement rejects late old-epoch child events", async () => {
+  let epoch = "epoch_synthetic"
+  const current = { ...succeeded(2, "ses_child"), sourceEpoch: "epoch_replaced" }
+  const result = await familyBoundary({ sessions: family, epoch: () => epoch, onSubscribe: (control) => {
+    if (control.subscriptions !== 1) return
+    setTimeout(() => {
+      epoch = "epoch_replaced"
+      control.drop()
+      control.dropLogs()
+      control.append("ses_child", { ...succeeded(99, "ses_child"), sourceEpoch: "epoch_synthetic" }, current)
+    }, 20)
+  } })
+  expect(result.result.outcome).toMatchObject({ outcome: "family" })
+  expect(result.result.outcome).toHaveProperty("changes", [{ sessionID: "ses_child", type: current.type, id: current.id, seq: 2 }])
+}, 5_000)
+
+test("family watch boundary: a child event between its snapshot and subscription is replayed", async () => {
+  let injected = false
+  const terminal = succeeded(4, "ses_child")
+  const result = await familyBoundary({ sessions: family, onSnapshot: (sessionID, control) => {
+    if (sessionID !== "ses_child" || injected) return
+    injected = true
+    control.append("ses_child", terminal)
+  } })
+  expect(result.result.outcome).toMatchObject({ outcome: "family" })
+  expect(result.result.outcome).toHaveProperty("changes", [{ sessionID: "ses_child", type: terminal.type, id: terminal.id, seq: 4 }])
+}, 5_000)
+
+test("family watch boundary: new grandchildren are discovered and watched without a root terminal", async () => {
+  const sessions: NonNullable<Scenario["sessions"]> = { ...family }
+  const result = await familyBoundary({ sessions, onSubscribe: (control) => {
+    setTimeout(() => {
+      sessions.ses_grandchild = { title: "Grandchild", parentID: "ses_child" }
+      control.push({ id: "evt_created_grandchild", created: base, type: "session.created",
+        durable: { aggregateID: "ses_grandchild", seq: 0, version: 2 }, data: {
+          sessionID: "ses_grandchild", title: "Grandchild", parentID: "ses_child", projectID: "prj_synthetic",
+          location: { directory: "/tmp/watched" }, created: base,
+        } })
+    }, 20)
+    setTimeout(() => control.append("ses_grandchild", succeeded(1, "ses_grandchild")), 50)
+  } })
+  expect(result.result.outcome).toMatchObject({ outcome: "family" })
+  expect(result.result.outcome).toHaveProperty("changes", [expect.objectContaining({ sessionID: "ses_grandchild" })])
+}, 5_000)
+
+test("family watch boundary: a new child settled during disconnect is replayed after discovery", async () => {
+  const sessions: NonNullable<Scenario["sessions"]> = { ses_target: { title: "Watched" } }
+  const result = await familyBoundary({ sessions, onSubscribe: (control) => {
+    if (control.subscriptions !== 1) return
+    setTimeout(() => {
+      control.drop()
+      control.dropLogs()
+      sessions.ses_child = { title: "Child", parentID: "ses_target" }
+      control.append("ses_child", succeeded(1, "ses_child"))
+    }, 20)
+  } })
+  expect(result.result.outcome).toMatchObject({ outcome: "family", work: { state: "incomplete" } })
+  expect(result.result.outcome).toHaveProperty("changes", [{ sessionID: "ses_child", type: "session.execution.succeeded", id: "evt_ses_child_1", seq: 1 }])
+}, 5_000)
+
+test("family watch boundary: stale-epoch status cannot release a terminal before current-epoch status", async () => {
+  let currentSent = false
+  const result = await familyBoundary({ sessions: family, active: ["ses_child"], onSubscribe: (control) => {
+    setTimeout(() => control.append("ses_child", succeeded(1, "ses_child")), 20)
+    setTimeout(() => control.push({ id: "evt_stale_idle", created: base, sourceEpoch: "epoch_old", type: "session.status", data: {
+      sessionID: "ses_child", status: { type: "idle" },
+    } }), 35)
+    setTimeout(() => {
+      currentSent = true
+      control.push({ id: "evt_current_busy", created: base, sourceEpoch: "epoch_synthetic", type: "session.status", data: {
+        sessionID: "ses_child", status: { type: "busy" },
+      } })
+    }, 60)
+  } })
+  expect(currentSent).toBe(true)
+  expect(result.result.outcome).toMatchObject({ outcome: "family", work: { state: "background" } })
+}, 5_000)
+
+test("family watch boundary: more than 64 Sessions fails explicitly rather than silently missing work", async () => {
+  const sessions: NonNullable<Scenario["sessions"]> = { ses_target: { title: "Watched" } }
+  for (let i = 0; i < 64; i++) sessions[`ses_child_${i}`] = { title: `Child ${i}`, parentID: "ses_target" }
+  await expect(familyBoundary({ sessions })).rejects.toThrow(/family.*64|64.*family/i)
+}, 5_000)
+
+test("family watch boundary: success, timeout, and abort release all owned streams and never follow children without family", async () => {
+  const success = await familyBoundary({ sessions: family, decisions: [decision("permission", "ses_child", "per_child")] })
+  await success.closed()
+  expect(success.openStreams()).toBe(0)
+  const timed = await familyBoundary({ sessions: family })
+  await timed.closed()
+  expect(timed.result.outcome).toMatchObject({ outcome: "timeout" })
+  expect(timed.openStreams()).toBe(0)
+  const single = await familyBoundary({ sessions: family }, { family: false })
+  expect(single.requests.some((request) => request.includes("/ses_child/log"))).toBe(false)
+  const controller = new AbortController()
+  const server = stub({ sessions: family, onSubscribe: () => { setTimeout(() => controller.abort(), 20) } })
+  await expect(watchSession(YCoding.make({ baseUrl: server.url }), {
+    sessionID: "ses_target", family: true, timeout: 1, standalone: false, json: true,
+  }, controller.signal)).rejects.toThrow()
+  await server.closed()
+  expect(server.openStreams()).toBe(0)
+}, 5_000)
+
+const checkpoint = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url")
+const familyCursor = {
+  version: 1, rootSessionID: "ses_target", sourceEpoch: "epoch_synthetic",
+  cursors: [{ sessionID: "ses_target", after: 0 }, { sessionID: "ses_child", after: 0 }],
+}
+
+test("family checkpoint boundary: resuming replays a child terminal committed between invocations", async () => {
+  const result = await watch({ sessions: family,
+    log: { ses_target: [text(0, "Baseline", "commentary")], ses_child: [succeeded(1, "ses_child")] }, todos: { ses_target: [todo("Verify owner work", "pending")] },
+  }, ["ses_target", "--family", "--after", "0", "--checkpoint", checkpoint(familyCursor), "--timeout", "1", "--json"])
+  expect(result.exit).toBe(0)
+  const output = JSON.parse(result.stdout)
+  expect(output).toMatchObject({ outcome: "family", work: { state: "incomplete" } })
+  expect(output.checkpoint).toEqual(expect.any(String))
+  expect(output.resume).toContain("--checkpoint")
+  const next = JSON.parse(Buffer.from(output.checkpoint, "base64url").toString())
+  expect(next).toMatchObject({ version: 1, rootSessionID: "ses_target", sourceEpoch: "epoch_synthetic" })
+  expect(next.cursors).toContainEqual({ sessionID: "ses_child", after: 1 })
+}, 10_000)
+
+for (const [name, value, error] of [
+  ["version", { ...familyCursor, version: 2 }, "checkpoint version"],
+  ["root", { ...familyCursor, rootSessionID: "ses_other" }, "checkpoint root"],
+  ["epoch", { ...familyCursor, sourceEpoch: "" }, "checkpoint epoch"],
+  ["duplicate", { ...familyCursor, cursors: [familyCursor.cursors[0], familyCursor.cursors[0]] }, "checkpoint Session IDs"],
+  ["cursor", { ...familyCursor, cursors: [{ sessionID: "ses_target", after: -1 }] }, "checkpoint cursor"],
+  ["authority", { ...familyCursor, completed: true }, "checkpoint fields"],
+  ["Session ID", { ...familyCursor, cursors: [{ sessionID: "ses_target" }, { sessionID: "foreign" }] }, "checkpoint Session IDs"],
+] as const) {
+  test(`family checkpoint boundary: rejects invalid ${name} without watching`, async () => {
+    const result = await watch({ sessions: family }, ["ses_target", "--family", "--checkpoint", checkpoint(value), "--timeout", "1", "--json"])
+    expect(result.exit).toBe(1)
+    expect(result.stderr).toContain(error)
+    expect(result.control.subscriptions).toBe(0)
+  }, 10_000)
+}
+
+test("family checkpoint boundary: an explicit conflicting root cursor is rejected", async () => {
+  const result = await watch({ sessions: family }, ["ses_target", "--family", "--after", "1", "--checkpoint", checkpoint(familyCursor)])
+  expect(result.exit).toBe(1)
+  expect(result.stderr).toContain("--after conflicts with checkpoint")
+}, 10_000)
+
+test("family checkpoint boundary: a stalled snapshot preserves an unvisited child cursor", async () => {
+  const saved = { ...familyCursor, cursors: [{ sessionID: "ses_target" }, { sessionID: "ses_child", after: 7 }] }
+  const result = await familyBoundary({ sessions: family, stall: "/api/session/ses_child/snapshot" }, { checkpoint: checkpoint(saved) })
+  expect(result.result.outcome).toMatchObject({ outcome: "timeout" })
+  expect(JSON.parse(Buffer.from(result.result.checkpoint!, "base64url").toString()).cursors).toContainEqual({ sessionID: "ses_child", after: 7 })
+}, 5_000)
+
+test("family checkpoint boundary: zero cursor against absent watermark rejects empty history", async () => {
+  const saved = { ...familyCursor, cursors: [{ sessionID: "ses_target", after: 0 }] }
+  await expect(familyBoundary({}, { checkpoint: checkpoint(saved) })).rejects.toThrow(/ahead of current Session history/)
+}, 5_000)
+
+test("family checkpoint boundary: zero cursor against actual zero watermark remains valid", async () => {
+  const saved = { ...familyCursor, cursors: [{ sessionID: "ses_target", after: 0 }] }
+  const result = await familyBoundary({ log: { ses_target: [text(0, "Baseline", "commentary")] } }, { checkpoint: checkpoint(saved) })
+  expect(result.result.outcome).toMatchObject({ outcome: "timeout" })
+  expect(result.result.after).toBe(0)
+}, 5_000)
+
+test("family checkpoint boundary: undefined cursor against absent watermark remains valid", async () => {
+  const saved = { ...familyCursor, cursors: [{ sessionID: "ses_target" }] }
+  const result = await familyBoundary({}, { checkpoint: checkpoint(saved) })
+  expect(result.result.outcome).toMatchObject({ outcome: "timeout" })
+  expect(result.result.after).toBeUndefined()
+}, 5_000)
+
+test("family checkpoint boundary: an unsettled child terminal is replayed until post-cleanup assessment", async () => {
+  const terminal = succeeded(2, "ses_child")
+  const first = await familyBoundary({ sessions: family, active: ["ses_child"], outstanding: { running: ["ses_child"] },
+    onSubscribe: (control) => { setTimeout(() => control.append("ses_child", terminal), 20) },
+  })
+  expect(first.result.outcome).toMatchObject({ outcome: "timeout" })
+  const second = await familyBoundary({ sessions: family, log: { ses_child: [terminal] } }, { checkpoint: first.result.checkpoint })
+  expect(second.result.outcome).toMatchObject({ outcome: "family", work: { state: "incomplete" } })
+  expect(second.result.outcome).toHaveProperty("changes", [{ sessionID: "ses_child", type: terminal.type, id: terminal.id, seq: 2 }])
+}, 5_000)
+
+test("family checkpoint boundary: current root receipt is re-read rather than stored as checkpoint authority", async () => {
+  const saved = { ...familyCursor, cursors: [{ sessionID: "ses_target", after: 6 }, { sessionID: "ses_child", after: 0 }] }
+  const result = await familyBoundary({ sessions: family,
+    log: { ses_target: [admitted(1, "msg_input"), started(2), promoted(3, "msg_input"), succeeded(5), receipt(6, "msg_input", "msg_answer")],
+      ses_child: [succeeded(1, "ses_child")] },
+  }, { checkpoint: checkpoint(saved) })
+  expect(result.result.outcome).toMatchObject({ outcome: "family", work: { state: "completed", receipt: { ...ref(6), inputID: "msg_input", assistantMessageID: "msg_answer", current: true } } })
+  expect(result.result.outcome).not.toHaveProperty("execution")
+}, 5_000)
+
+test("family watch boundary: post-cleanup busy invalidation reports a running successor as background", async () => {
+  const result = await familyBoundary({ sessions: family, active: ["ses_child"], onSubscribe: (control) => {
+    setTimeout(() => control.append("ses_child", succeeded(1, "ses_child")), 20)
+    setTimeout(() => control.push({ id: "evt_successor_busy", created: base, type: "session.status", data: { sessionID: "ses_child", status: { type: "busy" } } }), 50)
+  } })
+  expect(result.result.outcome).toMatchObject({ outcome: "family", work: { state: "background" } })
+}, 5_000)
+
+test("family watch boundary: a newer terminal during assessment cannot consume its cursor with older work", async () => {
+  const lost: string[] = []
+  let reads = 0
+  const failure = logEvent("session.execution.failed", 2, { sessionID: "ses_child", error: { type: "unknown", message: "Synthetic failure" } }, "ses_child")
+  const result = await familyBoundary({ sessions: family, outstanding: { lost },
+    onSubscribe: (control) => { setTimeout(() => control.append("ses_child", succeeded(1, "ses_child")), 20) },
+    readActive: (control) => {
+      if (++reads > 1) return Promise.resolve([])
+      return new Promise((resolve) => { setTimeout(() => {
+        lost.push("ses_child")
+        control.append("ses_child", failure)
+        resolve([])
+      }, 20) })
+    },
+  })
+  expect(result.result.outcome).toMatchObject({ outcome: "family", work: { state: "lost", lost: ["ses_child"] } })
+  expect(result.result.outcome).toHaveProperty("changes", [{ sessionID: "ses_child", type: failure.type, id: failure.id, seq: 2 }])
+  expect(reads).toBe(2)
+}, 5_000)
+
+test("family checkpoint boundary: a replaced source with a regressed root cursor fails without inventing input proof", async () => {
+  const saved = { ...familyCursor, sourceEpoch: "epoch_old", cursors: [{ sessionID: "ses_target", after: 100 }] }
+  await expect(familyBoundary({ log: { ses_target: [started(1), consumed(2, ["msg_new"]), succeeded(3)] } },
+    { checkpoint: checkpoint(saved), input: "msg_old" })).rejects.toThrow(/history.*restart.*checkpoint/i)
+}, 5_000)
+
+test("family checkpoint boundary: an explicit same-epoch future root cursor is never lowered", async () => {
+  const result = await familyBoundary({ log: { ses_target: [started(1), succeeded(3)] }, onSubscribe: (control) => {
+    setTimeout(() => control.append("ses_target", succeeded(4)), 20)
+  } }, { after: 100 })
+  expect(result.result.outcome).toMatchObject({ outcome: "timeout" })
+  expect(result.result.after).toBe(100)
+  expect(JSON.parse(Buffer.from(result.result.checkpoint!, "base64url").toString()).cursors).toContainEqual({ sessionID: "ses_target", after: 100 })
+}, 5_000)
+
+test("family checkpoint boundary: a changed process epoch preserves valid durable cursors", async () => {
+  const saved = { ...familyCursor, sourceEpoch: "epoch_old", cursors: [{ sessionID: "ses_target" }, { sessionID: "ses_child", after: 1 }] }
+  const result = await familyBoundary({ sessions: family, log: { ses_child: [succeeded(1, "ses_child")] }, onSubscribe: (control) => {
+    setTimeout(() => control.append("ses_child", succeeded(2, "ses_child")), 20)
+  } }, { checkpoint: checkpoint(saved) })
+  expect(result.result.outcome).toHaveProperty("changes", [{ sessionID: "ses_child", type: "session.execution.succeeded", id: "evt_ses_child_2", seq: 2 }])
+}, 5_000)
+
 test("an owner idle after its children drained, with open todos and no accepted receipt, is reported incomplete and never completed", async () => {
   const scenario: Scenario = {
     sessions: family,
@@ -503,14 +922,19 @@ test("an owner idle after its children drained, with open todos and no accepted 
     todos: { open: 2, items: [todo("Port the parser", "in_progress"), todo("Port the tests", "pending")] },
     children: { total: 1, active: 0, running: 0, waiting: 0 },
   }))
-  expect(output.resume).toEqual(["ycoding", "decision", "watch", "ses_target", "--family", "--after", "9", "--server", json.url, "--json"])
+  expect(output.resume).toEqual(["ycoding", "decision", "watch", "ses_target", "--family", "--after", "9", "--checkpoint", output.checkpoint, "--server", json.url, "--json"])
+  expect(JSON.parse(Buffer.from(output.checkpoint, "base64url").toString())).toEqual({
+    version: 1, rootSessionID: "ses_target", sourceEpoch: "epoch_synthetic",
+    cursors: [{ sessionID: "ses_target", after: 9 }, { sessionID: "ses_child" }],
+  })
   const text = await watch(scenario, ["ses_target", "--input", "msg_input", "--family"])
   expect(text.exit).toBe(0)
   expect(text.stdout).toContain("Execution succeeded in Session \"Watched\" (ses_target).")
   expect(text.stdout).toContain("Work incomplete: no accepted completion receipt; 2 open todos.")
   expect(text.stdout).toContain("[in_progress] Port the parser")
   expect(text.stdout).toContain("Child tasks: 0 of 1 active.")
-  expect(text.stdout).toContain(`Watch the next transition: ycoding decision watch ses_target --family --after 9 --server ${text.url}`)
+  expect(text.stdout).toContain("Watch the next transition: ycoding decision watch ses_target --family --after 9 --checkpoint ")
+  expect(text.stdout).toContain(`--server ${text.url}`)
   expect(text.stdout).not.toContain("Work completed")
   for (const foreign of ["ses_other", "per_other", "Foreign"]) expect(text.stdout + json.stdout).not.toContain(foreign)
 }, 60_000)

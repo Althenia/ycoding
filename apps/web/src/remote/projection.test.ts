@@ -198,6 +198,8 @@ function apply(view: SessionView, type: string, data: Record<string, unknown>, n
 test("tracks live execution and part timings for the transcript and status bar", () => {
   let view = apply(createSessionView("ses_a"), "session.execution.started", {}, 1_000)
   expect(view.executionStarted).toBe(1_000)
+  view = apply(view, "session.status", { status: { type: "busy" } }, 1_050)
+  expect(view.executionStarted).toBe(1_000)
   view = apply(view, "session.step.started", { assistantMessageID: "msg_a" }, 1_100)
   view = apply(view, "session.reasoning.started", { assistantMessageID: "msg_a", ordinal: 0 }, 1_200)
   view = apply(view, "session.reasoning.ended", { assistantMessageID: "msg_a", ordinal: 0, text: "thinking" }, 3_200)
@@ -209,6 +211,10 @@ test("tracks live execution and part timings for the transcript and status bar",
     { kind: "tool", started: 3_300, ran: 3_500, completed: 3_637 },
   ] })
   view = apply(view, "session.execution.succeeded", {}, 4_000)
+  expect(view.status).toBe("idle")
+  expect(view.executionStarted).toBeUndefined()
+  view = apply(view, "session.status", { status: { type: "idle" } }, 4_100)
+  expect(view.status).toBe("idle")
   expect(view.executionStarted).toBeUndefined()
 })
 
@@ -342,6 +348,28 @@ test("ends the elapsed clock on an idle status before the next execution starts"
   expect(next.executionStarted).toBe(10_000)
   expect(sessionStatusLabel(next, 11_000)).toBe("cooking · 1.0s")
 })
+
+for (const status of ["failed", "interrupted"] as const) {
+  test(`post-cleanup idle preserves ${status} until busy or a new execution`, () => {
+    let view = apply(createSessionView("ses_a"), "session.execution.started", {}, 1_000)
+    view = apply(view, "session.step.started", { assistantMessageID: "msg_a" }, 1_100)
+    view = apply(view, "session.retry.scheduled", { assistantMessageID: "msg_a", attempt: 2, at: 6_000, error: { code: "rate_limit", message: "Slow down" } }, 2_000)
+    const terminal = apply(view, `session.execution.${status}`, { error: { code: "provider_error", message: "Stopped" }, reason: "user" }, 3_000)
+    const idle = apply(terminal, "session.status", { status: { type: "idle" } }, 4_000)
+    expect(idle.status).toBe(status)
+    expect(idle.lastError).toEqual(terminal.lastError)
+    expect(idle.executionStarted).toBeUndefined()
+    expect(idle.messages.find((message) => message.id === "msg_a")).toMatchObject({ kind: "assistant", retry: undefined })
+    expect(sessionStatusLabel(idle, 6_000)).toBe(sessionStatusLabel(terminal, 6_000))
+    const busy = apply(idle, "session.status", { status: { type: "busy" } }, 7_000)
+    expect(busy.status).toBe("running")
+    expect(busy.executionStarted).toBeUndefined()
+    const next = apply(idle, "session.execution.started", {}, 10_000)
+    expect(next.status).toBe("running")
+    expect(next.executionStarted).toBe(10_000)
+    expect(sessionStatusLabel(next, 11_000)).toBe("cooking · 1.0s")
+  })
+}
 
 test("starts a fresh elapsed clock when the previous terminal event was missed", () => {
   const started = apply(createSessionView("ses_a"), "session.execution.started", {}, 1_000)

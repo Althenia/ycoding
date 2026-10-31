@@ -61,6 +61,7 @@ export const make = <Key, E, Reason = never>(options: {
    * drain and before the execution settles (waiters resolve after it completes).
    */
   readonly settled?: (key: Key, exit: Exit.Exit<void, E>, reason?: Reason) => Effect.Effect<void>
+  readonly afterSettled?: (key: Key) => Effect.Effect<void>
 }): Effect.Effect<Coordinator<Key, E, Reason>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const executions = new Map<Key, Execution<E, Reason>>()
@@ -103,7 +104,11 @@ export const make = <Key, E, Reason = never>(options: {
               execution.owner = undefined
             }).pipe(Effect.andThen(options.settled?.(key, exit, execution.interruptionReason) ?? Effect.void)),
           ),
-          Effect.onExit((exit) => Effect.sync(() => settle(key, execution, exit))),
+          Effect.onExit((exit) => Effect.sync(() => settle(key, execution, exit)).pipe(
+            Effect.andThen(Effect.suspend(() => options.afterSettled?.(key) ?? Effect.void).pipe(
+              Effect.catchCause((cause) => Effect.logError("Post-settlement observation failed", cause)),
+            )),
+          )),
           Effect.exit,
           Effect.asVoid,
         ),

@@ -12,6 +12,7 @@ import {
 import { DecisionCommand, shellCommand, watchTimeout } from "../../decision"
 import { Runtime } from "../../../framework/runtime"
 import { ServerConnection } from "../../../services/server-connection"
+import { createFamilyWatch, decodeCheckpoint, discoverFamily, FamilyCheckpointError, type FamilyChange } from "./family"
 
 type Client = ReturnType<typeof YCoding.make>
 type LogEvent = Exclude<SessionLogOutput, { type: "log.synced" }>
@@ -24,6 +25,7 @@ type Options = {
   readonly sessionID: string
   readonly input?: string
   readonly after?: number
+  readonly checkpoint?: string
   readonly family: boolean
   readonly timeout: number
   readonly server?: string
@@ -82,6 +84,7 @@ type Work = {
 
 type Outcome =
   | { readonly outcome: "decision"; readonly decisions: DecisionItem[]; readonly oversized: Oversized[]; readonly omitted: number }
+  | { readonly outcome: "family"; readonly changes: FamilyChange[]; readonly work: Work }
   | { readonly outcome: "settled"; readonly execution: Settled; readonly work?: Work }
   | { readonly outcome: "timeout"; readonly state: "running" | "unconfirmed" | "idle"; readonly work?: Work }
 
@@ -96,7 +99,7 @@ const taskPageLimit = 10
 const taskParentLimit = 20
 const assessmentReserveMs = 5_000
 const activeTaskStates: readonly string[] = ["starting", "running", "waiting", "cancelling"]
-const exitCodes = { settled: 0, decision: 2, timeout: 3 } as const
+const exitCodes = { settled: 0, family: 0, decision: 2, timeout: 3 } as const
 
 class InputBeforeCursor extends Error {}
 
@@ -131,6 +134,7 @@ function quiet(event: EventSubscribeOutput) {
 export function resumeCommand(options: Options, after: number | undefined, withInput = true) {
   return ["ycoding", "decision", "watch", options.sessionID, ...(options.family ? ["--family"] : []),
     ...(!withInput || options.input === undefined ? [] : ["--input", options.input]), ...(after === undefined ? [] : ["--after", String(after)]),
+    ...(options.checkpoint === undefined ? [] : ["--checkpoint", options.checkpoint]),
     ...(options.server === undefined ? [] : ["--server", options.server]), ...(options.standalone ? ["--standalone"] : []),
     ...(options.timeout === watchTimeout ? [] : ["--timeout", String(options.timeout)]), ...(options.json ? ["--json"] : [])]
 }
@@ -179,10 +183,12 @@ export async function watchSession(client: Client, options: Options, cancel: Abo
 }
 
 async function watchUntil(client: Client, options: Options, cancel: AbortSignal, signal: AbortSignal, deadline: number) {
+  if (options.checkpoint !== undefined && !options.family) throw new Error("--checkpoint requires --family")
+  const checkpoint = options.checkpoint === undefined ? undefined : decodeCheckpoint(options.checkpoint, options.sessionID, options.after)
   const target = await client.session.get({ sessionID: options.sessionID }, { signal })
   if (options.family && target.parentID !== undefined) throw new Error("--family requires a root Session")
-  let cursor = options.after
-  if (cursor === undefined && options.input === undefined)
+  let cursor = options.after ?? checkpoint?.cursors.find((item) => item.sessionID === target.id)?.after
+  if (cursor === undefined && options.input === undefined && checkpoint === undefined)
     cursor = (await client.session.snapshot({ sessionID: target.id, limit: 1 }, { signal })).watermark.seq
   let family = new Set([target.id])
   let execution: Execution | undefined
@@ -195,21 +201,9 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
   let receipt: Receipt | undefined
   let superseded = false
   let ended = false
+  const observer = options.family ? createFamilyWatch(client, target.id, signal, checkpoint, options.after) : undefined
 
-  const descendants = async () => {
-    const found = new Set([target.id])
-    const queue = [target.id]
-    while (queue.length) {
-      const parentID = queue.shift()!
-      let page: string | undefined
-      do {
-        const result = await client.session.list({ parentID, limit: 200, ...(page === undefined ? {} : { cursor: page }) }, { signal })
-        for (const child of result.data) if (!found.has(child.id)) { found.add(child.id); queue.push(child.id) }
-        page = result.cursor.next ?? undefined
-      } while (page !== undefined)
-    }
-    return found
-  }
+  const descendants = () => discoverFamily(client, target.id, signal)
 
   const response = async (settled: Settled) => {
     const from = options.input ?? settled.inputIDs[0]
@@ -264,6 +258,12 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
     }
     if (event.type === "session.input.admitted" || event.type === "session.execution.started") superseded ||= receipt !== undefined
     if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed" || event.type === "session.execution.interrupted") ended = true
+  }
+
+  const readWork = async () => {
+    for await (const event of client.session.log({ sessionID: target.id, follow: false }, { signal })) {
+      if (event.type !== "log.synced" && event.durable.aggregateID === target.id) track(event)
+    }
   }
 
   const apply = (event: LogEvent) => {
@@ -405,7 +405,7 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
     return reopened
   }
 
-  const assess = async (settlement: { readonly settled: boolean; readonly reopened: boolean }) => {
+  const assess = async (settlement: { readonly settled: boolean; readonly reopened: boolean; readonly familyEnded?: boolean }) => {
     const [active, outstanding, todos, pending, items, scope] = await Promise.all([
       client.session.active({ signal }),
       client.session.outstanding(undefined, { signal }),
@@ -417,6 +417,7 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
     const scoped = (ids: readonly string[]) => [...new Set(ids)].filter((id) => scope.has(id)).toSorted()
     const running = scoped(outstanding.running)
     const lost = scoped(outstanding.lost)
+    const activeFamily = scoped(Object.keys(active))
     const parents = [target.id, ...scoped([...outstanding.data, ...outstanding.lost]).filter((id) => id !== target.id)]
     const pages = await Promise.all(parents.slice(0, taskParentLimit).map((parentID) => client.session.subagent.list({ parentID, limit: taskPageLimit }, { signal })))
     const tasks = pages.flatMap((page) => page.data)
@@ -439,10 +440,10 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
     const state: Work["state"] = blocked ? "needs-decision"
       : executing ? "running"
       : lost.length ? "lost"
-      : running.length || pending.length || children.active > 0 ? "background"
+      : running.length || pending.length || children.active > 0 || activeFamily.some((id) => id !== target.id) ? "background"
       : !settlement.settled && execution !== undefined ? "unconfirmed"
       : current ? "completed"
-      : settlement.settled || receipt !== undefined || ended || open.length ? "incomplete"
+      : settlement.settled || settlement.familyEnded || receipt !== undefined || ended || open.length ? "incomplete"
       : "idle"
     const work: Work = {
       state,
@@ -459,7 +460,7 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
       lost,
       pending: pending.length,
     }
-    return { work, executing }
+    return { work, executing, active: activeFamily }
   }
 
   const report = async (execution: Settled): Promise<Outcome> => {
@@ -485,9 +486,16 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
     if (await promotedBeforeCursor())
       throw new InputBeforeCursor(`Input ${options.input} ran at or before --after ${options.after}; rerun without --after`)
     if (settled) return report(settled)
-    if (options.family) family = await descendants()
+    if (options.family && !observer) family = await descendants()
     const selected = selectDecisions((await client.decision.list({ signal })).filter((item) => family.has(item.sessionID)), options.json)
     if (selected.decisions.length + selected.oversized.length > 0) return { outcome: "decision", ...selected }
+    if (observer && observer.changes([]).length) {
+      const revision = observer.revision
+      const assessed = await assess({ settled: false, reopened: false, familyEnded: true })
+      if (observer.revision !== revision) return undefined
+      const changes = observer.changes(assessed.active)
+      if (changes.length) return { outcome: "family", changes, work: assessed.work }
+    }
     return undefined
   }
 
@@ -505,10 +513,9 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
     return cursor === undefined ? seq : Math.min(seq, cursor)
   }
 
-  const next = async (iterator: AsyncIterator<EventSubscribeOutput>) => {
+  const waitNext = async <T>(pending: Promise<T>) => {
     const remaining = deadline - Math.min(assessmentReserveMs, options.timeout * 200) - Date.now()
     if (remaining <= 0) return "timeout" as const
-    const pending = iterator.next()
     pending.catch(() => {})
     let timer: ReturnType<typeof setTimeout> | undefined
     const expired = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), remaining) })
@@ -518,11 +525,13 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
       clearTimeout(timer)
     }
   }
+  const next = (iterator: AsyncIterator<EventSubscribeOutput>) => waitNext(iterator.next())
 
-  const finish = (outcome: Outcome) => ({
-    outcome, target, after: outcome.outcome === "settled" ? cursor : anchor(), execution,
-    input: options.input === undefined ? undefined : input,
-  })
+  const finish = (outcome: Outcome) => {
+    const after = outcome.outcome === "settled" ? cursor : anchor()
+    return { outcome, target, after, execution, input: options.input === undefined ? undefined : input,
+      checkpoint: observer?.checkpoint(after, outcome.outcome === "family" ? outcome.changes : []) }
+  }
 
   try {
     for (let subscriptions = 0; ; subscriptions++) {
@@ -533,13 +542,33 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
         const connected = await next(iterator)
         if (connected === "timeout") return finish(await timedOut())
         if (connected.done || connected.value.type !== "server.connected") throw new Error("The server event stream is unavailable")
+        let seen = observer?.revision ?? 0
+        if (observer) {
+          family = await observer.sync(subscriptions > 0)
+          if (subscriptions === 0) await readWork()
+        }
+        let pending: Promise<IteratorResult<EventSubscribeOutput>> | undefined
         const initial = await evaluate()
         if (initial) return finish(initial)
         for (;;) {
-          const result = await next(iterator).catch(() => ({ done: true as const, value: undefined }))
+          const result = observer ? await waitNext(Promise.race([
+            (pending ??= iterator.next().catch(() => ({ done: true as const, value: undefined }))).then((result) => ({ kind: "event" as const, result })),
+            observer.wait(seen).then(() => ({ kind: "family" as const })),
+          ])) : await next(iterator).catch(() => ({ done: true as const, value: undefined }))
           if (result === "timeout") return finish(await timedOut())
-          if (result.done) break
-          if (!relevant(result.value)) continue
+          if ("kind" in result) {
+            if (result.kind === "event") {
+              pending = undefined
+              if (result.result.done) break
+              if (!relevant(result.result.value)) continue
+              observer!.notice(result.result.value)
+            }
+            seen = observer!.revision
+            family = await observer!.sync()
+          } else {
+            if (result.done) break
+            if (!relevant(result.value)) continue
+          }
           const outcome = await evaluate()
           if (outcome) return finish(outcome)
         }
@@ -549,9 +578,12 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
       }
     }
   } catch (error) {
-    if (cancel.aborted || error instanceof InputBeforeCursor) throw error
+    if (cancel.aborted || error instanceof InputBeforeCursor || error instanceof FamilyCheckpointError) throw error
     if (signal.aborted) return finish({ outcome: "timeout", state: execution === undefined ? "idle" : "unconfirmed" })
-    throw new Error(`${message(error)}; resume with: ${shellCommand(resumeCommand(options, anchor()))}`)
+    const checkpoint = observer?.checkpoint(anchor(), []) ?? options.checkpoint
+    throw new Error(`${message(error)}; resume with: ${shellCommand(resumeCommand({ ...options, checkpoint }, anchor()))}`)
+  } finally {
+    await observer?.close()
   }
 }
 
@@ -559,19 +591,26 @@ function render(options: Options, result: Awaited<ReturnType<typeof watchSession
   const json = options.json
   const { outcome, target, after, execution, input } = result
   const session = `Session "${line(target.title)}" (${target.id})`
-  const resume = resumeCommand(options, after)
+  const current = { ...options, checkpoint: result.checkpoint }
+  const resume = resumeCommand(current, after)
+  if (outcome.outcome === "family") {
+    if (json) return { outcome: "family", sessionID: target.id, ...(after === undefined ? {} : { after }),
+      ...(options.input === undefined ? {} : { inputID: options.input, input }), changes: outcome.changes, work: outcome.work, checkpoint: result.checkpoint, resume }
+    return [`Family work changed in ${session}.`, ...workLines(outcome.work, true), `Resume: ${shellCommand(resume)}`].join("\n")
+  }
   if (outcome.outcome === "decision") {
     if (json) return { outcome: "decision", sessionID: target.id, ...(after === undefined ? {} : { after }), decisions: outcome.decisions,
-      ...(outcome.oversized.length ? { oversized: outcome.oversized } : {}), ...(outcome.omitted ? { omitted: outcome.omitted } : {}), resume }
+      ...(outcome.oversized.length ? { oversized: outcome.oversized } : {}), ...(outcome.omitted ? { omitted: outcome.omitted } : {}),
+      ...(result.checkpoint === undefined ? {} : { checkpoint: result.checkpoint }), resume }
     const lines = [`Pending decision in ${session}. A listed item can settle by its own mode or appear twice while it moves to the review box; each decide command rechecks it.`,
       ...decisionLines(outcome.decisions, outcome.oversized, outcome.omitted), `Resume after deciding: ${shellCommand(resume)}`]
     return lines.join("\n")
   }
   if (outcome.outcome === "settled") {
     const settled = outcome.execution
-    const next = resumeCommand(options, after, false)
+    const next = resumeCommand(current, after, false)
     if (json) return { outcome: "settled", sessionID: target.id, ...(after === undefined ? {} : { after }), execution: settled,
-      ...(outcome.work === undefined ? {} : { work: outcome.work }), resume: next }
+      ...(outcome.work === undefined ? {} : { work: outcome.work }), ...(result.checkpoint === undefined ? {} : { checkpoint: result.checkpoint }), resume: next }
     const lines = [settled.status === "rejected" ? `Input rejected in ${session}.`
       : settled.status === "unknown" ? `The execution that ran input ${settled.inputIDs.join(", ")} in ${session} has ended, but its retained history no longer proves the result. Read message.list; do not treat it as succeeded.`
       : `Execution ${settled.status} in ${session}.`]
@@ -595,7 +634,7 @@ function render(options: Options, result: Awaited<ReturnType<typeof watchSession
     ...(latest === undefined ? {} : { latest }),
   }
   if (json) return { outcome: "timeout", sessionID: target.id, ...(after === undefined ? {} : { after }), progress,
-    ...(outcome.work === undefined ? {} : { work: outcome.work }), resume }
+    ...(outcome.work === undefined ? {} : { work: outcome.work }), ...(result.checkpoint === undefined ? {} : { checkpoint: result.checkpoint }), resume }
   const since = `${progress.startedAt ? ` since ${progress.startedAt}` : ""}${progress.toolCalls === undefined ? "" : `; ${progress.toolCalls} tool calls`}`
   const state = progress.state === "idle" ? "idle" : progress.state === "running" ? `running${since}`
     : `unconfirmed; retained history shows an open execution${since}, but the connected service does not report it active`
@@ -661,11 +700,16 @@ export default Runtime.handler(DecisionCommand.commands.watch, Effect.fn("cli.de
     ...Option.match(input.server, { onNone: () => ({}), onSome: (value) => ({ server: value }) }),
     ...Option.match(input.input, { onNone: () => ({}), onSome: (value) => ({ input: value }) }),
     ...Option.match(input.after, { onNone: () => ({}), onSome: (value) => ({ after: value }) }),
+    ...Option.match(input.checkpoint, { onNone: () => ({}), onSome: (value) => ({ checkpoint: value }) }),
   }
   if (!options.sessionID.trim()) return yield* Effect.fail(new Error("A Session ID is required"))
   if (options.input !== undefined && !options.input.trim()) return yield* Effect.fail(new Error("--input requires an input ID"))
   if (options.after !== undefined && options.after < 0) return yield* Effect.fail(new Error("--after must be a nonnegative sequence"))
   if (!Number.isInteger(options.timeout) || options.timeout < 1 || options.timeout > 3_600) return yield* Effect.fail(new Error("--timeout must be between 1 and 3600 seconds"))
+  if (options.checkpoint !== undefined) {
+    if (!options.family) return yield* Effect.fail(new Error("--checkpoint requires --family"))
+    yield* Effect.try({ try: () => decodeCheckpoint(options.checkpoint!, options.sessionID, options.after), catch: (error) => new Error(message(error)) })
+  }
   const connection = yield* ServerConnection.resolve({ server: options.server, standalone: options.standalone, mismatch: "ignore" })
   const client = YCoding.make({ baseUrl: connection.endpoint.url, headers: Service.headers(connection.endpoint) })
   const result = yield* Effect.tryPromise({ try: (signal) => watchSession(client, options, signal), catch: (error) => new Error(message(error)) })

@@ -1539,7 +1539,7 @@ function readAssistantRetry(value: unknown): Extract<RemoteMessageView, { kind: 
 function applyStatus(view: SessionView, data: Record<string, unknown>, now: number): SessionView {
   const status = isRecord(data.status) ? data.status : {}
   if (status.type === "busy") return { ...view, status: "running", updatedAt: now }
-  if (status.type === "idle") return { ...clearAssistantRetry(view), status: "idle", executionStarted: undefined, updatedAt: now }
+  if (status.type === "idle") return { ...clearAssistantRetry(view), status: view.status === "failed" || view.status === "interrupted" ? view.status : "idle", executionStarted: undefined, updatedAt: now }
   if (status.type === "retry") {
     const assistant = view.messages.findLast((message) => message.kind === "assistant")
     return { ...(assistant?.kind !== "assistant" ? view : withAssistant(view, { assistantMessageID: assistant.id }, now, (message) => ({ ...message,

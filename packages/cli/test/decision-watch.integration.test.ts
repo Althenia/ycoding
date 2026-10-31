@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
+import { homedir } from "node:os"
 import { deltaChunk, finishChunk, toolCallChunk } from "../../ai/test/lib/openai-chunks"
 import { createSession, password, providerConfig, startProviderStandIn, startServer, type IsolatedServer } from "./remote-harness"
 
@@ -22,7 +23,7 @@ const shellReply: Reply = (request) => {
 }
 
 async function boot(reply: Reply = shellReply) {
-  const scratch = join(import.meta.dir, "../../../.cache/tmp")
+  const scratch = join(homedir(), ".local/share/ycoding/tasks")
   await mkdir(scratch, { recursive: true })
   const directory = await mkdtemp(join(scratch, "decision-watch-"))
   cleanups.push(() => rm(directory, { recursive: true, force: true }))
@@ -118,6 +119,34 @@ test("a real Session's permission ask wakes the watch, stays pending, and the re
   expect(JSON.stringify(settled.work)).not.toContain("ses_watch_other")
   expect(settled.resume).toEqual(["ycoding", "decision", "watch", "ses_watch_target", "--after", String(settled.after), "--server", server.base, "--timeout", "45", "--json"])
   expect((await permissions(server, "ses_watch_other")).map((item) => item.id)).toEqual([unrelated.id])
+}, 120_000)
+
+test("a family checkpoint observes a real child settlement without completing its idle root", async () => {
+  const { server } = await boot()
+  const response = await server.request("/api/session", {
+    method: "POST", headers: json, body: JSON.stringify({ id: "ses_watch_child", parentID: "ses_watch_target" }),
+  })
+  expect(response.status, await response.clone().text()).toBe(200)
+  await prompt(server, "ses_watch_child", "msg_watch_child")
+  const first = await watch(server, ["ses_watch_target", "--family", "--timeout", "20"])
+  expect(first.stderr).toBe("")
+  expect(first.exit).toBe(2)
+  const pending = JSON.parse(first.stdout)
+  expect(pending.decisions).toEqual([expect.objectContaining({ kind: "permission", sessionID: "ses_watch_child" })])
+  expect(pending.checkpoint).toEqual(expect.any(String))
+  const reply = await server.request(`/api/session/ses_watch_child/permission/${pending.decisions[0].id}/reply`, {
+    method: "POST", headers: json, body: JSON.stringify({ reply: "once" }),
+  })
+  expect(reply.status, await reply.clone().text()).toBeLessThan(300)
+  const second = await rerun(server, pending.resume)
+  expect(second.stderr).toBe("")
+  expect(second.exit).toBe(0)
+  const settled = JSON.parse(second.stdout)
+  expect(settled).toMatchObject({ outcome: "family", sessionID: "ses_watch_target", work: { state: "incomplete" } })
+  expect(settled.changes).toContainEqual(expect.objectContaining({ sessionID: "ses_watch_child", type: "session.execution.succeeded" }))
+  expect(settled).not.toHaveProperty("execution")
+  expect(settled.work).not.toHaveProperty("receipt")
+  expect(settled.resume).toContain("--checkpoint")
 }, 120_000)
 
 test("a real question tool's form wakes the watch and the answered input completes", async () => {

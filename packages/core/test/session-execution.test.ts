@@ -50,6 +50,56 @@ const completionIt = testEffect(AppNodeBuilder.build(LayerNode.group([
   AppProcess.node, Database.node, EventRuntime.node, SessionStore.node, SessionProjector.node, Job.node,
 ])))
 
+for (const ending of ["succeeded", "failed", "interrupted"] as const) {
+  it.effect(`execution status invalidation follows ${ending} cleanup`, () => Effect.gen(function* () {
+    const database = yield* Database.Service
+    const sessionID = Session.ID.make(`ses_status_${ending}`)
+    yield* seedSessions(database, [sessionID])
+    const idle = yield* Deferred.make<void>()
+    const seen: Array<{ type: string; data: unknown; active: boolean }> = []
+    let active: SessionExecution.Interface["active"] = Effect.succeed(new Set())
+    const scope = yield* Scope.make()
+    const context = yield* buildExecution(scope,
+      () => ending === "succeeded" ? Effect.void : ending === "interrupted" ? Effect.fail(new UserInterruptedError()) : Effect.die("synthetic failure"),
+      (type, data) => Effect.gen(function* () {
+        if (type !== "session.status" && !type.startsWith("session.execution.")) return
+        const running = (yield* active).has(sessionID)
+        seen.push({ type, data, active: running })
+        if (type === "session.status" && !running) yield* Deferred.succeed(idle, undefined)
+      }),
+    )
+    const execution = Context.get(context, SessionExecution.Service)
+    active = execution.active
+    yield* execution.resume(sessionID).pipe(Effect.exit)
+    yield* Deferred.await(idle)
+    expect(seen).toEqual([
+      { type: "session.execution.started", data: { sessionID }, active: true },
+      { type: "session.status", data: { sessionID, status: { type: "busy" } }, active: true },
+      expect.objectContaining({ type: `session.execution.${ending}`, active: true }),
+      { type: "session.status", data: { sessionID, status: { type: "idle" } }, active: false },
+    ])
+    const history = yield* database.db.select().from(EventTable).all().pipe(Effect.orDie)
+    expect(history.some((event) => event.type.startsWith("session.status"))).toBe(false)
+    yield* Scope.close(scope, Exit.void)
+  }), 2_000)
+}
+
+it.effect("execution status publication failure cannot alter settlement or cleanup", () => Effect.gen(function* () {
+  const database = yield* Database.Service
+  const sessionID = Session.ID.make("ses_status_failure")
+  yield* seedSessions(database, [sessionID])
+  const scope = yield* Scope.make()
+  const context = yield* buildExecution(scope, () => Effect.void,
+    (type) => type === "session.status" ? Effect.die("status publication failed") : Effect.void)
+  const execution = Context.get(context, SessionExecution.Service)
+  yield* execution.resume(sessionID)
+  yield* execution.awaitIdle(sessionID)
+  expect(yield* execution.active).toEqual(new Set())
+  const history = yield* database.db.select().from(EventTable).all().pipe(Effect.orDie)
+  expect(history.some((event) => event.type === "session.execution.succeeded.1")).toBe(true)
+  yield* Scope.close(scope, Exit.void)
+}))
+
 function configuredGoals(continuation: SessionGoal.Interface["continuation"]) {
   return Effect.succeed(SessionGoal.Service.of({
     continuation, synthesize: () => Effect.die("unused"), steer: () => Effect.die("unused"),
@@ -1459,7 +1509,7 @@ function admittedInputTexts(database: Database.Service["Service"]) {
 function buildExecution(
   scope: Scope.Closeable,
   drain: SessionRunner.Interface["drain"],
-  observePublish?: (type: string) => Effect.Effect<void>,
+  observePublish?: (type: string, data: unknown) => Effect.Effect<void>,
   compactionExecution = noopCompactionExecution(),
   shells: Shell.Interface["list"] = () => Effect.succeed([]),
   steer: (input: {
@@ -1479,7 +1529,7 @@ function buildExecution(
       ? EventRuntime.Service.of({
           ...published,
           publish: (definition, data, options) =>
-            observePublish(definition.type).pipe(Effect.andThen(published.publish(definition, data, options))),
+            observePublish(definition.type, data).pipe(Effect.andThen(published.publish(definition, data, options))),
         })
       : published
     const store = yield* SessionStore.Service

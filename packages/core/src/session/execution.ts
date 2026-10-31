@@ -29,6 +29,7 @@ import { SessionCompletion } from "./completion"
 import { Job } from "../job"
 import { AppProcess } from "../process"
 import { ShellLedger } from "../shell/ledger"
+import { SessionStatusEvent } from "@ycoding-ai/schema/session-status-event"
 
 export interface Interface {
   /** Snapshots active execution owned by this process. */
@@ -210,12 +211,13 @@ export const layer = Layer.effect(
       )
     })
     let wake: (sessionID: SessionSchema.ID) => Effect.Effect<void> = () => Effect.void
-    const coordinator = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError, InterruptReason>({
+    const coordinator: SessionRunCoordinator.Coordinator<SessionSchema.ID, SessionRunner.RunError, InterruptReason> = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError, InterruptReason>({
       started: (sessionID) =>
         reportLifecycle(
           sessionID,
           events.publish(SessionEvent.Execution.Started, { sessionID }, clearSuspensionOnCommit(sessionID)),
-        ),
+        ).pipe(Effect.andThen(Effect.suspend(() => publishStatus(sessionID)))),
+      afterSettled: (sessionID) => publishStatus(sessionID),
       drain: Effect.fnUntraced(function* (sessionID: SessionSchema.ID, force) {
         woken.delete(sessionID)
         const session = yield* store.get(sessionID)
@@ -337,6 +339,13 @@ export const layer = Layer.effect(
         }),
     })
 
+    const publishStatus = (sessionID: SessionSchema.ID): Effect.Effect<void> => coordinator.active.pipe(
+      Effect.flatMap((active) => events.publish(SessionStatusEvent.Status, {
+        sessionID, status: { type: active.has(sessionID) ? "busy" : "idle" },
+      })),
+      Effect.asVoid,
+      Effect.catchCause((cause) => Effect.logWarning("Failed to publish Session status", cause).pipe(Effect.annotateLogs({ sessionID }))),
+    )
     wake = (sessionID) => Effect.sync(() => woken.add(sessionID)).pipe(Effect.andThen(coordinator.wake(sessionID)))
     return Service.of({
       active: coordinator.active,

@@ -6,6 +6,84 @@ import { testEffect } from "./lib/effect"
 
 const it = testEffect(Layer.empty)
 
+describe("post-registry settlement", () => {
+  it.effect("runs after cleanup without delaying the original done result", () => Effect.scoped(Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    const seen: boolean[] = []
+    const coordinator: SessionRunCoordinator.Coordinator<string, never> = yield* SessionRunCoordinator.make<string, never>({
+      drain: () => Effect.void,
+      settled: () => coordinator.active.pipe(Effect.tap((active) => Effect.sync(() => seen.push(active.has("session")))), Effect.asVoid),
+      afterSettled: () => coordinator.active.pipe(
+        Effect.tap((active) => Effect.sync(() => seen.push(active.has("session")))),
+        Effect.andThen(Deferred.succeed(entered, undefined)),
+        Effect.andThen(Deferred.await(release)),
+      ),
+    })
+    const running = yield* coordinator.run("session").pipe(Effect.forkChild)
+    yield* Deferred.await(entered)
+    yield* Fiber.join(running)
+    expect(seen).toEqual([true, false])
+    yield* Deferred.succeed(release, undefined)
+  })), 1_000)
+
+  it.effect("observes a late-wake successor instead of declaring the key idle", () => Effect.scoped(Effect.gen(function* () {
+    const observed = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    const seen: boolean[] = []
+    let runs = 0
+    const coordinator: SessionRunCoordinator.Coordinator<string, never> = yield* SessionRunCoordinator.make<string, never>({
+      drain: () => ++runs === 1 ? Effect.void : Deferred.await(release),
+      settled: () => runs === 1 ? coordinator.wake("session") : Effect.void,
+      afterSettled: () => coordinator.active.pipe(
+        Effect.tap((active) => Effect.sync(() => seen.push(active.has("session")))),
+        Effect.andThen(Deferred.succeed(observed, undefined)), Effect.asVoid,
+      ),
+    })
+    yield* coordinator.run("session")
+    yield* Deferred.await(observed)
+    expect(seen).toEqual([true])
+    yield* Deferred.succeed(release, undefined)
+    yield* coordinator.awaitIdle("session")
+  })), 1_000)
+
+  for (const ending of ["failure", "interruption", "shutdown"] as const) {
+    it.effect(`observes ${ending} cleanup exactly once`, () => Effect.scoped(Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const observed = yield* Deferred.make<void>()
+      const seen: boolean[] = []
+      const coordinator: SessionRunCoordinator.Coordinator<string, string> = yield* SessionRunCoordinator.make<string, string>({
+        drain: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(ending === "failure" ? Effect.fail("failed") : Effect.never)),
+        afterSettled: () => coordinator.active.pipe(
+          Effect.tap((active) => Effect.sync(() => seen.push(active.has("session")))),
+          Effect.andThen(Deferred.succeed(observed, undefined)), Effect.asVoid,
+        ),
+      })
+      const running = yield* coordinator.run("session").pipe(Effect.exit, Effect.forkChild)
+      yield* Deferred.await(started)
+      if (ending === "interruption") yield* coordinator.interrupt("session")
+      if (ending === "shutdown") yield* coordinator.shutdown()
+      const result = yield* Fiber.join(running)
+      yield* Deferred.await(observed)
+      yield* coordinator.awaitIdle("session")
+      expect(Exit.isFailure(result)).toBe(true)
+      expect(seen).toEqual([false])
+    })), 1_000)
+  }
+
+  it.effect("isolates a post-cleanup publication defect from the execution result", () => Effect.scoped(Effect.gen(function* () {
+    const observed = yield* Deferred.make<void>()
+    const coordinator = yield* SessionRunCoordinator.make<string, never>({
+      drain: () => Effect.void,
+      afterSettled: () => Deferred.succeed(observed, undefined).pipe(Effect.andThen(Effect.die("publication failed"))),
+    })
+    yield* coordinator.run("session")
+    yield* Deferred.await(observed)
+    yield* coordinator.awaitIdle("session")
+    expect(yield* coordinator.active).toEqual(new Set())
+  })), 1_000)
+})
+
 describe("SessionRunCoordinator", () => {
   it.effect("a child tool can interrupt the drain waiting for it", () =>
     Effect.scoped(
