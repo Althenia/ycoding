@@ -1,3 +1,10 @@
+import type {
+  LanguageModelV3,
+  LanguageModelV3CallOptions,
+  LanguageModelV3Content,
+  LanguageModelV3Message,
+  LanguageModelV3StreamPart,
+} from "@ai-sdk/provider"
 import { Hash } from "../../util/hash"
 import { define } from "../catalog-host"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
@@ -22,7 +29,11 @@ const methodID = Integration.MethodID.make("device")
 declare const YCODING_MUSE_OAUTH: unknown
 export const museUserAgent = "muse-code/launcher-3"
 const baseURL = "https://api.meta.ai/v1"
-const effortSettings = (reasoningEffort: string) => ({ reasoningEffort, reasoningSummary: "auto" as const, include: ["reasoning.encrypted_content"] })
+const effortSettings = (reasoningEffort: string) => ({
+  reasoningEffort,
+  reasoningSummary: "auto" as const,
+  include: ["reasoning.encrypted_content"],
+})
 const processSessionID = crypto.randomUUID()
 const reconnect =
   "Muse account token expired or was rejected; log in again: run ycoding, then /connect and choose Muse (Meta)."
@@ -133,6 +144,106 @@ export function observeMuseUsage(
     ),
     { status: response.status, statusText: response.statusText, headers: response.headers },
   )
+}
+
+const toolPrefix = "ycoding_"
+const toolNameLimit = 64
+
+function wireToolName(name: string) {
+  const direct = `${toolPrefix}${name}`
+  if (direct.length <= toolNameLimit) return direct
+  const digest = Hash.sha256(name).slice(0, 16)
+  return `${toolPrefix}${name.slice(0, toolNameLimit - toolPrefix.length - digest.length - 1)}_${digest}`
+}
+
+function toolNames() {
+  const wire = new Map<string, string>()
+  const original = new Map<string, string>()
+  return {
+    wire(name: string) {
+      const known = wire.get(name)
+      if (known !== undefined) return known
+      const encoded = wireToolName(name)
+      if (original.has(encoded)) throw new Error("Two Muse tool names encode to the same wire tool name")
+      wire.set(name, encoded)
+      original.set(encoded, name)
+      return encoded
+    },
+    original: (name: string) => original.get(name) ?? name,
+  }
+}
+
+function namespaceCall(options: LanguageModelV3CallOptions, names: ReturnType<typeof toolNames>) {
+  const prompt = options.prompt.map((message): LanguageModelV3Message => {
+    if (message.role === "assistant")
+      return {
+        ...message,
+        content: message.content.map((part) =>
+          part.type === "tool-call" && !part.providerExecuted ? { ...part, toolName: names.wire(part.toolName) } : part,
+        ),
+      }
+    if (message.role === "tool")
+      return {
+        ...message,
+        content: message.content.map((part) =>
+          part.type === "tool-result" ? { ...part, toolName: names.wire(part.toolName) } : part,
+        ),
+      }
+    return message
+  })
+  const toolChoice =
+    options.toolChoice?.type === "tool"
+      ? { ...options.toolChoice, toolName: names.wire(options.toolChoice.toolName) }
+      : options.toolChoice
+  return {
+    ...options,
+    prompt,
+    ...(options.tools
+      ? {
+          tools: options.tools.map((tool) =>
+            tool.type === "function" ? { ...tool, name: names.wire(tool.name) } : tool,
+          ),
+        }
+      : {}),
+    ...(toolChoice ? { toolChoice } : {}),
+  }
+}
+
+function restoreToolName<Part extends LanguageModelV3Content | LanguageModelV3StreamPart>(
+  part: Part,
+  names: ReturnType<typeof toolNames>,
+): Part {
+  if ((part.type === "tool-call" || part.type === "tool-input-start") && !part.providerExecuted)
+    return { ...part, toolName: names.original(part.toolName) }
+  return part
+}
+
+export function namespaceMuseTools(language: LanguageModelV3): LanguageModelV3 {
+  const doGenerate = async (options: LanguageModelV3CallOptions) => {
+    const names = toolNames()
+    const result = await language.doGenerate(namespaceCall(options, names))
+    return { ...result, content: result.content.map((part) => restoreToolName(part, names)) }
+  }
+  const doStream = async (options: LanguageModelV3CallOptions) => {
+    const names = toolNames()
+    const result = await language.doStream(namespaceCall(options, names))
+    return {
+      ...result,
+      stream: result.stream.pipeThrough(
+        new TransformStream<LanguageModelV3StreamPart, LanguageModelV3StreamPart>({
+          transform: (part, controller) => controller.enqueue(restoreToolName(part, names)),
+        }),
+      ),
+    }
+  }
+  return new Proxy(language, {
+    get(target, property) {
+      if (property === "doGenerate") return doGenerate
+      if (property === "doStream") return doStream
+      const value = Reflect.get(target, property, target)
+      return typeof value === "function" ? value.bind(target) : value
+    },
+  })
 }
 
 const OAuthClient = Schema.Struct({
@@ -328,7 +439,9 @@ export const discoverMuseModels = Effect.fn("Muse.discoverModels")(function* (
         return undefined
       }
       const released = metadata.release_date === undefined ? 0 : Date.parse(metadata.release_date)
-      const defaults: { reasoningEffort?: string; reasoningSummary: "auto"; include: string[] } = effortSettings(metadata.options?.reasoningEffort ?? "none")
+      const defaults: { reasoningEffort?: string; reasoningSummary: "auto"; include: string[] } = effortSettings(
+        metadata.options?.reasoningEffort ?? "none",
+      )
       if (metadata.options?.reasoningEffort === undefined) delete defaults.reasoningEffort
       return CatalogModel.Info.make({
         ...CatalogModel.Info.empty(providerID, CatalogModel.ID.make(model.id)),
@@ -636,8 +749,9 @@ export const MusePlugin = define({
       }),
     )
     yield* aisdk.hook.language((evt) => {
-      if (evt.model.providerID === providerID && evt.model.package === Provider.aisdk("@ai-sdk/openai"))
-        evt.language = evt.sdk.responses(evt.model.modelID ?? evt.model.id)
+      if (evt.model.providerID !== providerID || evt.model.package !== Provider.aisdk("@ai-sdk/openai")) return
+      const language: LanguageModelV3 = evt.sdk.responses(evt.model.modelID ?? evt.model.id)
+      evt.language = evt.snapshot?.value?.type === "oauth" ? namespaceMuseTools(language) : language
     })
   }),
 } satisfies PluginCatalogHost.Contribution)

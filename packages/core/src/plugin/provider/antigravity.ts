@@ -189,9 +189,7 @@ const tokenRequest = Effect.fnUntraced(function* (http: HttpClient.HttpClient, f
     Effect.catch(() => Effect.succeed(undefined)),
   )
   if (!token?.access_token)
-    return yield* Effect.fail(
-      new Error(token?.error ? `Google authorization failed: ${token.error}` : reconnect),
-    )
+    return yield* Effect.fail(new Error(token?.error ? `Google authorization failed: ${token.error}` : reconnect))
   return token
 })
 
@@ -254,9 +252,7 @@ const apiPost = Effect.fnUntraced(function* (
     HttpClientRequest.bodyText(JSON.stringify(body), "application/json"),
   )
   const response = yield* http.execute(
-    onboard
-      ? base.pipe(HttpClientRequest.setHeader("X-Goog-Api-Client", `gl-node/${process.versions.node}`))
-      : base,
+    onboard ? base.pipe(HttpClientRequest.setHeader("X-Goog-Api-Client", `gl-node/${process.versions.node}`)) : base,
   )
   if (response.status === 401 || response.status === 403) return yield* Effect.fail(new Error(reconnect))
   if (response.status < 200 || response.status >= 300)
@@ -297,12 +293,7 @@ export const discoverAntigravityModels = Effect.fn("Antigravity.discoverModels")
   access: string,
   project: string | undefined,
 ) {
-  const response = yield* apiPost(
-    http,
-    access,
-    "fetchAvailableModels",
-    project ? { project } : {},
-  ).pipe(
+  const response = yield* apiPost(http, access, "fetchAvailableModels", project ? { project } : {}).pipe(
     Effect.flatMap(
       HttpClientResponse.schemaBodyJson(
         Schema.Struct({
@@ -492,7 +483,7 @@ export function createAntigravityFetch(
     const request = stripTrailingModelContents(
       omitClientCacheControls(
         model.startsWith("claude-")
-          ? claudeToolIDs(claudeToolDeclarations(body, captured?.schemas), captured?.history)
+          ? omitUnsignedThinking(claudeToolIDs(claudeToolDeclarations(body, captured?.schemas), captured?.history))
           : body,
       ),
     )
@@ -568,25 +559,111 @@ function stripTrailingModelContents(body: unknown) {
   return contents.length === body.contents.length ? body : { ...body, contents }
 }
 
+function omitUnsignedThinking(body: unknown) {
+  if (!isRecord(body) || !Array.isArray(body.contents)) return body
+  const signed = (part: unknown) =>
+    !isRecord(part) ||
+    part.thought !== true ||
+    typeof part.text !== "string" ||
+    (typeof part.thoughtSignature === "string" && part.thoughtSignature !== "")
+  return {
+    ...body,
+    contents: body.contents.flatMap((content) => {
+      if (!isRecord(content) || !Array.isArray(content.parts)) return [content]
+      const parts = content.parts.filter(signed)
+      if (parts.length === content.parts.length) return [content]
+      return parts.length === 0 ? [] : [{ ...content, parts }]
+    }),
+  }
+}
+
+type GatewayFrame = { event: Sse.AnyEvent; response?: unknown }
+
+function candidateParts(response: unknown) {
+  if (!isRecord(response) || !Array.isArray(response.candidates)) return undefined
+  const content = isRecord(response.candidates[0]) ? response.candidates[0].content : undefined
+  return isRecord(content) && Array.isArray(content.parts) ? content.parts : undefined
+}
+
+function thoughtSignatureLinker() {
+  let open: Record<string, unknown> | undefined
+  let pending: GatewayFrame[] = []
+  const link = (parts: unknown[]) => {
+    const kept: unknown[] = []
+    for (const part of parts) {
+      if (!isRecord(part)) {
+        open = undefined
+        kept.push(part)
+        continue
+      }
+      if (typeof part.text === "string" && part.text !== "" && part.thought === true) {
+        open = part
+        kept.push(part)
+        continue
+      }
+      if (
+        (part.text === undefined || part.text === "") &&
+        typeof part.thoughtSignature === "string" &&
+        part.thoughtSignature !== "" &&
+        Object.keys(part).every((key) => key === "text" || key === "thought" || key === "thoughtSignature") &&
+        open
+      ) {
+        open.thoughtSignature = part.thoughtSignature
+        continue
+      }
+      if (part.text !== "") open = undefined
+      kept.push(part)
+    }
+    parts.splice(0, parts.length, ...kept)
+  }
+  return {
+    push(frame: GatewayFrame): GatewayFrame[] {
+      const parts = candidateParts(frame.response)
+      if (parts) link(parts)
+      if (open === undefined || open.thoughtSignature !== undefined || !parts?.includes(open)) {
+        open = undefined
+        const released = [...pending, frame]
+        pending = []
+        return released
+      }
+      const released = pending
+      pending = [frame]
+      return released
+    },
+    flush() {
+      const released = pending
+      open = undefined
+      pending = []
+      return released
+    },
+  }
+}
+
 function unwrapStream(response: Response) {
   const decoder = new TextDecoder()
   const encoder = new TextEncoder()
   const frames: string[] = []
   const partial: string[] = []
+  const linker = thoughtSignatureLinker()
+  const write = (frame: GatewayFrame) =>
+    Sse.encoder.write(
+      frame.event._tag === "Retry" || frame.response === undefined
+        ? frame.event
+        : { ...frame.event, data: JSON.stringify(frame.response) },
+    )
   const parser = Sse.makeParser((event) => {
     if (event._tag === "Retry") {
-      frames.push(Sse.encoder.write(event))
+      frames.push(...linker.push({ event }).map(write))
       return
     }
     const payload = Option.getOrUndefined(decodeBody(event.data))
     frames.push(
-      Sse.encoder.write({
-        ...event,
-        data:
-          payload && typeof payload === "object" && "response" in payload
-            ? JSON.stringify(payload.response)
-            : event.data,
-      }),
+      ...linker
+        .push({
+          event,
+          ...(payload && typeof payload === "object" && "response" in payload ? { response: payload.response } : {}),
+        })
+        .map(write),
     )
   })
   const stream = response.body!.pipeThrough(
@@ -604,6 +681,7 @@ function unwrapStream(response: Response) {
       flush(controller) {
         partial.push(decoder.decode())
         parser.feed(`${partial.join("").replace(/\r$/, "")}\n\n`)
+        frames.push(...linker.flush().map(write))
         if (frames.length > 0) controller.enqueue(encoder.encode(frames.join("")))
       },
     }),
