@@ -1,5 +1,6 @@
 import { Show, createSignal, type JSX } from "solid-js"
 import { Link } from "../../ui/link"
+import { Icon } from "../../ui/icon"
 import { BrandMark, ThemeToggle } from "../../ui/site"
 import { createInviteHttp } from "../http"
 import { formatAccessKey, inviteLandingView, takeInviteToken, type InvitePhase } from "../invite"
@@ -33,7 +34,7 @@ export function InvitePage(): JSX.Element {
           <h1 class="sign-in__title">{view().title}</h1>
           <Show when={!view().showKey}><p class="sign-in__lede">Accept to create your remote account and its access key.</p></Show>
         </div>
-        <Show when={view().message}><p class="sign-in__error" role="alert">{view().message}</p></Show>
+        <Show when={view().message}><p class="sign-in__error" role="alert"><Icon name="alert" size={16} /><span>{view().message}</span></p></Show>
         <Show when={view().canAccept || phase() === "accepting" || phase() === "error"}>
           <button class="button button--primary sign-in__provider" type="button" disabled={phase() === "accepting"}
             onClick={() => void accept()}>{phase() === "accepting" ? "Accepting…" : "Accept invite"}</button>

@@ -11,7 +11,6 @@
   grid-template-columns: minmax(0, 12ch) minmax(0, 1fr);
   gap: var(--yc-space-3);
   padding-block: var(--yc-space-2);
-  border-block-end: var(--yc-border-width) solid var(--yc-border);
 }
 
 .dots-connection__facts > div + div {

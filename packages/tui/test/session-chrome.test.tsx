@@ -317,7 +317,7 @@ describe("header profile segment", () => {
 
   test("renders no profile when the provider stores only one credential", async () => {
     const app = await renderHeader(160, { type: "ready" })
-    const line = app.captureCharFrame().split("\n")[1] ?? ""
+    const line = app.captureCharFrame().split("\n")[0] ?? ""
     // The identity run stays path · branch · agent · model · variant with no extra segment.
     expect(line).toContain("Build · anthropic/claude-opus-5 · max")
     expect(line.match(/·/g) ?? []).toHaveLength(4)
@@ -440,7 +440,7 @@ for (const width of [119, 120, 139, 140, 159, 160, 200]) {
     const path = `/workspace/worktrees/repo_${"b".repeat(64)}/研究/title-prompts`
     const app = await renderHeader(width, { type: "ready" }, { identity: { ...identity, path } })
     try {
-      const line = app.captureCharFrame().split("\n")[1]!
+      const line = app.captureCharFrame().split("\n")[0]!
       expect(line).toContain("Build")
       expect(line).toContain("anthropic/claude-opus-5")
       expect(line).toContain("main")
@@ -600,9 +600,8 @@ describe("header rendering", () => {
     expect(frame).toContain("~/Workspace/Personal/YCoding")
     expect(frame).toContain("main")
     expect(frame).toContain("cooking 4.1s")
-    expect(lines.findIndex((line) => line.includes(`v${InstallationVersion}`))).toBe(1)
-    expect(lines[0]?.trim()).toBe("")
-    expect(lines[2]?.trim()).toBe("")
+    expect(lines.findIndex((line) => line.includes(`v${InstallationVersion}`))).toBe(0)
+    expect(lines[1]?.trim()).toBe("")
     app.renderer.destroy()
   })
 

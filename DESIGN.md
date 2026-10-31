@@ -24,6 +24,7 @@ YCoding is a terminal-first coding agent. Its TUI is the behavioral reference; t
 - Own appearance with semantic tokens and components while retaining native keyboard, focus, and input behavior (`apps/web/src/styles/base.css`, `packages/tui/DESIGN.md`).
 - Keep physical control geometry stable and adapt composition at content breakpoints; reserve async geometry to preserve reading position (`apps/web/src/styles/tokens.css`, `apps/web/verify/loading.integration.test.ts`).
 - Favor a calm, legible work surface: use status color for meaning, text for recovery, and motion for continuity (`apps/web/src/styles/base.css`, `apps/web/src/remote/ui/loading.css`).
+- Spatial Canvas: build hierarchy from typography, open whitespace and single-level tonal planes on the web, and from whole-cell spacing and single-edge glyph accents in the terminal. Reserve visible boundaries for fields, the composer capsule, floating layers and pending requests, focus, hard-review danger states, and terminal dialogs (`apps/web/DESIGN.md` W80–W94, `packages/tui/DESIGN.md` T57 and T62–T64).
 
 ## Rules
 
@@ -42,6 +43,7 @@ Each approved rule binds inherited surfaces. An exception records an unresolved 
 | R9  | approved | GUI typography MUST use Geist Sans (`Geist`) for interface prose and Geist Mono for code and compact metadata. Web fonts MUST be self-hosted and extension fonts MUST be embedded without external font requests or new archive entries. Terminal typography MUST document Geist Mono as its reference without changing the user's terminal font settings.                                                                         | `apps/web/src/styles/typography.test.ts`, `extensions/chrome/test/design-md.test.js`; terminal host control is review-only         |
 | R10 | approved | README and public showcase images MUST be captures of current product surfaces with sample data: terminal frames from the real-route TUI screen harness in the default `ycoding` theme rendered in Geist Mono, and web and phone views from the remote verification fixture with only its fixture banner and controls hidden. Compositions MUST use the mark palette and Geist; NEVER redraw, mock, or retouch a captured surface. | review-only (`assets/showcase`)                                                                                                    |
 | R11 | approved | Decision copy MUST identify the pending request, allowed typed actions, active feature capability, and source provenance; it MUST NOT assign decision authority by person category or label a request as human-only. A request stays pending until a valid authorized client decision or configured existing automation settles it. Reject, Cancel, timeout, and Dismiss are request-local; Stop and Interrupt are separate Session operations. Do not infer a session-wide rejection default. Preserve explicit denies, permission ceilings, configured defaults, and capability-scoped grants. | review-only (`packages/tui/DESIGN.md`, `apps/web/DESIGN.md`, `docs/runtime.md`) |
+| R12 | approved | Surfaces MUST build hierarchy from typography, open whitespace and single-level tonal planes on the web, or whole-cell spacing and single-edge glyph accents (`▎`, `┃`) in the terminal. They MUST NOT nest bordered containers or separate rows, transcript parts, sections or chrome bands with full-width rules or slabs. A visible boundary MUST remain only for text fields, the composer capsule, floating layers and pending requests, focus, hard-review danger states, and terminal dialogs. | `apps/web/verify/design-contract.integration.test.ts`, `packages/tui/test/screen/session-chrome-row.screen.test.tsx`; other surfaces review-only |
 
 ## Colors
 
@@ -56,6 +58,8 @@ The terminal renders whole cells in the user's selected monospace font and size.
 ## Motion
 
 Product motion is functional: entrances, exits, and state feedback; reduced-motion preferences retain state without travel. The public site may use restrained reveal motion (`apps/web/src/styles/base.css`, `apps/web/src/remote/ui/loading.css`).
+
+Translucent navigation (the portrait phone bottom bar and the public site header) blurs the content behind it and MUST fall back to its opaque surface under `prefers-reduced-transparency: reduce`, `forced-colors: active`, or where `backdrop-filter` is unsupported (`apps/web/DESIGN.md` W94).
 
 ## Icons
 
@@ -85,7 +89,7 @@ Use WCAG 2.2 AA floors: normal text 4.5:1, large text and meaningful non-text bo
 
 ## Verification
 
-R1 and R2 require code and rendered-state review. R3–R5 use their named browser integration suites; R6 uses `bun test` in `packages/simulation` targeting `test/brand-assets.test.ts` and `bun run check:ycoding-brand`; R7 uses `bun test src/styles` from `apps/web`; R8 uses keyboard/contrast review and the named design-contract suite. R10 requires reviewing each showcase image against its capture source. Run `python3 ~/.agents/skills/daedalus/scripts/design_md.py lint` on this file and both surface files. Browser integration suites need their configured Chrome executable; a unit-suite pass does not imply these suites ran.
+R1, R2 and R12 require code and rendered-state review. R3–R5 use their named browser integration suites; R6 uses `bun test` in `packages/simulation` targeting `test/brand-assets.test.ts` and `bun run check:ycoding-brand`; R7 uses `bun test src/styles` from `apps/web`; R8 uses keyboard/contrast review and the named design-contract suite. R10 requires reviewing each showcase image against its capture source. Run `python3 ~/.agents/skills/daedalus/scripts/design_md.py lint` on this file and both surface files. Browser integration suites need their configured Chrome executable; a unit-suite pass does not imply these suites ran.
 
 ## Maintenance
 

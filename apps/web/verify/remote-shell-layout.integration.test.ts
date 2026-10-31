@@ -28,6 +28,46 @@ afterAll(async () => {
 })
 
 describe("remote shell layout", () => {
+  test("uses a 56px navigation rail on a coarse 844x390 landscape phone and restores portrait navigation", async () => {
+    for (const theme of ["light", "dark"] as const) {
+      const page = await fixture("view=chat", 390, "Stream remote output safely", theme, 844)
+      try {
+        await page.setCoarsePointer(true)
+        await page.evaluate(`document.fonts.ready`)
+        await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); Object.assign(document.querySelector('.fixture').style, {height:'100dvh', minHeight:'0', overflow:'hidden'}); })()`)
+        const portrait = await page.evaluate<{ destinations: number; newSession: boolean; navBottom: number; railWidth: number }>(`(() => ({
+          destinations: [...document.querySelectorAll('.bottom-nav__item')].filter(link => link.getBoundingClientRect().height >= 44).length,
+          newSession: document.querySelector('.bottom-nav__new').getClientRects().length > 0,
+          navBottom: document.querySelector('.bottom-nav').getBoundingClientRect().bottom,
+          railWidth: document.querySelector('.workspace__rail').getBoundingClientRect().width,
+        }))()`)
+        expect(portrait).toEqual({ destinations: 3, newSession: false, navBottom: 844, railWidth: 0 })
+        await page.setViewport(844, 390)
+        await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+        const landscape = await page.evaluate<{ phone: string; rail: number; navigation: number; left: number; top: number; height: number; targets: boolean; labels: string[]; header: number; overflow: boolean }>(`(() => {
+          const nav = document.querySelector('.bottom-nav').getBoundingClientRect(), header = document.querySelector('.app > .app-header').getBoundingClientRect();
+          return { phone:getComputedStyle(document.documentElement).getPropertyValue('--yc-phone-layout').trim(), rail:document.querySelector('.workspace__rail').getBoundingClientRect().width,
+            navigation:nav.width, left:nav.left, top:nav.top, height:nav.height, header:header.height,
+            labels:[...document.querySelectorAll('.bottom-nav__item .bottom-nav__label')].map(label => label.textContent.trim()),
+            targets:[...document.querySelectorAll('.bottom-nav a')].every(link => {const box=link.getBoundingClientRect();return box.width>=44 && box.height>=44 && box.left>=nav.left && box.right<=nav.right && box.bottom<=nav.bottom}),
+            overflow:document.documentElement.scrollWidth>innerWidth };
+        })()`)
+        expect(landscape).toEqual({ phone:"1", rail:0, navigation:56, left:0, top:0, height:390, targets:true, labels:["Sessions", "Usage", "Settings"], header:44, overflow:false })
+        expect(await page.evaluate<boolean>(`document.querySelector('.app > .app-header') !== document.querySelector('.workspace__topbar') && document.querySelector('.app > .app-header').hasAttribute('data-toast-clearance')`)).toBe(true)
+        await page.evaluate(`(() => { window.landscapeNativeViewport=window.visualViewport; const stub=Object.assign(new EventTarget(), {height:200, width:844, offsetTop:0, offsetLeft:0, scale:1, pageTop:0, pageLeft:0}); Object.defineProperty(window,'visualViewport',{configurable:true,value:stub}); window.landscapeViewport=stub; window.dispatchEvent(new Event('resize')); })()`)
+        expect(await page.evaluate<boolean>(`document.querySelector('.app').hasAttribute('data-keyboard-open') && getComputedStyle(document.querySelector('.bottom-nav')).display === 'none' && document.querySelector('.workspace').getBoundingClientRect().left === 0`)).toBe(true)
+        await page.evaluate(`window.landscapeViewport.height=390; window.dispatchEvent(new Event('resize')); document.querySelector('.bottom-nav__new').focus()`)
+        await page.pressKey("Enter", "Enter", 13, "\r")
+        for (let attempt=0; attempt<40 && !await page.evaluate<boolean>(`location.pathname === '/remote' && document.querySelector('.route-panel:not([inert]) .new-session-composer') !== null`); attempt+=1) await Bun.sleep(25)
+        expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote")
+        expect(await page.evaluate<number>(`window.remoteMutationReport().filter(item => item.operation === 'session.create' || item.operation === 'session.prompt').length`)).toBe(0)
+        await page.evaluate(`void Object.defineProperty(window,'visualViewport',{configurable:true,value:window.landscapeNativeViewport})`)
+        await page.setViewport(390, 844)
+        expect(await page.evaluate<boolean>(`document.querySelector('.bottom-nav').getBoundingClientRect().width === 390 && document.querySelector('.bottom-nav__new').getClientRects().length === 0 && document.querySelector('.workspace__rail').getBoundingClientRect().width === 0`)).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
   test("renders the undecided consent notice and records explicit Agree and Not now decisions", async () => {
     const page = await fixture("view=settings&noSelection=1&telemetryConsent=undecided", 390, "Help improve YCoding")
     try {
@@ -751,7 +791,7 @@ describe("remote shell layout", () => {
             slots:document.querySelectorAll('.session-status__slot').length, modes:document.querySelectorAll('.session-status__modes').length, goals:document.querySelectorAll('.session-status__active-goal').length,
             same:window.metadataOriginal.input === composer.querySelector('.composer__input') && window.metadataOriginal.autonomous === composer.querySelector('.session-status__autonomous-trigger') && window.metadataOriginal.goal === composer.querySelector('.session-status__goal-trigger'),
             focused:document.activeElement === window.metadataOriginal.input, draft:window.metadataOriginal.input.value,
-            visible:row.bottom <= Math.min(innerHeight, nav.height > 0 ? nav.top : innerHeight) + 1,
+            visible:row.top >= -1 && row.bottom <= innerHeight + 1 && row.left >= -1 && row.right <= innerWidth + 1 && (nav.width === 0 || nav.height === 0 || row.right <= nav.left + 1 || row.left >= nav.right - 1 || row.bottom <= nav.top + 1 || row.top >= nav.bottom - 1),
             targets:[...composer.querySelectorAll('button')].filter(button => button.getBoundingClientRect().width > 0).every(button => button.getBoundingClientRect().height >= 44),
             scrollOwner:mount?.parentElement.classList.contains('workspace__scroll') === true && !['auto','scroll'].includes(getComputedStyle(mount).overflowY) };
         })()`)
@@ -1286,7 +1326,13 @@ describe("remote shell layout", () => {
     const page = await fixture("view=chat&largeCatalog=1", width, "Stream remote output safely")
     try {
       for (const creating of [false, true]) {
-        if (creating) await page.evaluate(`document.querySelector('[aria-label="New session"]').click()`)
+        if (creating) {
+          if (width < 768) {
+            await page.evaluate(`document.querySelector('[aria-label="Open sessions"]').click()`)
+            for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.overlay--sessions-sheet[open] .new-session__trigger') !== null`); attempt += 1) await Bun.sleep(25)
+          }
+          await page.evaluate(`document.querySelector('${width < 768 ? ".overlay--sessions-sheet[open]" : ".workspace-new-session"} .new-session__trigger').click()`)
+        }
         const root = creating ? ".new-session-composer" : ".mini-composer__mount"
         for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('${root} .model-control__trigger')?.disabled === false`); attempt++) await Bun.sleep(25)
         expect(await page.evaluate<boolean>(`document.querySelector('${root} .model-control__trigger')?.disabled`)).toBe(false)
@@ -1595,7 +1641,7 @@ describe("remote shell layout", () => {
           height:composer?.getBoundingClientRect().height ?? 0,
           budget:4*hit+4*space+2*border,hit,space,
           rows:[dock.height,summaryRect.height,input.height,actions.height],
-          ordered:dock.bottom<=summaryRect.top && summaryRect.bottom<=input.top && input.bottom<=actions.top,
+          ordered:summaryRect.bottom<=input.top && input.bottom<=actions.top && actions.bottom<=dock.top,
           summaryNamed:['.composer__mobile-trigger','.session-status__autonomous-trigger','.session-status__goal-trigger'].every(selector=>!!summary.querySelector(selector)?.getAttribute('aria-label')),
           transcriptVisible:transcript.height>=2*hit && transcript.top>=0 && transcript.bottom<=composer.getBoundingClientRect().top+1 && composer.getBoundingClientRect().bottom<=innerHeight,
           input:composer?.querySelector('.composer__input')?.getBoundingClientRect().height ?? 0,

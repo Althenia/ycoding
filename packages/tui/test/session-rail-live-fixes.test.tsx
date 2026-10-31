@@ -208,7 +208,7 @@ test("colours every todo marker and label by status", async () => {
   }
 })
 
-test("paints the rail on its own surface behind a left rule and drops the rail footer", async () => {
+test("paints a borderless rail on its own surface and drops the rail footer", async () => {
   const app = await mountSidebar({ width: 189, height: 69 })
 
   try {
@@ -222,13 +222,11 @@ test("paints the rail on its own surface behind a left rule and drops the rail f
     expect(app.rail()!.background.default.toInts()).not.toEqual(app.canvas()!.background.default.toInts())
     expect(columns[railStart + 4]).toEqual(app.rail()!.background.default.toInts())
 
-    // The left rule is drawn as a border glyph, so it carries the border colour in its foreground
-    // over the rail surface rather than as a background fill.
     const cells = line?.spans.flatMap((span) =>
       Array.from(span.text, (character) => ({ character, fg: span.fg.toInts() })),
     ) ?? []
-    expect(cells[railStart]?.character).toBe("\u2502")
-    expect(cells[railStart]?.fg).toEqual(app.canvas()!.border.default.toInts())
+    expect(cells[railStart]?.character).not.toBe("\u2502")
+    expect(columns[railStart]).toEqual(app.rail()!.background.default.toInts())
 
     expect(frame).not.toContain("YCoding v")
     expect(frame).not.toContain(" · connected")

@@ -204,7 +204,7 @@ for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE]) {
         expect(title.bg.toInts()).toEqual(overlay)
         expect(body.fg.toInts()).toEqual(messageInk)
         expect(body.bg.toInts()).toEqual(overlay)
-        expect(border).toHaveLength(toast.height * 2)
+        expect(border).toHaveLength(toast.height)
         expect(
           border.every((span) => span.fg.toInts().every((value, index) => value === current.borderAccent[index])),
         ).toBe(true)

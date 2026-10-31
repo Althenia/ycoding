@@ -1053,8 +1053,8 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
       data: { sessionID, source: "session-state", text: "The user is back. Sleep mode is off." },
     } satisfies YCodingEvent)
     const deadline = Date.now() + 3000
-    while (screen.lines()[1]?.includes("asleep") && Date.now() < deadline) await Bun.sleep(10)
-    expect(screen.lines()[1]).not.toContain("asleep")
+    while (screen.lines()[0]?.includes("asleep") && Date.now() < deadline) await Bun.sleep(10)
+    expect(screen.lines()[0]).not.toContain("asleep")
     await slash("/wake")
     await frame("Awake; sleep mode is off")
     expect(autonomy.sleep).toBeUndefined()
@@ -1138,11 +1138,6 @@ function restorationRoute(url: URL) {
   remapped.pathname = remapped.pathname.replace(`/api/session/${restorationChildID}`, `/api/session/${sessionID}`)
   remapped.pathname = remapped.pathname.replace(`/api/session/${restorationParentID}`, `/api/session/${sessionID}`)
   return routeFor([])(remapped)
-}
-
-/** Transcript-content extent of a rendered line: [first painted column, last painted column + 1]. */
-function extent(line: string) {
-  return [line.length - line.trimStart().length, line.trimEnd().length] as const
 }
 
 function transcriptSlice(line: string, width: number) {
@@ -1588,7 +1583,7 @@ test("restores main-session tail and non-tail view across repeated subagent navi
   }
 }, 120_000)
 
-test("keeps non-subagent activity rows on one marker/label grid with symmetric compaction rules", async () => {
+test("keeps non-subagent activity rows on one marker/label grid without top rules", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
@@ -1627,22 +1622,13 @@ test("keeps non-subagent activity rows on one marker/label grid with symmetric c
     expect(SPINNER_FRAMES.some((frame) => running.slice(0, 10).includes(frame))).toBe(true)
     expect(screen.colorOf("..")).not.toEqual(screen.colorOf("ok"))
 
-    // Every activity row is introduced by exactly one full-width rule.
     const rule = transcriptSlice(lines[rowOf("project_search") - 1] ?? "", DESIGN_VIEWPORT.width)
-    expect(rule.trim()).toMatch(/^─+$/)
+    expect(rule.trim()).not.toMatch(/^─+$/)
 
-    // Compaction reaches both transcript content edges, exactly like the activity rule.
     const compaction = lineOf("~ compacted")
     const compactionLabel = "~ compacted · 42 messages → 1.2k tokens"
     expect(compaction).toContain(compactionLabel)
-    expect(extent(compaction)).toEqual(extent(rule))
-    const painted = compaction.slice(...extent(compaction))
-    const labelStart = painted.indexOf(compactionLabel)
-    const leftRule = painted.slice(0, labelStart).trim()
-    const rightRule = painted.slice(labelStart + compactionLabel.length).trim()
-    expect(leftRule).toMatch(/^─+$/)
-    expect(rightRule).toMatch(/^─+$/)
-    expect(Math.abs(leftRule.length - rightRule.length)).toBeLessThanOrEqual(1)
+    expect(compaction).not.toContain("─")
   } finally {
     await screen.dispose()
   }
@@ -1831,7 +1817,7 @@ test("renders subagent notifications as compact safe activity rows", async () =>
     expect(row.indexOf("◦")).toBe(3)
     expect(row.indexOf("subagent")).toBe(10)
     expect(row).toContain("completed")
-    expect(transcriptSlice(lines[rowIndex - 1] ?? "", DESIGN_VIEWPORT.width).trim()).toMatch(/^─+$/)
+    expect(transcriptSlice(lines[rowIndex - 1] ?? "", DESIGN_VIEWPORT.width).trim()).not.toMatch(/^─+$/)
     expect(screen.frame()).not.toContain("Subagent notification")
     expect(screen.frame()).not.toContain("Child completed after reviewing provider usage.")
     expect(screen.frame()).not.toContain("ses_sensitive_child")
@@ -1904,12 +1890,12 @@ test("hidden parallel subagent launches add no lines between assistant text and 
     const thought = lines.findIndex((line) => line.includes("Thought"))
     const shell = lines.findIndex((line) => line.includes("visible-check"))
     expect(text, screen.frame()).toBeGreaterThan(-1)
-    expect(thought, screen.frame()).toBe(text + 3)
-    expect(lines[thought - 1]?.trim()).toMatch(/^─+$/)
+    expect(thought, screen.frame()).toBe(text + 2)
+    expect(lines[thought - 1]?.trim()).not.toMatch(/^─+$/)
     expect(lines[text + 1]?.trim()).toBe("")
     expect(shell).toBeGreaterThan(thought)
     expect(lines[shell]?.indexOf("ok")).toBe(3)
-    expect(lines[shell - 1]?.trim()).toMatch(/^─+$/)
+    expect(lines[shell - 1]?.trim()).not.toMatch(/^─+$/)
     expect(screen.frame()).not.toContain("Hidden first task")
     expect(screen.frame()).not.toContain("Hidden second task")
   } finally {
@@ -1994,7 +1980,7 @@ test("renders a running Edit beside Shell on the compact activity grid", async (
       expect(SPINNER_FRAMES.some((frame) => edit.slice(0, 10).includes(frame))).toBe(true)
       expect(edit.trimEnd()).toMatch(/running · \d+[smhdw]$/)
       expect(edit.indexOf("running")).toBe(shell.indexOf("running"))
-      expect(transcriptSlice(lines[editIndex - 1] ?? "", viewport.width).trim()).toMatch(/^─+$/)
+      expect(transcriptSlice(lines[editIndex - 1] ?? "", viewport.width).trim()).not.toMatch(/^─+$/)
       const background = (index: number) => screen.spans().lines[index]?.spans.find((span) => span.text.includes("running"))?.bg.toInts()
       expect(background(editIndex)).toEqual(background(shellIndex))
     } finally {

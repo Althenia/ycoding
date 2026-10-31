@@ -1,4 +1,5 @@
 import { createMemo, For, Show } from "solid-js"
+import { TextAttributes } from "@opentui/core"
 import type { SessionAutonomyView } from "@ycoding-ai/client"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../../context/theme"
@@ -13,31 +14,20 @@ import { stringWidth } from "../../util/string-width"
 import type { ProjectContext } from "../../util/coordination"
 
 type AutonomyLevel = 0 | 1 | 2 | 3
-type AutonomyPart = { text: string; tone?: "manual" | "auto" | "yolo" | "asleep" }
+type AutonomyPart = { text: string; tone?: "manual" | "auto" | "yolo" | "asleep" | "label"; bold?: boolean }
 
 export function FooterAutonomy(props: { autonomy?: SessionAutonomyView; width?: number }) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
-  const muted = createMemo(() => readableTint(theme.text.subdued, theme.background.chrome))
+  const muted = createMemo(() => readableTint(theme.text.subdued, theme.background.default))
   const available = () => props.width ?? dimensions().width - 6
   const padded = createMemo(() => autonomyWidth(props.autonomy, 3, true) <= available())
   const level = createMemo(() => fittedAutonomyLevel(props.autonomy, available(), padded()))
   const style = (tone: AutonomyPart["tone"]) => {
-    if (tone === "manual")
-      return {
-        fg: readableForeground(theme.text.action.primary.focused, theme.text.feedback.success.default),
-        bg: theme.text.feedback.success.default,
-      }
-    if (tone === "yolo")
-      return {
-        fg: readableForeground(theme.text.action.primary.focused, theme.text.feedback.warning.default),
-        bg: theme.text.feedback.warning.default,
-      }
-    if (tone === "auto")
-      return {
-        fg: readableForeground(theme.text.action.destructive.default, theme.background.action.destructive.default),
-        bg: theme.background.action.destructive.default,
-      }
+    if (tone === "manual") return { fg: readableTint(theme.text.feedback.success.default, theme.background.default), bg: undefined }
+    if (tone === "yolo") return { fg: readableTint(theme.text.feedback.warning.default, theme.background.default), bg: undefined }
+    if (tone === "auto") return { fg: readableTint(theme.background.action.destructive.default, theme.background.default), bg: undefined }
+    if (tone === "label") return { fg: theme.text.default, bg: undefined }
     if (tone === "asleep")
       return {
         fg: readableForeground(theme.text.action.primary.focused, theme.background.action.primary.focused),
@@ -52,7 +42,7 @@ export function FooterAutonomy(props: { autonomy?: SessionAutonomyView; width?: 
           <box flexDirection="row" flexShrink={0}>
             <For each={item}>
               {(part) => (
-                <text wrapMode="none" flexShrink={0} fg={style(part.tone).fg} bg={style(part.tone).bg}>
+                <text wrapMode="none" flexShrink={0} fg={style(part.tone).fg} bg={style(part.tone).bg} attributes={part.bold ? TextAttributes.BOLD : undefined}>
                   {part.text}
                 </text>
               )}
@@ -77,7 +67,7 @@ export function Footer(props: {
   const data = useData()
   const route = useRoute()
   const dimensions = useTerminalDimensions()
-  const muted = createMemo(() => readableTint(theme.text.subdued, theme.background.chrome))
+  const muted = createMemo(() => readableTint(theme.text.subdued, theme.background.default))
   const paletteShortcut = Keymap.useShortcut("command.palette.show")
   const usageShortcut = Keymap.useShortcut("session.provider-usage.open")
   const projectShortcut = Keymap.useShortcut("project.members")
@@ -131,13 +121,13 @@ export function Footer(props: {
   return (
     <box
       width="100%"
-      height={3}
+      height={1}
       flexShrink={0}
       flexDirection="row"
       alignItems="center"
       paddingLeft={3}
       paddingRight={3}
-      backgroundColor={theme.background.chrome}
+      backgroundColor={theme.background.default}
     >
       <box flexDirection="row" gap={layout().gap} flexShrink={0}>
         <Show when={props.project && layout().identity}>
@@ -178,7 +168,7 @@ export function Footer(props: {
 
 export function ProjectFooterLine(props: { owner: ProjectContext; onIdentity?: () => void; onTab?: () => void; width?: number }) {
   const { theme } = useTheme()
-  const muted = createMemo(() => readableTint(theme.text.subdued, theme.background.chrome))
+  const muted = createMemo(() => readableTint(theme.text.subdued, theme.background.default))
   return (
     <box id="session.footer.project" height={1} flexShrink={props.width === undefined ? 1 : 0} minWidth={0} flexDirection="row">
       <text fg={muted()} wrapMode="none" truncate flexShrink={1} minWidth={0} onMouseUp={props.onIdentity}>
@@ -307,7 +297,9 @@ function autonomyItems(view: SessionAutonomyView | undefined, level: AutonomyLev
     const disabled = row.category === "guardrails" && row.effective !== undefined && view?.effective?.guardrailsEnabled === false
     const annotations = disabled ? (words ? " · disabled" : "!") : ""
     return [
-      { text: padded && row.effective ? ` ${label}${value} ` : `${label}${value}`, tone: row.effective },
+      ...(row.effective ? [{ text: level === 3 ? "●" : "● ", tone: row.effective }] : []),
+      { text: label, tone: row.effective ? "label" as const : undefined },
+      { text: value, tone: row.effective, bold: Boolean(row.effective) },
       ...(annotations ? [{ text: annotations }] : []),
     ]
   })

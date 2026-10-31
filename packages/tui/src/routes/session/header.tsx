@@ -376,10 +376,10 @@ export function Header(
         gap={gap()}
         paddingLeft={inset()}
         paddingRight={3}
-        height={3}
+        height={1}
         flexShrink={0}
         alignItems="center"
-        backgroundColor={theme.background.chrome}
+        backgroundColor={theme.background.default}
       >
         <Show
           when={props.subagent || props.sideChat}

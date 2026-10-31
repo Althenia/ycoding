@@ -731,7 +731,7 @@ function SignInScreen(): JSX.Element {
           <label class="field__label" for="remote-access-key">Access key</label>
           <input id="remote-access-key" class="input" value={accessKey()} onInput={(event) => setAccessKey(event.currentTarget.value)}
             autocomplete="off" spellcheck={false} autocapitalize="characters" aria-invalid={keyError() ? "true" : undefined} />
-          <Show when={keyError()}><p class="field__error" role="alert">{keyError()}</p></Show>
+          <Show when={keyError()}><p class="sign-in__error" role="alert"><Icon name="alert" size={16} /><span>{keyError()}</span></p></Show>
           <button type="submit" class="button button--secondary sign-in__provider" disabled={keyBusy()}>{keyBusy() ? "Signing in…" : "Sign in"}</button>
         </form>
         <p class="sign-in__note">
@@ -857,7 +857,8 @@ function Notices(): JSX.Element {
     <>
       <Show when={telemetryConsentNoticeView(state().telemetryConsent, state().transport.kind === "open" && state().connection.kind === "connected")}>
         <section class="telemetry-consent" aria-labelledby="telemetry-consent-title">
-          <div><h2 id="telemetry-consent-title">Help improve YCoding</h2>
+          <Icon name="usage" size={18} />
+          <div class="telemetry-consent__body"><h2 id="telemetry-consent-title">Help improve YCoding</h2>
             <p>Save usage, speed, and latency for each provider, model, and profile on this machine only. Nothing leaves your machine. You can change this anytime in Settings → Diagnostics.</p></div>
           <div class="telemetry-consent__actions">
             <button type="button" class="button button--primary button--small" onClick={() => void remote.store.setTelemetryConsent(true)}>Agree</button>
@@ -866,7 +867,7 @@ function Notices(): JSX.Element {
         </section>
       </Show>
       <Show when={state().telemetryConsent.error}>
-        {(error) => <p class="notice-strip notice-strip--warning" role="alert">{error()}</p>}
+        {(error) => <p class="notice-strip notice-strip--warning" role="alert"><Icon name="alert" size={16} /><span class="notice-strip__body">{error()}</span></p>}
       </Show>
       <Show when={state().notice}>
         {(notice) => (
@@ -1832,6 +1833,7 @@ function BottomNav(props: { readonly view: RemoteView }): JSX.Element {
   const flagged = (view: RemoteView) => view === "/remote/sessions" && attention().sessions
   return (
     <nav class="bottom-nav" aria-label="Workspace">
+      <Link to="/remote" class="bottom-nav__new" ariaLabel="New session" title="New session"><Icon name="plus" /></Link>
       <For each={primaryDestinations}>
         {(item) => (
           <Link

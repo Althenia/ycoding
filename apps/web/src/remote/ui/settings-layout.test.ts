@@ -48,25 +48,22 @@ describe("machine and device presentation", () => {
 const declared = (sheet: Stylesheet, selector: string, conditioned = false): Declarations =>
   declarationsWhere(sheet, (candidate) => (conditioned ? candidate.conditions.length > 0 : candidate.conditions.length === 0) && candidate.header.split(",").map((part) => part.trim()).includes(selector))
 
-describe("W85 numbered Settings sections", () => {
-  test("renders the ordinal outside the heading's accessible name", async () => {
+describe("icon-led Settings sections", () => {
+  test("keeps the decorative icon outside the heading's accessible name", async () => {
     const tsx = await read("settings.tsx")
     const section = tsx.slice(tsx.indexOf("function Section("), tsx.indexOf("The account section shows"))
-    expect(section).toContain('<span class="settings__ordinal" aria-hidden="true" />')
+    expect(section).toContain('<Icon name={sectionIcons[props.category]} size={18} />')
     expect(section).toContain("<h2 id={props.id}>{props.title}</h2>")
     expect(section).toContain("aria-labelledby={props.id}")
-    expect(section.indexOf("settings__ordinal")).toBeLessThan(section.indexOf("<h2"))
-    expect(section.slice(section.indexOf("<h2"), section.indexOf("</h2>"))).not.toContain("settings__ordinal")
+    expect(section.indexOf("<Icon")).toBeLessThan(section.indexOf("<h2"))
+    expect(tsx).not.toContain("settings__ordinal")
   })
 
-  test("numbers rendered sections from 01 in order, so a hidden Office leaves no gap", async () => {
+  test("keeps every Settings section in order without counters or accordions", async () => {
     const css = await readStylesheet("remote.css")
-    expect(declared(css, ".settings")["counter-reset"]).toBe("settings-section")
-    expect(declared(css, ".settings__section")["counter-increment"]).toBe("settings-section")
-    const ordinal = declared(css, ".settings__ordinal::before")
-    expect(ordinal.content).toBe('"§" counter(settings-section, decimal-leading-zero)')
-    expect(ordinal.color).toBe("var(--yc-green-strong)")
-    expect(ordinal["font-family"]).toBe("var(--yc-font-mono)")
+    expect(declared(css, ".settings")["counter-reset"]).toBeUndefined()
+    expect(declared(css, ".settings__section")["counter-increment"]).toBeUndefined()
+    expect(declared(css, ".settings__ordinal::before")).toEqual({})
     const tsx = await read("settings.tsx")
     expect(tsx.match(/<Section\b/g)?.length).toBe(9)
     const shell = await Bun.file(new URL("./shell.tsx", import.meta.url)).text()
@@ -75,8 +72,8 @@ describe("W85 numbered Settings sections", () => {
   })
 })
 
-describe("W83 flat Settings surfaces", () => {
-  test("draws records as ruled rows rather than framed cards or tables", async () => {
+describe("open Settings surfaces", () => {
+  test("separates records with space rather than frames or rules", async () => {
     const css = await readStylesheet("remote.css")
     for (const selector of [".account-card", ".device-table", ".list", ".notification-table"]) {
       const surface = declared(css, selector)
@@ -85,17 +82,22 @@ describe("W83 flat Settings surfaces", () => {
     }
     expect(declared(css, ".device-table__head").background).toBe("transparent")
     expect(declared(css, ".notification-table thead th").background).toBe("transparent")
+    for (const selector of [".settings__section", ".device-table__head", ".device-table .device + .device", ".defs__row + .defs__row", ".list__row + .list__row"]) {
+      expect(declared(css, selector)["border-block-start"]).toBeUndefined()
+      expect(declared(css, selector)["border-block-end"]).toBeUndefined()
+    }
+    expect(declared(css, ".device-table .device")["border-radius"]).toBe("var(--yc-radius-lg)")
   })
 
-  test("shows Appearance and Office choices as underline segments", async () => {
+  test("shows Appearance and Office choices as tonal segmented pills", async () => {
     const css = await readStylesheet("remote.css")
     for (const selector of [".appearance-segments .filters__option", ".office-settings .filters__option"]) {
       const option = declared(css, selector)
-      expect(option["border-radius"]).toBe("0")
-      expect(option["border-block-end"]).toBe("2px solid transparent")
+      expect(option["border-radius"]).toBe("var(--yc-radius-pill)")
+      expect(option["border-block-end"]).toBeUndefined()
     }
     const active = declared(css, ".appearance-segments .filters__option--active")
-    expect(active["border-block-end-color"]).toBe("var(--yc-text)")
-    expect(active.background).toBe("transparent")
+    expect(active["border-block-end-color"]).toBeUndefined()
+    expect(active.background).toBe("var(--yc-green-soft)")
   })
 })

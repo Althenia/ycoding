@@ -5,7 +5,9 @@
   min-inline-size: 0;
 }
 
-.running-sessions--ready .running-sessions__list { animation: running-sessions-reveal var(--yc-dur-base) var(--yc-ease-entrance) both; }
+@media (prefers-reduced-motion: no-preference) {
+  .running-sessions--ready .running-sessions__list { animation: running-sessions-reveal var(--yc-dur-base) var(--yc-ease-entrance) both; }
+}
 @keyframes running-sessions-reveal { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
 .running-sessions h2 {
@@ -17,8 +19,7 @@
 
 .running-sessions__list {
   display: flex;
-  gap: 0;
-  border-block: var(--yc-border-width) solid var(--yc-border);
+  gap: var(--yc-space-3);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -35,11 +36,8 @@
 .running-sessions__list li {
   min-inline-size: 0;
   flex: 0 0 300px;
-  border-inline-start: var(--yc-border-width) solid var(--yc-border);
   scroll-snap-align: start;
 }
-
-.running-sessions__list li:first-child { border-inline-start: 0; }
 
 .running-sessions__item {
   display: grid;
@@ -49,13 +47,11 @@
   min-block-size: calc(3 * var(--yc-leading-md) + 2 * var(--yc-space-1) + 2 * var(--yc-space-3));
   padding: var(--yc-space-3) var(--yc-space-4);
   border: 0 none transparent;
-  border-radius: 0;
-  background: transparent;
+  border-radius: var(--yc-radius-lg);
+  background: var(--yc-surface);
   color: var(--yc-text);
   text-align: start;
 }
-
-.running-sessions__list li:first-child .running-sessions__item { padding-inline-start: 0; }
 
 .running-sessions--loading .loading-placeholder--session { inline-size: 100%; }
 .running-sessions--loading .loading-placeholder--session .loading-placeholder__shape {
@@ -63,11 +59,9 @@
   min-block-size: calc(3 * var(--yc-leading-md) + 2 * var(--yc-space-1) + 2 * var(--yc-space-3));
   padding: var(--yc-space-3) var(--yc-space-4);
   border: 0 none transparent;
-  border-radius: 0;
-  background: transparent;
+  border-radius: var(--yc-radius-lg);
+  background: var(--yc-surface);
 }
-
-.running-sessions--loading .running-sessions__list li:first-child .loading-placeholder--session .loading-placeholder__shape { padding-inline-start: 0; }
 
 @media (hover: hover) {
   .running-sessions__item:hover { background: var(--yc-surface-sunken); }

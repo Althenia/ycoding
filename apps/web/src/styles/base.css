@@ -701,14 +701,13 @@ kbd {
 /* --- surfaces ----------------------------------------------------------- */
 
 .card {
-  background: var(--yc-surface-raised);
-  border: var(--yc-border-width) solid var(--yc-border);
+  background: var(--yc-surface);
   border-radius: var(--yc-radius-lg);
   padding: var(--yc-space-5);
 }
 
 .card--quiet {
-  background: var(--yc-surface);
+  background: var(--yc-surface-sunken);
 }
 
 .card__title {
@@ -875,7 +874,6 @@ kbd {
   min-block-size: var(--yc-header-h);
   background: color-mix(in srgb, var(--yc-bg) 88%, transparent);
   backdrop-filter: saturate(140%) blur(12px);
-  border-block-end: var(--yc-border-width) solid var(--yc-border);
 }
 
 .app-header__inner {
@@ -942,8 +940,8 @@ kbd {
   align-items: center;
   min-block-size: var(--yc-control-h);
   padding: 0 var(--yc-space-3);
-  border-radius: 0;
-  border-block-end: 2px solid transparent;
+  border-radius: var(--yc-radius-pill);
+  border-block-end: 0;
   color: var(--yc-text-muted);
   text-decoration: none;
   font-size: var(--yc-size-sm);
@@ -954,13 +952,13 @@ kbd {
 
 .nav__link:hover {
   color: var(--yc-text);
-  background: var(--yc-surface-sunken);
+  background: var(--yc-surface);
 }
 
 .nav__link--active {
   color: var(--yc-green-strong);
-  background: transparent;
-  border-block-end-color: var(--yc-green-strong);
+  background: var(--yc-green-soft);
+  font-weight: var(--yc-weight-semibold);
 }
 
 @media (min-width: 768px) {
@@ -997,7 +995,7 @@ kbd {
   gap: var(--yc-space-2);
   min-block-size: var(--yc-status-strip-h);
   padding-inline: var(--yc-gutter);
-  border-block-end: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-lg);
   background: var(--yc-surface);
   font-size: var(--yc-size-xs);
   color: var(--yc-text-muted);

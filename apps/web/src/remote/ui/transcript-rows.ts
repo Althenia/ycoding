@@ -5,29 +5,6 @@ export type TranscriptRow =
   | { readonly kind: "message"; readonly id: string; readonly message: RemoteMessageView; readonly continued: boolean }
   | { readonly kind: "decision"; readonly id: string; readonly decision: GuardrailDecisionView }
 
-export function folioTurn(message: RemoteMessageView): boolean {
-  return message.kind === "assistant" || message.kind === "user" && message.state !== "pending"
-}
-
-export function folioPositionKnown(history: { readonly status: string; readonly before?: string } | undefined, checkpoint: boolean): boolean {
-  return !checkpoint && history?.status === "idle" && history.before === undefined
-}
-
-export function folioOrdinals(messages: readonly RemoteMessageView[], complete: boolean, assigned: Map<string, number>): ReadonlyMap<string, number> {
-  const ordinals = new Map<string, number>()
-  let previous = 0
-  for (const message of messages) {
-    if (!folioTurn(message)) continue
-    const proven = assigned.get(message.id)
-    if (proven === undefined && !complete) continue
-    const ordinal = proven ?? previous + 1
-    assigned.set(message.id, ordinal)
-    ordinals.set(message.id, ordinal)
-    previous = ordinal
-  }
-  return ordinals
-}
-
 export function rowKey(message: RemoteMessageView): string {
   return message.kind === "compaction" && message.jobID ? message.jobID : message.id
 }

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { renderToString } from "solid-js/web"
-import { sectionOrdinalLabel, UsageHeading, usageSectionNumbers, usageSections } from "./usage-sections"
+import { UsageHeading } from "./usage-sections"
 
 const css = await Bun.file(new URL("./usage.css", import.meta.url)).text()
 
@@ -8,15 +8,25 @@ function rule(selector: string) {
   return css.split(/\n(?=\S)/).filter((block) => block.startsWith(`${selector} {`)).join("\n")
 }
 
-test("summary metrics are a flat divided strip", () => {
+test("summary metrics share one borderless tonal plane separated by space", () => {
   const strip = rule(".usage-tiles")
-  expect(strip).toContain("border-block")
-  expect(strip).not.toContain("gap: var(--yc-space-5)")
+  expect(strip).toContain("background: var(--yc-surface)")
+  expect(strip).toContain("border-radius: var(--yc-radius-xl)")
+  expect(strip).toContain("gap: var(--yc-space-5)")
+  expect(strip).not.toContain("border-block")
+  expect(strip).not.toContain("border:")
   const tile = rule(".usage-tile")
-  expect(tile).not.toContain("border: 1px")
+  expect(tile).not.toContain("border")
   expect(tile).not.toContain("background")
   expect(tile).not.toContain("animation")
-  expect(rule(".usage-tile + .usage-tile")).toContain("border-inline-start")
+  expect(css).not.toContain(".usage-tile + .usage-tile")
+  expect(css).not.toContain("border-inline-start: 1px")
+})
+
+test("the phone tonal plane leaves each stacked tile at least 260px wide at 320px (288px content minus 2 x --yc-space-3)", () => {
+  const phone = css.match(/@container \(max-width: 767px\) \{([\s\S]*?)\n\}\n@keyframes/)?.[1] ?? ""
+  expect(phone).toContain(".usage-tiles { padding: var(--yc-space-4) var(--yc-space-3); }")
+  expect(288 - 2 * 12).toBeGreaterThanOrEqual(260)
 })
 
 test("summary values reserve two current line heights without clipping pricing coverage", () => {
@@ -42,7 +52,7 @@ test("quota providers use inline dividers and the chart pair owns one quiet surf
   for (const property of ["background:", "border:", "border-radius:"]) expect(provider).not.toContain(property)
   const visuals = rule(".usage-visuals")
   expect(visuals).toContain("background: var(--yc-surface)")
-  expect(visuals).toContain("border-radius: var(--yc-radius-sm)")
+  expect(visuals).toContain("border-radius: var(--yc-radius-lg)")
   expect(visuals).toContain("padding: var(--yc-space-5)")
   expect(visuals).not.toContain("border:")
   const chart = rule(".usage-distribution, .usage-chart")
@@ -51,7 +61,7 @@ test("quota providers use inline dividers and the chart pair owns one quiet surf
 
 test("accounting sections and phone records remain flat", async () => {
   const incidents = await Bun.file(new URL("./model-incidents.css", import.meta.url)).text()
-  expect(rule(".usage-breakdown-section")).toContain("border-top: 1px solid var(--yc-border)")
+  expect(rule(".usage-breakdown-section")).not.toContain("border")
   expect(rule(".usage-breakdown-section")).toContain("padding-block: var(--yc-space-6)")
   expect(rule(".usage-breakdown-section")).not.toContain("background:")
   expect(css).not.toMatch(/\.usage-mobile-row \{[^}]*border: 1px/)
@@ -152,53 +162,27 @@ test("disclosure details wrap long values and add no animation", () => {
   expect(cost).not.toContain("transition")
 })
 
-test("quota group headings reuse the divider and mono text roles without a nested surface", () => {
+test("quota group headings reuse the mono text role without a rule or a nested surface", () => {
   const heading = rule(".usage-window-group")
-  expect(heading).toContain("border-top: 1px solid var(--yc-border)")
   expect(heading).toContain("color: var(--yc-text)")
-  for (const property of ["background", "border-radius", "animation"]) expect(heading).not.toContain(property)
+  for (const property of ["border", "background", "border-radius", "animation"]) expect(heading).not.toContain(property)
 })
 
-test("section ordinals render before the heading, hidden from assistive technology and outside its accessible name (W85)", () => {
+test("usage headings carry no section ordinal or counter and keep their owned icon children (W85)", async () => {
   for (const level of [2, 3] as const) {
-    const html = renderToString(() => UsageHeading({ level, id: "usage-allowances", ordinal: 3, children: "Provider quotas" }))
-    const heading = html.match(new RegExp(`<h${level}[^>]*>([\\s\\S]*?)</h${level}>`))
-    expect(heading?.[1]).toBe("Provider quotas")
-    expect(html).toContain('<span class="usage-ordinal" aria-hidden="true">§03</span>')
-    expect(html.indexOf("usage-ordinal")).toBeLessThan(html.indexOf(`<h${level}`))
-    expect(html).toContain('id="usage-allowances"')
+    const html = renderToString(() => UsageHeading({ level, id: "usage-allowances", children: "Provider quotas" }))
+    expect(html).toMatch(new RegExp(`^<h${level}[^>]*id="usage-allowances"[^>]*>Provider quotas</h${level}>$`))
+    expect(html).not.toContain("§")
   }
-  expect(renderToString(() => UsageHeading({ level: 3, children: "Request volume" }))).not.toContain("usage-ordinal")
-})
-
-test("section numbers run from 01 in rendered order and leave no gap for a section that is not rendered (W85)", () => {
-  expect(usageSectionNumbers([])).toEqual({ spend: 1, generation: 2, quotas: 3, charts: 4, trends: 5, speed: 6, consumption: 7, breakdown: 8, incidents: 9 })
-  expect(usageSectionNumbers(["generation", "trends", "speed"])).toEqual({ spend: 1, generation: 0, quotas: 2, charts: 3, trends: 0, speed: 0, consumption: 4, breakdown: 5, incidents: 6 })
-  expect([1, 9, 12].map(sectionOrdinalLabel)).toEqual(["§01", "§09", "§12"])
-})
-
-test("every Usage section takes its ordinal in page order without replacing its icon or the Group select", async () => {
-  const page = await Bun.file(new URL("./usage.tsx", import.meta.url)).text()
-  const speed = await Bun.file(new URL("./usage-speed.tsx", import.meta.url)).text()
-  const incidents = await Bun.file(new URL("./model-incidents.tsx", import.meta.url)).text()
-  const order = usageSections.map((section) => page.indexOf(`numbers().${section}`))
-  expect(order.every((index) => index > 0)).toBe(true)
-  expect([...order].sort((a, b) => a - b)).toEqual(order)
+  const sources = await Promise.all(["usage.tsx", "usage-speed.tsx", "model-incidents.tsx", "usage-sections.tsx"].map((name) => Bun.file(new URL(`./${name}`, import.meta.url)).text()))
+  for (const source of sources) expect(source).not.toMatch(/ordinal|usageSectionNumbers|numbers\(\)|§/)
+  expect(css).not.toMatch(/\.usage-ordinal|\.usage-title/)
+  const page = sources[0]!
   expect(page).not.toMatch(/<h2/)
-  expect(page).toContain('<UsageHeading level={2} id="usage-allowances" ordinal={numbers().quotas}><Icon name="usage" />Provider quotas</UsageHeading>')
-  expect(page).toContain('<UsageHeading level={2} id="usage-breakdown-title" ordinal={numbers().breakdown}><Icon name="sessions" />Breakdown</UsageHeading>')
+  expect(page).toContain('<UsageHeading level={2} id="usage-allowances"><Icon name="usage" />Provider quotas</UsageHeading>')
+  expect(page).toContain('<UsageHeading level={2} id="usage-breakdown-title"><Icon name="sessions" />Breakdown</UsageHeading>')
   expect(page).toContain("<UsageGroupControl")
-  expect(speed).toContain("ordinal={props.ordinal}")
-  expect(incidents).toContain('<UsageHeading level={2} id="incidents-title" ordinal={props.ordinal}><Icon name="shield" />Model incidents</UsageHeading>')
-})
-
-test("the ordinal is a mono green-strong marker with no animation (W85, W87)", () => {
-  const ordinal = rule(".usage-ordinal")
-  expect(ordinal).toContain("color: var(--yc-green-strong)")
-  expect(ordinal).toContain("var(--yc-font-mono)")
-  expect(ordinal).toContain("tabular-nums")
-  expect(ordinal).not.toMatch(/animation|transition/)
-  expect(rule(".usage-title")).toContain("display: flex")
+  expect(sources[2]).toContain('<UsageHeading level={2} id="incidents-title"><Icon name="shield" />Model incidents</UsageHeading>')
 })
 
 test("figures are sans tabular steps and labels are uppercase at wide tracking (W81, W87)", async () => {
@@ -230,12 +214,15 @@ test("messages, status text and chips are flat text rather than enclosing rectan
   for (const sheet of [css, incidents, speed]) expect(sheet).not.toContain("dashed")
 })
 
-test("Usage record rows keep a titled grid with single rules and mono metadata (W84)", () => {
+test("Usage record rows keep a titled grid with mono metadata and open hover planes (W84)", () => {
   expect(css).toMatch(/\.usage-mobile-row__top strong \{[^}]*var\(--yc-font-sans\)/)
   expect(css).toMatch(/\.usage-mobile-row p \{[^}]*var\(--yc-font-mono\)/)
   expect(rule(".usage-breakdown tbody th")).toContain("var(--yc-font-sans)")
-  expect(rule(".usage-page th, .usage-page td")).toContain("border-bottom: 1px solid var(--yc-border)")
-  expect(rule(".usage-consumption__row")).toContain("border-top: 1px solid var(--yc-border)")
-  expect(rule(".usage-mobile-row")).toBe("")
-  expect(css).toMatch(/\.usage-mobile-row \{[^}]*border-top: 1px solid var\(--yc-border\)/)
+  expect(rule(".usage-page th, .usage-page td")).not.toContain("border")
+  expect(rule(".usage-consumption__row")).not.toContain("border-top")
+  expect(rule(".usage-consumption__row")).toContain("border-radius: var(--yc-radius-md)")
+  expect(rule(".usage-consumption__row:hover")).toContain("background: var(--yc-surface)")
+  expect(css).toMatch(/\.usage-mobile-row \{[^}]*border-radius: var\(--yc-radius-md\)/)
+  expect(css).not.toMatch(/\.usage-mobile-row \{[^}]*border-top/)
+  expect(css).not.toMatch(/border-(?:top|bottom|block-start|block-end): 1px/)
 })

@@ -16,14 +16,16 @@
   gap: var(--yc-space-2);
   min-inline-size: 0;
   padding: var(--yc-space-2) var(--yc-space-3);
-  border: var(--yc-border-width) solid var(--yc-border);
+  border: 0;
   border-radius: var(--yc-radius-lg);
-  background: var(--yc-surface-raised);
+  background: transparent;
 }
 
 .machine-row__item[aria-current="true"] {
-  border-color: var(--yc-green-strong);
+  background: var(--yc-green-soft);
 }
+
+.machine-row__item:not([aria-current="true"]):is(:hover, :focus-within) { background: var(--yc-surface); }
 
 .machine-row__item[data-editing] .machine-row__identity {
   grid-column: 1 / -1;

@@ -397,7 +397,7 @@ export function SubagentFooter(props: {
     const items = [identity(), projectWidth() ? "project" : "", detail(), projectHint(), action()].filter(Boolean).length
     return Math.max(19, dimensions().width - 6 - stringWidth(identity() + detail() + projectHint() + action()) - projectWidth() - gap() * (items + (dimensions().width >= 40 ? 1 : 0)))
   }
-  const quiet = () => readableTint(theme.text.subdued, theme.background.chrome)
+  const quiet = () => readableTint(theme.text.subdued, theme.background.default)
   const nextSibling = () => {
     if (blocked()) return
     const id = parentID()
@@ -413,7 +413,7 @@ export function SubagentFooter(props: {
   }
 
   return (
-    <box width="100%" height={3} paddingLeft={3} paddingRight={3} alignItems="center" flexDirection="row" flexShrink={0} gap={gap()} backgroundColor={theme.background.chrome}>
+    <box width="100%" height={1} paddingLeft={3} paddingRight={3} alignItems="center" flexDirection="row" flexShrink={0} gap={gap()} backgroundColor={theme.background.default}>
       <Show when={identity()}>{(label) => <text fg={theme.text.default} wrapMode="none" flexShrink={0}>{label()}</text>}</Show>
       <Show when={props.project && projectWidth() > 0 ? props.project : undefined}>
         {(project) => <box width={projectWidth()} flexShrink={0}><ProjectFooterLine owner={project()} width={projectWidth()} onIdentity={props.onProjectIdentity} /></box>}
@@ -426,7 +426,7 @@ export function SubagentFooter(props: {
           [{projectShortcut()?.replaceAll("ctrl+", "⌃")}] <span style={{ fg: quiet() }}>Project</span>
         </text>
       </Show>
-      <text fg={readableTint(blocked() ? theme.text.feedback.warning.default : theme.text.action.primary.default, theme.background.chrome)} wrapMode="none" flexShrink={0} onMouseUp={nextSibling}>
+      <text fg={readableTint(blocked() ? theme.text.feedback.warning.default : theme.text.action.primary.default, theme.background.default)} wrapMode="none" flexShrink={0} onMouseUp={nextSibling}>
         {action()}
       </text>
     </box>

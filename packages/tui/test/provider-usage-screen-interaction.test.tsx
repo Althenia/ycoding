@@ -453,7 +453,8 @@ test("keeps the failed Overview free of scrollbar strips and makes padded naviga
     expect(bottom.every((span) => span.bg.toInts().join(",") === "21,24,29,255")).toBe(true)
     const navigationRow = screen.lines().findIndex((line) => line.includes("Overview"))
     const navigation = screen.lines()[navigationRow]
-    expect(navigation).toMatch(/Overview {2,}│ {2,}Usage/)
+    expect(navigation).toMatch(/Overview\s+Usage/)
+    expect(navigation).not.toContain("│")
     await screen.renderer.idle()
     await screen.mouse.click(navigation.indexOf("Usage") - 1, navigationRow)
     await waitFor(screen, "Provider quotas could not be loaded.")

@@ -78,7 +78,7 @@ describe("quiet workspace", () => {
           await until(page, `document.querySelector('.remote-connection-label')?.textContent.includes('Connected') && document.querySelector('.bottom-nav') !== null`)
           const state = await page.evaluate<{ links: string[]; current: string; rail: number; headerLinks: number; overflow: boolean; undersized: number; minHeight: number }>(`(() => {
             const nav = document.querySelector(innerWidth < 768 ? '.bottom-nav' : '.workspace__rail .remote-nav')
-            const links = [...(nav?.querySelectorAll('a') ?? [])]
+            const links = [...(nav?.querySelectorAll('.remote-nav__link, .bottom-nav__item') ?? [])]
             return {
               links: links.map(link => new URL(link.href).pathname),
               current: nav?.querySelector('[aria-current="page"]')?.textContent.trim() ?? '',

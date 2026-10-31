@@ -2,7 +2,7 @@ import { createMutation } from "@tanstack/solid-query"
 import { useStore } from "@tanstack/solid-store"
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { deviceAliasLimit, type RemoteLatencySample } from "@ycoding-ai/remote"
-import { Icon } from "../../ui/icon"
+import { Icon, type IconName } from "../../ui/icon"
 import { Link } from "../../ui/link"
 import { CustomSelect } from "../../ui/custom-select"
 import { Modal } from "../../ui/modal"
@@ -327,9 +327,20 @@ export function moveRadio(event: KeyboardEvent, index: number, count: number, se
   }
 }
 
+const sectionIcons = {
+  Machine: "monitor",
+  Account: "user",
+  Devices: "devices",
+  App: "package",
+  Diagnostics: "zap",
+  Appearance: "sun",
+  Office: "office",
+  Notifications: "bell",
+} as const satisfies Record<string, IconName>
+
 function Section(props: {
   readonly id: string
-  readonly category: string
+  readonly category: keyof typeof sectionIcons
   readonly title: string
   readonly hint: string
   readonly children: JSX.Element
@@ -338,7 +349,7 @@ function Section(props: {
     <section class="settings__section" aria-labelledby={props.id}>
       <div class="settings__head">
         <p class="settings__category">{props.category}</p>
-        <span class="settings__ordinal" aria-hidden="true" />
+        <Icon name={sectionIcons[props.category]} size={18} />
         <h2 id={props.id}>{props.title}</h2>
         <p class="settings__hint">{props.hint}</p>
       </div>

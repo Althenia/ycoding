@@ -44,7 +44,7 @@
 .usage-filter-sheet__error { color: var(--yc-danger); }
 .usage-filter-sheet__actions {
   position: sticky; inset-block-end: 0; display: flex; gap: var(--yc-space-3); padding: var(--yc-space-3) var(--yc-space-4);
-  border-block-start: var(--yc-border-width) solid var(--yc-border); background: var(--yc-surface-raised);
+  background: var(--yc-surface-raised);
 }
 .usage-filter-sheet__actions > .button { flex: 1 1 0; min-width: 0; }
 

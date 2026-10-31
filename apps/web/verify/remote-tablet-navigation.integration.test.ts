@@ -45,6 +45,15 @@ describe("tablet remote navigation", () => {
       expect(await page.evaluate<{ readonly label: string | null; readonly expanded: string | null; readonly focused: boolean }>(`(() => { const button = document.querySelector(${JSON.stringify(expand)}); return { label: button?.getAttribute('aria-label') ?? null, expanded: button?.getAttribute('aria-expanded') ?? null, focused: button !== null && document.activeElement === button }; })()`)).toEqual({ label: "Show workspace sidebar", expanded: "false", focused: true })
       expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll(".workspace__rail .remote-nav a")].filter(link => link.getBoundingClientRect().width >= 44 && link.getBoundingClientRect().height >= parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense'))).map(link => link.getAttribute("href"))`)).toEqual(["/remote/sessions", "/remote/usage", "/remote/settings"])
       expect(await page.evaluate<boolean>(`parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense')) >= 36`)).toBe(true)
+      expect(await page.evaluate<boolean>(`(() => {
+        const rail = getComputedStyle(document.querySelector('.workspace__rail'));
+        const active = getComputedStyle(document.querySelector('.remote-nav__link--active'));
+        const root = getComputedStyle(document.documentElement);
+        const probe = document.createElement('span'); document.body.append(probe);
+        probe.style.background = root.getPropertyValue('--yc-green-soft');
+        const fill = getComputedStyle(probe).backgroundColor; probe.remove();
+        return rail.borderInlineEndWidth === '0px' && active.backgroundColor === fill && active.boxShadow === 'none' && parseFloat(active.borderRadius) > 44;
+      })()`)).toBe(true)
       for (let index = 0; index < 12; index += 1) {
         await page.pressKey("Tab", "Tab", 9)
         expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail-body').contains(document.activeElement)`)).toBe(false)

@@ -701,7 +701,7 @@ export function ProjectsScreenContent(props: {
           <box flexDirection="row" flexGrow={1} minHeight={0} gap={2}>
             <box flexGrow={1} minHeight={0} gap={1}>
               <List />
-              <Panel title="LEGEND" height={7}>
+              <Panel title="LEGEND" height={6}>
                 <box flexDirection="row" height={1}>
                   <text fg={theme.text.default}>LIVE </text>
                   <text fg={memberStateColor(theme, "running")}>● running</text>
@@ -771,7 +771,7 @@ export function ProjectsScreenContent(props: {
                 <Show
                   when={view() === "new"}
                   fallback={
-                    <Panel title="SECTIONS" width={32} height={9}>
+                    <Panel title="SECTIONS" width={32} height={8}>
                       <For each={sections}>
                         {(label, index) => (
                           <box
@@ -838,7 +838,7 @@ export function ProjectsScreenContent(props: {
           </box>
           <Show when={view() === "settings" && project()}>
             {(current) => (
-              <Panel title="OTHER SECTIONS" height={8}>
+              <Panel title="OTHER SECTIONS" height={7}>
                 <text fg={theme.text.default}>
                   Members MASTER {current().master.title} ·{" "}
                   {current()

@@ -14,39 +14,87 @@ import { declarationsWhere, readStylesheet, widthThreshold, type Stylesheet } fr
 
 const BREAKPOINTS = [360, 480, 640, 768, 1024, 1280, 1600] as const
 const PHONE_LAYOUT_QUERY = "@media (max-width: 767px), (max-height: 599px) and (pointer: coarse)"
+const COARSE_LANDSCAPE_QUERY = "@media (max-height: 599px) and (pointer: coarse) and (orientation: landscape)"
 
 const SURFACE_FILES = ["base.css", "site.css", "docs.css", "remote.css"] as const
 
 const STYLESHEETS = [...SURFACE_FILES, "tokens.css"] as const
 
 describe("responsive contract", () => {
-  test("uses compact underlined navigation instead of filled rounded tabs", async () => {
+  test("uses pill navigation with a soft current state and no bottom rule", async () => {
     const sheet = await readStylesheet("base.css")
     expect(base(sheet, ".nav__link")).toMatchObject({
-      "border-radius": "0",
-      "border-block-end": "2px solid transparent",
+      "border-radius": "var(--yc-radius-pill)",
+      "border-block-end": "0",
     })
+    expect(base(sheet, ".nav__link:hover").background).toBe("var(--yc-surface)")
     expect(base(sheet, ".nav__link--active")).toMatchObject({
-      background: "transparent",
-      "border-block-end-color": "var(--yc-green-strong)",
+      background: "var(--yc-green-soft)",
+      color: "var(--yc-green-strong)",
+      "font-weight": "var(--yc-weight-semibold)",
     })
   })
 
-  test("uses the shared medium radius for public interactive and raised surfaces", async () => {
+  test("assigns Spatial Canvas radii: controls medium, tonal planes large, trust strip extra large, nav pills", async () => {
     const site = await readStylesheet("site.css")
     const docs = await readStylesheet("docs.css")
-    for (const selector of [".marketing .button", ".marketing .card", ".marketing .code-block", ".marketing .input"]) {
-      expect(declarationsWhere(site, (rule) => rule.header.includes(selector))["border-radius"]).toBe("var(--yc-radius-md)")
+    const radii: readonly (readonly [Stylesheet, string, string])[] = [
+      [site, ".marketing .button", "md"],
+      [site, ".marketing .code-block", "md"],
+      [site, ".marketing .input", "md"],
+      [site, ".marketing .card", "lg"],
+      [site, ".marketing .callout-bar", "lg"],
+      [site, ".marketing .feature", "lg"],
+      [site, ".marketing .trust__item", "xl"],
+      [docs, ".docs-bar__nav-toggle", "pill"],
+      [docs, ".docs-search-trigger", "pill"],
+      [docs, ".docs--index .doc-section", "md"],
+      [docs, ".docs--index .card", "lg"],
+      [docs, ".docs--article .code-block", "md"],
+      [docs, ".releases--timeline .release", "lg"],
+    ]
+    for (const [sheet, selector, step] of radii) {
+      expect({ selector, radius: declarationsWhere(sheet, (rule) => rule.header.includes(selector))["border-radius"] }).toEqual({ selector, radius: `var(--yc-radius-${step})` })
     }
-    for (const selector of [
-      ".docs-bar__nav-toggle",
-      ".docs-search-trigger",
-      ".docs--index .doc-section",
-      ".docs--index .card",
-      ".docs--article .code-block",
-      ".releases--timeline .release",
-    ]) {
-      expect(declarationsWhere(docs, (rule) => rule.header.includes(selector))["border-radius"]).toBe("var(--yc-radius-md)")
+  })
+
+  test("de-boxes public content: borderless tonal planes and open feature columns", async () => {
+    const base_ = await readStylesheet("base.css")
+    const site = await readStylesheet("site.css")
+    const docs = await readStylesheet("docs.css")
+    const frameless = (sheet: Stylesheet, selector: string) => {
+      const merged = declarationsWhere(sheet, (rule) => rule.header === selector && rule.conditions.length === 0)
+      expect({ selector, border: merged.border ?? "0" }).toEqual({ selector, border: "0" })
+      return merged
+    }
+    expect(base(base_, ".card").border).toBeUndefined()
+    expect(base(base_, ".card").background).toBe("var(--yc-surface)")
+    expect(base(base_, ".status-strip")["border-block-end"]).toBeUndefined()
+    expect(base(base_, ".status-strip")["border-radius"]).toBe("var(--yc-radius-lg)")
+    expect(base(base_, ".app-header")["border-block-end"]).toBeUndefined()
+    expect(frameless(site, ".feature").background).toBe("transparent")
+    expect(frameless(site, ".feature__icon")).toMatchObject({ background: "var(--yc-green-soft)", color: "var(--yc-green-strong)" })
+    expect(frameless(site, ".trust__item").background).toBe("var(--yc-surface)")
+    expect(base(site, ".callout-bar").border).toBeUndefined()
+    expect(frameless(docs, ".releases--timeline .release").background).toBe("var(--yc-surface)")
+    expect(base(docs, ".docs-bar")).toMatchObject({ background: "var(--yc-bg)", "border-block-end": "0" })
+    expect(base(docs, ".docs-shell__nav")["border-inline-end"]).toBeUndefined()
+    expect(docs.rules.filter((rule) => rule.header === ".docs-shell__nav" && rule.declarations["border-inline-end"] !== undefined)).toEqual([])
+    expect(base(docs, ".doc-section")["border-block-start"]).toBe("0")
+    expect(base(docs, ".inline-code").border).toBeUndefined()
+    expect(base(docs, ".docs-nav__link")["border-radius"]).toBe("var(--yc-radius-pill)")
+    expect(base(docs, ".card-grid > .card").background).toBe("var(--yc-surface)")
+    expect(base(docs, ".card-grid > .card:hover").background).toBe("var(--yc-surface-sunken)")
+  })
+
+  test("makes the public header translucent at 92% with opaque fallbacks", async () => {
+    const site = await readStylesheet("site.css")
+    expect(base(site, ".marketing .app-header")).toMatchObject({
+      background: "color-mix(in srgb, var(--yc-bg) 92%, transparent)",
+      "backdrop-filter": "saturate(140%) blur(16px)",
+    })
+    for (const condition of ["@supports not (backdrop-filter: blur(1px))", "@media (prefers-reduced-transparency: reduce)", "@media (forced-colors: active)"]) {
+      expect({ condition, background: declarationsWhere(site, (rule) => rule.header === ".marketing .app-header" && rule.conditions.includes(condition)).background }).toEqual({ condition, background: "var(--yc-bg)" })
     }
   })
 
@@ -58,7 +106,7 @@ describe("responsive contract", () => {
           // A keyframes prelude is not a condition on width; only media queries carry
           // a breakpoint that must be declared.
           if (!condition.startsWith("@media")) continue
-          if (condition === PHONE_LAYOUT_QUERY || condition === "@media (max-width: 767px) and (max-height: 480px)" || condition === "@media (max-height: 599px)") {
+          if (condition === PHONE_LAYOUT_QUERY || condition === COARSE_LANDSCAPE_QUERY || condition === "@media (max-width: 767px) and (max-height: 480px)" || condition === "@media (max-height: 599px)") {
             expect(name).toBe("remote.css")
             continue
           }
@@ -135,6 +183,8 @@ describe("responsive contract", () => {
     const remote = await readStylesheet("remote.css")
     expect(columnSteps(remote, ".workspace")).toEqual([])
     expect(columnSteps(remote, ".app")).toEqual([{ min: 768, tracks: 2 }])
+    const landscape = declarationsWhere(remote, (rule) => rule.header === ".app" && rule.conditions.includes(COARSE_LANDSCAPE_QUERY))
+    expect(landscape["grid-template-columns"]).toBe("var(--yc-bottom-nav-h) minmax(0, 1fr)")
     expect(shownFrom(remote, ".workspace__rail", 768)).toBe(true)
     expect(base(remote, ".workspace__rail-body")).toMatchObject({ "overflow-y": "auto", "overflow-anchor": "none", "min-block-size": "0" })
     for (const screen of ["sessions", "settings", "empty"]) {
@@ -286,7 +336,7 @@ describe("responsive contract", () => {
     }
     expect(base(remote, ".remote-nav__link")["font-family"]).toBe("var(--yc-font-sans)")
     expect(base(remote, ".app .pane__title")["text-transform"]).toBe("uppercase")
-    expect(base(remote, ".session-row--active")["box-shadow"]).toBe("inset 2px 0 var(--yc-green-strong)")
+    expect(base(remote, ".session-row--active")).toMatchObject({ background: "var(--yc-green-soft)", "border-radius": "var(--yc-radius-lg)" })
   })
 })
 
@@ -381,8 +431,8 @@ function columnSteps(sheet: Stylesheet, selector: string): readonly { readonly m
       (rule) =>
         rule.header === selector &&
         rule.declarations["grid-template-columns"] !== undefined &&
-        // The single-column base is the default, not a step.
-        rule.conditions.some((condition) => widthThreshold(condition) !== undefined),
+        // The single-column base and the phone-layout refinements are not min-width steps.
+        rule.conditions.some((condition) => widthThreshold(condition)?.min !== undefined),
     )
     .map((rule) => {
       const min = rule.conditions.map((condition) => widthThreshold(condition)?.min).find((value) => value !== undefined)

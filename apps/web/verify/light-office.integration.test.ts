@@ -88,8 +88,9 @@ test("light composer and picker boundaries separate from white surfaces", async 
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=light&noSelection=1`)
     for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`!!document.querySelector('.new-session-composer .model-control__trigger')`); attempt++) await Bun.sleep(100)
     for (const selector of [".new-session-composer .composer__row", ".new-session-composer__repository .mini-picker__trigger", ".new-session-composer .mini-picker__trigger", ".new-session-composer .model-control__trigger"]) {
-      const border = await page.evaluate<string>(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).borderColor`)
-      expect(ratio(border, "rgb(255, 255, 255)"), `${selector} boundary contrast`).toBeGreaterThanOrEqual(3)
+      const edge = await page.evaluate<{ color: string; width: number }>(`(() => { const style = getComputedStyle(document.querySelector(${JSON.stringify(selector)})); return { color: style.borderColor, width: parseFloat(style.borderTopWidth) } })()`)
+      expect(edge.width, `${selector} boundary width`).toBeGreaterThanOrEqual(1)
+      expect(ratio(edge.color, "rgb(255, 255, 255)"), `${selector} boundary contrast`).toBeGreaterThanOrEqual(3)
     }
   } finally { await page.close() }
 }, 30_000)

@@ -94,7 +94,7 @@ describe("remote navigation", () => {
     const page = await requireBrowser().openPage()
     const links = `(() => ({
       header: [...document.querySelectorAll('.remote-nav a')].map((link) => link.getAttribute('href')),
-      bottom: [...document.querySelectorAll('.bottom-nav a')].map((link) => link.getAttribute('href')),
+      bottom: [...document.querySelectorAll('.bottom-nav__item')].map((link) => link.getAttribute('href')),
       activityButton: document.querySelector('[aria-label="Open activity"]') !== null,
       pill: document.querySelector('.remote-connection-label')?.textContent?.trim() ?? null,
       strip: document.querySelector('.status-strip') !== null,

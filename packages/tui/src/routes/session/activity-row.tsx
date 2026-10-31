@@ -225,7 +225,7 @@ export function SessionActivityRow(props: {
       onMouseUp={open}
       onKeyDown={onKeyDown}
     >
-      <box width="100%" border={[`top`]} borderColor={theme.border.default} flexDirection="row">
+      <box width="100%" flexDirection="row">
         <text width={2} flexShrink={0} fg={markerColor()}>
           {props.row.type === "guardrail"
             ? "!!"
@@ -352,7 +352,7 @@ export function SessionToolActivityRow(props: {
       onMouseUp={toggle}
       onKeyDown={onKeyDown}
     >
-      <box width="100%" border={[`top`]} borderColor={theme.border.default} flexDirection="row">
+      <box width="100%" flexDirection="row">
         <text width={2} flexShrink={0} fg={color()}>{marker()}</text>
         <SessionActivitySpacer running={active()} color={color()} />
         <text

@@ -72,6 +72,8 @@ test("from tablet width the status group owns a full-width secondary line below 
 
 test("the phone Goal control keeps one width whether or not it shows an iteration count", () => {
   expect(phoneRule(".session-status__goal-trigger")["min-inline-size"]).toBe("4rem")
+  expect(baseRule(".session-status__autonomous-trigger,.session-status__goal-trigger")["padding-inline"]).toBe("var(--yc-space-2)")
+  expect(baseRule(".session-status__slot")["padding-inline"]).toBe("var(--yc-space-2)")
 })
 
 test("from tablet width the transient status slot follows the metadata so the second line starts at the control edge", () => {
@@ -94,4 +96,11 @@ test("below 768px an in-flight goal keeps the operational status visible and its
 test("metadata relocated into the conversation retains full wrapping words without another scroller", () => {
   expect(baseRule(".session-status--metadata :is(.session-status__slot,.session-status__label,.session-status__mode,.session-status__mode-full,.session-status__active-goal)")).toMatchObject({ "min-inline-size":"0", overflow:"visible", "overflow-wrap":"anywhere", "white-space":"normal" })
   expect(baseRule(".session-status--metadata .session-status__active-goal")).toMatchObject({ flex:"1 1 100%", "max-inline-size":"none" })
+})
+
+test("the Autonomous and Goal controls are pills and the status slot is a pill without an inline-start bar or inner rule", () => {
+  expect(baseRule(".session-status__autonomous-trigger,.session-status__goal-trigger")).toMatchObject({ border: "0", "border-radius": "var(--yc-radius-pill)" })
+  expect(baseRule(".session-status__slot")).toMatchObject({ border: "0", "border-radius": "var(--yc-radius-pill)" })
+  expect(sheet.rules.some((rule) => Object.keys(rule.declarations).some((property) => property === "border-inline-start" || property === "border-inline-start-color"))).toBe(false)
+  expect(baseRule(".composer__controls .session-status")["border-block-start"]).toBeUndefined()
 })

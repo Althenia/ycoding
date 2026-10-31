@@ -1,10 +1,10 @@
 .autonomous { display:grid; gap:var(--yc-space-3); min-inline-size:0; }
 .autonomous__note,.autonomous__offline { margin:0; color:var(--yc-text-muted); font-size:var(--yc-size-xs); line-height:var(--yc-leading-xs); }
-.autonomous__failure { margin:0; padding:var(--yc-space-2) var(--yc-space-3); border:0; border-inline-start:3px solid var(--yc-danger); border-radius:0; background:var(--yc-danger-soft); color:var(--yc-danger); font-size:var(--yc-size-xs); line-height:var(--yc-leading-xs); overflow-wrap:anywhere; }
-.autonomous__rows { display:grid; gap:0; min-inline-size:0; }
+.autonomous__failure { margin:0; padding:var(--yc-space-2) var(--yc-space-3); border:0; border-radius:var(--yc-radius-lg); background:var(--yc-danger-soft); color:var(--yc-danger); font-size:var(--yc-size-xs); line-height:var(--yc-leading-xs); overflow-wrap:anywhere; }
+.autonomous__rows { display:grid; gap:var(--yc-space-2); min-inline-size:0; }
 .autonomous__rows:focus-visible { outline:2px solid var(--yc-focus); outline-offset:2px; border-radius:var(--yc-radius-sm); }
-.autonomous__row { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--yc-space-2) var(--yc-space-3); min-inline-size:0; padding:var(--yc-space-3) var(--yc-space-1); border:0; border-block-end:1px solid var(--yc-border); border-radius:0; background:transparent; color:var(--yc-text); }
-.autonomous__row[aria-selected="true"] { background:var(--yc-surface-sunken); box-shadow:inset 3px 0 var(--yc-green-strong); padding-inline-start:var(--yc-space-3); }
+.autonomous__row { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--yc-space-2) var(--yc-space-3); min-inline-size:0; padding:var(--yc-space-3); border:0; border-radius:var(--yc-radius-lg); background:transparent; color:var(--yc-text); }
+.autonomous__row[aria-selected="true"] { background:var(--yc-green-soft); }
 .autonomous__text { display:grid; flex:1 1 14ch; gap:var(--yc-space-1); min-inline-size:0; }
 .autonomous__title { font-weight:var(--yc-weight-medium); }
 .autonomous__decider,.autonomous__source { color:var(--yc-text-muted); font-size:var(--yc-size-2xs); line-height:var(--yc-leading-2xs); overflow-wrap:anywhere; }

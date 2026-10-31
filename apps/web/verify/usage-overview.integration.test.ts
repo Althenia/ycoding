@@ -57,6 +57,7 @@ test("overview leads with spend, separates account quotas and Backend rates, and
       expect(result.tops.every((top, index) => index === 0 || top > result.tops[index - 1]!)).toBe(true)
       expect(result).toMatchObject({ quotaHeading: true, flat: true, dividers: true, surface: true, equalCharts: true, overflow: false, namedControls: true, icons: true, requests: 1 })
       expect(result.columns).toBe(result.content >= 1024 ? 2 : 1)
+      expect(await page.evaluate<{ readonly radius: string; readonly fill: boolean; readonly rules: string; readonly headings: number }>(`(() => { const strip = getComputedStyle(document.querySelector('.usage-tiles')); return { radius: strip.borderTopLeftRadius, fill: strip.backgroundColor !== 'rgba(0, 0, 0, 0)', rules: [strip.borderTopWidth, strip.borderBottomWidth, ...[...document.querySelectorAll('.usage-tile')].map(node => getComputedStyle(node).borderInlineStartWidth)].join(','), headings: document.querySelectorAll('.usage-page .usage-ordinal').length } })()`)).toEqual({ radius: "20px", fill: true, rules: "0px,0px,0px,0px,0px", headings: 0 })
       expect(result.values[0]).toContain("Today$5.40")
       expect(result.values[0]).toContain("31 requests")
       expect(result.values[1]).toContain("Yesterday$5.22")

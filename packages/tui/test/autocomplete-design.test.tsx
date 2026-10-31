@@ -165,9 +165,9 @@ function expectGeometry(app: Awaited<ReturnType<typeof renderAutocomplete>>, vie
   expect(suggestionRows.map((item) => item.command)).toEqual(["/model", "/mode", "/compact", "/mcp"])
   expect(suggestionRows.slice(1).map((item, index) => item.row - suggestionRows[index].row)).toEqual([1, 1, 1])
   expect(header.slice(mainWidth)).not.toContain("/ COMMANDS")
-  expect([left, right]).toEqual([0, mainWidth - 1])
-  expect(count + "4 of 4".length).toBe(mainWidth - 3)
-  expect(selected).toEqual({ start: 1, end: mainWidth - 1 })
+  expect([left, right]).toEqual([0, 0])
+  expect(count + "4 of 4".length).toBe(mainWidth - 2)
+  expect(selected).toEqual({ start: 1, end: mainWidth })
   expect(selectedBackgroundRows(app)).toEqual([suggestionRows[0].row])
   expect(Math.abs(description.indexOf("switch the active model") / (selected.end - selected.start) - 244 / 992)).toBeLessThanOrEqual(
     1 / (selected.end - selected.start),
@@ -186,7 +186,7 @@ function expectGeometry(app: Awaited<ReturnType<typeof renderAutocomplete>>, vie
 function expectNarrowGeometry(app: Awaited<ReturnType<typeof renderAutocomplete>>, viewport: typeof DESIGN_VIEWPORT) {
   const frame = app.captureCharFrame().split("\n")
   const header = frame.find((line) => line.includes("/ COMMANDS"))!
-  expect([header.indexOf("┃"), header.lastIndexOf("┃")]).toEqual([0, viewport.width - 1])
+  expect([header.indexOf("┃"), header.lastIndexOf("┃")]).toEqual([0, 0])
   expect(frame.join("\n")).not.toContain("SESSION")
 }
 

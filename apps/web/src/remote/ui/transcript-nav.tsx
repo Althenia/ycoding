@@ -7,7 +7,7 @@ import { hasCompactionCheckpoint, type RemoteMessageView } from "../projection"
 import type { GuardrailDecisionView } from "../decision-grades"
 import { MessageRow } from "./conversation"
 import { GuardrailDecisionRows } from "./decision-grades"
-import { folioOrdinals, folioPositionKnown, folioTurn, transcriptRows, type TranscriptRow } from "./transcript-rows"
+import { transcriptRows, type TranscriptRow } from "./transcript-rows"
 export { rowKey } from "./transcript-rows"
 import { LoadingPlaceholder } from "./loading"
 import { createRowVirtualizer, sameKeys } from "./virtual-rows"
@@ -61,16 +61,6 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   const targets = () => navigationTargets(scrollTop(), !away())
   const rows = createMemo(() => transcriptRows(props.messages(), props.decisions ?? []))
   const checkpoint = createMemo(() => hasCompactionCheckpoint(props.messages()))
-  let issued = new Map<string, number>()
-  let issuedFor: string | undefined
-  const ordinals = createMemo(() => {
-    const session = remote.state().activeSessionID
-    if (session !== issuedFor) {
-      issuedFor = session
-      issued = new Map()
-    }
-    return folioOrdinals(props.messages(), folioPositionKnown(remote.state().history, checkpoint()), issued)
-  })
   const ids = createMemo(() => rows().map((row) => row.id), [], { equals: sameKeys })
   const byKey = createMemo(() => new Map(rows().map((entry) => [entry.id, entry])))
   const prompts = createMemo(() => rows().flatMap((row) => row.kind === "message" && row.message.kind === "user" ? [row.message] : []))
@@ -355,7 +345,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
         const decision = () => { const current = item(); return current.kind === "decision" ? current.decision : undefined }
         const continued = () => { const current = item(); return current.kind === "message" && current.continued }
         const first = () => { const current = message(); return current !== undefined && current.id === id }
-        return <li class="transcript-navigation__item" data-message-id={id} data-entry={first() && folioTurn(message()!) ? "" : undefined} data-index={row.index()} data-settled={settled ? "" : undefined} data-prompt-id={message()?.kind === "user" ? id : undefined} tabindex={message()?.kind === "user" ? -1 : undefined} style={{ "inset-block-start": `${row.top()}px` }}
+        return <li class="transcript-navigation__item" data-message-id={id} data-index={row.index()} data-settled={settled ? "" : undefined} data-prompt-id={message()?.kind === "user" ? id : undefined} tabindex={message()?.kind === "user" ? -1 : undefined} style={{ "inset-block-start": `${row.top()}px` }}
           onFocusOut={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) virtual.release(id) }}
           ref={(element) => {
             row.measure(element)
@@ -364,7 +354,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
               pendingFocus = undefined
               element.focus({ preventScroll: true })
             })
-          }}><Show when={decision()}>{(value) => <GuardrailDecisionRows decisions={[value()]} />}</Show><Show when={message()}><MessageRow message={() => message()!} continued={continued()} head={first()} ordinal={ordinals().get(id)} /></Show></li>
+          }}><Show when={decision()}>{(value) => <GuardrailDecisionRows decisions={[value()]} />}</Show><Show when={message()}><MessageRow message={() => message()!} continued={continued()} head={first()} /></Show></li>
       }}</For>
     </ol>
     <Show when={jumpSlot()}>{(slot) => <Portal mount={slot()}><JumpControls hidden={!active()} clearance={clearance()} onTop={targets().top ? jumpToTop : undefined} onBottom={targets().bottom ? jumpToBottom : undefined} /></Portal>}</Show>

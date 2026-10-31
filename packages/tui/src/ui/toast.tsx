@@ -44,7 +44,7 @@ export function Toast() {
           top={3}
           right={right()}
           width={width()}
-          border={["left", "right"]}
+          border={["left"]}
           borderColor={theme.text.feedback[current().variant].default}
           paddingLeft={2}
           paddingRight={2}

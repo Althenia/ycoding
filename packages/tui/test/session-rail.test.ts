@@ -7,6 +7,7 @@ import {
   isExpandableRailSection,
   railPlacement,
   railWidth,
+  RAIL_SECTION_BAND_HEIGHT,
   resolveExpanded,
   type RailSectionKey,
 } from "../src/routes/session/rail"
@@ -110,6 +111,9 @@ describe("rail attention", () => {
 })
 
 describe("rail placement", () => {
+  test("uses a single-row section heading", () => {
+    expect(RAIL_SECTION_BAND_HEIGHT).toBe(1)
+  })
   test("hides the rail below 100 columns", () => {
     expect(railPlacement(80)).toBe("hidden")
     expect(railPlacement(99)).toBe("hidden")

@@ -312,7 +312,7 @@ export function ProviderUsageScreenContent(props: {
   }))
   return (
     <box width={dimensions().width} height={dimensions().height} flexDirection="column" backgroundColor={theme.background.default}>
-      <box height={3} flexShrink={0} alignItems="center" flexDirection="row" paddingLeft={3} paddingRight={3} backgroundColor={theme.background.chrome}>
+      <box height={1} flexShrink={0} alignItems="center" flexDirection="row" paddingLeft={3} paddingRight={3} backgroundColor={theme.background.default}>
         <BrandMark width={2} height={1} />
         <text> Usage</text>
         <box flexGrow={1} />
@@ -325,11 +325,10 @@ export function ProviderUsageScreenContent(props: {
           </text>
         </box>
       </box>
-      <box flexGrow={1} minHeight={0} flexDirection="column" paddingLeft={3} paddingRight={3}>
-      <box flexShrink={0} height={3} flexDirection="row" alignItems="center">
-        <For each={visibleViews()}>{(item, index) => (
+      <box flexGrow={1} minHeight={0} flexDirection="column" paddingLeft={3} paddingRight={3} paddingTop={1} paddingBottom={1}>
+      <box flexShrink={0} height={1} flexDirection="row" alignItems="center" gap={1}>
+        <For each={visibleViews()}>{(item) => (
           <>
-            <Show when={index() > 0}><text flexShrink={0} fg={theme.border.default}>│</text></Show>
             <box width={NAV_CELL_WIDTH} height={1} flexShrink={0} alignItems="center" onMouseUp={() => selectView(item)}>
               <text
                 fg={view() === item ? theme.text.feedback.info.default : theme.text.subdued}
@@ -418,7 +417,7 @@ export function ProviderUsageScreenContent(props: {
         <ModelIncidents refresh={reportRefresh()} now={props.now} load={props.incidents} />
       </Show>
       </box>
-      <box minHeight={3} flexShrink={0} alignItems="center" flexDirection="row" paddingLeft={3} paddingRight={3} backgroundColor={theme.background.chrome}>
+      <box height={1} flexShrink={0} alignItems="center" flexDirection="row" paddingLeft={3} paddingRight={3} backgroundColor={theme.background.default}>
         <text fg={theme.text.subdued}>
           {view() === "incidents" ? "Retained model incidents · backend-wide" : reportView() ? "Retained analytics · not a bill" : view() === "overview" ? "Backend analytics · retained request history" : "Provider-reported quota windows"}
         </text>

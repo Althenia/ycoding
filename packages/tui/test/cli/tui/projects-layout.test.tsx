@@ -222,6 +222,17 @@ test("Projects list shows master preview, meter and opens the master", async () 
     app.renderer.destroy()
   }
 })
+
+test.each([[80, 24], [120, 36]])("Projects use left accents without panel boxes at %i×%i", async (width, height) => {
+  const { app } = await mount({ projects: [release], width, height })
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("▸ PROJECTS 1")
+    expect(frame).toMatch(/[▎┃]/)
+    expect(frame).not.toMatch(/[┌┐└┘╭╮╰╯]/)
+    expect(frame).toContain("MASTER")
+  } finally { app.renderer.destroy() }
+})
 test("narrow list omits preview and question mark opens contextual keys", async () => {
   const { app } = await mount({ projects: [release], width: 80 })
   try {

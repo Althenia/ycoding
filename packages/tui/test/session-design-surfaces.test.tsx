@@ -24,6 +24,21 @@ const shell = {
   time: { started: now - 68_000 },
 }
 
+test.each([40, 80])("shell metadata keeps each field visible at %i columns", async (width) => {
+  const app = await testRender(() => <TestTuiContexts><ConfigProvider config={createTuiResolvedConfig()}>
+    <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+      <box width={width}><ShellOutputMetadata shell={shell} owner="Main chat" now={now} /></box>
+    </ThemeProvider>
+  </ConfigProvider></TestTuiContexts>, { width, height: 20 })
+  app.renderer.start()
+  try {
+    await app.waitForFrame((value) => value.includes("Capture"))
+    const text = app.captureCharFrame()
+    for (const value of ["Owner", "Main chat", "Status", "running", "Started", "Capture", shell.file]) expect(text).toContain(value)
+    expect(text).toMatch(/[▎┃]/)
+  } finally { app.renderer.destroy() }
+})
+
 test("shell output uses the design header, metadata columns, and footer labels", async () => {
   const app = await render(() => (
     <box width={189} height={17} flexDirection="column">

@@ -77,8 +77,8 @@
   min-block-size: var(--yc-hit-min);
   min-inline-size: 0;
   padding: var(--yc-space-3) var(--yc-space-4);
-  border-block-end: var(--yc-border-width) solid var(--yc-border);
   border-inline-start: 3px solid transparent;
+  border-radius: var(--yc-radius-lg);
   font-size: var(--yc-size-sm);
 }
 

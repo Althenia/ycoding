@@ -2,6 +2,7 @@ import { TextAttributes, type RGBA } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createContext, createEffect, createMemo, createSignal, Show, useContext, type ParentProps } from "solid-js"
 import { useTheme } from "../../context/theme"
+import { readableTint } from "../../theme/component"
 import { Locale } from "../../util/locale"
 import { stringWidth } from "../../util/string-width"
 import {
@@ -98,10 +99,10 @@ export function RailSection(
   const metrics = createMemo(() => railMetrics(dimensions().width))
   const expanded = createMemo(() => (rail ? rail.expanded(props.section) : true))
   const headerColor = createMemo(() => {
-    if (props.attention) return theme.text.feedback.warning.default
-    return expanded() ? theme.text.feedback.success.default : theme.text.feedback.info.default
+    const color = props.attention ? theme.text.feedback.warning.default : expanded() ? theme.text.feedback.success.default : theme.text.feedback.info.default
+    return readableTint(color, theme.background.surface.offset)
   })
-  const titleText = createMemo(() => Locale.truncate(String(props.title ?? "").trim() || "—", 80))
+  const titleText = createMemo(() => Locale.truncate(String(props.title ?? "").trim().toUpperCase() || "—", 80))
   const summaryText = createMemo(() => {
     const available = (rail ? railWidth(dimensions().width) - (rail.leftRule ? 1 : 0) : dimensions().width)
       - (rail ? metrics().paddingLeft + metrics().paddingRight : 0)
@@ -123,11 +124,10 @@ export function RailSection(
         paddingLeft={rail ? metrics().paddingLeft : 0}
         paddingRight={rail ? metrics().paddingRight : 0}
         marginLeft={rail?.leftRule ? -1 : 0}
-        backgroundColor={theme.background.surface.overlay}
         onMouseUp={toggle}
       >
         <text fg={headerColor()} wrapMode="none" flexShrink={0}>
-          {expanded() ? "\u2212" : "\u002b"}
+          {expanded() ? "▾" : "▸"}
         </text>
         <box flexGrow={1} flexShrink={0} paddingLeft={metrics().sectionLabelPadding}>
           <text fg={headerColor()} wrapMode="none" attributes={TextAttributes.BOLD}>
@@ -136,7 +136,7 @@ export function RailSection(
         </box>
         <Show when={summaryText()}>
           <text
-            fg={props.attention ? theme.text.feedback.warning.default : theme.text.subdued}
+            fg={readableTint(props.attention ? theme.text.feedback.warning.default : theme.text.subdued, theme.background.surface.offset)}
             wrapMode="none"
             flexShrink={0}
           >
@@ -153,10 +153,10 @@ export function RailSection(
           <Show when={props.children}>
             <box height={1} flexShrink={0} />
             {props.children}
-            <box height={1} flexShrink={0} />
           </Show>
         </box>
       </Show>
+      <box height={1} flexShrink={0} />
     </box>
   )
 }

@@ -222,7 +222,7 @@ describe("public routes and design-system behavior", () => {
     await page.close()
   })
 
-  test("uses one radius for public controls and raised surfaces without narrow overflow", async () => {
+  test("assigns the Spatial Canvas radii to public controls, planes and pills without narrow overflow", async () => {
     const page = await requireBrowser().openPage()
     const radii = async (path: string, selectors: readonly string[]) => {
       await page.navigate(url(path))
@@ -232,10 +232,10 @@ describe("public routes and design-system behavior", () => {
         return getComputedStyle(element).borderRadius
       })`)
     }
-    expect(await radii("/", [".button--primary", ".feature", ".code-block"])).toEqual(["10px", "10px", "10px"])
-    expect(await radii("/docs", [".docs-bar__nav-toggle", ".docs-search-trigger", ".doc-section", ".card"])).toEqual(["10px", "10px", "10px", "10px"])
+    expect(await radii("/", [".button--primary", ".feature", ".code-block"])).toEqual(["10px", "14px", "10px"])
+    expect(await radii("/docs", [".docs-bar__nav-toggle", ".docs-search-trigger", ".doc-section", ".card"])).toEqual(["999px", "999px", "10px", "14px"])
     expect(await radii("/docs/quickstart", [".code-block", ".callout"])).toEqual(["10px", "10px"])
-    expect(await radii("/changelog", [".release", ".filters__option"])).toEqual(["10px", "10px"])
+    expect(await radii("/changelog", [".release", ".filters__option"])).toEqual(["14px", "10px"])
     await page.setViewport(390, 844)
     for (const path of ["/", "/docs", "/docs/quickstart", "/changelog"]) {
       await page.navigate(url(path))
@@ -1069,7 +1069,7 @@ describe("public routes and design-system behavior", () => {
     const index = async (width: number) => {
       await page.setViewport(width, 900)
       await page.navigate(url("/docs"))
-      return page.evaluate<{ readonly navGettingStarted: string | undefined; readonly navUsage: string | undefined; readonly navUsageVisible: boolean; readonly indexGettingStarted: string | undefined; readonly indexUsage: string | undefined; readonly configuration: { readonly tracks: number; readonly summaries: number; readonly targetHeights: readonly number[]; readonly hrefs: readonly string[] }; readonly gettingStarted: { readonly borderedCards: number; readonly targetHeights: readonly number[]; readonly hrefs: readonly string[] } }>(`(() => {
+      return page.evaluate<{ readonly navGettingStarted: string | undefined; readonly navUsage: string | undefined; readonly navUsageVisible: boolean; readonly indexGettingStarted: string | undefined; readonly indexUsage: string | undefined; readonly configuration: { readonly tracks: number; readonly summaries: number; readonly targetHeights: readonly number[]; readonly hrefs: readonly string[] }; readonly gettingStarted: { readonly tonalCards: number; readonly targetHeights: readonly number[]; readonly hrefs: readonly string[] } }>(`(() => {
         const group = name => document.querySelector('.docs-topic-index [data-doc-group="'+name+'"]')
         const measure = section => {
           if (!(section instanceof HTMLElement)) throw new Error("group missing")
@@ -1080,10 +1080,10 @@ describe("public routes and design-system behavior", () => {
         const gettingStarted = group("get-started")
         const navTitles = [...document.querySelectorAll(".docs-shell__nav .docs-nav__title")]
         const navUsage = navTitles.find(element => element.textContent?.trim() === "Usage")
-        return { navGettingStarted: navTitles.find(element => element.textContent?.trim() === "Getting started")?.textContent?.trim(), navUsage: navUsage?.textContent?.trim(), navUsageVisible: navUsage instanceof HTMLElement && getComputedStyle(navUsage).display !== "none", indexGettingStarted: [...document.querySelectorAll(".docs-topic-index h2")].map(element => element.textContent?.trim()).find(text => text === "Getting started"), indexUsage: [...document.querySelectorAll(".docs-topic-index h2")].map(element => element.textContent?.trim()).find(text => text === "Usage"), configuration: measure(group("configuration")), gettingStarted: { borderedCards: gettingStarted instanceof HTMLElement ? [...gettingStarted.querySelectorAll(".card")].filter(card => getComputedStyle(card).borderTopWidth !== "0px").length : 0, targetHeights: gettingStarted instanceof HTMLElement ? [...gettingStarted.querySelectorAll(".card__link")].map(link => link.getBoundingClientRect().height) : [], hrefs: gettingStarted instanceof HTMLElement ? [...gettingStarted.querySelectorAll(".card__link")].map(link => link.getAttribute("href") ?? "") : [] } }
+        return { navGettingStarted: navTitles.find(element => element.textContent?.trim() === "Getting started")?.textContent?.trim(), navUsage: navUsage?.textContent?.trim(), navUsageVisible: navUsage instanceof HTMLElement && getComputedStyle(navUsage).display !== "none", indexGettingStarted: [...document.querySelectorAll(".docs-topic-index h2")].map(element => element.textContent?.trim()).find(text => text === "Getting started"), indexUsage: [...document.querySelectorAll(".docs-topic-index h2")].map(element => element.textContent?.trim()).find(text => text === "Usage"), configuration: measure(group("configuration")), gettingStarted: { tonalCards: gettingStarted instanceof HTMLElement ? [...gettingStarted.querySelectorAll(".card")].filter(card => getComputedStyle(card).borderTopWidth === "0px" && getComputedStyle(card).backgroundColor !== "rgba(0, 0, 0, 0)").length : 0, targetHeights: gettingStarted instanceof HTMLElement ? [...gettingStarted.querySelectorAll(".card__link")].map(link => link.getBoundingClientRect().height) : [], hrefs: gettingStarted instanceof HTMLElement ? [...gettingStarted.querySelectorAll(".card__link")].map(link => link.getAttribute("href") ?? "") : [] } }
       })()`)
     }
-    // Every group uses one card anatomy (bordered card, title, summary) at every width;
+    // Every group uses one card anatomy (borderless tonal plane, title, summary) at every width;
     // only the track count responds: one column on a phone, two on a tablet, three on a desktop.
     const mobile = await index(390)
     expect(mobile.navUsage).toBe("Usage")
@@ -1093,7 +1093,7 @@ describe("public routes and design-system behavior", () => {
     expect(mobile.configuration.hrefs).toContain("/docs/configuration")
     expect(mobile.configuration.targetHeights.length).toBeGreaterThan(0)
     expect(mobile.configuration.targetHeights.every((height) => height >= 44)).toBe(true)
-    expect(mobile.gettingStarted.borderedCards).toBe(mobile.gettingStarted.hrefs.length)
+    expect(mobile.gettingStarted.tonalCards).toBe(mobile.gettingStarted.hrefs.length)
     expect(mobile.gettingStarted.hrefs).toContain("/docs/quickstart")
     expect(mobile.gettingStarted.targetHeights.length).toBeGreaterThan(0)
     expect(mobile.gettingStarted.targetHeights.every((height) => height >= 44)).toBe(true)
