@@ -57,7 +57,7 @@ There is no generic `.ycoding/tool` loader. Custom tools must be provided by a p
 
 ## Built-in workspace memory
 
-The built-in `memory` tool stores explicit folder-scoped knowledge outside repository resource discovery. Configure it through the runtime `memory` object; it does not scan `.ycoding` for concepts or automatically load knowledge as instructions. Its actions are `status`, `list`, `search`, `read`, `write`, and offline `graph` export. See [Workspace knowledge memory](./memory.md) for storage, format, permissions, and update semantics.
+The built-in `memory` tool stores explicit folder-scoped knowledge outside repository resource discovery. Configure it through the runtime `memory` object; it does not scan `.ycoding` for concepts or automatically load knowledge as instructions. Its actions are `status`, `list`, `search`, `read`, `write`, offline `graph` export, and explicit maintenance: `delete`, `trash`, `restore`, `purge`, and `vacuum`. See [Workspace knowledge memory](./memory.md) for storage, format, permissions, search, and maintenance semantics.
 
 ## Built-in Git worktrees
 

@@ -16,6 +16,7 @@ import { Hash } from "./util/hash"
 import { Flock } from "./util/flock"
 import { MemoryFormat } from "./memory/format"
 import { MemoryGraph } from "./memory/graph"
+import { MemorySearch } from "./memory/search"
 import { MemoryError, memoryError } from "./memory/error"
 import { executeMutation, native } from "./project-artifact/filesystem"
 
@@ -97,7 +98,12 @@ export function make(input: {
     use: (
       state: State,
       signal: AbortSignal,
-    ) => Promise<{ result: A; id: string; concepts?: readonly MemoryFormat.Concept[] }>,
+    ) => Promise<{
+      result: A
+      id: string
+      concepts?: readonly MemoryFormat.Concept[]
+      warnings?: readonly MemoryFormat.Warning[]
+    }>,
   ) =>
     operate(scope, expectedRoot, async (resolved, signal) => {
       if (options.validate) await options.validate(resolved)
@@ -107,12 +113,12 @@ export function make(input: {
         resolved.root,
         async () => {
           signal.throwIfAborted()
-          const { result, id, concepts } = await use(resolved, signal)
-          const warnings = await refreshDerived(resolved, concepts, signal).then(
+          const committed = await use(resolved, signal)
+          const derived = await refreshDerived(resolved, committed.concepts, signal).then(
             () => [],
-            () => [{ id, code: "index-out-of-date" }],
+            () => [{ id: committed.id, code: "index-out-of-date" }],
           )
-          return { ...result, warnings }
+          return { ...committed.result, warnings: [...(committed.warnings ?? []), ...derived] }
         },
         { dir: path.join(resolved.root, ".locks"), signal },
       )
@@ -145,37 +151,15 @@ export function make(input: {
             message: "Search query must contain text and be at most 1024 characters.",
           })
         const bundle = await scan(resolved.root, resolved.limits)
-        const terms = [...new Set(MemoryFormat.words(options.query))]
-        const hits = bundle.concepts
-          .filter(
-            (concept) =>
-              (!options.type || concept.type === options.type) && (!options.tag || concept.tags?.includes(options.tag)),
-          )
-          .map((concept) => {
-            const fields = [
-              { text: `${concept.title ?? ""} ${concept.id}`, weight: 4 },
-              { text: `${concept.type} ${(concept.tags ?? []).join(" ")} ${concept.description ?? ""}`, weight: 2 },
-              { text: concept.body, weight: 1 },
-            ]
-            const score = fields.reduce((total, field) => {
-              const words = new Set(MemoryFormat.words(field.text))
-              return total + terms.filter((term) => words.has(term)).length * field.weight
-            }, 0)
-            const first =
-              terms
-                .map((term) => concept.body.toLowerCase().indexOf(term))
-                .filter((index) => index >= 0)
-                .sort((a, b) => a - b)[0] ?? 0
-            return {
-              ...MemoryFormat.summary(concept),
-              score,
-              snippet: concept.body.slice(Math.max(0, first - 60), Math.max(0, first - 60) + 320).trim(),
-            }
-          })
-          .filter((hit) => hit.score > 0)
-          .sort((a, b) => b.score - a.score || MemoryFormat.compare(a.id, b.id))
-          .slice(0, options.limit ?? 10)
-        return { hits, warnings: bundle.warnings }
+        return {
+          hits: MemorySearch.rank(bundle.concepts, {
+            query: options.query,
+            limit: options.limit ?? 10,
+            type: options.type,
+            tag: options.tag,
+          }),
+          warnings: bundle.warnings,
+        }
       }),
     read: (options: { scope?: Scope; id: string }, expectedRoot?: string) =>
       operate(options.scope, expectedRoot, async (resolved) => {
@@ -282,7 +266,7 @@ export function make(input: {
             const trash = await listTrash(resolved)
             // Fail closed on any incomplete inventory: a truncated or unreadable listing cannot
             // prove the archive fits, so admitting would exceed the configured bound.
-            if (trash.warnings.length > 0) throw tooLarge()
+            if (trash.warnings.some((warning) => warning.code !== "unpaired-trash")) throw tooLarge()
             if (
               trash.entries.length + 1 > resolved.limits.max_concepts ||
               trash.bytes + Buffer.byteLength(before) > resolved.limits.max_bundle_bytes
@@ -384,11 +368,12 @@ export function make(input: {
             source: path.join(resolved.root, trashDirectory, `${entry.trashID}.md`),
             destination: target,
           })
-          await removeSidecar(resolved, entry.trashID)
+          const warnings = await removeSidecar(resolved, entry.trashID)
           const concepts = await remaining(resolved)
           return {
             result: { id: entry.id, digest: entry.digest },
             id: entry.id,
+            warnings,
             ...(concepts === undefined ? {} : { concepts }),
           }
         },
@@ -413,70 +398,94 @@ export function make(input: {
           const stored = path.join(resolved.root, trashDirectory, `${entry.trashID}.md`)
           await safePath(resolved.root, stored)
           await fs.rm(stored, { force: false })
-          await removeSidecar(resolved, entry.trashID)
+          const warnings = await removeSidecar(resolved, entry.trashID)
           const concepts = await remaining(resolved)
           return {
             result: { trashID: entry.trashID, purged: true },
             id: entry.id,
+            warnings,
             ...(concepts === undefined ? {} : { concepts }),
           }
         },
       ),
     vacuum: (options: { scope?: Scope; dryRun?: boolean; expectedDigest?: string }, expectedRoot?: string) =>
-      operate(options.scope, expectedRoot, async (resolved, signal) => {
-        const dryRun = options.dryRun ?? true
-        if (!(await safePath(resolved.root, resolved.root))) {
-          const digest = inventoryDigest([], [], { entries: [] })
-          if (!dryRun) {
-            if (options.expectedDigest !== digest) throw stalePreview()
-            await createRoot(resolved.root)
+      operate(
+        options.scope,
+        expectedRoot,
+        async (
+          resolved,
+          signal,
+        ): Promise<{ dryRun: boolean; digest: string; removed: string[]; warnings: MemoryFormat.Warning[] }> => {
+          const dryRun = options.dryRun ?? true
+          if (!(await safePath(resolved.root, resolved.root))) {
+            const digest = inventoryDigest([], [], { entries: [] })
+            if (!dryRun) {
+              if (options.expectedDigest !== digest) throw stalePreview()
+              await createRoot(resolved.root)
+            }
+            return { dryRun, digest, removed: [], warnings: [] }
           }
-          return { dryRun, digest, removed: [], warnings: [] }
-        }
-        // Preview stays strictly read-only: no storage creation and no lock files.
-        if (dryRun) {
-          const bundle = await scan(resolved.root, resolved.limits)
-          const trash = await listTrash(resolved)
-          const obsolete = await findObsolete(resolved, bundle.concepts)
-          return {
-            dryRun,
-            digest: inventoryDigest(obsolete, bundle.concepts, trash),
-            removed: obsolete.map((item) => item.path),
-            warnings: [...bundle.warnings, ...trash.warnings],
-          }
-        }
-        if (options.expectedDigest === undefined) throw stalePreview()
-        await createRoot(resolved.root)
-        return Flock.withLock(
-          resolved.root,
-          async () => {
-            signal.throwIfAborted()
+          // Preview stays strictly read-only: no storage creation and no lock files.
+          if (dryRun) {
             const bundle = await scan(resolved.root, resolved.limits)
             const trash = await listTrash(resolved)
-            const obsolete = await findObsolete(resolved, bundle.concepts)
-            const digest = inventoryDigest(obsolete, bundle.concepts, trash)
-            if (options.expectedDigest !== digest) throw stalePreview()
-            for (const item of obsolete) {
-              signal.throwIfAborted()
-              const target = path.join(resolved.root, item.path)
-              await safePath(resolved.root, target)
-              await fs.rm(target, { force: true })
-            }
-            await removeEmptyDirectories(
-              resolved.root,
-              obsolete.map((item) => item.path),
-            )
-            await indexes(resolved, bundle.concepts, signal)
+            const plan = await cleanupPlan(resolved, bundle.concepts, trash.orphans)
             return {
               dryRun,
-              digest,
-              removed: obsolete.map((item) => item.path),
+              digest: inventoryDigest(plan, bundle.concepts, trash),
+              removed: plan.map((item) => item.path),
               warnings: [...bundle.warnings, ...trash.warnings],
             }
-          },
-          { dir: path.join(resolved.root, ".locks"), signal },
-        )
-      }),
+          }
+          if (options.expectedDigest === undefined) throw stalePreview()
+          await createRoot(resolved.root)
+          return Flock.withLock(
+            resolved.root,
+            async () => {
+              signal.throwIfAborted()
+              const bundle = await scan(resolved.root, resolved.limits)
+              const trash = await listTrash(resolved)
+              const plan = await cleanupPlan(resolved, bundle.concepts, trash.orphans)
+              const digest = inventoryDigest(plan, bundle.concepts, trash)
+              if (options.expectedDigest !== digest) throw stalePreview()
+              const removed: string[] = []
+              const failures: MemoryFormat.Warning[] = []
+              for (const item of plan) {
+                signal.throwIfAborted()
+                const target = path.join(resolved.root, item.path)
+                const committed = await safePath(resolved.root, target)
+                  .then(() => fs.rm(target, { force: true }))
+                  .then(
+                    () => true,
+                    () => false,
+                  )
+                if (committed) removed.push(item.path)
+                if (!committed) failures.push({ id: item.path, code: "vacuum-incomplete" })
+              }
+              await removeEmptyDirectories(resolved.root, removed)
+              const rebuilt = await indexes(resolved, bundle.concepts, signal).then(
+                () => [],
+                () => [{ id: "", code: "index-out-of-date" }],
+              )
+              return {
+                dryRun,
+                digest,
+                removed,
+                warnings: [
+                  ...bundle.warnings,
+                  ...trash.warnings.filter(
+                    (warning) =>
+                      warning.code !== "unreadable-trash" || !removed.includes(`${trashDirectory}/${warning.id}.json`),
+                  ),
+                  ...failures,
+                  ...rebuilt,
+                ],
+              }
+            },
+            { dir: path.join(resolved.root, ".locks"), signal },
+          )
+        },
+      ),
   }
 }
 
@@ -490,7 +499,8 @@ async function resolve(
   if (scope === "repository" && !repository)
     throw new MemoryError({
       code: "NotFound",
-      message: "No Git repository found for this location; repository memory is not available. Use the knowledge scope.",
+      message:
+        "No Git repository found for this location; repository memory is not available. Use the knowledge scope.",
     })
   const association = repository
     ? {
@@ -500,18 +510,31 @@ async function resolve(
         worktrees: await worktreeDirectories(input.git, repository),
       }
     : undefined
-  const anchor = association ? association.worktrees[0] ?? association.directory : directory
+  const anchor = association ? (association.worktrees[0] ?? association.directory) : directory
   const base = await baseOf(input, settings, anchor)
   const knowledgeRoot = path.join(base, "knowledge")
   const root = scope === "knowledge" ? knowledgeRoot : path.join(base, "repository", association!.id)
-  return { enabled: settings.enabled, scope, directory, base, root, knowledgeRoot, repository: association, limits: settings }
+  return {
+    enabled: settings.enabled,
+    scope,
+    directory,
+    base,
+    root,
+    knowledgeRoot,
+    repository: association,
+    limits: settings,
+  }
 }
 
 async function baseOf(input: { data: string; home: string }, settings: ConfigMemory.Resolved, anchor: string) {
   if (settings.path === undefined) return canonical(path.join(input.data, "memory"))
   const configured = settings.path
   const expanded =
-    configured === "~" ? input.home : configured.startsWith("~/") ? path.join(input.home, configured.slice(2)) : configured
+    configured === "~"
+      ? input.home
+      : configured.startsWith("~/")
+        ? path.join(input.home, configured.slice(2))
+        : configured
   return canonical(path.isAbsolute(expanded) ? expanded : path.resolve(anchor, expanded))
 }
 
@@ -661,7 +684,8 @@ async function scan(root: string, limits: ConfigMemory.Resolved) {
         if (error instanceof MemoryError && error.code === "TooLarge") throw error
         warnings.push({
           id,
-          code: error instanceof MemoryError && error.code === "InvalidConcept" ? "invalid-concept" : "unreadable-concept",
+          code:
+            error instanceof MemoryError && error.code === "InvalidConcept" ? "invalid-concept" : "unreadable-concept",
         })
       }
     }
@@ -723,10 +747,24 @@ async function readSidecar(directory: string, trashID: string) {
   }
 }
 
-async function removeSidecar(state: State, trashID: string) {
+async function removeSidecar(state: State, trashID: string): Promise<MemoryFormat.Warning[]> {
   const target = path.join(state.root, trashDirectory, `${trashID}.json`)
-  await safePath(state.root, target)
-  await fs.rm(target, { force: true })
+  return safePath(state.root, target)
+    .then(() => fs.rm(target, { force: true }))
+    .then(
+      () => [],
+      () => [{ id: trashID, code: "trash-metadata-out-of-date" }],
+    )
+}
+
+async function orphanReceipt(directory: string, trashID: string) {
+  const target = path.join(directory, `${trashID}.json`)
+  const stat = await info(target)
+  if (!stat?.isFile() || stat.size > sidecarLimitBytes) return undefined
+  if (await info(path.join(directory, `${trashID}.md`))) return undefined
+  const text = await readBounded(target, sidecarLimitBytes)
+  if (!MemoryFormat.isReceipt(text)) return undefined
+  return { path: `${trashDirectory}/${trashID}.json`, digest: Hash.sha256(text) }
 }
 
 /** Receipt derived from the original id and the archived bytes, so an edited sidecar id cannot pass. */
@@ -755,39 +793,50 @@ async function listTrash(state: State) {
   const directory = path.join(state.root, trashDirectory)
   const entries: TrashEntry[] = []
   const warnings: MemoryFormat.Warning[] = []
+  const orphans: { path: string; digest: string }[] = []
+  const advisory: MemoryFormat.Warning[] = []
   const entryLimit = state.limits.max_concepts
   const warningLimit = Math.max(0, state.limits.max_concepts - 1)
   let bytes = 0
   const stat = await info(directory)
-  if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) return { entries, bytes, warnings }
-  if ((await fs.realpath(directory)) !== directory) return { entries, bytes, warnings }
+  if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) return { entries, bytes, warnings, orphans }
+  if ((await fs.realpath(directory)) !== directory) return { entries, bytes, warnings, orphans }
   const names = (await fs.readdir(directory)).sort(MemoryFormat.compare)
   for (const name of names) {
-    if (!name.endsWith(".json")) continue
-    const trashID = name.slice(0, -".json".length)
-    if (!/^trash_[a-f0-9]{64}$/.test(trashID)) continue
+    const match = /^(trash_[a-f0-9]{64})\.(json|md)$/.exec(name)
+    if (!match) continue
+    const trashID = match[1]
+    if (match[2] === "md") {
+      if (advisory.length < state.limits.max_concepts && !(await info(path.join(directory, `${trashID}.json`))))
+        advisory.push({ id: trashID, code: "unpaired-trash" })
+      continue
+    }
     if (entries.length >= entryLimit) {
       warnings.push({ id: trashID, code: "trash-limit" })
       break
     }
-    try {
-      const entry = await readTrash(state, trashID)
+    const entry = await readTrash(state, trashID).catch(() => undefined)
+    if (entry) {
       if (bytes + Buffer.byteLength(entry.content) > state.limits.max_bundle_bytes) {
         warnings.push({ id: trashID, code: "trash-limit" })
         break
       }
       bytes += Buffer.byteLength(entry.content)
       entries.push({ id: entry.id, trashID, digest: entry.digest })
-    } catch {
-      if (warnings.length >= warningLimit) {
-        warnings.push({ id: trashID, code: "trash-limit" })
-        break
-      }
-      warnings.push({ id: trashID, code: "unreadable-trash" })
+      continue
     }
+    const orphan =
+      orphans.length < entryLimit ? await orphanReceipt(directory, trashID).catch(() => undefined) : undefined
+    if (orphan) orphans.push(orphan)
+    if (warnings.length >= warningLimit) {
+      warnings.push({ id: trashID, code: "trash-limit" })
+      break
+    }
+    warnings.push({ id: trashID, code: "unreadable-trash" })
   }
   entries.sort((a, b) => MemoryFormat.compare(a.trashID, b.trashID))
-  return { entries, bytes, warnings }
+  warnings.push(...advisory.slice(0, Math.max(0, state.limits.max_concepts - warnings.length)))
+  return { entries, bytes, warnings, orphans }
 }
 
 /**
@@ -795,7 +844,11 @@ async function listTrash(state: State) {
  * The graph is a derived export, so it is removed rather than cross-scanning shared knowledge here;
  * an explicit graph export regenerates it with the repository's current contents.
  */
-async function refreshDerived(state: State, concepts: readonly MemoryFormat.Concept[] | undefined, signal: AbortSignal) {
+async function refreshDerived(
+  state: State,
+  concepts: readonly MemoryFormat.Concept[] | undefined,
+  signal: AbortSignal,
+) {
   let failed = false
   const live =
     concepts ??
@@ -814,8 +867,7 @@ async function refreshDerived(state: State, concepts: readonly MemoryFormat.Conc
   await invalidateGraph(state).catch(() => {
     failed = true
   })
-  if (failed)
-    throw new MemoryError({ code: "Unavailable", message: "Derived memory files could not be rebuilt." })
+  if (failed) throw new MemoryError({ code: "Unavailable", message: "Derived memory files could not be rebuilt." })
 }
 
 /** Removes the managed graph so a deleted or changed concept cannot remain visible in it. */
@@ -835,10 +887,7 @@ async function exportGraph(state: State, signal: AbortSignal) {
       : { concepts: [] as MemoryFormat.Concept[], warnings: [] as MemoryFormat.Warning[], bytes: 0, count: 0 }
   const nodes = [
     ...repository.concepts.map((concept) => ({
-      id:
-        state.scope === "repository"
-          ? `repository/${state.repository!.id}/${concept.id}`
-          : `knowledge/${concept.id}`,
+      id: state.scope === "repository" ? `repository/${state.repository!.id}/${concept.id}` : `knowledge/${concept.id}`,
       concept,
     })),
     // Knowledge concepts keep the same qualified identity in both scopes so a memory-root link
@@ -889,7 +938,11 @@ function entry(concept: MemoryFormat.Concept, prefix: string) {
 }
 
 function indexContent(state: State, directory: string, lines: readonly string[]) {
-  const heading = directory ? `# ${directory}` : state.scope === "knowledge" ? "# Shared knowledge" : "# Repository memory"
+  const heading = directory
+    ? `# ${directory}`
+    : state.scope === "knowledge"
+      ? "# Shared knowledge"
+      : "# Repository memory"
   const metadata =
     directory === "" && state.scope === "repository"
       ? [
@@ -949,6 +1002,14 @@ async function findObsolete(state: State, concepts: readonly MemoryFormat.Concep
   return obsolete.sort((a, b) => MemoryFormat.compare(a.path, b.path))
 }
 
+async function cleanupPlan(
+  state: State,
+  concepts: readonly MemoryFormat.Concept[],
+  orphans: readonly { readonly path: string; readonly digest: string }[],
+) {
+  return [...(await findObsolete(state, concepts)), ...orphans].sort((a, b) => MemoryFormat.compare(a.path, b.path))
+}
+
 async function removeEmptyDirectories(root: string, removed: readonly string[]) {
   const directories = [...new Set(removed.map((relative) => path.posix.dirname(relative)))].sort(
     (a, b) => b.length - a.length,
@@ -969,9 +1030,7 @@ function inventoryDigest(
 ) {
   return Hash.sha256(
     JSON.stringify({
-      removed: obsolete
-        .map((item) => [item.path, item.digest])
-        .sort((a, b) => MemoryFormat.compare(a[0], b[0])),
+      removed: obsolete.map((item) => [item.path, item.digest]).sort((a, b) => MemoryFormat.compare(a[0], b[0])),
       concepts: concepts
         .map((concept) => [concept.id, concept.digest])
         .sort((a, b) => MemoryFormat.compare(a[0], b[0])),
@@ -993,7 +1052,10 @@ function unsafe() {
   })
 }
 function tooLarge() {
-  return new MemoryError({ code: "TooLarge", message: "Workspace memory exceeds a configured concept or bundle limit." })
+  return new MemoryError({
+    code: "TooLarge",
+    message: "Workspace memory exceeds a configured concept or bundle limit.",
+  })
 }
 function notFound() {
   return new MemoryError({ code: "NotFound", message: "Concept or trash entry not found." })
@@ -1020,15 +1082,17 @@ export const node = makeLocationNode({
         data: global.data,
         git,
         settings: () =>
-          config.entries().pipe(
-            Effect.map((entries) =>
-              ConfigMemory.resolve(
-                entries
-                  .filter((entry): entry is Config.Document => entry.type === "document")
-                  .flatMap((entry) => (entry.info.memory ? [entry.info.memory] : [])),
+          config
+            .entries()
+            .pipe(
+              Effect.map((entries) =>
+                ConfigMemory.resolve(
+                  entries
+                    .filter((entry): entry is Config.Document => entry.type === "document")
+                    .flatMap((entry) => (entry.info.memory ? [entry.info.memory] : [])),
+                ),
               ),
             ),
-          ),
       })
     }),
   ),
