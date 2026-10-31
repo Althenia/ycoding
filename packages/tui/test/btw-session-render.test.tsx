@@ -689,10 +689,13 @@ test.each([
     expect(lines).toHaveLength(height + 1)
     expect(lines.every((line) => line.length <= width)).toBe(true)
     const back = lines.findIndex((line) => line.includes("Back to main"))
-    expect(back).toBe(height - 1)
+    expect(back).toBe(height - 2)
     expect(lines[back]).toContain("commands")
     for (const mode of [/Permissions Manual|P Manual|P:M/, /Guardrails Manual|G Manual|G:M/, /Answers Manual|A Manual|A:M/]) expect(lines[back]).toMatch(mode)
-    expect(screen.spans().lines[back].spans.every((span) => span.bg.toInts().join(",") === "21,24,29,255")).toBe(true)
+    for (const row of [height - 3, height - 1]) {
+      expect(lines[row].trim()).toBe("")
+      expect(screen.spans().lines[row].spans.every((span) => span.bg.toInts().join(",") === "15,17,21,255")).toBe(true)
+    }
   } finally {
     await screen.dispose()
   }
@@ -712,7 +715,10 @@ for (const width of [40, 80, 200]) {
       expect(footer).toContain("next")
       expect(footer.trimEnd().length).toBeLessThanOrEqual(width)
       expect(screen.lines().filter((line) => /Permissions Manual|P Manual|P:M/.test(line))).toEqual([footer])
-      expect(screen.lines().at(-2)).toBe(footer)
+      const band = screen.lines().slice(-4, -1)
+      expect(band[0].trim()).toBe("")
+      expect(band[1]).toBe(footer)
+      expect(band[2].trim()).toBe("")
     } finally {
       await screen.dispose()
     }
@@ -887,11 +893,11 @@ test("main header clears its stale child count after reconnect without visiting 
   })
   try {
     await screen.waitForEventStream()
-    await waitFor(() => screen.lines()[0]?.includes("waiting · 1 subagent") === true, "active child header")
+    await waitFor(() => screen.lines()[1]?.includes("waiting · 1 subagent") === true, "active child header")
     state.settleChildWithoutEvent()
     screen.events.disconnect()
-    await waitFor(() => screen.lines()[0]?.includes("ready") === true, "reconciled header")
-    expect(screen.lines()[0]).not.toContain("subagent")
+    await waitFor(() => screen.lines()[1]?.includes("ready") === true, "reconciled header")
+    expect(screen.lines()[1]).not.toContain("subagent")
     expect(screen.frame()).toContain("Message YCoding…")
   } finally {
     await screen.dispose()

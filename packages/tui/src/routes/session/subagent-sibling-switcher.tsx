@@ -113,14 +113,15 @@ export function SubagentSiblingSwitcher() {
     <Show when={siblings().length > 0}>
       <box
         width="100%"
-        height={1}
+        height={3}
+        paddingTop={1}
         paddingLeft={1}
         paddingRight={1}
         flexDirection="row"
         alignItems="flex-start"
         flexShrink={0}
         flexGrow={0}
-        backgroundColor={theme.background.default}
+        backgroundColor={theme.background.surface.offset}
       >
         <Show when={parent()}>
           <box width={layout().parentWidth} height={1} flexShrink={0} onMouseUp={() => keymap.dispatch("session.parent")}>

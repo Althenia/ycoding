@@ -63,17 +63,6 @@ function findText(node: Renderable, text: string): TextRenderable | undefined {
 }
 
 describe("landing", () => {
-  test("marks the composer with a left accent instead of a horizontal rule", async () => {
-    const app = await renderLanding({ width: 80 })
-    try {
-      const lines = frame(app)
-      const prompt = lines.find((line) => line.includes("Message YCoding…"))
-      expect(prompt).toMatch(/^[▎┃]/)
-      expect(lines.some((line) => /^─{10}/.test(line))).toBe(false)
-    } finally {
-      app.renderer.destroy()
-    }
-  })
   test("renders the transparent five-block mark and requested landing copy with the YCoding design tokens", async () => {
     const app = await renderLanding({ width: DESIGN_VIEWPORT.width })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
@@ -115,7 +104,7 @@ describe("landing", () => {
     unbound.renderer.destroy()
   })
 
-  test("uses the static landing placeholder with a left composer accent", async () => {
+  test("uses the static landing placeholder and an uncapped full-width composer rule", async () => {
     // Both design grids are real: 189 columns with the sidebar open, 220 without.
     const narrow = await renderLanding({ width: NARROW_VIEWPORT.width })
     const sidebar = await renderLanding({ width: DESIGN_VIEWPORT.width })
@@ -123,7 +112,9 @@ describe("landing", () => {
 
     expect(frame(narrow).join("\n")).toContain("Message YCoding…")
     expect(landingPlaceholder.normal).toEqual(["Message YCoding…"])
-    for (const app of [narrow, sidebar, full]) expect(frame(app).some((line) => line.startsWith("┃"))).toBe(true)
+    expect(frame(narrow)[7]?.length).toBe(NARROW_VIEWPORT.width)
+    expect(frame(sidebar)[7]?.length).toBe(DESIGN_VIEWPORT.width)
+    expect(frame(full)[7]?.length).toBe(DESIGN_VIEWPORT_WIDE.width)
 
     narrow.renderer.destroy()
     sidebar.renderer.destroy()
@@ -154,7 +145,7 @@ describe("landing", () => {
       try {
         const sessionComposerPadding = Math.max(1, Math.min(4, Math.floor(viewport.height / 16)))
         expect(findText(app.renderer.root, "single-line composer")?.parent?.parent?.height).toBe(
-          1 + sessionComposerPadding,
+          2 + sessionComposerPadding,
         )
       } finally {
         app.renderer.destroy()

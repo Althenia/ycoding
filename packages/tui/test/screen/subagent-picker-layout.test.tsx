@@ -46,11 +46,10 @@ function promptRow(lines: string[]) {
   return lines.findIndex((line) => line.includes("Message YCoding…"))
 }
 
-/** The prompt band starts at its first left accent row, so the band height is footer minus that row. */
+/** The prompt band starts at its own rule, so the band height is footer minus rule. */
 function composerBand(lines: string[]) {
   const prompt = promptRow(lines)
-  let rule = prompt
-  while (rule > 0 && lines[rule - 1]?.trimStart().startsWith("┃")) rule--
+  const rule = lines.findLastIndex((line, index) => index < prompt && line.includes("─"))
   const footer = lines.findIndex((line) => /subagents \d/.test(line))
   expect(prompt).toBeGreaterThan(-1)
   expect(rule).toBeGreaterThan(-1)

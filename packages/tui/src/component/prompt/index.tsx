@@ -37,7 +37,6 @@ import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, type JSX } from "@opentui/solid"
 import { errorMessage } from "../../util/error"
 import { useDialog } from "../../ui/dialog"
-import { SplitBorder } from "../../ui/border"
 import { DialogIntegration } from "../dialog-integration"
 import { DialogModel } from "../dialog-model"
 import { useConnected } from "../use-connected"
@@ -2512,8 +2511,7 @@ export function Prompt(props: PromptProps) {
           minHeight={props.landing ? 1 : 2}
           flexShrink={0}
           flexDirection="column"
-          border={props.landing ? [] : ["left"]}
-          customBorderChars={SplitBorder.customBorderChars}
+          border={props.landing ? [] : ["top"]}
           borderColor={
             props.landing
               ? borderHighlight()
@@ -2533,7 +2531,6 @@ export function Prompt(props: PromptProps) {
             backgroundColor={promptBg}
             flexGrow={1}
             width="100%"
-            onMouseDown={() => { if (!props.disabled) input.focus() }}
           >
             <box width="100%" minHeight={1}>
             <textarea

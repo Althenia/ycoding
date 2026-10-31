@@ -98,7 +98,7 @@ export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"
     <box flexDirection="column" paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} gap={1} flexShrink={0}>
       <box
         flexDirection="column"
-        border={props.heading === false ? [] : ["left"]}
+        border={props.heading === false ? [] : ["left", "right", "top", "bottom"]}
         borderColor={theme.border.default}
         paddingLeft={props.heading === false ? 1 : 0}
         paddingRight={props.heading === false ? 1 : 0}
@@ -145,6 +145,7 @@ export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"
               </text>
             </Show>
           </box>
+          <box height={1} flexShrink={0} border={["top"]} borderColor={theme.border.default} />
         </Show>
         <box flexDirection="column" paddingTop={1} paddingBottom={1} flexShrink={0} paddingLeft={props.view === "split" ? 5 : 0}>
           <Show

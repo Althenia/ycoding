@@ -829,7 +829,6 @@ export function Autocomplete(props: {
         width={popupWidth()}
         zIndex={100}
         {...SplitBorder}
-        border={["left"]}
         backgroundColor={store.visible === "/" ? theme.background.surface.offset : undefined}
         borderColor={theme.border.default}
         flexDirection="column"

@@ -379,9 +379,7 @@ async function retryReceipt(screen: Awaited<ReturnType<typeof renderScreen>>) {
 }
 
 function composerRuleRow(lines: string[], contentRow: number) {
-  let row = contentRow
-  while (row > 0 && lines[row - 1]?.includes("┃")) row--
-  return row
+  return lines.findLastIndex((line, index) => index < contentRow && line.includes("─"))
 }
 
 test("keeps the composer subagent picker hidden during a permission review", async () => {
@@ -415,14 +413,14 @@ test("insets the input, caps natural wrapping at six rows, and keeps autocomplet
     // container crashes TextBuffer allocation on the next keystroke.
     expect(promptRow).toBeGreaterThan(-1)
     expect(ruleRow).toBeGreaterThan(-1)
-    expect(promptRow - ruleRow).toBe(2)
-    expect(initial.slice(ruleRow + 1, promptRow).every((line) => line.replace("┃", "").trim() === "")).toBe(true)
+    expect(promptRow - ruleRow).toBe(3)
+    expect(initial.slice(ruleRow + 1, promptRow).every((line) => line.trim() === "")).toBe(true)
     expect(initial.some((line) => line.includes("Enter send"))).toBe(false)
     // `⌃p commands` still belongs to the footer band, so assert on a hint-row-only affordance.
     expect(initial.some((line) => line.includes("⌃x b sidebar"))).toBe(false)
 
     // The composer sits directly above the footer band with no hint row between them.
-    const footerRow = initial.findIndex((line) => /subagents \d|sa\d/.test(line))
+    const footerRow = initial.findIndex((line) => /subagents \d/.test(line))
     expect(footerRow).toBeGreaterThan(promptRow)
     expect(footerRow - promptRow).toBeLessThanOrEqual(6)
 
@@ -433,7 +431,7 @@ test("insets the input, caps natural wrapping at six rows, and keeps autocomplet
     await waitForFrameText(screen, "session draft")
     const typed = screen.lines().findIndex((line) => line.includes("session draft"))
     expect(typed).toBe(promptRow)
-    expect(typed - composerRuleRow(screen.lines(), typed)).toBe(2)
+    expect(typed - composerRuleRow(screen.lines(), typed)).toBe(3)
 
     // Every paste stays below the prompt's large-paste virtualization threshold, producing one
     // naturally wrapped logical line rather than explicit newline rows. Await each deferred
@@ -468,7 +466,7 @@ test("insets the input, caps natural wrapping at six rows, and keeps autocomplet
     await screen.input.typeText("/")
     await waitForFrameText(screen, "/ COMMANDS")
     const autocomplete = screen.lines()
-    const slashRow = autocomplete.findIndex((line) => line.replace("┃", "").trim() === "/")
+    const slashRow = autocomplete.findIndex((line) => line.trim() === "/")
     const autocompleteFooter = autocomplete.findIndex((line) => line.includes("Enter accept"))
     const autocompleteRule = composerRuleRow(autocomplete, slashRow)
     expect(autocompleteRule - autocompleteFooter).toBe(2)

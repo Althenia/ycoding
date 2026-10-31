@@ -36,7 +36,8 @@ export function isExpandableRailSection(key: RailSectionKey): boolean {
   return EXPANDABLE_RAIL_SECTIONS.includes(key)
 }
 
-export const RAIL_SECTION_BAND_HEIGHT = 1
+// Penpot's 32px section bands occupy 2.76 terminal rows at the measured 11.594px row height.
+export const RAIL_SECTION_BAND_HEIGHT = Math.ceil(32 / 11.594)
 
 /**
  * Defaults keep only Session, context and todo open. All other sections stay

@@ -11,6 +11,7 @@ import { DialogProvider } from "../src/ui/dialog"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
+const chrome = [15, 17, 21, 255] as const
 const mint = [103, 215, 164, 255] as const
 const blue = [121, 184, 255, 255] as const
 const canvas = [21, 24, 29, 255] as const
@@ -93,22 +94,24 @@ test.each([
     const frame = app.captureCharFrame()
     const lines = frame.split("\n")
     const spans = app.captureSpans().lines
-    const header = spans.slice(0, 1)
-    const footer = spans.slice(-1)
+    const header = spans.slice(0, 3)
+    const footer = spans.slice(-4, -1)
     const row = lines.find((line) => line.includes("RETAINED MODEL BREAKDOWN"))
 
     expect(lines).toHaveLength(height + 1)
     expect(lines.every((line) => line.length <= width)).toBe(true)
-    expect(header).toHaveLength(1)
-    expect(footer).toHaveLength(1)
+    expect(header).toHaveLength(3)
+    expect(footer).toHaveLength(3)
     expect(header.flatMap((line) => line.spans).some((span) => span.fg.toInts().every((value, index) => value === mint[index]))).toBe(true)
-    expect(header.flatMap((line) => line.spans).some((span) => span.text.includes("Usage") && span.bg.toInts().every((value, index) => value === canvas[index]))).toBe(true)
-    expect(footer.flatMap((line) => line.spans).every((span) => span.bg.toInts().every((value, index) => value === canvas[index]))).toBe(true)
+    expect(header.flatMap((line) => line.spans).some((span) => span.text.includes("Usage") && span.bg.toInts().every((value, index) => value === chrome[index]))).toBe(true)
+    expect(footer.slice(1).flatMap((line) => line.spans).every((span) => span.bg.toInts().every((value, index) => value === chrome[index]))).toBe(true)
     expect(app.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("Overview"))?.fg.toInts()).toEqual([...blue])
     expect(row?.indexOf("RETAINED MODEL BREAKDOWN")).toBe(3)
-    const navigation = lines[2]
-    expect(navigation).toMatch(/Overview\s+Usage/)
-    expect(navigation).not.toContain("│")
+    const navigation = lines.slice(3, 6).find((line) => line.includes("Overview"))!
+    expect(navigation).toMatch(/Overview {2,}│ {2,}Usage/)
+    const separators = [...navigation.matchAll(/│/g)].map((match) => match.index)
+    expect(separators.length).toBeGreaterThan(0)
+    expect(separators.slice(1).every((column, index) => column - separators[index] === 13)).toBe(true)
     expect(spans[height - 4].spans.every((span) => span.bg.toInts().every((value, index) => value === canvas[index]))).toBe(true)
     if (width < 108) expect(frame).toContain("steps 3")
     if (width >= 108) expect(frame).toContain("STEPS")
@@ -223,7 +226,7 @@ test.each([
       expect(metricColors.size).toBeGreaterThanOrEqual(3)
       expect(Math.abs(lines[selectedRow].trimEnd().length - (width - 3))).toBeLessThanOrEqual(1)
       for (const tab of ["Overview", "Usage", "Models", "Daily", "Hourly", "Monthly", "Sessions", "Projects", "Stats", "Agents"]) {
-        expect(lines[2]).toContain(tab)
+        expect(lines.slice(3, 6).join("\n")).toContain(tab)
       }
       for (const column of ["INPUT", "OUTPUT", "CACHE", "COST"]) expect(frame.toUpperCase()).toContain(column)
     }

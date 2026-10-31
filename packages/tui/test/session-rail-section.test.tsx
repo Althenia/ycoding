@@ -129,7 +129,7 @@ test("renders the session title only inside the section body", async () => {
   try {
     const rows = app.captureCharFrame().split("\n")
     // A long title on the header row squeezed the label down to "S", because the summary never shrinks.
-    expect(rows[0]).toMatch(/^▾ SESSION *$/)
+    expect(rows[0]).toMatch(/^− SESSION *$/)
     expect(rows.slice(1).join("\n")).toContain("New session — cache audit")
   } finally {
     app.renderer.destroy()
@@ -357,7 +357,7 @@ test("leaves one blank row after expanded TODO content", async () => {
     expect(lines[completed + 1]?.trim()).toBe("")
     // The next section's three-row band vertically centers its title, so the title appears two rows
     // after the single separator. There is no second component-owned spacer.
-    expect(next - completed).toBe(2)
+    expect(next - completed).toBe(3)
   } finally {
     app.renderer.destroy()
   }
@@ -393,8 +393,8 @@ test("applies one outer surface row around populated expandable rail sections", 
       const headerRow = lines.findIndex((line) => line.includes(header))
       const contentRow = lines.findIndex((line) => line.includes(content))
       const nextRow = lines.findIndex((line) => line.includes(nextHeader))
-      expect(contentRow - headerRow).toBe(2)
-      expect(nextRow - contentRow).toBe(2)
+      expect(contentRow - headerRow).toBe(3)
+      expect(nextRow - contentRow).toBe(3)
       expect(lines[contentRow + 1]?.trim()).toBe("")
     }
   } finally {
@@ -637,16 +637,16 @@ test("renders rail header glyphs and colors for expanded, collapsed, and attenti
     const attentionExpanded = header("ATTENTION EXPANDED")
     const attentionCollapsed = header("ATTENTION COLLAPSED")
 
-    expect(expanded[0]?.plainText).toBe("▾")
+    expect(expanded[0]?.plainText).toBe("\u2212")
     expect(expanded[0]?.fg.toInts()).toEqual(theme()!.text.feedback.success.default.toInts())
     expect(expanded[1]?.fg.toInts()).toEqual(theme()!.text.feedback.success.default.toInts())
-    expect(collapsed[0]?.plainText).toBe("▸")
+    expect(collapsed[0]?.plainText).toBe("+")
     expect(collapsed[0]?.fg.toInts()).toEqual(theme()!.text.feedback.info.default.toInts())
     expect(collapsed[1]?.fg.toInts()).toEqual(theme()!.text.feedback.info.default.toInts())
-    expect(attentionExpanded[0]?.plainText).toBe("▾")
+    expect(attentionExpanded[0]?.plainText).toBe("\u2212")
     expect(attentionExpanded[0]?.fg.toInts()).toEqual(theme()!.text.feedback.warning.default.toInts())
     expect(attentionExpanded[1]?.fg.toInts()).toEqual(theme()!.text.feedback.warning.default.toInts())
-    expect(attentionCollapsed[0]?.plainText).toBe("▾")
+    expect(attentionCollapsed[0]?.plainText).toBe("\u2212")
     expect(attentionCollapsed[0]?.fg.toInts()).toEqual(theme()!.text.feedback.warning.default.toInts())
     expect(attentionCollapsed[1]?.fg.toInts()).toEqual(theme()!.text.feedback.warning.default.toInts())
   } finally {

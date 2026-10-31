@@ -2869,18 +2869,18 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
   }
   return (
     <Switch>
-      <Match when={peer()}>{(sender) => <box paddingLeft={1} paddingRight={1} marginTop={1}>
+      <Match when={peer()}>{(sender) => <box border={["top"]} borderColor={theme.border.default} paddingLeft={1} paddingRight={1} marginTop={1}>
         <Show when={Dots.peer(metadata()) || sender().details}>
           <text fg={theme.text.feedback.info.default} wrapMode="word">{escapeTerminalText(sender().label)}</text>
         </Show>
         <text fg={theme.text.default} wrapMode="word">{props.message.type === "synthetic" ? escapeTerminalText(props.message.text) : ""}</text>
       </box>}</Match>
-      <Match when={projectNotice()}>{(notice) => <box paddingLeft={1} paddingRight={1} marginTop={1}>
+      <Match when={projectNotice()}>{(notice) => <box border={["top"]} borderColor={theme.border.default} paddingLeft={1} paddingRight={1} marginTop={1}>
         <box flexDirection="row"><text fg={notice().event === "failed" ? theme.text.feedback.error.default : notice().event === "escalated" ? theme.text.feedback.warning.default : theme.text.subdued} wrapMode="none" truncate flexGrow={1}>{escapeTerminalText(notice().title)} {projectNoticeLabel(notice())}</text><text fg={theme.text.feedback.info.default} onMouseUp={() => route.navigate({ type: "session", sessionID: notice().sessionID })}>[o] Open</text></box>
         <Show when={notice().excerpt}><text fg={theme.text.subdued} wrapMode="word">{escapeTerminalText(notice().excerpt)}</text></Show>
       </box>}</Match>
       <Match when={goalSteer()}>
-        <box paddingLeft={1} paddingRight={1} paddingBottom={1}>
+        <box paddingLeft={1} paddingRight={1} paddingBottom={1} border={["top"]} borderColor={theme.border.default}>
           <text fg={theme.text.feedback.info.default}><b>Goal · steer</b></text>
           <text fg={theme.text.default} wrapMode="word">
             {props.message.type === "synthetic" ? props.message.text : ""}
@@ -3047,9 +3047,11 @@ function CompactionLifecycleMessage(props: {
   return (
     <box paddingLeft={1} flexDirection="column">
       <box flexDirection="row" alignItems="center">
+        <box border={["top"]} borderColor={color()} flexGrow={1} />
         <box paddingLeft={1} paddingRight={1}>
           <text fg={color()}>{compactionLabel(props.lifecycle)}</text>
         </box>
+        <box border={["top"]} borderColor={color()} flexGrow={1} />
       </box>
       <Show when={props.lifecycle.status === "completed" && props.lifecycle.metrics}>
         {(metrics) => (
@@ -3057,7 +3059,7 @@ function CompactionLifecycleMessage(props: {
             <Show when={number() !== undefined}>
               <text fg={theme.text.subdued}>~{compactTokenCount(props.history?.totalSavedTokens ?? 0)} tokens saved total</text>
             </Show>
-            <box width="100%" flexDirection="row">
+            <box border width="100%" flexDirection="row" borderColor={theme.border.default}>
               <box flexGrow={Math.max(1, metrics().inputTokens - metrics().retainedTokens)} backgroundColor={theme.text.subdued}>
                 <text fg={theme.background.default}>{composition().removed}</text>
               </box>
@@ -3096,6 +3098,7 @@ function CompactionMarker(props: {
   return (
     <box paddingLeft={1}>
       <box flexDirection="row" alignItems="center">
+        <box border={["top"]} borderColor={color()} flexGrow={1} />
         <box flexDirection="row" gap={1} paddingLeft={1} paddingRight={1}>
           <Switch>
             <Match when={props.message.status === "running"}>
@@ -3111,6 +3114,7 @@ function CompactionMarker(props: {
             <text fg={color()}>· cancelled</text>
           </Show>
         </box>
+        <box border={["top"]} borderColor={color()} flexGrow={1} />
       </box>
     </box>
   )
@@ -4501,7 +4505,7 @@ export function InlineToolRow(props: {
       onMouseOut={props.onMouseOut}
       onMouseUp={props.onMouseUp}
     >
-      <box width="100%" flexDirection="row">
+      <box width="100%" border={["top"]} borderColor={theme?.border.default} flexDirection="row">
         <text
           width={2}
           flexShrink={0}

@@ -19,7 +19,6 @@ import { Header, headerModelLabel } from "./session/header"
 import { useClient } from "../context/client"
 import { BrandMark } from "../component/logo"
 import { useToast } from "../ui/toast"
-import { SplitBorder } from "../ui/border"
 import { DialogChromeConnection } from "../component/dialog-session-browser"
 import { errorMessage } from "../util/error"
 import { modelDaybreak } from "../util/session-daybreak"
@@ -55,8 +54,7 @@ export function LandingComposer(props: { children: JSX.Element }) {
     <box
       width="100%"
       paddingBottom={Math.max(0, Math.max(1, Math.min(4, Math.floor(dimensions().height / 16))) - 1)}
-      border={["left"]}
-      customBorderChars={SplitBorder.customBorderChars}
+      border={["top"]}
       borderColor={theme.text.feedback.success.default}
     >
       {props.children}
@@ -89,9 +87,9 @@ function LandingFooter(props: { autonomy?: SessionAutonomyView }) {
       justifyContent="space-between"
       paddingLeft={3}
       paddingRight={3}
-      height={dimensions().width < 120 ? 2 : 1}
+      height={3}
       alignItems={dimensions().width < 120 ? "flex-start" : "center"}
-      backgroundColor={theme.background.default}
+      backgroundColor={theme.background.chrome}
     >
       <box flexDirection="row" gap={3} flexShrink={0}>
         <text fg={theme.text.subdued}>main</text>

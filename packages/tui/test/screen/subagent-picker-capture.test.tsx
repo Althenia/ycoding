@@ -83,14 +83,14 @@ test("captures populated subagent picker states at reference terminal dimensions
       // agent, the description and the metadata share it, with the metadata flush against the
       // composer's right inset so no column can overlap or push another off the row.
       expect(lines.join("\n")).toContain("c inclusive task cost details")
-      const tabs = viewport.height === NARROW_VIEWPORT.height ? 8 : 45
+      const tabs = viewport.height === NARROW_VIEWPORT.height ? 6 : 43
       expectAt(lines, tabs, 3, "Subagents")
       expectAt(lines, tabs, 14, "2")
       const tabLine = lines[tabs] ?? ""
       expect(tabLine.indexOf("Subagents")).toBeLessThan(tabLine.indexOf("Shell"))
       expect(tabLine.indexOf("Shell")).toBeLessThan(tabLine.indexOf("Side chats"))
       expect(tabLine).not.toContain("Idle")
-      const rows = viewport.height === NARROW_VIEWPORT.height ? [12, 14] : [50, 52]
+      const rows = viewport.height === NARROW_VIEWPORT.height ? [10, 12] : [48, 50]
       expectAt(lines, rows[0], 3, "? awaiting")
       expectAt(lines, rows[0], 19, "test-triage  · Tria")
       expectAt(lines, rows[1], 3, "running")
@@ -107,14 +107,14 @@ test("captures populated subagent picker states at reference terminal dimensions
         expect(lines[rows[0]]).toContain("anthropic/claude-sonnet-5 · 68% hit · ")
         expect(lines[rows[1]]).toContain("anthropic/claude-sonnet-5 · attached · 74% hit · ")
         // Only the awaiting task adds a second row, and it carries the question, never metadata.
-        expectAt(lines, 51, 19, "? Should I mark the pre-existing failures as expected, or fix them?")
+        expectAt(lines, 49, 19, "? Should I mark the pre-existing failures as expected, or fix them?")
         expect(lines.filter((line) => line.includes("anthropic/"))).toHaveLength(rows.length + 2)
-        expectAt(lines, 66, 3, "Enter attach")
-        expectAt(lines, 66, 18, "↑↓ move")
-        expectAt(lines, 66, 28, "⌃x k cancel")
-        expectAt(lines, 66, 43, "p pin")
-        expectAt(lines, 66, 51, "r answer")
-        expectAt(lines, 66, 62, "Esc close")
+        expectAt(lines, 64, 3, "Enter attach")
+        expectAt(lines, 64, 18, "↑↓ move")
+        expectAt(lines, 64, 28, "⌃x k cancel")
+        expectAt(lines, 64, 43, "p pin")
+        expectAt(lines, 64, 51, "r answer")
+        expectAt(lines, 64, 62, "Esc close")
       }
       const inactiveHeading = lines.findIndex((line) => line.includes("INACTIVE"))
       const hints = lines.findIndex((line, index) => index > inactiveHeading && line.includes("Enter attach"))

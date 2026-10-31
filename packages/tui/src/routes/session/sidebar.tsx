@@ -29,6 +29,8 @@ export function Sidebar(props: {
     <Show when={session()}>
       <box
         backgroundColor={theme.background.default}
+        border={["left"]}
+        borderColor={theme.border.default}
         width={railWidth(dimensions().width)}
         height="100%"
         paddingBottom={1}
@@ -52,6 +54,7 @@ export function Sidebar(props: {
             <RailProvider
               goal={props.autonomy?.goal?.status === "active"}
               allExpanded={allExpanded()}
+              leftRule
             >
               <SessionRailContent sessionID={props.sessionID} title={session().title}>
                 <pluginRuntime.Slot

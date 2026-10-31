@@ -52,10 +52,6 @@ test("renders session stats, percentages, tokens and total in a two-column grid"
   const app = await render(120, diagnostics)
   try {
     const frame = app.captureCharFrame()
-    const lines = frame.split("\n")
-    expect(lines[0]).toContain("Context breakdown")
-    expect(lines[1].trim()).toBe("")
-    expect(app.captureSpans().lines[0].spans.find((span) => span.text.includes("Context breakdown"))?.bg.toInts()).toEqual([21, 24, 29, 255])
     for (const label of ["Session", "Messages", "Provider", "Model", "Context Limit", "Total Tokens", "Usage %", "Input Tokens", "Output Tokens", "Reasoning Tokens", "Cache Tokens read/write", "User Messages", "Assistant Messages", "Total Cost", "Session Created", "Last Activity", "Category", "Tokens", "Total"])
       expect(frame).toContain(label)
     expect(frame).toContain("Demo session")

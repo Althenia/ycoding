@@ -105,12 +105,11 @@ export function ContextBreakdownContent(props: {
   const color = (index: number) => theme.hue[hues[index]][500]
 
   return <box width={dimensions().width} height={dimensions().height} flexDirection="column" backgroundColor={theme.background.default}>
-    <box height={1} flexShrink={0} flexDirection="row" alignItems="center" paddingLeft={3} paddingRight={3} backgroundColor={theme.background.default}>
+    <box height={3} flexShrink={0} flexDirection="row" alignItems="center" paddingLeft={3} paddingRight={3} backgroundColor={theme.background.chrome}>
       <BrandMark width={2} height={1} /><text> Context breakdown</text><box flexGrow={1} />
       <text fg={theme.text.subdued} onMouseUp={props.onBack}>{backShortcut() ?? "esc"} back</text>
     </box>
-    <box height={1} flexShrink={0} />
-    <scrollbox flexGrow={1} paddingLeft={3} paddingRight={3}>
+    <scrollbox flexGrow={1} paddingLeft={3} paddingRight={3} paddingTop={1}>
       <box flexDirection="column" gap={1}>
         <For each={Array.from({ length: dimensions().width >= 84 ? 8 : 16 }, (_, index) => index)}>{(index) =>
           <box flexDirection={dimensions().width >= 84 ? "row" : "column"}>

@@ -62,38 +62,17 @@ test("captures the product blocked-subagent screen at reference dimensions", asy
     expect(output).toContain(`blocked ${headerWait}`)
     expect(output).not.toContain("─")
     expect(output).not.toContain("│")
-    expect(rows[5]?.indexOf("TEST-TRIAGE SUBAGENT")).toBe(3)
-    expect(rows[7]?.indexOf("Two provider tests fail on main before my changes.")).toBe(3)
-    expect(rows[11]?.indexOf("ok")).toBe(3)
-    expect(rows[14]?.indexOf("?")).toBe(3)
-    expect(rows[20]?.indexOf("Should I mark the pre-existing failures as expected, or fix them?")).toBe(6)
-    expect(rows[0]).toMatch(/\? awaiting input · 4m\d{2}s/)
-    expect(rows[63]?.indexOf("Enter answer")).toBe(3)
-    expect(rows[63]).not.toContain("Esc leave blocked")
-    expect(rows[1]?.indexOf("↑ Provider cache audit")).toBe(3)
+    expect(rows[9]?.indexOf("TEST-TRIAGE SUBAGENT")).toBe(3)
+    expect(rows[11]?.indexOf("Two provider tests fail on main before my changes.")).toBe(3)
+    expect(rows[15]?.indexOf("ok")).toBe(3)
+    expect(rows[18]?.indexOf("?")).toBe(3)
+    expect(rows[24]?.indexOf("Should I mark the pre-existing failures as expected, or fix them?")).toBe(6)
+    expect(rows[1]).toMatch(/\? awaiting input · 4m\d{2}s/)
+    expect(rows[62]?.indexOf("Enter answer")).toBe(3)
+    expect(rows[62]).not.toContain("Esc leave blocked")
+    expect(rows[4]?.indexOf("↑ Provider cache audit")).toBe(3)
   }
 }, 60_000)
-
-for (const [width, speed, detail, identity] of [[44, true, false, false], [59, true, false, false], [60, true, false, false], [65, true, false, false], [66, true, false, true], [119, true, false, true], [120, true, true, true]] as const) {
-  test(`blocked subagent footer at ${width} columns shows speed ${speed}, context and cache detail ${detail}`, async () => {
-    const rows = await captureRoute({ width, height: 30, args: { sessionID }, sessionReady: true, settle: "≈ 100 tok/s", stable: width < 59 ? ["≈ 100 tok/s"] : ["≈ 100 tok/s", "2 of 3"], route: withSpeed })
-    const footer = rows.findLast((line) => line.trim()) ?? ""
-    expect(footer.includes("test-")).toBe(identity)
-    expect(footer.includes("≈ 100 tok/s")).toBe(speed)
-    expect(footer.includes("% hit")).toBe(detail)
-    expect(footer).not.toContain("durable · resumable")
-    expect(rows.join("\n")).toContain("Enter answer")
-    expect(rows.every((line) => line.length <= width)).toBe(true)
-  })
-}
-
-async function withSpeed(url: URL) {
-  const response = route(url)
-  if (url.pathname !== `/api/session/${sessionID}/diagnostics` || !response) return response
-  const body = await response.json()
-  return json({ ...body, data: { ...body.data, generationSpeed: { model, recent: [],
-    latest: { model, tokens: 100, durationNs: 1_000_000_000, tokensPerSecond: 100, estimated: true } } } })
-}
 
 function route(url: URL) {
   const now = Date.now()

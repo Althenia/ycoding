@@ -5,7 +5,6 @@ import { readableTint } from "../../theme/component"
 import { Keymap } from "../../context/keymap"
 import { Locale } from "../../util/locale"
 import { stringWidth } from "../../util/string-width"
-import { SplitBorder } from "../../ui/border"
 
 export type Tone = "success" | "warning" | "error" | "subdued"
 
@@ -46,10 +45,11 @@ export function Panel(props: {
   const { theme } = useTheme()
   return (
     <box
-      border={["left"]}
-      customBorderChars={SplitBorder.customBorderChars}
+      border
+      borderStyle="single"
       borderColor={props.active ? infoInk(theme) : theme.border.default}
-      backgroundColor={theme.background.default}
+      title={`${props.active ? "▸ " : ""}${props.title}`}
+      titleColor={props.active ? infoInk(theme) : quietInk(theme)}
       width={props.width}
       height={props.height}
       flexGrow={props.flexGrow}
@@ -60,9 +60,6 @@ export function Panel(props: {
       paddingLeft={1}
       paddingRight={1}
     >
-      <text height={1} flexShrink={0} fg={props.active ? infoInk(theme) : quietInk(theme)} attributes={TextAttributes.BOLD} wrapMode="none" truncate>
-        {`${props.active ? "▸ " : ""}${props.title}`}
-      </text>
       {props.children}
     </box>
   )

@@ -380,30 +380,24 @@ export function SubagentFooter(props: {
   const { theme } = useTheme()
   const projectShortcut = Keymap.useShortcut("project.members")
   const gap = () => dimensions().width < 60 ? 1 : 2
-  const fullIdentity = () => dimensions().width >= 60
-    ? Locale.truncateWidth(`${agent()} (${current()} of ${total()})`, dimensions().width < 80 ? 10 : 21)
+  const identity = () => dimensions().width >= 60
+    ? Locale.truncateWidth(`${agent()} (${current()} of ${total()})`, dimensions().width < 100 ? 10 : 21)
     : ""
   const projectWidth = () => props.project && dimensions().width >= 60 ? dimensions().width >= 140 ? 24 : 12 : 0
   const projectHint = () => props.project && projectShortcut() && dimensions().width >= 80
     ? `[${projectShortcut()!.replaceAll("ctrl+", "⌃")}] Project`
     : ""
+  const detail = () => dimensions().width >= 200
+    ? [economics()?.speed, context(), economics()?.cacheHit ? `${economics()?.cacheHit} hit` : undefined, economics()?.spent, "durable", "resumable"].filter(Boolean).join(" · ")
+    : ""
   const action = () => blocked()
     ? dimensions().width < 60 ? props.reviewing ? "review" : "reply" : props.reviewing ? "Review pending" : "Enter answer"
     : dimensions().width < 60 ? "next" : "→ next"
-  const fitsBesideAuthority = (labels: string[]) =>
-    dimensions().width - 6 - 19 - stringWidth(labels.join("")) - projectWidth() - gap() * (labels.filter(Boolean).length + (projectWidth() ? 1 : 0) + (dimensions().width >= 40 ? 1 : 0)) >= 0
-  const detail = () => {
-    if (dimensions().width >= 120)
-      return [economics()?.speed, context(), economics()?.cacheHit ? `${economics()?.cacheHit} hit` : undefined, economics()?.spent, ...(blocked() ? [] : ["durable", "resumable"])].filter(Boolean).join(" · ")
-    const speed = economics()?.speed
-    return speed && fitsBesideAuthority([projectHint(), action(), speed]) ? speed : ""
-  }
-  const identity = () => dimensions().width >= 120 || !detail() || fitsBesideAuthority([fullIdentity(), projectHint(), action(), detail()]) ? fullIdentity() : ""
   const modeWidth = () => {
     const items = [identity(), projectWidth() ? "project" : "", detail(), projectHint(), action()].filter(Boolean).length
     return Math.max(19, dimensions().width - 6 - stringWidth(identity() + detail() + projectHint() + action()) - projectWidth() - gap() * (items + (dimensions().width >= 40 ? 1 : 0)))
   }
-  const quiet = () => readableTint(theme.text.subdued, theme.background.default)
+  const quiet = () => readableTint(theme.text.subdued, theme.background.chrome)
   const nextSibling = () => {
     if (blocked()) return
     const id = parentID()
@@ -419,7 +413,7 @@ export function SubagentFooter(props: {
   }
 
   return (
-    <box width="100%" height={1} paddingLeft={3} paddingRight={3} alignItems="center" flexDirection="row" flexShrink={0} gap={gap()} backgroundColor={theme.background.default}>
+    <box width="100%" height={3} paddingLeft={3} paddingRight={3} alignItems="center" flexDirection="row" flexShrink={0} gap={gap()} backgroundColor={theme.background.chrome}>
       <Show when={identity()}>{(label) => <text fg={theme.text.default} wrapMode="none" flexShrink={0}>{label()}</text>}</Show>
       <Show when={props.project && projectWidth() > 0 ? props.project : undefined}>
         {(project) => <box width={projectWidth()} flexShrink={0}><ProjectFooterLine owner={project()} width={projectWidth()} onIdentity={props.onProjectIdentity} /></box>}
@@ -432,7 +426,7 @@ export function SubagentFooter(props: {
           [{projectShortcut()?.replaceAll("ctrl+", "⌃")}] <span style={{ fg: quiet() }}>Project</span>
         </text>
       </Show>
-      <text fg={readableTint(blocked() ? theme.text.feedback.warning.default : theme.text.action.primary.default, theme.background.default)} wrapMode="none" flexShrink={0} onMouseUp={nextSibling}>
+      <text fg={readableTint(blocked() ? theme.text.feedback.warning.default : theme.text.action.primary.default, theme.background.chrome)} wrapMode="none" flexShrink={0} onMouseUp={nextSibling}>
         {action()}
       </text>
     </box>

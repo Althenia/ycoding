@@ -39,7 +39,7 @@ export function BtwFooter(props: { sessionID: string; parentID: string; autonomy
   const label = () => dimensions().width < 40 ? "↑" : dimensions().width < 60 ? "main" : "Back to main"
   const key = () => dimensions().width >= 120 ? shortcuts.get("session.btw.back")?.replaceAll("ctrl+", "⌃") : undefined
   const palette = () => `${paletteShortcut()?.replaceAll("ctrl+", "⌃") ?? ""}${dimensions().width >= 80 ? " commands" : ""}`
-  const quiet = () => readableTint(theme.text.subdued, theme.background.default)
+  const quiet = () => readableTint(theme.text.subdued, theme.background.chrome)
   const back = () => route.navigate({ type: "session", sessionID: props.parentID })
   Keymap.createLayer(() => ({
     mode: "global",
@@ -56,14 +56,14 @@ export function BtwFooter(props: { sessionID: string; parentID: string; autonomy
   return (
     <box
       width="100%"
-      height={1}
+      height={3}
       paddingLeft={3}
       paddingRight={3}
       flexDirection="row"
       justifyContent="space-between"
       alignItems="center"
       flexShrink={0}
-      backgroundColor={theme.background.default}
+      backgroundColor={theme.background.chrome}
       gap={gap()}
     >
       <text fg={theme.text.action.primary.default} onMouseUp={back} wrapMode="none" flexShrink={0}>

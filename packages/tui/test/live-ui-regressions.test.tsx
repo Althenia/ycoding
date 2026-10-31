@@ -22,7 +22,7 @@ import { createApi, createEventStream, createFetch, directory, json, sessionSnap
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
-test("renders the first rail section title on the tonal rail without a band", async () => {
+test("centers the first rail section title in a full-width three-row background band", async () => {
   const dimensions = { width: 189, height: 69 }
   const app = await bootPromptRegression(dimensions)
 
@@ -46,11 +46,14 @@ test("renders the first rail section title on the tonal rail without a band", as
           column !== undefined && column >= dimensions.width - railWidth(dimensions.width),
       )
 
-    expect(titleRow).toBe(1)
-    expect(contentRow).toBe(titleRow + 2)
-    expect([titleRow, titleRow + 1, titleRow + 2].map(hasTitleBackground)).toEqual([true, true, true])
-    const viewportStart = dimensions.width - railWidth(dimensions.width)
-    const viewportEnd = dimensions.width - 1
+    expect(titleRow).toBe(4)
+    expect(contentRow).toBe(titleRow + 3)
+    expect([titleRow - 1, titleRow, titleRow + 1].map(hasTitleBackground)).toEqual([true, true, true])
+    expect(hasTitleBackground(titleRow + 2)).toBe(false)
+    // The rail's left rule and the scrollbox's terminal scrollbar gutter are outside the section
+    // viewport. The three-row band must fill every column between those fixed boundaries.
+    const viewportStart = dimensions.width - railWidth(dimensions.width) + 1
+    const viewportEnd = dimensions.width - 2
     expect([filledColumns[0], filledColumns.at(-1)]).toEqual([viewportStart, viewportEnd])
     expect(filledColumns).toHaveLength(viewportEnd - viewportStart + 1)
   } finally {
