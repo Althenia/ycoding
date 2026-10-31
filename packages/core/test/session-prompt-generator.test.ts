@@ -165,6 +165,27 @@ it.effect("returns generated text for an idle Session and records prompt usage w
   expect((yield* store.context(f.sessionID)).map((message) => message.type)).toEqual(["user", "assistant"])
 }))
 
+it.effect("sends the user-constraint policy in the assembled system request for every prompt mode, outside the untrusted user message", () => Effect.gen(function* () {
+  const policy = [
+    "In every mode, including goal, carry the applicable user configuration and constraints into the prompt: required model, provider and profile bindings, permissions, ownership, workflow, tests and checks, toolchain and filesystem.",
+    "Never direct a workaround that substitutes a binding, widens access, or redirects toolchain, cache, build or config locations or invents directories (for example CARGO_HOME, CARGO_TARGET_DIR, --config, custom target or cache paths, a repository .cache or macOS Library path).",
+    "Where the work cannot proceed within them, direct reporting the exact gap and the decision needed.",
+    "Keep any explicit user-authorized exception or later change through a supported control valid, and preserve the objective and its completion criteria.",
+  ]
+  for (const mode of ["start", "steer", "queue", "goal"] as const) {
+    const f = yield* setup()
+    expect(yield* request(f.sessionID, { mode, intent: "Ship the fix" })).toEqual({ status: "generated", text: output })
+    expect(requests).toHaveLength(1)
+    const system = JSON.stringify(requests[0]?.system)
+    for (const clause of policy) expect(system.split(JSON.stringify(clause).slice(1, -1))).toHaveLength(2)
+    expect(system).toContain("Output only the prompt text")
+    expect(system).not.toContain("Main-session controls:")
+    expect(requests[0]?.tools).toEqual([])
+    expect(JSON.parse(helperText() ?? "")).toMatchObject({ mode, intent: "Ship the fix" })
+    expect(helperText()).not.toContain("CARGO_HOME")
+  }
+}))
+
 it.effect("generates for a running child Session with an active goal, pending input, and an unfinished reply", () => Effect.gen(function* () {
   for (const options of [{ running: true, goal: true }, { pending: true }, { child: true }, { reply: false }, { user: "" }] as const) {
     const f = yield* setup(options)
