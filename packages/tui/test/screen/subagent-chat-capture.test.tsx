@@ -35,8 +35,8 @@ for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, { width: 80, heig
       expect(switcher).toContain("◦ docs-sync")
       expect(switcher).toContain("? test-triage")
       expect(switcher.indexOf(navigation)).toBe(viewport.width - 3 - navigation.length)
-      expect(lines[10]?.indexOf("DOCS-SYNC SUBAGENT")).toBe(3)
-      expect(lines[13]?.indexOf("Traced the telemetry fields to their documented counterparts and preserved the parent session's write restrictions.")).toBe(3)
+      expect(lines[6]?.indexOf("DOCS-SYNC SUBAGENT")).toBe(3)
+      expect(lines[9]?.indexOf("Traced the telemetry fields to their documented counterparts and preserved the parent session's write restrictions.")).toBe(3)
       // The shared grid right-aligns the duration as the row status, so it is no longer part of the
       // label run. Board 15 row 20 keeps the label at the content column with the duration at the edge.
       const thought = lines.find((line) => line.includes("Thought")) ?? ""
@@ -45,17 +45,17 @@ for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, { width: 80, heig
       expect(lines.join("\n")).toMatch(/thinking · \d+m\d{2}s/)
     }
     if (viewport.width >= 120) {
-      expect(lines[1]).toContain("thinking · 2m14s")
+      expect(lines[0]).toContain("thinking · 2m14s")
       expect(lines.join("\n")).toContain("SUBAGENT ECONOMICS")
       expect(lines.join("\n")).toContain("Cache hit")
       expect(lines.join("\n")).toContain("18.4K / 200K · 9%")
       expect(lines.join("\n")).toContain("41,208")
       expect(lines.join("\n")).toContain("docs-sync (1 of 3)")
       expect(lines.join("\n")).toContain("durable · resumable")
-      expect(lines[57]?.indexOf("SUBAGENT ECONOMICS")).toBe(3)
-      expect(lines[59]?.indexOf("Context")).toBe(3)
-      expect(lines[61]?.indexOf("18.4K / 200K · 9%")).toBe(3)
-      expect(lines[67]?.indexOf("docs-sync (1 of 3)")).toBe(3)
+      expect(lines[58]?.indexOf("SUBAGENT ECONOMICS")).toBe(3)
+      expect(lines[60]?.indexOf("Context")).toBe(3)
+      expect(lines[62]?.indexOf("18.4K / 200K · 9%")).toBe(3)
+      expect(lines[68]?.indexOf("docs-sync (1 of 3)")).toBe(3)
     }
     if (viewport.width === 80) {
       expect(lines.join("\n")).toContain("↑ Pr…")
@@ -72,19 +72,33 @@ for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, { width: 80, heig
 for (const viewport of [{ width: 80, height: 24 }, DESIGN_VIEWPORT]) {
   test(`selected child speed reaches the economics panel and footer at ${viewport.width}×${viewport.height}`, async () => {
     const lines = await captureRoute({ ...viewport, args: { sessionID }, settle: "≈ 100 tok/s", stable: ["docs-sync (1 of 3)", "≈ 100 tok/s"],
-      route: async (url) => {
-        const response = route(url)
-        if (url.pathname !== `/api/session/${sessionID}/diagnostics` || !response) return response
-        const body = await response.json()
-        return json({ ...body, data: { ...body.data, generationSpeed: { model: child.model, recent: [],
-          latest: { model: child.model, tokens: 100, durationNs: 1_000_000_000, tokensPerSecond: 100, estimated: true } } } })
-      },
+      route: withSpeed,
     })
     expect(lines.join("\n")).toContain("≈ 100 tok/s")
     expect(lines.findLast((line) => line.includes("docs-sync (1 of 3)"))).toContain("≈ 100 tok/s")
     if (viewport.width >= 120) expect(lines.join("\n").match(/≈ 100 tok\/s/g)?.length).toBeGreaterThanOrEqual(2)
     expect(lines.every((line) => line.length <= viewport.width)).toBe(true)
   })
+}
+
+for (const [width, speed, detail, identity] of [[42, false, false, false], [43, true, false, false], [59, true, false, false], [60, true, false, true], [119, true, false, true], [120, true, true, true]] as const) {
+  test(`running subagent footer at ${width} columns shows speed ${speed}, full detail ${detail}`, async () => {
+    const lines = await captureRoute({ width, height: 30, args: { sessionID }, settle: "≈ 100 tok/s", stable: width < 59 ? ["≈ 100 tok/s"] : ["≈ 100 tok/s", "1 of 3"], route: withSpeed })
+    const footer = lines.findLast((line) => line.trim()) ?? ""
+    expect(footer.includes("docs-")).toBe(identity)
+    expect(footer.includes("≈ 100 tok/s")).toBe(speed)
+    expect(footer.includes("74% hit")).toBe(detail)
+    expect(footer.includes("durable · resumable")).toBe(detail)
+    expect(lines.every((line) => line.length <= width)).toBe(true)
+  })
+}
+
+async function withSpeed(url: URL) {
+  const response = route(url)
+  if (url.pathname !== `/api/session/${sessionID}/diagnostics` || !response) return response
+  const body = await response.json()
+  return json({ ...body, data: { ...body.data, generationSpeed: { model: child.model, recent: [],
+    latest: { model: child.model, tokens: 100, durationNs: 1_000_000_000, tokensPerSecond: 100, estimated: true } } } })
 }
 
 function session(id: string, title: string, agent: string, parentID: string | undefined, cost: number) { return { id, title, projectID: location.project.id, location: { directory }, agent, ...(parentID ? { parentID } : {}), model: { providerID: "anthropic", id: "claude-sonnet-5", variant: "fast" }, cost, tokens: { input: 18_400, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 4 } } }

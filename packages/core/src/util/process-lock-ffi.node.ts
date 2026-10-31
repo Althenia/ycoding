@@ -1,4 +1,12 @@
-import { dlopen, getInt32 } from "node:ffi"
+import { createRequire } from "node:module"
+
+const require = createRequire(import.meta.url)
+let ffi: typeof import("node:ffi") | undefined
+
+function loadFfi() {
+  ffi ??= require("node:ffi") as typeof import("node:ffi")
+  return ffi
+}
 
 export type LockResult =
   | { readonly acquired: true }
@@ -15,6 +23,7 @@ let darwin: ReturnType<typeof openDarwin> | undefined
 let linux: ReturnType<typeof openLinux> | undefined
 
 function openDarwin() {
+  const { dlopen } = loadFfi()
   return dlopen("/usr/lib/libSystem.B.dylib", {
     flock: { arguments: ["int32", "int32"], return: "int32" },
     __error: { arguments: [], return: "pointer" },
@@ -22,6 +31,7 @@ function openDarwin() {
 }
 
 function openLinux() {
+  const { dlopen } = loadFfi()
   return dlopen("libc.so.6", {
     flock: { arguments: ["int32", "int32"], return: "int32" },
     __errno_location: { arguments: [], return: "pointer" },
@@ -29,6 +39,7 @@ function openLinux() {
 }
 
 export function lockDarwin(fd: number): LockResult {
+  const { getInt32 } = loadFfi()
   darwin ??= openDarwin()
   const result = darwin.functions.flock(fd, LOCK_EX | LOCK_NB)
   if (result === 0) return { acquired: true }
@@ -38,6 +49,7 @@ export function lockDarwin(fd: number): LockResult {
 }
 
 export function lockLinux(fd: number): LockResult {
+  const { getInt32 } = loadFfi()
   linux ??= openLinux()
   const result = linux.functions.flock(fd, LOCK_EX | LOCK_NB)
   if (result === 0) return { acquired: true }

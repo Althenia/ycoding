@@ -365,6 +365,15 @@ test("release verification covers Antigravity provider and build fixtures", () =
   expect(verify).toContain("./antigravity-build.test.ts")
 })
 
+test("release verification covers Muse provider and build fixtures", () => {
+  const verify = workflowJob(workflow, "verify-source")
+  expect(verify).toContain("Verify Muse provider and build fixture boundaries")
+  expect(verify).toContain("./test/plugin/provider-muse.test.ts")
+  expect(verify).toContain("./test/provider-usage-muse.test.ts")
+  expect(verify).toContain("./muse-build-env.test.ts")
+  expect(verify).toContain("./muse-build.test.ts")
+})
+
 test("release source gates retain native access, retirement and web unit contracts", () => {
   const verify = workflowJob(workflow, "verify-source")
   for (const file of [

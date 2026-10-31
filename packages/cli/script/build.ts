@@ -10,6 +10,7 @@ import { BUN_BINARY } from "../src/binary"
 import { buildComputerHelper, computerHelperBuildAvailable } from "./computer-use"
 import { copyChromeExtension } from "./chrome-extension"
 import { antigravityBuildDefinitions } from "./antigravity-build-env"
+import { museBuildDefinitions } from "./muse-build-env"
 
 const dir = path.resolve(import.meta.dirname, "..")
 const binary = BUN_BINARY
@@ -103,6 +104,7 @@ for (const item of targets) {
     },
     define: {
       ...antigravityBuildDefinitions(),
+      ...museBuildDefinitions(),
       YCODING_VERSION: `'${Script.version}'`,
       YCODING_CLI_NAME: `'${binary}'`,
       YCODING_MODELS_DEV: modelsData,

@@ -238,12 +238,14 @@ For Meta Model API credentials, YCoding sums the USD cost buckets reported for t
 
 ### Sources
 
+Muse ordinary quota reads use in-memory observations without minting keys. Explicit refresh of a stored OAuth account mints at most once every 60 seconds; direct keys never mint. The safe provider label uses `subs_tier_name`, not `subscription.tier`.
+
 | Provider | Source | Stability |
 | --- | --- | --- |
 | OpenRouter | Current-key spend, optional account credits and balance with the configured key, capped-key limit | stable provider API |
 | OpenAI API | Organization usage and cost endpoints for an explicitly marked admin credential | stable provider API |
 | Meta Model API | Organization usage and USD cost buckets for the current-bill and weekly/monthly request and token views | stable provider API |
-| Muse subscription | Trailing subscription-usage events from inference responses; window and weekly percentages and reset times | observed response stream |
+| Muse subscription | Key-mint `subs_usage` windows and `subs_tier_name`, followed by trailing response subscription-usage events; window and weekly percentages, including overages above 100%, and reset times | observed key mint and response stream |
 | Claude subscription | Unified response headers from normal Claude Code requests | observed live state |
 | Claude subscription | OAuth usage snapshot for cold start and model-specific buckets | best-effort provider-internal API |
 | Codex / Spark | Configured Codex app-server `account/rateLimits/read` | official local client contract |

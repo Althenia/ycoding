@@ -75,6 +75,7 @@ const metadata = {
     high: { reasoningEffort: "high" },
     xhigh: { reasoningEffort: "xhigh", selector: { description: "Extra high" } },
     max: { reasoningEffort: "max" },
+    ultra: { reasoningEffort: "ultra" },
   },
 }
 const row = {
@@ -209,6 +210,62 @@ test("registers Muse as a builtin subscription provider", () => {
 })
 
 describe("Muse device login", () => {
+  it.effect("requires a valid embedded client without consulting the environment", () =>
+    Effect.gen(function* () {
+      let calls = 0
+      const client = http(() => {
+        calls++
+        return Response.json(device)
+      })
+      const previous = process.env.YCODING_MUSE_CLIENT_ID
+      process.env.YCODING_MUSE_CLIENT_ID = "environment-fixture"
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previous === undefined) delete process.env.YCODING_MUSE_CLIENT_ID
+          if (previous !== undefined) process.env.YCODING_MUSE_CLIENT_ID = previous
+        }),
+      )
+      for (const embedded of [undefined, {}, { clientID: "" }, { clientID: "fixture", clientSecret: 123 }]) {
+        const result = yield* museOAuth(client, embedded).authorize({}).pipe(Effect.flip)
+        expect(String(result)).toContain("Muse OAuth requires YCODING_MUSE_CLIENT_ID at build time.")
+      }
+      expect(calls).toBe(0)
+    }),
+  )
+
+  for (const secret of [undefined, "", "fixture-secret"])
+    it.effect(`sends the appropriate OAuth client secret (${secret ?? "absent"})`, () =>
+      Effect.gen(function* () {
+        const requests: HttpClientRequest.HttpClientRequest[] = []
+        const client = http((request) => {
+          requests.push(request)
+          return Response.json(request.url.endsWith("authorization/") ? device : { access_token: "fixture" })
+        })
+        const started = yield* museOAuth(client, { clientID: "fixture-client", clientSecret: secret }).authorize({})
+        yield* started.callback
+        for (const request of requests) {
+          expect(request.headers["user-agent"]).toBe("muse-code/launcher-3")
+          expect(new URLSearchParams(body(request)).get("client_secret")).toBe(secret || null)
+        }
+      }),
+    )
+
+  for (const redirect of ["authorization", "token"])
+    it.effect(`rejects ${redirect} redirects`, () =>
+      Effect.gen(function* () {
+        const client = http((request) =>
+          request.url.includes(redirect + "/") ? new Response(null, { status: 302 }) : Response.json(device),
+        )
+        const registration = museOAuth(client, { clientID: "fixture-client" })
+        if (redirect === "authorization") {
+          expect(String(yield* registration.authorize({}).pipe(Effect.flip))).toContain("unexpected redirect")
+          return
+        }
+        const started = yield* registration.authorize({})
+        expect(String(yield* started.callback.pipe(Effect.flip))).toContain("unexpected redirect")
+      }),
+    )
+
   it.effect("uses form device authorization and immediate polling, preserving optional tokens and expiry", () =>
     Effect.gen(function* () {
       const requests: HttpClientRequest.HttpClientRequest[] = []
@@ -221,6 +278,7 @@ describe("Muse device login", () => {
               : { access_token: "account-token", refresh_token: "optional-refresh", expires_in: 60 },
           )
         }),
+        { clientID: "fixture-muse-client-id" },
       )
       expect("refresh" in registration).toBe(false)
       const started = yield* registration.authorize({})
@@ -236,14 +294,17 @@ describe("Muse device login", () => {
         ["POST", "https://auth.meta.com/oidc/device/token/"],
       ])
       for (const request of requests) {
+        expect(request.headers["user-agent"]).toBe("muse-code/launcher-3")
         expect(request.headers.accept).toBe("application/json")
         expect(request.headers["content-type"]).toBe("application/x-www-form-urlencoded")
       }
-      expect(new URLSearchParams(body(requests[0]))).toEqual(new URLSearchParams({ client_id: "1031625952748946" }))
+      expect(new URLSearchParams(body(requests[0]))).toEqual(
+        new URLSearchParams({ client_id: "fixture-muse-client-id" }),
+      )
       expect(Object.fromEntries(new URLSearchParams(body(requests[1])))).toEqual({
         grant_type: "urn:ietf:params:oauth:grant-type:device_code",
         device_code: device.device_code,
-        client_id: "1031625952748946",
+        client_id: "fixture-muse-client-id",
       })
     }),
   )
@@ -275,7 +336,7 @@ describe("Muse device login", () => {
           )
         }),
       )
-      const started = yield* museOAuth(client).authorize({})
+      const started = yield* museOAuth(client, { clientID: "fixture-muse-client-id" }).authorize({})
       expect(started.url).toBe(device.verification_uri)
       const fiber = yield* started.callback.pipe(Effect.forkChild)
       yield* Deferred.await(polled[0])
@@ -300,6 +361,7 @@ describe("Muse device login", () => {
               status: request.url.endsWith("authorization/") ? 200 : 400,
             }),
           ),
+          { clientID: "fixture-muse-client-id" },
         ).authorize({})
         const result = yield* started.callback.pipe(Effect.flip)
         expect(String(result)).toContain("Device authorization failed")
@@ -315,6 +377,7 @@ describe("Muse device login", () => {
             request.url.endsWith("authorization/") ? { ...device, expires_in: 1 } : { error: "authorization_pending" },
           ),
         ),
+        { clientID: "fixture-muse-client-id" },
       ).authorize({})
       const fiber = yield* started.callback.pipe(Effect.flip, Effect.forkChild)
       yield* TestClock.adjust("2 seconds")
@@ -324,6 +387,59 @@ describe("Muse device login", () => {
 })
 
 describe("Muse key mint and discovery", () => {
+  for (const [raw, expected] of [
+    ["https://api.meta.ai/v1/responses///", "https://api.meta.ai/v1"],
+    ["https://api.meta.ai/v1///", "https://api.meta.ai/v1"],
+    ["not a URL", "https://api.meta.ai/v1"],
+    ["https://user:pass@example.invalid/v1", "https://api.meta.ai/v1"],
+  ])
+    it.effect(`normalizes minted base URL ${raw}`, () =>
+      Effect.gen(function* () {
+        const result = yield* mintMuseKey(
+          http(() => Response.json({ api_key: "key", base_url: raw })),
+          account(),
+        )
+        expect(result.base_url).toBe(expected)
+      }),
+    )
+
+  for (const [status, payload, expected] of [
+    [403, { detail: " upgrade required " }, "Muse key mint failed: upgrade required"],
+    [422, { title: " bad request " }, "Muse key mint failed (422): bad request"],
+  ] as const)
+    it.effect(`reports problem details for ${status}`, () =>
+      Effect.gen(function* () {
+        const result = yield* mintMuseKey(
+          http(() => Response.json(payload, { status })),
+          account(),
+        ).pipe(Effect.flip)
+        expect(String(result)).toContain(expected)
+      }),
+    )
+
+  it.effect("returns subscription usage and display tier without personal fields", () =>
+    Effect.gen(function* () {
+      const result = yield* mintMuseKey(
+        http(() =>
+          Response.json({
+            api_key: "key",
+            base_url: "https://api.meta.ai/v1",
+            subs_tier_name: " Plus ",
+            subs_usage: { tier: "opaque-tier", window: { used_percent: 125.5 } },
+            user_email: "fixture@example.invalid",
+          }),
+        ),
+        account(),
+      )
+      expect(result).toMatchObject({
+        subs_tier_name: "Plus",
+        subs_usage: { label: "Muse (Meta) · Plus", windows: [{ used: 125.5 }] },
+      })
+      expect(JSON.stringify(result)).not.toContain("opaque-tier")
+      expect(JSON.stringify(result)).not.toContain("fixture@example.invalid")
+    }),
+  )
+
   it.effect("does not expose account personal fields in malformed mint errors", () =>
     Effect.gen(function* () {
       const failure = yield* mintMuseKey(
@@ -430,6 +546,7 @@ describe("Muse key mint and discovery", () => {
         "high",
         "xhigh",
         "max",
+        "ultra",
       ])
       expect(models[0]?.variants.map((variant) => variant.settings?.reasoningEffort)).toEqual([
         "minimal",
@@ -438,6 +555,7 @@ describe("Muse key mint and discovery", () => {
         "high",
         "xhigh",
         "max",
+        "ultra",
       ])
       expect(requests[0]).toMatchObject({
         method: "POST",
@@ -505,6 +623,126 @@ describe("Muse key mint and discovery", () => {
 })
 
 describe("MusePlugin", () => {
+  it.effect("maps session and client headers and normalizes contributor mode and tool choice", () =>
+    Effect.gen(function* () {
+      const aisdk = yield* AISDK.Service
+      const sent: { headers: Headers; body: unknown }[] = []
+      yield* addPlugin(
+        http(() => Response.json({ data: [] })),
+        async (_input, init) => {
+          sent.push({
+            headers: new Headers(init?.headers),
+            body: typeof init?.body === "string" ? JSON.parse(init.body) : init?.body,
+          })
+          return Response.json({})
+        },
+      )
+      let wrapped: typeof fetch | undefined
+      yield* aisdk.hook.sdk((event) => {
+        if (event.model.providerID === providerID) wrapped = event.options.fetch
+      })
+      const saved = yield* snapshot(Credential.Key.make({ type: "key", key: "fixture" }))
+      yield* aisdk.language(modelInfo(), saved)
+      if (!wrapped) throw new Error("missing wrapped fetch")
+      const send = wrapped
+      const headers = {
+        "x-ycoding-session": "child",
+        "x-parent-session-id": "parent",
+        "x-ycoding-client": "tui",
+        "x-ycoding-project": "fixture",
+        "x-session-affinity": "fixture",
+        "x-session-id": "fixture",
+        "x-opencode-session": "fixture",
+      }
+      yield* Effect.promise(() =>
+        send("https://example.invalid", {
+          headers,
+          body: JSON.stringify({
+            model: "fixture-contributor",
+            tool_choice: "required",
+            tools: [{ type: "function" }],
+          }),
+        }),
+      )
+      yield* Effect.promise(() =>
+        send("https://example.invalid", {
+          headers: { ...headers, "x-ycoding-client": "web" },
+          body: JSON.stringify({ model: "fixture-internal", tool_choice: "none", tools: [{ type: "function" }] }),
+        }),
+      )
+      yield* Effect.promise(() =>
+        send("https://example.invalid", {
+          body: JSON.stringify({ model: "fixture", tool_choice: "required", tools: [] }),
+        }),
+      )
+      expect(sent[0].headers.get("x-client-id")).toBe("tbh:tui")
+      expect(sent[1].headers.get("x-client-id")).toBe("tbh:serve")
+      expect(sent[2].headers.get("x-client-id")).toBe("tbh:exec")
+      expect(sent.map((entry) => entry.headers.get("x-tbh-contributor-mode"))).toEqual(["1", null, "0"])
+      expect(sent[0].body).toMatchObject({ tool_choice: "auto", tools: [{ type: "function" }] })
+      expect(sent[1].body).toEqual({ model: "fixture-internal" })
+      expect(sent[2].body).toEqual({ model: "fixture" })
+      const session = sent[0].headers.get("x-tbh-session-id")
+      const parent = sent[0].headers.get("x-tbh-parent-thread-id")
+      expect(session).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+      expect(parent).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+      expect(parent).not.toBe(session)
+      expect(sent[0].headers.get("x-meta-ai-gateway-session-id")).toBe(session)
+      expect(sent[0].headers.get("x-tbh-thread-id")).toBe(session)
+      expect(sent[0].headers.get("x-tbh-root-session-id")).toBe(parent)
+      expect(sent[1].headers.get("x-tbh-session-id")).toBe(session)
+      for (const name of Object.keys(headers)) expect(sent[0].headers.get(name)).toBeNull()
+    }),
+  )
+
+  it.effect("remints once after discovery rejects the first minted key and observes mint quota", () =>
+    Effect.gen(function* () {
+      const credentials = yield* Credential.Service
+      const catalog = yield* Catalog.Service
+      const usage = ProviderUsageRuntime.make({
+        credentials,
+        providers: catalog.provider,
+        adapters: { muse: ProviderUsageRuntime.muse },
+      })
+      const saved = yield* snapshot(account())
+      const discovered = yield* Deferred.make<void>()
+      let mints = 0
+      let requests = 0
+      const client = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          if (request.url.endsWith("/key")) {
+            mints++
+            return HttpClientResponse.fromWeb(
+              request,
+              Response.json({
+                api_key: `key-${mints}`,
+                base_url: "https://api.meta.ai/v1",
+                subs_tier_name: "Plus",
+                subs_usage: { window: { used_percent: 12 } },
+              }),
+            )
+          }
+          requests++
+          if (requests === 2) yield* Deferred.succeed(discovered, undefined)
+          return HttpClientResponse.fromWeb(
+            request,
+            requests === 1 ? Response.json({}, { status: 401 }) : Response.json({ data: [row] }),
+          )
+        }),
+      )
+      yield* addPlugin(client, undefined, usage)
+      yield* TestClock.adjust("500 millis")
+      yield* Deferred.await(discovered)
+      yield* TestClock.adjust("500 millis")
+      expect(mints).toBe(2)
+      expect(yield* usage.get({ providerID, credentialID: saved.credential!.id })).toMatchObject({
+        label: "Muse (Meta) · Plus",
+        windows: [{ used: 12 }],
+      })
+      expect(yield* catalog.model.get(providerID, CatalogModel.ID.make(row.id))).toBeDefined()
+    }),
+  )
+
   it.effect("observes SSE bytes unchanged and ignores malformed quota without recording it", () =>
     Effect.gen(function* () {
       const credentials = yield* Credential.Service

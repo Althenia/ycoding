@@ -6,6 +6,7 @@ import solid from "vite-plugin-solid"
 import { nodeExecArgv, nodeTarget, type NodeTarget, photonWasmAsset } from "./src/node/target"
 import { NODE_BINARY } from "./src/binary"
 import { antigravityBuildDefinitions } from "./script/antigravity-build-env"
+import { museBuildDefinitions } from "./script/muse-build-env"
 
 const dir = import.meta.dirname
 
@@ -213,6 +214,7 @@ export function mainConfig(input: NodeBuildInput): UserConfig {
     esbuild: { jsx: "automatic" },
     define: {
       ...antigravityBuildDefinitions(),
+      ...museBuildDefinitions(),
       YCODING_VERSION: JSON.stringify(input.version),
       YCODING_CLI_NAME: JSON.stringify(NODE_BINARY),
       YCODING_MODELS_DEV: input.models,

@@ -139,6 +139,12 @@ jobs:
           bun test --cwd packages/core ./test/plugin/provider-antigravity.test.ts
           bun test --cwd packages/cli/script ./antigravity-build-env.test.ts ./antigravity-build.test.ts
 
+      - name: Verify Muse provider and build fixture boundaries
+        if: matrix.suite == 'cli'
+        run: |
+          bun test --cwd packages/core ./test/plugin/provider-muse.test.ts ./test/provider-usage-muse.test.ts
+          bun test --cwd packages/cli/script ./muse-build-env.test.ts ./muse-build.test.ts
+
       - name: Verify Chrome extension suites
         if: matrix.suite == 'cli'
         run: bun test --cwd extensions/chrome ./test/protocol.test.js ./test/service-worker.test.js ./test/design-md.test.js
@@ -329,6 +335,8 @@ jobs:
         env:
           YCODING_ANTIGRAVITY_CLIENT_ID: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_ID }}
           YCODING_ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_SECRET }}
+          YCODING_MUSE_CLIENT_ID: ${{ secrets.YCODING_MUSE_CLIENT_ID }}
+          YCODING_MUSE_CLIENT_SECRET: ${{ secrets.YCODING_MUSE_CLIENT_SECRET }}
         run: bun run build:tui
 
       - name: Verify build metadata

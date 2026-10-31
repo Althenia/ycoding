@@ -671,12 +671,8 @@ const layer = Layer.effect(
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex")
 
-export const accountIdentityDigest = (credential: Credential.Info) =>
-  digest({
-    integrationID: credential.integrationID,
-    credentialID: credential.id,
-    accountGeneration: credential.accountGeneration,
-  })
+export { accountIdentityDigest } from "../../provider-usage/service"
+import { accountIdentityDigest } from "../../provider-usage/service"
 
 export const exactAuthIdentityDigest = (
   selected: CatalogModel.Info,

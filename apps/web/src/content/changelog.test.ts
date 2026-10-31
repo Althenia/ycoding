@@ -9,16 +9,19 @@ const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.ve
 describe("release entries", () => {
   test("lists v0.11.1 continuous decision follow first with its public limits", () => {
     const entry = RELEASES[0]
-    expect(entry).toMatchObject({ version: "0.11.1", date: "2026-10-31", title: "Continuous decision follow", tags: ["Added", "Changed"] })
-    expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(3)
-    expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(1)
+    expect(entry).toMatchObject({ version: "0.11.1", date: "2026-10-31", title: "Continuous decision follow, memory maintenance and open surfaces", tags: ["Added", "Changed", "Fixed"] })
+    expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(6)
+    expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(3)
+    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(4)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
     for (const fragment of [
+      "YCODING_MUSE_CLIENT_ID", "YCODING_MUSE_CLIENT_SECRET", "subscription tier name", "overage percentages above 100%", "`x-tbh-contributor-mode`",
       "decision watch <root> --family --follow", "until you cancel it", "identifiers only", "never printed",
       "descendants created after the watch starts", "reconnects", "heartbeat", "`--timeout`", "`--state`",
       "owner-only permissions", "replaced atomically", "symbolic links", "concurrent writer", "start a new state file",
       "`epoch-mismatch`", "`state-lock-held`", "never a path, server address, version or request content", "work-completion, task and review events", "ten consecutive failed reconnects", "nothing restarts", "cannot be reconstructed", "rereads current state only at startup", "shows only that the follow process is running", "requires `--family`", "rejects `--input`, `--after` and `--checkpoint`", "never answers, approves, resumes or retries",
-      "does not wake an idle or completed external task", "native follow process", "at-least-once, not exactly-once", "can print an observation again", "stable identifiers", "is unchanged",
+      "does not wake an idle or completed external task", "native follow process", "at-least-once, not exactly-once", "can print an observation again", "stable identifiers", "returns one bounded result, then exits",
+      "outcome: \"family\"", "`--checkpoint <token>`", "at most 64 Sessions", "BM25", "`expectedDigest`", "recoverable trash", "open tonal surfaces", "borderless tonal planes", "report the exact gap", "generation speed on much narrower terminals", "no longer shows the \"durable · resumable\" status",
     ]) expect(text).toContain(fragment)
     for (const excluded of ["CCA", "Flora", "milestone", "ses_", "exactly once"]) expect(text).not.toContain(excluded)
     expect(after("0.11.1")?.version).toBe("0.11.0")

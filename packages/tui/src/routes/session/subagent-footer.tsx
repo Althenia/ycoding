@@ -380,19 +380,25 @@ export function SubagentFooter(props: {
   const { theme } = useTheme()
   const projectShortcut = Keymap.useShortcut("project.members")
   const gap = () => dimensions().width < 60 ? 1 : 2
-  const identity = () => dimensions().width >= 60
-    ? Locale.truncateWidth(`${agent()} (${current()} of ${total()})`, dimensions().width < 100 ? 10 : 21)
+  const fullIdentity = () => dimensions().width >= 60
+    ? Locale.truncateWidth(`${agent()} (${current()} of ${total()})`, dimensions().width < 80 ? 10 : 21)
     : ""
   const projectWidth = () => props.project && dimensions().width >= 60 ? dimensions().width >= 140 ? 24 : 12 : 0
   const projectHint = () => props.project && projectShortcut() && dimensions().width >= 80
     ? `[${projectShortcut()!.replaceAll("ctrl+", "⌃")}] Project`
     : ""
-  const detail = () => dimensions().width >= 200
-    ? [economics()?.speed, context(), economics()?.cacheHit ? `${economics()?.cacheHit} hit` : undefined, economics()?.spent, "durable", "resumable"].filter(Boolean).join(" · ")
-    : ""
   const action = () => blocked()
     ? dimensions().width < 60 ? props.reviewing ? "review" : "reply" : props.reviewing ? "Review pending" : "Enter answer"
     : dimensions().width < 60 ? "next" : "→ next"
+  const fitsBesideAuthority = (labels: string[]) =>
+    dimensions().width - 6 - 19 - stringWidth(labels.join("")) - projectWidth() - gap() * (labels.filter(Boolean).length + (projectWidth() ? 1 : 0) + (dimensions().width >= 40 ? 1 : 0)) >= 0
+  const detail = () => {
+    if (dimensions().width >= 120)
+      return [economics()?.speed, context(), economics()?.cacheHit ? `${economics()?.cacheHit} hit` : undefined, economics()?.spent, ...(blocked() ? [] : ["durable", "resumable"])].filter(Boolean).join(" · ")
+    const speed = economics()?.speed
+    return speed && fitsBesideAuthority([projectHint(), action(), speed]) ? speed : ""
+  }
+  const identity = () => dimensions().width >= 120 || !detail() || fitsBesideAuthority([fullIdentity(), projectHint(), action(), detail()]) ? fullIdentity() : ""
   const modeWidth = () => {
     const items = [identity(), projectWidth() ? "project" : "", detail(), projectHint(), action()].filter(Boolean).length
     return Math.max(19, dimensions().width - 6 - stringWidth(identity() + detail() + projectHint() + action()) - projectWidth() - gap() * (items + (dimensions().width >= 40 ? 1 : 0)))

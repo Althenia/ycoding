@@ -1,26 +1,28 @@
+import { Hash } from "../../util/hash"
 import { define } from "../catalog-host"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
-import { Clock, Effect, Option, Schema, Semaphore, Stream } from "effect"
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { Clock, Effect, Option, Redacted, Schema, Semaphore, Stream } from "effect"
+import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { AISDK } from "../../aisdk"
 import { Catalog } from "../../catalog"
 import { Credential } from "../../credential"
 import { EventRuntime } from "../../event"
 import { Integration } from "../../integration"
 import { CatalogModel } from "../../model"
-import { settingsForEffort } from "../../models-dev"
 import { LocationAnnouncements } from "../../location-announcements"
 import { Provider } from "../../provider"
-import { ProviderUsage, ProviderUsageRuntime } from "../../provider-usage"
+import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
+import { ProviderUsageService } from "../../provider-usage/service"
 import { MuseUsage } from "../../provider-usage/muse"
-import { SessionRunnerModel } from "../../session/runner/model"
 import type { PluginCatalogHost } from "../catalog-host"
 
 const integrationID = Integration.ID.make("muse")
 const providerID = Provider.ID.make("muse")
 const methodID = Integration.MethodID.make("device")
-const clientID = "1031625952748946"
+declare const YCODING_MUSE_OAUTH: unknown
+export const museUserAgent = "muse-code/launcher-3"
 const baseURL = "https://api.meta.ai/v1"
+const effortSettings = (reasoningEffort: string) => ({ reasoningEffort, reasoningSummary: "auto" as const, include: ["reasoning.encrypted_content"] })
 const processSessionID = crypto.randomUUID()
 const reconnect =
   "Muse account token expired or was rejected; log in again: run ycoding, then /connect and choose Muse (Meta)."
@@ -45,7 +47,8 @@ const Mint = Schema.Struct({
   require_payment: Schema.optional(Schema.Boolean),
   action_url: Schema.optional(Schema.NullOr(Schema.String)),
   is_subs_active: Schema.optional(Schema.Boolean),
-  subs_tier_name: Schema.optional(Schema.String),
+  subs_tier_name: Schema.optional(Schema.NullOr(Schema.String)),
+  subs_usage: Schema.optional(Schema.Unknown),
 })
 const ModelRow = Schema.Struct({
   id: Schema.String,
@@ -65,10 +68,27 @@ const ModelRow = Schema.Struct({
 })
 const decodeRow = Schema.decodeUnknownOption(ModelRow)
 const decodeBody = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
-type MintedKey = { readonly api_key: string; readonly base_url: string }
+const decodeRecord = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Unknown))
+type MintedKey = {
+  readonly api_key: string
+  readonly base_url: string
+  readonly subs_tier_name?: string
+  readonly subs_usage?: ProviderUsage.Snapshot
+}
 type Fetch = (input: Parameters<typeof fetch>[0], init?: RequestInit) => Promise<Response>
 
-export function observeMuseUsage(response: Response, usage: ProviderUsageRuntime.Interface, profileKey?: string) {
+function deterministicUUID(seed: string) {
+  const hash = Hash.sha256(seed)
+  const variant = ((parseInt(hash[16], 16) & 3) | 8).toString(16)
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-${variant}${hash.slice(17, 20)}-${hash.slice(20, 32)}`
+}
+
+export function observeMuseUsage(
+  response: Response,
+  usage: ProviderUsageService.Interface,
+  profileKey?: string,
+  tierName?: string,
+) {
   if (!response.ok || !response.body || !response.headers.get("content-type")?.includes("text/event-stream"))
     return response
   const decoder = new TextDecoder()
@@ -76,7 +96,7 @@ export function observeMuseUsage(response: Response, usage: ProviderUsageRuntime
   const observeLine = (line: string) => {
     if (!line.startsWith("data:") || !line.includes("response.subscription_usage")) return
     const event = Option.getOrUndefined(decodeBody(line.slice(5).trim()))
-    const snapshot = MuseUsage.normalize(event, Date.now())
+    const snapshot = MuseUsage.normalize(event, Date.now(), tierName)
     if (!snapshot) {
       Effect.runSync(Effect.logWarning("invalid Muse subscription usage event"))
       return
@@ -115,23 +135,42 @@ export function observeMuseUsage(response: Response, usage: ProviderUsageRuntime
   )
 }
 
-export function museOAuth(http: HttpClient.HttpClient) {
+const OAuthClient = Schema.Struct({
+  clientID: Schema.NonEmptyString,
+  clientSecret: Schema.optional(Schema.RedactedFromValue(Schema.String)),
+})
+const decodeOAuthClient = Schema.decodeUnknownOption(OAuthClient)
+
+export function museOAuth(
+  http: HttpClient.HttpClient,
+  embedded: unknown = typeof YCODING_MUSE_OAUTH === "undefined" ? {} : YCODING_MUSE_OAUTH,
+) {
   return {
     integrationID,
     method: { id: methodID, type: "oauth", label: "Meta Muse Code account", remote: true },
     authorize: (_inputs: Integration.Inputs) =>
       Effect.gen(function* () {
-        const device = yield* HttpClient.filterStatusOk(http)
-          .execute(
-            HttpClientRequest.post("https://auth.meta.com/oidc/device/authorization/").pipe(
-              HttpClientRequest.acceptJson,
-              HttpClientRequest.bodyText(
-                new URLSearchParams({ client_id: clientID }).toString(),
-                "application/x-www-form-urlencoded",
-              ),
-            ),
-          )
-          .pipe(Effect.flatMap(HttpClientResponse.schemaBodyJson(Device)))
+        const client = Option.getOrUndefined(decodeOAuthClient(embedded))
+        if (!client) return yield* Effect.fail(new Error("Muse OAuth requires YCODING_MUSE_CLIENT_ID at build time."))
+        const form = () => {
+          const params = new URLSearchParams({ client_id: client.clientID })
+          if (client.clientSecret) {
+            const secret = Redacted.value(client.clientSecret)
+            if (secret.length > 0) params.set("client_secret", secret)
+          }
+          return params
+        }
+        const authorization = yield* http.execute(
+          HttpClientRequest.post("https://auth.meta.com/oidc/device/authorization/").pipe(
+            HttpClientRequest.acceptJson,
+            HttpClientRequest.setHeader("User-Agent", museUserAgent),
+            HttpClientRequest.bodyText(form().toString(), "application/x-www-form-urlencoded"),
+          ),
+        )
+        if (authorization.status >= 300 && authorization.status < 400)
+          return yield* Effect.fail(new Error("Device authorization failed: unexpected redirect"))
+        const checked = yield* HttpClientResponse.filterStatusOk(authorization)
+        const device = yield* HttpClientResponse.schemaBodyJson(Device)(checked)
         const interval =
           typeof device.interval === "number" && Number.isFinite(device.interval) && device.interval > 0
             ? device.interval * 1000
@@ -144,16 +183,20 @@ export function museOAuth(http: HttpClient.HttpClient) {
             const response = yield* http.execute(
               HttpClientRequest.post("https://auth.meta.com/oidc/device/token/").pipe(
                 HttpClientRequest.acceptJson,
+                HttpClientRequest.setHeader("User-Agent", museUserAgent),
                 HttpClientRequest.bodyText(
-                  new URLSearchParams({
-                    grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-                    device_code: device.device_code,
-                    client_id: clientID,
-                  }).toString(),
+                  (() => {
+                    const params = form()
+                    params.set("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
+                    params.set("device_code", device.device_code)
+                    return params.toString()
+                  })(),
                   "application/x-www-form-urlencoded",
                 ),
               ),
             )
+            if (response.status >= 300 && response.status < 400)
+              return yield* Effect.fail(new Error("Device authorization failed: unexpected redirect"))
             const token = yield* HttpClientResponse.schemaBodyJson(Token)(response)
             if (response.status >= 200 && response.status < 300 && token.access_token)
               return Credential.OAuth.make({
@@ -182,19 +225,56 @@ export function museOAuth(http: HttpClient.HttpClient) {
   } satisfies IntegrationOAuthMethodRegistration
 }
 
+export function normalizeMuseBaseURL(raw: string): Effect.Effect<string> {
+  return Effect.gen(function* () {
+    const parsed = yield* Effect.try(() => new URL(raw)).pipe(Effect.option)
+    if (parsed._tag === "Some") {
+      const url = parsed.value
+      if (["http:", "https:"].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash) {
+        const path = url.pathname.replace(/\/+$/, "").replace(/\/responses$/, "")
+        return `${url.origin}${path}`
+      }
+    }
+    yield* Effect.logWarning("unrecognized Muse base_url from key mint; using default")
+    return baseURL
+  })
+}
+
 export const mintMuseKey = Effect.fn("Muse.mintKey")(function* (http: HttpClient.HttpClient, value: Credential.OAuth) {
   if (value.expires !== 0 && value.expires <= (yield* Clock.currentTimeMillis))
     return yield* Effect.fail(new Error(reconnect))
   const response = yield* http.execute(
     HttpClientRequest.post("https://api.meta.ai/muse-code/key").pipe(
+      HttpClientRequest.acceptJson,
       HttpClientRequest.bearerToken(value.access),
       HttpClientRequest.setHeader("x-api-version", "1.0.0"),
       HttpClientRequest.bodyText(JSON.stringify({ onboard: false }), "application/json"),
     ),
   )
-  if (response.status === 401 || response.status === 403) return yield* Effect.fail(new Error(reconnect))
-  if (response.status < 200 || response.status >= 300)
-    return yield* Effect.fail(new Error(`Muse key mint failed: ${response.status}`))
+  if (response.status >= 300 && response.status < 400)
+    return yield* Effect.fail(new Error("Muse key mint refused redirect"))
+  if (response.status === 401) return yield* Effect.fail(new Error(reconnect))
+  if (response.status < 200 || response.status >= 300) {
+    const body = yield* response.json.pipe(Effect.catch(() => Effect.succeed(undefined)))
+    const problem = Option.getOrUndefined(
+      Schema.decodeUnknownOption(
+        Schema.Struct({
+          title: Schema.optional(Schema.NullOr(Schema.String)),
+          detail: Schema.optional(Schema.NullOr(Schema.String)),
+        }),
+      )(body),
+    )
+    const detail = problem?.detail?.trim() || problem?.title?.trim()
+    if (response.status === 403)
+      return yield* Effect.fail(new Error(detail ? `Muse key mint failed: ${detail.slice(0, 240)}` : reconnect))
+    return yield* Effect.fail(
+      new Error(
+        detail
+          ? `Muse key mint failed (${response.status}): ${detail.slice(0, 240)}`
+          : `Muse key mint failed: ${response.status}`,
+      ),
+    )
+  }
   const minted = yield* HttpClientResponse.schemaBodyJson(Mint)(response).pipe(
     Effect.catch(() => Effect.fail(new Error("Muse key mint returned an invalid response"))),
   )
@@ -204,7 +284,18 @@ export const mintMuseKey = Effect.fn("Muse.mintKey")(function* (http: HttpClient
     )
   if (!minted.api_key || !minted.base_url)
     return yield* Effect.fail(new Error("mint response missing api_key or base_url"))
-  return { api_key: minted.api_key, base_url: minted.base_url }
+  const base_url = yield* normalizeMuseBaseURL(minted.base_url)
+  const tier = minted.subs_tier_name?.trim()
+  const quota =
+    minted.subs_usage == null
+      ? undefined
+      : MuseUsage.normalizeSubscription(minted.subs_usage, yield* Clock.currentTimeMillis, tier)
+  return {
+    api_key: minted.api_key,
+    base_url,
+    ...(tier ? { subs_tier_name: tier } : {}),
+    ...(quota ? { subs_usage: quota } : {}),
+  }
 })
 
 export const discoverMuseModels = Effect.fn("Muse.discoverModels")(function* (
@@ -237,7 +328,7 @@ export const discoverMuseModels = Effect.fn("Muse.discoverModels")(function* (
         return undefined
       }
       const released = metadata.release_date === undefined ? 0 : Date.parse(metadata.release_date)
-      const defaults = { ...settingsForEffort("@ai-sdk/openai", model.id, metadata.options?.reasoningEffort ?? "none") }
+      const defaults: { reasoningEffort?: string; reasoningSummary: "auto"; include: string[] } = effortSettings(metadata.options?.reasoningEffort ?? "none")
       if (metadata.options?.reasoningEffort === undefined) delete defaults.reasoningEffort
       return CatalogModel.Info.make({
         ...CatalogModel.Info.empty(providerID, CatalogModel.ID.make(model.id)),
@@ -250,7 +341,7 @@ export const discoverMuseModels = Effect.fn("Muse.discoverModels")(function* (
         limit: metadata.limit,
         variants: Object.entries(metadata.variants ?? {}).map(([id, variant]) => ({
           id: CatalogModel.VariantID.make(id),
-          settings: settingsForEffort("@ai-sdk/openai", model.id, variant.reasoningEffort),
+          settings: effortSettings(variant.reasoningEffort),
         })),
       })
     }),
@@ -266,9 +357,10 @@ export const MusePlugin = define({
     const credentials = yield* Credential.Service
     const integrations = yield* Integration.Service
     const events = yield* EventRuntime.Service
-    const usage = yield* ProviderUsageRuntime.Service
+    const usage = yield* ProviderUsageService.Service
     const loading = Semaphore.makeUnsafe(1)
     const keys = new Map<string, Promise<MintedKey>>()
+    const tiers = new Map<string, string>()
     const loaded: {
       accounts: readonly { snapshot: Integration.Snapshot; models: readonly CatalogModel.Info[] }[]
       source?: string
@@ -285,12 +377,32 @@ export const MusePlugin = define({
       if (!id) throw new Error("Muse account requires a stored credential; run ycoding, then /connect to log in again.")
       const existing = keys.get(id)
       if (existing) return existing
-      const pending = Effect.runPromise(mintMuseKey(http, value).pipe(Effect.timeout("10 seconds")), { signal }).catch(
-        (cause: unknown) => {
+      const pending = Effect.runPromise(mintMuseKey(http, value).pipe(Effect.timeout("10 seconds")), { signal })
+        .then((minted) => {
+          if (minted.subs_tier_name) tiers.set(id, minted.subs_tier_name)
+          if (!minted.subs_tier_name) tiers.delete(id)
+          if (minted.subs_usage && minted.subs_usage.windows.length > 0 && snapshot.credential) {
+            const quota = minted.subs_usage
+            Effect.runSync(
+              usage.observe(
+                new ProviderUsage.Observation({
+                  providerID: quota.providerID,
+                  label: quota.label,
+                  source: quota.source,
+                  stability: quota.stability,
+                  observedAt: quota.updatedAt,
+                  windows: quota.windows,
+                }),
+                ProviderUsageService.accountIdentityDigest(snapshot.credential),
+              ),
+            )
+          }
+          return minted
+        })
+        .catch((cause: unknown) => {
           if (keys.get(id) === pending) keys.delete(id)
           throw cause
-        },
-      )
+        })
       keys.set(id, pending)
       return pending
     }
@@ -320,7 +432,11 @@ export const MusePlugin = define({
       const previous = loaded.accounts
       let failed = false
       const current = new Set(saved.map((credential) => JSON.stringify([credential.id, credential.generation])))
-      for (const id of keys.keys()) if (!current.has(id)) keys.delete(id)
+      for (const id of keys.keys())
+        if (!current.has(id)) {
+          keys.delete(id)
+          tiers.delete(id)
+        }
       loaded.accounts = (yield* Effect.forEach(
         connections,
         (connection) =>
@@ -333,7 +449,27 @@ export const MusePlugin = define({
               try: (signal) => keyFor(snapshot, signal),
               catch: (cause) => cause,
             }).pipe(
-              Effect.flatMap((key) => discoverMuseModels(http, key)),
+              Effect.flatMap((key) =>
+                discoverMuseModels(http, key).pipe(
+                  Effect.catch((error) => {
+                    if (
+                      !HttpClientError.isHttpClientError(error) ||
+                      error.reason._tag !== "StatusCodeError" ||
+                      error.reason.response.status !== 401 ||
+                      snapshot.value?.type !== "oauth"
+                    )
+                      return Effect.fail(error)
+                    const id = identity(snapshot)
+                    if (!id) return Effect.fail(error)
+                    const cached = keys.get(id)
+                    if (keys.get(id) === cached) keys.delete(id)
+                    return Effect.tryPromise({
+                      try: (signal) => keyFor(snapshot, signal),
+                      catch: (cause) => cause,
+                    }).pipe(Effect.flatMap((renewed) => discoverMuseModels(http, renewed)))
+                  }),
+                ),
+              ),
               Effect.timeout("10 seconds"),
               Effect.catch(() =>
                 Effect.logWarning(
@@ -406,31 +542,88 @@ export const MusePlugin = define({
         }
         const send: Fetch = typeof evt.options.fetch === "function" ? evt.options.fetch : fetch
         const profileKey = snapshot.credential
-          ? SessionRunnerModel.accountIdentityDigest(snapshot.credential)
+          ? ProviderUsageService.accountIdentityDigest(snapshot.credential)
           : undefined
         const wrapped: Fetch = async (input, init) => {
           const key = await keyFor(snapshot, init?.signal ?? undefined)
           const headers = new Headers(init?.headers)
           headers.set("authorization", `Bearer ${key.api_key}`)
-          headers.set("x-client-id", "tbh:exec")
-          headers.set("x-tbh-session-id", processSessionID)
-          headers.set("x-meta-ai-gateway-session-id", processSessionID)
+          const ycodingSession = headers.get("x-ycoding-session")?.trim() || undefined
+          const ycodingParent = headers.get("x-parent-session-id")?.trim() || undefined
+          const ycodingClient = headers.get("x-ycoding-client")?.trim().toLowerCase() || undefined
+          for (const name of [
+            "x-ycoding-session",
+            "x-ycoding-project",
+            "x-ycoding-client",
+            "x-parent-session-id",
+            "x-session-affinity",
+            "x-session-id",
+            "x-opencode-session",
+          ])
+            headers.delete(name)
+          headers.set(
+            "x-client-id",
+            ycodingClient === "tui"
+              ? "tbh:tui"
+              : ycodingClient === "desktop"
+                ? "tbh:desktop"
+                : ["web", "remote", "server"].includes(ycodingClient ?? "")
+                  ? "tbh:serve"
+                  : "tbh:exec",
+          )
+          const sessionUUID = ycodingSession
+            ? deterministicUUID(`${processSessionID}:${ycodingSession}`)
+            : processSessionID
+          headers.set("x-tbh-session-id", sessionUUID)
+          headers.set("x-meta-ai-gateway-session-id", sessionUUID)
+          if (ycodingSession) {
+            headers.set("x-tbh-thread-id", sessionUUID)
+            const parent = ycodingParent ? deterministicUUID(`${processSessionID}:${ycodingParent}`) : undefined
+            headers.set("x-tbh-root-session-id", parent ?? sessionUUID)
+            if (parent) headers.set("x-tbh-parent-thread-id", parent)
+          }
+          const raw =
+            typeof init?.body === "string"
+              ? init.body
+              : init?.body instanceof Uint8Array
+                ? new TextDecoder().decode(init.body)
+                : undefined
+          const decoded = raw === undefined ? undefined : Option.getOrUndefined(decodeBody(raw))
+          const parsed = Option.getOrUndefined(decodeRecord(decoded))
+          const model = typeof parsed?.model === "string" ? parsed.model : String(evt.model.modelID ?? evt.model.id)
+          if (model.endsWith("-internal")) headers.delete("x-tbh-contributor-mode")
+          if (!model.endsWith("-internal"))
+            headers.set("x-tbh-contributor-mode", model.endsWith("-contributor") ? "1" : "0")
+          const next = parsed && "tool_choice" in parsed && parsed.tool_choice !== "auto" ? { ...parsed } : undefined
+          if (next) {
+            if (next.tool_choice === "none" || !Array.isArray(next.tools) || next.tools.length === 0) {
+              delete next.tool_choice
+              delete next.tools
+            }
+            if (next.tool_choice !== undefined) next.tool_choice = "auto"
+          }
+          const body = next ? JSON.stringify(next) : init?.body
           const url = new URL(input instanceof URL ? input.href : typeof input === "string" ? input : input.url)
           const endpoint = new URL(`${key.base_url.replace(/\/$/, "")}/responses`)
           url.protocol = endpoint.protocol
           url.host = endpoint.host
           url.pathname = endpoint.pathname
-          const response = await send(url.href, { ...init, headers })
+          const response = await send(url.href, { ...init, headers, body })
           if (response.status !== 401 || snapshot.value?.type !== "oauth")
-            return observeMuseUsage(response, usage, profileKey)
+            return observeMuseUsage(
+              response,
+              usage,
+              profileKey,
+              identity(snapshot) ? tiers.get(identity(snapshot)!) : undefined,
+            )
           await response.body?.cancel()
           const id = identity(snapshot)!
           const cached = keys.get(id)
           if (cached && (await cached) === key && keys.get(id) === cached) keys.delete(id)
           const renewed = await keyFor(snapshot, init?.signal ?? undefined)
           headers.set("authorization", `Bearer ${renewed.api_key}`)
-          const retried = await send(`${renewed.base_url.replace(/\/$/, "")}/responses`, { ...init, headers })
-          if (retried.status !== 401) return observeMuseUsage(retried, usage, profileKey)
+          const retried = await send(`${renewed.base_url.replace(/\/$/, "")}/responses`, { ...init, headers, body })
+          if (retried.status !== 401) return observeMuseUsage(retried, usage, profileKey, tiers.get(id))
           await retried.body?.cancel()
           if ((await keys.get(id)) === renewed) keys.delete(id)
           throw new Error(reconnect)

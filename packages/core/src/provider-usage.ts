@@ -9,7 +9,7 @@ import { httpClient } from "./effect/app-node-platform"
 import { Integration } from "./integration"
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
 import { Provider } from "@ycoding-ai/schema/provider"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Schema, Semaphore } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { Global } from "./global"
 import { InstallationVersion } from "./installation/version"
@@ -28,7 +28,8 @@ import { OpenRouterUsage } from "./provider-usage/openrouter"
 import { GrokUsage } from "./provider-usage/grok"
 import { ZAIUsage } from "./provider-usage/zai"
 import { CursorUsage } from "./provider-usage/cursor"
-import { SessionRunnerModel } from "./session/runner/model"
+import { Service, accountIdentityDigest, type GetInput, type Interface } from "./provider-usage/service"
+export { Service, type GetInput, type Interface } from "./provider-usage/service"
 import { GoUsage } from "./provider-usage/go"
 import { ProviderUsageCache } from "./provider-usage/cache"
 import { ProviderUsageObservations } from "./provider-usage/observations"
@@ -44,24 +45,12 @@ const minute = 60_000
 
 const copilotOrgLogins = new Map<string, string>()
 
-export interface GetInput {
-  readonly providerID: Provider.ID
-  readonly credentialID?: Credential.ID
-  readonly refresh?: boolean
-}
-
-export interface Interface {
-  readonly get: (input: GetInput) => Effect.Effect<ProviderUsage.Snapshot>
-  readonly list: (input?: { readonly refresh?: boolean }) => Effect.Effect<ReadonlyArray<ProviderUsage.Snapshot>>
-  readonly observe: (observation: ProviderUsage.Observation, profileSource?: string) => Effect.Effect<void>
-  readonly forecast: (input: UsageForecast.Input) => Effect.Effect<UsageForecast.Info>
-}
-
 export interface AdapterInput {
   readonly providerID: Provider.ID
   readonly label: string
   readonly credential: Credential.Info
   readonly updatedAt: number
+  readonly refresh?: boolean
 }
 
 export type Adapter = (input: AdapterInput) => Effect.Effect<ProviderUsage.Snapshot, Error>
@@ -82,7 +71,10 @@ export interface MakeInput {
     scope: UsageForecast.LocalScope,
     asOf: number,
   ) => Effect.Effect<ReadonlyArray<LocalUsageBin>, unknown>
-  readonly accountUnknown?: (refresh?: boolean, cachedOnly?: boolean) => Effect.Effect<ReadonlyArray<ProviderUsage.Snapshot>>
+  readonly accountUnknown?: (
+    refresh?: boolean,
+    cachedOnly?: boolean,
+  ) => Effect.Effect<ReadonlyArray<ProviderUsage.Snapshot>>
 }
 
 const localSpendProviders = new Set(["anthropic", "openai", "opencode", "opencode-go", "xai"])
@@ -130,8 +122,6 @@ export class RequestError extends Schema.TaggedErrorClass<RequestError>()("Provi
   status: Schema.Number.pipe(Schema.optional),
   retryAfter: Schema.Number.pipe(Schema.optional),
 }) {}
-
-export class Service extends Context.Service<Service, Interface>()("@ycoding/ProviderUsage") {}
 
 export function make(input: MakeInput): Interface {
   const now = input.now ?? Date.now
@@ -192,7 +182,7 @@ export function make(input: MakeInput): Interface {
         (selected.value.type === "oauth" &&
           selected.value.metadata?.managed === true &&
           typeof selected.value.metadata.source === "string"))
-        ? SessionRunnerModel.accountIdentityDigest(selected)
+        ? accountIdentityDigest(selected)
         : undefined
     const observed = () =>
       profileSource !== undefined
@@ -224,7 +214,7 @@ export function make(input: MakeInput): Interface {
               ...(snapshot.message === undefined ? {} : { message: snapshot.message }),
             })
           : snapshot
-      return yield* retain(value, bound ? SessionRunnerModel.accountIdentityDigest(current) : undefined)
+      return yield* retain(value, bound ? accountIdentityDigest(current) : undefined)
     })
 
     const current = observed()
@@ -259,6 +249,7 @@ export function make(input: MakeInput): Interface {
           label: providerLabel(providerID),
           credential: selected,
           updatedAt,
+          refresh,
         }),
       })
       .pipe(
@@ -285,7 +276,10 @@ export function make(input: MakeInput): Interface {
     // only its generation time) carries no quota, so it cannot supersede a stored observation.
     if (
       latest &&
-      (latest.updatedAt >= snapshot.updatedAt || (snapshot.status === "unsupported" && snapshot.windows.length === 0))
+      (latest.updatedAt >= snapshot.updatedAt ||
+        (snapshot.status === "unsupported" &&
+          snapshot.windows.length === 0 &&
+          (providerID !== "muse" || snapshot.message === "Quota is reported after the next Muse response")))
     )
       return yield* profiled(latest, profileSource !== undefined)
     return fetched
@@ -307,7 +301,8 @@ export function make(input: MakeInput): Interface {
     })
     const snapshots = yield* Effect.forEach(
       targets,
-      (target) => load(target.providerID, target.candidates, target.credentialID, request?.refresh, request?.cachedOnly),
+      (target) =>
+        load(target.providerID, target.candidates, target.credentialID, request?.refresh, request?.cachedOnly),
       { concurrency: 4 },
     )
     const local =
@@ -358,36 +353,38 @@ export function make(input: MakeInput): Interface {
         ],
         { concurrency: 2 },
       )
-      const localRates = yield* Effect.sync(() => bins === undefined ? undefined : localRateForecasts(bins, asOf)).pipe(
-        Effect.catchCause(() => Effect.succeed(undefined)),
-      )
+      const localRates = yield* Effect.sync(() =>
+        bins === undefined ? undefined : localRateForecasts(bins, asOf),
+      ).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
       return yield* Effect.sync(() => ({
         asOf,
         localScope: request.localScope,
         ...(localRates === undefined ? {} : { localRates }),
-        ...(snapshots === undefined ? {} : { quotas: snapshots.flatMap((snapshot) =>
-          snapshot.source === "local_session"
-            ? []
-            : snapshot.windows.map((window) => ({
-                providerID: snapshot.providerID,
-                ...(snapshot.profile === undefined ? {} : { profile: snapshot.profile }),
-                windowID: window.id,
-                unit: window.unit,
-                ...forecast.quota({
-                  account: accounts.get(snapshot),
-                  snapshot,
-                  window,
-                  now: asOf,
-                  semantics: quotaSemantics(snapshot, window),
-                  wholeWindowMean:
-                    (snapshot.providerID === "cursor" && window.id === "included") ||
-                    (snapshot.providerID === "xai" && window.id === "weekly"),
-                }),
-              })),
-        ) }),
-      })).pipe(
-        Effect.catchCause(() => Effect.succeed({ asOf, localScope: request.localScope })),
-      )
+        ...(snapshots === undefined
+          ? {}
+          : {
+              quotas: snapshots.flatMap((snapshot) =>
+                snapshot.source === "local_session"
+                  ? []
+                  : snapshot.windows.map((window) => ({
+                      providerID: snapshot.providerID,
+                      ...(snapshot.profile === undefined ? {} : { profile: snapshot.profile }),
+                      windowID: window.id,
+                      unit: window.unit,
+                      ...forecast.quota({
+                        account: accounts.get(snapshot),
+                        snapshot,
+                        window,
+                        now: asOf,
+                        semantics: quotaSemantics(snapshot, window),
+                        wholeWindowMean:
+                          (snapshot.providerID === "cursor" && window.id === "included") ||
+                          (snapshot.providerID === "xai" && window.id === "weekly"),
+                      }),
+                    })),
+              ),
+            }),
+      })).pipe(Effect.catchCause(() => Effect.succeed({ asOf, localScope: request.localScope })))
     }),
     observe: Effect.fn("ProviderUsage.observe")(function* (observation, profileSource) {
       yield* Effect.gen(function* () {
@@ -534,7 +531,7 @@ const layer = Layer.effect(
           openrouter: (input) => openRouter(http, input),
           openai: (input) => openAI(http, input, integrations.connection),
           meta: (input) => meta(http, input),
-          muse,
+          muse: createMuseUsageAdapter(http),
           "github-copilot": (input) => githubCopilot(http, input),
           xai: (input) => grok(http, input),
           zai: (input) => zai(http, input),
@@ -553,27 +550,27 @@ const layer = Layer.effect(
                       .peek({ key: "openai:codex-app-server" })
                       .pipe(Effect.map((snapshot) => (snapshot ? [snapshot] : [])))
                   : cache
-                  .get({
-                    key: "openai:codex-app-server",
-                    ttlMs: minute,
-                    refresh,
-                    load: Effect.tryPromise(() =>
-                      CodexUsage.loadAppServer({
-                        providerID: Provider.ID.make("openai"),
-                        label: "Codex",
-                        updatedAt: Date.now(),
-                        client: CodexUsage.connectAppServer(providerUsage.codex_app_server!),
-                      }),
-                    ).pipe(
-                      Effect.map(
-                        (snapshot) => new ProviderUsage.Snapshot({ ...snapshot, profile: "Codex app-server" }),
+                      .get({
+                        key: "openai:codex-app-server",
+                        ttlMs: minute,
+                        refresh,
+                        load: Effect.tryPromise(() =>
+                          CodexUsage.loadAppServer({
+                            providerID: Provider.ID.make("openai"),
+                            label: "Codex",
+                            updatedAt: Date.now(),
+                            client: CodexUsage.connectAppServer(providerUsage.codex_app_server!),
+                          }),
+                        ).pipe(
+                          Effect.map(
+                            (snapshot) => new ProviderUsage.Snapshot({ ...snapshot, profile: "Codex app-server" }),
+                          ),
+                        ),
+                      })
+                      .pipe(
+                        Effect.map((snapshot) => [snapshot]),
+                        Effect.catch(() => Effect.succeed([])),
                       ),
-                    ),
-                  })
-                  .pipe(
-                    Effect.map((snapshot) => [snapshot]),
-                    Effect.catch(() => Effect.succeed([])),
-                  ),
             }),
         ...localReads(database, location),
       }),
@@ -599,6 +596,57 @@ export const node = makeLocationNode({
 })
 
 export const muse: Adapter = (input) => Effect.succeed(MuseUsage.unreported(input.updatedAt))
+
+const MuseMint = Schema.Struct({
+  require_payment: Schema.optional(Schema.Boolean),
+  is_subs_active: Schema.optional(Schema.Boolean),
+  subs_tier_name: Schema.optional(Schema.NullOr(Schema.String)),
+  subs_usage: Schema.optional(Schema.Unknown),
+})
+const decodeMuseMint = Schema.decodeUnknownOption(MuseMint)
+
+export function createMuseUsageAdapter(http: HttpClient.HttpClient): Adapter {
+  const cache = new Map<string, { readonly at: number; readonly snapshot: ProviderUsage.Snapshot }>()
+  const locks = new Map<string, Semaphore.Semaphore>()
+  return (input) => {
+    const oauth = input.credential.value
+    if (input.refresh !== true || oauth.type !== "oauth") return Effect.succeed(MuseUsage.unreported(input.updatedAt))
+    const id = accountIdentityDigest(input.credential)
+    const lock = locks.get(id) ?? Semaphore.makeUnsafe(1)
+    locks.set(id, lock)
+    return lock.withPermit(
+      Effect.gen(function* () {
+        const existing = cache.get(id)
+        if (existing && input.updatedAt - existing.at < 60_000) return existing.snapshot
+        if (oauth.expires !== 0 && oauth.expires <= input.updatedAt) return yield* new RequestError({ status: 401 })
+        const response = yield* http
+          .execute(
+            HttpClientRequest.post("https://api.meta.ai/muse-code/key").pipe(
+              HttpClientRequest.acceptJson,
+              HttpClientRequest.bearerToken(oauth.access),
+              HttpClientRequest.setHeader("x-api-version", "1.0.0"),
+              HttpClientRequest.bodyText(JSON.stringify({ onboard: false }), "application/json"),
+            ),
+          )
+          .pipe(Effect.mapError(() => new RequestError({})))
+        if (response.status < 200 || response.status >= 300) return yield* new RequestError({ status: response.status })
+        const body = yield* response.json.pipe(Effect.mapError(() => new RequestError({ status: response.status })))
+        const decoded = decodeMuseMint(body)
+        if (decoded._tag === "None") return yield* new RequestError({ status: response.status })
+        const minted = decoded.value
+        const quota = MuseUsage.normalizeSubscription(minted.subs_usage, input.updatedAt, minted.subs_tier_name)
+        const snapshot =
+          minted.require_payment === true || minted.is_subs_active === false
+            ? MuseUsage.inactive(input.updatedAt)
+            : quota && quota.windows.length > 0
+              ? quota
+              : MuseUsage.unreported(input.updatedAt, minted.subs_tier_name)
+        cache.set(id, { at: input.updatedAt, snapshot })
+        return snapshot
+      }),
+    )
+  }
+}
 
 const claudeOAuth = (
   http: HttpClient.HttpClient,
@@ -939,12 +987,10 @@ export const openAI = (
         !CodexUsage.isChatGPTCredential(snapshot.value)
       )
         return yield* Effect.fail(new Error("OpenAI usage account changed during refresh"))
-      const response = yield* json(
-        http,
-        "https://chatgpt.com/backend-api/wham/usage",
-        snapshot.value.access,
-        { ...OpenAICodex.headers(), ...CodexUsage.accountHeaders(snapshot.value) },
-      )
+      const response = yield* json(http, "https://chatgpt.com/backend-api/wham/usage", snapshot.value.access, {
+        ...OpenAICodex.headers(),
+        ...CodexUsage.accountHeaders(snapshot.value),
+      })
       return CodexUsage.normalize({
         providerID: input.providerID,
         label: "Codex",

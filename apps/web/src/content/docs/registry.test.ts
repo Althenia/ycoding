@@ -63,7 +63,7 @@ describe("public docs allowlist", () => {
   test("documents Muse account and key setup with current authentication limits", () => {
     const section = findDocPage("configuration/providers")?.sections.find((section) => section.heading === "Muse (Meta)")
     const text = section?.blocks.flatMap((block) => block.kind === "paragraph" ? [block.text] : []).join(" ") ?? ""
-    for (const required of ["muse", "Meta Muse Code account", "Meta Model API key", "META_API_KEY", "minimal", "max", "metadata", "catalog", "hidden", "non-tool", "re-login", "unknown", "response stream observations", "Weekly", "Quota reads do not mint keys"])
+    for (const required of ["muse", "Meta Muse Code account", "Meta Model API key", "META_API_KEY", "YCODING_MUSE_CLIENT_ID", "YCODING_MUSE_CLIENT_SECRET", "public client", "minimal", "max", "ultra", "metadata", "catalog", "hidden", "non-tool", "re-login", "unknown", "x-client-id", "x-tbh-contributor-mode", "tool_choice", "subs_usage", "subs_tier_name", "response stream observations", "Weekly", "above 100%", "Quota reads do not mint keys", "60 seconds"])
       expect(text).toContain(required)
   })
 
