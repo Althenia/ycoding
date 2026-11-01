@@ -7,8 +7,22 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.1 continuous decision follow first with its public limits", () => {
+  test("lists v0.11.2 quieter outside-repository reviews first", () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.2", date: "2026-11-01", title: "Quieter outside-repository reviews for API commands", tags: ["Fixed"] })
+    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(3)
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of [
+      "/api/session/outstanding", "not file operands", "external-directory warning", "urllib", "requests",
+      "strings and comments", "Path(path).write_text", "os.remove", "script files stay exempt", "@file", "file://",
+      "hard reviews", "explicit permission denies", "dynamically", "unconfirmed outside work",
+    ]) expect(text).toContain(fragment)
+    for (const excluded of ["CCA", "Flora", "milestone", "ses_"]) expect(text).not.toContain(excluded)
+    expect(after("0.11.2")?.version).toBe("0.11.1")
+  })
+
+  test("retains v0.11.1 continuous decision follow with its public limits", () => {
+    const entry = byVersion("0.11.1")
     expect(entry).toMatchObject({ version: "0.11.1", date: "2026-10-31", title: "Continuous decision follow, memory maintenance and open surfaces", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(6)
     expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(3)
@@ -1672,7 +1686,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 46)).toEqual([
+    expect(versions.slice(0, 47)).toEqual([
+      "0.11.2",
       "0.11.1",
       "0.11.0",
       "0.10.25",
