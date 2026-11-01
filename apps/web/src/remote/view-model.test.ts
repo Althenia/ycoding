@@ -23,6 +23,7 @@ import {
   sessionListRefreshNotice,
   sessionStateChips,
   keepAwakeIndicator,
+  modelEffortNotice,
   attachConfirmationValid,
   dotsConnectionView,
   shellOutputPaging,
@@ -35,6 +36,14 @@ import {
   type RemoteConnectionState,
   type RemoteSessionSummary,
 } from "./view-model"
+
+test("only known available models without offered effort explain their settings", () => {
+  expect(modelEffortNotice({ known: true, blocked: false, variants: 0 })).toBe("This model has no adjustable effort; it uses its own settings.")
+  expect(modelEffortNotice({ known: true, blocked: false, variants: 1 })).toBeUndefined()
+  expect(modelEffortNotice({ known: false, blocked: false, variants: 0 })).toBeUndefined()
+  expect(modelEffortNotice({ known: true, blocked: true, variants: 0 })).toBeUndefined()
+  expect(modelEffortNotice({ known: true, blocked: true, variants: 2 })).toBeUndefined()
+})
 
 describe("Dots connection display", () => {
   const status = { access: { enabled: true, revision: 3 }, configuration: { ready: true, profile: "native-test" }, connection: { state: "connecting" as const, hostname: "test-computer" } }

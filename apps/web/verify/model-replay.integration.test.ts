@@ -111,6 +111,27 @@ async function effort(page: Page, value: string) {
   await page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
 }
 
+test("models without adjustable effort explain their settings in the picker", async () => {
+  for (const viewport of [[390, 844], [1440, 900]] as const) {
+    const h = await harness({ providerID: "openai", id: "model-plain" }, undefined, undefined, viewport)
+    try {
+      await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+      expect(await h.page.evaluate<string | null>(`document.querySelector('.model-control__surface')?.textContent ?? null`)).toContain("This model has no adjustable effort; it uses its own settings.")
+      expect(await h.page.evaluate<boolean>(`document.querySelector('.model-control__surface [role="slider"]') === null`)).toBe(true)
+      expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
+    } finally { await h.close() }
+  }
+  const h = await harness({ providerID: "openai", id: "model-a", profile: "no-effort" })
+  try {
+    h.setCatalogModels(models.map((item) => item.id === "model-a" ? { ...item, profiles: [{ name: "no-effort", active: true, variants: [] }] } : item))
+    await h.page.evaluate(`window.modelReplayStore.loadCatalog({sessionID:'ses_a'}, {refresh:true})`)
+    await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.find(item=>item.id==='model-a')?.profiles?.[0]?.name === 'no-effort'`)
+    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__surface').textContent`)).toContain("This model has no adjustable effort; it uses its own settings.")
+    expect(await h.page.evaluate<boolean>(`document.querySelector('.model-control__surface [role="slider"]') === null`)).toBe(true)
+  } finally { await h.close() }
+})
+
 test("omitted effort is not an offered slider stop and clearing stays separate from variant selection", async () => {
   const h = await harness({ providerID: "openai", id: "model-a" })
   try {

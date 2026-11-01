@@ -17,6 +17,12 @@ import type { FormAnswerView, FormFieldView, FormView, SessionView, ShellOutputF
 
 export type FormDraft = Readonly<Record<string, FormAnswerView[string] | undefined>>
 
+export function modelEffortNotice(input: { readonly known: boolean; readonly blocked: boolean; readonly variants: number }) {
+  return input.known && !input.blocked && input.variants === 0
+    ? "This model has no adjustable effort; it uses its own settings."
+    : undefined
+}
+
 export function dotsConnectionView(input: { readonly status?: RemoteDotsStatus; readonly computer?: string; readonly online: boolean; readonly loading: boolean; readonly refreshing: boolean; readonly pending: boolean; readonly error?: string }) {
   const status = input.status
   return {
