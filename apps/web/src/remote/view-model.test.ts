@@ -24,6 +24,7 @@ import {
   sessionStateChips,
   keepAwakeIndicator,
   modelEffortNotice,
+  providerProfileRefreshVisible,
   attachConfirmationValid,
   dotsConnectionView,
   shellOutputPaging,
@@ -43,6 +44,16 @@ test("only known available models without offered effort explain their settings"
   expect(modelEffortNotice({ known: false, blocked: false, variants: 0 })).toBeUndefined()
   expect(modelEffortNotice({ known: true, blocked: true, variants: 0 })).toBeUndefined()
   expect(modelEffortNotice({ known: true, blocked: true, variants: 2 })).toBeUndefined()
+})
+
+test("provider profile refresh is offered only after failure without an active attempt", () => {
+  expect(providerProfileRefreshVisible({ phase: "unknown", hasAttempt: true })).toBe(false)
+  expect(providerProfileRefreshVisible({ phase: "failed", hasAttempt: true })).toBe(false)
+  expect(providerProfileRefreshVisible({ phase: "unknown", hasAttempt: false })).toBe(true)
+  expect(providerProfileRefreshVisible({ phase: "failed", hasAttempt: false })).toBe(true)
+  expect(providerProfileRefreshVisible({ phase: "unsupported", hasAttempt: false })).toBe(true)
+  expect(providerProfileRefreshVisible({ phase: "pending", hasAttempt: true })).toBe(false)
+  expect(providerProfileRefreshVisible({ phase: "ready", hasAttempt: false })).toBe(false)
 })
 
 describe("Dots connection display", () => {

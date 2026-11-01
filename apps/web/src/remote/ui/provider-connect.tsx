@@ -5,6 +5,7 @@ import { CustomSelect } from "../../ui/custom-select"
 import { useRemote } from "../context"
 import type { CatalogTarget } from "../catalog"
 import { createProviderAuth, providerAuthPrompts, type ProviderAuthState } from "../provider-auth"
+import { providerProfileRefreshVisible } from "../view-model"
 import "./provider-connect.css"
 
 export function ProviderConnect(props: { readonly target: CatalogTarget; readonly returnFocus: HTMLElement; readonly onClose: () => void; readonly onConnected?: (providerID: string) => void }) {
@@ -83,7 +84,7 @@ export function ProviderConnect(props: { readonly target: CatalogTarget; readonl
       <Show when={state().phase === "pending"}><p role="status">Waiting for provider authorization…</p></Show>
       <Show when={state().phase === "complete"}><p role="status">Provider profile connected.</p><button type="button" class="button button--secondary" disabled={!current()} onClick={() => { notified = false; void auth?.load() }}>Connect another profile</button></Show>
       <Show when={state().message}><p role={state().phase === "failed" ? "alert" : "status"} class="field__hint">{state().message}</p></Show>
-      <Show when={["failed", "unknown", "unsupported"].includes(state().phase)}><button type="button" class="button button--secondary" disabled={busy() || !current()} onClick={() => void auth?.load()}>Refresh provider profiles</button></Show>
+      <Show when={providerProfileRefreshVisible({ phase: state().phase, hasAttempt: state().attempt !== undefined })}><button type="button" class="button button--secondary" disabled={busy() || !current()} onClick={() => void auth?.load()}>Refresh provider profiles</button></Show>
       <Show when={state().phase === "ready" && !state().integrations.length}><p role="status">No provider integrations are available at this Location.</p></Show>
     </div>
   </Modal></Portal>

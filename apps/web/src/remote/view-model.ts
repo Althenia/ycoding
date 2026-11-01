@@ -10,6 +10,7 @@
 import type { CreateEnrollmentResponse, RemoteDotsComputerTarget, RemoteDotsStatus } from "@ycoding-ai/remote"
 import { autonomySummary, autonomyTone, type AutonomyMode } from "./autonomy"
 import type { KeepAwakeState } from "./keep-awake"
+import type { ProviderAuthState } from "./provider-auth"
 import type { RemoteRequestOutcome, RemoteTransportStatus } from "./transport"
 import { describeOutcome } from "./outcome"
 import type { PendingMutation } from "./store"
@@ -21,6 +22,10 @@ export function modelEffortNotice(input: { readonly known: boolean; readonly blo
   return input.known && !input.blocked && input.variants === 0
     ? "This model has no adjustable effort; it uses its own settings."
     : undefined
+}
+
+export function providerProfileRefreshVisible(input: { readonly phase: ProviderAuthState["phase"]; readonly hasAttempt: boolean }) {
+  return !input.hasAttempt && (input.phase === "failed" || input.phase === "unknown" || input.phase === "unsupported")
 }
 
 export function dotsConnectionView(input: { readonly status?: RemoteDotsStatus; readonly computer?: string; readonly online: boolean; readonly loading: boolean; readonly refreshing: boolean; readonly pending: boolean; readonly error?: string }) {

@@ -81,6 +81,9 @@ test("manual-code auth keeps a failed status read unresolved, submits once, then
     await page.evaluate(`window.providerAuthFixture.failRead();[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Check authentication status').click()`)
     await wait(page, `document.querySelector('dialog[aria-label="Connect provider"]').textContent.includes('Provider authentication could not finish.')`)
     expect(await page.evaluate<boolean>(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Connect profile')`)).toBe(false)
+    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Refresh provider profiles')`)).toBe(false)
+    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Check authentication status' && !item.disabled)`)).toBe(true)
+    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Cancel authentication' && !item.disabled)`)).toBe(true)
     expect(await page.evaluate<boolean>(`document.getElementById('provider-authorization-code').disabled`)).toBe(true)
     await page.evaluate(`[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Check authentication status').click()`)
     await wait(page, `document.getElementById('provider-authorization-code').disabled===false`)
@@ -89,6 +92,24 @@ test("manual-code auth keeps a failed status read unresolved, submits once, then
     await wait(page, `window.providerAuthFixture.report().acceptedCode===true && document.getElementById('provider-authorization-code')===null`)
     expect(await page.evaluate<number>(`window.requestLog.filter(item=>item.operation==='provider.auth.complete').length`)).toBe(1)
     expect(await page.evaluate<string>(`JSON.stringify(window.providerAuthState())+JSON.stringify(window.requestLog)+JSON.stringify(localStorage)`)).not.toContain("synthetic-test-code")
+  } finally { await page.close() }
+}, 30000)
+
+test("an unconfirmed key without an attempt can refresh provider profiles", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
+    await wait(page, `document.querySelector('.composer-resident:not([inert]) .composer__input') !== null`)
+    await palette(page)
+    await choose(page, "Provider", "OpenAI")
+    await choose(page, "Authentication method", "API key")
+    await input(page, "provider-api-key", "synthetic-test-key")
+    await page.evaluate(`window.providerAuthFixture.unknownKey();[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Connect profile').click()`)
+    await wait(page, `document.querySelector('dialog[aria-label="Connect provider"]').textContent.includes('The machine did not confirm the result.')`)
+    await page.evaluate(`[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Refresh provider profiles').click()`)
+    await wait(page, `window.requestLog.filter(item=>item.operation==='provider.auth.list').length===2`)
+    expect(await page.evaluate<number>(`window.requestLog.filter(item=>item.operation==='provider.auth.key').length`)).toBe(1)
+    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Refresh provider profiles')`)).toBe(false)
   } finally { await page.close() }
 }, 30000)
 

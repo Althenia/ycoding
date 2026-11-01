@@ -57,6 +57,7 @@ export type RelayDoubleOptions = {
   readonly usageProviders?: readonly unknown[]
   readonly usageSummary?: unknown
   readonly usageReport?: (input: Readonly<Record<string, unknown>> | undefined) => unknown
+  readonly fallback?: (request: Request) => Response | Promise<Response>
 }
 
 export type RelayDouble = {
@@ -287,6 +288,7 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
         return new Response(null, { status: 204 })
       }
       if (url.pathname === "/api/auth/logout") return new Response(null, { status: 204 })
+      if (options.fallback !== undefined) return options.fallback(request)
       return Response.json({ error: { code: "forbidden", message: "unknown route" } }, { status: 404 })
     },
     websocket: {
