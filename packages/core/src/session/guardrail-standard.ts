@@ -12,6 +12,8 @@ export interface Match {
     readonly matchedSegment: string
     readonly resolvedTargets: ReadonlyArray<string>
     readonly confirmed: boolean
+    readonly uncertainExecution?: true
+    readonly uncertainFilesystem?: true
   }
 }
 
@@ -56,7 +58,7 @@ const segmentReviews: ReadonlyArray<{ readonly id: string; readonly pattern: Reg
 
 const databaseReview = {
   id: "standard.review.database-destructive",
-  pattern: /\b(?:drop\s+(?:database|schema|table)|truncate\s+table|delete\s+from\s+[^\s;]+\s*;?\s*$)/i,
+  pattern: /\b(?:drop(?:\s|\/\*[\s\S]*?\*\/)+(?:database|schema|table)|truncate(?:\s|\/\*[\s\S]*?\*\/)+table|delete(?:\s|\/\*[\s\S]*?\*\/)+from\b)/i,
   reason: "Destructive database operation",
 }
 
@@ -90,15 +92,23 @@ export function match(action: string, resource: string, paths?: Paths, dismissed
     return { ...review, decision: "ask", hardReview: true, evidence: { matchedSegment, resolvedTargets: [], confirmed: !inertGitOperation(matchedSegment) } }
   }
   const database = dismissed?.has(databaseReview.id) ? undefined : executableDatabaseMention(resource)
-  if (database === undefined) return outside
-  return { ...databaseReview, decision: "ask", hardReview: true, evidence: { matchedSegment: database.segment, resolvedTargets: [], confirmed: database.confirmed } }
+  if (database === undefined) {
+    const uncertainImport = paths && !dismissed?.has("standard.review.outside-repo")
+      ? shellSegments(resource).find(unknownSqliteImport) : undefined
+    return uncertainImport ? { id: "standard.review.outside-repo", decision: "ask", hardReview: false,
+      reason: "SQLite import file target is unproven", evidence: { matchedSegment: uncertainImport.rawTokens.join(" "), resolvedTargets: outside?.evidence.resolvedTargets ?? [], confirmed: false, uncertainFilesystem: true } } : outside
+  }
+  return { ...databaseReview, reason: database.uncertainExecution ? "Possible destructive database operation; execution is unproven" : databaseReview.reason, decision: "ask", hardReview: true, evidence: { matchedSegment: database.segment, resolvedTargets: [], confirmed: database.confirmed, ...(database.uncertainExecution ? { uncertainExecution: true } : {}) } }
 }
 
 const databaseClients = new Set([
   "psql", "pgcli", "mysql", "mycli", "mariadb", "sqlite", "sqlite3", "litecli", "sqlcmd", "sqlplus", "isql", "usql",
   "duckdb", "clickhouse-client", "mongosh", "cockroach",
 ])
-const inertCarriers = new Set(["echo", "printf", "tee", "cat", "git"])
+const benignSqliteFlags = new Set([
+  "-batch", "-header", "-noheader", "-column", "-box", "-table", "-csv", "-line", "-json", "-bail", "-echo", "-quiet",
+])
+const inertCarriers = new Set(["echo", "printf", "tee", "cat"])
 
 function inertGitOperation(segment: string) {
   const tokens = segment.split(" ")
@@ -108,6 +118,237 @@ function inertGitOperation(segment: string) {
 
 function tokenName(token: string) {
   return token.replace(/^["']|["']$/g, "").split("/").at(-1) ?? token
+}
+
+function databaseClient(segment: ShellSegment) {
+  const index = segment.tokens.findIndex((token) => databaseClients.has(tokenName(token)))
+  return index >= 0 && segment.tokens.slice(0, index).every((token) =>
+    ["sudo", "command", "env", "nohup"].includes(tokenName(token)) || token.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(token))
+}
+
+function unknownSqliteImport(segment: ShellSegment) {
+  if (!databaseClient(segment) || !segment.tokens.some((token) => ["sqlite", "sqlite3"].includes(tokenName(token)))) return false
+  return segment.tokens.some((token) => [...token.matchAll(/^\s*\.import\s+([^\n]*)/gim)].some((match) =>
+    [...match[1].matchAll(/(?:^|\s)(--[\w-]+)/g)].some((option) => !["--csv", "--ascii", "--skip", "--schema"].includes(option[1]))))
+}
+
+function psqlCommands(sql: string) {
+  const commands: string[] = []
+  let quote: "'" | '"' | undefined
+  let dollar: string | undefined
+  let block = false
+  let lineStart = true
+  for (let index = 0; index < sql.length; index++) {
+    if (block) {
+      if (sql.startsWith("*/", index)) { block = false; index++ }
+      continue
+    }
+    if (dollar) {
+      if (sql.startsWith(dollar, index)) { index += dollar.length - 1; dollar = undefined }
+      continue
+    }
+    if (quote) {
+      if (sql[index] === "\\") { index++; continue }
+      if (sql[index] === quote) {
+        if (sql[index + 1] === quote) index++
+        else quote = undefined
+      }
+      continue
+    }
+    if (sql[index] === "\n") { lineStart = true; continue }
+    if (lineStart && /[ \t\r]/.test(sql[index])) continue
+    if (lineStart && sql[index] === "\\") {
+      const end = sql.indexOf("\n", index)
+      commands.push(sql.slice(index, end < 0 ? sql.length : end))
+      if (end < 0) break
+      index = end - 1
+      continue
+    }
+    lineStart = false
+    if (sql.startsWith("--", index)) {
+      const end = sql.indexOf("\n", index + 2)
+      if (end < 0) break
+      index = end - 1
+      continue
+    }
+    if (sql.startsWith("/*", index)) { block = true; index++; continue }
+    const character = sql[index]
+    if (character === "'" || character === '"') { quote = character; continue }
+    const tag = sql.slice(index).match(/^\$(?:[a-z_][\w]*)?\$/i)?.[0]
+    if (tag) { dollar = tag; index += tag.length - 1 }
+  }
+  return commands
+}
+
+function literalShellWords(segment: ShellSegment) {
+  const words: string[] = []
+  for (const raw of segment.rawTokens) {
+    if (/[$`\\]/.test(raw)) return undefined
+    let quote: "'" | '"' | undefined
+    let word = ""
+    for (const character of raw) {
+      if (character === quote) {
+        quote = undefined
+        continue
+      }
+      if (!quote && (character === "'" || character === '"')) {
+        quote = character
+        continue
+      }
+      if (!quote && /[*?[\]{}~()<>]/.test(character)) return undefined
+      word += character
+    }
+    if (quote) return undefined
+    words.push(word)
+  }
+  return words
+}
+
+function sqlCode(sql: string) {
+  let code = ""
+  for (let index = 0; index < sql.length; index++) {
+    const character = sql[index]
+    if (character === "\\" || character === "$" || character === "`") return undefined
+    if (sql.startsWith("--", index) && /\s|^$/.test(sql[index + 2] ?? "")) {
+      const newline = sql.indexOf("\n", index + 2)
+      index = newline < 0 ? sql.length : newline
+      code += " "
+      continue
+    }
+    if (sql.startsWith("/*", index)) {
+      const end = sql.indexOf("*/", index + 2)
+      if (end < 0 || /^(?:[!+]|m!)/i.test(sql.slice(index + 2)) || sql.slice(index + 2, end).includes("/*")) return undefined
+      index = end + 1
+      code += " "
+      continue
+    }
+    if (character === "'" || character === '"') {
+      const quote = character
+      let closed = false
+      while (++index < sql.length) {
+        if (sql[index] === "\\") return undefined
+        if (sql[index] !== quote) continue
+        if (sql[index + 1] === quote) {
+          index++
+          continue
+        }
+        closed = true
+        break
+      }
+      if (!closed) return undefined
+      code += "0"
+      continue
+    }
+    code += character
+  }
+  if (/^\s*\./m.test(code)) return undefined
+  return code
+}
+
+function readOnlySql(sql: string) {
+  const code = sqlCode(sql)
+  if (code === undefined) return false
+  return code.split(";").filter((statement) => statement.trim()).every((statement) => {
+    if (!/^\s*(?:explain\s+)?select\b/i.test(statement)) return false
+    if (/[^\w\s.,*()=<>!+\-/%0-9]/.test(statement)) return false
+    if (/\b(?:drop|truncate|delete|insert|update|create|alter|attach|detach|into|outfile|dumpfile|copy|call|do|execute|analyze|analyzer|pragma)\b/i.test(statement)) return false
+    return [...statement.matchAll(/(?:\b\w+\s*\.\s*)?(\b\w+)\s*\(/g)]
+      .every((call) => /^count\s*\(\s*\*\s*\)/i.test(statement.slice(call.index)))
+  })
+}
+
+function literalDatabaseQueries(segment: ShellSegment): string[] | undefined {
+  const tokens = literalShellWords(segment)
+  if (!tokens || segment.heredocBodies.length > 0 || tokens.some((token) => redirection.test(token))) return undefined
+  const name = tokenName(tokens[0] ?? "")
+  const sqlTexts: string[] = []
+  const sqlite = name === "sqlite3" || name === "sqlite"
+  if (!sqlite && name !== "psql" && name !== "mysql" && name !== "mariadb") return undefined
+  let database = false
+  for (let index = 1; index < tokens.length; index++) {
+    const token = tokens[index]
+    if (sqlite) {
+      if (benignSqliteFlags.has(token)) continue
+      if (token.startsWith("-")) return undefined
+      if (!database) {
+        database = true
+        continue
+      }
+      sqlTexts.push(token)
+      continue
+    }
+    const short = name === "psql" ? "-c" : "-e"
+    const long = name === "psql" ? "--command" : "--execute"
+    if (token === short || token === long) {
+      if (tokens[index + 1] === undefined) return undefined
+      sqlTexts.push(tokens[++index])
+      continue
+    }
+    if (token.startsWith(`${long}=`)) {
+      sqlTexts.push(token.slice(long.length + 1))
+      continue
+    }
+    if (token.startsWith(short) && token.length > short.length) {
+      sqlTexts.push(token.slice(short.length))
+      continue
+    }
+    return undefined
+  }
+  return sqlTexts.length > 0 ? sqlTexts : undefined
+}
+
+function isQualifiedDelete(sql: string) {
+  const code = sqlCode(sql)
+  if (code === undefined || /[^\w\s.,*()=<>!+\-/%0-9;]/.test(code)) return false
+  const statements = code.split(";").filter((statement) => statement.trim())
+  return statements.length > 0 && statements.every((statement) => {
+    if (!/^\s*delete\s+from\b/i.test(statement)) return false
+    if (/\b\w+\s*\(/.test(statement)) return false
+    let depth = 0
+    let where = -1
+    for (const token of statement.matchAll(/\(|\)|\b(?:where|returning)\b/gi)) {
+      if (token[0] === "(") depth++
+      else if (token[0] === ")") {
+        if (--depth < 0) return false
+      } else if (depth === 0 && token[0].toLowerCase() === "returning" && where < 0) return false
+      else if (depth === 0 && token[0].toLowerCase() === "where" && where < 0) where = token.index + token[0].length
+    }
+    return depth === 0 && where >= 0 && /^\s*\S/.test(statement.slice(where))
+  })
+}
+
+function isSqlMetadata(segment: ShellSegment): boolean {
+  const tokens = literalShellWords(segment)
+  if (!tokens || segment.heredocBodies.length > 0 || tokens.some((token) => redirection.test(token))) return false
+  const name = tokenName(tokens[0] ?? "")
+  if (name === "git") {
+    if (!gitMessageCommands.has(tokens[1])) return false
+    let message = false
+    for (let index = 2; index < tokens.length; index++) {
+      const token = tokens[index]
+      if (token === "-m" || token === "--message") {
+        if (tokens[index + 1] === undefined) return false
+        message = true
+        index++
+        continue
+      }
+      if (token.startsWith("--message=") || (token.startsWith("-m") && token.length > 2)) {
+        message = true
+        continue
+      }
+      if (!["-a", "--all", "--amend", "--no-edit", "--allow-empty", "--allow-empty-message"].includes(token)) return false
+    }
+    return message
+  }
+  if (name !== "gh" || tokens[1] !== "api" || !/^\/repos\/[^/]+\/[^/]+\/issues(?:\/\d+)?$/.test(tokens[2] ?? "")) return false
+  let field = false
+  for (let index = 3; index < tokens.length; index++) {
+    const token = tokens[index]
+    if (!["-f", "--raw-field", "-F", "--field"].includes(token) || !/^(?:title|body)=(?!@)/.test(tokens[index + 1] ?? "")) return false
+    field = true
+    index++
+  }
+  return field
 }
 
 const chainedSeparators = new Set(["; ", "\n ", " && ", " || "])
@@ -127,18 +368,42 @@ function executableDatabaseMention(resource: string) {
         : [],
     ),
   ]
-  const mention = [...resource.matchAll(new RegExp(databaseReview.pattern.source, "gi"))].find(
-    (found) => !inert.some(([start, end]) => found.index >= start && found.index + found[0].length <= end),
+  const dynamicInput = pipelines.find((group) => group.some(databaseClient) &&
+    group.some((item) => tokenName(item.tokens[0] ?? "") === "printf" && item.rawTokens.some((token) => /[$`]/.test(token))))
+  const clientProgram = segments.find((segment) => databaseClient(segment) && segment.tokens.some((token) =>
+    psqlCommands(token).some((command) => /^\\copy\b[^\n]*\b(?:from|to)\s+program\b/i.test(command))))
+  const opaqueInput = segments.find((segment) => databaseClient(segment) && segment.tokens.some((token) =>
+    /\$/.test(token) && /\\copy\b/i.test(token)))
+  const mentions = [
+    ...resource.matchAll(new RegExp(databaseReview.pattern.source, "gi")),
+    ...segments.filter((segment) => databaseReview.pattern.test(segment.tokens.join(" ")) || segment.heredocBodies.some((body) => databaseReview.pattern.test(body)) ||
+      (tokenName(segment.tokens[0] ?? "") === "printf" && databaseReview.pattern.test(segment.rawTokens.join(" ").replace(/\\(?:x([\da-f]{1,2})|0([0-7]{1,3})|([0-7]{1,3})|(.))/gi, (_match, hex: string | undefined, prefixed: string | undefined, octal: string | undefined, other: string | undefined) =>
+        hex ? String.fromCharCode(parseInt(hex, 16)) : prefixed ? String.fromCharCode(parseInt(prefixed, 8)) : octal ? String.fromCharCode(parseInt(octal, 8)) : other === "n" ? "\n" : " "))))
+      .map((segment) => ({ index: segment.start, 0: resource.slice(segment.start, segment.end) })),
+  ].filter(
+    (found) => !inert.some(([start, end]) => found.index >= start && found.index < end),
   )
-  if (!mention) return undefined
-  const segment = segments.find((item) => mention.index >= item.start && mention.index < item.end)
-  const group = pipelines.find((items) => segment !== undefined && items.includes(segment))
-  const client = group?.some((item) => item.rawTokens.some((token) => databaseClients.has(tokenName(token)))) === true
-  const carrier = segment !== undefined && inertCarriers.has(tokenName(segment.rawTokens[0] ?? ""))
-  return {
-    segment: segment ? segment.rawTokens.join(" ") : resource.replace(/\s+/g, " ").trim(),
-    confirmed: client || !carrier,
-  }
+  const candidates = mentions.flatMap((mention) => {
+    const segment = segments.find((item) => mention.index >= item.start && mention.index < item.end)
+      ?? segments.find((item) => item.heredocRanges.some(([start, end]) => mention.index >= start && mention.index < end))
+    const group = pipelines.find((items) => segment !== undefined && items.includes(segment))
+    const queries = segment && group?.length === 1 ? literalDatabaseQueries(segment) : undefined
+    if (segment && group?.length === 1 && ((queries && (queries.every(readOnlySql) || queries.every(isQualifiedDelete))) || isSqlMetadata(segment))) return []
+    const client = group?.some(databaseClient) === true
+    const carrier = segment !== undefined && inertCarriers.has(tokenName(segment.rawTokens[0] ?? ""))
+    return [{
+      segment: segment ? segment.rawTokens.join(" ") : resource.replace(/\s+/g, " ").trim(),
+      confirmed: client,
+      uncertainExecution: !client && (!carrier || group?.some((item) =>
+        !inertCarriers.has(tokenName(item.tokens[0] ?? "")) && !readOnlyShell(item.rawTokens.join(" "))) === true),
+    }]
+  })
+  return candidates.find((candidate) => candidate.confirmed)
+    ?? candidates.find((candidate) => candidate.uncertainExecution)
+    ?? (dynamicInput ? { segment: dynamicInput.map((item) => item.rawTokens.join(" ")).join(" | "), confirmed: false, uncertainExecution: true } : undefined)
+    ?? (clientProgram ? { segment: clientProgram.rawTokens.join(" "), confirmed: false, uncertainExecution: true } : undefined)
+    ?? (opaqueInput ? { segment: opaqueInput.rawTokens.join(" "), confirmed: false, uncertainExecution: true } : undefined)
+    ?? candidates[0]
 }
 
 function deletionMatch(command: string, paths?: Paths, dismissed?: ReadonlySet<string>): Match | undefined {
@@ -548,6 +813,38 @@ function pythonScriptIndex(args: ReadonlyArray<string>) {
 
 function commandArguments(name: string, args: ReadonlyArray<string>, heredocBodies: ReadonlyArray<string> = [], includeReadTargets = false) {
   if (name === "echo" || name === "printf") return []
+  if (name === "psql" || name === "mysql" || name === "mariadb") {
+    const short = name === "psql" ? "-c" : "-e"
+    const long = name === "psql" ? "--command" : "--execute"
+    const kept: string[] = []
+    for (let index = 0; index < args.length; index++) {
+      const arg = args[index]
+      const sql = arg === short || arg === long ? args[++index]
+        : arg.startsWith(`${long}=`) ? arg.slice(long.length + 1)
+          : arg.startsWith(short) && arg.length > short.length ? arg.slice(short.length) : undefined
+      if (sql === undefined) {
+        kept.push(arg)
+        continue
+      }
+      if (!readOnlySql(sql)) kept.push(sql)
+      if (name === "psql") {
+        const commands = psqlCommands(sql)
+        const copy = commands.join("\n").match(/(?:^|\n)\s*\\copy\s+(?:\([^\n]*\)|[^\n]*?)\s+\b(?:from|to)\s+(?:'([^']+)'|"([^"]+)"|([^\s;]+))/i)
+        if (copy && !/^program$/i.test(copy[1] ?? copy[2] ?? copy[3])) kept.push(copy[1] ?? copy[2] ?? copy[3])
+        const files = commands.flatMap((command) => [...command.matchAll(/^\\(?:i|ir|o|w)\s+(?:'([^']+)'|"([^"]+)"|([^\s;]+))/gi)])
+        kept.push(...files.map((command) => command[1] ?? command[2] ?? command[3]))
+      }
+    }
+    return kept
+  }
+  if (name === "sqlite" || name === "sqlite3") {
+    const targets = args.flatMap((arg) => {
+      const dot = [...arg.matchAll(/^\s*\.(?:read|open|output|once|import|backup|restore|save|log)\s+(?:(?:--(?:skip|schema)(?:=\S+|\s+\S+)|--(?:csv|ascii))\s+)*(?!-)(?:'([^']+)'|"([^"]+)"|(\S+))/gim)]
+      const sql = [...arg.matchAll(/\b(?:attach(?:\s+database)?|vacuum\s+into|(?:readfile|writefile)\s*\()\s*(?:'([^']+)'|"([^"]+)")/gi)]
+      return [...dot.map((match) => match[1] ?? match[2] ?? match[3]), ...sql.map((match) => match[1] ?? match[2])]
+    })
+    return [...args, ...targets]
+  }
   if (interpreters.has(name)) {
     const python = name === "python" || name === "python3"
     const script = python ? pythonScriptIndex(args) : args.findIndex((arg) => !arg.startsWith("-"))
@@ -812,6 +1109,7 @@ interface ShellSegment {
   readonly start: number
   readonly end: number
   readonly heredocBodies: Array<string>
+  readonly heredocRanges: Array<readonly [number, number]>
 }
 
 function rmOperations(command: string, paths?: Paths): ReadonlyArray<RmOperation> {
@@ -933,7 +1231,7 @@ function shellScan(command: string) {
   let heredocs: Array<{ readonly delimiter: string; readonly strip: boolean; readonly quoted: boolean; readonly command: string; readonly segment: number }> = []
   let linePiped = false
   const pushToken = (end: number) => {
-    if (!token) return
+    if (!token && !tokenQuoted) return
     if (tokens.length === 0) segmentStart = tokenStart
     const operator = tokens.at(-1)?.match(/^\d*<<(-?)$/)
     const attached = token.match(/^\d*<<(-?)([^<].*)$/s)
@@ -952,23 +1250,27 @@ function shellScan(command: string) {
     heredocs = []
     linePiped = false
     if (pending.length === 0) return newline
-    const bodies: Array<{ readonly segment: number; readonly body: string }> = []
+    const bodies: Array<{ readonly segment: number; readonly body: string; readonly start: number; readonly end: number }> = []
     const end = pending.reduce<number | undefined>((cursor, heredoc) => {
       if (cursor === undefined || !heredocConsumers.has(heredoc.command)) return undefined
       const lines = command.slice(cursor).split("\n")
       const closing = lines.findIndex((line) => (heredoc.strip ? line.replace(/^\t+/, "") : line) === heredoc.delimiter)
       if (closing < 0 || (!heredoc.quoted && lines.slice(0, closing).some((line) => /\$\(|`/.test(line)))) return undefined
-      bodies.push({ segment: heredoc.segment, body: lines.slice(0, closing).join("\n") })
+      const body = lines.slice(0, closing).join("\n")
+      bodies.push({ segment: heredoc.segment, body, start: cursor, end: cursor + body.length })
       return cursor + lines.slice(0, closing + 1).join("\n").length + 1
     }, newline + 1)
     if (piped || end === undefined) return newline
-    for (const { segment, body } of bodies) segments[segment]?.heredocBodies.push(body)
+    for (const { segment, body, start, end } of bodies) {
+      segments[segment]?.heredocBodies.push(body)
+      segments[segment]?.heredocRanges.push([start, end])
+    }
     return end - 2
   }
   const pushSegment = (next: Connector, nextSeparator: string, end: number) => {
     pushToken(end)
     if (tokens.length > 0) {
-      segments.push({ tokens, rawTokens, connector, separator, ranges, start: segmentStart, end, heredocBodies: [] })
+      segments.push({ tokens, rawTokens, connector, separator, ranges, start: segmentStart, end, heredocBodies: [], heredocRanges: [] })
       tokens = []
       rawTokens = []
       ranges = []

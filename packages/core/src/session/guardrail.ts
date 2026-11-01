@@ -477,6 +477,7 @@ export const layer = Layer.effect(
       }
       if (!result.standard || result.ruleIDs[0] !== "standard.review.outside-repo" || input.skipReview === true)
         return classified(result)
+      if (result.evidence?.uncertainFilesystem) return classified(result)
       const directories = input.resources.flatMap((resource) =>
         SessionGuardrailStandard.outsideTargets(input.action, resource, paths)).reduce((result, target) => {
         result.set(target.path, result.get(target.path) === true || target.directory)
@@ -685,7 +686,8 @@ export const layer = Layer.effect(
             if (matched.decision !== "ask" || !matched.standard || !ruleID?.startsWith("standard.review.") || input.skipReview) return current
             if (!current.evidence) return current
             if (!reviewPolicy.decideReviews) return current
-            if (matched.hardReview && (!reviewPolicy.decideHardReviews || current.evidence.confirmed)) return current
+            if (current.evidence.uncertainFilesystem) return current
+            if (matched.hardReview && (!reviewPolicy.decideHardReviews || current.evidence.confirmed || current.evidence.uncertainExecution)) return current
             const authorization = yield* autonomy
               .snapshot(matched.rootSessionID, { inherited: true })
               .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))

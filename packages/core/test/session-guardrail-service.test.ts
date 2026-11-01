@@ -1651,6 +1651,36 @@ const verifyExcluded = harness({ documents: new Map([
   ["/global/guardrails/deny.md", markdown({ id: "custom-deny", decision: "deny", resource: "denied" })],
   ["/global/guardrails/hard.md", markdown({ id: "standard.review.custom-name", decision: "hard_review", resource: "reviewed" })],
 ]) })
+
+const unknownImport = harness({ guardrails: "manual" })
+unknownImport.it.effect("unknown SQLite import target retains ordinary service review", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  const pending = yield* waitForRequest(service, { ...ordinaryReview, resources: [
+    `sqlite3 db.sqlite ".import --unknown value /outside/input.csv items"`,
+  ] })
+  expect(pending.request.ruleIDs).toEqual(["standard.review.outside-repo"])
+  expect(pending.request.reason).toBe("SQLite import file target is unproven")
+  expect(pending.request.hardReview).not.toBe(true)
+  yield* service.reply({ sessionID: parentID, requestID: pending.request.id, reply: "reject" })
+  expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
+}))
+
+for (const resources of [
+  [`sqlite3 db.sqlite ".import --unknown value file items"; touch /outside/real`],
+  [`sqlite3 db.sqlite ".import --unknown value file items"`, `touch /outside/real`],
+]) {
+  const mixedImport = harness({ verify: () => Effect.succeed(verificationOutput(false, 1)) })
+  mixedImport.it.effect(`unknown SQLite import preserves independent file review across resources: ${resources.length}`, () => Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const pending = yield* waitForRequest(service, { ...ordinaryReview, resources })
+    expect(pending.request.ruleIDs).toEqual(["standard.review.outside-repo"])
+    expect(pending.request.reason).toBe("SQLite import file target is unproven")
+    expect(mixedImport.verifications).toEqual([])
+    expect(mixedImport.dismissals).toEqual([])
+    yield* service.reply({ sessionID: parentID, requestID: pending.request.id, reply: "reject" })
+    expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
+  }))
+}
 verifyExcluded.it.effect("catastrophic and custom denies and custom reviews are never verified", () => Effect.gen(function* () {
   const service = yield* SessionGuardrail.Service
   for (const resource of ["rm -rf /", "denied"]) expect(Exit.isFailure(yield* service.assert({ ...ordinaryReview, resources: [resource] }).pipe(Effect.exit))).toBe(true)
@@ -1686,6 +1716,7 @@ for (const [name, command, ruleID] of [
   ["force push", "git push --force origin main", "standard.review.force-push"],
   ["destructive SQL", 'psql -c "DROP TABLE users"', "standard.review.database-destructive"],
   ["piped SQL", "cat <<EOF | psql\nDROP TABLE users;\nEOF", "standard.review.database-destructive"],
+  ["SQL after a dismissible printed mention", 'echo "DROP TABLE note" > notes.sql; psql -c "DROP TABLE users"', "standard.review.database-destructive"],
 ] as const) {
   const real = harness({
     verify: () => Effect.succeed(verificationOutput(false, 1)),
@@ -1699,6 +1730,50 @@ for (const [name, command, ruleID] of [
     expect(real.dismissals).toEqual([])
     expect(real.replies).toEqual([])
     expect(pending.request.escalation).toMatchObject({ reason: "escalated", choice: "allow" })
+    yield* service.reply({ sessionID: parentID, requestID: pending.request.id, reply: "reject" })
+    expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
+  }))
+}
+
+for (const command of [`psql -c "DROP TABLE users"`, `python -c "db.run('DROP TABLE users')"`]) {
+  const mixed = harness({
+    verify: () => Effect.succeed(verificationOutput(false, 1)),
+    decision: () => Effect.succeed(decisionOutput("approve", 1)),
+  })
+  mixed.it.effect(`SQL request boundary prevents an inert resource from releasing ${command}`, () => Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const pending = yield* waitForRequest(service, { ...hardReview, resources: [
+      `echo "DROP TABLE note" > notes.sql`, command,
+    ] })
+    expect(pending.request.ruleIDs).toEqual(["standard.review.database-destructive"])
+    expect(mixed.verifications).toEqual([])
+    expect(mixed.dismissals).toEqual([])
+    expect(mixed.replies).toEqual([])
+    yield* service.reply({ sessionID: parentID, requestID: pending.request.id, reply: "reject" })
+    expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
+  }))
+}
+
+for (const [name, command] of [
+  ["opaque literal source", `bun -e "const text = 'DROP TABLE users'; console.log(text)"`],
+  ["executable-looking source", `python -c "db.run('DROP TABLE users')"`],
+  ["interpreter heredoc source", `python <<'EOF'\ndb.run('DROP TABLE users')\nEOF`],
+  ["dynamic database input", `printf '%s' "$SQL" | psql`],
+  ["wrapped dynamic database input", `printf '%s' "$SQL" | env psql`],
+  ["database client program", `psql -c '\\copy items TO PROGRAM "some-program"'`],
+] as const) {
+  const uncertain = harness({
+    verify: () => Effect.succeed(verificationOutput(false, 1)),
+    decision: () => Effect.succeed(decisionOutput("approve", 1)),
+  })
+  uncertain.it.effect(`unproven SQL in ${name} cannot be released by a helper nonmatch`, () => Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const pending = yield* waitForRequest(service, { ...hardReview, resources: [command] })
+    expect(pending.request.ruleIDs).toEqual(["standard.review.database-destructive"])
+    expect(pending.request.reason).toBe("Possible destructive database operation; execution is unproven")
+    expect(uncertain.verifications).toEqual([])
+    expect(uncertain.dismissals).toEqual([])
+    expect(uncertain.replies).toEqual([])
     yield* service.reply({ sessionID: parentID, requestID: pending.request.id, reply: "reject" })
     expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
   }))
