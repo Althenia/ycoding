@@ -22,6 +22,18 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.3",
+    date: "2026-11-01",
+    title: "Bounded SQL classification and preserved review evidence",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "This release follows the version sequence restarted at v0.11.0. The v0.11.3 label was also used on 2026-10-26 for a different build; the shared release notes distinguish that historical publication from this release." },
+      { tag: "Fixed", text: "SQL guardrails distinguish supported literal printing, searches, comments and bounded read-only queries from destructive execution. An inert mention cannot hide a later destructive operation in the same command or another resource. Recognition is literal and bounded, not a general proof that a script is safe." },
+      { tag: "Fixed", text: "Reviews retain confirmed and uncertain evidence across command segments and resources. Opaque or dynamic interpreter input keeps non-dismissible review with an explicit reason that execution is unproven; arbitrary interpreter source is not treated as proven SQL execution. Hard reviews, catastrophic denies, custom rules and explicit permission denies remain enforced." },
+      { tag: "Fixed", text: "SQL client arguments preserve local-client file operations, including database operands, file-valued options and supported PostgreSQL and SQLite client commands. SQLite imports with unresolved import targets retain ordinary file-operation review without inventing a destructive database operation or losing known outside targets." },
+    ],
+  },
+  {
     version: "0.11.2",
     date: "2026-11-01",
     title: "Account connector skills, outcome delivery contracts, and quieter API reviews",

@@ -7,8 +7,39 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.2 account skills, agent prompt contracts, and quieter outside-repository reviews first", () => {
+  test("lists restarted v0.11.3 SQL review boundaries first", () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({
+      version: "0.11.3",
+      date: "2026-11-01",
+      title: "Bounded SQL classification and preserved review evidence",
+      tags: ["Changed", "Fixed"],
+    })
+    expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(1)
+    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(3)
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of [
+      "restarted at v0.11.0", "2026-10-26", "different build",
+      "literal printing", "bounded read-only queries", "later destructive operation",
+      "confirmed and uncertain evidence", "execution is unproven", "arbitrary interpreter",
+      "local-client file operations", "unresolved import targets", "known outside targets",
+      "custom rules", "explicit permission denies",
+    ]) expect(text).toContain(fragment)
+    expect(after("0.11.3")?.version).toBe("0.11.2")
+  })
+
+  test("v0.11.3 shared notes retain reset lineage and match the web changes", async () => {
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.3.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.11.3\n")
+    for (const change of byVersion("0.11.3")?.changes ?? []) expect(notes).toContain(change.text)
+    expect(notes).toContain("906b6cc733211f1be27c8a0ab90f56e7e1210394")
+    expect(notes).toContain("6023b5b3be8a986a43bb08861d905aa68f647464")
+    expect(notes).toContain("https://github.com/Althenia/ycoding/actions/runs/40313815078")
+    expect(notes).toContain("Historical CI records and artifacts remain unchanged")
+  })
+
+  test("retains v0.11.2 account skills, agent prompt contracts, and quieter outside-repository reviews", () => {
+    const entry = byVersion("0.11.2")
     expect(entry).toMatchObject({
       version: "0.11.2",
       date: "2026-11-01",
@@ -1712,7 +1743,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 47)).toEqual([
+    expect(versions.slice(0, 48)).toEqual([
+      "0.11.3",
       "0.11.2",
       "0.11.1",
       "0.11.0",
