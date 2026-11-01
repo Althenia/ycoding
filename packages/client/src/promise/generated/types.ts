@@ -634,6 +634,15 @@ export type IntegrationCommandAttemptStatus =
       time: { created: number | "Infinity" | "-Infinity" | "NaN"; expires: number | "Infinity" | "-Infinity" | "NaN" }
     }
 
+export type IntegrationAccountSkillsProof = {
+  status: number
+  keys: Array<string>
+  count?: number | null
+  hasNext?: boolean | null
+  paginationKeys?: Array<string> | null
+  detail?: { status: number; keys: Array<string> } | null
+}
+
 export type McpStatusConnected = { status: "connected" }
 
 export type McpStatusPending = { status: "pending" }
@@ -8267,6 +8276,50 @@ export type IntegrationCommandCancelInput = {
 }
 
 export type IntegrationCommandCancelOutput = void
+
+export type IntegrationAccountSkillsReadInput = {
+  readonly integrationID: { readonly integrationID: string }["integrationID"]
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly sessionID?: string | undefined
+    readonly agent?: string | undefined
+    readonly profile?: string | undefined
+    readonly id?: string | undefined
+  }["location"]
+  readonly sessionID?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly sessionID?: string | undefined
+    readonly agent?: string | undefined
+    readonly profile?: string | undefined
+    readonly id?: string | undefined
+  }["sessionID"]
+  readonly agent?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly sessionID?: string | undefined
+    readonly agent?: string | undefined
+    readonly profile?: string | undefined
+    readonly id?: string | undefined
+  }["agent"]
+  readonly profile?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly sessionID?: string | undefined
+    readonly agent?: string | undefined
+    readonly profile?: string | undefined
+    readonly id?: string | undefined
+  }["profile"]
+  readonly id?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly sessionID?: string | undefined
+    readonly agent?: string | undefined
+    readonly profile?: string | undefined
+    readonly id?: string | undefined
+  }["id"]
+}
+
+export type IntegrationAccountSkillsReadOutput = {
+  location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
+  data: IntegrationAccountSkillsProof
+}
 
 export type McpListInput = {
   readonly location?: {

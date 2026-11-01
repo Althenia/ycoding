@@ -269,6 +269,21 @@ test("displays no variant segment for an absent variant", () => {
 test("labels provider-qualified models with the resolved name", () => {
   expect(headerModelLabel({ providerID: "openai", modelID: "gpt-5-6-terra", name: "GPT-5.6 Terra" })).toBe("openai/GPT-5.6 Terra")
   expect(headerModelLabel({ providerID: "openai", modelID: "gpt-5-6-terra" })).toBe("openai/Gpt 5 6 Terra")
+  expect(
+    headerModelLabel({
+      providerID: "antigravity",
+      providerName: "Antigravity",
+      modelID: "claude-sonnet-5-5",
+      name: "Claude Sonnet 5.5",
+    }),
+  ).toBe("Antigravity/Claude Sonnet 5.5")
+  expect(
+    headerModelLabel({
+      providerID: "antigravity",
+      modelID: "claude-sonnet-5-5",
+      name: "Claude Sonnet 5.5",
+    }),
+  ).toBe("antigravity/Claude Sonnet 5.5")
 })
 
 test("keeps the header model label to provider and model only", () => {

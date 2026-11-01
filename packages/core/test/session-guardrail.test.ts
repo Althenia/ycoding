@@ -605,6 +605,122 @@ describe("SessionGuardrailMatch", () => {
   })
 
   test.each([
+    "ycoding api GET /api/session/outstanding",
+    "ycoding api GET /api/provider/muse",
+    "ycoding api GET '/api/session?limit=25'",
+    "ycoding api session.list --param search=inventory --param limit=50",
+    "ycoding api session.prompt -d '{\"text\":\"See /outside/file\"}'",
+    "ycoding api GET /api/session/outstanding; ycoding api GET /api/session/active; ycoding api GET /api/config | python3 -c 'import sys,json; d=json.load(sys.stdin); print(json.dumps({\"keys\":list(d),\"location\":d.get(\"location\")}))'; readlink /home/user/.local/bin/ycoding",
+    "/usr/local/bin/ycoding api GET /api/session/outstanding",
+    "curl -s http://localhost:4096/api/session/outstanding",
+    "curl -s /api/session/outstanding",
+    "curl -s -X POST -H 'content-type: application/json' -d '{\"path\":\"/outside/file\"}' https://example.com/api/session",
+    "wget -q https://example.com/api/file",
+    "http GET /api/session/outstanding",
+    "gh api -X GET /repos/owner/repo --jq .name",
+    "python3 script.py --url /api/session/outstanding",
+    "python3 script.py --endpoint=/api/session/outstanding",
+    "python3 -c \"import urllib.request; print(urllib.request.urlopen('http://localhost/api/session').read())\"",
+    "python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get(\"/api/config\"))'",
+    "python3 - <<'PY'\nimport requests\nprint(requests.get(\"/api/session\").json())\nPY",
+    "python3 -c \"print(open('/outside/notes.md').read())\"",
+    "python3 -c \"from pathlib import Path; print(Path('/outside/notes.md').read_text())\"",
+    "python3 -c 'print(\"open('/outside/out.txt','w')\")'",
+    "python3 - <<'PY'\n# open('/outside/out.txt','w')\nprint(1)\nPY",
+    "python3 - <<'PY'\ns = \"\"\"open('/outside/out.txt','w')\"\"\"\nprint(s)\nPY",
+    "curl -b session=abc https://example.com/api/session",
+    "curl -d @body.json https://example.com/api/session",
+    "curl -H 'X-Info: file:///outside/note' https://example.com",
+    "curl 'https://example.com/?next=file:///outside/note'",
+    "curl --referer 'file:///outside/note' https://example.com",
+    "curl -d 'next=file:///outside/note' https://example.com/api/session",
+  ])("does not treat API routes, client strings or in-memory code as outside file targets: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "allow", hardReview: false, ruleIDs: [] })
+    expect(SessionGuardrailStandard.outsidePaths("shell", command, paths)).toEqual([])
+  })
+
+  test.each([
+    "ycoding api GET /api/session/outstanding > /outside/out.json",
+    "ycoding api GET /api/session/outstanding; touch /outside/file",
+    "curl --output /outside/file /api/session",
+    "curl -d @/outside/body.json https://example.com/api/session",
+    "curl -d @../outside/body.json https://example.com/api/session",
+    "curl -F upload=@/outside/file.bin https://example.com/api/session",
+    "curl -b/outside/cookies.txt https://example.com/api/session",
+    "curl file:///outside/secret.txt",
+    "curl file://localhost/outside/secret.txt",
+    "curl --url file:///outside/secret.txt",
+    "curl --url=file:///outside/secret.txt",
+    "curl -H @/outside/headers.txt https://example.com/api/session",
+    "some-tool api GET /api/session/outstanding",
+    "tool GET /outside/file",
+    "curl -T /outside/upload.bin https://example.com/api/session",
+    "wget -O /outside/file https://example.com/api/file",
+    "gh api /repos/owner/repo --input /outside/body.json",
+    "touch /api/session/outstanding",
+    "cp notes.txt /api/outside/file",
+    "python3 script.py --output /outside/out",
+    "python3 -c \"open('/outside/out.txt','w').write('x')\"",
+    "python3 -c \"open('/outside/out.txt', mode='w').write('x')\"",
+    "python3 -c \"from pathlib import Path; Path('/outside/out.txt').write_text('x')\"",
+    "python3 -c \"import os; os.remove('/outside/out.txt')\"",
+    "python3 - <<'PY'\nopen('/outside/out.txt','w').write('x')\nPY",
+  ])("keeps real file targets in API and interpreter commands reviewed: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.outside-repo"] })
+  })
+
+  test("keeps custom, hard and catastrophic rules for API-shaped commands", () => {
+    const rules = layer([
+      custom({ id: "review-api-mutations", decision: "hard_review", actions: ["shell"], resources: ["ycoding api *"] }),
+    ])
+    expect(
+      SessionGuardrailMatch.evaluate({
+        action: "shell",
+        resources: ["ycoding api session.remove -d '{}'"],
+        paths,
+        custom: [rules],
+      }),
+    ).toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["review-api-mutations"] })
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: ["ycoding api GET /api/x; rm -rf /"], paths }))
+      .toMatchObject({ decision: "deny", ruleIDs: ["standard.catastrophic.rm-root"] })
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: ["ycoding api GET /api/x; git push --force origin main"], paths }))
+      .toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.force-push"] })
+  })
+
+  test("shell advisory targets include read-only file operands but not routes or executables", () => {
+    expect(SessionGuardrailStandard.shellFileTargets("ycoding api GET /api/session/outstanding", paths)).toEqual([])
+    expect(SessionGuardrailStandard.shellFileTargets("/usr/local/bin/ycoding api GET /api/session/outstanding", paths)).toEqual([])
+    expect(SessionGuardrailStandard.shellFileTargets("cat /outside/secret.txt", paths)).toContain("/outside/secret.txt")
+    expect(SessionGuardrailStandard.shellFileTargets("readlink /home/user/.local/bin/ycoding", paths))
+      .toContain("/home/user/.local/bin/ycoding")
+    expect(SessionGuardrailStandard.shellFileTargets("curl -o /outside/file https://example.com/api", paths))
+      .toContain("/outside/file")
+    expect(SessionGuardrailStandard.shellFileTargets("curl -s https://example.com/api > /outside/out", paths))
+      .toContain("/outside/out")
+    expect(SessionGuardrailStandard.shellFileTargets("python3 /outside/script.py", paths)).toContain("/outside/script.py")
+    expect(SessionGuardrailStandard.shellFileTargets("python3 -u /outside/script.py", paths)).toContain("/outside/script.py")
+    expect(SessionGuardrailStandard.shellFileTargets("python3 -c \"print(open('/outside/notes.md').read())\"", paths))
+      .toContain("/outside/notes.md")
+    expect(SessionGuardrailStandard.shellFileTargets("python3 -c \"from pathlib import Path; Path('/outside/notes.md').read_text()\"", paths))
+      .toContain("/outside/notes.md")
+    expect(SessionGuardrailStandard.shellFileTargets("python3 -c 'print(\"open('/outside/out.txt','w')\")'", paths))
+      .not.toContain("/outside/out.txt")
+    expect(SessionGuardrailStandard.shellFileTargets("curl -d @body.json https://example.com/api/session", paths))
+      .toContain("/workspace/project/body.json")
+    expect(SessionGuardrailStandard.shellFileTargets("curl file:///outside/secret.txt", paths)).toContain("/outside/secret.txt")
+    expect(SessionGuardrailStandard.shellFileTargets("curl file:///outside/a%20b.txt", paths)).toContain("/outside/a b.txt")
+    expect(SessionGuardrailStandard.shellFileTargets("curl -H 'X-Info: file:///outside/note' https://example.com", paths))
+      .not.toContain("/outside/note")
+    expect(SessionGuardrailStandard.shellFileTargets("curl 'https://example.com/?next=file:///outside/note'", paths))
+      .not.toContain("/outside/note")
+    expect(SessionGuardrailStandard.shellFileTargets("curl -H @/outside/headers.txt https://example.com/api/session", paths))
+      .toContain("/outside/headers.txt")
+    expect(SessionGuardrailStandard.outsidePaths("shell", "python3 /outside/script.py", paths)).toEqual([])
+  })
+
+  test.each([
     "cd /outside/review/_src && sed -n 270,290p styles/ide.css | grep -n \"grid-area\\|@container\" | cut -c1-240",
     "cd /outside/review || exit 1; git status --short | head -50; ls build 2>&1; ps -p 123 -o pid,etime,command 2>/dev/null | tail -1",
     "cd /workspace/project/crates/core && grep -n \"pub fn\" history.rs | head -60; ls ../../../store/src 2>/dev/null",

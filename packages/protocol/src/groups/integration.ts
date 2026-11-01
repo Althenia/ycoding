@@ -1,11 +1,35 @@
+import { Agent } from "@ycoding-ai/schema/agent"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Location } from "@ycoding-ai/schema/location"
+import { Session } from "@ycoding-ai/schema/session"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { InvalidRequestError } from "../errors.js"
 import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
 const Inputs = Schema.Record(Schema.String, Schema.String)
+
+export const AccountSkillsProof = Schema.Struct({
+  status: Schema.Int,
+  keys: Schema.Array(Schema.String),
+  count: Schema.optional(Schema.Int),
+  hasNext: Schema.optional(Schema.Boolean),
+  paginationKeys: Schema.optional(Schema.Array(Schema.String)),
+  detail: Schema.optional(
+    Schema.Struct({
+      status: Schema.Int,
+      keys: Schema.Array(Schema.String),
+    }),
+  ),
+}).annotate({ identifier: "Integration.AccountSkillsProof" })
+
+export const AccountSkillsQuery = Schema.Struct({
+  ...LocationQuery.fields,
+  sessionID: Schema.optional(Session.ID),
+  agent: Schema.optional(Agent.ID),
+  profile: Schema.optional(Schema.String),
+  id: Schema.optional(Schema.String),
+}).annotate({ identifier: "Integration.AccountSkillsQuery" })
 
 export const IntegrationGroup = HttpApiGroup.make("server.integration")
   .add(
@@ -192,6 +216,22 @@ export const IntegrationGroup = HttpApiGroup.make("server.integration")
           identifier: "integration.command.cancel",
           summary: "Cancel command connection",
           description: "Cancel a command authentication attempt and terminate its process.",
+        }),
+      ),
+  )
+  .add(
+    HttpApiEndpoint.get("integration.accountSkills.read", "/api/integration/:integrationID/account-skills", {
+      params: { integrationID: Integration.ID },
+      query: AccountSkillsQuery,
+      success: Location.response(AccountSkillsProof),
+      error: InvalidRequestError,
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "integration.accountSkills.read",
+          summary: "Read account skills proof",
+          description: "Read account skills list and optional detail proof for an authenticated integration.",
         }),
       ),
   )

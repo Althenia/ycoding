@@ -199,7 +199,8 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.debug)).toEqual(["location"])
   expect(Object.keys(client.debug.location)).toEqual(["list", "evict"])
   expect(Object.keys(client.message)).toEqual(["list", "capturedInputs"])
-  expect(Object.keys(client.integration)).toEqual(["list", "get", "wellknown", "connect", "oauth", "command"])
+  expect(Object.keys(client.integration)).toEqual(["list", "get", "wellknown", "connect", "oauth", "command", "accountSkills"])
+  expect(Object.keys(client.integration.accountSkills)).toEqual(["read"])
   expect(Object.keys(client.integration.wellknown)).toEqual(["add"])
   expect(Object.keys(client.integration.connect)).toEqual(["key"])
   expect(Object.keys(client.integration.oauth)).toEqual(["connect", "status", "complete", "cancel"])
@@ -601,48 +602,37 @@ test("server.get uses the public HTTP contract", async () => {
   expect(request?.url).toBe("http://localhost:3000/api/server")
 })
 
-test("generated Dots decision listing preserves the authenticated request context", async () => {
+test("generated Dots access mutation preserves the authenticated request context and serializes the exact revision boundary", async () => {
   const requests: Request[] = []
-  const result = { data: [], nextCursor: "next+page" }
-  const context = {
-    requestID: "request_fixture",
-    principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" },
-    epoch: "epoch_fixture",
-  }
-  const expectedAttachment = { profile: "fixture", dotID: "dot", threadID: "thread", generation: "1", label: "Fixture" }
-  const input = {
-    sessionID: "ses_dots_client",
-    bindingID: "binding_fixture",
-    expectedAttachment,
-    delegation: { id: "delegation_fixture", revision: 3 },
-    targetSessionID: "ses_target",
-    cursor: "cursor_fixture",
-    limit: 12,
-    remoteSource: context,
-  }
+  const status = {
+    access: { enabled: true, revision: 2 },
+    configuration: { ready: true, profile: "synthetic-profile" },
+    connection: { state: "connected", hostname: "synthetic-host" },
+  } as const
   const client = YCoding.make({
     baseUrl: "http://localhost:3000",
+    headers: { authorization: "Bearer synthetic-dots-token" },
     fetch: async (request, init) => {
       requests.push(request instanceof Request ? request : new Request(request, init))
-      return Response.json({ data: result })
+      return Response.json({ data: status })
     },
   })
 
-  expect(await client.dots.decisions.list(input)).toEqual(result)
+  const result = await client.dots.set(
+    { enabled: true, expectedRevision: 1 },
+    { headers: { "x-request-id": "req_synthetic_dots" } },
+  )
+
+  expect(result).toEqual(status)
   expect(requests).toHaveLength(1)
-  expect([requests[0]!.method, new URL(requests[0]!.url).pathname]).toEqual([
-    "POST",
-    "/api/session/ses_dots_client/dots/decisions/list",
-  ])
-  expect(await requests[0]!.json()).toEqual({
-    bindingID: "binding_fixture",
-    expectedAttachment,
-    delegation: { id: "delegation_fixture", revision: 3 },
-    targetSessionID: "ses_target",
-    cursor: "cursor_fixture",
-    limit: 12,
-    remoteSource: context,
-  })
+  const req = requests[0]!
+  expect([req.method, new URL(req.url).pathname, new URL(req.url).search]).toEqual(["PUT", "/api/dots", ""])
+  expect(req.headers.get("authorization")).toBe("Bearer synthetic-dots-token")
+  expect(req.headers.get("x-request-id")).toBe("req_synthetic_dots")
+  expect(req.headers.has("x-ycoding-directory")).toBe(false)
+  expect(req.headers.has("x-ycoding-workspace")).toBe(false)
+  expect(await req.json()).toEqual({ enabled: true, expectedRevision: 1 })
+  expect(client.dots).not.toHaveProperty("decisions")
 })
 
 test("experimental wellknown integration add uses the public HTTP contract", async () => {

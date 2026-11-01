@@ -1232,6 +1232,10 @@ Successful Library listing does not establish upload or materialization eligibil
 
 The CCA executor also has an explicitly selected private helper channel; see [the CCA executor contract](../specs/dots-cca-executor.md#private-library-helper-channel). It does not change the default or custom hosted catalog and is not proof of an installed or live upload.
 
+#### Account skills read-proof transport
+
+The authenticated account skills read endpoint `GET /api/integration/openai/account-skills` exposes a Location-scoped read-proof transport for ChatGPT account skills. It requires valid Session provenance (`sessionID`), verifies Location and agent ownership, pins the effective or configured profile, and asserts `chatgpt_account_skills_read` permission before dispatch. Requests target the fixed ChatGPT API base `https://chatgpt.com/backend-api` with fixed routes `/hazelnuts?scope=installed&include_permissions=true` and optional detail `/hazelnuts/{id}?include_permissions=true`. Missing provenance, profile conflicts, and permission denials fail closed with HTTP 400 before network dispatch. When a specific skill ID pin is requested, it is verified against the installed list items after the list GET; an unlisted ID fails closed with HTTP 400 before any detail GET dispatch. An unsupported integration parameter returns HTTP 400. Responses return integer HTTP status codes (`status: 200`); detail responses expose `status` and `keys` rather than raw entity descriptions. Upstream HTTP errors are sanitized to prevent credential or payload leakage.
+
 Run the provider boundary checks locally:
 
 ```sh

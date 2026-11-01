@@ -21,6 +21,7 @@ const item = {
     action: "shell",
     resources: ["echo value"],
     fingerprint: "a".repeat(64),
+    fingerprintVersion: 2,
     requestID: "per_first",
   },
 } as const
