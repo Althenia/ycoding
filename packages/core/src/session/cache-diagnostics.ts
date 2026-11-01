@@ -1,6 +1,6 @@
 export * as SessionCacheDiagnostics from "./cache-diagnostics"
 
-import { cacheProfile } from "@ycoding-ai/ai/cache-profile"
+import { cacheProfile, normalizeCacheModelID } from "@ycoding-ai/ai/cache-profile"
 import { Effect, Schema } from "effect"
 import { and, desc, eq, lt, sql } from "drizzle-orm"
 import { Session } from "@ycoding-ai/schema/session"
@@ -80,6 +80,11 @@ export function mechanism(
   model: CatalogModel.Ref,
   tokens: TokenUsage.Info,
 ): Session.CacheMechanism {
+  if (
+    model.providerID === "antigravity" &&
+    (routeID === "ai-sdk:@ai-sdk/google" || routeID === "unknown") &&
+    normalizeCacheModelID(model.id).startsWith("claude-")
+  ) return "anthropic-cache-control"
   const known = ROUTE_MECHANISMS[routeID]
   if (known) return known
   if (routeID === "unknown") {

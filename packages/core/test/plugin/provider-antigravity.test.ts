@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url"
 import type { LanguageModelV3CallOptions, LanguageModelV3ToolResultOutput } from "@ai-sdk/provider"
 import { LLM, LLMEvent, Message, ToolDefinition } from "@ycoding-ai/ai"
 import { LLMClient, RequestExecutor } from "@ycoding-ai/ai/route"
+import { Project } from "@ycoding-ai/schema/project"
 import { AISDK } from "@ycoding-ai/core/aisdk"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/core/integration"
@@ -19,6 +20,8 @@ import {
   exchangeAntigravityCode,
 } from "@ycoding-ai/core/plugin/provider/antigravity"
 import { Provider } from "@ycoding-ai/core/provider"
+import { SessionModelHeaders } from "@ycoding-ai/core/session/model-headers"
+import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { BrowserTool } from "@ycoding-ai/core/tool/browser"
 import { ComputerTool } from "@ycoding-ai/core/tool/computer"
@@ -67,10 +70,231 @@ const withEnvironment = (env: Record<string, string>) =>
   Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env })))
 
 describe("AntigravityPlugin", () => {
+  test("session affinity hash uses signed UTF-8 FNV-1a vectors", async () => {
+    const { antigravitySessionID } = await import("@ycoding-ai/core/plugin/provider/antigravity")
+    expect(antigravitySessionID("", "")).toBe("-5808590958014384161")
+    expect(antigravitySessionID("ses-a", "gemini-3.8-flash-medium")).toBe("4903109517633975494")
+    expect(antigravitySessionID("雪", "模型")).toBe("-4657986721058320816")
+  })
+
+  test("request headers merge with init overrides and affinity falls back in order", async () => {
+    const { antigravitySessionID } = await import("@ycoding-ai/core/plugin/provider/antigravity")
+    const sent: { request: { sessionId?: string } }[] = []
+    const wrapped = createAntigravityFetch(
+      async (_input, init) => {
+        if (typeof init?.body !== "string") throw new Error("Expected JSON request body")
+        sent.push(JSON.parse(init.body))
+        return Response.json({ response: {} })
+      },
+      { access: "google-access", sessionID: " fallback " },
+    )
+    const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-fixture:generateContent"
+    await wrapped(new Request(url, { headers: { "x-session-affinity": " original ", "x-session-id": "secondary" } }), {
+      method: "POST",
+      headers: { "x-session-affinity": " override " },
+      body: "{}",
+    })
+    await wrapped(new Request(url, { headers: { "x-session-affinity": " ", "x-session-id": " secondary " } }), {
+      method: "POST",
+      body: "{}",
+    })
+    await wrapped(url, { method: "POST", body: "{}" })
+    expect(sent.map((item) => item.request.sessionId)).toEqual(
+      ["override", "secondary", "fallback"].map((value) => antigravitySessionID(value, "gemini-fixture")),
+    )
+  })
+
+  test("session affinity and sanitized headers reach the gateway through Google SDK", async () => {
+    const { createGoogleGenerativeAI } = await import("@ai-sdk/google")
+    const seen: { body: { model: string; sessionId?: string; request: { sessionId?: string } }; headers: Headers }[] =
+      []
+    const run = async (affinity: string, model: string) => {
+      const sdk = createGoogleGenerativeAI({
+        apiKey: "placeholder",
+        fetch: Object.assign(
+          createAntigravityFetch(
+            async (_input, init) => {
+              if (typeof init?.body !== "string") throw new Error("Expected JSON request body")
+              seen.push({ body: JSON.parse(init.body), headers: new Headers(init.headers) })
+              return Response.json({
+                response: {
+                  candidates: [{ content: { role: "model", parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+                },
+              })
+            },
+            { access: "google-access", model },
+          ),
+          { preconnect: fetch.preconnect },
+        ),
+      })
+      const headers = SessionModelHeaders.make({
+        id: SessionSchema.ID.make(affinity),
+        parentID: SessionSchema.ID.make("ses-parent"),
+        projectID: Project.ID.make("project"),
+      })
+      await sdk
+        .languageModel("gemini-3.8-flash")
+        .doGenerate({
+          prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
+          headers: { ...headers, accept: "text/event-stream" },
+        })
+    }
+    await run("ses-a", "gemini-3.8-flash-medium")
+    await run("ses-a", "gemini-3.8-flash-medium")
+    await run("ses-b", "gemini-3.8-flash-medium")
+    await run("ses-a", "gemini-3.8-flash-high")
+    const ids = seen.map((item) => item.body.request.sessionId)
+    expect(ids[0]).toMatch(/^-?\d+$/)
+    expect(BigInt(ids[0]!) >= -(1n << 63n) && BigInt(ids[0]!) < 1n << 63n).toBe(true)
+    const { antigravitySessionID } = await import("@ycoding-ai/core/plugin/provider/antigravity")
+    expect(ids[0]).toBe(antigravitySessionID("ses-a", "gemini-3.8-flash-medium"))
+    expect(ids[1]).toBe(ids[0])
+    expect(ids[2]).not.toBe(ids[0])
+    expect(ids[3]).not.toBe(ids[0])
+    for (const item of seen) {
+      expect(item.body.sessionId).toBeUndefined()
+      expect(Object.fromEntries(item.headers)).toEqual({
+        authorization: "Bearer google-access",
+        "content-type": "application/json",
+        "user-agent": antigravityUserAgent(),
+        accept: "text/event-stream",
+      })
+    }
+  })
+
+  for (const packed of [false, true]) {
+    test(`interleaved reasoning and tool calls preserve order and signatures in ${packed ? "one" : "multiple"} SSE events`, async () => {
+      const { createGoogleGenerativeAI } = await import("@ai-sdk/google")
+      const parts = [
+        { text: "First thought", thought: true },
+        { text: "", thoughtSignature: "sig-1" },
+        { functionCall: { name: "lookup", args: { query: "a" } } },
+        { text: "Second thought", thought: true },
+        { text: "", thoughtSignature: "sig-2" },
+        { functionCall: { name: "lookup", args: { query: "b" } } },
+      ]
+      const groups = packed ? [parts] : parts.map((part) => [part])
+      const sdk = createGoogleGenerativeAI({
+        apiKey: "placeholder",
+        fetch: Object.assign(
+          createAntigravityFetch(
+            async () =>
+              new Response(
+                groups
+                  .map(
+                    (group, index) =>
+                      `data: ${JSON.stringify({ response: { candidates: [{ content: { role: "model", parts: group }, ...(index === groups.length - 1 ? { finishReason: "STOP" } : {}) }], ...(index === groups.length - 1 ? { usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 2 } } : {}) } })}\n\n`,
+                  )
+                  .join(""),
+                { headers: { "content-type": "text/event-stream" } },
+              ),
+            { access: "google-access" },
+          ),
+          { preconnect: fetch.preconnect },
+        ),
+      })
+      const language = captureToolSchemas(sdk.languageModel("gemini-fixture"))
+      const events = await Array.fromAsync(
+        (await language.doStream({ prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }] })).stream,
+      )
+      const selected = events.filter((event) =>
+        ["reasoning-start", "reasoning-delta", "reasoning-end", "tool-call", "finish"].includes(event.type),
+      )
+      expect(selected.map((event) => event.type)).toEqual([
+        "reasoning-start",
+        "reasoning-delta",
+        "reasoning-end",
+        "tool-call",
+        "reasoning-start",
+        "reasoning-delta",
+        "reasoning-end",
+        "tool-call",
+        "finish",
+      ])
+      const deltas = events.filter((event) => event.type === "reasoning-delta")
+      expect(deltas.map((event) => [event.delta, event.providerMetadata?.google?.thoughtSignature])).toEqual([
+        ["First thought", "sig-1"],
+        ["Second thought", "sig-2"],
+      ])
+      expect(deltas[0]?.id).not.toBe(deltas[1]?.id)
+      expect(
+        events.filter((event) => event.type === "tool-call").map((event) => [event.toolName, event.input]),
+      ).toEqual([
+        ["lookup", '{"query":"a"}'],
+        ["lookup", '{"query":"b"}'],
+      ])
+      const response = await Effect.runPromise(
+        Effect.gen(function* () {
+          const aisdk = yield* AISDK.Service
+          yield* aisdk.hook.sdk((event) => {
+            event.sdk = sdk
+          })
+          yield* aisdk.hook.language((event) => {
+            event.language = captureToolSchemas(event.sdk.languageModel("gemini-fixture"))
+          })
+          const model = yield* SessionRunnerModel.fromCatalogModel(
+            CatalogModel.Info.make({
+              ...CatalogModel.Info.empty(Provider.ID.make("antigravity"), CatalogModel.ID.make("gemini-fixture")),
+              package: Provider.aisdk("@ai-sdk/google"),
+            }),
+            undefined,
+            { loadAISDK: aisdk.model },
+          )
+          return yield* LLMClient.generate(
+            LLM.request({
+              model,
+              prompt: "Hi",
+              tools: [tool("lookup", { type: "object", properties: { query: { type: "string" } } })],
+            }),
+          )
+        }).pipe(Effect.scoped, Effect.provide(AISDK.locationLayer), Effect.provide(client)),
+      )
+      const reasoning = response.message.content.filter((part) => part.type === "reasoning")
+      expect(reasoning.map((part) => [part.text, part.providerMetadata?.google?.thoughtSignature])).toEqual([
+        ["First thought", "sig-1"],
+        ["Second thought", "sig-2"],
+      ])
+      expect(response.toolCalls.map((call) => [call.name, call.input])).toEqual([
+        ["lookup", { query: "a" }],
+        ["lookup", { query: "b" }],
+      ])
+    })
+  }
+  test("packed tool calls precede subsequent text and finish with usage once", async () => {
+    const { createGoogleGenerativeAI } = await import("@ai-sdk/google")
+    const sdk = createGoogleGenerativeAI({
+      apiKey: "placeholder",
+      fetch: Object.assign(
+        createAntigravityFetch(
+          async () =>
+            new Response(
+              `data: ${JSON.stringify({ response: { candidates: [{ content: { role: "model", parts: [{ functionCall: { name: "lookup", args: { query: "a" } } }, { text: "After" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 2 } } })}\n\n`,
+              { headers: { "content-type": "text/event-stream" } },
+            ),
+          { access: "google-access" },
+        ),
+        { preconnect: fetch.preconnect },
+      ),
+    })
+    const events = await Array.fromAsync(
+      (
+        await captureToolSchemas(sdk.languageModel("gemini-fixture")).doStream({
+          prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
+        })
+      ).stream,
+    )
+    expect(
+      events
+        .filter((event) => ["tool-call", "text-start", "text-delta", "text-end", "finish"].includes(event.type))
+        .map((event) => event.type),
+    ).toEqual(["tool-call", "text-start", "text-delta", "text-end", "finish"])
+    expect(events.filter((event) => event.type === "finish")).toHaveLength(1)
+    expect(events.find((event) => event.type === "finish")?.usage.inputTokens.total).toBe(3)
+  })
   test("is registered as a built-in provider plugin with the installed client identity", () => {
     expect(ProviderPlugins.some((plugin) => plugin.id === "ycoding.provider.antigravity")).toBe(true)
     expect(AntigravityPlugin.id).toBe("ycoding.provider.antigravity")
-    expect(antigravityUserAgent()).toStartWith("antigravity/hub/2.26.0 (aidev_client; os_type=")
+    expect(antigravityUserAgent()).toStartWith("antigravity/hub/2.28.2 (aidev_client; os_type=")
   })
 
   test("OAuth authorization requires embedded credentials before creating a callback listener", async () => {
@@ -154,7 +378,7 @@ describe("AntigravityPlugin", () => {
       expect(project).toBe("project-9")
       expect(seen?.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
       expect(seen?.headers.authorization).toBe("Bearer google-access")
-      expect(seen?.headers["user-agent"]).toStartWith("antigravity/hub/2.26.0")
+      expect(seen?.headers["user-agent"]).toStartWith("antigravity/hub/2.28.2")
       expect(JSON.parse(body(seen!))).toEqual({ metadata: { ideType: "ANTIGRAVITY" } })
     }),
   )
@@ -173,7 +397,7 @@ describe("AntigravityPlugin", () => {
       expect(seen[1]?.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:onboardUser")
       expect(JSON.parse(body(seen[1]!))).toEqual({
         tier_id: "standard-tier",
-        metadata: { ide_type: "ANTIGRAVITY", ide_version: "2.26.0", ide_name: "antigravity" },
+        metadata: { ide_type: "ANTIGRAVITY", ide_version: "2.28.2", ide_name: "antigravity" },
       })
     }),
   )
@@ -580,7 +804,7 @@ describe("AntigravityPlugin", () => {
     const headers = new Headers(seen?.init?.headers)
     expect(headers.get("authorization")).toBe("Bearer google-access")
     expect(headers.get("x-goog-api-key")).toBeNull()
-    expect(headers.get("user-agent")).toStartWith("antigravity/hub/2.26.0")
+    expect(headers.get("user-agent")).toStartWith("antigravity/hub/2.28.2")
     const sent = JSON.parse(String(seen?.init?.body))
     expect(sent.project).toBe("project-1")
     expect(sent.model).toBe("gemini-fixture")

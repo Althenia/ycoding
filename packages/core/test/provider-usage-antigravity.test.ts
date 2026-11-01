@@ -251,7 +251,7 @@ describe("AntigravityUsage", () => {
     )
     expect(seen.map((request) => request.url)).toEqual([summaryURL])
     expect(seen[0]?.headers.authorization).toBe("Bearer google-access")
-    expect(seen[0]?.headers["user-agent"]).toStartWith("antigravity/hub/2.26.0")
+    expect(seen[0]?.headers["user-agent"]).toStartWith("antigravity/hub/2.28.2")
     if (seen[0]?.body._tag !== "Uint8Array") throw new Error("Expected encoded body")
     expect(JSON.parse(new TextDecoder().decode(seen[0].body.body))).toEqual({ project: "project-1" })
     expect(snapshot.windows.map((window) => window.group)).toEqual([

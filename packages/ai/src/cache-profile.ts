@@ -77,6 +77,11 @@ const PROFILES: Record<string, CacheProfile> = {
   "gemini-2-5-flash": implicit(1024),
   "gemini-3-pro": implicit(4096),
   "gemini-3-flash": implicit(1024),
+  "gemini-3-1-pro": implicit(4096),
+  "gemini-3-1-flash": implicit(1024),
+  "gemini-3-8-flash": implicit(4096),
+  "gemini-4-argon": implicit(4096),
+  "gemini-4": implicit(4096),
   // Meta Llama 4 family — implicit cache, per-model namespace like OpenAI
   "llama-4-maverick": implicit(1024),
   "llama-4-scout": implicit(1024),

@@ -229,6 +229,26 @@ test("derives provider cache mechanisms from the executed route", () => {
   )
 })
 
+test("reports Antigravity Claude cache control and Gemini implicit cache thresholds", () => {
+  for (const routeID of ["ai-sdk:@ai-sdk/google", "unknown"]) {
+    for (const id of ["claude-sonnet-5-5", "claude-opus-5-5"]) {
+      const selected = namedModel("antigravity", id)
+      expect(SessionCacheDiagnostics.mechanism(routeID, selected, tokens)).toBe("anthropic-cache-control")
+      expect(SessionCacheDiagnostics.calculate({ model: selected, tokens, routeID, estimatedCost: Money.USD.zero }).cache)
+        .toMatchObject({ mechanism: "anthropic-cache-control", minimumTokens: 512 })
+    }
+    for (const id of ["gemini-3.8-flash", "gemini-4-argon"]) {
+      const selected = namedModel("antigravity", id)
+      for (const eligible of [2000, 5000]) {
+        const usage = { ...tokens, input: eligible, cache: { read: 0, write: 0 } }
+        expect(SessionCacheDiagnostics.mechanism(routeID, selected, usage)).toBe("gemini-prefix-cache")
+        expect(SessionCacheDiagnostics.calculate({ model: selected, tokens: usage, routeID, estimatedCost: Money.USD.zero }).cache)
+          .toMatchObject({ mechanism: "gemini-prefix-cache", minimumTokens: 4096, belowMinimum: eligible < 4096 })
+      }
+    }
+  }
+})
+
 test("derives provider cache mechanisms from native (non-AI-SDK) route ids", () => {
   expect(SessionCacheDiagnostics.mechanism("runpod-ollama", model("runpod"), {
     input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 },

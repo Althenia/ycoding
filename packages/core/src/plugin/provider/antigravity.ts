@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks"
-import type { LanguageModelV3 } from "@ai-sdk/provider"
+import type { LanguageModelV3, LanguageModelV3StreamPart } from "@ai-sdk/provider"
 import { ToolSchemaProjection } from "@ycoding-ai/ai"
 import { createServer } from "node:http"
 import { define } from "../catalog-host"
@@ -26,7 +26,7 @@ const methodID = Integration.MethodID.make("google")
 const callbackPort = 51121
 const redirectURI = `http://localhost:${callbackPort}/oauth-callback`
 export const antigravityBaseURL = "https://daily-cloudcode-pa.googleapis.com"
-export const clientVersion = "2.26.0"
+export const clientVersion = "2.28.2"
 const scopes = [
   "https://www.googleapis.com/auth/cloud-platform",
   "https://www.googleapis.com/auth/userinfo.email",
@@ -40,6 +40,13 @@ const reconnect =
 export function antigravityUserAgent() {
   const os = process.platform === "win32" ? "windows" : process.platform
   return `antigravity/hub/${clientVersion} (aidev_client; os_type=${os}; arch=${process.arch})`
+}
+
+export function antigravitySessionID(affinity: string, model: string): string {
+  let hash = 0xcbf29ce484222325n
+  for (const byte of new TextEncoder().encode(`${affinity}\0${model}`))
+    hash = ((hash ^ BigInt(byte)) * 0x100000001b3n) & 0xffffffffffffffffn
+  return BigInt.asIntN(64, hash).toString(10)
 }
 
 const Token = Schema.Struct({
@@ -389,7 +396,63 @@ export function captureToolSchemas(language: LanguageModelV3): LanguageModelV3 {
       return callCapture.run({ schemas, history: toolHistory(options.prompt ?? []) }, () => call(options))
     }
   const doGenerate = capture((options: Parameters<LanguageModelV3["doGenerate"]>[0]) => language.doGenerate(options))
-  const doStream = capture((options: Parameters<LanguageModelV3["doStream"]>[0]) => language.doStream(options))
+  const doStream = capture(async (options: Parameters<LanguageModelV3["doStream"]>[0]) => {
+    const result = await language.doStream(options)
+    const blocks: Record<"text" | "reasoning", { rawId?: string; activeId?: string; epoch: number }> = {
+      text: { epoch: 0 },
+      reasoning: { epoch: 0 },
+    }
+    const stream = result.stream.pipeThrough(
+      new TransformStream<LanguageModelV3StreamPart, LanguageModelV3StreamPart>({
+        transform(part, controller) {
+          const close = (kind: "text" | "reasoning") => {
+            const block = blocks[kind]
+            if (block.activeId === undefined) return
+            controller.enqueue({ type: kind === "text" ? "text-end" : "reasoning-end", id: block.activeId })
+            block.activeId = undefined
+          }
+          if (part.type === "text-start" || part.type === "reasoning-start") {
+            const kind = part.type === "text-start" ? "text" : "reasoning"
+            close(kind === "text" ? "reasoning" : "text")
+            blocks[kind] = { rawId: part.id, activeId: part.id, epoch: 0 }
+            controller.enqueue(part)
+            return
+          }
+          if (part.type === "text-delta" || part.type === "reasoning-delta") {
+            const kind = part.type === "text-delta" ? "text" : "reasoning"
+            const block = blocks[kind]
+            if (block.activeId === undefined) {
+              block.activeId = `${part.id}:${++block.epoch}`
+              controller.enqueue({
+                type: kind === "text" ? "text-start" : "reasoning-start",
+                id: block.activeId,
+                ...(part.providerMetadata ? { providerMetadata: part.providerMetadata } : {}),
+              })
+            }
+            controller.enqueue({ ...part, id: block.activeId })
+            return
+          }
+          if (part.type === "text-end" || part.type === "reasoning-end") {
+            const block = blocks[part.type === "text-end" ? "text" : "reasoning"]
+            if (block.activeId !== undefined) controller.enqueue({ ...part, id: block.activeId })
+            block.activeId = undefined
+            return
+          }
+          if (
+            part.type === "tool-input-start" ||
+            part.type === "tool-call" ||
+            part.type === "tool-result" ||
+            part.type === "finish"
+          ) {
+            close("reasoning")
+            close("text")
+          }
+          controller.enqueue(part)
+        },
+      }),
+    )
+    return { ...result, stream }
+  })
   return new Proxy(language, {
     get(target, property) {
       if (property === "doGenerate") return doGenerate
@@ -467,7 +530,7 @@ function claudeToolIDs(body: unknown, history: ToolHistory | undefined) {
 
 export function createAntigravityFetch(
   send: Fetch,
-  session: { access: string; project?: string; model?: string },
+  session: { access: string; project?: string; model?: string; sessionID?: string },
 ): Fetch {
   const wrapped: Fetch = async (input, init) => {
     const url = new URL(input instanceof URL ? input.href : typeof input === "string" ? input : input.url)
@@ -487,11 +550,19 @@ export function createAntigravityFetch(
           : body,
       ),
     )
-    const headers = new Headers(init?.headers)
-    headers.delete("x-goog-api-key")
+    const incomingHeaders = new Headers(input instanceof Request ? input.headers : undefined)
+    new Headers(init?.headers).forEach((value, key) => incomingHeaders.set(key, value))
+    const affinity =
+      incomingHeaders.get("x-session-affinity")?.trim() ||
+      incomingHeaders.get("x-session-id")?.trim() ||
+      session.sessionID?.trim() ||
+      undefined
+    const accept = incomingHeaders.get("accept")
+    const headers = new Headers()
     headers.set("authorization", `Bearer ${session.access}`)
     headers.set("user-agent", antigravityUserAgent())
     headers.set("content-type", "application/json")
+    if (accept) headers.set("accept", accept)
     const response = await send(`${antigravityBaseURL}/v1internal:${action}${url.search}`, {
       ...init,
       headers,
@@ -501,7 +572,10 @@ export function createAntigravityFetch(
         userAgent: "antigravity",
         requestType: "agent",
         requestId: `agent-${crypto.randomUUID()}`,
-        request: request ?? {},
+        request: {
+          ...(isRecord(request) ? request : {}),
+          ...(affinity ? { sessionId: antigravitySessionID(affinity, model) } : {}),
+        },
       }),
     })
     if (!response.ok || !response.body) return response
@@ -651,9 +725,41 @@ function unwrapStream(response: Response) {
         ? frame.event
         : { ...frame.event, data: JSON.stringify(frame.response) },
     )
+  const split = (frame: GatewayFrame): GatewayFrame[] => {
+    const response = frame.response
+    const parts = candidateParts(response)
+    if (!isRecord(response) || !Array.isArray(response.candidates) || !parts) return [frame]
+    const candidate = response.candidates[0]
+    if (!isRecord(candidate) || !isRecord(candidate.content)) return [frame]
+    const candidates = response.candidates
+    const content = candidate.content
+    const groups: unknown[][] = [[]]
+    for (const part of parts) {
+      const group = groups[groups.length - 1]
+      const last = group[group.length - 1]
+      if (isRecord(last) && "functionCall" in last) groups.push([])
+      groups[groups.length - 1].push(part)
+    }
+    if (groups.length === 1) return [frame]
+    return groups.map((group, index) => {
+      const final = index === groups.length - 1
+      const { candidates: _candidates, ...fields } = response
+      const { finishReason: _finishReason, ...candidateFields } = candidate
+      return {
+        ...frame,
+        response: {
+          ...(final ? fields : {}),
+          candidates: [
+            { ...(final ? candidate : candidateFields), content: { ...content, parts: group } },
+            ...(final ? candidates.slice(1) : []),
+          ],
+        },
+      }
+    })
+  }
   const parser = Sse.makeParser((event) => {
     if (event._tag === "Retry") {
-      frames.push(...linker.push({ event }).map(write))
+      frames.push(...linker.push({ event }).flatMap(split).map(write))
       return
     }
     const payload = Option.getOrUndefined(decodeBody(event.data))
@@ -663,6 +769,7 @@ function unwrapStream(response: Response) {
           event,
           ...(payload && typeof payload === "object" && "response" in payload ? { response: payload.response } : {}),
         })
+        .flatMap(split)
         .map(write),
     )
   })
@@ -681,7 +788,7 @@ function unwrapStream(response: Response) {
       flush(controller) {
         partial.push(decoder.decode())
         parser.feed(`${partial.join("").replace(/\r$/, "")}\n\n`)
-        frames.push(...linker.flush().map(write))
+        frames.push(...linker.flush().flatMap(split).map(write))
         if (frames.length > 0) controller.enqueue(encoder.encode(frames.join("")))
       },
     }),

@@ -82,6 +82,13 @@ describe("cacheProfile", () => {
     expect(cacheProfile("gemini-2.5-pro")?.minimumTokens).toBe(4096)
   })
 
+  test("resolves newer Gemini implicit cache profiles and variants", () => {
+    for (const id of ["gemini-3.1-pro", "gemini-3.1-pro-high", "gemini-3.8-flash", "gemini-3.8-flash-high", "gemini-4", "gemini-4-argon", "gemini-4-argon-low", "gemini-4-argon-medium", "gemini-4-argon-high"]) {
+      expect([id, cacheProfile(id)]).toEqual([id, { minimumTokens: 4096, extendedTtl: false }])
+    }
+    expect(cacheProfile("gemini-3.1-flash")).toEqual({ minimumTokens: 1024, extendedTtl: false })
+  })
+
   test("returns undefined for models with no published profile", () => {
     // An unknown model must not be assumed to support the 1h bucket.
     expect(cacheProfile("some-self-hosted-llama")).toBeUndefined()

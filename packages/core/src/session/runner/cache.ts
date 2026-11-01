@@ -111,6 +111,7 @@ export const promptCacheNamespace = (
       workspaceID: input.workspaceID,
       providerID: input.providerID,
       modelID: input.modelID,
+      ...(input.providerID === "antigravity" && input.variant !== undefined ? { variant: input.variant } : {}),
       accountIdentityDigest: input.accountIdentityDigest,
       policyRevision: input.policyRevision,
       permissions: input.permissions.map((rule) => ({

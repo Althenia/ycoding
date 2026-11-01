@@ -271,6 +271,20 @@ test("variant selection is not a cache namespace input", () => {
   )
 })
 
+test("partitions Antigravity namespaces by variant while preserving other providers", () => {
+  const variants = [undefined, "low", "medium", "high", "max"]
+  for (const modelID of ["gemini-3.8-flash", "claude-sonnet-5-5"]) {
+    const input = { ...base, providerID: "antigravity", modelID }
+    const keys = variants.map((variant) => SessionRunnerCache.promptCacheNamespace({ ...input, variant }))
+    expect(new Set(keys).size).toBe(variants.length)
+  }
+  for (const [providerID, modelID] of [["openai", "gpt-5.6"], ["anthropic", "claude-sonnet-5-5"], ["openrouter", "model"], ["amazon-bedrock", "model"]]) {
+    const input = { ...base, providerID, modelID }
+    const keys = variants.map((variant) => SessionRunnerCache.promptCacheNamespace({ ...input, variant }))
+    expect(new Set(keys).size).toBe(1)
+  }
+})
+
 test("every route preserves namespace, generation and wire affinity across variant-only changes", async () => {
   const routes = [
     "openai-chat",
