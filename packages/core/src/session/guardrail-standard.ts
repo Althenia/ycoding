@@ -210,28 +210,37 @@ export function outsidePaths(action: string, resource: string, paths: Paths): Re
   return outsideTargets(action, resource, paths).map((target) => target.path)
 }
 
+function shellSegmentTargets(resource: string, paths: Paths, includeReadOnly: boolean): ReadonlyArray<OutsideTarget> {
+  return shellWorkdirs(resource, paths).flatMap(({ segment, workdir }) => {
+    if (!includeReadOnly && readOnlyShell(segment.rawTokens.join(" "))) return []
+    const invocation = executable(segment.tokens)
+    const operands = shellOperands(segment.tokens, segment.heredocBodies, includeReadOnly)
+    const separator = invocation?.name === "cd" ? invocation.args.indexOf("--") : -1
+    const cdOperand = invocation?.name === "cd"
+      ? separator >= 0 ? invocation.args[separator + 1] : invocation.args.find((token) => !token.startsWith("-"))
+      : undefined
+    const cdPath = cdOperand === undefined ? undefined : resolveTarget(cdOperand, workdir, paths)
+    return [
+      { path: workdir, directory: true },
+      ...(invocation?.name === "cd" && invocation.args.length === 0 ? [{ path: paths.home, directory: true }] : []),
+      ...operands.map((target) => {
+        const resolved = resolveTarget(target, workdir, paths)
+        return { path: resolved, directory: cdPath !== undefined && resolved === cdPath }
+      }),
+    ]
+  })
+}
+
+export function shellFileTargets(command: string, paths: Paths): ReadonlyArray<string> {
+  return [...new Set(shellSegmentTargets(command, paths, true).map((target) => target.path))]
+    .filter((target) => target !== resolveTarget(paths.workdir, paths.workdir, paths))
+}
+
 export function outsideTargets(action: string, resource: string, paths: Paths): ReadonlyArray<OutsideTarget> {
   const targets = action === "file_mutation"
     ? [{ path: resolveTarget(resource, paths.workdir, paths), directory: false }]
     : action === "shell" && !readOnlyShell(resource)
-      ? shellWorkdirs(resource, paths).flatMap(({ segment, workdir }) => {
-          if (readOnlyShell(segment.rawTokens.join(" "))) return []
-          const invocation = executable(segment.tokens)
-          const operands = shellOperands(segment.tokens)
-          const separator = invocation?.name === "cd" ? invocation.args.indexOf("--") : -1
-          const cdOperand = invocation?.name === "cd"
-            ? separator >= 0 ? invocation.args[separator + 1] : invocation.args.find((token) => !token.startsWith("-"))
-            : undefined
-          const cdPath = cdOperand === undefined ? undefined : resolveTarget(cdOperand, workdir, paths)
-          return [
-            { path: workdir, directory: true },
-            ...(invocation?.name === "cd" && invocation.args.length === 0 ? [{ path: paths.home, directory: true }] : []),
-            ...operands.map((target) => {
-              const resolved = resolveTarget(target, workdir, paths)
-              return { path: resolved, directory: cdPath !== undefined && resolved === cdPath }
-            }),
-          ]
-        })
+      ? shellSegmentTargets(resource, paths, false)
       : []
   const merged = targets.reduce((result, target) => {
     result.set(target.path, result.get(target.path) === true || target.directory)
@@ -258,7 +267,7 @@ const ghApiValueOptions = new Set([
   "-p", "--preview", "--input", "--hostname", "--cache",
 ])
 
-function shellOperands(tokens: ReadonlyArray<string>) {
+function shellOperands(tokens: ReadonlyArray<string>, heredocBodies: ReadonlyArray<string> = [], includeReadTargets = false) {
   const redirects: string[] = []
   const words: string[] = []
   for (let index = 0; index < tokens.length; index++) {
@@ -274,18 +283,281 @@ function shellOperands(tokens: ReadonlyArray<string>) {
   }
   const commandIndex = words.findIndex((token) => !["sudo", "command", "env", "nohup"].includes(path.basename(token)) &&
     !token.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token))
-  const args = commandArguments(path.basename(words[commandIndex] ?? ""), words.slice(commandIndex + 1)).flatMap((token) => {
-    const value = token.replace(/^[^=]+=/, "")
-    return !value || value.startsWith("-") || /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? [] : [value]
+  const args = commandArguments(path.basename(words[commandIndex] ?? ""), words.slice(commandIndex + 1), heredocBodies, includeReadTargets).flatMap((token) => {
+    const stripped = token.replace(/^[^=]+=/, "")
+    const value = /^@(?:\/|~\/|\.)/.test(stripped) ? stripped.slice(1) : stripped
+    return !value || value.startsWith("-") || /^[a-z][a-z0-9+.-]*:\/\//i.test(value) || /^\/\/[^/]+\//.test(value) ? [] : [value]
   })
   return [...redirects, ...args]
 }
 
-function commandArguments(name: string, args: ReadonlyArray<string>) {
+const httpMethods = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+const ycodingApiTextOptions = new Set(["-d", "--data", "-H", "--header", "--param", "--server"])
+const scriptTransportOptions = new Set(["--url", "--endpoint"])
+
+function dropNamedValueOptions(args: ReadonlyArray<string>, options: ReadonlySet<string>) {
+  const longNames = [...options].filter((option) => option.startsWith("--")).map((option) => option.slice(2))
+  const kept: string[] = []
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index]
+    if (longNames.some((name) => token.startsWith(`--${name}=`))) continue
+    if (index > 0 && options.has(args[index - 1])) continue
+    kept.push(token)
+  }
+  return kept
+}
+
+function ycodingApiArgs(args: ReadonlyArray<string>) {
+  const api = args.findIndex((arg, index) => !arg.startsWith("-") && !ycodingApiTextOptions.has(args[index - 1]))
+  if (args[api] !== "api") return undefined
+  const kept = args.slice(0, api)
+  let positionals = 0
+  let droppable = 1
+  for (let index = api + 1; index < args.length; index++) {
+    const token = args[index]
+    const positional = !token.startsWith("-") && !ycodingApiTextOptions.has(args[index - 1])
+    if (positional) {
+      positionals++
+      if (positionals === 1 && httpMethods.has(token)) droppable = 2
+      if (positionals <= droppable) continue
+    }
+    kept.push(token)
+  }
+  return dropNamedValueOptions(kept, ycodingApiTextOptions)
+}
+
+const curlFileOptions = new Set([
+  "-o", "--output", "--output-dir", "-T", "--upload-file", "-K", "--config", "--cert", "-E", "--key", "--cacert",
+  "--capath", "-c", "--cookie-jar", "-D", "--dump-header", "--trace", "--trace-ascii", "--libcurl", "-z",
+  "--time-cond", "--etag-save", "--etag-compare", "--unix-socket", "--netrc-file",
+])
+const wgetFileOptions = new Set([
+  "-O", "--output-document", "-P", "--directory-prefix", "-i", "--input-file", "--post-file", "--ca-certificate",
+  "--certificate", "--private-key", "--ca-directory", "--crl-file", "-o", "--output-file", "-a", "--append-output",
+  "--load-cookies", "--save-cookies", "--warc-file",
+])
+const httpieFileOptions = new Set(["-o", "--output", "--session", "--cert", "--cert-key"])
+const curlDataOptions = new Set(["-d", "--data", "--data-ascii", "--data-binary", "--data-urlencode", "-F", "--form"])
+
+function curlDataFile(option: string, value: string | undefined) {
+  if (value === undefined) return undefined
+  if (option === "-F" || option === "--form") {
+    const field = value.split(";")[0]
+    return field.match(/^[^=]+=[@<](.+)$/s)?.[1] ?? (field.startsWith("@") && field !== "@-" ? field.slice(1) : undefined)
+  }
+  if (option === "--data-urlencode") {
+    if (value.startsWith("@")) return value === "@-" ? undefined : value.slice(1)
+    return value.match(/^[^=@]+@(.+)$/s)?.[1]
+  }
+  return value.startsWith("@") && value !== "@-" ? value.slice(1) : undefined
+}
+
+function fileUrlTarget(value: string | undefined) {
+  const target = value?.match(/^file:\/\/(?:localhost)?(\/[^\s?#'"]*)/)?.[1]
+  if (target === undefined) return undefined
+  try {
+    return decodeURIComponent(target)
+  } catch {
+    return target
+  }
+}
+
+const curlValueOptions = new Set([
+  "--request", "--user-agent", "--referer", "--user", "--proxy", "--proxy-user", "--max-time", "--connect-timeout",
+  "--expect100-timeout", "--retry", "--retry-delay", "--retry-max-time", "--limit-rate", "--resolve", "--connect-to",
+  "--interface", "--local-port", "--dns-servers", "--dns-interface", "--dns-ipv4-addr", "--dns-ipv6-addr", "--pass",
+  "--oauth2-bearer", "--aws-sigv4", "--delegation", "--service-name", "--krb", "--mail-from", "--mail-rcpt",
+  "--mail-auth", "--ftp-alternative", "--proto", "--proto-redir", "--proto-default", "--max-redirs", "--keepalive-time",
+  "--speed-limit", "--speed-time", "--buffer-size", "--write-out", "--range", "--variable", "--data-raw", "--form-string",
+])
+const curlShortValueChars = new Set(["A", "e", "u", "U", "x", "X", "m", "r", "w", "Y", "y", "t", "z"])
+
+function curlOptionValue(kept: string[], option: string, value: string | undefined) {
+  if (value === undefined) return
+  if (curlFileOptions.has(option)) kept.push(value)
+  else if (option === "-b" || option === "--cookie") {
+    if (!value.includes("=")) kept.push(value)
+  } else if (option === "-H" || option === "--header") {
+    if (value.startsWith("@") && value !== "@-") kept.push(value.slice(1))
+  } else if (curlDataOptions.has(option)) {
+    const file = curlDataFile(option, value)
+    if (file !== undefined) kept.push(file)
+  } else if (option === "--url") {
+    const target = fileUrlTarget(value)
+    if (target !== undefined) kept.push(target)
+  }
+}
+
+const curlSeparateValueOptions = new Set([
+  ...curlFileOptions, ...curlDataOptions, ...curlValueOptions, "-b", "--cookie", "-H", "--header", "--url",
+])
+
+function curlFileArgs(args: ReadonlyArray<string>) {
+  const kept: string[] = []
+  let positionalOnly = false
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index]
+    if (positionalOnly) {
+      const target = fileUrlTarget(token)
+      if (target !== undefined) kept.push(target)
+      continue
+    }
+    if (token === "--") {
+      positionalOnly = true
+      continue
+    }
+    const long = token.match(/^(--[a-z-]+)=(.+)$/s)
+    if (long) {
+      curlOptionValue(kept, long[1], long[2])
+      continue
+    }
+    if (token.startsWith("--")) {
+      if (curlSeparateValueOptions.has(token)) curlOptionValue(kept, token, args[++index])
+      continue
+    }
+    if (token.length > 1 && token.startsWith("-")) {
+      for (let position = 1; position < token.length; position++) {
+        const option = `-${token[position]}`
+        const rest = token.slice(position + 1)
+        if (curlSeparateValueOptions.has(option)) {
+          curlOptionValue(kept, option, rest || args[++index])
+          break
+        }
+        if (curlShortValueChars.has(token[position])) {
+          if (!rest) index++
+          break
+        }
+      }
+      continue
+    }
+    const target = fileUrlTarget(token)
+    if (target !== undefined) kept.push(target)
+  }
+  return kept
+}
+
+function httpClientFileArgs(name: string, args: ReadonlyArray<string>) {
+  if (name === "curl") return curlFileArgs(args)
+  const fileOptions = name === "wget" ? wgetFileOptions : httpieFileOptions
+  const kept: string[] = []
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index]
+    if (fileOptions.has(token)) {
+      if (args[index + 1] !== undefined) kept.push(args[++index])
+      continue
+    }
+    const long = token.match(/^(--[a-z-]+)=(.+)$/s)
+    if (long) {
+      if (fileOptions.has(long[1])) kept.push(token)
+      continue
+    }
+    const attached = token.match(/^-([A-Za-z])(.+)$/s)
+    if (attached && token.length > 2 && !token.startsWith("--") && fileOptions.has(`-${attached[1]}`))
+      kept.push(attached[2])
+  }
+  return kept
+}
+
+function pythonPlaceholderScan(code: string) {
+  const values: string[] = []
+  const text: string[] = []
+  for (let index = 0; index < code.length; index++) {
+    const character = code[index]
+    if (character === "#") {
+      while (index < code.length && code[index] !== "\n") index++
+      text.push("\n")
+      continue
+    }
+    const previous = text.at(-1) ?? ""
+    const literal = /[\w]/.test(previous) ? undefined
+      : code.slice(index).match(/^(?:([rRbBuUfF]{1,2}))?('''|"""|'|")/)
+    if (!literal) {
+      text.push(character)
+      continue
+    }
+    const raw = /[rR]/.test(literal[1] ?? "")
+    const delimiter = literal[2]
+    let cursor = index + literal[0].length
+    let value = ""
+    while (cursor < code.length) {
+      if (!raw && code[cursor] === "\\" && cursor + 1 < code.length) {
+        value += code[cursor + 1]
+        cursor += 2
+        continue
+      }
+      if (code.startsWith(delimiter, cursor)) break
+      if (delimiter.length === 1 && code[cursor] === "\n") break
+      value += code[cursor]
+      cursor++
+    }
+    text.push(`\u0001${values.length}\u0002`)
+    values.push(value)
+    index = Math.min(cursor + delimiter.length - 1, code.length - 1)
+  }
+  return { text: text.join(""), values }
+}
+
+const pythonPlaceholder = "\\u0001(\\d+)\\u0002"
+
+function pythonFileAccess(code: string) {
+  const { text, values } = pythonPlaceholderScan(code)
+  const reads: string[] = []
+  const writes: string[] = []
+  const value = (index: string | undefined) => index === undefined ? undefined : values[Number(index)]
+  const writeMode = (mode: string | undefined) => /[wax+]/.test(mode ?? "r")
+  for (const found of text.matchAll(new RegExp(`\\bopen\\(\\s*(?:file\\s*=\\s*)?${pythonPlaceholder}(?:\\s*,\\s*(?:mode\\s*=\\s*)?${pythonPlaceholder})?`, "g"))) {
+    const target = value(found[1])
+    if (target !== undefined) (writeMode(value(found[2])) ? writes : reads).push(target)
+  }
+  for (const found of text.matchAll(new RegExp(`\\bPath\\(\\s*${pythonPlaceholder}\\s*\\)\\s*\\.\\s*(read_text|read_bytes|write_text|write_bytes|touch|unlink|mkdir|rmdir|rename|replace|open)\\s*\\((?:\\s*(?:mode\\s*=\\s*)?${pythonPlaceholder})?`, "g"))) {
+    const target = value(found[1])
+    if (target === undefined) continue
+    const method = found[2]
+    if (method === "read_text" || method === "read_bytes") reads.push(target)
+    else if (method === "open") (writeMode(value(found[3])) ? writes : reads).push(target)
+    else {
+      writes.push(target)
+      const destination = (method === "rename" || method === "replace") ? value(found[3]) : undefined
+      if (destination !== undefined) writes.push(destination)
+    }
+  }
+  for (const call of text.matchAll(/\b(?:os\.(?:remove|unlink|rename|replace|mkdir|makedirs|rmdir|removedirs)|shutil\.(?:copy|copy2|copyfile|copytree|move|rmtree))\(([^)]*)\)/g))
+    for (const found of call[1].matchAll(new RegExp(pythonPlaceholder, "g"))) {
+      const target = value(found[1])
+      if (target !== undefined) writes.push(target)
+    }
+  return { reads, writes }
+}
+
+const pythonValueOptions = new Set(["-W", "-X", "--check-hash-based-pycs"])
+
+function pythonScriptIndex(args: ReadonlyArray<string>) {
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]
+    if (arg === "--") return index + 1 < args.length ? index + 1 : -1
+    if (arg === "-c" || arg === "-m" || arg === "-") return -1
+    if (pythonValueOptions.has(arg)) {
+      index++
+      continue
+    }
+    if (arg.startsWith("-")) continue
+    return index
+  }
+  return -1
+}
+
+function commandArguments(name: string, args: ReadonlyArray<string>, heredocBodies: ReadonlyArray<string> = [], includeReadTargets = false) {
   if (name === "echo" || name === "printf") return []
   if (interpreters.has(name)) {
-    const script = args.findIndex((arg) => !arg.startsWith("-"))
-    return args.filter((_, index) => index !== script)
+    const python = name === "python" || name === "python3"
+    const script = python ? pythonScriptIndex(args) : args.findIndex((arg) => !arg.startsWith("-"))
+    const argv = args.filter((_, index) => includeReadTargets || index !== script)
+    const kept = python ? dropNamedValueOptions(argv, scriptTransportOptions) : argv
+    if (!python) return kept
+    const code = args[args.indexOf("-c") + 1]
+    const sources = [...(args.includes("-c") && code !== undefined ? [code] : []), ...heredocBodies]
+    const access = sources.map((source) => pythonFileAccess(source))
+    return [...kept, ...access.flatMap((item) => item.writes), ...(includeReadTargets ? access.flatMap((item) => item.reads) : [])]
   }
   if (name === "git") {
     const subcommand = args.findIndex((arg, index) => !arg.startsWith("-") && !gitValueOptions.has(args[index - 1]))
@@ -293,12 +565,20 @@ function commandArguments(name: string, args: ReadonlyArray<string>) {
     return args.filter((arg, index) => index <= subcommand ||
       !(/^-[A-Za-z]*m$|^--message$/.test(args[index - 1]) || arg.startsWith("--message=")))
   }
-  if (name !== "gh") return args
-  const endpoint = args[0] === "api"
-    ? args.findIndex((arg, index) => index > 0 && !arg.startsWith("-") && !ghApiValueOptions.has(args[index - 1]))
-    : -1
-  return args.filter((arg, index) => index !== endpoint && !ghTextOptions.has(args[index - 1]) &&
-    !/^--(?:title|body|notes|subject)=/.test(arg))
+  if (name === "gh") {
+    const endpoint = args[0] === "api"
+      ? args.findIndex((arg, index) => index > 0 && !arg.startsWith("-") && !ghApiValueOptions.has(args[index - 1]))
+      : -1
+    return args.filter((arg, index) => index !== endpoint && !ghTextOptions.has(args[index - 1]) &&
+      !/^--(?:title|body|notes|subject)=/.test(arg))
+  }
+  if (name === "curl" || name === "wget" || name === "http" || name === "https" || name === "xh")
+    return httpClientFileArgs(name, args)
+  if (name === "ycoding") {
+    const api = ycodingApiArgs(args)
+    if (api !== undefined) return api
+  }
+  return args
 }
 
 function isTemporary(target: string, workdir: string, paths?: Paths) {
@@ -531,6 +811,7 @@ interface ShellSegment {
   readonly ranges: ReadonlyArray<string>
   readonly start: number
   readonly end: number
+  readonly heredocBodies: Array<string>
 }
 
 function rmOperations(command: string, paths?: Paths): ReadonlyArray<RmOperation> {
@@ -649,7 +930,7 @@ function shellScan(command: string) {
   let quote: "'" | '"' | undefined
   let escaped = false
   let tokenQuoted = false
-  let heredocs: Array<{ readonly delimiter: string; readonly strip: boolean; readonly quoted: boolean; readonly command: string }> = []
+  let heredocs: Array<{ readonly delimiter: string; readonly strip: boolean; readonly quoted: boolean; readonly command: string; readonly segment: number }> = []
   let linePiped = false
   const pushToken = (end: number) => {
     if (!token) return
@@ -661,7 +942,7 @@ function shellScan(command: string) {
     ranges.push(`${segments.length}:${tokens.length - 1}`)
     const heredoc = /^\d*<<-?$/.test(token) ? undefined : operator ? { strip: operator[1] === "-", delimiter: token }
       : attached ? { strip: attached[1] === "-", delimiter: attached[2] } : undefined
-    if (heredoc) heredocs.push({ ...heredoc, quoted: tokenQuoted, command: path.basename(tokens[0]) })
+    if (heredoc) heredocs.push({ ...heredoc, quoted: tokenQuoted, command: path.basename(tokens[0]), segment: segments.length })
     token = ""
     tokenQuoted = false
   }
@@ -671,19 +952,23 @@ function shellScan(command: string) {
     heredocs = []
     linePiped = false
     if (pending.length === 0) return newline
+    const bodies: Array<{ readonly segment: number; readonly body: string }> = []
     const end = pending.reduce<number | undefined>((cursor, heredoc) => {
       if (cursor === undefined || !heredocConsumers.has(heredoc.command)) return undefined
       const lines = command.slice(cursor).split("\n")
       const closing = lines.findIndex((line) => (heredoc.strip ? line.replace(/^\t+/, "") : line) === heredoc.delimiter)
       if (closing < 0 || (!heredoc.quoted && lines.slice(0, closing).some((line) => /\$\(|`/.test(line)))) return undefined
+      bodies.push({ segment: heredoc.segment, body: lines.slice(0, closing).join("\n") })
       return cursor + lines.slice(0, closing + 1).join("\n").length + 1
     }, newline + 1)
-    return piped || end === undefined ? newline : end - 2
+    if (piped || end === undefined) return newline
+    for (const { segment, body } of bodies) segments[segment]?.heredocBodies.push(body)
+    return end - 2
   }
   const pushSegment = (next: Connector, nextSeparator: string, end: number) => {
     pushToken(end)
     if (tokens.length > 0) {
-      segments.push({ tokens, rawTokens, connector, separator, ranges, start: segmentStart, end })
+      segments.push({ tokens, rawTokens, connector, separator, ranges, start: segmentStart, end, heredocBodies: [] })
       tokens = []
       rawTokens = []
       ranges = []

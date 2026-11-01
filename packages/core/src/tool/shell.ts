@@ -1,5 +1,6 @@
 export * as ShellTool from "./shell"
 
+import os from "os"
 import path from "path"
 import { ToolFailure } from "@ycoding-ai/ai"
 import type { Shell as ShellSchema } from "@ycoding-ai/schema/shell"
@@ -12,6 +13,7 @@ import { Permission } from "../permission"
 import { PluginRuntime } from "../plugin/runtime"
 import { NonNegativeInt } from "../schema"
 import { SessionGuardrail } from "../session/guardrail"
+import { SessionGuardrailStandard } from "../session/guardrail-standard"
 import { SessionSchema } from "../session/schema"
 import { Shell } from "../shell"
 import { Tool, type Content } from "./tool"
@@ -83,7 +85,6 @@ const modelOutput = (output: Output): string | undefined => {
  */
 // TODO: Port tree-sitter bash / PowerShell parser-based approval reduction.
 // TODO: Port BashArity reusable command-prefix approvals.
-// TODO: Replace token-based command-argument external-directory advisories with parser-based detection.
 // TODO: Restore PowerShell and cmd-specific invocation/path handling on Windows.
 // TODO: Add plugin shell.env environment augmentation when its hook exists.
 // TODO: Persist job status and define restart recovery before exposing remote observation.
@@ -92,20 +93,19 @@ const modelOutput = (output: Output): string | undefined => {
 // TODO: Revisit binary output handling if stdout/stderr decoding is text-only.
 // TODO: Stream full shell output into managed storage while retaining only a bounded in-memory preview.
 
-const shellTokens = (command: string) => command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
-const unquote = (value: string) => value.replace(/^(['"])(.*)\1$/, "$2")
 const externalCommandDirectories = Effect.fn("ShellTool.externalCommandDirectories")(function* (
   fs: FSUtil.Interface,
   command: string,
   cwd: string,
 ) {
   const directories = new Set<string>()
-  for (const token of shellTokens(command)) {
-    const value = unquote(token).replace(/[;,|&]+$/, "")
-    if (!path.isAbsolute(value)) continue
-    const resolved = yield* fs.resolve(value)
+  const targets = SessionGuardrailStandard.shellFileTargets(command, { workdir: cwd, project: cwd, home: os.homedir() })
+  for (const target of targets) {
+    if (!path.isAbsolute(target)) continue
+    const resolved = yield* fs.resolve(target)
     if (FSUtil.contains(cwd, resolved)) continue
-    directories.add(yield* fs.resolve(path.dirname(resolved)))
+    const stat = yield* fs.stat(resolved).pipe(Effect.catch(() => Effect.succeed(undefined)))
+    directories.add(yield* fs.resolve(stat?.type === "Directory" ? resolved : path.dirname(resolved)))
   }
   return [...directories]
 })
