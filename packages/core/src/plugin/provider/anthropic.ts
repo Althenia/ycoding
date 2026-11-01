@@ -260,6 +260,7 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
             delete evt.options[claudeCodeSourceSetting]
             evt.options.fetch = createClaudeCodeFetch({
               fetch: upstream,
+              profileSource: source,
               credentials: resolveCredentials,
               reload: async () => {
                 await resolveCredentials()

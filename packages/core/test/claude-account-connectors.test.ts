@@ -241,9 +241,9 @@ describe("Claude account connectors", () => {
         remote.requests.every((request) => request.headers.get("authorization") === "Bearer fixture-access-a"),
       ).toBe(true)
       const [discovery, ...proxied] = remote.requests
-      expect(discovery.headers.get("user-agent")).toMatch(/^claude-cli\/\S+ \(external, sdk-cli\)$/)
+      expect(discovery.headers.get("user-agent")).toBe("claude-cli/2.1.316 (external, sdk-cli)")
       expect(discovery.headers.get("x-mcp-client-session-id")).toBeNull()
-      expect(proxied.every((request) => /^claude-code\/\S+ \(cli\)$/.test(request.headers.get("user-agent") ?? ""))).toBe(true)
+      expect(proxied.every((request) => request.headers.get("user-agent") === "claude-code/2.1.316 (cli)")).toBe(true)
       expect(proxied.every((request) => request.headers.get("accept-encoding") === "identity")).toBe(true)
       const sessions = new Set(proxied.map((request) => request.headers.get("x-mcp-client-session-id")))
       expect(sessions.size).toBe(1)

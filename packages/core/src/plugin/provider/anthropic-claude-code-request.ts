@@ -8,7 +8,7 @@ type FetchInput = Parameters<typeof fetch>[0]
 type FetchInit = NonNullable<Parameters<typeof fetch>[1]>
 type FetchBody = FetchInit["body"]
 
-const defaultVersion = "2.1.289"
+const defaultVersion = "2.1.316"
 const systemIdentity = "You are Claude Code, Anthropic's official CLI for Claude."
 const billingPrefix = "x-anthropic-billing-header"
 const toolPrefix = "mcp_"
@@ -18,15 +18,15 @@ const oauthBeta = "oauth-2025-04-20"
 const interleavedThinkingBeta = "interleaved-thinking-2025-05-14"
 const contextManagementBeta = "context-management-2025-06-27"
 const promptCachingScopeBeta = "prompt-caching-scope-2026-01-05"
-const advisorToolBeta = "advisor-tool-2026-03-01"
 const thinkingTokenCountBeta = "thinking-token-count-2026-05-13"
 const extendedCacheTtlBeta = "extended-cache-ttl-2025-04-11"
 const effortBeta = "effort-2025-11-24"
 const longContextBetas = ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"] as const
 const claudeCodeSessionID = randomUUID()
+const sessionBetas = new Map<string, string[]>()
 
 type ContentBlock = { type?: string; text?: string } & Record<string, unknown>
-type ClaudeMessage = { role?: string; content?: string | ContentBlock[] }
+type ClaudeMessage = { role?: string; isMeta?: boolean; content?: string | ContentBlock[] }
 type ClaudeBody = {
   model?: string
   system?: ContentBlock[]
@@ -37,7 +37,6 @@ type ClaudeBody = {
 } & Record<string, unknown>
 
 export function getClaudeCodeModelBetas(modelID: string, excluded = new Set<string>()) {
-  const model = AnthropicModel.normalize(modelID)
   const capabilities = AnthropicModel.capabilities(modelID)
   const configured = (process.env.ANTHROPIC_BETA_FLAGS ?? "")
     .split(",")
@@ -49,9 +48,7 @@ export function getClaudeCodeModelBetas(modelID: string, excluded = new Set<stri
     interleavedThinkingBeta,
     contextManagementBeta,
     promptCachingScopeBeta,
-    advisorToolBeta,
     thinkingTokenCountBeta,
-    extendedCacheTtlBeta,
   ]
   if (capabilities.effort.length > 0) defaults = [...defaults, effortBeta]
   const lower = modelID.toLowerCase()
@@ -70,6 +67,7 @@ export function buildClaudeCodeHeaders(
   options: {
     readonly sessionID?: string
     readonly requestID?: () => string
+    readonly oneHourCache?: boolean
   } = {},
 ) {
   const headers = new Headers(input instanceof Request ? input.headers : undefined)
@@ -80,7 +78,14 @@ export function buildClaudeCodeHeaders(
     .filter(Boolean)
   headers.set("authorization", `Bearer ${accessToken}`)
   headers.set("anthropic-version", "2023-06-01")
-  headers.set("anthropic-beta", [...new Set([...getClaudeCodeModelBetas(modelID, excluded), ...incoming])].join(","))
+  const betas = [...new Set([
+    ...getClaudeCodeModelBetas(modelID, excluded),
+    ...(options.oneHourCache ? [extendedCacheTtlBeta] : []),
+    ...incoming,
+  ])].filter((beta) =>
+    !excluded.has(beta) && beta !== "advisor-tool-2026-03-01" && (beta !== extendedCacheTtlBeta || options.oneHourCache),
+  )
+  headers.set("anthropic-beta", betas.join(","))
   headers.set("anthropic-dangerous-direct-browser-access", "true")
   headers.set("x-app", "cli")
   headers.set("user-agent", claudeCodeAPIUserAgent())
@@ -90,7 +95,7 @@ export function buildClaudeCodeHeaders(
     "x-stainless-arch": process.arch === "arm64" ? "arm64" : process.arch,
     "x-stainless-lang": "js",
     "x-stainless-os": process.platform === "darwin" ? "MacOS" : process.platform,
-    "x-stainless-package-version": "0.81.0",
+    "x-stainless-package-version": "0.128.0",
     "x-stainless-retry-count": "0",
     "x-stainless-runtime": "node",
     "x-stainless-runtime-version": process.version,
@@ -117,7 +122,11 @@ export function claudeCodeMCPProxyHeaders() {
 
 export function transformClaudeCodeBody(
   body: FetchBody,
-  options: { readonly version?: string; readonly billingSample?: string } = {},
+  options: {
+    readonly version?: string
+    readonly billingSample?: string
+    readonly identity?: { device_id: string; account_uuid: string; session_id: string }
+  } = {},
 ): FetchBody {
   if (typeof body !== "string") return body
   let parsed: ClaudeBody
@@ -126,6 +135,8 @@ export function transformClaudeCodeBody(
   } catch {
     return body
   }
+  if (options.identity)
+    parsed.metadata = { ...(record(parsed.metadata) ? parsed.metadata : {}), user_id: JSON.stringify(options.identity) }
   if (!Array.isArray(parsed.system)) parsed.system = []
   parsed.system = parsed.system.filter(
     (entry) => !(entry.type === "text" && typeof entry.text === "string" && entry.text.startsWith(billingPrefix)),
@@ -279,6 +290,7 @@ export function createClaudeCodeFetch(input: {
   readonly credentials: () => Promise<ClaudeCodeCredentials | null>
   readonly reload: () => Promise<ClaudeCodeCredentials | null>
   readonly sessionID?: string
+  readonly profileSource?: string
   readonly requestID?: () => string
   readonly billingSample?: (sessionID: string) => Promise<string | undefined>
   readonly onEvent?: (event: ClaudeCodeRequestEvent) => void
@@ -290,16 +302,34 @@ export function createClaudeCodeFetch(input: {
     credentials: ClaudeCodeCredentials,
     excluded: Set<string>,
     billingSample: string | undefined,
+    sessionID: string,
+    betaKey: string | undefined,
   ) => {
     const modelID = modelFromBody(init.body)
     const url = requestURL(request)
     const headers = buildClaudeCodeHeaders(request, init, credentials.accessToken, modelID, excluded, {
-      sessionID: input.sessionID,
+      sessionID,
       requestID: input.requestID,
+      oneHourCache: hasOneHourCache(init.body),
     })
+    if (betaKey) {
+      const betas = sessionBetas.get(betaKey) ?? (headers.get("anthropic-beta") ?? "").split(",")
+      const current = betas.filter((beta) => !excluded.has(beta))
+      sessionBetas.set(betaKey, current)
+      headers.set("anthropic-beta", current.join(","))
+    }
     return input.fetch(url, {
       ...init,
-      body: transformClaudeCodeBody(init.body, { billingSample }),
+      body: transformClaudeCodeBody(init.body, {
+        billingSample,
+        ...(input.profileSource
+          ? { identity: {
+              device_id: createHash("sha256").update(`ycoding-claude-code-device:${input.profileSource}`).digest("hex"),
+              account_uuid: "",
+              session_id: sessionID,
+            } }
+          : {}),
+      }),
       headers,
     })
   }
@@ -311,14 +341,18 @@ export function createClaudeCodeFetch(input: {
     const sessionID =
       input.sessionID ??
       requestHeader(request, init, "x-ycoding-session") ??
-      requestHeader(request, init, "x-session-id")
+      requestHeader(request, init, "x-session-id") ??
+      claudeCodeSessionID
+    const betaKey = input.profileSource
+      ? JSON.stringify([input.profileSource, sessionID, modelFromBody(init.body)])
+      : undefined
     const billingSample =
       sessionID && input.billingSample
         ? await Promise.resolve()
             .then(() => input.billingSample!(sessionID))
             .catch(() => undefined)
         : undefined
-    let response = await run(request, init, latest, excluded, billingSample)
+    let response = await run(request, init, latest, excluded, billingSample, sessionID, betaKey)
     let dispatched = latest
     if (response.status === 401) {
       const rotated = await input.reload().catch(() => null)
@@ -327,19 +361,21 @@ export function createClaudeCodeFetch(input: {
         event: "credential-rotated",
         data: { sourceReloaded: true },
       })
-      response = await run(request, init, rotated, excluded, billingSample)
+      response = await run(request, init, rotated, excluded, billingSample, sessionID, betaKey)
       dispatched = rotated
     }
     for (;;) {
       if (response.status !== 400 && response.status !== 429) break
       if (!isLongContextError(await response.clone().text())) break
-      const active = getClaudeCodeModelBetas(modelFromBody(init.body), excluded)
+      const active = betaKey
+        ? sessionBetas.get(betaKey) ?? []
+        : getClaudeCodeModelBetas(modelFromBody(init.body), excluded)
       const beta = longContextBetas.find((candidate) => active.includes(candidate))
       if (!beta) break
       excluded.add(beta)
       input.onEvent?.({ event: "beta-excluded", data: { beta } })
       const current = (await input.credentials()) ?? latest
-      response = await run(request, init, current, excluded, billingSample)
+      response = await run(request, init, current, excluded, billingSample, sessionID, betaKey)
       dispatched = current
     }
     try {
@@ -403,6 +439,20 @@ function modelFromBody(body: FetchBody) {
   }
 }
 
+function hasOneHourCache(body: FetchBody) {
+  if (typeof body !== "string") return false
+  try {
+    const visit = (value: unknown): boolean =>
+      Array.isArray(value)
+        ? value.some(visit)
+        : record(value) &&
+          ((record(value.cache_control) && value.cache_control.ttl === "1h") || Object.values(value).some(visit))
+    return visit(JSON.parse(body))
+  } catch {
+    return false
+  }
+}
+
 function prefixToolName(name: string) {
   return `${toolPrefix}${name.charAt(0).toUpperCase()}${name.slice(1)}`
 }
@@ -416,7 +466,7 @@ function buildBillingHeader(messages: ClaudeMessage[], value: string, entrypoint
 export const claudeCodeBillingSample = (text: string) => [4, 7, 20].map((index) => text[index] ?? "0").join("")
 
 function firstUserText(messages: ClaudeMessage[]) {
-  const content = messages.find((message) => message.role === "user")?.content
+  const content = messages.find((message) => message.role === "user" && !message.isMeta)?.content
   if (typeof content === "string") return content
   return content?.find((block) => block.type === "text" && typeof block.text === "string")?.text ?? ""
 }

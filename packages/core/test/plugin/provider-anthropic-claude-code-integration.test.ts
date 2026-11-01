@@ -696,18 +696,17 @@ it.effect(
         "interleaved-thinking-2025-05-14",
         "context-management-2025-06-27",
         "prompt-caching-scope-2026-01-05",
-        "advisor-tool-2026-03-01",
         "thinking-token-count-2026-05-13",
-        "extended-cache-ttl-2025-04-11",
         "effort-2025-11-24",
       ])
       expect(sentBody).toMatchObject({
         model: "claude-opus-5",
+        metadata: { user_id: expect.stringContaining('"device_id":') },
         system: [
           {
             type: "text",
             text: expect.stringMatching(
-              /^x-anthropic-billing-header: cc_version=2\.1\.289\.[0-9a-f]{3}; cc_entrypoint=sdk-cli;$/,
+              /^x-anthropic-billing-header: cc_version=2\.1\.316\.[0-9a-f]{3}; cc_entrypoint=sdk-cli;$/,
             ),
           },
           {

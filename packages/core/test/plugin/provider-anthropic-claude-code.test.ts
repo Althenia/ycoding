@@ -418,6 +418,80 @@ describe("Claude Code credentials", () => {
 })
 
 describe("Claude Code request translation", () => {
+  test("uses captured client identity and the first non-meta prompt for billing", () => {
+    const headers = buildClaudeCodeHeaders("https://api.anthropic.com/v1/messages", {}, "token", "claude-sonnet-4-6", new Set())
+    expect(headers.get("user-agent")).toBe("claude-cli/2.1.316 (external, sdk-cli)")
+    expect(headers.get("x-stainless-package-version")).toBe("0.128.0")
+    expect(headers.has("x-claude-code-request-class")).toBe(false)
+    expect(headers.has("x-claude-code-agent-type")).toBe(false)
+    expect(headers.has("x-claude-code-prompt-id")).toBe(false)
+    const transformed = JSON.parse(requiredString(transformClaudeCodeBody(JSON.stringify({
+      messages: [{ role: "user", isMeta: true, content: "ignored" }, { role: "user", content: "Reply with OK" }],
+    })), "body"))
+    expect(transformed.system[0].text).toBe("x-anthropic-billing-header: cc_version=2.1.316.346; cc_entrypoint=sdk-cli;")
+  })
+
+  test("sends stable profile identity and session betas, latching rejected betas", async () => {
+    const sent: Array<{ headers: Headers; body: { metadata: { user_id: string } } }> = []
+    let reject = true
+    const makeFetcher = (profileSource: string) => createClaudeCodeFetch({
+      profileSource,
+      fetch: Object.assign(async (_request: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        const body = JSON.parse(requiredString(init?.body, "body"))
+        sent.push({ headers, body })
+        if (reject && headers.get("anthropic-beta")?.includes("interleaved-thinking-2025-05-14")) {
+          reject = false
+          return Response.json({ error: { message: "You're out of extra usage" } }, { status: 429 })
+        }
+        return Response.json({ type: "message", content: [] })
+      }, { preconnect: fetch.preconnect }),
+      credentials: async () => credentials("paid", Date.now() + 3_600_000),
+      reload: async () => null,
+    })
+    const request = (fetcher: typeof fetch, text: string) => fetcher("https://api.anthropic.com/v1/messages", {
+      method: "POST", headers: { "x-session-id": "ses_parity" }, body: JSON.stringify({ model: "claude-sonnet-4-6", system: [{ type: "text", text: "stable", cache_control: { type: "ephemeral", ttl: "1h" } }], messages: [{ role: "user", content: text }] }),
+    })
+    await request(makeFetcher("profile-a"), "hello")
+    await request(makeFetcher("profile-a"), "hello")
+    await request(makeFetcher("profile-b"), "hello")
+    expect(sent[0]?.headers.get("anthropic-beta")).not.toContain("advisor-tool")
+    expect(sent[0]?.headers.get("anthropic-beta")).toContain("extended-cache-ttl-2025-04-11")
+    expect(sent[1]?.headers.get("anthropic-beta")).not.toContain("interleaved-thinking-2025-05-14")
+    expect(sent[2]?.headers.get("anthropic-beta")).toBe(sent[1]?.headers.get("anthropic-beta"))
+    const first = JSON.parse(sent[1].body.metadata.user_id)
+    const again = JSON.parse(sent[2].body.metadata.user_id)
+    const other = JSON.parse(sent[3].body.metadata.user_id)
+    expect(first).toEqual({ device_id: expect.any(String), account_uuid: "", session_id: "ses_parity" })
+    expect(again).toEqual(first)
+    expect(other.device_id).not.toBe(first.device_id)
+  })
+
+  test("matches one-hour beta to markers and keeps an appended request prefix stable", async () => {
+    const sent: Array<{ headers: Headers; body: string }> = []
+    const fetcher = createClaudeCodeFetch({
+      profileSource: "profile-prefix",
+      fetch: Object.assign(async (_request: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        sent.push({ headers: new Headers(init?.headers), body: requiredString(init?.body, "body") })
+        return Response.json({ type: "message", content: [] })
+      }, { preconnect: fetch.preconnect }),
+      credentials: async () => credentials("paid", Date.now() + 3_600_000),
+      reload: async () => null,
+    })
+    const base = { model: "claude-sonnet-4-6", system: [{ type: "text", text: "stable system", cache_control: { type: "ephemeral", ttl: "1h" } }], messages: [{ role: "user", content: "hello" }] }
+    for (const messages of [base.messages, [...base.messages, { role: "assistant", content: "answer" }, { role: "user", content: "next" }]]) {
+      await fetcher("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-session-id": "ses_prefix" }, body: JSON.stringify({ ...base, messages }) })
+    }
+    await fetcher("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-session-id": "ses_5m" }, body: JSON.stringify({ model: base.model, messages: base.messages }) })
+    expect(sent[0]?.headers.get("anthropic-beta")).toBe(sent[1]?.headers.get("anthropic-beta"))
+    expect(sent[0]?.headers.get("anthropic-beta")).toContain("extended-cache-ttl-2025-04-11")
+    expect(sent[2]?.headers.get("anthropic-beta")).not.toContain("extended-cache-ttl-2025-04-11")
+    const marker = '"cache_control":{"type":"ephemeral","ttl":"1h"}'
+    const prefix = (body: string) => body.slice(0, body.indexOf(marker) + marker.length)
+    expect(prefix(sent[0].body)).toBe(prefix(sent[1].body))
+    expect(cacheMarkers(JSON.parse(sent[0].body))).toBeLessThanOrEqual(4)
+    expect(cacheMarkers(JSON.parse(sent[1].body))).toBeLessThanOrEqual(4)
+  })
   test("builds Claude Code headers with only model-required and explicit betas", () => {
     const headers = buildClaudeCodeHeaders(
       "https://api.anthropic.com/v1/messages",
@@ -448,13 +522,11 @@ describe("Claude Code request translation", () => {
       "interleaved-thinking-2025-05-14",
       "context-management-2025-06-27",
       "prompt-caching-scope-2026-01-05",
-      "advisor-tool-2026-03-01",
       "thinking-token-count-2026-05-13",
-      "extended-cache-ttl-2025-04-11",
       "effort-2025-11-24",
       "custom-feature",
     ])
-    expect(headers.get("user-agent")).toBe("claude-cli/2.1.289 (external, sdk-cli)")
+    expect(headers.get("user-agent")).toBe("claude-cli/2.1.316 (external, sdk-cli)")
   })
 
   test("derives Claude Code session affinity from the stable incoming Session ID", async () => {
@@ -491,7 +563,7 @@ describe("Claude Code request translation", () => {
     expect(sent).toEqual(["ses_first", "ses_second", "ses_first"])
   })
 
-  test("uses Claude Code 2.1.289 in the default billing signature", () => {
+  test("uses Claude Code 2.1.316 in the default billing signature", () => {
     const transformed = JSON.parse(
       requiredString(
         transformClaudeCodeBody(
@@ -505,7 +577,7 @@ describe("Claude Code request translation", () => {
     )
 
     expect(transformed.system[0].text).toMatch(
-      /^x-anthropic-billing-header: cc_version=2\.1\.289\.[0-9a-f]{3}; cc_entrypoint=sdk-cli;$/,
+      /^x-anthropic-billing-header: cc_version=2\.1\.316\.[0-9a-f]{3}; cc_entrypoint=sdk-cli;$/,
     )
     expect(transformed.system[0].text).not.toContain("cch=")
   })
@@ -653,9 +725,7 @@ describe("Claude Code request translation", () => {
         "interleaved-thinking-2025-05-14",
         "context-management-2025-06-27",
         "prompt-caching-scope-2026-01-05",
-        "advisor-tool-2026-03-01",
         "thinking-token-count-2026-05-13",
-        "extended-cache-ttl-2025-04-11",
         "custom-one",
         "custom-two",
       ])
