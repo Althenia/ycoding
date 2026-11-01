@@ -24,12 +24,15 @@ export const RELEASES: readonly ReleaseEntry[] = [
   {
     version: "0.11.2",
     date: "2026-11-01",
-    title: "Quieter outside-repository reviews for API commands",
-    tags: ["Fixed"],
+    title: "Account connector skills, outcome delivery contracts, and quieter API reviews",
+    tags: ["Added", "Changed", "Fixed"],
     changes: [
+      { tag: "Added", text: "Location-scoped ChatGPT account connector skills discovery through `GET /api/integration/openai/account-skills` (and `ycoding api GET /api/integration/openai/account-skills?sessionID=...`) reports bounded list and detail HTTP status, top-level keys, item count, and pagination flags using existing authentication, session provenance, and permission. Raw skill bodies, instructions, tool schemas, and credentials are excluded." },
+      { tag: "Changed", text: "Built-in agent instructions consolidate outcome ownership, requiring agents to drive tasks through integration, validation and delivery across layers, verify runtime and profile context before building helpers, and separate implemented, tested and live-verified states." },
       { tag: "Fixed", text: "Outside-repository guardrail review and the shell tool's external-directory warning no longer treat API requests as file work: `ycoding api` routes such as `/api/session/outstanding`, named HTTP client (curl, wget and HTTPie) URLs and route arguments, and header, query and request-body text are not file operands, so API inspection commands no longer stop for an outside-repository review or report an external directory such as `/api/session/*`." },
       { tag: "Fixed", text: "Python inline code and heredocs are classified by what they do: URL and route strings in `urllib`, `requests` and JSON or string processing, and file-looking text inside strings and comments, do not count as file access, while literal file writes such as `open(path, 'w')`, `Path(path).write_text(...)`, `os.remove(...)` and `shutil` operations are still reviewed. Recognized read-only commands and interpreter script files stay exempt from review." },
       { tag: "Fixed", text: "Commands that do touch files keep their review and warning coverage: shell redirections, file-valued options such as `--output` and `-o`, curl `@file` request bodies, form uploads and header files, `file://` targets in URL position, and file-command operands are still detected, and custom guardrails, hard reviews, catastrophic denies and explicit permission denies are unchanged. Recognition is literal and bounded: paths computed dynamically in scripts are not resolved, and unrecognized tools' absolute operands can still be reviewed as unconfirmed outside work." },
+      { tag: "Fixed", text: "The TUI session header displays the resolved provider display name instead of the raw provider identifier when provider metadata is available." },
     ],
   },
   {

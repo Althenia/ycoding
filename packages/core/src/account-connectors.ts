@@ -1,11 +1,13 @@
 export * as AccountConnectors from "./account-connectors"
 
 import type { FetchLike } from "@modelcontextprotocol/client"
+import { Agent } from "./agent"
 import { Credential } from "@ycoding-ai/schema/credential"
 import { Context, Effect, Layer } from "effect"
 import { join } from "node:path"
 import { AccountConnectorTools } from "./account-connectors/tools"
 import { AccountConnectorLibrary } from "./account-connectors/library"
+import { AccountConnectorSkills } from "./account-connectors/account-skills"
 import { AttachmentStore } from "./attachment-store"
 import { ClaudeAccountConnectors } from "./account-connectors/claude"
 import { Config } from "./config"
@@ -18,6 +20,7 @@ import { LocationMutation } from "./location-mutation"
 import { MCPClient } from "./mcp/client"
 import { Permission } from "./permission"
 import { SessionGuardrail } from "./session/guardrail"
+import { SessionSchema } from "./session/schema"
 import type { SessionEvent } from "./session/event"
 import { OpenAICodex } from "./plugin/provider/openai-codex"
 import { createClaudeCodeCredentialStore } from "./plugin/provider/anthropic-claude-code-account"
@@ -39,6 +42,15 @@ export interface Interface {
       readonly binding?: Pick<SessionEvent.ProfileBinding, "credentialID" | "accountGeneration">
     }
   }) => Effect.Effect<Parameters<Tools.Interface["registerBatch"]>[0], Error>
+  readonly skillsRead: (input: {
+    readonly profile?: string
+    readonly binding?: Pick<SessionEvent.ProfileBinding, "credentialID" | "accountGeneration">
+    readonly permission: {
+      readonly sessionID: SessionSchema.ID
+      readonly agent?: Agent.ID
+      readonly source?: Permission.Source
+    }
+  }) => Effect.Effect<AccountConnectorSkills.Read, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/AccountConnectors") {}
@@ -158,6 +170,49 @@ export function make(options: {
       return response
     })
 
+  const skillsRequest =
+    (
+      current: () => Effect.Effect<{ readonly accountID: string; readonly value: { readonly access: string } }, Error>,
+    ) =>
+    (route: string) =>
+      Effect.gen(function* () {
+        if (
+          route !== "/hazelnuts?scope=installed&include_permissions=true" &&
+          !/^\/hazelnuts\/(?!uploads(?:[/?#]|$)|draft(?:[/?#]|$))[^/?#]+\?include_permissions=true$/.test(route)
+        )
+          return yield* Effect.fail(new Error("Unsupported ChatGPT account skills read request"))
+        const before = yield* current()
+        const response = yield* Effect.tryPromise({
+          try: (signal) =>
+            (options.fetch ?? fetch)(`https://chatgpt.com/backend-api${route}`, {
+              method: "GET",
+              signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+              redirect: "error",
+              headers: {
+                ...OpenAICodex.headers(),
+                authorization: `Bearer ${before.value.access}`,
+                "ChatGPT-Account-Id": before.accountID,
+                "content-type": "application/json",
+              },
+            }),
+          catch: () => new Error("ChatGPT account skills read request failed"),
+        })
+        yield* current().pipe(
+          Effect.onError(() =>
+            Effect.promise(async () => {
+              await response.body?.cancel()
+            }),
+          ),
+        )
+        if (!response.ok) {
+          yield* Effect.promise(async () => {
+            await response.body?.cancel()
+          })
+          return yield* Effect.fail(new AccountConnectorSkills.RequestRejected(response.status))
+        }
+        return response
+      })
+
   return {
     libraryFactory: Effect.fn("AccountConnectors.libraryFactory")(function* (scope: CcaLibraryScope) {
       const current = Effect.fn("AccountConnectors.privateLibrary.current")(function* () {
@@ -229,6 +284,82 @@ export function make(options: {
           fetch: (url, init) => (options.fetch ?? fetch)(url, init),
         }),
       ]
+    }),
+    skillsRead: Effect.fn("AccountConnectors.skillsRead")(function* (input) {
+      const configured = yield* options.settings()
+      if (configured?.enabled !== true)
+        return yield* Effect.fail(new Error("ChatGPT account skills read is disabled by configuration"))
+      const integration = yield* options.integration.get(integrationID)
+      const activeConnection = integration?.connections.find(
+        (value) => value.type === "credential" && value.active,
+      )
+      const activeLabel =
+        activeConnection && activeConnection.type === "credential" ? activeConnection.label : undefined
+      const effectiveProfile = configured.profile ?? activeLabel
+      if (input.profile !== undefined && effectiveProfile !== undefined && input.profile !== effectiveProfile)
+        return yield* Effect.fail(
+          new Error("The requested ChatGPT profile conflicts with the effective account profile"),
+        )
+      const selected = yield* select({ ...input, profile: effectiveProfile })
+      if (!selected)
+        return yield* Effect.fail(new Error("ChatGPT account skills read is disabled by configuration"))
+      if (
+        input.binding &&
+        (selected.connection.id !== input.binding.credentialID ||
+          selected.credential.accountGeneration !== input.binding.accountGeneration)
+      )
+        return yield* Effect.fail(
+          new Error("The selected ChatGPT profile conflicts with the pinned account skills binding"),
+        )
+      const current = Effect.fn("AccountConnectors.skillsRead.current")(function* () {
+        const currentConfigured = yield* options.settings()
+        if (currentConfigured?.enabled !== true)
+          return yield* Effect.fail(new Error("ChatGPT account skills read is disabled by configuration"))
+        let currentEffectiveProfile = currentConfigured.profile
+        if (currentEffectiveProfile === undefined && !input.binding) {
+          const currentIntegration = yield* options.integration.get(integrationID)
+          const currentActive = currentIntegration?.connections.find(
+            (value) => value.type === "credential" && value.active,
+          )
+          currentEffectiveProfile =
+            currentActive && currentActive.type === "credential" ? currentActive.label : undefined
+        } else if (currentEffectiveProfile === undefined && input.binding) {
+          currentEffectiveProfile = selected.connection.label
+        }
+        if (
+          input.profile !== undefined &&
+          currentEffectiveProfile !== undefined &&
+          input.profile !== currentEffectiveProfile
+        )
+          return yield* Effect.fail(
+            new Error("The requested ChatGPT profile conflicts with the effective account profile"),
+          )
+        const value = yield* select({ ...input, profile: currentEffectiveProfile })
+        if (!value)
+          return yield* Effect.fail(new Error("ChatGPT account skills read is disabled by configuration"))
+        if (
+          value.connection.id !== selected.connection.id ||
+          value.credential.accountGeneration !== selected.credential.accountGeneration ||
+          value.accountID !== selected.accountID
+        )
+          return yield* Effect.fail(
+            new Error("The ChatGPT account skills profile changed; refresh the tool catalog"),
+          )
+        return value
+      })
+      return AccountConnectorSkills.make({
+        request: skillsRequest(current),
+        current,
+        beforeDispatch: () =>
+          options.permission.assert({
+            sessionID: input.permission.sessionID,
+            agent: input.permission.agent,
+            action: "chatgpt_account_skills_read",
+            resources: [selected.connection.id],
+            metadata: { profile: selected.connection.label, accountID: selected.accountID },
+            source: input.permission.source,
+          }),
+      })
     }),
     tools: Effect.fn("AccountConnectors.tools")(function* (input) {
       const selected = yield* select(input)
@@ -380,6 +511,7 @@ const layer = Layer.effect(
     })
     return Service.of({
       libraryFactory: chatgpt.libraryFactory,
+      skillsRead: chatgpt.skillsRead,
       tools: (input) =>
         Effect.gen(function* () {
           const native = yield* isolate("chatgpt-library", chatgpt.library(input))

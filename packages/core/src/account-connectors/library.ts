@@ -556,7 +556,7 @@ function nativeFileRoute(value: string) {
   return pathname + url.search
 }
 
-function readBytes(response: Response, maximum: number) {
+export function readBytes(response: Response, maximum: number) {
   return Effect.tryPromise({
     try: async (signal) => {
       const reader = response.body?.getReader()

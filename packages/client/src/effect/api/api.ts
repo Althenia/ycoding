@@ -939,6 +939,22 @@ export type IntegrationCommandCancelOperation<E = never> = (
   input: Endpoint12_10Input,
 ) => Effect.Effect<Endpoint12_10Output, E>
 
+type Endpoint12_11Request = Parameters<RawClient["server.integration"]["integration.accountSkills.read"]>[0]
+export type Endpoint12_11Input = {
+  readonly integrationID: Endpoint12_11Request["params"]["integrationID"]
+  readonly location?: Endpoint12_11Request["query"]["location"]
+  readonly sessionID?: Endpoint12_11Request["query"]["sessionID"]
+  readonly agent?: Endpoint12_11Request["query"]["agent"]
+  readonly profile?: Endpoint12_11Request["query"]["profile"]
+  readonly id?: Endpoint12_11Request["query"]["id"]
+}
+export type Endpoint12_11Output = EffectValue<
+  ReturnType<RawClient["server.integration"]["integration.accountSkills.read"]>
+>
+export type IntegrationAccountSkillsReadOperation<E = never> = (
+  input: Endpoint12_11Input,
+) => Effect.Effect<Endpoint12_11Output, E>
+
 export interface IntegrationApi<E = never> {
   readonly list: IntegrationListOperation<E>
   readonly get: IntegrationGetOperation<E>
@@ -955,6 +971,7 @@ export interface IntegrationApi<E = never> {
     readonly status: IntegrationCommandStatusOperation<E>
     readonly cancel: IntegrationCommandCancelOperation<E>
   }
+  readonly accountSkills: { readonly read: IntegrationAccountSkillsReadOperation<E> }
 }
 
 type Endpoint13_0Request = Parameters<RawClient["server.mcp"]["mcp.list"]>[0]

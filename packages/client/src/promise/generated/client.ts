@@ -189,6 +189,8 @@ import type {
   IntegrationCommandStatusOutput,
   IntegrationCommandCancelInput,
   IntegrationCommandCancelOutput,
+  IntegrationAccountSkillsReadInput,
+  IntegrationAccountSkillsReadOutput,
   McpListInput,
   McpListOutput,
   McpAddInput,
@@ -1806,6 +1808,26 @@ export function make(options: ClientOptions) {
               successStatus: 204,
               declaredStatuses: [401, 400],
               empty: true,
+            },
+            requestOptions,
+          ),
+      },
+      accountSkills: {
+        read: (input: IntegrationAccountSkillsReadInput, requestOptions?: RequestOptions) =>
+          request<IntegrationAccountSkillsReadOutput>(
+            {
+              method: "GET",
+              path: `/api/integration/${encodeURIComponent(input.integrationID)}/account-skills`,
+              query: {
+                location: input["location"],
+                sessionID: input["sessionID"],
+                agent: input["agent"],
+                profile: input["profile"],
+                id: input["id"],
+              },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
             },
             requestOptions,
           ),

@@ -71,10 +71,11 @@ const SEGMENT_HINT: Partial<Record<SessionHeaderSegmentKey, { command: string; v
   variant: { command: "variant.cycle", verb: "cycle" },
 }
 
-export function headerModelLabel(input: { providerID?: string; modelID?: string; name?: string }) {
+export function headerModelLabel(input: { providerID?: string; providerName?: string; modelID?: string; name?: string }) {
   const id = input.modelID ?? input.name ?? ""
   const resolvedName = input.name ?? Locale.titlecase(id.replaceAll("-", " "))
-  return input.providerID ? `${input.providerID}/${resolvedName}` : resolvedName
+  const providerDisplay = input.providerName ?? input.providerID
+  return providerDisplay ? `${providerDisplay}/${resolvedName}` : resolvedName
 }
 
 /**
@@ -450,8 +451,12 @@ function resolveIdentity(props: SessionHeaderIdentity): ResolvedSessionHeaderIde
   const model = data.location.model
     .list(session.location)
     ?.find((item) => item.providerID === sessionModel.providerID && item.id === sessionModel.id)
+  const provider = data.location.provider
+    .list(session.location)
+    ?.find((item) => item.id === sessionModel.providerID)
   const modelLabel = headerModelLabel({
     providerID: model?.providerID ?? sessionModel.providerID,
+    providerName: provider?.name,
     modelID: sessionModel.id,
     name: model?.name,
   })

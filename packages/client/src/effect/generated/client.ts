@@ -1171,6 +1171,27 @@ const Endpoint12_10 = (raw: RawClient["server.integration"]) => (input: Endpoint
     query: { location: input["location"] },
   }).pipe(Effect.mapError(mapClientError))
 
+type Endpoint12_11Request = Parameters<RawClient["server.integration"]["integration.accountSkills.read"]>[0]
+type Endpoint12_11Input = {
+  readonly integrationID: Endpoint12_11Request["params"]["integrationID"]
+  readonly location?: Endpoint12_11Request["query"]["location"]
+  readonly sessionID?: Endpoint12_11Request["query"]["sessionID"]
+  readonly agent?: Endpoint12_11Request["query"]["agent"]
+  readonly profile?: Endpoint12_11Request["query"]["profile"]
+  readonly id?: Endpoint12_11Request["query"]["id"]
+}
+const Endpoint12_11 = (raw: RawClient["server.integration"]) => (input: Endpoint12_11Input) =>
+  raw["integration.accountSkills.read"]({
+    params: { integrationID: input["integrationID"] },
+    query: {
+      location: input["location"],
+      sessionID: input["sessionID"],
+      agent: input["agent"],
+      profile: input["profile"],
+      id: input["id"],
+    },
+  }).pipe(Effect.mapError(mapClientError))
+
 const adaptGroup12 = (raw: RawClient["server.integration"]) => ({
   list: Endpoint12_0(raw),
   get: Endpoint12_1(raw),
@@ -1183,6 +1204,7 @@ const adaptGroup12 = (raw: RawClient["server.integration"]) => ({
     cancel: Endpoint12_7(raw),
   },
   command: { connect: Endpoint12_8(raw), status: Endpoint12_9(raw), cancel: Endpoint12_10(raw) },
+  accountSkills: { read: Endpoint12_11(raw) },
 })
 
 type Endpoint13_0Request = Parameters<RawClient["server.mcp"]["mcp.list"]>[0]

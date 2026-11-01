@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import path from "node:path"
 import { NodeServices } from "@effect/platform-node"
 import { Effect, Option } from "effect"
 import { CliOutput, Command, type HelpDoc } from "effect/unstable/cli"
@@ -33,4 +34,56 @@ test("the api command keeps its description, argument and flags", async () => {
     { name: "server", aliases: [], description: "Connect to a server URL instead of the background service" },
     { name: "standalone", aliases: [], description: "Run with a private server instead of the background service" },
   ])
+})
+
+test("CLI api command exits 0 on 2xx response from synthetic server", async () => {
+  const server = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const url = new URL(req.url)
+      if (url.pathname === "/api/health") return Response.json({ version: "local" })
+      if (url.pathname === "/test-ok") return Response.json({ status: "ok" })
+      return new Response("Not found", { status: 404 })
+    },
+  })
+  try {
+    const proc = Bun.spawn(["bun", "run", "src/index.ts", "api", "--server", `http://localhost:${server.port}`, "GET", "/test-ok"], {
+      cwd: path.resolve(__dirname, ".."),
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const exitCode = await proc.exited
+    const stdout = await new Response(proc.stdout).text()
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain('"status":"ok"')
+  } finally {
+    server.stop(true)
+  }
+})
+
+test("CLI api command exits 1 on non-2xx response from synthetic server", async () => {
+  const server = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const url = new URL(req.url)
+      if (url.pathname === "/api/health") return Response.json({ version: "local" })
+      if (url.pathname === "/test-error") return new Response(JSON.stringify({ error: "InvalidRequestError" }), { status: 400, headers: { "content-type": "application/json" } })
+      return new Response("Not found", { status: 404 })
+    },
+  })
+  try {
+    const proc = Bun.spawn(["bun", "run", "src/index.ts", "api", "--server", `http://localhost:${server.port}`, "GET", "/test-error"], {
+      cwd: path.resolve(__dirname, ".."),
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const exitCode = await proc.exited
+    const stderr = await new Response(proc.stderr).text()
+    const stdout = await new Response(proc.stdout).text()
+    expect(exitCode).toBe(1)
+    expect(stderr).toContain("ycoding: API request failed: HTTP 400")
+    expect(stdout).toContain("InvalidRequestError")
+  } finally {
+    server.stop(true)
+  }
 })

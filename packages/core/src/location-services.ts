@@ -1,5 +1,6 @@
 import { Cause, Context, Effect, Fiber, Layer, RcMap, Scope, Semaphore } from "effect"
 import path from "node:path"
+import { AccountConnectors } from "./account-connectors"
 import { Agent } from "./agent"
 import { AISDK } from "./aisdk"
 import { Browser } from "./browser"
@@ -74,6 +75,7 @@ export { LocationServiceMap } from "./location-service-map"
 
 const locationServiceNodes = [
   Location.node,
+  AccountConnectors.node,
   Policy.node,
   Config.node,
   Decision.node,
