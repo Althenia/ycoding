@@ -50,7 +50,12 @@ export function evaluate(input: Input): Result {
   const custom = customResult(input)
   if (custom?.decision === "deny") return custom
 
-  const standardHardReview = standard.find((item) => item.hardReview)
+  const firstHardReview = standard.find((item) => item.hardReview)
+  const standardHardReview = firstHardReview?.id === "standard.review.database-destructive"
+    ? standard.find((item) => item.id === firstHardReview.id && item.evidence?.confirmed)
+      ?? standard.find((item) => item.id === firstHardReview.id && item.evidence?.uncertainExecution)
+      ?? firstHardReview
+    : firstHardReview
   if (standardHardReview)
     return {
       decision: "ask",
@@ -70,7 +75,13 @@ export function evaluate(input: Input): Result {
     }
   if (custom) return custom
 
-  const standardAsk = standard.find((item) => item.decision === "ask")
+  const firstAsk = standard.find((item) => item.decision === "ask")
+  const uncertainOutside = firstAsk?.id === "standard.review.outside-repo"
+    ? standard.find((item) => item.id === firstAsk.id && item.evidence?.uncertainFilesystem) : undefined
+  const standardAsk = uncertainOutside?.evidence ? { ...uncertainOutside, evidence: {
+    ...uncertainOutside.evidence,
+    resolvedTargets: [...new Set(standard.filter((item) => item.id === uncertainOutside.id).flatMap((item) => item.evidence?.resolvedTargets ?? []))],
+  } } : firstAsk
   if (standardAsk)
     return {
       decision: "ask",

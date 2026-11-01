@@ -495,6 +495,12 @@ describe("SessionGuardrailMatch", () => {
     "# DROP TABLE users\nls",
     'echo "DROP TABLE a" && psql -c "select 1"',
     'grep "DROP DATABASE" . ; echo done',
+    'git commit -m "drop table migration"',
+    'git checkout -b drop-table-fix',
+    'gh api /repos/owner/repo/issues -f title="Fix drop table issue"',
+    "sqlite3 db.sqlite \"SELECT * FROM audit WHERE action = 'DROP TABLE'\"",
+    "psql -c \"SELECT 'DROP TABLE users' AS statement\"",
+    "sqlite3 db.sqlite \"SELECT count(*) FROM t WHERE query LIKE 'delete from %'\"",
   ])("does not review SQL that is only printed, searched or commented: %s", (command) => {
     expect(SessionGuardrailStandard.match("shell", command)).toBeUndefined()
     expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths })).toMatchObject({ decision: "allow" })
@@ -504,6 +510,8 @@ describe("SessionGuardrailMatch", () => {
     'psql -c "DROP TABLE scratch_items"',
     "mysql -e 'TRUNCATE TABLE t'",
     'sqlite3 db.sqlite "DROP TABLE t"',
+    'sqlite3 /tmp/temp.db "DROP TABLE t"',
+    'sqlite3 ./disposable.db "DROP TABLE t"',
     'echo "DROP TABLE t" | psql',
     "printf 'DROP TABLE t;' | mysql",
     "cat <<'EOF' | psql\nDROP TABLE t;\nEOF",
@@ -515,6 +523,8 @@ describe("SessionGuardrailMatch", () => {
     'echo "$(psql -c \'DROP TABLE x\')"',
     "echo `psql -c 'drop table x'`",
     "python -c \"import db; db.run('DROP TABLE x')\"",
+    'bun run -e "db.query(\'DROP TABLE x\')"',
+    'node -e "db.query(\'DROP TABLE x\')"',
     'echo hi > out.sql; psql -c "DROP TABLE x"',
     'grep x file && psql -c "DROP TABLE x"',
     'echo "DROP TABLE x" > script.sql',
@@ -526,11 +536,318 @@ describe("SessionGuardrailMatch", () => {
     "bash <<'EOF'\n# note\ndrop table x\nEOF",
     'echo "DROP TABLE x" | tee run.sql | psql',
     "xargs -I{} psql -c {} <<< 'DROP TABLE x'",
+    'sqlite3 db.sqlite "DELETE FROM t; SELECT 1"',
+    'sqlite3 db.sqlite "CREATE TABLE t (id int); DELETE FROM t; SELECT 1"',
+    'sqlite3 :memory: "ATTACH DATABASE \'live.db\' AS live; DROP TABLE live.t"',
+    'sqlite3 :memory: "ATTACH \'live.db\' AS live; DELETE FROM live.t"',
+    'sqlite3 :memory: "DROP TABLE t; $EXPANSION"',
+    'sqlite3 :memory: "DROP TABLE $(cat file)"',
+    'git commit -m "drop table" && psql -c "DROP TABLE b"',
+    'sqlite3 :memory: "DROP TABLE a"; psql -c "DROP TABLE b"',
+    'psql -c "SELECT 1" -c "DROP TABLE t"',
+    'mysql -e "SELECT 1" -e "DROP TABLE t"',
+    'sqlite3 :memory: ".open prod.db" "DROP TABLE t"',
+    'sqlite3 :memory: ".read migration.sql" "DROP TABLE t"',
+    'sqlite3 :memory: ".output prod.sql" "DROP TABLE t"',
+    'sqlite3 -cmd ".read script.sql" :memory: "DROP TABLE t"',
+    'sqlite3 :memory: "DROP TABLE t" | psql',
+    'cat migration.sql | sqlite3 :memory: "DROP TABLE t"',
+    'psql -c "SELECT dblink_exec(\'conn\', \'DROP TABLE t\')"',
+    'sqlite3 db.sqlite "SELECT load_extension(\'ext\'); DROP TABLE t"',
+    'curl -H "Content-Type: application/json" -d \'{"query":"DROP TABLE scratch"}\' http://localhost:8080/api/execute',
+    'curl -d "DROP TABLE scratch" http://localhost:8080/api/query',
+    'sqlite3 :memory: "DROP TABLE t"',
+    'sqlite3 :memory: "TRUNCATE TABLE t"',
+    'sqlite3 :memory: "DELETE FROM t"',
+    'sqlite3 "" "DROP TABLE t"',
+    'echo "DROP TABLE t" | sqlite3 :memory:',
+    'sqlite3 :memory: "CREATE TABLE t (id int); DROP TABLE t"',
+    'git rebase --exec "psql -c \'DROP TABLE users\'"',
+    'psql -c "SELECT run_sql(\'DROP TABLE users\')"',
+    'psql -c "SELECT \'DROP TABLE\'" -f live.sql',
+    'psql --command="DROP TABLE live"',
+    'psql -c "EXPLAIN ANALYZE DROP TABLE users"',
+    'gh api /repos/owner/repo/issues --raw-field query="DROP TABLE users"',
   ])("still reviews SQL that can execute or is not proven inert: %s", (command) => {
     expect(SessionGuardrailStandard.match("shell", command)).toMatchObject({
       id: "standard.review.database-destructive",
       hardReview: true,
     })
+  })
+
+  test.each([
+    `psql -c "SELECT 'it''s DROP TABLE users'"`,
+    `psql --command="SELECT 'DROP TABLE users'"`,
+    `mysql --execute="SELECT 'DROP TABLE users'"`,
+    `sqlite3 db.sqlite "SELECT 1 /* DROP TABLE users */"`,
+    `psql -c "SELECT 1 -- DROP TABLE users"`,
+    `psql -c "/* DROP TABLE users */ SELECT 1"`,
+    `psql -c "SELECT 'DROP TABLE a'; SELECT 'DROP TABLE b'"`,
+    `psql -c "EXPLAIN SELECT 'DROP TABLE users'"`,
+  ])("SQL boundary distinguishes literal data and comments: %s", (command) => {
+    expect(SessionGuardrailStandard.match("shell", command)).toBeUndefined()
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "allow", hardReview: false })
+  })
+
+  test.each([
+    `psql -c "/* harmless */ SELECT 1" -f /outside/input.sql`,
+    `mysql -e "/* harmless */ SELECT 1" < /outside/input.sql`,
+    `psql -c '\\copy items FROM "/outside/input.csv"'`,
+    `psql --command='\\copy items TO "/outside/output.csv"'`,
+    `psql -c '\\copy (SELECT * FROM items) TO "/outside/output.csv"'`,
+    `psql -c '\\i /outside/input.sql'`,
+    `psql -c '\\ir /outside/input.sql'`,
+    `psql -c '\\o /outside/output.txt'`,
+    `psql -c '\\w /outside/output.sql'`,
+    `psql --file=/outside/input.sql`,
+    `sqlite3 -init /outside/init.sql db.sqlite "SELECT 1"`,
+    `sqlite3 db.sqlite ".read /outside/input.sql"`,
+    `sqlite3 db.sqlite ".import --csv /outside/input.csv items"`,
+    `sqlite3 db.sqlite ".import --skip 1 /outside/input.csv items"`,
+    `sqlite3 db.sqlite ".import --schema main /outside/input.csv items"`,
+    `sqlite3 db.sqlite "SELECT 1;\n.read /outside/input.sql"`,
+    `sqlite3 db.sqlite "ATTACH '/outside/other.db' AS other"`,
+    `sqlite3 db.sqlite "VACUUM INTO '/outside/copy.db'"`,
+    `sqlite3 db.sqlite "SELECT readfile('/outside/input.txt')"`,
+    `sqlite3 db.sqlite "SELECT writefile('/outside/output.txt', 'x')"`,
+  ])("SQL query text does not hide separate outside file targets: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.outside-repo"] })
+  })
+
+  test("SQL server-side COPY path is not treated as a local file operand", () => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [
+      `psql -c "COPY items FROM '/server/input.csv'"`,
+    ], paths })).toMatchObject({ decision: "allow" })
+  })
+
+  test.each([
+    `psql -c "SELECT 'DROP TABLE users'" | psql`,
+    `sqlite3 db.sqlite "SELECT 'DROP TABLE users'" | bash`,
+    `psql -c "SELECT 'DROP TABLE users'" > migration.sql`,
+    `psql -c "SELECT 'DROP TABLE users'" < startup.sql`,
+    `psql -c "SELECT 'DROP TABLE users'" -f startup.sql`,
+    `psql -c "SELECT 'DROP TABLE users'" --file=startup.sql`,
+    `psql -c "SELECT 'DROP TABLE users'" --command="DELETE FROM users; SELECT 1"`,
+    `psql --command="SELECT run_sql('DROP TABLE users')"`,
+    `mysql --execute="SELECT run_sql('DROP TABLE users')"`,
+    `psql -c "SELECT 'DROP TABLE users' INTO OUTFILE 'migration.sql'"`,
+    `psql -c "SELECT 'DROP TABLE users' \\gexec"`,
+    `psql -c "EXPLAIN ANALYZE SELECT run_sql('DROP TABLE users')"`,
+    `psql -c "SELECT 'DROP TABLE users'; DO $$ BEGIN EXECUTE 'DROP TABLE users'; END $$"`,
+    `psql -c 'DO $body$ BEGIN EXECUTE $sql$DROP TABLE users$sql$; END $body$'`,
+    `psql -c "SELECT 'DROP TABLE users'" -c "SELECT run_sql('DROP TABLE users')"`,
+    `psql -c "SELECT 'DROP TABLE users"`,
+    `mysql -e "SELECT 'a\\' ; DROP TABLE users; --'"`,
+    `sqlite3 db.sqlite "SELECT 'DROP TABLE users'; DELETE FROM users; SELECT 1"`,
+    `sqlite3 -cmd ".read startup.sql" db.sqlite "SELECT 'DROP TABLE users'"`,
+    `sqlite3 db.sqlite "SELECT 'DROP TABLE users'" ".read startup.sql"`,
+    `sqlite3 db.sqlite "SELECT 'DROP TABLE users'" ".output output.sql"`,
+    `sqlite3 db.sqlite "SELECT 'DROP TABLE users'" ".open live.db"`,
+    `sqlite3 db.sqlite "SELECT 'DROP TABLE users'; ATTACH 'live.db' AS live"`,
+    `sqlite3 :memory: "SELECT 'DROP TABLE users'; SELECT writefile('output.sql', 'data')"`,
+    `printf '\\x2eopen live.db\\nDROP TABLE users;\\n' | sqlite3 :memory:`,
+    `printf '\\056read startup.sql\\nDROP TABLE users;\\n' | sqlite3 :memory:`,
+    `printf '\\x2eoutput output.sql\\nDROP TABLE users;\\n' | sqlite3 :memory:`,
+    `printf '\\x44ROP TABLE users;' | sqlite3 :memory:`,
+    `printf '\\104ROP TABLE users;' | sqlite3 :memory:`,
+    `printf '%b' '\\0104ROP TABLE users;' | sqlite3 :memory:`,
+    `sqlite3 :memory: "DROP TABLE users" > /dev/null.backup`,
+    `sqlite3 :memory: "DROP TABLE users" > /dev/null/output`,
+    `sqlite3 file::memory:?cache=shared "DROP TABLE users"`,
+    `git rebase --exec="psql -c 'DROP TABLE users'"`,
+    `git -c alias.sql="!psql -c 'DROP TABLE users'" sql`,
+    `git commit -m "DROP TABLE note" --config-env=core.editor=SQL_EDITOR`,
+    `gh api /repos/owner/repo/issues --raw-field=query="DROP TABLE users"`,
+    `gh api /repos/owner/repo/issues -F sql="DROP TABLE users"`,
+    `gh api /repos/owner/repo/issues --input='{"sql":"DROP TABLE users"}'`,
+    `gh api /repos/owner/repo/issues -f title="DROP TABLE note" -f query="DROP TABLE users"`,
+    `gh api /sql -f title="DROP TABLE users"`,
+    `curl --json '{"query":"DROP TABLE users"}' https://example.invalid/sql`,
+    `bun -e "console.log('DROP TABLE users'); db.exec(input)"`,
+    `python -c "print('DROP TABLE users'); connection.executescript(payload)"`,
+    `sqlite3 db.sqlite "SELECT 'DROP TABLE a'"; psql -c "DROP TABLE b"`,
+  ])("SQL boundary retains review for unproven execution context: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.database-destructive"] })
+  })
+
+  test.each([
+    `printf '%s' "$SQL" | psql`,
+    `printf '%b' "$SQL" | sqlite3 :memory:`,
+    `printf '%s' "$SQL" | env psql`,
+    `printf '%s' "$SQL" | command psql`,
+    `psql -c '\\copy items TO PROGRAM "some-program"'`,
+    `psql -c 'SELECT $$\\copy items TO PROGRAM "some-program"$$'`,
+  ])("SQL boundary retains non-dismissible review for dynamic client input: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "ask", hardReview: true, reason: "Possible destructive database operation; execution is unproven", evidence: { confirmed: false, uncertainExecution: true } })
+  })
+
+  test("unknown SQLite import options retain ordinary file-operation review without an invented target", () => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [
+      `sqlite3 db.sqlite ".import --unknown value /outside/input.csv items"`,
+    ], paths })).toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.outside-repo"],
+      reason: "SQLite import file target is unproven", evidence: { resolvedTargets: [] } })
+  })
+
+  test("multiline SQL dollar text is not interpreted as a psql client file command", () => {
+    const command = `psql -c 'SELECT $$\n\\copy items TO PROGRAM "/outside/program"\n$$'`
+    expect(SessionGuardrailStandard.outsidePaths("shell", command, paths)).toEqual([])
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "ask", hardReview: true, reason: "Possible destructive database operation; execution is unproven", evidence: { confirmed: false, uncertainExecution: true, resolvedTargets: [] } })
+  })
+
+  test.each([
+    `psql -c 'SELECT "\\i /outside/fake.sql"'`,
+    `psql -c 'SELECT "\\o /outside/fake.sql"'`,
+  ])("SQL quoted identifiers do not create client file targets: %s", (command) => {
+    expect(SessionGuardrailStandard.outsidePaths("shell", command, paths)).toEqual([])
+  })
+
+  test.each([
+    [`sqlite3 db.sqlite ".import --unknown value file items"; touch /outside/real`, undefined],
+    [`sqlite3 db.sqlite ".import --unknown value file items"`, `touch /outside/real`],
+  ])("unknown SQLite import retains independent outside target: %s", (first, second) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: second ? [first, second] : [first], paths }))
+      .toMatchObject({ decision: "ask", hardReview: false, reason: "SQLite import file target is unproven", evidence: {
+        uncertainFilesystem: true, resolvedTargets: ["/outside/real"],
+      } })
+  })
+
+  test("dynamic printf without a database sink remains ordinary shell work", () => {
+    expect(SessionGuardrailStandard.match("shell", `printf '%s' "$SQL"`)).toBeUndefined()
+  })
+
+  test.each([
+    `sqlite3 * "SELECT 'DROP TABLE users'"`,
+    `sqlite3 ~/db.sqlite "SELECT 'DROP TABLE users'"`,
+    `gh api /repos/owner/repo/issues -F title="@DROP TABLE payload"`,
+    `sqlite3 db.sqlite "DELETE FROM users -- cleanup"`,
+    `sqlite3 db.sqlite "DELETE FROM users /* cleanup */"`,
+    `sqlite3 db.sqlite 'DELETE FROM "user table"; SELECT 1'`,
+    `sqlite3 db.sqlite "DELETE FROM \\"user table\\" -- cleanup"`,
+    `sqlite3 db.sqlite 'DELETE FROM [user table]; SELECT 1'`,
+  ])("SQL boundary rejects expansion, file input and commented unqualified deletion: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.database-destructive"] })
+  })
+
+  test.each([
+    `sqlite3 db.sqlite "DELETE FROM users WHERE id = 1"`,
+    `sqlite3 db.sqlite "DELETE FROM users /* bounded */ WHERE id = 1"`,
+    `sqlite3 db.sqlite 'DELETE FROM "user table" WHERE id = 1'`,
+  ])("SQL boundary preserves qualified deletion behavior: %s", (command) => {
+    expect(SessionGuardrailStandard.match("shell", command)).toBeUndefined()
+  })
+
+  test.each([
+    `bun -e "const text = 'DROP TABLE users'; console.log(text)"`,
+    `python -c "db.run('DROP TABLE users')"`,
+    `python <<'EOF'\ndb.run('DROP TABLE users')\nEOF`,
+    `cat <<'TEXT'\nDROP TABLE users\nTEXT\npython <<'CODE'\ndb.run('DROP TABLE users')\nCODE`,
+  ])("SQL boundary marks opaque source as non-dismissible uncertainty, not proven execution: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "ask", hardReview: true, reason: "Possible destructive database operation; execution is unproven", evidence: {
+        confirmed: false, uncertainExecution: true,
+      } })
+  })
+
+  test.each([
+    `mariadb -e "SELECT 1 /*M! ; DROP TABLE users */"`,
+    `sqlite3 db.sqlite "SELECT 'DROP TABLE users'\n.shell psql"`,
+  ])("SQL boundary rejects executable comment and line-command syntax: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.database-destructive"] })
+  })
+
+  test.each([
+    `echo "DROP TABLE note" > notes.sql; psql -c "DROP TABLE users"`,
+    `cat <<'EOF'\nDROP TABLE note\nEOF\npsql -c "DROP TABLE users"`,
+  ])("SQL boundary reports later confirmed execution instead of an early dismissible mention: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "ask", hardReview: true, evidence: {
+        matchedSegment: `psql -c "DROP TABLE users"`, confirmed: true,
+      } })
+  })
+
+  test.each([
+    [[`echo "DROP TABLE note" > notes.sql`, `psql -c "DROP TABLE users"`], true],
+    [[`python -c "db.run('DROP TABLE note')"`, `psql -c "DROP TABLE users"`], true],
+    [[`echo "DROP TABLE note" > notes.sql`, `python -c "db.run('DROP TABLE users')"`], false],
+  ] as const)("SQL request boundary prioritizes non-dismissible evidence across resources: %j", (resources, confirmed) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources, paths }))
+      .toMatchObject({ decision: "ask", hardReview: true, evidence: {
+        matchedSegment: resources[1], confirmed, ...(confirmed ? {} : { uncertainExecution: true }),
+      } })
+  })
+
+  test("SQL request boundary preserves precedence of a different first hard rule", () => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [
+      "git push --force origin main", `echo "DROP TABLE note" > notes.sql`, `psql -c "DROP TABLE users"`,
+    ], paths })).toMatchObject({ ruleIDs: ["standard.review.force-push"], hardReview: true })
+  })
+
+  test.each([
+    `sqlite3 db.sqlite "DELETE FROM users RETURNING *"`,
+    `sqlite3 db.sqlite 'DELETE FROM "tenant space"."user table"; SELECT 1'`,
+    `psql -c "DROP /* migration */ TABLE users"`,
+    `psql -c "DROP/* migration */TABLE users"`,
+  ])("SQL prefilter boundary retains destructive returning, qualified identifiers and comment-separated tokens: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.database-destructive"] })
+  })
+
+  test.each([
+    `ls # DELETE FROM users\n`,
+    `echo "DELETE FROM users"; ls`,
+    `printf 'DELETE FROM users'; psql -c "SELECT 1"`,
+    `sqlite3 db.sqlite "SELECT 'DROP /* migration */ TABLE users'"`,
+    `sqlite3 db.sqlite 'DELETE FROM "tenant space"."user table" WHERE id = 1'`,
+  ])("SQL prefilter boundary preserves inert source ranges and qualified deletion: %s", (command) => {
+    expect(SessionGuardrailStandard.match("shell", command)).toBeUndefined()
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "allow", hardReview: false })
+  })
+
+  test.each([
+    `psql -c "DELETE FROM ONLY users"`,
+    `psql -c "DELETE FROM users AS u USING teams t RETURNING u.id"`,
+    `psql -c 'DELETE FROM "tenant space"."user table" AS "u alias"'`,
+    `psql -c "DELETE FROM users USING teams WHEREVER id = 1"`,
+    `psql -c "DELETE FROM users USING (SELECT 1 WHERE true) q"`,
+    `psql -c "DELETE FROM users WHERE run_sql('DROP TABLE users')"`,
+  ])("SQL deletion policy boundary reviews unknown or unqualified suffixes: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.database-destructive"] })
+  })
+
+  test.each([
+    `psql -c "DELETE FROM ONLY users AS u WHERE u.id = 1"`,
+    `psql -c "DELETE FROM users AS u USING teams t WHERE u.id = t.id RETURNING u.id"`,
+    `psql -c 'DELETE FROM "tenant space"."user table" AS "u alias" WHERE id = 1'`,
+    `psql -c "SELECT 'DELETE FROM users USING teams'"`,
+    `psql -c "SELECT 1 /* DELETE FROM users USING teams */"`,
+  ])("SQL deletion policy boundary preserves top-level WHERE and inert text: %s", (command) => {
+    expect(SessionGuardrailStandard.match("shell", command)).toBeUndefined()
+  })
+
+  test.each([
+    `psql -c "DELETE FROM users AS u"`,
+    `psql -c "DELETE FROM users u RETURNING u.id"`,
+    `psql -c 'DELETE FROM "tenant space"."user table" AS u RETURNING u.id'`,
+  ])("SQL alias boundary reviews unconditional deletion: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.database-destructive"] })
+  })
+
+  test.each([
+    `psql -c "DELETE FROM users AS u WHERE u.id = 1"`,
+    `psql -c "DELETE FROM users u WHERE u.id = 1 RETURNING u.id"`,
+    `psql -c "SELECT 'DELETE FROM users AS u'"`,
+  ])("SQL alias boundary preserves bounded and inert cases: %s", (command) => {
+    expect(SessionGuardrailStandard.match("shell", command)).toBeUndefined()
   })
 
   test("reports the executed segment as the verification evidence for a mixed command", () => {
