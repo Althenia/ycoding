@@ -9,9 +9,11 @@ import {
   awaitsApproval,
   connectionStripView,
   filterSessions,
+  prioritizePanelSessions,
   sessionChips,
   sessionNeedsAttention,
   sessionPanelSummary,
+  sessionCompanionSummary,
   remoteSurfaceComposition,
   summarizeSession,
 } from "./shell-model"
@@ -45,6 +47,21 @@ test("session panel summarizes shown waiting, running and pinned sessions", () =
   expect(sessionPanelSummary(rows, undefined)).toBe("1 waiting · 1 running · 1 pinned")
   expect(sessionPanelSummary([session()], view({ requests: [{ kind: "permission", id: "per_1", action: "shell", resources: ["bun test *"], askedAt: 0 }] }))).toBe("1 waiting · 0 running · 0 pinned")
   expect(sessionPanelSummary([], undefined)).toBe("0 waiting · 0 running · 0 pinned")
+})
+
+test("session navigation prioritizes needs action, running, pinned, then remaining sessions stably", () => {
+  const rows = [session({ id: "idle" }), session({ id: "pinned", pinnedAt: 2 }), session({ id: "running", running: true, pinnedAt: 3 }), session({ id: "waiting", attention: true, running: true }), session({ id: "idle2" })]
+  expect(prioritizePanelSessions(rows, undefined).map((item) => item.id)).toEqual(["waiting", "running", "pinned", "idle", "idle2"])
+  expect(rows.map((item) => item.id)).toEqual(["idle", "pinned", "running", "waiting", "idle2"])
+  expect(prioritizePanelSessions([session({ id: "idle" }), session()], view({ requests: [{ kind: "permission", id: "per_1", action: "shell", resources: [], askedAt: 0 }] })).map((item) => item.id)).toEqual(["ses_a", "idle"])
+})
+
+test("Session companion reports only current measured context, effective autonomy and active goal", () => {
+  const model = { providerID: "openai", id: "model" }
+  const current = view({ model, contextWindow: { model, used: 24_000, limit: 128_000 }, autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal: { text: "Ship", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 5 } } })
+  expect(sessionCompanionSummary(current)).toMatchObject({ contextLabel: "19% used · 81% left", contextTokens: "24K / 128K tokens", contextFraction: 24_000 / 128_000, autonomyLabel: "Autonomous Manual", goalText: "Ship", goalIteration: 2 })
+  expect(sessionCompanionSummary(undefined)).toBeUndefined()
+  expect(sessionCompanionSummary(view())?.contextLabel).toBeUndefined()
 })
 
 describe("screen-specific workspace composition", () => {

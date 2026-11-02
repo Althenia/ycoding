@@ -73,6 +73,7 @@ import { LoadingPlaceholder } from "./loading"
 import { SubagentBar, TeamAnswerForm } from "./subagent-bar"
 import { createRowVirtualizer, sameKeys, scrollParent } from "./virtual-rows"
 import { TeamHeading, TeamView } from "./team-view"
+import { requestAutonomousDialog } from "./autonomous-dialog"
 import { isManagedSubagent, siblingTargets, teamActiveCount, teamActivityLabel } from "./team-model"
 import {
   remoteSurfaceComposition,
@@ -80,6 +81,8 @@ import {
   sessionChips,
   sessionNeedsAttention,
   sessionPanelSummary,
+  prioritizePanelSessions,
+  sessionCompanionSummary,
   summarizeSession,
   views,
   type RemoteView,
@@ -448,13 +451,14 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const paletteSessionSelected = () => selected() && (view() !== "/remote/session" || (ownsSessionDevice() && ownsSessionRoute()))
   const teamContent = () => <TeamView
     data={() => state().team!} currentSessionID={state().activeSessionID ?? ""} now={Date.now} sheet={phoneLayout()}
+    sessionSummary={() => sessionCompanionSummary(state().view, activeSession()?.model)} onOpenAutonomy={requestAutonomousDialog}
     onClose={closeTeam} onOpen={openFromTeam} onCancel={remote.store.cancelSubagent} onAnswer={remote.store.answerSubagent} onPin={remote.store.pinSubagent} onContinueRecovery={remote.store.continueRecovery}
     onLoadOlder={remote.store.loadMoreTeam} onViewShell={remote.store.teamShellOutput} onKillShell={remote.store.killTeamShell}
     onOpenSideChat={openFromTeam} onCreateSideChat={remote.store.createSideChat} onLoadOlderSideChats={remote.store.loadMoreSideChats} />
 
   return (
     <Show when={entry() === "workspace"} fallback={<SignInScreen />}>
-      <div ref={bindKeyboardChrome} class={`app app--${viewClass()}${view() === "/remote/session" && selected() && ownsSessionDevice() ? " app--selected" : view() === "/remote" ? " app--empty" : ""}${view() === "/remote/session" && managedChild() ? " app--managed-child" : ""}${view() === "/remote/session" && selectedLoading() ? " app--selected-loading" : ""}${railCollapsed() ? " app--rail-collapsed" : ""}${officeShown() ? " app--office" : ""}${showNewSession() ? " app--new-session" : ""}`}>
+      <div ref={bindKeyboardChrome} class={`app app--${viewClass()}${view() === "/remote/session" && selected() && ownsSessionDevice() ? " app--selected" : view() === "/remote" ? " app--empty" : ""}${view() === "/remote/session" && managedChild() ? " app--managed-child" : ""}${view() === "/remote/session" && selectedLoading() ? " app--selected-loading" : ""}${railCollapsed() ? " app--rail-collapsed" : ""}${officeShown() ? " app--office" : ""}${showNewSession() ? " app--new-session" : ""}${teamVisible() && !phoneLayout() && view() === "/remote/session" && selected() ? " app--team-open" : ""}`}>
         <a class="skip-link" href="#remote-main">Skip to content</a>
         <aside id="session-rail" class="workspace__rail" aria-label="Workspace navigation">
           <div class="workspace__rail-head">
@@ -465,7 +469,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           </div>
           <div class="workspace__rail-navigation">
             <PrimaryNav view={view()} />
-            <div class="workspace-new-session"><NewSessionButton labeled disabled={!canCreateSession()} onClick={() => openNewSession()} /></div>
+            <div class="workspace-new-session"><NewSessionButton labeled newChat disabled={!canCreateSession()} onClick={() => openNewSession()} /></div>
             <ResumeSession view={view()} />
           </div>
           <div ref={rail} class="workspace__rail-body" inert={railCollapsed()}>
@@ -1041,7 +1045,7 @@ function SessionPanel(props: {
             <SessionRailList
               project={props.project}
               onVirtualizer={(rows) => { feedRows = rows }}
-              sessions={state().sessions}
+              sessions={state().sessionFilter === "all" ? prioritizePanelSessions(state().sessions, state().view) : state().sessions}
               readOnly={state().sessionRowsStale === true}
               busy={state().sessionRowsStale === true}
               onSelectSession={props.onSelectSession}
@@ -1130,6 +1134,24 @@ function SessionTableRows(props: {
   )
 }
 
+function SessionPin(props: { readonly session: SessionInfoView; readonly disabled?: boolean }): JSX.Element {
+  const remote = useRemote()
+  const [pending, setPending] = createSignal(false)
+  const [error, setError] = createSignal("")
+  const pinned = () => props.session.pinnedAt !== undefined
+  const label = () => `${pinned() ? "Unpin" : "Pin"} ${props.session.title}`
+  return <span class="session-pin">
+    <button type="button" class="session-pin__button" aria-label={label()} title={label()} aria-pressed={pinned()} disabled={props.disabled || pending()} onClick={async () => {
+      setPending(true)
+      setError("")
+      const result = await remote.store.pinSession(props.session.id, !pinned())
+      if (result.status !== "ok") setError(result.message)
+      setPending(false)
+    }}><Icon name="pin" size={16} /></button>
+    <Show when={error()}>{(message) => <span role="alert" class="session-pin__error">{message()}</span>}</Show>
+  </span>
+}
+
 function SessionRow(props: {
   readonly project: SessionProjectLookup
   readonly session: SessionInfoView
@@ -1141,7 +1163,7 @@ function SessionRow(props: {
   const active = () => remote.state().activeSessionID === props.session.id || remote.state().selectedSessionInfo?.parentID === props.session.id
   const chips = () => sessionChips(props.session, remote.state().view, props.project(props.session.id))
   return (
-    <button
+    <div class="session-row-wrap"><button
       type="button"
       class={`session-row${active() ? " session-row--active" : ""}`}
       data-session-id={props.session.id}
@@ -1169,7 +1191,7 @@ function SessionRow(props: {
       <Show when={sessionNeedsAttention(props.session, remote.state().view)}>
         <span class="attention-dot session-row__attention" aria-hidden="true" />
       </Show>
-    </button>
+    </button><SessionPin session={props.session} disabled={props.readOnly} /></div>
   )
 }
 
@@ -1204,6 +1226,7 @@ function SessionSummaryRow(props: {
       <span class="sessions-table__status" role="cell">
         <For each={chips().filter((chip, index) => index === 0 || chip.label.startsWith("review ") || chip.label.startsWith("Master · ") || chip.label.startsWith("Member · "))}>{(chip) => <Chip label={chip.label} tone={chip.tone} />}</For>
         <Show when={chips().length === 0}><Chip label="Idle" tone="neutral" /></Show>
+        <SessionPin session={props.session} disabled={props.readOnly} />
       </span>
       <span class="sessions-table__updated" role="cell">
         {summary().updatedAt === undefined ? "Not reported" : new Date(props.session.updatedAt).toLocaleString()}

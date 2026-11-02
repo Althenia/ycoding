@@ -1499,22 +1499,26 @@ describe("operation mapping", () => {
     expect(test.calls.some((call) => call.method === "subagentCancel")).toBe(false)
   })
 
-  test("remote pin operations require a verified direct managed child and use its Location", async () => {
+  test("remote pin operations require an admitted root or verified managed child and use its Location", async () => {
     const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, directory: "/child", parentID: "ses_root", agent: "general" }),
       sessionInfo("ses_foreign", { updated: 3, parentID: "ses_other", agent: "general" }), sessionInfo("ses_btw", { updated: 4, parentID: "ses_root", agent: "btw" })]
     const test = await harness({ sessions })
     const run = (sessionID: string, operation: "session.pin" | "session.unpin") => executeRemoteOperation({
       request: { ...request(operation), sessionID }, sessions: test.registry, subscriptions: test.subscriptions, local: test.local,
     })
+    expect(valueOf(await run("ses_root", "session.pin"))).toBeNull()
+    expect(valueOf(await run("ses_root", "session.unpin"))).toBeNull()
     expect(valueOf(await run("ses_child", "session.pin"))).toBeNull()
     expect(valueOf(await run("ses_child", "session.unpin"))).toBeNull()
     expect(test.calls.filter((call) => call.method === "pin" || call.method === "unpin")).toEqual([
+      { method: "pin", args: ["ses_root", { directory: "/work" }] },
+      { method: "unpin", args: ["ses_root", { directory: "/work" }] },
       { method: "pin", args: ["ses_child", { directory: "/child" }] },
       { method: "unpin", args: ["ses_child", { directory: "/child" }] },
     ])
-    for (const [sessionID, code] of [["ses_root", "forbidden"], ["ses_foreign", "session_not_allowed"], ["ses_btw", "forbidden"], ["ses_missing", "session_not_allowed"]] as const)
+    for (const [sessionID, code] of [["ses_foreign", "session_not_allowed"], ["ses_btw", "forbidden"], ["ses_missing", "session_not_allowed"]] as const)
       expect(errorOf(await run(sessionID, "session.pin")).code).toBe(code)
-    expect(test.calls.filter((call) => call.method === "pin" || call.method === "unpin")).toHaveLength(2)
+    expect(test.calls.filter((call) => call.method === "pin" || call.method === "unpin")).toHaveLength(4)
   })
 
   test("Team shells expose only root-family owners and kill no foreign or ownerless shell", async () => {

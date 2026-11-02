@@ -757,6 +757,12 @@ body:has(.app) {
 
 /* No trailing status column: at the 288px rail a trailing chip left the session
    title about 60px, so the state chips sit on the meta line instead. */
+.session-row-wrap { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+.session-pin { position: relative; display: inline-flex; align-items: center; }
+.session-pin__button { display: grid; place-items: center; inline-size: 44px; block-size: 44px; border: 0; border-radius: var(--yc-radius-md); background: transparent; color: var(--yc-text-muted); cursor: pointer; }
+.session-pin__button[aria-pressed="true"] { color: var(--yc-text); background: var(--yc-green-soft); }
+.session-pin__button:disabled { cursor: default; opacity: 0.5; }
+.session-pin__error { position: absolute; inset-block-start: 100%; inset-inline-end: 0; z-index: 2; inline-size: 16rem; padding: var(--yc-space-2); border-radius: var(--yc-radius-md); background: var(--yc-surface); color: var(--yc-text); }
 .session-row {
   display: grid;
   align-items: start;
@@ -1351,6 +1357,12 @@ body:has(.app) {
 
 .app--conversation.app--selected:not(.app--office, .app--new-session) .workspace__scroll {
   padding-block-end: var(--yc-space-20);
+}
+
+@media (max-width: 767px) {
+  .app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .conversation-jump-slot {
+    block-size: var(--yc-space-16);
+  }
 }
 
 @media (min-width: 1024px) {
@@ -2340,6 +2352,9 @@ body:has(.app) {
   transition: opacity var(--yc-dur-base) var(--yc-ease-standard), transform var(--yc-dur-base) var(--yc-ease-standard);
 }
 .team-control__panel.team-control--exiting { pointer-events: none; }
+@media (min-width: 1280px) {
+  .app--team-open .workspace:not(.workspace--project) { padding-inline-end: calc(29rem + 2 * var(--yc-space-4)); }
+}
 :root[data-motion="on"] .team-control__panel.team-control--entering { opacity: 0; transform: translateY(8px); }
 :root[data-motion="on"] .team-control__panel.team-control--exiting { opacity: 0; transform: translateY(-8px); }
 :root:not([data-motion="on"]) .team-control__panel.team-control--exiting { content-visibility: hidden; }
