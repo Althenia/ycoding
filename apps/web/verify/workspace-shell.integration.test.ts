@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { launchBrowser } from "./cdp"
+import { join } from "node:path"
 
 const port = 4276
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -27,6 +28,32 @@ afterAll(async () => {
 })
 
 describe("quiet workspace", () => {
+  for (const [width, height] of [[1440, 900], [390, 844]] as const) for (const theme of ["light", "dark"] as const) {
+    test(`session navigation shows priority counts and filters at ${width} in ${theme}`, async () => {
+      const page = await requireBrowser().openPage()
+      try {
+        await page.setViewport(width, height)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&theme=${theme}`)
+        await until(page, `document.querySelector('.composer-resident textarea') !== null`)
+        if (width < 768) await page.evaluate(`document.querySelector('[aria-label="Open sessions"]').click()`)
+        const panel = width < 768 ? ".overlay--sessions-sheet" : ".workspace__rail"
+        await until(page, `document.querySelector('${panel} .session-panel__summary')`)
+        expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${panel} .session-filters button')].map(button => button.textContent.trim())`)).toEqual(["All", "Waiting", "Running", "Idle"])
+        expect(await page.evaluate<string>(`document.querySelector('${panel} .session-panel__summary').textContent`)).toMatch(/\d+ waiting · \d+ running · \d+ pinned/)
+        await page.evaluate(`document.querySelector('${panel} .session-filters button:nth-child(2)').click()`)
+        await until(page, `document.querySelector('${panel} .session-filters button:nth-child(2)')?.getAttribute('aria-pressed') === 'true'`)
+        await page.evaluate(`document.querySelector('${panel} .session-filters button:first-child').click()`)
+        await until(page, `document.querySelector('${panel} .session-filters button:first-child')?.getAttribute('aria-pressed') === 'true'`)
+        if (width < 768) {
+          await page.pressEscape()
+          await until(page, `document.querySelector('.overlay--sessions-sheet') === null`)
+        }
+        await page.evaluate(`document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove()`)
+        const directory = process.env.YCODING_WEB_CAPTURE_DIR
+        if (directory) await Bun.write(join(directory, `accepted-ui-unobscured-${width}-${theme}-${crypto.randomUUID()}.png`), Buffer.from(await page.screenshot(), "base64"))
+      } finally { await page.close() }
+    }, 30_000)
+  }
   test("keeps the machine state unknown while the account read is pending", async () => {
     const page = await requireBrowser().openPage()
     try {

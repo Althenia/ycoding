@@ -7,6 +7,42 @@ if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromi
 let server: ReturnType<typeof Bun.spawn> | undefined
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
 
+test("a draft and attachments remain editable without an available repository", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1&workspaces=recoverable`)
+    await wait(page, `document.querySelector('.new-session-composer [role="status"]')?.textContent.includes('No previously opened repositories')`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer textarea').disabled`)).toBe(false)
+    await type(page, ".new-session-composer textarea", "Keep this draft")
+    await page.evaluate(`(() => { const input=document.querySelector('.new-session-composer input[type=file]'); const files=new DataTransfer(); files.items.add(new File(['hello'],'draft.txt')); input.files=files.files; input.dispatchEvent(new Event('change',{bubbles:true})); })()`)
+    await wait(page, `document.querySelector('.new-session-composer .composer__attachments-summary')`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer button[aria-label="Create session"]').disabled`)).toBe(true)
+    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer [role="status"]').textContent`)).toContain("your draft stays here until a repository is chosen")
+    await page.pressKey("Enter", "Enter", 13)
+    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer textarea').value`)).toBe("Keep this draft")
+    expect(await page.evaluate<number>(`window.requestLog.filter(item => item.operation === 'session.create').length`)).toBe(0)
+    await page.evaluate(`window.remoteExposeWorkspaces(); document.querySelector('[aria-label="Refresh repositories"]').click()`)
+    await wait(page, `document.querySelector('.new-session-composer button[aria-label="Create session"]:not([disabled])')`)
+    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer textarea').value`)).toBe("Keep this draft")
+    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer .composer__attachments-summary') !== null`)).toBe(true)
+  } finally { await page.close() }
+}, 30_000)
+
+test("a file still being read survives repository selection", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1&workspaces=recoverable`)
+    await wait(page, `document.querySelector('.new-session-composer [role="status"]')?.textContent.includes('No previously opened repositories')`)
+    await page.evaluate(`(() => { const original = File.prototype.arrayBuffer; File.prototype.arrayBuffer = function() { return new Promise(resolve => { window.releaseFile = () => { File.prototype.arrayBuffer = original; void original.call(this).then(resolve) } }) }; const input = document.querySelector('.new-session-composer input[type=file]'), files = new DataTransfer(); files.items.add(new File(['hello'], 'draft.txt')); input.files = files.files; input.dispatchEvent(new Event('change', { bubbles: true })); })()`)
+    await wait(page, `typeof window.releaseFile === 'function'`)
+    await page.evaluate(`window.remoteExposeWorkspaces(); document.querySelector('[aria-label="Refresh repositories"]').click()`)
+    await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]')?.textContent.includes('YCoding')`)
+    await page.evaluate(`window.releaseFile()`)
+    await wait(page, `document.querySelector('.new-session-composer .composer__attachments-summary')`)
+    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer .composer__attachments-summary').textContent`)).toContain("1/64 files")
+  } finally { await page.close() }
+}, 30_000)
+
 beforeAll(async () => {
   server = Bun.spawn(["bun", "run", "dev", "--", "--host", "127.0.0.1", "--port", `${port}`, "--strictPort"], { cwd: import.meta.dir.replace(/\/verify$/, ""), env: { ...process.env, YCODING_WEB_VERIFY: "1" }, stdout: "ignore", stderr: "ignore" })
   for (let index = 0; index < 60 && !(await ready()); index++) await Bun.sleep(100)

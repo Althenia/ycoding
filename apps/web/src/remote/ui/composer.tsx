@@ -33,6 +33,7 @@ export function MiniComposer(props: {
   readonly text: string
   readonly onText: (text: string) => void
   readonly disabled?: boolean
+  readonly sendDisabled?: boolean
   readonly running?: boolean
   readonly allowEmpty?: boolean
   readonly onSubmit: (value: ComposerSubmission) => void | boolean | Promise<void | boolean>
@@ -45,9 +46,10 @@ export function MiniComposer(props: {
   const [drafts, setDrafts] = createSignal<Record<string, { readonly agent?: string; readonly attachments: readonly ComposerAttachment[]; readonly parts: readonly MentionPart[] }>>({})
   const emptyAttachments: readonly ComposerAttachment[] = []
   const emptyParts: readonly MentionPart[] = []
-  const draft = () => drafts()[modelKey() ?? ""]
+  const draftKey = () => props.allowEmpty ? "landing" : modelKey()
+  const draft = () => drafts()[draftKey() ?? ""]
   const updateDraft = (update: (current: { readonly agent?: string; readonly attachments: readonly ComposerAttachment[]; readonly parts: readonly MentionPart[] }) => { readonly agent?: string; readonly attachments: readonly ComposerAttachment[]; readonly parts: readonly MentionPart[] }) => {
-    const key = modelKey()
+    const key = draftKey()
     if (key) setDrafts((current) => ({ ...current, [key]: update(current[key] ?? { attachments: emptyAttachments, parts: emptyParts }) }))
   }
   const agent = () => draft()?.agent
@@ -299,15 +301,18 @@ export function MiniComposer(props: {
     })
   })
   createEffect(() => {
-    const key = targetKey()
+    draftKey()
     attachmentGeneration++
+    onCleanup(() => { attachmentGeneration++ })
+  })
+  createEffect(() => {
+    const key = targetKey()
     if (key) untrack(() => void remote.store.loadCatalog(props.target!))
     rememberedVariants.clear()
     setFileResult([])
     setAttachmentError(undefined)
     setMobileOpen(false)
     untrack(() => closeContext())
-    onCleanup(() => { attachmentGeneration++ })
   })
   createEffect(() => {
     const target = props.target
@@ -423,7 +428,7 @@ export function MiniComposer(props: {
     }
   }
   const send = async () => {
-    if (props.disabled || reading() || (!props.allowEmpty && !props.text.trim() && !attachments().length)) return
+    if (props.disabled || props.sendDisabled || reading() || (!props.allowEmpty && !props.text.trim() && !attachments().length)) return
     const chosenAgent = selectedAgent()
     const chosenModel = selectedModel()
     const pendingAgent = current()?.agent === chosenAgent ? undefined : chosenAgent
@@ -460,7 +465,7 @@ export function MiniComposer(props: {
     const submittedParts = parts()
     const submittedAttachments = attachments()
     const submittedAgent = agent()
-    const submittedKey = modelKey()
+    const submittedKey = draftKey()
     const submittedScope = observedModelScope
     try {
       const accepted = requested.kind === "command"
@@ -570,7 +575,7 @@ export function MiniComposer(props: {
         <span class="composer__spacer" />
         <div class="composer__actions"><input ref={fileInput} class="composer__file-input" type="file" multiple aria-label="Choose files" onChange={(event) => { void addFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = "" }} /><button type="button" class="composer__attach" aria-label="Attach files" title="Attach files" disabled={props.disabled || reading() > 0} onClick={() => fileInput?.click()}><Icon name="plus" /></button><Show when={!props.allowEmpty}><button type="button" class="composer__delivery-toggle" aria-label={delivery() === "steer" ? "Steer mode; switch to Queue" : "Queue mode; switch to Steer"} title={delivery() === "steer" ? "Steer: switch to Queue" : "Queue: switch to Steer"} aria-pressed={delivery() === "queue"} onClick={() => setDelivery(delivery() === "steer" ? "queue" : "steer")}><Icon name={delivery()} /></button></Show>
           <Show when={props.running && props.onInterrupt}><button type="button" class="mini-composer__interrupt" aria-label="Interrupt the running step" onClick={props.onInterrupt}><Icon name="stop" /></button></Show>
-          <button type="button" class="mini-composer__send" aria-label={props.allowEmpty ? "Create session" : "Send prompt"} disabled={props.disabled || reading() > 0 || (!props.allowEmpty && !props.text.trim() && !attachments().length)} onClick={() => void send()}><Icon name="send" /></button></div>
+          <button type="button" class="mini-composer__send" aria-label={props.allowEmpty ? "Create session" : "Send prompt"} disabled={props.disabled || props.sendDisabled || reading() > 0 || (!props.allowEmpty && !props.text.trim() && !attachments().length)} onClick={() => void send()}><Icon name="send" /></button></div>
         </div>
       </div>
     </div>

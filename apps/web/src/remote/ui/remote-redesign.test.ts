@@ -11,6 +11,7 @@ import {
   filterSessions,
   sessionChips,
   sessionNeedsAttention,
+  sessionPanelSummary,
   remoteSurfaceComposition,
   summarizeSession,
 } from "./shell-model"
@@ -37,6 +38,13 @@ const view = (patch: Partial<SessionView> = {}): SessionView => ({
   requests: [],
   unhandledEvents: 0,
   ...patch,
+})
+
+test("session panel summarizes shown waiting, running and pinned sessions", () => {
+  const rows = [session({ attention: true, running: true, pinnedAt: 1 }), session({ id: "ses_b", running: true }), session({ id: "ses_c" })]
+  expect(sessionPanelSummary(rows, undefined)).toBe("1 waiting · 1 running · 1 pinned")
+  expect(sessionPanelSummary([session()], view({ requests: [{ kind: "permission", id: "per_1", action: "shell", resources: ["bun test *"], askedAt: 0 }] }))).toBe("1 waiting · 0 running · 0 pinned")
+  expect(sessionPanelSummary([], undefined)).toBe("0 waiting · 0 running · 0 pinned")
 })
 
 describe("screen-specific workspace composition", () => {
