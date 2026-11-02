@@ -69,7 +69,7 @@ export function NewSessionComposer(props: { readonly workspaceID?: string; reado
     <div class="new-session-composer__header"><h2 class="visually-hidden">New session</h2><div class="new-session-composer__brand"><BrandMark /></div></div>
     <Show when={!connected()}><p role="status">Connect to an online machine to create a session.</p></Show>
     <Show when={workspaceStatus() === "error"}><p role="alert">{listed().error?.message ?? "Repositories could not be loaded."}</p></Show>
-    <Show when={workspaceStatus() === "ready" && !workspaces().length}><p role="status">No previously opened repositories are available. Open a repository locally once, then refresh.</p></Show>
+    <Show when={connected() && workspaceStatus() === "ready" && !workspace()}><p role="status">{workspaces().length ? "Choose an available repository before sending; your draft stays here until a repository is chosen." : "No previously opened repositories are available. Open a repository locally once, then refresh; your draft stays here until a repository is chosen."}</p></Show>
     <Show when={props.workspaceID !== undefined && workspaceStatus() === "ready" && !workspace()}><p role="alert">The originating repository is unavailable on this machine. <Link to="/remote" class="text-link">Choose another repository</Link>.</p></Show>
     <div class="new-session-composer__repository"><Show when={workspaceStatus() === "loading"} fallback={<ComposerPicker label="Repository" icon="folder" placeholder="Choose repository" value={workspaceID()} options={workspaces().map((item) => ({ value: item.id, label: labels().get(item.id) ?? item.name ?? "Repository" }))} disabled={!connected() || props.workspaceID !== undefined} onChange={setWorkspaceID} />}><LoadingPlaceholder kind="repository" label="Loading previously opened repositories…" /></Show>
       <button type="button" class="new-session-composer__refresh" aria-label="Refresh repositories" title="Refresh repositories" disabled={!connected() || workspaceStatus() === "loading"} onClick={() => void listed().refetch()}><Icon name="refresh" /></button>
@@ -81,6 +81,6 @@ export function NewSessionComposer(props: { readonly workspaceID?: string; reado
       <button class="button button--primary" type="button" disabled={!connected()} onClick={() => void retry()}>Retry</button>
       <button class="button button--secondary" type="button" onClick={() => remote.store.dismissSessionCreation()}>{creation()?.status === "unknown" ? "Dismiss" : "Choose another repository"}</button>
     </div></Show>
-    <MiniComposer target={workspace() ? { workspaceID: workspaceID() } : undefined} text={text()} onText={setText} disabled={disabled()} allowEmpty onSubmit={create} />
+    <MiniComposer target={workspace() ? { workspaceID: workspaceID() } : undefined} text={text()} onText={setText} disabled={!!creation()} sendDisabled={disabled()} allowEmpty onSubmit={create} />
   </section>
 }

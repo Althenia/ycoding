@@ -99,6 +99,13 @@ export function sessionNeedsAttention(session: SessionInfoView, view: SessionVie
   return view !== undefined && view.id === session.id && view.requests.length > 0
 }
 
+export function sessionPanelSummary(sessions: readonly SessionInfoView[], view: SessionView | undefined): string {
+  const waiting = sessions.filter((session) => sessionNeedsAttention(session, view)).length
+  const running = sessions.filter((session) => session.running === true && !sessionNeedsAttention(session, view)).length
+  const pinned = sessions.filter((session) => session.pinnedAt !== undefined).length
+  return `${waiting} waiting · ${running} running · ${pinned} pinned`
+}
+
 /**
  * The chips one session row and the selected session's header row show: the status the
  * device reported, plus the fact that the loaded view is holding an unanswered approval.

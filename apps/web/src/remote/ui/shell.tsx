@@ -79,6 +79,7 @@ import {
   connectionStripView,
   sessionChips,
   sessionNeedsAttention,
+  sessionPanelSummary,
   summarizeSession,
   views,
   type RemoteView,
@@ -1023,6 +1024,10 @@ function SessionPanel(props: {
               onInput={(event) => remote.store.searchSessions(event.currentTarget.value)}
             />
           </label>
+          <div class="session-filters" role="group" aria-label="Session status">
+            <For each={["all", "waiting", "running", "idle"] as const}>{(value) => <button type="button" class={`session-filters__option${state().sessionFilter === value ? " session-filters__option--active" : ""}`} aria-pressed={state().sessionFilter === value} disabled={state().transport.kind !== "open" || cached() !== undefined} onClick={() => remote.store.searchSessions(state().sessionQuery, value)}>{value[0]?.toUpperCase()}{value.slice(1)}</button>}</For>
+          </div>
+          <Show when={state().sessions.length > 0}><p class="panel__note session-panel__summary" role="status">{sessionPanelSummary(state().sessions, state().view)} shown</p></Show>
           <Show when={state().sessionListNotice}>{(notice) => <p class="panel__note" role="status" aria-label="Session list status">{notice()}</p>}</Show>
           <Show when={state().sessions.length > 0} fallback={
             <Show when={state().sessionListStatus === "loading"} fallback={<NoSessionsState />}>

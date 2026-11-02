@@ -827,6 +827,8 @@ function createFixtureStore(): Fixture {
     { id: "workspace_fixture", projectID: "prj_remote", directory: "/workspace/ycoding", name: "YCoding" },
     { id: "workspace_other", projectID: "prj_other", directory: "/workspace/other", name: "Other repository" },
   ]
+  let workspacesExposed = false
+  Object.assign(window, { remoteExposeWorkspaces: () => { workspacesExposed = true } })
   const createdSessions = new Map<string, {
     id: string
     title: string
@@ -1020,7 +1022,7 @@ function createFixtureStore(): Fixture {
         const group = groupOf(session)
         return [group.id, group] as const
       })).values()] } }
-      return { status: "ok", value: { data: accountParams.get("workspaces") === "empty" ? [] : workspaces } }
+      return { status: "ok", value: { data: accountParams.get("workspaces") === "empty" || accountParams.get("workspaces") === "recoverable" && !workspacesExposed ? [] : workspaces } }
     }
     if (operation === "session.create") {
       const workspace = workspaces.find((item) => item.id === input?.workspace)
