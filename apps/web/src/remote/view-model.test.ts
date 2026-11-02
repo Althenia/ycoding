@@ -50,6 +50,13 @@ test("family task activity separates running, waiting and supervising ownership"
   expect(familyTaskActivity([{ state: "completed" }])).toEqual({ running: false, waiting: 0, supervising: false })
 })
 
+test("project chips follow the pin and precede autonomy", () => {
+  const base = { id: "ses_a", title: "A", status: "idle" as const, pinned: true, autonomy: "normal" as const, permissions: "manual" as const, guardrails: "manual" as const, answers: "manual" as const }
+  expect(sessionStateChips({ ...base, projectRole: "master", projectName: "Atlas" }).map((chip) => chip.label)).toEqual(["Pinned", "Master · Atlas", "Autonomous Manual"])
+  expect(sessionStateChips({ ...base, projectRole: "member", projectName: "Atlas" })).toContainEqual({ label: "Member · Atlas", tone: "neutral" })
+  expect(sessionStateChips(base).map((chip) => chip.label)).toEqual(["Pinned", "Autonomous Manual"])
+})
+
 test("only known available models without offered effort explain their settings", () => {
   expect(modelEffortNotice({ known: true, blocked: false, variants: 0 })).toBe("This model has no adjustable effort; it uses its own settings.")
   expect(modelEffortNotice({ known: true, blocked: false, variants: 1 })).toBeUndefined()

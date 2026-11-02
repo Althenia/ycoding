@@ -48,6 +48,7 @@ import { ProviderConnect } from "./provider-connect"
 import { DotsConnection } from "./dots-connection"
 import type { CatalogTarget } from "../catalog"
 import { ProjectsPage, ProjectsRail, ProjectPanel, ProjectsDialogs, ProjectStatus, ProjectFreshness, createProjectsData } from "./projects"
+import { projectOf } from "../coordination"
 import { UsagePage } from "./usage"
 import {
   AccountSettings,
@@ -277,6 +278,10 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const openFromTeam = (sessionID: string) => { closeTeam(); openSession(sessionID) }
   const openCreatedSession = (sessionID: string) => { setNewSessionVisited(false); openSession(sessionID) }
   const projects = createProjectsData(() => view() === "/remote/projects" || view() === "/remote/session", openSession)
+  const sessionProject = (id: string) => {
+    const project = projects.ready() ? projectOf(projects.groups(), id) : undefined
+    return project === undefined ? undefined : { role: project.role, name: project.detail.name }
+  }
   const projectContext = () => view() === "/remote/session" ? projects.membership() : undefined
   const [projectSheet, setProjectSheet] = createSignal(false)
   let projectTrigger: HTMLButtonElement | undefined
@@ -467,7 +472,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
               <ProjectsRail data={projects} onNew={newProject} />
             </Show>
             <Show when={composition().showSessionRail && !projectContext()}>
-              <SessionPanel canCreateSession={canCreateSession()} onNewSession={() => openNewSession("sidebar")} onSelectSession={openSession} />
+              <SessionPanel project={sessionProject} canCreateSession={canCreateSession()} onNewSession={() => openNewSession("sidebar")} onSelectSession={openSession} />
             </Show>
             <Show when={view() === "/remote/sessions"}><WorkspaceNav /></Show>
           </div>
@@ -531,6 +536,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                   <RoutePanel active={view() === "/remote/session" && officeShown() && selected()}><OfficePresentation office={office} onSelectSession={openSession} /></RoutePanel>
                   <RoutePanel active={view() === "/remote/sessions"}>
                     <SessionsPage
+                      project={sessionProject}
                       canCreateSession={canCreateSession()}
                       onNewSession={() => openNewSession()}
                       onNewWorkspaceSession={() => openNewSession("sessions")}
@@ -617,6 +623,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
             setNavOpen(false)
           }}>
             <SessionPanel
+              project={sessionProject}
               canCreateSession={canCreateSession()}
               onNewSession={() => openNewSession("sidebar")}
               onSelectSession={openSession}
@@ -940,6 +947,7 @@ function ConnectionStrip(): JSX.Element {
 }
 
 function SessionPanel(props: {
+  readonly project: SessionProjectLookup
   readonly canCreateSession: boolean
   readonly onNewSession: () => void
   readonly onSelectSession: (sessionID: string) => void
@@ -992,7 +1000,7 @@ function SessionPanel(props: {
               {(view) => (
                 <>
                   <p class="panel__note">{view().note}</p>
-                  <SessionRailList sessions={state().sessions} readOnly onSelectSession={props.onSelectSession} onVirtualizer={(rows) => { feedRows = rows }} />
+                  <SessionRailList project={props.project} sessions={state().sessions} readOnly onSelectSession={props.onSelectSession} onVirtualizer={(rows) => { feedRows = rows }} />
                 </>
               )}
             </Show>
@@ -1026,6 +1034,7 @@ function SessionPanel(props: {
             </Show>
           }>
             <SessionRailList
+              project={props.project}
               onVirtualizer={(rows) => { feedRows = rows }}
               sessions={state().sessions}
               readOnly={state().sessionRowsStale === true}
@@ -1042,7 +1051,10 @@ function SessionPanel(props: {
   )
 }
 
+type SessionProjectLookup = (id: string) => { readonly role: "master" | "member"; readonly name: string } | undefined
+
 function SessionRailList(props: {
+  readonly project: SessionProjectLookup
   readonly sessions: readonly SessionInfoView[]
   readonly readOnly: boolean
   readonly busy?: boolean
@@ -1071,7 +1083,7 @@ function SessionRailList(props: {
           const row = rows.row(id)
           return (
             <div class="session-list__row" role="listitem" aria-posinset={row.index() + 1} aria-setsize={keys().length} data-index={row.index()} style={{ "inset-block-start": `${row.top()}px` }} ref={row.measure}>
-              <SessionRow session={byID().get(id)!} readOnly={props.readOnly} onSelectSession={props.onSelectSession} onNavigate={props.onNavigate} />
+              <SessionRow project={props.project} session={byID().get(id)!} readOnly={props.readOnly} onSelectSession={props.onSelectSession} onNavigate={props.onNavigate} />
             </div>
           )
         }}
@@ -1081,6 +1093,7 @@ function SessionRailList(props: {
 }
 
 function SessionTableRows(props: {
+  readonly project: SessionProjectLookup
   readonly sessions: readonly SessionInfoView[]
   readonly readOnly: boolean
   readonly onSelectSession: (sessionID: string) => void
@@ -1105,7 +1118,7 @@ function SessionTableRows(props: {
       <For each={rows.rendered()}>
         {(id) => {
           const row = rows.row(id)
-          return <SessionSummaryRow session={byID().get(id)!} readOnly={props.readOnly} onSelectSession={props.onSelectSession} rowIndex={row.index() + 2} top={row.top()} measure={row.measure} />
+          return <SessionSummaryRow project={props.project} session={byID().get(id)!} readOnly={props.readOnly} onSelectSession={props.onSelectSession} rowIndex={row.index() + 2} top={row.top()} measure={row.measure} />
         }}
       </For>
     </div>
@@ -1113,6 +1126,7 @@ function SessionTableRows(props: {
 }
 
 function SessionRow(props: {
+  readonly project: SessionProjectLookup
   readonly session: SessionInfoView
   readonly readOnly?: boolean
   readonly onSelectSession: (sessionID: string) => void
@@ -1120,7 +1134,7 @@ function SessionRow(props: {
 }): JSX.Element {
   const remote = useRemote()
   const active = () => remote.state().activeSessionID === props.session.id || remote.state().selectedSessionInfo?.parentID === props.session.id
-  const chips = () => sessionChips(props.session, remote.state().view)
+  const chips = () => sessionChips(props.session, remote.state().view, props.project(props.session.id))
   return (
     <button
       type="button"
@@ -1143,7 +1157,7 @@ function SessionRow(props: {
         <span class="session-row__meta">
           <span title={props.session.directory}>{sessionProjectLabel(props.session)}</span>
           <span class="session-row__status">
-            <For each={chips().filter((chip, index) => index === 0 || chip.label.startsWith("review "))}>{(chip) => <Chip label={chip.label} tone={chip.tone} />}</For>
+            <For each={chips().filter((chip, index) => index === 0 || chip.label.startsWith("review ") || chip.label.startsWith("Master · ") || chip.label.startsWith("Member · "))}>{(chip) => <Chip label={chip.label} tone={chip.tone} />}</For>
           </span>
         </span>
       </span>
@@ -1155,6 +1169,7 @@ function SessionRow(props: {
 }
 
 function SessionSummaryRow(props: {
+  readonly project: SessionProjectLookup
   readonly session: SessionInfoView
   readonly readOnly?: boolean
   readonly onSelectSession: (sessionID: string) => void
@@ -1163,8 +1178,8 @@ function SessionSummaryRow(props: {
   readonly measure: (element: HTMLElement) => void
 }): JSX.Element {
   const remote = useRemote()
-  const summary = () => summarizeSession(props.session, remote.state().view)
-  const chips = () => sessionChips(props.session, remote.state().view)
+  const summary = () => summarizeSession(props.session, remote.state().view, props.project(props.session.id))
+  const chips = () => sessionChips(props.session, remote.state().view, props.project(props.session.id))
   return (
     <div class="sessions-table__row" role="row" aria-rowindex={props.rowIndex} data-session-id={props.session.id} data-index={props.rowIndex - 2} style={{ "inset-block-start": `${props.top}px` }} ref={props.measure}>
       <span class="sessions-table__title" role="cell">
@@ -1182,7 +1197,7 @@ function SessionSummaryRow(props: {
         </button>
       </span>
       <span class="sessions-table__status" role="cell">
-        <For each={chips().filter((chip, index) => index === 0 || chip.label.startsWith("review "))}>{(chip) => <Chip label={chip.label} tone={chip.tone} />}</For>
+        <For each={chips().filter((chip, index) => index === 0 || chip.label.startsWith("review ") || chip.label.startsWith("Master · ") || chip.label.startsWith("Member · "))}>{(chip) => <Chip label={chip.label} tone={chip.tone} />}</For>
         <Show when={chips().length === 0}><Chip label="Idle" tone="neutral" /></Show>
       </span>
       <span class="sessions-table__updated" role="cell">
@@ -1482,6 +1497,7 @@ function SessionsTopAnchor(props: { readonly slot: HTMLElement; readonly scroll:
 }
 
 function SessionsPage(props: {
+  readonly project: SessionProjectLookup
   readonly canCreateSession: boolean
   readonly onNewSession: () => void
   readonly onNewWorkspaceSession: () => void
@@ -1574,6 +1590,7 @@ function SessionsPage(props: {
                     <span role="columnheader">Updated</span>
                   </div>
                   <SessionTableRows
+                    project={props.project}
                     onVirtualizer={(rows) => { feedRows = rows }}
                     sessions={sessions()}
                     readOnly={cached() !== undefined || remote.state().sessionRowsStale === true}

@@ -13,7 +13,7 @@ import type { ModelRefView } from "../projection"
 import { applyMention, autocompleteBound, effortLabel, modelSelection, modelSelectionKey, modelSpeeds, needsCatalogRead, optionsForTrigger, promptGenerateModes, queuedDraftDelivery, queuedPromptIndicator, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, type MentionPart, type PromptGenerateMode } from "./composer-logic"
 import { ComposerPicker } from "./composer-picker"
 import { containTab, createSheetFrame } from "./composer-sheet"
-import { attachmentLimit, encodeAttachment, type ComposerAttachment } from "./composer-attachment"
+import { attachmentCapacitySummary, attachmentLimit, encodeAttachment, type ComposerAttachment } from "./composer-attachment"
 import { ModelControl } from "./model-control"
 import { requestAutonomousDialog } from "./autonomous-dialog"
 import { ComposerStatus } from "./status-bar"
@@ -42,20 +42,32 @@ export function MiniComposer(props: {
   readonly metadataMount?: HTMLElement
 }): JSX.Element {
   const remote = useRemote()
-  const [agent, setAgent] = createSignal<string>()
+  const [drafts, setDrafts] = createSignal<Record<string, { readonly agent?: string; readonly attachments: readonly ComposerAttachment[]; readonly parts: readonly MentionPart[] }>>({})
+  const emptyAttachments: readonly ComposerAttachment[] = []
+  const emptyParts: readonly MentionPart[] = []
+  const draft = () => drafts()[modelKey() ?? ""]
+  const updateDraft = (update: (current: { readonly agent?: string; readonly attachments: readonly ComposerAttachment[]; readonly parts: readonly MentionPart[] }) => { readonly agent?: string; readonly attachments: readonly ComposerAttachment[]; readonly parts: readonly MentionPart[] }) => {
+    const key = modelKey()
+    if (key) setDrafts((current) => ({ ...current, [key]: update(current[key] ?? { attachments: emptyAttachments, parts: emptyParts }) }))
+  }
+  const agent = () => draft()?.agent
+  const setAgent = (value: string | undefined) => updateDraft((current) => ({ ...current, agent: value }))
   const [modelsByTarget, setModelsByTarget] = createSignal<Record<string, ModelRefView>>({})
   const [forcedModelSwitches, setForcedModelSwitches] = createSignal<Record<string, { readonly revision: number }>>({})
   const [recentModels, setRecentModels] = createSignal(readRecentModels())
   const rememberedVariants = new Map<string, string>()
   const [delivery, setDelivery] = createSignal<"steer" | "queue">("steer")
-  const [attachments, setAttachments] = createSignal<readonly ComposerAttachment[]>([])
+  const attachments = () => draft()?.attachments ?? emptyAttachments
+  const setAttachments = (value: readonly ComposerAttachment[] | ((current: readonly ComposerAttachment[]) => readonly ComposerAttachment[])) => updateDraft((current) => ({ ...current, attachments: typeof value === "function" ? value(current.attachments) : value }))
   const [attachmentError, setAttachmentError] = createSignal<string>()
   const [reading, setReading] = createSignal(0)
   const [dragging, setDragging] = createSignal(false)
-  const [parts, setParts] = createSignal<readonly MentionPart[]>([])
+  const parts = () => draft()?.parts ?? emptyParts
+  const setParts = (value: readonly MentionPart[]) => updateDraft((current) => ({ ...current, parts: value }))
   const [cursor, setCursor] = createSignal(0)
   const [fileResult, setFileResult] = createSignal<readonly FileOption[]>([])
   const [fileError, setFileError] = createSignal<string>()
+  const [fileSearching, setFileSearching] = createSignal(false)
   const [active, setActive] = createSignal(0)
   const [dismissed, setDismissed] = createSignal<string>()
   const [bound, setBound] = createSignal<number>()
@@ -156,6 +168,7 @@ export function MiniComposer(props: {
     observedModelScope = scope
     setModelsByTarget({})
     setForcedModelSwitches({})
+    setDrafts({})
   })
   createEffect(() => {
     const key = modelKey()
@@ -233,8 +246,9 @@ export function MiniComposer(props: {
   }
   const queueContextClose = () => contextClose.maybeExecute()
   const trigger = createMemo(() => suggestionTrigger(props.text, cursor(), dismissed()))
-  const options = () => trigger() ? optionsForTrigger(trigger()!.trigger, trigger()!.query, catalog(), fileResult(), !!props.target && "sessionID" in props.target) : []
-  const suggesting = () => options().length > 0 || fileError() !== undefined
+  const options = () => trigger() && !(trigger()!.trigger === "@" && fileError()) ? optionsForTrigger(trigger()!.trigger, trigger()!.query, catalog(), fileResult(), !!props.target && "sessionID" in props.target) : []
+  const searchingFiles = () => trigger()?.trigger === "@" && !!trigger()?.query.trim()
+  const suggesting = () => options().length > 0 || searchingFiles()
   const dismissSuggestions = (returnFocus = true) => {
     const match = trigger()
     if (!match) return
@@ -288,11 +302,8 @@ export function MiniComposer(props: {
     const key = targetKey()
     attachmentGeneration++
     if (key) untrack(() => void remote.store.loadCatalog(props.target!))
-    setParts([])
-    setAgent(undefined)
     rememberedVariants.clear()
     setFileResult([])
-    setAttachments([])
     setAttachmentError(undefined)
     setMobileOpen(false)
     untrack(() => closeContext())
@@ -342,10 +353,11 @@ export function MiniComposer(props: {
   const findFiles = createDebouncer((query: string, id: number) => {
     void remote.store.findFiles(props.target!, query, 50).then((result) => {
       if (id !== request) return
+      setFileSearching(false)
       if (result.status === "ok") setFileResult(result.files)
       else setFileError(result.message)
     }, () => {
-      if (id === request) setFileError("File search failed")
+      if (id === request) { setFileSearching(false); setFileError("File search failed") }
     })
   }, { wait: 220 })
   createEffect(() => {
@@ -356,9 +368,20 @@ export function MiniComposer(props: {
     setActive(0)
     setFileResult([])
     setFileError(undefined)
+    setFileSearching(false)
     if (!key || match?.trigger !== "@" || !match.query.trim()) return
+    setFileSearching(true)
     findFiles.maybeExecute(match.query, id)
   })
+  const retryFiles = () => {
+    const match = trigger()
+    if (match?.trigger !== "@" || !match.query.trim() || !targetKey()) return
+    findFiles.cancel()
+    setFileError(undefined)
+    setFileResult([])
+    setFileSearching(true)
+    findFiles.maybeExecute(match.query, ++request)
+  }
   const edit = (text: string, position: number) => {
     dismissPrediction()
     setParts(reconcileMentions(props.text, text, parts()))
@@ -436,22 +459,25 @@ export function MiniComposer(props: {
     const generation = attachmentGeneration
     const submittedParts = parts()
     const submittedAttachments = attachments()
+    const submittedAgent = agent()
+    const submittedKey = modelKey()
+    const submittedScope = observedModelScope
     try {
       const accepted = requested.kind === "command"
         ? await props.onSubmit({ kind: "command", input: { ...requested.input, ...(files.length ? { files } : {}) } })
         : requested.kind === "prompt"
           ? await props.onSubmit({ kind: "prompt", input: { ...requested.input, ...(files.length ? { files } : {}) } })
           : await props.onSubmit(requested)
-      if (generation !== attachmentGeneration) return
       if (accepted === false) {
-        if (files.length && remote.state().transport.kind === "open" && remote.state().uploadError) setAttachmentError(remote.state().uploadError)
+        if (generation === attachmentGeneration && files.length && remote.state().transport.kind === "open" && remote.state().uploadError) setAttachmentError(remote.state().uploadError)
         return
       }
-      if (parts() === submittedParts) setParts([])
-      if (attachments() === submittedAttachments) {
-        setAttachments([])
-        setAttachmentError(undefined)
-      }
+      if (submittedKey && submittedScope === observedModelScope) setDrafts((current) => {
+        const draft = current[submittedKey]
+        if (!draft) return current
+        return { ...current, [submittedKey]: { ...draft, parts: draft.parts === submittedParts ? emptyParts : draft.parts, attachments: draft.attachments === submittedAttachments ? emptyAttachments : draft.attachments, agent: draft.agent === submittedAgent ? undefined : draft.agent } }
+      })
+      if (generation === attachmentGeneration) setAttachmentError(undefined)
     } catch (cause) {
       if (generation === attachmentGeneration) setAttachmentError(cause instanceof Error ? cause.message : "The attachment could not be sent.")
     }
@@ -519,10 +545,12 @@ export function MiniComposer(props: {
               <span>{option.label}</span><Show when={option.description}><small title={option.description}>{option.description}</small></Show>
             </button>}</For>
           </div>
-          <Show when={fileError()}><p class="mini-composer__suggestions-status" role="status">{fileError()}</p></Show>
+          <Show when={fileSearching()}><p class="mini-composer__suggestions-status" role="status">Searching project files…</p></Show>
+          <Show when={searchingFiles() && !fileSearching() && !fileError() && fileResult().length === 0}><p class="mini-composer__suggestions-status" role="status">No matching files in this workspace.</p></Show>
+          <Show when={fileError()}><p class="mini-composer__suggestions-status" role="status">{fileError()}</p><button type="button" class="mini-composer__suggestions-retry" aria-label="Retry file search" onPointerDown={(event) => event.preventDefault()} onClick={retryFiles}>Retry</button></Show>
         </div></Show>
       </div>
-      <Show when={attachments().length}><div class="composer__attachments" aria-label="Attachments"><For each={attachments()}>{(item) => <div class="composer__attachment"><Show when={item.mime.startsWith("image/")}><img src={item.uri} alt="" /></Show><span class="composer__attachment-name" title={item.name}>{item.name}</span><span class="composer__attachment-size">{item.size < 1024 ? `${item.size} B` : `${(item.size / 1024).toFixed(1)} KiB`}</span><button type="button" aria-label={`Remove ${item.name}`} onClick={() => { setAttachments((items) => items.filter((entry) => entry.id !== item.id)); setAttachmentError(undefined) }}><Icon name="close" /></button></div>}</For></div></Show>
+      <Show when={attachments().length}><div class="composer__attachments" aria-label="Attachments"><For each={attachments()}>{(item) => <div class="composer__attachment"><Show when={item.mime.startsWith("image/")}><img src={item.uri} alt="" /></Show><span class="composer__attachment-name" title={item.name}>{item.name}</span><span class="composer__attachment-size">{item.size < 1024 ? `${item.size} B` : `${(item.size / 1024).toFixed(1)} KiB`}</span><button type="button" aria-label={`Remove ${item.name}`} onClick={() => { setAttachments((items) => items.filter((entry) => entry.id !== item.id)); setAttachmentError(undefined) }}><Icon name="close" /></button></div>}</For><span class="composer__attachments-summary">{attachmentCapacitySummary(attachments())}</span></div></Show>
       <Show when={attachmentError()}><p class="composer__attachment-error" role="alert">{attachmentError()}</p></Show>
       <Show when={catalog()?.status === "error" || catalog()?.status === "unsupported"}>
         <div class="composer__catalog-status" role="status"><p class="field__hint">{catalog()?.status === "unsupported" ? "Update YCoding on the connected machine to load agents and models." : catalog()?.message ?? "The agent and model catalog could not be loaded."}</p><button type="button" class="button button--secondary button--small" aria-label="Retry agent and model catalog" disabled={props.disabled} onClick={() => { if (props.target) void remote.store.loadCatalog(props.target, { refresh: true }) }}>Retry catalog</button></div>

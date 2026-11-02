@@ -12,6 +12,13 @@ const models: ModelOption[] = [
   { providerID: "openai", id: "quant-fp8-fast", name: "Quant FP8 Fast", variants: [] },
 ]
 
+test("draft targets are isolated by session, machine, and connection generation", () => {
+  const a = modelSelectionKey({ sessionID: "ses_a" }, "dev_1", 1)
+  expect(a).not.toBe(modelSelectionKey({ sessionID: "ses_b" }, "dev_1", 1))
+  expect(a).not.toBe(modelSelectionKey({ sessionID: "ses_a" }, "dev_2", 1))
+  expect(a).not.toBe(modelSelectionKey({ sessionID: "ses_a" }, "dev_1", 2))
+})
+
 test("model selection uses only offered effort and explains unsupported incoming references", () => {
   const incoming = { providerID: "openai", id: "gpt-6-sol", variant: "max" }
   expect(modelSelection(models, incoming)).toMatchObject({ model: incoming, blocked: true })

@@ -4,6 +4,10 @@ import { declarationsWhere, parseStylesheet } from "../../styles/css-rules"
 const composer = await Bun.file(new URL("./composer.css", import.meta.url)).text().then((source) => parseStylesheet("composer.css", source))
 const base = (header: string) => declarationsWhere(composer, (rule) => rule.header === header && rule.conditions.length === 0)
 
+test("explicit motion off stops reasoning sparkles", () => {
+  expect(base(':root[data-motion="off"] .model-control__sparkles, :root[data-motion="off"] .model-control__sparkles i').animation).toBe("none")
+})
+
 test("the expanded dock follows the capsule at its end edge and the collapsed handle stays in flow", () => {
   expect(base(".composer")).toMatchObject({ display: "flex", "flex-direction": "column" })
   expect(base(".composer__dock")).toMatchObject({ position: "static", order: "1", "align-self": "end" })
