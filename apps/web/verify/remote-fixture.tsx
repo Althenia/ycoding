@@ -185,8 +185,10 @@ const syntheticHttp: RemoteHttp = {
   logout: async () => ok(undefined),
 }
 
+const acceptedPreview = accountParams.get("acceptedPreview") === "1"
 const defaultSessions: readonly WireSession[] = [
-  { id: sessionID, title: "Stream remote output safely", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(42), updated: ago(1) }, running: true },
+  { id: sessionID, title: "Stream remote output safely", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(42), updated: ago(1), ...(acceptedPreview ? { pinned: ago(5) } : {}) }, running: !acceptedPreview },
+  ...(acceptedPreview ? [{ id: "ses_running", title: "Verify provider auth fallback", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(15), updated: ago(1) }, running: true }] : []),
   { id: "ses_archived", title: "Archived: release notes", time: { created: ago(300), updated: ago(280), archived: ago(280) } },
   { id: "ses_child", title: "Child: fix flaky suite", parentID: sessionID, time: { created: ago(30), updated: ago(4) } },
   ...(accountParams.get("team") === "office-large-family" ? Array.from({ length: 5 }, (_, index) => ({
@@ -419,7 +421,10 @@ let childQuestionAnswered = false
 let releaseChildAnswer: (() => void) | undefined
 Object.assign(window, { remoteReleaseChildAnswer: () => releaseChildAnswer?.() })
 let probeText = "## Stable heading\n\nParagraph before streaming.\n\n```ts\nconst pending = 1"
-let messages: readonly unknown[] = transcriptProbe ? [...Array.from({ length: 12 }, (_, index) => [
+let messages: readonly unknown[] = acceptedPreview ? [
+  { id: "msg_user", type: "user", text: "Refactor the session sync and run the targeted tests.", time: { created: ago(40), consumed: ago(39) } },
+  { id: "msg_assistant", type: "assistant", agent: "god", model, content: [{ type: "text", text: "Updated the session sync and verified the targeted tests." }], tokens: { input: 24_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, diagnostics: { contextLimit: 128_000 }, time: { created: ago(38), completed: ago(5) } },
+] : transcriptProbe ? [...Array.from({ length: 12 }, (_, index) => [
     { id: `probe_prompt_${index}`, type: "user", text: `Investigate part ${index}`, time: { created: index * 2 + 1, consumed: index * 2 + 2 } },
     { id: `probe_reply_${index}`, type: "assistant", agent: "god", model, content: [{ type: "text", text: `## Part ${index}\n\n${"Verified content remains in place. ".repeat(8)}` }], time: { created: index * 2 + 2, completed: index * 2 + 3 } },
   ]).flat(),
@@ -952,6 +957,7 @@ function createFixtureStore(): Fixture {
       return { status: "ok", value: { accepted: samples.length } }
     }
     if (responseProbe && operation === "session.capturedChanges.list") return { status: "ok", value: { data: structuredClone(responseCaptured) } }
+    if (acceptedPreview && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [{ placementMessageID: "msg_assistant", path: "src/remote/store.ts", additions: 2, deletions: 1, status: "modified", files: [{ path: "src/remote/store.ts", diff: "@@ -1 +1,2 @@\n-const old = 1\n+const next = 2\n+export { next }", additions: 2, deletions: 1, status: "modified" }] }] } }
     if (transcriptProbe && operation === "session.todo.list") return { status: "ok", value: { data: [{ content: "Verify stable transcript", status: "in_progress", priority: "high" }] } }
     if (transcriptProbe && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [{ placementMessageID: "probe_reply_4", path: "src/probe.ts", additions: 1, deletions: 1, status: "modified", files: [{ path: "src/probe.ts", diff: `@@ -1 +1 @@\n-before\n+${probeCaptured}`, additions: 1, deletions: 1, status: "modified" }] }] } }
     if (connectionMode === "offline") return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
@@ -1192,7 +1198,7 @@ function createFixtureStore(): Fixture {
             ...autonomyExtras(),
           })
     }
-    if (operation === "session.permission.list") return { status: "ok", value: { data: targetSessionID === sessionID && accountParams.get("team") !== "two" ? unreplied(permissions).map(withChain) : [] } }
+    if (operation === "session.permission.list") return { status: "ok", value: { data: targetSessionID === sessionID && (acceptedPreview || accountParams.get("team") !== "two") ? unreplied(permissions).map(withChain) : [] } }
     if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: targetSessionID === sessionID && accountParams.get("team") !== "two" ? unreplied(guardrails).map((item) => withChain(accountParams.get("grades") === "1" ? { ...item, escalation: { choice: "escalate", confidence: 0.61, grades: fixtureGrades } } : item)) : [] } }
     if (operation === "session.guardrail.status") return { status: "ok", value: { data: {
       rootSessionID: sessionID, profile: "default", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [],

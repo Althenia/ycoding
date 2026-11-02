@@ -899,6 +899,10 @@ body:has(.app) {
   font-size: var(--yc-size-xs);
 }
 
+:is(.workspace__rail, .overlay--sessions-sheet) .session-filters__option {
+  padding-inline: var(--yc-space-2);
+}
+
 .session-filters__option--active {
   background: var(--yc-green-soft);
   color: var(--yc-text);

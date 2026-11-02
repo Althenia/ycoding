@@ -33,13 +33,17 @@ describe("quiet workspace", () => {
       const page = await requireBrowser().openPage()
       try {
         await page.setViewport(width, height)
-        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&theme=${theme}`)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1&theme=${theme}`)
         await until(page, `document.querySelector('.composer-resident textarea') !== null`)
         if (width < 768) await page.evaluate(`document.querySelector('[aria-label="Open sessions"]').click()`)
         const panel = width < 768 ? ".overlay--sessions-sheet" : ".workspace__rail"
-        await until(page, `document.querySelector('${panel} .session-panel__summary')`)
+        await until(page, `document.querySelector('${panel} .session-panel__summary')?.textContent === '1 waiting · 1 running · 1 pinned shown'`)
+        await until(page, `document.querySelector('${panel} .session-list')?.innerText.includes('Waiting for approval')`)
         expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${panel} .session-filters button')].map(button => button.textContent.trim())`)).toEqual(["All", "Waiting", "Running", "Idle"])
-        expect(await page.evaluate<string>(`document.querySelector('${panel} .session-panel__summary').textContent`)).toMatch(/\d+ waiting · \d+ running · \d+ pinned/)
+        expect(await page.evaluate<number>(`new Set([...document.querySelectorAll('${panel} .session-filters button')].map(button => Math.round(button.getBoundingClientRect().top))).size`)).toBe(1)
+        expect(await page.evaluate<string>(`document.querySelector('${panel} .session-panel__summary').textContent`)).toBe("1 waiting · 1 running · 1 pinned shown")
+        expect(await page.evaluate<string>(`document.querySelector('${panel} .session-list').innerText`)).toContain("Pinned")
+        expect(await page.evaluate<string>(`document.querySelector('${panel} .session-list').innerText`)).toContain("Waiting for approval")
         await page.evaluate(`document.querySelector('${panel} .session-filters button:nth-child(2)').click()`)
         await until(page, `document.querySelector('${panel} .session-filters button:nth-child(2)')?.getAttribute('aria-pressed') === 'true'`)
         await page.evaluate(`document.querySelector('${panel} .session-filters button:first-child').click()`)
@@ -48,7 +52,19 @@ describe("quiet workspace", () => {
           await page.pressEscape()
           await until(page, `document.querySelector('.overlay--sessions-sheet') === null`)
         }
+        await until(page, `document.querySelector('.file-change-card__summary') !== null`)
+        await page.evaluate(`document.querySelector('.file-change-card__summary').click()`)
+        await until(page, `document.querySelector('.file-change-card__file-toggle') !== null`)
+        await page.evaluate(`document.querySelector('.file-change-card__file-toggle').click()`)
+        await until(page, `document.querySelector('.file-change-card__diff .file-change-card__code') !== null && document.querySelector('${width < 768 ? ".composer__mobile-context-ring" : ".composer__context"}') !== null`)
+        expect(await page.evaluate<string>(`document.querySelector('${width < 768 ? ".composer__mobile-trigger" : ".composer__context-trigger"}').getAttribute('aria-label')`)).toContain("19% used · 81% left")
+        expect(await page.evaluate<string>(`document.querySelector('.file-change-card__diff').innerText`)).toContain("export { next }")
         await page.evaluate(`document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove()`)
+        if (width < 768) {
+          await page.wheel(width / 2, height / 3, 0, -500)
+          await until(page, `document.querySelector('.file-change-card__summary').getBoundingClientRect().top >= document.querySelector('.workspace__topbar:not([inert])').getBoundingClientRect().bottom`)
+          await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'), card = document.querySelector('.file-change-card'); root.scrollTop += card.getBoundingClientRect().top - root.getBoundingClientRect().top - 12 })()`)
+        }
         const directory = process.env.YCODING_WEB_CAPTURE_DIR
         if (directory) await Bun.write(join(directory, `accepted-ui-unobscured-${width}-${theme}-${crypto.randomUUID()}.png`), Buffer.from(await page.screenshot(), "base64"))
       } finally { await page.close() }

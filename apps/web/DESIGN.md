@@ -313,7 +313,7 @@ Native question Forms and recorded question cards show the reported Answers mode
 
 Workspace file suggestions state loading and empty results, and offer a named retry after failure. Attachment rows show file count and byte limits inside the composer. Session rows show verified Project membership as a neutral chip when Project data is ready. Explicit motion off stops the reasoning-track sparkles. Use the existing text, surface, spacing, and motion treatments (`verify/accepted-ui-static.integration.test.ts`).
 
-The new-session landing keeps drafts and attachments editable without a repository, blocks creation until a connected machine reports the selected repository, and states how to restore an unavailable repository. The Session rail and phone sheet reuse the Session status filters and summarize waiting, running, and pinned counts for the loaded rows (`verify/new-session.integration.test.ts`, `verify/workspace-shell.integration.test.ts`).
+The new-session landing keeps drafts and attachments editable without a repository, blocks creation until a connected machine reports the selected repository, and states how to restore an unavailable repository. The Session rail and phone sheet reuse the Session status filters on one row with `--yc-space-2` inline padding, show each pinned row's chip, and summarize waiting, running, and pinned counts for the loaded rows (`verify/new-session.integration.test.ts`, `verify/workspace-shell.integration.test.ts`).
 
 | ID | Status | Binding statement | Enforcing check |
 | --- | --- | --- | --- |
