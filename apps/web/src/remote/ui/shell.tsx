@@ -1162,7 +1162,7 @@ function SessionRow(props: {
         <span class="session-row__meta">
           <span title={props.session.directory}>{sessionProjectLabel(props.session)}</span>
           <span class="session-row__status">
-            <For each={chips().filter((chip, index) => index === 0 || chip.label.startsWith("review ") || chip.label.startsWith("Master · ") || chip.label.startsWith("Member · "))}>{(chip) => <Chip label={chip.label} tone={chip.tone} />}</For>
+            <For each={chips().filter((chip, index) => index === 0 || chip.label === "Pinned" || chip.label.startsWith("review ") || chip.label.startsWith("Master · ") || chip.label.startsWith("Member · "))}>{(chip) => <Chip label={chip.label} tone={chip.tone} />}</For>
           </span>
         </span>
       </span>
