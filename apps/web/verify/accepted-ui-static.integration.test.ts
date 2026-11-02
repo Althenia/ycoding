@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { launchBrowser } from "./cdp"
 import { startRelayDouble } from "../test/relay-double"
+import { accountedTask } from "../test/usage-fixture"
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 
@@ -12,13 +13,33 @@ const summary = { id: "cgrp_1", name: "Atlas", revision: 1, active: true, master
 const detail = { ...summary, master: participant("ses_a"), members: [participant("ses_b")] }
 const catalog = { agents: [{ id: "god", name: "God", mode: "primary", hidden: false }, { id: "builder", name: "Builder", mode: "primary", hidden: false }, { id: "fail-helper", name: "Fail helper", mode: "subagent", hidden: false }], models: [{ providerID: "openai", id: "gpt-5", name: "GPT-5", variants: ["low", "high"] }], defaultModel: { providerID: "openai", id: "gpt-5" }, commands: [], skills: [], references: [], resources: [] }
 
-async function harness(width: number, height: number, project = false) {
+async function harness(width: number, height: number, project = false, surfaces = false) {
   let searches = 0
   let release: (() => void) | undefined
   const relay = await startRelayDouble({
     advertisedSessions: ["ses_a", "ses_b"],
     handler: async (request) => {
       if (request.operation === "session.catalog") return { ok: true, value: catalog }
+      if (surfaces && request.operation === "session.snapshot" && request.sessionID === "ses_a") {
+        const model = { providerID: "openai", id: "gpt-5" }
+        return { ok: true, value: { sourceEpoch: "epoch_1", session: { id: "ses_a", title: "Session A", model, time: { created: 1, updated: 4 } }, messages: [
+          { id: "msg_user", type: "user", text: "Update the file", time: { created: 1, consumed: 2 } },
+          { id: "msg_assistant", type: "assistant", agent: "god", model, content: [{ type: "text", text: "Updated the file." }], tokens: { input: 24_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, diagnostics: { contextLimit: 128_000 }, time: { created: 3, completed: 4 } },
+        ], watermark: { type: "log.synced", aggregateID: "ses_a", seq: 0 } } }
+      }
+      if (surfaces && request.operation === "session.capturedChanges.list") return { ok: true, value: { data: [{ placementMessageID: "msg_assistant", path: "src/app.ts", additions: 2, deletions: 1, status: "modified", files: [{ path: "src/app.ts", additions: 2, deletions: 1, status: "modified", diff: "@@ -1 +1,2 @@\n-const old = 1\n+const next = 2\n+export { next }" }] }] } }
+      if (surfaces && request.operation === "session.subagent.list") return { ok: true, value: { data: [{ sessionID: "ses_child", parentID: "ses_a", description: "Inspect file", agent: "builder", state: "running", revision: 1, time: { created: 1, updated: 2 } }], summary: { total: 1, active: 1 }, cursor: {} } }
+      if (surfaces && request.operation === "session.taskCosts") return { ok: true, value: { data: { tasks: [accountedTask("ses_child")], total: accountedTask("ses_child").total, history: "retained" } } }
+      if (surfaces && request.operation === "session.team.economics") return { ok: true, value: { data: [{ sessionID: "ses_child", cost: 0.25, tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 3, write: 0 } }, cacheHitRatio: 0.75, contextTotal: 800, contextLimit: 2_000, cacheRead: 3, cacheWrite: 0 }] } }
+      if (surfaces && request.operation === "session.team.shell.list") return { ok: true, value: { data: [] } }
+      if (surfaces && request.operation === "session.side-chat.list") return { ok: true, value: { data: [], cursor: {} } }
+      if (surfaces && request.operation === "incident.report") return { ok: true, value: { data: { rows: [], groups: 0 } } }
+      if (surfaces && request.operation === "incident.recent") return { ok: true, value: { data: { items: [] } } }
+      if (surfaces && request.operation === "usage.dashboard") {
+        const total = { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
+        const report = (slot: unknown) => ({ group: typeof slot === "object" && slot !== null ? Reflect.get(slot, "group") : "day", rows: [], total, rowCount: 0 })
+        return { ok: true, value: { data: { status: "ready", asOf: Date.now(), revision: "fixture", summary: total, live: { asOf: Date.now(), active: 0, streaming: 0, models: [], history: [] }, quota: { status: "ready", providers: [{ providerID: "openai", label: "Codex", status: "available", source: "provider_api", stability: "stable", updatedAt: Date.now(), windows: [{ id: "week", label: "Weekly", unit: "percent", used: 40, limit: 100 }] }], forecast: { asOf: Date.now(), localScope: "backend", localRates: [], quotas: [] } }, daily: report(request.input?.daily), monthly: report(request.input?.monthly), breakdown: report(request.input?.breakdown) } } }
+      }
       if (request.operation === "session.review.list") return { ok: true, value: { data: [] } }
       if (request.operation === "coordination.list") return { ok: true, value: { data: project ? [summary] : [] } }
       if (request.operation === "coordination.get") return { ok: true, value: { data: detail } }
@@ -170,6 +191,43 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
       expect(h.relay.connections).toBeGreaterThanOrEqual(3)
       await h.wait(`location.search.includes('ses_a') && document.querySelector('.composer-resident:not([inert]) .composer__input:not([disabled])')`)
       expect(await h.page.evaluate<boolean>(`document.querySelector('.composer-resident:not([inert]) .composer__attachments-summary') === null`)).toBe(true)
+    } finally { await h.close() }
+  }, 30000)
+
+  test(`team helper, context window, diff review, usage and settings render at ${width}`, async () => {
+    const h = await harness(width, height, false, true)
+    try {
+      if (width < 768) {
+        await h.wait(`document.querySelector('.composer__mobile-context-ring')`)
+        await h.page.evaluate(`document.querySelector('.composer-resident:not([inert]) .composer__mobile-trigger').click()`)
+        await h.wait(`document.querySelector('.composer__selection-sheet .composer__context-summary')`)
+      } else {
+        await h.wait(`document.querySelector('.composer__context-trigger')`)
+        await h.page.evaluate(`document.querySelector('.composer__context-trigger').click()`)
+        await h.wait(`document.querySelector('.composer__context-popover')`)
+      }
+      const context = width < 768 ? ".composer__selection-sheet .composer__context-summary" : ".composer__context-popover"
+      expect(await h.page.evaluate<string>(`document.querySelector('${context}').textContent`)).toContain("19% used · 81% left")
+      await h.page.pressEscape()
+      await h.wait(`document.querySelector('.file-change-card__summary')?.textContent.includes('Edited 1 file')`)
+      await h.page.evaluate(`document.querySelector('.file-change-card__summary').click()`)
+      await h.wait(`document.querySelector('.file-change-card__file-toggle')?.textContent.includes('app.ts')`)
+      await h.page.evaluate(`document.querySelector('.file-change-card__file-toggle').click()`)
+      expect(await h.page.evaluate<boolean>(`(() => { const node = document.querySelector(${JSON.stringify(width < 768 ? '.file-change-card__unified' : '.file-change-card__split')}); return node && getComputedStyle(node).display !== 'none' && node.textContent.includes('const old = 1') && node.textContent.includes('const next = 2') ${width < 768 ? '' : "&& node.textContent.includes('Old') && node.textContent.includes('New')"}; })()`)).toBe(true)
+      await h.wait(`document.querySelector('[aria-label="Open Team"]:not([inert])')`)
+      await h.page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
+      await h.wait(`document.querySelector('.team-view__usage .team-view__meter')`)
+      expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.team-view__tabs [role=tab] .team-view__tab-label')].map(item => item.textContent)`)).toEqual(["Subagents", "Shell", "Side chats"])
+      expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.team-view__usage dt')].map(item => item.textContent)`)).toEqual(["Tokens (inclusive)", "Cost (inclusive)", "Context", "Cache"])
+      if (width < 768) await h.page.pressEscape()
+      else await h.page.evaluate(`document.querySelector('[aria-label="Close Team"]').click()`)
+      const nav = width < 768 ? ".bottom-nav" : ".remote-nav"
+      await h.page.evaluate(`document.querySelector('${nav} a[href="/remote/usage"]').click()`)
+      await h.wait(`location.pathname === '/remote/usage' && document.body.textContent.includes('Model incidents')`)
+      for (const label of ["Today", "Yesterday", "Last 30 days", "Codex", "Model incidents"]) await h.wait(`document.querySelector('.usage-page')?.textContent.includes(${JSON.stringify(label)})`)
+      await h.page.evaluate(`document.querySelector('${nav} a[href="/remote/settings"]').click()`)
+      await h.wait(`location.pathname === '/remote/settings' && document.body.textContent.includes('Keep machine awake')`)
+      for (const label of ["Machine", "Studio Mac", "Keep machine awake", "Appearance", "Notifications"]) await h.wait(`document.querySelector('.settings')?.textContent.includes(${JSON.stringify(label)})`)
     } finally { await h.close() }
   }, 30000)
 }
