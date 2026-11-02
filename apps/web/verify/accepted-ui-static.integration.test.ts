@@ -19,6 +19,7 @@ async function harness(width: number, height: number, project = false) {
     advertisedSessions: ["ses_a", "ses_b"],
     handler: async (request) => {
       if (request.operation === "session.catalog") return { ok: true, value: catalog }
+      if (request.operation === "session.review.list") return { ok: true, value: { data: [] } }
       if (request.operation === "coordination.list") return { ok: true, value: { data: project ? [summary] : [] } }
       if (request.operation === "coordination.get") return { ok: true, value: { data: detail } }
       if (request.operation === "coordination.settings") return { ok: true, value: { data: { enabled: true, categories: ["question", "permission", "review"] } } }
@@ -121,26 +122,40 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
     const h = await harness(width, height, true)
     try {
       await h.wait(`document.body.textContent.includes('Atlas')`)
-      await h.page.evaluate(`document.querySelector('a[href="/remote/sessions"]').click()`)
+      const nav = width < 768 ? ".bottom-nav" : ".remote-nav"
+      expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('${nav} a[href]')].filter(item => item.getBoundingClientRect().width > 0).map(item => item.getAttribute('href'))`)).toEqual(expect.arrayContaining(["/remote/sessions", "/remote/usage", "/remote/settings"]))
+      await h.wait(`document.querySelector('[aria-label="Open Team"]:not([inert])')?.getBoundingClientRect().width > 0`)
+      await h.waitRequest("session.review.list")
+      expect(await h.page.evaluate<boolean>(`document.body.textContent.includes('Review items could not be loaded')`)).toBe(false)
+      if (width < 768) await h.page.evaluate(`document.querySelector('[aria-label="Open sessions"]').click()`)
+      const newSession = width < 768 ? '.overlay--sessions-sheet button[aria-label^="New session"]' : ".workspace-new-session button"
+      await h.wait(`document.querySelector(${JSON.stringify(newSession)})?.getBoundingClientRect().width > 0`)
+      await h.page.evaluate(`document.querySelector(${JSON.stringify(newSession)}).click()`)
+      await h.wait(`location.pathname === '/remote' && document.querySelector('.new-session-composer__repository button')?.getBoundingClientRect().width > 0`)
+      await h.page.evaluate(`document.querySelector('${nav} a[href="/remote/sessions"]').click()`)
+      await h.wait(`location.pathname === '/remote/sessions'`)
       await h.wait(`document.querySelector('.sessions-table__row[data-session-id="ses_a"]')?.textContent.includes('Master · Atlas')`)
       await h.wait(`document.querySelector('.sessions-table__row[data-session-id="ses_b"]')?.textContent.includes('Member · Atlas')`)
-      await h.page.evaluate(`document.querySelector('.sessions-table__row[data-session-id="ses_a"] button').click()`)
-      await h.wait(`document.querySelector('.composer-resident:not([inert]) .composer__input')`)
-      if (width < 768) await h.page.evaluate(`document.querySelector('.composer-resident:not([inert]) .composer__mobile-trigger').click()`)
-      await h.page.evaluate(`document.querySelector('.model-control__trigger').click(); document.documentElement.dataset.motion='off'`)
-      await h.wait(`document.querySelector('.model-control__sparkles i')`)
-      const animations = await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__sparkles,.model-control__sparkles i')].map(item=>getComputedStyle(item).animationName)`)
-      expect(animations.length).toBeGreaterThan(1)
-      expect(animations.every((animation) => animation === "none")).toBe(true)
+      expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.session-filters button')].filter(item => item.getBoundingClientRect().width > 0).map(item => item.textContent.trim())`)).toEqual(["All", "Waiting", "Running", "Idle"])
+      await h.page.evaluate(`document.querySelector('.sessions-table__row[data-session-id="ses_a"] .sessions-table__select').click()`)
+      await h.wait(`location.pathname === '/remote/session' && document.querySelector('.composer-resident:not([inert]) .composer__input')`)
+      await h.wait(`document.querySelector('[aria-label="Open Team"]:not([inert])')?.getBoundingClientRect().width > 0`)
       const directory = process.env.YCODING_WEB_CAPTURE_DIR
       if (directory) {
         await mkdir(directory, { recursive: true })
         await Bun.write(join(directory, `accepted-ui-${width}-${crypto.randomUUID()}.png`), Buffer.from(await h.page.screenshot(), "base64"))
       }
+      if (width < 768) await h.page.evaluate(`document.querySelector('.composer-resident:not([inert]) .composer__mobile-trigger').click()`)
+      await h.wait(`document.querySelector('.composer-resident:not([inert]) .model-control__trigger:not([disabled])')`)
+      await h.page.evaluate(`document.querySelector('.composer-resident:not([inert]) .model-control__trigger').click(); document.documentElement.dataset.motion='off'`)
+      await h.wait(`document.querySelector('.model-control__surface .model-control__sparkles i')`)
+      const animations = await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__surface .model-control__sparkles,.model-control__surface .model-control__sparkles i')].map(item=>getComputedStyle(item).animationName)`)
+      expect(animations.length).toBeGreaterThan(1)
+      expect(animations.every((animation) => animation === "none")).toBe(true)
     } finally { await h.close() }
   }, 30000)
 
-  test(`a transient relay reconnect preserves target attachments at ${width}`, async () => {
+  test(`a transient relay reconnect preserves target attachments while connection replacement invalidates them at ${width}`, async () => {
     const h = await harness(width, height)
     try {
       await h.page.evaluate(`(() => { const input=document.querySelector('.composer-resident:not([inert]) input[type=file]'); const dt=new DataTransfer(); dt.items.add(new File(['hello'],'test.txt')); input.files=dt.files; input.dispatchEvent(new Event('change',{bubbles:true})); })()`)
@@ -150,6 +165,11 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
       expect(h.relay.connections).toBeGreaterThanOrEqual(2)
       await h.wait(`document.querySelector('.composer-resident:not([inert]) .composer__input:not([disabled])')`)
       expect(await h.page.evaluate<boolean>(`document.querySelector('.composer-resident:not([inert]) .composer__attachments-summary') !== null`)).toBe(true)
+      h.relay.dropConnections(4403, "revoked")
+      for (let i = 0; i < 400 && h.relay.connections < 3; i++) await Bun.sleep(30)
+      expect(h.relay.connections).toBeGreaterThanOrEqual(3)
+      await h.wait(`location.search.includes('ses_a') && document.querySelector('.composer-resident:not([inert]) .composer__input:not([disabled])')`)
+      expect(await h.page.evaluate<boolean>(`document.querySelector('.composer-resident:not([inert]) .composer__attachments-summary') === null`)).toBe(true)
     } finally { await h.close() }
   }, 30000)
 }
