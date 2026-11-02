@@ -832,6 +832,305 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
+  it.effect("a drain that fails before promotion schedules a successor that promotes the pending input once", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const events = yield* EventRuntime.Service
+      const sessionID = Session.ID.make("ses_failed_promotion_successor")
+      yield* seedSessions(database, [sessionID])
+      yield* admitCompletionInput(database, events, sessionID, "msg_failed_promotion")
+
+      let drains = 0
+      let promoted = 0
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, ({ sessionID: id }) =>
+        Effect.gen(function* () {
+          drains += 1
+          if (drains === 1)
+            return yield* Effect.fail(
+              new LLMError({
+                module: "test",
+                method: "stream",
+                reason: new TransportReason({ message: "Disconnected" }),
+              }),
+            )
+          promoted += yield* SessionPending.promoteSteers(database.db, events, id)
+        }),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.wake(sessionID)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(drains).toBe(2)
+      expect(promoted).toBe(1)
+      const pending = yield* database.db
+        .select()
+        .from(SessionPendingTable)
+        .where(eq(SessionPendingTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(pending).toHaveLength(0)
+      const history = yield* database.db.select().from(EventTable).all().pipe(Effect.orDie)
+      expect(history.filter((row) => row.type === "session.execution.failed.1")).toHaveLength(1)
+      expect(history.filter((row) => row.type === "session.input.promoted.1")).toHaveLength(1)
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.effect("persistent pre-promotion drain failure is bounded and leaves the input pending", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const events = yield* EventRuntime.Service
+      const sessionID = Session.ID.make("ses_failed_promotion_bounded")
+      yield* seedSessions(database, [sessionID])
+      yield* admitCompletionInput(database, events, sessionID, "msg_always_failing")
+
+      let drains = 0
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, () =>
+        Effect.sync(() => {
+          drains += 1
+        }).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new LLMError({
+                module: "test",
+                method: "stream",
+                reason: new TransportReason({ message: "Disconnected" }),
+              }),
+            ),
+          ),
+        ),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.wake(sessionID)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(drains).toBe(4)
+      const history = yield* database.db.select().from(EventTable).all().pipe(Effect.orDie)
+      expect(history.filter((row) => row.type === "session.execution.failed.1")).toHaveLength(4)
+      const pending = yield* database.db
+        .select()
+        .from(SessionPendingTable)
+        .where(eq(SessionPendingTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(pending).toHaveLength(1)
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.effect("drain start and failed-settle retry reads tolerate a malformed pending row", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const events = yield* EventRuntime.Service
+      const sessionID = Session.ID.make("ses_malformed_pending_row")
+      yield* seedSessions(database, [sessionID])
+      yield* admitCompletionInput(database, events, sessionID, "msg_valid_input")
+      yield* database.db
+        .insert(SessionPendingTable)
+        .values({
+          id: SessionMessage.ID.make("msg_malformed_row"),
+          session_id: sessionID,
+          type: "user",
+          data: {},
+          admitted_seq: 999_999,
+        })
+        .run()
+        .pipe(Effect.orDie)
+
+      let drains = 0
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, () =>
+        Effect.sync(() => {
+          drains += 1
+        }).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new LLMError({
+                module: "test",
+                method: "stream",
+                reason: new TransportReason({ message: "Disconnected" }),
+              }),
+            ),
+          ),
+        ),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.wake(sessionID)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(drains).toBe(4)
+      const history = yield* database.db.select().from(EventTable).all().pipe(Effect.orDie)
+      expect(history.filter((row) => row.type === "session.execution.failed.1")).toHaveLength(4)
+      const pending = yield* database.db
+        .select({ id: SessionPendingTable.id })
+        .from(SessionPendingTable)
+        .where(eq(SessionPendingTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(pending).toHaveLength(2)
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.effect("an interrupt landing during a failed settle suppresses the successor drain", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const events = yield* EventRuntime.Service
+      const sessionID = Session.ID.make("ses_failed_settle_interrupt")
+      yield* seedSessions(database, [sessionID])
+      yield* admitCompletionInput(database, events, sessionID, "msg_settle_interrupt")
+
+      let drains = 0
+      let stop: SessionExecution.Interface["interrupt"] = () => Effect.void
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(
+        scope,
+        () =>
+          Effect.sync(() => {
+            drains += 1
+          }).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new LLMError({
+                  module: "test",
+                  method: "stream",
+                  reason: new TransportReason({ message: "Disconnected" }),
+                }),
+              ),
+            ),
+          ),
+        (type) => (type === "session.execution.failed" ? stop(sessionID) : Effect.void),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+      stop = execution.interrupt
+
+      yield* execution.wake(sessionID)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(drains).toBe(1)
+      const pending = yield* database.db
+        .select()
+        .from(SessionPendingTable)
+        .where(eq(SessionPendingTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(pending).toHaveLength(1)
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.effect("a failed managed child drain schedules no successor and publishes no later success", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const events = yield* EventRuntime.Service
+      const parentID = Session.ID.make("ses_failed_child_parent")
+      const childID = Session.ID.make("ses_failed_child")
+      yield* seedSessions(database, [parentID, childID])
+      yield* database.db
+        .insert(SessionTaskTable)
+        .values({
+          session_id: childID,
+          parent_id: parentID,
+          parent_assistant_message_id: SessionMessage.ID.make("msg_parent"),
+          tool_call_id: "call_failed_child",
+          input_id: SessionMessage.ID.make("msg_child_input"),
+          description: "failing child",
+          agent: Agent.ID.make("reviewer"),
+          model: CatalogModel.Ref.make({ providerID: Provider.ID.make("test"), id: CatalogModel.ID.make("model") }),
+          prompt_digest: "digest",
+          background: false,
+          delivery: "steer",
+          state: "running",
+        })
+        .run()
+      yield* admitCompletionInput(database, events, childID, "msg_child_pending")
+
+      let drains = 0
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, () =>
+        Effect.sync(() => {
+          drains += 1
+        }).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new LLMError({
+                module: "test",
+                method: "stream",
+                reason: new TransportReason({ message: "Disconnected" }),
+              }),
+            ),
+          ),
+        ),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.wake(childID)
+      yield* execution.awaitIdle(childID)
+
+      expect(drains).toBe(1)
+      const history = yield* database.db.select().from(EventTable).all().pipe(Effect.orDie)
+      expect(history.filter((row) => row.type === "session.execution.succeeded.1")).toHaveLength(0)
+      const task = yield* database.db
+        .select({ state: SessionTaskTable.state })
+        .from(SessionTaskTable)
+        .where(eq(SessionTaskTable.session_id, childID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(task?.state).toBe("failed")
+      const pending = yield* database.db
+        .select()
+        .from(SessionPendingTable)
+        .where(eq(SessionPendingTable.session_id, childID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(pending).toHaveLength(1)
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.effect("a drain that promotes then fails schedules no successor for a queued input", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const events = yield* EventRuntime.Service
+      const sessionID = Session.ID.make("ses_promote_then_fail")
+      yield* seedSessions(database, [sessionID])
+      yield* admitCompletionInput(database, events, sessionID, "msg_promoted_steer")
+      yield* admitCompletionInput(database, events, sessionID, "msg_queued_input", "queue")
+
+      let drains = 0
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, ({ sessionID: id }) =>
+        Effect.gen(function* () {
+          drains += 1
+          yield* SessionPending.promoteSteers(database.db, events, id)
+          return yield* Effect.fail(
+            new LLMError({
+              module: "test",
+              method: "stream",
+              reason: new TransportReason({ message: "Disconnected" }),
+            }),
+          )
+        }),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.wake(sessionID)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(drains).toBe(1)
+      const pending = yield* SessionPending.list(database.db, sessionID)
+      expect(pending.map((entry) => entry.id)).toEqual([SessionMessage.ID.make("msg_queued_input")])
+      const history = yield* database.db.select().from(EventTable).all().pipe(Effect.orDie)
+      expect(history.filter((row) => row.type === "session.input.promoted.1")).toHaveLength(1)
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
   it.effect("does not invoke the runner for a waiting managed child", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service

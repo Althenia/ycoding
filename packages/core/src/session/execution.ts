@@ -19,8 +19,8 @@ import { SessionCompactionExecution } from "./compaction-execution"
 import { SessionMessage } from "./message"
 import { SessionPending } from "./pending"
 import { SessionHistory } from "./history"
-import { SessionTaskTable } from "./sql"
-import { and, eq, inArray } from "drizzle-orm"
+import { SessionPendingTable, SessionTaskTable } from "./sql"
+import { and, eq, inArray, ne } from "drizzle-orm"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { Shell } from "../shell"
 import { SessionGoal } from "./goal"
@@ -170,6 +170,44 @@ export const layer = Layer.effect(
     // Sessions woken since their last drain began. A wake rung after the final drain's promotion
     // starts a successor drain, which a completed task would gate out, so completion defers to it.
     const woken = new Set<SessionSchema.ID>()
+    const failedSuccessorLimit = 3
+    const failedPending = new Map<SessionSchema.ID, { count: number; ids: ReadonlySet<SessionMessage.ID> }>()
+    const stopRequested = new Set<SessionSchema.ID>()
+    const drainPendingSnapshot = new Map<SessionSchema.ID, ReadonlySet<SessionMessage.ID>>()
+    const pendingInputIDs = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+      const rows = yield* db
+        .select({ id: SessionPendingTable.id })
+        .from(SessionPendingTable)
+        .where(and(eq(SessionPendingTable.session_id, sessionID), ne(SessionPendingTable.type, "compaction")))
+        .all()
+        .pipe(Effect.orDie)
+      return new Set(rows.map((row) => SessionMessage.ID.make(row.id)))
+    })
+    const retryFailedPending = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+      const snapshot = drainPendingSnapshot.get(sessionID)
+      drainPendingSnapshot.delete(sessionID)
+      if (stopRequested.has(sessionID)) return
+      if (snapshot === undefined || snapshot.size === 0) return
+      const task = yield* db
+        .select({ state: SessionTaskTable.state })
+        .from(SessionTaskTable)
+        .where(eq(SessionTaskTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (task) return
+      const ids = yield* pendingInputIDs(sessionID)
+      if (ids.size === 0) {
+        failedPending.delete(sessionID)
+        return
+      }
+      if ([...snapshot].some((id) => !ids.has(id))) return
+      const previous = failedPending.get(sessionID)
+      const unchanged =
+        previous !== undefined && previous.ids.size === ids.size && [...ids].every((id) => previous.ids.has(id))
+      const count = unchanged ? previous.count + 1 : 1
+      failedPending.set(sessionID, { count, ids })
+      if (count <= failedSuccessorLimit) yield* wake(sessionID)
+    })
     const settleTask = Effect.fnUntraced(function* (sessionID: SessionSchema.ID, outcome: ReturnType<typeof terminal>) {
       const task = yield* db
         .select({ state: SessionTaskTable.state })
@@ -220,6 +258,8 @@ export const layer = Layer.effect(
       afterSettled: (sessionID) => publishStatus(sessionID),
       drain: Effect.fnUntraced(function* (sessionID: SessionSchema.ID, force) {
         woken.delete(sessionID)
+        stopRequested.delete(sessionID)
+        drainPendingSnapshot.set(sessionID, yield* pendingInputIDs(sessionID))
         const session = yield* store.get(sessionID)
         if (!session) return yield* Effect.die(new Error(`Session not found: ${sessionID}`))
         const task = yield* db
@@ -324,6 +364,19 @@ export const layer = Layer.effect(
               Effect.logError("Failed to settle managed child task", cause).pipe(Effect.annotateLogs({ sessionID })),
             ),
           )
+          if (outcome.type === "failed")
+            yield* retryFailedPending(sessionID).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Failed to schedule a successor drain for pending inputs", cause).pipe(
+                  Effect.annotateLogs({ sessionID }),
+                ),
+              ),
+            )
+          else {
+            failedPending.delete(sessionID)
+            drainPendingSnapshot.delete(sessionID)
+            stopRequested.delete(sessionID)
+          }
           const queued =
             advanced === undefined
               ? false
@@ -349,7 +402,8 @@ export const layer = Layer.effect(
     wake = (sessionID) => Effect.sync(() => woken.add(sessionID)).pipe(Effect.andThen(coordinator.wake(sessionID)))
     return Service.of({
       active: coordinator.active,
-      interrupt: (sessionID) => coordinator.interrupt(sessionID, "user"),
+      interrupt: (sessionID) =>
+        Effect.sync(() => stopRequested.add(sessionID)).pipe(Effect.andThen(coordinator.interrupt(sessionID, "user"))),
       resume: coordinator.run,
       wake,
       awaitIdle: coordinator.awaitIdle,
