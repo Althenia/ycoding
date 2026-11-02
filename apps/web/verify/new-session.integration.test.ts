@@ -7,6 +7,23 @@ if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromi
 let server: ReturnType<typeof Bun.spawn> | undefined
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
 
+test("new chat identifies standalone scope and retains its own draft", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
+    await wait(page, `document.querySelector('.workspace-new-session button[aria-label="New chat"]') !== null`)
+    await page.evaluate(`document.querySelector('.workspace-new-session button[aria-label="New chat"]').click()`)
+    await wait(page, `document.querySelector('.new-session-composer textarea') !== null`)
+    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer__scope-note').textContent`)).toContain("standalone")
+    await type(page, ".new-session-composer textarea", "Separate draft")
+    await page.evaluate(`document.querySelector('.workspace-resume').click()`)
+    await wait(page, `document.querySelector('.composer-resident:not([inert]) textarea') !== null`)
+    await page.evaluate(`document.querySelector('.workspace-new-session button[aria-label="New chat"]').click()`)
+    await wait(page, `document.querySelector('.new-session-composer textarea') !== null`)
+    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer textarea').value`)).toBe("Separate draft")
+  } finally { await page.close() }
+}, 30_000)
+
 test("a draft and attachments remain editable without an available repository", async () => {
   const page = await browser!.openPage()
   try {

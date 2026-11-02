@@ -936,9 +936,11 @@ async function run(input: OperationInput) {
       return await input.local.subagentPage(sessionID, location, validated.cursor)
     case "session.pin":
     case "session.unpin": {
-      if (verified.parentID === undefined || verified.agent === "btw") throw new OperationError("forbidden", "Only managed child Sessions can be pinned through Team")
-      const parent = await input.sessions.verify(verified.parentID)
-      if (parent === undefined) throw new OperationError("session_not_allowed", "Parent Session is not available at its recorded location")
+      if (verified.agent === "btw") throw new OperationError("forbidden", "Side-chat Sessions cannot be pinned")
+      if (verified.parentID !== undefined) {
+        const parent = await input.sessions.verify(verified.parentID)
+        if (parent === undefined) throw new OperationError("session_not_allowed", "Parent Session is not available at its recorded location")
+      }
       return validated.kind === "session.pin" ? await input.local.pin(sessionID, location) : await input.local.unpin(sessionID, location)
     }
     case "subagent.cancel": {

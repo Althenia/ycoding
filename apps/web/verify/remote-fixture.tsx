@@ -197,7 +197,7 @@ const defaultSessions: readonly WireSession[] = [
   ...(accountParams.get("team") === "two" ? [{ id: "ses_second", title: "Child: inspect source", parentID: sessionID, time: { created: ago(20), updated: ago(2) } }] : []),
   ...(accountParams.get("team") === "two" ? [{ id: "ses_btw", title: "Side question", parentID: sessionID, agent: "btw", time: { created: ago(19), updated: ago(2) } }] : []),
 ]
-const sessions: readonly WireSession[] = [...(remoteScenarioData?.sessions ?? defaultSessions), ...(accountParams.get("masterInput") === "1" ? [{ id: "ses_master", title: "Release master", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(50), updated: ago(1) } }] : []), ...(accountParams.has("carouselFamily") ? [{
+let sessions: readonly WireSession[] = [...(remoteScenarioData?.sessions ?? defaultSessions), ...(accountParams.get("masterInput") === "1" ? [{ id: "ses_master", title: "Release master", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(50), updated: ago(1) } }] : []), ...(accountParams.has("carouselFamily") ? [{
   id: "ses_postgres_child", title: "Inspect Postgres indexes", parentID: "ses_postgres", projectID: "project-auth",
   location: { directory: "/workspace/db-pruner" }, time: { created: ago(15), updated: ago(2) }, running: true,
 }] : [])]
@@ -963,6 +963,13 @@ function createFixtureStore(): Fixture {
     if (connectionMode === "offline") return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
     if (operation.startsWith("coordination.")) return coordinationOutcome(operation, input)
     if (operation === "dots.get" || operation === "dots.set" || operation === "dots.attach") return dotsOutcome(operation, input, "dev_studio")
+    if (operation === "session.pin" || operation === "session.unpin") {
+      if (accountParams.get("pinFailure") === "1") return { status: "failed", error: { code: "forbidden", message: "Pinning denied" } }
+      const item = sessions.find((session) => session.id === targetSessionID)
+      if (!item || item.agent === "btw") return { status: "failed", error: { code: "session_not_allowed", message: "Session is unavailable" } }
+      sessions = sessions.map((session) => session.id !== targetSessionID ? session : { ...session, time: { ...session.time, pinned: operation === "session.pin" ? Date.now() : undefined } })
+      return { status: "ok", value: null }
+    }
     if (operation === "session.delete") {
       mutationRequests.push({ operation, input: { sessionID: targetSessionID } })
       coordinationGroups = coordinationGroups.filter((group) => group.masterSessionID !== targetSessionID).map((group) => ({ ...group, memberSessionIDs: group.memberSessionIDs.filter((id) => id !== targetSessionID), revision: group.revision + 1 }))

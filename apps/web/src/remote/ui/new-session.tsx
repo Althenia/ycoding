@@ -9,9 +9,9 @@ import { Icon } from "../../ui/icon"
 import { Link } from "../../ui/link"
 import { LoadingPlaceholder } from "./loading"
 
-export function NewSessionButton(props: { readonly disabled: boolean; readonly onClick: () => void; readonly labeled?: boolean; readonly workspace?: string }): JSX.Element {
-  const label = () => props.workspace ? `New session in ${props.workspace}` : "New session"
-  return <button type="button" class={`button button--primary button--small new-session__trigger${props.labeled ? " new-session__trigger--labeled" : ""}`} aria-label={label()} title={label()} disabled={props.disabled} onClick={() => props.onClick()}><Icon name="plus" size={18} /><Show when={props.labeled}><span>New session</span></Show></button>
+export function NewSessionButton(props: { readonly disabled: boolean; readonly onClick: () => void; readonly labeled?: boolean; readonly newChat?: boolean; readonly workspace?: string }): JSX.Element {
+  const label = () => props.workspace ? `New session in ${props.workspace}` : props.newChat ? "New chat" : "New session"
+  return <button type="button" class={`button button--primary button--small new-session__trigger${props.labeled ? " new-session__trigger--labeled" : ""}`} aria-label={label()} title={label()} disabled={props.disabled} onClick={() => props.onClick()}><Icon name="plus" size={18} /><Show when={props.labeled}><span>{label()}</span></Show></button>
 }
 
 export function NewSessionComposer(props: { readonly workspaceID?: string; readonly onCreated: (sessionID: string) => void; readonly onWorkspaceChange?: (workspaceID: string | undefined) => void }): JSX.Element {
@@ -71,6 +71,7 @@ export function NewSessionComposer(props: { readonly workspaceID?: string; reado
     <Show when={workspaceStatus() === "error"}><p role="alert">{listed().error?.message ?? "Repositories could not be loaded."}</p></Show>
     <Show when={connected() && workspaceStatus() === "ready" && !workspace()}><p role="status">{workspaces().length ? "Choose an available repository before sending; your draft stays here until a repository is chosen." : "No previously opened repositories are available. Open a repository locally once, then refresh; your draft stays here until a repository is chosen."}</p></Show>
     <Show when={props.workspaceID !== undefined && workspaceStatus() === "ready" && !workspace()}><p role="alert">The originating repository is unavailable on this machine. <Link to="/remote" class="text-link">Choose another repository</Link>.</p></Show>
+    <p class="field__hint new-session-composer__scope-note">Starts a standalone session in the selected repository. Coordination Projects stay optional and are never inherited.</p>
     <div class="new-session-composer__repository"><Show when={workspaceStatus() === "loading"} fallback={<ComposerPicker label="Repository" icon="folder" placeholder="Choose repository" value={workspaceID()} options={workspaces().map((item) => ({ value: item.id, label: labels().get(item.id) ?? item.name ?? "Repository" }))} disabled={!connected() || props.workspaceID !== undefined} onChange={setWorkspaceID} />}><LoadingPlaceholder kind="repository" label="Loading previously opened repositories…" /></Show>
       <button type="button" class="new-session-composer__refresh" aria-label="Refresh repositories" title="Refresh repositories" disabled={!connected() || workspaceStatus() === "loading"} onClick={() => void listed().refetch()}><Icon name="refresh" /></button>
     </div>

@@ -1,4 +1,5 @@
-import { modelLabel, type SessionView } from "../projection"
+import { contextWindowDisplay, modelLabel, type ModelRefView, type SessionView } from "../projection"
+import { autonomySummary } from "../autonomy"
 import type { SessionInfoView } from "../store"
 import type { RemoteTransportStatus } from "../transport"
 import {
@@ -104,6 +105,23 @@ export function sessionPanelSummary(sessions: readonly SessionInfoView[], view: 
   const running = sessions.filter((session) => session.running === true && !sessionNeedsAttention(session, view)).length
   const pinned = sessions.filter((session) => session.pinnedAt !== undefined).length
   return `${waiting} waiting · ${running} running · ${pinned} pinned`
+}
+
+export function prioritizePanelSessions(sessions: readonly SessionInfoView[], view: SessionView | undefined): readonly SessionInfoView[] {
+  const priority = (session: SessionInfoView) => sessionNeedsAttention(session, view) ? 0 : session.running === true ? 1 : session.pinnedAt !== undefined ? 2 : 3
+  return [...sessions].sort((left, right) => priority(left) - priority(right))
+}
+
+export function sessionCompanionSummary(view: SessionView | undefined, sessionModel?: ModelRefView) {
+  if (!view) return undefined
+  const context = contextWindowDisplay(view, view.model ?? sessionModel)
+  const autonomy = view.autonomy
+  const goal = autonomy?.goal?.status === "active" ? autonomy.goal : undefined
+  return {
+    ...(context ? { contextLabel: `${context.usedPercent}% used · ${context.leftPercent}% left`, contextTokens: context.tokens, contextFraction: context.fraction } : {}),
+    ...(autonomy ? { autonomyLabel: autonomySummary(autonomy.effective ?? autonomy).label } : {}),
+    ...(goal ? { goalText: goal.text, goalIteration: goal.iteration } : {}),
+  }
 }
 
 /**

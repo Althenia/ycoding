@@ -28,6 +28,60 @@ afterAll(async () => {
 })
 
 describe("quiet workspace", () => {
+  test("Session navigation pins and unpins without selecting another Session", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      await page.setViewport(1440, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1`)
+      await until(page, `document.querySelector('.workspace__rail button[aria-label="Pin Verify provider auth fallback"]') !== null`)
+      await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Pin Verify provider auth fallback"]').click()`)
+      await until(page, `document.querySelector('.workspace__rail button[aria-label="Unpin Verify provider auth fallback"][aria-pressed="true"]') !== null`)
+      expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('session_id')`)).toBe("ses_fixture")
+      await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Unpin Verify provider auth fallback"]').click()`)
+      await until(page, `document.querySelector('.workspace__rail button[aria-label="Pin Verify provider auth fallback"][aria-pressed="false"]') !== null`)
+      expect(await page.evaluate<string[]>(`window.requestLog.filter(item => item.operation === 'session.pin' || item.operation === 'session.unpin').map(item => item.operation)`)).toEqual(["session.pin", "session.unpin"])
+      await page.setViewport(390, 844)
+      await until(page, `document.querySelector('[aria-label="Open sessions"]') !== null`)
+      await page.evaluate(`document.querySelector('[aria-label="Open sessions"]').click()`)
+      await until(page, `document.querySelector('.overlay--sessions-sheet button[aria-label="Pin Verify provider auth fallback"]') !== null`)
+      await page.evaluate(`document.querySelector('.overlay--sessions-sheet button[aria-label="Pin Verify provider auth fallback"]').click()`)
+      await until(page, `document.querySelector('.overlay--sessions-sheet button[aria-label="Unpin Verify provider auth fallback"][aria-pressed="true"]') !== null`)
+      await page.evaluate(`document.querySelector('.overlay--sessions-sheet button[aria-label="Unpin Verify provider auth fallback"]').click()`)
+      await until(page, `document.querySelector('.overlay--sessions-sheet button[aria-label="Pin Verify provider auth fallback"][aria-pressed="false"]') !== null`)
+      expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('session_id')`)).toBe("ses_fixture")
+    } finally { await page.close() }
+  }, 30_000)
+
+  test("Sessions page pin controls report failures without changing state", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      await page.setViewport(1440, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&acceptedPreview=1&pinFailure=1`)
+      await until(page, `document.querySelector('.sessions-table__row button[aria-label="Pin Verify provider auth fallback"]') !== null`)
+      await page.evaluate(`document.querySelector('.sessions-table__row button[aria-label="Pin Verify provider auth fallback"]').click()`)
+      await until(page, `document.querySelector('.session-pin__error')?.textContent.includes('Pinning denied')`)
+      expect(await page.evaluate<string>(`document.querySelector('.sessions-table__row button[aria-label="Pin Verify provider auth fallback"]').getAttribute('aria-pressed')`)).toBe("false")
+      expect(await page.evaluate<string[]>(`window.requestLog.filter(item => item.operation === 'session.pin' || item.operation === 'session.unpin').map(item => item.operation)`)).toEqual(["session.pin"])
+    } finally { await page.close() }
+  }, 30_000)
+  test("Team shows the current Session context, autonomy and active goal", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      await page.setViewport(1440, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1`)
+      await until(page, `document.querySelector('[aria-label="Open Team"]:not([disabled])') !== null`)
+      await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
+      await until(page, `document.querySelector('.team-view__session-summary') !== null`)
+      const summary = await page.evaluate<string>(`document.querySelector('.team-view__session-summary').innerText`)
+      expect(summary).toContain("19% used · 81% left")
+      expect(summary).toContain("Autonomous")
+      expect(summary).toContain("Goal active · Ship the remote workspace")
+      expect(await page.evaluate<boolean>(`document.querySelector('.team-view__session-summary .team-view__meter') !== null`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('.workspace__main').getBoundingClientRect().right <= document.querySelector('.team-control__panel').getBoundingClientRect().left`)).toBe(true)
+      await page.evaluate(`document.querySelector('.team-view__session-summary button').click()`)
+      await until(page, `document.querySelector('dialog[aria-label="Autonomous"]') !== null`)
+    } finally { await page.close() }
+  }, 30_000)
   for (const [width, height] of [[1440, 900], [390, 844]] as const) for (const theme of ["light", "dark"] as const) {
     test(`session navigation shows priority counts and filters at ${width} in ${theme}`, async () => {
       const page = await requireBrowser().openPage()
@@ -59,14 +113,27 @@ describe("quiet workspace", () => {
         await until(page, `document.querySelector('.file-change-card__diff .file-change-card__code') !== null && document.querySelector('${width < 768 ? ".composer__mobile-context-ring" : ".composer__context"}') !== null`)
         expect(await page.evaluate<string>(`document.querySelector('${width < 768 ? ".composer__mobile-trigger" : ".composer__context-trigger"}').getAttribute('aria-label')`)).toContain("19% used · 81% left")
         expect(await page.evaluate<string>(`document.querySelector('.file-change-card__diff').innerText`)).toContain("export { next }")
+        if (width >= 768) {
+          await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
+          await until(page, `document.querySelector('.team-view__session-summary')?.innerText.includes('19% used')`)
+          await until(page, `document.querySelector('.team-control__panel:not(.team-control--entering)') !== null`)
+          await page.evaluate(`Promise.all(document.querySelector('.team-control__panel').getAnimations().map(animation => animation.finished.catch(() => undefined)))`)
+        }
         await page.evaluate(`document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove()`)
+        if (width < 768) {
+          await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'); root.scrollTop = root.scrollHeight })()`)
+          expect(await page.evaluate<boolean>(`(() => { const deny = document.querySelector('.request--permission .button--danger').getBoundingClientRect(), nav = document.querySelector('.transcript-navigation__controls').getBoundingClientRect(); return deny.bottom <= nav.top || deny.right <= nav.left })()`)).toBe(true)
+        }
+        const directory = process.env.YCODING_WEB_CAPTURE_DIR
+        if (directory) await Bun.write(join(directory, `accepted-ui-unobscured-${width}-${theme}-${crypto.randomUUID()}.png`), Buffer.from(await page.screenshot(), "base64"))
         if (width < 768) {
           await page.wheel(width / 2, height / 3, 0, -500)
           await until(page, `document.querySelector('.file-change-card__summary').getBoundingClientRect().top >= document.querySelector('.workspace__topbar:not([inert])').getBoundingClientRect().bottom`)
           await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'), card = document.querySelector('.file-change-card'); root.scrollTop += card.getBoundingClientRect().top - root.getBoundingClientRect().top - 12 })()`)
+          await until(page, `document.querySelector('.transcript-navigation__controls').style.marginBlockEnd === '0px'`)
+          expect(await page.evaluate(`(() => { const deny = document.querySelector('.request--permission .button--danger'), before = deny.getBoundingClientRect(), scroll = document.querySelector('.workspace__scroll').getBoundingClientRect(), controls = document.querySelector('.transcript-navigation__controls'), navBefore = controls.getBoundingClientRect(); const visibleClear = Math.min(before.bottom, scroll.bottom) <= navBefore.top || before.right <= navBefore.left; deny.focus(); const rect = deny.getBoundingClientRect(), nav = controls.getBoundingClientRect(); const hit = [[0.1, 0.5], [0.5, 0.5], [0.9, 0.5]].every(([x, y]) => document.elementFromPoint(rect.left + rect.width * x, rect.top + rect.height * y) === deny); return { visibleClear, clear: rect.bottom <= nav.top || rect.right <= nav.left, hit, focus: document.activeElement === deny, deny: rect.toJSON(), nav: nav.toJSON() } })()`)).toMatchObject({ visibleClear: true, clear: true, hit: true, focus: true })
+          if (directory) await Bun.write(join(directory, `accepted-ui-scrolled-${width}-${theme}-${crypto.randomUUID()}.png`), Buffer.from(await page.screenshot(), "base64"))
         }
-        const directory = process.env.YCODING_WEB_CAPTURE_DIR
-        if (directory) await Bun.write(join(directory, `accepted-ui-unobscured-${width}-${theme}-${crypto.randomUUID()}.png`), Buffer.from(await page.screenshot(), "base64"))
       } finally { await page.close() }
     }, 30_000)
   }

@@ -498,7 +498,7 @@ describe("transcript rendering", () => {
     } finally { await page.close() }
   })
 
-  test("floats the jump control above the full composer mount and selector row without a layout row", async () => {
+  test("keeps the jump control above the full composer mount and selector row", async () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(390, 844)

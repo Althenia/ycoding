@@ -99,6 +99,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     const controls = slot?.querySelector<HTMLElement>(".transcript-navigation__controls")
     if (!slot || !controls) return
     const bounds = slot.getBoundingClientRect()
+    if (bounds.height > 0 && bounds.top >= viewport.bottom) { setClearance(0); return }
     const bottom = bounds.top + controls.offsetTop + controls.offsetHeight + clearance()
     const left = bounds.left + controls.offsetLeft
     const gap = Number.parseFloat(getComputedStyle(controls).bottom)

@@ -253,11 +253,12 @@ describe("responsive contract", () => {
     expect(label).toMatchObject({ position: "absolute", "clip-path": "inset(50%)" })
   })
 
-  test("floats the jump controls in a zero-height slot at every width", async () => {
+  test("reserves phone space for jump controls and floats them on wider screens", async () => {
     const remote = await readStylesheet("remote.css")
     const nav = await readStylesheet("../remote/ui/transcript-nav.css")
     const slot = declarationsWhere(remote, (rule) => rule.header.includes(".conversation-jump-slot") && rule.header.includes(":not(") && rule.conditions.length === 0)
     expect(slot).toMatchObject({ position: "relative", display: "block", "block-size": "0" })
+    expect(remote.rules.some((rule) => rule.header.includes(".conversation-jump-slot") && rule.conditions.some((condition) => condition.includes("max-width: 767px")) && rule.declarations["block-size"] === "var(--yc-space-16)")).toBe(true)
     expect(base(nav, ".transcript-navigation__controls")).toMatchObject({ position: "absolute" })
     expect(nav.rules.some((rule) => rule.header.includes("transcript-navigation__controls") && rule.declarations.display === "none")).toBe(false)
     expect(nav.rules.some((rule) => rule.header.includes("desktop-controls") || rule.header.includes("mobile-controls"))).toBe(false)

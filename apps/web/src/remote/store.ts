@@ -332,6 +332,7 @@ export type RemoteStore = {
   readonly cancelSubagent: (childID: string) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
   readonly answerSubagent: (childID: string, questionID: string, text: string) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
   readonly pinSubagent: (childID: string, pinned: boolean) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
+  readonly pinSession: (sessionID: string, pinned: boolean) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
   readonly continueRecovery: (childID: string) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
   readonly killTeamShell: (shellID: string) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
   readonly teamShellOutput: (ownerID: string, shellID: string, cursor?: number) => Promise<{ readonly command?: string; readonly status?: string; readonly text: string; readonly cursor: number; readonly size: number; readonly truncated: boolean }>
@@ -3435,6 +3436,20 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const task = readTeamTask(data)
       if (task?.parentID !== rootID || task.sessionID !== childID) return { status: "unknown", message: "The device returned an unreadable answer; check the subagent before retrying." }
       setState({ team: { ...container.state.team, tasks: container.state.team.tasks.map((item) => item.sessionID === childID ? { ...item, ...task, question: task.question } : item) } })
+      return { status: "ok", message: "" }
+    },
+    pinSession: async (sessionID, pinned) => {
+      const owner = transport
+      if (!owner || container.state.transport.kind !== "open" || !container.state.sessions.some((session) => session.id === sessionID))
+        return { status: "failed", message: "Session is not available for pinning." }
+      const outcome = await owner.request(pinned ? "session.pin" : "session.unpin", { sessionID, timeoutMs: 10_000 })
+      if (!isCurrentConnection(owner)) return { status: "unknown", message: "The connection changed; check the Session before retrying." }
+      if (outcome.status !== "ok") return teamActionFailure(outcome, pinned ? "Pin Session" : "Unpin Session")
+      const pinnedAt = pinned ? Date.now() : undefined
+      const update = (session: SessionInfoView) => session.id === sessionID ? { ...session, pinnedAt } : session
+      setState({ sessions: container.state.sessions.map(update), selectedSessionInfo: container.state.selectedSessionInfo ? update(container.state.selectedSessionInfo) : undefined })
+      sessionsToken += 1
+      void loadSessions(sessionsToken)
       return { status: "ok", message: "" }
     },
     pinSubagent: async (childID, pinned) => {

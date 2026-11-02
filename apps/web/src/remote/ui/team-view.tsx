@@ -44,6 +44,8 @@ export function TeamHeading(props: { readonly data: () => TeamPanelData }): JSX.
 
 export function TeamView(props: {
   readonly data: () => TeamPanelData
+  readonly sessionSummary?: () => { readonly contextLabel?: string; readonly contextTokens?: string; readonly contextFraction?: number; readonly autonomyLabel?: string; readonly goalText?: string; readonly goalIteration?: number } | undefined
+  readonly onOpenAutonomy?: () => void
   readonly currentSessionID: string
   readonly now: () => number
   readonly sheet: boolean
@@ -164,6 +166,11 @@ export function TeamView(props: {
   const tabCount = (value: Tab) => value === "subagents" ? props.data().total ?? props.data().tasks.length : value === "shell" ? props.data().shells.length : props.data().sideChats.length
   const panel = <section class="team-view" ref={section} aria-label="Team">
     <Show when={!props.sheet}><div class="team-view__header"><TeamHeading data={props.data} /><button type="button" class="team-view__close" aria-label="Close Team" onClick={props.onClose}><Icon name="close" size={18} /></button></div></Show>
+    <Show when={props.sessionSummary?.()}>{(summary) => <section class="team-view__session-summary" aria-label="Session context and autonomy">
+      <Show when={summary().contextLabel}><strong>Context window</strong><span>{summary().contextLabel} · {summary().contextTokens}</span><span class="team-view__meter" role="img" aria-label={summary().contextLabel}><span style={{ "inline-size": `${Math.min(100, (summary().contextFraction ?? 0) * 100)}%` }} /></span></Show>
+      <Show when={summary().autonomyLabel}><button type="button" class="team-view__button" onClick={props.onOpenAutonomy}>{summary().autonomyLabel}</button></Show>
+      <Show when={summary().goalText}><span>Goal active · {summary().goalText}</span></Show>
+    </section>}</Show>
     <div class="team-view__tabs" role="tablist" aria-label="Team sections">
       <For each={tabs}>{(value, index) => <button type="button" role="tab" data-tab={value} aria-selected={tab() === value} aria-controls={`team-panel-${value}`}
         tabIndex={tab() === value ? 0 : -1} onClick={() => selectTab(value)} onKeyDown={(event) => moveTab(event, index())}>
