@@ -62,7 +62,7 @@ export function connectionStripView(input: {
 }
 
 /** One advertised session as the header chips and the session rows describe it. */
-export function summarizeSession(session: SessionInfoView, view: SessionView | undefined): RemoteSessionSummary {
+export function summarizeSession(session: SessionInfoView, view: SessionView | undefined, project?: { readonly role: "master" | "member"; readonly name: string }): RemoteSessionSummary {
   const active = view !== undefined && view.id === session.id ? view : undefined
   const autonomy = active?.autonomy
   const model = modelLabel(active?.model) ?? session.modelLabel
@@ -71,6 +71,7 @@ export function summarizeSession(session: SessionInfoView, view: SessionView | u
     title: session.title,
     status: sessionStatus(session, active),
     ...(session.pinnedAt === undefined ? {} : { pinned: true }),
+    ...(project === undefined ? {} : { projectRole: project.role, projectName: project.name }),
     agent: active?.agent ?? session.agent,
     model,
     autonomy: autonomy?.mode,
@@ -102,12 +103,12 @@ export function sessionNeedsAttention(session: SessionInfoView, view: SessionVie
  * The chips one session row and the selected session's header row show: the status the
  * device reported, plus the fact that the loaded view is holding an unanswered approval.
  */
-export function sessionChips(session: SessionInfoView, view: SessionView | undefined): readonly SessionChip[] {
+export function sessionChips(session: SessionInfoView, view: SessionView | undefined, project?: { readonly role: "master" | "member"; readonly name: string }): readonly SessionChip[] {
   const review = view?.review?.items.filter((item) => item.rootSessionID === session.id || item.sessionID === session.id).length ?? 0
   const chips = [
     ...(review > 0 ? [{ label: `review ${review}`, tone: "attention" as const }] : []),
     ...(session.lost === true ? [{ label: lostResultLabel, tone: "attention" as const }] : []),
-    ...sessionStateChips(summarizeSession(session, view)),
+    ...sessionStateChips(summarizeSession(session, view, project)),
   ]
   if (awaitsApproval(view, session.id)) return [{ label: "Waiting for approval", tone: "attention" }, ...chips]
   if (sessionNeedsAttention(session, view)) return [{ label: "Waiting for you", tone: "attention" }, ...chips]

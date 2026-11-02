@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test"
 import { RemoteLimits } from "@ycoding-ai/remote"
-import { encodeAttachment, attachmentLimit } from "./composer-attachment"
+import { encodeAttachment, attachmentLimit, attachmentCapacitySummary } from "./composer-attachment"
+
+test("summarizes attachment capacity", () => {
+  expect(attachmentCapacitySummary([{ size: RemoteLimits.maxAttachmentBytes }, { size: RemoteLimits.maxAttachmentBytes }])).toBe("2/64 files · 40 MiB / 40 MiB · 20 MiB per-file limit")
+  expect(attachmentCapacitySummary([{ size: 5 }])).toBe("1/64 files · 5 B / 40 MiB · 20 MiB per-file limit")
+})
 
 test("encodes a named image as canonical base64 data URL for the file input", async () => {
   const file = new File([new Uint8Array([0, 1, 2, 253, 254, 255])], "capture.png", { type: "image/png" })

@@ -230,6 +230,13 @@ describe("pinned sessions", () => {
 })
 
 describe("session summary", () => {
+  test("includes verified project membership without changing unassociated sessions", () => {
+    const pinned = session({ pinnedAt: 1_000 })
+    const active = view({ autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual" } })
+    expect(sessionChips(pinned, active, { role: "master", name: "Atlas" }).map((chip) => chip.label)).toEqual(["Pinned", "Master · Atlas", "Autonomous Manual"])
+    expect(sessionChips(pinned, active, { role: "member", name: "Atlas" })).toContainEqual({ label: "Member · Atlas", tone: "neutral" })
+    expect(sessionChips(pinned, active).map((chip) => chip.label)).toEqual(["Pinned", "Autonomous Manual"])
+  })
   test("keeps archived ahead of the live report", () => {
     expect(summarizeSession(session({ archived: true, running: true }), undefined).status).toBe("archived")
   })

@@ -2,6 +2,13 @@ import { RemoteLimits } from "@ycoding-ai/remote"
 
 export type ComposerAttachment = { readonly id: string; readonly name: string; readonly size: number; readonly mime: string; readonly uri: string }
 
+export function attachmentCapacitySummary(files: readonly { readonly size: number }[]): string {
+  const mib = 1024 * 1024
+  const bytes = files.reduce((sum, file) => sum + file.size, 0)
+  const total = bytes < mib ? `${bytes} B` : `${Number((bytes / mib).toFixed(2))} MiB`
+  return `${files.length}/64 files · ${total} / ${RemoteLimits.maxConnectionAttachmentBytes / mib} MiB · ${RemoteLimits.maxAttachmentBytes / mib} MiB per-file limit`
+}
+
 export function attachmentLimit(files: readonly { readonly size: number; readonly name: string }[]): string | undefined {
   if (files.length > 64) return "A message can contain at most 64 files. Remove an attachment before adding another."
   if (files.some((file) => file.size === 0)) return "An empty file cannot be attached."

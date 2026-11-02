@@ -1477,10 +1477,10 @@ test("a failed file search leaves no stuck panel: Escape and Close dismiss it an
     const panel = () => page.evaluate<{ open: boolean; options: number; status: string; value: string; focused: boolean }>(`(() => { const p = document.querySelector('.mini-composer__mount .mini-composer__suggestions'), f = document.querySelector(${JSON.stringify(field)}); return { open: p !== null, options: p?.querySelectorAll('[role="option"]').length ?? 0, status: p?.querySelector('[role="status"]')?.textContent ?? '', value: f.value, focused: document.activeElement === f } })()`)
     for (const dismiss of ["escape", "close"] as const) {
       await type(page, field, "@fai")
-      await Bun.sleep(320)
-      expect((await panel()).open).toBe(false)
+      await wait(page, `document.querySelector('.mini-composer__mount .mini-composer__suggestions [role="status"]')?.textContent === 'No matching files in this workspace.'`)
+      expect(await panel()).toMatchObject({ open: true, options: 0, status: "No matching files in this workspace.", value: "@fai" })
       await type(page, field, "@fail")
-      await wait(page, `document.querySelector('.mini-composer__mount .mini-composer__suggestions [role="status"]') !== null`)
+      await wait(page, `document.querySelector('.mini-composer__mount .mini-composer__suggestions [role="status"]')?.textContent === 'File search is unavailable'`)
       expect(await panel()).toMatchObject({ open: true, options: 0, status: "File search is unavailable", value: "@fail" })
       if (dismiss === "escape") await page.pressEscape()
       else await page.evaluate(`document.querySelector('.mini-composer__suggestions-head button').click()`)

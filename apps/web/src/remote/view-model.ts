@@ -209,6 +209,8 @@ export type RemoteSessionSummary = {
   readonly title: string
   readonly status: RemoteSessionStatus
   readonly pinned?: boolean
+  readonly projectRole?: "master" | "member"
+  readonly projectName?: string
   readonly agent?: string
   readonly model?: string
   readonly autonomy?: "normal"
@@ -425,6 +427,7 @@ export function sessionStateChips(session: RemoteSessionSummary): readonly Sessi
   if (session.status === "archived") chips.push({ label: "Archived", tone: "neutral" })
   if (session.status === "failed") chips.push({ label: "Failed", tone: "neutral" })
   if (session.pinned) chips.push({ label: "Pinned", tone: "neutral" })
+  if (session.projectRole !== undefined && session.projectName !== undefined) chips.push({ label: `${session.projectRole === "master" ? "Master" : "Member"} · ${session.projectName}`, tone: "neutral" })
 
   if (session.autonomy !== undefined) {
     if (session.permissions !== undefined && session.guardrails !== undefined && session.answers !== undefined) {
