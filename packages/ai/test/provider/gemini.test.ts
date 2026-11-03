@@ -192,7 +192,9 @@ describe("Gemini route", () => {
         const prepared = yield* LLMClient.prepare(
           LLM.request({ model, messages: [Message.user({ type: "media", ...media })] }),
         )
-        expect(JSON.stringify(prepared.body.contents)).toMatch(/File \(unnamed\).*omitted:.*(does not support|does not match|valid base64)/)
+        expect(JSON.stringify(prepared.body.contents)).toMatch(
+          /File \(unnamed\).*omitted:.*(does not support|does not match|valid base64)/,
+        )
       }),
     )
 
@@ -214,21 +216,17 @@ describe("Gemini route", () => {
     }),
   )
 
-  it.effect("omits tools when tool choice is none", () =>
+  it.effect("omits tools and sends NONE when tool choice is none", () =>
     Effect.gen(function* () {
-      const prepared = yield* LLMClient.prepare(
-        LLM.request({
-          id: "req_no_tools",
-          model,
-          prompt: "Say hello.",
-          tools: [{ name: "lookup", description: "Lookup data", inputSchema: { type: "object" } }],
-          toolChoice: { type: "none" },
-        }),
-      )
-
-      expect(prepared.body).toEqual({
-        contents: [{ role: "user", parts: [{ text: "Say hello." }] }],
-      })
+      for (const tools of [[], [{ name: "lookup", description: "Lookup data", inputSchema: { type: "object" } }]]) {
+        const prepared = yield* LLMClient.prepare(
+          LLM.request({ id: "req_no_tools", model, prompt: "Say hello.", tools, toolChoice: { type: "none" } }),
+        )
+        expect(prepared.body).toEqual({
+          contents: [{ role: "user", parts: [{ text: "Say hello." }] }],
+          toolConfig: { functionCallingConfig: { mode: "NONE" } },
+        })
+      }
     }),
   )
 

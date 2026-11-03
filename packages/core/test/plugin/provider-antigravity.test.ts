@@ -70,6 +70,58 @@ const withEnvironment = (env: Record<string, string>) =>
   Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env })))
 
 describe("AntigravityPlugin", () => {
+  test("sends NONE for a text-only Gemini recovery request", async () => {
+    const { createGoogleGenerativeAI } = await import("@ai-sdk/google")
+    const sent: Record<string, unknown>[] = []
+    const sdk = createGoogleGenerativeAI({
+      apiKey: "placeholder",
+      fetch: Object.assign(
+        createAntigravityFetch(
+          async (_input, init) => {
+            if (typeof init?.body !== "string") throw new Error("Expected JSON request body")
+            sent.push(JSON.parse(init.body))
+            return new Response(
+              `data: ${JSON.stringify({ response: { candidates: [{ content: { role: "model", parts: [{ text: "answer" }] }, finishReason: "STOP" }] } })}\n\n`,
+              { headers: { "content-type": "text/event-stream" } },
+            )
+          },
+          { access: "fixture" },
+        ),
+        { preconnect: fetch.preconnect },
+      ),
+    })
+    const language = captureToolSchemas(sdk.languageModel("gemini-fixture"))
+    for (const toolChoice of [undefined, { type: "none" } as const])
+      await Array.fromAsync(
+        (
+          await language.doStream({
+            prompt: [
+              { role: "user", content: [{ type: "text", text: "Answer" }] },
+              {
+                role: "assistant",
+                content: [{ type: "tool-call", toolCallId: "call-1", toolName: "lookup", input: {} }],
+              },
+              {
+                role: "tool",
+                content: [
+                  {
+                    type: "tool-result",
+                    toolCallId: "call-1",
+                    toolName: "lookup",
+                    output: { type: "text", value: "result" },
+                  },
+                ],
+              },
+            ],
+            tools: [],
+            toolChoice,
+          })
+        ).stream,
+      )
+    expect(sent[0]?.request).not.toHaveProperty("toolConfig")
+    expect(sent[1]?.request).toMatchObject({ toolConfig: { functionCallingConfig: { mode: "NONE" } } })
+    expect(sent[1]?.request).not.toHaveProperty("tools")
+  })
   test("session affinity hash uses signed UTF-8 FNV-1a vectors", async () => {
     const { antigravitySessionID } = await import("@ycoding-ai/core/plugin/provider/antigravity")
     expect(antigravitySessionID("", "")).toBe("-5808590958014384161")
@@ -132,12 +184,10 @@ describe("AntigravityPlugin", () => {
         parentID: SessionSchema.ID.make("ses-parent"),
         projectID: Project.ID.make("project"),
       })
-      await sdk
-        .languageModel("gemini-3.8-flash")
-        .doGenerate({
-          prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
-          headers: { ...headers, accept: "text/event-stream" },
-        })
+      await sdk.languageModel("gemini-3.8-flash").doGenerate({
+        prompt: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
+        headers: { ...headers, accept: "text/event-stream" },
+      })
     }
     await run("ses-a", "gemini-3.8-flash-medium")
     await run("ses-a", "gemini-3.8-flash-medium")

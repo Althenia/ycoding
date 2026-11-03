@@ -185,7 +185,8 @@ const lowerToolConfig = (toolChoice: NonNullable<LLMRequest["toolChoice"]>) =>
 const lowerUserPart = Effect.fn("Gemini.lowerUserPart")(function* (part: TextPart | MediaPart) {
   if (part.type === "text") return { text: part.text }
   return yield* ProviderShared.recoverMedia(
-    "Gemini", part,
+    "Gemini",
+    part,
     ProviderShared.validateMedia("Gemini", part, MEDIA_MIMES).pipe(
       Effect.map((media) => ({ inlineData: { mimeType: media.mime, data: media.base64 } })),
     ),
@@ -281,13 +282,16 @@ const lowerMessages = Effect.fn("Gemini.lowerMessages")(function* (request: LLMR
       })
       for (const item of content) {
         if (item.type === "text") continue
-        parts.push(yield* ProviderShared.recoverMedia(
-          "Gemini", { type: "media", mediaType: item.mime, data: item.uri, filename: item.name },
-          ProviderShared.validateToolFile("Gemini", item, MEDIA_MIMES).pipe(
-            Effect.map((media) => ({ inlineData: { mimeType: media.mime, data: media.base64 } })),
+        parts.push(
+          yield* ProviderShared.recoverMedia(
+            "Gemini",
+            { type: "media", mediaType: item.mime, data: item.uri, filename: item.name },
+            ProviderShared.validateToolFile("Gemini", item, MEDIA_MIMES).pipe(
+              Effect.map((media) => ({ inlineData: { mimeType: media.mime, data: media.base64 } })),
+            ),
+            (text) => ({ text }),
           ),
-          (text) => ({ text }),
-        ))
+        )
       }
     }
     contents.push({ role: "user", parts })
@@ -334,7 +338,10 @@ const fromRequest = Effect.fn("Gemini.fromRequest")(function* (request: LLMReque
           },
         ]
       : undefined,
-    toolConfig: toolsEnabled && request.toolChoice ? yield* lowerToolConfig(request.toolChoice) : undefined,
+    toolConfig:
+      request.toolChoice && (toolsEnabled || request.toolChoice.type === "none")
+        ? yield* lowerToolConfig(request.toolChoice)
+        : undefined,
     generationConfig: Object.values(generationConfig).some((value) => value !== undefined)
       ? generationConfig
       : undefined,

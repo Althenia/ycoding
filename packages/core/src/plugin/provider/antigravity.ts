@@ -358,7 +358,7 @@ type ToolHistory = {
   calls: { id: unknown; name: unknown }[]
   responses: { id: unknown; name: unknown }[]
 }
-type CallCapture = { schemas: ReadonlyMap<string, unknown>; history: ToolHistory }
+type CallCapture = { schemas: ReadonlyMap<string, unknown>; history: ToolHistory; toolsDisabled: boolean }
 
 const callCapture = new AsyncLocalStorage<CallCapture>()
 
@@ -384,7 +384,14 @@ function toolHistory(prompt: ReadonlyArray<unknown>): ToolHistory {
 
 export function captureToolSchemas(language: LanguageModelV3): LanguageModelV3 {
   const capture =
-    <Options extends { tools?: ReadonlyArray<unknown>; prompt?: ReadonlyArray<unknown> }, Result>(
+    <
+      Options extends {
+        tools?: ReadonlyArray<unknown>
+        prompt?: ReadonlyArray<unknown>
+        toolChoice?: { type: string }
+      },
+      Result,
+    >(
       call: (options: Options) => PromiseLike<Result>,
     ) =>
     (options: Options) => {
@@ -393,7 +400,10 @@ export function captureToolSchemas(language: LanguageModelV3): LanguageModelV3 {
         if (!isRecord(item) || item.type !== "function" || typeof item.name !== "string") continue
         schemas.set(item.name, item.inputSchema)
       }
-      return callCapture.run({ schemas, history: toolHistory(options.prompt ?? []) }, () => call(options))
+      return callCapture.run(
+        { schemas, history: toolHistory(options.prompt ?? []), toolsDisabled: options.toolChoice?.type === "none" },
+        () => call(options),
+      )
     }
   const doGenerate = capture((options: Parameters<LanguageModelV3["doGenerate"]>[0]) => language.doGenerate(options))
   const doStream = capture(async (options: Parameters<LanguageModelV3["doStream"]>[0]) => {
@@ -542,7 +552,7 @@ export function createAntigravityFetch(
     // Gemini selects the prefix breakpoint on the server. Drop any client cache
     // resource or breakpoint the SDK may have attached, then keep the remaining
     // prefix stable by not ending the request on a model turn.
-    const captured = model.startsWith("claude-") ? callCapture.getStore() : undefined
+    const captured = callCapture.getStore()
     const request = stripTrailingModelContents(
       omitClientCacheControls(
         model.startsWith("claude-")
@@ -574,6 +584,14 @@ export function createAntigravityFetch(
         requestId: `agent-${crypto.randomUUID()}`,
         request: {
           ...(isRecord(request) ? request : {}),
+          ...(captured?.toolsDisabled
+            ? {
+                toolConfig: {
+                  ...(isRecord(request) && isRecord(request.toolConfig) ? request.toolConfig : {}),
+                  functionCallingConfig: { mode: "NONE" },
+                },
+              }
+            : {}),
           ...(affinity ? { sessionId: antigravitySessionID(affinity, model) } : {}),
         },
       }),
