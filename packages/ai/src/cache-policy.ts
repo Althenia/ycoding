@@ -172,10 +172,10 @@ const isGpt56MarkablePart = (part: ContentPart) => {
   return true
 }
 
-type Gpt56MarkerRole = "user" | "assistant" | "tool"
+type Gpt56MarkerRole = "user" | "assistant" | "tool" | "system"
 type Gpt56MarkerRoles = ReadonlyArray<Gpt56MarkerRole> | undefined
 const isGpt56MarkerRole = (role: Message["role"]): role is Gpt56MarkerRole =>
-  role === "user" || role === "assistant" || role === "tool"
+  role === "user" || role === "assistant" || role === "tool" || role === "system"
 
 // Anthropic and Bedrock check at most 20 block positions per breakpoint when
 // hunting for a prior cache entry. A single trailing anchor therefore finds
@@ -442,13 +442,18 @@ export const applyCachePolicy = (request: LLMRequest): LLMRequest => {
   const tailHint = makeHint(policy.ttlSeconds)
   const prefixHint = auto && cacheProfile(request.model.id)?.extendedTtl ? makeHint(EXTENDED_TTL_SECONDS) : tailHint
   const reserve = coordinateAutoHints(request)
+  const publicResponses = publicResponsesEndpoint(request)
   // Responses accepts breakpoints on input blocks only; assistant replay uses
   // output_text. Chat uses text blocks for both directions and can mark either.
+  // Public Responses also accepts durable chronological instruction blocks.
+  // Keep their endpoints available when a volatile suffix selects explicit mode.
   const gpt56Roles: Gpt56MarkerRoles = !gpt56
     ? undefined
     : request.model.route.id === "openai-chat" || request.model.route.id === "github-copilot-chat"
       ? ["user", "assistant", "tool"]
-      : ["user", "tool"]
+      : publicResponses
+        ? ["user", "tool", "system"]
+        : ["user", "tool"]
   const tools = policy.tools && !gpt56 ? markLastTool(request.tools, prefixHint, reserve) : request.tools
   const system = policy.system ? markLastSystem(request.system, prefixHint, reserve) : request.system
   const promptCacheOptions = OpenAIOptions.promptCacheOptions(request)
@@ -462,7 +467,6 @@ export const applyCachePolicy = (request: LLMRequest): LLMRequest => {
         openai: { promptCacheOptions: { ...promptCacheOptions, mode: "explicit" } },
       })
     : request.providerOptions
-  const publicResponses = publicResponsesEndpoint(request)
   const implicitReserved = gpt56 && promptCacheOptions?.mode !== "explicit" && !explicitVolatileSuffix ? 1 : 0
   const gpt56MessageLimit =
     gpt56 && !publicResponses

@@ -690,7 +690,13 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
         const content = yield* ProviderShared.systemUpdateText("OpenAI Responses", message)
         input.push({
           role: "system",
-          content: content.map((part) => ({ type: "input_text" as const, text: part.text })),
+          content: content.map((part) => ({
+            type: "input_text" as const,
+            text: part.text,
+            ...(supportsBreakpoints && part.cache
+              ? { prompt_cache_breakpoint: cacheBreakpoint(part.cache) }
+              : {}),
+          })),
         })
         continue
       }
