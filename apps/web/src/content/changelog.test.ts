@@ -9,13 +9,18 @@ const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.ve
 describe("release entries", () => {
   test("lists v0.11.5 instruction caching and search guardrails first with shared notes", async () => {
     const entry = RELEASES[0]
-    expect(entry).toMatchObject({ version: "0.11.5", date: "2026-11-03", tags: ["Fixed"] })
-    expect(entry?.changes).toHaveLength(2)
+    expect(entry).toMatchObject({ version: "0.11.5", date: "2026-11-03", tags: ["Changed", "Fixed"] })
+    expect(entry?.changes).toHaveLength(3)
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.5.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.11.5\n")
     for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
     for (const fragment of ["OpenAI Responses", "instruction", "volatile", "have not been measured", "read-only", "destructive", "custom", "catastrophic", "bounded"]) expect(text).toContain(fragment)
+    expect(notes).toContain("2044b664eecffa53b6c4197bfb391dd8407c7321")
+    expect(notes).toContain("fe6924e3115e167354d43bb045485cb556f98230")
+    expect(text).toContain("clarification changes no production behavior")
+    expect(text).toContain("Durable Session-state observations")
+    expect(text).not.toContain("Live volatile state remains unmarked")
     expect(after("0.11.5")?.version).toBe("0.11.4")
   })
 

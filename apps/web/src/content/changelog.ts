@@ -25,9 +25,10 @@ export const RELEASES: readonly ReleaseEntry[] = [
     version: "0.11.5",
     date: "2026-11-03",
     title: "Durable instruction caching and precise search guardrails",
-    tags: ["Fixed"],
+    tags: ["Changed", "Fixed"],
     changes: [
-      { tag: "Fixed", text: "Public OpenAI Responses requests for GPT-5.6 and later keep durable chronological instruction updates eligible for cache breakpoints while preserving their role and order. Live volatile state remains unmarked. Cache-hit or cost gains have not been measured." },
+      { tag: "Changed", text: "This v0.11.5 re-release clarifies durable Session-state observations versus explicitly volatile outbound messages and adds regression coverage. The clarification changes no production behavior." },
+      { tag: "Fixed", text: "Public OpenAI Responses requests for GPT-5.6 and later keep durable chronological instruction updates eligible for cache breakpoints while preserving their role and order. Durable Session-state observations are replayed chronologically and remain eligible; outbound messages explicitly flagged volatile receive no generated breakpoint. Cache-hit or cost gains have not been measured." },
       { tag: "Fixed", text: "Recognized read-only search and print commands avoid destructive-rule false positives for text they only inspect, including bounded reader wrappers, literal regex end anchors and plain input redirection. Executable pipelines, substitutions, unsupported arithmetic expansion, destructive commands, custom guardrails and catastrophic denies retain their checks. Recognition remains literal and bounded." },
     ],
   },
