@@ -11,7 +11,7 @@ import { Effect } from "effect"
 import { it } from "./lib/effect"
 
 for (const mode of ["auto", "explicit", "implicit"] as const) {
-  it.effect(`${mode}: preserves a cached instruction-update prefix before changing live state`, () =>
+  it.effect(`${mode}: preserves an instruction-update prefix before a plugin-owned volatile suffix`, () =>
     Effect.gen(function* () {
       const id = CatalogModel.ID.make("gpt-6.1-sol")
       const model = yield* SessionRunnerModel.fromCatalogModel(CatalogModel.Info.make({

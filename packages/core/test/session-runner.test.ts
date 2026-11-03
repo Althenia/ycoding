@@ -3,6 +3,7 @@ import {
   LLMClient,
   LLMError,
   LLMEvent,
+  LLMRequest,
   Message,
   Model,
   SystemPart,
@@ -15,7 +16,6 @@ import {
   ContentPolicyReason,
   QuotaExceededReason,
   type LLMClientShape,
-  type LLMRequest,
 } from "@ycoding-ai/ai"
 import * as AnthropicMessages from "@ycoding-ai/ai/protocols/anthropic-messages"
 import * as OpenAIChat from "@ycoding-ai/ai/protocols/openai-chat"
@@ -2333,6 +2333,20 @@ describe("SessionRunnerLLM", () => {
   it.effect("retains delivered Session state as visible append-only history", () =>
     Effect.gen(function* () {
       const session = yield* setup
+      const compile = (request: LLMRequest) => LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLMRequest.update(request, {
+          model: OpenAIResponses.route.model({ id: "gpt-6.1-sol" }),
+          cache: { system: true, messages: { tail: Number.MAX_SAFE_INTEGER } },
+          providerOptions: { openai: { store: false, promptCacheOptions: { mode: "implicit", ttl: "30m" } } },
+        }),
+      ).pipe(Effect.provide(LLMClient.layer.pipe(Layer.provide(Layer.succeed(RequestExecutor.Service, {
+        execute: () => Effect.die("Payload preparation must not send a provider request"),
+      })))))
+      const stateBlocks = (body: OpenAIResponses.OpenAIResponsesBody) => body.input.flatMap((item) =>
+        "role" in item && item.role === "system" && Array.isArray(item.content)
+          ? item.content.filter((part) => part.type === "input_text" && part.text.includes("Authoritative current Session state"))
+          : [],
+      )
       response = reply.text("First answer", "state-first")
       yield* admit(session, "First prompt")
       yield* session.resume(sessionID)
@@ -2345,6 +2359,9 @@ describe("SessionRunnerLLM", () => {
         ),
       )
       expect(firstState).toBeDefined()
+      const firstBody = (yield* compile(first)).body
+      expect(firstBody.prompt_cache_options?.mode).toBe("implicit")
+      expect(stateBlocks(firstBody)).toMatchObject([{ prompt_cache_breakpoint: { mode: "explicit" } }])
       const history = yield* session.context(sessionID)
       expect(
         history.some(
@@ -2377,6 +2394,13 @@ describe("SessionRunnerLLM", () => {
       expect(states[0]).toEqual(firstState!)
       expect(JSON.stringify(states[1])).toContain("New task")
       expect(requests[2]!.messages.some((message) => message.volatile === true)).toBe(false)
+      const thirdBody = (yield* compile(requests[2]!)).body
+      expect(thirdBody.prompt_cache_options?.mode).toBe("implicit")
+      expect(thirdBody.input.slice(0, firstBody.input.length)).toEqual([...firstBody.input])
+      expect(stateBlocks(thirdBody)).toMatchObject([
+        { prompt_cache_breakpoint: { mode: "explicit" } },
+        { prompt_cache_breakpoint: { mode: "explicit" } },
+      ])
 
       yield* replaySessionProjection(sessionID)
       response = reply.text("After replay", "state-replayed")
