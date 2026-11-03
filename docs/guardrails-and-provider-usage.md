@@ -123,6 +123,8 @@ The code-owned standard profile:
 
 The matcher is conservative rather than a complete shell-language interpreter. It tracks possible working directories across supported compound commands; `cd ... &&` establishes relocation only on success, while unconditional, fallback, pipeline and background execution cannot assume relocation succeeded. Aliases, functions, command substitution, `xargs`/`find` deletion, and symlink identity remain outside broad-deletion recognition. Approval does not make a denied agent permission valid, and a permission approval does not bypass a guardrail review.
 
+Destructive text that a proven read-only pipeline only searches or prints — for example `rg`, `grep`, or `git grep` patterns naming `delete from`, `git reset --hard`, or `mkfs` — does not match the standard destructive rules. The exemption requires every segment of the pipeline to be a recognized read-only invocation; command substitution, pipes into interpreters or database clients, non-null output redirection, and execution-capable search options such as `rg --pre` or `git grep -O` keep the command classified; plain input redirection and the existing null-output (`/dev/null`) redirection exception remain read-only. Custom guardrail rules still apply to read-only searches.
+
 Catastrophic standard denies are unoverrideable. Built-in hard reviews that survive semantic match verification retain precedence over custom allow rules. For other actions, the first matching custom source layer decides before ordinary standard review or allow behavior. A source layer with enabled invalid configuration reviews mutation actions and retains its place in that ordering.
 
 ### Custom guardrails

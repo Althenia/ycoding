@@ -73,7 +73,12 @@ export function match(action: string, resource: string, paths?: Paths, dismissed
         } } : undefined
   if (action !== "shell") return outside
   const command = resource.replace(/\s+/g, " ").trim()
-  const denied = catastrophic.find((rule) => rule.pattern.test(command))
+  const inert = inertShellSegments(resource)
+  const executableText = shellSegments(resource)
+    .map((segment, index) => `${index === 0 ? "" : segment.separator}${inert.has(index) ? "" : [segment.rawTokens.join(" "), ...segment.heredocBodies].join(" ")}`)
+    .join("")
+    .replace(/\s+/g, " ")
+  const denied = catastrophic.find((rule) => rule.pattern.test(executableText))
   const deletion = deletionMatch(resource, paths, dismissed)
   if (denied) return { ...denied, decision: "deny", hardReview: false }
   if (deletion?.decision === "deny") return deletion
@@ -86,9 +91,9 @@ export function match(action: string, resource: string, paths?: Paths, dismissed
     }
     return { raw: segment.rawTokens.join(" "), command: git < 0 ? segment.rawTokens.join(" ") : [...segment.tokens.slice(0, git + 1), ...segment.tokens.slice(index)].join(" ") }
   })
-  const review = segmentReviews.find((rule) => !dismissed?.has(rule.id) && segments.some((segment) => rule.pattern.test(segment.command)))
+  const review = segmentReviews.find((rule) => !dismissed?.has(rule.id) && segments.some((segment, index) => !inert.has(index) && rule.pattern.test(segment.command)))
   if (review) {
-    const matchedSegment = segments.find((segment) => review.pattern.test(segment.command))?.raw ?? command
+    const matchedSegment = segments.find((segment, index) => !inert.has(index) && review.pattern.test(segment.command))?.raw ?? command
     return { ...review, decision: "ask", hardReview: true, evidence: { matchedSegment, resolvedTargets: [], confirmed: !inertGitOperation(matchedSegment) } }
   }
   const database = dismissed?.has(databaseReview.id) ? undefined : executableDatabaseMention(resource)
@@ -353,6 +358,23 @@ function isSqlMetadata(segment: ShellSegment): boolean {
 
 const chainedSeparators = new Set(["; ", "\n ", " && ", " || "])
 
+function inertShellSegments(resource: string) {
+  const { segments } = shellScan(resource)
+  const inert = new Set<number>()
+  let group: number[] = []
+  const settle = () => {
+    if (group.length > 0 && group.every((index) => readOnlyShell(resource.slice(segments[index].start, segments[index].end))))
+      group.forEach((index) => inert.add(index))
+    group = []
+  }
+  segments.forEach((segment, index) => {
+    if (index > 0 && chainedSeparators.has(segment.separator)) settle()
+    group.push(index)
+  })
+  settle()
+  return inert
+}
+
 function executableDatabaseMention(resource: string) {
   const { segments, comments } = shellScan(resource)
   const pipelines = segments.reduce<ShellSegment[][]>((groups, segment, index) => {
@@ -360,13 +382,10 @@ function executableDatabaseMention(resource: string) {
     else groups.at(-1)!.push(segment)
     return groups
   }, [])
+  const inertSegments = inertShellSegments(resource)
   const inert = [
     ...comments,
-    ...pipelines.flatMap((group) =>
-      group.every((segment) => readOnlyShell(resource.slice(segment.start, segment.end)))
-        ? group.map((segment) => [segment.start, segment.end] as const)
-        : [],
-    ),
+    ...segments.flatMap((segment, index) => inertSegments.has(index) ? [[segment.start, segment.end] as const] : []),
   ]
   const dynamicInput = pipelines.find((group) => group.some(databaseClient) &&
     group.some((item) => tokenName(item.tokens[0] ?? "") === "printf" && item.rawTokens.some((token) => /[$`]/.test(token))))
@@ -927,7 +946,8 @@ function readOnlyShell(command: string) {
       if (character === quote) quote = undefined
       continue
     }
-    if (character === "`" || character === "$" || (!quote && /[(){}#]/.test(character))) return false
+    if (character === "`" || (!quote && /[(){}#]/.test(character))) return false
+    if (character === "$" && /[A-Za-z0-9_{([@*#?$!-]/.test(command[index + 1] ?? "")) return false
     if (character === "\\") {
       if (!command[index + 1] || command[index + 1] === "\n") return false
       text.push(character, command[++index])
@@ -943,7 +963,7 @@ function readOnlyShell(command: string) {
       text.push(character)
       continue
     }
-    if (character === "<") return false
+    if (character === "<" && (command[index + 1] === "<" || command[index + 1] === "(")) return false
     if (character === ">" || (/\d/.test(character) && command[index + 1] === ">" &&
       (index === 0 || /[\s;|&]/.test(command[index - 1])))) {
       const redirect = command.slice(index).match(/^(?:[012])?>(?:>\s*\/dev\/null|\s*\/dev\/null|&[012])(?=\s|[;|&]|$)/)?.[0]
@@ -959,10 +979,19 @@ function readOnlyShell(command: string) {
   return segments.length > 0 && segments.every((segment) => readOnlyInvocation(segment.tokens))
 }
 
+const safeAssignment = /^(?:LC_ALL|LC_[A-Z]+|LANG|LANGUAGE|TZ)=[^\s]+$/
+
 function readOnlyInvocation(tokens: ReadonlyArray<string>) {
-  const name = path.basename(tokens[0])
-  if (!shellReaders.has(name) || (tokens[0] !== name && !["/bin", "/usr/bin"].includes(path.dirname(tokens[0])))) return false
-  const args = tokens.slice(1)
+  let start = 0
+  while (start < tokens.length && safeAssignment.test(tokens[start])) start++
+  if (tokens[start] === "command") {
+    start++
+    if (tokens[start] === "-p" || tokens[start] === "--") start++
+  }
+  const invocation = tokens[start] ?? ""
+  const name = path.basename(invocation)
+  if (!shellReaders.has(name) || (invocation !== name && !["/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"].includes(path.dirname(invocation)))) return false
+  const args = tokens.slice(start + 1)
   if (name === "sed") {
     const scripts: string[] = []
     for (let index = 0; index < args.length; index++) {
