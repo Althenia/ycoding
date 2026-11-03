@@ -6983,6 +6983,52 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("consumes an admitted prompt exactly once after a pre-promotion drain failure", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const execution = yield* realExecution
+      const admitted = yield* admit(session, "Survive the first drain")
+
+      let flushes = 0
+      pluginFlushHook = Effect.suspend(() =>
+        flushes++ === 0 ? Effect.die(new Error("synthetic plugin flush failure")) : Effect.void,
+      )
+      response = reply.text("Recovered response", "text-recovered")
+
+      yield* execution.wake(sessionID)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(userTexts(requests[0]!)).toEqual(["Survive the first drain"])
+      const messages = yield* session.context(sessionID)
+      expect(
+        messages
+          .filter((message) => message.type === "user")
+          .map((message) => ({ id: message.id, consumed: message.time.consumed !== undefined })),
+      ).toEqual([{ id: admitted.id, consumed: true }])
+      const { db } = yield* Database.Service
+      const events = yield* db
+        .select({ type: EventTable.type, data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .orderBy(asc(EventTable.seq))
+        .all()
+        .pipe(Effect.orDie)
+      expect(events.filter((event) => event.type === "session.execution.failed.1")).toHaveLength(1)
+      expect(events.filter((event) => event.type === "session.input.promoted.1")).toHaveLength(1)
+      expect(events.filter((event) => event.type === "session.input.consumed.1").map((event) => event.data)).toEqual([
+        expect.objectContaining({ inputIDs: [admitted.id] }),
+      ])
+      const pending = yield* db
+        .select({ id: SessionPendingTable.id })
+        .from(SessionPendingTable)
+        .where(eq(SessionPendingTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(pending).toHaveLength(0)
+    }),
+  )
+
   it.effect("runs steering input accepted while the active step fails", () =>
     Effect.gen(function* () {
       const session = yield* setup

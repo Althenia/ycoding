@@ -2,7 +2,11 @@ import { expect, test } from "bun:test"
 import { parseAgentMessage, parseChunkedValue, type RemoteResponse } from "@ycoding-ai/remote"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
-import { Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
+import { Config } from "@ycoding-ai/core/config"
+import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
+import { McpInstructions } from "@ycoding-ai/core/mcp/instructions"
+import { MCP } from "@ycoding-ai/core/mcp/index"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
@@ -839,6 +843,257 @@ test("bridges authorized session operations against an isolated server", async (
     await rm(directory, { recursive: true, force: true })
   }
 }, 60_000)
+
+test("consumes a relay-admitted prompt exactly once after bounded pre-promotion failures", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-prepromotion-"))
+  const agentConfig = JSON.stringify({ agents: { fragile: { description: "Fragile test agent", mode: "primary" } } })
+  await writeFile(join(directory, "ycoding.json"), agentConfig)
+  const server = await startServer(directory, { provider: { text: "Recovered." } })
+  const provider = server.provider
+  if (provider === undefined) throw new Error("the isolated server must expose its provider stand-in")
+  const sessionID = "ses_remote_prepromotion"
+  const messageID = "msg_remote_prepromotion_once"
+  const relay = createRelay()
+  const bridge = new RemoteAgent({
+    relayURL: "https://relay.example",
+    local: createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } }),
+    credentials: async () => ({ accessToken: "integration-token", accessExpiresAt: Date.now() + 600_000 }),
+    createConnection: relay.createConnection,
+    refreshIntervalMs: 3_600_000,
+  })
+  const refresh = async () => {
+    const response = await server.request("/api/provider/refresh", { method: "POST" })
+    expect(response.status, await response.clone().text()).toBe(204)
+  }
+  const agentIDs = async () => {
+    const response = await server.request("/api/agent")
+    expect(response.status, await response.clone().text()).toBe(200)
+    const body = (await response.json()) as { data: readonly { id: string }[] }
+    return body.data.map((agent) => agent.id)
+  }
+  let logPoll = 0
+  const logEvents = async () => {
+    relay.deliver(request(`log_poll_${++logPoll}`, "session.log", sessionID, { after: 0 }))
+    const body = valueOf(await answer(relay, `log_poll_${logPoll}`)) as {
+      data: readonly { type: string; data?: { inputID?: string; inputIDs?: readonly string[] } }[]
+    }
+    return body.data
+  }
+
+  try {
+    const created = await server.request("/api/session", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: sessionID,
+        location: { directory },
+        agent: "fragile",
+        model: { providerID: provider.providerID, id: provider.modelID },
+      }),
+    })
+    expect(created.status, await created.clone().text()).toBe(200)
+    expect(await agentIDs()).toContain("fragile")
+    await bridge.connect()
+
+    await writeFile(join(directory, "ycoding.json"), "{}")
+    await refresh()
+    await waitFor(async () => ((await agentIDs()).includes("fragile") ? undefined : true), 30_000)
+
+    relay.deliver(request("prompt_1", "session.prompt", sessionID, { id: messageID, text: "Consume me exactly once" }))
+    const admitted = valueOf(await answer(relay, "prompt_1")) as { data: { id: string } }
+    expect(admitted.data.id).toBe(messageID)
+    const inputID = await waitFor(async () => {
+      const entry = (await logEvents()).find((event) => event.type === "session.input.admitted")
+      return entry?.data?.inputID
+    }, 30_000)
+
+    const failed = await waitFor(async () => {
+      const events = (await logEvents()).filter((event) => event.type === "session.execution.failed")
+      return events.length >= 4 ? events : undefined
+    }, 30_000)
+    expect(failed.length).toBe(4)
+    expect((await logEvents()).filter((event) => event.type === "session.input.promoted")).toHaveLength(0)
+    expect(provider.requests()).toHaveLength(0)
+    const pendingResponse = await server.request(`/api/session/${sessionID}/pending`)
+    expect(pendingResponse.status, await pendingResponse.clone().text()).toBe(200)
+    const pending = (await pendingResponse.json()) as { data: readonly { id: string }[] }
+    expect(pending.data.map((item) => item.id)).toEqual([inputID])
+
+    expect(await agentIDs()).toContain("god")
+    relay.deliver(request("switch_1", "session.switchAgent", sessionID, { agent: "god" }))
+    expect(valueOf(await answer(relay, "switch_1"))).toBeNull()
+
+    relay.deliver(request("prompt_2", "session.prompt", sessionID, { id: messageID, text: "Consume me exactly once" }))
+    const retried = valueOf(await answer(relay, "prompt_2")) as { data: { id: string } }
+    expect(retried.data.id).toBe(messageID)
+
+    await waitFor(async () =>
+      (await logEvents()).some(
+        (event) => event.type === "session.input.consumed" && event.data?.inputIDs?.includes(inputID),
+      )
+        ? true
+        : undefined,
+    30_000)
+    const events = await logEvents()
+    expect(events.filter((event) => event.type === "session.input.admitted" && event.data?.inputID === inputID)).toHaveLength(1)
+    expect(events.filter((event) => event.type === "session.input.promoted" && event.data?.inputID === inputID)).toHaveLength(1)
+    expect(
+      events.filter((event) => event.type === "session.input.consumed" && event.data?.inputIDs?.includes(inputID)),
+    ).toHaveLength(1)
+    const failedAfterConsumption = events.filter((event) => event.type === "session.execution.failed").length
+    expect(failedAfterConsumption).toBe(4)
+    expect(provider.requests()).toHaveLength(1)
+    expect(JSON.stringify(provider.requests()[0]).split("Consume me exactly once").length - 1).toBe(1)
+
+    relay.deliver(request("messages_1", "session.messages", sessionID))
+    const messages = valueOf(await answer(relay, "messages_1")) as { data: readonly { type: string; id: string }[] }
+    expect(messages.data.filter((message) => message.type === "user" && message.id === messageID)).toHaveLength(1)
+    const pendingAfter = await server.request(`/api/session/${sessionID}/pending`)
+    expect(pendingAfter.status, await pendingAfter.clone().text()).toBe(200)
+    expect(((await pendingAfter.json()) as { data: readonly unknown[] }).data).toHaveLength(0)
+
+    relay.deliver(request("stop_1", "session.interrupt", sessionID))
+    expect(valueOf(await answer(relay, "stop_1"))).toBeDefined()
+    await Bun.sleep(250)
+    expect(provider.requests()).toHaveLength(1)
+    const afterStop = await logEvents()
+    expect(afterStop.filter((event) => event.type === "session.input.consumed")).toHaveLength(1)
+    expect(afterStop.filter((event) => event.type === "session.execution.failed")).toHaveLength(failedAfterConsumption)
+  } catch (error) {
+    const types = await logEvents().then(
+      (events) => events.map((event) => event.type).join(","),
+      () => "<log unavailable>",
+    )
+    const relevant = server.logs.filter((line) => /failed|fragile|AgentNotFound|error/i.test(line)).slice(-20)
+    throw new Error(
+      `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\nsession events: ${types}\nserver logs (filtered):\n${relevant.join("\n")}`,
+    )
+  } finally {
+    await bridge.close()
+    await server.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 120_000)
+
+test("automatically consumes a relay-admitted prompt exactly once after one transient pre-promotion failure", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-oneshot-"))
+  const fault = { armed: false, fired: false }
+  const oneShotNode = makeLocationNode({
+    service: McpInstructions.Service,
+    layer: Layer.effect(
+      McpInstructions.Service,
+      Effect.gen(function* () {
+        const real = yield* McpInstructions.Service
+        return McpInstructions.Service.of({
+          load: (agent) =>
+            Effect.suspend(() => {
+              if (fault.armed && !fault.fired) {
+                fault.fired = true
+                return Effect.die(new Error("synthetic one-shot pre-promotion failure"))
+              }
+              return real.load(agent)
+            }),
+        })
+      }),
+    ).pipe(Layer.provide(McpInstructions.layer)),
+    deps: [Config.node, MCP.node],
+  })
+  const server = await startServer(directory, {
+    provider: { text: "Recovered." },
+    replacements: [[McpInstructions.node, oneShotNode]],
+  })
+  const provider = server.provider
+  if (provider === undefined) throw new Error("the isolated server must expose its provider stand-in")
+  const sessionID = "ses_remote_oneshot"
+  const messageID = "msg_remote_oneshot_once"
+  const relay = createRelay()
+  const bridge = new RemoteAgent({
+    relayURL: "https://relay.example",
+    local: createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } }),
+    credentials: async () => ({ accessToken: "integration-token", accessExpiresAt: Date.now() + 600_000 }),
+    createConnection: relay.createConnection,
+    refreshIntervalMs: 3_600_000,
+  })
+  let logPoll = 0
+  const logEvents = async () => {
+    relay.deliver(request(`oneshot_log_${++logPoll}`, "session.log", sessionID, { after: 0 }))
+    const body = valueOf(await answer(relay, `oneshot_log_${logPoll}`)) as {
+      data: readonly { type: string; data?: { inputID?: string; inputIDs?: readonly string[] } }[]
+    }
+    return body.data
+  }
+
+  try {
+    await createSession(server, sessionID, directory, { providerID: provider.providerID, id: provider.modelID })
+    await bridge.connect()
+
+    fault.armed = true
+    relay.deliver(request("oneshot_prompt", "session.prompt", sessionID, { id: messageID, text: "Consume me after one failure" }))
+    const admitted = valueOf(await answer(relay, "oneshot_prompt")) as { data: { id: string } }
+    expect(admitted.data.id).toBe(messageID)
+    const inputID = await waitFor(async () => {
+      const entry = (await logEvents()).find((event) => event.type === "session.input.admitted")
+      return entry?.data?.inputID
+    }, 30_000)
+
+    await waitFor(async () =>
+      (await logEvents()).some(
+        (event) => event.type === "session.input.consumed" && event.data?.inputIDs?.includes(inputID),
+      )
+        ? true
+        : undefined,
+    30_000)
+    expect(fault.fired).toBe(true)
+    const events = await logEvents()
+    expect(events.filter((event) => event.type === "session.input.admitted")).toHaveLength(1)
+    expect(events.filter((event) => event.type === "session.input.admitted" && event.data?.inputID === inputID)).toHaveLength(1)
+    expect(events.filter((event) => event.type === "session.execution.failed")).toHaveLength(1)
+    expect(events.filter((event) => event.type === "session.input.promoted" && event.data?.inputID === inputID)).toHaveLength(1)
+    expect(
+      events.filter((event) => event.type === "session.input.consumed" && event.data?.inputIDs?.includes(inputID)),
+    ).toHaveLength(1)
+    const failedIndex = events.findIndex((event) => event.type === "session.execution.failed")
+    const promotedIndex = events.findIndex(
+      (event) => event.type === "session.input.promoted" && event.data?.inputID === inputID,
+    )
+    const consumedIndex = events.findIndex(
+      (event) => event.type === "session.input.consumed" && event.data?.inputIDs?.includes(inputID),
+    )
+    expect(failedIndex).toBeGreaterThanOrEqual(0)
+    expect(failedIndex).toBeLessThan(promotedIndex)
+    expect(promotedIndex).toBeLessThan(consumedIndex)
+    expect(provider.requests()).toHaveLength(1)
+    expect(JSON.stringify(provider.requests()[0]).split("Consume me after one failure").length - 1).toBe(1)
+
+    relay.deliver(request("oneshot_messages", "session.messages", sessionID))
+    const messages = valueOf(await answer(relay, "oneshot_messages")) as { data: readonly { type: string; id: string }[] }
+    expect(messages.data.filter((message) => message.type === "user" && message.id === messageID)).toHaveLength(1)
+    const pendingAfter = await server.request(`/api/session/${sessionID}/pending`)
+    expect(pendingAfter.status, await pendingAfter.clone().text()).toBe(200)
+    expect(((await pendingAfter.json()) as { data: readonly unknown[] }).data).toHaveLength(0)
+
+    relay.deliver(request("oneshot_stop", "session.interrupt", sessionID))
+    expect(valueOf(await answer(relay, "oneshot_stop"))).toBeNull()
+    await Bun.sleep(250)
+    expect(provider.requests()).toHaveLength(1)
+    const afterStop = await logEvents()
+    expect(afterStop.filter((event) => event.type === "session.input.consumed")).toHaveLength(1)
+    expect(afterStop.filter((event) => event.type === "session.execution.failed")).toHaveLength(1)
+  } catch (error) {
+    const types = await logEvents().then(
+      (events) => events.map((event) => event.type).join(","),
+      () => "<log unavailable>",
+    )
+    const relevant = server.logs.filter((line) => /failed|synthetic one-shot|error/i.test(line)).slice(-20)
+    throw new Error(
+      `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\nfault: ${JSON.stringify(fault)}\nsession events: ${types}\nserver logs (filtered):\n${relevant.join("\n")}`,
+    )
+  } finally {
+    await bridge.close()
+    await server.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 120_000)
 
 test("replies to real ordinary and hard guardrail reviews through the root Session relay", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-guardrail-"))

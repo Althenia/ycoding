@@ -123,6 +123,7 @@ export function createRoutes(
   serviceURLs: () => ReadonlyArray<string> = () => [],
   sourceEpoch: ServiceStatus.Epoch = ServiceStatus.Epoch.make(randomUUID()),
   remote: RemoteConnection.Interface = RemoteConnection.unavailable,
+  replacements: LayerNode.Replacements = [],
 ) {
   return makeRoutes(
     options.password
@@ -132,6 +133,7 @@ export function createRoutes(
     serviceURLs,
     sourceEpoch,
     remote,
+    replacements,
   )
 }
 
@@ -139,7 +141,7 @@ export function createEmbeddedRoutes(
   options: ServerOptions = {},
   sourceEpoch: ServiceStatus.Epoch = ServiceStatus.Epoch.make(randomUUID()),
 ) {
-  return makeRoutes(ServerAuth.Config.configLayer({ password: Option.none() }), options, () => [], sourceEpoch, RemoteConnection.unavailable)
+  return makeRoutes(ServerAuth.Config.configLayer({ password: Option.none() }), options, () => [], sourceEpoch, RemoteConnection.unavailable, [])
 }
 
 function makeRoutes<AuthError, AuthServices>(
@@ -148,9 +150,11 @@ function makeRoutes<AuthError, AuthServices>(
   serviceURLs: () => ReadonlyArray<string>,
   sourceEpoch: ServiceStatus.Epoch,
   remote: RemoteConnection.Interface,
+  extraReplacements: LayerNode.Replacements,
 ) {
   const pluginRuntimeCell = PluginRuntime.makeCell()
   const replacements: LayerNode.Replacements = [
+    ...extraReplacements,
     [Database.node, Database.configured(options.database)],
     [ModelsDev.node, ModelsDev.configured({ ...options.models, client: options.client })],
     [Watcher.node, Watcher.configured({ enabled: options.fs?.filewatcher })],

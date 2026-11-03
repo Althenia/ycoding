@@ -3,6 +3,7 @@ export * as ServerProcess from "./process"
 import { NodeHttpServer, NodeHttpServerRequest } from "@effect/platform-node"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { SdkPlugins } from "@ycoding-ai/core/plugin/sdk"
+import type { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionRestart } from "@ycoding-ai/core/session/execution/restart"
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
@@ -42,6 +43,7 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   remoteFactory?: (address: HttpServer.Address, password: string) => Promise<RemoteConnection.Interface>,
   plugins: ReadonlyArray<Parameters<SdkPlugins.Interface["register"]>[0]> = [],
   nativeFactory?: (host: NativeDots.Host) => Promise<void | (() => Promise<void>)>,
+  replacements: LayerNode.Replacements = [],
 ) {
   const password = options.password
   if (!password) return yield* Effect.fail(new Error("Missing server password"))
@@ -100,6 +102,7 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
         },
         sourceEpoch,
         remote,
+        replacements,
       ).pipe(Layer.provide(NodeHttpServer.layerHttpServices)),
       applicationScope,
     )
