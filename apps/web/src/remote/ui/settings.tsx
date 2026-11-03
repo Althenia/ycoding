@@ -103,7 +103,7 @@ export function MachineSettings(): JSX.Element {
     }
     stopEditing(item)
   }
-  return <Section id="machine-settings" category="Machine" title="Machine" hint="Choose an online machine to access its Sessions.">
+  return <><Section id="machine-settings" category="Machine" title="Machine" hint="Choose an online machine to access its Sessions.">
     <Show when={machineIDs().length > 0} fallback={<p class="machine-row__empty field__hint" role="status">{availability().placeholder}</p>}>
       <ul class="machine-row" role="list" aria-label="Machines">
         <For each={machineIDs()}>
@@ -153,6 +153,7 @@ export function MachineSettings(): JSX.Element {
     </Show>
     <Show when={note() !== ""}><p class="machine-row__note field__hint" role="status">{note()}</p></Show>
     <p id="machine-row-scope" class="machine-row__scope field__hint">Names are shared across your account's browsers.</p>
+  </Section><Section id="keep-awake-settings" category="Machine" title="Keep awake" hint="Keep the connected machine awake while Sessions run.">
     <div class="defs__row" aria-busy={awake().busy}>
       <span class="defs__key" id="machine-awake-label">Keep machine awake</span>
       <span class="defs__value">
@@ -173,7 +174,7 @@ export function MachineSettings(): JSX.Element {
         <span id="machine-awake-caveat" class="field__hint machine-awake__caveat">{awake().caveat}</span>
       </span>
     </div>
-  </Section>
+  </Section></>
 }
 
 export function ExternalNotificationSettings(): JSX.Element {
@@ -197,6 +198,8 @@ export function AppSettings(): JSX.Element {
       <span class="defs__key">Mode</span>
       <span class="defs__value" role="status">{pwaInstall.isInstalled() ? "Installed app" : "Browser"}</span>
     </div>
+    <div class="defs__row"><span class="defs__key">Closing browser</span><span class="defs__value">Closing this browser disconnects only this tab; the enrolled machine and its running Sessions keep working.</span></div>
+    <div class="defs__row"><span class="defs__key">Managed on machine</span><span class="defs__value">Saved permissions, MCP servers, plugins and project artifacts, configuration diagnostics, and interactive terminals or Git working trees are managed in YCoding on the enrolled machine.</span></div>
     <Show when={pwaInstall.canInstall()}>
       <div class="defs__row">
         <span class="defs__key">Install</span>
@@ -204,6 +207,10 @@ export function AppSettings(): JSX.Element {
       </div>
     </Show>
   </Section>
+}
+
+export function PermissionSettings(): JSX.Element {
+  return <Section id="permission-settings" category="App" title="Permissions" hint="Saved permissions are managed in YCoding on the enrolled machine."><p class="field__hint">Session requests are answered in the conversation.</p></Section>
 }
 
 export function LatencySettings(): JSX.Element {

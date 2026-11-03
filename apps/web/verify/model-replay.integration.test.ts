@@ -16,7 +16,7 @@ beforeAll(async () => {
     await Bun.sleep(100)
   }
   throw new Error("Model fixture did not start")
-})
+}, 30_000)
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
 const models = [
@@ -110,6 +110,37 @@ async function effort(page: Page, value: string) {
   }
   await page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
 }
+
+test("composer effort slider submits a provider-offered variant", async () => {
+  const h = await harness({ providerID: "openai", id: "model-a" })
+  try {
+    await h.page.evaluate(`document.querySelector('.reasoning-effort input').focus()`)
+    await h.page.pressKey("End", "End", 35)
+    expect(await h.page.evaluate<string>(`document.querySelector('.reasoning-effort input').getAttribute('aria-valuetext')`)).toBe("Max")
+    await send(h.page, "Use maximum effort")
+    await wait(h.page, `document.querySelector('textarea').value === ''`)
+    expect(h.relay.requests.find((request) => request.operation === "session.switchModel")?.input?.model).toEqual({ providerID: "openai", id: "model-a", variant: "max" })
+  } finally { await h.close() }
+})
+
+test("composer default effort is a separate slider stop", async () => {
+  const h = await harness({ providerID: "openai", id: "model-a" })
+  try {
+    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.reasoning-effort__labels span')].map(node => node.textContent)`)).toEqual(["Default", "Low", "High", "Max"])
+    expect(await h.page.evaluate<string>(`document.querySelector('.reasoning-effort input').value`)).toBe("0")
+    await h.page.evaluate(`document.querySelector('.reasoning-effort input').focus()`)
+    await h.page.pressKey("ArrowRight", "ArrowRight", 39)
+    expect(await h.page.evaluate<string>(`document.querySelector('.reasoning-effort input').getAttribute('aria-valuetext')`)).toBe("Low")
+  } finally { await h.close() }
+})
+
+test("composer does not offer effort for a model without variants", async () => {
+  const h = await harness({ providerID: "openai", id: "model-plain" })
+  try {
+    expect(await h.page.evaluate<boolean>(`document.querySelector('.reasoning-effort input') === null`)).toBe(true)
+    expect(await h.page.evaluate<string>(`document.querySelector('.reasoning-effort').textContent`)).toContain("No adjustable effort")
+  } finally { await h.close() }
+})
 
 test("models without adjustable effort explain their settings in the picker", async () => {
   for (const viewport of [[390, 844], [1440, 900]] as const) {

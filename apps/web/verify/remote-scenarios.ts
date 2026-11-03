@@ -12,7 +12,7 @@ export type WireSession = {
   readonly location?: { readonly directory: string }
   readonly agent?: string
   readonly model?: { readonly providerID: string; readonly id: string }
-  readonly time: { readonly created: number; readonly updated: number; readonly active?: number; readonly archived?: number }
+  readonly time: { readonly created: number; readonly updated: number; readonly active?: number; readonly archived?: number; readonly pinned?: number }
   readonly running?: boolean
 }
 
@@ -325,7 +325,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     ...common,
     view: "chat",
     noSelection: true,
-    expectedText: ["New session", "Default agent"],
+    expectedText: ["Start with a conversation.", "Default agent"],
   }
   if (name === "conversation-tool-terminal-output") return {
     ...common,
@@ -367,7 +367,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
       noSelection: true,
       emptyBackend: true,
       sessions: [],
-      expectedText: ["New session", "Default agent"],
+      expectedText: ["Start with a conversation.", "Default agent"],
     }
   if (name === "selected-machine-offline") return {
       ...common,

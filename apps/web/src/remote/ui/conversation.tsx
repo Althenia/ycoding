@@ -501,7 +501,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
     if (request.kind !== "guardrail") return true
     return props.activeSessionID !== undefined && remote.state().activeSessionID === props.activeSessionID && remote.state().view?.id === props.activeSessionID && remote.state().view?.requests.some((item) => item.kind === "guardrail" && item.id === request.id) === true
   }
-  const reply = () => remote.state().mutations.find((entry) => entry.kind === "guardrail" && entry.input.requestID === props.request().id)
+  const reply = () => remote.state().mutations.findLast((entry) => (entry.kind === "guardrail" || entry.kind === "permission") && entry.kind === props.request().kind && entry.input.requestID === props.request().id)
   const disabled = () => !canReply() || reply()?.state === "sending"
   const review = () => { const request = props.request(); return request.kind === "guardrail" ? request : undefined }
   const permission = () => { const request = props.request(); return request.kind === "permission" ? request : undefined }
@@ -523,10 +523,12 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
         <Show when={permissionView()?.always}>{(scope) => <p class="request__note">{scope()}</p>}</Show>
         <Show when={permission()?.escalation}>{(escalation) => <><p class="request__note" role="status">{humanReviewText(escalation())}</p><Show when={escalation().grades?.length}><DecisionGrades grades={escalation().grades ?? []} selected={escalation().choice} /></Show></>}</Show>
         <Show when={permission()?.projectEscalation}>{(escalation) => <ProjectEscalationNote escalation={escalation()} />}</Show>
+        <Show when={reply()}><p class="request__note" role="status">{reply()?.state === "sending" ? "Sending human decision…" : reply()?.detail}</p></Show>
         <div class="request__actions">
           <button
             type="button"
             class="button button--primary button--small"
+            disabled={disabled()}
             onClick={() => void remote.store.replyPermission(props.request().id, "once")}
           >
             Approve once
@@ -534,6 +536,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
           <Show when={permissionView()?.always}><button
             type="button"
             class="button button--secondary button--small"
+            disabled={disabled()}
             onClick={() => void remote.store.replyPermission(props.request().id, "always")}
           >
             Always this session
@@ -541,6 +544,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
           <button
             type="button"
             class="button button--danger button--small"
+            disabled={disabled()}
             onClick={() => void remote.store.replyPermission(props.request().id, "reject")}
           >
             Deny

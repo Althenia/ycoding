@@ -65,7 +65,7 @@ describe("icon-led Settings sections", () => {
     expect(declared(css, ".settings__section")["counter-increment"]).toBeUndefined()
     expect(declared(css, ".settings__ordinal::before")).toEqual({})
     const tsx = await read("settings.tsx")
-    expect(tsx.match(/<Section\b/g)?.length).toBe(9)
+    expect(tsx.match(/<Section\b/g)?.length).toBe(11)
     const shell = await Bun.file(new URL("./shell.tsx", import.meta.url)).text()
     expect(shell).toContain("<Show when={!props.phoneLayout}><OfficeSettings office={props.office} /></Show>")
     expect(shell).not.toMatch(/settings-accordion|aria-expanded[^\n]*settings__section/)

@@ -1,4 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
+import { mkdtemp, rm } from "node:fs/promises"
+import { join } from "node:path"
+import { tmpdir } from "node:os"
 import { launchBrowser } from "./cdp"
 
 const port = 4829
@@ -6,6 +9,7 @@ const browserPath = process.env.YCODING_WEB_CHROME
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
 let server: ReturnType<typeof Bun.spawn> | undefined
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
+let captures: string
 
 type Page = Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>
 const composer = ".mini-composer__mount"
@@ -16,18 +20,19 @@ beforeAll(async () => {
   for (let index = 0; index < 80 && !(await ready()); index++) await Bun.sleep(100)
   if (!(await ready())) throw new Error("Vite did not start")
   browser = await launchBrowser(browserPath, 1440, 900)
-})
-afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
+  captures = await mkdtemp(join(tmpdir(), "ycoding-mobile-composer-"))
+}, 30_000)
+afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited; if (captures) await rm(captures, { recursive: true }) })
 
-test("the conversation composer keeps its summary, policy words, draft and primary actions inside the page at phone, tablet and desktop widths", async () => {
-  for (const [width, height] of viewports) for (const theme of ["light", "dark"]) {
+for (const [width, height] of viewports) for (const theme of ["light", "dark"]) {
+  test(`the conversation composer and companion keep controls and policy visible at ${width} in ${theme}`, async () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width, height)
       if (width < 768) await page.setCoarsePointer(true)
       await openComposer(page, theme)
       await page.evaluate(`window.composerSetGoalStatus('active')`)
-      await wait(page, `document.querySelector('${composer} .session-status__active-goal') !== null`)
+      await wait(page, `document.querySelector('#session-companion-panel .session-status__active-goal') !== null`)
       await page.evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent === 'Toggle running').click()`)
       await wait(page, `document.querySelector('${composer} .mini-composer__interrupt') !== null`)
       const layout = await page.evaluate<{ overflow: boolean; escaped: string[]; undersized: string[]; words: string; trigger: string; name: string | null; title: string | null; chips: string[]; codes: boolean; summaryHeight: number; names: string[]; draftHeight: number; draftLabel: string | null }>(`(() => {
@@ -39,11 +44,11 @@ test("the conversation composer keeps its summary, policy words, draft and prima
           overflow: document.documentElement.scrollWidth > innerWidth,
           escaped: [...mount.querySelectorAll('.composer__row button, .composer__row textarea, .session-status__mode')].filter(item => item.getClientRects().length > 0).filter(item => { const rect = item.getBoundingClientRect(); return rect.left < row.left - 1 || rect.right > row.right + 1 || rect.left < 0 || rect.right > innerWidth }).map(item => item.getAttribute('aria-label') ?? item.className),
           undersized: ${width < 768 ? "boxes.filter(([, rect]) => rect.width < 44 || rect.height < 44).map(([name]) => name)" : "[]"},
-          words: mount.querySelector('.session-status__active-goal').textContent.trim(),
+          words: document.querySelector('#session-companion-panel .session-status__active-goal').textContent.trim(),
           trigger: auto.innerText.trim(),
           name: auto.getAttribute('aria-label'),
           title: auto.getAttribute('title'),
-          chips: [...mount.querySelectorAll('.session-status__mode')].filter(item => item.getClientRects().length > 0).map(item => item.innerText.trim()),
+          chips: [...document.querySelectorAll('#session-companion-panel .session-status__mode')].filter(item => item.getClientRects().length > 0).map(item => item.innerText.trim()),
           codes: /(^|\\s)(Au·|P·|G·|Q·|Zz|R\\d)/.test(mount.innerText),
           summaryHeight: mount.querySelector('.composer__row').getBoundingClientRect().height,
           names: Object.values(named).map(selector => mount.querySelector(selector).getAttribute('aria-label')),
@@ -66,50 +71,45 @@ test("the conversation composer keeps its summary, policy words, draft and prima
       if (width < 768) expect(layout.summaryHeight).toBeLessThanOrEqual(320)
       await capture(page, `mobile-composer-${width}-${theme}`)
     } finally { await page.close() }
-  }
-}, 120_000)
+  }, 120_000)
+}
 
-test("from tablet width identity pickers and primary actions share the first line and status metadata spans a full-width second line without growing the card", async () => {
-  for (const [width, height] of [[768, 1024], [820, 1180], [1024, 768], [1440, 900]] as const) for (const theme of ["light", "dark"]) {
+for (const [width, height] of [[768, 1024], [820, 1180], [1024, 768], [1440, 900]] as const) for (const theme of ["light", "dark"]) {
+  test(`wide composer controls and companion details remain readable at ${width} in ${theme}`, async () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width, height)
       await openComposer(page, theme)
       const idle = await page.evaluate<number>(`document.querySelector('${composer} .composer__row').getBoundingClientRect().height`)
       await page.evaluate(`window.composerSetGoalStatus('active')`)
-      await wait(page, `document.querySelector('${composer} .session-status__active-goal') !== null && document.querySelectorAll('${composer} .session-status__mode').length === 2`)
+      await wait(page, `document.querySelector('#session-companion-panel .session-status__active-goal') !== null && document.querySelectorAll('#session-companion-panel .session-status__mode').length === 2`)
       await settle(page)
-      const geometry = await page.evaluate<{ row: number; sameLine: boolean; below: boolean; spans: boolean; metadataLine: boolean; goalText: boolean; rowBox: { left: number; right: number } }>(`(() => {
+      const geometry = await page.evaluate<{ row: number; sameLine: boolean; detailsOutsideComposer: boolean; goalText: boolean; words: string[] }>(`(() => {
         const mount = document.querySelector('${composer}'), row = mount.querySelector('.composer__row'), box = row.getBoundingClientRect()
         const rect = selector => mount.querySelector(selector).getBoundingClientRect()
-        const agent = rect('.composer__controls button[aria-label="Agent"]'), model = rect('.composer__controls button[aria-label="Model"]'), send = rect('.mini-composer__send'), status = rect('.session-status')
-        const meta = ['.session-status__autonomous-trigger', '.session-status__goal-trigger', '.session-status__mode', '.session-status__active-goal'].map(selector => rect(selector))
-        const overlap = (a, b) => a.top < b.bottom && b.top < a.bottom
-        const goal = mount.querySelector('.session-status__active-goal')
+        const controls = ['.composer__controls button[aria-label="Agent"]', '.composer__controls button[aria-label="Model"]', '.session-status__autonomous-trigger', '.session-status__goal-trigger'].map(rect)
+        const panel = document.querySelector('#session-companion-panel'), goal = panel.querySelector('.session-status__active-goal')
         return {
           row: box.height,
-          sameLine: overlap(agent, send) && overlap(model, send),
-          below: status.top >= Math.max(agent.bottom, model.bottom, send.bottom) - 1,
-          spans: status.left <= box.left + 16 && status.right >= box.right - 16,
-          metadataLine: meta.every(item => Math.abs((item.top + item.bottom) / 2 - (meta[0].top + meta[0].bottom) / 2) <= 4),
+          sameLine: controls[0].top < controls[1].bottom && controls[1].top < controls[0].bottom && controls[2].top < controls[3].bottom && controls[3].top < controls[2].bottom,
+          detailsOutsideComposer: !mount.querySelector('.session-status__mode,.session-status__active-goal'),
           goalText: goal.scrollWidth <= goal.clientWidth + 1,
-          rowBox: { left: box.left, right: box.right },
+          words: [...panel.querySelectorAll('.session-status__mode')].map(item => item.innerText.trim()),
         }
       })()`)
       expect(geometry.sameLine).toBe(true)
-      expect(geometry.below).toBe(true)
-      expect(geometry.spans).toBe(true)
-      expect(geometry.metadataLine).toBe(true)
+      expect(geometry.detailsOutsideComposer).toBe(true)
+      expect(geometry.words).toEqual(["Permissions Auto", "Guardrails Auto"])
       expect(geometry.goalText).toBe(true)
       expect(geometry.row).toBeLessThanOrEqual(idle + 1)
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
       await capture(page, `mobile-composer-wide-${width}-${theme}`)
     } finally { await page.close() }
-  }
-}, 120_000)
+  }, 120_000)
+}
 
-test("the selected Conversation shell keeps title, status, todos, transcript, dock and composer usable at phone and tablet widths", async () => {
-  for (const [width, height] of [[320, 700], [390, 844], [820, 1180]] as const) for (const theme of ["light", "dark"]) {
+for (const [width, height] of [[320, 700], [390, 844], [820, 1180]] as const) for (const theme of ["light", "dark"]) {
+  test(`the selected Conversation keeps its composer and companion usable at ${width} in ${theme}`, async () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width, height)
@@ -118,14 +118,14 @@ test("the selected Conversation shell keeps title, status, todos, transcript, do
       await wait(page, `document.querySelector('.workspace__main .composer__row') !== null && document.querySelector('.workspace__main .session-status__goal-trigger') !== null`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove()`)
       await settle(page)
-      const shell = await page.evaluate<{ overflow: boolean; composerInside: boolean; draft: number; transcript: number; targets: string[]; identityVisible: boolean | null; identityLine: boolean | null; slotText: string; slotFits: boolean; slotOffIdentityLine: boolean | null; goalPreview: number }>(`(() => {
+      const shell = await page.evaluate<{ overflow: boolean; composerInside: boolean; draft: number; transcript: number; targets: string[]; identityVisible: boolean | null; identityLine: boolean | null; slotText: string; slotFits: boolean; slotOffIdentityLine: boolean | null; goalAbsent: boolean }>(`(() => {
         const composer = document.querySelector('.workspace__main .composer').getBoundingClientRect(), draft = document.querySelector('.workspace__main textarea').getBoundingClientRect(), transcript = document.querySelector('.workspace__scroll').getBoundingClientRect()
-        const small = [...document.querySelectorAll('.workspace__main .composer button')].filter(item => item.getClientRects().length > 0).filter(item => ${width < 768 ? "item.getBoundingClientRect().height < 44" : "false"}).map(item => item.getAttribute('aria-label') ?? item.className)
+        const small = [...document.querySelectorAll('.workspace__main .composer button')].filter(item => item.getClientRects().length > 0).filter(item => ${width < 768 ? "item.getBoundingClientRect().height < 44" : "false"}).map(item => item.outerHTML.slice(0,300))
         const main = document.querySelector('.workspace__main'), label = main.querySelector('.composer__mobile-label'), slot = main.querySelector('.session-status__slot'), slotLabel = slot.querySelector('.session-status__label'), preview = main.querySelector('.session-status__active-goal')
         const prefixVisible = () => { if (!label) return null; const text = label.firstChild, parts = label.textContent.split(' · '), range = document.createRange(); range.setStart(text, 0); range.setEnd(text, parts[0].length + 3 + parts[1].length); return range.getBoundingClientRect().right <= label.getBoundingClientRect().right + 0.5 }
         const identity = main.querySelector('.composer__mobile-trigger')
         const slotRange = document.createRange(); slotRange.selectNodeContents(slotLabel)
-        return { overflow: document.documentElement.scrollWidth > innerWidth, composerInside: composer.left >= 0 && composer.right <= innerWidth && composer.bottom <= innerHeight + 1, draft: draft.height, transcript: transcript.height, targets: small, identityVisible: prefixVisible(), identityLine: identity ? Math.abs(identity.getBoundingClientRect().top - main.querySelector('.session-status__autonomous-trigger').getBoundingClientRect().top) <= 1 : null, slotText: slotLabel.textContent.trim(), slotFits: getComputedStyle(slotLabel).position !== 'absolute' && slotLabel.scrollWidth <= slotLabel.clientWidth + 1 && slot.scrollWidth <= slot.clientWidth + 1 && slotRange.getBoundingClientRect().right <= slot.getBoundingClientRect().right, slotOffIdentityLine: identity ? slot.getBoundingClientRect().top >= identity.getBoundingClientRect().bottom - 1 : null, goalPreview: preview ? preview.getBoundingClientRect().width : 0 }
+        return { overflow: document.documentElement.scrollWidth > innerWidth, composerInside: composer.left >= 0 && composer.right <= innerWidth && composer.bottom <= innerHeight + 1, draft: draft.height, transcript: transcript.height, targets: small, identityVisible: prefixVisible(), identityLine: identity ? Math.abs(identity.getBoundingClientRect().top - main.querySelector('.session-status__autonomous-trigger').getBoundingClientRect().top) <= 1 : null, slotText: slotLabel.textContent.trim(), slotFits: getComputedStyle(slotLabel).position !== 'absolute' && slotLabel.scrollWidth <= slotLabel.clientWidth + 1 && slot.scrollWidth <= slot.clientWidth + 1 && slotRange.getBoundingClientRect().right <= slot.getBoundingClientRect().right, slotOffIdentityLine: identity ? slot.getBoundingClientRect().bottom <= identity.getBoundingClientRect().top + 1 : null, goalAbsent: !preview }
       })()`)
       expect(shell.overflow).toBe(false)
       expect(shell.composerInside).toBe(true)
@@ -139,11 +139,35 @@ test("the selected Conversation shell keeps title, status, todos, transcript, do
         expect(shell.identityLine).toBe(true)
         expect(shell.slotOffIdentityLine).toBe(true)
       }
-      expect(shell.goalPreview).toBeGreaterThanOrEqual(120)
+      expect(shell.goalAbsent).toBe(true)
+      expect(await page.evaluate<string[]>(`(() => { const root=document.querySelector('.workspace__main .composer'), controls=[...root.querySelectorAll('button')].filter(e=>e.getClientRects().length && e.getBoundingClientRect().width>0), text=root.querySelector('.composer__attachment-disclosure'), range=document.createRange(); range.selectNodeContents(text); const disclosure=range.getBoundingClientRect(), hit=(a,b)=>a.left<b.right && b.left<a.right && a.top<b.bottom && b.top<a.bottom, name=e=>(e.getAttribute('aria-label')||e.textContent)+' '+JSON.stringify(e.getBoundingClientRect().toJSON()); return controls.flatMap((e,i)=>[...controls.slice(i+1).filter(other=>hit(e.getBoundingClientRect(),other.getBoundingClientRect())).map(other=>name(e)+' / '+name(other)),...(hit(e.getBoundingClientRect(),disclosure)?[name(e)+' / disclosure']:[])]) })()`)).toEqual([])
       await capture(page, `mobile-shell-${width}-${theme}`)
+      await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
+      await wait(page, `document.querySelector('#session-companion-panel .session-status__active-goal') !== null`)
+      expect(await page.evaluate<string>(`document.querySelector('#session-companion-panel .session-status__active-goal').textContent`)).toContain('Goal active')
     } finally { await page.close() }
-  }
-}, 120_000)
+  }, 120_000)
+}
+
+test("compact composer preserves prediction, attachments and dock actions", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(320, 700)
+    await page.setCoarsePointer(true)
+    await openComposer(page, "light")
+    await page.evaluate(`window.composerPrediction('Run focused checks')`)
+    await wait(page, `document.querySelector('.composer__use-prediction') !== null`)
+    expect(await page.evaluate<boolean>(`(() => { const prediction=document.querySelector('.composer__use-prediction'), dock=document.querySelector('.composer__dock-toggle'), a=prediction.getBoundingClientRect(), b=dock.getBoundingClientRect(); return a.width>=44 && a.height>=44 && b.width>=44 && b.height>=44 && (a.right<=b.left || b.right<=a.left || a.bottom<=b.top || b.bottom<=a.top) })()`)).toBe(true)
+    await page.evaluate(`(() => { const input=document.querySelector('.composer__file-input'), files=new DataTransfer(); files.items.add(new File(['sample'], 'sample.txt', {type:'text/plain'})); input.files=files.files; input.dispatchEvent(new Event('change',{bubbles:true})) })()`)
+    await wait(page, `document.querySelector('.composer__attachment') !== null`)
+    expect(await page.evaluate<boolean>(`(() => { const file=document.querySelector('.composer__attachment').getBoundingClientRect(), actions=document.querySelector('.composer__actions').getBoundingClientRect(); return file.bottom<=actions.top || actions.bottom<=file.top || file.right<=actions.left || actions.right<=file.left })()`)).toBe(true)
+    await page.evaluate(`document.querySelector('.composer__dock-toggle').click()`)
+    await wait(page, `document.querySelector('.composer--collapsed') !== null`)
+    await page.evaluate(`document.querySelector('.composer__dock-toggle').click()`)
+    await wait(page, `document.querySelector('.composer--collapsed') === null`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.composer__attachment') !== null`)).toBe(true)
+  } finally { await page.evaluate(`localStorage.removeItem('ycoding.remote.composer-collapsed')`).catch(() => {}); await page.close() }
+}, 30_000)
 
 test("send follows the draft, a missing connection disables editing without hiding policy, and catalog failure keeps a 44px retry", async () => {
   for (const [width, height] of viewports) {
@@ -292,7 +316,7 @@ async function settle(page: Page) {
 async function capture(page: Page, name: string) {
   await settle(page)
   await page.evaluate(`document.querySelectorAll('.composer-fixture > button').forEach(button => { button.style.display = 'none' })`)
-  await Bun.write(new URL(`../../../.cache/tmp/${name}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+  await Bun.write(join(captures, `${name}.png`), Buffer.from(await page.screenshot(), "base64"))
 }
 
 async function type(page: Page, selector: string, text: string) {

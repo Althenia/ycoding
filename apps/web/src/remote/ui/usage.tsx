@@ -67,6 +67,12 @@ export function UsagePage() {
   const connected = createMemo(() => remote.state().transport.kind === "open")
   const selectedZone = () => zoneMode() === "local" ? localZone : undefined
   const zoneLabel = () => zoneMode() === "local" ? `Local · ${localZone}` : "UTC"
+  const todayBounds = () => {
+    const date = new Date(now())
+    const from = zoneMode() === "local" ? new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime() : Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
+    const to = zoneMode() === "local" ? new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime() : from + 86_400_000
+    return { from, to }
+  }
   const reports = createMemo(() => usageReportInputs(openedAt, selectedZone(), { group: group(), offset: offset(), sort: sort(), order: order(), providerID: filters().provider, profile: filters().profile, modelID: filters().model, selectedEffort: filters().effort, range: filters().range, from: filters().from, to: filters().to }))
   const dashboardInput = createMemo<UsageDashboardInput>(() => reports())
   const breakdownInput = createMemo<BreakdownInput>(() => reports().breakdown)
@@ -266,11 +272,14 @@ export function UsagePage() {
   return <div class="usage-page" ref={usagePhone.ref}>
     <header class="usage-head"><div class="usage-head__title"><h1><Icon name="usage" />Usage</h1><p>Quotas and spend from {machine() ?? "your machine"}</p></div>
       <div class="usage-head__actions"><Show when={latest() !== undefined}><span class="usage-head__freshness">Updated {relativeFreshness(latest()!, now())}</span></Show>
+        <div class="usage-toggle" role="group" aria-label="Usage range"><For each={["today", "last7", "last30"] as const}>{(range) => <button type="button" aria-pressed={range === "today" ? filters().range === "custom" && filters().from === todayBounds().from && filters().to === todayBounds().to : filters().range === range} onClick={() => {
+          batch(() => { setFilters({ ...filters(), range: range === "today" ? "custom" : range, ...(range === "today" ? todayBounds() : { from: undefined, to: undefined }) }); setOffset(0) })
+        }}>{range === "today" ? "Today" : range === "last7" ? "7 days" : "30 days"}</button>}</For></div>
         <div class={`usage-zone usage-toggle${zoneMode() === "local" ? " usage-zone--local" : ""}`} role="group" aria-label="Usage time zone">
           <button type="button" aria-pressed={zoneMode() === "utc"} onClick={() => setZoneMode("utc")}>UTC</button>
           <button type="button" aria-pressed={zoneMode() === "local"} onClick={() => setZoneMode("local")}>Local</button>
         </div>
-        <button class="usage-refresh" type="button" aria-label="Refresh quotas" title="Refresh quotas" aria-busy={busy() || quotaPreparing() ? "true" : "false"} disabled={busy() || quotaPreparing() || remote.state().transport.kind !== "open"} onClick={retry}><Icon name="refresh" /></button>
+        <button class="usage-refresh" type="button" aria-label="Refresh quotas" title="Refresh quotas" aria-busy={busy() || quotaPreparing() ? "true" : "false"} disabled={busy() || quotaPreparing() || remote.state().transport.kind !== "open"} onClick={retry}><Icon name="refresh" /><span>Refresh</span></button>
       </div>
     </header>
     <Show when={view().kind === "error" && displayed() === undefined}>{(() => { const current = view(); return <p class="usage-message" role="alert">{current.kind === "error" ? current.message : ""} <button type="button" onClick={retry}>Retry</button></p> })()}</Show>
@@ -281,7 +290,7 @@ export function UsagePage() {
       <Show when={dailyScope()}>{(scope) => <p class="usage-spend__scope">Spend, daily charts and trends filtered to {scope()}</p>}</Show>
       <Show when={dailyData()}>
         <div class="usage-tiles"><For each={tileIDs}>{(id) => <article class="usage-tile">
-          <h3>{tileLabels[id]}</h3><strong>{spendCostText(tileValue(id))}</strong>
+          <h3>{tileLabels[id]}</h3><strong>{spendCostText(tileValue(id)) || "—"}</strong>
           <p class="usage-tile__meta"><span>{count(tileValue(id).requests)} requests</span><span>{count(tileValue(id).tokens)} tokens</span></p>
           <Show when={id === "last30"}><svg viewBox="0 0 100 32" aria-label="Spend trend over the last 30 days" role="img" preserveAspectRatio="none"><polyline points={sparkline()} /></svg></Show>
         </article>}</For></div>
@@ -325,7 +334,7 @@ export function UsagePage() {
             </svg>
             <Show when={activeDay()}>{(entry) => <div class="usage-chart__tooltip" ref={dayTooltip} style={{ left: `${dayPosition().left}px`, top: `${dayPosition().top}px` }} role="status"><strong>{entry().key}</strong><Show when={spendCostText(entry()) !== ""}><span>Estimated cost {spendCostText(entry())}</span></Show><span>{count(entry().requests)} requests · {count(entry().tokens)} tokens</span></div>}</Show>
             <div class="usage-chart__labels"><span>{days()[0]?.label}</span><span>{days()[14]?.label}</span><span>Today</span></div>
-            <Show when={tableOpen()}><div id="usage-daily-table" class="usage-table-wrap"><table><caption>Daily usage, last 30 {zoneLabel()} days</caption><thead><tr><th scope="col">Day</th><th scope="col">Cost</th><th scope="col">Tokens</th><th scope="col">Requests</th></tr></thead><tbody><For each={[...days()].reverse()}>{(entry) => <tr><th scope="row">{entry.key}</th><td>{spendCostText(entry)}</td><td>{count(entry.tokens)}</td><td>{count(entry.requests)}</td></tr>}</For></tbody></table></div></Show>
+            <Show when={tableOpen()}><div id="usage-daily-table" class="usage-table-wrap"><table><caption>Daily usage, last 30 {zoneLabel()} days</caption><thead><tr><th scope="col">Day</th><th scope="col">Cost</th><th scope="col">Tokens</th><th scope="col">Requests</th></tr></thead><tbody><For each={[...days()].reverse()}>{(entry) => <tr><th scope="row">{entry.key}</th><td>{spendCostText(entry) || "—"}</td><td>{count(entry.tokens)}</td><td>{count(entry.requests)}</td></tr>}</For></tbody></table></div></Show>
           </Show>
         </div>
         <div class="usage-distribution" ref={providerCard} aria-labelledby="usage-distribution-title">

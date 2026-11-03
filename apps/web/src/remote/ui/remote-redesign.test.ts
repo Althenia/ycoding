@@ -59,9 +59,10 @@ test("session navigation prioritizes needs action, running, pinned, then remaini
 test("Session companion reports only current measured context, effective autonomy and active goal", () => {
   const model = { providerID: "openai", id: "model" }
   const current = view({ model, contextWindow: { model, used: 24_000, limit: 128_000 }, autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal: { text: "Ship", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 5 } } })
-  expect(sessionCompanionSummary(current)).toMatchObject({ contextLabel: "19% used · 81% left", contextTokens: "24K / 128K tokens", contextFraction: 24_000 / 128_000, autonomyLabel: "Autonomous Manual", goalText: "Ship", goalIteration: 2 })
+  expect(sessionCompanionSummary(current)).toMatchObject({ contextLabel: "19% used · 81% left", contextTokens: "24K / 128K tokens", contextUsed: "24K", contextCapacity: "128K", contextFraction: 24_000 / 128_000, autonomyLabel: "Autonomous Manual", goalText: "Ship", goalIteration: 2 })
   expect(sessionCompanionSummary(undefined)).toBeUndefined()
   expect(sessionCompanionSummary(view())?.contextLabel).toBeUndefined()
+  expect(sessionCompanionSummary(view())?.contextUsed).toBeUndefined()
 })
 
 describe("screen-specific workspace composition", () => {
@@ -496,7 +497,7 @@ describe("tonal sidebar and phone navigation", () => {
     expect(at(".bottom-nav__new", landscape).display).toBe("grid")
     expect(declared(css, ".bottom-nav__new").display).toBe("none")
     expect(declared(css, ".app[data-keyboard-open] > .bottom-nav").display).toBe("none")
-    expect(await shell()).toContain('<Link to="/remote" class="bottom-nav__new" ariaLabel="New session" title="New session"><Icon name="plus" /></Link>')
+    expect(await shell()).toContain('<Link to="/remote" class="bottom-nav__new" ariaLabel="New chat" title="New chat"><Icon name="plus" /></Link>')
   })
 
   test("keeps translucent portrait navigation legible and provides all opaque fallbacks", async () => {
@@ -510,12 +511,13 @@ describe("tonal sidebar and phone navigation", () => {
     }
   })
 
-  test("retains separate borderless header owners and the existing focus and toast handoffs", async () => {
+  test("retains distinct header borders and the existing focus and toast handoffs", async () => {
     const css = await readStylesheet("remote.css")
     for (const selector of [".app > .app-header", ".workspace__topbar"]) {
       expect(declared(css, selector).background).toBe("var(--yc-bg)")
-      expect(declared(css, selector)["border-block-end"]).toBeUndefined()
     }
+    expect(declared(css, ".app > .app-header")["border-block-end"]).toBeUndefined()
+    expect(declared(css, ".workspace__topbar")["border-block-end"]).toBe("1px solid var(--yc-border)")
     const source = await shell()
     expect(source).toContain('<header class="app-header" data-toast-clearance>')
     expect(source).toContain(".workspace__topbar:not([inert]) .conversation-breadcrumb")

@@ -3914,6 +3914,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     replyPermission: async (id, reply) => {
       const sessionID = container.state.activeSessionID
       if (sessionID === undefined) return
+      if (container.state.mutations.some((entry) => entry.kind === "permission" && entry.input.requestID === id && entry.state === "sending")) return
+      const token = selectionToken
+      const owner = transport
       const outcome = await request(
         {
           id: `permission_${id}_${reply}`,
@@ -3926,7 +3929,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         },
         { sessionID },
       )
-      settleRequest(id, outcome)
+      if (token === selectionToken && container.state.activeSessionID === sessionID && owner !== undefined && isCurrentConnection(owner)) settleRequest(id, outcome)
     },
     replyGuardrail: async (id, reply) => {
       const sessionID = container.state.activeSessionID

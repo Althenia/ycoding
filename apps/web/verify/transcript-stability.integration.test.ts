@@ -93,8 +93,8 @@ test("agent headings appear only for actual text replies while every assistant k
   } finally { await page.close() }
 })
 
-test("New session is a named compact plus action in the sidebar and list and keeps a resident draft", async () => {
-  for (const [width, route] of [[1440, "chat"], [1440, "sessions"], [390, "sessions"]] as const) for (const reduced of [false, true]) {
+for (const [width, route] of [[1440, "chat"], [1440, "sessions"], [390, "sessions"]] as const) for (const reduced of [false, true]) {
+  test(`New chat is a named labeled action and keeps a resident draft at ${width} ${route} reduced ${reduced}`, async () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width, 900)
@@ -104,11 +104,12 @@ test("New session is a named compact plus action in the sidebar and list and kee
       await wait(page, `document.querySelector('.mini-composer__mount textarea') !== null`)
       await page.evaluate(`(() => { const field=document.querySelector('.mini-composer__mount textarea'); field.value='Keep this draft'; field.dispatchEvent(new Event('input',{bubbles:true})); window.newSessionDraft=field; })()`)
       const button = `[...document.querySelectorAll('.new-session__trigger')].find(button=>button.getBoundingClientRect().width>0 && !button.closest('[inert]'))`
-      const before = await page.evaluate<{ name: string; title: string; icon: boolean; width: number; height: number }>(`(() => { const button=${button},rect=button.getBoundingClientRect(); return {name:button.getAttribute('aria-label') || button.textContent.trim(),title:button.title,icon:button.querySelector('svg')!==null,width:rect.width,height:rect.height} })()`)
-      expect(before.name).toBe("New session")
-      expect(before.title).toBe("New session")
+      const before = await page.evaluate<{ name: string; title: string; text: string; icon: boolean; width: number; height: number }>(`(() => { const button=${button},rect=button.getBoundingClientRect(); return {name:button.getAttribute('aria-label') || button.textContent.trim(),title:button.title,text:button.innerText,icon:button.querySelector('svg')!==null,width:rect.width,height:rect.height} })()`)
+      expect(before.name).toBe("New chat")
+      expect(before.title).toBe("New chat")
+      expect(before.text).toContain("New chat")
       expect(before.icon).toBe(true)
-      expect(before.width).toBeLessThanOrEqual(44)
+      expect(before.width).toBeGreaterThanOrEqual(44)
       expect(before.height).toBeGreaterThanOrEqual(width === 390 ? 44 : 36)
       await page.evaluate(`${button}.focus()`)
       await page.pressKey(" ", "Space", 32)
@@ -116,8 +117,8 @@ test("New session is a named compact plus action in the sidebar and list and kee
       expect(await page.evaluate<string>(`window.newSessionDraft.value`)).toBe("Keep this draft")
       expect(await page.evaluate<boolean>(`window.newSessionDraft.isConnected`)).toBe(true)
     } finally { await page.close() }
-  }
-})
+  })
+}
 
 test("streaming Markdown retains its tail node and code focus while latest-follow tracks real growth", async () => {
   for (const width of [390, 1440])

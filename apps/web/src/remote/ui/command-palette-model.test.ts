@@ -169,6 +169,7 @@ describe("palette availability", () => {
   })
 
   test("navigation omits the current view and links the open conversation from other views", () => {
+    expect(paletteActions(base).find((action) => action.id === "nav.new")).toMatchObject({ title: "New chat", intent: { type: "go", view: "new" } })
     expect(ids(base)).not.toContain("nav.session")
     expect(ids({ ...base, view: "/remote/usage" })).toEqual(expect.arrayContaining(["nav.session", "nav.sessions", "nav.settings"]))
     expect(ids({ ...base, view: "/remote/usage" })).not.toContain("nav.usage")

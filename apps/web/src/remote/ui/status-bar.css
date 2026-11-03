@@ -12,6 +12,7 @@
 .session-status__autonomous-icon { display:none; }
 .session-status__autonomous-trigger:hover,.session-status__goal-trigger:hover { background:var(--yc-surface-sunken); }
 .composer__controls .session-status { flex:1 1 100%; order:1; padding-block-start:var(--yc-space-1); }
+.composer--metadata-in-transcript .composer__controls .session-status { flex:0 1 auto; order:0; padding-block-start:0; }
 .composer__controls .session-status__active-goal { flex:1 1 16ch; max-inline-size:48ch; }
 @media (min-width: 768px) { .composer__controls .session-status__slot { order:2; } }
 .session-status__goal-count { font-variant-numeric:tabular-nums; opacity:.7; }

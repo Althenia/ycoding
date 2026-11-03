@@ -1,4 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
+import { mkdtemp, rm } from "node:fs/promises"
+import { join } from "node:path"
+import { tmpdir } from "node:os"
 import { launchBrowser } from "./cdp"
 
 const port = 4533
@@ -6,6 +9,7 @@ const browserPath = process.env.YCODING_WEB_CHROME
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
 let server: ReturnType<typeof Bun.spawn> | undefined
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
+let captures: string
 type Page = Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>
 
 beforeAll(async () => {
@@ -13,8 +17,9 @@ beforeAll(async () => {
   for (let index = 0; index < 60 && !(await ready()); index++) await Bun.sleep(100)
   if (!(await ready())) throw new Error("Vite did not start")
   browser = await launchBrowser(browserPath, 1440, 900)
-})
-afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
+  captures = await mkdtemp(join(tmpdir(), "ycoding-review-box-"))
+}, 30_000)
+afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited; if (captures) await rm(captures, { recursive: true }) })
 
 const box = ".workspace__main .review-box"
 const item = (id: string) => `${box} [data-review-item="${id}"]`
@@ -22,8 +27,8 @@ const buttons = (page: Page, id: string) => page.evaluate<string[]>(`[...documen
 const decisions = (page: Page) => page.evaluate<unknown[]>(`window.remoteMutationReport().filter(entry => entry.operation === 'session.review.decide').map(entry => entry.input)`)
 const click = (page: Page, selector: string, label: string) => page.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].find(button => button.textContent.trim() === ${JSON.stringify(label)})?.click()`)
 
-test("the review box lists every deferred kind below live requests and sends one human decision per control", async () => {
-  for (const width of [1440, 390]) for (const theme of ["light", "dark"]) {
+for (const width of [1440, 390]) for (const theme of ["light", "dark"]) {
+  test(`the review box lists deferred requests and sends human decisions at ${width} in ${theme}`, async () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width, 900)
@@ -32,8 +37,12 @@ test("the review box lists every deferred kind below live requests and sends one
       await wait(page, `document.querySelectorAll('${box} [data-review-item]').length === 5`)
       expect(await page.evaluate<string>(`document.querySelector('${box} .review-box__title')?.textContent`)).toBe("Review · 5 waiting")
       expect(await page.evaluate<boolean>(`(() => { const live = [...document.querySelectorAll('.workspace__main #pending-requests .request')].at(-1), review = document.querySelector('${box}'); return !live || live.getBoundingClientRect().bottom <= review.getBoundingClientRect().top + 1 })()`)).toBe(true)
-      expect(await page.evaluate<string | null>(`document.querySelector('.workspace__main .session-status__mode[data-mode="review"]')?.title ?? null`)).toBe("review 5")
-      if (width >= 768) expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-row--active .chip')].map(chip => chip.textContent)`)).toContain("review 5")
+      await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
+      await wait(page, `document.querySelector('#session-companion-panel .session-status__mode[data-mode="review"]') !== null`)
+      expect(await page.evaluate<string | null>(`document.querySelector('#session-companion-panel .session-status__mode[data-mode="review"]')?.title ?? null`)).toBe("review 5")
+      await page.evaluate(`document.querySelector(${JSON.stringify(width < 768 ? ".companion__back" : '[aria-label="Close Session companion"]')}).click()`)
+      await wait(page, `document.querySelector('.app--team-open') === null && (document.querySelector('#session-companion-panel') === null || document.querySelector('#session-companion-panel').getAttribute('aria-hidden') === 'true')`)
+      if (width >= 768) expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-row--active .chip')].filter(chip => { const r=chip.getBoundingClientRect(), p=chip.closest('.session-row').getBoundingClientRect(); return r.width>0 && r.height>0 && r.left>=p.left && r.right<=p.right && r.top>=p.top && r.bottom<=p.bottom }).map(chip => chip.textContent)`)).toContain("review 5")
       expect(await buttons(page, "rvw_hard")).toEqual(["Approve once", "Reject"])
       expect(await page.evaluate<boolean>(`document.querySelector('${item("rvw_hard")}').classList.contains('request--hard')`)).toBe(true)
       expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('${item("rvw_hard")}')).borderTopColor`)).not.toBe(await page.evaluate<string>(`getComputedStyle(document.querySelector('${item("rvw_permission")}')).borderTopColor`))
@@ -47,7 +56,7 @@ test("the review box lists every deferred kind below live requests and sends one
       expect(await page.evaluate<string>(`document.querySelector('${item("rvw_hard")}').textContent`)).toContain("rm -rf <build>")
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('${box} button')].every(button => button.getBoundingClientRect().right <= innerWidth)`)).toBe(true)
       if (width === 390) expect(await page.evaluate<boolean>(`[...document.querySelectorAll('${box} .request__actions button')].every(button => button.getBoundingClientRect().height >= 43.5)`)).toBe(true)
-      await page.screenshot().then((image) => Bun.write(new URL(`../../../.cache/tmp/review-box-${width}-${theme}.png`, import.meta.url), Buffer.from(image, "base64")))
+      await page.screenshot().then((image) => Bun.write(join(captures, `review-box-${width}-${theme}.png`), Buffer.from(image, "base64")))
 
       await click(page, `${item("rvw_hard")} button`, "Reject")
       await wait(page, `document.querySelector('${item("rvw_hard")}') === null`)
@@ -70,11 +79,13 @@ test("the review box lists every deferred kind below live requests and sends one
         { itemID: "rvw_permission", decision: { kind: "permission", reply: "once" } },
       ])
       expect(await page.evaluate<boolean>(`window.remoteMutationReport().every(entry => entry.operation !== 'session.prompt' && entry.operation !== 'session.autonomy.set')`)).toBe(true)
-      expect(await page.evaluate<boolean>(`document.querySelector('.workspace__main .session-status__mode[data-mode="review"]') === null`)).toBe(true)
+      await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
+      await wait(page, `document.querySelector('#session-companion-panel') !== null`)
+      expect(await page.evaluate<boolean>(`document.querySelector('#session-companion-panel .session-status__mode[data-mode="review"]') === null`)).toBe(true)
       expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-row--active .chip')].map(chip => chip.textContent)`)).not.toContain("review 1")
     } finally { await page.close() }
-  }
-}, 120_000)
+  }, 120_000)
+}
 
 test("an uncertain decision stays visible with its item and is never sent again on its own", async () => {
   const page = await browser!.openPage()

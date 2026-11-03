@@ -259,6 +259,7 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
 
   const server = Bun.serve<{ deviceID: string }>({
     port: 0,
+    hostname: "127.0.0.1",
     fetch(request, self) {
       const url = new URL(request.url)
       record({ kind: "http", path: url.pathname })
