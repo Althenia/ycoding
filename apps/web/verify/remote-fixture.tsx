@@ -9,7 +9,7 @@
  */
 import { accountedTask } from "../test/usage-fixture"
 import { render } from "solid-js/web"
-import { onMount } from "solid-js"
+import { Show, onMount } from "solid-js"
 import { ThemeProvider } from "../src/theme/theme-store"
 import { App } from "../src/app"
 import { pwaInstall } from "../src/pwa/install"
@@ -90,6 +90,7 @@ const accountMode = remoteScenarioData?.account ?? accountParams.get("account") 
 const accountDelayMs = Number(accountParams.get("accountDelay") ?? 0)
 /** `?connection=offline` selects a signed-in device whose open relay has no local agent. */
 const connectionMode = remoteScenarioData?.connection ?? accountParams.get("connection") ?? "open"
+let sessionInventoryOffline = false
 /** `?form=all` adds every native field kind for browser verification. */
 const formMode = accountParams.get("form") ?? "question"
 /** Delays native Form settlement so the browser can observe disabled duplicate controls. */
@@ -188,7 +189,8 @@ const syntheticHttp: RemoteHttp = {
 const acceptedPreview = accountParams.get("acceptedPreview") === "1"
 const defaultSessions: readonly WireSession[] = [
   { id: sessionID, title: "Stream remote output safely", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(42), updated: ago(1), ...(acceptedPreview ? { pinned: ago(5) } : {}) }, running: !acceptedPreview },
-  ...(acceptedPreview ? [{ id: "ses_running", title: "Verify provider auth fallback", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(15), updated: ago(1) }, running: true }] : []),
+  ...(acceptedPreview ? [{ id: "ses_running", title: "Verify provider auth fallback", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(15), updated: ago(1), ...(accountParams.has("priorityPins") ? { pinned: ago(5) } : {}) }, running: true }] : []),
+  ...(accountParams.has("priorityPins") ? [{ id: "ses_idle_pinned", title: "Pinned idle", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(20), updated: ago(2), pinned: ago(5) } }] : []),
   { id: "ses_archived", title: "Archived: release notes", time: { created: ago(300), updated: ago(280), archived: ago(280) } },
   { id: "ses_child", title: "Child: fix flaky suite", parentID: sessionID, time: { created: ago(30), updated: ago(4) } },
   ...(accountParams.get("team") === "office-large-family" ? Array.from({ length: 5 }, (_, index) => ({
@@ -423,7 +425,7 @@ Object.assign(window, { remoteReleaseChildAnswer: () => releaseChildAnswer?.() }
 let probeText = "## Stable heading\n\nParagraph before streaming.\n\n```ts\nconst pending = 1"
 let messages: readonly unknown[] = acceptedPreview ? [
   { id: "msg_user", type: "user", text: "Refactor the session sync and run the targeted tests.", time: { created: ago(40), consumed: ago(39) } },
-  { id: "msg_assistant", type: "assistant", agent: "god", model, content: [{ type: "text", text: "Updated the session sync and verified the targeted tests." }], tokens: { input: 24_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, diagnostics: { contextLimit: 128_000 }, time: { created: ago(38), completed: ago(5) } },
+  { id: "msg_assistant", type: "assistant", agent: "god", model, content: [{ type: "text", text: "Updated the session sync and verified the targeted tests." }], tokens: { input: 24_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, diagnostics: { contextLimit: 128_000, contextBreakdown: { system: 3_200, tools: 4_800, user: 2_400, assistant: 4_600, reasoning: 3_000, toolCalls: 5_200, other: 800 } }, time: { created: ago(38), completed: ago(5) } },
 ] : transcriptProbe ? [...Array.from({ length: 12 }, (_, index) => [
     { id: `probe_prompt_${index}`, type: "user", text: `Investigate part ${index}`, time: { created: index * 2 + 1, consumed: index * 2 + 2 } },
     { id: `probe_reply_${index}`, type: "assistant", agent: "god", model, content: [{ type: "text", text: `## Part ${index}\n\n${"Verified content remains in place. ".repeat(8)}` }], time: { created: index * 2 + 2, completed: index * 2 + 3 } },
@@ -960,7 +962,7 @@ function createFixtureStore(): Fixture {
     if (acceptedPreview && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [{ placementMessageID: "msg_assistant", path: "src/remote/store.ts", additions: 2, deletions: 1, status: "modified", files: [{ path: "src/remote/store.ts", diff: "@@ -1 +1,2 @@\n-const old = 1\n+const next = 2\n+export { next }", additions: 2, deletions: 1, status: "modified" }] }] } }
     if (transcriptProbe && operation === "session.todo.list") return { status: "ok", value: { data: [{ content: "Verify stable transcript", status: "in_progress", priority: "high" }] } }
     if (transcriptProbe && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [{ placementMessageID: "probe_reply_4", path: "src/probe.ts", additions: 1, deletions: 1, status: "modified", files: [{ path: "src/probe.ts", diff: `@@ -1 +1 @@\n-before\n+${probeCaptured}`, additions: 1, deletions: 1, status: "modified" }] }] } }
-    if (connectionMode === "offline") return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
+    if (connectionMode === "offline" || (sessionInventoryOffline && operation === "session.list")) return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
     if (operation.startsWith("coordination.")) return coordinationOutcome(operation, input)
     if (operation === "dots.get" || operation === "dots.set" || operation === "dots.attach") return dotsOutcome(operation, input, "dev_studio")
     if (operation === "session.pin" || operation === "session.unpin") {
@@ -1227,6 +1229,9 @@ function createFixtureStore(): Fixture {
       operation === "session.form.reply" ||
       operation === "session.form.cancel"
     ) {
+      if (operation === "session.permission.reply" && accountParams.get("permissionConflict") === "hold") return new Promise<RemoteRequestOutcome>((resolve) => {
+        Object.assign(window, { releasePermissionConflict: () => resolve({ status: "failed", error: { code: "internal_error", message: "already settled from another browser" } }) })
+      })
       const requestID = typeof input?.requestID === "string" ? input.requestID : undefined
       const formID = typeof input?.formID === "string" ? input.formID : undefined
       if (requestID !== undefined) answered.add(requestID)
@@ -1577,6 +1582,7 @@ Object.assign(window, { remoteQuestionAssessment: fixture.assessQuestion })
 Object.assign(window, { providerAuthState: () => fixture.store.state() })
 Object.assign(window, { remoteQuotaNotice: (frame: RemoteNoticeFrame) => fixture.noticeFrame(frame) })
 Object.assign(window, { remoteReloadMessages: fixture.store.reloadMessages })
+Object.assign(window, { remoteOfflineInventory: () => { sessionInventoryOffline = true; fixture.invalidateSessions() } })
 Object.assign(window, { remoteInventoryReport: () => ({ requests: fixture.inventoryRequests(), rows: fixture.store.state().sessions.length,
   groups: fixture.store.state().sessionGroups.length, next: fixture.store.state().sessionHasNext,
   first: fixture.store.state().sessions[0]?.id, last: fixture.store.state().sessions.at(-1)?.id, inputs: fixture.inventoryInputs(),
@@ -1750,6 +1756,7 @@ function FixturePage() {
   })
   return (
     <div class="fixture">
+      <Show when={!acceptedPreview}>
       <p class="fixture__banner" role="status">
         {relayAddress === undefined
           ? "Synthetic fixture build — transport and account calls are local stubs. Not a real session, account, or relay."
@@ -1769,6 +1776,7 @@ function FixturePage() {
           Simulate status change
         </button>
       </div>
+      </Show>
       <App createRemoteStore={() => fixture.store} />
     </div>
   )

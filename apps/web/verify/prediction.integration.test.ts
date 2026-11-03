@@ -259,7 +259,7 @@ test("/prompt opens the generate dialog, sends mode and memory, and hides Steer 
       expect(await page.evaluate<number>(`window.composerRequests().length`)).toBe(1)
       await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]:not([disabled])') !== null`)
       await page.evaluate(`(() => { const field=document.querySelector('.new-session-composer textarea'); field.focus(); field.value='/prompt open the task'; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
-      await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Create session"]').click()`)
+      await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]').click()`)
       await wait(page, `document.querySelector('dialog[aria-label="Generate prompt"]')?.open === true`)
       expect(await page.evaluate<string[]>(`[...document.querySelectorAll('dialog[aria-label="Generate prompt"] input[type=radio]')].map(radio => radio.closest('label').textContent.trim())`)).toEqual(["Start a task", "Goal objective"])
       await page.pressEscape()

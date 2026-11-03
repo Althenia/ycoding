@@ -1,10 +1,11 @@
 # Web
 
-- Preserve composer attachments, mentions, and agent selection per Session while switching targets.
-- Show attachment limits and retry workspace file searches from the composer.
-- Show verified Project membership on Session rows and stop reasoning-track animations when motion is off.
-- Keep new-session drafts editable until a repository is available, and show Session filters and loaded priority counts in the sidebar and phone sheet.
-- Keep Session filters on one row and show pinned status alongside waiting status in Session navigation.
-- Prioritize Sessions needing action, label the standalone New chat scope, and show the current Session's reported context and autonomy in Team.
-- Pin and unpin admitted Sessions from the Session rail or Sessions page.
-- Keep conversation jump controls clear of decision buttons on phones.
+- Preserve attachments, mentions, and agent choices per Session; show attachment limits and retry workspace file searches.
+- Keep new chat drafts editable before repository selection and offer supported reasoning effort controls.
+- Keep filters on one row, group Sessions by priority, show loaded counts and pinned waiting status, and pin from the rail or Sessions page.
+- Open the command palette with Ctrl/Cmd+K in either sidebar state and label the creation action New chat.
+- Show verified Project membership on Session rows and stop reasoning animations when motion is off.
+- Show Session context, estimated category breakdowns, autonomy, and goals in the companion as step diagnostics arrive.
+- Open captured file diffs in companion Changes using View changes.
+- Switch Usage between Today, 7 days, and 30 days, and refresh quotas with a labelled control.
+- Keep phone jump controls clear of decisions, show permission reply failures, and clarify machine-managed Settings.

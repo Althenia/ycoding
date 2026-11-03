@@ -148,16 +148,26 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
       await h.wait(`document.querySelector('[aria-label="Open Team"]:not([inert])')?.getBoundingClientRect().width > 0`)
       await h.waitRequest("session.review.list")
       expect(await h.page.evaluate<boolean>(`document.body.textContent.includes('Review items could not be loaded')`)).toBe(false)
-      if (width < 768) await h.page.evaluate(`document.querySelector('[aria-label="Open sessions"]').click()`)
-      const newSession = width < 768 ? '.overlay--sessions-sheet button[aria-label^="New session"]' : ".workspace-new-session button"
+      if (width < 768) {
+        await h.page.evaluate(`document.querySelector('[aria-label="Open sessions"]').click()`)
+        await h.wait(`document.querySelector('.overlay--sessions-sheet') !== null`)
+        await h.page.pressEscape()
+        await h.wait(`document.querySelector('.overlay--sessions-sheet') === null`)
+      }
+      const newSession = width < 768 ? '.conversation-header__actions .new-session__trigger[aria-label^="New chat"]' : ".workspace-new-session button"
       await h.wait(`document.querySelector(${JSON.stringify(newSession)})?.getBoundingClientRect().width > 0`)
-      await h.page.evaluate(`document.querySelector(${JSON.stringify(newSession)}).click()`)
+      if (width < 768) {
+        const hit = await h.page.evaluate<{ x: number; y: number; reachable: boolean }>(`(() => { const button=document.querySelector(${JSON.stringify(newSession)}), rect=button.getBoundingClientRect(), x=rect.left+rect.width/2, y=rect.top+rect.height/2; return { x, y, reachable: rect.width > 0 && rect.height > 0 && !button.disabled && !button.closest('[inert], [aria-hidden="true"]') && x >= 0 && x < innerWidth && y >= 0 && y < innerHeight && button.contains(document.elementFromPoint(x,y)) } })()`)
+        expect(hit.reachable).toBe(true)
+        await h.page.mouse("mousePressed", hit.x, hit.y)
+        await h.page.mouse("mouseReleased", hit.x, hit.y)
+      } else await h.page.evaluate(`document.querySelector(${JSON.stringify(newSession)}).click()`)
       await h.wait(`location.pathname === '/remote' && document.querySelector('.new-session-composer__repository button')?.getBoundingClientRect().width > 0`)
       await h.page.evaluate(`document.querySelector('${nav} a[href="/remote/sessions"]').click()`)
       await h.wait(`location.pathname === '/remote/sessions'`)
       await h.wait(`document.querySelector('.sessions-table__row[data-session-id="ses_a"]')?.textContent.includes('Master · Atlas')`)
       await h.wait(`document.querySelector('.sessions-table__row[data-session-id="ses_b"]')?.textContent.includes('Member · Atlas')`)
-      expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.session-filters button')].filter(item => item.getBoundingClientRect().width > 0).map(item => item.textContent.trim())`)).toEqual(["All", "Waiting", "Running", "Idle"])
+      expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.session-filters button')].filter(item => item.getBoundingClientRect().width > 0).map(item => item.textContent.trim())`)).toEqual(["All (2)", "Waiting (0)", "Running (0)", "Idle (2)"])
       await h.page.evaluate(`document.querySelector('.sessions-table__row[data-session-id="ses_a"] .sessions-table__select').click()`)
       await h.wait(`location.pathname === '/remote/session' && document.querySelector('.composer-resident:not([inert]) .composer__input')`)
       await h.wait(`document.querySelector('[aria-label="Open Team"]:not([inert])')?.getBoundingClientRect().width > 0`)

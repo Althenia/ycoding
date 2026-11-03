@@ -461,8 +461,8 @@ describe("remote navigation", () => {
         expect(entrance.duration.split(",").every((duration) => duration.trim() === (reduced ? "0s" : "0.22s"))).toBe(true)
         if (reduced) expect(entrance.frames.every((opacity) => opacity === 1)).toBe(true)
         else expect(new Set(entrance.frames).size).toBeGreaterThan(1)
-        await until(page, `document.querySelector('.team-view__header [aria-label="Close Team"]') !== null`)
-        await page.evaluate(`document.querySelector('.team-view__header [aria-label="Close Team"]').click()`)
+        await until(page, `document.querySelector('.team-control__panel [aria-label="Close Session companion"]') !== null`)
+        await page.evaluate(`document.querySelector('.team-control__panel [aria-label="Close Session companion"]').click()`)
         const exit = await page.evaluate<{ readonly inert: boolean; readonly hidden: boolean; readonly focused: boolean; readonly duration: string; readonly contentVisibility: string }>(`(() => { const layer=document.querySelector('.team-control--exiting'); return {inert:layer?.inert === true, hidden:layer?.getAttribute('aria-hidden') === 'true', focused:document.activeElement === document.querySelector('[aria-label="Open Team"]'), duration:layer ? getComputedStyle(layer).transitionDuration : '', contentVisibility:layer ? getComputedStyle(layer).contentVisibility : ''} })()`)
         expect(exit.inert && exit.hidden && exit.focused).toBe(true)
         expect(exit.duration.split(",").every((duration) => duration.trim() === (reduced ? "0s" : "0.22s"))).toBe(true)
@@ -624,10 +624,9 @@ describe("remote navigation", () => {
     } finally { await page.close() }
   }, 120_000)
 
-  test("Conversation re-enters at the latest message without showing a wrong position, then leaves a deliberate scroll-up alone", async () => {
+  for (const [width, height] of [[1440, 900], [390, 844]] as const) for (const theme of themes) for (const reduced of [false, true]) test(`Conversation re-enters at the latest message without showing a wrong position, then leaves a deliberate scroll-up alone at ${width} ${theme} reduced=${reduced}`, async () => {
     const page = await requireBrowser().openPage()
     try {
-      for (const [width, height] of [[1440, 900], [390, 844]] as const) for (const theme of themes) for (const reduced of [false, true]) {
         await page.setViewport(width, height)
         await page.setReducedMotion(reduced)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`)
@@ -648,11 +647,10 @@ describe("remote navigation", () => {
         expect(after.samples.length, `${label} sampled visible frames`).toBeGreaterThan(0)
         expect(Math.max(...after.samples), `${label} no visible frame at an inherited position`).toBeLessThanOrEqual(48)
 
-        const held = await page.evaluate<{ readonly top: number; readonly after: number; readonly anchorShift: number; readonly sameAnchor: boolean }>(`(() => new Promise(resolve => { const scroll = document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -300 })); scroll.scrollTop = 200; scroll.dispatchEvent(new Event('scroll')); const top = scroll.scrollTop; const bounds = scroll.getBoundingClientRect(); const anchor = [...document.querySelectorAll('.conversation-pane [data-message-id]')].find((row) => { const rect = row.getBoundingClientRect(); return rect.top >= bounds.top && rect.bottom <= bounds.bottom }); const anchorTop = anchor.getBoundingClientRect().top; document.querySelector('.conversation-pane').style.minHeight = '4200px'; setTimeout(() => resolve({ top, after: scroll.scrollTop, anchorShift: anchor.getBoundingClientRect().top - anchorTop, sameAnchor: document.contains(anchor) }), 400) }))()`)
+        const held = await page.evaluate<{ readonly top: number; readonly after: number; readonly anchorShift: number; readonly sameAnchor: boolean }>(`(() => new Promise(resolve => { const scroll = document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -300 })); scroll.scrollTop = 200; scroll.dispatchEvent(new Event('scroll')); const top = scroll.scrollTop; const bounds = scroll.getBoundingClientRect(); const anchor = [...document.querySelectorAll('.conversation-pane [data-message-id]')].find((row) => { const rect = row.getBoundingClientRect(); return rect.bottom > bounds.top && rect.top < bounds.bottom }); const anchorTop = anchor.getBoundingClientRect().top; document.querySelector('.conversation-pane').style.minHeight = '4200px'; setTimeout(() => resolve({ top, after: scroll.scrollTop, anchorShift: anchor.getBoundingClientRect().top - anchorTop, sameAnchor: document.contains(anchor) }), 400) }))()`)
         expect(held.sameAnchor, `${label} the visible row stays mounted`).toBe(true)
         expect(Math.abs(held.anchorShift), `${label} a deliberate scroll-up is not forced back: the visible row does not move on screen`).toBeLessThanOrEqual(2)
         expect(held.after, `${label} the reader is not snapped back to the tail`).toBeLessThan(held.top + 400)
-      }
     } finally { await page.close() }
   }, 90_000)
 })

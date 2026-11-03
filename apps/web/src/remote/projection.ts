@@ -57,7 +57,27 @@ type GenerationSpeedHistoryView = {
   readonly recent: readonly GenerationSpeedSampleView[]
 }
 
-type ContextWindowView = { readonly model: ModelRefView; readonly used: number; readonly limit: number }
+export type ContextBreakdownView = {
+  readonly system: number
+  readonly tools: number
+  readonly user: number
+  readonly assistant: number
+  readonly reasoning: number
+  readonly toolCalls: number
+  readonly other: number
+}
+
+export const contextBreakdownCategories = [
+  ["system", "System"],
+  ["tools", "Tools"],
+  ["user", "User"],
+  ["assistant", "Assistant"],
+  ["reasoning", "Reasoning"],
+  ["toolCalls", "Tool calls"],
+  ["other", "Other"],
+] as const
+
+type ContextWindowView = { readonly model: ModelRefView; readonly used: number; readonly limit: number; readonly breakdown?: ContextBreakdownView }
 
 const positiveInteger = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined
 
@@ -89,12 +109,26 @@ function readGenerationSpeed(value: unknown): GenerationSpeedHistoryView | undef
     ...(unreportedReason ? { unreportedReason } : {}) }
 }
 
-function readContextWindow(model: unknown, used: unknown, limit: unknown): ContextWindowView | undefined {
+export function readContextBreakdown(value: unknown): ContextBreakdownView | undefined {
+  if (!isRecord(value)) return undefined
+  const system = value.system
+  const tools = value.tools
+  const user = value.user
+  const assistant = value.assistant
+  const reasoning = value.reasoning
+  const toolCalls = value.toolCalls
+  const other = value.other
+  if (!nonNegativeInteger(system) || !nonNegativeInteger(tools) || !nonNegativeInteger(user) || !nonNegativeInteger(assistant) || !nonNegativeInteger(reasoning) || !nonNegativeInteger(toolCalls) || !nonNegativeInteger(other)) return undefined
+  return { system, tools, user, assistant, reasoning, toolCalls, other }
+}
+
+function readContextWindow(model: unknown, used: unknown, limit: unknown, breakdown?: unknown): ContextWindowView | undefined {
   const selected = readModelRef(model)
   const total = positiveInteger(used)
   const cap = positiveInteger(limit)
   if (!selected || total === undefined || cap === undefined) return undefined
-  return { model: selected, used: total, limit: cap }
+  const parsed = readContextBreakdown(breakdown)
+  return { model: selected, used: total, limit: cap, ...(parsed === undefined ? {} : { breakdown: parsed }) }
 }
 
 function readAssistantContext(value: unknown): ContextWindowView | undefined {
@@ -103,7 +137,8 @@ function readAssistantContext(value: unknown): ContextWindowView | undefined {
     value.tokens.cache.read, value.tokens.cache.write]
   if (!counts.every((count): count is number => typeof count === "number" && Number.isSafeInteger(count) && count >= 0)) return undefined
   return readContextWindow(value.model, counts.reduce((sum, count) => sum + count, 0),
-    isRecord(value.diagnostics) ? value.diagnostics.contextLimit : undefined)
+    isRecord(value.diagnostics) ? value.diagnostics.contextLimit : undefined,
+    isRecord(value.diagnostics) ? value.diagnostics.contextBreakdown : undefined)
 }
 
 const sameModel = (left: ModelRefView | undefined, right: ModelRefView | undefined) =>
@@ -138,6 +173,8 @@ export function contextWindowDisplay(view: SessionView | undefined, selected: Mo
     usedPercent,
     leftPercent: Math.max(0, 100 - usedPercent),
     fraction: context.used / context.limit,
+    usedTokens: compactTokens.format(context.used),
+    capacityTokens: compactTokens.format(context.limit),
     tokens: `${compactTokens.format(context.used)} / ${compactTokens.format(context.limit)} tokens`,
   }
 }
@@ -983,13 +1020,15 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       return { ...view, agent: stringField(data.agent) ?? view.agent, updatedAt: now }
     case "session.model.selected": {
       const selected = readModelRef(data.model)
-      return { ...view, model: selected ?? view.model, updatedAt: now }
+      const measured = view.contextWindow?.model
+      const stale = selected !== undefined && measured !== undefined && (selected.providerID !== measured.providerID || selected.id !== measured.id)
+      return { ...view, model: selected ?? view.model, ...(stale ? { contextWindow: undefined } : {}), updatedAt: now }
     }
     case "session.diagnostics.updated": {
       if (stringField(data.sessionID) !== view.id || !isRecord(data.diagnostics)) return view
       const context = isRecord(data.diagnostics.context) ? data.diagnostics.context : undefined
       return { ...view, generationSpeed: readGenerationSpeed(data.diagnostics.generationSpeed),
-        contextWindow: readContextWindow(data.diagnostics.model, context?.total, context?.limit), updatedAt: now }
+        contextWindow: readContextWindow(data.diagnostics.model, context?.total, context?.limit, data.diagnostics.contextBreakdown), updatedAt: now }
     }
     case "session.execution.started":
       return { ...clearAssistantRetry(view), status: "running", executionStarted: now, updatedAt: now }
@@ -1037,14 +1076,19 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         retry: undefined,
       }))
     case "session.step.ended":
-      return { ...withAssistant(view, data, now, (message) => ({ ...message, completed: now, retry: undefined })), activeAt }
-    case "session.step.failed":
-      return { ...withAssistant(view, data, now, (message) => ({
+    case "session.step.failed": {
+      const next = withAssistant(view, data, now, (message) => ({
         ...message,
         completed: now,
         retry: undefined,
-        error: readError(data.error)?.message ?? "The step failed",
-      })), activeAt }
+        ...(event.type === "session.step.failed" ? { error: readError(data.error)?.message ?? "The step failed" } : {}),
+      }))
+      const id = stringField(data.assistantMessageID)
+      const assistant = next.messages.find((item) => item.id === id && item.kind === "assistant")
+      const model = (assistant?.kind === "assistant" ? assistant.model : undefined) ?? next.model
+      const contextWindow = readAssistantContext({ model, tokens: data.tokens, diagnostics: { contextLimit: data.contextLimit, contextBreakdown: data.contextBreakdown } })
+      return { ...next, ...(contextWindow === undefined ? {} : { contextWindow }), activeAt }
+    }
     case "session.text.started":
       return withTextPart(view, data, now, (part) => part)
     case "session.text.delta":

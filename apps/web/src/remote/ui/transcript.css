@@ -1,5 +1,6 @@
 .transcript-message { display:grid; gap:var(--yc-space-2); min-inline-size:0; max-inline-size:100%; animation:transcript-enter var(--yc-dur-base) var(--yc-ease-entrance) both; }
 .transcript-message--assistant { justify-self:stretch; }
+.transcript-message--assistant .transcript-message__text { padding: var(--yc-space-3) var(--yc-space-4); border: 1px solid var(--yc-border); border-radius: 22px 22px 22px 6px; background: var(--yc-surface); }
 .transcript-message--user { grid-template-columns:minmax(0,1fr); justify-self:end; justify-items:end; inline-size:fit-content; max-inline-size:min(82%,48ch); }
 .transcript-message--user .transcript-attachment { inline-size:480px; max-inline-size:100%; }
 .transcript-message__bubble { margin:0; padding:var(--yc-space-3) var(--yc-space-4); border:0; border-radius:var(--yc-radius-xl) var(--yc-radius-xl) var(--yc-radius-sm) var(--yc-radius-xl); background:var(--yc-green-soft); color:var(--yc-text); text-align:start; white-space:pre-wrap; overflow-wrap:anywhere; max-inline-size:100%; }

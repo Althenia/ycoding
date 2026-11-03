@@ -7,6 +7,11 @@ import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/rem
 import { createRemoteTransport, type RemoteRequestTiming, type RemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
 import { startRelayDouble, waitFor, type RelayDouble, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
 
+test("daily usage table provides a fallback for unreported spend", async () => {
+  const usage = await Bun.file(new URL("../src/remote/ui/usage.tsx", import.meta.url)).text()
+  expect(usage).toContain('<td>{spendCostText(entry) || "—"}</td>')
+})
+
 const manualModes = { permissions: "manual", guardrails: "manual", answers: "manual" } as const
 
 const autonomyData = (state: Record<string, unknown>) => ({
@@ -2904,6 +2909,65 @@ describe("remote store integration", () => {
     } finally {
       await test.stop()
     }
+  })
+
+  test("permission replies reject duplicate in-flight decisions and retain a conflict", async () => {
+    const held = Promise.withResolvers<RelayHandlerOutcome>()
+    const test = await harness({ permissions: [{ id: "per_1", action: "edit", resources: ["src/**"] }],
+      handler: (request) => request.operation === "session.permission.reply" ? held.promise : "default" })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      const first = test.store.replyPermission("per_1", "once")
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.permission.reply"))
+      const duplicate = test.store.replyPermission("per_1", "reject")
+      expect(await Promise.race([duplicate.then(() => true), Bun.sleep(150).then(() => false)])).toBe(true)
+      expect(test.relay.requests.filter((request) => request.operation === "session.permission.reply")).toHaveLength(1)
+      held.resolve({ ok: false, code: "internal_error", message: "already settled from another browser" })
+      await first
+      expect(test.store.state().view?.requests.map((request) => request.id)).toContain("per_1")
+      expect(test.store.state().mutations.find((mutation) => mutation.kind === "permission")).toMatchObject({ state: "failed", detail: "already settled from another browser" })
+    } finally { held.resolve("default"); await test.stop() }
+  })
+
+  test("a settled permission reply cannot remove another selected Session's request", async () => {
+    const held = Promise.withResolvers<RelayHandlerOutcome>()
+    const test = await harness({ permissions: [{ id: "per_1", action: "edit", resources: ["src/**"] }],
+      handler: (request) => request.operation === "session.permission.reply" ? held.promise : "default" })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      const pending = test.store.replyPermission("per_1", "once")
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.permission.reply"))
+      await test.store.selectSession("ses_b")
+      expect(test.store.state().view?.requests.map((request) => request.id)).toContain("per_1")
+      held.resolve({ ok: true, value: null })
+      await pending
+      expect(test.store.state().view?.requests.map((request) => request.id)).toContain("per_1")
+    } finally { held.resolve("default"); await test.stop() }
+  })
+
+  test("a disconnected permission reply cannot settle a reconnected Session's request", async () => {
+    const held = Promise.withResolvers<RelayHandlerOutcome>()
+    const test = await harness({ permissions: [{ id: "per_1", action: "edit", resources: ["src/**"] }],
+      handler: (request) => request.operation === "session.permission.reply" ? held.promise : "default" })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      const pending = test.store.replyPermission("per_1", "once")
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.permission.reply"))
+      test.store.disconnect()
+      await pending
+      test.store.connect("dev_1")
+      await waitFor(() => test.store.state().transport.kind === "open")
+      await test.store.selectSession("ses_a")
+      expect(test.store.state().view?.requests.map((request) => request.id)).toContain("per_1")
+      held.resolve({ ok: true, value: null })
+      expect(test.store.state().view?.requests.map((request) => request.id)).toContain("per_1")
+    } finally { held.resolve("default"); await test.stop() }
   })
 
   test("removes a request locally after a successful reply and keeps it on failure", async () => {

@@ -38,7 +38,7 @@ describe("remote product-state scenarios", () => {
     expect(remoteScenario(new URLSearchParams("scenario=conversation-landing-390"))).toMatchObject({
       view: "chat",
       noSelection: true,
-      expectedText: ["New session", "Default agent"],
+      expectedText: ["Start with a conversation.", "Default agent"],
     })
     expect(remoteScenario(new URLSearchParams("scenario=empty-backend-1440"))).toMatchObject({ account: "ok", connection: "open", emptyBackend: true, noSelection: true })
     expect(remoteScenario(new URLSearchParams("scenario=selected-machine-offline-768"))).toMatchObject({ account: "ok", connection: "offline", noSelection: true })

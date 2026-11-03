@@ -1114,7 +1114,7 @@ describe("remote shell layout", () => {
       await page.evaluate(`document.querySelector('.new-session-composer .mini-picker__trigger[aria-label="Repository"]').click()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`[...document.querySelectorAll('.mini-picker__option')].some(option => option.textContent.includes('Other repository'))`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`[...document.querySelectorAll('.mini-picker__option')].find(option => option.textContent.includes('Other repository'))?.click()`)
-      await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Create session"]').click()`)
+      await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]').click()`)
       for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('New session') ?? false`); attempt += 1) await Bun.sleep(50)
       for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .session-row--active') !== null`); attempt += 1) await Bun.sleep(50)
       for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .session-panel__workspace h3')?.textContent?.trim() === 'other'`); attempt += 1) await Bun.sleep(50)

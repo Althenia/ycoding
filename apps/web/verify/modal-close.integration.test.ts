@@ -188,10 +188,10 @@ describe("one close control per modal", () => {
       await page.navigate(`${origin}/verify/remote.html?view=chat&team=two&theme=dark`)
       for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Open Team"]')?.getBoundingClientRect().width > 0`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`(() => { const trigger = document.querySelector('[aria-label="Open Team"]'); trigger.focus(); trigger.click() })()`)
-      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-control__panel .team-view__header [aria-label="Close Team"]') !== null`); attempt += 1) await Bun.sleep(25)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.team-control__panel .team-view__header [aria-label="Close Team"]').length`)).toBe(1)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-control__panel [aria-label="Close Session companion"]') !== null`); attempt += 1) await Bun.sleep(25)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.team-control__panel [aria-label="Close Session companion"]').length`)).toBe(1)
       expect(await page.evaluate<boolean>(`document.querySelector('dialog.team-view__sheet') === null`)).toBe(true)
-      await page.evaluate(`document.querySelector('.team-control__panel .team-view__header [aria-label="Close Team"]').click()`)
+      await page.evaluate(`document.querySelector('.team-control__panel [aria-label="Close Session companion"]').click()`)
       expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === 'Open Team'`)).toBe(true)
     } finally { await page.close() }
   }, 30_000)

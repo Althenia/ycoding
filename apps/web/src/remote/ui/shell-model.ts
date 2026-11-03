@@ -118,7 +118,7 @@ export function sessionCompanionSummary(view: SessionView | undefined, sessionMo
   const autonomy = view.autonomy
   const goal = autonomy?.goal?.status === "active" ? autonomy.goal : undefined
   return {
-    ...(context ? { contextLabel: `${context.usedPercent}% used · ${context.leftPercent}% left`, contextTokens: context.tokens, contextFraction: context.fraction } : {}),
+    ...(context ? { contextLabel: `${context.usedPercent}% used · ${context.leftPercent}% left`, contextTokens: context.tokens, contextUsed: context.usedTokens, contextCapacity: context.capacityTokens, contextFraction: context.fraction } : {}),
     ...(autonomy ? { autonomyLabel: autonomySummary(autonomy.effective ?? autonomy).label } : {}),
     ...(goal ? { goalText: goal.text, goalIteration: goal.iteration } : {}),
   }

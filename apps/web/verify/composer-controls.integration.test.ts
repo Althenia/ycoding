@@ -60,8 +60,8 @@ test("CDP pages default to normal motion without overriding native mobile touch 
   } finally { await page.close(); await first.close() }
 })
 
-test("selected Session speed and context share one stable composer row and accessible details", async () => {
-  for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
+for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
+  test(`selected Session speed and context share one stable composer row and accessible details at ${width} in ${theme}`, async () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width!, height!)
@@ -113,18 +113,20 @@ test("selected Session speed and context share one stable composer row and acces
         await page.pressEscape()
         await wait(page, `document.querySelector('.composer__context-popover') === null`)
         await page.evaluate(`document.querySelector('.composer__context-trigger')?.click()`)
+        expect(await page.evaluate<boolean>(`document.querySelector('.composer__context-popover') === null`)).toBe(true)
+        await page.evaluate(`document.querySelector('.composer__context-trigger')?.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))`)
         await wait(page, `document.querySelector('.composer__context-popover') !== null`)
         expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.composer__context-popover')).animationDuration`)).toBe("0.14s")
-        await page.evaluate(`document.querySelector('.composer__context-trigger')?.click()`)
+        await page.evaluate(`document.querySelector('.composer__context-trigger')?.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }))`)
         await wait(page, `document.querySelector('.composer__context-popover') === null`)
         await page.setReducedMotion(true)
-        await page.evaluate(`document.querySelector('.composer__context-trigger')?.click()`)
+        await page.evaluate(`document.querySelector('.composer__context-trigger')?.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))`)
         await wait(page, `document.querySelector('.composer__context-popover') !== null`)
         expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.composer__context-popover')).animationDuration`)).toBe("0s")
-        await page.evaluate(`document.querySelector('.composer__context-trigger')?.click()`)
-        expect(await page.evaluate<boolean>(`document.querySelector('.composer__context-popover') === null`)).toBe(true)
+        await page.evaluate(`document.querySelector('.composer__context-trigger')?.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }))`)
+        await wait(page, `document.querySelector('.composer__context-popover') === null`)
         await page.setReducedMotion(false)
-        await page.evaluate(`document.querySelector('.composer__context-trigger')?.click()`)
+        await page.evaluate(`document.querySelector('.composer__context-trigger')?.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))`)
         await wait(page, `document.querySelector('.composer__context-popover') !== null`)
         await page.evaluate(`Promise.all([...document.querySelector('.composer__context-popover').getAnimations()].map(animation => animation.finished.catch(() => {})))`)
       }
@@ -143,8 +145,8 @@ test("selected Session speed and context share one stable composer row and acces
       await page.evaluate(`window.composerSetDiagnostics('unknown')`)
       expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .composer__speed') !== null`)).toBe(false)
     } finally { await page.evaluate(`localStorage.removeItem('ycoding.remote.composer-collapsed')`).catch(() => {}); await page.close() }
-  }
-}, 60_000)
+  }, 60_000)
+}
 
 test("Session composer dock collapses accessibly, persists, releases transcript height, and expands for decisions and palette drafts", async () => {
   const page = await browser!.openPage()
@@ -219,8 +221,8 @@ test("Session composer dock collapses accessibly, persists, releases transcript 
   } finally { await palettePage.evaluate(`localStorage.removeItem('ycoding.remote.composer-collapsed')`).catch(() => {}); await palettePage.close() }
 }, 90_000)
 
-test("pending prompts, mutation toasts, and the active goal remain accessible on phone and desktop", async () => {
-  for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
+for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
+  test(`pending prompts, mutation toasts, and the active goal remain accessible at ${width} in ${theme}`, async () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width!, height!)
@@ -230,7 +232,7 @@ test("pending prompts, mutation toasts, and the active goal remain accessible on
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetPending('steer'); window.composerSetGoalStatus('active')`)
       await wait(page, `document.querySelector('.transcript-message__receipt')?.textContent?.includes('Processing') === true`)
       expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).toBe("Processing prompt")
-      expect(await page.evaluate<string>(`document.querySelector('.session-status__active-goal')?.textContent?.trim()`)).toBe("Goal active · Finish task")
+      expect(await page.evaluate<string>(`document.querySelector('#session-companion-panel .session-status__active-goal')?.textContent?.trim()`)).toBe("Goal active · Finish task")
       await page.evaluate(`window.composerSetGoalStatus(null); window.composerSetGoalPending(true)`)
       expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .session-status__announce[role="status"]')?.textContent?.trim()`)).toBe("Setting goal…")
       expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(width === 390 ? ".session-status__goal-trigger .session-status__goal-progress .transcript-dot-trail" : ".session-status__goal-setting .transcript-dot-trail")}) !== null && document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-busy') === 'true'`)).toBe(true)
@@ -256,8 +258,8 @@ test("pending prompts, mutation toasts, and the active goal remain accessible on
         await wait(page, `document.querySelector('.mutation-toast') === null`)
       }
     } finally { await page.close() }
-  }
-}, 30_000)
+  }, 30_000)
+}
 
 test("retry status yields to progress and terminal state at phone and desktop widths", async () => {
   for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
@@ -320,8 +322,8 @@ test("phone status shows the Session state, never the autonomy level shown besid
   }
 }, 30_000)
 
-test("phone agent and model summary, autonomy and goal share one line above the draft while primary actions sit below it", async () => {
-  for (const [width, height] of [[360, 780], [390, 844], [430, 932], [820, 1180]]) for (const theme of ["light", "dark"]) {
+for (const [width, height] of [[360, 780], [390, 844], [430, 932], [820, 1180]]) for (const theme of ["light", "dark"]) {
+  test(`phone agent and model summary, autonomy and goal share one line above the draft at ${width} in ${theme}`, async () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width!, height!)
@@ -330,7 +332,7 @@ test("phone agent and model summary, autonomy and goal share one line above the 
       await wait(page, `document.querySelector('.mini-composer__mount .composer__row') !== null`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetStatus('tool')`)
       await Bun.sleep(600)
-      const layout = await page.evaluate<{ present: boolean; label: string; pillVisible: boolean; summaryLine: boolean; summaryAboveDraft: boolean; actionsBelowDraft: boolean; inside: boolean; ellipsis: boolean; overflow: boolean }>(`(() => { const mount=document.querySelector('.mini-composer__mount'), button=mount.querySelector('.composer__summary .composer__mobile-trigger'), auto=mount.querySelector('.session-status__autonomous-trigger'), goal=mount.querySelector('.session-status__goal-trigger'), controls=mount.querySelector('.composer__controls'), card=mount.querySelector('.composer__row').getBoundingClientRect(), input=mount.querySelector('textarea').getBoundingClientRect(), actions=[...mount.querySelectorAll('.composer__attach,.composer__delivery-toggle,.mini-composer__send')].map(item=>item.getBoundingClientRect()), summary=[button,auto,goal].map(item=>item?.getBoundingClientRect()); const present=!!button; return { present, label:button?.textContent ?? '', pillVisible:[...controls.querySelectorAll('.mini-picker,.model-control')].some(item=>getComputedStyle(item).display!=='none'), summaryLine:present && summary.every(rect=>rect && Math.abs(rect.top-summary[0].top)<=1), summaryAboveDraft:present && summary.every(rect=>rect.bottom<=input.top+1), actionsBelowDraft:actions.length===3 && actions.every(rect=>rect.top>=input.bottom-1 && Math.abs(rect.top-actions[0].top)<=1), inside:present && summary[0].left>=card.left && summary[2].right<=card.right, ellipsis:present && getComputedStyle(button.querySelector('.composer__mobile-label')).textOverflow==='ellipsis', overflow:document.documentElement.scrollWidth>innerWidth } })()`)
+      const layout = await page.evaluate<{ present: boolean; label: string; pillVisible: boolean; summaryLine: boolean; summaryAboveDraft: boolean; actionsAlongsideDraft: boolean; inside: boolean; ellipsis: boolean; overflow: boolean }>(`(() => { const mount=document.querySelector('.mini-composer__mount'), button=mount.querySelector('.composer__summary .composer__mobile-trigger'), auto=mount.querySelector('.session-status__autonomous-trigger'), goal=mount.querySelector('.session-status__goal-trigger'), controls=mount.querySelector('.composer__controls'), card=mount.querySelector('.composer__row').getBoundingClientRect(), input=mount.querySelector('textarea').getBoundingClientRect(), attach=mount.querySelector('.composer__attach').getBoundingClientRect(), delivery=mount.querySelector('.composer__delivery-toggle').getBoundingClientRect(), send=mount.querySelector('.mini-composer__send').getBoundingClientRect(), summary=[button,auto,goal].map(item=>item?.getBoundingClientRect()); const present=!!button; return { present, label:button?.textContent ?? '', pillVisible:[...controls.querySelectorAll('.mini-picker,.model-control')].some(item=>getComputedStyle(item).display!=='none'), summaryLine:present && summary.every(rect=>rect && Math.abs(rect.top-summary[0].top)<=1), summaryAboveDraft:present && summary.every(rect=>rect.bottom<=input.top+1), actionsAlongsideDraft:attach.top>=input.top && attach.bottom<=input.bottom && send.top>=input.top && send.bottom<=input.bottom && delivery.top>=input.bottom, inside:present && summary[0].left>=card.left && summary[2].right<=card.right, ellipsis:present && getComputedStyle(button.querySelector('.composer__mobile-label')).textOverflow==='ellipsis', overflow:document.documentElement.scrollWidth>innerWidth } })()`)
       if (width! <= 430) {
         expect(layout.present).toBe(true)
         expect(layout.label).toContain("GSD")
@@ -339,7 +341,7 @@ test("phone agent and model summary, autonomy and goal share one line above the 
         expect(layout.pillVisible).toBe(false)
         expect(layout.summaryLine).toBe(true)
         expect(layout.summaryAboveDraft).toBe(true)
-        expect(layout.actionsBelowDraft).toBe(true)
+        expect(layout.actionsAlongsideDraft).toBe(true)
         expect(layout.inside).toBe(true)
         expect(layout.ellipsis).toBe(true)
       } else {
@@ -347,7 +349,7 @@ test("phone agent and model summary, autonomy and goal share one line above the 
         expect(layout.pillVisible).toBe(true)
       }
       expect(layout.overflow).toBe(false)
-      await Bun.write(new URL(`../../../.cache/tmp/composer-selection-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      await Bun.write(join(captures, `composer-selection-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
       if (width! <= 430) {
         await page.evaluate(`document.querySelector('.composer__mobile-trigger')?.click()`)
         await wait(page, `document.querySelector('.composer__selection-sheet') !== null`)
@@ -356,13 +358,13 @@ test("phone agent and model summary, autonomy and goal share one line above the 
         expect(sheet.modal).toBe("true")
         expect(sheet.targetHeight).toBeGreaterThanOrEqual(44)
         expect(sheet.focused).toBe("Agent")
-        await Bun.write(new URL(`../../../.cache/tmp/composer-selection-sheet-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await Bun.write(join(captures, `composer-selection-sheet-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
         await page.pressEscape()
         expect(await page.evaluate<string>(`document.activeElement?.className`)).toBe("composer__mobile-trigger")
       }
     } finally { await page.close() }
-  }
-}, 90_000)
+  }, 90_000)
+}
 
 test("status stays inside a fixed-height composer and pending picks survive unrelated updates", async () => {
   const page = await browser!.openPage()
@@ -562,8 +564,8 @@ test("the Autonomous dialog closes when the Session changes", async () => {
   } finally { await page.close() }
 }, 30_000)
 
-test("Goal is visibly off after completion and other terminal states while its control remains reachable", async () => {
-  for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
+for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
+  test(`Goal is visibly off after completion and other terminal states at ${width} in ${theme}`, async () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width!, height!)
@@ -575,16 +577,16 @@ test("Goal is visibly off after completion and other terminal states while its c
       const measure = async () => { await settle(); return page.evaluate<{ name: string | null; color: string; background: string; autonomousBackground: string; count: boolean; asymmetry: number; height: number; left: number }>(`(() => { const button=document.querySelector('.mini-composer__mount .session-status__goal-trigger'), autonomous=document.querySelector('.mini-composer__mount .session-status__autonomous-trigger'), style=getComputedStyle(button), rect=button.getBoundingClientRect(), walker=document.createTreeWalker(button, NodeFilter.SHOW_TEXT), glyphs=[]; for (let node=walker.nextNode(); node; node=walker.nextNode()) { if (!node.textContent.trim() || getComputedStyle(node.parentElement).visibility === 'hidden') continue; const range=document.createRange(); range.selectNodeContents(node); glyphs.push(range.getBoundingClientRect()) } const left=Math.min(...glyphs.map(box => box.left)), right=Math.max(...glyphs.map(box => box.right)); return { name:button.getAttribute('aria-label'), color:style.color, background:style.backgroundColor, autonomousBackground:getComputedStyle(autonomous).backgroundColor, count:button.querySelector('.session-status__goal-count') !== null, asymmetry:Math.abs((left - rect.left) - (rect.right - right)), height:rect.height, left:rect.left } })()`) }
       const active = await measure()
       expect(active.name).toBe("Goal active")
-      expect(await page.evaluate<string>(`document.querySelector('.session-status__active-goal')?.textContent?.trim()`)).toBe("Goal active · Finish task")
+      expect(await page.evaluate<string>(`document.querySelector('#session-companion-panel .session-status__active-goal')?.textContent?.trim()`)).toBe("Goal active · Finish task")
       expect(active.count).toBe(true)
       expect(active.asymmetry).toBeLessThanOrEqual(1)
       expect(active.background).toBe(active.autonomousBackground)
-      await Bun.write(new URL(`../../../.cache/tmp/composer-goal-active-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      await Bun.write(join(captures, `composer-goal-active-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
       for (const status of ["completed", "stopped", "exhausted", null] as const) {
         await page.evaluate(`window.composerSetGoalStatus(${JSON.stringify(status)})`)
         const off = await measure()
         expect(off.name).toBe("Goal off")
-        expect(await page.evaluate<boolean>(`document.querySelector('.session-status__active-goal') === null`)).toBe(true)
+        expect(await page.evaluate<boolean>(`document.querySelector('#session-companion-panel .session-status__active-goal') === null`)).toBe(true)
         expect(off.background).not.toBe(off.autonomousBackground)
         expect(off.color).not.toBe(active.color)
         expect(off.count).toBe(false)
@@ -592,14 +594,14 @@ test("Goal is visibly off after completion and other terminal states while its c
         expect(Math.abs(off.height - active.height)).toBeLessThanOrEqual(1)
         expect(Math.abs(off.left - active.left)).toBeLessThanOrEqual(1)
         if (status !== "completed") continue
-        await Bun.write(new URL(`../../../.cache/tmp/composer-goal-off-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await Bun.write(join(captures, `composer-goal-off-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
         await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__goal-trigger')?.click()`)
         expect(await page.evaluate<boolean>(`document.querySelector('${goalPanel(width!)} input[aria-label="Goal"]') !== null`)).toBe(true)
         await page.pressEscape()
       }
     } finally { await page.close() }
-  }
-}, 30_000)
+  }, 30_000)
+}
 
 test("managed subagents keep a read-only context bar without autonomy actions", async () => {
   const page = await browser!.openPage()
@@ -634,8 +636,8 @@ test("unreported Session autonomy offers no Autonomous selection", async () => {
   } finally { await page.close() }
 }, 30_000)
 
-test("sleep, wake, and keep-awake commands run their operations and show autonomy chips without sending prompts", async () => {
-  for (const width of [1440, 390]) for (const theme of ["light", "dark"]) {
+for (const width of [1440, 390]) for (const theme of ["light", "dark"]) {
+  test(`sleep, wake, and keep-awake commands show companion autonomy without sending prompts at ${width} in ${theme}`, async () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width, 844)
@@ -643,11 +645,15 @@ test("sleep, wake, and keep-awake commands run their operations and show autonom
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
       const composer = ".workspace__main .mini-composer__mount"
       await wait(page, `document.querySelector('${composer} .session-status__autonomous-trigger')?.getAttribute('aria-label') === 'Autonomous: Permissions Auto, Guardrails Auto, Answers Manual'`)
-      expect(await page.evaluate<number>(`document.querySelectorAll('${composer} .session-status__mode[data-mode="sleep"]').length`)).toBe(0)
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${composer} .session-status__mode')].map(chip => chip.dataset.mode)`)).toEqual(["permissions", "guardrails"])
+      const openCompanion = async () => { await page.evaluate(`document.querySelector('.companion-context-trigger').click()`); await wait(page, `document.querySelector('#session-companion-panel .session-status__modes') !== null`) }
+      const closeCompanion = async () => { await page.evaluate(`document.querySelector(${JSON.stringify(width === 390 ? ".companion__back" : '[aria-label="Close Session companion"]')}).click()`); await wait(page, `document.querySelector('#session-companion-panel') === null || document.querySelector('#session-companion-panel').getAttribute('aria-hidden') === 'true'`) }
+      await openCompanion()
+      expect(await page.evaluate<number>(`document.querySelectorAll('#session-companion-panel .session-status__mode[data-mode="sleep"]').length`)).toBe(0)
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('#session-companion-panel .session-status__mode')].map(chip => chip.dataset.mode)`)).toEqual(["permissions", "guardrails"])
+      await closeCompanion()
       await type(page, `${composer} textarea`, "/sle")
       await wait(page, `[...document.querySelectorAll('${composer} [role="option"]')].some(option => option.textContent.includes('/sleep'))`)
-      const modes = () => page.evaluate<{ label: string; tone: string }[]>(`[...document.querySelectorAll('${composer} .session-status__mode[data-mode="sleep"]')].map(chip => ({ label: chip.title, tone: [...chip.classList].find(name => name.startsWith('session-status__mode--')) ?? '' }))`)
+      const modes = () => page.evaluate<{ label: string; tone: string }[]>(`[...document.querySelectorAll('#session-companion-panel .session-status__mode[data-mode="sleep"]')].map(chip => ({ label: chip.title, tone: [...chip.classList].find(name => name.startsWith('session-status__mode--')) ?? '' }))`)
       const run = async (command: string, operation: string, input: Record<string, unknown>) => {
         const before = await page.evaluate<number>(`window.remoteMutationReport().length`)
         await type(page, `${composer} textarea`, command)
@@ -657,21 +663,19 @@ test("sleep, wake, and keep-awake commands run their operations and show autonom
         await wait(page, `document.querySelector('${composer} textarea')?.value === ''`)
       }
       await run("/sleep", "session.autonomy.set", { sleep: true })
-      await wait(page, `document.querySelectorAll('${composer} .session-status__mode[data-mode="sleep"]').length === 1`)
+      await openCompanion()
+      await wait(page, `document.querySelectorAll('#session-companion-panel .session-status__mode[data-mode="sleep"]').length === 1`)
       expect(await modes()).toEqual([{ label: "asleep", tone: "session-status__mode--on" }])
-      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('${composer} .session-status__mode')].every(chip => chip.getBoundingClientRect().right <= innerWidth)`)).toBe(true)
-      expect(await page.evaluate<string[]>(`(() => { const status = document.querySelector('${composer} .session-status'); const boxes = (selector, inside) => [...document.querySelectorAll(selector)].filter(el => status.contains(el) === inside && el.getClientRects().length > 0).map(el => [el, el.getBoundingClientRect()]); const others = boxes('${composer} :is(button,textarea,[role="slider"])', false); return boxes('${composer} :is(.session-status__mode,.session-status__autonomous-trigger,.session-status__goal-trigger)', true).flatMap(([chip, a]) => others.filter(([, b]) => a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1).map(([other]) => (chip.title || chip.className) + ' overlaps ' + (other.getAttribute('aria-label') || other.className))) })()`)).toEqual([])
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${composer} .session-status__mode')].map(chip => getComputedStyle(chip.querySelector('.session-status__mode-full')).display === 'none' ? '' : chip.querySelector('.session-status__mode-full').textContent)`)).toEqual(["Permissions Auto", "Guardrails Auto", "asleep"])
-      await Bun.write(new URL(`../../../.cache/tmp/composer-asleep-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
-      await wait(page, `document.querySelectorAll('${composer} .session-status__mode').length === 3`)
-      if (width === 390) {
-        const metadata = await page.evaluate<{ modes: string[]; words: string[]; readable: boolean; contained: boolean }>(`(() => { const root = document.querySelector('${composer}'), cluster = root.querySelector('.session-status__modes'), box = cluster.getBoundingClientRect(), goal = root.querySelector('.session-status__goal-trigger').getBoundingClientRect(), card = root.querySelector('.composer__row').getBoundingClientRect(), draft = root.querySelector('textarea').getBoundingClientRect(), chips = [...cluster.querySelectorAll('.session-status__mode')]; return { modes: chips.map(chip => chip.dataset.mode), words: chips.map(chip => chip.textContent.trim()), readable: chips.every(chip => { const range = document.createRange(); range.selectNodeContents(chip.querySelector('.session-status__mode-full')); const text = range.getBoundingClientRect(), bounds = chip.getBoundingClientRect(); return text.width > 0 && text.left >= bounds.left - 0.5 && text.right <= bounds.right + 0.5 }), contained: box.left >= card.left && box.right <= card.right && box.top >= goal.bottom - 1 && box.bottom <= draft.top + 1 }; })()`)
-        expect(metadata).toEqual({ modes: ["permissions", "guardrails", "sleep"], words: ["Permissions Auto", "Guardrails Auto", "asleep"], readable: true, contained: true })
-      }
+      const metadata = await page.evaluate<{ modes: string[]; words: string[]; readable: boolean; contained: boolean; outside: boolean }>(`(() => { const panel=document.querySelector('#session-companion-panel'), bounds=panel.getBoundingClientRect(), chips=[...panel.querySelectorAll('.session-status__mode')]; return { modes: chips.map(chip => chip.dataset.mode), words: chips.map(chip => chip.textContent.trim()), readable: chips.every(chip => { const range=document.createRange(); range.selectNodeContents(chip.querySelector('.session-status__mode-full')); const text=range.getBoundingClientRect(), box=chip.getBoundingClientRect(); return text.width>0 && text.left>=box.left-0.5 && text.right<=box.right+0.5 }), contained: chips.every(chip => { const box=chip.getBoundingClientRect(); return box.left>=bounds.left && box.right<=bounds.right }), outside: !!document.querySelector('${composer} .session-status__mode') || document.documentElement.scrollWidth>innerWidth }; })()`)
+      expect(metadata).toEqual({ modes: ["permissions", "guardrails", "sleep"], words: ["Permissions Auto", "Guardrails Auto", "asleep"], readable: true, contained: true, outside: false })
+      await Bun.write(join(captures, `composer-asleep-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
+      await closeCompanion()
       await run("/keep-awake", "machine.keepAwake.set", { enabled: true })
       await run("/wake", "session.autonomy.set", { sleep: false })
-      await wait(page, `document.querySelectorAll('${composer} .session-status__mode[data-mode="sleep"]').length === 0`)
+      await openCompanion()
+      await wait(page, `document.querySelectorAll('#session-companion-panel .session-status__mode[data-mode="sleep"]').length === 0`)
       expect(await modes()).toEqual([])
+      await closeCompanion()
       await type(page, `${composer} textarea`, "/sleep now")
       await page.evaluate(`document.querySelector('${composer} button[aria-label="Send prompt"]')?.click()`)
       await wait(page, `document.querySelector('${composer}')?.textContent?.includes('Use /sleep without arguments.') === true`)
@@ -684,14 +688,16 @@ test("sleep, wake, and keep-awake commands run their operations and show autonom
       expect(await page.evaluate<unknown>(`window.remoteMutationReport().filter(item => item.operation === 'session.autonomy.set').at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { permissions: "yolo", guardrails: "yolo", answers: "yolo" } })
       expect(await page.evaluate<boolean>(`window.remoteMutationReport().every(item => item.operation !== 'session.prompt')`)).toBe(true)
     } finally { await page.close() }
-  }
-
+  }, 120_000)
+}
+test("the companion reports when a sleeping machine may sleep", async () => {
   const held = await browser!.openPage()
   try {
     await held.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&goal=none&asleep=1&sleepHold=failed`)
-    const composer = ".workspace__main .mini-composer__mount"
-    await wait(held, `document.querySelector('${composer} .session-status__mode[data-mode="sleep"]')?.title === 'asleep · machine may sleep'`)
-    expect(await held.evaluate<string>(`document.querySelector('${composer} .session-status__mode[data-mode="sleep"]')?.className`)).toContain("session-status__mode--attention")
+    await wait(held, `document.querySelector('.companion-context-trigger') !== null`)
+    await held.evaluate(`document.querySelector('.companion-context-trigger').click()`)
+    await wait(held, `document.querySelector('#session-companion-panel .session-status__mode[data-mode="sleep"]')?.title === 'asleep · machine may sleep'`)
+    expect(await held.evaluate<string>(`document.querySelector('#session-companion-panel .session-status__mode[data-mode="sleep"]')?.className`)).toContain("session-status__mode--attention")
     expect(await held.evaluate<number>(`window.remoteOperationReport().operations['machine.keepAwake.get'] ?? 0`)).toBeGreaterThanOrEqual(1)
   } finally { await held.close() }
 }, 120_000)
@@ -1233,7 +1239,7 @@ test("keyboard and mouse autocomplete, pending identity, and creation work acros
         await type(page, ".new-session-composer textarea", "Use @apps/web")
         await wait(page, `document.querySelector('.new-session-composer [role="listbox"][aria-label="Suggestions"]')?.textContent?.includes('composer.tsx') === true`)
         await page.evaluate(`document.querySelector('.new-session-composer [role="option"]')?.click()`)
-        await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Create session"]')?.click()`)
+        await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]')?.click()`)
         await wait(page, `document.querySelector('output')?.textContent?.includes('ses_created') === true`)
         expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)?.input`)).toMatchObject({ workspaceID: "work_two", model: { providerID: "anthropic", id: "claude-opus-5-5", variant: "max" }, prompt: { text: "Use @apps/web/src/remote/ui/composer.tsx", files: [{ uri: "file:///workspace/ycoding/apps/web/src/remote/ui/composer.tsx", mention: { start: 4, text: "@apps/web/src/remote/ui/composer.tsx" } }] } })
         const layout = await page.evaluate<{ overflow: boolean; controlsInside: boolean; touchTargets: boolean }>(`(() => { const rows = [...document.querySelectorAll('.composer__row')]; const controls = [...document.querySelectorAll('.composer__controls button')].filter(button=>button.getBoundingClientRect().width>0); return { overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth, controlsInside: rows.every(row => [...row.querySelectorAll('.composer__controls button')].every(button => button.getBoundingClientRect().right <= row.getBoundingClientRect().right + 1)), touchTargets: controls.every(button => button.getBoundingClientRect().width >= 44 && button.getBoundingClientRect().height >= 44) }; })()`)
@@ -1328,16 +1334,16 @@ test("selected slash, dollar, at and hash suggestions dispatch their TUI-equival
     await type(page, ".new-session-composer textarea", "/go")
     expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.new-session-composer [role="option"]')].map((option) => option.textContent ?? '')`)).not.toContainEqual(expect.stringContaining("/goal"))
     await type(page, ".new-session-composer textarea", "/goal new objective")
-    await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Create session"]')?.click()`)
+    await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]')?.click()`)
     expect(await page.evaluate<string>(`document.querySelector('.new-session-composer [role="alert"]')?.textContent ?? ''`)).toContain("Open a session")
     expect((await operations()).filter((item) => item.operation === "session.create")).toHaveLength(0)
   } finally { await page.close() }
 }, 30_000)
 
-test("setting a goal from the composer never blocks it and shows one stable, announced in-flight indicator", async () => {
+for (const [width, height] of [[390, 844], [1440, 900]]) for (const reduced of [false, true]) {
+  test(`setting a goal keeps one stable announced indicator at ${width} reduced ${reduced}`, async () => {
   const mount = ".workspace__main .mini-composer__mount"
   const stable = [".composer", ".composer__input", ".mini-composer__send", ".composer__attach", ".composer__delivery-toggle", ".session-status__autonomous-trigger", ".session-status__goal-trigger"]
-  for (const [width, height] of [[390, 844], [1440, 900]]) for (const reduced of [false, true]) {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width!, height!)
@@ -1347,30 +1353,39 @@ test("setting a goal from the composer never blocks it and shows one stable, ann
       await wait(page, `document.querySelector('${mount} textarea') !== null && document.querySelector('${mount} .session-status__goal-trigger') !== null`)
       await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
       const geometry = () => page.evaluate<readonly (readonly number[] | null)[]>(`${JSON.stringify(stable)}.map(selector => { const element = document.querySelector('${mount} ' + selector); if (!element) return null; const box = element.getBoundingClientRect(); return [box.x, box.y, box.width, box.height].map(value => Math.round(value * 10) / 10) })`)
-      const chipSelector = width === 390 ? ".session-status__goal-trigger .session-status__goal-progress" : ".session-status__goal-setting"
-      const modeBoxes = `[...document.querySelectorAll('${mount} .session-status__mode')].map(chip => { const box = chip.getBoundingClientRect(), span = chip.querySelector('.session-status__mode-full'), range = document.createRange(); range.selectNodeContents(span); const text = range.getBoundingClientRect(); return { mode: chip.dataset.mode, readable: text.width > 0 && box.width >= 20 && text.left >= box.left - 0.5 && text.right <= box.right + 0.5 } })`
+      const chipSelector = width === 390 ? `${mount} .session-status__goal-trigger .session-status__goal-progress` : ".conversation-metadata .session-status__goal-setting"
+      const modeBoxes = `[...document.querySelectorAll('#session-companion-panel .session-status__mode')].map(chip => { const box = chip.getBoundingClientRect(), span = chip.querySelector('.session-status__mode-full'), range = document.createRange(); range.selectNodeContents(span); const text = range.getBoundingClientRect(); return { mode: chip.dataset.mode, readable: text.width > 0 && box.width >= 20 && text.left >= box.left - 0.5 && text.right <= box.right + 0.5 } })`
+      const inspectModes = async () => {
+        await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
+        await wait(page, `document.querySelectorAll('#session-companion-panel .session-status__mode').length === 2`)
+        const result = await page.evaluate<unknown>(modeBoxes)
+        await page.evaluate(`document.querySelector(${JSON.stringify(width === 390 ? ".companion__back" : '[aria-label="Close Session companion"]')}).click()`)
+        await wait(page, `document.querySelector('#session-companion-panel') === null || document.querySelector('#session-companion-panel').getAttribute('aria-hidden') === 'true'`)
+        await wait(page, `document.querySelector('.app--team-open') === null`)
+        return result
+      }
       const idle = await geometry()
       expect(idle.every((box) => box !== null)).toBe(true)
-      expect(await page.evaluate<unknown>(modeBoxes)).toEqual([{ mode: "permissions", readable: true }, { mode: "guardrails", readable: true }])
+      expect(await inspectModes()).toEqual([{ mode: "permissions", readable: true }, { mode: "guardrails", readable: true }])
       const send = `document.querySelector('${mount} button[aria-label="Send prompt"]')?.click()`
       await type(page, `${mount} textarea`, "/goal ship it safely")
       await page.evaluate(send)
       await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.goal.set')`)
-      await wait(page, `document.querySelector('${mount} .session-status__goal-setting') !== null`)
+      await wait(page, `document.querySelector('.conversation-metadata .session-status__goal-setting') !== null`)
 
-      expect(await page.evaluate<unknown>(modeBoxes)).toEqual([{ mode: "permissions", readable: true }, { mode: "guardrails", readable: true }])
-      const indicatorBounds = await page.evaluate<{ insideComposer: boolean; insideGoalTrigger: boolean; overlaps: string[] }>(`(() => { const chip = document.querySelector('${mount} ${chipSelector}'), composer = document.querySelector('${mount} .composer'), goal = document.querySelector('${mount} .session-status__goal-trigger'), chipBox = chip.getBoundingClientRect(), composerBox = composer.getBoundingClientRect(), goalBox = goal.getBoundingClientRect(), controls = ['.composer__attach', '.composer__delivery-toggle', '.mini-composer__send', '.session-status__autonomous-trigger', '.session-status__goal-trigger']; return { insideComposer: chipBox.left >= composerBox.left && chipBox.right <= composerBox.right && chipBox.top >= composerBox.top && chipBox.bottom <= composerBox.bottom, insideGoalTrigger: goal.contains(chip) && chipBox.left >= goalBox.left && chipBox.right <= goalBox.right && chipBox.top >= goalBox.top && chipBox.bottom <= goalBox.bottom, overlaps: controls.filter(selector => { const control = document.querySelector('${mount} ' + selector); if (control.contains(chip)) return false; const box = control.getBoundingClientRect(); return chipBox.left < box.right && chipBox.right > box.left && chipBox.top < box.bottom && chipBox.bottom > box.top }) } })()`)
-      expect(indicatorBounds).toEqual({ insideComposer: true, insideGoalTrigger: width === 390, overlaps: [] })
+      expect(await inspectModes()).toEqual([{ mode: "permissions", readable: true }, { mode: "guardrails", readable: true }])
+      const indicatorBounds = await page.evaluate<{ insideComposer: boolean; insideGoalTrigger: boolean; overlaps: string[] }>(`(() => { const chip = document.querySelector('${chipSelector}'), composer = document.querySelector('${mount} .composer'), goal = document.querySelector('${mount} .session-status__goal-trigger'), chipBox = chip.getBoundingClientRect(), composerBox = composer.getBoundingClientRect(), goalBox = goal.getBoundingClientRect(), controls = ['.composer__attach', '.composer__delivery-toggle', '.mini-composer__send', '.session-status__autonomous-trigger', '.session-status__goal-trigger']; return { insideComposer: chipBox.left >= composerBox.left && chipBox.right <= composerBox.right && chipBox.top >= composerBox.top && chipBox.bottom <= composerBox.bottom, insideGoalTrigger: goal.contains(chip) && chipBox.left >= goalBox.left && chipBox.right <= goalBox.right && chipBox.top >= goalBox.top && chipBox.bottom <= goalBox.bottom, overlaps: controls.filter(selector => { const control = document.querySelector('${mount} ' + selector); if (control.contains(chip)) return false; const box = control.getBoundingClientRect(); return chipBox.left < box.right && chipBox.right > box.left && chipBox.top < box.bottom && chipBox.bottom > box.top }) } })()`)
+      expect(indicatorBounds).toEqual({ insideComposer: width === 390, insideGoalTrigger: width === 390, overlaps: [] })
 
-      const pending = await page.evaluate<{ enabled: boolean; draft: string; busy: string | null; name: string | null; chip: string; chipHidden: string | null; dots: number; announced: string; dotAnimation: string; chipAnimation: string }>(`(() => { const chip = document.querySelector('${mount} ${chipSelector}'), trigger = document.querySelector('${mount} .session-status__goal-trigger'), field = document.querySelector('${mount} textarea'); return { enabled: !field.disabled, draft: field.value, busy: trigger.getAttribute('aria-busy'), name: trigger.getAttribute('aria-label'), chip: chip.innerText.trim(), chipHidden: chip.getAttribute('aria-hidden'), dots: chip.querySelectorAll('.transcript-dot-trail').length, announced: document.querySelector('${mount} .session-status__announce[role="status"]')?.textContent?.trim() ?? '', dotAnimation: chip.querySelector('.transcript-dot-trail span') ? getComputedStyle(chip.querySelector('.transcript-dot-trail span')).animationName : 'missing', chipAnimation: getComputedStyle(chip).animationName } })()`)
+      const pending = await page.evaluate<{ enabled: boolean; draft: string; busy: string | null; name: string | null; chip: string; chipHidden: string | null; dots: number; announced: string; dotAnimation: string; chipAnimation: string }>(`(() => { const chip = document.querySelector('${chipSelector}'), trigger = document.querySelector('${mount} .session-status__goal-trigger'), field = document.querySelector('${mount} textarea'); return { enabled: !field.disabled, draft: field.value, busy: trigger.getAttribute('aria-busy'), name: trigger.getAttribute('aria-label'), chip: chip.innerText.trim(), chipHidden: chip.getAttribute('aria-hidden'), dots: chip.querySelectorAll('.transcript-dot-trail').length, announced: document.querySelector('${mount} .session-status__announce[role="status"]')?.textContent?.trim() ?? '', dotAnimation: chip.querySelector('.transcript-dot-trail span') ? getComputedStyle(chip.querySelector('.transcript-dot-trail span')).animationName : 'missing', chipAnimation: getComputedStyle(chip).animationName } })()`)
       expect(pending).toMatchObject({ enabled: true, draft: "", busy: "true", name: "Setting goal", chip: width === 390 ? "Goal…" : "Setting goal…", chipHidden: "true", dots: 1, announced: "Setting goal…" })
       expect(pending.dotAnimation === "none").toBe(reduced)
       expect(pending.chipAnimation === "none").toBe(reduced)
       expect(await geometry()).toEqual(idle)
-      expect(await page.evaluate<unknown>(modeBoxes)).toEqual([{ mode: "permissions", readable: true }, { mode: "guardrails", readable: true }])
+      expect(await inspectModes()).toEqual([{ mode: "permissions", readable: true }, { mode: "guardrails", readable: true }])
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
       if (!reduced) await Bun.sleep(300)
-      if (!reduced) await Bun.write(new URL(`../../../.cache/tmp/composer-goal-setting-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      if (!reduced) await Bun.write(join(captures, `composer-goal-setting-${width}.png`), Buffer.from(await page.screenshot(), "base64"))
 
       await type(page, `${mount} textarea`, "keep working meanwhile")
       expect(await page.evaluate<boolean>(`document.querySelector('${mount} button[aria-label="Send prompt"]').disabled`)).toBe(false)
@@ -1392,12 +1407,14 @@ test("setting a goal from the composer never blocks it and shows one stable, ann
       await page.pressEscape()
 
       await page.evaluate(`window.remoteReleaseGoal('ok')`)
-      await wait(page, `document.querySelector('${mount} .session-status__goal-setting') === null`)
-      const settled = await page.evaluate<{ busy: string | null; name: string | null; announced: string; goal: string }>(`(() => { const trigger = document.querySelector('${mount} .session-status__goal-trigger'); return { busy: trigger.getAttribute('aria-busy'), name: trigger.getAttribute('aria-label'), announced: document.querySelector('${mount} .session-status__announce[role="status"]')?.textContent?.trim() ?? 'missing', goal: document.querySelector('${mount} .session-status__active-goal')?.textContent?.trim() ?? '' } })()`)
+      await wait(page, `document.querySelector('.conversation-metadata .session-status__goal-setting') === null`)
+      await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
+      await wait(page, `document.querySelector('#session-companion-panel .session-status__active-goal') !== null`)
+      const settled = await page.evaluate<{ busy: string | null; name: string | null; announced: string; goal: string }>(`(() => { const trigger = document.querySelector('${mount} .session-status__goal-trigger'); return { busy: trigger.getAttribute('aria-busy'), name: trigger.getAttribute('aria-label'), announced: document.querySelector('${mount} .session-status__announce[role="status"]')?.textContent?.trim() ?? 'missing', goal: document.querySelector('#session-companion-panel .session-status__active-goal')?.textContent?.trim() ?? '' } })()`)
       expect(settled).toEqual({ busy: null, name: "Goal active", announced: "", goal: "Goal active · ship it safely" })
     } finally { await page.close() }
-  }
-}, 90_000)
+  }, 90_000)
+}
 
 test("a failed or uncertain composer goal returns to the empty draft with its outcome toast", async () => {
   const mount = ".workspace__main .mini-composer__mount"

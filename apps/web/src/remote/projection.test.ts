@@ -195,6 +195,26 @@ function apply(view: SessionView, type: string, data: Record<string, unknown>, n
   return applySessionEvent(view, event(type, data), now)
 }
 
+test("durable step outcomes project reported context and preserve it when counts are unavailable", () => {
+  const model = { providerID: "openai", id: "model-a" }
+  const breakdown = { system: 3, tools: 4, user: 2, assistant: 5, reasoning: 1, toolCalls: 5, other: 0 }
+  const tokens = { input: 15, output: 3, reasoning: 1, cache: { read: 1, write: 0 } }
+  for (const type of ["session.step.ended", "session.step.failed"]) {
+    const started = apply(createSessionView("ses_a"), "session.step.started", { assistantMessageID: "msg_a", model })
+    const completed = apply(started, type, { assistantMessageID: "msg_a", tokens, contextLimit: 100, contextBreakdown: breakdown })
+    expect(completed.contextWindow).toEqual({ model, used: 20, limit: 100, breakdown })
+    const noCounts = apply(completed, type, { assistantMessageID: "msg_a" })
+    expect(noCounts.contextWindow).toEqual(completed.contextWindow)
+    const zero = apply(completed, type, { assistantMessageID: "msg_a", tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, contextLimit: 100 })
+    expect(zero.contextWindow).toEqual(completed.contextWindow)
+    const next = apply(completed, "session.step.ended", { assistantMessageID: "msg_a", tokens, contextLimit: 200 })
+    expect(next.contextWindow).toEqual({ model, used: 20, limit: 200 })
+  }
+  const selected = apply(createSessionView("ses_a"), "session.model.selected", { model })
+  const fallback = apply(selected, "session.step.ended", { assistantMessageID: "msg_b", tokens, contextLimit: 100, contextBreakdown: breakdown })
+  expect(fallback.contextWindow).toEqual({ model, used: 20, limit: 100, breakdown })
+})
+
 test("tracks live execution and part timings for the transcript and status bar", () => {
   let view = apply(createSessionView("ses_a"), "session.execution.started", {}, 1_000)
   expect(view.executionStarted).toBe(1_000)
@@ -263,6 +283,47 @@ test("live weighted speed retains model effort changes and compaction independen
     boundary: { messageID: "msg_before", seq: 1 }, metrics: { excludedMessages: 1, excludedParts: 0, inputTokens: 100, retainedTokens: 40 } }, 4)
   expect(generationSpeedDisplay(compacted, selected)?.label).toBe("5,400 tok/s")
   expect(contextWindowDisplay(compacted, selected)).toBeUndefined()
+})
+
+test("projects the per-category context breakdown from snapshot and live diagnostics and clears it with the window", () => {
+  const selected = { id: "gpt-6", providerID: "openai", variant: "high" }
+  const breakdown = { system: 12_400, tools: 18_200, user: 6_800, assistant: 16_400, reasoning: 6_200, toolCalls: 4_200, other: 0 }
+  const snapshot = readSnapshot({ session: { model: selected }, messages: [{ id: "msg_current", type: "assistant", agent: "build", model: selected,
+    content: [], tokens: { input: 60_000, output: 10_000, reasoning: 2_000, cache: { read: 2_000, write: 0 } },
+    diagnostics: { contextLimit: 258_000, contextBreakdown: breakdown }, time: { created: 3, completed: 4 } }] })
+  expect(snapshot?.contextWindow).toEqual({ model: selected, used: 74_000, limit: 258_000, breakdown })
+
+  const diagnostics = (contextBreakdown: unknown) => ({
+    model: selected, context: { total: 74_000, limit: 258_000 }, contextBreakdown,
+  })
+  const live = apply(createSessionView("ses_a"), "session.diagnostics.updated", {
+    sessionID: "ses_a", diagnostics: diagnostics(breakdown),
+  })
+  expect(live.contextWindow).toEqual({ model: selected, used: 74_000, limit: 258_000, breakdown })
+
+  const negative = apply(createSessionView("ses_a"), "session.diagnostics.updated", {
+    sessionID: "ses_a", diagnostics: diagnostics({ ...breakdown, other: -1 }),
+  }, 2)
+  expect(negative.contextWindow).toEqual({ model: selected, used: 74_000, limit: 258_000 })
+  expect(negative.contextWindow?.breakdown).toBeUndefined()
+
+  const fractional = apply(createSessionView("ses_a"), "session.diagnostics.updated", {
+    sessionID: "ses_a", diagnostics: diagnostics({ ...breakdown, system: 1.5 }),
+  }, 3)
+  expect(fractional.contextWindow?.breakdown).toBeUndefined()
+
+  const compacted = apply(live, "session.compaction.ended", { sessionID: "ses_a", jobID: "cmp_1",
+    boundary: { messageID: "msg_before", seq: 1 }, metrics: { excludedMessages: 1, excludedParts: 0, inputTokens: 100, retainedTokens: 40 } }, 4)
+  expect(compacted.contextWindow).toBeUndefined()
+
+  const reverted = apply(live, "session.revert.committed", { sessionID: "ses_a", to: "msg_before" }, 5)
+  expect(reverted.contextWindow).toBeUndefined()
+
+  const switched = apply(live, "session.model.selected", { sessionID: "ses_a", model: { id: "claude", providerID: "anthropic" } }, 6)
+  expect(switched.contextWindow).toBeUndefined()
+
+  const variantOnly = apply(live, "session.model.selected", { sessionID: "ses_a", model: { ...selected, variant: "low" } }, 7)
+  expect(variantOnly.contextWindow?.breakdown).toEqual(breakdown)
 })
 
 test("labels model-wide estimates across profiles and leaves empty populations blank", () => {

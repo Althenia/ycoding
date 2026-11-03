@@ -3,6 +3,7 @@ import { createSignal, For, Show } from "solid-js"
 import { useStore } from "@tanstack/solid-store"
 import { RemoteProvider } from "../src/remote/context"
 import { Composer } from "../src/remote/ui/composer"
+import { SessionStatusDetails } from "../src/remote/ui/status-bar"
 import { MessageRow } from "../src/remote/ui/conversation"
 import { NewSessionComposer } from "../src/remote/ui/new-session"
 import { ToastLayer } from "../src/remote/ui/notifications"
@@ -181,6 +182,7 @@ function Fixture() {
     <main class="composer-fixture" style={{ "max-width": "900px", margin: "auto", padding: "16px" }}>
       <button type="button" onClick={() => setRunning(!running())}>Toggle running</button>
       <Composer sessionID={current().activeSessionID} running={running()} canSend={predictionEnabled()} />
+      <aside id="session-companion-panel" aria-label="Session companion"><SessionStatusDetails /></aside>
       <ToastLayer sessionID="ses_fixture" onOpenSession={() => {}} />
       <div class="transcript" aria-label="Fixture transcript"><For each={current().view?.messages ?? []}>{(message) => <MessageRow message={() => message} />}</For></div>
       <NewSessionComposer onCreated={setCreated} />

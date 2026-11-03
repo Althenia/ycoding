@@ -6,8 +6,8 @@ import "./file-change-card.css"
 
 type CapturedFile = RemoteCapturedChangesPage["data"][number]
 
-export function FileChangeCard(props: { readonly files: () => readonly CapturedFile[] }): JSX.Element {
-  const [open, setOpen] = createSignal(false)
+export function FileChangeCard(props: { readonly files: () => readonly CapturedFile[]; readonly inCompanion?: boolean }): JSX.Element {
+  const [open, setOpen] = createSignal(props.inCompanion === true)
   const filesID = createUniqueId()
   const totals = createMemo(() => summarizeFileChanges(props.files()))
   return (
@@ -20,6 +20,7 @@ export function FileChangeCard(props: { readonly files: () => readonly CapturedF
         </span>
         <span class="file-change-card__chevron" aria-hidden="true"><Icon name="chevron-down" size={14} /></span>
       </button>
+      <Show when={!props.inCompanion}><button type="button" class="file-change-card__view" onClick={() => window.dispatchEvent(new CustomEvent("ycoding:open-companion", { detail: "changes" }))}>View changes</button></Show>
       <ul class="file-change-card__files" id={filesID} hidden={!open()}><For each={props.files().map((file) => file.path)}>{(path) => <FileChangeRow file={() => props.files().find((file) => file.path === path)!} />}</For></ul>
     </section>
   )
@@ -76,7 +77,7 @@ function DiffCellView(props: { readonly cell?: DiffCell }): JSX.Element {
 function UnifiedLine(props: { readonly line: Exclude<DiffLine, { readonly kind: "hunk" }> }): JSX.Element {
   return (
     <div class={`file-change-card__line file-change-card__line--${props.line.kind}`}>
-      <span class="file-change-card__number">{props.line.oldNumber ?? props.line.newNumber}</span>
+      <span class="file-change-card__number">{props.line.oldNumber ?? ""}</span><span class="file-change-card__number">{props.line.newNumber ?? ""}</span>
       <span class="file-change-card__prefix" aria-hidden="true">{props.line.kind === "added" ? "+" : props.line.kind === "removed" ? "−" : " "}</span>
       <span class="file-change-card__code">{props.line.text}</span>
     </div>

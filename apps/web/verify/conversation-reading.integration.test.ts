@@ -338,11 +338,11 @@ test("a new-conversation attachment draft survives an uncertain creation outcome
   try {
     await open(page, "creation=unknown")
     await openNewSession(page, 1440)
-    await wait(page, `location.pathname === '/remote' && !!document.querySelector('.new-session-composer [aria-label="Create session"]:not([disabled])')`)
-    await wait(page, `!!document.querySelector('.new-session-composer [aria-label="Create session"]:not([disabled])')`)
+    await wait(page, `location.pathname === '/remote' && !!document.querySelector('.new-session-composer [aria-label="New chat"]:not([disabled])')`)
+    await wait(page, `!!document.querySelector('.new-session-composer [aria-label="New chat"]:not([disabled])')`)
     await page.evaluate(`(() => {const transfer=new DataTransfer(); transfer.items.add(new File(['A scoped draft'], 'scope.txt', {type:'text/plain'})); document.querySelector('.new-session-composer .composer__row').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));})()`)
     await wait(page, `!!document.querySelector('.new-session-composer .composer__attachment-name')`)
-    await page.evaluate(`document.querySelector('.new-session-composer [aria-label="Create session"]').click()`)
+    await page.evaluate(`document.querySelector('.new-session-composer [aria-label="New chat"]').click()`)
     await wait(page, `!!document.querySelector('.new-session__outcome--unknown')`)
     expect(await page.evaluate<string>(`document.querySelector('.new-session-composer .composer__attachment-name')?.textContent??''`)).toBe("scope.txt")
   } finally { await page.close() }

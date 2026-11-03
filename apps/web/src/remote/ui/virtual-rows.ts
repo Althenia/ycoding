@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from "solid-js"
-import { createVirtualizer, defaultRangeExtractor, measureElement, type Range, type Virtualizer } from "@tanstack/solid-virtual"
+import { createVirtualizer, defaultRangeExtractor, elementScroll, measureElement, type Range, type Virtualizer } from "@tanstack/solid-virtual"
 
 export function sameKeys(previous: readonly string[], next: readonly string[]): boolean {
   return previous.length === next.length && previous.every((key, index) => key === next[index])
@@ -83,17 +83,20 @@ export function createRowVirtualizer(input: RowVirtualizerInput) {
     return row ? Number(row.dataset.index) : undefined
   }
 
+  const frozen = () => input.list()?.offsetParent === null || input.list()?.closest("[inert]") != null
+
   const virtualizer = createVirtualizer<HTMLElement, HTMLElement>({
     get count() { return input.keys().length },
     get getItemKey() { return keyAt() },
     get scrollMargin() { return margin() },
     get gap() { return gap() },
     getScrollElement: () => scroller() ?? null,
+    scrollToFn: (offset, options, instance) => { if (!frozen()) elementScroll(offset, options, instance) },
     initialOffset: () => input.scroller()?.scrollTop ?? 0,
     estimateSize: (index) => typical ?? input.estimate(index),
     overscan: input.overscan,
     scrollPaddingStart: input.scrollPaddingStart ?? 0,
-    get scrollEndThreshold() { return input.compensate?.() === false ? input.scrollEndThreshold ?? 1 : -1 },
+    get scrollEndThreshold() { return !frozen() && input.compensate?.() === false ? input.scrollEndThreshold ?? 1 : -1 },
     anchorTo: "end",
     rangeExtractor: (range) => withPinnedIndex(range, focusedIndex()),
     measureElement: (element, entry, instance) => {
@@ -107,9 +110,6 @@ export function createRowVirtualizer(input: RowVirtualizerInput) {
     },
     onChange: (instance) => input.onChange?.(instance),
   })
-
-  // A list inside an inert panel is off screen while a shared scroller shows another page; its window must not follow that scroller.
-  const frozen = () => input.list()?.offsetParent === null || input.list()?.closest("[inert]") != null
 
   let settledWidth: number | undefined
   let settleFrame: number | undefined
@@ -188,7 +188,7 @@ export function createRowVirtualizer(input: RowVirtualizerInput) {
     previousKeys = next
     const root = input.scroller()
     const anchored = untrack(() => virtualizer.scrollOffset)
-    if (!root || anchored === null || previous.length === 0 || previous[0] === next[0]) return
+    if (!root || frozen() || anchored === null || previous.length === 0 || previous[0] === next[0]) return
     write(root, anchored)
   })
 

@@ -158,7 +158,7 @@ function navigationActions(context: PaletteContext): readonly PaletteAction[] {
   const go = (view: "new" | "sessions" | "session" | "projects" | "usage" | "settings"): PaletteIntent => ({ type: "go", view })
   return [
     ...(context.canCreateSession && context.view !== "/remote"
-      ? [{ id: "nav.new", title: "New session", description: "Start a conversation on this machine", group: "Navigation" as const, keywords: "create conversation chat", intent: go("new") }]
+      ? [{ id: "nav.new", title: "New chat", description: "Start a conversation on this machine", group: "Navigation" as const, keywords: "create conversation chat", intent: go("new") }]
       : []),
     ...(context.session && context.view !== "/remote/session"
       ? [{ id: "nav.session", title: "Go to session", description: "Return to the open conversation", group: "Navigation" as const, keywords: "conversation chat", intent: go("session") }]
