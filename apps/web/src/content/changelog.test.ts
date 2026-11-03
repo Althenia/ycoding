@@ -7,8 +7,20 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists restarted v0.11.3 SQL review boundaries first", () => {
+  test("lists v0.11.4 remote prompt recovery and model controls first with shared notes", async () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.4", date: "2026-11-03", tags: ["Fixed"] })
+    expect(entry?.changes).toHaveLength(4)
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.4.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.11.4\n")
+    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of ["before promotion", "bounded", "same message ID", "Stop", "restart", "Gemini", "Antigravity", "text-only recovery", "no adjustable effort", "status checking", "cancellation"]) expect(text).toContain(fragment)
+    expect(after("0.11.4")?.version).toBe("0.11.3")
+  })
+
+  test("retains restarted v0.11.3 SQL review boundaries", () => {
+    const entry = byVersion("0.11.3")
     expect(entry).toMatchObject({
       version: "0.11.3",
       date: "2026-11-01",
@@ -1743,7 +1755,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 48)).toEqual([
+    expect(versions.slice(0, 49)).toEqual([
+      "0.11.4",
       "0.11.3",
       "0.11.2",
       "0.11.1",

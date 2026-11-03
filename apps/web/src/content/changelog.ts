@@ -22,6 +22,18 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.4",
+    date: "2026-11-03",
+    title: "Remote prompt recovery and clearer model controls",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Remote, web and mobile prompts whose execution fails before promotion receive bounded automatic successor wakes. Persistent failures leave the input pending for explicit retry with the same message ID. Stop suppresses automatic successors, and restart does not resume root Sessions." },
+      { tag: "Fixed", text: "Gemini and Antigravity preserve disabled tools even when the tool list is empty, including text-only recovery responses. Recovery remains bounded to one extra step, and local tool calls emitted despite the disabled setting are rejected without execution." },
+      { tag: "Fixed", text: "Model settings explains when an available model or profile has no adjustable effort. Unknown and blocked selections retain their own states, and no effort override is inferred." },
+      { tag: "Fixed", text: "Unresolved provider authorization retains status checking and cancellation without offering a profile refresh that cannot run. Failed, unknown and unsupported states offer profile refresh only when no authorization attempt remains." },
+    ],
+  },
+  {
     version: "0.11.3",
     date: "2026-11-01",
     title: "Bounded SQL classification and preserved review evidence",
