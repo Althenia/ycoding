@@ -94,6 +94,7 @@ export const ActionResult = Schema.Struct({
   logs: Browser.ActionResult.fields.logs,
   savedFile: Browser.ActionResult.fields.savedFile,
   webmcpTools: Browser.ActionResult.fields.webmcpTools,
+  dialog: Browser.ActionResult.fields.dialog,
 }).annotate({ identifier: "IsolatedBrowser.ActionResult" })
 export interface ActionResult extends Schema.Schema.Type<typeof ActionResult> {}
 

@@ -12,6 +12,10 @@ const jobs = [
   { source: "ycoding-icon.svg", target: "../../apps/web/public/icons/icon-192.png", size: 192 },
   { source: "ycoding-icon.svg", target: "ycoding-icon-512.png", size: 512 },
   { source: "ycoding-icon-maskable.svg", target: "ycoding-icon-maskable-512.png", size: 512 },
+  { source: "ycoding-icon.svg", target: "../../extensions/chrome/icons/ycoding-16.png", size: 16 },
+  { source: "ycoding-icon.svg", target: "../../extensions/chrome/icons/ycoding-32.png", size: 32 },
+  { source: "ycoding-icon.svg", target: "../../extensions/chrome/icons/ycoding-48.png", size: 48 },
+  { source: "ycoding-icon.svg", target: "../../extensions/chrome/icons/ycoding-128.png", size: 128 },
 ] as const
 
 for (const job of jobs) {

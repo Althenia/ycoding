@@ -60,6 +60,34 @@ const computer = Layer.mock(Computer.Service, {
     })
   },
   query: () => { calls.push("native:desktop.query"); return Effect.succeed({ status: "ok" as const, action: "desktop.query" as const, revision: "rev-1", elements: [] }) },
+  observe: () => {
+    calls.push("native:desktop.observe")
+    return Effect.succeed({
+      status: "ok" as const,
+      action: "desktop.observe" as const,
+      revision: "rev-1",
+      accessible: true,
+      elements: [{ path: [0], role: "AXWindow", label: "Fixture", frame: [0, 0, 800, 500] as const, actions: [], enabled: true, focused: false }],
+      diff: '+ [0] AXWindow "Fixture"',
+      image: "base64",
+      width: 320, height: 240, scale: 1,
+    })
+  },
+  historyList: Effect.sync(() => {
+    calls.push("history:list")
+    return [
+      { id: "hist-1", file: "hist-1.jsonl", sessionID: String(sessionID), started: "2026-11-04T10:00:00.000Z", updated: "2026-11-04T10:01:00.000Z", events: 1 },
+      { id: "hist-2", file: "hist-2.jsonl", sessionID: "ses_other", started: "2026-11-04T09:00:00.000Z", updated: "2026-11-04T09:01:00.000Z", events: 3 },
+    ]
+  }),
+  historyRead: (input) => {
+    calls.push(`history:read:${input.id}`)
+    return Effect.succeed([{ type: "event" as const, at: "2026-11-04T10:00:01.000Z", sessionID: String(sessionID), action: "desktop.inspect", bundleID: "com.example.fixture", pid: 451, windowID: 73, revision: "rev-1" }])
+  },
+  historyClear: (input) => {
+    calls.push(`history:clear:${input.sessionID}`)
+    return Effect.succeed(1)
+  },
   cancel: () => Effect.succeed(false),
   releaseSession: () => Effect.void,
   browserTabs: (input) => {
@@ -138,7 +166,7 @@ describe("computer tool policy ordering", () => {
       yield* settleTool(registry, call({ action: "desktop.stage", platform: "macos", bundle_id: "com.example.fixture", pid: 451, window_id: 73, expected_revision: "rev-1" }, "stage-window"))
       expect(calls).toEqual([
         "permission:computer:macos.bundle_id/com.example.fixture/stage",
-        "guardrail:computer:macos.bundle_id/com.example.fixture/stage:true",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/stage:undefined",
         "native:desktop.stage:73",
         "guardrail:release",
       ])
@@ -146,7 +174,7 @@ describe("computer tool policy ordering", () => {
       yield* settleTool(registry, call({ action: "desktop.unstage", platform: "macos", bundle_id: "com.example.fixture", pid: 451, window_id: 73 }, "unstage-window"))
       expect(calls).toEqual([
         "permission:computer:macos.bundle_id/com.example.fixture/stage",
-        "guardrail:computer:macos.bundle_id/com.example.fixture/stage:true",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/stage:undefined",
         "native:desktop.unstage:73",
         "guardrail:release",
       ])
@@ -163,7 +191,7 @@ describe("computer tool policy ordering", () => {
       denyStage = false
       expect(calls).toEqual([
         "permission:computer:macos.bundle_id/com.example.fixture/stage",
-        "guardrail:computer:macos.bundle_id/com.example.fixture/stage:true",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/stage:undefined",
       ])
     }),
   )
@@ -251,14 +279,14 @@ describe("computer tool policy ordering", () => {
       yield* settleTool(registry, call({ action: "desktop.launch", platform: "macos", bundle_id: "com.example.fixture", remote_debugging: true }, "debug-launch"))
       expect(calls).toEqual([
         "permission:computer:macos.bundle_id/com.example.fixture/remote_debugging",
-        "guardrail:computer:macos.bundle_id/com.example.fixture/remote_debugging:true",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/remote_debugging:undefined",
         "native:desktop.launch", "guardrail:release",
       ])
       calls.length = 0
       const settlement = yield* settleTool(registry, call({ action: "desktop.quit", platform: "macos", bundle_id: "com.example.fixture", pid: "451" }, "graceful-quit"))
       expect(calls).toEqual([
         "permission:computer:macos.bundle_id/com.example.fixture/quit",
-        "guardrail:computer:macos.bundle_id/com.example.fixture/quit:true",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/quit:undefined",
         "native:desktop.quit", "guardrail:release",
       ])
       expect(settlement.output?.content).toEqual([{ type: "text", text: JSON.stringify({ type: "result", action: "desktop.quit", revision: "", exited: false }) }])
@@ -292,7 +320,7 @@ describe("computer tool policy ordering", () => {
       yield* settleTool(registry, call({ action: "desktop.launch", platform: "macos", bundle_id: "com.example.fixture" }, "launch"))
       expect(calls).toEqual([
         "permission:computer:macos.bundle_id/com.example.fixture/launch",
-        "guardrail:computer:macos.bundle_id/com.example.fixture/launch:true",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/launch:undefined",
         "native:desktop.launch",
         "guardrail:release",
       ])
@@ -411,8 +439,8 @@ describe("computer tool policy ordering", () => {
         ),
       )
       expect(calls).toEqual([
-        "permission:computer:macos.bundle_id/com.example.fixture/451/73",
-        "guardrail:computer:macos.bundle_id/com.example.fixture/451/73,element/0:true",
+        "permission:computer:macos.bundle_id/com.example.fixture/desktop",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/desktop,element/0:undefined",
         "native:desktop.click",
         "guardrail:release",
       ])
@@ -432,8 +460,8 @@ describe("computer tool policy ordering", () => {
         ),
       )
       expect(calls).toEqual([
-        "permission:computer:macos.bundle_id/com.example.fixture/451/73",
-        "guardrail:computer:macos.bundle_id/com.example.fixture/451/73:true",
+        "permission:computer:macos.bundle_id/com.example.fixture/desktop",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/desktop:true",
         "native:desktop.capture",
         "guardrail:release",
       ])
@@ -469,9 +497,91 @@ describe("computer tool policy ordering", () => {
         ),
       )
       expect(calls).toEqual([
-        "permission:computer:macos.bundle_id/com.example.fixture/451/73",
-        "guardrail:computer:macos.bundle_id/com.example.fixture/451/73,element/1/2,safe input:true",
+        "permission:computer:macos.bundle_id/com.example.fixture/desktop",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/desktop,element/1/2,safe input:undefined",
         "native:desktop.type",
+        "guardrail:release",
+      ])
+    }),
+  )
+
+  it.effect("observes with the per-app resource and returns the AX diff with the screenshot", () =>
+    Effect.gen(function* () {
+      calls.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      const settlement = yield* settleTool(
+        registry,
+        call({ action: "desktop.observe", platform: "macos", bundle_id: "com.example.fixture", pid: 451, window_id: 73 }, "desktop-observe"),
+      )
+      expect(calls).toEqual([
+        "permission:computer:macos.bundle_id/com.example.fixture/desktop",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/desktop:true",
+        "native:desktop.observe",
+        "guardrail:release",
+      ])
+      const text = settlement.output?.content?.find((part) => part.type === "text")
+      expect(text?.type === "text" ? JSON.parse(text.text) : undefined).toMatchObject({
+        action: "desktop.observe",
+        diff: '+ [0] AXWindow "Fixture"',
+        elements: [{ path: [0], role: "AXWindow", label: "Fixture" }],
+      })
+    }),
+  )
+
+  it.effect("maps paste, click hold options, and key chords to native actions", () =>
+    Effect.gen(function* () {
+      actions.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      for (const [index, fields] of [
+        { action: "desktop.paste", text: "<b>hello</b>", format: "html" },
+        { action: "desktop.click", x: 15, y: 22, duration_ms: 800, key: "shift" },
+        { action: "desktop.key", key: "super+c", duration_ms: 120 },
+      ].entries()) {
+        yield* settleTool(registry, call({ ...fields, platform: "macos", bundle_id: "com.example.fixture", pid: 451, window_id: 73, expected_revision: "rev-1" }, `parity-mapping-${index}`))
+      }
+      expect(actions).toEqual([
+        { type: "desktop.paste", text: "<b>hello</b>", format: "html" },
+        { type: "desktop.click", x: 15, y: 22, button: undefined, count: undefined, durationMs: 800, key: "", modifiers: ["shift"] },
+        { type: "desktop.key", element: undefined, key: "c", modifiers: ["command"], durationMs: 120 },
+      ])
+    }),
+  )
+
+  it.effect("blocks a forbidden app before permission or native dispatch", () =>
+    Effect.gen(function* () {
+      calls.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      const settlement = yield* settleTool(
+        registry,
+        call({ action: "desktop.inspect", platform: "macos", bundle_id: "com.apple.systempreferences", pid: 451, window_id: 73 }, "forbidden-inspect"),
+      )
+      expect(calls).toEqual([])
+      expect(settlement.result).toMatchObject({ type: "error", value: expect.stringContaining("app_not_allowed") })
+    }),
+  )
+
+  it.effect("scopes history reads to the calling Session and reviews clear", () =>
+    Effect.gen(function* () {
+      calls.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      const listed = yield* settleTool(registry, call({ action: "desktop.history", op: "list" }, "history-list"))
+      const listedText = listed.output?.content?.find((part) => part.type === "text")
+      expect(listedText?.type === "text" ? JSON.parse(listedText.text).entries : undefined).toEqual([
+        { id: "hist-1", sessionID: String(sessionID), started: "2026-11-04T10:00:00.000Z", updated: "2026-11-04T10:01:00.000Z", events: 1 },
+      ])
+      calls.length = 0
+      yield* settleTool(registry, call({ action: "desktop.history", op: "read", id: "hist-2" }, "history-read-other"))
+      expect(calls).toEqual(["history:list"])
+      calls.length = 0
+      yield* settleTool(registry, call({ action: "desktop.history", op: "clear" }, "history-clear"))
+      expect(calls).toEqual([
+        "permission:computer:macos.computer_history/clear",
+        "guardrail:computer:macos.computer_history/clear:undefined",
+        `history:clear:${sessionID}`,
         "guardrail:release",
       ])
     }),

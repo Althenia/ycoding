@@ -18,7 +18,7 @@ import {
   tabID,
 } from "./protocol.js"
 import { geistSans } from "./fonts.js"
-import { LABELS, TITLE_PREFIX, markerScript, timing, tokens } from "./indicator.js"
+import { LABELS, markerScript, timing, tokens } from "./indicator.js"
 
 const PROTOCOL_VERSION = "1.3"
 const STORAGE_KEY = "browserPairing"
@@ -31,7 +31,6 @@ const CURSOR_WORLD = "ycoding-agent-cursor"
 const CURSOR_COMMAND_TIMEOUT_MS = 600
 const INPUT_COMMAND_TIMEOUT_MS = 2000
 const MARKER_FAILED = "YCoding could not show its control marker on this page"
-const MARKER_TEXT = TITLE_PREFIX.trimEnd()
 const interactiveRoles = new Set([
   "button",
   "checkbox",
@@ -99,6 +98,7 @@ const ACTION_TYPES = new Set([
   "export",
   "webmcp_list",
   "webmcp_invoke",
+  "dialog",
 ])
 
 let socket
@@ -179,7 +179,7 @@ chrome.tabs.onUpdated.addListener((chromeTabID, change, info) => {
     send({
       type: "updated",
       tabID: current.id,
-      title: current.marked ? stripMarker(info.title ?? "") : (info.title ?? ""),
+      title: info.title ?? "",
       url: current.url,
       documentGeneration: current.documentGeneration,
     })
@@ -229,6 +229,19 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     const info = params?.targetInfo
     for (const session of tabSessions(tab).values())
       if (session.targetId === info?.targetId && info?.url) session.url = info.url
+    return
+  }
+  if (method === "Page.javascriptDialogOpening") {
+    tab.dialog = {
+      kind: String(params?.type ?? "alert").slice(0, 32),
+      message: String(params?.message ?? "").slice(0, 1024),
+      defaultPrompt: params?.defaultPrompt ? String(params.defaultPrompt).slice(0, 1024) : undefined,
+      sessionId: source.sessionId,
+    }
+    return
+  }
+  if (method === "Page.javascriptDialogClosed") {
+    delete tab.dialog
     return
   }
   if (method === "Runtime.consoleAPICalled") {
@@ -526,7 +539,7 @@ async function revokeTab(tab) {
   send({ type: "revoked", tabID: tab.id })
   await clearMarker(tab)
   if (!tab.profile || tab.attached) await chrome.debugger.detach({ tabId: tab.chromeTabID }).catch(() => {})
-  if (tab.owned) await removeInactive(tab.chromeTabID)
+  if (tab.owned && !tab.deliverable) await removeInactive(tab.chromeTabID)
 }
 
 function isAllowedPage(tab, value) {
@@ -583,6 +596,10 @@ async function receive(raw, current = socket) {
   if (message.type === "release" && message.generation === generation) {
     const tab = tabs.get(message.tabID)
     if (tab?.owned) await revokeTab(tab)
+  }
+  if (message.type === "deliver" && message.generation === generation) {
+    const tab = tabs.get(message.tabID)
+    if (tab?.owned) tab.deliverable = true
   }
 }
 
@@ -1049,10 +1066,14 @@ async function observe(message) {
           const attributes = attrs(described.node.attributes)
           const href = attributes.get("href")
           const destination = href ? new URL(href, url).toString() : undefined
+          const elementName = String(node.name?.value ?? "")
+          const locatorBase = `role=${role}[name=${JSON.stringify(elementName.slice(0, 128))}]`
+          const duplicates = elements.filter((candidate) => candidate.locator?.startsWith(locatorBase)).length
           elements.push({
             ref,
             role,
-            name: String(node.name?.value ?? ""),
+            name: elementName,
+            locator: duplicates ? `${locatorBase}|nth=${duplicates}` : locatorBase,
             description: node.description?.value ? String(node.description.value) : undefined,
             disabled: node.properties?.some((item) => item.name === "disabled" && item.value?.value === true) || undefined,
             destination,
@@ -1104,6 +1125,14 @@ async function act(message) {
     if (message.action.type === "ungroup") return ungroupTabs(message)
     if (!ACTION_TYPES.has(message.action.type)) throw new Error("Unsupported browser action")
     fresh = tab.profile && !tab.attached ? tab : undefined
+    if (message.action.type === "dialog" && message.action.accept !== undefined && tab.dialog) {
+      dispatched = true
+      await command(tab.chromeTabID, "Page.handleJavaScriptDialog", {
+        accept: message.action.accept,
+        ...(message.action.text === undefined ? {} : { promptText: message.action.text }),
+      }, tab.dialog.sessionId).catch(() => {})
+      delete tab.dialog
+    }
     await controlTabs([tab])
     tab.allowedOrigins = new Set(message.allowedOrigins)
     applyFrameOrigins(tab, message)
@@ -1122,10 +1151,10 @@ async function act(message) {
     }
     if (message.action.type === "key") await dispatchKey(tab, message.action, () => (dispatched = true))
     if (message.action.type === "wait") await waitAction(tab, message.action)
-    const peripheral = ["clipboard_read", "clipboard_write", "upload", "download", "logs", "export", "webmcp_list", "webmcp_invoke"].includes(message.action.type)
+    const peripheral = ["clipboard_read", "clipboard_write", "upload", "download", "logs", "export", "webmcp_list", "webmcp_invoke", "dialog"].includes(message.action.type)
       ? await peripheralAction(tab, message.action, () => (dispatched = true))
       : {}
-    const captured = message.action.type === "capture" ? await capture(tab) : undefined
+    const captured = message.action.type === "capture" ? await capture(tab, message.action) : undefined
     await isActive(tab)
     const info = await tabInfo(tab)
     if (tabs.get(tab.id) !== tab || !isAllowedPage(tab, info.url)) {
@@ -1154,6 +1183,7 @@ async function act(message) {
       logs: peripheral.logs,
       data: peripheral.data,
       webmcpTools: peripheral.webmcpTools,
+      dialog: peripheral.dialog,
     })
   } catch (error) {
     if (!dispatched) await abandonFresh(fresh)
@@ -1337,6 +1367,22 @@ function modelContextExpression(body) {
 }
 
 async function peripheralAction(tab, action, markDispatched) {
+  if (action.type === "dialog") {
+    if (action.accept === undefined) {
+      if (!tab.dialog) throw new Error("No JavaScript dialog is open on this tab")
+      const { sessionId: _sessionId, ...dialog } = tab.dialog
+      return { dialog }
+    }
+    if (tab.dialog) {
+      markDispatched()
+      await command(tab.chromeTabID, "Page.handleJavaScriptDialog", {
+        accept: action.accept,
+        ...(action.text === undefined ? {} : { promptText: action.text }),
+      }, tab.dialog.sessionId)
+      delete tab.dialog
+    }
+    return {}
+  }
   if (action.type === "clipboard_read") {
     await assertPageCaptureSafe(tab)
     const text = await mainWorldEvaluate(tab, "navigator.clipboard.readText()").catch((error) => {
@@ -1601,10 +1647,6 @@ function refreshMarkers() {
   return Promise.all([...tabs.values()].filter((tab) => tab.marked && tab.attached).map((tab) => mark(tab)))
 }
 
-function stripMarker(title) {
-  return title.startsWith(MARKER_TEXT) ? title.slice(MARKER_TEXT.length).replace(/^ /, "") : title
-}
-
 async function assertPageCaptureSafe(tab) {
   const sessions = [undefined, ...tabSessions(tab).keys()]
   let missing = 0
@@ -1620,9 +1662,30 @@ async function assertPageCaptureSafe(tab) {
   if (missing !== tabSessions(tab).size) throw incompleteCaptureInspection()
 }
 
-async function capture(tab) {
+async function capture(tab, action = {}) {
   await assertPageCaptureSafe(tab)
-  const { data } = await command(tab.chromeTabID, "Page.captureScreenshot", { format: "png", fromSurface: true })
+  let clip = action.clip
+  if (action.ref) {
+    const target = requireRef(tab, action.ref)
+    await command(tab.chromeTabID, "DOM.scrollIntoViewIfNeeded", { backendNodeId: target.backendNodeId }, target.sessionId)
+    const { quads } = await command(tab.chromeTabID, "DOM.getContentQuads", { backendNodeId: target.backendNodeId }, target.sessionId)
+    const quad = quads?.[0]
+    if (!Array.isArray(quad) || quad.length < 8) throw new Error("Capture target has no visible bounds")
+    const xs = [quad[0], quad[2], quad[4], quad[6]]
+    const ys = [quad[1], quad[3], quad[5], quad[7]]
+    clip = {
+      x: Math.max(0, Math.floor(Math.min(...xs))),
+      y: Math.max(0, Math.floor(Math.min(...ys))),
+      width: Math.max(1, Math.ceil(Math.max(...xs) - Math.min(...xs))),
+      height: Math.max(1, Math.ceil(Math.max(...ys) - Math.min(...ys))),
+    }
+  }
+  const { data } = await command(tab.chromeTabID, "Page.captureScreenshot", {
+    format: "png",
+    fromSurface: true,
+    ...(clip ? { clip: { ...clip, scale: 1 }, captureBeyondViewport: true } : {}),
+    ...(action.fullPage ? { captureBeyondViewport: true } : {}),
+  })
   const bytes = Math.floor((data.length * 3) / 4)
   if (bytes > MAX_CAPTURE_BYTES) throw new Error("Capture exceeds the 1 MiB limit")
   return { mediaType: "image/png", data, bytes }
@@ -1721,7 +1784,7 @@ async function isActive(tab) {
 
 async function tabInfo(tab) {
   const info = await chrome.tabs.get(tab.chromeTabID)
-  if (!tab.owned) return tab.marked ? { ...info, title: stripMarker(info.title ?? "") } : info
+  if (!tab.owned) return info
   let history
   for (let attempt = 0; ; attempt++) {
     try {
@@ -1735,7 +1798,7 @@ async function tabInfo(tab) {
   }
   const entry = history.entries[history.currentIndex] ?? history.entries.at(-1)
   const title = entry?.title ?? ""
-  return { active: info.active, title: tab.marked ? stripMarker(title) : title, url: entry?.url }
+  return { active: info.active, title, url: entry?.url }
 }
 
 async function removeInactive(chromeTabID) {
@@ -1814,7 +1877,7 @@ async function stop(disconnected) {
     clearBadge(tab.chromeTabID)
     await clearMarker(tab)
     if (!tab.profile || tab.attached) await chrome.debugger.detach({ tabId: tab.chromeTabID }).catch(() => {})
-    if (tab.owned) await removeInactive(tab.chromeTabID)
+    if (tab.owned && !tab.deliverable) await removeInactive(tab.chromeTabID)
   }
   const current = socket
   socket = undefined

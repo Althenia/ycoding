@@ -10,6 +10,8 @@ import { AppProcess } from "./process"
 import { SessionEvent } from "./session/event"
 import { SessionSchema } from "./session/schema"
 import { MacOSComputer } from "./computer/macos"
+import { ComputerHistory } from "./computer/history"
+import { Global } from "./global"
 import { NativeError, type AgentDisplay, type ComputerFrame, type Status } from "./computer/types"
 
 export { NativeError } from "./computer/types"
@@ -60,6 +62,14 @@ export interface Interface {
     readonly callID: string
     readonly target: MacOSComputer.DesktopTarget
   }) => Effect.Effect<NativeSuccess, Error>
+  readonly observe: (input: {
+    readonly sessionID: SessionSchema.ID
+    readonly callID: string
+    readonly target: MacOSComputer.DesktopTarget
+  }) => Effect.Effect<NativeSuccess, Error>
+  readonly historyList: Effect.Effect<ReadonlyArray<ComputerHistory.Entry>, Error>
+  readonly historyRead: (input: { readonly id: string; readonly limit?: number }) => Effect.Effect<ReadonlyArray<ComputerHistory.StoredEvent>, Error>
+  readonly historyClear: (input: { readonly sessionID: SessionSchema.ID }) => Effect.Effect<number, Error>
   readonly cancel: (input: { readonly sessionID: SessionSchema.ID; readonly callID: string }) => Effect.Effect<boolean>
   readonly releaseSession: (sessionID: SessionSchema.ID) => Effect.Effect<void>
 }
@@ -68,6 +78,7 @@ interface Claim {
   readonly locationToken: object
   readonly sessionID: SessionSchema.ID
   readonly revision: string
+  readonly elements?: NativeSuccess["elements"]
 }
 
 interface Active {
@@ -96,6 +107,7 @@ const desktopMutation = (request: NativeRequest) =>
   request.action.startsWith("desktop.") &&
   request.action !== "desktop.inspect" &&
   request.action !== "desktop.capture" &&
+  request.action !== "desktop.observe" &&
   request.action !== "desktop.list" &&
   request.action !== "desktop.launch"
 
@@ -116,6 +128,33 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
   const displayOwners = new Map<object, DisplayOwner>()
   const stagedWindows = new Map<object, Map<string, StagedWindow>>()
   const desktopInput = Semaphore.makeUnsafe(1)
+  const historyDirectory = path.join(Global.Path.data, ComputerHistory.directoryName)
+  const history = ComputerHistory.recorder(historyDirectory)
+  let historyPruned = false
+
+  const recordHistory = (input: { readonly sessionID: SessionSchema.ID; readonly target: Target }, request: NativeRequest, result: NativeSuccess) => {
+    if (input.target.application !== "desktop" || !request.action.startsWith("desktop.")) return Effect.void
+    const target = input.target
+    return Effect.tryPromise({
+      try: async () => {
+        if (!historyPruned) {
+          historyPruned = true
+          await ComputerHistory.prune(historyDirectory).catch(() => 0)
+        }
+        await history.record({
+          sessionID: input.sessionID,
+          action: request.action,
+          bundleID: target.bundleID,
+          pid: target.pid,
+          windowID: target.windowID,
+          revision: result.revision,
+          effect: result.effect,
+          screenshot: ComputerHistory.screenshotRef(result.image, result.width, result.height, result.scale),
+        })
+      },
+      catch: () => new NativeError({ code: "native_failure", message: "Computer history write failed", outcome: "not_started" }),
+    }).pipe(Effect.catch(() => Effect.void))
+  }
 
   const begin = Effect.fnUntraced(function* (
     locationToken: object,
@@ -179,7 +218,8 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
             if (onSuccess) yield* onSuccess(result)
             if (active.controller.signal.aborted || activeCalls.get(callKey(active.sessionID, active.callID))?.token !== active.token) return
             if (nativeRequest.action === "finder.move") claims.delete(active.targetKey)
-            else claims.set(active.targetKey, { locationToken, sessionID: input.sessionID, revision: result.revision })
+            else claims.set(active.targetKey, { locationToken, sessionID: input.sessionID, revision: result.revision, elements: result.elements ?? claims.get(active.targetKey)?.elements })
+            yield* recordHistory(input, nativeRequest, result)
           })),
           Effect.tap(() => active.controller.signal.aborted
             ? Effect.fail(expectedRevision !== undefined || nativeRequest.action === "desktop.unstage"
@@ -304,6 +344,7 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
         ...[...stagedWindows.entries()].filter(([, windows]) => [...windows.values()].some((window) => window.sessionID === sessionID)).map(([locationToken]) => locationToken),
         ...[...activeCalls.values()].filter((active) => active.sessionID === sessionID).map((active) => active.locationToken),
       ])
+      history.stop(sessionID)
       yield* Effect.sync(() => {
         for (const [key, claim] of claims) if (claim.sessionID === sessionID) claims.delete(key)
         for (const active of activeCalls.values()) {
@@ -493,6 +534,40 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
           )
         return run(locationToken, input, request, input.expectedRevision)
       }),
+      observe: Effect.fn("Computer.observe")((input) =>
+        Effect.gen(function* () {
+          if (platform !== "darwin")
+            return yield* Effect.fail(
+              new NativeError({
+                code: "unsupported_platform",
+                message: `Native computer use has no provider for ${platform}`,
+                outcome: "not_started",
+              }),
+            )
+          const before = claims.get(MacOSComputer.targetKey(input.target))?.elements
+          const result = yield* run(
+            locationToken,
+            input,
+            MacOSComputer.observeRequest({ sessionID: input.sessionID, callID: input.callID }, input.target),
+          )
+          const diff = MacOSComputer.diffElements(before, result.elements ?? [])
+          return diff ? { ...result, diff } : result
+        }),
+      ),
+      historyList: Effect.tryPromise({
+        try: () => ComputerHistory.list(historyDirectory),
+        catch: () => new NativeError({ code: "native_failure", message: "Computer history could not be listed", outcome: "not_started" }),
+      }),
+      historyRead: (input) =>
+        Effect.tryPromise({
+          try: () => ComputerHistory.read(historyDirectory, input.id, input.limit),
+          catch: () => new NativeError({ code: "invalid_request", message: "Computer history entry is unavailable", outcome: "not_started" }),
+        }),
+      historyClear: (input) =>
+        Effect.tryPromise({
+          try: () => ComputerHistory.clear(historyDirectory, input.sessionID),
+          catch: () => new NativeError({ code: "native_failure", message: "Computer history could not be cleared", outcome: "not_started" }),
+        }),
       capture: Effect.fn("Computer.capture")((input) => {
         if (platform !== "darwin")
           return Effect.fail(

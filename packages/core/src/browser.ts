@@ -86,6 +86,7 @@ export interface Interface {
   ) => Effect.Effect<Pairing, SessionErrors.NotFoundError | BusyError>
   readonly open: (input: OpenInput) => Effect.Effect<Tab, SessionErrors.NotFoundError | OwnershipError | FenceError | BusyError | UnavailableError | BridgeError>
   readonly close: (input: CloseInput) => Effect.Effect<void, SessionErrors.NotFoundError | OwnershipError | FenceError | BusyError | UnavailableError | BridgeError>
+  readonly deliver: (input: CloseInput) => Effect.Effect<Tab, SessionErrors.NotFoundError | OwnershipError | FenceError | UnavailableError>
   readonly release: (
     input: ReleaseInput,
   ) => Effect.Effect<void, SessionErrors.NotFoundError | OwnershipError | FenceError | BusyError | UnavailableError | BridgeError>
@@ -497,6 +498,9 @@ export const layer = (options: Options = {}) =>
           return yield* new FenceError({ message: "Chrome tab control is paused" })
         if (tab.generation !== input.generation)
           return yield* new FenceError({ message: "Chrome bridge generation is stale" })
+        const previous = input.diff
+          ? { revision: tab.observationRevision, documentGeneration: tab.documentGeneration, elements: new Map(tab.elements) }
+          : undefined
         const deferred = yield* Deferred.make<Observation | ActionResult, BridgeError>()
         const result = yield* dispatch(
           current,
@@ -521,7 +525,23 @@ export const layer = (options: Options = {}) =>
         )
         if (!("elements" in result))
           return yield* new BridgeError({ message: "Extension returned an action result for observe" })
-        return result
+        if (!previous || previous.elements.size === 0 || previous.documentGeneration !== result.documentGeneration)
+          return result
+        if (result.elements.some((element) => !element.locator)) return result
+        const previousByLocator = new Map(
+          Array.from(previous.elements.values()).flatMap((element) =>
+            element.locator ? [[element.locator, element] as const] : [],
+          ),
+        )
+        const currentByLocator = new Map(result.elements.map((element) => [element.locator!, element]))
+        const changed = result.elements.filter((element) => {
+          const before = previousByLocator.get(element.locator!)
+          if (!before) return true
+          const now = tab.elements.get(element.ref)
+          return !now || now.identity !== before.identity
+        })
+        const removed = Array.from(previousByLocator.keys()).filter((locator) => !currentByLocator.has(locator))
+        return { ...result, elements: changed, delta: { baseRevision: previous.revision, removed } }
       })
 
       const history = Effect.fn("Browser.history")(function* (input: HistoryInput) {
@@ -633,6 +653,17 @@ export const layer = (options: Options = {}) =>
         return yield* Effect.void
       })
 
+      const deliver = Effect.fn("Browser.deliver")(function* (input: CloseInput) {
+        const { current, tab } = yield* requireTab(input.sessionID, input.tabID)
+        if (tab.mode !== "owned")
+          return yield* new OwnershipError({ message: "Only agent-created tabs can be marked deliverable" })
+        if (tab.generation !== input.generation)
+          return yield* new FenceError({ message: "Chrome bridge generation is stale" })
+        tab.deliverable = true
+        current.transport.send({ type: "deliver", tabID: tab.id, generation: current.generation })
+        return publicTab(tab, input.sessionID)
+      })
+
       const relinquishTab = Effect.fn("Browser.relinquishTab")(function* (
         current: Connection,
         tab: MutableTab,
@@ -708,7 +739,7 @@ export const layer = (options: Options = {}) =>
           tab.observationRevision !== input.observationRevision
         )
           return yield* new FenceError({ message: "Chrome tab observation is stale; observe again" })
-        const element = tab.elements.get(input.ref)
+        const element = BrowserOperation.resolveElement(tab.elements, { ref: input.ref })
         if (!element || element.disabled)
           return yield* new FenceError({ message: "Semantic element reference is stale or disabled" })
         return element.destination
@@ -726,7 +757,7 @@ export const layer = (options: Options = {}) =>
           tab.observationRevision !== input.observationRevision
         )
           return yield* new FenceError({ message: "Chrome tab observation is stale; observe again" })
-        const element = tab.elements.get(input.ref)
+        const element = BrowserOperation.resolveElement(tab.elements, { ref: input.ref })
         if (!element || element.disabled)
           return yield* new FenceError({ message: "Semantic element reference is stale or disabled" })
         return element.frame
@@ -768,10 +799,12 @@ export const layer = (options: Options = {}) =>
           tab.observationRevision !== input.observationRevision
         )
           return yield* new FenceError({ message: "Chrome tab observation is stale; observe again" })
+        let resolvedAction = input.action
         if (input.action.type === "click" || input.action.type === "type" || input.action.type === "upload") {
-          const element = tab.elements.get(input.action.ref)
+          const element = BrowserOperation.resolveElement(tab.elements, input.action)
           if (!element) return yield* new FenceError({ message: "Semantic element reference is stale" })
           if (element.disabled) return yield* new FenceError({ message: "Semantic element is disabled" })
+          resolvedAction = { ...input.action, ref: element.ref }
         }
         if (input.action.type === "upload") {
           const uploadPaths = input.action.paths
@@ -791,7 +824,7 @@ export const layer = (options: Options = {}) =>
             input.action.type === "navigate"
               ? safePage(input.action.url)
               : input.action.type === "click"
-                ? tab.elements.get(input.action.ref)?.destination
+                ? BrowserOperation.resolveElement(tab.elements, input.action)?.destination
                 : undefined,
           catch: () => new FenceError({ message: "Only credential-free HTTP and HTTPS navigation is supported" }),
         })
@@ -800,8 +833,8 @@ export const layer = (options: Options = {}) =>
             ? input.action.tabIDs.map((id) => current.tabs.get(id)!.page.origin) : [])])]
         if (tab.mode === "owned") tab.allowedOrigins = new Set(allowedOrigins)
         const actionRef =
-          input.action.type === "click" || input.action.type === "type" || input.action.type === "wait" || input.action.type === "upload"
-            ? input.action.ref
+          resolvedAction.type === "click" || resolvedAction.type === "type" || resolvedAction.type === "wait" || resolvedAction.type === "upload"
+            ? resolvedAction.ref
             : undefined
         const targetElement = actionRef ? tab.elements.get(actionRef) : undefined
         const frameOrigins = [...new Set([...(tab.frameOrigins ?? []),
@@ -814,7 +847,7 @@ export const layer = (options: Options = {}) =>
           sessionID: input.sessionID,
           generation: input.generation,
           documentGeneration: input.documentGeneration,
-          mutation: ["navigate", "click", "type", "group", "ungroup", "back", "forward", "reload", "key", "clipboard_write", "upload", "webmcp_invoke"].includes(input.action.type),
+          mutation: ["navigate", "click", "type", "group", "ungroup", "back", "forward", "reload", "key", "clipboard_write", "upload", "webmcp_invoke", "dialog"].includes(input.action.type),
           fingerprint,
           actionType: input.action.type,
           deferred,
@@ -832,7 +865,7 @@ export const layer = (options: Options = {}) =>
             observationRevision: input.observationRevision,
             allowedOrigins,
             frameOrigins,
-            action: input.action,
+            action: resolvedAction,
           },
           input.action.type === "group" || input.action.type === "ungroup"
             ? input.action.tabIDs.flatMap((id) => current.tabs.get(id) ?? [])
@@ -1216,6 +1249,7 @@ export const layer = (options: Options = {}) =>
             download: sanitizeDownload(message.download),
             logs: sanitizeLogs(message.logs),
             webmcpTools: sanitizeWebMcpTools(message.webmcpTools),
+            dialog: sanitizeDialog(message.dialog),
           }
           if (pending.actionType !== "export") remember(current, pending.fingerprint, result, `${pending.sessionID}\0${pending.callID}`)
           Deferred.doneUnsafe(pending.deferred, Effect.succeed(result))
@@ -1318,7 +1352,7 @@ export const layer = (options: Options = {}) =>
         return { sessionID: trust.sessionID, serverID: trust.serverID, secret: undefined }
       })
 
-      return Service.of({ status, list, start, open, close, release, observe, clickDestination, elementFrame, actionIdentity, action, history, control, stop, forget, attach })
+      return Service.of({ status, list, start, open, close, deliver, release, observe, clickDestination, elementFrame, actionIdentity, action, history, control, stop, forget, attach })
     }),
   )
 
@@ -1453,6 +1487,18 @@ function sanitizeHistory(
   return { entries }
 }
 
+function sanitizeDialog(
+  dialog: Extract<BrowserProtocol.ClientMessage, { readonly type: "result" }>["dialog"],
+): Browser.DialogInfo | undefined {
+  if (!dialog) return undefined
+  if (!["alert", "confirm", "prompt", "beforeunload"].includes(dialog.kind)) return undefined
+  return {
+    kind: dialog.kind as Browser.DialogInfo["kind"],
+    message: bounded(dialog.message, Browser.MAX_NAME_LENGTH),
+    defaultPrompt: dialog.defaultPrompt ? bounded(dialog.defaultPrompt, Browser.MAX_NAME_LENGTH) : undefined,
+  }
+}
+
 function sanitizeObservation(
   message: Extract<BrowserProtocol.ClientMessage, { readonly type: "observation" }>,
 ): Observation | undefined {
@@ -1464,6 +1510,7 @@ function sanitizeObservation(
     name: bounded(element.name, Browser.MAX_NAME_LENGTH),
     description: element.description ? bounded(element.description, Browser.MAX_NAME_LENGTH) : undefined,
     disabled: element.disabled,
+    locator: element.locator ? bounded(element.locator, Browser.MAX_LOCATOR_LENGTH) : undefined,
     destination: element.destination ? safePageMaybe(element.destination) : undefined,
     frame: element.frame ? safePageMaybe(element.frame) : undefined,
   }))

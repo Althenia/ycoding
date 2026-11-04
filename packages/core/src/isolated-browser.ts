@@ -302,7 +302,42 @@ export const layer = (options: Options = {}) =>
           }),
           Effect.mapError((error) => new UnavailableError({ message: error.message })),
         )
+        const previous = input.diff
+          ? {
+              revision: instance.tab.observationRevision,
+              documentGeneration: instance.tab.documentGeneration,
+              elements: new Map(instance.tab.elements),
+            }
+          : undefined
         applyObservation(instance, observed)
+        const allElements = [...instance.tab.elements.values()].map((element) =>
+          Schema.decodeUnknownSync(Browser.Element)(element),
+        )
+        let elements = allElements
+        let delta: Browser.Observation["delta"]
+        if (
+          previous &&
+          previous.elements.size > 0 &&
+          previous.documentGeneration === instance.tab.documentGeneration &&
+          allElements.every((element) => element.locator)
+        ) {
+          const previousByLocator = new Map(
+            Array.from(previous.elements.values()).flatMap((element) =>
+              element.locator ? [[element.locator, element] as const] : [],
+            ),
+          )
+          const currentLocators = new Set(allElements.map((element) => element.locator!))
+          elements = allElements.filter((element) => {
+            const before = previousByLocator.get(element.locator!)
+            if (!before) return true
+            const now = instance.tab.elements.get(element.ref)
+            return !now || now.identity !== before.identity
+          })
+          delta = {
+            baseRevision: previous.revision,
+            removed: Array.from(previousByLocator.keys()).filter((locator) => !currentLocators.has(locator)),
+          }
+        }
         return {
           mode: "isolated" as const,
           instanceID: instance.instanceID,
@@ -312,7 +347,8 @@ export const layer = (options: Options = {}) =>
           revision: instance.tab.observationRevision,
           title: instance.tab.title,
           page: instance.tab.page,
-          elements: [...instance.tab.elements.values()].map((element) => Schema.decodeUnknownSync(Browser.Element)(element)),
+          elements,
+          ...(delta ? { delta } : {}),
           ...(observed.texts?.length ? { texts: [...observed.texts] } : {}),
           ...(observed.frames?.length ? { frames: [...observed.frames] } : {}),
           truncated: observed.truncated,
@@ -373,16 +409,20 @@ export const layer = (options: Options = {}) =>
         )
           return yield* new FenceError({ message: "Isolated browser observation is stale; observe again" })
         const element =
-          input.action.type === "click" || input.action.type === "type"
-            ? instance.tab.elements.get(input.action.ref)
+          input.action.type === "click" || input.action.type === "type" || input.action.type === "upload"
+            ? BrowserOperation.resolveElement(instance.tab.elements, input.action)
             : undefined
-        if ((input.action.type === "click" || input.action.type === "type") && !element)
+        if ((input.action.type === "click" || input.action.type === "type" || input.action.type === "upload") && !element)
           return yield* new FenceError({ message: "Semantic element reference is stale" })
         if (element?.disabled) return yield* new FenceError({ message: "Semantic element is disabled" })
+        const resolvedAction =
+          element && (input.action.type === "click" || input.action.type === "type" || input.action.type === "upload")
+            ? { ...input.action, ref: element.ref }
+            : input.action
         const destination = yield* destinationPage(input.action, element)
         const allowedOrigins = [...new Set([instance.tab.page.origin, ...(destination ? [destination.origin] : []),
           ...(element?.frame ? [element.frame.origin] : [])])]
-        const mutation = ["navigate", "click", "type", "back", "forward", "reload", "key", "clipboard_write", "upload", "webmcp_invoke"].includes(input.action.type)
+        const mutation = ["navigate", "click", "type", "back", "forward", "reload", "key", "clipboard_write", "upload", "webmcp_invoke", "dialog"].includes(input.action.type)
         const deferred = yield* Deferred.make<ActionResult>()
         const pending: PendingAction = { callID: input.callID, fingerprint, mutation, deferred }
         instance.pending = pending
@@ -394,7 +434,7 @@ export const layer = (options: Options = {}) =>
             Deferred.doneUnsafe(deferred, Effect.succeed(instance.settlements.get(input.callID)?.result ?? result))
           })
         pending.fiber = Effect.runFork(runtime
-          .action(input.action, allowedOrigins)
+          .action(resolvedAction, allowedOrigins)
           .pipe(
             Effect.timeoutOrElse({
               duration: operationTimeout,
@@ -428,6 +468,7 @@ export const layer = (options: Options = {}) =>
                     logs: output.logs ? [...output.logs] : undefined,
                     savedFile,
                     webmcpTools: output.webmcpTools ? [...output.webmcpTools] : undefined,
+                    dialog: output.dialog,
                   }
                   yield* settle(result)
                 }),

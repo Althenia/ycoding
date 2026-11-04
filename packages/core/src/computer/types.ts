@@ -81,6 +81,7 @@ export type NativeSuccess<Action extends string = string> = {
   readonly width?: number
   readonly height?: number
   readonly scale?: number
+  readonly diff?: string
   readonly apps?: ReadonlyArray<AppInfo>
   readonly pid?: number
   readonly windows?: ReadonlyArray<WindowInfo | BrowserWindowInfo>
@@ -116,6 +117,8 @@ export class NativeError extends Schema.TaggedErrorClass<NativeError>()("Compute
     "window_full_screen",
     "window_minimized",
     "app_hidden",
+    "app_not_allowed",
+    "screen_locked",
   ]),
   message: Schema.String,
   outcome: Schema.Literals(["not_started", "unknown"]).pipe(Schema.optional),

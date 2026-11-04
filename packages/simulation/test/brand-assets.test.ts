@@ -78,6 +78,17 @@ test("the app icon keeps a small, even margin around the Y mark", async () => {
   expect(Math.max(...margins) - Math.min(...margins)).toBeLessThanOrEqual(0.01)
 })
 
+test("generated Chrome extension icons have exact dimensions", async () => {
+  const generator = await Bun.file(path.join(brand, "../../packages/simulation/script/generate-brand-assets.ts")).text()
+  for (const size of [16, 32, 48, 128] as const)
+    expect(generator).toContain(`../../extensions/chrome/icons/ycoding-${size}.png`)
+  for (const size of [16, 32, 48, 128] as const) {
+    const image = await loadImage(path.join(brand, `../../extensions/chrome/icons/ycoding-${size}.png`))
+    expect(image.width).toBe(size)
+    expect(image.height).toBe(size)
+  }
+})
+
 test("generated YCoding PNG assets have exact dimensions", async () => {
   for (const [name, size] of [
     ["ycoding-mark-256.png", 256],

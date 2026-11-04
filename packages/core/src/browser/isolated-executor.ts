@@ -101,6 +101,7 @@ export interface ActionOutput {
   readonly logs?: ReadonlyArray<Browser.LogEntry>
   readonly data?: string
   readonly webmcpTools?: ReadonlyArray<Browser.WebMcpTool>
+  readonly dialog?: Browser.DialogInfo
 }
 
 export interface Runtime {
@@ -246,6 +247,7 @@ async function configureRuntime(
   const frameSessions = new Map<string, { targetId: string; url: string; ready?: Promise<void>; failed?: boolean }>()
   const observedFrameOrigins = new Set<string>()
   const logs: Browser.LogEntry[] = []
+  let openDialog: (Browser.DialogInfo & { readonly sessionId?: string }) | undefined
   const pushLog = (entry: Browser.LogEntry) => {
     logs.push(entry)
     if (logs.length > Browser.MAX_LOG_ENTRIES) logs.splice(0, logs.length - Browser.MAX_LOG_ENTRIES)
@@ -318,6 +320,22 @@ async function configureRuntime(
   }
   const handleEvent = async (event: Event) => {
     if (closing) return
+    if (event.method === "Page.javascriptDialogOpening") {
+      const kind = typeof event.params?.type === "string" ? event.params.type : "alert"
+      openDialog = {
+        kind: (["alert", "confirm", "prompt", "beforeunload"].includes(kind) ? kind : "alert") as Browser.DialogInfo["kind"],
+        message: bounded(typeof event.params?.message === "string" ? event.params.message : "", Browser.MAX_NAME_LENGTH),
+        ...(typeof event.params?.defaultPrompt === "string" && event.params.defaultPrompt
+          ? { defaultPrompt: bounded(event.params.defaultPrompt, Browser.MAX_NAME_LENGTH) }
+          : {}),
+        sessionId: event.sessionId,
+      }
+      return
+    }
+    if (event.method === "Page.javascriptDialogClosed") {
+      openDialog = undefined
+      return
+    }
     if (event.method === "Target.targetDestroyed") {
       const target = typeof event.params?.targetId === "string" ? event.params.targetId : undefined
       if (target) destroyedTargets.get(target)?.()
@@ -639,10 +657,14 @@ async function configureRuntime(
           const destination = attributes.get("href")
           const ref = `b${elements.length + 1}`
           refs.set(ref, { sessionId: session.id, backendNodeId, frameId: frame.id, url: frameURL })
+          const elementName = bounded(stringMaybe(recordMaybe(node.name)?.value) ?? "", Browser.MAX_NAME_LENGTH)
+          const locatorBase = BrowserOperation.makeLocator({ role: bounded(role, 64), name: elementName })
+          const duplicates = elements.filter((candidate) => candidate.locator?.startsWith(locatorBase)).length
           const element = {
             ref: Browser.Element.fields.ref.make(ref),
+            locator: duplicates ? BrowserOperation.makeLocator({ role: bounded(role, 64), name: elementName }, duplicates) : locatorBase,
             role: bounded(role, 64),
-            name: bounded(stringMaybe(recordMaybe(node.name)?.value) ?? "", Browser.MAX_NAME_LENGTH),
+            name: elementName,
             ...(boundedMaybe(stringMaybe(recordMaybe(node.description)?.value), Browser.MAX_NAME_LENGTH)
               ? {
                   description: boundedMaybe(stringMaybe(recordMaybe(node.description)?.value), Browser.MAX_NAME_LENGTH),
@@ -755,7 +777,7 @@ async function configureRuntime(
           [...allowedOrigins].map((origin) => denyClipboard(cdp, browserContextId, origin, actionSignal)),
         )
         let dispatched = false
-        let peripheral: Pick<ActionOutput, "text" | "logs" | "data" | "webmcpTools"> = {}
+        let peripheral: Pick<ActionOutput, "text" | "logs" | "data" | "webmcpTools" | "dialog"> = {}
         const popupStart = popupRejections
         const downloadStart = downloadAttempts
         try {
@@ -768,7 +790,7 @@ async function configureRuntime(
             await cdp.send("Page.navigate", { url: destination.toString() }, sessionId, actionSignal)
           }
           if (action.type === "click") {
-            const target = requireRef(refs, action.ref)
+            const target = requireRef(refs, action.ref ?? "")
             const backendNodeId = target.backendNodeId
             const described = record(
               await cdp.send("DOM.describeNode", { backendNodeId, depth: 0 }, target.sessionId, actionSignal),
@@ -803,7 +825,7 @@ async function configureRuntime(
             )
           }
           if (action.type === "type") {
-            const target = requireRef(refs, action.ref)
+            const target = requireRef(refs, action.ref ?? "")
             const backendNodeId = target.backendNodeId
             const described = record(
               await cdp.send("DOM.describeNode", { backendNodeId, depth: 0 }, target.sessionId, actionSignal),
@@ -873,6 +895,20 @@ async function configureRuntime(
               await delay(100, actionSignal)
             }
           }
+          if (action.type === "dialog") {
+            if (action.accept === undefined) {
+              if (!openDialog) throw new globalThis.Error("No JavaScript dialog is open on this tab")
+              const { sessionId: _dialogSession, ...dialog } = openDialog
+              peripheral = { dialog }
+            } else if (openDialog) {
+              dispatched = true
+              await cdp.send("Page.handleJavaScriptDialog", {
+                accept: action.accept,
+                ...(action.text === undefined ? {} : { promptText: action.text }),
+              }, openDialog.sessionId ?? sessionId, actionSignal)
+              openDialog = undefined
+            }
+          }
           if (action.type === "logs") {
             const limit = Math.min(Math.max(action.limit ?? Browser.MAX_LOG_ENTRIES, 1), Browser.MAX_LOG_ENTRIES)
             peripheral = { logs: logs.slice(-limit) }
@@ -902,8 +938,28 @@ async function configureRuntime(
             if (Buffer.byteLength(text, "utf8") > Browser.MAX_CLIPBOARD_BYTES) throw new globalThis.Error("WebMCP result exceeds the 64 KiB limit")
             peripheral = { text }
           }
+          let captureClip = action.type === "capture" ? action.clip : undefined
+          if (action.type === "capture" && action.ref) {
+            const target = refs.get(action.ref)
+            if (!target) throw new globalThis.Error("Semantic element reference is stale")
+            await cdp.send("DOM.scrollIntoViewIfNeeded", { backendNodeId: target.backendNodeId }, target.sessionId, actionSignal)
+            const quads = record(await cdp.send("DOM.getContentQuads", { backendNodeId: target.backendNodeId }, target.sessionId, actionSignal)).quads
+            const quad = Array.isArray(quads) ? quads[0] : undefined
+            if (!Array.isArray(quad) || quad.length < 8 || quad.some((value) => typeof value !== "number"))
+              throw new globalThis.Error("Capture target has no visible bounds")
+            const xs = [quad[0], quad[2], quad[4], quad[6]] as number[]
+            const ys = [quad[1], quad[3], quad[5], quad[7]] as number[]
+            captureClip = {
+              x: Math.max(0, Math.floor(Math.min(...xs))),
+              y: Math.max(0, Math.floor(Math.min(...ys))),
+              width: Math.max(1, Math.ceil(Math.max(...xs) - Math.min(...xs))),
+              height: Math.max(1, Math.ceil(Math.max(...ys) - Math.min(...ys))),
+            }
+          }
           const capture =
-            action.type === "capture" ? await capturePage(cdp, sessionId, actionSignal, [...frameSessions.keys()]) : undefined
+            action.type === "capture"
+              ? await capturePage(cdp, sessionId, actionSignal, [...frameSessions.keys()], { clip: captureClip, fullPage: action.fullPage })
+              : undefined
           await delay(ACTION_SETTLE_MS, actionSignal)
           while (popupTasks.size > 0) await Promise.all(popupTasks)
           if (safetyFailure) throw new globalThis.Error(safetyFailure)

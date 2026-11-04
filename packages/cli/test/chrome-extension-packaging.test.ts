@@ -61,8 +61,8 @@ test("bundles the indicator module into service-worker.js and keeps protocol.js 
     expect([...worker.matchAll(/(?:from|import\()\s*["']([^"']+)["']/g)].map((match) => match[1])).toEqual([
       "./protocol.js",
     ])
-    expect(worker).toContain('"\u24CE "')
-    expect(worker).toContain("M40 40h40l48 64 48-64h40l-64 96v80h-48v-80z")
+    expect(worker).toContain("data-ycoding-agent-icon")
+    expect(worker).toContain("M40 40h32v64H40zm144 0h32v64h-32zM40 112h64v64H72v-32H40zm112 0h64v32h-32v32h-32zm-40 72h32v32h-32z")
     expect(worker).toContain("[data-ycoding-agent-marker]")
   })
 })
@@ -156,4 +156,27 @@ test("ships only bundled, minified entries plus manifest and assets, with no sou
     expect(html).toContain('src="popup.js"')
     expect(html).toContain('href="popup.css"')
   })
+})
+
+test("packages Edge and Brave variants from the same sources with family manifests", async () => {
+  const bin = await mkdtemp(path.join(os.tmpdir(), "ycoding-extension-families-"))
+  try {
+    for (const family of BrowserExtension.families) {
+      await copyChromeExtension(bin, family.id)
+      const extension = path.join(bin, family.directory)
+      const files = (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: extension })))
+        .map((file) => file.split(path.sep).join("/"))
+        .sort()
+      expect(files).toEqual([...BrowserExtension.files])
+      const manifest = JSON.parse(await readFile(path.join(extension, "manifest.json"), "utf8"))
+      expect(manifest.manifest_version).toBe(3)
+      expect(manifest.description).toContain(family.label)
+      expect(manifest.background.service_worker).toBe("service-worker.js")
+      expect(await readFile(path.join(extension, "service-worker.js"), "utf8")).toBe(
+        await readFile(path.join(bin, "ycoding-chrome-extension", "service-worker.js"), "utf8"),
+      )
+    }
+  } finally {
+    await rm(bin, { recursive: true, force: true })
+  }
 })

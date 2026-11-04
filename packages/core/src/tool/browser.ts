@@ -58,6 +58,7 @@ const ActionObject = Schema.Union([
   Browser.Schema.Export,
   Browser.Schema.WebMcpList,
   Browser.Schema.WebMcpInvoke,
+  Browser.Schema.Dialog,
 ])
 const ActionPayload = Schema.Union([
   ActionObject,
@@ -113,6 +114,8 @@ const OpenOperation = Schema.Struct({ operation: Schema.Literal("open"), mode: S
   generation: integer(Browser.Schema.Generation), url: Browser.Schema.OpenInput.fields.url })
 const CloseOperation = Schema.Struct({ operation: Schema.Literal("close"), mode: Schema.Literal("owned"), tabID: Browser.TabID,
   generation: integer(Browser.Schema.Generation) })
+const DeliverOperation = Schema.Struct({ operation: Schema.Literal("deliver"), mode: Schema.Literal("owned"), tabID: Browser.TabID,
+  generation: integer(Browser.Schema.Generation) })
 
 const ReleaseOperation = Schema.Struct({ operation: Schema.Literal("release"), mode: Schema.Literal("profile"), tabID: Browser.TabID,
   generation: integer(Browser.Schema.Generation) })
@@ -153,6 +156,7 @@ export const Input = Schema.Union([
   StopOperation,
   OpenOperation,
   CloseOperation,
+  DeliverOperation,
   ReleaseOperation,
   HistoryOperation,
   IsolatedHistoryOperation,
@@ -171,6 +175,7 @@ const Output = Schema.Union([
   Schema.Struct({ type: Schema.Literal("tabs"), mode: Schema.Literal("profile"), tabs: Schema.Array(Browser.Schema.Tab) }),
   Schema.Struct({ type: Schema.Literal("opened"), tab: Browser.Schema.Tab }),
   Schema.Struct({ type: Schema.Literal("closed"), mode: Schema.Literal("owned") }),
+  Schema.Struct({ type: Schema.Literal("delivered"), mode: Schema.Literal("owned"), tab: Browser.Schema.Tab }),
   Schema.Struct({ type: Schema.Literal("released"), mode: Schema.Literal("profile") }),
   Schema.Struct({ type: Schema.Literal("observation"), observation: IsolatedBrowser.Schema.Observation }),
   Schema.Struct({ type: Schema.Literal("observation"), observation: Browser.Schema.Observation }),
@@ -195,7 +200,7 @@ export const Plugin = {
           name,
           Tool.make({
             description:
-              "Work inside web pages in the paired Chrome profile with the user's existing logins: read page text and controls (including content inside cross-origin iframes, such as embedded third-party widgets), click, type, navigate, go back/forward, reload, press keys, scroll, wait, capture screenshots, search history, use the clipboard, upload files, wait for downloads, read console logs, export pages as MHTML, and list or invoke native page WebMCP tools when present. Prefer this tool over computer for anything inside a web page; observations return readable text plus semantic elements, and an element's optional frame field names the iframe page it came from (frames lists child frames and whether each was observed). Use status once, then tabs. Reuse returned tabID, generation, documentGeneration, and observationRevision fences exactly as numbers; never invent refs. Observe for semantic refs, then act only by a returned ref. Action results return updated tab fences, not a semantic observation; carry those fences forward for actions without refs, and observe again before another ref-based action because each action invalidates prior refs. Capture only when semantic observation is insufficient. On a stale-fence error, observe once and retry once; never replay an uncertain mutation—observe first. Prefer mode:'owned' background tabs for new work so user tabs stay untouched. Paired Chrome is the default; mode:'profile' selects it explicitly, and mode:'isolated' uses the user-started temporary headless browser. Profile tabs can group or ungroup granted inactive tabs. The first observe or action claims a profile tab for this Session; lease:'other' means another Session controls it, so choose another tab or wait. Call operation:'release' with mode:'profile' when finished with a tab; control also ends when the Session goes idle. Owned mode only creates and closes its own tabs. Focus emulation keeps controlled pages visible and unthrottled while attached; it ends when the debugger detaches.",
+              "Work inside web pages in the paired Chrome profile with the user's existing logins: read page text and controls (including content inside cross-origin iframes, such as embedded third-party widgets), click, type, navigate, go back/forward, reload, press keys, scroll, wait, capture screenshots, search history, use the clipboard, upload files, wait for downloads, read console logs, export pages as MHTML, and list or invoke native page WebMCP tools when present. Prefer this tool over computer for anything inside a web page; observations return readable text plus semantic elements, and an element's optional frame field names the iframe page it came from (frames lists child frames and whether each was observed). Use status once, then tabs. Reuse returned tabID, generation, documentGeneration, and observationRevision fences exactly as numbers; never invent refs. Observe for semantic refs, then act only by a returned ref; each element also carries a stable locator (role and accessible name), and click, type, and upload accept that locator instead of a ref when the same element must be found again after re-observing. Observe with diff:true to receive only elements added or changed since the previous observation, with removed locators listed in delta; the first observation is always full. Action results return updated tab fences, not a semantic observation; carry those fences forward for actions without refs, and observe again before another ref-based action because each action invalidates prior refs. Capture only when semantic observation is insufficient; capture accepts a clip rectangle, fullPage:true for the whole page, or a ref to capture one element. If a page opens a JavaScript dialog, other actions stall until it is answered: use action {type:'dialog'} to read it and {type:'dialog', accept:true or false, text} to respond. Mark an owned tab that holds the work product with operation:'deliver' so it stays open in Chrome for the user instead of closing when control ends. Ask the user before irreversible submissions, purchases, payments, deletions, sending messages, or accepting legal terms; proceed without asking for reading, navigation, and reversible input that does not submit anything. Never solve CAPTCHAs, enter passwords, one-time codes, or payment secrets: stop and hand the page to the user. On a stale-fence error, observe once and retry once; never replay an uncertain mutation—observe first. Prefer mode:'owned' background tabs for new work so user tabs stay untouched. Paired Chrome is the default; mode:'profile' selects it explicitly, and mode:'isolated' uses the user-started temporary headless browser. Profile tabs can group or ungroup granted inactive tabs. The first observe or action claims a profile tab for this Session; lease:'other' means another Session controls it, so choose another tab or wait. Call operation:'release' with mode:'profile' when finished with a tab; control also ends when the Session goes idle. Owned mode only creates and closes its own tabs. Focus emulation keeps controlled pages visible and unthrottled while attached; it ends when the debugger detaches.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) => {
@@ -279,6 +284,17 @@ export const Plugin = {
                   yield* browser.close({ sessionID: context.sessionID, tabID: input.tabID, generation: input.generation,
                     callID: context.callID }).pipe(Effect.ensuring(reservation.release))
                   return { type: "closed" as const, mode: "owned" as const }
+                }
+                if (input.operation === "deliver") {
+                  const tab = (yield* browser.list(context.sessionID)).find((item) => item.id === input.tabID && item.mode === "owned")
+                  if (!tab) return yield* new ToolFailure({ message: "Chrome tab is not owned by this Session" })
+                  yield* permission.assert({ action: "browser_control", resources: ["deliver"], save: ["*"],
+                    metadata: { operationDigest: requestDigest(input), action: "deliver", mode: "owned" }, sessionID: context.sessionID, agent: context.agent, source })
+                  yield* permission.assert({ action: "browser_read", resources: [`${tab.page.origin}${tab.page.path}`],
+                    save: [tab.page.origin], metadata: { operationDigest: requestDigest(input), operation: "deliver" }, sessionID: context.sessionID, agent: context.agent, source })
+                  const delivered = yield* browser.deliver({ sessionID: context.sessionID, tabID: input.tabID, generation: input.generation,
+                    callID: context.callID })
+                  return { type: "delivered" as const, mode: "owned" as const, tab: delivered }
                 }
                 if (input.operation === "release") {
                   const held = (yield* browser.list(context.sessionID)).find(
@@ -494,7 +510,7 @@ export const Plugin = {
                         generation: input.generation,
                         documentGeneration: input.documentGeneration,
                         observationRevision: input.observationRevision,
-                        ref: input.action.ref,
+                        ref: input.action.ref ?? input.action.locator ?? "",
                       })
                     : undefined
                 const elementFrame =
@@ -505,7 +521,7 @@ export const Plugin = {
                         generation: input.generation,
                         documentGeneration: input.documentGeneration,
                         observationRevision: input.observationRevision,
-                        ref: input.action.ref,
+                        ref: input.action.ref ?? input.action.locator ?? "",
                       })
                     : undefined
                 const frameResource =
@@ -520,7 +536,8 @@ export const Plugin = {
                       })
                     : page
                 const permissionAction =
-                  ["capture", "scroll", "wait", "clipboard_read", "logs", "download", "export", "webmcp_list"].includes(input.action.type)
+                  ["capture", "scroll", "wait", "clipboard_read", "logs", "download", "export", "webmcp_list"].includes(input.action.type) ||
+                  (input.action.type === "dialog" && input.action.accept === undefined)
                     ? "browser_read"
                     : input.action.type === "navigate"
                       ? "browser_navigate"
@@ -533,7 +550,7 @@ export const Plugin = {
                   metadata: {
                     operationDigest: actionDigest,
                     operation: input.action.type,
-                    ...(extensionMode && ["navigate", "click", "type", "back", "forward", "reload", "key", "clipboard_write", "upload", "webmcp_invoke"].includes(input.action.type)
+                    ...(extensionMode && ["navigate", "click", "type", "back", "forward", "reload", "key", "clipboard_write", "upload", "webmcp_invoke", "dialog"].includes(input.action.type)
                       ? { mode: ownedMode ? "owned" : "profile", incidentalDownloads: true, site: new URL(resource).origin }
                       : {}),
                   },
@@ -593,7 +610,7 @@ export const Plugin = {
                     agent: context.agent,
                     source,
                   })
-                const mutating = ["navigate", "click", "type", "back", "forward", "reload", "key", "clipboard_write", "upload", "webmcp_invoke"].includes(input.action.type)
+                const mutating = ["navigate", "click", "type", "back", "forward", "reload", "key", "clipboard_write", "upload", "webmcp_invoke", "dialog"].includes(input.action.type)
                 const reservation = mutating
                   ? yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID },
                       sessionID: context.sessionID,

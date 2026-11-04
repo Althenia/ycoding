@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { FONT_ALIAS, TITLE_PREFIX, markerScript, timing, tokens } from "../indicator.js"
+import { FAVICON_SVG, FONT_ALIAS, markerScript, timing, tokens } from "../indicator.js"
 import { createFakePage } from "./fixtures/fake-page.js"
 
 test("the page expiry outlasts several missed refreshes and is checked more often than it is refreshed", () => {
@@ -11,8 +11,77 @@ test("the page expiry outlasts several missed refreshes and is checked more ofte
   expect(timing.clear).toBeLessThan(timing.mark)
 })
 
-test("the title marker is the circled Y glyph followed by one separating space", () => {
-  expect(TITLE_PREFIX).toBe("\u24CE ")
+test("the favicon marker is the canonical mint pixel-Y geometry on a dark tile", async () => {
+  const asset = await Bun.file(new URL("../../../assets/brand/ycoding-mark.svg", import.meta.url)).text()
+  const geometry = /<path d="([^"]+)"/.exec(asset)?.[1]
+  expect(FAVICON_SVG).toContain(geometry)
+  expect(FAVICON_SVG).toContain("#67D7A4")
+  expect(tokens.colors["agent-mark"]).toBe("#67d7a4")
+})
+
+describe("the favicon logo marker", () => {
+  test("mark swaps the page favicon for the logo data URL and leaves the title untouched", async () => {
+    const page = createFakePage()
+    page.setPageTitle("Example page")
+    page.setPageIcon("https://example.test/favicon.ico")
+    expect(await page.evaluate(markerScript("mark"))).toEqual({ ok: true, font: false })
+    const links = page.iconLinks()
+    expect(links).toHaveLength(1)
+    expect(links[0].getAttribute("href")).toStartWith("data:image/svg+xml,")
+    expect(decodeURIComponent(links[0].getAttribute("href"))).toContain("#67D7A4")
+    expect(page.document.title).toBe("Example page")
+  })
+
+  test("clear and expiry each restore the page-authored favicon", async () => {
+    const clearing = createFakePage()
+    clearing.setPageIcon("/site.png")
+    await clearing.evaluate(markerScript("mark"))
+    await clearing.evaluate(markerScript("clear"))
+    expect(clearing.iconLinks().map((node) => node.getAttribute("href"))).toEqual(["/site.png"])
+
+    const expiring = createFakePage()
+    expiring.setPageIcon("/site.png")
+    await expiring.evaluate(markerScript("mark"))
+    expiring.clock.advance(timing.expiry + timing.check)
+    expect(expiring.iconLinks().map((node) => node.getAttribute("href"))).toEqual(["/site.png"])
+    expect(expiring.markers()).toHaveLength(0)
+  })
+
+  test("a page favicon change while marked is re-asserted and becomes the restore target", async () => {
+    const page = createFakePage()
+    page.setPageIcon("/old.png")
+    await page.evaluate(markerScript("mark"))
+    page.setPageIcon("/new.png")
+    await Bun.sleep(2)
+    const links = page.iconLinks()
+    expect(links).toHaveLength(1)
+    expect(links[0].getAttribute("href")).toStartWith("data:image/svg+xml,")
+    await page.evaluate(markerScript("clear"))
+    expect(page.iconLinks().map((node) => node.getAttribute("href"))).toEqual(["/new.png"])
+  })
+
+  test("a favicon the page policy blocks fails the mark closed and leaves the page icons untouched", async () => {
+    const page = createFakePage()
+    page.setPageTitle("Strict page")
+    page.setPageIcon("/site.png")
+    page.faviconBlocked = true
+    expect(await page.evaluate(markerScript("mark"))).toEqual({ ok: false })
+    expect(page.iconLinks().map((node) => node.getAttribute("href"))).toEqual(["/site.png"])
+    expect(page.markers()).toHaveLength(0)
+    expect(page.hosts()).toHaveLength(0)
+    expect(page.document.title).toBe("Strict page")
+    page.faviconBlocked = false
+    expect(await page.evaluate(markerScript("mark"))).toEqual({ ok: true, font: false })
+    expect(page.iconLinks()[0]?.getAttribute("href")).toStartWith("data:image/svg+xml,")
+  })
+
+  test("a page without any favicon ends with none after clear", async () => {
+    const page = createFakePage()
+    await page.evaluate(markerScript("mark"))
+    expect(page.iconLinks()).toHaveLength(1)
+    await page.evaluate(markerScript("clear"))
+    expect(page.iconLinks()).toEqual([])
+  })
 })
 
 test("the serialized marker script is self-contained and runs with only page globals", async () => {
@@ -72,8 +141,8 @@ test.skipIf(!Bun.which("node"))("the source module serialized under Node runs wi
 const fontData = Buffer.from("wOF2-test-payload").toString("base64")
 const cursor = { x: 5, y: 6, label: "Click", click: false }
 
-test("the cursor label chip draws the monochrome brand mark inline before its words in the label text color", async () => {
-  const asset = await Bun.file(new URL("../../../assets/brand/ycoding-mark-mono.svg", import.meta.url)).text()
+test("the cursor label chip draws the mint pixel-Y brand mark inline before its words", async () => {
+  const asset = await Bun.file(new URL("../../../assets/brand/ycoding-mark.svg", import.meta.url)).text()
   const page = createFakePage()
   await page.evaluate(markerScript("mark", cursor))
   const walk = (node) => [node, ...node.children.flatMap(walk), ...(node.shadow ? walk(node.shadow) : [])]
@@ -81,12 +150,12 @@ test("the cursor label chip draws the monochrome brand mark inline before its wo
   const [mark, words] = chip.children
   expect(chip.children).toHaveLength(2)
   expect(mark.tagName).toBe("SVG")
-  expect(mark.attributes.get("viewBox")).toBe("40 40 176 176")
+  expect(mark.attributes.get("viewBox")).toBe("0 0 256 256")
   expect(mark.attributes.get("width")).toBe(String(parseInt(tokens.components["agent-mark"].size)))
   expect(mark.attributes.get("height")).toBe(String(parseInt(tokens.components["agent-mark"].size)))
   expect(mark.attributes.get("aria-hidden")).toBe("true")
   expect(mark.children.map((path) => [path.tagName, path.attributes.get("d"), path.attributes.get("fill")])).toEqual([
-    ["PATH", /<path d="([^"]+)"/.exec(asset)?.[1], tokens.colors["agent-label-text"]],
+    ["PATH", /<path d="([^"]+)"/.exec(asset)?.[1], tokens.colors["agent-mark"]],
   ])
   expect(words.tagName).toBe("SPAN")
   expect(words.textContent).toBe("YCoding · Click")
@@ -154,7 +223,7 @@ describe("the label font", () => {
     expect(await page.evaluate(markerScript("mark", cursor, fontData))).toEqual({ ok: true, font: false })
     expect(page.fontFaces()).toEqual([])
     expect(page.chipText()).toEqual(["YCoding · Click"])
-    expect(page.document.title.startsWith(TITLE_PREFIX.trim())).toBe(true)
+    expect(page.iconLinks()[0]?.getAttribute("href")).toStartWith("data:image/svg+xml,")
   })
 
   describe("while the face is still loading", () => {

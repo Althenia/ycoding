@@ -231,4 +231,42 @@ describe("Browser selected-tab contract", () => {
       }),
     ).toEqual({ secret: "s".repeat(32), expiresAt: expect.any(Number) })
   })
+
+  test("accepts dialog, locator, capture-variant, diff, and deliverable contract additions within bounds", () => {
+    const base = {
+      sessionID: "ses_contract", tabID: "btab_contract", generation: 1,
+      documentGeneration: 2, observationRevision: 3, callID: "call_contract",
+    }
+    for (const action of [
+      { type: "dialog" },
+      { type: "dialog", accept: true },
+      { type: "dialog", accept: false, text: "synthetic" },
+      { type: "click", locator: 'role=button[name="Save"]' },
+      { type: "type", locator: 'role=textbox[name="Email"]', text: "a@b.test" },
+      { type: "capture", fullPage: true },
+      { type: "capture", clip: { x: 0, y: 10, width: 100, height: 50 } },
+      { type: "capture", ref: "b2" },
+    ])
+      expect(Schema.is(Browser.ActionInput)({ ...base, action }), JSON.stringify(action)).toBe(true)
+    for (const action of [
+      { type: "dialog", text: "x".repeat(4097) },
+      { type: "click", locator: "" },
+      { type: "capture", clip: { x: -1, y: 0, width: 10, height: 10 } },
+      { type: "capture", clip: { x: 0, y: 0, width: 0, height: 10 } },
+    ])
+      expect(Schema.is(Browser.ActionInput)({ ...base, action }), JSON.stringify(action)).toBe(false)
+    const result = {
+      callID: "c1", tab: { ...tab, deliverable: true }, status: "completed",
+      dialog: { kind: "confirm", message: "Proceed?" },
+    }
+    expect(Schema.decodeUnknownSync(Browser.ActionResult)(result) as unknown).toEqual(result)
+    const observation = {
+      tabID: tab.id, generation: 1, documentGeneration: 2, revision: 4, title: "Fixture", page: tab.page,
+      elements: [{ ref: "b1", role: "button", name: "Save", locator: 'role=button[name="Save"]' }],
+      delta: { baseRevision: 3, removed: ['role=link[name="Old"]'] },
+      truncated: false,
+    }
+    expect(Schema.decodeUnknownSync(Browser.Observation)(observation) as unknown).toEqual(observation)
+    expect(Schema.is(Browser.ObserveInput)({ sessionID: tab.sessionID, tabID: tab.id, generation: 1, callID: "o1", diff: true })).toBe(true)
+  })
 })

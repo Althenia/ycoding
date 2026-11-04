@@ -21,8 +21,9 @@ async function bundle(entry: string, external?: string[]) {
   return result.outputs[0]
 }
 
-export async function copyChromeExtension(binDirectory: string) {
-  const destination = path.join(binDirectory, BrowserExtension.directory)
+export async function copyChromeExtension(binDirectory: string, family: BrowserExtension.Family = "chrome") {
+  const target = BrowserExtension.family(family)
+  const destination = path.join(binDirectory, target.directory)
   await rm(destination, { recursive: true, force: true })
   await mkdir(path.join(destination, "icons"), { recursive: true })
   const [worker, protocol, popup, stylesheet] = await Promise.all([
@@ -39,18 +40,34 @@ export async function copyChromeExtension(binDirectory: string) {
     Bun.write(path.join(destination, "popup.js"), popup),
     Bun.write(path.join(destination, "popup.css"), `${license}\n${await stylesheet.text()}`),
     ...BrowserExtension.files
-      .filter((file) => !(bundled as readonly string[]).includes(file))
+      .filter((file) => !(bundled as readonly string[]).includes(file) && file !== "manifest.json")
       .map((file) => copyFile(path.join(chromeExtensionSource, file), path.join(destination, file))),
+    writeManifest(destination, target.label),
   ])
+}
+
+async function writeManifest(destination: string, label: string) {
+  const source = path.join(chromeExtensionSource, "manifest.json")
+  if (label === "Chrome") return copyFile(source, path.join(destination, "manifest.json"))
+  const manifest = JSON.parse(await Bun.file(source).text()) as Record<string, unknown>
+  manifest.description = String(manifest.description ?? "").replace("Chrome", label)
+  const action = manifest.action as Record<string, unknown> | undefined
+  if (action && typeof action.default_title === "string")
+    action.default_title = action.default_title.replace("Chrome", label)
+  await Bun.write(path.join(destination, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`)
 }
 
 if (import.meta.main) {
   const binDirectory = process.argv[2]
-  if (!binDirectory) {
-    console.error("usage: bun packages/cli/script/chrome-extension.ts <bin-directory>")
+  const family = process.argv[3] ?? "chrome"
+  if (!binDirectory || !["chrome", "edge", "brave", "all"].includes(family)) {
+    console.error("usage: bun packages/cli/script/chrome-extension.ts <bin-directory> [chrome|edge|brave|all]")
     process.exit(2)
   }
   const resolved = path.resolve(binDirectory)
-  await copyChromeExtension(resolved)
-  console.log(path.join(resolved, BrowserExtension.directory))
+  const targets = family === "all" ? BrowserExtension.families : [BrowserExtension.family(family as BrowserExtension.Family)]
+  for (const target of targets) {
+    await copyChromeExtension(resolved, target.id)
+    console.log(path.join(resolved, target.directory))
+  }
 }

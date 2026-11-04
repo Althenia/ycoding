@@ -11,6 +11,10 @@ export async function capturePage(
   sessionId: string,
   signal: AbortSignal,
   childSessions: ReadonlyArray<string> = [],
+  options: {
+    readonly clip?: { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
+    readonly fullPage?: boolean
+  } = {},
 ) {
   let missing = 0
   for (const session of [sessionId, ...childSessions]) {
@@ -21,7 +25,12 @@ export async function capturePage(
   }
   if (missing !== childSessions.length) throw new globalThis.Error(incomplete)
   const capture = record(
-    await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, sessionId, signal),
+    await cdp.send("Page.captureScreenshot", {
+      format: "png",
+      fromSurface: true,
+      ...(options.clip ? { clip: { ...options.clip, scale: 1 }, captureBeyondViewport: true } : {}),
+      ...(options.fullPage ? { captureBeyondViewport: true } : {}),
+    }, sessionId, signal),
   )
   const data = string(capture.data)
   const bytes = Math.floor((data.length * 3) / 4)

@@ -16,6 +16,7 @@ export function createFakePage() {
     fontLoadFails: false,
     fontFaceMissing: false,
     fontLoadDeferred: false,
+    faviconBlocked: false,
   }
   const faces = new Set()
   const fontLoads = []
@@ -68,6 +69,12 @@ export function createFakePage() {
     }
     setAttribute(name, value) {
       this.attributes.set(name, String(value))
+    }
+    getAttribute(name) {
+      return this.attributes.get(name) ?? null
+    }
+    removeAttribute(name) {
+      this.attributes.delete(name)
     }
     append(...nodes) {
       for (const node of nodes) {
@@ -152,6 +159,21 @@ export function createFakePage() {
       listeners.set(name, (listeners.get(name) ?? []).filter((item) => item !== listener)),
   }
 
+  class FakeImage {
+    naturalWidth = 0
+    onload
+    onerror
+    set src(_value) {
+      queueMicrotask(() => {
+        if (state.faviconBlocked) this.onerror?.()
+        else {
+          this.naturalWidth = 256
+          this.onload?.()
+        }
+      })
+    }
+  }
+
   class MutationObserver {
     constructor(callback) {
       this.callback = callback
@@ -174,6 +196,7 @@ export function createFakePage() {
       return state.fontFaceMissing ? undefined : FontFace
     },
     MutationObserver,
+    Image: FakeImage,
     Date: { now: () => clock.now },
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
@@ -221,6 +244,9 @@ export function createFakePage() {
     set fontFaceMissing(value) {
       state.fontFaceMissing = value
     },
+    set faviconBlocked(value) {
+      state.faviconBlocked = value
+    },
     fontFaces: () => Array.from(faces),
     fontLoads,
     setVisibility: (value) => (state.visibility = value),
@@ -232,6 +258,16 @@ export function createFakePage() {
     },
     dispatch: (name) => Promise.all((listeners.get(name) ?? []).map((listener) => listener())),
     markers: () => documentElement.querySelectorAll("[data-ycoding-agent-marker]"),
+    iconLinks: () =>
+      head.querySelectorAll("link").filter((node) => (node.getAttribute("rel") ?? "").split(/\s+/).includes("icon")),
+    setPageIcon(href) {
+      for (const node of this.iconLinks()) node.remove()
+      const link = new Node("link")
+      link.setAttribute("rel", "icon")
+      link.setAttribute("href", href)
+      head.append(link)
+      return link
+    },
     hosts: () => documentElement.querySelectorAll("[data-ycoding-agent-cursor]"),
     chipText: () => {
       const walk = (node) => [node, ...node.children.flatMap(walk), ...(node.shadow ? walk(node.shadow) : [])]
@@ -279,6 +315,7 @@ export function createFakePage() {
       state.fontLoadFails = false
       state.fontFaceMissing = false
       state.fontLoadDeferred = false
+      state.faviconBlocked = false
       faces.clear()
       fontLoads.length = 0
       pendingLoads.length = 0

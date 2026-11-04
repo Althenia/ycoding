@@ -5,6 +5,7 @@ import CryptoKit
 import Foundation
 import CoreGraphics
 import ScreenCaptureKit
+import QuartzCore
 import Darwin
 
 private struct Owner: Decodable {
@@ -131,6 +132,8 @@ private struct Request: Decodable {
     let deltaX: Int?
     let deltaY: Int?
     let modifiers: [String]?
+    let format: String?
+    let durationMs: Int?
     let role: String?
     let limit: Int?
     let maxNodes: Int?
@@ -216,6 +219,7 @@ private enum HelperError: Error {
     case windowMinimized
     case appHidden
     case stageNotVisible
+    case screenLocked
 
     var response: Response {
         switch self {
@@ -259,6 +263,8 @@ private enum HelperError: Error {
             return failure("app_hidden", "The application is hidden; ask the user to unhide it with Command-H or its Dock icon, then retry")
         case .stageNotVisible:
             return failure("background_unavailable", "The window did not appear on the agent display after it was moved; its original frame was restored")
+        case .screenLocked:
+            return failure("screen_locked", "The screen is locked; unlock it and inspect the target before retrying")
         case .focusRestoreFailed:
             return failure("focus_restore_failed", "Target-only synthetic focus could not be released after background input; inspect before any further mutation", outcome: "unknown")
         case .quitPending:
@@ -347,6 +353,188 @@ private struct SpaceMap {
         if spaces.contains(where: { fullScreen.contains($0) }) { return "full_screen" }
         return spaces.contains(where: { current.contains($0) }) ? "current_space" : "other_space"
     }
+}
+
+
+private func screenIsLocked() -> Bool {
+    guard let dictionary = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+    return (dictionary["CGSSessionScreenIsLocked"] as? NSNumber)?.boolValue == true
+}
+
+private final class ControlIndicator {
+    static let shared = ControlIndicator()
+
+    private var panel: NSPanel?
+    private var hideItem: DispatchWorkItem?
+    private var prepared = false
+
+    private init() {}
+
+    func show(at point: CGPoint, label: String) {
+        if Thread.isMainThread {
+            render(at: point, label: label)
+            return
+        }
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            self.render(at: point, label: label)
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + 0.25)
+    }
+
+    func hide() {
+        if Thread.isMainThread {
+            hideOnMain()
+            return
+        }
+        DispatchQueue.main.async { self.hideOnMain() }
+    }
+
+    private func hideOnMain() {
+        hideItem?.cancel()
+        hideItem = nil
+        panel?.orderOut(nil)
+    }
+
+    private func cocoaFrame(topLeft: CGPoint, size: CGSize) -> NSRect {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        return NSRect(x: topLeft.x, y: primaryHeight - topLeft.y - size.height, width: size.width, height: size.height)
+    }
+
+    private func polygon(_ points: [CGPoint], scale: CGFloat, height: CGFloat, into path: CGMutablePath) {
+        for (index, point) in points.enumerated() {
+            let mapped = CGPoint(x: point.x * scale, y: height - point.y * scale)
+            if index == 0 { path.move(to: mapped) } else { path.addLine(to: mapped) }
+        }
+        path.closeSubpath()
+    }
+
+    private func markLayer(frame: NSRect) -> CAShapeLayer {
+        let path = CGMutablePath()
+        let scale = frame.width / 256
+        polygon([CGPoint(x: 40, y: 40), CGPoint(x: 72, y: 40), CGPoint(x: 72, y: 104), CGPoint(x: 40, y: 104)], scale: scale, height: frame.height, into: path)
+        polygon([CGPoint(x: 184, y: 40), CGPoint(x: 216, y: 40), CGPoint(x: 216, y: 104), CGPoint(x: 184, y: 104)], scale: scale, height: frame.height, into: path)
+        polygon([CGPoint(x: 40, y: 112), CGPoint(x: 104, y: 112), CGPoint(x: 104, y: 176), CGPoint(x: 72, y: 176), CGPoint(x: 72, y: 144), CGPoint(x: 40, y: 144)], scale: scale, height: frame.height, into: path)
+        polygon([CGPoint(x: 152, y: 112), CGPoint(x: 216, y: 112), CGPoint(x: 216, y: 144), CGPoint(x: 184, y: 144), CGPoint(x: 184, y: 176), CGPoint(x: 152, y: 176)], scale: scale, height: frame.height, into: path)
+        polygon([CGPoint(x: 112, y: 184), CGPoint(x: 144, y: 184), CGPoint(x: 144, y: 216), CGPoint(x: 112, y: 216)], scale: scale, height: frame.height, into: path)
+        let layer = CAShapeLayer()
+        layer.frame = frame
+        layer.path = path
+        layer.fillColor = CGColor(red: 103.0 / 255, green: 215.0 / 255, blue: 164.0 / 255, alpha: 1)
+        return layer
+    }
+
+    private func arrowLayer(frame: NSRect) -> CAShapeLayer {
+        let path = CGMutablePath()
+        polygon([CGPoint(x: 0, y: 0), CGPoint(x: 0, y: 17), CGPoint(x: 4.5, y: 13), CGPoint(x: 7.5, y: 20), CGPoint(x: 10, y: 19), CGPoint(x: 7, y: 12), CGPoint(x: 13, y: 12)], scale: 1, height: frame.height, into: path)
+        let layer = CAShapeLayer()
+        layer.frame = frame
+        layer.path = path
+        layer.fillColor = CGColor(red: 139.0 / 255, green: 92.0 / 255, blue: 246.0 / 255, alpha: 1)
+        layer.strokeColor = CGColor(red: 1, green: 1, blue: 1, alpha: 0.9)
+        layer.lineWidth = 0.75
+        return layer
+    }
+
+    private func render(at point: CGPoint, label: String) {
+        if !prepared {
+            _ = NSApplication.shared
+            NSApplication.shared.setActivationPolicy(.accessory)
+            NSApplication.shared.finishLaunching()
+            prepared = true
+        }
+        let size = CGSize(width: 190, height: 48)
+        let frame = cocoaFrame(topLeft: point, size: size)
+        let panel = self.panel ?? NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        self.panel = panel
+        panel.setFrame(frame, display: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.ignoresMouseEvents = true
+        panel.isReleasedWhenClosed = false
+        panel.sharingType = .none
+        panel.level = .screenSaver
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+
+        let view = NSView(frame: NSRect(origin: .zero, size: size))
+        view.wantsLayer = true
+        guard let root = view.layer else { return }
+        root.backgroundColor = CGColor(red: 0, green: 0, blue: 0, alpha: 0)
+        root.addSublayer(arrowLayer(frame: NSRect(x: 0, y: 28, width: 14, height: 20)))
+
+        let chip = CALayer()
+        chip.frame = NSRect(x: 14, y: 9, width: 164, height: 24)
+        chip.backgroundColor = CGColor(red: 109.0 / 255, green: 40.0 / 255, blue: 217.0 / 255, alpha: 1)
+        chip.cornerRadius = 5
+        chip.shadowColor = CGColor(red: 0, green: 0, blue: 0, alpha: 0.53)
+        chip.shadowOpacity = 1
+        chip.shadowRadius = 2
+        chip.shadowOffset = CGSize(width: 0, height: -1)
+        root.addSublayer(chip)
+        root.addSublayer(markLayer(frame: NSRect(x: 20, y: 15, width: 12, height: 12)))
+
+        let text = CATextLayer()
+        text.frame = NSRect(x: 38, y: 13, width: 136, height: 16)
+        text.string = "YCoding · \(label)"
+        text.font = NSFont.systemFont(ofSize: 12)
+        text.fontSize = 12
+        text.foregroundColor = CGColor(red: 1, green: 1, blue: 1, alpha: 1)
+        text.alignmentMode = .left
+        text.truncationMode = .end
+        text.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        root.addSublayer(text)
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        panel.contentView = view
+        panel.orderFrontRegardless()
+        CATransaction.commit()
+        CATransaction.flush()
+
+        hideItem?.cancel()
+        let item = DispatchWorkItem { self.hideOnMain() }
+        hideItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: item)
+    }
+}
+
+private func indicatorLabel(_ action: String) -> String {
+    switch action {
+    case "desktop.click": return "Click"
+    case "desktop.type": return "Type"
+    case "desktop.scroll": return "Scroll"
+    case "desktop.drag": return "Drag"
+    case "desktop.key": return "Key"
+    case "desktop.paste": return "Paste"
+    case "desktop.select_text": return "Select"
+    case "desktop.perform_action": return "Action"
+    default: return "Observe"
+    }
+}
+
+private func showIndicator(_ request: Request, _ window: DesktopWindow, elements: [Element] = []) {
+    guard window.onScreen else { return }
+    let bounds = window.bounds
+    var point = CGPoint(x: bounds.midX, y: bounds.midY)
+    if let path = request.element,
+       let element = elements.first(where: { $0.path == path }), element.frame.count == 4,
+       element.frame[2] > 0 || element.frame[3] > 0 {
+        let scale = imageScale(bounds)
+        if scale > 0 {
+            point = CGPoint(x: bounds.minX + (element.frame[0] + element.frame[2] / 2) / scale,
+                            y: bounds.minY + (element.frame[1] + element.frame[3] / 2) / scale)
+        }
+    } else if request.action == "desktop.drag", let x = request.fromX, let y = request.fromY,
+              let mapped = try? windowPoint(x, y, bounds: bounds) {
+        point = mapped
+    } else if let x = request.x, let y = request.y, let mapped = try? windowPoint(x, y, bounds: bounds) {
+        point = mapped
+    } else if ["desktop.inspect", "desktop.capture", "desktop.observe"].contains(request.action) {
+        point = CGPoint(x: bounds.minX + 20, y: bounds.minY + 20)
+    }
+    ControlIndicator.shared.show(at: point, label: indicatorLabel(request.action))
 }
 
 // Chromium-derived engines build their web Accessibility tree lazily and drop it when occluded;
@@ -1219,7 +1407,7 @@ private func windowPoint(_ x: Int, _ y: Int, bounds: CGRect) throws -> CGPoint {
 // f0 gesture phase, f1 click state, f3 button number, f7 touch subtype, f40 pid filter, f51/f91/f92 window routing,
 // f58 click group, and a screen-space window location, created from the HID system event source.
 private func pointerEvent(_ type: CGEventType, _ button: CGMouseButton, _ point: CGPoint,
-                          _ target: DesktopTarget, click: Int = 1, phase: Int64? = nil, dualPost: Bool = false) throws {
+                          _ target: DesktopTarget, click: Int = 1, phase: Int64? = nil, dualPost: Bool = false, flags: CGEventFlags = []) throws {
     guard let post = BackgroundPost.post, let setLocation = BackgroundPost.setLocation, let setField = BackgroundPost.setField,
           let source = CGEventSource(stateID: .hidSystemState),
           let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: button) else {
@@ -1230,6 +1418,7 @@ private func pointerEvent(_ type: CGEventType, _ button: CGMouseButton, _ point:
                                      (7, 3), (40, Int64(target.pid)), (51, window), (58, BackgroundPost.groupID),
                                      (91, window), (92, window)]
     for (field, value) in fields { setField(event, field, value) }
+    event.flags = flags
     setLocation(event, point)
     post(target.pid, event)
     // The sky_click recipe also posts through the public pid channel: SkyLight reaches Chromium
@@ -1255,7 +1444,16 @@ private func routePointer(_ target: DesktopTarget, _ route: InputRoute, settle: 
 private func coordinateClick(_ request: Request, _ target: DesktopTarget, _ window: DesktopWindow, route: InputRoute) throws {
     guard let x = request.x, let y = request.y,
           request.button == nil || request.button == "left" || request.button == "right",
-          request.count == nil || request.count == 1 || request.count == 2 else { throw HelperError.invalidRequest }
+          request.count == nil || request.count == 1 || request.count == 2,
+          request.durationMs == nil || (0...5000).contains(request.durationMs!) else { throw HelperError.invalidRequest }
+    let flags = try eventFlags(request.modifiers)
+    let hold: (down: CGEvent, up: CGEvent)?
+    if let key = request.key, !key.isEmpty {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { throw HelperError.backgroundUnavailable }
+        hold = try makeKeyEvents(key, request.modifiers, source)
+    } else {
+        hold = nil
+    }
     let point = try windowPoint(x, y, bounds: window.bounds)
     guard BackgroundPost.post != nil, BackgroundPost.setLocation != nil, BackgroundPost.setField != nil else { throw HelperError.backgroundUnavailable }
     let right = request.button == "right"
@@ -1264,15 +1462,17 @@ private func coordinateClick(_ request: Request, _ target: DesktopTarget, _ wind
     // receive the click twice, so non-Chromium targets keep the single SkyLight post.
     let dual = route == .sky && !right && isChromiumClassApp(target)
     try routePointer(target, route) {
-        try pointerEvent(.mouseMoved, button, point, target, click: 0, phase: 2, dualPost: dual)
+        try pointerEvent(.mouseMoved, button, point, target, click: 0, phase: 2, dualPost: dual, flags: flags)
         Thread.sleep(forTimeInterval: 0.015)
         do {
             if !right { try primeUserActivation(target, dualPost: dual) }
+            hold?.down.postToPid(target.pid)
+            defer { hold?.up.postToPid(target.pid) }
             let clicks = request.count ?? 1
             for count in 1...clicks {
-                try pointerEvent(right ? .rightMouseDown : .leftMouseDown, button, point, target, click: count, dualPost: dual)
-                Thread.sleep(forTimeInterval: right ? 0.028 : 0.001)
-                try pointerEvent(right ? .rightMouseUp : .leftMouseUp, button, point, target, click: count, dualPost: dual)
+                try pointerEvent(right ? .rightMouseDown : .leftMouseDown, button, point, target, click: count, dualPost: dual, flags: flags)
+                Thread.sleep(forTimeInterval: max(right ? 0.028 : 0.001, TimeInterval(request.durationMs ?? 0) / 1000))
+                try pointerEvent(right ? .rightMouseUp : .leftMouseUp, button, point, target, click: count, dualPost: dual, flags: flags)
                 if count < clicks { Thread.sleep(forTimeInterval: 0.08) }
             }
         } catch { throw HelperError.unknownOutcome }
@@ -1315,8 +1515,7 @@ private func coordinateScroll(_ request: Request, _ target: DesktopTarget, _ win
 
 // AXMenuItemCmdModifiers bits: 1 shift, 2 option, 4 control; command chords only fire through
 // NSMenu for the active app, so a background target needs its matching menu item pressed directly.
-private func menuItemForCommandChord(_ request: Request, key: String, target: DesktopTarget) -> AXUIElement? {
-    let modifiers = request.modifiers ?? []
+private func menuItemForCommandChord(_ modifiers: [String], key: String, target: DesktopTarget) -> AXUIElement? {
     guard modifiers.contains("command"), key.unicodeScalars.count == 1 else { return nil }
     var bits = 0
     if modifiers.contains("shift") { bits |= 1 }
@@ -1338,6 +1537,121 @@ private func menuItemForCommandChord(_ request: Request, key: String, target: De
         }
     }
     return nil
+}
+
+
+private func eventFlags(_ modifiers: [String]?) throws -> CGEventFlags {
+    var flags: CGEventFlags = []
+    for modifier in modifiers ?? [] {
+        switch modifier {
+        case "command": flags.insert(.maskCommand)
+        case "shift": flags.insert(.maskShift)
+        case "option": flags.insert(.maskAlternate)
+        case "control": flags.insert(.maskControl)
+        case "fn": flags.insert(.maskSecondaryFn)
+        default: throw HelperError.invalidRequest
+        }
+    }
+    return flags
+}
+
+private let namedKeyCodes: [String: CGKeyCode] = ["enter": 36, "return": 36, "tab": 48, "escape": 53, "space": 49,
+    "delete": 51, "forward_delete": 117, "up": 126, "down": 125, "left": 123, "right": 124,
+    "home": 115, "end": 119, "page_up": 116, "page_down": 121,
+    "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97,
+    "f7": 98, "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111]
+
+private let characterKeyCodes: [Character: CGKeyCode] = ["a": 0, "b": 11, "c": 8, "d": 2, "e": 14, "f": 3,
+    "g": 5, "h": 4, "i": 34, "j": 38, "k": 40, "l": 37, "m": 46, "n": 45, "o": 31, "p": 35,
+    "q": 12, "r": 15, "s": 1, "t": 17, "u": 32, "v": 9, "w": 13, "x": 7, "y": 16, "z": 6,
+    "0": 29, "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25,
+    "-": 27, "=": 24, "[": 33, "]": 30, ";": 41, "'": 39, ",": 43, ".": 47, "/": 44, "`": 50]
+
+private func makeKeyEvents(_ key: String, _ modifiers: [String]?, _ source: CGEventSource) throws -> (down: CGEvent, up: CGEvent)? {
+    if key.isEmpty { return nil }
+    let flags = try eventFlags(modifiers)
+    let printable = key.unicodeScalars.count == 1 && key.unicodeScalars.allSatisfy { $0.value >= 32 && $0.value != 127 }
+    let hasModifiers = !(modifiers ?? []).isEmpty
+    let characterCode = key.lowercased().first.flatMap { characterKeyCodes[$0] }
+    guard let code = namedKeyCodes[key] ?? (printable ? (hasModifiers ? characterCode : 0) : nil),
+          let down = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true),
+          let up = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false) else { throw HelperError.invalidRequest }
+    down.flags = flags
+    up.flags = flags
+    if printable && !hasModifiers {
+        let units = Array(key.utf16)
+        down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+        up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+    }
+    return (down, up)
+}
+
+private func postKey(_ key: String, _ modifiers: [String]?, _ durationMs: Int?, _ target: DesktopTarget) throws {
+    guard durationMs == nil || (0...5000).contains(durationMs!) else { throw HelperError.invalidRequest }
+    guard let source = CGEventSource(stateID: .combinedSessionState),
+          let events = try makeKeyEvents(key, modifiers, source) else {
+        if key.isEmpty { throw HelperError.invalidRequest }
+        throw HelperError.backgroundUnavailable
+    }
+    try withSkyFocus(target, keyWindow: true, settle: 0.01) {
+        if let item = menuItemForCommandChord(modifiers ?? [], key: key, target: target) {
+            guard AXUIElementPerformAction(item, kAXPressAction as CFString) == .success else { throw HelperError.unknownOutcome }
+            Thread.sleep(forTimeInterval: 0.1)
+            return
+        }
+        events.down.postToPid(target.pid)
+        if let durationMs, durationMs > 0 { Thread.sleep(forTimeInterval: TimeInterval(durationMs) / 1000) }
+        events.up.postToPid(target.pid)
+    }
+}
+
+private func plainTextFromHTML(_ html: String) -> String {
+    var text = html.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+    let entities = ["&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&apos;": "'", "&#39;": "'", "&nbsp;": " "]
+    for (entity, replacement) in entities { text = text.replacingOccurrences(of: entity, with: replacement) }
+    return text
+}
+
+private func paste(_ request: Request, _ target: DesktopTarget) throws {
+    guard let text = request.text, text.utf8.count <= 16384 else { throw HelperError.invalidRequest }
+    let format = request.format ?? "text"
+    guard ["text", "md", "html"].contains(format) else { throw HelperError.invalidRequest }
+    let pasteboard = NSPasteboard.general
+    let saved: [[(NSPasteboard.PasteboardType, Data)]] = (pasteboard.pasteboardItems ?? []).map { item in
+        item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+    }
+    func restore() {
+        pasteboard.clearContents()
+        guard !saved.isEmpty else { return }
+        let items = saved.map { representations -> NSPasteboardItem in
+            let item = NSPasteboardItem()
+            for (type, data) in representations { item.setData(data, forType: type) }
+            return item
+        }
+        pasteboard.writeObjects(items)
+    }
+    let item = NSPasteboardItem()
+    if format == "html" {
+        item.setString(text, forType: .html)
+        item.setString(plainTextFromHTML(text), forType: .string)
+    } else {
+        if format == "md" { item.setString(text, forType: NSPasteboard.PasteboardType("net.daringfireball.markdown")) }
+        item.setString(text, forType: .string)
+    }
+    pasteboard.clearContents()
+    guard pasteboard.writeObjects([item]) else {
+        restore()
+        throw HelperError.backgroundUnavailable
+    }
+    do {
+        try postKey("v", ["command"], nil, target)
+        Thread.sleep(forTimeInterval: 0.15)
+        restore()
+    } catch {
+        Thread.sleep(forTimeInterval: 0.15)
+        restore()
+        throw error
+    }
 }
 
 private func keyboard(_ request: Request, _ target: DesktopTarget) throws {
@@ -1364,51 +1678,8 @@ private func keyboard(_ request: Request, _ target: DesktopTarget) throws {
         return
     }
     guard let key = request.key else { throw HelperError.invalidRequest }
-    let codes: [String: CGKeyCode] = ["enter": 36, "return": 36, "tab": 48, "escape": 53, "space": 49,
-        "delete": 51, "forward_delete": 117, "up": 126, "down": 125, "left": 123, "right": 124,
-        "home": 115, "end": 119, "page_up": 116, "page_down": 121,
-        "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97,
-        "f7": 98, "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111]
-    let printable = key.unicodeScalars.count == 1 && key.unicodeScalars.allSatisfy { $0.value >= 32 && $0.value != 127 }
-    let characterCodes: [Character: CGKeyCode] = ["a": 0, "b": 11, "c": 8, "d": 2, "e": 14, "f": 3,
-        "g": 5, "h": 4, "i": 34, "j": 38, "k": 40, "l": 37, "m": 46, "n": 45, "o": 31, "p": 35,
-        "q": 12, "r": 15, "s": 1, "t": 17, "u": 32, "v": 9, "w": 13, "x": 7, "y": 16, "z": 6,
-        "0": 29, "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25,
-        "-": 27, "=": 24, "[": 33, "]": 30, ";": 41, "'": 39, ",": 43, ".": 47, "/": 44, "`": 50]
-    let hasModifiers = !(request.modifiers ?? []).isEmpty
-    let characterCode = key.lowercased().first.flatMap { characterCodes[$0] }
-    guard let code = codes[key] ?? (printable ? (hasModifiers ? characterCode : 0) : nil),
-          let down = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true),
-          let up = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false) else { throw HelperError.invalidRequest }
-    var flags: CGEventFlags = []
-    for modifier in request.modifiers ?? [] {
-        switch modifier {
-        case "command": flags.insert(.maskCommand)
-        case "shift": flags.insert(.maskShift)
-        case "option": flags.insert(.maskAlternate)
-        case "control": flags.insert(.maskControl)
-        case "fn": flags.insert(.maskSecondaryFn)
-        default: throw HelperError.invalidRequest
-        }
-    }
-    down.flags = flags
-    up.flags = flags
-    if printable && !hasModifiers {
-        let units = Array(key.utf16)
-        down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-        up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-    }
-    try withSkyFocus(target, keyWindow: true, settle: 0.01) {
-        if let item = menuItemForCommandChord(request, key: key, target: target) {
-            guard AXUIElementPerformAction(item, kAXPressAction as CFString) == .success else { throw HelperError.unknownOutcome }
-            Thread.sleep(forTimeInterval: 0.1)
-            return
-        }
-        down.postToPid(target.pid)
-        up.postToPid(target.pid)
-    }
+    try postKey(key, request.modifiers, request.durationMs, target)
 }
-
 private func queryElements(_ request: Request, target: DesktopTarget) throws -> Response {
     guard let expected = request.expectedRevision else { throw HelperError.invalidRequest }
     let text = request.text?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1420,6 +1691,7 @@ private func queryElements(_ request: Request, target: DesktopTarget) throws -> 
     guard (1...100).contains(limit), (1...5000).contains(maxNodes) else { throw HelperError.invalidRequest }
     let (window, revision, _) = try desktopSnapshot(target)
     guard revision == expected else { throw HelperError.staleRevision }
+    showIndicator(request, window)
     guard let root = window.element else { throw unreachableWindowError(window) ?? HelperError.targetNotFound }
     let wantedRole = role.map { $0.hasPrefix("AX") ? $0 : "AX" + $0 }
     var matches: [Element] = []
@@ -1488,6 +1760,7 @@ private func selectText(_ request: Request, element: AXUIElement) throws {
 
 private func handle(_ request: Request) async throws -> Response {
     guard !request.owner.sessionID.isEmpty, !request.owner.callID.isEmpty else { throw HelperError.invalidRequest }
+    if request.action.hasPrefix("desktop."), screenIsLocked() { throw HelperError.screenLocked }
     switch (request.action, request.target) {
     case ("webbrowser.tabs", nil):
         return try browserTabs(request)
@@ -1547,23 +1820,39 @@ private func handle(_ request: Request) async throws -> Response {
         }
     case ("desktop.inspect", .desktop(let target)):
         let (window, revision, elements) = try desktopSnapshot(target)
+        showIndicator(request, window, elements: elements)
         return success(request.action, revision, elements: elements, accessible: window.element != nil)
     case ("desktop.capture", .desktop(let target)):
-        _ = try desktopSnapshot(target)
+        let initial = try desktopSnapshot(target)
+        showIndicator(request, initial.0, elements: initial.2)
         let (image, width, height, scale) = try await captureWindow(target)
         return success(request.action, try desktopSnapshot(target).1, image: image, width: width, height: height, scale: scale)
+    case ("desktop.observe", .desktop(let target)):
+        var snapshot = try desktopSnapshot(target)
+        showIndicator(request, snapshot.0, elements: snapshot.2)
+        var captured = try await captureWindow(target)
+        let settled = try desktopSnapshot(target)
+        if settled.1 != snapshot.1 {
+            captured = try await captureWindow(target)
+            snapshot = try desktopSnapshot(target)
+        } else {
+            snapshot = settled
+        }
+        return success(request.action, snapshot.1, elements: snapshot.2, image: captured.0, width: captured.1, height: captured.2, scale: captured.3, accessible: snapshot.0.element != nil)
     case ("desktop.query", .desktop(let target)):
         return try queryElements(request, target: target)
     case ("desktop.click", .desktop(let target)),
          ("desktop.drag", .desktop(let target)),
          ("desktop.type", .desktop(let target)),
+         ("desktop.paste", .desktop(let target)),
          ("desktop.scroll", .desktop(let target)),
          ("desktop.select_text", .desktop(let target)),
          ("desktop.perform_action", .desktop(let target)),
          ("desktop.key", .desktop(let target)):
         guard let expected = request.expectedRevision else { throw HelperError.invalidRequest }
-        let (window, revision, _) = try desktopSnapshot(target)
+        let (window, revision, elements) = try desktopSnapshot(target)
         guard revision == expected else { throw HelperError.staleRevision }
+        showIndicator(request, window, elements: elements)
         let imageBefore = await windowFingerprint(target)
         let isCoordinate = request.element == nil && ["desktop.click", "desktop.drag", "desktop.scroll"].contains(request.action)
         if isCoordinate, window.placement == "other_space", !window.onScreen, isChromiumClassApp(target) {
@@ -1647,6 +1936,8 @@ private func handle(_ request: Request) async throws -> Response {
             return success(request.action, measured.settled, effect: measured.effect)
         case "desktop.type", "desktop.key":
             try keyboard(request, target)
+        case "desktop.paste":
+            try paste(request, target)
         default: throw HelperError.invalidRequest
         }
         let measured = try await measureEffect()
@@ -1869,6 +2160,7 @@ private func serveClient(_ fd: Int32) async -> Bool {
               let body = await Task.detached(operation: { receive(fd, count: Int(length)) }).value,
               let command = try? JSONDecoder().decode(RPCRequest.self, from: body), command.jsonrpc == "2.0" else { return false }
         if command.method == "shutdown" {
+            ControlIndicator.shared.hide()
             _ = sendFrame(fd, RPCResponse<String>(id: command.id, result: "ok", error: nil))
             return true
         }
@@ -1908,7 +2200,7 @@ private func serve(_ launch: ServiceLaunch) async -> Bool {
     guard socketPath.utf8.count < 104 else { return false }
     let listener = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
     guard listener >= 0 else { return false }
-    defer { OcclusionKeepAlive.releaseAll(); Darwin.close(listener); unlink(socketPath) }
+    defer { ControlIndicator.shared.hide(); OcclusionKeepAlive.releaseAll(); Darwin.close(listener); unlink(socketPath) }
     var address = sockaddr_un()
     address.sun_family = sa_family_t(AF_UNIX)
     address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
@@ -1920,7 +2212,7 @@ private func serve(_ launch: ServiceLaunch) async -> Bool {
     }
     guard bound == 0, listen(listener, 8) == 0 else { return false }
     let ownerExit = DispatchSource.makeProcessSource(identifier: pid_t(launch.ownerPID), eventMask: .exit, queue: .main)
-    ownerExit.setEventHandler { OcclusionKeepAlive.releaseAll(); exit(0) }
+    ownerExit.setEventHandler { ControlIndicator.shared.hide(); OcclusionKeepAlive.releaseAll(); exit(0) }
     ownerExit.resume()
     defer { ownerExit.cancel() }
     guard FileManager.default.createFile(atPath: (launch.controlDirectory as NSString).appendingPathComponent("pid"),

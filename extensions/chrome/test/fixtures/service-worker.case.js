@@ -1460,6 +1460,54 @@ describe("Chrome bridge peripherals", () => {
     }
   })
 
+  test("reports a JavaScript dialog, answers it, and errors when none is open", async () => {
+    const { socket, shared, observation } = await connect()
+    try {
+      expect(observation.elements[0].locator).toBe('role=textbox[name="Name"]')
+      await socket.receive(action("dialog-none", shared.tabID, observation, { type: "dialog" }))
+      expect(socket.outgoing.find((message) => message.callID === "dialog-none")).toMatchObject({ type: "error", dispatched: false })
+      await harness.debuggerEvents.emit({ tabId: 17 }, "Page.javascriptDialogOpening", {
+        type: "confirm",
+        message: "Proceed?",
+        hasBrowserHandler: false,
+      })
+      await socket.receive(action("dialog-read", shared.tabID, observation, { type: "dialog" }))
+      expect(socket.outgoing.find((message) => message.callID === "dialog-read")).toMatchObject({
+        type: "result",
+        status: "completed",
+        dialog: { kind: "confirm", message: "Proceed?" },
+      })
+      await socket.receive(action("dialog-accept", shared.tabID, observation, { type: "dialog", accept: true }))
+      expect(socket.outgoing.find((message) => message.callID === "dialog-accept")).toMatchObject({ type: "result", status: "completed" })
+      expect(harness.commands).toContainEqual(
+        expect.objectContaining({ method: "Page.handleJavaScriptDialog", params: { accept: true } }),
+      )
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("captures a clip rectangle and the full page on request", async () => {
+    const { socket, shared, observation } = await connect()
+    try {
+      await socket.receive(action("capture-clip", shared.tabID, observation, { type: "capture", clip: { x: 1, y: 2, width: 30, height: 40 } }))
+      expect(socket.outgoing.find((message) => message.callID === "capture-clip")).toMatchObject({ type: "result", status: "completed" })
+      expect(harness.commands).toContainEqual(
+        expect.objectContaining({
+          method: "Page.captureScreenshot",
+          params: expect.objectContaining({ clip: { x: 1, y: 2, width: 30, height: 40, scale: 1 }, captureBeyondViewport: true }),
+        }),
+      )
+      await socket.receive(action("capture-full", shared.tabID, observation, { type: "capture", fullPage: true }))
+      expect(socket.outgoing.find((message) => message.callID === "capture-full")).toMatchObject({ type: "result", status: "completed" })
+      const screenshots = harness.commands.filter((item) => item.method === "Page.captureScreenshot")
+      expect(screenshots.at(-1).params).toMatchObject({ captureBeyondViewport: true })
+      expect(screenshots.at(-1).params.clip).toBeUndefined()
+    } finally {
+      await stopBridge()
+    }
+  })
+
   test("exports MHTML data and reports WebMCP unsupported when the page has no model context", async () => {
     const { socket, shared, observation } = await connect()
     try {
@@ -1506,12 +1554,13 @@ describe("Chrome control marker", () => {
   }
   const refresh = () => [...intervals.values()].find((interval) => interval.delay === timing.refresh)
 
-  test("marks the tab title before observing and relinquish restores the page title before detaching", async () => {
+  test("marks the tab favicon before observing and relinquish restores the page favicon before detaching", async () => {
     const { socket, shared } = await connect("m")
     try {
       const observation = await observe(socket, shared[0].tabID)
       expect(observation).toMatchObject({ type: "observation" })
-      expect(harness.cursorDOM.document.title).toBe("Ⓨ Inbox")
+      expect(harness.cursorDOM.document.title).toBe("Inbox")
+      expect(harness.cursorDOM.iconLinks()[0]?.getAttribute("href")).toStartWith("data:image/svg+xml,")
       expect(harness.cursorDOM.markers()).toHaveLength(1)
       expect(indexOf(([, method]) => method === "Runtime.evaluate")).toBeLessThan(
         indexOf(([, method]) => method === "Accessibility.getFullAXTree"),
@@ -1540,7 +1589,7 @@ describe("Chrome control marker", () => {
     }
   })
 
-  test("reports the page's own title to YCoding by stripping only the installed marker", async () => {
+  test("reports the page's own title to YCoding because the marker never writes the title", async () => {
     const tab = tabAt(17)
     Object.defineProperty(tab, "title", { get: () => harness.cursorDOM.document.title })
     const { socket, shared } = await connect("q", [tab])
@@ -1555,35 +1604,37 @@ describe("Chrome control marker", () => {
     }
   })
 
-  test("preserves dynamic page titles, including one that starts with the marker text", async () => {
+
+  test("preserves dynamic page favicons while the logo stays installed", async () => {
     const { socket, shared } = await connect("d")
     try {
+      harness.cursorDOM.setPageIcon("/one.png")
       await observe(socket, shared[0].tabID)
-      harness.cursorDOM.setPageTitle("Inbox (3)")
+      expect(harness.cursorDOM.iconLinks()).toHaveLength(1)
+      expect(harness.cursorDOM.iconLinks()[0].getAttribute("href")).toStartWith("data:image/svg+xml,")
+      harness.cursorDOM.setPageIcon("/two.png")
       await flush()
-      expect(harness.cursorDOM.document.title).toBe("Ⓨ Inbox (3)")
-      harness.cursorDOM.setPageTitle("Ⓨ My notes")
-      await flush()
-      expect(harness.cursorDOM.document.title).toBe("Ⓨ Ⓨ My notes")
+      expect(harness.cursorDOM.iconLinks()).toHaveLength(1)
+      expect(harness.cursorDOM.iconLinks()[0].getAttribute("href")).toStartWith("data:image/svg+xml,")
       await socket.receive({ type: "relinquish", callID: "release-dynamic", tabID: shared[0].tabID, generation: "bridge-1" })
-      expect(harness.cursorDOM.document.title).toBe("Ⓨ My notes")
+      expect(harness.cursorDOM.iconLinks().map((node) => node.getAttribute("href"))).toEqual(["/two.png"])
+      expect(harness.cursorDOM.document.title).toBe("Inbox")
     } finally {
       await stopBridge()
     }
   })
 
-  test("removes only a title element the marker created and keeps a page title it did not write", async () => {
+
+  test("marks a document without a favicon and leaves none behind, keeping a page title it did not write", async () => {
     const { socket, shared } = await connect("t")
     try {
-      harness.cursorDOM.removeTitle()
       await observe(socket, shared[0].tabID)
-      expect(harness.cursorDOM.document.title).toBe("Ⓨ")
+      expect(harness.cursorDOM.iconLinks()).toHaveLength(1)
       await socket.receive({ type: "relinquish", callID: "release-created", tabID: shared[0].tabID, generation: "bridge-1" })
-      expect(harness.cursorDOM.document.querySelector("title")).toBeNull()
+      expect(harness.cursorDOM.iconLinks()).toEqual([])
 
       await observe(socket, shared[0].tabID, "observe-written")
       harness.cursorDOM.setPageTitle("Changed by page")
-      harness.cursorDOM.document.title = "Changed by page"
       await socket.receive({ type: "relinquish", callID: "release-written", tabID: shared[0].tabID, generation: "bridge-1" })
       expect(harness.cursorDOM.document.title).toBe("Changed by page")
     } finally {
@@ -1688,7 +1739,8 @@ describe("Chrome control marker", () => {
       harness.cursorDOM.setPageTitle("Next")
       await harness.debuggerEvents.emit({ tabId: 17 }, "Page.frameNavigated", { frame: { url: "https://example.test/next" } })
       await flush()
-      expect(harness.cursorDOM.document.title).toBe("Ⓨ Next")
+      expect(harness.cursorDOM.document.title).toBe("Next")
+      expect(harness.cursorDOM.iconLinks()[0]?.getAttribute("href")).toStartWith("data:image/svg+xml,")
       expect(harness.commands.filter((item) => item.method === "Page.createIsolatedWorld")).toHaveLength(2)
     } finally {
       await stopBridge()
@@ -1721,7 +1773,8 @@ describe("Chrome control marker", () => {
         await refresh().callback()
       }
       expect(harness.cursorDOM.markers()).toHaveLength(1)
-      expect(harness.cursorDOM.document.title).toBe("Ⓨ Inbox")
+      expect(harness.cursorDOM.document.title).toBe("Inbox")
+      expect(harness.cursorDOM.iconLinks()[0]?.getAttribute("href")).toStartWith("data:image/svg+xml,")
       expect(harness.commands.filter((item) => item.method === "Page.createIsolatedWorld")).toHaveLength(1)
 
       harness.cursorDOM.clock.advance(timing.expiry - 1)
@@ -1889,34 +1942,38 @@ describe("Chrome control marker", () => {
     }
   })
 
-  test("restores the title when the page removes the marker and never stacks a second prefix", async () => {
+
+  test("restores the favicon when the page removes the marker and never installs a second logo", async () => {
     const { socket, shared } = await connect("e")
     try {
+      harness.cursorDOM.setPageIcon("/mine.png")
       await observe(socket, shared[0].tabID)
       harness.cursorDOM.markers()[0].remove()
       await flush()
+      expect(harness.cursorDOM.iconLinks().map((node) => node.getAttribute("href"))).toEqual(["/mine.png"])
       expect(harness.cursorDOM.document.title).toBe("Inbox")
-      harness.cursorDOM.setPageTitle("Inbox (2)")
-      await flush()
-      expect(harness.cursorDOM.document.title).toBe("Inbox (2)")
       await observe(socket, shared[0].tabID, "observe-after-removal")
-      expect(harness.cursorDOM.document.title).toBe("Ⓨ Inbox (2)")
+      expect(harness.cursorDOM.iconLinks()).toHaveLength(1)
+      expect(harness.cursorDOM.iconLinks()[0].getAttribute("href")).toStartWith("data:image/svg+xml,")
     } finally {
       await stopBridge()
     }
   })
 
-  test("keeps a title the website itself starts with the marker text when the page removes the marker", async () => {
+
+  test("never alters a page title, whatever it contains, across mark and removal", async () => {
     const { socket, shared } = await connect("i")
     try {
       harness.cursorDOM.setPageTitle("Ⓨ real")
+      harness.cursorDOM.setPageIcon("/real.png")
       await observe(socket, shared[0].tabID)
-      expect(harness.cursorDOM.document.title).toBe("Ⓨ Ⓨ real")
+      expect(harness.cursorDOM.document.title).toBe("Ⓨ real")
+      expect(harness.cursorDOM.iconLinks()[0]?.getAttribute("href")).toStartWith("data:image/svg+xml,")
       harness.cursorDOM.markers()[0].remove()
       await flush()
       expect(harness.cursorDOM.document.title).toBe("Ⓨ real")
+      expect(harness.cursorDOM.iconLinks().map((node) => node.getAttribute("href"))).toEqual(["/real.png"])
       await observe(socket, shared[0].tabID, "observe-website-prefix")
-      expect(harness.cursorDOM.document.title).toBe("Ⓨ Ⓨ real")
       await socket.receive({ type: "relinquish", callID: "release-website-prefix", tabID: shared[0].tabID, generation: "bridge-1" })
       expect(harness.cursorDOM.document.title).toBe("Ⓨ real")
     } finally {
@@ -1941,7 +1998,7 @@ describe("Chrome control marker", () => {
     }
   })
 
-  test("group and ungroup report the page's own title, not the marked one", async () => {
+  test("group and ungroup report the page's own title while the logo marker is installed", async () => {
     const tabs = [tabAt(17), tabAt(18, { url: "https://example.test/second" })]
     for (const tab of tabs) Object.defineProperty(tab, "title", { get: () => harness.cursorDOM.document.title })
     const { socket, shared } = await connect("t", tabs)
@@ -1949,7 +2006,8 @@ describe("Chrome control marker", () => {
       const anchor = shared.find((item) => item.url.endsWith("/form"))
       const second = shared.find((item) => item.url.endsWith("/second"))
       const observation = await observe(socket, anchor.tabID)
-      expect(harness.cursorDOM.document.title).toBe("Ⓨ Inbox")
+      expect(harness.cursorDOM.document.title).toBe("Inbox")
+      expect(harness.cursorDOM.iconLinks()[0]?.getAttribute("href")).toStartWith("data:image/svg+xml,")
       await socket.receive(action("group-title", anchor.tabID, observation, { type: "group", tabIDs: [anchor.tabID, second.tabID], title: "Task" }))
       expect(socket.outgoing.find((message) => message.callID === "group-title")).toMatchObject({ type: "result", title: "Inbox" })
       await socket.receive(action("ungroup-title", anchor.tabID, observation, { type: "ungroup", tabIDs: [anchor.tabID, second.tabID], groupID: 7 }))
@@ -2085,7 +2143,8 @@ describe("Chrome control marker", () => {
       await waitFor(() => socket.outgoing.some((message) => message.callID === "open-marked"))
       expect(socket.outgoing.find((message) => message.callID === "open-marked")).toMatchObject({ type: "opened" })
       expect(evaluations(24).length).toBeGreaterThan(0)
-      expect(harness.cursorDOM.document.title).toBe("Ⓨ Inbox")
+      expect(harness.cursorDOM.document.title).toBe("Inbox")
+      expect(harness.cursorDOM.iconLinks()[0]?.getAttribute("href")).toStartWith("data:image/svg+xml,")
       await socket.receive({ type: "release", tabID: "btab_owned_marked", generation: "bridge-1" })
       expect(harness.cursorDOM.markers()).toHaveLength(0)
 

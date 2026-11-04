@@ -61,16 +61,19 @@ export interface BrowserWindow {
 
 export type Target = ItermTarget | FinderTarget | DesktopTarget | BrowserTarget
 
+export type Modifier = "command" | "shift" | "option" | "control" | "fn"
+
 export type Action =
   | { readonly type: "iterm.send_text"; readonly text: string; readonly newline: boolean }
   | { readonly type: "finder.move"; readonly destination: string }
   | { readonly type: "desktop.click"; readonly element: ReadonlyArray<number> }
-  | { readonly type: "desktop.click"; readonly x: number; readonly y: number; readonly button?: "left" | "right"; readonly count?: 1 | 2 }
+  | { readonly type: "desktop.click"; readonly x: number; readonly y: number; readonly button?: "left" | "right"; readonly count?: 1 | 2; readonly durationMs?: number; readonly key?: string; readonly modifiers?: ReadonlyArray<Modifier> }
   | { readonly type: "desktop.drag"; readonly fromX: number; readonly fromY: number; readonly toX: number; readonly toY: number }
   | { readonly type: "desktop.type"; readonly element?: ReadonlyArray<number>; readonly text: string }
+  | { readonly type: "desktop.paste"; readonly text: string; readonly format?: "text" | "md" | "html" }
   | { readonly type: "desktop.scroll"; readonly element: ReadonlyArray<number>; readonly direction: "up" | "down" }
   | { readonly type: "desktop.scroll"; readonly x: number; readonly y: number; readonly deltaX: number; readonly deltaY: number }
-  | { readonly type: "desktop.key"; readonly element?: ReadonlyArray<number>; readonly key: string; readonly modifiers?: ReadonlyArray<"command" | "shift" | "option" | "control" | "fn"> }
+  | { readonly type: "desktop.key"; readonly element?: ReadonlyArray<number>; readonly key: string; readonly modifiers?: ReadonlyArray<Modifier>; readonly durationMs?: number }
   | { readonly type: "desktop.select_text"; readonly element: ReadonlyArray<number>; readonly text: string; readonly prefix?: string; readonly suffix?: string; readonly selection?: "text" | "cursor_before" | "cursor_after" }
   | { readonly type: "desktop.perform_action"; readonly element: ReadonlyArray<number>; readonly name: "press" | "confirm" | "increment" | "decrement" | "show_menu" }
 
@@ -99,11 +102,11 @@ export type Request =
       readonly newline: boolean
     }
   | { readonly action: "finder.inspect"; readonly owner: Owner; readonly target: FinderTarget }
-  | { readonly action: "desktop.inspect" | "desktop.capture"; readonly owner: Owner; readonly target: DesktopTarget }
+  | { readonly action: "desktop.inspect" | "desktop.capture" | "desktop.observe"; readonly owner: Owner; readonly target: DesktopTarget }
   | { readonly action: "desktop.stage"; readonly owner: Owner; readonly target: DesktopTarget; readonly expectedRevision: string; readonly displayID: number }
   | { readonly action: "desktop.unstage"; readonly owner: Owner; readonly target: DesktopTarget; readonly originalFrame: ComputerFrame }
   | {
-      readonly action: "desktop.click" | "desktop.drag" | "desktop.type" | "desktop.scroll" | "desktop.key" | "desktop.select_text" | "desktop.perform_action" | "desktop.query"
+      readonly action: "desktop.click" | "desktop.drag" | "desktop.type" | "desktop.paste" | "desktop.scroll" | "desktop.key" | "desktop.select_text" | "desktop.perform_action" | "desktop.query"
       readonly owner: Owner
       readonly target: DesktopTarget
       readonly expectedRevision: string
@@ -111,7 +114,9 @@ export type Request =
       readonly text?: string
       readonly direction?: "up" | "down"
       readonly key?: string
-      readonly modifiers?: ReadonlyArray<"command" | "shift" | "option" | "control" | "fn">
+      readonly modifiers?: ReadonlyArray<Modifier>
+      readonly format?: "text" | "md" | "html"
+      readonly durationMs?: number
       readonly x?: number
       readonly y?: number
       readonly button?: "left" | "right"
@@ -158,7 +163,7 @@ export const capabilities = [
     platform: "macos",
     application: "desktop",
     identity: { kind: "macos.bundle_id", value: "explicit-running-app" },
-    operations: ["list", "launch", "inspect", "capture", "query", "click", "drag", "type", "scroll", "key", "select_text", "perform_action", "stage", "unstage"],
+    operations: ["list", "launch", "inspect", "capture", "observe", "query", "click", "drag", "type", "paste", "scroll", "key", "select_text", "perform_action", "stage", "unstage"],
   },
   {
     platform: "macos",
@@ -221,6 +226,81 @@ export const captureRequest = (owner: Owner, target: DesktopTarget): Request => 
   target,
 })
 
+export const observeRequest = (owner: Owner, target: DesktopTarget): Request => ({
+  action: "desktop.observe",
+  owner,
+  target,
+})
+
+const modifierNames: Readonly<Record<string, Modifier>> = {
+  command: "command", cmd: "command", super: "command", meta: "command",
+  shift: "shift",
+  option: "option", opt: "option", alt: "option",
+  control: "control", ctrl: "control",
+  fn: "fn", function: "fn",
+}
+
+const keyNames: Readonly<Record<string, string>> = {
+  return: "enter", enter: "enter", kp_enter: "enter", tab: "tab", escape: "escape", esc: "escape",
+  space: "space", backspace: "delete", delete: "delete", forward_delete: "forward_delete",
+  up: "up", down: "down", left: "left", right: "right", home: "home", end: "end",
+  page_up: "page_up", prior: "page_up", page_down: "page_down", next: "page_down",
+}
+
+// Parses an xdotool-style chord ("super+c", "ctrl+shift+Return", "KP_0") plus any
+// explicit modifiers into the native key + modifier model. Returns undefined for
+// unknown modifiers or a missing final key so callers fail closed before dispatch.
+export function keyChord(key: string, explicit: ReadonlyArray<Modifier> = []): { readonly key: string; readonly modifiers: ReadonlyArray<Modifier> } | undefined {
+  if (typeof key !== "string" || key.length === 0 || key.length > 64) return undefined
+  const parts = key.split("+").map((part) => part.trim())
+  if (parts.some((part) => part.length === 0)) return undefined
+  const modifiers: Modifier[] = []
+  for (const part of parts.slice(0, -1)) {
+    const modifier = modifierNames[part.toLowerCase()]
+    if (!modifier) return undefined
+    if (!modifiers.includes(modifier)) modifiers.push(modifier)
+  }
+  for (const modifier of explicit) if (!modifiers.includes(modifier)) modifiers.push(modifier)
+  let final = parts[parts.length - 1]
+  const solo = modifierNames[final.toLowerCase()]
+  // A lone modifier ("shift") is a hold, not a key press: key stays empty so
+  // click-with-key can apply it as event flags; desktop.key rejects empty keys.
+  if (solo && parts.length === 1) return { key: "", modifiers: modifiers.includes(solo) ? modifiers : [...modifiers, solo] }
+  if (/^kp_\d$/i.test(final)) final = final.slice(-1)
+  const named = keyNames[final.toLowerCase()]
+  if (named) return { key: named, modifiers }
+  if (/^f(?:[1-9]|1[0-2])$/i.test(final)) return { key: final.toLowerCase(), modifiers }
+  if ([...final].length === 1) return { key: final, modifiers }
+  return undefined
+}
+
+type DiffElement = {
+  readonly path: ReadonlyArray<number>
+  readonly role: string
+  readonly label: string
+  readonly value?: string
+  readonly enabled: boolean
+  readonly focused: boolean
+}
+
+// Renders the AX tree change between two snapshots as one line per changed element,
+// keyed by child-index path: "+" added, "-" removed, "~" changed in place.
+export function diffElements(before: ReadonlyArray<DiffElement> | undefined, after: ReadonlyArray<DiffElement>): string {
+  const render = (sign: string, element: DiffElement) =>
+    `${sign} [${element.path.join(",")}] ${element.role} ${JSON.stringify(element.label)}${element.value !== undefined ? ` value=${JSON.stringify(element.value)}` : ""}${element.enabled ? "" : " (disabled)"}${element.focused ? " (focused)" : ""}`
+  const prior = new Map((before ?? []).map((element) => [element.path.join("/"), element]))
+  const lines: string[] = []
+  for (const element of after) {
+    const previous = prior.get(element.path.join("/"))
+    if (!previous) lines.push(render("+", element))
+    else if (previous.role !== element.role || previous.label !== element.label || previous.value !== element.value || previous.enabled !== element.enabled || previous.focused !== element.focused)
+      lines.push(render("~", element))
+    prior.delete(element.path.join("/"))
+  }
+  for (const element of prior.values()) lines.push(render("-", element))
+  return lines.join("\n")
+}
+
 export const queryRequest = (
   owner: Owner,
   target: DesktopTarget,
@@ -262,6 +342,7 @@ export function actionRequest(
     target.application === "desktop" &&
     (action.type === "desktop.click" ||
       action.type === "desktop.type" ||
+      action.type === "desktop.paste" ||
       action.type === "desktop.scroll" ||
       action.type === "desktop.drag" ||
       action.type === "desktop.key" ||
@@ -306,6 +387,8 @@ const Response = Schema.Union([
       "finder.inspect",
       "finder.move",
       "desktop.inspect",
+      "desktop.observe",
+      "desktop.paste",
       "desktop.list",
       "desktop.launch",
       "desktop.quit",
@@ -514,7 +597,7 @@ export function invokeWith(
         : { code: "invalid_response", message: "Agent display helper returned a mismatched action", outcome: "unknown" }))))
     const mutating = request.action === "iterm.send_text" || request.action === "finder.move" || request.action === "desktop.launch" || request.action === "desktop.quit" ||
       request.action.startsWith("webbrowser.") && request.action !== "webbrowser.tabs" ||
-      request.action.startsWith("desktop.") && !["desktop.inspect", "desktop.capture", "desktop.list", "desktop.query"].includes(request.action)
+      request.action.startsWith("desktop.") && !["desktop.inspect", "desktop.capture", "desktop.observe", "desktop.list", "desktop.query"].includes(request.action)
     return Effect.uninterruptible(Effect.suspend(() => {
       const work = chain.then(async () => {
         if (signal.aborted) throw new Error("Native helper call cancelled")
@@ -540,6 +623,10 @@ export function invokeWithBridge(processes: AppProcess.Interface, platform: Node
   return Object.assign((request: Request, signal: AbortSignal) => {
     if (platform !== "darwin" || !request.action.startsWith("desktop.")) return native(request, signal)
     if (request.action === "desktop.list" || request.action === "desktop.inspect" || request.action === "desktop.quit") return native(request, signal)
+    // The bridge has no press-and-hold or key-during-click semantics, so those stay on
+    // the native route instead of silently dropping the held-key/duration options.
+    if ((request.action === "desktop.click" && (request.durationMs !== undefined || request.key !== undefined)) ||
+        (request.action === "desktop.key" && request.durationMs !== undefined)) return native(request, signal)
     return Effect.gen(function* () {
       const { ElectronComputer } = yield* Effect.promise(() => import("./electron"))
       const bridge = electron ?? ElectronComputer.make()
@@ -565,7 +652,7 @@ export function invokeWithBridge(processes: AppProcess.Interface, platform: Node
         if (!ready) return yield* new NativeError({ code: "unknown_outcome", message: "Electron relaunch did not expose a PID-owned renderer endpoint", outcome: "unknown" })
         return launched
       }
-      if (request.action === "desktop.capture" || request.action === "desktop.click" || request.action === "desktop.drag" ||
+      if (request.action === "desktop.capture" || request.action === "desktop.observe" || request.action === "desktop.click" || request.action === "desktop.drag" ||
           request.action === "desktop.scroll" || request.action === "desktop.type" || request.action === "desktop.key") {
         if ("element" in request && request.element) return yield* native(request, signal)
         if (!(yield* Effect.promise(() => bridge.isElectron(request.target.pid)))) return yield* native(request, signal)
@@ -579,9 +666,9 @@ export function invokeWithBridge(processes: AppProcess.Interface, platform: Node
             return yield* new NativeError({ code: "stale_revision", message: "Target state changed; inspect again", outcome: "not_started" })
         }
         const action = bridgeAction(request)
-        if (request.action !== "desktop.capture" && !action)
+        if (request.action !== "desktop.capture" && request.action !== "desktop.observe" && !action)
           return yield* new NativeError({ code: "invalid_request", message: "Invalid Electron desktop action", outcome: "not_started" })
-        const operation = request.action === "desktop.capture" ? { type: "capture" as const }
+        const operation = request.action === "desktop.capture" || request.action === "desktop.observe" ? { type: "capture" as const }
           : { type: "action" as const, action: action! }
         const performed = yield* Effect.tryPromise({
           try: () => bridge.perform(target, window, operation, signal),
@@ -594,10 +681,11 @@ export function invokeWithBridge(processes: AppProcess.Interface, platform: Node
           if (performed.type === "capture") {
             const inspected = yield* native({ action: "desktop.inspect", owner: request.owner, target }, signal)
             return { status: "ok" as const, action: request.action, revision: inspected.revision,
+              ...(request.action === "desktop.observe" ? { accessible: inspected.accessible, elements: inspected.elements } : {}),
               image: performed.image, width: performed.width, height: performed.height, scale: performed.scale }
           }
           const inspected = yield* native({ action: "desktop.inspect", owner: request.owner, target }, signal)
-          if (request.action === "desktop.capture") return yield* new NativeError({ code: "invalid_response", message: "Electron bridge returned an action for capture", outcome: "unknown" })
+          if (request.action === "desktop.capture" || request.action === "desktop.observe") return yield* new NativeError({ code: "invalid_response", message: "Electron bridge returned an action for capture", outcome: "unknown" })
           return { status: "ok" as const, action: request.action, revision: inspected.revision, effect: performed.effect }
         }
         return yield* new NativeError({ code: "background_unavailable", message: "Electron bridge route is unavailable for this window; use an Accessibility element route or stage it on the agent display", outcome: "not_started" })

@@ -114,6 +114,24 @@ describe("scoped desktop control", () => {
       yield* invoke.shutdown()
     })))
   })
+  test("observe diffs against the claim snapshot and records session-scoped history", async () => {
+    const element = (label: string) => ({ path: [0, 1], role: "AXButton", label, frame: [0, 0, 10, 10] as const, actions: [] as const, enabled: true, focused: false })
+    const computer = Computer.make((request) => Effect.succeed({
+      status: "ok" as const,
+      action: request.action,
+      revision: request.action === "desktop.observe" ? "rev-2" : "rev-1",
+      accessible: true,
+      elements: [element(request.action === "desktop.observe" ? "Saved" : "Save")],
+      ...(request.action === "desktop.observe" ? { image: "jpeg", width: 800, height: 500, scale: 1 } : {}),
+    }), "darwin")
+    await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "observe-base", target: desktop }))
+    const observed = await Effect.runPromise(computer.observe({ sessionID: owner, callID: "observe-next", target: desktop }))
+    expect(observed).toMatchObject({ action: "desktop.observe", revision: "rev-2", image: "jpeg" })
+    expect(observed.diff).toContain('~ [0,1] AXButton "Saved"')
+    const entries = (await Effect.runPromise(computer.historyList)).filter((entry) => entry.sessionID === owner)
+    const events = (await Promise.all(entries.map((entry) => Effect.runPromise(computer.historyRead({ id: entry.id }))))).flat()
+    expect(events.some((event) => event.action === "desktop.observe" && event.revision === "rev-2" && event.screenshot?.sha256.length === 64)).toBe(true)
+  })
   test("graceful quit invalidates all window claims for its pid even if exit is pending", async () => {
     const computer = Computer.make((request) => Effect.succeed({ status: "ok" as const,
       action: request.action, revision: "rev-before-quit", ...(request.action === "desktop.quit" ? { exited: false } : {}) }), "darwin")
@@ -1005,7 +1023,7 @@ describe("native computer target ownership", () => {
         platform: "macos",
         application: "desktop",
         identity: { kind: "macos.bundle_id", value: "explicit-running-app" },
-        operations: ["list", "launch", "inspect", "capture", "query", "click", "drag", "type", "scroll", "key", "select_text", "perform_action", "stage", "unstage"],
+        operations: ["list", "launch", "inspect", "capture", "observe", "query", "click", "drag", "type", "paste", "scroll", "key", "select_text", "perform_action", "stage", "unstage"],
       },
       {
         platform: "macos",
@@ -1188,9 +1206,11 @@ const fixtureRequest = Schema.Struct({
     "desktop.launch",
     "desktop.quit",
     "desktop.capture",
+    "desktop.observe",
     "desktop.click",
     "desktop.drag",
     "desktop.type",
+    "desktop.paste",
     "desktop.scroll",
     "desktop.key",
     "desktop.query",

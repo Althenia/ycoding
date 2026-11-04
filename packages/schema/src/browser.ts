@@ -16,6 +16,8 @@ export const MAX_LOG_ENTRIES = 100
 export const MAX_EXPORT_BYTES = 8 * 1024 * 1024
 export const MAX_UPLOAD_FILES = 8
 export const MAX_TYPE_BYTES = 8 * 1024
+export const MAX_DIALOG_TEXT_BYTES = 4 * 1024
+export const MAX_LOCATOR_LENGTH = 512
 export const MAX_CAPTURE_BYTES = 1024 * 1024
 export const MAX_TITLE_LENGTH = 512
 export const MAX_NAME_LENGTH = 1024
@@ -75,6 +77,7 @@ export const Tab = Schema.Struct({
   uncertainCallID: CallID.pipe(optional),
   mode: Schema.Literals(["owned", "profile"]).pipe(optional),
   lease: Schema.Literals(["self", "other"]).pipe(optional),
+  deliverable: Schema.Boolean.pipe(optional),
 }).annotate({ identifier: "Browser.Tab" })
 export interface Tab extends Schema.Schema.Type<typeof Tab> {}
 
@@ -104,6 +107,7 @@ export const Element = Schema.Struct({
   name: Schema.String.check(Schema.isMaxLength(MAX_NAME_LENGTH)),
   description: Schema.String.check(Schema.isMaxLength(MAX_NAME_LENGTH)).pipe(optional),
   disabled: Schema.Boolean.pipe(optional),
+  locator: Schema.String.check(Schema.isMaxLength(MAX_LOCATOR_LENGTH)).pipe(optional),
   destination: Page.pipe(optional),
   frame: Page.pipe(optional),
 }).annotate({ identifier: "Browser.Element" })
@@ -132,22 +136,41 @@ export const Observation = Schema.Struct({
   elements: Schema.Array(Element).check(Schema.isMaxLength(MAX_OBSERVATION_ELEMENTS)),
   texts: Schema.Array(Text).check(Schema.isMaxLength(MAX_OBSERVATION_TEXTS)).pipe(optional),
   frames: Schema.Array(Frame).check(Schema.isMaxLength(MAX_OBSERVATION_FRAMES)).pipe(optional),
+  delta: Schema.Struct({
+    baseRevision: ObservationRevision,
+    removed: Schema.Array(Schema.String.check(Schema.isMaxLength(MAX_LOCATOR_LENGTH))).check(
+      Schema.isMaxLength(MAX_OBSERVATION_ELEMENTS),
+    ),
+  }).pipe(optional),
   truncated: Schema.Boolean,
 }).annotate({ identifier: "Browser.Observation" })
 export interface Observation extends Schema.Schema.Type<typeof Observation> {}
 
+const Locator = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_LOCATOR_LENGTH))
 export const Navigate = Schema.Struct({ type: Schema.Literal("navigate"), url: boundedUtf8(8 * 1024) })
-export const Click = Schema.Struct({ type: Schema.Literal("click"), ref: Element.fields.ref })
+export const Click = Schema.Struct({
+  type: Schema.Literal("click"),
+  ref: Element.fields.ref.pipe(optional),
+  locator: Locator.pipe(optional),
+})
 export const Type = Schema.Struct({
   type: Schema.Literal("type"),
-  ref: Element.fields.ref,
+  ref: Element.fields.ref.pipe(optional),
+  locator: Locator.pipe(optional),
   text: boundedUtf8(MAX_TYPE_BYTES),
 })
 export const Scroll = Schema.Struct({
   type: Schema.Literal("scroll"),
   deltaY: Schema.Int.check(Schema.isGreaterThanOrEqualTo(-10_000), Schema.isLessThanOrEqualTo(10_000)),
 })
-export const Capture = Schema.Struct({ type: Schema.Literal("capture") })
+const ClipCoordinate = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(100_000))
+const ClipSize = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(100_000))
+export const Capture = Schema.Struct({
+  type: Schema.Literal("capture"),
+  ref: Element.fields.ref.pipe(optional),
+  clip: Schema.Struct({ x: ClipCoordinate, y: ClipCoordinate, width: ClipSize, height: ClipSize }).pipe(optional),
+  fullPage: Schema.Boolean.pipe(optional),
+})
 export const Group = Schema.Struct({
   type: Schema.Literal("group"),
   tabIDs: Schema.Array(TabID).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
@@ -180,7 +203,8 @@ export const ClipboardWrite = Schema.Struct({
 })
 export const Upload = Schema.Struct({
   type: Schema.Literal("upload"),
-  ref: Element.fields.ref,
+  ref: Element.fields.ref.pipe(optional),
+  locator: Locator.pipe(optional),
   paths: Schema.Array(boundedUtf8(4096)).check(Schema.isMinLength(1), Schema.isMaxLength(MAX_UPLOAD_FILES)),
 })
 export const Download = Schema.Struct({
@@ -192,6 +216,11 @@ export const Logs = Schema.Struct({
   limit: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(MAX_LOG_ENTRIES)).pipe(optional),
 })
 export const Export = Schema.Struct({ type: Schema.Literal("export") })
+export const Dialog = Schema.Struct({
+  type: Schema.Literal("dialog"),
+  accept: Schema.Boolean.pipe(optional),
+  text: boundedUtf8(MAX_DIALOG_TEXT_BYTES).pipe(optional),
+})
 export const WebMcpList = Schema.Struct({ type: Schema.Literal("webmcp_list") })
 export const WebMcpInvoke = Schema.Struct({
   type: Schema.Literal("webmcp_invoke"),
@@ -200,7 +229,7 @@ export const WebMcpInvoke = Schema.Struct({
 })
 export const Action = Schema.Union([
   Navigate, Click, Type, Scroll, Capture, Group, Ungroup, Back, Forward, Reload, Key, Wait,
-  ClipboardRead, ClipboardWrite, Upload, Download, Logs, Export, WebMcpList, WebMcpInvoke,
+  ClipboardRead, ClipboardWrite, Upload, Download, Logs, Export, WebMcpList, WebMcpInvoke, Dialog,
 ])
 export type Action = typeof Action.Type
 
@@ -220,6 +249,7 @@ export const ObserveInput = Schema.Struct({
   tabID: TabID,
   generation: Generation,
   callID: CallID,
+  diff: Schema.Boolean.pipe(optional),
 }).annotate({ identifier: "Browser.ObserveInput" })
 export interface ObserveInput extends Schema.Schema.Type<typeof ObserveInput> {}
 
@@ -280,6 +310,13 @@ export const SavedFile = Schema.Struct({
 }).annotate({ identifier: "Browser.SavedFile" })
 export interface SavedFile extends Schema.Schema.Type<typeof SavedFile> {}
 
+export const DialogInfo = Schema.Struct({
+  kind: Schema.Literals(["alert", "confirm", "prompt", "beforeunload"]),
+  message: Schema.String.check(Schema.isMaxLength(MAX_NAME_LENGTH)),
+  defaultPrompt: Schema.String.check(Schema.isMaxLength(MAX_NAME_LENGTH)).pipe(optional),
+}).annotate({ identifier: "Browser.DialogInfo" })
+export interface DialogInfo extends Schema.Schema.Type<typeof DialogInfo> {}
+
 export const WebMcpTool = Schema.Struct({
   name: Schema.String.check(Schema.isMaxLength(128)),
   description: Schema.String.check(Schema.isMaxLength(MAX_NAME_LENGTH)).pipe(optional),
@@ -298,6 +335,7 @@ export const ActionResult = Schema.Struct({
   logs: Schema.Array(LogEntry).check(Schema.isMaxLength(MAX_LOG_ENTRIES)).pipe(optional),
   savedFile: SavedFile.pipe(optional),
   webmcpTools: Schema.Array(WebMcpTool).check(Schema.isMaxLength(MAX_LOG_ENTRIES)).pipe(optional),
+  dialog: DialogInfo.pipe(optional),
 }).annotate({ identifier: "Browser.ActionResult" })
 export interface ActionResult extends Schema.Schema.Type<typeof ActionResult> {}
 

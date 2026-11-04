@@ -61,6 +61,7 @@ const Observation = Schema.Struct({
       name: Schema.String,
       description: Schema.String.pipe(Schema.optional),
       disabled: Schema.Boolean.pipe(Schema.optional),
+      locator: Schema.String.pipe(Schema.optional),
       destination: Schema.String.pipe(Schema.optional),
       frame: Schema.String.pipe(Schema.optional),
     }),
@@ -115,6 +116,11 @@ const Result = Schema.Struct({
       description: Schema.String.pipe(Schema.optional),
     }),
   ).pipe(Schema.optional),
+  dialog: Schema.Struct({
+    kind: Schema.String,
+    message: Schema.String,
+    defaultPrompt: Schema.String.pipe(Schema.optional),
+  }).pipe(Schema.optional),
 })
 const HistoryResult = Schema.Struct({
   type: Schema.Literal("history_result"),
@@ -219,6 +225,7 @@ export type ServerMessage =
   | { readonly type: "open"; readonly callID: string; readonly tabID: Browser.TabID; readonly generation: number; readonly url: string }
   | { readonly type: "close"; readonly callID: string; readonly tabID: Browser.TabID; readonly generation: number }
   | { readonly type: "release"; readonly tabID: Browser.TabID; readonly generation: number }
+  | { readonly type: "deliver"; readonly tabID: Browser.TabID; readonly generation: number }
   | { readonly type: "relinquish"; readonly callID: string; readonly tabID: Browser.TabID; readonly generation: number }
   | { readonly type: "error"; readonly message: string }
 

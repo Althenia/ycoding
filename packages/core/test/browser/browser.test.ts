@@ -230,6 +230,51 @@ describe("paired Chrome browser service", () => {
     }))
   })
 
+  test("diffs observations by locator, resolves locator actions to refs, and refuses deliver on profile tabs", async () => {
+    await run(Effect.gen(function* () {
+      const browser = yield* Browser.Service
+      const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+      const connected = yield* Effect.promise(() => attached(browser, outbox))
+      const tabID = Browser.TabID.make("btab_diff_profile")
+      yield* connected.attachment.receive({ type: "shared", mode: "profile", tabID,
+        title: "Diff", url: "https://example.test/diff", documentGeneration: 1, active: false })
+      const first = yield* browser.observe({ sessionID, tabID, generation: connected.generation,
+        callID: "diff-first" }).pipe(Effect.forkScoped)
+      yield* Queue.take(outbox)
+      yield* connected.attachment.receive({ type: "observation", tabID, callID: "diff-first",
+        generation: connected.generation, documentGeneration: 1, revision: 1, title: "Diff",
+        url: "https://example.test/diff", elements: [
+          { ref: "b1", role: "button", name: "Save", locator: 'role=button[name="Save"]' },
+          { ref: "b2", role: "link", name: "Old", locator: 'role=link[name="Old"]' },
+        ], truncated: false })
+      expect((yield* Fiber.join(first)).elements).toHaveLength(2)
+      const second = yield* browser.observe({ sessionID, tabID, generation: connected.generation,
+        callID: "diff-second", diff: true }).pipe(Effect.forkScoped)
+      yield* Queue.take(outbox)
+      yield* connected.attachment.receive({ type: "observation", tabID, callID: "diff-second",
+        generation: connected.generation, documentGeneration: 1, revision: 2, title: "Diff",
+        url: "https://example.test/diff", elements: [
+          { ref: "b1", role: "button", name: "Save", locator: 'role=button[name="Save"]', disabled: true },
+          { ref: "b3", role: "button", name: "New", locator: 'role=button[name="New"]' },
+        ], truncated: false })
+      const diffed = yield* Fiber.join(second)
+      expect(diffed.elements.map((element) => element.ref)).toEqual(["b1", "b3"])
+      expect(diffed.delta).toEqual({ baseRevision: 1, removed: ['role=link[name="Old"]'] })
+      const acting = yield* browser.action({ sessionID, tabID, generation: connected.generation,
+        documentGeneration: 1, observationRevision: 2, callID: "locator-click",
+        action: { type: "click", locator: 'role=button[name="New"]' } }).pipe(Effect.forkScoped)
+      const sent = yield* Queue.take(outbox)
+      expect(sent).toMatchObject({ type: "action", action: { type: "click", ref: "b3" } })
+      yield* connected.attachment.receive({ type: "result", tabID, callID: "locator-click",
+        generation: connected.generation, documentGeneration: 1, observationRevision: 2,
+        status: "completed", title: "Diff", url: "https://example.test/diff",
+        dialog: { kind: "confirm", message: "Proceed?" } })
+      expect(yield* Fiber.join(acting)).toMatchObject({ status: "completed", dialog: { kind: "confirm", message: "Proceed?" } })
+      expect(Exit.isFailure(yield* browser.deliver({ sessionID, tabID,
+        generation: connected.generation, callID: "deliver-profile" }).pipe(Effect.exit))).toBe(true)
+    }))
+  })
+
   test("accepts profile tabs only after explicit extension grant and removes them on revocation", async () => {
     await run(Effect.gen(function* () {
       const browser = yield* Browser.Service
