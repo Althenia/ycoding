@@ -171,6 +171,15 @@ async function freePort() {
   return reserved.port
 }
 
+async function homeProbeTarget(home: string, granted: readonly string[]) {
+  const file = fileURLToPath(new URL("../../../LICENSE", import.meta.url))
+  const info = await fs.lstat(file)
+  const target = await fs.realpath(file)
+  if (!info.isFile() || !inside(target, home) || granted.some((item) => inside(target, item)))
+    throw new Error("The HOME read probe needs the repository LICENSE as a regular file inside HOME and outside every granted path.")
+  return target
+}
+
 async function probe(run: string, home: string, cwd: string, backend: Backend) {
   const root = await ownedDirectory(run, home)
   const elsewhere = await ownedDirectory(run, home)
@@ -193,6 +202,7 @@ async function probe(run: string, home: string, cwd: string, backend: Backend) {
   const refusedBy = (result: { readonly code: number; readonly stderr: string }) => result.code !== 0 && result.stderr.includes(denied)
   try {
     if (!(await fs.lstat(manifest)).isFile()) throw new Error("The desktop package manifest is missing.")
+    const license = await homeProbeTarget(home, [root, elsewhere, cwd, backend.directory, backend.manifest, ...systemReads, ...devices, ...probeTools])
     const allowed = await open(listener({ host: "127.0.0.1", port: 0 }))
     const refused = await open(listener({ host: "127.0.0.1", port: 0 }))
     const refused6 = await open(listener({ host: "::1", port: 0 }))
@@ -213,7 +223,7 @@ async function probe(run: string, home: string, cwd: string, backend: Backend) {
       const result = await execute(confined(command), env)
       verify(`the backend boundary refuses to execute ${command[0]}`, refusedBy(result), result)
     }
-    for (const target of ["/private/etc/hosts", path.join(home, ".ycoding-desktop-isolation-probe"), manifest]) {
+    for (const target of ["/private/etc/hosts", license, manifest]) {
       const result = await execute(tools(["/bin/cat", target]), env)
       verify(`reading ${target} is refused`, refusedBy(result), result)
     }
