@@ -3,6 +3,7 @@ export * as ComputerHistory from "./history"
 import { createHash } from "node:crypto"
 import { appendFile, mkdir, readdir, readFile, rm, stat } from "node:fs/promises"
 import path from "node:path"
+import { Schema } from "effect"
 
 // Session-scoped computer-use history. One JSONL file per controlling Session is
 // written only while that Session holds desktop claims: a `session` header line
@@ -34,6 +35,24 @@ export interface StoredEvent extends Event {
   readonly type: "event"
   readonly at: string
 }
+
+const storedEvent = Schema.Struct({
+  type: Schema.Literal("event"),
+  at: Schema.String,
+  sessionID: Schema.String,
+  action: Schema.String,
+  bundleID: Schema.String,
+  pid: Schema.Number,
+  windowID: Schema.Number,
+  revision: Schema.String,
+  effect: Schema.optional(Schema.Literals(["changed", "unchanged", "unverified"])),
+  screenshot: Schema.optional(Schema.Struct({
+    sha256: Schema.String,
+    width: Schema.optional(Schema.Number),
+    height: Schema.optional(Schema.Number),
+    scale: Schema.optional(Schema.Number),
+  })),
+})
 
 export interface Entry {
   readonly id: string
@@ -90,13 +109,15 @@ export async function list(directory: string): Promise<ReadonlyArray<Entry>> {
   for (const file of await files(directory)) {
     const full = path.join(directory, file)
     const lines = (await readFile(full, "utf8").catch(() => "")).split("\n").filter((line) => line.trim().length > 0)
-    const header = lines.length > 0 ? (JSON.parse(lines[0]) as { sessionID?: string; started?: string }) : {}
+    const parsed: unknown = lines.length > 0 ? JSON.parse(lines[0]) : {}
+    if (parsed === null) throw new TypeError("Invalid computer history header")
+    const header = typeof parsed === "object" ? parsed : {}
     const info = await stat(full).catch(() => undefined)
     entries.push({
       id: idOf(file),
       file,
-      sessionID: typeof header.sessionID === "string" ? header.sessionID : "",
-      started: typeof header.started === "string" ? header.started : "",
+      sessionID: "sessionID" in header && typeof header.sessionID === "string" ? header.sessionID : "",
+      started: "started" in header && typeof header.started === "string" ? header.started : "",
       updated: info ? info.mtime.toISOString() : "",
       events: Math.max(0, lines.length - 1),
     })
@@ -108,8 +129,11 @@ export async function read(directory: string, id: string, limit = 500): Promise<
   const lines = (await readFile(resolveFile(directory, id), "utf8")).split("\n").filter((line) => line.trim().length > 0)
   const events: StoredEvent[] = []
   for (const line of lines.slice(1)) {
-    const parsed = JSON.parse(line) as StoredEvent
-    if (parsed && parsed.type === "event") events.push(parsed)
+    const parsed: unknown = JSON.parse(line)
+    if (parsed && typeof parsed === "object" && "type" in parsed && parsed.type === "event") {
+      if (!Schema.is(storedEvent)(parsed)) throw new Error("Invalid computer history event")
+      events.push(parsed)
+    }
     if (events.length >= limit) break
   }
   return events

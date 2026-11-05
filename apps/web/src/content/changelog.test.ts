@@ -7,8 +7,20 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.5 instruction caching and search guardrails first with shared notes", async () => {
+  test("lists v0.11.6 browser and computer controls first with shared notes", async () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.6", date: "2026-11-05", tags: ["Added", "Changed"] })
+    expect(entry?.changes).toHaveLength(7)
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.6.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.11.6\n")
+    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of ["locator", "dialog", "favicon", "Pinned", "Edge", "Brave", "desktop.observe", "desktop.paste", "desktop.history", "non-activating", "permission", "guardrail", "locked"]) expect(text).toContain(fragment)
+    expect(after("0.11.6")?.version).toBe("0.11.5")
+  })
+
+  test("retains v0.11.5 instruction caching and search guardrails with shared notes", async () => {
+    const entry = byVersion("0.11.5")
     expect(entry).toMatchObject({ version: "0.11.5", date: "2026-11-03", tags: ["Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(3)
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.5.md", import.meta.url)).text()
@@ -1773,6 +1785,7 @@ describe("release entries", () => {
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
     expect(versions.slice(0, 50)).toEqual([
+      "0.11.6",
       "0.11.5",
       "0.11.4",
       "0.11.3",
@@ -1822,7 +1835,6 @@ describe("release entries", () => {
       "0.8.4",
       "0.8.3",
       "0.8.2",
-      "0.8.1",
     ])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))

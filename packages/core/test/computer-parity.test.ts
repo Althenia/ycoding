@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { Schema } from "effect"
@@ -77,6 +77,48 @@ describe("AX element diff", () => {
 })
 
 describe("computer history recorder", () => {
+  test("preserves history header defaults and JSON errors", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "ycoding-computer-history-"))
+    try {
+      await writeFile(path.join(directory, "empty.jsonl"), "")
+      await writeFile(path.join(directory, "partial.jsonl"), JSON.stringify({ sessionID: 7, started: null }))
+      expect((await ComputerHistory.list(directory)).map(({ id, sessionID, started, events }) => ({ id, sessionID, started, events })))
+        .toEqual([{ id: "empty", sessionID: "", started: "", events: 0 }, { id: "partial", sessionID: "", started: "", events: 0 }])
+      await writeFile(path.join(directory, "invalid.jsonl"), "{")
+      await expect(ComputerHistory.list(directory)).rejects.toBeInstanceOf(SyntaxError)
+      await expect(ComputerHistory.read(directory, "invalid")).resolves.toEqual([])
+      await writeFile(path.join(directory, "invalid.jsonl"), "{}\n{")
+      await expect(ComputerHistory.read(directory, "invalid")).rejects.toBeInstanceOf(SyntaxError)
+      await expect(ComputerHistory.read(directory, "missing")).rejects.toThrow()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("preserves event metadata, optional fields and limits, and rejects malformed events", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "ycoding-computer-history-"))
+    try {
+      const recorder = ComputerHistory.recorder(directory, () => new Date("2026-11-04T10:00:00.000Z"))
+      const base = { sessionID: "ses_fixture", action: "desktop.capture", bundleID: "com.example.fixture", pid: 1, windowID: 2, revision: "rev" }
+      const screenshot = { sha256: "synthetic-digest", width: 320, height: 240, scale: 1 }
+      await recorder.record({ ...base, screenshot, effect: "changed" })
+      await recorder.record(base)
+      const [entry] = await ComputerHistory.list(directory)
+      const events = await ComputerHistory.read(directory, entry!.id)
+      expect(events).toEqual([
+        { type: "event", at: "2026-11-04T10:00:00.000Z", ...base, screenshot, effect: "changed" },
+        { type: "event", at: "2026-11-04T10:00:00.000Z", ...base },
+      ])
+      expect(await ComputerHistory.read(directory, entry!.id, 1)).toEqual([events[0]])
+      await writeFile(path.join(directory, "invalid-event.jsonl"), '{}\n{"type":"other"}\n{"type":"event","legacy":true}\n')
+      await expect(ComputerHistory.read(directory, "invalid-event")).rejects.toThrow()
+      await writeFile(path.join(directory, "invalid-event.jsonl"), `{}\n${JSON.stringify({ ...events[0], screenshot: { ...screenshot, width: "invalid" } })}\n`)
+      await expect(ComputerHistory.read(directory, "invalid-event")).rejects.toThrow()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   test("records session-scoped events, lists, reads, prunes, and clears them", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "ycoding-computer-history-"))
     try {

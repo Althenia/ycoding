@@ -22,6 +22,21 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.6",
+    date: "2026-11-05",
+    title: "Browser and computer controls",
+    tags: ["Added", "Changed"],
+    changes: [
+      { tag: "Added", text: "Browser observations offer stable role-and-name locators and optional diffs; capture can target an element, a rectangle or the full page. Agents can inspect and answer JavaScript dialogs and deliver an owned tab to leave the finished work open after control ends." },
+      { tag: "Added", text: "On macOS, `desktop.observe` combines an Accessibility diff and screenshot; `desktop.paste` supports text, Markdown and HTML while restoring the previous clipboard. Clicks and keys support held input and key chords." },
+      { tag: "Added", text: "`desktop.history` lists and reads the calling Session's local desktop-control records, or clears them with permission and guardrail review. Records contain action metadata and screenshot references, not image bytes or audio; files older than 30 days or beyond the newest 200 are pruned when recording starts." },
+      { tag: "Changed", text: "Controlled browser tabs show the YCoding favicon instead of changing page titles; the original favicons are restored when control ends. Pinned tabs and pages that block the marker image cannot be controlled. After updating, reload the unpacked extension in the browser." },
+      { tag: "Changed", text: "The browser extension can also be loaded in Edge and Brave. Each browser pairs separately; native tab-strip rendering of the control marker in those browsers remains a manual check." },
+      { tag: "Changed", text: "Desktop calls show a non-activating cursor and action label. Native pointer and keyboard input targets the selected process without moving the user's pointer or changing the user's focus; an application may still activate itself." },
+      { tag: "Changed", text: "Desktop window permission is saved per app, while terminals ask every time. Security and credential apps are blocked by default; desktop mutations receive guardrail review, remote Sessions use separate permissions, and desktop operations fail closed while the screen is locked." },
+    ],
+  },
+  {
     version: "0.11.5",
     date: "2026-11-03",
     title: "Durable instruction caching and precise search guardrails",
