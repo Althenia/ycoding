@@ -425,8 +425,22 @@ export async function isolation(resources: string) {
     const password = env.YCODING_PASSWORD
     if (!password) throw new Error("A shared synthetic backend needs a synthetic YCODING_PASSWORD.")
     const port = requested || await freePort()
-    const server = Bun.spawn([...confine(owned, [provider.endpoint], [backend.executable, "serve", "--stdio", "--port", String(port)])], { env, stdin: "pipe", stdout: "pipe", stderr: "ignore" })
+    const server = Bun.spawn([...confine(owned, [provider.endpoint], [backend.executable, "serve", "--stdio", "--port", String(port)])], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
     const first = Promise.withResolvers<string>()
+    let tail = ""
+    let pending = ""
+    const errors: string[] = []
+    const capture = (async () => {
+      const decoder = new TextDecoder()
+      for await (const piece of server.stderr) {
+        const text = decoder.decode(piece, { stream: true })
+        tail = (tail + text).slice(-4096)
+        const lines = (pending + text).split("\n")
+        pending = (lines.pop() ?? "").slice(0, 300)
+        for (const line of lines)
+          if (errors.length < 8 && (line.startsWith("error:") || line.includes("Error"))) errors.push(line.slice(0, 300))
+      }
+    })().catch((error) => { tail = (tail + "\nstderr read failed: " + String(error)).slice(-4096) })
     const drain = (async () => {
       const decoder = new TextDecoder()
       let buffer = ""
@@ -435,7 +449,8 @@ export async function isolation(resources: string) {
         const newline = buffer.indexOf("\n")
         if (newline >= 0) { first.resolve(buffer.slice(0, newline)); buffer = "" }
       }
-      first.reject(new Error("Shared synthetic fixture exited before readiness"))
+      await Promise.race([Promise.all([server.exited, capture]), Bun.sleep(1_000)])
+      first.reject(new Error(`Shared synthetic fixture exited before readiness: exit ${server.exitCode ?? "running"}; signal ${server.signalCode ?? "none"}; ${[...errors.filter((line) => !tail.includes(line)), tail.trim()].join("\n")}`))
     })()
     let revoke = () => {}
     void server.exited.then(() => revoke())
