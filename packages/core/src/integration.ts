@@ -370,6 +370,7 @@ const layer = Layer.effect(
         id: credential.id,
         label: credential.label,
         active: credential.id === active?.id,
+        kind: credential.value.type,
       }))
       const env = (entry?.methods ?? [])
         .filter((method) => method.type === "env")
@@ -681,15 +682,17 @@ const layer = Layer.effect(
     })
 
     const snapshot = Effect.fn("Integration.connection.snapshot")(function* (
-      connection: IntegrationConnection.Info,
+      input: IntegrationConnection.Info,
       options?: { readonly refresh?: boolean; readonly rejectedAccessToken?: string },
     ) {
-      if (connection.type === "env") {
-        const key = process.env[connection.name]
-        return { connection, value: key ? Credential.Key.make({ type: "key", key }) : undefined }
+      if (input.type === "env") {
+        const key = process.env[input.name]
+        return { connection: input, value: key ? Credential.Key.make({ type: "key", key }) : undefined }
       }
-      const credential = yield* credentials.get(connection.id)
-      if (!credential) return { connection }
+      const credential = yield* credentials.get(input.id)
+      if (!credential)
+        return { connection: { type: input.type, id: input.id, label: input.label, active: input.active } }
+      const connection = { ...input, kind: credential.value.type }
       if (credential.value.type === "key") return { connection, credential, value: credential.value }
       const implementation = state
         .get()

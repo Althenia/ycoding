@@ -2,6 +2,10 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-11-05: Report credential connection kind
+
+- Add optional `kind: "oauth" | "key"` to `Connection.CredentialInfo`. Servers that include this change always populate it from the stored credential in `integration.list`, `integration.get`, and the active connection returned to plugins; servers that predate it omit it, and clients decode responses without it. Connections passed to `connection.resolve` may omit `kind` or carry a different value; resolution uses the stored credential. Connection payloads contain no secret fields or values. Regenerate the Promise client types from Schema.
+
 ## 2026-10-27: Group provider usage windows
 
 - Add optional non-empty `group` to `ProviderUsage.Window`. The field is additive; windows without it decode and render as before. Regenerate the Promise client types from Schema.

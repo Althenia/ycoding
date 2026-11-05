@@ -2,6 +2,7 @@ export * as Connection from "./connection.js"
 
 import { Schema } from "effect"
 import { Credential } from "./credential.js"
+import { optional } from "./schema.js"
 
 export interface CredentialInfo extends Schema.Schema.Type<typeof CredentialInfo> {}
 export const CredentialInfo = Schema.Struct({
@@ -10,6 +11,8 @@ export const CredentialInfo = Schema.Struct({
   label: Schema.String,
   /** Whether this stored credential is the active profile for its integration. */
   active: Schema.Boolean,
+  /** Whether the stored credential came from an OAuth sign-in or an API key. Absent from older servers. */
+  kind: Schema.Literals(["oauth", "key"]).pipe(optional),
 }).annotate({ identifier: "Connection.CredentialInfo" })
 
 export interface EnvInfo extends Schema.Schema.Type<typeof EnvInfo> {}

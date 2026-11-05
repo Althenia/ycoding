@@ -586,7 +586,13 @@ export type IntegrationKeyMethod = { type: "key"; label?: string }
 
 export type IntegrationEnvMethod = { type: "env"; names: Array<string> }
 
-export type ConnectionCredentialInfo = { type: "credential"; id: string; label: string; active: boolean }
+export type ConnectionCredentialInfo = {
+  type: "credential"
+  id: string
+  label: string
+  active: boolean
+  kind?: "oauth" | "key"
+}
 
 export type ConnectionEnvInfo = { type: "env"; name: string }
 

@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Cause, Clock, Deferred, Duration, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
+import { Cause, Clock, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import { Credential } from "@ycoding-ai/core/credential"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -634,12 +634,14 @@ describe("Integration", () => {
               id: personal.id,
               label: "Personal",
               active: true,
+              kind: "key",
             },
             {
               type: "credential",
               id: work.id,
               label: "Work",
               active: false,
+              kind: "key",
             },
             { type: "env", name: "INTEGRATION_TEST_ACME_KEY" },
           ])
@@ -648,6 +650,7 @@ describe("Integration", () => {
             id: personal.id,
             label: "Personal",
             active: true,
+            kind: "key",
           })
           expect(work.id).not.toBe(personal.id)
 
@@ -658,6 +661,7 @@ describe("Integration", () => {
             id: work.id,
             label: "Work",
             active: true,
+            kind: "key",
           })
 
           // Removing the active profile promotes the remaining one.
@@ -667,6 +671,7 @@ describe("Integration", () => {
             id: personal.id,
             label: "Personal",
             active: true,
+            kind: "key",
           })
         }),
       (previous) =>
@@ -676,4 +681,112 @@ describe("Integration", () => {
         }),
     )
   })
+
+  it.effect("reports each profile's credential kind without secret fields", () => {
+    const integrationID = Integration.ID.make("kinds")
+    return Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const previous = process.env.INTEGRATION_TEST_KINDS_KEY
+        process.env.INTEGRATION_TEST_KINDS_KEY = "synthetic-env-secret"
+        return previous
+      }),
+      () =>
+        Effect.gen(function* () {
+          const integrations = yield* Integration.Service
+          const credentials = yield* Credential.Service
+          yield* integrations.transform((editor) =>
+            editor.method.update({
+              integrationID,
+              method: { type: "env", names: ["INTEGRATION_TEST_KINDS_KEY"] },
+            }),
+          )
+          const keyed = yield* credentials.create({
+            integrationID,
+            label: "Keyed",
+            value: Credential.Key.make({ type: "key", key: "synthetic-key-secret", metadata: { note: "synthetic" } }),
+          })
+          const signedIn = yield* credentials.create({
+            integrationID,
+            label: "Signed In",
+            value: Credential.OAuth.make({
+              type: "oauth",
+              methodID: Integration.MethodID.make("browser"),
+              access: "synthetic-access-secret",
+              refresh: "synthetic-refresh-secret",
+              expires: 4_102_444_800_000,
+              metadata: { accountID: "synthetic-account" },
+            }),
+          })
+
+          const listed = (yield* integrations.list()).find((info) => info.id === integrationID)
+          const fetched = yield* integrations.get(integrationID)
+          const expected = [
+            { type: "credential", id: signedIn.id, label: "Signed In", active: true, kind: "oauth" },
+            { type: "credential", id: keyed.id, label: "Keyed", active: false, kind: "key" },
+            { type: "env", name: "INTEGRATION_TEST_KINDS_KEY" },
+          ] as const
+          expect(listed?.connections).toEqual(expected)
+          expect(fetched?.connections).toEqual(expected)
+
+          const encoded = Schema.encodeSync(Integration.Info)(fetched!)
+          expect(encoded.connections.map((connection) => Object.keys(connection).toSorted())).toEqual([
+            ["active", "id", "kind", "label", "type"],
+            ["active", "id", "kind", "label", "type"],
+            ["name", "type"],
+          ])
+          const serialized = JSON.stringify(encoded.connections)
+          for (const field of ["access", "refresh", "key", "expires", "metadata", "methodID"])
+            expect(serialized).not.toContain(`"${field}":`)
+          for (const secret of ["synthetic-key-secret", "synthetic-access-secret", "synthetic-refresh-secret", "synthetic-env-secret", "synthetic-account"])
+            expect(serialized).not.toContain(secret)
+        }),
+      (previous) =>
+        Effect.sync(() => {
+          if (previous === undefined) delete process.env.INTEGRATION_TEST_KINDS_KEY
+          else process.env.INTEGRATION_TEST_KINDS_KEY = previous
+        }),
+    )
+  })
+
+  it.effect("projects the stored credential kind onto connections passed without or with a different kind", () =>
+    Effect.gen(function* () {
+      const integrationID = Integration.ID.make("projected-kinds")
+      const integrations = yield* Integration.Service
+      const credentials = yield* Credential.Service
+      const keyed = yield* credentials.create({
+        integrationID,
+        label: "Keyed",
+        value: Credential.Key.make({ type: "key", key: "synthetic-key-secret" }),
+      })
+      const signedIn = yield* credentials.create({
+        integrationID,
+        label: "Signed In",
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make("browser"),
+          access: "synthetic-access-secret",
+          refresh: "synthetic-refresh-secret",
+          expires: 4_102_444_800_000,
+        }),
+      })
+
+      const legacy = { type: "credential", id: keyed.id, label: "Keyed", active: false } as const
+      expect(yield* integrations.connection.resolve(legacy)).toEqual(keyed.value)
+      expect((yield* integrations.connection.snapshot(legacy)).connection).toEqual({ ...legacy, kind: "key" })
+      const stale = { type: "credential", id: signedIn.id, label: "Signed In", active: true, kind: "key" } as const
+      expect((yield* integrations.connection.snapshot(stale)).connection).toEqual({ ...stale, kind: "oauth" })
+    }),
+  )
+
+  it.effect("omits a caller-supplied kind, credential and value when the credential is not stored", () =>
+    Effect.gen(function* () {
+      const integrations = yield* Integration.Service
+      const missing = { type: "credential", id: Credential.ID.make("cred_missing"), label: "Gone", active: true } as const
+      const snapshot = yield* integrations.connection.snapshot({ ...missing, kind: "key" })
+      expect(snapshot.connection).toEqual(missing)
+      expect(Object.hasOwn(snapshot.connection, "kind")).toBe(false)
+      expect(snapshot.credential).toBeUndefined()
+      expect(snapshot.value).toBeUndefined()
+    }),
+  )
 })

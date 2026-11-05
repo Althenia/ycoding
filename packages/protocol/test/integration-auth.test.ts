@@ -47,3 +47,28 @@ test("OpenAPI exposes the optional manual-code capability on the connect respons
   expect(attempt).toMatchObject({ properties: { manualCode: { type: "boolean" } } })
   expect(attempt).not.toMatchObject({ required: expect.arrayContaining(["manualCode"]) })
 })
+
+test("integration list and get decode credential connections from servers that predate kind", () => {
+  expect(IntegrationGroup.endpoints["integration.list"].path).toBe("/api/integration")
+  expect(IntegrationGroup.endpoints["integration.get"].path).toBe("/api/integration/:integrationID")
+  const location = { directory: "/project", project: { id: "proj_test", directory: "/project" } }
+  const integration = {
+    id: "acme",
+    name: "Acme",
+    methods: [],
+    connections: [
+      { type: "credential", id: "cred_old", label: "Old", active: true },
+      { type: "credential", id: "cred_new", label: "New", active: false, kind: "oauth" },
+      { type: "env", name: "ACME_KEY" },
+    ],
+  }
+  const listed = Schema.decodeUnknownSync(Location.response(Schema.Array(Integration.Info)))({ location, data: [integration] })
+  const fetched = Schema.decodeUnknownSync(Location.response(Schema.UndefinedOr(Integration.Info)))({ location, data: integration })
+  const summary = (connections: Integration.Info["connections"] = []): unknown[] =>
+    connections.map((connection) =>
+      connection.type === "credential" ? [connection.id, Object.hasOwn(connection, "kind"), connection.kind] : [connection.name],
+    )
+  const expected = [["cred_old", false, undefined], ["cred_new", true, "oauth"], ["ACME_KEY"]]
+  expect(summary(listed.data[0]?.connections)).toEqual(expected)
+  expect(summary(fetched.data?.connections)).toEqual(expected)
+})
