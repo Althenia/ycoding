@@ -108,6 +108,7 @@ import {
   SessionProviderStateLinkTable,
   SessionProviderRequestTable,
   SessionTable,
+  SessionTaskTable,
 } from "@ycoding-ai/core/session/sql"
 import { InstructionEntry } from "@ycoding-ai/core/session/instruction-entry"
 import { SessionStore } from "@ycoding-ai/core/session/store"
@@ -12063,6 +12064,53 @@ describe("SessionRunnerLLM", () => {
         { finish: "stop", content: [{ type: "text", text: "Selected boundary checked and verified." }] },
       ])
       expect([...(yield* execution.active)]).toEqual([])
+    }),
+  )
+
+  it.effect("a wake skips the drain of a rate-limited managed task that failed: six queued inputs stay pending, the task stays failed and no work completes", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const events = yield* EventRuntime.Service
+      const { db } = yield* Database.Service
+      const execution = yield* realExecution
+      const child = yield* session.create({ parentID: sessionID, title: "Rate limited child" })
+      yield* events.publish(SessionEvent.Task.Updated, {
+        sessionID: child.id,
+        change: {
+          type: "launched",
+          parentID: sessionID,
+          parentAssistantMessageID: SessionMessage.ID.make("msg_rate_limited_parent"),
+          toolCallID: "call_rate_limited_child",
+          inputID: SessionMessage.ID.make("msg_rate_limited_child"),
+          description: "Rate limited work",
+          agent: Agent.ID.make("build"),
+          model: { id: CatalogModel.ID.make("fake-model"), providerID: Provider.ID.make("fake") },
+          promptDigest: "rate-limited-fixture",
+          background: true,
+          delivery: "steer",
+        },
+      })
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
+      yield* session.prompt({ sessionID: child.id, text: "Initial steer", delivery: "steer", resume: false })
+      const failure = rateLimited(120_001)
+      responseStream = Stream.fail(failure)
+      yield* execution.wake(child.id)
+      yield* execution.awaitIdle(child.id)
+      expect(requests).toHaveLength(1)
+      const taskState = db.select({ state: SessionTaskTable.state }).from(SessionTaskTable).where(eq(SessionTaskTable.session_id, child.id)).get().pipe(Effect.orDie, Effect.map((row) => row?.state))
+      expect(yield* taskState).toBe("failed")
+
+      const retained = (yield* session.pending(child.id)).map((pending) => pending.id)
+      const queued = yield* Effect.forEach(["one", "two", "three", "four", "five", "six"], (text) =>
+        session.prompt({ sessionID: child.id, text: `Queued ${text}`, delivery: "queue", resume: false }),
+      )
+      yield* execution.wake(child.id)
+      yield* execution.awaitIdle(child.id)
+
+      expect(requests).toHaveLength(1)
+      expect((yield* session.pending(child.id)).map((pending) => pending.id)).toEqual([...retained, ...queued.map((input) => input.id)])
+      expect(yield* taskState).toBe("failed")
+      expect(yield* recordedEventTypes(child.id)).not.toContain("session.work.completed.1")
     }),
   )
 })

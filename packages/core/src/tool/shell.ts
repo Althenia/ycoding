@@ -14,6 +14,7 @@ import { PluginRuntime } from "../plugin/runtime"
 import { NonNegativeInt } from "../schema"
 import { SessionGuardrail } from "../session/guardrail"
 import { SessionGuardrailStandard } from "../session/guardrail-standard"
+import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
 import { Shell } from "../shell"
 import { Tool, type Content } from "./tool"
@@ -147,8 +148,8 @@ export const Plugin = {
                 : "Command cancelled"
           return runtime.orchestration
             .notice({
+              id: SessionMessage.ID.make(`msg_shell_notice_${Hash.sha256(`${sessionID}\0${shellID}`).slice(0, 24)}`),
               sessionID,
-              shellID,
               text: `<shell id="${callID}" state="${state}" command="${command}">\n${text}\n</shell>`,
               description: command,
               metadata: { source: "shell", state },

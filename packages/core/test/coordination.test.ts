@@ -304,3 +304,60 @@ describe("Project scope", () => {
       expect((yield* restarted.scopeOf(ids.master.id))?.active).toBe(false)
     })))
 })
+
+describe("Project member addition", () => {
+  const groupEvents = (groupID: Coordination.GroupID) =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      return yield* db.select({ type: EventTable.type, data: EventTable.data }).from(EventTable).where(eq(EventTable.aggregate_id, groupID)).orderBy(EventTable.seq).all().pipe(Effect.orDie)
+    })
+  const ownerRow = (sessionID: Session.ID) =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      return (yield* db.select({ owner: CoordinationMemberTable.owner_session_id }).from(CoordinationMemberTable).where(eq(CoordinationMemberTable.session_id, sessionID)).get().pipe(Effect.orDie))?.owner
+    })
+
+  test("adds an owned root Session with one changed and one owner-changed event and a new revision", () =>
+    run(Effect.gen(function* () {
+      const ids = yield* setup
+      const service = yield* CoordinationService.Service
+      const group = yield* create(ids)
+      const owner = yield* ids.sessions.create({ parentID: ids.master.id, title: "owner" })
+      const added = yield* service.addMember(group.id, { sessionID: ids.other.id, ownerSessionID: owner.id })
+      expect(added.revision).toBe(Coordination.Revision.make(1))
+      expect(added.memberSessionIDs.slice().sort()).toEqual([ids.member.id, ids.other.id].sort())
+      expect(yield* ownerRow(ids.other.id)).toBe(owner.id)
+      expect(yield* ownerRow(ids.member.id)).toBeNull()
+      const rows = yield* groupEvents(group.id)
+      expect(rows.map((row) => row.type)).toEqual(["coordination.group.created.2", "coordination.group.changed.1", "coordination.member.owner.changed.1"])
+      expect(rows[1]?.data).toMatchObject({ revision: 1, memberSessionIDs: expect.arrayContaining([ids.member.id, ids.other.id]) })
+      expect(rows[2]?.data).toEqual({ groupID: group.id, revision: 1, sessionID: ids.other.id, ownerSessionID: owner.id })
+    })))
+
+  test("adds an unowned Session with only a changed event", () =>
+    run(Effect.gen(function* () {
+      const ids = yield* setup
+      const service = yield* CoordinationService.Service
+      const group = yield* create(ids)
+      yield* service.addMember(group.id, { sessionID: ids.other.id })
+      expect(yield* ownerRow(ids.other.id)).toBeNull()
+      expect((yield* groupEvents(group.id)).map((row) => row.type)).toEqual(["coordination.group.created.2", "coordination.group.changed.1"])
+    })))
+
+  test("refuses child, archived, existing and other-Project Sessions without recording anything", () =>
+    run(Effect.gen(function* () {
+      const ids = yield* setup
+      const service = yield* CoordinationService.Service
+      const { db } = yield* Database.Service
+      const group = yield* create(ids)
+      yield* service.create({ name: "Second", masterSessionID: ids.spare.id, memberSessionIDs: [] })
+      const child = yield* ids.sessions.create({ parentID: ids.other.id, title: "child" })
+      const archived = yield* ids.sessions.create({ location: ids.location, title: "archived" })
+      yield* db.run(sql`UPDATE session SET time_archived = 1 WHERE id = ${archived.id}`).pipe(Effect.orDie)
+      for (const sessionID of [child.id, archived.id, ids.member.id, ids.master.id, ids.spare.id])
+        expect((yield* failure(service.addMember(group.id, { sessionID })))._tag).toBe("Coordination.IneligibleSessionError")
+      expect((yield* failure(service.addMember(Coordination.GroupID.make("cgrp_missing"), { sessionID: ids.other.id })))._tag).toBe("Coordination.NotFoundError")
+      expect((yield* service.get(group.id)).revision).toBe(group.revision)
+      expect((yield* groupEvents(group.id)).map((row) => row.type)).toEqual(["coordination.group.created.2"])
+    })))
+})

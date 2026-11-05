@@ -231,7 +231,9 @@ function stub(scenario: Scenario) {
     }) }
 }
 
-async function watch(scenario: Scenario, args: string[], options: { entry?: "tui" | "index"; signalAfterSubscribe?: NodeJS.Signals } = {}) {
+type SignalAtRead = { readonly signal: NodeJS.Signals; readonly path: string }
+
+async function watch(scenario: Scenario, args: string[], options: { entry?: "tui" | "index"; signalAfterSubscribe?: NodeJS.Signals; signalAtRead?: SignalAtRead } = {}) {
   const server = stub(scenario)
   const child = Bun.spawn([process.execPath, new URL(`../src/${options.entry ?? "tui"}.ts`, import.meta.url).pathname, "decision", "watch", ...args, "--server", server.url], {
     stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home, YCODING_TEST_HOME: home, YCODING_PASSWORD: "" },
@@ -240,6 +242,12 @@ async function watch(scenario: Scenario, args: string[], options: { entry?: "tui
     const deadline = Date.now() + 20_000
     while (server.control.subscriptions === 0 && Date.now() < deadline) await Bun.sleep(25)
     child.kill(options.signalAfterSubscribe)
+  }
+  const signalAt = options.signalAtRead
+  if (signalAt) {
+    const deadline = Date.now() + 20_000
+    while (!server.requests.some((request) => request.startsWith(`GET ${signalAt.path}`)) && Date.now() < deadline) await Bun.sleep(25)
+    child.kill(signalAt.signal)
   }
   const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
   for (const request of server.requests) expect(request.startsWith("GET ")).toBe(true)
@@ -1160,4 +1168,121 @@ test("bounded child task and todo lists report how many entries were not listed"
   expect(template.params).toEqual({ parentID: "<parent-session-id>" })
   expect(resolveOperation(JSON.parse(JSON.stringify(OpenApi.fromApi(ClientApi))), "session.subagent.list", { parentID: "ses_member_20" }))
     .toEqual({ method: "GET", path: "/api/session/ses_member_20/subagent" })
+}, 60_000)
+
+const unassessedLine = "Work not assessed: the Session state could not be read before the deadline."
+const slowActive = () => Bun.sleep(3_000).then(() => [])
+const resumeArgs = (resume: readonly string[]) => resume.slice(3).filter((value, index, all) => value !== "--server" && all[index - 1] !== "--server")
+
+function expectUnavailable(...outputs: Record<string, unknown>[]) {
+  expect(outputs).toMatchObject(outputs.map(() => ({ assessment: "unavailable" })))
+  for (const output of outputs) expect(output).not.toHaveProperty("work")
+}
+
+test("an assessment cut off by the deadline marks a timeout result unavailable", async () => {
+  const plain = await watch({ stall: "/api/session/active" }, ["ses_target", "--timeout", "1"])
+  expect(plain.exit).toBe(3)
+  expect(plain.stdout).toContain(unassessedLine)
+  const json = await watch({ stall: "/api/session/active" }, ["ses_target", "--timeout", "1", "--json"])
+  expect(json.exit).toBe(3)
+  expect(json.requests.some((request) => request.startsWith("GET /api/session/active"))).toBe(true)
+  const output = JSON.parse(json.stdout)
+  expect(output).toMatchObject({ outcome: "timeout", sessionID: "ses_target", progress: { state: "idle" } })
+  const familyJson = await watch({ sessions: family, readActive: slowActive }, ["ses_target", "--family", "--timeout", "1", "--json"])
+  expect(familyJson.exit).toBe(3)
+  const familyOutput = JSON.parse(familyJson.stdout)
+  expect(familyOutput).toMatchObject({ outcome: "timeout", sessionID: "ses_target", progress: { state: "idle" } })
+  expect(typeof familyOutput.checkpoint).toBe("string")
+  expectUnavailable(output, familyOutput)
+}, 30_000)
+
+test("an assessment cut off by the deadline marks a settled result unavailable", async () => {
+  const plain = await watch({ log: ownerRun(succeeded(4)), stall: "/api/session/active" }, ["ses_target", "--input", "msg_input", "--timeout", "1"])
+  expect(plain.exit).toBe(0)
+  expect(plain.stdout).toContain("Execution succeeded in Session \"Watched\" (ses_target).")
+  expect(plain.stdout).toContain(unassessedLine)
+  const settled = { status: "succeeded", inputIDs: ["msg_input"], startedAt: iso(2), settledAt: iso(4), startEvent: ref(2), endEvent: ref(4) }
+  const json = await watch({ log: ownerRun(succeeded(4)), stall: "/api/session/active" }, ["ses_target", "--input", "msg_input", "--timeout", "1", "--json"])
+  expect(json.exit).toBe(0)
+  const output = JSON.parse(json.stdout)
+  expect(output).toMatchObject({ outcome: "settled", sessionID: "ses_target", after: 4, execution: settled })
+  const familyJson = await watch({ sessions: family, log: ownerRun(succeeded(4)), readActive: slowActive },
+    ["ses_target", "--family", "--input", "msg_input", "--timeout", "1", "--json"])
+  expect(familyJson.exit).toBe(0)
+  const familyOutput = JSON.parse(familyJson.stdout)
+  expect(familyOutput).toMatchObject({ outcome: "settled", sessionID: "ses_target", after: 4, execution: settled })
+  expectUnavailable(output, familyOutput)
+}, 30_000)
+
+test("a read cut off by the deadline outside the assessment marks the timeout result unavailable", async () => {
+  const outputs: Record<string, unknown>[] = []
+  for (const args of [["--json"], ["--family", "--json"]]) {
+    const result = await watch({ sessions: family, stall: "/api/decision" }, ["ses_target", "--timeout", "1", ...args])
+    expect(result.exit).toBe(3)
+    expect(result.requests.some((request) => request.startsWith("GET /api/session/active"))).toBe(false)
+    const output = JSON.parse(result.stdout)
+    expect(output).toMatchObject({ outcome: "timeout", sessionID: "ses_target", progress: { state: "idle" } })
+    outputs.push(output)
+  }
+  const plain = await watch({ stall: "/api/decision" }, ["ses_target", "--timeout", "1"])
+  expect(plain.exit).toBe(3)
+  expect(plain.stdout).toContain(unassessedLine)
+  const changed = await watch({ sessions: family, readActive: slowActive, onSubscribe: (control) => {
+    setTimeout(() => control.append("ses_child", succeeded(1, "ses_child")), 20)
+  } }, ["ses_target", "--family", "--timeout", "1", "--json"])
+  expect(changed.exit).toBe(3)
+  expect(changed.requests.filter((request) => request.startsWith("GET /api/session/active")).length).toBe(1)
+  const output = JSON.parse(changed.stdout)
+  expect(output).toMatchObject({ outcome: "timeout", sessionID: "ses_target" })
+  expectUnavailable(...outputs, output)
+}, 30_000)
+
+test("a watch resumed after an unavailable assessment reports the normal assessment once reads succeed", async () => {
+  const log = ownerRun(succeeded(4))
+  const completed = work("completed", { receipt: { id: "evt_ses_target_5", seq: 5, inputID: "msg_input", assistantMessageID: "msg_answer", current: true } })
+  const cut = await watch({ log, stall: "/api/session/active" }, ["ses_target", "--after", "4", "--timeout", "1", "--json"])
+  expect(cut.exit).toBe(3)
+  const first = JSON.parse(cut.stdout)
+  expectUnavailable(first)
+  expect(first.resume).toEqual(["ycoding", "decision", "watch", "ses_target", "--after", "4", "--server", cut.url, "--timeout", "1", "--json"])
+  const resumed = await watch({ log: { ses_target: [...log.ses_target, receipt(5, "msg_input", "msg_answer")] } }, resumeArgs(first.resume))
+  expect(resumed.exit).toBe(3)
+  const output = JSON.parse(resumed.stdout)
+  expect(output).not.toHaveProperty("assessment")
+  expect(output.work).toEqual(completed)
+
+  const familyCut = await watch({ sessions: family, log, readActive: slowActive }, ["ses_target", "--family", "--timeout", "1", "--json"])
+  expect(familyCut.exit).toBe(3)
+  const familyFirst = JSON.parse(familyCut.stdout)
+  expectUnavailable(familyFirst)
+  expect(familyFirst.resume).toContain("--checkpoint")
+  const familyResumed = await watch({ sessions: family, log: { ses_target: [...log.ses_target, receipt(5, "msg_input", "msg_answer")] } }, resumeArgs(familyFirst.resume))
+  expect(familyResumed.exit).toBe(0)
+  const familyOutput = JSON.parse(familyResumed.stdout)
+  expect(familyOutput).toMatchObject({ outcome: "family", changes: [{ sessionID: "ses_target", type: "session.work.completed", id: "evt_ses_target_5", seq: 5 }] })
+  expect(familyOutput).not.toHaveProperty("assessment")
+  expect(familyOutput.work).toEqual(completed)
+}, 30_000)
+
+test("cancelling or killing a watch during a stalled assessment prints no result and no assessment", async () => {
+  for (const signal of ["SIGINT", "SIGKILL"] as const) {
+    const result = await watch({ log: ownerRun(succeeded(4)), stall: "/api/session/active" }, ["ses_target", "--input", "msg_input", "--timeout", "30", "--json"],
+      { signalAtRead: { signal, path: "/api/session/active" } })
+    expect(result.requests.some((request) => request.startsWith("GET /api/session/active"))).toBe(true)
+    expect(result.stdout).toBe("")
+    expect([0, 2, 3]).not.toContain(result.exit)
+  }
+}, 30_000)
+
+test("queued work in outstanding data blocks completion only inside the watched scope", async () => {
+  const log = { ses_target: [...ownerRun(succeeded(4)).ses_target, receipt(5, "msg_input", "msg_answer")] }
+  const receiptWork = { id: "evt_ses_target_5", seq: 5, inputID: "msg_input", assistantMessageID: "msg_answer", current: true }
+  const reported = async (outstanding: string[], args: string[]) => {
+    const result = await watch({ sessions: family, log, outstanding: { data: outstanding } }, ["ses_target", "--timeout", "1", "--json", ...args])
+    return [result.exit, JSON.parse(result.stdout).work]
+  }
+  expect(await reported(["ses_child"], ["--family"])).toEqual([3, work("background", { receipt: receiptWork })])
+  expect(await reported(["ses_other"], ["--family"])).toEqual([3, work("completed", { receipt: receiptWork })])
+  expect(await reported([], ["--family"])).toEqual([3, work("completed", { receipt: receiptWork })])
+  expect(await reported(["ses_child"], ["--after", "4"])).toEqual([3, work("completed", { receipt: receiptWork })])
 }, 60_000)

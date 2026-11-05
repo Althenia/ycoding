@@ -62,6 +62,10 @@ export interface Interface {
   readonly accessOf: (sessionID: Session.ID) => Effect.Effect<Access | undefined>
   readonly withOwnership: <A, E, R>(groupID: Coordination.GroupID, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   readonly setOwner: (groupID: Coordination.GroupID, input: OwnerInput) => Effect.Effect<void, NotFoundError>
+  readonly addMember: (
+    groupID: Coordination.GroupID,
+    input: { readonly sessionID: Session.ID; readonly ownerSessionID?: Session.ID },
+  ) => Effect.Effect<Group, NotFoundError | IneligibleSessionError>
   readonly activate: (groupID: Coordination.GroupID) => Effect.Effect<void>
   readonly pause: (groupID: Coordination.GroupID) => Effect.Effect<void>
 }
@@ -441,6 +445,37 @@ export const layer = Layer.effect(
               },
             )
             yield* updated(groupID, current.revision)
+          }),
+        ),
+      ),
+
+      addMember: Effect.fn("Coordination.addMember")((groupID, input) =>
+        lock.withLock("projects")(
+          Effect.gen(function* () {
+            const current = yield* row(groupID)
+            const memberSessionIDs = [...(yield* memberIDs(groupID)), input.sessionID]
+            yield* validateSessions(groupID, current.master_session_id, memberSessionIDs)
+            const at = yield* now
+            const revision = Coordination.Revision.make(current.revision + 1)
+            yield* events.publishBatch([
+              {
+                definition: Coordination.Event.Changed,
+                data: { groupID, revision, name: current.name, masterSessionID: current.master_session_id, memberSessionIDs, settings: settingsOf(current) },
+                options: {
+                  commit: () =>
+                    Effect.gen(function* () {
+                      yield* db.update(CoordinationGroupTable).set({ revision, time_updated: at })
+                        .where(eq(CoordinationGroupTable.id, groupID)).run().pipe(Effect.orDie)
+                      yield* insertMembers(groupID, [input.sessionID], new Map(input.ownerSessionID === undefined ? [] : [[input.sessionID, input.ownerSessionID]]))
+                    }),
+                },
+              },
+              ...(input.ownerSessionID === undefined
+                ? []
+                : [{ definition: Coordination.Event.OwnerChanged, data: { groupID, revision, sessionID: input.sessionID, ownerSessionID: input.ownerSessionID } }]),
+            ])
+            yield* updated(groupID, revision)
+            return yield* groupOf(yield* row(groupID))
           }),
         ),
       ),

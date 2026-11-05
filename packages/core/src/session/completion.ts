@@ -308,6 +308,12 @@ export const backgroundWork = Effect.fnUntraced(function* (
   )
 })
 
+export const hasPending = Effect.fnUntraced(function* (db: DatabaseService, sessionIDs: ReadonlyArray<SessionSchema.ID>) {
+  const pending = yield* db.select({ id: SessionPendingTable.id }).from(SessionPendingTable)
+    .where(inArray(SessionPendingTable.session_id, [...sessionIDs])).limit(1).get().pipe(Effect.orDie)
+  return pending !== undefined
+})
+
 const unfinished = Effect.fnUntraced(function* (
   db: DatabaseService,
   jobs: Pick<Job.Interface, "list" | "outstandingSessions">,
@@ -318,9 +324,7 @@ const unfinished = Effect.fnUntraced(function* (
   const running = yield* active
   if (ids.length === 0 || !running.has(sessionID)) return true
   if (yield* backgroundWork(db, jobs, sessionID, running, ids)) return true
-  const pending = yield* db.select({ id: SessionPendingTable.id }).from(SessionPendingTable)
-    .where(inArray(SessionPendingTable.session_id, ids)).limit(1).get().pipe(Effect.orDie)
-  if (pending) return true
+  if (yield* hasPending(db, ids)) return true
   if ((yield* SessionReviewFold.openCount(db, sessionID)) > 0) return true
   const state = yield* db.select({ id: SessionTable.id }).from(SessionTable)
     .where(and(inArray(SessionTable.id, ids), sql`(${SessionTable.revert} IS NOT NULL OR json_extract(${SessionTable.autonomy}, '$.goal.status') = 'active')`))

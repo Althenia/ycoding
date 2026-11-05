@@ -131,7 +131,7 @@ jobs:
         working-directory: packages/cli
         run: |
           bun test --timeout 30000 ./test/decision-follow-state.test.ts ./test/decision-follow.test.ts ./test/decision-follow-command.test.ts
-          bun test --timeout 30000 ./test/decision-watch.test.ts -t "both entrypoints advertise|already pending decision|every decision kind|completion is reported only|failed, interrupted, and rejected|timeout reports progress|resume command keeps|root accepted receipt|a family checkpoint|checkpoint boundary: rejects invalid|explicit conflicting root cursor is rejected|zero cursor against absent watermark rejects"
+          bun test --timeout 30000 ./test/decision-watch.test.ts -t "both entrypoints advertise|already pending decision|every decision kind|completion is reported only|failed, interrupted, and rejected|timeout reports progress|resume command keeps|root accepted receipt|a family checkpoint|checkpoint boundary: rejects invalid|explicit conflicting root cursor is rejected|zero cursor against absent watermark rejects|assessment cut off by the deadline|read cut off by the deadline outside the assessment|resumed after an unavailable assessment|cancelling or killing a watch during a stalled assessment|queued work in outstanding data blocks completion only inside the watched scope"
 
       - name: Verify Antigravity provider and build fixture boundaries
         if: matrix.suite == 'cli'

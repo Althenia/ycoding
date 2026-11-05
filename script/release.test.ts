@@ -46,7 +46,7 @@ test("source verification runs the native decision follow regression files in th
   expect("if" in step ? step.if : undefined).toBe("matrix.suite == 'cli'")
   expect("working-directory" in step ? step["working-directory"] : undefined).toBe("packages/cli")
   const files = ["decision-follow-state", "decision-follow", "decision-follow-command"].map((name) => `./test/${name}.test.ts`)
-  const oneShot = "both entrypoints advertise|already pending decision|every decision kind|completion is reported only|failed, interrupted, and rejected|timeout reports progress|resume command keeps|root accepted receipt|a family checkpoint|checkpoint boundary: rejects invalid|explicit conflicting root cursor is rejected|zero cursor against absent watermark rejects"
+  const oneShot = "both entrypoints advertise|already pending decision|every decision kind|completion is reported only|failed, interrupted, and rejected|timeout reports progress|resume command keeps|root accepted receipt|a family checkpoint|checkpoint boundary: rejects invalid|explicit conflicting root cursor is rejected|zero cursor against absent watermark rejects|assessment cut off by the deadline|read cut off by the deadline outside the assessment|resumed after an unavailable assessment|cancelling or killing a watch during a stalled assessment|queued work in outstanding data blocks completion only inside the watched scope"
   expect(step.run).toBe([
     `bun test --timeout 30000 ${files.join(" ")}`,
     `bun test --timeout 30000 ./test/decision-watch.test.ts -t "${oneShot}"`,

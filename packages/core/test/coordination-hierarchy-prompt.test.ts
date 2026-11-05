@@ -373,9 +373,10 @@ const requestFor = (id: Session.ID, text: string) =>
 const systemText = (request: LLMRequest | undefined) => JSON.stringify(request?.system)
 const hierarchy = [
   "The Project hierarchy is Master → recorded owner → executor",
-  "As Master, coordinate assignments, decide escalations, and review integration evidence",
-  "As a supervisor, directly handle your owned member Sessions",
-  "stay responsible for them after a turn settles",
+  "As Master, coordinate assignments, decide escalations, review integration evidence, and keep advancing independent work",
+  "As Master, decompose the user's work into independent scopes without waiting to be asked",
+  "As a supervisor, stay responsible for every Session you control until its work is verified complete",
+  "keep supervising after each turn settles",
   "The owner chain handles routine and native requests and escalates only human-only or uncertain choices",
   "Never send a member a message only to acknowledge a report or notification",
 ]
@@ -394,8 +395,10 @@ const operating = [
   "Require batched corrections, reruns of only failed or invalidated checks, and reuse of valid evidence for unchanged sources, contracts and environment, including at integration and merge.",
   "A missing prior measurement is not a reason to wait: run within the agreed bounded limit and record actual usage afterward",
   "Report progress by delivery milestones, not by mixed administrative counts",
-  "As Main, use `assign` to give a member Session to a supervising subagent you launched",
-  "uses `release` with reason `completed` once the work is verified",
+  "As Master, use `create` to start a member Session in its own managed worktree under you or an owner subagent you launched",
+  "`assign` to give an existing member Session to an owner subagent you launched",
+  "uses `release` with reason `completed` only after verifying the work",
+  "act on each in the turn it arrives",
   "Idle, failure, or a settled turn never ends ownership",
 ]
 const gates = [
@@ -506,7 +509,8 @@ describe("Master hierarchy prompt assembly", () => {
       yield* setupProject
       const system = systemText(yield* requestFor(otherSessionID, "Coordinate the team"))
       expect(system).toContain("Directly manage Sessions owned by the Master")
-      expect(system).toContain("for supervisor-owned Sessions, give directions to their recorded supervisor rather than relaying their routine events")
+      expect(system).toContain("for supervisor-owned Sessions, route everything through their recorded supervisor rather than relaying their routine events, and handle only their escalations and integration")
+      expect(system).not.toContain("Main")
       expect(system).toContain("Do not execute a member's task, take over its tools, or control its subagents.")
       expect(system).toContain("Verify assignments and completion evidence against the user's current direction.")
       expect(system).toContain("Manual-mode requests remain human-only.")
@@ -525,7 +529,7 @@ describe("Master hierarchy prompt assembly", () => {
       yield* coordination.setOwner(group.id, { sessionID, ownerSessionID: supervisor })
       const owned = systemText(yield* requestFor(supervisor, "Supervise the member"))
       expect(owned).toContain("Project role: supervisor")
-      expect(owned).toContain("You cannot assign or transfer ownership")
+      expect(owned).toContain("You cannot assign or transfer ownership or create members")
       expect(owned).toContain("Do not execute a member's task, take over its tools, or control its subagents.")
       expect(owned).toContain(JSON.stringify(CoordinationInstructions.content).slice(1, -1))
       for (const text of hierarchy) expect(owned).toContain(text)

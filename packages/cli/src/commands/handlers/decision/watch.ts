@@ -423,6 +423,7 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
     const running = scoped(outstanding.running)
     const lost = scoped(outstanding.lost)
     const activeFamily = scoped(Object.keys(active))
+    const queued = scoped(outstanding.data).filter((id) => id !== target.id)
     const parents = [target.id, ...scoped([...outstanding.data, ...outstanding.lost]).filter((id) => id !== target.id)]
     const pages = await Promise.all(parents.slice(0, taskParentLimit).map((parentID) => client.session.subagent.list({ parentID, limit: taskPageLimit }, { signal })))
     const tasks = pages.flatMap((page) => page.data)
@@ -445,7 +446,7 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
     const state: Work["state"] = blocked ? "needs-decision"
       : executing ? "running"
       : lost.length ? "lost"
-      : running.length || pending.length || children.active > 0 || activeFamily.some((id) => id !== target.id) ? "background"
+      : running.length || pending.length || queued.length || children.active > 0 || activeFamily.some((id) => id !== target.id) ? "background"
       : !settlement.settled && execution !== undefined ? "unconfirmed"
       : current ? "completed"
       : settlement.settled || settlement.familyEnded || receipt !== undefined || ended || open.length ? "incomplete"
@@ -615,7 +616,7 @@ function render(options: Options, result: Awaited<ReturnType<typeof watchSession
     const settled = outcome.execution
     const next = resumeCommand(current, after, false)
     if (json) return { outcome: "settled", sessionID: target.id, ...(after === undefined ? {} : { after }), execution: settled,
-      ...(outcome.work === undefined ? {} : { work: outcome.work }), ...(result.checkpoint === undefined ? {} : { checkpoint: result.checkpoint }), resume: next }
+      ...workField(outcome.work), ...(result.checkpoint === undefined ? {} : { checkpoint: result.checkpoint }), resume: next }
     const lines = [settled.status === "rejected" ? `Input rejected in ${session}.`
       : settled.status === "unknown" ? `The execution that ran input ${settled.inputIDs.join(", ")} in ${session} has ended, but its retained history no longer proves the result. Read message.list; do not treat it as succeeded.`
       : `Execution ${settled.status} in ${session}.`]
@@ -639,7 +640,7 @@ function render(options: Options, result: Awaited<ReturnType<typeof watchSession
     ...(latest === undefined ? {} : { latest }),
   }
   if (json) return { outcome: "timeout", sessionID: target.id, ...(after === undefined ? {} : { after }), progress,
-    ...(outcome.work === undefined ? {} : { work: outcome.work }), ...(result.checkpoint === undefined ? {} : { checkpoint: result.checkpoint }), resume }
+    ...workField(outcome.work), ...(result.checkpoint === undefined ? {} : { checkpoint: result.checkpoint }), resume }
   const since = `${progress.startedAt ? ` since ${progress.startedAt}` : ""}${progress.toolCalls === undefined ? "" : `; ${progress.toolCalls} tool calls`}`
   const state = progress.state === "idle" ? "idle" : progress.state === "running" ? `running${since}`
     : `unconfirmed; retained history shows an open execution${since}, but the connected service does not report it active`
@@ -653,6 +654,10 @@ function render(options: Options, result: Awaited<ReturnType<typeof watchSession
 }
 
 const unassessed = "Work not assessed: the Session state could not be read before the deadline."
+
+function workField(work: Work | undefined) {
+  return work === undefined ? { assessment: "unavailable" as const } : { work }
+}
 
 function decisionLines(decisions: readonly DecisionItem[], oversized: readonly Oversized[], omitted: number) {
   return [

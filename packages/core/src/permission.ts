@@ -154,6 +154,21 @@ export function evaluate(action: string, resource: string, ...rulesets: Permissi
   return !/[?*[]/.test(directory) && TemporaryPath.contains(directory) ? { ...rule, effect: "allow" } : rule
 }
 
+export function effectiveDenies(rules: Permission.Ruleset): Permission.Ruleset {
+  return rules.filter(
+    (rule, index) =>
+      rule.effect === "deny" &&
+      !rules
+        .slice(index + 1)
+        .some(
+          (later) =>
+            later.effect !== "deny" &&
+            (later.action === "*" || later.action === rule.action) &&
+            (later.resource === "*" || later.resource === rule.resource),
+        ),
+  )
+}
+
 export function merge(...rulesets: Permission.Ruleset[]): Permission.Ruleset {
   return rulesets.flat()
 }

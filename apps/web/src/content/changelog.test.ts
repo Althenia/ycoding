@@ -7,8 +7,20 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.6 browser and computer controls first with shared notes", async () => {
+  test("lists v0.11.7 project owner delegation first with shared notes", async () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.7", date: "2026-11-05", title: "Project owner delegation", tags: ["Added", "Changed"] })
+    expect(entry?.changes).toHaveLength(6)
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.7.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.11.7\n")
+    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of ["`create`", "managed Git worktree", "first message", "guardrail", "not allowed by configuration", "permission ceiling", "effective deny rules", "later non-deny agent rule", "identical action text (or `*`)", "identical resource text (or `*`)", "current owner", "resumes", "Waiting and starting", "never receive member notifications", "not delivered twice", "no background work", "compaction barrier", "does not read the member's goal state", "open reviews", "active revert", "descendant Sessions", "has not been verified", "exactly one receiver", "deterministic notice identity", "replaying earlier events at startup does not wake any Session or resend notices already delivered", "owner subagents", "verified", "OAuth", "API key", "credential material", "decision watch --family", "queued work", "`background`", "plain watch", "assessment: \"unavailable\""]) expect(text).toContain(fragment)
+    expect(after("0.11.7")?.version).toBe("0.11.6")
+  })
+
+  test("retains v0.11.6 browser and computer controls with shared notes", async () => {
+    const entry = byVersion("0.11.6")
     expect(entry).toMatchObject({ version: "0.11.6", date: "2026-11-05", tags: ["Added", "Changed"] })
     expect(entry?.changes).toHaveLength(7)
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.6.md", import.meta.url)).text()
@@ -1785,6 +1797,7 @@ describe("release entries", () => {
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
     expect(versions.slice(0, 50)).toEqual([
+      "0.11.7",
       "0.11.6",
       "0.11.5",
       "0.11.4",
@@ -1834,7 +1847,6 @@ describe("release entries", () => {
       "0.8.5",
       "0.8.4",
       "0.8.3",
-      "0.8.2",
     ])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))

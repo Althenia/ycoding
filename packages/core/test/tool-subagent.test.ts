@@ -2518,7 +2518,7 @@ describe("SubagentTool", () => {
 
 const noticeDrains: Session.ID[] = []
 const noticeRuns: Session.ID[] = []
-const noticeHolds = new Map<Session.ID, Deferred.Deferred<void>>()
+const noticeHolds = new Map<Session.ID, { entered: Deferred.Deferred<void>; release: Deferred.Deferred<void> }>()
 let wakeGate: { sessionID: Session.ID; entered: Deferred.Deferred<void>; release: Deferred.Deferred<void> } | undefined
 let settleBarrier: { sessionID: Session.ID; entered: Deferred.Deferred<void>; release: Deferred.Deferred<void> } | undefined
 
@@ -2536,7 +2536,7 @@ const noticeExecutionNode = makeGlobalNode({
               noticeDrains.push(sessionID)
               const promoted = yield* SessionPending.promoteSteers(db, events, sessionID)
               const hold = noticeHolds.get(sessionID)
-              if (hold) yield* Deferred.await(hold)
+              if (hold) yield* Deferred.succeed(hold.entered, undefined).pipe(Effect.andThen(Deferred.await(hold.release)))
               if (promoted === 0 && !force) return
               noticeRuns.push(sessionID)
               const assistantMessageID = SessionMessage.ID.create()
@@ -2702,7 +2702,8 @@ const noticeSetup = (options: { hold?: boolean; barrier?: boolean } = {}) =>
     const callID = `call_notice_launch_${sequence}`
     const childID = SessionOrchestrationIdentity.launch(parent.id, assistantID, callID).childID
     const release = yield* Deferred.make<void>()
-    if (options.hold) noticeHolds.set(childID, release)
+    const held = yield* Deferred.make<void>()
+    if (options.hold) noticeHolds.set(childID, { entered: held, release })
     const barrier = { sessionID: childID, entered: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() }
     if (options.barrier) settleBarrier = barrier
     const gate = { sessionID: childID, entered: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() }
@@ -2728,6 +2729,7 @@ const noticeSetup = (options: { hold?: boolean; barrier?: boolean } = {}) =>
     const notifier = yield* SessionOrchestrationNotifier.Service
     const db = (yield* Database.Service).db
     const events = yield* EventRuntime.Service
+    if (options.hold) yield* Deferred.await(held)
     if (!options.hold && !options.barrier) yield* execution.awaitIdle(child.sessionID)
     const observe = Effect.gen(function* () {
       const notices = yield* db
@@ -2763,8 +2765,8 @@ const noticeSetup = (options: { hold?: boolean; barrier?: boolean } = {}) =>
     })
     const notice = (shellID: string, resume = true, sessionID: Session.ID = child.sessionID) =>
       runtime.orchestration.notice({
+        id: SessionMessage.ID.make(`msg_shell_notice_${Hash.sha256(`${sessionID}\0${shellID}`).slice(0, 24)}`),
         sessionID,
-        shellID,
         text: noticeText,
         description: "true",
         metadata: { source: "shell", state: "completed" },

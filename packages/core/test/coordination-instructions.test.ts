@@ -4,7 +4,7 @@ import { CoordinationInstructions } from "../src/coordination/instructions"
 import { Instructions } from "../src/instructions/index"
 
 test("Project instructions describe member messaging and native decisions", () => {
-  expect(CoordinationInstructions.content).toContain("owner's instruction channel")
+  expect(CoordinationInstructions.content).toContain("Write every member message in first person as your own instruction channel")
   expect(CoordinationInstructions.content).toContain("recorded human instructions or current delegated authority")
   expect(CoordinationInstructions.content).toContain("Project notifications")
   expect(CoordinationInstructions.content).toContain("do not poll")
@@ -20,6 +20,28 @@ test("Master instructions require supervision, evidence review and reasoned esca
     "owning subagent → Master → human",
     "Bring the human only decisions and approvals",
   ]) expect(CoordinationInstructions.content).toContain(instruction)
+})
+
+test("the Master decomposes work into owner-supervised member Sessions with their own worktrees", () => {
+  for (const instruction of [
+    "As Master, decompose the user's work into independent scopes without waiting to be asked, launch an owner subagent for each",
+    "use `create` to start a member Session in its own managed worktree under you or an owner subagent you launched",
+    "for supervisor-owned Sessions, route everything through their recorded supervisor rather than relaying their routine events, and handle only their escalations and integration",
+    "keep advancing independent work",
+  ]) expect(CoordinationInstructions.content).toContain(instruction)
+  expect(CoordinationInstructions.content).not.toContain("Main")
+})
+
+test("supervisors stay responsible for controlled Sessions until verified completion", async () => {
+  for (const instruction of [
+    "As a supervisor, stay responsible for every Session you control until its work is verified complete",
+    "keep it moving toward its outcome without waiting to be asked",
+    "act on each in the turn it arrives",
+    "uses `release` with reason `completed` only after verifying the work",
+    "The owner chain handles routine and native requests and escalates only human-only or uncertain choices",
+  ]) expect(CoordinationInstructions.content).toContain(instruction)
+  const entries = await Effect.runPromise(Instructions.read(CoordinationInstructions.make("supervisor")))
+  expect(entries[0]?.value).toContain("You cannot assign or transfer ownership or create members.")
 })
 
 test("the voice source is present only for a scoped Session", async () => {

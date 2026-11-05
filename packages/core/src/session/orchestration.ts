@@ -407,8 +407,8 @@ export interface Interface {
     readonly childID: SessionSchema.ID
   }) => Effect.Effect<Task, ControlError>
   readonly notice: (input: {
+    readonly id: SessionMessage.ID
     readonly sessionID: SessionSchema.ID
-    readonly shellID: string
     readonly text: string
     readonly description?: string
     readonly metadata?: Record<string, unknown>
@@ -970,9 +970,7 @@ const layer = Layer.effect(
         locks.withLock(input.sessionID)(
           Effect.gen(function* () {
             const message = {
-              id: SessionMessage.ID.make(
-                `msg_shell_notice_${Hash.sha256(`${input.sessionID}\0${input.shellID}`).slice(0, 24)}`,
-              ),
+              id: input.id,
               sessionID: input.sessionID,
               text: input.text,
               description: input.description,

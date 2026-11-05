@@ -9,9 +9,14 @@ import { Session } from "@ycoding-ai/schema/session"
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { SessionDelivery } from "@ycoding-ai/schema/session-delivery"
 import { Effect, Schema } from "effect"
+import { Agent } from "../agent"
+import { Config } from "../config"
+import { ConfigCapabilities } from "../config/capabilities"
+import { Permission } from "../permission"
 import { CoordinationRuntime } from "../session/coordination-runtime"
 import { CoordinationAccess } from "../session/coordination-access"
 import { Tool } from "./tool"
+import { WorktreeTool } from "./worktree"
 
 export const name = CoordinationAccess.tool
 const target = { sessionID: Session.ID }
@@ -52,6 +57,14 @@ export const Input = Schema.Union([
   Schema.Struct({ action: Schema.Literal("interrupt"), ...target }),
   Schema.Struct({ action: Schema.Literal("assign"), ...target, ownerSessionID: Session.ID }),
   Schema.Struct({ action: Schema.Literal("release"), ...target, reason: Coordination.ReleaseReason }),
+  Schema.Struct({
+    action: Schema.Literal("create"),
+    name: WorktreeTool.Name,
+    ownerSessionID: Session.ID.pipe(Schema.optional),
+    title: Schema.String.check(Schema.isPattern(/\S/), Schema.isMaxLength(120)).pipe(Schema.optional),
+    prompt: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32000)).pipe(Schema.optional),
+    model: Model.Ref.pipe(Schema.optional),
+  }),
 ])
 export type Input = typeof Input.Type
 
@@ -64,15 +77,19 @@ export const description = [
   "answer: settle a member's pending question, permission, or review under the delegated-decision policy. decision: approve (default) or decline; decline rejects a routine or decline-only permission or review with your rationale as the member's feedback. Hard, explicit-decision, Manual-mode, and uncertain cases are refused with a reason.",
   "escalate: pass a pending request you cannot settle up the chain with a reason. From a Master subagent it goes to the Master; from the Master it goes to the user's decision surface, with every reason attached to the member's pending prompt. A request already deferred to the review box returns deferred-to-review-box with its item ID. Escalate whatever answer refuses.",
   "interrupt: stop a member's running turn.",
-  "assign: Master only. Give a member Session to a subagent the Master launched; that supervisor owns it until released, and reassigning transfers it. Idle, failure, or a settled turn never ends ownership.",
+  "assign: Master only. Give a member Session to a live subagent the Master launched (not cancelling, cancelled, failed, lost or archived); that supervisor owns it until released, and reassigning transfers it. Idle, a failed turn, or a settled turn never ends ownership.",
   "release: the Master or the member's owner ends ownership, with reason completed (work verified complete) or released. Removing the member from the Project or deleting the owner also ends it.",
-  "Member events (execution start, settled-step progress, turn settled with no background work left, failure, interruption, question, form, permission ask, guardrail review) arrive directly at the recorded owner as Project notifications; an unassigned member routes to the Master. Do not poll. Message text never settles a control.",
+  "create: Master only. Create a managed worktree named name on branch name under the same permission, guardrail and existing-name rules as the worktree tool, start a root member Session there under your session's permission ceiling plus your agent's effective deny rules (agent denies not covered by a later non-deny agent rule with the same action or \"*\" and the same resource or \"*\") with title (default name) and optional model, and add it to the Project. ownerSessionID is yourself or a live subagent you launched; omit it to leave the member unowned so it reports to you. An optional prompt is sent as its first message after it joins; a refused prompt is returned without undoing the member. A failure after the worktree exists names the worktree and branch; nothing is removed.",
+  "Member events (execution start, settled-step progress, turn settled with no background work left, failure, interruption, question, form, permission ask, guardrail review) go to the member's recorded owner as Project notifications, or to the Master for an unowned member; no other Session receives them, and while a live owner exists only an explicit escalate reaches the Master. A member's completed notification is sent only when its turn settled with no background work left and the member has no pending input of any kind (steer, queue or compaction barrier). The notification does not read the member's goal state, open reviews, an active revert or pending rows of descendant Sessions; its behavior with an active goal has not been verified. A completed owner resumes only when the notification wakes its receiver (urgent, or the Project is active), no review is open on that owner and the owner Session has no active revert. A resumed owner reports to its parent again when it settles. Waiting and starting owners keep notifications pending until they run. Cancelling, cancelled, failed and lost owners never receive member notifications. An owner in one of those states, or archived, is released, and the Master receives the member's notifications and pending requests. Do not poll. Message text never settles a control.",
 ].join("\n")
 
 export const Plugin = {
   id: "ycoding.tool.project",
   effect: Effect.fn("CoordinationTool.Plugin")(function* (ctx: Context) {
     const runtime = yield* CoordinationRuntime.Service
+    const agents = yield* Agent.Service
+    const config = yield* Config.Service
+    const worktree = yield* WorktreeTool.creator
     yield* ctx.tool.transform((draft) => draft.add(name, Tool.make({
       description,
       input: Input,
@@ -101,6 +118,13 @@ export const Plugin = {
           return { action: "assign" as const, ...(yield* runtime.assign(caller, { sessionID: input.sessionID, ownerSessionID: input.ownerSessionID })) }
         if (input.action === "release")
           return { action: "release" as const, ...(yield* runtime.release(caller, { sessionID: input.sessionID, reason: input.reason })) }
+        if (input.action === "create") {
+          if (!ConfigCapabilities.allowsTool(Config.capabilities(yield* config.entries()), WorktreeTool.name))
+            return yield* new ToolFailure({ message: "Project member creation requires the worktree tool capability" })
+          const agent = yield* agents.resolve(context.agent)
+          if (agent === undefined) return yield* new ToolFailure({ message: "The calling agent is unavailable" })
+          return { action: "create" as const, ...(yield* runtime.create(caller, { ...input, agentPermissions: Permission.effectiveDenies(agent.permissions) }, (worktreeName) => worktree(worktreeName, context))) }
+        }
         return { action: "interrupt" as const, ...(yield* runtime.interrupt(caller, input)) }
       }).pipe(Effect.mapError((error) => error instanceof ToolFailure ? error : new ToolFailure({ message: error.message, error }))),
     }), { codemode: false })).pipe(Effect.orDie)
