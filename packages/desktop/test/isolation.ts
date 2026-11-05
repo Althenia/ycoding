@@ -17,6 +17,7 @@ type Backend = Awaited<ReturnType<typeof bundledGrant>>
 const sandbox = "/usr/bin/sandbox-exec"
 const systemReads = ["/usr/lib", "/System/Library", "/System/Cryptexes/OS", "/System/Volumes/Preboot/Cryptexes/OS"]
 const devices = ["/dev/null", "/dev/random", "/dev/urandom"]
+const icuData = "/usr/share/icu/icudt78l.dat"
 const probeTools = ["/bin/bash", "/bin/cat", "/bin/ls", "/usr/bin/nc"]
 const credentialName = /KEY|TOKEN|SECRET|PASSWORD|AUTH|CREDENTIAL|COOKIE|SOCK/
 const denied = "Operation not permitted"
@@ -106,7 +107,7 @@ function profile(input: { readonly owned: string; readonly cwd: string; readonly
   const tools = input.tools ?? []
   const executables = [input.backend.executable, ...tools]
   const subpaths = [...systemReads, input.backend.directory, input.cwd]
-  const literals = [input.backend.manifest, ...devices, ...tools]
+  const literals = [input.backend.manifest, ...devices, ...tools, icuData]
   const metadata = [...new Set([...subpaths, ...literals, input.owned].flatMap(ancestors))]
   const list = (kind: string, items: readonly string[]) => items.map((item) => `(${kind} ${quoted(item)})`).join(" ")
   return [
