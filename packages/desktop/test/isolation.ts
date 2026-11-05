@@ -425,6 +425,7 @@ export async function isolation(resources: string) {
     const password = env.YCODING_PASSWORD
     if (!password) throw new Error("A shared synthetic backend needs a synthetic YCODING_PASSWORD.")
     const port = requested || await freePort()
+    const spawnedAt = new Date().toISOString()
     const server = Bun.spawn([...confine(owned, [provider.endpoint], [backend.executable, "serve", "--stdio", "--port", String(port)])], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
     const first = Promise.withResolvers<string>()
     let tail = ""
@@ -449,8 +450,8 @@ export async function isolation(resources: string) {
         const newline = buffer.indexOf("\n")
         if (newline >= 0) { first.resolve(buffer.slice(0, newline)); buffer = "" }
       }
-      await Promise.race([Promise.all([server.exited, capture]), Bun.sleep(1_000)])
-      first.reject(new Error(`Shared synthetic fixture exited before readiness: exit ${server.exitCode ?? "running"}; signal ${server.signalCode ?? "none"}; ${[...errors.filter((line) => !tail.includes(line)), tail.trim()].join("\n")}`))
+      const endedAt = await Promise.race([Promise.all([server.exited, capture]).then(() => new Date().toISOString()), Bun.sleep(1_000).then(() => "running")])
+      first.reject(new Error(`Shared synthetic fixture exited before readiness: pid ${server.pid}; spawned ${spawnedAt}; ended ${endedAt}; exit ${server.exitCode ?? "running"}; signal ${server.signalCode ?? "none"}; ${[...errors.filter((line) => !tail.includes(line)), tail.trim()].join("\n")}`))
     })()
     let revoke = () => {}
     void server.exited.then(() => revoke())
