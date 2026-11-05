@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { LLM, Message } from "@ycoding-ai/ai"
-import { LLMClient, RequestExecutor } from "@ycoding-ai/ai/route"
-import { Context, DateTime, Deferred, Effect, Fiber, Layer } from "effect"
+import { LLMClient, RequestExecutor, WebSocketExecutor } from "@ycoding-ai/ai/route"
+import { Context, DateTime, Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { HttpClientResponse } from "effect/unstable/http"
 import { Money } from "@ycoding-ai/schema/money"
 import { Catalog } from "@ycoding-ai/core/catalog"
@@ -755,6 +755,136 @@ describe("per-session profiles", () => {
           prompt_cache_key: prepared[1]!.request.providerOptions?.openai?.promptCacheKey,
         })
       }),
+  )
+
+  runtimeIt.effect("keeps admitted API-key Responses history on encoded requests across the default and named profile", () =>
+    Effect.gen(function* () {
+      const fixture = yield* runtimeSetup
+      yield* Effect.forEach(fixture.profiles, (profile) => fixture.credentials.remove(profile.id))
+      const credential = yield* fixture.credentials.create({
+        integrationID: Integration.ID.make(providerID),
+        label: "Fixture",
+        value: Credential.Key.make({ type: "key", key: "fixture-key" }),
+      })
+      yield* fixture.credentials.activate(credential.id)
+      const sessions = yield* Session.Service
+      const db = (yield* Database.Service).db
+      const events = yield* EventRuntime.Service
+      const liveState = yield* SessionLiveState.Service
+      const requests = yield* SessionModelRequest.Service
+      const root = yield* sessions.create({ location: { directory: AbsolutePath.make("/fixture") }, model: session().model })
+      const agent = Agent.Info.empty(Agent.ID.make("fixture"))
+      const admit = (text: string) => Effect.gen(function* () {
+        yield* sessions.prompt({ sessionID: root.id, text, resume: false })
+        expect(yield* SessionPending.promoteSteers(db, events, root.id)).toBe(1)
+      })
+      const capture = Effect.fnUntraced(function* (websocket = false) {
+        const current = yield* sessions.get(root.id)
+        const resolved = yield* fixture.models.resolve(current)
+        const history = yield* SessionHistory.forModel(db, root.id, resolved.ref, resolved.accountIdentityDigest)
+        const prepared = yield* requests.prepare({
+          step: 1,
+          context: { session: current, model: resolved, agent: { id: agent.id, info: agent }, initial: "Stable fixture instructions", contextRevision: 0, messages: history, liveState: yield* liveState.load(root.id) },
+        })
+        let body: (Record<string, unknown> & { input: unknown[] }) | undefined
+        const decode = (text: string) => {
+          const parsed: unknown = JSON.parse(text)
+          if (typeof parsed !== "object" || parsed === null || !("input" in parsed) || !Array.isArray(parsed.input))
+            throw new Error("Expected Responses input array")
+          return { ...parsed, input: parsed.input }
+        }
+        const run = LLMClient.generate(prepared.request).pipe(
+          Effect.provide(LLMClient.configured()),
+          Effect.provideService(RequestExecutor.Service, { execute: (request) => Effect.sync(() => {
+            if (websocket) throw new Error("Unexpected HTTP request")
+            expect(request.url).toBe("https://api.openai.com/v1/responses")
+            if (request.body._tag !== "Uint8Array") throw new Error("Expected JSON request")
+            body = decode(new TextDecoder().decode(request.body.body))
+            return HttpClientResponse.fromWeb(request, new Response(
+              `data: ${JSON.stringify({ type: "response.completed", response: { id: "resp_fixture", status: "completed", output: [] } })}\n\n`,
+              { headers: { "content-type": "text/event-stream" } },
+            ))
+          }) }),
+          Effect.provideService(WebSocketExecutor.Service, { open: (request) => Effect.sync(() => {
+            expect(request.url).toBe("wss://api.openai.com/v1/responses")
+            return {
+              sendText: (text: string) => Effect.sync(() => { body = decode(text) }),
+              messages: Stream.make(JSON.stringify({ type: "response.completed", response: { id: "resp_fixture", status: "completed", output: [] } })),
+              close: Effect.void,
+            }
+          }) }),
+        )
+        yield* run
+        expect(body).toBeDefined()
+        return { body: body!, resolved, cache: prepared.cache }
+      })
+      yield* admit("Inspect the fixture")
+      yield* events.publish(SessionEvent.ContextObserved, { sessionID: root.id, source: "session-state", text: "State: initial" })
+      yield* events.publish(SessionEvent.ContextObserved, { sessionID: root.id, source: "team-view", text: "Team: running" })
+      const first = yield* capture()
+      const assistantID = SessionMessage.ID.create()
+      yield* events.publish(SessionEvent.Step.Started, { sessionID: root.id, assistantMessageID: assistantID, agent: agent.id, model: first.resolved.ref })
+      const reasoningState = { itemId: "rs_fixture", reasoningEncryptedContent: "fixture-ciphertext" }
+      yield* events.publish(SessionEvent.Reasoning.Started, { sessionID: root.id, assistantMessageID: assistantID, ordinal: 0, state: reasoningState })
+      yield* events.publish(SessionEvent.Reasoning.Ended, { sessionID: root.id, assistantMessageID: assistantID, ordinal: 0, text: "Fixture reasoning", state: reasoningState })
+      for (let index = 0; index < 60; index++) {
+        const callID = `call_${index}`
+        yield* events.publish(SessionEvent.Tool.Input.Started, { sessionID: root.id, assistantMessageID: assistantID, callID, name: "lookup" })
+        yield* events.publish(SessionEvent.Tool.Called, { sessionID: root.id, assistantMessageID: assistantID, callID, input: { index }, executed: false })
+        yield* events.publish(SessionEvent.Tool.Success, { sessionID: root.id, assistantMessageID: assistantID, callID, structured: { index }, executed: false, content: [{ type: "text", text: `Result ${index}` }] })
+      }
+      yield* events.publish(SessionEvent.Step.Ended, { sessionID: root.id, assistantMessageID: assistantID, finish: "tool-calls", cost: Money.USD.zero, tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } })
+      const tracker = yield* (yield* SessionProviderRequest.Service).next({
+        sessionID: root.id, source: "step", agent: agent.id, model: first.resolved.ref,
+        routeID: first.resolved.model.route.id, connectionIdentityDigest: first.resolved.accountIdentityDigest,
+        promptCacheKey: first.cache.promptCacheKey, systemDigest: first.cache.systemDigest, toolDigest: first.cache.toolDigest,
+      })
+      yield* tracker.complete({ outcome: "completed", assistantMessageID: assistantID, continuation: "full", tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } })
+      yield* admit("Continue the fixture")
+      yield* events.publish(SessionEvent.ContextObserved, { sessionID: root.id, source: "session-state", text: "State: changed" })
+      yield* events.publish(SessionEvent.ContextObserved, { sessionID: root.id, source: "team-view", text: "Team: completed" })
+      const second = yield* capture()
+      expect(second.body.prompt_cache_key).toBe(first.body.prompt_cache_key)
+      const firstInput = first.body.input
+      const secondInput = second.body.input
+      expect(secondInput.slice(0, firstInput.length)).toEqual(firstInput)
+      const explicitPositions = (input: unknown[]) => input.flatMap((item, index) =>
+        JSON.stringify(item).includes('"prompt_cache_breakpoint"') ? [index] : [],
+      )
+      const firstPositions = explicitPositions(firstInput)
+      const secondPositions = explicitPositions(secondInput)
+      const secondLookup = new Set([...secondPositions.slice(0, 2), ...secondPositions.slice(-50)])
+      expect(firstPositions).toEqual([0, 1, 2, 3])
+      expect(secondPositions).toHaveLength(67)
+      expect(firstPositions.filter((position) => secondLookup.has(position))).toEqual([0, 1])
+      expect(first.body.prompt_cache_options).toEqual({ mode: "implicit", ttl: "30m" })
+      expect(second.body.prompt_cache_options).toEqual(first.body.prompt_cache_options)
+      expect(second.body.tools).toEqual(first.body.tools)
+      expect(JSON.stringify(secondInput)).toContain("State: initial")
+      expect(JSON.stringify(secondInput)).toContain("State: changed")
+      expect(JSON.stringify(secondInput)).toContain("Team: running")
+      expect(JSON.stringify(secondInput)).toContain("Team: completed")
+      expect(JSON.stringify(secondInput)).toContain("Result 59")
+      expect(second.body.store).toBe(true)
+      expect(secondInput).toContainEqual({ type: "item_reference", id: "rs_fixture" })
+      expect(yield* sessions.switchModel({ sessionID: root.id, model: session("Fixture").model! })).toEqual({ status: "switched" })
+      const named = yield* capture()
+      expect(named.resolved.accountIdentityDigest).toBe(first.resolved.accountIdentityDigest)
+      expect(named.body.prompt_cache_key).toBe(second.body.prompt_cache_key)
+      expect(named.body.input).toEqual(second.body.input)
+      const locations = yield* LocationServiceMap.Service
+      const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
+      yield* catalog.transform((draft) => draft.model.update(providerID, modelID, (model) => {
+        model.package = "@ycoding-ai/ai/providers/openai/responses"
+        model.settings = { ...model.settings, transport: "websocket" }
+      }))
+      const wsFirst = yield* capture(true)
+      yield* admit("Continue after the fanout")
+      const wsSecond = yield* capture(true)
+      expect(wsFirst.resolved.model.route.id).toBe("openai-responses-websocket")
+      expect(wsSecond.body.input.slice(0, wsFirst.body.input.length)).toEqual(wsFirst.body.input)
+      expect(wsSecond.body.prompt_cache_key).toBe(wsFirst.body.prompt_cache_key)
+    }),
   )
 
   it.effect("fails closed for missing, renamed, deleted or replaced bound profiles", () =>

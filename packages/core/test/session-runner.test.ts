@@ -21,9 +21,11 @@ import * as AnthropicMessages from "@ycoding-ai/ai/protocols/anthropic-messages"
 import * as OpenAIChat from "@ycoding-ai/ai/protocols/openai-chat"
 import * as OpenAIResponses from "@ycoding-ai/ai/protocols/openai-responses"
 import { classifyProviderFailure } from "@ycoding-ai/ai/provider-error"
-import { RequestExecutor } from "@ycoding-ai/ai/route"
+import { RequestExecutor, WebSocketExecutor } from "@ycoding-ai/ai/route"
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Catalog } from "@ycoding-ai/core/catalog"
+import { Credential } from "@ycoding-ai/core/credential"
+import { Integration } from "@ycoding-ai/core/integration"
 import { Database } from "@ycoding-ai/core/database/database"
 import { makeGlobalNode, makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -79,6 +81,7 @@ import * as SessionRunnerLLM from "@ycoding-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { MAX_STEPS_RESET_PROMPT } from "@ycoding-ai/core/session/runner/max-steps"
 import { renderTeamObservation } from "@ycoding-ai/core/session/orchestration-view"
+import { DotsContext } from "@ycoding-ai/core/dots/context"
 import { SessionModelHeaders } from "@ycoding-ai/core/session/model-headers"
 import { SessionUsage } from "@ycoding-ai/core/session/usage"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
@@ -161,6 +164,7 @@ let responses: LLMEvent[][] | undefined
 let responseStream: Stream.Stream<LLMEvent, TestStreamError> | undefined
 let responseStreams: Stream.Stream<LLMEvent, TestStreamError>[] | undefined
 let nativeResponses: string[] | undefined
+const nativeRequests: Array<{ transport: "http" | "websocket"; url: string; body: unknown }> = []
 let streamGate: Deferred.Deferred<void> | undefined
 let streamStarted: Deferred.Deferred<void> | undefined
 let streamFailure: LLMError | undefined
@@ -180,19 +184,43 @@ const client = Layer.succeed(
           Stream.provide(
             LLMClient.layer.pipe(
               Layer.provide(
-                Layer.succeed(RequestExecutor.Service, {
-                  execute: (request) =>
-                    Effect.sync(() => {
+                Layer.mergeAll(
+                  Layer.succeed(RequestExecutor.Service, {
+                    execute: (request) =>
+                      Effect.sync(() => {
+                        const body = nativeResponses?.shift()
+                        if (body === undefined) throw new Error("Unexpected provider request")
+                        if (request.body._tag !== "Uint8Array") throw new Error("Expected JSON request")
+                        nativeRequests.push({
+                          transport: "http",
+                          url: request.url,
+                          body: JSON.parse(new TextDecoder().decode(request.body.body)),
+                        })
+                        return HttpClientResponse.fromWeb(
+                          request,
+                          new Response(body, {
+                            headers: { "content-type": "text/event-stream" },
+                          }),
+                        )
+                      }),
+                  }),
+                  Layer.succeed(WebSocketExecutor.Service, {
+                    open: (request) => Effect.sync(() => {
                       const body = nativeResponses?.shift()
                       if (body === undefined) throw new Error("Unexpected provider request")
-                      return HttpClientResponse.fromWeb(
-                        request,
-                        new Response(body, {
-                          headers: { "content-type": "text/event-stream" },
+                      const frames = body.split("\n\n")
+                        .filter((frame) => frame.startsWith("data: "))
+                        .map((frame) => frame.slice(6))
+                      return {
+                        sendText: (text) => Effect.sync(() => {
+                          nativeRequests.push({ transport: "websocket", url: request.url, body: JSON.parse(text) })
                         }),
-                      )
+                        messages: Stream.fromIterable(frames),
+                        close: Effect.void,
+                      }
                     }),
-                }),
+                  }),
+                ),
               ),
             ),
           ),
@@ -566,12 +594,13 @@ let modelResolveHook = Effect.void
 let currentModel = model
 let currentCost: CatalogModel.Info["cost"] = []
 let currentAccountIdentityDigest = "a".repeat(64)
+let actualModelResolver: SessionRunnerModel.Interface | undefined
 const fallbackModels = new Map<string, { model: Model; cost: CatalogModel.Info["cost"]; digest: string }>()
 const unavailableModels = new Set<string>()
 const unavailableProfiles = new Set<string>()
 const profileDigests = new Map<string, string>()
-const models = SessionRunnerModel.layerWith((session) =>
-  modelResolveHook.pipe(
+const models = SessionRunnerModel.layerWith((session, options) =>
+  actualModelResolver ? actualModelResolver.resolve(session, options) : modelResolveHook.pipe(
     Effect.andThen(
       Effect.gen(function* () {
         const selected = session.model
@@ -890,7 +919,7 @@ const promptCatalog = Layer.mock(Catalog.Service, {
     get: (providerID, modelID) =>
       Effect.succeed(catalogModel?.providerID === providerID && catalogModel.id === modelID ? catalogModel : undefined),
     all: () => Effect.succeed([]),
-    available: () => Effect.succeed([]),
+    available: () => Effect.sync(() => actualModelResolver && catalogModel ? [catalogModel] : []),
     default: () => Effect.succeed(undefined),
     small: () => Effect.succeed(undefined),
   },
@@ -1079,6 +1108,8 @@ const setup = Effect.gen(function* () {
   responseStream = undefined
   responseStreams = undefined
   nativeResponses = undefined
+  nativeRequests.length = 0
+  actualModelResolver = undefined
   streamGate = undefined
   streamStarted = undefined
   toolExecutionGate = undefined
@@ -2234,12 +2265,14 @@ describe("SessionRunnerLLM", () => {
       const db = (yield* Database.Service).db
       const live = yield* SessionLiveState.Service
       const state = yield* live.load(sessionID)
-      const sources = ["session-state", "team-view", "step-limit"] as const
-      const latest = [state.text, renderTeamObservation([]).text, MAX_STEPS_RESET_PROMPT]
+      const sources = ["session-state", "team-view", "step-limit", "dots"] as const
+      const dots = { state: "disabled", reason: "tool_unavailable", generation: 1 } as const
+      const latest = [state.text, renderTeamObservation([]).text, MAX_STEPS_RESET_PROMPT, DotsContext.render(dots)]
       const observations = Array.from({ length: 1253 }, (_, index) => {
-        const source = index < 1003 ? sources[index % 3] : "team-view"
+        const source =
+          index >= 999 && index < 1003 ? sources[index - 999] : index < 999 ? sources[index % 3] : "team-view"
         const text =
-          index >= 1000 && index < 1003 ? latest[index % 3] : `Distinct observation ${index}: ${"x".repeat(2048)}`
+          index >= 999 && index < 1003 ? latest[index - 999] : `Distinct observation ${index}: ${"x".repeat(2048)}`
         return { source, text }
       })
       const rows = observations.map((observation, index) => {
@@ -2283,6 +2316,7 @@ describe("SessionRunnerLLM", () => {
                   sessionID,
                   source: observations[row.seq - 1000].source,
                   text: observations[row.seq - 1000].text,
+                  ...(observations[row.seq - 1000].source === "dots" ? { dots } : {}),
                 },
               })),
             )
@@ -2307,7 +2341,11 @@ describe("SessionRunnerLLM", () => {
           query.sql.includes('"type" in') &&
           query.sql.slice(0, query.sql.indexOf(" from ")).includes('"data"'),
       )
-      expect(pages).toHaveLength(3)
+      const pagesPerScan = Math.ceil((observations.length - 999) / 100)
+      expect(pages).toHaveLength(pagesPerScan * 2)
+      expect(pages.slice(pagesPerScan).map((page) => page.params)).toEqual(
+        pages.slice(0, pagesPerScan).map((page) => page.params),
+      )
       expect(
         pages.every(
           (query) => query.sql.includes('order by "session_message"."seq" desc limit ?') && query.params.at(-1) === 100,
@@ -2490,6 +2528,10 @@ describe("SessionRunnerLLM", () => {
       expect(teamMessages(requests[0]!)).toHaveLength(0)
 
       yield* insertSession(otherSessionID)
+      yield* db.update(SessionTable)
+        .set({ model: { id: CatalogModel.ID.make("fake-model"), providerID: Provider.ID.make("fake") } })
+        .where(eq(SessionTable.id, otherSessionID))
+        .run()
       yield* events.publish(SessionEvent.Task.Updated, {
         sessionID: otherSessionID,
         change: {
@@ -10484,6 +10526,142 @@ describe("SessionRunnerLLM", () => {
       })
     }),
   )
+
+  for (const transport of ["http", "websocket"] as const) {
+    it.effect(
+      `replays stateless API-key Responses reasoning and executed tools across ${transport} Session turns`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_state: "stateless" })
+        const id = CatalogModel.ID.make("gpt-6.1")
+        catalogModel = CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.openai, id),
+          modelID: CatalogModel.ID.make("gpt-6.1-sol"),
+          package:
+            transport === "http" ? Provider.aisdk("@ai-sdk/openai") : "@ycoding-ai/ai/providers/openai/responses",
+          settings: { apiKey: "fixture-key", transport },
+          variants: ["low", "high"].map((effort) => ({
+            id: CatalogModel.VariantID.make(effort),
+            settings:
+              transport === "http"
+                ? { reasoningEffort: effort }
+                : { providerOptions: { openai: { reasoningEffort: effort } } },
+          })),
+          limit: testLimits,
+        })
+        const services = yield* Layer.build(
+          AppNodeBuilder.build(
+            LayerNode.group([SessionRunnerModel.node, Credential.node, Integration.node, Catalog.node, Agent.node]),
+            [[Location.node, Location.boundNode({ directory: runnerDirectory })]],
+          ),
+        )
+        const credentials = Context.get(services, Credential.Service)
+        const realCatalog = Context.get(services, Catalog.Service)
+        yield* realCatalog.transform((draft) =>
+          draft.model.update(Provider.ID.openai, id, (item) => {
+            item.package = catalogModel!.package
+            item.modelID = catalogModel!.modelID
+            item.settings = { apiKey: "fixture-key", transport }
+            item.variants = transport === "http"
+              ? ["low", "high"].map((effort) => ({
+                  id: CatalogModel.VariantID.make(effort),
+                  settings: { reasoningEffort: effort },
+                }))
+              : ["low", "high"].map((effort) => ({
+                  id: CatalogModel.VariantID.make(effort),
+                  settings: { providerOptions: { openai: { reasoningEffort: effort } } },
+                }))
+            item.limit = testLimits
+            item.enabled = true
+          }),
+        )
+        const credential = yield* credentials.create({
+          integrationID: Integration.ID.make("openai"),
+          label: "Fixture",
+          value: Credential.Key.make({ type: "key", key: "fixture-key" }),
+        })
+        yield* credentials.activate(credential.id)
+        actualModelResolver = Context.get(services, SessionRunnerModel.Service)
+        const select = (effort: "low" | "high", profile?: string) =>
+          session.switchModel({
+            sessionID,
+            model: {
+              providerID: Provider.ID.openai,
+              id,
+              variant: CatalogModel.VariantID.make(effort),
+              ...(profile ? { profile } : {}),
+            },
+          })
+        expect(yield* select("low")).toEqual({ status: "switched" })
+        const defaultResolved = yield* actualModelResolver.resolve(yield* session.get(sessionID))
+        const call = {
+          type: "function_call", id: "fc_fixture", call_id: "call_fixture", name: "echo",
+          arguments: '{"text":"fixture-result"}',
+        }
+        const reason = {
+          type: "reasoning", id: "rs_fixture", encrypted_content: "fixture-ciphertext",
+          summary: [{ type: "summary_text", text: "Fixture reasoning" }],
+        }
+        const stream = (items: unknown[]) => items.map((item) => `data: ${JSON.stringify(item)}\n\n`).join("")
+        nativeResponses = [
+          stream([
+            { type: "response.reasoning_summary_text.delta", item_id: "rs_fixture", delta: "Fixture reasoning" },
+            { type: "response.output_item.done", item: reason },
+            { type: "response.output_item.added", item: { ...call, arguments: "" } },
+            { type: "response.function_call_arguments.delta", item_id: "fc_fixture", delta: call.arguments },
+            { type: "response.output_item.done", item: call },
+            { type: "response.completed", response: { id: "resp_first" } },
+          ]),
+          stream([
+            { type: "response.output_text.delta", item_id: "msg_second", delta: "Tool finished" },
+            { type: "response.completed", response: { id: "resp_second" } },
+          ]),
+          stream([
+            { type: "response.output_text.delta", item_id: "msg_third", delta: "Continued" },
+            { type: "response.completed", response: { id: "resp_third" } },
+          ]),
+        ]
+        yield* admit(session, "Use the fixture tool")
+        yield* session.resume(sessionID)
+        expect(executions).toEqual(["fixture-result"])
+        expect(nativeRequests).toHaveLength(2)
+        expect(yield* select("high", "Fixture")).toEqual({ status: "switched" })
+        const namedResolved = yield* actualModelResolver.resolve(yield* session.get(sessionID))
+        expect(namedResolved.ref.profile).toBe("Fixture")
+        expect(namedResolved.accountIdentityDigest).toBe(defaultResolved.accountIdentityDigest)
+        yield* admit(session, "Continue after the tool")
+        yield* session.resume(sessionID)
+        expect(nativeRequests).toHaveLength(3)
+        expect(nativeRequests.map((request) => request.transport)).toEqual([transport, transport, transport])
+        const endpoint = transport === "http"
+          ? "https://api.openai.com/v1/responses"
+          : "wss://api.openai.com/v1/responses"
+        expect(nativeRequests.map((request) => request.url)).toEqual([endpoint, endpoint, endpoint])
+        const bodies = nativeRequests.map((request) => {
+          const body = request.body
+          if (typeof body !== "object" || body === null || !("input" in body) || !Array.isArray(body.input))
+            throw new Error("Expected Responses input")
+          return {
+            input: body.input as unknown[],
+            store: "store" in body ? body.store : undefined,
+            prompt_cache_key: "prompt_cache_key" in body ? body.prompt_cache_key : undefined,
+            reasoning: "reasoning" in body ? body.reasoning : undefined,
+          }
+        })
+        expect(bodies.map((body) => body.store)).toEqual([false, false, false])
+        expect(typeof bodies[0]?.prompt_cache_key).toBe("string")
+        expect(bodies[0]?.prompt_cache_key).not.toBe("")
+        expect(bodies[1]?.prompt_cache_key).toBe(bodies[0]?.prompt_cache_key)
+        expect(bodies[2]?.prompt_cache_key).toBe(bodies[0]?.prompt_cache_key)
+        expect(bodies[1]?.input.slice(0, bodies[0]?.input.length)).toEqual(bodies[0]?.input)
+        expect(bodies[2]?.input.slice(0, bodies[1]?.input.length)).toEqual(bodies[1]?.input)
+        expect(JSON.stringify(bodies[1]?.input)).toContain("fixture-ciphertext")
+        expect(JSON.stringify(bodies[1]?.input)).toContain("fixture-result")
+        expect(bodies[0]?.reasoning).toMatchObject({ effort: "low" })
+        expect(bodies[2]?.input).toContainEqual({ type: "configuration_update", reasoning: { effort: "high" } })
+      }),
+    )
+  }
 
   for (const recovery of [false, true]) {
     it.effect(
