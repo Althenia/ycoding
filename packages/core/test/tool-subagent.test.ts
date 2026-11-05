@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Context, DateTime, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Cause, Context, DateTime, Deferred, Effect, Fiber, Layer, Logger, Option, Schema, Stream } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import path from "path"
 import { LLMEvent, Message, SystemPart } from "@ycoding-ai/ai"
@@ -23,6 +23,7 @@ import { Job } from "@ycoding-ai/core/job"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
+import { ScopeUnavailableError } from "@ycoding-ai/core/session/error"
 import { SessionReview } from "@ycoding-ai/core/session/review"
 import { SessionReviewFold } from "@ycoding-ai/core/session/review-fold"
 import type { LocationServices } from "@ycoding-ai/core/location-services"
@@ -77,8 +78,16 @@ const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 }
 const executionWakes: Session.ID[] = []
 const executionInterrupts: Session.ID[] = []
 const notificationDeliveredOnWake: boolean[] = []
+let failWake = false
+let failPrepare = false
 
 const outputSessionID = (value: unknown) => Schema.decodeUnknownSync(SubagentTool.Output)(value).sessionID
+
+const currentTaskOwner = Effect.gen(function* () {
+  const owner = yield* ShellLedger.identify(yield* AppProcess.Service, process.pid)
+  expect(owner).toBeDefined()
+  return owner!
+})
 
 const executionNode = makeGlobalNode({
   service: SessionExecution.Service,
@@ -133,10 +142,12 @@ const executionNode = makeGlobalNode({
         })
       })
       return SessionExecution.Service.of({
+        prepareTask: () => failPrepare ? Effect.fail(new ScopeUnavailableError({ operation: "managed task owner" })) : Effect.void,
         active: Effect.succeed(new Set()),
         resume: complete,
         wake: (sessionID) =>
           Effect.gen(function* () {
+            if (failWake) return yield* new ScopeUnavailableError({ operation: "managed task owner" })
             executionWakes.push(sessionID)
             const rows = yield* db
               .select({ delivered: SessionTaskNotificationTable.delivered })
@@ -226,6 +237,169 @@ it.live("agent delegation while asleep preserves family sleep and its hold", () 
         expect((yield* awake.get).sleepHold).toBe(true)
       }),
     ),
+  ),
+)
+
+it.live("acknowledges a committed parent message when advisory wake fails and retries without duplication", () =>
+  Effect.acquireRelease(Effect.promise(() => tmpdir()), (directory) => Effect.promise(() => directory[Symbol.asyncDispose]())).pipe(
+    Effect.flatMap((directory) => Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ location: Location.Ref.make({ directory: AbsolutePath.make(directory.path) }), model: parentModel })
+      yield* withSubagent(parent.location)
+      const prepared = yield* SessionOrchestration.preflight(parent, { agent: Agent.ID.make("reviewer"), caller: toolIdentity.agent })
+        .pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location, [LocationServiceMap.full])))
+      const orchestration = (yield* PluginRuntime.Service).orchestration
+      const child = yield* orchestration.launch({ parentID: parent.id, parentAssistantMessageID: SessionMessage.ID.make("msg_ack_launch"), toolCallID: "call_ack_launch", agent: Agent.ID.make("reviewer"), description: "hold ack", prompt: "hold", background: true, prepared })
+      const messageID = SessionMessage.ID.make("msg_ack_send")
+      const input = { parentID: parent.id, childID: child.sessionID, messageID, text: "work", delivery: "queue" as const }
+      failPrepare = true
+      const rejected = yield* Effect.exit(orchestration.send(input)).pipe(Effect.ensuring(Effect.sync(() => { failPrepare = false })))
+      expect(rejected._tag === "Failure" && Option.getOrUndefined(Cause.findErrorOption(rejected.cause))).toBeInstanceOf(SessionOrchestration.ServiceUnavailableError)
+      expect((yield* sessions.pending(child.sessionID)).filter((item) => item.id === messageID)).toHaveLength(0)
+      const logs: unknown[] = []
+      failWake = true
+      const result = yield* Effect.exit(orchestration.send(input)).pipe(
+        Effect.provide(Logger.layer([Logger.make(({ message }) => { logs.push(message) })])),
+        Effect.ensuring(Effect.sync(() => { failWake = false })),
+      )
+      expect(result._tag).toBe("Success")
+      expect(JSON.stringify(logs)).toContain("Failed to wake Session after durable admission")
+      expect(JSON.stringify(logs)).toContain("managed task owner")
+      expect((yield* sessions.pending(child.sessionID)).filter((item) => item.id === messageID)).toHaveLength(1)
+      yield* orchestration.send(input)
+      expect((yield* sessions.pending(child.sessionID)).filter((item) => item.id === messageID)).toHaveLength(1)
+    })),
+  ),
+)
+
+it.live("retries the wake for an already committed launch without duplicating its input", () =>
+  Effect.acquireRelease(Effect.promise(() => tmpdir()), (directory) => Effect.promise(() => directory[Symbol.asyncDispose]())).pipe(
+    Effect.flatMap((directory) => Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ location: Location.Ref.make({ directory: AbsolutePath.make(directory.path) }), model: parentModel })
+      yield* withSubagent(parent.location)
+      const prepared = yield* SessionOrchestration.preflight(parent, { agent: Agent.ID.make("reviewer"), caller: toolIdentity.agent })
+        .pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location, [LocationServiceMap.full])))
+      const orchestration = (yield* PluginRuntime.Service).orchestration
+      const input = { parentID: parent.id, parentAssistantMessageID: SessionMessage.ID.make("msg_retry_launch"), toolCallID: "call_retry_launch", agent: Agent.ID.make("reviewer"), description: "hold retry", prompt: "hold", background: true, prepared }
+      failWake = true
+      const result = yield* Effect.exit(orchestration.launch(input)).pipe(Effect.ensuring(Effect.sync(() => { failWake = false })))
+      expect(result._tag).toBe("Success")
+      if (result._tag !== "Success") return
+      const initialWakes = executionWakes.filter((id) => id === result.value.sessionID).length
+      const retried = yield* orchestration.launch(input)
+      expect(retried.sessionID).toBe(result.value.sessionID)
+      expect(executionWakes.filter((id) => id === retried.sessionID)).toHaveLength(initialWakes + 1)
+      expect((yield* sessions.pending(retried.sessionID)).filter((entry) => entry.type === "user")).toHaveLength(1)
+    })),
+  ),
+)
+
+it.live("acknowledges a committed child review and resumes pending work after advisory wake fails", () =>
+  Effect.acquireRelease(Effect.promise(() => tmpdir()), (directory) => Effect.promise(() => directory[Symbol.asyncDispose]())).pipe(
+    Effect.flatMap((directory) => Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ location: Location.Ref.make({ directory: AbsolutePath.make(directory.path) }), model: parentModel })
+      yield* withSubagent(parent.location)
+      const prepared = yield* SessionOrchestration.preflight(parent, { agent: Agent.ID.make("reviewer"), caller: toolIdentity.agent })
+        .pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location, [LocationServiceMap.full])))
+      const orchestration = (yield* PluginRuntime.Service).orchestration
+      const child = yield* orchestration.launch({ parentID: parent.id, parentAssistantMessageID: SessionMessage.ID.make("msg_review_launch"), toolCallID: "call_review_launch", agent: Agent.ID.make("reviewer"), description: "hold review", prompt: "hold", background: true, prepared })
+      yield* (yield* SessionAutonomy.Service).set({ sessionID: parent.id, sleep: true, answers: "manual" })
+      const question = yield* orchestration.question(child.sessionID, "Proceed?")
+      expect(question.question.deferred).toBe(true)
+      const reviews = yield* SessionReview.Service
+      const item = (yield* reviews.list(parent.id)).find((entry) => entry.kind === "subagent_question")!
+      const decision = { sessionID: parent.id, itemID: item.itemID, decision: { kind: "subagent_question" as const, text: "yes" } }
+      const logs: unknown[] = []
+      failWake = true
+      const result = yield* Effect.exit(reviews.decide(decision)).pipe(
+        Effect.provide(Logger.layer([Logger.make(({ message }) => { logs.push(message) })])),
+        Effect.ensuring(Effect.sync(() => { failWake = false })),
+      )
+      expect(result._tag).toBe("Success")
+      expect(JSON.stringify(logs)).toContain("Failed to wake Session after durable admission")
+      expect((yield* sessions.pending(child.sessionID)).filter((entry) => entry.type === "synthetic" && entry.data.metadata?.kind === "answer")).toHaveLength(1)
+      const db = (yield* Database.Service).db
+      const decisions = () => db.select().from(EventTable).where(eq(EventTable.aggregate_id, child.sessionID)).all().pipe(
+        Effect.map((events) => events.filter((event) => event.type === EventRuntime.versionedType(SessionEvent.Review.Decided.type, SessionEvent.Review.Decided.durable.version))),
+      )
+      expect(yield* decisions()).toHaveLength(1)
+      const before = executionWakes.filter((id) => id === child.sessionID).length
+      expect(yield* reviews.decide(decision).pipe(Effect.flip)).toBeInstanceOf(SessionReview.ConflictError)
+      yield* orchestration.resume({ parentID: parent.id, childID: child.sessionID })
+      expect(executionWakes.filter((id) => id === child.sessionID)).toHaveLength(before + 1)
+      expect((yield* sessions.pending(child.sessionID)).filter((entry) => entry.type === "synthetic" && entry.data.metadata?.kind === "answer")).toHaveLength(1)
+      expect(yield* decisions()).toHaveLength(1)
+    })),
+  ),
+)
+
+it.live("acknowledges recovery Continue despite advisory wake failure and keeps its review settled", () =>
+  Effect.acquireRelease(Effect.promise(() => tmpdir()), (directory) => Effect.promise(() => directory[Symbol.asyncDispose]())).pipe(
+    Effect.flatMap((directory) => Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ location: Location.Ref.make({ directory: AbsolutePath.make(directory.path) }), model: parentModel })
+      yield* withSubagent(parent.location)
+      const prepared = yield* SessionOrchestration.preflight(parent, { agent: Agent.ID.make("reviewer"), caller: toolIdentity.agent })
+        .pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location, [LocationServiceMap.full])))
+      const orchestration = (yield* PluginRuntime.Service).orchestration
+      const child = yield* orchestration.launch({ parentID: parent.id, parentAssistantMessageID: SessionMessage.ID.make("msg_recovery_review_launch"), toolCallID: "call_recovery_review_launch", agent: Agent.ID.make("reviewer"), description: "hold recovery", prompt: "hold", background: true, prepared })
+      const question = yield* orchestration.question(child.sessionID, "Continue after restart?")
+      const reviews = yield* SessionReview.Service
+      const item = yield* reviews.open({ sessionID: child.sessionID, kind: "recovery", reason: "restart", origin: { questionID: question.question.id }, payload: { type: "recovery", tools: [{ messageID: SessionMessage.ID.make("msg_recovery_tool"), callID: "call_recovery_tool", name: "synthetic" }] }, limit: 16 })
+      const decision = { sessionID: parent.id, itemID: item.itemID, decision: { kind: "recovery" as const, choice: "continue" as const } }
+      const logs: unknown[] = []
+      failWake = true
+      const result = yield* Effect.exit(reviews.decide(decision)).pipe(
+        Effect.provide(Logger.layer([Logger.make(({ message }) => { logs.push(message) })])),
+        Effect.ensuring(Effect.sync(() => { failWake = false })),
+      )
+      expect(result._tag).toBe("Success")
+      expect(JSON.stringify(logs)).toContain("Failed to wake Session after durable admission")
+      const pending = () => sessions.pending(child.sessionID).pipe(Effect.map((items) => items.filter((entry) => entry.id === SessionReviewFold.promptID(item.itemID))))
+      const db = (yield* Database.Service).db
+      const decisions = () => db.select().from(EventTable).where(eq(EventTable.aggregate_id, child.sessionID)).all().pipe(
+        Effect.map((events) => events.filter((event) => event.type === EventRuntime.versionedType(SessionEvent.Review.Decided.type, SessionEvent.Review.Decided.durable.version))),
+      )
+      expect(yield* pending()).toHaveLength(1)
+      expect(yield* decisions()).toHaveLength(1)
+      expect(yield* reviews.decide(decision).pipe(Effect.flip)).toBeInstanceOf(SessionReview.ConflictError)
+      const before = executionWakes.filter((id) => id === child.sessionID).length
+      yield* orchestration.resume({ parentID: parent.id, childID: child.sessionID })
+      expect(executionWakes.filter((id) => id === child.sessionID)).toHaveLength(before + 1)
+      expect(yield* pending()).toHaveLength(1)
+      expect(yield* decisions()).toHaveLength(1)
+    })),
+  ),
+)
+
+it.live("acknowledges committed notices and automatic answers when advisory wake fails", () =>
+  Effect.acquireRelease(Effect.promise(() => tmpdir()), (directory) => Effect.promise(() => directory[Symbol.asyncDispose]())).pipe(
+    Effect.flatMap((directory) => Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ location: Location.Ref.make({ directory: AbsolutePath.make(directory.path) }), model: parentModel })
+      yield* withSubagent(parent.location)
+      const prepared = yield* SessionOrchestration.preflight(parent, { agent: Agent.ID.make("reviewer"), caller: toolIdentity.agent })
+        .pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location, [LocationServiceMap.full])))
+      const orchestration = (yield* PluginRuntime.Service).orchestration
+      const child = yield* orchestration.launch({ parentID: parent.id, parentAssistantMessageID: SessionMessage.ID.make("msg_notice_launch"), toolCallID: "call_notice_launch", agent: Agent.ID.make("reviewer"), description: "hold notice", prompt: "hold", background: true, prepared })
+      const notice = { id: SessionMessage.ID.make("msg_synthetic_notice"), sessionID: child.sessionID, text: "Notice", resume: true }
+      failWake = true
+      const sent = yield* Effect.exit(orchestration.notice(notice)).pipe(Effect.ensuring(Effect.sync(() => { failWake = false })))
+      expect(sent._tag).toBe("Success")
+      if (sent._tag !== "Success") return
+      yield* orchestration.notice(notice)
+      expect((yield* sessions.pending(child.sessionID)).filter((item) => item.id === sent.value.id)).toHaveLength(1)
+      yield* (yield* SessionAutonomy.Service).set({ sessionID: parent.id, answers: "auto" })
+      yield* (yield* SessionAutonomy.Service).set({ sessionID: child.sessionID, answers: "auto" })
+      failWake = true
+      const answered = yield* Effect.exit(orchestration.question(child.sessionID, "Choose", { options: ["Proceed (Recommended)", "Stop"] })).pipe(Effect.ensuring(Effect.sync(() => { failWake = false })))
+      expect(answered._tag).toBe("Success")
+      if (answered._tag !== "Success") return
+      expect(answered.value.autoAnswered).toBe(true)
+      expect((yield* sessions.pending(child.sessionID)).filter((entry) => entry.type === "synthetic" && entry.data.metadata?.automatic === true)).toHaveLength(1)
+    })),
   ),
 )
 
@@ -460,11 +634,13 @@ describe("SubagentTool", () => {
     expect((yield* SessionCapturedChanges.page(db, { sessionID: parent.id, limit: 10 })).data).toEqual(captured.data)
     const history = yield* db.select().from(EventTable).orderBy(sql`rowid`).all().pipe(Effect.orDie)
     const projects = yield* db.select().from(ProjectTable).all().pipe(Effect.orDie)
+    const replayOwner = yield* ShellLedger.identify(yield* AppProcess.Service, process.pid)
+    expect(replayOwner).toBeDefined()
     const rebuilt = yield* Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const events = yield* EventRuntime.Service
       yield* db.insert(ProjectTable).values(projects).run().pipe(Effect.orDie)
-      for (const row of history) yield* events.replay({ id: row.id, aggregateID: row.aggregate_id, seq: row.seq, type: row.type, created: DateTime.makeUnsafe(row.created), data: row.data })
+      for (const row of history) yield* events.replay({ id: row.id, aggregateID: row.aggregate_id, seq: row.seq, type: row.type, created: DateTime.makeUnsafe(row.created), data: row.data }).pipe(Effect.provideService(EventRuntime.TaskOwner, replayOwner))
       return yield* SessionCapturedChanges.page(db, { sessionID: parent.id, limit: 10 })
     }).pipe(Effect.provide(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node])).pipe(Layer.fresh)), Effect.scoped)
     expect(rebuilt.data).toEqual(captured.data)
@@ -600,8 +776,9 @@ describe("SubagentTool", () => {
           const losses = yield* lossAdmissions
           expect(losses).toHaveLength(1)
           expect((yield* (yield* SessionStore.Service).context(parent.id)).filter((message) => message.type === "synthetic" && message.metadata?.type === "lost")).toHaveLength(1)
+          const taskOwner = yield* currentTaskOwner
           for (const task of [child, fresh]) {
-            yield* execution.resume(task.sessionID)
+            yield* execution.resume(task.sessionID, taskOwner)
             expect((yield* orchestration.get(parent.id, task.sessionID)).state).toBe("completed")
             yield* orchestration.settle(task.sessionID, { type: "completed", excerpt: childText })
           }
@@ -619,7 +796,7 @@ describe("SubagentTool", () => {
             const events = yield* EventRuntime.Service
             yield* db.insert(ProjectTable).values(projects).run().pipe(Effect.orDie)
             for (const row of history) yield* events.replay({ id: row.id, aggregateID: row.aggregate_id, seq: row.seq,
-              type: row.type, created: DateTime.makeUnsafe(row.created), data: row.data })
+              type: row.type, created: DateTime.makeUnsafe(row.created), data: row.data }).pipe(Effect.provideService(EventRuntime.TaskOwner, taskOwner))
             return yield* db.select().from(SessionTaskTable).orderBy(SessionTaskTable.session_id).all().pipe(Effect.orDie)
           }).pipe(Effect.provide(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node])).pipe(Layer.fresh)), Effect.scoped)
           expect(rebuilt).toEqual(tasks)
@@ -1182,7 +1359,7 @@ describe("SubagentTool", () => {
               },
               { id: EventRuntime.ID.make(interruptedIDs.launchEventID) },
             ),
-          )
+          ).pipe(Effect.provideService(EventRuntime.TaskOwner, yield* currentTaskOwner))
           expect((yield* orchestration.get(parent.id, interruptedIDs.childID)).state).toBe("starting")
           expect(yield* sessions.pending(interruptedIDs.childID)).toHaveLength(0)
 
@@ -1244,7 +1421,7 @@ describe("SubagentTool", () => {
               background: true,
               delivery: "steer",
             },
-          })
+          }).pipe(Effect.provideService(EventRuntime.TaskOwner, yield* currentTaskOwner))
           expect((yield* orchestration.get(parent.id, ids.childID)).state).toBe("starting")
           const transitions = yield* events.subscribe(SessionEvent.Task.Updated).pipe(
             Stream.filter((event) => event.data.sessionID === ids.childID),

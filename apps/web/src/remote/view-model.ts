@@ -24,6 +24,10 @@ export function familyTaskActivity(tasks: readonly { readonly state: string }[])
   return { running, waiting, supervising: !running && waiting === 0 && tasks.some((task) => task.state === "supervising") }
 }
 
+export function boundPlacement(info: "bound" | "standalone" | undefined, view: "bound" | "standalone" | undefined) {
+  return info !== "standalone" && view !== "standalone" && (info === "bound" || view === "bound")
+}
+
 export function modelEffortNotice(input: { readonly known: boolean; readonly blocked: boolean; readonly variants: number }) {
   return input.known && !input.blocked && input.variants === 0
     ? "This model has no adjustable effort; it uses its own settings."

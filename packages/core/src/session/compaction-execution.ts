@@ -8,6 +8,7 @@ import { SessionCompaction } from "./compaction"
 import { SessionCompactionJob } from "./compaction-job"
 import type { ContextManifest } from "./context-manifest"
 import { SessionContextState } from "./context-state"
+import { SessionErrors } from "./error"
 
 const LeaseDurationMillis = 30_000
 const ActivationAttempts = 3
@@ -143,7 +144,7 @@ const activate = <E, R>(
   owner: string,
   manifest: (job: SessionCompactionJob.Job) => Effect.Effect<ContextManifest.Manifest, E, R>,
   attempts: number,
-): Effect.Effect<void, E | SessionContextState.ActivationError, R> =>
+): Effect.Effect<void, E | SessionContextState.ActivationError | SessionErrors.ScopeUnavailableError, R> =>
   manifest(job).pipe(
     Effect.flatMap((candidate) =>
       contextState.activate({ sessionID: job.sessionID, jobID: job.id, leaseOwner: owner, manifest: candidate }),
@@ -199,6 +200,7 @@ function result(job: SessionCompactionJob.Job & { readonly status: "ended" | "fa
 
 function terminalFailureCode(cause: Cause.Cause<unknown>): CompactionSchema.FailureCode {
   const error = Option.getOrUndefined(Cause.findErrorOption(cause)) ?? Cause.squash(cause)
+  if (error instanceof SessionErrors.ScopeUnavailableError) return "protected_state_changed"
   if (error instanceof SessionCompaction.ManifestError) return error.code
   if (!(error instanceof SessionContextState.ActivationError)) return "migration_failed"
   if (

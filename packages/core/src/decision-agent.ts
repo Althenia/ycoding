@@ -56,9 +56,9 @@ export interface Invocation {
 export const agentFor = (context: Pick<Invocation, "purpose" | "authority">): Agent.ID =>
   Agent.ID.make(context.authority === "yolo" && context.purpose !== undefined ? `yolo-${context.purpose}` : "decision")
 
-export interface Interface {
-  readonly evaluate: (request: typeof DecisionJudgment.Request.Type, context: Invocation) => Effect.Effect<typeof Response.Type, Error>
-  readonly modelKey: (context: Invocation) => Effect.Effect<string>
+export interface Interface<E = never> {
+  readonly evaluate: (request: typeof DecisionJudgment.Request.Type, context: Invocation) => Effect.Effect<typeof Response.Type, Error | E>
+  readonly modelKey: (context: Invocation) => Effect.Effect<string, E>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/DecisionAgent") {}
@@ -149,11 +149,20 @@ function auditedAnswers(answers: typeof DecisionJudgment.Document.Type["decision
   }))
 }
 
-const layer = Layer.effect(Service, Effect.gen(function* () {
+type Snapshot<E> = {
+  readonly entries: ReadonlyArray<Config.Entry>
+  readonly revision?: number
+  readonly assert: () => Effect.Effect<void, E>
+}
+type Helpers<E> = {
+  readonly settings: () => Effect.Effect<SessionHelperPolicy.Settings, E>
+  readonly resolveRef: (session: SessionSchema.Info, selected: CatalogModel.Ref | undefined, options?: SessionHelperPolicy.ResolveOptions) => Effect.Effect<SessionRunnerModel.Resolved | undefined, E>
+  readonly resolveModel: (session: SessionSchema.Info, role: SessionHelperPolicy.Role, agent?: Agent.Info, options?: SessionHelperPolicy.ResolveOptions) => Effect.Effect<SessionRunnerModel.Resolved | undefined, E>
+}
+
+export const make = <E>(helpers: Helpers<E>, capture: () => Effect.Effect<Snapshot<E>, E>) => Effect.gen(function* () {
   const agents = yield* Agent.Service
-  const helpers = yield* SessionHelperPolicy.Service
   const store = yield* SessionStore.Service
-  const config = yield* Config.Service
   const requests = yield* SessionProviderRequest.Service
   const events = yield* EventRuntime.Service
   const llm = yield* LLMClient.Service
@@ -165,25 +174,30 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
     agent: Agent.Info,
     decisionAgent: Agent.Info,
     options?: SessionHelperPolicy.ResolveOptions,
-  ): ReadonlyArray<{ readonly key: string; readonly resolve: Effect.Effect<SessionRunnerModel.Resolved | undefined> }> => {
+  ) => Effect.gen(function* () {
     if (context.authority !== "yolo" || context.purpose === undefined)
       return [{ key: "decision", resolve: Effect.suspend(() => helpers.resolveModel(session, "decision", decisionAgent, options)) }]
+    const settings = yield* helpers.settings()
     return SessionHelperPolicy.selectHelperCandidates({
       agentModels: [agent.model, decisionAgent.model],
-      roleModel: helpers.settings.models.decision,
+      roleModel: settings.models.decision,
       sessionModel: session.model,
     }).map((selected) => ({
       key: selected === undefined ? "session" : JSON.stringify([selected.providerID, selected.id, selected.variant ?? null, selected.profile ?? null]),
       resolve: Effect.suspend(() => helpers.resolveRef(session, selected, options)),
     }))
-  }
-  return Service.of({
+  })
+  return {
     modelKey: Effect.fn("DecisionAgent.modelKey")(function* (context) {
+      const snapshot = yield* capture()
       const session = yield* store.get(context.sessionID)
       const agent = yield* agents.get(agentFor(context))
       const decisionAgent = yield* agents.get(Agent.ID.make("decision"))
-      if (!session || !agent || !decisionAgent) return "unavailable"
-      const parts = yield* Effect.forEach(candidateChain(session, context, agent, decisionAgent, { refresh: false }), (candidate) =>
+      if (!session || !agent || !decisionAgent) {
+        yield* snapshot.assert()
+        return "unavailable"
+      }
+      const parts = yield* Effect.forEach(yield* candidateChain(session, context, agent, decisionAgent, { refresh: false }), (candidate) =>
         candidate.resolve.pipe(
           Effect.map((resolved) => [
             candidate.key,
@@ -193,9 +207,12 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
           ]),
         ),
       )
-      return JSON.stringify([parts, yield* taskContext(context.sessionID).pipe(Effect.catchDefect(() => Effect.succeed(null)))])
+      const task = yield* taskContext(context.sessionID).pipe(Effect.catchDefect(() => Effect.succeed(null)))
+      yield* snapshot.assert()
+      return JSON.stringify(snapshot.revision === undefined ? [parts, task] : [parts, task, snapshot.revision])
     }),
     evaluate: Effect.fn("DecisionAgent.evaluate")(function* (input, context) {
+      const snapshot = yield* capture()
       const startedAt = context.startedAt ?? (yield* Clock.currentTimeMillis)
       const agentID = agentFor(context)
       let fingerprint = Hash.sha256(JSON.stringify(input))
@@ -207,6 +224,7 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
         readonly answers?: ReturnType<typeof auditedAnswers>
       }) => Effect.suspend(() => {
         if (progress.audited) return Effect.void
+        return snapshot.assert().pipe(Effect.andThen(Effect.suspend(() => {
         progress.audited = true
         return events.publish(SessionEvent.DecisionAudited, {
           sessionID: context.sessionID,
@@ -222,6 +240,7 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
           attempts: progress.attempts,
           ...(fields.answers === undefined ? {} : { answers: fields.answers }),
         }).pipe(Effect.ignore)
+        })))
       })
       const auditFailed = (reason: DecisionFailure.Reason, model?: typeof CatalogModel.Ref.Type) =>
         audit({ outcome: "failed", reason, ...(model === undefined ? {} : { model }) }).pipe(Effect.andThen(Effect.fail(new Error({ reason }))))
@@ -236,7 +255,7 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
       const decisionAgent = agentID === "decision" ? agent : yield* agents.get(Agent.ID.make("decision"))
       if (!session || !agent || !decisionAgent) return yield* auditFailed("unavailable")
       const recovery = context.authority === "yolo" && context.purpose !== undefined
-      const chain = candidateChain(session, context, agent, decisionAgent)
+      const chain = yield* candidateChain(session, context, agent, decisionAgent)
       const maxAttempts = recovery ? MAX_RECOVERY_ATTEMPTS : MAX_ATTEMPTS
       let totalUsage: SessionUsage.Recorded | undefined
 
@@ -244,8 +263,7 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
         resolved: SessionRunnerModel.Resolved,
         carry: { readonly repair: boolean; readonly truncated: boolean },
       ) {
-        const entries = yield* config.entries()
-        const efficiency = SessionRunnerCache.efficiencySettings(Config.latest(entries, "efficiency"))
+        const efficiency = SessionRunnerCache.efficiencySettings(Config.latest(snapshot.entries, "efficiency"))
         const schema = DecisionJudgment.responseSchema(input)
         const makeBase = (maxTokens: number, repair: boolean) => LLM.request({
           model: resolved.model,
@@ -388,6 +406,7 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
           const remaining = TOTAL_TIMEOUT_MS - ((yield* Clock.currentTimeMillis) - startedAt)
           if (remaining <= 0) return { type: "failure" as const, failure: failure("timeout"), exhausted: true }
           progress.attempts += 1
+          yield* snapshot.assert()
           const outcome = yield* runAttempt(maxTokens, Math.min(ATTEMPT_TIMEOUT_MS, remaining), repair)
           if (outcome.usage !== undefined) totalUsage = totalUsage ? SessionUsage.add(totalUsage, outcome.usage) : outcome.usage
           if (outcome.type === "success") return { type: "success" as const, document: outcome.document }
@@ -420,6 +439,7 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
           const currentTask = yield* taskContext(context.sessionID).pipe(Effect.catchDefect(() => auditFailed("unavailable", resolved.ref)))
           if (SessionDecisionContext.authorityDigest(task) !== SessionDecisionContext.authorityDigest(currentTask))
             return yield* auditFailed("unavailable", resolved.ref)
+          yield* snapshot.assert()
           yield* audit({ outcome: "succeeded", model: resolved.ref, answers: auditedAnswers(outcome.document.decisions.answers) })
           return { model: resolved.ref, semantics: "model-estimate" as const, ...outcome.document.decisions,
             ...(totalUsage === undefined ? {} : { usage: totalUsage.tokens }),
@@ -432,11 +452,21 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
       }
       const report = lastFailed ?? firstSkip ?? { reason: "unavailable" as const }
       progress.route = report.route
+      yield* snapshot.assert()
       return yield* auditFailed(report.reason, report.ref)
-      }).pipe(Effect.onInterrupt(() => audit({ outcome: "cancelled" })))
+      }).pipe(Effect.onInterrupt(() => audit({ outcome: "cancelled" }).pipe(Effect.ignore)))
     }, (effect, _input, context) => SessionUsageAttribution.contribute(database.db, context.sessionID, effect)),
-  })
+  } satisfies Interface<E>
+})
+
+const layer = Layer.effect(Service, Effect.gen(function* () {
+  const helpers = yield* SessionHelperPolicy.Service
+  const config = yield* Config.Service
+  return yield* make({ ...helpers, settings: () => Effect.succeed(helpers.settings) }, () => config.entries().pipe(
+    Effect.map((entries) => ({ entries, assert: () => Effect.void })),
+  ))
 }))
+
 
 export const node = makeLocationNode({
   service: Service, layer,

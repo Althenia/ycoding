@@ -43,6 +43,7 @@ export const remoteOperations = [
   "session.list",
   "session.active",
   "session.get",
+  "session.fork",
   "session.delete",
   "session.messages",
   "session.capturedChanges.list",
@@ -131,6 +132,7 @@ export const remoteOperations = [
 /** Operations that address one session and therefore require `sessionID`. */
 export const remoteSessionOperations = [
   "session.get",
+  "session.fork",
   "session.delete",
   "session.messages",
   "session.capturedChanges.list",
@@ -305,6 +307,7 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.active": "read",
   "session.get": "read",
   "session.delete": "mutation",
+  "session.fork": "mutation",
   "session.messages": "read",
   "session.capturedChanges.list": "read",
   "session.compaction.list": "read",
@@ -983,6 +986,9 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
   if (operation === "dots.detach" || operation === "dots.remove") return input === undefined || isRecord(input) && Object.keys(input).every((key) => key === "expectedTarget") &&
     (input.expectedTarget === undefined || readDotsComputerTarget(input.expectedTarget) !== null)
   if (operation === "session.delete") return input === undefined || isRecord(input) && Object.keys(input).length === 0
+  if (operation === "session.fork") return input === undefined || isRecord(input) &&
+    Object.keys(input).every((key) => key === "messageID") &&
+    (input.messageID === undefined || typeof input.messageID === "string" && /^msg_[A-Za-z0-9_-]+$/.test(input.messageID) && input.messageID.length <= 128)
   if (operation.startsWith("coordination.")) return validCoordinationInput(operation, input)
   if (operation === "session.list") return input === undefined || isRecord(input) &&
     (input.status === undefined || input.status === "waiting" || input.status === "running" || input.status === "idle") &&
@@ -1097,13 +1103,13 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
   if (
     !isRecord(input) ||
     !isSessionID(input.id) ||
-    !validWorkspace(input.workspace) ||
+    (input.scope === "standalone" ? input.workspace !== undefined : (input.scope !== undefined && input.scope !== "bound") || !validWorkspace(input.workspace)) ||
     (input.agent !== undefined && !validName(input.agent)) ||
     (input.model !== undefined && !validModel(input.model)) ||
     (input.title !== undefined && !isSessionTitle(input.title))
   )
     return false
-  return Object.keys(input).every((key) => key === "id" || key === "workspace" || key === "agent" || key === "model" || key === "title")
+  return Object.keys(input).every((key) => key === "id" || key === "scope" || key === "workspace" || key === "agent" || key === "model" || key === "title")
 }
 
 function coordinationKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {

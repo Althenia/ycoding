@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "aedbc9a3-76ec-41b4-b4b8-bfdb95541c84",
+  "id": "582385aa-d079-4c5a-b46d-6f2c0e3f7718",
   "prevIds": [
-    "ab4e32f6-9348-419d-8b4c-06d5980547b6"
+    "aedbc9a3-76ec-41b4-b4b8-bfdb95541c84"
   ],
   "ddl": [
     {
@@ -6816,6 +6816,16 @@
       "type": "text",
       "notNull": true,
       "autoincrement": false,
+      "default": "'bound'",
+      "generated": null,
+      "name": "scope",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
       "default": null,
       "generated": null,
       "name": "project_id",
@@ -12502,6 +12512,12 @@
       "name": "session_provider_state_link_time_check",
       "entityType": "checks",
       "table": "session_provider_state_link"
+    },
+    {
+      "value": "\"scope\" IN ('bound', 'standalone')",
+      "name": "session_scope_check",
+      "entityType": "checks",
+      "table": "session"
     },
     {
       "value": "typeof(\"revision\") = 'integer' AND \"revision\" >= 0",

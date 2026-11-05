@@ -6,6 +6,8 @@ import { SessionReview } from "@ycoding-ai/schema/session-review"
 import { Effect, Schema } from "effect"
 import { Form } from "../form"
 import { Permission } from "../permission"
+import type { StandalonePermission } from "./standalone-permission"
+import type { StandaloneConfig } from "../config/standalone"
 import { Hash } from "../util/hash"
 import { Question } from "../question"
 import { Tool } from "./tool"
@@ -82,12 +84,7 @@ export const toModelOutput = (
   return `User has answered your questions: ${formatted}. You can now continue with the user's answers in mind.`
 }
 
-export const Plugin = {
-  id: "ycoding.tool.question",
-  effect: Effect.fn("QuestionTool.Plugin")(function* (ctx: PluginContext) {
-    const forms = yield* Form.Service
-    const permission = yield* Permission.Service
-    yield* ctx.tool.transform((draft) => draft.add(name, Tool.make({
+export const make = (forms: Form.Interface<StandaloneConfig.InvalidError>, permission: StandalonePermission.Interface) => Tool.make({
       description,
       input: Input,
       output: Output,
@@ -104,10 +101,12 @@ export const Plugin = {
           metadata: { kind: "question", tool: { messageID: context.messageID, callID: context.callID } },
           fields: [toField(input.questions[0], 0), ...input.questions.slice(1).map((question, index) => toField(question, index + 1))],
         }).pipe(
-          Effect.catchTag("SessionReview.FullError", () =>
-            Effect.succeed({ status: "full" as const }),
-          ),
-          Effect.orDie,
+          Effect.catchTags({
+            "SessionReview.FullError": () => Effect.succeed({ status: "full" as const }),
+            "Form.AlreadyExistsError": (error) => Effect.die(error),
+            "Form.InvalidFormError": (error) => Effect.die(error),
+          }),
+          Effect.mapError((error) => new ToolFailure({ message: "Question unavailable", error })),
           Effect.flatMap((state): Effect.Effect<Output> => {
             if (state.status === "full")
               return Effect.succeed({ answers: input.questions.map((): Question.Answer => []), reviewFull: true as const })
@@ -123,7 +122,24 @@ export const Plugin = {
           }),
         )),
       ),
-    }), { codemode: false })).pipe(Effect.orDie)
+    })
+
+export const makeStandalone = (forms: Form.Interface<StandaloneConfig.InvalidError>, permission: StandalonePermission.Scoped, config: StandaloneConfig.Interface) => {
+  const tool = make(forms, permission)
+  return { ...tool, execute: (...[input, context]: Parameters<typeof tool.execute>) => Effect.gen(function* () {
+    const snapshot = yield* config.snapshot()
+    const result = yield* tool.execute(input, context)
+    yield* permission.check({ action: "question", resources: ["*"], sessionID: context.sessionID, agent: context.agent }, snapshot.generation)
+    return result
+  }).pipe(Effect.mapError((error) => error instanceof ToolFailure ? error : new ToolFailure({ message: "Question unavailable", error }))) }
+}
+
+export const Plugin = {
+  id: "ycoding.tool.question",
+  effect: Effect.fn("QuestionTool.Plugin")(function* (ctx: PluginContext) {
+    const forms = yield* Form.Service
+    const permission = yield* Permission.Service
+    yield* ctx.tool.transform((draft) => draft.add(name, make(forms, permission), { codemode: false })).pipe(Effect.orDie)
   }),
 }
 

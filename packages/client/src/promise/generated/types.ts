@@ -25,6 +25,7 @@ export type TelemetryRequestSample = {
     | "session.list"
     | "session.active"
     | "session.get"
+    | "session.fork"
     | "session.messages"
     | "session.capturedChanges.list"
     | "session.compaction.list"
@@ -3740,6 +3741,7 @@ export type SessionInfo = {
   parentID?: string
   fork?: { sessionID: string; messageID?: string }
   projectID: string
+  scope?: "bound" | "standalone"
   agent?: string
   model?: ModelRef
   daybreak?: ModelDaybreak
@@ -3765,6 +3767,7 @@ export type SessionCreated = {
   data: {
     sessionID: string
     projectID: string
+    scope?: "bound" | "standalone"
     location: LocationRef
     parentID?: string
     agent?: string
@@ -4700,6 +4703,7 @@ export type SessionLogItem =
       data: {
         sessionID: string
         projectID: string
+        scope?: "bound" | "standalone"
         location: LocationRef
         parentID?: string
         agent?: string
@@ -5840,6 +5844,14 @@ export type SessionNotFoundError = {
 export const isSessionNotFoundError = (value: unknown): value is SessionNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "SessionNotFoundError"
 
+export type ConflictError = {
+  readonly _tag: "ConflictError"
+  readonly message: string
+  readonly resource?: string | undefined
+}
+export const isConflictError = (value: unknown): value is ConflictError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ConflictError"
+
 export type AttachmentNotFoundError = { readonly _tag: "AttachmentNotFoundError"; readonly message: string }
 export const isAttachmentNotFoundError = (value: unknown): value is AttachmentNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "AttachmentNotFoundError"
@@ -5855,14 +5867,6 @@ export type UnknownError = {
 }
 export const isUnknownError = (value: unknown): value is UnknownError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "UnknownError"
-
-export type ConflictError = {
-  readonly _tag: "ConflictError"
-  readonly message: string
-  readonly resource?: string | undefined
-}
-export const isConflictError = (value: unknown): value is ConflictError =>
-  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ConflictError"
 
 export type ServiceUnavailableError = {
   readonly _tag: "ServiceUnavailableError"
@@ -6153,6 +6157,7 @@ export type ServerTelemetryAppendInput = {
             | "session.list"
             | "session.active"
             | "session.get"
+            | "session.fork"
             | "session.messages"
             | "session.capturedChanges.list"
             | "session.compaction.list"
@@ -6421,6 +6426,7 @@ export type SessionListOutput = SessionsResponse
 export type SessionCreateInput = {
   readonly id?: {
     readonly id?: string | null
+    readonly scope?: "bound" | "standalone" | null
     readonly parentID?: string | null
     readonly title?: string | null
     readonly agent?: string | null
@@ -6432,8 +6438,23 @@ export type SessionCreateInput = {
     } | null
     readonly location?: { readonly directory: string; readonly workspaceID?: string } | null
   }["id"]
+  readonly scope?: {
+    readonly id?: string | null
+    readonly scope?: "bound" | "standalone" | null
+    readonly parentID?: string | null
+    readonly title?: string | null
+    readonly agent?: string | null
+    readonly model?: {
+      readonly id: string
+      readonly providerID: string
+      readonly variant?: string
+      readonly profile?: string
+    } | null
+    readonly location?: { readonly directory: string; readonly workspaceID?: string } | null
+  }["scope"]
   readonly parentID?: {
     readonly id?: string | null
+    readonly scope?: "bound" | "standalone" | null
     readonly parentID?: string | null
     readonly title?: string | null
     readonly agent?: string | null
@@ -6447,6 +6468,7 @@ export type SessionCreateInput = {
   }["parentID"]
   readonly title?: {
     readonly id?: string | null
+    readonly scope?: "bound" | "standalone" | null
     readonly parentID?: string | null
     readonly title?: string | null
     readonly agent?: string | null
@@ -6460,6 +6482,7 @@ export type SessionCreateInput = {
   }["title"]
   readonly agent?: {
     readonly id?: string | null
+    readonly scope?: "bound" | "standalone" | null
     readonly parentID?: string | null
     readonly title?: string | null
     readonly agent?: string | null
@@ -6473,6 +6496,7 @@ export type SessionCreateInput = {
   }["agent"]
   readonly model?: {
     readonly id?: string | null
+    readonly scope?: "bound" | "standalone" | null
     readonly parentID?: string | null
     readonly title?: string | null
     readonly agent?: string | null
@@ -6486,6 +6510,7 @@ export type SessionCreateInput = {
   }["model"]
   readonly location?: {
     readonly id?: string | null
+    readonly scope?: "bound" | "standalone" | null
     readonly parentID?: string | null
     readonly title?: string | null
     readonly agent?: string | null

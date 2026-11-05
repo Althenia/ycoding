@@ -35,6 +35,7 @@ import type { UsageAccounting } from "@ycoding-ai/schema/usage-accounting"
 import type { UsageAnchor } from "@ycoding-ai/schema/usage-anchor"
 import { SessionUsageAttribution } from "./usage-attribution"
 import { RetentionSettings } from "../retention-settings"
+import { UsageAnalytics } from "../usage-analytics"
 import { SqlError } from "effect/unstable/sql/SqlError"
 import { SessionAutonomy } from "./autonomy"
 import type { DecisionMode } from "@ycoding-ai/schema/session-autonomy"
@@ -79,7 +80,9 @@ import {
   InvalidCursorError,
   MessageDecodeError,
   NotFoundError,
+  ScopeUnavailableError,
 } from "./error"
+export { ScopeUnavailableError } from "./error"
 import { makeGlobalNode } from "../effect/app-node"
 import { KeepAwake } from "../keep-awake"
 import { LocationServiceMap } from "../location-service-map"
@@ -179,7 +182,7 @@ type CreateBaseInput = {
   origin?: SessionSchema.Info["origin"]
 }
 type CreateInput = CreateBaseInput &
-  ({ location: Location.Ref; parentID?: never } | { parentID: SessionSchema.ID; location?: never })
+  ({ scope?: "bound"; location: Location.Ref; parentID?: never } | { scope: "standalone"; location?: never; parentID?: never } | { parentID: SessionSchema.ID; location?: never; scope?: never })
 
 type CompactBaseInput = {
   id?: ID
@@ -281,6 +284,9 @@ export class DestinationNotDirectoryError extends Schema.TaggedErrorClass<Destin
   "Session.DestinationNotDirectoryError",
   { directory: AbsolutePath },
 ) {}
+export class SessionPlacementConflictError extends Schema.TaggedErrorClass<SessionPlacementConflictError>()(
+  "Session.SessionPlacementConflictError", { sessionID: SessionSchema.ID },
+) {}
 export const MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type MessageNotFoundError = SessionRevert.MessageNotFoundError
 
@@ -299,6 +305,8 @@ export type Error =
   | SkillConflictNotFoundError
   | DestinationNotFoundError
   | DestinationNotDirectoryError
+  | SessionPlacementConflictError
+  | ScopeUnavailableError
   | Command.NotFoundError
   | Command.EvaluationError
   | MessageNotFoundError
@@ -311,7 +319,7 @@ export interface Interface {
   }>
   readonly create: (
     input: CreateInput,
-  ) => Effect.Effect<SessionSchema.Info, NotFoundError | AgentNotSelectableError | SessionRunnerModel.Error>
+  ) => Effect.Effect<SessionSchema.Info, NotFoundError | AgentNotSelectableError | SessionRunnerModel.Error | SessionPlacementConflictError | ScopeUnavailableError>
   readonly fork: (
     input: ForkInput,
   ) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError | HistoryPrunedError>
@@ -362,7 +370,7 @@ export interface Interface {
   readonly fileChanges: (sessionID: SessionSchema.ID) => Effect.Effect<SessionEvent.FileChange.Info[], NotFoundError>
   readonly skills: (
     sessionID: SessionSchema.ID,
-  ) => Effect.Effect<Info[], NotFoundError | AgentNotFoundError | MessageDecodeError>
+  ) => Effect.Effect<Info[], NotFoundError | AgentNotFoundError | MessageDecodeError | ScopeUnavailableError>
   /**
    * Durable admitted session work not yet visible in projected history,
    * ordered by admission. Includes unpromoted user and synthetic inputs and
@@ -415,7 +423,7 @@ export interface Interface {
     sessionID: SessionSchema.ID
     directory: AbsolutePath
     workspaceID?: Location.Ref["workspaceID"]
-  }) => Effect.Effect<void, NotFoundError | DestinationNotFoundError | DestinationNotDirectoryError>
+  }) => Effect.Effect<void, NotFoundError | DestinationNotFoundError | DestinationNotDirectoryError | ScopeUnavailableError>
   readonly prompt: (input: {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
@@ -429,12 +437,12 @@ export interface Interface {
     resume?: boolean
     causedBy?: UsageAnchor.Ref
     native?: { readonly source: Form.NativeReplySource; readonly validate: () => Effect.Effect<boolean> }
-  }) => Effect.Effect<SessionPending.User, NotFoundError | PromptConflictError | AttachmentError>
+  }) => Effect.Effect<SessionPending.User, NotFoundError | PromptConflictError | AttachmentError | ScopeUnavailableError>
   /** Generates text from current Session context without admitting input or mutating history. */
   readonly generate: (input: {
     sessionID: SessionSchema.ID
     prompt: string
-  }) => Effect.Effect<string, NotFoundError | SessionGenerate.Error>
+  }) => Effect.Effect<string, NotFoundError | SessionGenerate.Error | ScopeUnavailableError>
   readonly diagnostics: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<Session.CacheDiagnostics | undefined, NotFoundError | MessageDecodeError>
@@ -452,8 +460,8 @@ export interface Interface {
   ) => Effect.Effect<UsageAccounting.TaskCosts, NotFoundError>
   readonly autonomy: {
     readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionAutonomy.State, NotFoundError>
-    readonly set: (input: AutonomyInput) => Effect.Effect<SessionAutonomy.State, NotFoundError | SessionGoal.Error>
-    readonly effective: (sessionID: SessionSchema.ID) => Effect.Effect<SessionAutonomy.Effective, NotFoundError>
+    readonly set: (input: AutonomyInput) => Effect.Effect<SessionAutonomy.State, NotFoundError | SessionGoal.Error | ScopeUnavailableError>
+    readonly effective: (sessionID: SessionSchema.ID) => Effect.Effect<SessionAutonomy.Effective, NotFoundError | ScopeUnavailableError>
   }
   readonly command: (input: {
     id?: SessionMessage.ID
@@ -469,7 +477,7 @@ export interface Interface {
     resume?: boolean
   }) => Effect.Effect<
     SessionPending.User,
-    NotFoundError | PromptConflictError | AttachmentError | Command.NotFoundError | Command.EvaluationError
+    NotFoundError | PromptConflictError | AttachmentError | Command.NotFoundError | Command.EvaluationError | ScopeUnavailableError
   >
   readonly shell: (input: {
     id?: EventRuntime.ID
@@ -482,18 +490,19 @@ export interface Interface {
     | Shell.MemoryLimitUnavailable
     | Shell.SpawnError
     | SessionGuardrail.AssertError
+    | ScopeUnavailableError
   >
   readonly skill: (input: {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
     skill: Skill.ID
     resume?: boolean
-  }) => Effect.Effect<void, NotFoundError | SkillNotFoundError>
+  }) => Effect.Effect<void, NotFoundError | SkillNotFoundError | ScopeUnavailableError>
   readonly resolveSkillConflict: (input: {
     sessionID: SessionSchema.ID
     winner: Skill.ID
     loser: Skill.ID
-  }) => Effect.Effect<void, NotFoundError | AgentNotFoundError | MessageDecodeError | SkillConflictNotFoundError>
+  }) => Effect.Effect<void, NotFoundError | AgentNotFoundError | MessageDecodeError | SkillConflictNotFoundError | ScopeUnavailableError>
   readonly compact: Compact
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
@@ -507,8 +516,8 @@ export interface Interface {
     readonly failed: ReadonlySet<SessionSchema.ID>
     readonly lost: ReadonlySet<SessionSchema.ID>
   }>
-  readonly background: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
-  readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
+  readonly background: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | ScopeUnavailableError>
+  readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError | ScopeUnavailableError>
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly synthetic: (input: {
     id?: SessionMessage.ID
@@ -519,7 +528,7 @@ export interface Interface {
     delivery?: SessionPending.Delivery
     resume?: boolean
     causedBy?: UsageAnchor.Ref
-  }) => Effect.Effect<SessionPending.Synthetic, NotFoundError | SyntheticConflictError>
+  }) => Effect.Effect<SessionPending.Synthetic, NotFoundError | SyntheticConflictError | ScopeUnavailableError>
   readonly revert: {
     readonly stage: (input: {
       sessionID: SessionSchema.ID
@@ -529,7 +538,7 @@ export interface Interface {
       Session.Revert,
       NotFoundError | MessageNotFoundError | HistoryPrunedError | BusyError | Snapshot.Error
     >
-    readonly clear: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError | Snapshot.Error>
+    readonly clear: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError | Snapshot.Error | ScopeUnavailableError>
     readonly commit: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError>
   }
 }
@@ -699,6 +708,37 @@ const layer = Layer.effect(
     const retentionSettings = yield* RetentionSettings.Service
     const locations = yield* LocationServiceMap.Service
     const fs = yield* FSUtil.Service
+    const standaloneRoot = (operation: string) => Effect.gen(function* () {
+      const state = yield* fs.realPath(global.state).pipe(Effect.mapError(() => new ScopeUnavailableError({ operation })))
+      const root = path.join(state, "standalone-sessions")
+      const physical = yield* fs.realPath(root).pipe(
+        Effect.catchReason("PlatformError", "NotFound", () => fs.readLink(root).pipe(
+          Effect.flatMap(() => Effect.fail(new ScopeUnavailableError({ operation }))),
+          Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(root)),
+        )),
+        Effect.mapError(() => new ScopeUnavailableError({ operation })),
+      )
+      if (physical !== root) return yield* new ScopeUnavailableError({ operation })
+      return root
+    })
+    const physicalPath = (directory: string, operation: string) => Effect.gen(function* () {
+      let current = directory
+      const suffix: string[] = []
+      while (true) {
+        const real = yield* fs.realPath(current).pipe(
+          Effect.catchReason("PlatformError", "NotFound", () => fs.readLink(current).pipe(
+            Effect.flatMap(() => Effect.fail(new ScopeUnavailableError({ operation }))),
+            Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(undefined)),
+          )),
+          Effect.mapError(() => new ScopeUnavailableError({ operation })),
+        )
+        if (real !== undefined) return path.join(real, ...suffix.reverse())
+        const parent = path.dirname(current)
+        if (parent === current) return yield* new ScopeUnavailableError({ operation })
+        suffix.push(path.basename(current))
+        current = parent
+      }
+    })
     const attachments = yield* AttachmentStore.Service
     const jobs = yield* Job.Service
     const projectArtifactAccounting = yield* ProjectArtifactAccounting.Service
@@ -1511,15 +1551,44 @@ const layer = Layer.effect(
         const sessionID = input.id ?? SessionSchema.ID.create()
         if (input.native && (input.parentID !== undefined || !(yield* input.native.validate())))
           return yield* new NotFoundError({ sessionID })
-        const recorded = yield* store.get(sessionID)
-        if (recorded) return recorded
-        if (input.agent && decisionAgents.has(input.agent)) return yield* new AgentNotSelectableError({ agent: input.agent })
         const parent = input.parentID ? yield* store.get(input.parentID) : undefined
         if (input.parentID && parent === undefined) return yield* new NotFoundError({ sessionID: input.parentID })
-        const location = parent?.location ?? input.location
-        if (location === undefined)
+        if (input.parentID && (input.location !== undefined || input.scope !== undefined)) return yield* new ScopeUnavailableError({ operation: "create" })
+        const scope = parent?.scope ?? input.scope ?? "bound"
+        const lexicalRoot = path.join(global.state, "standalone-sessions")
+        const supplied = parent?.location ?? input.location
+        if (scope === "bound" && supplied && FSUtil.contains(lexicalRoot, path.resolve(supplied.directory)))
+          return yield* new ScopeUnavailableError({ operation: "create" })
+        const root = yield* standaloneRoot("create")
+        const requested = parent?.location ?? (scope === "standalone"
+          ? Location.Ref.make({ directory: AbsolutePath.make(root) })
+          : input.location)
+        if (requested === undefined)
           return yield* Effect.die(new Error("Session.create requires either location or an existing parentID"))
-        const project = yield* projects.resolve(location.directory)
+        const canonical = scope === "standalone" && !parent ? root : yield* physicalPath(requested.directory, "create")
+        if (scope === "bound" && FSUtil.contains(root, canonical)) return yield* new ScopeUnavailableError({ operation: "create" })
+        const location = parent ? parent.location : scope === "standalone" ? Location.Ref.make({ directory: AbsolutePath.make(canonical) }) : requested
+        const matches = (session: SessionSchema.Info) => physicalPath(session.location.directory, "create").pipe(
+          Effect.map((directory) => session.scope === scope && session.parentID === input.parentID &&
+            directory === canonical && session.location.workspaceID === location.workspaceID),
+        )
+        const recorded = yield* store.get(sessionID)
+        if (recorded) return (yield* matches(recorded)) ? recorded : yield* new SessionPlacementConflictError({ sessionID })
+        if (input.agent && decisionAgents.has(input.agent)) return yield* new AgentNotSelectableError({ agent: input.agent })
+        const project = scope === "standalone"
+          ? { id: Location.standaloneProjectID, directory: AbsolutePath.make(root), vcs: undefined }
+          : yield* projects.resolve(location.directory)
+        if (scope === "standalone") {
+          yield* fs.makeDirectory(root, { recursive: true }).pipe(Effect.orDie)
+          const realRoot = yield* fs.realPath(root).pipe(Effect.orDie)
+          if (realRoot !== root) return yield* new ScopeUnavailableError({ operation: "create" })
+          const rows = yield* db.select({ id: ProjectTable.id, worktree: ProjectTable.worktree }).from(ProjectTable).all().pipe(Effect.orDie)
+          for (const row of rows) {
+            if (row.id === project.id && row.worktree !== root) return yield* new ScopeUnavailableError({ operation: "create" })
+            const real = yield* physicalPath(row.worktree, "create")
+            if (row.id !== project.id && real === realRoot) return yield* new ScopeUnavailableError({ operation: "create" })
+          }
+        }
         yield* db
           .insert(ProjectTable)
           .values({ id: project.id, worktree: project.directory, vcs: project.vcs?.type, sandboxes: [] })
@@ -1531,11 +1600,11 @@ const layer = Layer.effect(
         const relative = path.relative(project.directory, location.directory).replaceAll("\\", "/")
         const chosen = input.model ?? parent?.model
         const selection =
-          chosen ??
+          chosen ?? (scope === "standalone" ? undefined :
           (yield* Catalog.Service.pipe(
             Effect.provide(locations.get(location, [LocationServiceMap.full])),
             Effect.flatMap((catalog) => catalog.model.defaultSelection()),
-          ))
+          )))
         const inheritedBinding =
           input.profileBinding ??
           (parent &&
@@ -1550,7 +1619,7 @@ const layer = Layer.effect(
                 .pipe(Effect.orDie))?.binding ?? undefined)
             : undefined)
         const bound =
-          selection?.profile === undefined
+          selection?.profile === undefined || scope === "standalone"
             ? undefined
             : yield* SessionRunnerModel.Service.pipe(
                 Effect.provide(locations.get(location, [LocationServiceMap.full])),
@@ -1559,6 +1628,7 @@ const layer = Layer.effect(
                     SessionSchema.Info.make({
                       id: sessionID,
                       projectID: project.id,
+                      scope,
                       title: input.title ?? "New session",
                       model: selection,
                       location,
@@ -1577,6 +1647,7 @@ const layer = Layer.effect(
               data: {
                 sessionID,
                 projectID: project.id,
+                scope,
                 location,
                 parentID: input.parentID,
                 agent: input.agent,
@@ -1615,7 +1686,7 @@ const layer = Layer.effect(
                 )
             }),
           )
-        if (projected.type === "existing") return projected.session
+        if (projected.type === "existing") return (yield* matches(projected.session)) ? projected.session : yield* new SessionPlacementConflictError({ sessionID })
         // TODO: Restore recorded sessions onto replacement synchronized workspaces in a future API slice.
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
@@ -1852,6 +1923,7 @@ const layer = Layer.effect(
         }),
         effective: Effect.fn("Session.autonomy.effective")(function* (sessionID) {
           const session = yield* result.get(sessionID)
+          if (session.scope === "standalone") return yield* new ScopeUnavailableError({ operation: "autonomy.effective" })
           const notFound = <A, R>(effect: Effect.Effect<A, SessionAutonomy.NotFoundError, R>) =>
             effect.pipe(
               Effect.catchTag("SessionAutonomy.NotFound", (error) =>
@@ -1865,6 +1937,7 @@ const layer = Layer.effect(
         }),
         set: Effect.fn("Session.autonomy.set")(function* (input) {
           const session = yield* result.get(input.sessionID)
+          if (session.scope === "standalone") return yield* new ScopeUnavailableError({ operation: "autonomy.set" })
           const goal = input.goal
           const notFound = <A, R>(effect: Effect.Effect<A, SessionAutonomy.NotFoundError, R>) =>
             effect.pipe(
@@ -2140,6 +2213,7 @@ const layer = Layer.effect(
       }),
       skills: Effect.fn("Session.skills")(function* (sessionID) {
         const session = yield* result.get(sessionID)
+        if (session.scope === "standalone") return yield* new ScopeUnavailableError({ operation: "skills" })
         const contextModule = yield* Effect.promise<typeof import("./context")>(() => import("./" + "context"))
         const context = yield* contextModule.SessionContext.Service.pipe(
           Effect.provide(locations.get(session.location, [LocationServiceMap.full])),
@@ -2168,6 +2242,8 @@ const layer = Layer.effect(
           Effect.gen(function* () {
             if (input.native && !(yield* input.native.validate())) return yield* new NotFoundError({ sessionID: input.sessionID })
             const session = yield* result.get(input.sessionID)
+            if (session.scope === "standalone" && (input.resume !== false || (input.files?.length ?? 0) > 0))
+              return yield* new ScopeUnavailableError({ operation: "prompt" })
             // A staged revert must be committed before admitting new input so the prompt
             // continues from the reverted boundary rather than stale post-boundary history.
             if (session.revert) {
@@ -2201,7 +2277,7 @@ const layer = Layer.effect(
                       attachments,
                       db,
                     ).pipe(Effect.provideService(FSUtil.Service, fs))
-                    const skillMentions = input.text.includes("$")
+                    const skillMentions = session.scope !== "standalone" && input.text.includes("$")
                       ? yield* Effect.gen(function* () {
                           const pluginModule = yield* Effect.promise<typeof import("../plugin/supervisor")>(
                             () => import("../plugin/supervisor"),
@@ -2281,7 +2357,8 @@ const layer = Layer.effect(
                     Effect.logWarning("Session prompt queued during active shell; wake deferred", {
                       inputID: admitted.id,
                     }).pipe(Effect.annotateLogs({ sessionID: admitted.sessionID }))
-                  : execution.wake(admitted.sessionID),
+                  : execution.wake(admitted.sessionID).pipe(Effect.catchTag("Session.ScopeUnavailableError", (error) =>
+                      Effect.logError("Could not wake admitted Session input", { sessionID: admitted.sessionID, inputID: admitted.id, error }))),
             )
             yield* (
               freshlyAdmitted && stale !== undefined
@@ -2296,12 +2373,14 @@ const layer = Layer.effect(
       ),
       generate: Effect.fn("Session.generate")(function* (input) {
         const session = yield* result.get(input.sessionID)
+        if (session.scope === "standalone") return yield* new ScopeUnavailableError({ operation: "generate" })
         const generate = yield* SessionGenerate.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
         return yield* generate.generate(input)
       }),
       command: Effect.fn("Session.command")(
         function* (input) {
           const session = yield* result.get(input.sessionID)
+          if (session.scope === "standalone") return yield* new ScopeUnavailableError({ operation: "command" })
           if (input.id !== undefined) {
             const messageID = input.id
             const prior = yield* SessionPending.lookup(db, input.sessionID, messageID).pipe(
@@ -2409,6 +2488,7 @@ const layer = Layer.effect(
       ),
       shell: Effect.fn("Session.shell")(function* (input) {
         const session = yield* result.get(input.sessionID)
+        if (session.scope === "standalone") return yield* new ScopeUnavailableError({ operation: "shell" })
         yield* shellLocks.withLock(input.sessionID)(
           Effect.gen(function* () {
             activeShells.add(input.sessionID)
@@ -2469,7 +2549,8 @@ const layer = Layer.effect(
             Effect.ensuring(
               Effect.gen(function* () {
                 activeShells.delete(input.sessionID)
-                yield* execution.wake(input.sessionID)
+                yield* execution.wake(input.sessionID).pipe(Effect.catchTag("Session.ScopeUnavailableError", (error) =>
+                  Effect.logError("Could not wake Session after shell completion", { sessionID: input.sessionID, shellOperationID: input.id, error })))
               }),
             ),
           ),
@@ -2477,6 +2558,7 @@ const layer = Layer.effect(
       }),
       skill: Effect.fn("Session.skill")(function* (input) {
         const session = yield* result.get(input.sessionID)
+        if (session.scope === "standalone") return yield* new ScopeUnavailableError({ operation: "skill" })
         const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
         const access = yield* permission.evaluateEffective({
           sessionID: session.id,
@@ -2677,13 +2759,19 @@ const layer = Layer.effect(
       },
       move: Effect.fn("Session.move")(function* (input) {
         const current = yield* result.get(input.sessionID)
+        if (current.scope === "standalone") return yield* new ScopeUnavailableError({ operation: "move" })
         const value = input.directory.trim()
         const expanded =
           value === "~" ? global.home : value.startsWith("~/") ? path.join(global.home, value.slice(2)) : value
         const directory = AbsolutePath.make(path.resolve(current.location.directory, expanded))
+        const root = path.join(global.state, "standalone-sessions")
+        if (FSUtil.contains(root, directory)) return yield* new ScopeUnavailableError({ operation: "move" })
         const info = yield* fs.stat(directory).pipe(Effect.catch(() => Effect.succeed(undefined)))
         if (!info) return yield* new DestinationNotFoundError({ directory })
         if (info.type !== "Directory") return yield* new DestinationNotDirectoryError({ directory })
+        const physical = yield* fs.realPath(directory).pipe(Effect.mapError(() => new ScopeUnavailableError({ operation: "move" })))
+        const physicalRoot = yield* standaloneRoot("move")
+        if (FSUtil.contains(physicalRoot, physical)) return yield* new ScopeUnavailableError({ operation: "move" })
         if (current.location.directory === directory && current.location.workspaceID === input.workspaceID) return
         const project = yield* projects.resolve(directory)
         yield* db
@@ -2974,7 +3062,8 @@ const layer = Layer.effect(
           .pipe(Effect.catchTag("Session.SyntheticConflictError", Effect.die))
       }),
       resume: Effect.fn("Session.resume")(function* (sessionID) {
-        yield* result.get(sessionID)
+        const session = yield* result.get(sessionID)
+        if (session.scope === "standalone") return yield* new ScopeUnavailableError({ operation: "resume" })
         yield* execution.resume(sessionID)
       }),
       synthetic: Effect.fn("Session.synthetic")((input) =>
@@ -3361,6 +3450,7 @@ export const node = makeGlobalNode({
     SessionStore.node,
     SessionProviderRequest.node,
     RetentionSettings.node,
+    UsageAnalytics.node,
     LocationServiceMap.node,
     SessionProjector.node,
     SessionContextExclusionCleanup.node,

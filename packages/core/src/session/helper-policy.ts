@@ -89,7 +89,7 @@ export const selectHelperCandidates = (input: SelectHelperCandidatesInput): Read
  * whenever an agent pins a model. Absent and `"session"` keep the historical
  * `agentModel ?? sessionModel` precedence. `title` and `goal` never take this path.
  */
-const selectCompactionModel = (
+export const selectCompactionModel = (
   scopes: NonNullable<Settings["compactionScopes"]>,
   session: SessionSchema.Info,
   agent?: Agent.Info,

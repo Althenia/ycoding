@@ -156,44 +156,42 @@ export interface DelegatedReplyInput {
   readonly validate: (form: Info) => Effect.Effect<boolean>
 }
 
-export interface Interface {
-  readonly cancelDelegated: (input: Omit<DelegatedReplyInput, "answer" | "source"> & { readonly source: ClientReplySource }) => Effect.Effect<void, AlreadySettledError | NotFoundError>
-  readonly replyDelegated: (input: DelegatedReplyInput) => Effect.Effect<void, AlreadySettledError | InvalidAnswerError | NotFoundError>
-  readonly create: (input: CreateInput) => Effect.Effect<Info, AlreadyExistsError | InvalidFormError>
+export interface Interface<E = never> {
+  readonly cancelDelegated: (input: Omit<DelegatedReplyInput, "answer" | "source"> & { readonly source: ClientReplySource }) => Effect.Effect<void, AlreadySettledError | NotFoundError | E>
+  readonly replyDelegated: (input: DelegatedReplyInput) => Effect.Effect<void, AlreadySettledError | InvalidAnswerError | NotFoundError | E>
+  readonly create: (input: CreateInput) => Effect.Effect<Info, AlreadyExistsError | InvalidFormError | E>
   readonly ask: (
     input: CreateInput,
-  ) => Effect.Effect<AskResult, AlreadyExistsError | InvalidFormError | SessionReviewFold.FullError>
-  readonly deferPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  ) => Effect.Effect<AskResult, AlreadyExistsError | InvalidFormError | SessionReviewFold.FullError | E>
+  readonly deferPending: (sessionID: SessionSchema.ID) => Effect.Effect<void, E>
   readonly get: (id: ID) => Effect.Effect<Info, NotFoundError>
   readonly list: (input?: ListInput) => Effect.Effect<ReadonlyArray<Info>>
   readonly state: (id: ID) => Effect.Effect<State, NotFoundError>
   readonly snapshot: (id: ID) => Effect.Effect<Snapshot | undefined>
   readonly snapshots: (sessionID: SessionSchema.ID, family?: ReadonlyArray<SessionSchema.ID>) => Effect.Effect<ReadonlyArray<Snapshot>>
-  readonly reconsider: (input: ReconsiderInput) => Effect.Effect<ReconsiderResult>
-  readonly escalate: (input: EscalateInput) => Effect.Effect<EscalateResult>
-  readonly reply: (input: ReplyInput) => Effect.Effect<void, AlreadySettledError | InvalidAnswerError | NotFoundError>
-  readonly cancel: (id: ID) => Effect.Effect<void, AlreadySettledError | NotFoundError>
-  readonly cancelPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly reconsider: (input: ReconsiderInput) => Effect.Effect<ReconsiderResult, E>
+  readonly escalate: (input: EscalateInput) => Effect.Effect<EscalateResult, E>
+  readonly reply: (input: ReplyInput) => Effect.Effect<void, AlreadySettledError | InvalidAnswerError | NotFoundError | E>
+  readonly cancel: (id: ID) => Effect.Effect<void, AlreadySettledError | NotFoundError | E>
+  readonly cancelPending: (sessionID: SessionSchema.ID) => Effect.Effect<void, E>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/Form") {}
 
-interface Entry {
+interface Entry<E> {
   readonly form: Info
   readonly state: State
   readonly deferred: Deferred.Deferred<TerminalState>
   readonly epoch: number | undefined
   readonly source?: ReplySource
+  readonly fence: Effect.Effect<void, E>
 }
 
-export const layer = Layer.effect(
-  Service,
+export const make = <E>(config: { readonly entries: () => Effect.Effect<ReadonlyArray<Config.Entry>, E>; readonly capture: () => Effect.Effect<Effect.Effect<void, E>, E>; readonly cancelOnFailure?: boolean }, decision: Decision.Interface<E>) =>
   Effect.gen(function* () {
-    const config = yield* Config.Service
     const database = yield* Database.Service
     const events = yield* EventRuntime.Service
     const autonomy = yield* SessionAutonomy.Service
-    const decision = yield* Decision.Service
     const settle = Semaphore.makeUnsafe(1)
     const reconsidering = new Set<ID>()
     const asks = new Map<string, { epoch: number; count: number }>()
@@ -212,7 +210,7 @@ export const layer = Layer.effect(
       }
     }
     const exclusive = <A, E, R>(effect: Effect.Effect<A, E, R>) => settle.withPermit(Effect.uninterruptible(effect))
-    const forms = yield* Cache.makeWith<ID, Entry>(
+    const forms = yield* Cache.makeWith<ID, Entry<E>>(
       () => Effect.die(new Error("Form cache must be used via set/getSuccess, never get")),
       {
         capacity: Number.MAX_SAFE_INTEGER,
@@ -233,7 +231,7 @@ export const layer = Layer.effect(
     })
 
     const complete = Effect.fn("Form.complete")(function* (
-      entry: Entry,
+      entry: Entry<E>,
       state: Exclude<TerminalState, { readonly status: "timed_out" }>,
       source?: ReplySource,
       receiptCommitted = false,
@@ -252,13 +250,13 @@ export const layer = Layer.effect(
           reason: state.status === "answered" ? "Answered before assessment settled." : "Request closed before assessment settled.",
         }),
       } }
-      const settle = Cache.set(forms, id, { form, deferred: entry.deferred, epoch: entry.epoch, state, ...(source === undefined ? {} : { source }) }).pipe(
+      const settle = Cache.set(forms, id, { form, deferred: entry.deferred, epoch: entry.epoch, fence: entry.fence, state, ...(source === undefined ? {} : { source }) }).pipe(
         Effect.andThen(Deferred.succeed(entry.deferred, state)),
       )
       yield* receiptCommitted ? notification.pipe(Effect.ensuring(settle)) : notification.pipe(Effect.andThen(settle))
     })
 
-    const createPending = Effect.fn("Form.createPending")((input: CreateInput, epoch?: number, assessment?: Form.Assessment) =>
+    const createPending = Effect.fn("Form.createPending")((input: CreateInput, fence: Effect.Effect<void, E>, epoch?: number, assessment?: Form.Assessment) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const id = input.id ?? ID.create()
@@ -274,12 +272,14 @@ export const layer = Layer.effect(
             fields: input.fields,
             ...(assessment === undefined ? {} : { assessment }),
           }
-          const entry: Entry = {
+          const entry: Entry<E> = {
             form,
             state: { status: "pending" },
             deferred: yield* Deferred.make<TerminalState>(),
             epoch,
+            fence,
           }
+          yield* fence
           yield* Cache.set(forms, id, entry)
           yield* events.publish(Event.Created, { form }).pipe(Effect.onError(() => Cache.invalidate(forms, id)))
           return form
@@ -329,7 +329,7 @@ export const layer = Layer.effect(
         exclusive(Effect.gen(function* () {
           const current = yield* find(entry.form.id).pipe(Effect.orDie)
           if (current.state.status !== "pending") return
-          const item = yield* openReview(current.form, sessionID, { reason: "sleep_entry" }, true).pipe(Effect.orDie)
+          const item = yield* openReview(current.form, sessionID, { reason: "sleep_entry" }, true).pipe(Effect.catchTag("SessionReview.FullError", (error) => Effect.die(error)))
           yield* complete(current, { status: "deferred", itemID: item.itemID })
         })), { discard: true })
     })
@@ -356,9 +356,9 @@ export const layer = Layer.effect(
         }),
       )
 
-    const create = Effect.fn("Form.create")((input: CreateInput) => createPending(input))
+    const create = Effect.fn("Form.create")((input: CreateInput) => config.capture().pipe(Effect.flatMap((fence) => createPending(input, fence))))
 
-    const updateAssessment = (entry: Entry, assessment: Form.Assessment) => Effect.gen(function* () {
+    const updateAssessment = (entry: Entry<E>, assessment: Form.Assessment) => Effect.gen(function* () {
       const updated = { ...entry, form: { ...entry.form, assessment } }
       yield* Cache.set(forms, entry.form.id, updated)
       yield* events.publish(Event.Assessed, { id: entry.form.id, sessionID: entry.form.sessionID, assessment })
@@ -373,6 +373,7 @@ export const layer = Layer.effect(
 
     const withSettlement = (id: ID, result: AskResult) => Effect.gen(function* () {
       const final = yield* find(id).pipe(Effect.orDie)
+      if (result.status === "answered") yield* final.fence
       return { ...result, ...(final.form.assessment === undefined ? {} : { assessment: final.form.assessment }), ...(final.source === undefined ? {} : { source: final.source }) }
     })
 
@@ -381,6 +382,7 @@ export const layer = Layer.effect(
         Effect.sync(() => enter(input.sessionID)),
         (ticket) => Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
+          const fence = yield* config.capture()
           const sessionID = Schema.is(SessionSchema.ID)(input.sessionID) ? input.sessionID : undefined
           const snapshot = sessionID
             ? yield* autonomy
@@ -402,7 +404,7 @@ export const layer = Layer.effect(
                 : []),
           } : undefined
           const createWaiting = (waiting: CreateInput, value = assessment) =>
-            createPending(waiting, ticket.epoch, value).pipe(
+            createPending(waiting, fence, ticket.epoch, value).pipe(
               Effect.tap((created) => (ticket.superseded() ? cancelObsolete(created.id) : Effect.void)),
             )
           const asleep = sessionID
@@ -420,6 +422,7 @@ export const layer = Layer.effect(
               fields: input.fields,
             }
             if (!auto || !snapshot) {
+              yield* fence
               const item = yield* openReview(form, sessionID, { reason: "disabled" })
               return { status: "deferred", itemID: item.itemID, ...(assessment === undefined ? {} : { assessment }) } as AskResult
             }
@@ -430,6 +433,7 @@ export const layer = Layer.effect(
                 .isAsleep(sessionID)
                 .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
               if (asleepNow) {
+                yield* fence
                 const item = yield* openReview(form, sessionID, outcome.type === "defer" ? outcome : { reason: "disabled" })
                 return { status: "deferred", itemID: item.itemID, ...(assessment === undefined ? {} : { assessment: { ...assessment, fields: outcome.assessments ?? assessment.fields } }) } as AskResult
               }
@@ -445,8 +449,8 @@ export const layer = Layer.effect(
             const entry = yield* find(created.id).pipe(Effect.orDie)
             const automatic = yield* reply({ id: created.id, answer: outcome.answer }).pipe(
               Effect.as(true),
-              Effect.catchTag("Form.AlreadySettledError", () => Effect.succeed(false)),
-              Effect.orDie,
+              Effect.catch((error) => error instanceof AlreadySettledError ? Effect.succeed(false)
+                : error instanceof NotFoundError || error instanceof InvalidAnswerError ? Effect.die(error) : Effect.fail(error)),
             )
             const result = yield* Deferred.await(entry.deferred)
             return yield* withSettlement(created.id, { ...result, ...(automatic ? { automatic: true as const, via: outcome.via, ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }) } : {}) })
@@ -463,16 +467,19 @@ export const layer = Layer.effect(
             const unchanged = outcome?.type === "answer" && sessionID && snapshot
               ? yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot)
               : false
-            if (outcome?.assessments && assessment) yield* assessed(form.id,
+            if (outcome?.assessments && assessment) {
+              yield* fence
+              yield* assessed(form.id,
               outcome.type === "answer" && !unchanged
                 ? outcome.assessments.map((field) => ({ ...field, status: "unavailable" as const, recommendation: undefined, reason: "Answers mode changed; assessment not applied." }))
                 : outcome.assessments,
-            )
+              )
+            }
             const automatic = outcome?.type === "answer" && unchanged
               ? yield* reply({ id: form.id, answer: outcome.answer }).pipe(
                   Effect.as(true),
-                  Effect.catchTag("Form.AlreadySettledError", () => Effect.succeed(false)),
-                  Effect.orDie,
+                  Effect.catch((error) => error instanceof AlreadySettledError ? Effect.succeed(false)
+                    : error instanceof NotFoundError || error instanceof InvalidAnswerError ? Effect.die(error) : Effect.fail(error)),
                 )
               : false
             const result = yield* Deferred.await(entry.deferred)
@@ -482,6 +489,7 @@ export const layer = Layer.effect(
             return yield* withSettlement(form.id, value)
           })).pipe(
             Effect.onInterrupt(() => Effect.ignore(cancel(form.id))),
+            Effect.onError(() => config.cancelOnFailure ? Effect.ignore(cancel(form.id)) : Effect.void),
           )
         }),
         ),
@@ -524,7 +532,7 @@ export const layer = Layer.effect(
     const reconsider = Effect.fn("Form.reconsider")((input: ReconsiderInput) =>
       Effect.acquireUseRelease(
         exclusive(
-          Effect.gen(function* (): Effect.fn.Return<{ readonly entry?: Entry; readonly result?: ReconsiderResult }> {
+          Effect.gen(function* (): Effect.fn.Return<{ readonly entry?: Entry<E>; readonly result?: ReconsiderResult }> {
             const entry = yield* find(input.id).pipe(Effect.catchTag("Form.NotFoundError", () => Effect.succeed(undefined)))
             if (entry === undefined || entry.state.status !== "pending" || fingerprint(entry.form) !== input.fingerprint)
               return { result: { outcome: "stale", requestID: input.id, fingerprint: input.fingerprint, settled: false } }
@@ -675,6 +683,7 @@ export const layer = Layer.effect(
                         const invalid = validateAnswer(current.form, outcome.answer)
                         if (invalid) return { ...base, outcome: "escalated" as const, settled: false, reason: "invalid-answer" }
                       }
+                      yield* current.fence
                       const updated = native?.assessments === undefined ? current : yield* updateAssessment(current, {
                         mode, sourceSessionID: effective?.inherited.answers ?? sessionID, fields: native.assessments,
                       })
@@ -743,6 +752,7 @@ export const layer = Layer.effect(
           if (entry.state.status !== "pending") return yield* new AlreadySettledError({ id: input.id })
           const invalid = validateAnswer(entry.form, input.answer)
           if (invalid) return yield* new InvalidAnswerError({ id: input.id, message: invalid })
+          yield* entry.fence
           yield* complete(entry, { status: "answered", answer: input.answer })
         }),
       ),
@@ -758,6 +768,7 @@ export const layer = Layer.effect(
             return yield* new NotFoundError({ id: input.id })
           const invalid = validateAnswer(entry.form, input.answer)
           if (invalid) return yield* new InvalidAnswerError({ id: input.id, message: invalid })
+          yield* entry.fence
           const committed = yield* events.publishBatch([{ definition: SessionEvent.DotsDecisionSettled, data: {
             sessionID: SessionSchema.ID.make(entry.form.sessionID),
             source: input.source,
@@ -803,15 +814,21 @@ export const layer = Layer.effect(
       ),
     )
 
-    return Service.of({ create, ask, deferPending, get, list, state, snapshot, snapshots, reconsider, escalate, reply, replyDelegated, cancelDelegated, cancel, cancelPending })
-  }),
-)
+    return { create, ask, deferPending, get, list, state, snapshot, snapshots, reconsider, escalate, reply, replyDelegated, cancelDelegated, cancel, cancelPending } satisfies Interface<E>
+  })
+
+export const layer = Layer.effect(Service, Effect.gen(function* () {
+  const config = yield* Config.Service
+  return yield* make({ entries: config.entries, capture: () => Effect.succeed(Effect.void) }, yield* Decision.Service)
+}))
+
 
 export const node = makeLocationNode({
   service: Service,
   layer,
   deps: [Config.node, Database.node, EventRuntime.node, SessionAutonomy.node, Decision.node],
 })
+
 
 interface AutoMode {
   readonly autoAnswer: boolean
@@ -828,15 +845,15 @@ type SleepOutcome =
       readonly assessments?: ReadonlyArray<Form.FieldAssessment>
     }
 
-function decisionAnswer(
-  decision: Decision.Interface,
+function decisionAnswer<E>(
+  decision: Decision.Interface<E>,
   sessionID: SessionSchema.ID,
   form: Info,
   mode: AutoMode,
-): Effect.Effect<SleepOutcome> {
+): Effect.Effect<SleepOutcome, E> {
   return Effect.gen(function* () {
     let consultations = 0
-    const consulted: Decision.Interface = {
+    const consulted: Decision.Interface<E> = {
       evaluate: (input, context) => {
         consultations++
         return decision.evaluate(input, context)
@@ -921,13 +938,13 @@ function modelDefer(outcome: {
   }
 }
 
-function decisionValue(
-  decision: Decision.Interface,
+function decisionValue<E>(
+  decision: Decision.Interface<E>,
   sessionID: SessionSchema.ID,
   form: Info,
   field: InputField,
   mode: AutoMode,
-): Effect.Effect<FieldOutcome> {
+): Effect.Effect<FieldOutcome, E> {
   const required = mustAnswer(form, field)
   const unanswered: FieldOutcome = required
     ? { type: "defer", reason: isTextField(field) ? "free_text" : "disabled" }
@@ -1054,7 +1071,7 @@ function decisionValue(
       description: option.description ?? option.label,
     })),
   }).pipe(
-    Effect.flatMap((outcome): Effect.Effect<FieldOutcome> => {
+    Effect.flatMap((outcome): Effect.Effect<FieldOutcome, E> => {
       if (outcome.type === "judgment")
         return Effect.succeed<FieldOutcome>(
           validateField(field, outcome.value)

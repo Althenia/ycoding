@@ -42,6 +42,7 @@ const projects = Layer.succeed(Project.Service, Project.Service.of({
 const executing = Session.ID.make("ses_executing")
 const location = { directory: AbsolutePath.make(process.env.YCODING_TEST_XDG_ROOT!) }
 const execution = Layer.succeed(SessionExecution.Service, SessionExecution.Service.of({
+  prepareTask: () => Effect.void,
   active: Effect.succeed(new Set([executing])),
   resume: () => Effect.void,
   wake: () => Effect.void,
@@ -77,6 +78,8 @@ it.effect("derives outstanding Sessions from pending input, active goal, tasks, 
     const parent = Session.ID.make("ses_parent")
     const child = Session.ID.make("ses_child")
     const shell = Session.ID.make("ses_shell")
+    const owner = yield* ShellLedger.identify(yield* AppProcess.Service, process.pid)
+    expect(owner).toBeDefined()
     for (const id of [pending, goal, parent, shell, executing]) yield* sessions.create({ id, location })
     yield* sessions.create({ id: child, parentID: parent })
     yield* sessions.synthetic({ sessionID: pending, text: "queued", resume: false })
@@ -87,8 +90,8 @@ it.effect("derives outstanding Sessions from pending input, active goal, tasks, 
       parentAssistantMessageID: SessionMessage.ID.make("msg_parent"), toolCallID: "call_1",
       inputID: SessionMessage.ID.make("msg_child"), description: "child", agent: Agent.ID.make("build"),
       model: CatalogModel.Ref.make({ providerID: Provider.ID.make("test"), id: CatalogModel.ID.make("model") }), promptDigest: "digest", background: true,
-      delivery: "steer" } })
-    yield* events.publish(SessionEvent.Task.Updated, { sessionID: child, change: { type: "started" } })
+      delivery: "steer" } }).pipe(Effect.provideService(EventRuntime.TaskOwner, owner))
+    yield* events.publish(SessionEvent.Task.Updated, { sessionID: child, change: { type: "started" } }).pipe(Effect.provideService(EventRuntime.TaskOwner, owner))
     const release = yield* Deferred.make<void>()
     const job = yield* jobs.start({ type: "shell", metadata: { sessionID: shell }, run: Deferred.await(release).pipe(Effect.as("done")) })
     yield* jobs.background(job.id)

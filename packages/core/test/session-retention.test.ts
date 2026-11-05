@@ -34,6 +34,7 @@ const hooks: Effect.Effect<void>[] = []
 const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
+    prepareTask: () => Effect.void,
     active: Effect.suspend(() => hooks.shift() ?? Effect.void).pipe(Effect.as(active)),
     resume: () => Effect.void,
     wake: () => Effect.void,

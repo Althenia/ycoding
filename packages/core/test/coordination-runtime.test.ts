@@ -63,6 +63,7 @@ const outstanding = new Set<SessionSchema.ID>()
 const woken: SessionSchema.ID[] = []
 const interrupted: SessionSchema.ID[] = []
 const execution = Layer.mock(SessionExecution.Service, {
+  prepareTask: () => Effect.void,
   active: Effect.sync(() => new Set(running)),
   wake: (sessionID) => Effect.sync(() => { woken.push(sessionID) }),
   interrupt: (sessionID) => Effect.sync(() => { interrupted.push(sessionID) }),
@@ -517,7 +518,7 @@ const pendingFor = (fixture: Fixture, sessionID: SessionSchema.ID) =>
 const noticesFor = (fixture: Fixture, sessionID: SessionSchema.ID) =>
   pendingFor(fixture, sessionID).pipe(Effect.map((rows) => rows.filter((row) => row.type === "synthetic")))
 
-const refusal = <A>(effect: Effect.Effect<A, CoordinationRuntime.RefusedError>) =>
+const refusal = <A>(effect: Effect.Effect<A, CoordinationRuntime.RefusedError | Session.ScopeUnavailableError | SessionOrchestration.ServiceUnavailableError>) =>
   effect.pipe(Effect.flip, Effect.map((error) => error.message))
 
 describe("project activation", () => {

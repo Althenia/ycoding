@@ -4,8 +4,9 @@ import { PermissionSaved } from "@ycoding-ai/core/permission/saved"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
-import { PermissionNotFoundError, SessionNotFoundError } from "@ycoding-ai/protocol/errors"
+import { InvalidRequestError, PermissionNotFoundError, SessionNotFoundError } from "@ycoding-ai/protocol/errors"
 import { response } from "../location"
+import { SessionPermission } from "../middleware/permission-location"
 
 function missingRequest(id: Permission.ID) {
   return new PermissionNotFoundError({ requestID: id, message: `Permission request not found: ${id}` })
@@ -24,7 +25,7 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
       .handle(
         "session.permission.create",
         Effect.fn(function* (ctx) {
-          const permission = yield* Permission.Service
+          const permission = yield* SessionPermission
           return {
             data: yield* permission
               .ask({
@@ -46,6 +47,7 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
                       message: `Session not found: ${error.sessionID}`,
                     }),
                 ),
+                Effect.catchTag("StandaloneConfig.InvalidError", () => new InvalidRequestError({ message: "Standalone configuration is unavailable" })),
               ),
           }
         }),
@@ -53,14 +55,14 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
       .handle(
         "session.permission.list",
         Effect.fn(function* (ctx) {
-          const permission = yield* Permission.Service
+          const permission = yield* SessionPermission
           return { data: yield* permission.forSession(ctx.params.sessionID) }
         }),
       )
       .handle(
         "session.permission.get",
         Effect.fn(function* (ctx) {
-          const permission = yield* Permission.Service
+          const permission = yield* SessionPermission
           const request = yield* permission.get(ctx.params.requestID)
           if (!request || request.sessionID !== ctx.params.sessionID) return yield* missingRequest(ctx.params.requestID)
           return { data: request }
@@ -69,19 +71,19 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
       .handle(
         "session.permission.reply",
         Effect.fn(function* (ctx) {
-          const permission = yield* Permission.Service
+          const permission = yield* SessionPermission
           const request = yield* permission.get(ctx.params.requestID)
           if (!request || request.sessionID !== ctx.params.sessionID) return yield* missingRequest(ctx.params.requestID)
           yield* permission
             .reply({ requestID: ctx.params.requestID, reply: ctx.payload.reply, message: ctx.payload.message })
-            .pipe(Effect.catchTag("Permission.NotFoundError", () => missingRequest(ctx.params.requestID)))
+            .pipe(Effect.catchTag("Permission.NotFoundError", () => missingRequest(ctx.params.requestID)), Effect.catchTag("StandaloneConfig.InvalidError", () => new InvalidRequestError({ message: "Standalone configuration is unavailable" })))
           return HttpApiSchema.NoContent.make()
         }),
       )
       .handle(
         "session.permission.reject",
         Effect.fn(function* (ctx) {
-          const permission = yield* Permission.Service
+          const permission = yield* SessionPermission
           const request = yield* permission.get(ctx.params.requestID)
           if (!request || request.sessionID !== ctx.params.sessionID) return yield* missingRequest(ctx.params.requestID)
           yield* permission
@@ -90,7 +92,7 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
               reply: "reject",
               message: ctx.payload.message,
             })
-            .pipe(Effect.catchTag("Permission.NotFoundError", () => missingRequest(ctx.params.requestID)))
+            .pipe(Effect.catchTag("Permission.NotFoundError", () => missingRequest(ctx.params.requestID)), Effect.catchTag("StandaloneConfig.InvalidError", () => new InvalidRequestError({ message: "Standalone configuration is unavailable" })))
           return HttpApiSchema.NoContent.make()
         }),
       )

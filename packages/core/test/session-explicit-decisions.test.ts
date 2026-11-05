@@ -88,9 +88,9 @@ async function run(input: { agent?: Agent.ID; child?: boolean; denied?: boolean 
     yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: directory, sandboxes: [] }).onConflictDoNothing().run()
     const sessionID = SessionSchema.ID.create()
     const parentID = input.child ? SessionSchema.ID.create() : undefined
-    if (parentID) yield* events.publish(SessionEvent.Created, { sessionID: parentID, projectID: Project.ID.global, location: { directory }, title: "parent", created: Date.now() })
+    if (parentID) yield* events.publish(SessionEvent.Created, { sessionID: parentID, projectID: Project.ID.global, scope: "bound", location: { directory }, title: "parent", created: Date.now() })
     yield* events.publish(SessionEvent.Created, {
-      sessionID, projectID: Project.ID.global, location: { directory }, title: "explicit decisions", created: Date.now(), agent: input.agent, parentID,
+      sessionID, projectID: Project.ID.global, scope: "bound", location: { directory }, title: "explicit decisions", created: Date.now(), agent: input.agent, parentID,
       permissionCeiling: input.denied ? [{ action: "decision", resource: "*", effect: "deny" }] : undefined,
     })
     const pending = yield* SessionPending.admit(db, events, { id: SessionMessage.ID.create(), sessionID,

@@ -67,6 +67,7 @@ const assertions: Permission.AssertInput[] = []
 const wakes: string[] = []
 let onWake = (_id: string): Effect.Effect<void> => Effect.void
 const data = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-shell-worktree-data-"))
+await fs.mkdir(path.join(data, "state"))
 let configEntries: Config.Entry[] = [configDocument()]
 let denyAction: string | undefined
 let correction: string | undefined
@@ -375,6 +376,7 @@ const executionNode = makeGlobalNode({
         })
       })
       return SessionExecution.Service.of({
+        prepareTask: () => Effect.void,
         active: Effect.succeed(new Set()),
         resume: complete,
         wake: (id) => Effect.sync(() => wakes.push(id)).pipe(Effect.andThen(Effect.suspend(() => onWake(id)))),

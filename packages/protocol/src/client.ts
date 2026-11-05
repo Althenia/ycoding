@@ -27,6 +27,8 @@ type ClientApiShape = Api<
   Context.Service.Shape<typeof SessionLocationMiddleware>,
   Context.Service.Identifier<typeof SessionLocationMiddleware>,
   Context.Service.Shape<typeof SessionLocationMiddleware>,
+  Context.Service.Identifier<typeof SessionLocationMiddleware>,
+  Context.Service.Shape<typeof SessionLocationMiddleware>,
   typeof EventGroup
 >
 
@@ -37,6 +39,7 @@ export const ClientApi: ClientApiShape = makeDefaultApi({
   // The generated client only needs a middleware identity for API typing.
   formLocationMiddleware: SessionLocationMiddleware,
   sessionLocationMiddleware: SessionLocationMiddleware,
+  permissionLocationMiddleware: SessionLocationMiddleware,
 })
 
 export const groupNames = {

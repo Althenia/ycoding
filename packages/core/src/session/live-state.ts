@@ -58,7 +58,7 @@ export interface DatabaseCapture {
 }
 
 export interface Interface {
-  readonly load: (sessionID: Session.ID) => Effect.Effect<Snapshot, SessionErrors.NotFoundError>
+  readonly load: (sessionID: Session.ID) => Effect.Effect<Snapshot, SessionErrors.NotFoundError | SessionErrors.ScopeUnavailableError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionLiveState") {}
@@ -110,7 +110,7 @@ export const sleepReminder = (autonomy: SessionAutonomy.State, machineAwake?: bo
     "The user is asleep and cannot interact. Make decisions independently, do not wait for user input, and keep working until the task is done.",
     "Automatic answers require the answering Session's auto-answer toggle and default off, including during sleep. Baseline model assessment of permission and guardrail requests follows guardrails.decide_reviews, which defaults on. Disabled or unsettled requests wait in the user's review box. Continue independent work without guessing answers or replaying deferred actions.",
     machineAwake === undefined
-      ? undefined
+      ? "Keep-awake status is unknown; this machine may sleep."
       : machineAwake
         ? lidAwake
           ? "Keep-awake holds idle and lid-closed sleep off."
@@ -317,12 +317,12 @@ export const captureDatabase = Effect.fn("SessionLiveState.captureDatabase")(fun
   )
 })
 
-export const layer = Layer.effect(
+const makeLayer = <R>(readGuardrails: Effect.Effect<Pick<SessionGuardrail.ObservationInterface, "snapshot">, never, R>) => Layer.effect(
   Service,
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
-    const guardrails = yield* SessionGuardrail.Service
-    const keepAwake = yield* KeepAwake.Service
+    const guardrails = yield* readGuardrails
+    const keepAwake = yield* KeepAwake.Observation
 
     const loadDatabase = Effect.fn("SessionLiveState.loadDatabase")((sessionID: Session.ID) =>
       db
@@ -354,7 +354,7 @@ export const layer = Layer.effect(
             permissionCeiling: current.permissionCeiling,
           }),
         goalReminder(current.autonomy),
-        sleepReminder(current.autonomy, awake?.state === "on", awake?.lid === "on"),
+        sleepReminder(current.autonomy, awake && awake.state === "on", awake && awake.lid === "on"),
         reviewNotice,
       ]
         .filter((part): part is string => part !== undefined)
@@ -376,8 +376,16 @@ export const layer = Layer.effect(
   }),
 )
 
+export const layer = makeLayer(SessionGuardrail.Service)
+
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Database.node, SessionGuardrail.node, KeepAwake.node],
+  deps: [Database.node, SessionGuardrail.node, KeepAwake.node, KeepAwake.observationNode],
+})
+
+export const standaloneNode = makeLocationNode({
+  service: Service,
+  layer: makeLayer(SessionGuardrail.Observation),
+  deps: [Database.node, SessionGuardrail.standaloneObservationNode, KeepAwake.observationNode],
 })

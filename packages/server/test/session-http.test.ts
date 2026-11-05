@@ -1,7 +1,16 @@
 import { expect, test } from "bun:test"
 import { Session } from "@ycoding-ai/core/session"
 import { SubagentCursor } from "@ycoding-ai/protocol/groups/session"
-import { Effect, Schema } from "effect"
+import { Context, DateTime, Effect, Layer, Schema } from "effect"
+import { Project } from "@ycoding-ai/core/project"
+import { Location } from "@ycoding-ai/core/location"
+import { AbsolutePath } from "@ycoding-ai/core/schema"
+import { Database } from "@ycoding-ai/core/database/database"
+import { ProjectTable } from "@ycoding-ai/core/project/sql"
+import { SessionTable } from "@ycoding-ai/core/session/sql"
+import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
+import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
+import { sessionLocationLayer } from "../src/middleware/session-location"
 import { sessionHttp } from "./session-http"
 import { SessionCompaction } from "../../schema/src/session-compaction"
 import { Agent } from "@ycoding-ai/core/agent"
@@ -11,6 +20,62 @@ import { SessionMessage } from "@ycoding-ai/core/session/message"
 const parentID = Session.ID.make("ses_http_parent")
 const otherID = Session.ID.make("ses_http_other")
 const anchor = { rank: 0, updated: 0, sessionID: otherID, direction: "next" } as const
+const parent = Session.Info.make({ id: parentID, scope: "bound", projectID: Project.ID.global, title: "Parent", location: Location.Ref.make({ directory: AbsolutePath.make("/work") }), cost: Schema.decodeUnknownSync(Session.Info.fields.cost)(0), tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: DateTime.makeUnsafe(1), updated: DateTime.makeUnsafe(1) } })
+
+test("standalone scope create rejects conflicting placement before the core call", async () => {
+  const inputs: unknown[] = []
+  await using http = sessionHttp({ create: (input: unknown) => Effect.sync(() => inputs.push(input)).pipe(Effect.andThen(Effect.fail(new Session.NotFoundError({ sessionID: parentID })))) })
+  for (const body of [
+    { scope: "standalone" },
+    { scope: "standalone", parentID },
+    { scope: "standalone", location: { directory: "/work" } },
+    { parentID, scope: "bound" },
+    { parentID, location: { directory: "/work" } },
+  ]) {
+    const response = await http.json("/api/session", "POST", body)
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ _tag: "InvalidRequestError" })
+  }
+  expect(inputs).toEqual([])
+})
+
+test("standalone scope rejects external child creation before the core call", async () => {
+  const inputs: unknown[] = []
+  await using http = sessionHttp({
+    get: () => Effect.succeed({ ...parent, scope: "standalone" }),
+    create: (input: unknown) => Effect.sync(() => inputs.push(input)).pipe(Effect.andThen(Effect.fail(new Session.NotFoundError({ sessionID: parentID })))),
+  })
+  const response = await http.json("/api/session", "POST", { parentID })
+  expect(response.status).toBe(400)
+  expect(await response.json()).toMatchObject({ _tag: "InvalidRequestError" })
+  expect(inputs).toEqual([])
+})
+
+test("standalone scope GET and denied routes never initialize the Location graph", async () => {
+  let calls = 0
+  const standalone = { ...parent, scope: "standalone" as const }
+  const database = Database.layer({ path: ":memory:" }).pipe(Layer.tap((context) => Effect.gen(function* () {
+    const db = Context.get(context, Database.Service).db
+    yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/work"), sandboxes: [] }).run()
+    yield* db.insert(SessionTable).values({ id: parentID, project_id: Project.ID.global, scope: "standalone", directory: "/work", title: "Parent" }).run()
+  }).pipe(Effect.orDie)))
+  const locations = Layer.mock(LocationServiceMap.Service, { get: <const Items extends LocationServiceMap.Nodes>(_ref: Location.Ref, _nodes: Items) => {
+    calls++
+    const failure: Effect.Effect<Context.Context<LayerNode.Output<Items[number]>>> = Effect.die(new Error("Unexpected Location graph"))
+    return Layer.effectContext(failure)
+  } })
+  const sessionLocation = sessionLocationLayer.pipe(Layer.provide(Layer.mergeAll(database, locations)))
+  await using http = sessionHttp({ get: () => Effect.succeed(standalone) }, { sessionLocation })
+  const get = await http.request(`/api/session/${parentID}`)
+  expect(get.status).toBe(200)
+  expect(await get.json()).toMatchObject({ data: { id: parentID, scope: "standalone" } })
+  for (const [path, body] of [[`/api/session/${parentID}?location[directory]=/other`, undefined], [`/api/session/${parentID}/snapshot`, undefined], [`/api/session/${parentID}/move`, { directory: "/work" }], [`/api/session/${parentID}/prompt`, { text: "hello" }], [`/api/session/${parentID}/command`, { command: "test" }], [`/api/session/${parentID}/skill`, { skill: "test" }], [`/api/session/${parentID}/shell`, { command: "true" }]] as const) {
+    const response = await http.request(path, { method: body === undefined ? "GET" : "POST", headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ _tag: "InvalidRequestError" })
+  }
+  expect(calls).toBe(0)
+})
 
 test("internal decision helper rejection maps to HTTP 400 for creation and switching", async () => {
   const rejected = new AgentNotSelectableError({ agent: Agent.ID.make("decision") })
@@ -30,6 +95,7 @@ test("internal decision helper rejection maps to HTTP 400 for creation and switc
 test("missing Sessions retain HTTP 404 during creation and agent switching", async () => {
   await using http = sessionHttp({
     create: () => Effect.fail(new Session.NotFoundError({ sessionID: parentID })),
+    get: () => Effect.succeed(parent),
     switchAgent: () => Effect.fail(new Session.NotFoundError({ sessionID: parentID })),
   })
   for (const path of ["/api/session", `/api/session/${parentID}/agent`]) {
@@ -43,6 +109,7 @@ test("creation forwards an explicit title for root and child Sessions", async ()
   const inputs: unknown[] = []
   await using http = sessionHttp({
     create: (input: unknown) => Effect.sync(() => inputs.push(input)).pipe(Effect.andThen(Effect.fail(new Session.NotFoundError({ sessionID: parentID })))),
+    get: () => Effect.succeed(parent),
   })
   for (const body of [{ id: otherID, title: "Release review", location: { directory: "/work" } }, { parentID, title: "Child review" }, { id: otherID, location: { directory: "/work" } }])
     expect((await http.json("/api/session", "POST", body)).status).toBe(404)

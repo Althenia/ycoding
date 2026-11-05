@@ -96,8 +96,10 @@ type MixedMiddlewareGroups<
   LocationService,
   SessionLocationId extends HttpApiMiddleware.AnyId,
   SessionLocationService,
+  PermissionLocationId extends HttpApiMiddleware.AnyId,
+  PermissionLocationService,
 > =
-  | ReturnType<typeof makePermissionGroup<LocationId, LocationService, SessionLocationId, SessionLocationService>>
+  | ReturnType<typeof makePermissionGroup<LocationId, LocationService, PermissionLocationId, PermissionLocationService>>
   | ReturnType<typeof makeQuestionGroup<LocationId, LocationService, SessionLocationId, SessionLocationService>>
   | ReturnType<typeof makeIncidentGroup<LocationId, LocationService>>
 
@@ -110,6 +112,8 @@ type ApiGroups<
   FormLocationService,
   SessionLocationId extends HttpApiMiddleware.AnyId,
   SessionLocationService,
+  PermissionLocationId extends HttpApiMiddleware.AnyId,
+  PermissionLocationService,
   Event extends HttpApiGroup.Constraint,
 > =
   | typeof HealthGroup
@@ -124,7 +128,7 @@ type ApiGroups<
   | CatalogGroups<LocationId, LocationService, CatalogLocationId, CatalogLocationService>
   | FormGroups<LocationId, LocationService, FormLocationId, FormLocationService>
   | SessionGroups<SessionLocationId, SessionLocationService>
-  | MixedMiddlewareGroups<LocationId, LocationService, SessionLocationId, SessionLocationService>
+  | MixedMiddlewareGroups<LocationId, LocationService, SessionLocationId, SessionLocationService, PermissionLocationId, PermissionLocationService>
   | Event
 
 type EventGroupFor<Definitions extends ReadonlyArray<Definition>> = ReturnType<typeof makeEventGroup<Definitions>>
@@ -138,6 +142,8 @@ export type Api<
   FormLocationService,
   SessionLocationId extends HttpApiMiddleware.AnyId,
   SessionLocationService,
+  PermissionLocationId extends HttpApiMiddleware.AnyId,
+  PermissionLocationService,
   Event extends HttpApiGroup.Constraint,
 > = HttpApi.HttpApi<
   "server",
@@ -152,6 +158,8 @@ export type Api<
         FormLocationService,
         SessionLocationId,
         SessionLocationService,
+        PermissionLocationId,
+        PermissionLocationService,
         Event
       >,
       Authorization
@@ -171,12 +179,15 @@ const makeApiFromGroup = <
   FormLocationService,
   SessionLocationId extends HttpApiMiddleware.AnyId,
   SessionLocationService,
+  PermissionLocationId extends HttpApiMiddleware.AnyId,
+  PermissionLocationService,
 >(
   eventGroup: Group,
   locationMiddleware: Context.Key<LocationId, LocationService>,
   catalogLocationMiddleware: Context.Key<CatalogLocationId, CatalogLocationService>,
   formLocationMiddleware: Context.Key<FormLocationId, FormLocationService>,
   sessionLocationMiddleware: Context.Key<SessionLocationId, SessionLocationService>,
+  permissionLocationMiddleware: Context.Key<PermissionLocationId, PermissionLocationService>,
 ): Api<
   LocationId,
   LocationService,
@@ -186,6 +197,8 @@ const makeApiFromGroup = <
   FormLocationService,
   SessionLocationId,
   SessionLocationService,
+  PermissionLocationId,
+  PermissionLocationService,
   Group
 > =>
   HttpApi.make("server")
@@ -206,7 +219,7 @@ const makeApiFromGroup = <
     .add(CredentialGroup.middleware(locationMiddleware))
     .add(ProjectGroup.middleware(locationMiddleware))
     .add(makeFormGroup(locationMiddleware, formLocationMiddleware))
-    .add(makePermissionGroup(locationMiddleware, sessionLocationMiddleware))
+    .add(makePermissionGroup(locationMiddleware, permissionLocationMiddleware))
     .add(FileSystemGroup.middleware(locationMiddleware))
     .add(CommandGroup.middleware(locationMiddleware))
     .add(SkillGroup.middleware(locationMiddleware))
@@ -250,12 +263,15 @@ export const makeApi = <
   FormLocationService,
   SessionLocationId extends HttpApiMiddleware.AnyId,
   SessionLocationService,
+  PermissionLocationId extends HttpApiMiddleware.AnyId,
+  PermissionLocationService,
 >(options: {
   readonly definitions: Definitions
   readonly locationMiddleware: Context.Key<LocationId, LocationService>
   readonly catalogLocationMiddleware: Context.Key<CatalogLocationId, CatalogLocationService>
   readonly formLocationMiddleware: Context.Key<FormLocationId, FormLocationService>
   readonly sessionLocationMiddleware: Context.Key<SessionLocationId, SessionLocationService>
+  readonly permissionLocationMiddleware: Context.Key<PermissionLocationId, PermissionLocationService>
 }): Api<
   LocationId,
   LocationService,
@@ -265,6 +281,8 @@ export const makeApi = <
   FormLocationService,
   SessionLocationId,
   SessionLocationService,
+  PermissionLocationId,
+  PermissionLocationService,
   EventGroupFor<Definitions>
 > =>
   makeApiFromGroup(
@@ -273,6 +291,7 @@ export const makeApi = <
     options.catalogLocationMiddleware,
     options.formLocationMiddleware,
     options.sessionLocationMiddleware,
+    options.permissionLocationMiddleware,
   )
 
 export const makeDefaultApi = <
@@ -284,11 +303,14 @@ export const makeDefaultApi = <
   FormLocationService,
   SessionLocationId extends HttpApiMiddleware.AnyId,
   SessionLocationService,
+  PermissionLocationId extends HttpApiMiddleware.AnyId,
+  PermissionLocationService,
 >(options: {
   readonly locationMiddleware: Context.Key<LocationId, LocationService>
   readonly catalogLocationMiddleware: Context.Key<CatalogLocationId, CatalogLocationService>
   readonly formLocationMiddleware: Context.Key<FormLocationId, FormLocationService>
   readonly sessionLocationMiddleware: Context.Key<SessionLocationId, SessionLocationService>
+  readonly permissionLocationMiddleware: Context.Key<PermissionLocationId, PermissionLocationService>
 }): Api<
   LocationId,
   LocationService,
@@ -298,6 +320,8 @@ export const makeDefaultApi = <
   FormLocationService,
   SessionLocationId,
   SessionLocationService,
+  PermissionLocationId,
+  PermissionLocationService,
   typeof EventGroup
 > =>
   makeApiFromGroup(
@@ -306,4 +330,5 @@ export const makeDefaultApi = <
     options.catalogLocationMiddleware,
     options.formLocationMiddleware,
     options.sessionLocationMiddleware,
+    options.permissionLocationMiddleware,
   )

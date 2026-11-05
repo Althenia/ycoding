@@ -10,6 +10,10 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Ses
   sessionID: SessionSchema.ID,
 }) {}
 
+export class ScopeUnavailableError extends Schema.TaggedErrorClass<ScopeUnavailableError>()(
+  "Session.ScopeUnavailableError", { operation: Schema.String },
+) {}
+
 export class MessageDecodeError extends Schema.TaggedErrorClass<MessageDecodeError>()("Session.MessageDecodeError", {
   sessionID: SessionSchema.ID,
   messageID: SessionMessage.ID,

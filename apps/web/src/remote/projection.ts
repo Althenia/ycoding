@@ -9,7 +9,7 @@
 import { ToolInvocation } from "../../../../packages/schema/src/tool-invocation"
 import type { Form } from "../../../../packages/schema/src/form"
 import { escapeDisplayText, toolDisplayName } from "../../../../packages/client/src/tool-display"
-import { RemoteLimits, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
+import { RemoteLimits, isSessionID, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
 import { autonomyCategories, autonomyLabels, readAutonomyMode, type AutonomyCategory, type AutonomyModes, type EffectiveAutonomyView } from "./autonomy"
 import { parseUnifiedPatch } from "./file-change-diff"
 import { readProjectEscalation, readProjectEscalationEvent, type ProjectEscalationView } from "./project-escalation"
@@ -418,6 +418,7 @@ export function autonomyModeParts(autonomy: Pick<SessionAutonomyView, "permissio
 }
 
 export type SessionView = {
+  readonly scope?: "bound" | "standalone"
   readonly prediction?: { readonly sessionID: string; readonly sourceMessageID: string; readonly text: string }
   readonly id: string
   readonly title?: string
@@ -1006,6 +1007,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       const created = readModelRef(data.model)
       return {
         ...view,
+        ...(data.scope === undefined ? { scope: "bound" as const } : data.scope === "bound" || data.scope === "standalone" ? { scope: data.scope } : {}),
         title: stringField(data.title) ?? view.title,
         agent: stringField(data.agent) ?? view.agent,
         model: created ?? view.model,
@@ -2068,6 +2070,9 @@ function stringList(value: unknown): readonly string[] {
 /* -------------------------------------------------------------------------- */
 
 export type SessionSnapshot = {
+  readonly sessionID?: string
+  readonly watermarkSessionID?: string
+  readonly scope?: "bound" | "standalone"
   readonly messages: readonly RemoteMessageView[]
   readonly generationSpeed?: GenerationSpeedHistoryView
   readonly contextWindow?: ContextWindowView
@@ -2092,7 +2097,19 @@ export function readSnapshot(payload: unknown): SessionSnapshot | undefined {
   if (!isRecord(payload) || !Array.isArray(payload.messages)) return undefined
   if (payload.before !== undefined && (typeof payload.before !== "string" || payload.before.length === 0 || payload.before.length > 256)) return undefined
   const session = isRecord(payload.session) ? payload.session : {}
+  if (session.id !== undefined && !isSessionID(session.id)) return undefined
+  if (session.scope !== undefined && session.scope !== "bound" && session.scope !== "standalone") return undefined
+  const tokens = isRecord(session.tokens) ? session.tokens : {}
+  const cache = isRecord(tokens.cache) ? tokens.cache : {}
+  const time = isRecord(session.time) ? session.time : {}
+  const location = isRecord(session.location) ? session.location : {}
+  const validSession = isSessionID(session.id) && typeof session.projectID === "string" && session.projectID.length > 0 &&
+    typeof session.title === "string" && typeof location.directory === "string" && location.directory.length > 0 &&
+    [session.cost, tokens.input, tokens.output, tokens.reasoning, cache.read, cache.write, time.created, time.updated].every((value) => typeof value === "number" && Number.isFinite(value)) &&
+    (session.scope === undefined || session.scope === "bound" || session.scope === "standalone")
   const watermark = isRecord(payload.watermark) ? numberField(payload.watermark.seq) : undefined
+  if (isRecord(payload.watermark) && payload.watermark.aggregateID !== undefined && !isSessionID(payload.watermark.aggregateID)) return undefined
+  const watermarkSessionID = isRecord(payload.watermark) ? stringField(payload.watermark.aggregateID) : undefined
   const sourceEpoch = stringField(payload.sourceEpoch)
   const archived = isRecord(session.time) && numberField(session.time.archived) !== undefined
   const model = readModelRef(session.model)
@@ -2109,6 +2126,9 @@ export function readSnapshot(payload: unknown): SessionSnapshot | undefined {
   const visibleIDs = new Set(messages.map((message) => message.id))
   return {
     messages,
+    ...(isSessionID(session.id) ? { sessionID: session.id } : {}),
+    ...(validSession ? { scope: session.scope === "standalone" ? "standalone" as const : "bound" as const } : {}),
+    ...(watermarkSessionID === undefined ? {} : { watermarkSessionID }),
     ...(payload.before === undefined ? {} : { before: payload.before }),
     coveredAssistantIDs: allMessages.flatMap((message) => message.kind === "assistant" && !visibleIDs.has(message.id) ? [message.id] : []),
     ...(stringField(session.title) === undefined ? {} : { title: stringField(session.title) }),

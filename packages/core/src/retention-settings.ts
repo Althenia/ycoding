@@ -21,7 +21,7 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Ret
 
 function graph(options: Config.Options | undefined, directory: AbsolutePath) {
   return LayerNode.hoist(Config.configured(options), Node.tags.values.global, [
-    [Location.node, Location.boundNode(Location.Ref.make({ directory }))],
+    [Location.node, Location.standaloneNode(Location.Ref.make({ directory }))],
   ])
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test"
 import path from "path"
-import { DateTime, Effect, Layer, Stream } from "effect"
+import fs from "fs/promises"
+import { Cause, Context, DateTime, Effect, Layer, Logger, Option, PlatformError, Schema, Scope, Stream } from "effect"
 import { Money } from "@ycoding-ai/schema/money"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
@@ -9,6 +10,7 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventRuntime } from "@ycoding-ai/core/event"
+import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { EventTable } from "@ycoding-ai/core/event/sql"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
@@ -21,11 +23,15 @@ import { Session } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
+import { SessionTaskRecovery } from "@ycoding-ai/core/session/execution/recovery"
+import { AppProcess } from "@ycoding-ai/core/process"
 import { SessionPending } from "@ycoding-ai/core/session/pending"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
-import { SessionTable } from "@ycoding-ai/core/session/sql"
+import { SessionPendingTable, SessionTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { Workspace } from "@ycoding-ai/core/workspace"
+import { Global } from "@ycoding-ai/core/global"
+import { Skill } from "@ycoding-ai/core/skill"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
 
@@ -39,6 +45,10 @@ const projects = Layer.succeed(
     commit: () => Effect.void,
   }),
 )
+const isolatedGlobal = Layer.effect(Global.Service, Effect.gen(function* () {
+  const tmp = yield* Effect.acquireRelease(Effect.promise(() => tmpdir()), (value) => Effect.promise(() => value[Symbol.asyncDispose]()))
+  return Global.Service.of(Global.make({ state: tmp.path }))
+}))
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
@@ -50,6 +60,7 @@ const it = testEffect(
       LocationServiceMap.node,
     ]),
     [
+      [Global.node, isolatedGlobal],
       [Project.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
     ],
@@ -57,6 +68,66 @@ const it = testEffect(
 )
 const location = Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) })
 const id = Session.ID.create()
+let placementResolutions = 0
+const guardedProjects = Layer.succeed(Project.Service, Project.Service.of({
+  list: () => Effect.succeed([]),
+  resolve: (directory) => Effect.sync(() => { placementResolutions++; return { id: Project.ID.global, directory } }),
+  directories: () => Effect.succeed([]), recordOpened: () => Effect.void, commit: () => Effect.void,
+}))
+const guarded = testEffect(AppNodeBuilder.build(
+  LayerNode.group([Global.node, Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node, Session.node, LocationServiceMap.node]),
+  [[Global.node, isolatedGlobal], [Project.node, guardedProjects], [SessionExecution.node, SessionExecution.noopLayer]],
+))
+const guardedFilesystem = Layer.effect(FSUtil.Service, Effect.map(FSUtil.Service, (fs) => FSUtil.Service.of({
+  ...fs,
+  realPath: (target) => target === "/synthetic/permission-denied"
+    ? Effect.fail(PlatformError.systemError({ _tag: "PermissionDenied", module: "FileSystem", method: "realPath" }))
+    : fs.realPath(target),
+}))).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+const guardedIO = testEffect(AppNodeBuilder.build(
+  LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node, Session.node, LocationServiceMap.node]),
+  [[Global.node, isolatedGlobal], [Project.node, guardedProjects], [SessionExecution.node, SessionExecution.noopLayer], [FSUtil.node, guardedFilesystem]],
+))
+const raceGate = Promise.withResolvers<void>()
+let arrivals = 0
+let raceArmed = false
+const racingProjects = Layer.succeed(Project.Service, Project.Service.of({
+  list: () => Effect.succeed([]),
+  resolve: (directory) => Effect.promise(async () => {
+    if (!raceArmed) return { id: Project.ID.global, directory }
+    arrivals++
+    if (arrivals === 2) raceGate.resolve()
+    await raceGate.promise
+    return { id: Project.ID.global, directory }
+  }),
+  directories: () => Effect.succeed([]), recordOpened: () => Effect.void, commit: () => Effect.void,
+}))
+const racing = testEffect(AppNodeBuilder.build(
+  LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node, Session.node, LocationServiceMap.node]),
+  [[Global.node, isolatedGlobal], [Project.node, racingProjects], [SessionExecution.node, SessionExecution.noopLayer]],
+))
+let graphCalls = 0
+let processRuns = 0
+const noGraph = Layer.mock(LocationServiceMap.Service, { get: <const Items extends LocationServiceMap.Nodes>(_ref: Location.Ref, _nodes: Items) => {
+  graphCalls++
+  const failure: Effect.Effect<Context.Context<LayerNode.Output<Items[number]>>> = Effect.die(new Error("Unexpected Location graph"))
+  return Layer.effectContext(failure)
+} })
+const realExecution = testEffect(AppNodeBuilder.build(
+  LayerNode.group([Database.node, EventRuntime.node, SessionStore.node, Session.node, SessionExecution.node, LocationServiceMap.node, AppProcess.node]),
+  [[Global.node, isolatedGlobal], [Project.node, projects], [LocationServiceMap.node, noGraph], [AppProcess.node, Layer.mock(AppProcess.Service, {
+    run: () => { processRuns++; return Effect.succeed({ command: "ps", exitCode: 0, stdout: Buffer.from(""), stderr: Buffer.from(""), stdoutTruncated: false, stderrTruncated: false }) },
+  })]],
+))
+let failWake = false
+const wakeExecution = Layer.effect(SessionExecution.Service, Effect.map(SessionExecution.Service, (execution) => SessionExecution.Service.of({
+  ...execution,
+  wake: () => failWake ? Effect.fail(new Session.ScopeUnavailableError({ operation: "wake" })) : Effect.void,
+}))).pipe(Layer.provide(SessionExecution.noopLayer))
+const wakeRuntime = testEffect(AppNodeBuilder.build(
+  LayerNode.group([Database.node, EventRuntime.node, SessionStore.node, Session.node, LocationServiceMap.node]),
+  [[Global.node, isolatedGlobal], [Project.node, projects], [SessionExecution.node, wakeExecution]],
+))
 
 /** Public session events from a `log` read, without synced markers. */
 const logEvents = (session: Session.Interface, sessionID: Session.ID, follow?: boolean) =>
@@ -80,6 +151,199 @@ function withTmp<A, E, R>(f: (directory: string) => Effect.Effect<A, E, R>) {
 }
 
 describe("Session.create", () => {
+  wakeRuntime.effect("standalone scope wake failure preserves committed admission and reports it", () => {
+    const logs: string[] = []
+    return Effect.gen(function* () {
+      const session = yield* Session.Service
+      const db = (yield* Database.Service).db
+      const root = yield* session.create({ location })
+      failWake = true
+      const admitted = yield* session.prompt({ sessionID: root.id, text: "Synthetic first" })
+      expect(admitted.data.text).toBe("Synthetic first")
+      expect((yield* db.select().from(SessionPendingTable).where(eq(SessionPendingTable.session_id, root.id)).all().pipe(Effect.orDie))).toHaveLength(1)
+      expect((yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, root.id)).all().pipe(Effect.orDie)).filter((event) => event.type.startsWith("session.input.admitted."))).toHaveLength(1)
+      expect(logs.some((entry) => entry.includes("Could not wake admitted Session input"))).toBe(true)
+      failWake = false
+      const second = yield* session.prompt({ sessionID: root.id, text: "Synthetic second" })
+      expect(second.data.text).toBe("Synthetic second")
+      expect((yield* db.select().from(SessionPendingTable).where(eq(SessionPendingTable.session_id, root.id)).all().pipe(Effect.orDie))).toHaveLength(2)
+      expect((yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, root.id)).all().pipe(Effect.orDie)).filter((event) => event.type.startsWith("session.input.admitted."))).toHaveLength(2)
+      expect(logs.filter((entry) => entry.includes("Could not wake admitted Session input"))).toHaveLength(1)
+    }).pipe(Effect.provide(Logger.layer([Logger.make((entry) => logs.push(Bun.inspect(entry.message)))], { mergeWithExisting: false })))
+  })
+
+  it.effect("standalone scope schema decodes legacy bound and roundtrips standalone", () => Effect.sync(() => {
+    const info = { id: "ses_scope", projectID: "global", title: "Scope", location: { directory: "/work" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 } }
+    const event = { sessionID: "ses_scope", projectID: "global", title: "Scope", location: { directory: "/work" }, created: 1 }
+    expect(Schema.decodeUnknownSync(Session.Info)(info).scope).toBe("bound")
+    expect(Schema.decodeUnknownSync(SessionEvent.Created.data)(event).scope).toBe("bound")
+    const standaloneInfo = Schema.decodeUnknownSync(Session.Info)({ ...info, scope: "standalone" })
+    const standaloneEvent = Schema.decodeUnknownSync(SessionEvent.Created.data)({ ...event, scope: "standalone" })
+    expect(Schema.decodeUnknownSync(Session.Info)(Schema.encodeSync(Session.Info)(standaloneInfo)).scope).toBe("standalone")
+    expect(Schema.decodeUnknownSync(SessionEvent.Created.data)(Schema.encodeSync(SessionEvent.Created.data)(standaloneEvent)).scope).toBe("standalone")
+  }))
+
+  realExecution.effect("standalone scope rejects real execution and skips recovery before Location graphs", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const execution = yield* SessionExecution.Service
+      const events = yield* EventRuntime.Service
+      const appProcess = yield* AppProcess.Service
+      const db = (yield* Database.Service).db
+      const lifetime = yield* Scope.Scope
+      graphCalls = 0
+      processRuns = 0
+      const root = yield* session.create({ scope: "standalone" })
+      const child = yield* session.create({ parentID: root.id })
+      const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("synthetic"), providerID: Provider.ID.make("synthetic") })
+      yield* db.insert(SessionTaskTable).values({ session_id: child.id, parent_id: root.id, parent_assistant_message_id: SessionMessage.ID.make("msg_parent"), tool_call_id: "call_1", input_id: SessionMessage.ID.make("msg_child"), description: "synthetic", agent: "build", model, prompt_digest: "digest", background: true, delivery: "steer", state: "running", owner_pid: 123456, owner_started: "synthetic" }).run().pipe(Effect.orDie)
+      expect(yield* execution.resume(child.id).pipe(Effect.flip)).toMatchObject({ _tag: "Session.ScopeUnavailableError", operation: "managed task owner" })
+      expect(yield* execution.wake(child.id).pipe(Effect.flip)).toMatchObject({ _tag: "Session.ScopeUnavailableError", operation: "managed task owner" })
+      expect(yield* session.resume(child.id).pipe(Effect.flip)).toMatchObject({ _tag: "Session.ScopeUnavailableError" })
+      expect(yield* session.autonomy.effective(child.id).pipe(Effect.flip)).toMatchObject({ _tag: "Session.ScopeUnavailableError" })
+      expect(yield* session.skills(child.id).pipe(Effect.flip)).toMatchObject({ _tag: "Session.ScopeUnavailableError" })
+      expect(yield* session.generate({ sessionID: child.id, prompt: "hello" }).pipe(Effect.flip)).toMatchObject({ _tag: "Session.ScopeUnavailableError" })
+      expect(yield* session.move({ sessionID: child.id, directory: location.directory }).pipe(Effect.flip)).toMatchObject({ _tag: "Session.ScopeUnavailableError" })
+      const taskBefore = yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, child.id)).get().pipe(Effect.orDie)
+      const eventsBefore = yield* db.select().from(EventTable).all().pipe(Effect.orDie)
+      yield* SessionTaskRecovery.recover({ db, events, appProcess, execution, lifetime })
+      expect(processRuns).toBeGreaterThan(0)
+      expect(graphCalls).toBe(0)
+      expect(yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, child.id)).get().pipe(Effect.orDie)).toEqual(taskBefore)
+      expect(yield* db.select().from(EventTable).all().pipe(Effect.orDie)).toEqual(eventsBefore)
+    }),
+  )
+  racing.effect("standalone scope conflicting concurrent placements do not adopt the winner", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      raceArmed = true
+      const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("synthetic"), providerID: Provider.ID.make("synthetic") })
+      const sessionID = Session.ID.create()
+      const placements = [location, Location.Ref.make({ directory: AbsolutePath.make(path.dirname(location.directory)) })]
+      const results = yield* Effect.all(placements.map((target) => session.create({ id: sessionID, location: target, model }).pipe(Effect.exit)), { concurrency: "unbounded" })
+      expect(results.filter((result) => result._tag === "Success")).toHaveLength(1)
+      expect(results.filter((result) => result._tag === "Failure")).toHaveLength(1)
+      const failure = results.find((result) => result._tag === "Failure")
+      expect(failure?._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(failure.cause)) : undefined).toMatchObject({ _tag: "Session.SessionPlacementConflictError", sessionID })
+      const persisted = yield* session.get(sessionID)
+      expect(placements.map((item) => item.directory)).toContain(persisted.location.directory)
+    }),
+  )
+
+  guarded.effect("standalone scope rejects reserved bound placements before project resolution", () =>
+    withTmp((directory) => Effect.gen(function* () {
+      const session = yield* Session.Service
+      const global = yield* Global.Service
+      const root = path.join(global.state, "standalone-sessions")
+      yield* Effect.promise(() => fs.mkdir(root, { recursive: true }))
+      const alias = path.join(directory, "alias")
+      yield* Effect.promise(() => fs.symlink(root, alias, "dir"))
+      placementResolutions = 0
+      for (const target of [root, path.join(root, "child"), alias, path.join(alias, "missing"), `${alias}/../standalone-sessions/missing`]) {
+        const result = yield* session.create({ location: Location.Ref.make({ directory: AbsolutePath.make(target) }) }).pipe(Effect.flip)
+        expect(result).toMatchObject({ _tag: "Session.ScopeUnavailableError" })
+      }
+      expect(placementResolutions).toBe(0)
+    })),
+  )
+
+  guarded.effect("standalone scope rejects unresolved bound placement before project resolution", () =>
+    withTmp((directory) => Effect.gen(function* () {
+      const session = yield* Session.Service
+      const broken = path.join(directory, "broken")
+      yield* Effect.promise(() => fs.symlink(path.join(directory, "missing"), broken, "dir"))
+      placementResolutions = 0
+      for (const target of [broken, path.join(broken, "child")]) {
+        const result = yield* session.create({ location: Location.Ref.make({ directory: AbsolutePath.make(target) }) }).pipe(Effect.flip)
+        expect(result).toMatchObject({ _tag: "Session.ScopeUnavailableError" })
+      }
+      expect(placementResolutions).toBe(0)
+    })),
+  )
+
+  guarded.effect("bound creation preserves a missing directory below a real ancestor", () =>
+    withTmp((directory) => Effect.gen(function* () {
+      const session = yield* Session.Service
+      const target = Location.Ref.make({ directory: AbsolutePath.make(path.join(directory, "missing", "child")) })
+      expect((yield* session.create({ location: target })).location).toEqual(target)
+    })),
+  )
+
+  guardedIO.effect("bound creation fails closed on a filesystem error", () => Effect.gen(function* () {
+    const session = yield* Session.Service
+    placementResolutions = 0
+    const result = yield* session.create({ location: Location.Ref.make({ directory: AbsolutePath.make("/synthetic/permission-denied") }) }).pipe(Effect.flip)
+    expect(result).toMatchObject({ _tag: "Session.ScopeUnavailableError" })
+    expect(placementResolutions).toBe(0)
+  }))
+
+  it.effect("standalone scope is persisted and inherited by child and fork", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const root = yield* session.create({ scope: "standalone" })
+      const child = yield* session.create({ parentID: root.id })
+      const fork = yield* session.fork({ sessionID: root.id })
+      expect(root.scope).toBe("standalone")
+      expect((yield* session.get(root.id)).scope).toBe("standalone")
+      expect(child).toMatchObject({ scope: "standalone", projectID: root.projectID, location: root.location })
+      expect(fork).toMatchObject({ scope: "standalone", projectID: root.projectID, location: root.location })
+    }),
+  )
+
+  it.effect("standalone text admission preserves literal skill-like text", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const root = yield* session.create({ scope: "standalone" })
+      const input = yield* session.prompt({ sessionID: root.id, text: "Literal $not-a-skill", resume: false })
+      expect(input).toMatchObject({ sessionID: root.id, type: "user", data: { text: "Literal $not-a-skill" } })
+    }),
+  )
+
+  it.effect("standalone rejects whole attachment batches including reused prompt IDs", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const db = (yield* Database.Service).db
+      const root = yield* session.create({ scope: "standalone" })
+      const accepted = yield* session.prompt({ sessionID: root.id, text: "accepted", resume: false })
+      const inline = { uri: "data:text/plain;base64,c3ludGhldGlj" }
+      const file = { uri: "file:///synthetic-never-read" }
+      for (const files of [[inline, file], [file, inline]]) {
+        for (const id of [undefined, accepted.id]) {
+          const error = yield* session.prompt({ sessionID: root.id, id, text: "reject", files, resume: false }).pipe(Effect.flip)
+          expect(error).toMatchObject({ _tag: "Session.ScopeUnavailableError" })
+        }
+      }
+      const pending = yield* db.select().from(SessionPendingTable).where(eq(SessionPendingTable.session_id, root.id)).all().pipe(Effect.orDie)
+      expect(pending).toHaveLength(1)
+    }),
+  )
+
+  it.effect("standalone scope rejects direct execution and location graph operations", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const root = yield* session.create({ scope: "standalone" })
+      const check = <A, E>(effect: Effect.Effect<A, E>) => effect.pipe(Effect.flip, Effect.tap((error) => Effect.sync(() => expect(error).toMatchObject({ _tag: "Session.ScopeUnavailableError" }))))
+      yield* check(session.prompt({ sessionID: root.id, text: "hello" }))
+      yield* check(session.command({ sessionID: root.id, command: "test" }))
+      yield* check(session.shell({ sessionID: root.id, command: "true" }))
+      yield* check(session.skill({ sessionID: root.id, skill: Skill.ID.make("test") }))
+      yield* check(session.move({ sessionID: root.id, directory: location.directory }))
+      yield* check(session.resume(root.id))
+      yield* check(session.generate({ sessionID: root.id, prompt: "hello" }))
+      yield* check(session.autonomy.effective(root.id))
+      yield* check(session.skills(root.id))
+    }),
+  )
+
+  it.effect("standalone scope placement rejects conflicting retry", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const root = yield* session.create({ location })
+      const conflict = yield* session.create({ id: root.id, scope: "standalone" }).pipe(Effect.flip)
+      expect(conflict).toMatchObject({ _tag: "Session.SessionPlacementConflictError", sessionID: root.id })
+    }),
+  )
+
   it.effect("creates a fresh projected session when the ID is omitted", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service
@@ -425,12 +689,11 @@ describe("Session.create", () => {
     }),
   )
 
-  it.effect("returns the existing Session when one ID is reused with different create arguments", () =>
+  it.effect("rejects a changed placement but preserves the original Session for other retried choices", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service
       const created = yield* session.create({ id, location })
       const changed = [
-        { id, location: Location.Ref.make({ directory: AbsolutePath.make("/other") }) },
         { id, location, agent: Agent.ID.make("build") },
         {
           id,
@@ -442,6 +705,8 @@ describe("Session.create", () => {
       for (const input of changed) {
         expect(yield* session.create(input)).toEqual(created)
       }
+      const conflict = yield* session.create({ id, location: Location.Ref.make({ directory: AbsolutePath.make(path.dirname(location.directory)) }) }).pipe(Effect.flip)
+      expect(conflict).toMatchObject({ _tag: "Session.SessionPlacementConflictError", sessionID: id })
       expect((yield* session.list()).data).toHaveLength(1)
     }),
   )

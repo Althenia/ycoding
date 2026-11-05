@@ -10,6 +10,7 @@ import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { response } from "../location"
+import { SessionForm } from "../middleware/form-location"
 
 function missingForm(id: Form.ID) {
   return new FormNotFoundError({ id, message: `Form not found: ${id}` })
@@ -18,7 +19,7 @@ function missingForm(id: Form.ID) {
 export const FormHandler = HttpApiBuilder.group(Api, "server.form", (handlers) =>
   Effect.gen(function* () {
     const requireOwnedForm = Effect.fnUntraced(function* (sessionID: Form.Info["sessionID"], formID: Form.ID) {
-      const form = yield* Form.Service
+      const form = yield* SessionForm
       const info = yield* form.get(formID).pipe(Effect.catchTag("Form.NotFoundError", () => missingForm(formID)))
       if (info.sessionID !== sessionID) return yield* missingForm(formID)
       return { form, info }
@@ -35,7 +36,7 @@ export const FormHandler = HttpApiBuilder.group(Api, "server.form", (handlers) =
       .handle(
         "session.form.list",
         Effect.fn(function* (ctx) {
-          const form = yield* Form.Service
+          const form = yield* SessionForm
           const forms = yield* form.list({ sessionID: ctx.params.sessionID })
           return { data: forms }
         }),
@@ -43,7 +44,7 @@ export const FormHandler = HttpApiBuilder.group(Api, "server.form", (handlers) =
       .handle(
         "session.form.create",
         Effect.fn(function* (ctx) {
-          const form = yield* Form.Service
+          const form = yield* SessionForm
           const created = yield* form
             .create({
               id: ctx.payload.id,
@@ -57,6 +58,7 @@ export const FormHandler = HttpApiBuilder.group(Api, "server.form", (handlers) =
                 "Form.AlreadyExistsError": (error) => new ConflictError({ resource: error.id, message: error.message }),
                 "Form.InvalidFormError": (error) =>
                   new InvalidRequestError({ message: error.message, field: "fields" }),
+                "StandaloneConfig.InvalidError": () => new InvalidRequestError({ message: "Standalone configuration is unavailable" }),
               }),
             )
           return { data: created }
@@ -90,6 +92,7 @@ export const FormHandler = HttpApiBuilder.group(Api, "server.form", (handlers) =
               "Form.InvalidAnswerError": (error) =>
                 new FormInvalidAnswerError({ id: error.id, message: error.message }),
               "Form.NotFoundError": () => missingForm(ctx.params.formID),
+              "StandaloneConfig.InvalidError": () => new InvalidRequestError({ message: "Standalone configuration is unavailable" }),
             }),
           )
           return HttpApiSchema.NoContent.make()
@@ -104,6 +107,7 @@ export const FormHandler = HttpApiBuilder.group(Api, "server.form", (handlers) =
               "Form.AlreadySettledError": (error) =>
                 new FormAlreadySettledError({ id: error.id, message: error.message }),
               "Form.NotFoundError": () => missingForm(ctx.params.formID),
+              "StandaloneConfig.InvalidError": () => new InvalidRequestError({ message: "Standalone configuration is unavailable" }),
             }),
           )
           return HttpApiSchema.NoContent.make()

@@ -32,7 +32,8 @@ import { GuardrailHandler } from "../src/handlers/guardrail"
 import { ReviewHandler } from "../src/handlers/review"
 import { LocationMiddleware, type LocationServices } from "../src/location"
 import { SessionLocationMiddleware } from "../src/middleware/session-location"
-import { FormLocationMiddleware } from "../src/middleware/form-location"
+import { FormLocationMiddleware, SessionForm } from "../src/middleware/form-location"
+import { PermissionLocationMiddleware, SessionPermission } from "../src/middleware/permission-location"
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "ycoding-decision-list-"))
@@ -168,12 +169,19 @@ async function fixture() {
     const owner = owners.findIndex((owner) => request.url.includes(owner.id))
     return yield* Effect.provide(effect, Context.makeUnsafe<LocationServices>((contexts[owner] ?? contexts[0])!.mapUnsafe))
   })
+  const controlContext = Effect.gen(function* () {
+    const { HttpServerRequest } = yield* Effect.promise(() => import("effect/unstable/http"))
+    const request = yield* HttpServerRequest.HttpServerRequest
+    const owner = owners.findIndex((owner) => request.url.includes(owner.id))
+    return contexts[owner] ?? contexts[0]!
+  })
   const globalServices = Layer.succeedContext(globals!)
   const services = Layer.mergeAll(globalServices, locations,
     SessionDecisions.layer.pipe(Layer.provide(locations), Layer.provide(globalServices)),
     Layer.succeed(Authorization, (effect) => effect), Layer.succeed(SchemaErrorMiddleware, (effect) => effect),
     Layer.succeed(LocationMiddleware, locationMiddleware), Layer.succeed(SessionLocationMiddleware, scopedMiddleware),
-    Layer.succeed(FormLocationMiddleware, scopedMiddleware),
+    Layer.succeed(FormLocationMiddleware, (effect) => controlContext.pipe(Effect.flatMap((context) => Effect.provideService(effect, SessionForm, Context.get(context, Form.Service))))),
+    Layer.succeed(PermissionLocationMiddleware, (effect) => controlContext.pipe(Effect.flatMap((context) => Effect.provideService(effect, SessionPermission, Context.get(context, Permission.Service))))),
   )
   const api = HttpApi.make("server").add(Api.groups["server.decision"]).add(Api.groups["server.permission"])
     .add(Api.groups["server.question"]).add(Api.groups["server.form"]).add(Api.groups["server.guardrail"]).add(Api.groups["server.review"])

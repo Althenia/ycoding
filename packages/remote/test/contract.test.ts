@@ -47,6 +47,18 @@ import {
   type RemoteOperation,
 } from "../src/index"
 
+test("fork is a scoped mutation accepting only an optional message boundary", () => {
+  expect(remoteOperations).toContain("session.fork")
+  expect(remoteSessionOperations).toContain("session.fork")
+  expect(remoteOperationAccess["session.fork"]).toBe("mutation")
+  const frame = { type: "request", id: "req_fork", operation: "session.fork", sessionID: "ses_1" }
+  for (const input of [undefined, {}, { messageID: "msg_boundary" }])
+    expect(parseClientMessage(JSON.stringify({ ...frame, input })).ok).toBe(true)
+  for (const input of [{ messageID: "" }, { messageID: "../bad" }, { scope: "bound" }, { directory: "/work" }, { messageID: "msg_boundary", extra: true }])
+    expect(parseClientMessage(JSON.stringify({ ...frame, input })).ok).toBe(false)
+  expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: undefined })).ok).toBe(false)
+})
+
 test("guardrail and decision grades survive response and event serialization and relay validation", () => {
   const grades = [
     { choice: "approve_all", confidence: 0.934567, evidence: "All targets were checked." },
@@ -451,6 +463,19 @@ describe("remote envelope: request", () => {
       expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation: "session.list", input }))).toMatchObject({ ok: false })
   })
 
+  test("standalone scope creation validates exclusive placement", () => {
+    const parse = (input: unknown) => parseClientMessage(JSON.stringify({ type: "request", id: "a", operation: "session.create", input }))
+    expect(parse({ id: "ses_new", scope: "standalone" })).toMatchObject({ ok: true })
+    expect(parse({ id: "ses_new", scope: "bound", workspace: "wsp_1" })).toMatchObject({ ok: true })
+    for (const input of [
+      { id: "ses_new", scope: "standalone", workspace: "wsp_1" },
+      { id: "ses_new", scope: "standalone", workspaceID: "wsp_1" },
+      { id: "ses_new", scope: "standalone", directory: "/work" },
+      { id: "ses_new", scope: "bound" },
+      { id: "ses_new", scope: "other", workspace: "wsp_1" },
+    ]) expect(parse(input)).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+  })
+
   test("validates the exact workspace inventory and Session creation request shapes", () => {
     expect(parseClientMessage('{"type":"request","id":"a","operation":"workspace.list"}')).toEqual({
       ok: true,
@@ -815,6 +840,7 @@ describe("remote operations", () => {
       "session.list",
       "session.active",
       "session.get",
+      "session.fork",
       "session.delete",
       "session.messages",
       "session.capturedChanges.list",

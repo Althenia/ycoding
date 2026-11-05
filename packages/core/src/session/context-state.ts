@@ -86,7 +86,7 @@ export interface Interface {
     sessionID: SessionSchema.ID,
     messages: ReadonlyArray<SessionMessage.Info>,
   ) => Effect.Effect<ReadonlyArray<SessionMessage.Info>>
-  readonly activate: (input: ActivationInput) => Effect.Effect<ActivationResult, ActivationError>
+  readonly activate: (input: ActivationInput) => Effect.Effect<ActivationResult, ActivationError | SessionErrors.ScopeUnavailableError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionContextState") {}
@@ -367,7 +367,7 @@ const layer = Layer.effect(
       activate: (input) =>
         Effect.gen(function* () {
           const session = yield* db
-            .select({ directory: SessionTable.directory, workspaceID: SessionTable.workspace_id })
+            .select({ directory: SessionTable.directory, workspaceID: SessionTable.workspace_id, scope: SessionTable.scope })
             .from(SessionTable)
             .where(eq(SessionTable.id, input.sessionID))
             .get()
@@ -375,7 +375,14 @@ const layer = Layer.effect(
           if (!session) return yield* activationFailure("unknown_context", `Session ${input.sessionID} was not found`)
           const guardrail = yield* Effect.promise(() => import("./guardrail"))
           const liveState = yield* Effect.promise(() => import("./live-state"))
-          return yield* guardrail.Service.use((guardrails) => activate(db, events, guardrails, liveState, input)).pipe(
+          if (session.scope === "standalone")
+            return yield* guardrail.Observation.use((guardrails) => activate(db, events, guardrails, liveState, input)).pipe(
+              Effect.provide(Layer.effectContext(locations.contextEffect(Location.Ref.make({
+                directory: AbsolutePath.make(session.directory),
+                workspaceID: session.workspaceID ?? undefined,
+              }), [guardrail.standaloneObservationNode], session.scope).pipe(Effect.mapError((error) => error instanceof SessionErrors.ScopeUnavailableError ? error : new SessionErrors.ScopeUnavailableError({ operation: "global guardrail policy" }))))),
+            )
+          return yield* guardrail.Observation.use((guardrails) => activate(db, events, guardrails, liveState, input)).pipe(
             Effect.provide(
               locations
                 .get(
@@ -383,7 +390,7 @@ const layer = Layer.effect(
                     directory: AbsolutePath.make(session.directory),
                     workspaceID: session.workspaceID ?? undefined,
                   }),
-                  [guardrail.node],
+                  [guardrail.observationNode],
                 )
                 .pipe(Layer.orDie),
             ),
@@ -402,10 +409,10 @@ export const node = makeGlobalNode({
 const activate = Effect.fn("SessionContextState.activate")(function* (
   db: DatabaseService,
   events: EventRuntime.Interface,
-  guardrails: SessionGuardrail.Interface,
+  guardrails: SessionGuardrail.ObservationInterface,
   liveState: LiveStateModule,
   input: ActivationInput,
-): Effect.fn.Return<ActivationResult, ActivationError> {
+): Effect.fn.Return<ActivationResult, ActivationError | SessionErrors.ScopeUnavailableError> {
   const manifestDigest = yield* requireManifest(input.manifest)
   const state = yield* findCurrent(db, input.sessionID)
   if (!state)
@@ -453,7 +460,7 @@ const activate = Effect.fn("SessionContextState.activate")(function* (
     retainedTokens: input.manifest.retainedTokens,
   }
   const event = yield* guardrails
-    .withSnapshot(input.sessionID, (guardrail) =>
+    .withSnapshot(input.sessionID, (guardrail, validate) =>
       events.publish(
         SessionEvent.Compaction.Ended,
         {
@@ -474,6 +481,7 @@ const activate = Effect.fn("SessionContextState.activate")(function* (
               sequence,
               timeActivated,
               guardrail,
+              validate,
             }).pipe(Effect.orDie),
         },
       ),
@@ -481,7 +489,7 @@ const activate = Effect.fn("SessionContextState.activate")(function* (
     .pipe(
       Effect.catchCause((cause) => {
         const error = Cause.squash(cause)
-        if (error instanceof ActivationError) return Effect.fail(error)
+        if (error instanceof ActivationError || error instanceof SessionErrors.ScopeUnavailableError) return Effect.fail(error)
         if (error instanceof SessionErrors.NotFoundError)
           return activationFailure("unknown_context", `Session ${input.sessionID} was not found`)
         return Effect.die(error)
@@ -506,6 +514,7 @@ const commitActivation = Effect.fnUntraced(function* (
     readonly sequence: number
     readonly timeActivated: number
     readonly guardrail: SessionGuardrail.Snapshot
+    readonly validate: Effect.Effect<void, SessionErrors.ScopeUnavailableError>
   },
 ) {
   const state = yield* findCurrent(db, activation.input.sessionID)
@@ -544,6 +553,7 @@ const commitActivation = Effect.fnUntraced(function* (
   const content = decodeManifestContent(ContextManifest.manifestJSON(activation.input.manifest))
   if (!Schema.is(Schema.Json)(content))
     return yield* activationFailure("invalid_manifest", "Manifest content is not JSON")
+  yield* activation.validate
   yield* db
     .insert(CompactionManifestBlobTable)
     .values({
@@ -669,6 +679,7 @@ const commitActivation = Effect.fnUntraced(function* (
         `Compaction job ${activation.input.jobID} lost lease ownership before activation`,
       )
   }
+  yield* activation.validate
 })
 
 const readCurrent = Effect.fn("SessionContextState.current")(function* (

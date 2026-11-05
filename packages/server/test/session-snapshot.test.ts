@@ -25,7 +25,7 @@ test("snapshot HTTP forwards bounded window input, preserves watermark, and maps
     if (options?.before === "invalid") return Effect.fail(new Session.InvalidCursorError())
     return Effect.succeed({
       session: Session.Info.make({
-        id: sessionID, projectID: Project.ID.global, title: "Window", cost: Schema.decodeUnknownSync(Session.Info.fields.cost)(0),
+        id: sessionID, projectID: Project.ID.global, scope: "bound", title: "Window", cost: Schema.decodeUnknownSync(Session.Info.fields.cost)(0),
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
         location: Location.Ref.make({ directory: AbsolutePath.make("/project") }),

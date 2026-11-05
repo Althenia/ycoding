@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Deferred, Effect, Exit, Fiber, Scope } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { ChildProcess } from "effect/unstable/process"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
@@ -8,8 +8,11 @@ import path from "node:path"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { KeepAwake } from "@ycoding-ai/core/keep-awake"
 import { AppProcess } from "@ycoding-ai/core/process"
+import { Global } from "@ycoding-ai/core/global"
+import { ClamshellSleep } from "@ycoding-ai/core/util/clamshell-sleep"
 import { ProcessLock } from "@ycoding-ai/core/util/process-lock"
 import { SystemSleep } from "@ycoding-ai/core/util/system-sleep"
+import { UserActivity } from "@ycoding-ai/core/util/user-activity"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(LayerNode.compile(AppProcess.node))
@@ -21,6 +24,45 @@ const make = (options: Omit<KeepAwake.Options, "userActivity">) => KeepAwake.mak
 
 const onStatus = { state: "on", display: "on", activity: "on", lid: "on", system: "on", sleepHold: false } as const
 const offStatus = { state: "off", display: "off", activity: "off", lid: "off", system: "off", sleepHold: false } as const
+
+const observation = testEffect(LayerNode.compile(KeepAwake.observationNode))
+class ControllerBindingProbe extends Context.Service<ControllerBindingProbe, unknown>()("@ycoding/KeepAwake/ControllerBinding") {}
+observation.effect("reports unknown without constructing a controller", () =>
+  Effect.gen(function* () {
+    const status = yield* KeepAwake.Observation
+    expect(yield* status.get).toBeUndefined()
+    expect(Option.isNone(Context.getOption(yield* Effect.context<KeepAwake.Observation>(), ControllerBindingProbe))).toBe(true)
+  }),
+)
+
+const syntheticController = [
+  [AppProcess.node, Layer.mock(AppProcess.Service, { spawn: () => Effect.die("synthetic spawn failure") })],
+  [ClamshellSleep.node, Layer.mock(ClamshellSleep.Service, { set: () => "off" })],
+  [SystemSleep.node, Layer.mock(SystemSleep.Service, { permitted: Effect.succeed(false), set: () => Effect.succeed("off") })],
+  [UserActivity.node, Layer.mock(UserActivity.Service, { set: () => "off" })],
+  [Global.node, Layer.succeed(Global.Service, Global.make({ state: "/dev/null" }))],
+] as const
+observation.effect("observes the real controller through its owning scope", () =>
+  Effect.gen(function* () {
+    const status = yield* KeepAwake.Observation
+    expect(yield* status.get).toBeUndefined()
+    const scope = yield* Scope.make()
+    const controller = Context.get(yield* Layer.buildWithScope(LayerNode.compile(KeepAwake.node, syntheticController), scope), KeepAwake.Service)
+    expect(yield* status.get).toEqual(yield* controller.get)
+    const duplicateScope = yield* Scope.make()
+    const duplicateNode = { ...KeepAwake.node, implementation: Layer.fresh(KeepAwake.layer) }
+    const duplicate = yield* Effect.exit(Layer.buildWithScope(LayerNode.compile(duplicateNode, syntheticController), duplicateScope))
+    expect(Exit.isFailure(duplicate)).toBe(true)
+    yield* Scope.close(duplicateScope, Exit.void)
+    expect(yield* status.get).toEqual(yield* controller.get)
+    if (process.platform === "darwin") {
+      expect((yield* controller.set(true)).state).toBe("error")
+      expect((yield* status.get)?.state).toBe("error")
+    }
+    yield* Scope.close(scope, Exit.void)
+    expect(yield* status.get).toBeUndefined()
+  }),
+)
 
 const fakeClamshell = (fail = false) => {
   const calls: boolean[] = []

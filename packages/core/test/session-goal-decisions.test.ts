@@ -20,6 +20,8 @@ import { KeepAwake } from "@ycoding-ai/core/keep-awake"
 import { KV } from "@ycoding-ai/core/kv"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { Permission } from "@ycoding-ai/core/permission"
+import { AppProcess } from "@ycoding-ai/core/process"
+import { ShellLedger } from "@ycoding-ai/core/shell/ledger"
 import { Project } from "@ycoding-ai/core/project"
 import { Question } from "@ycoding-ai/core/question"
 import { Session } from "@ycoding-ai/core/session"
@@ -41,7 +43,7 @@ import { SessionGoalDecisions } from "../src/session/goal-decisions"
 import { reviewLocation } from "./fixture/review"
 import { testEffect } from "./lib/effect"
 
-type Reconsider<I, R> = (input: I, real: (input: I) => Effect.Effect<R>) => Effect.Effect<R>
+type Reconsider<I, R, E = never> = (input: I, real: (input: I) => Effect.Effect<R, E>) => Effect.Effect<R, E>
 
 interface Entry {
   readonly type: string
@@ -69,7 +71,7 @@ const hooks: {
   permission?: Reconsider<Permission.ReconsiderInput, Permission.ReconsiderResult>
   form?: Reconsider<Form.ReconsiderInput, Form.ReconsiderResult>
   question?: Reconsider<Question.ReconsiderInput, Question.ReconsiderResult>
-  child?: Reconsider<ChildReconsiderInput, ChildReconsiderResult>
+  child?: Reconsider<ChildReconsiderInput, ChildReconsiderResult, Session.ScopeUnavailableError | SessionOrchestration.ServiceUnavailableError>
 } = {}
 let fakeGuardrail: SessionGoalDecisions.Located["guardrail"] | undefined
 let fakeShell: SessionGoalDecisions.Located["shell"] | undefined
@@ -84,6 +86,7 @@ const childWakes: SessionSchema.ID[] = []
 const recordingExecution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
+    prepareTask: () => Effect.void,
     active: Effect.succeed(new Set<SessionSchema.ID>()),
     resume: () => Effect.void,
     wake: (sessionID) => Effect.sync(() => void childWakes.push(sessionID)),
@@ -115,6 +118,7 @@ const fixtureOverrides = [
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
+      AppProcess.node,
       Database.node,
       KV.node,
       EventRuntime.node,
@@ -442,9 +446,16 @@ const replay = (f: Pick<Fixture, "loop">, type: string) =>
 const awaitWakes = (count: number) => tap.until((seen) => seen.filter((entry) => entry.type === "test.wake").length >= count)
 const reconsidered = (count: number) => tap.until((seen) => seen.filter((entry) => entry.type === "test.reconsider").length >= count)
 
+const taskOwner = Effect.gen(function* () {
+  const owner = yield* ShellLedger.identify(yield* AppProcess.Service, process.pid)
+  expect(owner).toBeDefined()
+  return owner!
+})
+
 const managedChild = (f: Fixture, parent: SessionSchema.ID = f.root.id) =>
   Effect.gen(function* () {
     const child = yield* f.sessions.create({ parentID: parent, model })
+    const owner = yield* taskOwner
     yield* f.events.publish(SessionEvent.Task.Updated, {
       sessionID: child.id,
       change: {
@@ -460,8 +471,8 @@ const managedChild = (f: Fixture, parent: SessionSchema.ID = f.root.id) =>
         background: true,
         delivery: "steer",
       },
-    })
-    yield* f.events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
+    }).pipe(Effect.provideService(EventRuntime.TaskOwner, owner))
+    yield* f.events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } }).pipe(Effect.provideService(EventRuntime.TaskOwner, owner))
     return child
   })
 
@@ -1170,7 +1181,7 @@ it.live("B10 under Manual an explicit-decision child question waits, is never an
     const lapsed = yield* managedChild(f)
     const timedOut = yield* f.orchestration.question(lapsed.id, "Approve the purchase of the paid plan for lapsed evidence?")
     yield* awaitReceipts(f.root.id, 3)
-    yield* f.events.publish(SessionEvent.Task.Updated, { sessionID: lapsed.id, change: { type: "question_timed_out", questionID: timedOut.question.id } })
+    yield* f.events.publish(SessionEvent.Task.Updated, { sessionID: lapsed.id, change: { type: "question_timed_out", questionID: timedOut.question.id } }).pipe(Effect.provideService(EventRuntime.TaskOwner, yield* taskOwner))
     yield* replay(f, SessionEvent.Task.Updated.type)
     expect((yield* receipts(f, f.root.id)).filter((item) => item.goalDecision.outcome === "resumed")).toHaveLength(1)
 
@@ -2042,8 +2053,8 @@ it.live("CQ5 a cancelled child, a deferred question or a wrong fingerprint is ne
         background: true,
         delivery: "steer",
       },
-    })
-    yield* f.events.publish(SessionEvent.Task.Updated, { sessionID: slept.id, change: { type: "started" } })
+    }).pipe(Effect.provideService(EventRuntime.TaskOwner, yield* taskOwner))
+    yield* f.events.publish(SessionEvent.Task.Updated, { sessionID: slept.id, change: { type: "started" } }).pipe(Effect.provideService(EventRuntime.TaskOwner, yield* taskOwner))
     yield* f.autonomy.set({ sessionID: f.root.id, sleep: true })
     const { question } = yield* f.orchestration.question(slept.id, "Deferred approach", approach)
     expect((yield* f.orchestration.get(f.root.id, slept.id)).question?.deferred).toBe(true)

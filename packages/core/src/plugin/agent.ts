@@ -4,12 +4,16 @@ export * as AgentPlugin from "./agent"
 
 import path from "path"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
-import { Effect, Schema } from "effect"
+import type { AgentDraft } from "@ycoding-ai/plugin/effect/agent"
+import { Effect, Layer, Schema } from "effect"
 import { Agent } from "../agent"
+import { builtinAgentIDs } from "../agent/builtin-ids"
 import { ConfigAgent } from "../config/agent"
 import { ConfigMarkdown } from "../config/markdown"
 import { Global } from "../global"
 import { Permission } from "../permission"
+import { EventRuntime } from "../event"
+import { makeLocationNode } from "../effect/app-node"
 import gsdContent from "./agent/GSD.md" with { type: "text" }
 import architechContent from "./agent/architech.md" with { type: "text" }
 import godContent from "./agent/god.md" with { type: "text" }
@@ -29,19 +33,19 @@ const BuiltInMetadata = Schema.Struct({
     }),
   }),
 })
-const builtIns = () =>
+const builtIns = (scope: "bound" | "standalone") =>
   [
-    { id: "GSD", content: gsdContent },
-    { id: "architech", content: architechContent },
-    { id: "god", content: godContent },
-    { id: "yangi", content: yangiContent },
-    { id: "occam", content: occamContent },
-    { id: "omoikane", content: omoikaneContent },
-    { id: "wittgenstein", content: wittgensteinContent },
-    { id: "zeus", content: zeusContent },
-  ].map((item) => ({ id: item.id, ...sourceDefinition(item.content) }))
+    { id: builtinAgentIDs.GSD, content: gsdContent },
+    { id: builtinAgentIDs.architech, content: architechContent },
+    { id: builtinAgentIDs.god, content: godContent },
+    { id: builtinAgentIDs.yangi, content: yangiContent },
+    { id: builtinAgentIDs.occam, content: occamContent },
+    { id: builtinAgentIDs.omoikane, content: omoikaneContent },
+    { id: builtinAgentIDs.wittgenstein, content: wittgensteinContent },
+    { id: builtinAgentIDs.zeus, content: zeusContent },
+  ].map((item) => ({ id: item.id, ...sourceDefinition(item.content, scope) }))
 
-function sourceDefinition(content: string) {
+function sourceDefinition(content: string, scope: "bound" | "standalone") {
   const markdown = ConfigMarkdown.parse(content)
   const metadata = Schema.decodeUnknownSync(BuiltInMetadata)(markdown.data)
   return {
@@ -49,7 +53,7 @@ function sourceDefinition(content: string) {
     mode: metadata.mode,
     temperature: metadata.request.body.temperature,
     color: metadata.color,
-    system: sourceSystem(markdown.content, metadata.mode),
+    system: sourceSystem(markdown.content, metadata.mode, scope),
   }
 }
 
@@ -212,15 +216,14 @@ const SUBAGENT_CAPABILITIES = `Subagent controls:
 - Issue independent tool calls together in one step (reads, searches, focused tests), but never run two typechecks or builds at once.
 - Report the outcome, exact checks, assumptions, any corrected premise, and remaining risk with self-contained attributable evidence; distinguish implemented, tested and verified states, and name owned paths only where the parent needs them to verify or integrate.`
 
-function sourceSystem(content: string, mode: "primary" | "subagent") {
+function sourceSystem(content: string, mode: "primary" | "subagent", scope: "bound" | "standalone") {
   const base = content.trim()
+  if (scope === "standalone") return `${base.split(/(?<=[.!?])\s/)[0]}\n\nThis is a standalone text conversation. Only question, todowrite, goal, task_complete are available. There is no host filesystem, shell, worktree, subagent, plugin, skill, MCP, or network access. Follow the user's constraints, distinguish verified facts from uncertainty, and report outcomes and blockers accurately.`
   const capabilities = mode === "primary" ? [SUBAGENT_NOTICE, MAINCHAT_CAPABILITIES] : [SUBAGENT_CAPABILITIES]
   return [YCODING_PROJECT_PROMPT, base, ...capabilities].join("\n\n")
 }
 
-export const Plugin = define({
-  id: "ycoding.agent",
-  effect: Effect.fn(function* (ctx) {
+export function apply(draft: Pick<AgentDraft, "update">, scope: "bound" | "standalone" = "bound") {
     const whitelistedDirs = [path.join(Global.Path.data, "*"), path.join(Global.Path.tmp, "*")]
     const readonlyExternalDirectory: Permission.Ruleset = [
       { action: "external_directory", resource: "*", effect: "ask" },
@@ -242,8 +245,7 @@ export const Plugin = define({
       { action: "read", resource: "*.env.example", effect: "allow" },
     ]
 
-    yield* ctx.agent.transform((draft) => {
-      for (const definition of builtIns()) {
+      for (const definition of builtIns(scope)) {
         draft.update(Agent.ID.make(definition.id), (item) => {
           item.name = Agent.Name.make(definition.id.charAt(0).toUpperCase() + definition.id.slice(1))
           item.description = definition.description
@@ -271,7 +273,7 @@ export const Plugin = define({
         })
       }
 
-      draft.update(Agent.ID.make("btw"), (item) => {
+      draft.update(Agent.ID.make(builtinAgentIDs.btw), (item) => {
         item.name = Agent.Name.make("BTW")
         item.mode = "subagent"
         item.hidden = false
@@ -298,7 +300,7 @@ export const Plugin = define({
         )
       })
 
-      draft.update(Agent.ID.make("compaction"), (item) => {
+      draft.update(Agent.ID.make(builtinAgentIDs.compaction), (item) => {
         item.name = Agent.Name.make("Compaction")
         item.mode = "primary"
         item.hidden = true
@@ -306,7 +308,7 @@ export const Plugin = define({
         item.permissions.push(...Permission.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
       })
 
-      draft.update(Agent.ID.make("title"), (item) => {
+      draft.update(Agent.ID.make(builtinAgentIDs.title), (item) => {
         item.name = Agent.Name.make("Title")
         item.mode = "primary"
         item.hidden = true
@@ -314,7 +316,7 @@ export const Plugin = define({
         item.permissions.push(...Permission.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
       })
 
-      draft.update(Agent.ID.make("goal"), (item) => {
+      draft.update(Agent.ID.make(builtinAgentIDs.goal), (item) => {
         item.name = Agent.Name.make("Goal")
         item.mode = "primary"
         item.hidden = true
@@ -322,7 +324,7 @@ export const Plugin = define({
         item.permissions.push(...Permission.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
       })
 
-      draft.update(Agent.ID.make("prediction"), (item) => {
+      draft.update(Agent.ID.make(builtinAgentIDs.prediction), (item) => {
         item.name = Agent.Name.make("Prediction")
         item.mode = "primary"
         item.hidden = true
@@ -330,7 +332,7 @@ export const Plugin = define({
         item.permissions.push(...Permission.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
       })
 
-      draft.update(Agent.ID.make("prompt"), (item) => {
+      draft.update(Agent.ID.make(builtinAgentIDs.prompt), (item) => {
         item.name = Agent.Name.make("Prompt")
         item.mode = "primary"
         item.hidden = true
@@ -338,7 +340,7 @@ export const Plugin = define({
         item.permissions.push(...Permission.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
       })
 
-      draft.update(Agent.ID.make("decision"), (item) => {
+      draft.update(Agent.ID.make(builtinAgentIDs.decision), (item) => {
         item.name = Agent.Name.make("Decision")
         item.mode = "primary"
         item.hidden = true
@@ -346,7 +348,7 @@ export const Plugin = define({
         item.permissions.push(...Permission.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
       })
 
-      draft.update(Agent.ID.make("yolo-permission"), (item) => {
+      draft.update(Agent.ID.make(builtinAgentIDs.permission), (item) => {
         item.name = Agent.Name.make("Yolo Permission")
         item.mode = "primary"
         item.hidden = true
@@ -354,7 +356,7 @@ export const Plugin = define({
         item.permissions.push(...Permission.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
       })
 
-      draft.update(Agent.ID.make("yolo-guardrail"), (item) => {
+      draft.update(Agent.ID.make(builtinAgentIDs.guardrail), (item) => {
         item.name = Agent.Name.make("Yolo Guardrail")
         item.mode = "primary"
         item.hidden = true
@@ -362,7 +364,7 @@ export const Plugin = define({
         item.permissions.push(...Permission.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
       })
 
-      draft.update(Agent.ID.make("yolo-answer"), (item) => {
+      draft.update(Agent.ID.make(builtinAgentIDs.answer), (item) => {
         item.name = Agent.Name.make("Yolo Answer")
         item.mode = "primary"
         item.hidden = true
@@ -370,13 +372,27 @@ export const Plugin = define({
         item.permissions.push(...Permission.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
       })
 
-      draft.update(Agent.ID.make("summary"), (item) => {
+      draft.update(Agent.ID.make(builtinAgentIDs.summary), (item) => {
         item.name = Agent.Name.make("Summary")
         item.mode = "primary"
         item.hidden = true
         item.system = PROMPT_SUMMARY
         item.permissions.push(...Permission.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
       })
-    })
+}
+
+export const Plugin = define({
+  id: "ycoding.agent",
+  effect: Effect.fn(function* (ctx) {
+    yield* ctx.agent.transform((draft) => apply(draft))
   }),
+})
+
+export const standaloneNode = makeLocationNode({
+  service: Agent.Service,
+  layer: Layer.effectDiscard(Effect.gen(function* () {
+    const agents = yield* Agent.Service
+    yield* agents.transform((draft) => apply({ update: (id, update) => draft.update(Agent.ID.make(id), update) }, "standalone"))
+  })).pipe(Layer.provideMerge(Agent.layer)),
+  deps: [EventRuntime.node],
 })

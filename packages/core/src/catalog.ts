@@ -90,12 +90,13 @@ export interface Interface extends State.Transformable<Draft> {
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/Catalog") {}
 
-const layer = Layer.effect(
-  Service,
+const make = (
+  integrations: Pick<Integration.Interface, "list">,
+  ready?: (model: CatalogModel.Info, credential: Credential.Info) => boolean,
+) =>
   Effect.gen(function* () {
     const events = yield* EventRuntime.Service
     const announcements = yield* LocationAnnouncements.Current
-    const integrations = yield* Integration.Service
     const policy = yield* Policy.Service
     const credentials = yield* Credential.Service
 
@@ -228,7 +229,8 @@ const layer = Layer.effect(
           .filter(
             (credential) =>
               relevant.filter((item) => item.label === credential.label).length === 1 &&
-              (contextual ? accountModels(credential, provider.id)?.get(model.id)?.enabled === true : model.enabled),
+              (contextual ? accountModels(credential, provider.id)?.get(model.id)?.enabled === true : model.enabled) &&
+              (!ready || ready(projectModel(accountModels(credential, provider.id)?.get(model.id) ?? model, provider), credential)),
           )
           .map((credential) => {
             const daybreak = accountModels(credential, provider.id)?.get(model.id)?.daybreak
@@ -330,6 +332,7 @@ const layer = Layer.effect(
             : model
               ? projectModel(model, record.provider)
               : undefined
+          if (contextual && ready && !ready(contextual, matching[0]!)) return undefined
           return contextual && profiled(contextual, record.provider, saved, matching[0])
         }),
 
@@ -353,7 +356,7 @@ const layer = Layer.effect(
         available: Effect.fn("Catalog.model.available")(function* () {
           const providers = new Set((yield* result.provider.available()).map((provider) => provider.id))
           const models = (yield* result.model.all()).filter(
-            (model) => providers.has(model.providerID) && (model.enabled || model.profiles?.length),
+            (model) => providers.has(model.providerID) && (ready ? !!model.profiles?.length : model.enabled || model.profiles?.length),
           )
           return pipe(
             models,
@@ -370,7 +373,7 @@ const layer = Layer.effect(
               if (
                 model &&
                 (defaultModel.profile === undefined
-                  ? model.enabled
+                  ? model.enabled && (!ready || !!model.profiles?.length)
                   : model.profiles?.some((profile) => profile.name === defaultModel.profile))
               )
                 return model
@@ -439,8 +442,9 @@ const layer = Layer.effect(
     }
 
     return Service.of(result)
-  }),
-)
+  })
+
+const layer = Layer.effect(Service, Effect.flatMap(Integration.Service, make))
 
 const SMALL_MODEL_RE = /\b(nano|flash|lite|mini|haiku|small|fast)\b/
 
@@ -460,4 +464,11 @@ export const node = makeLocationNode({
   service: Service,
   layer,
   deps: [EventRuntime.node, Integration.node, Policy.node, Credential.node],
+})
+
+export const standaloneNode = makeLocationNode({
+  service: Service,
+  layer: Layer.effect(Service, Effect.flatMap(Integration.StandaloneService, (integration) => make(integration,
+    (model, credential) => Provider.standaloneReady(model.package, credential.value, credential.integrationID)))),
+  deps: [EventRuntime.node, Integration.standaloneNode, Policy.node, Credential.node],
 })

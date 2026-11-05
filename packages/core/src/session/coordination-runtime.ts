@@ -168,22 +168,24 @@ type HandledEvent = EventRuntime.SubscribePayload<typeof handledEvents>
 const staleOwnerStates: ReadonlySet<string> = new Set(["cancelling", "cancelled", "failed", "lost"])
 const ownerEndingChanges: ReadonlySet<string> = new Set(["cancelled", "failed", "lost", "question_asked"])
 
+export type RecoverError = Session.ScopeUnavailableError | SessionOrchestration.ServiceUnavailableError | EventRuntime.TaskOwnerUnavailableError
+
 export interface Interface {
   readonly get: (groupID: Coordination.GroupID) => Effect.Effect<Coordination.Info, CoordinationService.NotFoundError>
   readonly summaries: () => Effect.Effect<ReadonlyArray<Coordination.GroupSummary>>
   readonly roster: (caller: SessionSchema.ID) => Effect.Effect<Roster, RefusedError>
-  readonly send: (caller: SessionSchema.ID, input: SendInput) => Effect.Effect<SendResult, RefusedError>
+  readonly send: (caller: SessionSchema.ID, input: SendInput) => Effect.Effect<SendResult, RefusedError | Session.ScopeUnavailableError>
   readonly answer: (caller: SessionSchema.ID, input: AnswerInput) => Effect.Effect<CoordinationDecisions.Result, RefusedError>
   readonly interrupt: (caller: SessionSchema.ID, input: { readonly sessionID: SessionSchema.ID }) => Effect.Effect<{ readonly sessionID: SessionSchema.ID; readonly state: Coordination.MemberState }, RefusedError>
   readonly inspect: (caller: SessionSchema.ID, input: { readonly sessionID: SessionSchema.ID; readonly requestID: string }) => Effect.Effect<RequestDetail, RefusedError>
-  readonly escalate: (caller: SessionSchema.ID, input: EscalateInput) => Effect.Effect<EscalateResult, RefusedError>
-  readonly assign: (caller: SessionSchema.ID, input: AssignInput) => Effect.Effect<OwnershipResult, RefusedError>
+  readonly escalate: (caller: SessionSchema.ID, input: EscalateInput) => Effect.Effect<EscalateResult, RefusedError | Session.ScopeUnavailableError | SessionOrchestration.ServiceUnavailableError>
+  readonly assign: (caller: SessionSchema.ID, input: AssignInput) => Effect.Effect<OwnershipResult, RefusedError | EventRuntime.TaskOwnerUnavailableError>
   readonly release: (caller: SessionSchema.ID, input: ReleaseInput) => Effect.Effect<OwnershipResult, RefusedError>
   readonly create: <E>(
     caller: SessionSchema.ID,
     input: CreateInput,
     worktree: (name: string) => Effect.Effect<Worktree, E>,
-  ) => Effect.Effect<CreateResult, RefusedError | E>
+  ) => Effect.Effect<CreateResult, RefusedError | E | Session.ScopeUnavailableError | EventRuntime.TaskOwnerUnavailableError>
 }
 
 export interface Options {
@@ -230,7 +232,7 @@ export const authorizeMember = Effect.fn("CoordinationRuntime.authorizeMember")(
 
 const clip = (text: string) => (text.length > maxExcerpt ? `${text.slice(0, maxExcerpt - 1)}…` : text)
 
-export function make(options: Options): Interface & { readonly handle: (event: HandledEvent) => Effect.Effect<void>; readonly recover: () => Effect.Effect<void> } {
+export function make(options: Options): Interface & { readonly handle: (event: HandledEvent) => Effect.Effect<void>; readonly recover: () => Effect.Effect<void, RecoverError> } {
   const { db, events, coordination, decisions, execution, sessions, orchestration, jobs } = options
   const senders = new Map<SessionSchema.ID, SessionSchema.ID>()
   const sendLock = KeyedMutex.makeUnsafe<Coordination.GroupID>()
@@ -1064,7 +1066,13 @@ const layer: Layer.Layer<
     const jobs = yield* Job.Service
     const runtime = make({ db: database.db, events, coordination, decisions, execution, sessions, orchestration, validateModel, jobs })
     yield* events.subscribe(handledEvents).pipe(Stream.runForEach(runtime.handle), Effect.forkScoped({ startImmediately: true }))
-    yield* runtime.recover()
+    yield* runtime.recover().pipe(
+      Effect.catchTags({
+        "Session.ScopeUnavailableError": (error) => Effect.logError("Coordination recovery could not wake Session", { error }),
+        "SessionOrchestration.ServiceUnavailableError": (error) => Effect.logError("Coordination recovery could not access managed task ownership", { error }),
+        "EventRuntime.TaskOwnerUnavailable": (error) => Effect.logError("Coordination recovery has no managed task owner", { error }),
+      }),
+    )
     return Service.of(runtime)
   }),
 )

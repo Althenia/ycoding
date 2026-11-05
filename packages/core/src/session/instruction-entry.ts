@@ -53,7 +53,7 @@ const source = (entry: Info & { readonly removed: boolean }) =>
     },
   })
 
-const layer = Layer.effect(
+export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service

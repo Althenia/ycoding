@@ -6,6 +6,9 @@ import type { ProviderPackageDefinition } from "@ycoding-ai/ai"
 import { Npm } from "./npm"
 import type { DeepMutable } from "./schema"
 import { importModule, resolveModule } from "#runtime-import"
+import type { SessionScope } from "@ycoding-ai/schema/session-scope"
+import type { Credential } from "@ycoding-ai/schema/credential"
+import { OpenAICodex } from "./plugin/provider/openai-codex"
 
 export const ID = Provider.ID
 export type ID = typeof ID.Type
@@ -47,7 +50,23 @@ const builtins = new Map<string, () => Promise<unknown>>([
   ["@ycoding-ai/ai/providers/xai", () => import("@ycoding-ai/ai/providers/xai")],
 ])
 
-export const loadPackage = Effect.fn("Provider.loadPackage")(function* (specifier: string, npm?: Npm.Interface) {
+export const standalonePackage = (specifier: string | undefined) =>
+  specifier === "@ycoding-ai/ai/providers/openai" || specifier === "@ycoding-ai/ai/providers/openai/responses"
+
+export const usableStandaloneSecret = (credential: Credential.Value) =>
+  (credential.type === "key" ? credential.key : credential.access).trim().length > 0
+
+export const standaloneCredential = (credential: Credential.Value, integrationID: string) =>
+  usableStandaloneSecret(credential) &&
+  (credential.type === "key" || (integrationID === "openai" && OpenAICodex.isChatGPT(credential)))
+
+export const standaloneReady = (specifier: string | undefined, credential: Credential.Value, integrationID: string) =>
+  standalonePackage(specifier) && standaloneCredential(credential, integrationID)
+
+export const loadPackage = Effect.fn("Provider.loadPackage")(function* (specifier: string, npm?: Npm.Interface, scope: SessionScope = "bound") {
+  if (scope === "standalone" && !standalonePackage(specifier)) {
+    return yield* new LoadError({ package: specifier, cause: new Error("Provider package is unavailable in standalone scope") })
+  }
   const builtin = builtins.get(specifier)
   if (builtin) return yield* importPackage(specifier, specifier, builtin)
   const resolved = yield* Effect.sync(() => {

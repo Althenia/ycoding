@@ -86,6 +86,7 @@ const sessionInfo = (id: string, daybreak?: Session.Info["daybreak"]) =>
   Session.Info.make({
     id: Session.ID.make(id),
     projectID: Project.ID.global,
+    scope: "bound",
     title: "test",
     cost: Money.USD.zero,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -382,6 +383,7 @@ describe("SessionRunnerModel", () => {
         const session = Session.Info.make({
           id: Session.ID.make("ses_model_variant"),
           projectID: Project.ID.global,
+          scope: "bound",
           title: "test",
           model: {
             id: catalog.id,
@@ -436,6 +438,7 @@ describe("SessionRunnerModel", () => {
       const session = Session.Info.make({
         id: Session.ID.make("ses_compatible_variant"),
         projectID: Project.ID.global,
+        scope: "bound",
         title: "test",
         model: {
           id: catalog.id,
@@ -474,6 +477,7 @@ describe("SessionRunnerModel", () => {
       const session = Session.Info.make({
         id: Session.ID.make("ses_model_variant_none"),
         projectID: Project.ID.global,
+        scope: "bound",
         title: "test",
         model: {
           id: catalog.id,
@@ -564,6 +568,7 @@ describe("SessionRunnerModel", () => {
         Session.Info.make({
           id: Session.ID.make(id),
           projectID: Project.ID.global,
+          scope: "bound",
           title: "test",
           model: { id: catalog.id, providerID: catalog.providerID, variant: CatalogModel.VariantID.make(variant) },
           cost: Money.USD.zero,
@@ -613,6 +618,7 @@ describe("SessionRunnerModel", () => {
         const session = Session.Info.make({
           id: Session.ID.make("ses_model_variant_unavailable"),
           projectID: Project.ID.global,
+          scope: "bound",
           title: "test",
           model: {
             id: catalog.id,
@@ -666,6 +672,7 @@ describe("SessionRunnerModel", () => {
       const session = Session.Info.make({
         id: Session.ID.make("ses_anthropic_variant"),
         projectID: Project.ID.global,
+        scope: "bound",
         title: "test",
         model: {
           id: catalog.id,

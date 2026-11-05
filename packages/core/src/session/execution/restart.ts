@@ -7,6 +7,7 @@ import { EventRuntime } from "../../event"
 import { AppProcess } from "../../process"
 import { ShellLedger } from "../../shell/ledger"
 import { SessionExecution } from "../execution"
+import { ScopeUnavailableError } from "../error"
 import { SessionInterruptedExecution } from "./interrupted"
 import { SessionTaskRecovery } from "./recovery"
 import { SessionStore } from "../store"
@@ -24,8 +25,8 @@ export interface Interface {
    */
   readonly reconcileInterruptedExecutions: Effect.Effect<void>
   readonly reconcileShells: Effect.Effect<void>
-  readonly recoverTasks: Effect.Effect<void>
-  readonly loseStaleTasks: Effect.Effect<void>
+  readonly recoverTasks: Effect.Effect<void, ScopeUnavailableError | EventRuntime.TaskOwnerUnavailableError>
+  readonly loseStaleTasks: Effect.Effect<void, EventRuntime.TaskOwnerUnavailableError>
 }
 
 /**

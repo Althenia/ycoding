@@ -10,6 +10,7 @@ import { Integration } from "@ycoding-ai/core/integration"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Integration.node, Credential.node, EventRuntime.node])))
+const standaloneIt = testEffect(AppNodeBuilder.build(LayerNode.group([Integration.standaloneNode, Credential.node, EventRuntime.node])))
 const failingCredentialNode = makeGlobalNode({
   service: Credential.Service,
   layer: Layer.succeed(
@@ -793,6 +794,44 @@ describe("Integration", () => {
       expect(Object.hasOwn(snapshot.connection, "kind")).toBe(false)
       expect(snapshot.credential).toBeUndefined()
       expect(snapshot.value).toBeUndefined()
+    }),
+  )
+
+  standaloneIt.effect("lists standalone connections with the stored credential kind and replaces a forged kind in snapshots", () =>
+    Effect.gen(function* () {
+      const integrationID = Integration.ID.make("standalone-kinds")
+      const integrations = yield* Integration.StandaloneService
+      const credentials = yield* Credential.Service
+      yield* integrations.transform((editor) => editor.update(integrationID, (integration) => (integration.name = "Standalone")))
+      const keyed = yield* credentials.create({
+        integrationID,
+        label: "Keyed",
+        value: Credential.Key.make({ type: "key", key: "synthetic-key-secret" }),
+      })
+      const signedIn = yield* credentials.create({
+        integrationID,
+        label: "Signed In",
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make("browser"),
+          access: "synthetic-access-secret",
+          refresh: "synthetic-refresh-secret",
+          expires: 4_102_444_800_000,
+        }),
+      })
+
+      const expected = [
+        { type: "credential", id: signedIn.id, label: "Signed In", active: true, kind: "oauth" },
+        { type: "credential", id: keyed.id, label: "Keyed", active: false, kind: "key" },
+      ] as const
+      expect((yield* integrations.get(integrationID))?.connections).toEqual(expected)
+      expect((yield* integrations.list()).find((info) => info.id === integrationID)?.connections).toEqual(expected)
+
+      const forged = { type: "credential", id: signedIn.id, label: "Signed In", active: true, kind: "key" } as const
+      const snapshot = yield* integrations.connection.snapshot(forged)
+      expect(snapshot.connection).toEqual({ ...forged, kind: "oauth" })
+      expect(snapshot.credential).toEqual(signedIn)
+      expect(snapshot.value).toEqual(signedIn.value)
     }),
   )
 })

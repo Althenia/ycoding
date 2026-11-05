@@ -18,12 +18,14 @@ import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionProviderRequestTable, SessionTable, SessionUsageTable } from "@ycoding-ai/core/session/sql"
 import { SessionUsageCleanup } from "@ycoding-ai/core/session/usage-cleanup"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
+import { RetentionSettings } from "@ycoding-ai/core/retention-settings"
 import { testEffect } from "./lib/effect"
 
 const active = new Set<Session.ID>()
 const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
+    prepareTask: () => Effect.void,
     active: Effect.sync(() => active),
     resume: () => Effect.void,
     wake: () => Effect.void,
@@ -36,7 +38,15 @@ const execution = Layer.succeed(
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionUsageCleanup.node]),
-    [[SessionExecution.node, execution]],
+    [
+      [SessionExecution.node, execution],
+      [
+        RetentionSettings.node,
+        Layer.succeed(RetentionSettings.Service, {
+          read: () => Effect.succeed({ recordsDays: 7, usageDays: 30, latencyDays: 30, incidentDays: 30 }),
+        }),
+      ],
+    ],
   ),
 )
 

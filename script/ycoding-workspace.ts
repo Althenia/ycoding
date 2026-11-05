@@ -7,6 +7,7 @@ export const approvedPackageNames = new Set([
   "@ycoding-ai/client",
   "@ycoding-ai/codemode",
   "@ycoding-ai/core",
+  "@ycoding-ai/desktop",
   "@ycoding-ai/effect-drizzle-sqlite",
   "@ycoding-ai/effect-sqlite-node",
   "@ycoding-ai/http-recorder",

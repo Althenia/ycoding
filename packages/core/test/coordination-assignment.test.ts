@@ -28,6 +28,7 @@ import { tmpdir } from "./fixture/tmpdir"
 
 const running = new Set<SessionSchema.ID>()
 const execution = Layer.mock(SessionExecution.Service, {
+  prepareTask: () => Effect.void,
   active: Effect.sync(() => new Set(running)),
   wake: () => Effect.void,
   interrupt: () => Effect.void,
@@ -354,7 +355,7 @@ const worktrees = Effect.gen(function* () {
     (value) => Effect.promise(() => value[Symbol.asyncDispose]()),
   )
   const calls: string[] = []
-  const create = (before: Effect.Effect<void> = Effect.void) => (name: string) =>
+  const create = <E = never>(before: Effect.Effect<void, E> = Effect.void) => (name: string) =>
     Effect.gen(function* () {
       calls.push(name)
       const directory = path.join(root.path, name)

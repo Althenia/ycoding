@@ -25,6 +25,48 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/KeepAwake") {}
 
+export interface ObservationInterface {
+  readonly get: Effect.Effect<Status | undefined>
+}
+
+export class Observation extends Context.Service<Observation, ObservationInterface>()("@ycoding/KeepAwake/Observation") {}
+
+class ControllerBinding extends Context.Service<ControllerBinding, {
+  readonly reserve: Effect.Effect<(status: Effect.Effect<Status>) => Effect.Effect<void>, never, Scope.Scope>
+}>()("@ycoding/KeepAwake/ControllerBinding") {}
+
+const observationLayer = Layer.effectContext(Effect.gen(function* () {
+  const current = yield* Ref.make<{ readonly token: symbol; readonly status?: Effect.Effect<Status> } | undefined>(undefined)
+  const observation = Observation.of({
+    get: Effect.gen(function* () {
+      const entry = yield* Ref.get(current)
+      if (!entry?.status) return undefined
+      const status = yield* entry.status
+      return (yield* Ref.get(current))?.token === entry.token ? status : undefined
+    }),
+  })
+  const binding = ControllerBinding.of({
+    reserve: Effect.gen(function* () {
+      const token = Symbol()
+      yield* Effect.acquireRelease(
+        Ref.modify(current, (existing) => existing === undefined ? [true, { token }] as const : [false, existing] as const).pipe(
+          Effect.flatMap((reserved) => reserved ? Effect.void : Effect.die(new Error("Keep-awake controller already attached"))),
+        ),
+        () => Ref.update(current, (existing) => existing?.token === token ? undefined : existing),
+      )
+      return (status) => Ref.update(current, (existing) => existing?.token === token ? { token, status } : existing)
+    }),
+  })
+  return Context.make(Observation, observation).pipe(Context.add(ControllerBinding, binding))
+}))
+
+export const observationOwner = makeGlobalNode({ name: "@ycoding/KeepAwake/ObservationOwner", layer: observationLayer, deps: [] })
+export const observationNode = makeGlobalNode({
+  service: Observation,
+  layer: Layer.effect(Observation, Observation),
+  deps: [observationOwner],
+})
+
 export interface Options {
   readonly spawner: ChildProcessSpawner["Service"]
   readonly platform: NodeJS.Platform
@@ -341,8 +383,12 @@ export const layer = Layer.effect(
     const systemSleep = yield* SystemSleep.Service
     const userActivity = yield* UserActivity.Service
     const global = yield* Global.Service
-    return yield* make({ spawner, clamshell, systemSleep, userActivity, lidFile: path.join(global.state, "keep-awake-lid.json"), platform: process.platform, pid: process.pid })
+    const observation = yield* ControllerBinding
+    const publishStatus = yield* observation.reserve
+    const controller = yield* make({ spawner, clamshell, systemSleep, userActivity, lidFile: path.join(global.state, "keep-awake-lid.json"), platform: process.platform, pid: process.pid })
+    yield* publishStatus(controller.get)
+    return controller
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [AppProcess.node, ClamshellSleep.node, SystemSleep.node, UserActivity.node, Global.node] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [AppProcess.node, ClamshellSleep.node, SystemSleep.node, UserActivity.node, Global.node, observationOwner] })

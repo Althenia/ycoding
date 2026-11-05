@@ -9,6 +9,7 @@ import { Model } from "./model.js"
 import { NonNegativeInt, PositiveInt, RelativePath } from "./schema.js"
 import { FileAttachment } from "./prompt.js"
 import { SessionID } from "./session-id.js"
+import { SessionScopeWithDefault } from "./session-scope.js"
 import { Origin } from "./session-origin.js"
 import { Location } from "./location.js"
 import { SessionMessage } from "./session-message.js"
@@ -68,6 +69,7 @@ export const Created = Event.durable({
   schema: {
     ...Base,
     projectID: Project.ID,
+    scope: SessionScopeWithDefault,
     location: Location.Ref,
     parentID: SessionID.pipe(optional),
     agent: Agent.ID.pipe(optional),

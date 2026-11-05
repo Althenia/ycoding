@@ -458,10 +458,11 @@ export const json = <Body, Message extends Record<string, unknown>>(
               attempt: 1,
               observer: runtime.observeAttempt,
             },
-            webSocket.open({ url: prepared.url, headers: prepared.headers }),
+            (runtime.beforeDispatch ?? Effect.void).pipe(Effect.flatMap(() => webSocket.open({ url: prepared.url, headers: prepared.headers }))),
           ),
           (connection) => connection.close,
         )
+        yield* runtime.beforeDispatch ?? Effect.void
         yield* connection.sendText(prepared.encodedMessage)
         return connection.messages.pipe(Stream.map((message) => messageText(message, decoder)))
       }),
@@ -530,7 +531,7 @@ export const json = <Body, Message extends Record<string, unknown>>(
                   attempt: 1,
                   observer: runtime.observeAttempt,
                 },
-                webSocket.open({ url: prepared.url, headers: prepared.headers }),
+                (runtime.beforeDispatch ?? Effect.void).pipe(Effect.flatMap(() => webSocket.open({ url: prepared.url, headers: prepared.headers }))),
               ))
             state.connection = connection
             const continuedMessage = metadata.fullReplay
@@ -539,7 +540,8 @@ export const json = <Body, Message extends Record<string, unknown>>(
             const sent = continuedMessage ?? prepared.message
             const continued = continuedMessage !== undefined
             const replayMessage = yield* input.continuation!.replayMessage(request, metadata.messageBoundary)
-            yield* connection.sendText(input.encodeMessage(sent)).pipe(
+            yield* (runtime.beforeDispatch ?? Effect.void).pipe(
+              Effect.flatMap(() => connection.sendText(input.encodeMessage(sent))),
               Effect.onError(() =>
                 Effect.gen(function* () {
                   if (state.connection === connection) {

@@ -195,6 +195,11 @@ function apply(view: SessionView, type: string, data: Record<string, unknown>, n
   return applySessionEvent(view, event(type, data), now)
 }
 
+test("standalone scope survives created events and snapshots", () => {
+  expect(apply(createSessionView("ses_a"), "session.created", { sessionID: "ses_a", scope: "standalone" })).toMatchObject({ scope: "standalone" })
+  expect(readSnapshot({ session: { id: "ses_a", scope: "standalone", projectID: "prj_a", title: "A", location: { directory: "/work" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 } }, messages: [] })).toMatchObject({ sessionID: "ses_a", scope: "standalone" })
+})
+
 test("durable step outcomes project reported context and preserve it when counts are unavailable", () => {
   const model = { providerID: "openai", id: "model-a" }
   const breakdown = { system: 3, tools: 4, user: 2, assistant: 5, reasoning: 1, toolCalls: 5, other: 0 }

@@ -1,6 +1,7 @@
 export * as ConfigAgentPlugin from "./agent"
 
 import { define } from "@ycoding-ai/plugin/effect/plugin"
+import type { AgentDraft } from "@ycoding-ai/plugin/effect/agent"
 import path from "path"
 import { Effect, Option, Schema, Stream } from "effect"
 import { Agent } from "../../agent"
@@ -23,6 +24,53 @@ type PathAction =
   | typeof ReadTool.name
   | typeof EditTool.name
 const pathActions = ["external_directory", "read", "edit"] as const satisfies readonly PathAction[]
+
+type DocumentDraft = {
+  list: () => readonly { readonly id: string }[]
+  has: (id: string) => boolean
+  default: (id: string) => void
+  update: AgentDraft["update"]
+  remove: (id: string) => void
+}
+
+export function applyDocuments(draft: DocumentDraft, documents: readonly Config.Document[], home: string, builtinsOnly = false) {
+  const permissions = expandPermissions(documents.flatMap((document) => document.info.permissions ?? []), home)
+  const builtins = new Set(draft.list().map((agent) => agent.id))
+  const configuredDefault = Config.latest(documents, "default_agent")
+  if (configuredDefault !== undefined) draft.default(configuredDefault)
+  for (const current of draft.list()) draft.update(current.id, (agent) => agent.permissions.push(...permissions))
+  for (const document of documents) {
+    for (const [id, item] of Object.entries(document.info.agents ?? {})) {
+      const exists = draft.has(id)
+      if (builtinsOnly && !builtins.has(id)) continue
+      if (item.disabled) { draft.remove(id); continue }
+      draft.update(id, (agent) => {
+        if (!exists) agent.permissions.push(...permissions)
+        if (document.path && path.isAbsolute(document.path)) {
+          const location = AbsolutePath.make(document.path)
+          if (!agent.locations?.includes(location)) agent.locations = [...(agent.locations ?? []), location]
+        }
+        if (item.model !== undefined) agent.model = {
+          id: item.model.model,
+          providerID: item.model.providerID,
+          ...(item.model.variant === undefined ? {} : { variant: item.model.variant }),
+          ...(item.model.profile === undefined ? {} : { profile: item.model.profile }),
+        }
+        if (item.request !== undefined) {
+          Object.assign(agent.request.headers, item.request.headers ?? {})
+          Object.assign(agent.request.body, item.request.body ?? {})
+        }
+        if (item.system !== undefined) agent.system = item.system
+        if (item.description !== undefined) agent.description = item.description
+        if (item.mode !== undefined) agent.mode = item.mode
+        if (item.hidden !== undefined) agent.hidden = item.hidden
+        if (item.color !== undefined) agent.color = item.color
+        if (item.steps !== undefined) agent.steps = item.steps
+        if (item.permissions !== undefined) agent.permissions.push(...expandPermissions(item.permissions, home))
+      })
+    }
+  }
+}
 export const Plugin = define({
   id: "ycoding.config.agent",
   effect: Effect.fn(function* (ctx) {
@@ -49,56 +97,10 @@ export const Plugin = define({
       }).pipe(Effect.map((documents) => documents.flat()))
     })
     const loaded = { documents: yield* load() }
-    yield* ctx.agent.transform((draft) => {
-      const permissions = expandPermissions(
-        loaded.documents.flatMap((document) => document.info.permissions ?? []),
-        global.home,
-      )
-      const configuredDefault = Config.latest(loaded.documents, "default_agent")
-      if (configuredDefault !== undefined) draft.default(Agent.ID.make(configuredDefault))
-      for (const current of draft.list()) {
-        draft.update(current.id, (agent) => agent.permissions.push(...permissions))
-      }
-
-      for (const document of loaded.documents) {
-        for (const [id, item] of Object.entries(document.info.agents ?? {})) {
-          const agentID = Agent.ID.make(id)
-          if (item.disabled) {
-            draft.remove(agentID)
-            continue
-          }
-
-          const exists = draft.get(agentID) !== undefined
-          draft.update(agentID, (agent) => {
-            if (!exists) agent.permissions.push(...permissions)
-            if (document.path && path.isAbsolute(document.path)) {
-              const location = AbsolutePath.make(document.path)
-              if (!agent.locations?.includes(location)) agent.locations = [...(agent.locations ?? []), location]
-            }
-            if (item.model !== undefined)
-              agent.model = {
-                id: item.model.model,
-                providerID: item.model.providerID,
-                ...(item.model.variant === undefined ? {} : { variant: item.model.variant }),
-                ...(item.model.profile === undefined ? {} : { profile: item.model.profile }),
-              }
-            if (item.request !== undefined) {
-              Object.assign(agent.request.headers, item.request.headers ?? {})
-              Object.assign(agent.request.body, item.request.body ?? {})
-            }
-            if (item.system !== undefined) agent.system = item.system
-            if (item.description !== undefined) agent.description = item.description
-            if (item.mode !== undefined) agent.mode = item.mode
-            if (item.hidden !== undefined) agent.hidden = item.hidden
-            if (item.color !== undefined) agent.color = item.color
-            if (item.steps !== undefined) agent.steps = item.steps
-            if (item.permissions !== undefined) {
-              agent.permissions.push(...expandPermissions(item.permissions, global.home))
-            }
-          })
-        }
-      }
-    })
+    yield* ctx.agent.transform((draft) => applyDocuments({
+      list: draft.list, has: (id) => draft.get(id) !== undefined, default: draft.default,
+      update: draft.update, remove: draft.remove,
+    }, loaded.documents, global.home))
     yield* ctx.event.subscribe().pipe(
       Stream.filter((event) => event.type === "config.updated"),
       Stream.runForEach(() =>

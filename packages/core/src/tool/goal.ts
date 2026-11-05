@@ -5,6 +5,7 @@ import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { Effect, Schema } from "effect"
 import { Database } from "../database/database"
 import { Permission } from "../permission"
+import type { StandalonePermission } from "./standalone-permission"
 import { SessionAutonomy } from "../session/autonomy"
 import { SessionReviewFold } from "../session/review-fold"
 import { Tool } from "./tool"
@@ -29,17 +30,7 @@ export const Output = Schema.Struct({
 
 export type Output = typeof Output.Type
 
-export const Plugin = {
-  id: "ycoding.tool.goal",
-  effect: Effect.fn("GoalTool.Plugin")(function* (ctx: PluginContext) {
-    const autonomy = yield* SessionAutonomy.Service
-    const database = yield* Database.Service
-    const permission = yield* Permission.Service
-    yield* ctx.tool
-      .transform((draft) =>
-        draft.add(
-          name,
-          Tool.make({
+export const make = (autonomy: SessionAutonomy.Interface, database: Database.Interface, permission: StandalonePermission.Interface) => Tool.make({
             description:
               "Manage the current autonomous goal for this session. The user alone creates, replaces, or resumes the goal through the /goal command or the UI; never change the objective text. After the user enables a goal, maintain its status: use get to inspect, report after a blocker, complete after verified achievement, and stop/clear only when the user asks. Do not report ordinary progress. Use report only after encountering a blocker, attempting reasonable self-resolution, and remaining unable to progress; every report consumes one no-progress retry attempt. Active background subagents or shells are unfinished work, not automatic no progress. Use complete only after the goal is achieved and verified; completion is agent-owned. Do not use set to create a goal; it will be rejected.",
             input: Input,
@@ -140,10 +131,14 @@ export const Plugin = {
                     }).pipe(Effect.catchTag("SessionAutonomy.NotFound", (error) => Effect.fail(new ToolFailure({ message: "Session not found", error })))),
                   ),
                 ),
-          }),
-          { codemode: false },
-        ),
-      )
-      .pipe(Effect.orDie)
+          })
+
+export const Plugin = {
+  id: "ycoding.tool.goal",
+  effect: Effect.fn("GoalTool.Plugin")(function* (ctx: PluginContext) {
+    const autonomy = yield* SessionAutonomy.Service
+    const database = yield* Database.Service
+    const permission = yield* Permission.Service
+    yield* ctx.tool.transform((draft) => draft.add(name, make(autonomy, database, permission), { codemode: false })).pipe(Effect.orDie)
   }),
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-switch-model"
+description = "Enables the desktop_switch_model command without any pre-configured scope."
+commands.allow = ["desktop_switch_model"]
+
+[[permission]]
+identifier = "deny-desktop-switch-model"
+description = "Denies the desktop_switch_model command without any pre-configured scope."
+commands.deny = ["desktop_switch_model"]

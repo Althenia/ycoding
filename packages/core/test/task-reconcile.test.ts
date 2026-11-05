@@ -295,6 +295,8 @@ describe("SessionTask.reconcileStaleTasks", () => {
     Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const appProcess = yield* AppProcess.Service
+      const replayOwner = yield* ShellLedger.identify(appProcess, process.pid)
+      expect(replayOwner).toBeDefined()
       const events = yield* EventRuntime.Service
       const parentID = SessionSchema.ID.make("ses_fold_parent")
       const childID = SessionSchema.ID.make("ses_fold_child")
@@ -304,6 +306,7 @@ describe("SessionTask.reconcileStaleTasks", () => {
           sessionID,
           parentID: sessionID === childID ? parentID : undefined,
           projectID: Project.ID.global,
+          scope: "bound",
           location: { directory: AbsolutePath.make("/tmp") },
           title: sessionID,
           created: Date.now(),
@@ -313,8 +316,8 @@ describe("SessionTask.reconcileStaleTasks", () => {
         type: "launched", parentID, parentAssistantMessageID: SessionMessage.ID.make("msg_fold_parent"),
         toolCallID: "call_fold", inputID: SessionMessage.ID.make("msg_fold_input"), description: "fold",
         agent: Agent.ID.make("build"), model, promptDigest: "digest", background: true, delivery: "steer",
-      } })
-      yield* events.publish(SessionEvent.Task.Updated, { sessionID: childID, change: { type: "started" } })
+      } }).pipe(Effect.provideService(EventRuntime.TaskOwner, replayOwner))
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: childID, change: { type: "started" } }).pipe(Effect.provideService(EventRuntime.TaskOwner, replayOwner))
       yield* db.update(SessionTaskTable).set({ owner_pid: 2 ** 22 + 1, owner_started: "Thu Jan  1 00:00:00 1970" }).run().pipe(Effect.orDie)
       yield* SessionTask.reconcileStaleTasks(db, appProcess)
       const live = (yield* db.select().from(SessionTaskTable).all().pipe(Effect.orDie)).map((row) => ({ ...row, owner_pid: null, owner_started: null }))
@@ -329,7 +332,7 @@ describe("SessionTask.reconcileStaleTasks", () => {
         for (const row of history) yield* events.replay({
           id: row.id, aggregateID: row.aggregate_id, seq: row.seq, type: row.type,
           created: DateTime.makeUnsafe(row.created), data: row.data,
-        })
+        }).pipe(Effect.provideService(EventRuntime.TaskOwner, replayOwner))
         return { tasks: (yield* db.select().from(SessionTaskTable).all().pipe(Effect.orDie)).map((row) => ({ ...row, owner_pid: null, owner_started: null })),
           notifications: yield* db.select().from(SessionTaskNotificationTable).all().pipe(Effect.orDie) }
       }).pipe(Effect.provide(replayLayer.pipe(Layer.fresh)), Effect.scoped)
@@ -499,13 +502,14 @@ describe("SessionTask owner fence", () => {
           sessionID,
           parentID: sessionID === childID ? parentID : undefined,
           projectID: Project.ID.global,
+          scope: "bound",
           location: { directory: AbsolutePath.make("/tmp") },
           title: sessionID,
           created: Date.now(),
         })
       }
       const publish = (change: typeof SessionEvent.Task.Updated.Type.data.change) =>
-        events.publish(SessionEvent.Task.Updated, { sessionID: childID, change })
+        events.publish(SessionEvent.Task.Updated, { sessionID: childID, change }).pipe(Effect.provideService(EventRuntime.TaskOwner, self!))
       yield* publish({
         type: "launched", parentID, parentAssistantMessageID: SessionMessage.ID.make("msg_own_parent"), toolCallID: "call_own",
         inputID: SessionMessage.ID.make("msg_own_input"), description: "own", agent: Agent.ID.make("build"), model,

@@ -4,11 +4,17 @@ import { Effect } from "effect"
 import { define } from "./catalog-host"
 import { CatalogModel } from "../model"
 import { Provider } from "../provider"
+import { Catalog } from "../catalog"
 
 export const Plugin = define({
   id: "ycoding.variant",
-  effect: Effect.fn(function* (ctx) {
-    yield* ctx.catalog.transform((catalog) => {
+  effect: Effect.fn(function* () {
+    const catalog = yield* Catalog.Service
+    yield* catalog.transform(apply)
+  }),
+})
+
+export const apply = (catalog: Catalog.Draft) => {
       for (const record of catalog.provider.list()) {
         for (const model of record.models.values()) {
           catalog.model.update(model.providerID, model.id, (draft) => {
@@ -25,14 +31,12 @@ export const Plugin = define({
           })
         }
       }
-    })
-  }),
-})
+}
 
 export function generate(
   model: { readonly id: string; readonly modelID?: string; readonly package?: string },
   provider?: { readonly package: string },
-): NonNullable<CatalogModel.Info["variants"]> {
+): CatalogModel.MutableInfo["variants"] {
   const packageName = model.package ?? provider?.package
   if (!Provider.isAISDK(packageName) || Provider.packageName(packageName) !== "@ai-sdk/openai-compatible") return []
   const ids = `${model.id} ${model.modelID ?? ""}`.toLowerCase()

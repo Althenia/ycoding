@@ -25,7 +25,211 @@ async function harness(handler: RelayRequestHandler, now?: () => number, determi
   return { store, relay, stop: async () => { store.dispose(); await relay.stop() } }
 }
 
+const source = { id: "ses_a", scope: "bound", projectID: "prj_test", location: { directory: "/work" }, title: "Source" }
+const forked = { ...source, id: "ses_child", title: "Fork", fork: { sessionID: "ses_a" } }
+const boundaryFork = { ...forked, fork: { ...forked.fork, messageID: "msg_boundary" } }
+const forkHarness = (handler: RelayRequestHandler) => harness((request) => request.operation === "session.list"
+  ? { ok: true, value: { data: [source, { ...source, id: "ses_b" }] } }
+  : handler(request))
+
 describe("remote Session nonblocking sends", () => {
+  test("opens a verified fork on the same device", async () => {
+    const child = forked
+    const context = await forkHarness((request) => request.operation === "session.fork" ? { ok: true, value: { data: child } }
+      : request.operation === "session.get" && request.sessionID === child.id ? { ok: true, value: { data: child } } : "default")
+    try {
+      expect(await context.store.forkSession()).toMatchObject({ status: "ok", sessionID: child.id })
+      expect(context.store.state().selectedSessionInfo?.id).toBe(child.id)
+      expect(context.relay.requests.filter((request) => request.operation === "session.fork")).toHaveLength(1)
+    } finally { await context.stop() }
+  })
+
+  test("fork reports an unsupported operation without Team copy", async () => {
+    const context = await forkHarness((request) => request.operation === "session.fork" ? { ok: false, code: "unknown_operation", message: "unknown" } : "default")
+    try {
+      const result = await context.store.forkSession()
+      expect(result.status).toBe("failed")
+      if (result.status === "ok") throw new Error("Expected fork failure")
+      expect(result.message).toContain("fork")
+      expect(result.message).not.toContain("Team")
+    } finally { await context.stop() }
+  })
+
+  for (const [name, child] of [
+    ["scope", { ...boundaryFork, scope: "standalone" }],
+    ["directory", { ...boundaryFork, location: { directory: "/other" } }],
+    ["source", { ...boundaryFork, fork: { ...boundaryFork.fork, sessionID: "ses_other" } }],
+    ["message", { ...boundaryFork, fork: { ...boundaryFork.fork, messageID: "msg_other" } }],
+    ["missing scope", { ...boundaryFork, scope: undefined }],
+  ] as const) test(`fork rejects mismatched ${name}`, async () => {
+    const context = await forkHarness((request) => request.operation === "session.fork" ? { ok: true, value: { data: child } } : "default")
+    try {
+      expect((await context.store.forkSession("msg_boundary")).status).toBe("unknown")
+      expect(context.store.state().activeSessionID).toBe("ses_a")
+    } finally { await context.stop() }
+  })
+
+  test("fork without a boundary rejects an unexpected boundary", async () => {
+    const context = await forkHarness((request) => request.operation === "session.fork" ? { ok: true, value: { data: boundaryFork } } : "default")
+    try {
+      expect((await context.store.forkSession()).status).toBe("unknown")
+      expect(context.store.state().activeSessionID).toBe("ses_a")
+    } finally { await context.stop() }
+  })
+
+  test("fork rejects a source placement changed by a list refresh", async () => {
+    const response = gate()
+    let changed = false
+    const context = await harness((request) => request.operation === "session.fork" ? response.promise
+      : request.operation === "session.list" ? { ok: true, value: { data: [{ ...source, location: { directory: changed ? "/other" : "/work" } }] } } : "default")
+    try {
+      const result = context.store.forkSession()
+      await waitFor(() => context.relay.requests.some((request) => request.operation === "session.fork"))
+      changed = true
+      context.store.searchSessions("source")
+      await waitFor(() => context.store.state().selectedSessionInfo?.directory === "/other")
+      response.resolve({ ok: true, value: { data: forked } })
+      expect((await result).status).toBe("unknown")
+      expect(context.store.state().activeSessionID).toBe("ses_a")
+    } finally { response.resolve("default"); await context.stop() }
+  })
+
+  test("fork prevents concurrent duplicate submissions", async () => {
+    const response = gate()
+    const context = await forkHarness((request) => request.operation === "session.fork" ? response.promise : "default")
+    try {
+      const first = context.store.forkSession()
+      await waitFor(() => context.relay.requests.some((request) => request.operation === "session.fork"))
+      const duplicate = context.store.forkSession()
+      response.resolve({ ok: false, code: "outcome_unknown", message: "unknown" })
+      expect((await first).status).toBe("unknown")
+      expect((await duplicate).status).toBe("failed")
+      expect(context.relay.requests.filter((request) => request.operation === "session.fork")).toHaveLength(1)
+      expect(context.store.state().mutations).toEqual([])
+    } finally { response.resolve("default"); await context.stop() }
+  })
+
+  test("fork does not report success after selection is superseded", async () => {
+    const subscription = gate()
+    const context = await forkHarness((request) => request.operation === "session.fork" ? { ok: true, value: { data: forked } }
+      : request.operation === "session.subscribe" && request.sessionID === forked.id ? subscription.promise : "default")
+    try {
+      const result = context.store.forkSession()
+      await waitFor(() => context.relay.requests.some((request) => request.operation === "session.subscribe" && request.sessionID === forked.id))
+      await context.store.selectSession("ses_b")
+      subscription.resolve({ ok: true, value: {} })
+      expect((await result).status).toBe("unknown")
+      expect(context.store.state().activeSessionID).toBe("ses_b")
+    } finally { subscription.resolve("default"); await context.stop() }
+  })
+
+  test("fork does not report success after the device changes during selection", async () => {
+    const subscription = gate()
+    const context = await forkHarness((request) => request.operation === "session.fork" ? { ok: true, value: { data: forked } }
+      : request.operation === "session.subscribe" && request.sessionID === forked.id ? subscription.promise : "default")
+    try {
+      const result = context.store.forkSession()
+      await waitFor(() => context.relay.requests.some((request) => request.operation === "session.subscribe" && request.sessionID === forked.id))
+      context.store.connect("device_other")
+      subscription.resolve({ ok: true, value: {} })
+      expect((await result).status).toBe("unknown")
+    } finally { subscription.resolve("default"); await context.stop() }
+  })
+
+  test("fork requires explicit source scope", async () => {
+    const context = await harness((request) => request.operation === "session.list"
+      ? { ok: true, value: { data: [{ ...source, scope: undefined }] } } : "default")
+    try {
+      expect((await context.store.forkSession()).status).toBe("failed")
+      expect(context.relay.requests.filter((request) => request.operation === "session.fork")).toHaveLength(0)
+    } finally { await context.stop() }
+  })
+
+  test("fork retains unknown outcomes and does not replay the mutation", async () => {
+    const context = await forkHarness((request) => request.operation === "session.fork"
+      ? { ok: false, code: "outcome_unknown", message: "Fork outcome unknown" } : "default")
+    try {
+      expect(await context.store.forkSession("msg_boundary")).toMatchObject({ status: "unknown" })
+      expect(context.relay.requests.filter((request) => request.operation === "session.fork")).toHaveLength(1)
+      expect(context.store.state().selectedSessionInfo?.id).toBe("ses_a")
+    } finally { await context.stop() }
+  })
+
+  test("a late fork response cannot change a newer Session selection", async () => {
+    const response = gate()
+    const context = await forkHarness((request) => request.operation === "session.fork" ? response.promise : "default")
+    try {
+      const fork = context.store.forkSession()
+      await waitFor(() => context.relay.requests.some((request) => request.operation === "session.fork"))
+      await context.store.selectSession("ses_b")
+      response.resolve({ ok: true, value: { data: { id: "ses_child", scope: "bound", location: { directory: "/work" } } } })
+      await fork
+      expect(context.store.state().selectedSessionInfo?.id).toBe("ses_b")
+    } finally { response.resolve("default"); await context.stop() }
+  })
+  const snapshotInfo = { projectID: "prj_test", title: "Deep", location: { directory: "/work" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 } }
+  for (const [name, session, aggregateID] of [["empty", {}, undefined], ["mismatched", { ...snapshotInfo, id: "ses_other" }, undefined], ["invalid scope", { ...snapshotInfo, id: "ses_deep", scope: "unknown" }, undefined], ["foreign watermark", { ...snapshotInfo, id: "ses_deep" }, "ses_other"]] as const)
+    test(`deep-linked placement rejects ${name} snapshot authority`, async () => {
+      const context = await harness((request) => request.sessionID !== "ses_deep" ? "default"
+        : request.operation === "session.get" ? { ok: false, code: "not_found", message: "Not found" }
+        : request.operation === "session.snapshot" ? { ok: true, value: { session, messages: [], watermark: { seq: 0, aggregateID } } } : "default")
+      try {
+        await context.store.selectSession("ses_deep")
+        expect(await context.store.sendPrompt({ text: "Must not send", delivery: "queue" })).toBe(false)
+        expect(context.relay.requests.filter((request) => request.operation === "session.prompt" && request.sessionID === "ses_deep")).toHaveLength(0)
+      } finally { await context.stop() }
+    })
+
+  test("deep-linked placement rejects stale snapshot authority", async () => {
+    let reads = 0
+    const context = await harness((request) => request.sessionID !== "ses_deep" ? "default"
+      : request.operation === "session.get" ? { ok: false, code: "not_found", message: "Not found" }
+      : request.operation === "session.snapshot" ? { ok: true, value: { session: ++reads === 1 ? {} : { ...snapshotInfo, id: "ses_deep" }, messages: [], watermark: { seq: reads === 1 ? 5 : 4, aggregateID: "ses_deep" } } } : "default")
+    try {
+      await context.store.selectSession("ses_deep")
+      expect(context.store.state().view?.watermark).toBe(5)
+      await context.store.reloadMessages()
+      expect(await context.store.sendPrompt({ text: "Must not send", delivery: "queue" })).toBe(false)
+      expect(context.relay.requests.filter((request) => request.operation === "session.prompt" && request.sessionID === "ses_deep")).toHaveLength(0)
+    } finally { await context.stop() }
+  })
+
+  test("placement change prevents queued and retried prompt dispatch", async () => {
+    const modelGate = gate()
+    const context = await harness((request) => request.operation === "session.switchModel" ? modelGate.promise : "default")
+    try {
+      expect(await context.store.sendPrompt({ text: "First", delivery: "steer", model: { id: "next", providerID: "synthetic" } })).toBe(true)
+      await waitFor(() => context.relay.requests.some((request) => request.operation === "session.switchModel"))
+      expect(await context.store.sendPrompt({ text: "Queued", delivery: "queue" })).toBe(true)
+      context.relay.pushEvent("ses_a", { type: "session.created", data: { sessionID: "ses_a", scope: "standalone" }, durable: { aggregateID: "ses_a", seq: 1, version: 2 } })
+      await waitFor(() => context.store.state().view?.scope === "standalone")
+      modelGate.resolve({ ok: true, value: { data: {} } })
+      await waitFor(() => context.store.state().mutations.every((mutation) => mutation.state === "failed"))
+      for (const mutation of context.store.state().mutations) await context.store.retryMutation(mutation.id)
+      expect(context.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(0)
+    } finally { modelGate.resolve("default"); await context.stop() }
+  })
+
+  for (const outcome of ["standalone", "failed", "legacy"] as const)
+    test(`deep-linked placement ${outcome} gates sends until resolved`, async () => {
+      const detail = gate()
+      const context = await harness((request) => request.sessionID === "ses_deep" && request.operation === "session.get" ? detail.promise
+        : request.sessionID === "ses_deep" && request.operation === "session.snapshot" && outcome === "failed" ? { ok: false, code: "not_found", message: "Not found" } : "default")
+      try {
+        const selection = context.store.selectSession("ses_deep")
+        await waitFor(() => context.relay.requests.some((request) => request.operation === "session.get" && request.sessionID === "ses_deep"))
+        expect(context.store.state().selectedSessionInfo?.scope).toBeUndefined()
+        expect(await context.store.sendPrompt({ text: "Pending", delivery: "queue" })).toBe(false)
+        expect(context.relay.requests.filter((request) => request.operation === "session.prompt" && request.sessionID === "ses_deep")).toHaveLength(0)
+        detail.resolve(outcome === "failed" ? { ok: false, code: "not_found", message: "Not found" } : { ok: true, value: { data: { id: "ses_deep", ...(outcome === "standalone" ? { scope: "standalone" } : {}) } } })
+        await selection
+        expect(context.store.state().selectedSessionInfo?.scope).toBe(outcome === "failed" ? undefined : outcome === "legacy" ? "bound" : "standalone")
+        expect(await context.store.sendPrompt({ text: "Resolved", delivery: "steer" })).toBe(outcome === "legacy")
+        await waitFor(() => outcome !== "legacy" || context.relay.requests.some((request) => request.operation === "session.prompt" && request.sessionID === "ses_deep"))
+        expect(context.relay.requests.filter((request) => request.operation === "session.prompt" && request.sessionID === "ses_deep")).toHaveLength(outcome === "legacy" ? 1 : 0)
+      } finally { detail.resolve({ ok: false, code: "not_found", message: "Not found" }); await context.stop() }
+    })
+
   test("confirms a lost model-switch response from the exact selected model without sending it again", async () => {
     const target = { id: "model-next", providerID: "synthetic", variant: "high", profile: "synthetic-account" }
     let switched = false

@@ -375,6 +375,7 @@ describe("public event manifest", () => {
     const data = SessionEvent.Created.data.make({
       sessionID: Session.ID.make("ses_current"),
       projectID: Project.ID.make("project"),
+      scope: "bound",
       location: Location.Ref.make({ directory: AbsolutePath.make("/project") }),
       title: "Current session",
       created: 1,

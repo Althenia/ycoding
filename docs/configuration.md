@@ -349,6 +349,10 @@ The default categories are `question`, `permission`, and `review`. Optional `act
 
 External-notification filters are client preferences, not Project settings. TUI `attention.coordination` stores `scope` (`all`, `coordinators`, or `selected`), selected Master `sessionIDs`, and optional `categories` (`question`, `permission`, `review`, `failure`, `completion`). The persisted value `coordinators` selects Masters. Web preferences are per browser and phone push preferences are per subscription. Pending controls and in-app notices remain visible; filtering grants no decision authority.
 
+### Desktop app
+
+The macOS desktop app stores its backend choice in `backend-preferences.json` in its application configuration directory (`~/Library/Application Support/app.ycoding.desktop/`): the selected mode and a credential-free shared HTTP(S) origin. Loading the file never connects; a malformed or unreadable file is reported and left in place. An explicit shared URL authenticates like `ycoding --server`, using `YCODING_PASSWORD` or `YCODING_SERVER_PASSWORD` from the app process environment. An empty shared endpoint discovers the compatible managed service through its registration and fails when none is running. Own mode runs the bundled CLI's `serve`, which resolves its database and directories like the CLI. See [packages/desktop](../packages/desktop/README.md).
+
 ### Remote access
 
 `ycoding remote` gives the authenticated owner of an enrolled machine access to every Session in that machine's backend through a relay deployment. The local process keeps execution authority; see [Runtime behavior](./runtime.md#remote-relay-agent) for backend-derived Location, authorization, reconnection, and frame-bounding rules.

@@ -25,7 +25,7 @@ const locations: string[] = []
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([CoordinationDecisionRuntime.node]), [
   [CoordinationSettings.node, Layer.succeed(CoordinationSettings.Service, { read: () => Effect.succeed({ enabled: true, categories: ["question", "permission", "review"] }) })],
   [CoordinationService.node, Layer.mock(CoordinationService.Service, { accessOf: () => Effect.succeed({ scope: { groupID, masterSessionID: coordinatorSessionID, memberSessionIDs: [targetSessionID], active: true, settings: { concurrency: 1 } }, role: "master", ownedSessionIDs: [] }) })],
-  [SessionStore.node, Layer.mock(SessionStore.Service, { get: (id) => Effect.succeed(Session.Info.make({ id, projectID: Project.ID.global, title: "Target", location: { directory: AbsolutePath.make(id === targetSessionID ? "/target" : "/coordinator") }, cost: Money.USD.make(0), tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: DateTime.makeUnsafe(1), updated: DateTime.makeUnsafe(1) } })) })],
+  [SessionStore.node, Layer.mock(SessionStore.Service, { get: (id) => Effect.succeed(Session.Info.make({ id, projectID: Project.ID.global, scope: "bound", title: "Target", location: { directory: AbsolutePath.make(id === targetSessionID ? "/target" : "/coordinator") }, cost: Money.USD.make(0), tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: DateTime.makeUnsafe(1), updated: DateTime.makeUnsafe(1) } })) })],
   [CoordinationDecisionRuntime.node, makeGlobalNode({ service: CoordinationDecisions.Service, layer: CoordinationDecisionRuntime.layerWith((location) => {
     locations.push(location.directory)
     return Layer.mergeAll(

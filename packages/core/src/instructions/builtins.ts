@@ -7,6 +7,7 @@ import { ConfigCapabilities } from "../config/capabilities"
 import { Global } from "../global"
 import { Location } from "../location"
 import { SessionSchema } from "../session/schema"
+import type { SessionScope } from "@ycoding-ai/schema/session-scope"
 import { Instructions } from "./index"
 
 export interface Input {
@@ -14,6 +15,7 @@ export interface Input {
   readonly capabilities: ConfigCapabilities.Resolved
   /** Tool names the selected agent can call; a block describing an absent tool is omitted. */
   readonly tools: ReadonlySet<string>
+  readonly scope?: SessionScope
 }
 
 export interface Interface {
@@ -31,6 +33,7 @@ const requiredTool: Partial<Record<ConfigCapabilities.BuiltinInstruction, string
 }
 
 export function enabled(name: ConfigCapabilities.BuiltinInstruction, input: Omit<Input, "sessionID">) {
+  if (input.scope === "standalone" && (name === "environment" || name === "git-worktree" || name === "git-attribution" || name === "shell-memory")) return false
   const tool = requiredTool[name]
   return (
     ConfigCapabilities.allows(input.capabilities.builtin_instructions, name) &&

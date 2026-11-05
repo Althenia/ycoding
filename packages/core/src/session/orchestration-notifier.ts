@@ -18,8 +18,10 @@ export const NotificationBatchSize = 100
 export type DeliveryResult = "admitted" | "retry" | "quarantined"
 
 export interface Interface {
-  readonly dispatch: Effect.Effect<void>
+  readonly dispatch: Effect.Effect<void, DispatchError>
 }
+
+export type DispatchError = Session.ScopeUnavailableError | SessionOrchestration.ServiceUnavailableError
 
 export function make<Row, E, R>(dependencies: {
   readonly list: (limit: number) => Effect.Effect<ReadonlyArray<Row>, E, R>
@@ -45,6 +47,14 @@ export function make<Row, E, R>(dependencies: {
   )
   return { dispatch }
 }
+
+const logDispatchFailure = <A, R>(effect: Effect.Effect<A, DispatchError, R>) =>
+  effect.pipe(
+    Effect.catchTags({
+      "Session.ScopeUnavailableError": (error) => Effect.logError("Could not dispatch Session notification", { error }),
+      "SessionOrchestration.ServiceUnavailableError": (error) => Effect.logError("Could not dispatch Session notification", { error }),
+    }),
+  )
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionOrchestrationNotifier") {}
 
@@ -133,15 +143,17 @@ const layer = Layer.effect(
     const unsubscribe = yield* events.listen((event) => {
       if (event.type !== SessionEvent.Execution.Started.type) return Effect.void
       const parentID = Schema.decodeUnknownSync(SessionEvent.Execution.Started.data)(event.data).sessionID
-      return lock.withLock(`restart\0${parentID}`)(notifier(parentID).dispatch)
+      return lock.withLock(`restart\0${parentID}`)(notifier(parentID).dispatch).pipe(
+        logDispatchFailure,
+      )
     })
     yield* Effect.addFinalizer(() => unsubscribe)
 
     yield* events.subscribe(SessionEvent.Task.Updated).pipe(
-      Stream.runForEach(() => service.dispatch),
+      Stream.runForEach(() => service.dispatch.pipe(logDispatchFailure)),
       Effect.forkScoped({ startImmediately: true }),
     )
-    yield* service.dispatch.pipe(Effect.forkScoped({ startImmediately: true }))
+    yield* service.dispatch.pipe(logDispatchFailure, Effect.forkScoped({ startImmediately: true }))
     return Service.of(service)
   }),
 )

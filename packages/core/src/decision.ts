@@ -45,18 +45,17 @@ export interface Invocation {
   readonly invocationKey?: string
 }
 
-export interface Interface {
-  readonly evaluate: (value: Input, context: Invocation) => Effect.Effect<Output, Error>
+export interface Interface<E = never> {
+  readonly evaluate: (value: Input, context: Invocation) => Effect.Effect<Output, Error | E>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/Decision") {}
 
 const MAX_SETTLED = 128
 
-export const layer = Layer.effect(Service, Effect.gen(function* () {
-  const agent = yield* DecisionAgent.Service
+export const make = <E>(agent: DecisionAgent.Interface<E>) => Effect.gen(function* () {
   const settled = new Map<string, Output>()
-  const inflight = new Map<string, Deferred.Deferred<Output | undefined, Error>>()
+  const inflight = new Map<string, Deferred.Deferred<Output | undefined, Error | E>>()
   const evaluate = Effect.fn("Decision.evaluate")(function* (value: Input, context: Invocation) {
     const decoded = yield* Schema.decodeUnknownEffect(Input)(value).pipe(Effect.mapError(() => new Error({ reason: "invalid-request" })))
     if (Buffer.byteLength(JSON.stringify(decoded)) > 1_048_576) return yield* new Error({ reason: "input-too-large" })
@@ -71,7 +70,7 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
     )
     const run = agent.evaluate(decoded.request, invocation).pipe(
       Effect.map((response): Output => ({ provider: "agent", response })),
-      Effect.mapError((error) => new Error({ reason: error.reason })),
+      Effect.mapError((error) => error instanceof DecisionAgent.Error ? new Error({ reason: error.reason }) : error),
     )
     if (context.invocationKey === undefined) return yield* run
     const resolved = yield* preflight
@@ -92,7 +91,7 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
         if (done) return { type: "done" as const, output: done }
         const waiting = inflight.get(key)
         if (waiting) return { type: "wait" as const, deferred: waiting }
-        const deferred = yield* Deferred.make<Output | undefined, Error>()
+        const deferred = yield* Deferred.make<Output | undefined, Error | E>()
         inflight.set(key, deferred)
         return { type: "lead" as const, deferred }
       }))
@@ -105,7 +104,7 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
       return yield* run.pipe(
         Effect.onExit((exit) => Effect.gen(function* () {
           if (Exit.isSuccess(exit)) {
-            const current = yield* preflight
+            const current = yield* preflight.pipe(Effect.tapError((error) => Deferred.fail(claim.deferred, error)))
             if (Option.isSome(current) && current.value === model) {
               settled.set(key, exit.value)
               while (settled.size > MAX_SETTLED) {
@@ -124,14 +123,19 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
       )
     }
   })
-  return Service.of({
+  return {
     evaluate: (value, context) =>
       evaluate(value, context).pipe(
         Effect.timeoutOption(Duration.millis(DecisionAgent.TOTAL_TIMEOUT_MS)),
         Effect.flatMap((result) => (Option.isSome(result) ? Effect.succeed(result.value) : Effect.fail(new Error({ reason: "timeout" })))),
       ),
-  })
+  } satisfies Interface<E>
+})
+
+export const layer = Layer.effect(Service, Effect.gen(function* () {
+  return yield* make(yield* DecisionAgent.Service)
 }))
+
 
 function invalidInvocation(context: Invocation) {
   if (context.invocationKey !== undefined && (context.invocationKey.length === 0 || context.invocationKey.length > 256)) return true

@@ -293,6 +293,28 @@ describe("lazy Location services", () => {
     }),
   )
 
+  it.live("keeps bound resources leased when their lookup is invalidated", () =>
+    Effect.gen(function* () {
+      const nodes = probes()
+      const locations = yield* LocationServiceMap.Service
+      const ref = refOf("/lazy/bound-lease")
+      yield* Effect.gen(function* () {
+        const current = yield* locations.contextEffect(ref, [nodes.left])
+        yield* locations.invalidate(ref)
+        expect(nodes.events).toEqual(["build:base", "build:left"])
+        expect(Context.get(current, Left).base).toBe(1)
+      }).pipe(Effect.scoped)
+      expect(nodes.events.filter((event) => event === "close:base")).toHaveLength(1)
+      yield* Effect.gen(function* () {
+        const next = yield* locations.contextEffect(ref, [nodes.left])
+        expect(Context.get(next, Left).base).toBe(2)
+        expect(nodes.events.filter((event) => event === "close:base")).toHaveLength(1)
+      }).pipe(Effect.scoped)
+      yield* locations.invalidate(ref)
+      expect(nodes.events.filter((event) => event === "close:base")).toHaveLength(2)
+    }),
+  )
+
   it.effect("releases an idle Location after the idle time and keeps a touched one", () =>
     Effect.gen(function* () {
       const nodes = probes()

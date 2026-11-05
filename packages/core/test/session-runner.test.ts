@@ -125,6 +125,7 @@ import { ReferenceInstructions } from "@ycoding-ai/core/reference/instructions"
 import { McpInstructions } from "@ycoding-ai/core/mcp/instructions"
 import { CatalogModel } from "@ycoding-ai/core/model"
 import { AppProcess } from "@ycoding-ai/core/process"
+import { ShellLedger } from "@ycoding-ai/core/shell/ledger"
 import { ModelGuidanceInstructions } from "@ycoding-ai/core/model-incident/instructions"
 import { ModelIncidentTable } from "@ycoding-ai/core/model-incident/sql"
 import { Location } from "@ycoding-ai/core/location"
@@ -754,8 +755,16 @@ const contextState = makeGlobalNode({
     const database = yield* Database.Service
     const events = yield* EventRuntime.Service
     const guardrails = yield* SessionGuardrail.Service
+    const observation = SessionGuardrail.Observation.of({
+      snapshot: guardrails.snapshot,
+      withSnapshot: (sessionID, use) => guardrails.withSnapshot(sessionID, (snapshot) => use(snapshot, Effect.void)),
+    })
     const locations = yield* fixedLocations(
-      (_location: Location.Ref) => Layer.succeed(SessionGuardrail.Service, guardrails) as unknown as Layer.Layer<LocationServices>,
+      (_location: Location.Ref) =>
+        Layer.mergeAll(
+          Layer.succeed(SessionGuardrail.Service, guardrails),
+          Layer.succeed(SessionGuardrail.Observation, observation),
+        ) as unknown as Layer.Layer<LocationServices>,
     )
     return AppNodeBuilder.build(SessionContextState.node, [
       [Database.node, Layer.succeed(Database.Service, database)],
@@ -964,6 +973,7 @@ const execution = makeGlobalNode({
         ),
     })
     return SessionExecution.Service.of({
+      prepareTask: () => Effect.void,
       active: coordinator.active,
       resume: coordinator.run,
       wake: coordinator.wake,
@@ -980,6 +990,7 @@ const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
       fixtureRunner,
+      AppProcess.node,
       Database.node,
       Job.node,
       EventRuntime.node,
@@ -1049,6 +1060,12 @@ const sessionAffinity = SessionModelHeaders.make(
 )["X-Session-Id"]
 const otherSessionID = Session.ID.make("ses_runner_other")
 const admit = (session: Session.Interface, text: string) => session.prompt({ sessionID, text, resume: false })
+
+const taskOwner = Effect.gen(function* () {
+  const owner = yield* ShellLedger.identify(yield* AppProcess.Service, process.pid)
+  expect(owner).toBeDefined()
+  return owner!
+})
 
 const insertSession = (id: Session.ID) =>
   Effect.gen(function* () {
@@ -2555,8 +2572,8 @@ describe("SessionRunnerLLM", () => {
           background: true,
           delivery: "steer",
         },
-      })
-      yield* events.publish(SessionEvent.Task.Updated, { sessionID: otherSessionID, change: { type: "started" } })
+      }).pipe(Effect.provideService(EventRuntime.TaskOwner, yield* taskOwner))
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: otherSessionID, change: { type: "started" } }).pipe(Effect.provideService(EventRuntime.TaskOwner, yield* taskOwner))
       yield* admit(session, "Observe child")
       yield* session.resume(sessionID)
       const firstTeam = teamMessages(requests[1]!)[0]!
@@ -2635,8 +2652,8 @@ describe("SessionRunnerLLM", () => {
           background: true,
           delivery: "steer",
         },
-      })
-      yield* events.publish(SessionEvent.Task.Updated, { sessionID: otherSessionID, change: { type: "started" } })
+      }).pipe(Effect.provideService(EventRuntime.TaskOwner, yield* taskOwner))
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: otherSessionID, change: { type: "started" } }).pipe(Effect.provideService(EventRuntime.TaskOwner, yield* taskOwner))
       yield* events.publish(SessionEvent.Task.Updated, {
         sessionID: otherSessionID,
         change: { type: "progressed", progress: { text: "Checking fixture", time: 1 } },
@@ -12415,8 +12432,8 @@ describe("SessionRunnerLLM", () => {
           background: true,
           delivery: "steer",
         },
-      })
-      yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
+      }).pipe(Effect.provideService(EventRuntime.TaskOwner, yield* taskOwner))
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } }).pipe(Effect.provideService(EventRuntime.TaskOwner, yield* taskOwner))
       const question = yield* orchestration.question(child.id, "Which boundary should I check?")
       expect(question.autoAnswered).toBe(false)
       expect(yield* orchestration.get(sessionID, child.id)).toMatchObject({ state: "waiting" })

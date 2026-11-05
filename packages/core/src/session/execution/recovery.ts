@@ -44,6 +44,7 @@ type Input = {
   readonly appProcess: AppProcess.Interface
   readonly execution: SessionExecution.Interface
   readonly lifetime: Scope.Scope
+  readonly owner?: ShellLedger.Process
 }
 
 export const recover = Effect.fn("SessionTaskRecovery.recover")(function* (input: Input) {
@@ -60,9 +61,18 @@ export const recover = Effect.fn("SessionTaskRecovery.recover")(function* (input
     yield* Effect.logWarning("could not list processes; active child tasks were not recovered")
     return
   }
+  const owner = yield* ShellLedger.identify(input.appProcess, process.pid)
   yield* Effect.forEach(
     rows.filter((row) => !ShellLedger.alive(snapshot.value, row.owner_pid, row.owner_started)),
-    (row) => recoverTask(input, row),
+    (row) => recoverTask({ ...input, owner }, row).pipe(
+      Effect.provideService(EventRuntime.TaskOwner, owner),
+      Effect.catchTag("EventRuntime.TaskOwnerUnavailable", (error) =>
+        Effect.logWarning("Could not recover managed task without a valid process owner", error).pipe(
+          Effect.annotateLogs({ sessionID: row.session_id }),
+        )),
+      Effect.catchTag("Session.ScopeUnavailableError", (error) =>
+        Effect.logWarning("Could not start managed task recovery", error).pipe(Effect.annotateLogs({ sessionID: row.session_id }))),
+    ),
     { discard: true },
   )
 })
@@ -71,6 +81,8 @@ const recoverTask = Effect.fnUntraced(function* (input: Input, row: Row) {
   const db = input.db
   const events = input.events
   const sessionID = SessionSchema.ID.make(row.session_id)
+  const session = yield* db.select({ scope: SessionTable.scope }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+  if (session?.scope === "standalone") return yield* Effect.logWarning("Standalone Session recovery is unavailable").pipe(Effect.annotateLogs({ sessionID }))
   if (row.state === "waiting" && row.question_id !== null && row.question !== null && row.question_time !== null) return
   const unchanged = Effect.gen(function* () {
     const latest = yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, row.session_id)).get().pipe(Effect.orDie)
@@ -94,13 +106,21 @@ const recoverTask = Effect.fnUntraced(function* (input: Input, row: Row) {
     )
   if (row.state === "waiting" || row.state === "cancelling") return yield* lose(notResumed)
   const pending = (yield* SessionPending.has(db, sessionID, "steer")) || (yield* SessionPending.has(db, sessionID, "queue"))
+  const prepareOwner = Effect.gen(function* () {
+    yield* EventRuntime.requireTaskOwner
+    if (input.owner) yield* input.execution.prepareTask(input.owner)
+  })
   if (row.state === "starting") {
     if (!pending) return yield* lose(notResumed)
+    yield* prepareOwner
     const started = yield* events.publishBatch(
       [{ definition: SessionEvent.Task.Updated, data: { sessionID, change: { type: "started" } } }],
       { when: unchanged },
     )
-    if (started.length > 0) yield* input.execution.wake(sessionID)
+    if (started.length > 0) yield* input.execution.wake(sessionID, input.owner).pipe(
+      Effect.catchTag("Session.ScopeUnavailableError", (error) =>
+        Effect.logWarning("Failed to wake recovered task after durable admission", error).pipe(Effect.annotateLogs({ sessionID }))),
+    )
     return
   }
   const interrupted = yield* interruptedByRestart(db, sessionID)
@@ -123,6 +143,7 @@ const recoverTask = Effect.fnUntraced(function* (input: Input, row: Row) {
     )
     return
   }
+  yield* prepareOwner
   const resumed = yield* events.publishBatch(
     [
       ...incomplete,
@@ -135,7 +156,10 @@ const recoverTask = Effect.fnUntraced(function* (input: Input, row: Row) {
     { when: unchanged },
   )
   if (resumed.length === 0) return
-  yield* input.execution.resume(sessionID).pipe(Effect.ignore, Effect.forkIn(input.lifetime, { startImmediately: true }))
+  yield* input.execution.resume(sessionID, input.owner).pipe(
+    Effect.catch((error) => Effect.logWarning("Failed to resume recovered task after durable admission", error).pipe(Effect.annotateLogs({ sessionID }))),
+    Effect.forkIn(input.lifetime, { startImmediately: true }),
+  )
 })
 
 const ask = Effect.fnUntraced(function* (input: {

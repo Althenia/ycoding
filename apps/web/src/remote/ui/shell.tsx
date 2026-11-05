@@ -25,6 +25,7 @@ import {
 } from "../projection"
 import type { SessionInfoView } from "../store"
 import {
+  boundPlacement,
   accountReadState,
   cachedSessionsView,
   connectionLabel,
@@ -628,6 +629,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                   onOpenContext={() => { setCompanionTab("context"); openTeam() }}
                   metadataMount={!conversationHidden() && !managedChild() && !selectedLoading() ? composerMetadataMount() : undefined}
                   running={state().view?.status === "running"}
+                  sendDisabled={!boundPlacement(state().selectedSessionInfo?.scope, state().view?.scope)}
                   canSend={
                     !managedChild() && state().transport.kind === "open" &&
                     state().connection.kind !== "offline" &&

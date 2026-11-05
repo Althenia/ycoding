@@ -50,16 +50,23 @@ const makeEndpoint = Effect.fn("cli.standalone.endpoint")(
     const output = yield* Deferred.await(readyLine)
     const ready = yield* Effect.tryPromise(() => decodeReady(output))
     return {
-      url: ready.url,
-      auth: { type: "basic" as const, username: "ycoding", password },
-      pid: proc.pid,
-    } satisfies Endpoint & { readonly pid: number }
+      endpoint: {
+        url: ready.url,
+        auth: { type: "basic" as const, username: "ycoding", password },
+        pid: proc.pid,
+      } satisfies Endpoint & { readonly pid: number },
+      exited: Effect.ignore(proc.exitCode),
+    }
   },
   Effect.provide(LayerNode.compile(CrossSpawnSpawner.node)),
 )
 
-export function start(options: Options = {}) {
+export function owned(options: Options = {}) {
   return makeEndpoint(options)
+}
+
+export function start(options: Options = {}) {
+  return makeEndpoint(options).pipe(Effect.map((server) => server.endpoint))
 }
 
 export * as Standalone from "./standalone"

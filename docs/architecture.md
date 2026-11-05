@@ -48,6 +48,7 @@ Rules:
 - Client consumes the assembled Protocol and provides generated and composed APIs.
 - CLI owns the executable, local-service discovery, build, packaging, and TUI startup.
 - TUI owns presentation and interaction, never canonical durable state.
+- Desktop owns the macOS Tauri shell, its Solid/Vite window and a Bun native worker. It consumes Client and never imports Core or Server; CLI embeds the worker for its hidden `desktop-client` command.
 - Remote owns the closed relay envelopes and device-authentication request shapes shared by the CLI, browser, and edge relay. It does not redefine local Session semantics.
 - Web owns the responsive browser presentation and curated public content. It must not import Core or Server implementation code. The remote browser store is a TanStack Store that owns event-sourced Session state, selection, subscriptions, notices, Team state, and mutations; connection-scoped read resources (provider usage, keep-awake, workspace lists) are TanStack Query resources keyed by device and connection generation, and one Query client discards them when the connection ends. Views read those resources through a non-suspending observer (`apps/web/src/remote/query.ts`) because a Solid Query resource read reaches the router's Suspense boundary and would detach the shell; route loaders preload a view's reads on link intent, and the shell warms the Usage, keep-awake, and workspace reads once after the selected Session settles. Browser-persisted notification preferences are a TanStack Store persisted through browser storage.
 
@@ -149,6 +150,10 @@ Owns:
 
 The TUI keeps bounded read models. It does not own canonical Session state.
 
+### `packages/desktop`
+
+Owns the macOS Tauri 2 application: the Rust shell in `src-tauri`, the Solid/Vite/TanStack backend-choice and Session workspace window (Sessions rail, transcript, composer and New chat placement), the full-tree bundled-resource manifest, and the Bun native worker run by the hidden CLI `desktop-client` command. Rust verifies the bundled CLI executable against its manifest digest, owns the worker's stdin lease and bounded line protocol, and grants the main window sixteen commands (preferences, state, connect, disconnect, Sessions, workspaces, messages, create Session, prompt, interrupt, requests, reply, models, switch model, pin, and read one Session) plus event listen/unlisten. The worker uses `@ycoding-ai/client` with the TUI's readiness rule: native health, then the initial `server.connected` event, then an abortable event stream. Endpoint credentials stay in the worker and its `desktop-host` control process. Own mode starts the bundled `serve` through the existing standalone lease. Shared mode attaches to an explicit URL or discovers an existing compatible managed service read-only; it never starts, stops, replaces or migrates that service. `bun run build:desktop -- --outdir=<fresh-directory>` builds the CLI, Vite assets and Tauri `.app`; release workflows do not build it.
+
 ### Supporting packages
 
 - `packages/codemode`: restricted program execution and discovery over host-provided tools; Core owns catalog visibility, leaf authorization, hooks, and provider-facing output bounding. Allocation caps are not hard heap isolation.
@@ -191,7 +196,7 @@ Prompt admission and provider execution are separate. A prompt is admitted durab
 
 ## Location scope
 
-Models, providers, provider usage, tools, permissions, Session guardrails, instructions, filesystem access, plugins, and related services are resolved through a Location. Session execution resolves the Session's Location when a drain starts. Location-service cache keys normalize absolute-directory path segments and trailing separators before acquisition and invalidation, so equivalent directory references share one service graph; explicit workspace identities remain separate keys.
+Models, providers, provider usage, tools, permissions, Session guardrails, instructions, filesystem access, plugins, and related services are resolved through a Location. Bound Session execution and bound Session-scoped middleware use the full Location graph. Standalone Sessions reject the full graph and execute through the reduced standalone runner; `Session.prompt` admits only text with `resume: false`, stored literally without resolving skill mentions; resumed prompts and prompts with files are rejected before any reused-ID lookup, and commands, shells, skills, moves and generation are rejected. Location-service cache keys normalize absolute-directory path segments and trailing separators before acquisition and invalidation, and separate explicit workspace identities and Session scopes.
 
 `SessionGuardrail` is Location-scoped but evaluates by Session ID. It resolves the root Session through `SessionStore`, shares counters across that family, and mediates mutation immediately before side effects. `ProviderUsage` is Location-scoped and resolves credentials through the existing credential service; it returns normalized, cached snapshots without becoming part of model execution.
 

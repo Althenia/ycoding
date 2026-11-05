@@ -9,6 +9,8 @@ if (!runRegexProcess()) {
   const { main } = await import("./main")
 
   const handlers = Runtime.handlers(Commands, {
+    "desktop-host": () => import("./commands/handlers/desktop-host"),
+    "desktop-client": () => import("./commands/handlers/desktop-client"),
     decision: {
       list: () => import("./commands/handlers/decision/list"),
       watch: () => import("./commands/handlers/decision/watch"),

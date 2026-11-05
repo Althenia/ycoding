@@ -50,6 +50,7 @@ export type DecideError =
   | InstanceType<typeof ConflictError>
   | InstanceType<typeof InvalidDecisionError>
   | Session.NotFoundError
+  | Session.ScopeUnavailableError
 
 export interface Interface {
   readonly decideDelegated: (input: DelegatedDecideInput) => Effect.Effect<void, DecideError>

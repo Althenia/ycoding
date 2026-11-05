@@ -1,23 +1,27 @@
 import { describe, expect } from "bun:test"
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Context, Effect, Exit, Layer, Logger, Option, Scope } from "effect"
 import { eq } from "drizzle-orm"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventRuntime } from "@ycoding-ai/core/event"
+import { EventTable } from "@ycoding-ai/core/event/sql"
 import { CatalogModel } from "@ycoding-ai/core/model"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { Provider } from "@ycoding-ai/core/provider"
+import { AppProcess } from "@ycoding-ai/core/process"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
+import { SessionExecution } from "@ycoding-ai/core/session/execution"
+import { SessionTaskRecovery } from "@ycoding-ai/core/session/execution/recovery"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
-import { SessionTable, SessionTaskNotificationTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
+import { SessionPendingTable, SessionTable, SessionTaskNotificationTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
 import { SessionOrchestration as SessionOrchestrationSchema } from "@ycoding-ai/schema/session-orchestration"
 import { Money } from "@ycoding-ai/schema/money"
 import { testEffect } from "./lib/effect"
@@ -51,11 +55,16 @@ const seed = Effect.gen(function* () {
   }
 })
 
-const update = (change: SessionOrchestrationSchema.Change) =>
+const defaultOwner = { pid: 1234, pgid: 1234, started: "synthetic-start" }
+const malformedOwner = { pid: 0, pgid: 0, started: "" }
+const ownerOf = (db: Database.Interface["db"], sessionID: SessionSchema.ID) =>
+  db.select({ pid: SessionTaskTable.owner_pid, started: SessionTaskTable.owner_started }).from(SessionTaskTable).where(eq(SessionTaskTable.session_id, sessionID)).get()
+const update = (change: SessionOrchestrationSchema.Change, owner = defaultOwner) =>
   EventRuntime.Service.use((events) => events.publish(SessionEvent.Task.Updated, { sessionID: childID, change }))
+    .pipe(Effect.provideService(EventRuntime.TaskOwner, owner))
 
-const launch = (background = true) =>
-  update({
+const launchChange = (background = true): Extract<SessionOrchestrationSchema.Change, { type: "launched" }> =>
+  ({
     type: "launched",
     parentID,
     parentAssistantMessageID: SessionMessage.ID.make("msg_parent"),
@@ -69,7 +78,196 @@ const launch = (background = true) =>
     delivery: "steer",
   })
 
+const launch = (background = true, owner = defaultOwner) => update(launchChange(background), owner)
+
 describe("Session orchestration projection", () => {
+  it.effect("continues recovering independent rows when the process identity cannot be read", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const database = yield* Database.Service
+      const db = database.db
+      const events = yield* EventRuntime.Service
+      const later = SessionSchema.ID.make("ses_zchild")
+      const final = SessionSchema.ID.make("ses_zz_final")
+      yield* db.insert(SessionTable).values({ id: later, project_id: Project.ID.global, parent_id: parentID, directory: "/project", title: later }).run()
+      yield* db.insert(SessionTable).values({ id: final, project_id: Project.ID.global, parent_id: parentID, directory: "/project", title: final }).run()
+      yield* launch()
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: later, change: { ...launchChange(), toolCallID: "call_later", inputID: SessionMessage.ID.make("msg_later") } }).pipe(Effect.provideService(EventRuntime.TaskOwner, defaultOwner))
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: final, change: { ...launchChange(), toolCallID: "call_final", inputID: SessionMessage.ID.make("msg_final") } }).pipe(Effect.provideService(EventRuntime.TaskOwner, defaultOwner))
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: final, change: { type: "started" } }).pipe(Effect.provideService(EventRuntime.TaskOwner, defaultOwner))
+      const assistantMessageID = SessionMessage.ID.make("msg_final_assistant")
+      yield* events.publish(SessionEvent.Step.Started, { sessionID: final, assistantMessageID, agent: Agent.ID.make("build"), model })
+      yield* events.publish(SessionEvent.Text.Started, { sessionID: final, assistantMessageID, ordinal: 0 })
+      yield* events.publish(SessionEvent.Text.Ended, { sessionID: final, assistantMessageID, ordinal: 0, text: "Done" })
+      yield* events.publish(SessionEvent.Step.Ended, { sessionID: final, assistantMessageID, finish: "stop", cost: Money.USD.zero, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })
+      yield* events.publish(SessionEvent.Execution.Failed, { sessionID: final, error: { type: "interrupted", message: "Synthetic restart" } })
+      yield* db.insert(SessionPendingTable).values({ id: SessionMessage.ID.make("msg_recovery_pending"), session_id: childID, type: "synthetic", data: {}, delivery: "steer", admitted_seq: 1 }).run()
+      const appProcess = yield* AppProcess.Service.pipe(Effect.provide(Layer.mock(AppProcess.Service, {
+        run: () => Effect.succeed({ command: "ps", exitCode: 0, stdout: Buffer.from(""), stderr: Buffer.from(""), stdoutTruncated: false, stderrTruncated: false }),
+      })))
+      const beforeEvents = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, childID)).all()
+      const beforePending = yield* db.select().from(SessionPendingTable).where(eq(SessionPendingTable.session_id, childID)).all()
+      const executionContext = yield* Layer.build(AppNodeBuilder.build(SessionExecution.node, [
+        [Database.node, Layer.succeed(Database.Service, database)],
+        [EventRuntime.node, Layer.succeed(EventRuntime.Service, events)],
+      ]))
+      const execution = Context.get(executionContext, SessionExecution.Service)
+      const lifetime = yield* Scope.Scope
+      const logs: unknown[] = []
+      const result = yield* Effect.exit(SessionTaskRecovery.recover({ db, events, appProcess, execution, lifetime })).pipe(
+        Effect.provide(Logger.layer([Logger.make(({ message }) => { logs.push(message) })])),
+      )
+      expect(Exit.isSuccess(result)).toBe(true)
+      expect(JSON.stringify(logs)).not.toContain("Could not recover managed task")
+      expect(yield* ownerOf(db, childID)).toEqual({ pid: null, started: null })
+      expect((yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get())?.state).toBe("running")
+      expect((yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, later)).get())?.state).toBe("lost")
+      expect((yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, final)).get())?.state).toBe("completed")
+      expect((yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, childID)).all()).length).toBeGreaterThan(beforeEvents.length)
+      expect(yield* db.select().from(SessionPendingTable).where(eq(SessionPendingTable.session_id, childID)).all()).toEqual(beforePending)
+    }).pipe(Effect.scoped),
+  )
+
+  it.effect("records a null owner for a task claim without a supplied process owner", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const db = (yield* Database.Service).db
+      const events = yield* EventRuntime.Service
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: childID, change: launchChange() })
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: childID, change: { type: "started" } })
+      expect(yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get()).toMatchObject({
+        state: "running", owner_pid: null, owner_started: null,
+      })
+    }),
+  )
+
+  it.effect("rejects a malformed supplied task owner before creating the task", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const db = (yield* Database.Service).db
+      const result = yield* Effect.exit(launch(true, malformedOwner))
+      expect(Exit.isFailure(result) && Option.getOrUndefined(Cause.findErrorOption(result.cause))).toBeInstanceOf(EventRuntime.TaskOwnerUnavailableError)
+      expect(yield* db.select().from(SessionTaskTable).all()).toEqual([])
+      expect((yield* SessionOrchestration.snapshot(db, parentID)).sequence).toBe(0)
+    }),
+  )
+
+  it.effect("preserves the supplied task owner for a live launch and batched start", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const owner = { pid: 1234, pgid: 1234, started: "synthetic-start" }
+      yield* launch(true, owner)
+      const events = yield* EventRuntime.Service
+      yield* events.publishBatch([
+        { definition: SessionEvent.Task.Updated, data: { sessionID: childID, change: { type: "started" } } },
+      ]).pipe(Effect.provideService(EventRuntime.TaskOwner, owner))
+      const db = (yield* Database.Service).db
+      expect(yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get()).toMatchObject({
+        state: "running", owner_pid: owner.pid, owner_started: owner.started,
+      })
+    }),
+  )
+
+  it.effect("projects an ownerless claim batch with a null owner", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const events = yield* EventRuntime.Service
+      const db = (yield* Database.Service).db
+      yield* events.publishBatch([
+        { definition: SessionEvent.AgentSelected, data: { sessionID: parentID, agent: Agent.ID.make("build") } },
+        { definition: SessionEvent.Task.Updated, data: { sessionID: childID, change: launchChange() } },
+      ])
+      expect(yield* ownerOf(db, childID)).toEqual({ pid: null, started: null })
+      expect((yield* db.select().from(SessionTable).where(eq(SessionTable.id, parentID)).get())?.agent).toBe("build")
+    }),
+  )
+
+  it.effect("rejects a malformed owner before any batch projection", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const events = yield* EventRuntime.Service
+      const db = (yield* Database.Service).db
+      const result = yield* Effect.exit(events.publishBatch([
+        { definition: SessionEvent.AgentSelected, data: { sessionID: parentID, agent: Agent.ID.make("build") } },
+        { definition: SessionEvent.Task.Updated, data: { sessionID: childID, change: launchChange() } },
+      ]).pipe(Effect.provideService(EventRuntime.TaskOwner, malformedOwner)))
+      expect(Exit.isFailure(result) && Option.getOrUndefined(Cause.findErrorOption(result.cause))).toBeInstanceOf(EventRuntime.TaskOwnerUnavailableError)
+      expect(yield* db.select().from(SessionTaskTable).all()).toEqual([])
+      expect((yield* db.select().from(SessionTable).where(eq(SessionTable.id, parentID)).get())?.agent).toBeNull()
+    }),
+  )
+
+  it.effect("rejects a malformed owner and preserves a supplied owner on replay", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const events = yield* EventRuntime.Service
+      const db = (yield* Database.Service).db
+      const event = {
+        id: EventRuntime.ID.create(),
+        type: EventRuntime.versionedType(SessionEvent.Task.Updated.type, SessionEvent.Task.Updated.durable.version),
+        seq: 0,
+        aggregateID: childID,
+        data: { sessionID: childID, change: launchChange() },
+      }
+      const result = yield* Effect.exit(events.replay(event).pipe(Effect.provideService(EventRuntime.TaskOwner, malformedOwner)))
+      expect(Exit.isFailure(result) && Option.getOrUndefined(Cause.findErrorOption(result.cause))).toBeInstanceOf(EventRuntime.TaskOwnerUnavailableError)
+      expect(yield* db.select().from(SessionTaskTable).all()).toEqual([])
+      const owner = { pid: 4321, pgid: 4321, started: "replay-start" }
+      yield* events.replay(event).pipe(Effect.provideService(EventRuntime.TaskOwner, owner))
+      expect(yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get()).toMatchObject({
+        owner_pid: owner.pid, owner_started: owner.started,
+      })
+    }),
+  )
+
+  it.effect("rejects a malformed owner and preserves a supplied owner for every claiming transition", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const events = yield* EventRuntime.Service
+      const db = (yield* Database.Service).db
+      yield* launch()
+      const question = { id: SessionOrchestrationSchema.QuestionID.make("qst_owner"), text: "Proceed?", time: 4 }
+      const transitions: SessionOrchestrationSchema.Change[] = [
+        { type: "started" },
+        { type: "resumed" },
+        { type: "question_answered", answer: { questionID: question.id, text: "yes" } },
+        { type: "question_timed_out", questionID: question.id },
+      ]
+      for (const [index, change] of transitions.entries()) {
+        if (index >= 2) yield* update({ type: "question_asked", question })
+        const before = yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get()
+        const result = yield* Effect.exit(update(change, malformedOwner))
+        expect(Exit.isFailure(result) && Option.getOrUndefined(Cause.findErrorOption(result.cause))).toBeInstanceOf(EventRuntime.TaskOwnerUnavailableError)
+        expect(yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get()).toEqual(before)
+        const owner = { pid: 2000 + index, pgid: 2000 + index, started: `synthetic-${index}` }
+        yield* update(change, owner)
+        expect(yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get()).toMatchObject({
+          owner_pid: owner.pid, owner_started: owner.started,
+        })
+      }
+    }),
+  )
+
+  it.effect("preflights every replayAll event before projecting any event", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const events = yield* EventRuntime.Service
+      const db = (yield* Database.Service).db
+      const replay = [
+        { id: EventRuntime.ID.create(), type: EventRuntime.versionedType(SessionEvent.AgentSelected.type, SessionEvent.AgentSelected.durable.version), seq: 0, aggregateID: childID, data: { sessionID: childID, agent: Agent.ID.make("build") } },
+        { id: EventRuntime.ID.create(), type: EventRuntime.versionedType(SessionEvent.Task.Updated.type, SessionEvent.Task.Updated.durable.version), seq: 1, aggregateID: childID, data: { sessionID: childID, change: launchChange() } },
+      ]
+      const result = yield* Effect.exit(events.replayAll(replay).pipe(Effect.provideService(EventRuntime.TaskOwner, malformedOwner)))
+      expect(Exit.isFailure(result) && Option.getOrUndefined(Cause.findErrorOption(result.cause))).toBeInstanceOf(EventRuntime.TaskOwnerUnavailableError)
+      expect((yield* db.select().from(SessionTable).where(eq(SessionTable.id, childID)).get())?.agent).toBeNull()
+      expect(yield* db.select().from(SessionTaskTable).all()).toEqual([])
+      yield* events.replayAll(replay).pipe(Effect.provideService(EventRuntime.TaskOwner, defaultOwner))
+      expect(yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get()).toMatchObject({
+        owner_pid: defaultOwner.pid, owner_started: defaultOwner.started,
+      })
+    }),
+  )
+
   it.effect("snapshots direct-child versions with a durable membership fence", () =>
     Effect.gen(function* () {
       yield* seed

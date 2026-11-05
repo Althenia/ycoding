@@ -370,7 +370,7 @@ export interface Interface {
   readonly get: (
     parentID: SessionSchema.ID,
     childID: SessionSchema.ID,
-  ) => Effect.Effect<Task, Session.NotFoundError | NotFoundError | ForbiddenError>
+  ) => Effect.Effect<Task, Session.NotFoundError | NotFoundError | ForbiddenError | Session.ScopeUnavailableError>
   readonly launch: (input: LaunchInput) => Effect.Effect<Task, LaunchError>
   readonly switchModel: (input: {
     readonly parentID: SessionSchema.ID
@@ -414,17 +414,17 @@ export interface Interface {
     readonly description?: string
     readonly metadata?: Record<string, unknown>
     readonly resume: boolean
-  }) => ReturnType<Session.Interface["synthetic"]>
+  }) => Effect.Effect<Effect.Success<ReturnType<Session.Interface["synthetic"]>>, Effect.Error<ReturnType<Session.Interface["synthetic"]>> | ServiceUnavailableError>
   readonly resume: (input: {
     readonly parentID: SessionSchema.ID
     readonly childID: SessionSchema.ID
   }) => Effect.Effect<Task, ControlError>
-  readonly progress: (childID: SessionSchema.ID, text: string) => Effect.Effect<Task, TaskNotFoundError | ConflictError>
+  readonly progress: (childID: SessionSchema.ID, text: string) => Effect.Effect<Task, TaskNotFoundError | ConflictError | ServiceUnavailableError>
   readonly question: (
     childID: SessionSchema.ID,
     text: string,
     data?: Schema.Json,
-  ) => Effect.Effect<{ readonly question: Question; readonly autoAnswered: boolean }, TaskNotFoundError | ConflictError>
+  ) => Effect.Effect<{ readonly question: Question; readonly autoAnswered: boolean }, TaskNotFoundError | ConflictError | Session.ScopeUnavailableError | ServiceUnavailableError>
   readonly reconsiderQuestion: (input: {
     readonly parentID: SessionSchema.ID
     readonly childID: SessionSchema.ID
@@ -436,25 +436,25 @@ export interface Interface {
     readonly answer?: { readonly text?: string; readonly data?: Schema.Json }
     readonly confidence?: number
     readonly validate: (task: Task) => Effect.Effect<boolean>
-  }) => Effect.Effect<QuestionReconsiderResult>
+  }) => Effect.Effect<QuestionReconsiderResult, Session.ScopeUnavailableError | ServiceUnavailableError>
   readonly settle: (
     childID: SessionSchema.ID,
     result:
       | { readonly type: "completed"; readonly excerpt?: string }
       | { readonly type: "failed"; readonly error: string; readonly excerpt?: string }
       | { readonly type: "lost"; readonly excerpt?: string },
-  ) => Effect.Effect<Task, TaskNotFoundError | ConflictError>
-  readonly background: (childID: SessionSchema.ID) => Effect.Effect<Task, TaskNotFoundError | ConflictError>
+  ) => Effect.Effect<Task, TaskNotFoundError | ConflictError | ServiceUnavailableError>
+  readonly background: (childID: SessionSchema.ID) => Effect.Effect<Task, TaskNotFoundError | ConflictError | ServiceUnavailableError>
   readonly teamView: (
     parentID: SessionSchema.ID,
   ) => Effect.Effect<ReturnType<typeof renderTeamView>, Session.NotFoundError>
-  readonly recover: Effect.Effect<void>
+  readonly recover: Effect.Effect<void, Session.ScopeUnavailableError | ServiceUnavailableError>
   readonly resolveRecovery: (input: {
     readonly childID: SessionSchema.ID
     readonly itemID: SessionReview.ID
     readonly choice: "continue" | "stop"
     readonly dots?: DotsSettlement
-  }) => Effect.Effect<Task, TaskNotFoundError | ConflictError>
+  }) => Effect.Effect<Task, TaskNotFoundError | ConflictError | Session.ScopeUnavailableError | ServiceUnavailableError>
 }
 
 export type Error =
@@ -467,10 +467,11 @@ export type Error =
   | ServiceUnavailableError
   | QuestionNotFoundError
   | Permission.Error
+  | Session.ScopeUnavailableError
 
 export type OwnershipError = Session.NotFoundError | NotFoundError | ForbiddenError
-export type LaunchError = Session.NotFoundError | ConflictError | InvalidRequestError
-export type ControlError = OwnershipError | ConflictError
+export type LaunchError = Session.NotFoundError | ConflictError | InvalidRequestError | Session.ScopeUnavailableError | ServiceUnavailableError
+export type ControlError = OwnershipError | ConflictError | Session.ScopeUnavailableError | ServiceUnavailableError
 export type AnswerError = ControlError | InvalidRequestError | QuestionNotFoundError
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionOrchestration") {}
@@ -484,6 +485,14 @@ const layer = Layer.effect(
     const stepBoundary = yield* SessionStepBoundary.Service
     const processService = yield* AppProcess.Service
     const owner = yield* ShellLedger.identify(processService, process.pid)
+    const requireOwner = Effect.gen(function* () {
+      yield* EventRuntime.requireTaskOwner.pipe(Effect.provideService(EventRuntime.TaskOwner, owner))
+      if (owner) yield* execution.prepareTask(owner)
+    }).pipe(Effect.mapError((error) => new ServiceUnavailableError({ message: error.message })))
+    const advisoryWake = (sessionID: SessionSchema.ID) => execution.wake(sessionID, owner).pipe(
+      Effect.catchTag("Session.ScopeUnavailableError", (error) =>
+        Effect.logWarning("Failed to wake Session after durable admission", error).pipe(Effect.annotateLogs({ sessionID }))),
+    )
     const sessions = yield* Session.Service
     const autonomy = yield* SessionAutonomy.Service
     const locations = yield* LocationServiceMap.Service
@@ -567,9 +576,14 @@ const layer = Layer.effect(
       parentID: SessionSchema.ID,
       childID: SessionSchema.ID,
     ) {
-      yield* sessions.get(parentID)
+      const parent = yield* sessions.get(parentID)
+      if (parent.scope === "standalone") return yield* new Session.ScopeUnavailableError({ operation: "subagent" })
       const row = yield* task(childID)
-      if (row?.parent_id === parentID) return row
+      if (row?.parent_id === parentID) {
+        const child = yield* sessions.get(childID)
+        if (child.scope === "standalone") return yield* new Session.ScopeUnavailableError({ operation: "subagent" })
+        return row
+      }
       const child = yield* db
         .select({ id: SessionTable.id })
         .from(SessionTable)
@@ -580,12 +594,25 @@ const layer = Layer.effect(
       return yield* new NotFoundError({ parentID, childID })
     })
 
-    const publish = (childID: SessionSchema.ID, change: typeof SessionEvent.Task.Updated.Type["data"]["change"], id?: string) =>
-      events.publish(
+    const publish = (childID: SessionSchema.ID, change: typeof SessionEvent.Task.Updated.Type["data"]["change"], id?: string) => Effect.gen(function* () {
+      if (["launched", "started", "resumed", "question_answered", "question_timed_out"].includes(change.type)) yield* requireOwner
+      return yield* events.publish(
         SessionEvent.Task.Updated,
         { sessionID: childID, change },
         { id: id ? EventRuntime.ID.make(id) : undefined },
+      ).pipe(
+        Effect.provideService(EventRuntime.TaskOwner, owner),
+        Effect.mapError((error) => new ServiceUnavailableError({ message: error.message })),
       )
+    })
+
+    const advisoryStart = (sessionID: SessionSchema.ID) => publish(sessionID, { type: "started" }).pipe(
+      Effect.as(true),
+      Effect.catchTag("SessionOrchestration.ServiceUnavailableError", (error) =>
+        Effect.logWarning("Failed to start Session after durable admission", error).pipe(
+          Effect.annotateLogs({ sessionID }), Effect.as(false),
+        )),
+    )
 
     const current = Effect.fn("SessionOrchestration.current")(function* (childID: SessionSchema.ID) {
       const row = yield* task(childID)
@@ -662,6 +689,7 @@ const layer = Layer.effect(
         return locks.withLock(ids.childID)(
           Effect.gen(function* () {
             const parent = yield* sessions.get(input.parentID)
+            if (parent.scope === "standalone") return yield* new Session.ScopeUnavailableError({ operation: "subagent" })
             const usageAnchor = yield* SessionUsageAttribution.dispatch(db, input.parentID)
             const prepared = input.prepared
             const promptDigest = input.sharedContext === undefined
@@ -699,6 +727,7 @@ const layer = Layer.effect(
               }
             }
             const start = Effect.gen(function* () {
+              yield* requireOwner
               yield* sessions
                 .prompt({
                   id: ids.inputID,
@@ -719,13 +748,15 @@ const layer = Layer.effect(
                   ),
                 )
               yield* publish(ids.childID, { type: "started" }, `evt_task_started_${ids.childID.slice(-24)}`)
-              yield* execution.wake(ids.childID)
+              yield* advisoryWake(ids.childID)
               return yield* current(ids.childID)
             })
             if (existing) {
               if (existing.state === "starting") return yield* start
+              if (existing.state === "running") yield* advisoryWake(ids.childID)
               return (yield* withReviewState(db, [taskFromRow(existing)]))[0]!
             }
+            yield* requireOwner
             yield* sessions
               .create({
                 id: ids.childID,
@@ -784,6 +815,11 @@ const layer = Layer.effect(
               return yield* new ConflictError({
                 message: `Subagent ${input.childID} was stopped after a service restart; only the user can continue it`,
               })
+            const existingInput = yield* SessionPending.lookup(db, input.childID, input.messageID).pipe(
+              Effect.catchDefect((defect) => defect instanceof SessionPending.LifecycleConflict
+                ? Effect.fail(new ConflictError({ message: `Conflicting parent message for ${input.childID}` })) : Effect.die(defect)),
+            )
+            if (!existingInput) yield* requireOwner
             yield* sessions
               .synthetic({
                 id: input.messageID,
@@ -816,13 +852,13 @@ const layer = Layer.effect(
               .get()
               .pipe(Effect.orDie)
             if (!isTerminal(row.state) && row.state !== "supervising") {
-              yield* execution.wake(input.childID)
+              yield* advisoryWake(input.childID)
               const latest = yield* task(input.childID)
               if (!latest || !isTerminal(latest.state)) return yield* current(input.childID)
             }
             if (!(yield* pending)) return (yield* withReviewState(db, [taskFromRow(row)]))[0]!
-            yield* publish(input.childID, { type: "started" })
-            yield* execution.wake(input.childID)
+            if (!(yield* advisoryStart(input.childID))) return yield* current(input.childID)
+            yield* advisoryWake(input.childID)
             return yield* current(input.childID)
           }),
         ),
@@ -835,6 +871,7 @@ const layer = Layer.effect(
               return yield* new QuestionNotFoundError({ childID: input.childID, questionID: input.questionID })
             if (row.state !== "waiting")
               return yield* new ConflictError({ message: `Question ${input.questionID} is not open` })
+            yield* requireOwner
             const dots = input.dots
             const exact = Effect.gen(function* () {
               const latest = yield* task(input.childID)
@@ -914,9 +951,12 @@ const layer = Layer.effect(
                   defect instanceof SessionPending.LifecycleConflict ? Effect.succeed(false as const) : Effect.die(defect)))
                 if (admitted === false || (admitted === undefined) !== (prior === undefined)) return false
                 return admitted === undefined || (admitted.type === "synthetic" && Hash.json({ data: admitted.data, delivery: admitted.delivery }) === Hash.json({ data, delivery: "steer" }))
-              }) })
+              }) }).pipe(
+                Effect.provideService(EventRuntime.TaskOwner, owner),
+                Effect.mapError((error) => new ServiceUnavailableError({ message: error.message })),
+              )
               if (committed.length === 0) return yield* new ConflictError({ message: `Question ${input.questionID} changed before answer delivery` })
-              yield* execution.wake(input.childID)
+              yield* advisoryWake(input.childID)
               return yield* current(input.childID)
             }
             if (dots) {
@@ -926,9 +966,12 @@ const layer = Layer.effect(
                 { definition: SessionEvent.Task.Updated, data: { sessionID: input.childID, change } },
                 { definition: SessionEvent.DotsDecisionSettled, data: { sessionID: input.childID, source: dots.source,
                   target: { kind: "subagent_question", questionID: input.questionID, fingerprint: dots.fingerprint } } },
-              ], { when: exact })
+              ], { when: exact }).pipe(
+                Effect.provideService(EventRuntime.TaskOwner, owner),
+                Effect.mapError((error) => new ServiceUnavailableError({ message: error.message })),
+              )
               if (committed.length === 0) return yield* new ConflictError({ message: "Dots child answer changed before delivery" })
-              yield* execution.wake(input.childID)
+              yield* advisoryWake(input.childID)
               return yield* current(input.childID)
             }
             yield* sessions
@@ -941,7 +984,7 @@ const layer = Layer.effect(
                 ),
               )
             yield* publish(input.childID, change)
-            yield* execution.wake(input.childID)
+            yield* advisoryWake(input.childID)
             return yield* current(input.childID)
           }),
         ),
@@ -981,6 +1024,13 @@ const layer = Layer.effect(
               metadata: input.metadata,
             }
             const row = yield* task(input.sessionID)
+            if (row && input.resume && (row.state === "running" || row.state === "completed")) {
+              const prior = yield* SessionPending.lookup(db, input.sessionID, message.id).pipe(
+                Effect.catchDefect((defect) => defect instanceof SessionPending.LifecycleConflict
+                  ? Effect.fail(new Session.SyntheticConflictError({ sessionID: input.sessionID, inputID: message.id })) : Effect.die(defect)),
+              )
+              if (!prior) yield* requireOwner
+            }
             const admitted = yield* sessions.synthetic({ ...message, resume: false })
             if (!input.resume || (row && row.state !== "running" && row.state !== "supervising" && row.state !== "completed")) return admitted
             const pending = db
@@ -991,14 +1041,14 @@ const layer = Layer.effect(
               .pipe(Effect.orDie)
             if (!(yield* pending) || (yield* sessions.get(input.sessionID)).revert) return admitted
             if (row?.state !== "completed" && row?.state !== "supervising") {
-              yield* execution.wake(input.sessionID)
+              yield* advisoryWake(input.sessionID)
               if (!row) return admitted
               const state = (yield* task(input.sessionID))?.state
               if ((state !== "completed" && state !== "supervising") || !(yield* pending)) return admitted
             }
             if ((yield* SessionReviewFold.fold(db, [input.sessionID])).some(SessionReviewFold.isOpen)) return admitted
-            yield* publish(input.sessionID, { type: "started" })
-            yield* execution.wake(input.sessionID)
+            if (!(yield* advisoryStart(input.sessionID))) return admitted
+            yield* advisoryWake(input.sessionID)
             return admitted
           }),
         ),
@@ -1017,7 +1067,7 @@ const layer = Layer.effect(
               .get()
               .pipe(Effect.orDie)
             if (!pending) return yield* new ConflictError({ message: `No durable pending work for ${input.childID}` })
-            yield* execution.wake(input.childID)
+            yield* execution.wake(input.childID, owner)
             return (yield* withReviewState(db, [taskFromRow(row)]))[0]!
           }),
         ),
@@ -1099,6 +1149,7 @@ const layer = Layer.effect(
             }
             if (sleepOutcome?.type === "answer") {
               const answerText = sleepOutcome.text
+              yield* requireOwner
               yield* sessions
                 .synthetic({
                   id: SessionOrchestrationIdentity.launch(
@@ -1133,7 +1184,7 @@ const layer = Layer.effect(
                       : new ConflictError({ message: `Conflicting autonomous answer for ${question.id}` }),
                   ),
                 )
-              yield* execution.wake(childID)
+              yield* advisoryWake(childID)
               return { question, autoAnswered: true }
             }
             yield* publish(childID, { type: "question_asked", question })
@@ -1223,6 +1274,7 @@ const layer = Layer.effect(
                           ...(fromGoalAnswer && input.confidence !== undefined ? { confidence: input.confidence } : outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
                         },
                       }
+                      yield* requireOwner
                       const committed = yield* events.publishBatch(
                         [
                           {
@@ -1248,9 +1300,12 @@ const layer = Layer.effect(
                             return yield* input.validate(again.view)
                           }),
                         },
+                      ).pipe(
+                        Effect.provideService(EventRuntime.TaskOwner, owner),
+                        Effect.mapError((error) => new ServiceUnavailableError({ message: error.message })),
                       )
                       if (committed.length === 0) return (yield* open) === undefined ? stale : escalated("stale-assessment")
-                      yield* execution.wake(input.childID)
+                      yield* advisoryWake(input.childID)
                       return {
                         ...base,
                         outcome: "allowed",
@@ -1358,7 +1413,7 @@ const layer = Layer.effect(
                 if (isTerminal(latest.state)) {
                   if (!pending || (yield* SessionReviewFold.stoppedRecovery(db, latest.session_id)) !== undefined) return
                   yield* publish(latest.session_id, { type: "started" })
-                  yield* execution.wake(latest.session_id)
+                  yield* advisoryWake(latest.session_id)
                   return
                 }
                 if (!pending) {
@@ -1371,7 +1426,7 @@ const layer = Layer.effect(
                   return
                 }
                 if (latest.state === "starting") yield* publish(latest.session_id, { type: "started" })
-                yield* execution.wake(latest.session_id)
+                yield* advisoryWake(latest.session_id)
               }),
             ),
           { concurrency: 4, discard: true },
@@ -1416,6 +1471,7 @@ const layer = Layer.effect(
               )
               return admitted === undefined
             })
+            if (input.choice === "continue") yield* requireOwner
             const committed = input.choice === "stop"
               ? yield* events.publishBatch([
                   { definition: SessionEvent.Task.Updated, data: { sessionID: input.childID, change: {
@@ -1425,7 +1481,10 @@ const layer = Layer.effect(
                   } } },
                   decided,
                   ...receipt,
-                ], { when: unchanged })
+                ], { when: unchanged }).pipe(
+                  Effect.provideService(EventRuntime.TaskOwner, owner),
+                  Effect.mapError((error) => new ServiceUnavailableError({ message: error.message })),
+                )
               : yield* events.publishBatch([
                   { definition: SessionEvent.InputAdmitted, data: {
                     sessionID: input.childID,
@@ -1446,10 +1505,13 @@ const layer = Layer.effect(
                     : { type: "question_answered" as const, answer: { questionID, text: "Continue", ...(dots === undefined ? {} : { source: dots.source }) } } } },
                   decided,
                   ...receipt,
-                ], { when: unchanged })
+                ], { when: unchanged }).pipe(
+                  Effect.provideService(EventRuntime.TaskOwner, owner),
+                  Effect.mapError((error) => new ServiceUnavailableError({ message: error.message })),
+                )
             if (committed.length === 0)
               return yield* new ConflictError({ message: `Restart recovery ${input.itemID} changed before its decision` })
-            if (input.choice === "continue") yield* execution.wake(input.childID)
+            if (input.choice === "continue") yield* advisoryWake(input.childID)
             return yield* current(input.childID)
           }),
         ),

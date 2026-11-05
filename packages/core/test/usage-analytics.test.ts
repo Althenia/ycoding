@@ -8,6 +8,7 @@ import { EventRuntime } from "../src/event"
 import { Session } from "../src/session"
 import { SessionEvent } from "../src/session/event"
 import { SessionExecution } from "../src/session/execution"
+import { SessionProjector } from "../src/session/projector"
 import { UsageAnalytics } from "../src/usage-analytics"
 import { UsageAnalyticsRequestTable } from "../src/usage-analytics.sql"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
@@ -18,6 +19,26 @@ import { AbsolutePath } from "@ycoding-ai/schema/schema"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionUsageRead } from "../src/session/usage-read"
 import { tmpdir } from "node:os"
+
+test("usage projection does not depend on retention or well-known discovery", () => {
+  const compiler = LayerNode.compiler()
+  const names = compiler.closure(compiler.members(UsageAnalytics.projectorNode)).map((node) => node.name)
+  expect(names).not.toContain("@ycoding/RetentionSettings")
+  expect(names).not.toContain("@ycoding/WellKnown")
+})
+
+test("bound Session graph retains cleanup while the shared projector excludes host discovery", () => {
+  const compiler = LayerNode.compiler()
+  const projector = compiler.closure(compiler.members(SessionProjector.node)).map((node) => node.name)
+  const bound = compiler.closure(compiler.members(Session.node)).map((node) => node.name)
+  expect(projector.filter((name) => name === UsageAnalytics.projectorNode.name)).toHaveLength(1)
+  expect(projector).not.toContain(UsageAnalytics.node.name)
+  expect(projector).not.toContain("@ycoding/RetentionSettings")
+  expect(projector).not.toContain("@ycoding/WellKnown")
+  expect(projector).not.toContain("@ycoding/AppProcess")
+  expect(bound.filter((name) => name === UsageAnalytics.projectorNode.name)).toHaveLength(1)
+  expect(bound.filter((name) => name === UsageAnalytics.node.name)).toHaveLength(1)
+})
 
 const runtime = AppNodeBuilder.build(
   LayerNode.group([Database.node, EventRuntime.node, Session.node, UsageAnalytics.node]),

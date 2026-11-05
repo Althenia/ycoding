@@ -74,6 +74,7 @@ const models = SessionRunnerModel.layerWith(() => Effect.succeed(SessionRunnerMo
 const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
+    prepareTask: () => Effect.void,
     active: Effect.succeed(new Set()),
     resume: () => Effect.void,
     wake: () => Effect.void,

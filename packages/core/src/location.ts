@@ -15,6 +15,7 @@ export interface Interface extends Info {
 export class Service extends Context.Service<Service, Interface>()("@ycoding/Location") {}
 
 export const node = LayerNode.unbound(Service, tags.values.location)
+export const standaloneProjectID = Project.ID.make("proj_standalone_sessions")
 
 const layer = (ref: Ref) =>
   Layer.effect(
@@ -36,4 +37,15 @@ export const boundNode = (ref: Ref) =>
     service: Service,
     layer: layer(ref),
     deps: [Project.node],
+  })
+
+export const standaloneNode = (ref: Ref) =>
+  makeLocationNode({
+    service: Service,
+    layer: Layer.succeed(Service, Service.of({
+      directory: ref.directory,
+      workspaceID: ref.workspaceID,
+      project: { id: standaloneProjectID, directory: ref.directory },
+    })),
+    deps: [],
   })

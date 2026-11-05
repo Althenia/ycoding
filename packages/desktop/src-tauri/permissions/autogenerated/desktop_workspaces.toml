@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-workspaces"
+description = "Enables the desktop_workspaces command without any pre-configured scope."
+commands.allow = ["desktop_workspaces"]
+
+[[permission]]
+identifier = "deny-desktop-workspaces"
+description = "Denies the desktop_workspaces command without any pre-configured scope."
+commands.deny = ["desktop_workspaces"]

@@ -60,6 +60,7 @@ import { schemaErrorLayer } from "./middleware/schema-error"
 import { PtyEnvironment } from "./pty-environment"
 import { catalogLayer, layer } from "./location"
 import { formLocationLayer } from "./middleware/form-location"
+import { permissionLocationLayer } from "./middleware/permission-location"
 import { sessionLocationLayer } from "./middleware/session-location"
 import { ServerInfo } from "./server-info"
 import type { ServerOptions } from "./options"
@@ -204,6 +205,7 @@ function makeRoutes<AuthError, AuthServices>(
       return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
         Layer.provide(Layer.merge(handlers, DecisionHandler).pipe(Layer.provide(services), Layer.provide(processIdentityLayer(sourceEpoch)), Layer.provide(Layer.succeed(RemoteConnection.Service, remote)))),
         Layer.provide(formLocationLayer),
+        Layer.provide(permissionLocationLayer),
         Layer.provide(sessionLocationLayer),
         Layer.provide(layer),
         Layer.provide(catalogLayer),

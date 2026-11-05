@@ -80,6 +80,11 @@ const paths = Effect.gen(function* () {
   }
 })
 
+export const discoveryOptions = Effect.fnUntraced(function* () {
+  const { file } = yield* paths
+  return { file, version: InstallationVersion }
+})
+
 export const options = Effect.fnUntraced(function* () {
   const { file, legacyFile } = yield* paths
   yield* migrateRegistration(legacyFile, file)

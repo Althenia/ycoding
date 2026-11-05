@@ -5,6 +5,8 @@ import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { Context, Effect, Layer, Stream } from "effect"
 import { Agent } from "../agent"
 import { Config } from "../config"
+import { StandaloneConfig } from "../config/standalone"
+import { StandaloneAgent } from "../plugin/standalone-agent"
 import { Database } from "../database/database"
 import { EventRuntime } from "../event"
 import { makeLocationNode } from "../effect/app-node"
@@ -12,12 +14,14 @@ import { llmClient } from "../effect/app-node-platform"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionEvent } from "./event"
 import { SessionHelperPolicy } from "./helper-policy"
+import { StandaloneHelperPolicy } from "./standalone-helper-policy"
 import { SessionHistory } from "./history"
 import { SessionModelHeaders } from "./model-headers"
 import { SessionProviderRequest } from "./provider-request"
 import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { SessionUsageAttribution } from "./usage-attribution"
 import { SessionRunnerCache } from "./runner/cache"
+import type { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
 import { SessionUsage } from "./usage"
 
@@ -25,15 +29,21 @@ const MAX_LENGTH = 100
 const REFUSAL =
   /^(?:["'“‘`]\s*)?(?:unfortunately[,:]?\s+)?(?:(?:i|we)\s+(?:cannot|can['’]t|won['’]t|will not|(?:am|are)\s+(?:unable|not able)|(?:(?:must|have to)\s+)?(?:decline|refuse))\b|(?:i['’]m|we['’]re|i am|we are)\s+(?:sorry|unable|not able)\b|sorry\b|as an (?:ai|assistant)\b)/iu
 
-type Dependencies = {
+type Dependencies<E> = {
   readonly headers?: SessionModelHeaders.Options
   readonly events: EventRuntime.Interface
   readonly llm: {
     readonly stream: (request: LLMRequest) => Stream.Stream<LLMEvent, LLMError>
   }
   readonly agents: Agent.Interface
-  readonly config: Config.Interface
-  readonly helpers: SessionHelperPolicy.Interface
+  readonly entries: () => Effect.Effect<ReadonlyArray<Config.Entry>, E>
+  readonly helpers: {
+    readonly settings: () => Effect.Effect<SessionHelperPolicy.Settings, E>
+    readonly localTitle: SessionHelperPolicy.Interface["localTitle"]
+    readonly resolveModel: (session: SessionSchema.Info, role: SessionHelperPolicy.Role, agent?: Agent.Info) => Effect.Effect<SessionRunnerModel.Resolved | undefined, E>
+  }
+  readonly check?: Effect.Effect<void, E>
+  readonly rename: (sessionID: SessionSchema.ID, title: string) => Effect.Effect<void, E>
   readonly requests: SessionProviderRequest.Interface
 }
 
@@ -48,7 +58,7 @@ const UNTITLED = /^New session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 
 const truncate = (value: string) => (value.length <= MAX_LENGTH ? value : `${value.slice(0, MAX_LENGTH - 3)}...`)
 
-const make = (dependencies: Dependencies) => {
+const make = <E>(dependencies: Dependencies<E>) => {
   const generateForFirstPrompt = Effect.fn("SessionTitle.generateForFirstPrompt")(function* (
     db: Database.Interface["db"],
     session: SessionSchema.Info,
@@ -62,30 +72,21 @@ const make = (dependencies: Dependencies) => {
       anchor,
       Effect.gen(function* () {
         const mode =
-          Config.latest(yield* dependencies.config.entries(), "efficiency")?.title ??
-          dependencies.helpers.settings.titleMode
+          Config.latest(yield* dependencies.entries(), "efficiency")?.title ??
+          (yield* dependencies.helpers.settings()).titleMode
         if (mode === "off") return
         if (mode === "local") {
-          yield* dependencies.events.publish(SessionEvent.Renamed, {
-            sessionID: session.id,
-            title: dependencies.helpers.localTitle(firstUser.text),
-          })
+          yield* dependencies.rename(session.id, dependencies.helpers.localTitle(firstUser.text))
           return
         }
         const agent = yield* dependencies.agents.get(Agent.ID.make("title"))
         if (!agent) {
-          yield* dependencies.events.publish(SessionEvent.Renamed, {
-            sessionID: session.id,
-            title: dependencies.helpers.localTitle(firstUser.text),
-          })
+          yield* dependencies.rename(session.id, dependencies.helpers.localTitle(firstUser.text))
           return
         }
         const resolved = yield* dependencies.helpers.resolveModel(session, "title", agent)
         if (!resolved) {
-          yield* dependencies.events.publish(SessionEvent.Renamed, {
-            sessionID: session.id,
-            title: dependencies.helpers.localTitle(firstUser.text),
-          })
+          yield* dependencies.rename(session.id, dependencies.helpers.localTitle(firstUser.text))
           return
         }
         const baseRequest = LLM.request({
@@ -115,7 +116,7 @@ const make = (dependencies: Dependencies) => {
           tools: baseRequest.tools,
         }
         const efficiency = SessionRunnerCache.efficiencySettings(
-          Config.latest(yield* dependencies.config.entries(), "efficiency"),
+          Config.latest(yield* dependencies.entries(), "efficiency"),
         )
         const cache = SessionRunnerCache.providerOptions({
           ...namespaceInput,
@@ -176,6 +177,7 @@ const make = (dependencies: Dependencies) => {
             outcome,
           })
         })
+        if (dependencies.check) yield* dependencies.check
         const streamed = yield* dependencies.llm.stream(request).pipe(
           Stream.tap(tracker.observeEvent),
           Stream.onExit(() => tracker.settle()),
@@ -221,10 +223,7 @@ const make = (dependencies: Dependencies) => {
         yield* recordUsage
         yield* completeRequest(!streamed || providerFailed ? "failed" : "completed")
         if (!streamed || failed) {
-          yield* dependencies.events.publish(SessionEvent.Renamed, {
-            sessionID: session.id,
-            title: dependencies.helpers.localTitle(firstUser.text),
-          })
+          yield* dependencies.rename(session.id, dependencies.helpers.localTitle(firstUser.text))
           return
         }
         const title = [...blocks.values()]
@@ -235,16 +234,10 @@ const make = (dependencies: Dependencies) => {
           .map((line) => line.trim())
           .find((line) => line.length > 0)
         if (!title || REFUSAL.test(title)) {
-          yield* dependencies.events.publish(SessionEvent.Renamed, {
-            sessionID: session.id,
-            title: dependencies.helpers.localTitle(firstUser.text),
-          })
+          yield* dependencies.rename(session.id, dependencies.helpers.localTitle(firstUser.text))
           return
         }
-        yield* dependencies.events.publish(SessionEvent.Renamed, {
-          sessionID: session.id,
-          title: truncate(title),
-        })
+        yield* dependencies.rename(session.id, truncate(title))
       }),
     )
   })
@@ -262,7 +255,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
       const helpers = yield* SessionHelperPolicy.Service
       const requests = yield* SessionProviderRequest.Service
       const database = yield* Database.Service
-      const title = make({ events, llm, agents, config, helpers, requests, headers: options })
+      const title = make({ events, llm, agents, entries: () => config.entries(), helpers: { ...helpers, settings: () => Effect.succeed(helpers.settings) }, requests, headers: options, rename: (sessionID, title) => events.publish(SessionEvent.Renamed, { sessionID, title }).pipe(Effect.asVoid) })
       return Service.of({
         generateForFirstPrompt: (session) => title.generateForFirstPrompt(database.db, session),
       })
@@ -286,3 +279,33 @@ export function configured(options?: SessionModelHeaders.Options) {
 }
 
 export const node = configured()
+
+export class StandaloneService extends Context.Service<StandaloneService, {
+  readonly generateForFirstPrompt: (session: SessionSchema.Info) => Effect.Effect<void, StandaloneConfig.InvalidError>
+}>()("@ycoding/SessionTitle.Standalone") {}
+
+export const standaloneNode = makeLocationNode({
+  service: StandaloneService,
+  layer: Layer.effect(StandaloneService, Effect.gen(function* () {
+    const events = yield* EventRuntime.Service
+    const llm = yield* LLMClient.Service
+    const agents = yield* Agent.Service
+    const agentState = yield* StandaloneAgent.Service
+    const config = yield* StandaloneConfig.Service
+    const helpers = yield* StandaloneHelperPolicy.Service
+    const requests = yield* SessionProviderRequest.Service
+    const database = yield* Database.Service
+    return StandaloneService.of({ generateForFirstPrompt: (session) => Effect.gen(function* () {
+      const current = yield* config.snapshot()
+      yield* agentState.refresh()
+      const title = make({
+        events, llm, agents, helpers: { ...helpers, localTitle: SessionHelperPolicy.localTitle }, requests,
+        entries: () => config.snapshot().pipe(Effect.map((snapshot) => snapshot.entries)),
+        check: config.assert(current.generation),
+        rename: (sessionID, title) => config.withCurrent(current.generation, () => events.publish(SessionEvent.Renamed, { sessionID, title }).pipe(Effect.asVoid)),
+      })
+      return yield* title.generateForFirstPrompt(database.db, session)
+    }) })
+  })),
+  deps: [EventRuntime.node, llmClient, Agent.node, StandaloneAgent.node, StandaloneConfig.node, StandaloneHelperPolicy.node, SessionProviderRequest.node, Database.node],
+})

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-messages"
+description = "Enables the desktop_messages command without any pre-configured scope."
+commands.allow = ["desktop_messages"]
+
+[[permission]]
+identifier = "deny-desktop-messages"
+description = "Denies the desktop_messages command without any pre-configured scope."
+commands.deny = ["desktop_messages"]

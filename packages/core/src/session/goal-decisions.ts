@@ -23,6 +23,7 @@ import { SessionDecisionContext } from "./decision-context"
 import { SessionAutonomy } from "./autonomy"
 import { SessionEvent } from "./event"
 import { SessionExecution } from "./execution"
+import { ScopeUnavailableError } from "./error"
 import { SessionGuardrail } from "./guardrail"
 import { SessionMessage } from "./message"
 import { SessionOrchestration } from "./orchestration"
@@ -185,7 +186,7 @@ interface Candidate extends Reference {
   readonly rawForm?: Form.Info
   readonly rawQuestion?: Question.Request
   readonly rawChild?: ChildTask
-  readonly reconsider: (call: ReconsiderCall, goalAnswer?: GoalAnswer) => Effect.Effect<Settlement>
+  readonly reconsider: (call: ReconsiderCall, goalAnswer?: GoalAnswer) => Effect.Effect<Settlement, ScopeUnavailableError | SessionOrchestration.ServiceUnavailableError>
 }
 
 type ChildTask = Effect.Success<ReturnType<SessionOrchestration.Interface["questionSnapshots"]>>[number]["task"]
@@ -830,7 +831,11 @@ export function make(options: Options): Interface {
   const rounds = (owner: SessionSchema.ID, remaining: number): Effect.Effect<void> =>
     remaining === 0
       ? Effect.void
-      : Effect.scoped(pass(owner)).pipe(Effect.flatMap((again) => (again ? rounds(owner, remaining - 1) : Effect.void)))
+      : Effect.scoped(pass(owner)).pipe(
+          Effect.catchTag("Session.ScopeUnavailableError", (error) => Effect.logWarning("Goal decision pass could not wake Session", { owner, error }).pipe(Effect.as(false))),
+          Effect.catchTag("SessionOrchestration.ServiceUnavailableError", (error) => Effect.logWarning("Goal decision pass could not access managed task ownership", { owner, error }).pipe(Effect.as(false))),
+          Effect.flatMap((again) => (again ? rounds(owner, remaining - 1) : Effect.void)),
+        )
 
   const inspectLocked = (owner: SessionSchema.ID) => rounds(owner, maxRounds)
 
@@ -1004,7 +1009,7 @@ export function make(options: Options): Interface {
   })
 
   const guarded = (message: string) =>
-    Effect.catchCause((cause: Cause.Cause<never>) =>
+    Effect.catchCause((cause: Cause.Cause<unknown>) =>
       Cause.hasInterruptsOnly(cause) ? Effect.interrupt : Effect.logWarning(message, { cause: Cause.pretty(cause) }),
     )
 

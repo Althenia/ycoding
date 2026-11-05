@@ -538,19 +538,22 @@ export const selection = Effect.fn("SessionRunnerModel.selection")(function* (
   }
 })
 
-/** Resolves models from the catalog belonging to the current Location runtime. */
-const layer = Layer.effect(
-  Service,
-  Effect.gen(function* () {
+export const make = (
+  integrations: { readonly connection: Pick<Integration.Interface["connection"], "snapshot"> & Partial<Pick<Integration.Interface["connection"], "active">> },
+  dependencies: Dependencies,
+  standalone: boolean,
+) => Effect.gen(function* () {
     const catalog = yield* Catalog.Service
-    const integrations = yield* Integration.Service
     const credentials = yield* Credential.Service
-    const npm = yield* Npm.Service
-    const aisdk = yield* AISDK.Service
     const db = (yield* Database.Service).db
     return Service.of({
       resolve: Effect.fn("SessionRunnerModel.resolve")(function* (session, options) {
-        const selectedConfiguration = yield* selection(session, catalog.model)
+        if (standalone) {
+          if (!session.model) return yield* new ModelNotSelectedError({ sessionID: session.id })
+          if (session.model.profile === undefined)
+            return yield* new ProfileUnavailableError({ providerID: session.model.providerID, profile: "" })
+        }
+        const selectedConfiguration = yield* selection(session, standalone ? { ...catalog.model, available: catalog.model.all } : catalog.model)
         if (!selectedConfiguration) return yield* new ModelNotSelectedError({ sessionID: session.id })
         const selected = selectedConfiguration.model
         const effectiveSession = { ...session, model: selectedConfiguration.ref }
@@ -568,6 +571,11 @@ const layer = Layer.effect(
               .pipe(Effect.orDie))?.binding ??
             undefined)
         const profile = effectiveSession.model?.profile
+        if (standalone && profile === undefined)
+          return yield* new ProfileUnavailableError({ providerID: selected.providerID, profile: "" })
+        if (standalone && profile !== undefined && storedBinding &&
+          (storedBinding.providerID !== selected.providerID || storedBinding.profile !== profile))
+          return yield* new ProfileUnavailableError({ providerID: selected.providerID, profile })
         const saved =
           storedBinding?.providerID === selected.providerID && storedBinding.profile === profile
             ? storedBinding
@@ -585,18 +593,21 @@ const layer = Layer.effect(
                 saved.accountGeneration !== matching[0]?.accountGeneration)))
         )
           return yield* new ProfileUnavailableError({ providerID: selected.providerID, profile })
+        const active = integrations.connection.active
+        if (profile === undefined && !active)
+          return yield* new ProfileUnavailableError({ providerID: selected.providerID, profile: "" })
         const connection =
-          profile === undefined
-            ? yield* integrations.connection.active(integrationID)
-            : IntegrationConnection.CredentialInfo.make({
+          profile !== undefined
+            ? IntegrationConnection.CredentialInfo.make({
                 type: "credential",
                 id: matching[0]!.id,
                 label: profile,
                 active: matching[0]!.active,
               })
+            : active ? yield* active(integrationID) : undefined
         const snapshot = connection
           ? yield* integrations.connection
-              .snapshot(connection, options?.refresh === false ? { refresh: false } : undefined)
+              .snapshot(connection, standalone || options?.refresh === false ? { refresh: false } : undefined)
               .pipe(
                 Effect.catchTag("Integration.Authorization", (error) =>
                   Effect.gen(function* () {
@@ -622,17 +633,21 @@ const layer = Layer.effect(
           return yield* new ProfileUnavailableError({ providerID: selected.providerID, profile })
         if (connection?.type === "credential" && !credentialInfo)
           return yield* new Integration.AuthorizationError({ cause: new Error("Selected credential is unavailable") })
+        if (standalone && (!credential || !Provider.usableStandaloneSecret(credential)))
+          return yield* new ProfileUnavailableError({ providerID: selected.providerID, profile: profile ?? "" })
         const contextual = yield* catalog.model.forConnection(selected, snapshot)
         if (!contextual)
           return yield* new ModelUnavailableError({ providerID: selected.providerID, modelID: selected.id })
+        if (standalone && (
+          !credential ||
+          !Provider.standaloneReady(contextual.package, credential, integrationID)
+        ))
+          return yield* unsupported(contextual)
         const model = yield* resolve(
           effectiveSession,
           contextual,
           credential,
-          {
-            loadPackage: (specifier) => Provider.loadPackage(specifier, npm),
-            loadAISDK: (model, snapshot) => aisdk.model(model, snapshot),
-          },
+          dependencies,
           connection,
           snapshot,
         ).pipe(
@@ -695,8 +710,17 @@ const layer = Layer.effect(
         }
       }),
     })
-  }),
-)
+  })
+
+const layer = Layer.effect(Service, Effect.gen(function* () {
+  const integrations = yield* Integration.Service
+  const npm = yield* Npm.Service
+  const aisdk = yield* AISDK.Service
+  return yield* make(integrations, {
+    loadPackage: (specifier) => Provider.loadPackage(specifier, npm),
+    loadAISDK: (model, snapshot) => aisdk.model(model, snapshot),
+  }, false)
+}))
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex")
 

@@ -140,7 +140,8 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
       })),
     ),
   frames: (prepared, request, runtime) => {
-    const execute = runtime.http.execute(prepared.request).pipe(
+    const execute = (runtime.beforeDispatch ?? Effect.void).pipe(
+      Effect.flatMap(() => runtime.http.execute(prepared.request)),
       Effect.flatMap((response) =>
         input.onResponseHeaders === undefined
           ? Effect.succeed(response)

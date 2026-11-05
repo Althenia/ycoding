@@ -69,6 +69,7 @@ const graph = (database?: ReturnType<typeof Database.layer>) =>
         Layer.succeed(
           SessionExecution.Service,
           SessionExecution.Service.of({
+            prepareTask: () => Effect.void,
             active: Effect.succeed(new Set()),
             resume: (sessionID) => Effect.sync(() => void resumed.push(sessionID)),
             wake: (sessionID) => Effect.sync(() => void woken.push(sessionID)),
