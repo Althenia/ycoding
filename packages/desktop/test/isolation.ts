@@ -197,7 +197,12 @@ async function probe(run: string, home: string, cwd: string, backend: Backend) {
     return value
   }
   const verify = (name: string, passed: boolean, result: { readonly code: number; readonly stderr: string }) => {
-    if (!passed) throw new Error(`Backend confinement is not in force; no native backend was started. ${name}: exit ${result.code}; ${result.stderr.trim().slice(0, 300)}`)
+    if (!passed) {
+      const stderr = result.stderr.trim()
+      const tail = stderr.slice(-1200)
+      const lines = stderr.split("\n").filter((line) => line.startsWith("error:") || line.includes("Error")).map((line) => line.slice(0, 300)).filter((line) => !tail.includes(line)).slice(0, 8)
+      throw new Error(`Backend confinement is not in force; no native backend was started. ${name}: exit ${result.code}; ${[...lines, tail].join("\n")}`)
+    }
   }
   const refusedBy = (result: { readonly code: number; readonly stderr: string }) => result.code !== 0 && result.stderr.includes(denied)
   try {
