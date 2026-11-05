@@ -209,8 +209,12 @@ async function probe(run: string, home: string, cwd: string, backend: Backend) {
     const udp = await open(datagrams())
     const socket = await open(listener({ path: path.join(root, "s") }))
     const env = await syntheticEnv(root, "http://127.0.0.1:9/v1")
+    const observer = path.join(run, "unix-connect")
+    const built = await execute(["/usr/bin/cc", "-O2", "-Wall", "-Werror", "-o", observer, fileURLToPath(new URL("./unix-connect.c", import.meta.url))], env)
+    if (built.code !== 0) throw new Error(`The Unix-socket observer did not compile: exit ${built.code}; ${built.stderr.trim().slice(0, 300)}`)
     const confined = (command: Command): Command => [sandbox, "-p", profile({ owned: root, cwd, backend, connect: [allowed.port] }), ...command]
     const tools = (command: Command): Command => [sandbox, "-p", profile({ owned: root, cwd, backend, connect: [allowed.port], tools: probeTools }), ...command]
+    const observed = (command: Command): Command => [sandbox, "-p", profile({ owned: root, cwd, backend, connect: [allowed.port], tools: [observer] }), ...command]
     const own = await execute(tools(["/bin/cat", readable]), env)
     verify("an owned file is readable", own.code === 0 && own.stdout === "inside\n", own)
     const sibling = await execute(tools(["/bin/cat", outside]), env)
@@ -243,7 +247,7 @@ async function probe(run: string, home: string, cwd: string, backend: Backend) {
     const datagram = await execute(tools(["/bin/bash", "-c", 'printf x | /usr/bin/nc -v -n -u -w 1 127.0.0.1 "$1"', "probe", String(udp.port)]), env)
     await Bun.sleep(200)
     verify("UDP to another loopback port is refused", refusedBy(datagram) && udp.received() === 0, datagram)
-    const unix = await execute(tools(["/usr/bin/nc", "-v", "-U", path.join(root, "s")]), env)
+    const unix = await execute(observed([observer, path.join(root, "s")]), env)
     verify("a Unix socket inside the owned root is refused", refusedBy(unix) && socket.connections() === 0, unix)
     const remote = await execute(tools(["/usr/bin/nc", "-v", "-n", "-z", "-G", "2", "192.0.2.1", "9"]), env)
     verify("a remote address is refused", refusedBy(remote), remote)
