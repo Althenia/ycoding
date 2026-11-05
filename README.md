@@ -78,6 +78,10 @@ ycoding remote connect
 
 See [remote workspace](https://ycoding.althenia.app/docs/usage/remote) for sign-in options, recovery, and connection states.
 
+### macOS desktop app
+
+Build a native window from source with `bun run build:desktop -- --outdir=<fresh-directory>`. At startup, choose **Start my own backend** (a private bundled backend that stops when the window closes) or **Connect to a shared backend** (an explicit local URL or the running managed service, left running on close). It uses the same native client and events as the terminal, not the relay. Release archives do not include it. See [packages/desktop](./packages/desktop/README.md).
+
 ### Native Dots access
 
 Configure `"dots": { "enabled": true, "profile": "<OpenAI OAuth profile>" }` in trusted global configuration. The native connection is pinned to that profile's credential, account, and account generation. Open **Dots connection** from the TUI or web command palette, including without a selected Session. Its single Connect/Disconnect control changes a separate backend-wide preference that defaults Off. On grants native access to every existing and future eligible Session on that backend. Session creation does not enable it.

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-pin"
+description = "Enables the desktop_pin command without any pre-configured scope."
+commands.allow = ["desktop_pin"]
+
+[[permission]]
+identifier = "deny-desktop-pin"
+description = "Denies the desktop_pin command without any pre-configured scope."
+commands.deny = ["desktop_pin"]

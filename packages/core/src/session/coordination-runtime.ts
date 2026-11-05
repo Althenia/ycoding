@@ -134,11 +134,11 @@ export interface Interface {
   readonly get: (groupID: Coordination.GroupID) => Effect.Effect<Coordination.Info, CoordinationService.NotFoundError>
   readonly summaries: () => Effect.Effect<ReadonlyArray<Coordination.GroupSummary>>
   readonly roster: (caller: SessionSchema.ID) => Effect.Effect<Roster, RefusedError>
-  readonly send: (caller: SessionSchema.ID, input: SendInput) => Effect.Effect<SendResult, RefusedError>
+  readonly send: (caller: SessionSchema.ID, input: SendInput) => Effect.Effect<SendResult, RefusedError | Session.ScopeUnavailableError>
   readonly answer: (caller: SessionSchema.ID, input: AnswerInput) => Effect.Effect<CoordinationDecisions.Result, RefusedError>
   readonly interrupt: (caller: SessionSchema.ID, input: { readonly sessionID: SessionSchema.ID }) => Effect.Effect<{ readonly sessionID: SessionSchema.ID; readonly state: Coordination.MemberState }, RefusedError>
   readonly inspect: (caller: SessionSchema.ID, input: { readonly sessionID: SessionSchema.ID; readonly requestID: string }) => Effect.Effect<RequestDetail, RefusedError>
-  readonly escalate: (caller: SessionSchema.ID, input: EscalateInput) => Effect.Effect<EscalateResult, RefusedError>
+  readonly escalate: (caller: SessionSchema.ID, input: EscalateInput) => Effect.Effect<EscalateResult, RefusedError | Session.ScopeUnavailableError>
   readonly assign: (caller: SessionSchema.ID, input: AssignInput) => Effect.Effect<OwnershipResult, RefusedError>
   readonly release: (caller: SessionSchema.ID, input: ReleaseInput) => Effect.Effect<OwnershipResult, RefusedError>
 }
@@ -186,7 +186,7 @@ export const authorizeMember = Effect.fn("CoordinationRuntime.authorizeMember")(
 
 const clip = (text: string) => (text.length > maxExcerpt ? `${text.slice(0, maxExcerpt - 1)}…` : text)
 
-export function make(options: Options): Interface & { readonly handle: (event: HandledEvent) => Effect.Effect<void>; readonly recover: () => Effect.Effect<void> } {
+export function make(options: Options): Interface & { readonly handle: (event: HandledEvent) => Effect.Effect<void>; readonly recover: () => Effect.Effect<void, Session.ScopeUnavailableError> } {
   const { db, events, coordination, decisions, execution, sessions, jobs } = options
   const senders = new Map<SessionSchema.ID, SessionSchema.ID>()
   const sendLock = KeyedMutex.makeUnsafe<Coordination.GroupID>()
@@ -749,7 +749,7 @@ const layer: Layer.Layer<
     const jobs = yield* Job.Service
     const runtime = make({ db: database.db, events, coordination, decisions, execution, sessions, validateModel, jobs })
     yield* events.subscribe(handledEvents).pipe(Stream.runForEach(runtime.handle), Effect.forkScoped({ startImmediately: true }))
-    yield* runtime.recover()
+    yield* runtime.recover().pipe(Effect.catchTag("Session.ScopeUnavailableError", (error) => Effect.logError("Coordination recovery could not wake Session", { error })))
     return Service.of(runtime)
   }),
 )

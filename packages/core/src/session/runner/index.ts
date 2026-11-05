@@ -3,7 +3,7 @@ export * as SessionRunner from "./index"
 import type { LLMError } from "@ycoding-ai/ai"
 import { Context, Effect } from "effect"
 import { SessionSchema } from "../schema"
-import type { AgentNotFoundError, MessageDecodeError, StepFailedError, UserInterruptedError } from "../error"
+import type { AgentNotFoundError, MessageDecodeError, ScopeUnavailableError, StepFailedError, UserInterruptedError } from "../error"
 import { SessionRunnerModel } from "./model"
 import type { Instructions } from "../../instructions/index"
 import type { ToolOutputStore } from "../../tool-output-store"
@@ -17,6 +17,7 @@ export type RunError =
   | UserInterruptedError
   | Instructions.InitializationBlocked
   | ToolOutputStore.Error
+  | ScopeUnavailableError
 
 /** Runs one local continuation from already-recorded Session history. */
 export interface Interface {

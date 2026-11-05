@@ -18,6 +18,7 @@ import { and, asc, eq, lte } from "drizzle-orm"
 import { Cause, Clock, Context, Data, Duration, Effect, Layer, Option, Schema, Stream } from "effect"
 import { Agent } from "../agent"
 import { Config } from "../config"
+import { StandaloneConfig } from "../config/standalone"
 import { ConfigCompaction } from "../config/compaction"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
@@ -102,23 +103,25 @@ export class ManifestError extends Data.TaggedError("SessionCompaction.ManifestE
   readonly code: FailureCode
 }> {}
 
-type Dependencies = {
+export type Dependencies = {
   readonly db: Database.Interface["db"]
   readonly headers?: SessionModelHeaders.Options
   readonly llm: {
     readonly stream: (request: LLMRequest) => Stream.Stream<LLMEvent, LLMError>
   }
   readonly agents: Agent.Interface
-  readonly helpers: SessionHelperPolicy.Interface
+  readonly helpers: {
+    readonly resolveModel: (session: SessionSchema.Info, role: SessionHelperPolicy.Role, agent?: Agent.Info) => Effect.Effect<SessionRunnerModel.Resolved | undefined, SessionRunnerModel.Error | StandaloneConfig.InvalidError>
+  }
   readonly requests: SessionProviderRequest.Interface
   readonly config: ConfigCompaction.Resolved
-  readonly configService: Config.Interface
+  readonly entries: () => Effect.Effect<ReadonlyArray<Config.Entry>, StandaloneConfig.InvalidError>
   readonly store: SessionStore.Interface
   readonly liveState: SessionLiveState.Interface
   readonly events: EventRuntime.Interface
 }
 
-const make = (dependencies: Dependencies): Interface => {
+export const make = (dependencies: Dependencies): Interface => {
   const attempt = Effect.fn("SessionCompaction.attempt")(function* (input: {
     readonly session: SessionSchema.Info
     readonly resolved: SessionRunnerModel.Resolved
@@ -153,7 +156,7 @@ const make = (dependencies: Dependencies): Interface => {
       tools: baseRequest.tools,
     }
     const efficiency = SessionRunnerCache.efficiencySettings(
-      Config.latest(yield* dependencies.configService.entries(), "efficiency"),
+      Config.latest(yield* dependencies.entries(), "efficiency"),
     )
     const cache = SessionRunnerCache.providerOptions({
       ...namespaceInput,
@@ -283,7 +286,7 @@ const make = (dependencies: Dependencies): Interface => {
       return Option.isSome(decoded) ? [{ seq: row.seq, message: decoded.value }] : []
     })
     if (remoteRoute && owner && owner.contextRevision === job.baseContextRevision) {
-      const remote = yield* remoteCompaction(dependencies, session, job, owner).pipe(Effect.option)
+      const remote = yield* optionalProviderResult(remoteCompaction(dependencies, session, job, owner))
       if (Option.isSome(remote)) {
         let retainedTokens = 0
         const retained = decodedMessages
@@ -468,7 +471,9 @@ const make = (dependencies: Dependencies): Interface => {
     return yield* new ManifestError({ code: "invalid_manifest" })
   })
 
-  return Service.of({ manifest: (job, prepareOwner) => SessionUsageAttribution.withAnchor(job.sessionID, job.usageAnchor, manifest(job, prepareOwner)) })
+  return Service.of({ manifest: (job, prepareOwner) => SessionUsageAttribution.withAnchor(job.sessionID, job.usageAnchor, manifest(job, prepareOwner)).pipe(
+    Effect.mapError((error) => error instanceof ManifestError ? error : new ManifestError({ code: "migration_failed" })),
+  ) })
 }
 
 const remoteCompaction = Effect.fn("SessionCompaction.remote")(function* (
@@ -536,8 +541,9 @@ const remoteCompaction = Effect.fn("SessionCompaction.remote")(function* (
           }
         }),
       ),
-      Effect.catchTag("LLM.Error", () =>
-        Effect.sync(() => {
+      Effect.catchTag("LLM.Error", (error) => error.module === "standalone.config"
+        ? Effect.fail(new StandaloneConfig.InvalidError({ reason: "stale" }))
+        : Effect.sync(() => {
           failed = true
         }),
       ),
@@ -581,12 +587,17 @@ type SummarySource = {
   readonly capsule: string
 }
 
+const optionalProviderResult = <A, E>(effect: Effect.Effect<A, E>) => effect.pipe(Effect.matchEffect({
+  onFailure: (error) => error instanceof StandaloneConfig.InvalidError ? Effect.fail(error) : Effect.succeed(Option.none<A>()),
+  onSuccess: (value) => Effect.succeed(Option.some(value)),
+}))
+
 const generateCheckpoint = Effect.fn("SessionCompaction.generateCheckpoint")(function* (input: {
   readonly attempt: (input: {
     readonly session: SessionSchema.Info
     readonly resolved: SessionRunnerModel.Resolved
     readonly messages: readonly Message[]
-  }) => Effect.Effect<string, ManifestError>
+  }) => Effect.Effect<string, ManifestError | StandaloneConfig.InvalidError>
   readonly session: SessionSchema.Info
   readonly resolved?: SessionRunnerModel.Resolved
   readonly source: ReadonlyArray<SummarySource>
@@ -634,13 +645,11 @@ const generateCheckpoint = Effect.fn("SessionCompaction.generateCheckpoint")(fun
       continue
     }
     calls += 1
-    const generated = yield* input
-      .attempt({
+    const generated = yield* optionalProviderResult(input.attempt({
         session: input.session,
         resolved: input.resolved,
         messages: [Message.user(summaryPrompt(summary, prefix.text, prefix.through))],
-      })
-      .pipe(Effect.option)
+      }))
     if (Option.isNone(generated)) {
       const finalized = localCheckpoint(input, memory)
       if (finalized) return finalized
@@ -1215,6 +1224,7 @@ const ensureHelperSession = Effect.fnUntraced(function* (
       data: {
         sessionID: id,
         projectID: owner.projectID,
+        scope: owner.scope,
         location: owner.location,
         parentID: owner.id,
         agent: Agent.ID.make("compaction"),
@@ -1257,8 +1267,9 @@ function startStreamed(
         hooks.updateUsage(SessionUsage.record(event.usage, hooks.cost), SessionUsage.timing(event.usage))
       return Effect.void
     }),
-    Effect.catchTag("LLM.Error", () =>
-      Effect.sync(() => {
+    Effect.catchTag("LLM.Error", (error) => error.module === "standalone.config"
+      ? Effect.fail(new StandaloneConfig.InvalidError({ reason: "stale" }))
+      : Effect.sync(() => {
         hooks.setFailure("provider_failed")
       }),
     ),
@@ -1289,7 +1300,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             .filter((entry): entry is Config.Document => entry.type === "document")
             .flatMap((entry) => (entry.info.compaction ? [entry.info.compaction] : [])),
         ),
-        configService: config,
+        entries: () => config.entries(),
         store,
         liveState,
         events,

@@ -11,8 +11,70 @@ import { fromRow } from "../src/session/info"
 import { SessionSchema } from "../src/session/schema"
 import { SessionTable } from "../src/session/sql"
 import previousSchema from "./fixture/database-current-2026-07-25"
+import currentSchema from "../src/database/schema.gen"
 
 const migration = migrations.find((item) => item.id.endsWith("_session-origin"))
+
+test("standalone scope migration preserves existing Sessions and messages with a bound default", async () => {
+  const scopeMigration = migrations.find((item) => item.id.endsWith("_session-scope"))
+  expect(scopeMigration).toBeDefined()
+  await run(
+    Effect.gen(function* () {
+      const db = yield* EffectDrizzleSqlite.makeWithDefaults()
+      yield* db.transaction((tx) => previousSchema.up(tx))
+      yield* db.run(sql`CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)`)
+      yield* db.run(sql`CREATE TABLE database_format (id TEXT PRIMARY KEY, time_created INTEGER NOT NULL)`)
+      yield* db.run(sql`INSERT INTO database_format VALUES ('current-2026-07-25', 1)`)
+      const completed = migrations.filter((item) => item.id <= "20260803011247_session-usage")
+      yield* Effect.forEach(completed, (item) => db.run(sql`INSERT INTO migration VALUES (${item.id}, 1)`))
+      yield* DatabaseMigration.applyOnly(
+        db,
+        migrations.filter((item) => !item.id.endsWith("_session-scope")),
+      )
+      yield* db.run(sql`PRAGMA foreign_keys = ON`)
+      const seed = [
+        sql`INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('global', '/project', 1, 1, '[]')`,
+        sql`INSERT INTO session (id, project_id, directory, title, time_created, time_updated) VALUES ('ses_scope_old', 'global', '/project', 'Old', 1, 2)`,
+        sql`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES ('msg_scope_old', 'ses_scope_old', 'user', 1, 1, 1, '{"content":[]}')`,
+        sql`INSERT INTO session_todo (session_id, content, status, priority, position, time_created, time_updated) VALUES ('ses_scope_old', 'Test', 'pending', 'high', 0, 1, 1)`,
+        sql`INSERT INTO event_sequence (aggregate_id, seq) VALUES ('ses_scope_old', 1)`,
+        sql`INSERT INTO event (id, aggregate_id, seq, created, type, data) VALUES ('evt_scope_old', 'ses_scope_old', 1, 1, 'session.created.1', '{"sessionID":"ses_scope_old"}')`,
+      ]
+      yield* Effect.forEach(seed, (statement) => db.run(statement))
+      yield* DatabaseMigration.applyOnly(db, [scopeMigration!])
+      yield* DatabaseMigration.applyOnly(db, [scopeMigration!])
+      const sessions = yield* db.all(sql`SELECT id, scope FROM session`)
+      expect(sessions).toEqual([{ id: "ses_scope_old", scope: "bound" }])
+      const messages = yield* db.all(sql`SELECT id FROM session_message`)
+      expect(messages).toEqual([{ id: "msg_scope_old" }])
+      const todos = yield* db.all(sql`SELECT session_id, content FROM session_todo`)
+      expect(todos).toEqual([{ session_id: "ses_scope_old", content: "Test" }])
+      const events = yield* db.all(sql`SELECT id, aggregate_id FROM event`)
+      expect(events).toEqual([{ id: "evt_scope_old", aggregate_id: "ses_scope_old" }])
+      const sequences = yield* db.all(sql`SELECT aggregate_id, seq FROM event_sequence`)
+      expect(sequences).toEqual([{ aggregate_id: "ses_scope_old", seq: 1 }])
+      expect(yield* db.all(sql`PRAGMA foreign_key_check`)).toEqual([])
+      const ledger = yield* db.all(sql`SELECT id FROM migration WHERE id = ${scopeMigration!.id}`)
+      expect(ledger).toHaveLength(1)
+      const update = db.run(sql`UPDATE session SET scope = 'invalid' WHERE id = 'ses_scope_old'`)
+      expect(yield* update.pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
+    }),
+  )
+  await run(
+    Effect.gen(function* () {
+      const db = yield* EffectDrizzleSqlite.makeWithDefaults()
+      yield* db.transaction((tx) => currentSchema.up(tx))
+      const seed = [
+        sql`INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('global', '/project', 1, 1, '[]')`,
+        sql`INSERT INTO session (id, project_id, directory, title, time_created, time_updated) VALUES ('ses_scope_fresh', 'global', '/project', 'Fresh', 1, 2)`,
+      ]
+      yield* Effect.forEach(seed, (statement) => db.run(statement))
+      expect(yield* db.all(sql`SELECT scope FROM session`)).toEqual([{ scope: "bound" }])
+      const update = db.run(sql`UPDATE session SET scope = 'invalid' WHERE id = 'ses_scope_fresh'`)
+      expect(yield* update.pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
+    }),
+  )
+})
 
 const mapped = [
   "ses_thread",

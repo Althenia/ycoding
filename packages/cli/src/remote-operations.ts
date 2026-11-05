@@ -2,7 +2,7 @@ export * as RemoteOperations from "./remote-operations"
 
 import { createHash } from "node:crypto"
 import { Dots } from "@ycoding-ai/schema/dots"
-import { realpath, stat } from "node:fs/promises"
+import { lstat, realpath, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, isAbsolute, relative, resolve, sep } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -10,6 +10,7 @@ import { Project } from "@ycoding-ai/schema/project"
 import type { FormAnswer, ReviewDecideInput, SessionInfo } from "@ycoding-ai/client/promise"
 import { capturedChildSessionIDs, summarizeCapturedChanges } from "@ycoding-ai/client/file-change-summary"
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
+import { Global } from "@ycoding-ai/core/global"
 import {
   RemoteLimits,
   readDotsComputerTarget,
@@ -347,7 +348,7 @@ export type SessionRegistry = {
   /** Reads the Session at its recorded Location now, whatever the verification window holds. */
   readonly renew: (sessionID: string) => Promise<SessionInfo | undefined>
   /** Adds one newly created Session at the Location the backend reported for it, without reading the inventory. */
-  readonly add: (sessionID: string, location: LocalLocation) => Promise<void>
+  readonly add: (sessionID: string, location: LocalLocation, accept?: (session: SessionInfo) => boolean) => Promise<SessionInfo | undefined>
   readonly refresh: () => Promise<void>
 }
 
@@ -459,13 +460,17 @@ export function createSessionRegistry(input: {
       invalidate(sessionID)
       return verify(sessionID)
     },
-    add: async (sessionID, location) => {
-      if (verified.has(sessionID)) return
+    add: async (sessionID, location, accept) => {
+      const existing = verified.get(sessionID)
+      if (existing !== undefined) return accept && !accept(existing) ? undefined : existing
       const created = await input.local.getSession(sessionID, location)
-      if (verified.has(sessionID)) return
+      const concurrent = verified.get(sessionID)
+      if (concurrent !== undefined) return accept && !accept(concurrent) ? undefined : concurrent
+      if (accept && !accept(created)) return undefined
       verified.set(sessionID, created)
       verifiedAt.set(sessionID, now())
       input.onChange?.()
+      return created
     },
     refresh: async () => {
       await refresh()
@@ -555,7 +560,7 @@ async function workspaceList(input: OperationInput): Promise<readonly RemoteWork
 
 async function sessionWorkspaces(local: LocalServer, sessions: readonly SessionInfo[], cache?: OperationCache): Promise<readonly RemoteWorkspaceInfo[]> {
   const projects = new Map((await local.projectList()).map((project) => [project.id, project]))
-  const visible = sessions.filter((session) => session.origin === undefined)
+  const visible = sessions.filter((session) => session.origin === undefined && session.scope !== "standalone")
   const directories = [...new Set(visible.map((session) => resolve(session.location.directory)))]
   if (cache !== undefined) for (const [directory, entry] of cache.directories) if (entry.expiresAt <= cache.now()) cache.directories.delete(directory)
   const permitted = new Set((await Promise.all(directories.map(async (directory) => await cachedWorkspaceDirectory(directory, cache) ? directory : undefined)))
@@ -581,9 +586,26 @@ async function cachedWorkspaceDirectory(directory: string, cache?: OperationCach
 }
 
 async function allowedWorkspaceDirectory(directory: string): Promise<boolean> {
+  const standalone = resolve(Global.Path.state, "standalone-sessions")
+  if (contained(standalone, resolve(directory))) return false
   const canonical = await realpath(directory).catch(() => undefined)
   if (canonical === undefined || !(await stat(canonical).then((value) => value.isDirectory(), () => false))) return false
-  const temporary = await realpath(tmpdir()).catch(() => tmpdir())
+  let standaloneReal: string
+  try {
+    standaloneReal = await realpath(standalone)
+  } catch (error) {
+    if (typeof error !== "object" || error === null || Reflect.get(error, "code") !== "ENOENT") return false
+    try {
+      await lstat(standalone)
+      return false
+    } catch (missing) {
+      if (typeof missing !== "object" || missing === null || Reflect.get(missing, "code") !== "ENOENT") return false
+    }
+    try { standaloneReal = resolve(await realpath(Global.Path.state), "standalone-sessions") } catch { return false }
+  }
+  if (contained(standaloneReal, canonical)) return false
+  let temporary: string
+  try { temporary = await realpath(tmpdir()) } catch { return false }
   if ([temporary, "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"].some((root) => contained(root, canonical))) return false
   return !/^\/(?:private\/)?var\/folders\/[^/]+\/[^/]+\/T(?:\/|$)/.test(canonical)
 }
@@ -816,8 +838,10 @@ async function run(input: OperationInput) {
     if (current.id !== candidate.info.projectID) throw new OperationError("invalid_message", "Workspace project changed")
     return validated.kind === "workspace.catalog" ? catalog(input.local, candidate.location) : findFiles(input.local, candidate.location, validated.query, validated.limit)
   }
-  if (validated.kind === "session.create")
+  if (validated.kind === "session.create") {
+    if (validated.scope === "standalone") throw new OperationError("invalid_message", "Standalone Session creation is unavailable")
     return { data: await createRootSession(input, validated.id, validated.workspace, { agent: validated.agent, model: validated.model, title: validated.title }) }
+  }
   if (validated.kind === "list") {
     const sessions = input.sessions.snapshot()
     if (validated.query.status === undefined && validated.query.order !== "active") return listPage(sessions, validated.query)
@@ -881,7 +905,7 @@ async function run(input: OperationInput) {
   if (verified === undefined)
     throw new OperationError("session_not_allowed", "Session is not available at its recorded location")
   if (verified.parentID !== undefined && verified.agent !== "btw" && [
-    "session.prompt", "session.command", "session.compact", "session.skill", "session.attachment.upload",
+    "session.prompt", "session.command", "session.compact", "session.skill", "session.attachment.upload", "session.fork",
     "session.switchModel", "session.switchAgent", "session.autonomy.set", "session.goal.set", "session.goal.stop",
     "incident.guidance.clear",
   ].includes(request.operation))
@@ -906,6 +930,24 @@ async function run(input: OperationInput) {
       return { data: await input.local.incidentGuidanceClear(validated.input, location) }
     case "get":
       return { data: verified }
+    case "fork": {
+      const forked = await input.local.forkSession(sessionID, location, validated.messageID)
+      const matches = (candidate: SessionInfo | undefined) => candidate !== undefined && isSessionID(candidate.id) &&
+        candidate.id !== sessionID && candidate.parentID === undefined && candidate.scope === verified.scope &&
+        candidate.fork?.sessionID === sessionID && candidate.fork?.messageID === validated.messageID &&
+        candidate.projectID === verified.projectID && candidate.location.directory === verified.location.directory &&
+        candidate.location.workspaceID === verified.location.workspaceID
+      try {
+        if (!matches(forked)) throw new Error("Fork placement mismatch")
+        const reread = await input.local.getSession(forked.id, location)
+        if (!matches(reread) || reread.id !== forked.id) throw new Error("Fork placement mismatch")
+        const current = await input.sessions.add(forked.id, locationInfo(forked), (candidate) => candidate.id === forked.id && matches(candidate))
+        if (!matches(current) || current?.id !== forked.id) throw new Error("Fork verification failed")
+        return { data: current }
+      } catch {
+        throw new OperationError("outcome_unknown", "Fork may have been created but could not be verified. Check Sessions before retrying.")
+      }
+    }
     case "delete":
       await input.local.deleteSession(sessionID, location)
       return {}
@@ -1173,7 +1215,7 @@ type Validated =
   | { readonly kind: "incident.report"; readonly input: RemoteIncidentReportInput }
   | { readonly kind: "incident.recent"; readonly input: RemoteIncidentRecentInput }
   | { readonly kind: "incident.guidance" | "incident.guidance.clear"; readonly input: RemoteIncidentGuidanceInput }
-  | { readonly kind: "session.create"; readonly id: string; readonly workspace: string; readonly agent?: string; readonly model?: ModelSelection; readonly title?: string }
+  | ({ readonly kind: "session.create"; readonly id: string; readonly agent?: string; readonly model?: ModelSelection; readonly title?: string } & ({ readonly scope: "standalone" } | { readonly scope: "bound"; readonly workspace: string }))
   | { readonly kind: "workspace.catalog"; readonly workspace: string }
   | { readonly kind: "workspace.file.find"; readonly workspace: string; readonly query: string; readonly limit: number }
   | { readonly kind: "catalog" }
@@ -1184,6 +1226,7 @@ type Validated =
   | { readonly kind: "command"; readonly input: CommandInput }
   | { readonly kind: "skill"; readonly input: { readonly id?: string; readonly skill: string; readonly resume?: boolean } }
   | { readonly kind: "get" }
+  | { readonly kind: "fork"; readonly messageID?: string }
   | { readonly kind: "delete" }
   | { readonly kind: "snapshot"; readonly limit?: number; readonly before?: string }
   | { readonly kind: "capturedChanges.list"; readonly cursor?: string }
@@ -1438,6 +1481,7 @@ function validate(request: RemoteRequest): Validated {
     return { kind: "attachment.read", digest: fields.digest }
   }
   if (request.operation === "session.message.stream") return { kind: "message.stream", messageID: messageID(fields.messageID) }
+  if (request.operation === "session.fork") return { kind: "fork", ...(fields.messageID === undefined ? {} : { messageID: messageID(fields.messageID) }) }
   if (request.operation === "workspace.list") return { kind: "workspace.list", sessionsOnly: fields.sessionsOnly === true }
   if (request.operation === "session.list") return { kind: "list", query: parseListQuery(fields) }
   if (request.operation === "session.active") return { kind: "active" }
@@ -1522,15 +1566,18 @@ function validate(request: RemoteRequest): Validated {
       throw new OperationError("invalid_message", "Invalid family member list")
     return { kind: "family.activity", sessionIDs: fields.sessionIDs }
   }
-  if (request.operation === "session.create")
+  if (request.operation === "session.create") {
+    if ((fields.scope !== undefined && fields.scope !== "bound" && fields.scope !== "standalone") || (fields.scope === "standalone" && fields.workspace !== undefined))
+      throw new OperationError("invalid_message", "Invalid Session placement")
     return {
       kind: "session.create",
       id: sessionID(fields.id, "id"),
-      workspace: requireString(fields.workspace, "workspace", 128),
+      ...(fields.scope === "standalone" ? { scope: "standalone" as const } : { scope: "bound" as const, workspace: requireString(fields.workspace, "workspace", 128) }),
       ...(fields.agent === undefined ? {} : { agent: requireString(fields.agent, "agent", 128) }),
       ...(fields.model === undefined ? {} : { model: modelSelection(fields.model) }),
       ...(fields.title === undefined ? {} : { title: sessionTitle(fields.title) }),
     }
+  }
   const plain = plainKinds[request.operation]
   if (plain !== undefined) return { kind: plain } as Validated
   switch (request.operation) {
@@ -2182,6 +2229,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "workspace.list": ["sessionsOnly"],
   "session.list": ["limit", "order", "search", "searchFields", "parentID", "background", "cursor", "workspace", "status", "around", "before"],
   "session.active": [],
+  "session.fork": ["messageID"],
   "usage.providers": ["refresh"],
   "usage.summary": [],
   "usage.dashboard": ["daily", "monthly", "breakdown", "refresh"],
@@ -2256,7 +2304,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.autonomy.set": ["permissions", "guardrails", "answers", "sleep"],
   "session.goal.set": ["goal", "maxNoProgress"],
   "session.goal.stop": ["goal"],
-  "session.create": ["id", "workspace", "agent", "model", "title"],
+  "session.create": ["id", "scope", "workspace", "agent", "model", "title"],
 }
 
 function validateFields(request: RemoteRequest): Readonly<Record<string, unknown>> {
@@ -2280,6 +2328,7 @@ const mutations: ReadonlySet<string> = new Set([
   "coordination.update",
   "coordination.delete",
   "session.delete",
+  "session.fork",
   "session.compact",
   "session.create",
   "session.subagent.cancel",

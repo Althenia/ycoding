@@ -10,6 +10,7 @@ export interface TransportRuntime {
   readonly http: RequestExecutorInterface
   readonly webSocket?: WebSocketExecutorInterface
   readonly observeAttempt?: TransportAttempt.Observer
+  readonly beforeDispatch?: Effect.Effect<void, LLMError>
 }
 
 export interface Transport<Body, Prepared, Frame> {

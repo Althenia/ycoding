@@ -6,6 +6,7 @@ import { Context, Effect, Exit, Layer, Scope, Semaphore, Stream } from "effect"
 import { AISDK } from "../aisdk"
 import { Catalog } from "../catalog"
 import { Config } from "../config"
+import { StandaloneConfig } from "../config/standalone"
 import { ConfigPolicyPlugin } from "../config/plugin/policy"
 import { ConfigProviderPlugin } from "../config/plugin/provider"
 import { ProviderModelDiscovery } from "../config/plugin/provider-discovery"
@@ -20,17 +21,19 @@ import { Integration } from "../integration"
 import { Location } from "../location"
 import { ModelsDev } from "../models-dev"
 import { Npm } from "../npm"
+import { Policy } from "../policy"
 import type { PluginRegistry } from "../plugin"
 import { ProviderUsageRuntime } from "../provider-usage"
 import { State } from "../state"
 import { WellKnown } from "../wellknown"
 import { WellKnownPlugin } from "../wellknown/plugin"
 import { PluginCatalogHost } from "./catalog-host"
-import { ModelsDevPlugin } from "./models-dev"
+import { ModelsDevPlugin, registerModelsDev } from "./models-dev"
 import { PluginOperations } from "./operations"
 import { ProviderPlugins } from "./provider"
 import { PluginRuntime } from "./runtime"
 import { VariantPlugin } from "./variant"
+import { StandaloneCatalog } from "./standalone-catalog"
 
 const pre: readonly PluginCatalogHost.Contribution[] = [WellKnownPlugin.Plugin, ModelsDevPlugin, ...ProviderPlugins]
 const post: readonly PluginCatalogHost.Contribution[] = [
@@ -145,6 +148,59 @@ export const node = makeLocationNode({
     ProviderModelDiscovery.node,
     WellKnown.node,
   ],
+})
+
+export const standaloneNode = makeLocationNode({
+  service: Service,
+  layer: Layer.effectContext(Effect.gen(function* () {
+    const catalog = yield* Catalog.Service
+    const integrations = yield* Integration.StandaloneService
+    const models = yield* ModelsDev.ReadonlyService
+    const config = yield* StandaloneConfig.Service
+    const policy = yield* Policy.Service
+    const lock = Semaphore.makeUnsafe(1)
+    const loaded = { snapshot: yield* config.snapshot() }
+    const loadPolicy = () => policy.load(loaded.snapshot.entries.toReversed().flatMap((entry) => entry.info.experimental?.policies ?? []))
+    yield* loadPolicy()
+    yield* registerModelsDev(catalog, integrations, models).pipe(Effect.provideService(State.Phase, State.phases.pre))
+    yield* integrations.transform((draft) => ConfigProviderPlugin.applyIntegrations(draft, loaded.snapshot.entries))
+      .pipe(Effect.provideService(State.Phase, State.phases.post))
+    yield* catalog.transform((draft) => ConfigProviderPlugin.applyConfigured(draft, loaded.snapshot.entries))
+      .pipe(Effect.provideService(State.Phase, State.phases.post))
+    yield* catalog.transform(VariantPlugin.apply).pipe(Effect.provideService(State.Phase, State.phases.post))
+    yield* catalog.transform((draft) => ConfigPolicyPlugin.apply(draft, loaded.snapshot.entries))
+      .pipe(Effect.provideService(State.Phase, State.phases.post))
+    const refresh = () => lock.withPermit(Effect.gen(function* () {
+      const next = yield* config.snapshot()
+      if (next.generation !== loaded.snapshot.generation) {
+        const previous = loaded.snapshot
+        loaded.snapshot = next
+        yield* Effect.gen(function* () {
+          yield* loadPolicy()
+          yield* integrations.reload()
+          yield* catalog.reload()
+        }).pipe(Effect.onExit((exit) => Exit.isFailure(exit) ? Effect.sync(() => { loaded.snapshot = previous }) : Effect.void))
+      }
+      yield* config.assert(next.generation)
+      return next.generation
+    }))
+    const scoped = StandaloneCatalog.Service.of({
+      refresh,
+      model: { get: (...args) => Effect.gen(function* () {
+        const generation = yield* refresh()
+        const model = yield* catalog.model.get(...args)
+        yield* config.assert(generation)
+        return model
+      }) },
+    })
+    yield* config.assert(loaded.snapshot.generation)
+    const service = Service.of({ list: Effect.succeed({
+      pre: [{ id: Plugin.ID.make("ycoding.models-dev") }],
+      post: ["ycoding.config.provider", "ycoding.variant", "ycoding.config.policy"].map((id) => ({ id: Plugin.ID.make(id) })),
+    }) })
+    return Context.make(Service, service).pipe(Context.add(StandaloneCatalog.Service, scoped))
+  })),
+  deps: [Catalog.standaloneNode, Integration.standaloneNode, ModelsDev.standaloneNode, StandaloneConfig.node, Policy.node, EventRuntime.node],
 })
 
 export const nodes = [Catalog.node, node] as const

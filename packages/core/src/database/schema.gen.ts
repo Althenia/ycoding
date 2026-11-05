@@ -1119,6 +1119,7 @@ export default {
       yield* tx.run(`
         CREATE TABLE \`session\` (
           \`id\` text PRIMARY KEY,
+          \`scope\` text DEFAULT 'bound' NOT NULL,
           \`project_id\` text NOT NULL,
           \`workspace_id\` text,
           \`parent_id\` text,
@@ -1151,7 +1152,8 @@ export default {
           \`time_active\` integer,
           \`time_pinned\` integer,
           \`time_suspended\` integer,
-          CONSTRAINT \`fk_session_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
+          CONSTRAINT \`fk_session_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE,
+          CONSTRAINT "session_scope_check" CHECK("scope" IN ('bound', 'standalone'))
         );
       `)
       yield* tx.run(`

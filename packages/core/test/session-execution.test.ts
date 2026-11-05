@@ -50,6 +50,12 @@ const completionIt = testEffect(AppNodeBuilder.build(LayerNode.group([
   AppProcess.node, Database.node, EventRuntime.node, SessionStore.node, SessionProjector.node, Job.node,
 ])))
 
+const currentOwner = Effect.gen(function* () {
+  const self = yield* ShellLedger.identify(yield* AppProcess.Service, process.pid)
+  if (!self) return yield* Effect.die(new Error("Current process is not identifiable"))
+  return self
+})
+
 for (const ending of ["succeeded", "failed", "interrupted"] as const) {
   it.effect(`execution status invalidation follows ${ending} cleanup`, () => Effect.gen(function* () {
     const database = yield* Database.Service
@@ -1030,6 +1036,7 @@ describe("SessionExecution lifecycle", () => {
       const events = yield* EventRuntime.Service
       const parentID = Session.ID.make("ses_failed_child_parent")
       const childID = Session.ID.make("ses_failed_child")
+      const owner = yield* currentOwner
       yield* seedSessions(database, [parentID, childID])
       yield* database.db
         .insert(SessionTaskTable)
@@ -1046,6 +1053,8 @@ describe("SessionExecution lifecycle", () => {
           background: false,
           delivery: "steer",
           state: "running",
+          owner_pid: owner.pid,
+          owner_started: owner.started,
         })
         .run()
       yield* admitCompletionInput(database, events, childID, "msg_child_pending")
@@ -1069,7 +1078,7 @@ describe("SessionExecution lifecycle", () => {
       )
       const execution = Context.get(context, SessionExecution.Service)
 
-      yield* execution.wake(childID)
+      yield* execution.wake(childID, owner)
       yield* execution.awaitIdle(childID)
 
       expect(drains).toBe(1)
@@ -1136,6 +1145,7 @@ describe("SessionExecution lifecycle", () => {
       const database = yield* Database.Service
       const parentID = Session.ID.make("ses_waiting_parent")
       const childID = Session.ID.make("ses_waiting_child")
+      const owner = yield* currentOwner
       yield* seedSessions(database, [parentID, childID])
       yield* database.db
         .insert(SessionTaskTable)
@@ -1174,7 +1184,7 @@ describe("SessionExecution lifecycle", () => {
             drained.push(sessionID)
           }),
         )
-        yield* Context.get(context, SessionExecution.Service).resume(childID)
+        yield* Context.get(context, SessionExecution.Service).resume(childID, owner)
         yield* Scope.close(scope, Exit.void)
       }).pipe(Effect.provide(Logger.layer([logger])))
       expect(drained).toEqual([])
@@ -1188,12 +1198,11 @@ describe("SessionExecution lifecycle", () => {
   it.effect("drains a running managed child only while this process holds its claim", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
-      const appProcess = yield* AppProcess.Service
-      const self = yield* ShellLedger.identify(appProcess, process.pid)
+      const self = yield* currentOwner
       const parentID = Session.ID.make("ses_claim_parent")
       const claims = [
         { childID: Session.ID.make("ses_claim_dead"), owner_pid: 2_000_000_000, owner_started: "Thu Jan  1 00:00:00 1970" },
-        { childID: Session.ID.make("ses_claim_self"), owner_pid: self?.pid ?? null, owner_started: self?.started ?? null },
+        { childID: Session.ID.make("ses_claim_self"), owner_pid: self.pid, owner_started: self.started },
         { childID: Session.ID.make("ses_claim_unknown"), owner_pid: null, owner_started: null },
       ]
       yield* seedSessions(database, [parentID, ...claims.map((claim) => claim.childID)])
@@ -1222,9 +1231,9 @@ describe("SessionExecution lifecycle", () => {
       const scope = yield* Scope.make()
       const context = yield* buildExecution(scope, ({ sessionID }) => Effect.sync(() => void drained.push(sessionID)))
       const execution = Context.get(context, SessionExecution.Service)
-      for (const claim of claims) yield* execution.resume(claim.childID)
+      for (const claim of claims) yield* execution.resume(claim.childID, self)
       yield* Scope.close(scope, Exit.void)
-      expect(drained).toEqual([Session.ID.make("ses_claim_self"), Session.ID.make("ses_claim_unknown")])
+      expect(drained).toEqual([Session.ID.make("ses_claim_self")])
     }),
   )
 

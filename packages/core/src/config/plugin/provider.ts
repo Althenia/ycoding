@@ -12,6 +12,70 @@ import { CatalogModel } from "../../model"
 import { Provider } from "../../provider"
 import { ProviderModelDiscovery } from "./provider-discovery"
 
+export const applyConfigured = (catalog: Catalog.Draft, entries: readonly Config.Entry[]) => {
+  const files = entries.filter((entry): entry is Config.Document => entry.type === "document")
+  const configuredDefault = Config.latest(entries, "model")
+  if (configuredDefault !== undefined)
+    catalog.model.default.set(configuredDefault.providerID, configuredDefault.model, {
+      variant: configuredDefault.variant,
+      profile: configuredDefault.profile,
+    })
+  for (const file of files) {
+    for (const [id, item] of Object.entries(file.info.providers ?? {})) {
+      const providerID = Provider.ID.make(id)
+      catalog.provider.update(providerID, (provider) => {
+        if (item.name !== undefined) provider.name = item.name
+        if (item.package !== undefined) provider.package = item.package
+        if (item.settings !== undefined) provider.settings = mutable(Provider.mergeOverlay(provider.settings, item.settings))
+        if (item.headers !== undefined) provider.headers = Provider.mergeHeaders(provider.headers, item.headers)
+        if (item.body !== undefined) provider.body = mutable(Provider.mergeOverlay(provider.body, item.body))
+      })
+      for (const [id, config] of Object.entries(item.models ?? {}))
+        catalog.model.update(providerID, CatalogModel.ID.make(id), (model) => applyModelConfig(model, config))
+    }
+  }
+  for (const id of new Set(files.flatMap((file) => Object.keys(file.info.providers ?? {})))) {
+    catalog.model.account.configure(Provider.ID.make(id), (model) => {
+      for (const file of files) {
+        const item = file.info.providers?.[id]
+        if (!item) continue
+        if (item.package !== undefined) model.package = item.package
+        if (item.settings !== undefined) model.settings = mutable(Provider.mergeOverlay(model.settings, item.settings))
+        if (item.headers !== undefined) model.headers = Provider.mergeHeaders(model.headers, item.headers)
+        if (item.body !== undefined) model.body = mutable(Provider.mergeOverlay(model.body, item.body))
+      }
+      for (const file of files) {
+        const config = file.info.providers?.[id]?.models?.[model.id]
+        if (config) applyModelConfig(model, config)
+      }
+    })
+  }
+}
+
+export const applyIntegrations = (integrations: Integration.Draft, entries: readonly Config.Entry[]) => {
+  const files = entries.filter((entry): entry is Config.Document => entry.type === "document")
+  const packages = new Map(files.flatMap((file) =>
+    Object.entries(file.info.providers ?? {}).flatMap(([id, provider]) =>
+      provider.package === undefined ? [] : [[id, provider.package] as const])))
+  const compatible = new Set([...packages].flatMap(([id, name]) =>
+    name === "aisdk:@ai-sdk/openai-compatible" || name === "@ycoding-ai/ai/providers/runpod" ? [id] : []))
+  const configured = new Set([
+    ...compatible,
+    ...files.flatMap((file) => Object.entries(file.info.providers ?? {}).flatMap(([id, provider]) =>
+      provider.env === undefined ? [] : [id])),
+  ])
+  for (const file of files) {
+    for (const [id, item] of Object.entries(file.info.providers ?? {})) {
+      const integrationID = Integration.ID.make(id)
+      if (!configured.has(id) && !integrations.get(integrationID)) continue
+      integrations.update(integrationID, (integration) => { integration.name = item.name ?? integration.name })
+      if (item.env !== undefined) integrations.method.update({ integrationID, method: { type: "env", names: [...item.env] } })
+      if (compatible.has(id) && !integrations.method.list(integrationID).some((method) => method.type === "key"))
+        integrations.method.update({ integrationID, method: { type: "key", label: "API key" } })
+    }
+  }
+}
+
 const discover = Effect.fn("ConfigProviderPlugin.discover")(function* (
   entries: readonly Config.Entry[],
   integrations: Integration.Interface,
@@ -118,47 +182,7 @@ export const Plugin = define({
         Array<{ readonly snapshot?: Integration.Snapshot; readonly models: readonly ProviderModelDiscovery.Model[] }>
       >(),
     }
-    yield* ctx.integration.transform((integrations) => {
-      const files = loaded.entries.filter((entry): entry is Config.Document => entry.type === "document")
-      const packages = new Map(
-        files.flatMap((file) =>
-          Object.entries(file.info.providers ?? {}).flatMap(([id, provider]) =>
-            provider.package === undefined ? [] : [[id, provider.package] as const],
-          ),
-        ),
-      )
-      const compatible = new Set(
-        [...packages].flatMap(([id, name]) =>
-          name === "aisdk:@ai-sdk/openai-compatible" || name === "@ycoding-ai/ai/providers/runpod" ? [id] : [],
-        ),
-      )
-      const configuredIntegrations = new Set([
-        ...compatible,
-        ...files.flatMap((file) =>
-          Object.entries(file.info.providers ?? {}).flatMap(([id, provider]) =>
-            provider.env === undefined ? [] : [id],
-          ),
-        ),
-      ])
-      for (const file of files) {
-        for (const [id, item] of Object.entries(file.info.providers ?? {})) {
-          const integrationID = id
-          if (!configuredIntegrations.has(id) && !integrations.get(integrationID)) continue
-          integrations.update(integrationID, (integration) => {
-            integration.name = item.name ?? integration.name
-          })
-          if (item.env !== undefined) {
-            integrations.method.update({
-              integrationID,
-              method: { type: "env", names: [...item.env] },
-            })
-          }
-          if (compatible.has(id) && !integrations.method.list(integrationID).some((method) => method.type === "key")) {
-            integrations.method.update({ integrationID, method: { type: "key", label: "API key" } })
-          }
-        }
-      }
-    })
+    yield* integrations.transform((draft) => applyIntegrations(draft, loaded.entries))
 
     loaded.discovered = yield* discover(initial, integrations, credentials, catalogService, discovery, false)
     yield* catalogService.transform((catalog) => {
@@ -166,12 +190,6 @@ export const Plugin = define({
         catalog.provider.list().map((record) => [record.provider.id, structuredClone(record.models)]),
       )
       const files = loaded.entries.filter((entry): entry is Config.Document => entry.type === "document")
-      const configuredDefault = Config.latest(loaded.entries, "model")
-      if (configuredDefault !== undefined)
-        catalog.model.default.set(configuredDefault.providerID, configuredDefault.model, {
-          variant: configuredDefault.variant,
-          profile: configuredDefault.profile,
-        })
       for (const [id, scopes] of loaded.discovered) {
         const providerID = Provider.ID.make(id)
         const models = scopes.flatMap((scope) => scope.models)
@@ -181,39 +199,7 @@ export const Plugin = define({
           )
         }
       }
-      for (const file of files) {
-        for (const [id, item] of Object.entries(file.info.providers ?? {})) {
-          const providerID = Provider.ID.make(id)
-          catalog.provider.update(providerID, (provider) => {
-            if (item.name !== undefined) provider.name = item.name
-            if (item.package !== undefined) provider.package = item.package
-            if (item.settings !== undefined)
-              provider.settings = mutable(Provider.mergeOverlay(provider.settings, item.settings))
-            if (item.headers !== undefined) provider.headers = Provider.mergeHeaders(provider.headers, item.headers)
-            if (item.body !== undefined) provider.body = mutable(Provider.mergeOverlay(provider.body, item.body))
-          })
-          for (const [id, config] of Object.entries(item.models ?? {})) {
-            catalog.model.update(providerID, CatalogModel.ID.make(id), (model) => applyModelConfig(model, config))
-          }
-        }
-      }
-      for (const id of new Set(files.flatMap((file) => Object.keys(file.info.providers ?? {})))) {
-        catalog.model.account.configure(Provider.ID.make(id), (model) => {
-          for (const file of files) {
-            const item = file.info.providers?.[id]
-            if (!item) continue
-            if (item.package !== undefined) model.package = item.package
-            if (item.settings !== undefined)
-              model.settings = mutable(Provider.mergeOverlay(model.settings, item.settings))
-            if (item.headers !== undefined) model.headers = Provider.mergeHeaders(model.headers, item.headers)
-            if (item.body !== undefined) model.body = mutable(Provider.mergeOverlay(model.body, item.body))
-          }
-          for (const file of files) {
-            const config = file.info.providers?.[id]?.models?.[model.id]
-            if (config) applyModelConfig(model, config)
-          }
-        })
-      }
+      applyConfigured(catalog, loaded.entries)
       for (const [id, scopes] of loaded.discovered) {
         const providerID = Provider.ID.make(id)
         const provider = catalog.provider.get(providerID)?.provider

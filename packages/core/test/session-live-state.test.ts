@@ -1,9 +1,15 @@
 import { expect } from "bun:test"
 import { eq } from "drizzle-orm"
-import { Effect, Layer } from "effect"
+import { Context, Effect, Exit, Layer, Scope } from "effect"
 import { Statement } from "effect/unstable/sql"
 import { Database } from "@ycoding-ai/core/database/database"
 import { KeepAwake } from "@ycoding-ai/core/keep-awake"
+import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
+import { AppProcess } from "@ycoding-ai/core/process"
+import { ClamshellSleep } from "@ycoding-ai/core/util/clamshell-sleep"
+import { SystemSleep } from "@ycoding-ai/core/util/system-sleep"
+import { UserActivity } from "@ycoding-ai/core/util/user-activity"
+import { Global } from "@ycoding-ai/core/global"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventSequenceTable, EventTable } from "@ycoding-ai/core/event/sql"
 import { Project } from "@ycoding-ai/core/project"
@@ -71,7 +77,7 @@ const guardrails = Layer.succeed(
     withSnapshot: (_sessionID, use) => use({ sequence: 4, digest: guardrailDigest }),
   }),
 )
-const keepAwake = Layer.mock(KeepAwake.Service, {
+const keepAwake = Layer.mock(KeepAwake.Observation, {
   get: Effect.succeed({ state: "off", lid: "off", sleepHold: false } as const),
 })
 const it = testEffect(
@@ -106,6 +112,52 @@ const seed = Effect.gen(function* () {
     .run()
     .pipe(Effect.orDie)
 })
+
+const unobserved = testEffect(
+  SessionLiveState.layer.pipe(
+    Layer.provideMerge(Layer.mergeAll(Database.layer({ path: ":memory:" }), guardrails,
+      Layer.succeed(KeepAwake.Observation, { get: Effect.succeed(undefined) }))),
+  ),
+)
+unobserved.effect("does not claim sleep-controller status when no controller is observed", () =>
+  Effect.gen(function* () {
+    yield* seed
+    const db = (yield* Database.Service).db
+    yield* db.update(SessionTable).set({ autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", sleep: {} } }).where(eq(SessionTable.id, sessionID)).run()
+    const snapshot = yield* SessionLiveState.Service.use((service) => service.load(sessionID))
+    expect(snapshot.text).toContain("The user is asleep")
+    expect(snapshot.text).toContain("Keep-awake status is unknown")
+    expect(snapshot.text).not.toContain("Keep-awake is not holding")
+    expect(snapshot.text).not.toContain("Keep-awake holds idle")
+  }),
+)
+
+const observedLiveState = testEffect(
+  SessionLiveState.layer.pipe(Layer.provideMerge(Layer.mergeAll(
+    Database.layer({ path: ":memory:" }), guardrails, LayerNode.compile(KeepAwake.observationNode),
+  ))),
+)
+observedLiveState.effect("renders the status of the actual controller only while its scope owns it", () =>
+  Effect.gen(function* () {
+    yield* seed
+    const db = (yield* Database.Service).db
+    yield* db.update(SessionTable).set({ autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", sleep: {} } }).where(eq(SessionTable.id, sessionID)).run()
+    const live = yield* SessionLiveState.Service
+    expect((yield* live.load(sessionID)).text).toContain("Keep-awake status is unknown")
+    const scope = yield* Scope.make()
+    const controller = Context.get(yield* Layer.buildWithScope(LayerNode.compile(KeepAwake.node, [
+      [AppProcess.node, Layer.mock(AppProcess.Service, { spawn: () => Effect.die("synthetic spawn failure") })],
+      [ClamshellSleep.node, Layer.mock(ClamshellSleep.Service, { set: () => "off" })],
+      [SystemSleep.node, Layer.mock(SystemSleep.Service, { permitted: Effect.succeed(false), set: () => Effect.succeed("off") })],
+      [UserActivity.node, Layer.mock(UserActivity.Service, { set: () => "off" })],
+      [Global.node, Layer.succeed(Global.Service, Global.make({ state: "/dev/null" }))],
+    ]), scope), KeepAwake.Service)
+    expect((yield* controller.get).state).not.toBe("on")
+    expect((yield* live.load(sessionID)).text).toContain("Keep-awake is not holding")
+    yield* Scope.close(scope, Exit.void)
+    expect((yield* live.load(sessionID)).text).toContain("Keep-awake status is unknown")
+  }),
+)
 
 it.effect("renders canonical protected state and returns every required content-free source", () =>
   Effect.gen(function* () {

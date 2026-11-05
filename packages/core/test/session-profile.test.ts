@@ -121,6 +121,7 @@ const session = (profile?: string) =>
   SessionSchema.Info.make({
     id: SessionSchema.ID.create(),
     projectID: Project.ID.global,
+    scope: "bound",
     title: "profile fixture",
     cost: Money.USD.zero,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -518,7 +519,7 @@ describe("per-session profiles", () => {
           expect(
             yield* sessions.create({
               id: root.id,
-              parentID: SessionSchema.ID.create(),
+              location: { directory: AbsolutePath.make("/fixture") },
               title: "Ignored retry fields",
               model: session("Missing").model,
             }),

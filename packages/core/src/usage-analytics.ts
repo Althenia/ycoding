@@ -100,12 +100,10 @@ export const backfill = Effect.fn("UsageAnalytics.backfill")(function* (
   }
 })
 
-export const layer = Layer.effect(
-  Service,
+const projectorLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const database = yield* Database.Service
     const events = yield* EventRuntime.Service
-    const settings = yield* RetentionSettings.Service
     yield* events.project(SessionEvent.ProviderRequestRecorded, (event) =>
       Effect.gen(function* () {
         const current = yield* Current
@@ -147,6 +145,20 @@ export const layer = Layer.effect(
         yield* UsageViewChange.append(database.db, stored.id)
       }),
     )
+  }),
+)
+
+export const projectorNode = makeGlobalNode({
+  name: "@ycoding/UsageAnalytics/Projector",
+  layer: projectorLayer,
+  deps: [Database.node, EventRuntime.node],
+})
+
+export const layer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    const database = yield* Database.Service
+    const settings = yield* RetentionSettings.Service
     return Service.of({
       cleanup: Effect.fn("UsageAnalytics.cleanup")(function* (now = Date.now()) {
         const days = (yield* settings.read()).usageDays
@@ -208,5 +220,5 @@ const cleanupLayer = Layer.effectDiscard(
 export const node = makeGlobalNode({
   service: Service,
   layer: Layer.merge(layer, cleanupLayer.pipe(Layer.provide(layer))),
-  deps: [Database.node, EventRuntime.node, RetentionSettings.node],
+  deps: [Database.node, RetentionSettings.node, projectorNode],
 })

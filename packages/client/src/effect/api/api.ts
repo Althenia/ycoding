@@ -107,6 +107,7 @@ export type SessionListOperation<E = never> = (input?: Endpoint5_0Input) => Effe
 type Endpoint5_1Request = Parameters<RawClient["server.session"]["session.create"]>[0]
 export type Endpoint5_1Input = {
   readonly id?: Endpoint5_1Request["payload"]["id"]
+  readonly scope?: Endpoint5_1Request["payload"]["scope"]
   readonly parentID?: Endpoint5_1Request["payload"]["parentID"]
   readonly title?: Endpoint5_1Request["payload"]["title"]
   readonly agent?: Endpoint5_1Request["payload"]["agent"]

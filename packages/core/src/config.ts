@@ -261,7 +261,7 @@ export class GlobalService extends Context.Service<GlobalService, {
   readonly subscribe: (listener: () => void) => () => void
 }>()("@ycoding/Config.Global") {}
 
-const parseDocument = Effect.fnUntraced(function* (text: string, target: string) {
+export const parseDocument = Effect.fnUntraced(function* (text: string, target: string) {
   const errors: ParseError[] = []
   const input: unknown = parse(text, errors, { allowTrailingComma: true })
   if (errors.length) {
@@ -274,6 +274,20 @@ const parseDocument = Effect.fnUntraced(function* (text: string, target: string)
   return recovered
 })
 
+const globalSource = Effect.fnUntraced(function* (name: string, strict: boolean) {
+  const fs = yield* FSUtil.Service
+  const global = yield* Global.Service
+  const target = path.join(global.config, name)
+  const read = strict
+    ? fs.readFileString(target).pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(undefined)))
+    : fs.readFileStringSafe(target)
+  return { target, text: yield* read }
+})
+
+export const readGlobalSources = Effect.fnUntraced(function* (strict = false) {
+  return yield* Effect.forEach(["ycoding.json", "ycoding.jsonc"], (name) => globalSource(name, strict))
+})
+
 export const globalLayer = Layer.effect(GlobalService, Effect.gen(function* () {
   const fs = yield* FSUtil.Service
   const global = yield* Global.Service
@@ -284,8 +298,7 @@ export const globalLayer = Layer.effect(GlobalService, Effect.gen(function* () {
     const entries: Document[] = []
     const diagnostics: Diagnostic[] = []
     for (const name of ["ycoding.json", "ycoding.jsonc"]) {
-      const target = path.join(global.config, name)
-      const text = yield* fs.readFileStringSafe(target).pipe(Effect.orDie)
+      const { target, text } = yield* globalSource(name, false).pipe(Effect.provideService(FSUtil.Service, fs), Effect.provideService(Global.Service, global), Effect.orDie)
       if (!text) continue
       const substituted = yield* ConfigVariable.substitute({ type: "path", path: target, text }).pipe(
         Effect.provideService(FSUtil.Service, fs),
@@ -639,6 +652,16 @@ export function configured(options?: Options) {
 }
 
 export const node = configured()
+
+export const standaloneNode = makeLocationNode({
+  service: Service,
+  layer: Layer.effect(Service, Effect.map(GlobalService, (global) => Service.of({
+    entries: () => global.snapshot().pipe(Effect.map((snapshot) => [...snapshot.entries])),
+    diagnostics: () => global.snapshot().pipe(Effect.map((snapshot) => [...snapshot.diagnostics])),
+    reload: () => global.reload(),
+  }))),
+  deps: [globalNode],
+})
 
 const recoveryOptions = { errors: "all", onExcessProperty: "error", propertyOrder: "original" } as const
 const decodeInfo = Schema.decodeUnknownResult(Info, recoveryOptions)

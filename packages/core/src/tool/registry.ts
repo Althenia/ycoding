@@ -5,7 +5,7 @@ import { Context, Effect, Layer, Scope, Semaphore } from "effect"
 import type { Agent } from "../agent"
 import { ConfigCapabilities } from "../config/capabilities"
 import { Image } from "../image"
-import { Permission } from "../permission"
+import type { Permission } from "../permission"
 import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
 import { ToolOutputStore } from "../tool-output-store"
@@ -81,17 +81,18 @@ export interface Settlement {
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/ToolRegistry") {}
 
-const registryLayer = Layer.effect(
+const makeRegistryLayer = (
+  resources: ToolOutputStore.Interface | undefined,
+  image: Image.Interface | undefined,
+) => Layer.effect(
   Service,
   Effect.gen(function* () {
-    const resources = yield* ToolOutputStore.Service
     const toolHooks = yield* ToolHooks.Service
-    const image = yield* Image.Service
 
     type NormalizedItem = ToolOutput["content"][number] | "decode" | "size"
     const normalizeImages = Effect.fn("ToolRegistry.normalizeImages")(function* (content: ToolOutput["content"]) {
       const normalized = yield* Effect.forEach(content, (item): Effect.Effect<NormalizedItem> => {
-        if (item.type !== "file" || !item.mime.startsWith("image/")) return Effect.succeed(item)
+        if (!image || item.type !== "file" || !item.mime.startsWith("image/")) return Effect.succeed(item)
         // RFC 2397 permits parameters between the mime and ";base64".
         const base64 = /^data:[^,]*;base64,(.*)$/s.exec(item.uri)?.[1]
         if (base64 === undefined) return Effect.succeed(item)
@@ -154,6 +155,7 @@ const registryLayer = Layer.effect(
       })
 
     const settleTool = Effect.fn("ToolRegistry.settleTool")(function* (input: ExecuteInput, tool: AnyTool) {
+      let invalidProgress = false
       // Hooks fire only for hosted/local tools; provider-executed calls never reach settleTool.
       const beforeEvent: ToolHooks.BeforeEvent = {
         tool: input.call.name,
@@ -173,6 +175,10 @@ const registryLayer = Layer.effect(
           messageID: input.messageID,
           callID: input.call.id,
           progress: (update) => {
+            if (!resources && !safeStandaloneContent(update.content ?? [], update.structured)) {
+              invalidProgress = true
+              return Effect.void
+            }
             const progress = input.progress
             if (!progress) return Effect.void
             return normalizeImages(
@@ -199,14 +205,18 @@ const registryLayer = Layer.effect(
         ),
       )
       let settlement: Settlement
-      if ("result" in pending) {
+      if (!resources && (invalidProgress || ("output" in pending && !safeStandaloneContent(pending.output.content, pending.output.structured)))) {
+        const failure = new ToolFailure({ message: "Standalone tool output exceeds limits or contains files" })
+        settlement = { result: { type: "error", value: failure.message }, error: toSessionError(failure) }
+      } else if ("result" in pending) {
         settlement = pending
       } else {
-        const bounded = yield* resources.bound({
+        const output = { structured: pending.output.structured, content: yield* normalizeImages(pending.output.content) }
+        const bounded = resources ? yield* resources.bound({
           sessionID: input.sessionID,
           callID: input.call.id,
-          output: { structured: pending.output.structured, content: yield* normalizeImages(pending.output.content) },
-        })
+          output,
+        }) : { output, outputPaths: [] }
         const result = ToolOutput.toResultValue(bounded.output)
         settlement =
           result.type === "error"
@@ -332,8 +342,13 @@ const registryLayer = Layer.effect(
           })
         }
       for (const [name, registration] of selected) {
+        if (!resources && !standaloneTools.has(name)) continue
         if (whollyDisabled(permission(registration.tool, name), rules)) continue
         if (!ConfigCapabilities.allowsTool(capabilities, name)) continue
+        if (!resources) {
+          direct.set(name, registration)
+          continue
+        }
         codemode.set(name, registration)
         if (!registration.codemode) direct.set(name, registration)
       }
@@ -400,6 +415,26 @@ const registryLayer = Layer.effect(
   }),
 )
 
+function safeStandaloneContent(content: ReadonlyArray<{ readonly type: string; readonly text?: string }>, structured: unknown) {
+  if (content.some((item) => item.type !== "text" || typeof item.text !== "string")) return false
+  try {
+    const text = content.length ? content.map((item) => item.text).join("") : JSON.stringify(structured, null, 2) ?? String(structured)
+    return text.split("\n").length <= ToolOutputStore.MAX_LINES && new TextEncoder().encode(text).length <= ToolOutputStore.MAX_BYTES
+  } catch {
+    return false
+  }
+}
+
+const standaloneTools = new Set(["question", "todowrite", "goal", "task_complete"])
+
+const registryLayer = Layer.unwrap(Effect.gen(function* () {
+  const resources = yield* ToolOutputStore.Service
+  const image = yield* Image.Service
+  return makeRegistryLayer(resources, image)
+}))
+
+const standaloneRegistryLayer = makeRegistryLayer(undefined, undefined)
+
 const layer = Layer.effect(
   Tools.Service,
   Service.use((registry) =>
@@ -416,6 +451,12 @@ export const node = makeLocationNode({
   service: Service,
   layer,
   deps: [ToolOutputStore.node, ToolHooks.node, Image.node],
+})
+
+export const standaloneNode = makeLocationNode({
+  service: Service,
+  layer: standaloneRegistryLayer,
+  deps: [ToolHooks.node],
 })
 
 export const toolsNode = makeLocationNode({

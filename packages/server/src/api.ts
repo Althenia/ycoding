@@ -1,6 +1,7 @@
 import { makeDefaultApi } from "@ycoding-ai/protocol/api"
 import { CatalogLocationMiddleware, LocationMiddleware } from "./location"
 import { FormLocationMiddleware } from "./middleware/form-location"
+import { PermissionLocationMiddleware } from "./middleware/permission-location"
 import { SessionLocationMiddleware } from "./middleware/session-location"
 
 export const Api = makeDefaultApi({
@@ -10,4 +11,5 @@ export const Api = makeDefaultApi({
   // Do not use that sentinel with general session APIs.
   formLocationMiddleware: FormLocationMiddleware,
   sessionLocationMiddleware: SessionLocationMiddleware,
+  permissionLocationMiddleware: PermissionLocationMiddleware,
 })

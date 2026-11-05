@@ -3,7 +3,7 @@ export * as DecisionChoice from "./decision-choice"
 import { Effect, Exit, Option, Result, Schema } from "effect"
 import { DecisionFailure } from "@ycoding-ai/schema/decision-failure"
 import type { Category, DecisionMode } from "@ycoding-ai/schema/session-autonomy"
-import type { Decision } from "./decision"
+import { Decision } from "./decision"
 import { DecisionJudgment } from "./decision-judgment"
 import { SessionAutonomy } from "./session/autonomy"
 import { SessionSchema } from "./session/schema"
@@ -129,8 +129,8 @@ export function choose(
     )
 }
 
-export function chooseDetailed(
-  decision: Decision.Interface,
+export function chooseDetailed<E>(
+  decision: Decision.Interface<E>,
   input: {
     readonly sessionID: SessionSchema.ID
     readonly name: string
@@ -141,7 +141,7 @@ export function chooseDetailed(
     readonly authority?: Authority
     readonly invocationKey?: string
   },
-): Effect.Effect<Outcome> {
+): Effect.Effect<Outcome, E> {
   if (input.choices.length === 0) return Effect.succeed({ type: "unsettled", reason: "refused" } as Outcome)
   if (redactionCollision(input.choices)) return Effect.succeed({ type: "unsettled", reason: "invalid-request" } as Outcome)
   return decision
@@ -170,22 +170,24 @@ export function chooseDetailed(
       Effect.result,
       Effect.timeoutOption("60 seconds"),
       Effect.exit,
-      Effect.map((exit): Outcome => {
-        if (Exit.isFailure(exit)) return { type: "unsettled", reason: "provider-failed" }
-        if (exit.value._tag === "None") return { type: "unsettled", reason: "timeout" }
+      Effect.flatMap((exit): Effect.Effect<Outcome, E> => {
+        if (Exit.isFailure(exit)) return Effect.succeed({ type: "unsettled", reason: "provider-failed" })
+        if (exit.value._tag === "None") return Effect.succeed({ type: "unsettled", reason: "timeout" })
         const result = exit.value.value
-        if (Result.isFailure(result)) return { type: "unsettled", reason: result.failure.reason }
+        if (Result.isFailure(result)) return result.failure instanceof Decision.Error
+          ? Effect.succeed({ type: "unsettled", reason: result.failure.reason })
+          : Effect.fail(result.failure)
         const answer = result.success.response.answers.find((item) => item.name === input.name)
-        if (answer?.type === "refusal") return { type: "unsettled", reason: "refused" }
+        if (answer?.type === "refusal") return Effect.succeed({ type: "unsettled", reason: "refused" })
         if (!answer || answer.type !== "choice" || typeof answer.choice !== "string")
-          return { type: "unsettled", reason: "invalid-output" }
+          return Effect.succeed({ type: "unsettled", reason: "invalid-output" })
         const choice = input.choices.find((candidate) => redactText(candidate.value) === answer.choice)
-        if (!choice) return { type: "unsettled", reason: "invalid-output" }
+        if (!choice) return Effect.succeed({ type: "unsettled", reason: "invalid-output" })
         if (!Number.isFinite(answer.confidence) || answer.confidence < 0 || answer.confidence > 1)
-          return { type: "unsettled", reason: "invalid-output" }
+          return Effect.succeed({ type: "unsettled", reason: "invalid-output" })
         if (answer.confidence < ConfidenceThreshold)
-          return { type: "unsettled", reason: "low_confidence", choice: choice.value, confidence: answer.confidence }
-        return { type: "judgment", value: choice.value, confidence: answer.confidence }
+          return Effect.succeed({ type: "unsettled", reason: "low_confidence", choice: choice.value, confidence: answer.confidence })
+        return Effect.succeed({ type: "judgment", value: choice.value, confidence: answer.confidence })
       }),
     )
 }
@@ -200,7 +202,7 @@ export type GradedOutcome =
   | { readonly type: "grades"; readonly grades: ReadonlyArray<Grade> }
   | { readonly type: "unsettled"; readonly reason: DecisionFailure.Reason }
 
-export function grade(decision: Decision.Interface, input: {
+export function grade<E>(decision: Decision.Interface<E>, input: {
   readonly sessionID: SessionSchema.ID
   readonly name: string
   readonly instructions: string
@@ -209,7 +211,7 @@ export function grade(decision: Decision.Interface, input: {
   readonly purpose?: Purpose
   readonly authority?: Authority
   readonly invocationKey?: string
-}): Effect.Effect<GradedOutcome> {
+}): Effect.Effect<GradedOutcome, E> {
   if (input.choices.length === 0 || redactionCollision(input.choices))
     return Effect.succeed({ type: "unsettled", reason: "invalid-request" } as GradedOutcome)
   const originals = new Map(input.choices.map((choice) => [redactText(choice.value), choice.value]))
@@ -227,21 +229,23 @@ export function grade(decision: Decision.Interface, input: {
     Effect.result,
     Effect.timeoutOption("60 seconds"),
     Effect.exit,
-    Effect.map((exit): GradedOutcome => {
-      if (Exit.isFailure(exit)) return { type: "unsettled", reason: "provider-failed" }
-      if (exit.value._tag === "None") return { type: "unsettled", reason: "timeout" }
+    Effect.flatMap((exit): Effect.Effect<GradedOutcome, E> => {
+      if (Exit.isFailure(exit)) return Effect.succeed({ type: "unsettled", reason: "provider-failed" })
+      if (exit.value._tag === "None") return Effect.succeed({ type: "unsettled", reason: "timeout" })
       const result = exit.value.value
-      if (Result.isFailure(result)) return { type: "unsettled", reason: result.failure.reason }
+      if (Result.isFailure(result)) return result.failure instanceof Decision.Error
+        ? Effect.succeed({ type: "unsettled", reason: result.failure.reason })
+        : Effect.fail(result.failure)
       const response = result.success.response
       const parsed = DecisionJudgment.validate({ decisions: { version: response.version, answers: response.answers } }, request)
-      if (Result.isFailure(parsed)) return { type: "unsettled", reason: "invalid-output" }
+      if (Result.isFailure(parsed)) return Effect.succeed({ type: "unsettled", reason: "invalid-output" })
       const answer = parsed.success.decisions.answers[0]
-      if (!answer || answer.type === "refusal") return { type: "unsettled", reason: "refused" }
-      if (!answer.grades) return { type: "unsettled", reason: "invalid-output" }
-      return { type: "grades", grades: answer.grades.map((grade) => ({
+      if (!answer || answer.type === "refusal") return Effect.succeed({ type: "unsettled", reason: "refused" })
+      if (!answer.grades) return Effect.succeed({ type: "unsettled", reason: "invalid-output" })
+      return Effect.succeed({ type: "grades", grades: answer.grades.map((grade) => ({
         choice: originals.get(String(grade.choice))!,
         confidence: grade.confidence, evidence: redactText(grade.evidence).slice(0, 500),
-      })) }
+      })) })
     }),
   )
 }
@@ -268,9 +272,9 @@ export function recommendationReason(reason: string) {
   return reason
 }
 
-export function recommend(decision: Decision.Interface, input: Parameters<typeof grade>[1] & {
+export function recommend<E>(decision: Decision.Interface<E>, input: Parameters<typeof grade>[1] & {
   readonly multiple: boolean
-}): Effect.Effect<Recommendation> {
+}): Effect.Effect<Recommendation, E> {
   return Effect.gen(function* () {
     const outcome = yield* grade(decision, {
       ...input,
@@ -347,7 +351,7 @@ export type TextOutcome =
   | { readonly type: "text"; readonly value: string; readonly confidence: number }
   | { readonly type: "unsettled"; readonly reason: UnsettledReason; readonly confidence?: number }
 
-export function answerText(decision: Decision.Interface, input: {
+export function answerText<E>(decision: Decision.Interface<E>, input: {
   readonly sessionID: SessionSchema.ID
   readonly name: string
   readonly instructions: string
@@ -356,7 +360,7 @@ export function answerText(decision: Decision.Interface, input: {
   readonly purpose?: Purpose
   readonly authority?: Authority
   readonly invocationKey?: string
-}): Effect.Effect<TextOutcome> {
+}): Effect.Effect<TextOutcome, E> {
   const maxLength = input.maxLength ?? DecisionJudgment.DefaultTextMaxLength
   if (!Number.isInteger(maxLength) || maxLength < 1 || maxLength > DecisionJudgment.DefaultTextMaxLength)
     return Effect.succeed({ type: "unsettled", reason: "invalid-request" } as TextOutcome)
@@ -371,20 +375,22 @@ export function answerText(decision: Decision.Interface, input: {
     Effect.result,
     Effect.timeoutOption("60 seconds"),
     Effect.exit,
-    Effect.map((exit): TextOutcome => {
-      if (Exit.isFailure(exit)) return { type: "unsettled", reason: "provider-failed" }
-      if (exit.value._tag === "None") return { type: "unsettled", reason: "timeout" }
+    Effect.flatMap((exit): Effect.Effect<TextOutcome, E> => {
+      if (Exit.isFailure(exit)) return Effect.succeed({ type: "unsettled", reason: "provider-failed" })
+      if (exit.value._tag === "None") return Effect.succeed({ type: "unsettled", reason: "timeout" })
       const result = exit.value.value
-      if (Result.isFailure(result)) return { type: "unsettled", reason: result.failure.reason }
+      if (Result.isFailure(result)) return result.failure instanceof Decision.Error
+        ? Effect.succeed({ type: "unsettled", reason: result.failure.reason })
+        : Effect.fail(result.failure)
       const answer = result.success.response.answers.find((item) => item.name === input.name)
-      if (answer?.type === "refusal") return { type: "unsettled", reason: "refused" }
+      if (answer?.type === "refusal") return Effect.succeed({ type: "unsettled", reason: "refused" })
       if (!answer || answer.type !== "text" || typeof answer.text !== "string" || answer.text.trim().length === 0 || answer.text.length > maxLength)
-        return { type: "unsettled", reason: "invalid-output" }
+        return Effect.succeed({ type: "unsettled", reason: "invalid-output" })
       if (!Number.isFinite(answer.confidence) || answer.confidence < 0 || answer.confidence > 1)
-        return { type: "unsettled", reason: "invalid-output" }
+        return Effect.succeed({ type: "unsettled", reason: "invalid-output" })
       if (answer.confidence < ConfidenceThreshold)
-        return { type: "unsettled", reason: "low_confidence", confidence: answer.confidence }
-      return { type: "text", value: answer.text, confidence: answer.confidence }
+        return Effect.succeed({ type: "unsettled", reason: "low_confidence", confidence: answer.confidence })
+      return Effect.succeed({ type: "text", value: answer.text, confidence: answer.confidence })
     }),
   )
 }
@@ -393,7 +399,7 @@ export type BooleanOutcome =
   | { readonly type: "boolean"; readonly value: boolean; readonly confidence: number }
   | { readonly type: "unsettled"; readonly reason: UnsettledReason; readonly confidence?: number }
 
-export function answerBoolean(decision: Decision.Interface, input: {
+export function answerBoolean<E>(decision: Decision.Interface<E>, input: {
   readonly sessionID: SessionSchema.ID
   readonly name: string
   readonly instructions: string
@@ -401,7 +407,7 @@ export function answerBoolean(decision: Decision.Interface, input: {
   readonly purpose?: Purpose
   readonly authority?: Authority
   readonly invocationKey?: string
-}): Effect.Effect<BooleanOutcome> {
+}): Effect.Effect<BooleanOutcome, E> {
   return decision.evaluate({
     provider: "agent",
     request: {
@@ -413,20 +419,22 @@ export function answerBoolean(decision: Decision.Interface, input: {
     Effect.result,
     Effect.timeoutOption("60 seconds"),
     Effect.exit,
-    Effect.map((exit): BooleanOutcome => {
-      if (Exit.isFailure(exit)) return { type: "unsettled", reason: "provider-failed" }
-      if (exit.value._tag === "None") return { type: "unsettled", reason: "timeout" }
+    Effect.flatMap((exit): Effect.Effect<BooleanOutcome, E> => {
+      if (Exit.isFailure(exit)) return Effect.succeed({ type: "unsettled", reason: "provider-failed" })
+      if (exit.value._tag === "None") return Effect.succeed({ type: "unsettled", reason: "timeout" })
       const result = exit.value.value
-      if (Result.isFailure(result)) return { type: "unsettled", reason: result.failure.reason }
+      if (Result.isFailure(result)) return result.failure instanceof Decision.Error
+        ? Effect.succeed({ type: "unsettled", reason: result.failure.reason })
+        : Effect.fail(result.failure)
       const answer = result.success.response.answers.find((item) => item.name === input.name)
-      if (answer?.type === "refusal") return { type: "unsettled", reason: "refused" }
+      if (answer?.type === "refusal") return Effect.succeed({ type: "unsettled", reason: "refused" })
       if (!answer || answer.type !== "predicate" || typeof answer.answer !== "boolean")
-        return { type: "unsettled", reason: "invalid-output" }
+        return Effect.succeed({ type: "unsettled", reason: "invalid-output" })
       if (!Number.isFinite(answer.confidence) || answer.confidence < 0 || answer.confidence > 1)
-        return { type: "unsettled", reason: "invalid-output" }
+        return Effect.succeed({ type: "unsettled", reason: "invalid-output" })
       if (answer.confidence < ConfidenceThreshold)
-        return { type: "unsettled", reason: "low_confidence", confidence: answer.confidence }
-      return { type: "boolean", value: answer.answer, confidence: answer.confidence }
+        return Effect.succeed({ type: "unsettled", reason: "low_confidence", confidence: answer.confidence })
+      return Effect.succeed({ type: "boolean", value: answer.answer, confidence: answer.confidence })
     }),
   )
 }

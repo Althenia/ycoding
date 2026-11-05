@@ -6,7 +6,7 @@ import { Session } from "@ycoding-ai/core/session"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { Workspace } from "@ycoding-ai/core/workspace"
 import { eq } from "drizzle-orm"
-import { Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http"
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
 import { InvalidRequestError, SessionNotFoundError } from "@ycoding-ai/protocol/errors"
@@ -51,7 +51,7 @@ export const sessionLocationLayer = Layer.effect(
           ),
         )
         const row = yield* db
-          .select({ directory: SessionTable.directory, workspaceID: SessionTable.workspace_id })
+          .select({ directory: SessionTable.directory, workspaceID: SessionTable.workspace_id, scope: SessionTable.scope, projectID: SessionTable.project_id })
           .from(SessionTable)
           .where(eq(SessionTable.id, sessionID))
           .get()
@@ -61,6 +61,21 @@ export const sessionLocationLayer = Layer.effect(
             sessionID,
             message: `Session not found: ${sessionID}`,
           })
+
+        const url = new URL(request.url, "http://localhost")
+        const query = url.searchParams
+        const decode = (value: string) => { try { return decodeURIComponent(value) } catch { return value } }
+        const directories = [...query.getAll("location[directory]"), request.headers["x-ycoding-directory"] === undefined ? null : decode(request.headers["x-ycoding-directory"])]
+        const workspaces = [...query.getAll("location[workspace]"), request.headers["x-ycoding-workspace"] ?? null]
+        if (directories.some((value) => value !== null && value !== row.directory) || workspaces.some((value) => value !== null && value !== row.workspaceID))
+          return yield* new InvalidRequestError({ message: "Session location does not match the recorded placement" })
+        const ref = Location.Ref.make({ directory: AbsolutePath.make(row.directory), workspaceID: row.workspaceID ? Workspace.ID.make(row.workspaceID) : undefined })
+        if (row.scope === "standalone") {
+          if (request.method !== "GET" || url.pathname !== `/api/session/${sessionID}`)
+            return yield* new InvalidRequestError({ message: "Standalone Session operation is unavailable" })
+          const context = Context.make(Location.Service, Location.Service.of({ ...ref, project: { id: row.projectID, directory: ref.directory } }))
+          return yield* Effect.provide(effect, Context.makeUnsafe<LocationServices>(context.mapUnsafe))
+        }
 
         return yield* effect.pipe(
           Effect.provide(

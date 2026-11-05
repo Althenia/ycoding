@@ -18,7 +18,7 @@ import { testEffect } from "../../core/test/lib/effect"
 import { Api } from "../src/api"
 import { FormHandler } from "../src/handlers/form"
 import { LocationMiddleware, type LocationServices } from "../src/location"
-import { FormLocationMiddleware } from "../src/middleware/form-location"
+import { FormLocationMiddleware, SessionForm } from "../src/middleware/form-location"
 
 const it = testEffect(AppNodeBuilder.build(Form.node, [
   [Database.node, Database.configured({ path: ":memory:" })],
@@ -39,7 +39,7 @@ it.effect("session.form.create stays pending after a day and accepts a late vali
   const application = yield* Layer.build(HttpApiBuilder.layer(HttpApi.make("server").add(Api.groups["server.form"])).pipe(
     Layer.provide(FormHandler),
     Layer.provide(Layer.mergeAll(
-      Layer.succeed(FormLocationMiddleware, (effect) => Effect.provide(effect, services)),
+      Layer.succeed(FormLocationMiddleware, (effect) => Effect.provideService(effect, SessionForm, form)),
       Layer.succeed(LocationMiddleware, (effect) => Effect.provide(effect, services)),
       Layer.succeed(Authorization, (effect) => effect),
       Layer.succeed(SchemaErrorMiddleware, (effect) => effect),

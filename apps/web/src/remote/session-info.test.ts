@@ -2,6 +2,11 @@ import { describe, expect, test } from "bun:test"
 import { readSessionInfo } from "./store"
 
 describe("remote Session location metadata", () => {
+  test("standalone scope survives Session metadata projection", () => {
+    expect(readSessionInfo({ id: "ses_standalone", title: "New", scope: "standalone" })).toMatchObject({ scope: "standalone" })
+    expect(readSessionInfo({ id: "ses_bound", title: "Bound", scope: "bound" })).toMatchObject({ scope: "bound" })
+  })
+
   test("retains the project and directory already carried by Session.Info", () => {
     expect(readSessionInfo({
       id: "ses_api",
@@ -15,6 +20,7 @@ describe("remote Session location metadata", () => {
       projectID: "prj_api",
       directory: "/work/api",
       workspaceID: "ws_local",
+      scope: "bound",
       updatedAt: 42,
       archived: false,
     })
@@ -28,7 +34,7 @@ describe("remote Session location metadata", () => {
       { projectID: null, location: null },
     ]) {
       expect(readSessionInfo({ id: "ses_api", title: "/work/api", ...metadata })).toEqual({
-        id: "ses_api", title: "/work/api", updatedAt: 0, archived: false,
+        id: "ses_api", title: "/work/api", scope: "bound", updatedAt: 0, archived: false,
       })
     }
   })

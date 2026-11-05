@@ -647,7 +647,7 @@ function SuggestDialog(props: {
   </Modal>
 }
 
-export function Composer(props: { readonly sessionID?: string; readonly running: boolean; readonly canSend: boolean; readonly metadataMount?: HTMLElement; readonly companionContextOpen?: boolean; readonly onOpenContext?: () => void }): JSX.Element {
+export function Composer(props: { readonly sessionID?: string; readonly running: boolean; readonly canSend: boolean; readonly sendDisabled?: boolean; readonly metadataMount?: HTMLElement; readonly companionContextOpen?: boolean; readonly onOpenContext?: () => void }): JSX.Element {
   const remote = useRemote()
   const [suggestion, setSuggestion] = createSignal<{ readonly hint?: string; readonly returnFocus: HTMLElement }>()
   let composerMount: HTMLDivElement | undefined
@@ -665,7 +665,7 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
     return true
   }
   return <div class="mini-composer__mount" ref={composerMount}>
-    <MiniComposer phoneSummary metadataMount={props.metadataMount} companionContextOpen={props.companionContextOpen} onOpenContext={props.onOpenContext} target={props.sessionID ? { sessionID: props.sessionID } : undefined} text={text()} onText={(value) => { if (props.sessionID) remote.store.setDraft(props.sessionID, value) }} disabled={!props.canSend || !props.sessionID} running={props.running} showStatus onInterrupt={() => void remote.store.interrupt()} onSubmit={async (value) => {
+    <MiniComposer phoneSummary metadataMount={props.metadataMount} companionContextOpen={props.companionContextOpen} onOpenContext={props.onOpenContext} target={props.sessionID ? { sessionID: props.sessionID } : undefined} text={text()} onText={(value) => { if (props.sessionID) remote.store.setDraft(props.sessionID, value) }} disabled={!props.canSend || !props.sessionID} sendDisabled={props.sendDisabled} running={props.running} showStatus onInterrupt={() => void remote.store.interrupt()} onSubmit={async (value) => {
       const sessionID = props.sessionID
       const draft = text()
       if (!sessionID) return false

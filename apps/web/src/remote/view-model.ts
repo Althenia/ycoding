@@ -18,6 +18,10 @@ import type { FormAnswerView, FormFieldView, FormView, SessionView, ShellOutputF
 
 export type FormDraft = Readonly<Record<string, FormAnswerView[string] | undefined>>
 
+export function boundPlacement(info: "bound" | "standalone" | undefined, view: "bound" | "standalone" | undefined) {
+  return info !== "standalone" && view !== "standalone" && (info === "bound" || view === "bound")
+}
+
 export function modelEffortNotice(input: { readonly known: boolean; readonly blocked: boolean; readonly variants: number }) {
   return input.known && !input.blocked && input.variants === 0
     ? "This model has no adjustable effort; it uses its own settings."

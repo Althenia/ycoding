@@ -93,7 +93,7 @@ test("prediction helper selection preserves session inheritance, profile and age
   const selected = "Personal#openai/prediction-model#low"
   const info = Schema.decodeUnknownSync(Config.Info)({ efficiency: { helper_models: { prediction: selected } } })
   expect(settings([new Config.Document({ type: "document", info })]).models.prediction).toEqual(ref("openai", "prediction-model", "low", "Personal"))
-  const session = SessionSchema.Info.make({ id: SessionSchema.ID.make("ses_prediction_model"), projectID: Project.ID.global,
+  const session = SessionSchema.Info.make({ id: SessionSchema.ID.make("ses_prediction_model"), projectID: Project.ID.global, scope: "bound",
     location: { directory: AbsolutePath.make("/project") }, title: "Prediction", time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) }, cost: Money.USD.zero,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, model: ref("fixture", "owner", "medium", "Owner") })
   const seen: Array<SessionSchema.Info["model"]> = []
@@ -109,7 +109,7 @@ test("prompt helper selection preserves session inheritance, profile and agent p
   const selected = "Personal#openai/prompt-model#low"
   const info = Schema.decodeUnknownSync(Config.Info)({ efficiency: { helper_models: { prompt: selected } } })
   expect(settings([new Config.Document({ type: "document", info })]).models.prompt).toEqual(ref("openai", "prompt-model", "low", "Personal"))
-  const session = SessionSchema.Info.make({ id: SessionSchema.ID.make("ses_prompt_model"), projectID: Project.ID.global,
+  const session = SessionSchema.Info.make({ id: SessionSchema.ID.make("ses_prompt_model"), projectID: Project.ID.global, scope: "bound",
     location: { directory: AbsolutePath.make("/project") }, title: "Prompt", time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) }, cost: Money.USD.zero,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, model: ref("fixture", "owner", "medium", "Owner") })
   const seen: Array<SessionSchema.Info["model"]> = []
@@ -129,6 +129,7 @@ test("decision helper resolution preserves agent, configured, session, and defau
   const session = SessionSchema.Info.make({
     id: SessionSchema.ID.make("ses_decision_owner"),
     projectID: Project.ID.global,
+    scope: "bound",
     cost: Money.USD.zero,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: DateTime.makeUnsafe(1), updated: DateTime.makeUnsafe(1) },
@@ -195,6 +196,7 @@ test("compaction model selection uses the owner Session scope before the hidden 
     SessionSchema.Info.make({
       id,
       projectID: Project.ID.global,
+      scope: "bound",
       cost: Money.USD.zero,
       tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
       time: { created: DateTime.makeUnsafe(1), updated: DateTime.makeUnsafe(1) },

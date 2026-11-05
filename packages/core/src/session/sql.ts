@@ -33,6 +33,7 @@ import type { RelativePath } from "../schema"
 import type { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import type { SessionEvent } from "@ycoding-ai/schema/session-event"
 import type { UsageAnchor } from "@ycoding-ai/schema/usage-anchor"
+import type { SessionScope } from "@ycoding-ai/schema/session-scope"
 
 type SessionMessageData = Omit<(typeof SessionMessage.Info)["Encoded"], "type" | "id">
 
@@ -48,6 +49,7 @@ export const SessionTable = sqliteTable(
   "session",
   {
     id: text().$type<SessionSchema.ID>().primaryKey(),
+    scope: text().$type<SessionScope>().notNull().default("bound"),
     project_id: text()
       .$type<Project.ID>()
       .notNull()
@@ -84,6 +86,7 @@ export const SessionTable = sqliteTable(
     time_suspended: integer(),
   },
   (table) => [
+    check("session_scope_check", sql`${table.scope} IN ('bound', 'standalone')`),
     index("session_time_updated_id_idx").on(table.time_updated, table.id),
     index("session_active_goal_idx")
       .on(table.id)

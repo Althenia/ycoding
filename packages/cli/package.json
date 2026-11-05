@@ -32,6 +32,7 @@
     "@effect/platform-node": "catalog:",
     "@ycoding-ai/client": "workspace:*",
     "@ycoding-ai/core": "workspace:*",
+    "@ycoding-ai/desktop": "workspace:*",
     "@ycoding-ai/meeting": "workspace:*",
     "@ycoding-ai/plugin": "workspace:*",
     "@ycoding-ai/remote": "workspace:*",

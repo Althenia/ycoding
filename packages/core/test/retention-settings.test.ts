@@ -11,7 +11,16 @@ import { Config } from "../src/config"
 import { ConfigAnalyticsRetention } from "../src/config/analytics-retention"
 import { ConfigSessionRetention } from "../src/config/session-retention"
 import { RetentionSettings } from "../src/retention-settings"
+import { Project } from "../src/project"
+import { Git } from "../src/git"
 import { AbsolutePath } from "@ycoding-ai/schema/schema"
+
+test("global retention settings have no repository service dependencies", () => {
+  const compiler = LayerNode.compiler()
+  const names = compiler.closure(compiler.members(RetentionSettings.node)).map((node) => node.name)
+  expect(names).not.toContain(Project.node.name)
+  expect(names).not.toContain(Git.node.name)
+})
 
 test("retention fields accept positive integers and reject zero, negative, fractional and nonnumeric values", () => {
   for (const [schema, key] of [

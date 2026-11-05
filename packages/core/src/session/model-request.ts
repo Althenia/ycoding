@@ -15,6 +15,7 @@ import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Context, Effect, Layer } from "effect"
 import { Config } from "../config"
+import { StandaloneConfig } from "../config/standalone"
 import { AccountConnectors } from "../account-connectors"
 import { ConfigEfficiency } from "../config/efficiency"
 import { Database } from "../database/database"
@@ -24,11 +25,14 @@ import { makeLocationNode } from "../effect/app-node"
 import { PluginHooks } from "../plugin/hooks"
 import { OpenAICodex } from "../plugin/provider/openai-codex"
 import { ToolRegistry } from "../tool/registry"
+import { StandaloneTools } from "../tool/standalone-tools"
 import { SessionContext } from "./context"
 import { SessionModelHeaders } from "./model-headers"
 import { SessionRunnerCache } from "./runner/cache"
 import { SessionCacheRuntime } from "./runner/cache-runtime"
 import { SessionRunnerModel } from "./runner/model"
+import { StandaloneModel } from "./runner/standalone-model"
+import { ScopeUnavailableError } from "./error"
 import PROMPT_DEFAULT from "./runner/prompt/base.txt"
 import { isProviderImage, readAttachments, readToolImages, toLLMMessages } from "./runner/to-llm-message"
 import { ImageAnalyzer } from "./runner/image-analyzer"
@@ -109,32 +113,38 @@ export interface Interface {
 /** Location-scoped outbound model-request preparation. */
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionModelRequest") {}
 
-export const layer = (options?: SessionModelHeaders.Options) =>
-  Layer.effect(
-    Service,
-    Effect.gen(function* () {
-      const hooks = yield* PluginHooks.Service
-      const registry = yield* ToolRegistry.Service
-      const coordination = yield* CoordinationService.Service
-      const config = yield* Config.Service
-      const connectors = yield* AccountConnectors.Service
-      const cacheRuntime = yield* SessionCacheRuntime.Service
-      const continuation = yield* SessionContinuation.Service
-      const providerState = yield* SessionProviderState.Service
-      const db = (yield* Database.Service).db
-      const attachments = yield* AttachmentStore.Service
-      const catalog = yield* Catalog.Service
-      const imageAnalyzer = yield* ImageAnalyzer.Service.pipe(
-        Effect.orElseSucceed(() => undefined as unknown as ImageAnalyzer.Interface),
-      )
+type StandaloneError = StandaloneConfig.InvalidError | ScopeUnavailableError
+
+export class StandaloneService extends Context.Service<StandaloneService, {
+  readonly prepare: (input: PrepareInput) => Effect.Effect<Prepared, StandaloneError>
+}>()("@ycoding/StandaloneModelRequest") {}
+
+interface Dependencies<E> {
+  readonly entries: () => Effect.Effect<ReadonlyArray<Config.Entry>, E>
+  readonly materialize: (permissions: Parameters<ToolRegistry.Interface["materialize"]>[0], capabilities: Parameters<ToolRegistry.Interface["materialize"]>[1], resolved: SessionRunnerModel.Resolved) => Effect.Effect<ToolRegistry.Materialization, E>
+  readonly guard?: (input: PrepareInput) => Effect.Effect<void, E>
+  readonly hooks?: PluginHooks.Interface
+  readonly coordination: CoordinationService.Interface
+  readonly cacheRuntime: SessionCacheRuntime.Interface
+  readonly continuation: SessionContinuation.Interface
+  readonly providerState: SessionProviderState.Interface
+  readonly db: Database.Interface["db"]
+  readonly attachments?: AttachmentStore.Interface
+  readonly catalog: Catalog.Interface
+  readonly imageAnalyzer?: ImageAnalyzer.Interface
+}
+
+const make = <E>(dependencies: Dependencies<E>, options?: SessionModelHeaders.Options) => {
+      const { coordination, cacheRuntime, continuation, providerState, db, attachments, catalog, imageAnalyzer } = dependencies
 
       const prepare = Effect.fn("SessionModelRequest.prepare")(function* (input: PrepareInput) {
+        if (dependencies.guard) yield* dependencies.guard(input)
         const session = input.context.session
         const agent = input.context.agent
         const resolved = input.model ?? input.context.model
         const model = resolved.model
         const providerMetadataKey = model.route.providerMetadataKey ?? model.provider
-        const configEntries = yield* config.entries()
+        const configEntries = yield* dependencies.entries()
         const efficiencyInfo = Config.latest(configEntries, "efficiency")
         const responsesState = ConfigEfficiency.openAIResponsesState(efficiencyInfo)
         const efficiency = SessionRunnerCache.efficiencySettings(efficiencyInfo)
@@ -158,18 +168,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const permissions = [...basePermissions, ...CoordinationAccess.rules(scoped)]
         const executableTools = toolsDisabled
           ? undefined
-          : yield* registry.materialize(permissions, Config.capabilities(configEntries), [
-              ...(yield* connectors
-                .tools({
-                  profile: resolved.ref.providerID === "openai" ? resolved.ref.profile : undefined,
-                  binding: resolved.ref.providerID === "openai" ? resolved.profileBinding : undefined,
-                  claude:
-                    resolved.ref.providerID === "anthropic"
-                      ? { profile: resolved.ref.profile, binding: resolved.profileBinding }
-                      : undefined,
-                })
-                .pipe(Effect.orDie)),
-            ])
+          : yield* dependencies.materialize(permissions, Config.capabilities(configEntries), resolved)
         const system = baseSystem(input.context)
         const directOpenAIResponses =
           model.provider === "openai" && SessionContinuation.isResponsesRoute(model.route.id)
@@ -189,8 +188,8 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           stateless: effectiveStore === false,
           accountIdentityDigest: resolved.accountIdentityDigest,
         })
-        const attachmentRead = yield* readAttachments(attachments, session.id, input.context.messages)
-        const verifiedAttachments = attachmentRead.verified
+        const attachmentRead = attachments ? yield* readAttachments(attachments, session.id, input.context.messages) : undefined
+        const verifiedAttachments = attachmentRead?.verified ?? []
         const toolImages = readToolImages(input.context.messages)
         const imageInputs = [
           ...verifiedAttachments
@@ -205,7 +204,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             .pipe(Effect.orElseSucceed(() => undefined as unknown as import("../model").CatalogModel.Info | undefined))
           const multimodal = runningInfo ? ImageAnalyzer.isMultimodal(runningInfo.capabilities) : false
           if (!multimodal) {
-            const entriesImg = yield* config.entries()
+            const entriesImg = yield* dependencies.entries()
             const analyzerInfo = Config.latest(entriesImg, "image_analyzer")
             const analyzerEnabled = analyzerInfo ? ConfigImageAnalyzer.isEnabled(analyzerInfo) : false
             if (analyzerEnabled && imageAnalyzer) {
@@ -233,7 +232,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           }
         }
         const descriptions = fallbackDescriptions
-        const attachmentMaterialization = {
+        const attachmentMaterialization = attachmentRead === undefined ? undefined : {
           ...attachmentRead.materialization,
           ...(descriptions
             ? {
@@ -263,7 +262,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const toolDefinitions = executableTools?.definitions ?? []
         const toolsByName = new Map(toolDefinitions.map((tool) => [tool.name, tool]))
         // Hooks may reshape available definitions but cannot advertise tools omitted by permissions or the Step limit.
-        const contextEvent = yield* hooks.trigger("session", "context", {
+        const contextData = {
           sessionID: session.id,
           agent: agent.id,
           model: resolved.ref,
@@ -276,7 +275,8 @@ export const layer = (options?: SessionModelHeaders.Options) =>
               { description: tool.description, input: { ...tool.inputSchema } },
             ]),
           ),
-        })
+        }
+        const contextEvent = dependencies.hooks ? yield* dependencies.hooks.trigger("session", "context", contextData) : contextData
         const hookedTools = SessionRunnerCache.canonicalTools(
           Object.entries(contextEvent.tools).flatMap(([name, tool]) => {
             const registered = toolsByName.get(name)
@@ -554,6 +554,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             }
           return { type: "settle", settle: executableTools.settle }
         }
+        if (dependencies.guard) yield* dependencies.guard(input)
         return {
           request,
           inputIDs,
@@ -573,9 +574,68 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         }
       })
 
-      return Service.of({ prepare })
+      return { prepare }
+}
+
+export const layer = (options?: SessionModelHeaders.Options) => Layer.effect(Service, Effect.gen(function* () {
+  const hooks = yield* PluginHooks.Service
+  const registry = yield* ToolRegistry.Service
+  const coordination = yield* CoordinationService.Service
+  const config = yield* Config.Service
+  const connectors = yield* AccountConnectors.Service
+  const cacheRuntime = yield* SessionCacheRuntime.Service
+  const continuation = yield* SessionContinuation.Service
+  const providerState = yield* SessionProviderState.Service
+  const db = (yield* Database.Service).db
+  const attachments = yield* AttachmentStore.Service
+  const catalog = yield* Catalog.Service
+  const imageAnalyzer = yield* ImageAnalyzer.Service.pipe(Effect.orElseSucceed(() => undefined))
+  return Service.of(make({
+    hooks, coordination, cacheRuntime, continuation, providerState, db, attachments, catalog, imageAnalyzer,
+    entries: () => config.entries(),
+    materialize: (permissions, capabilities, resolved) => Effect.gen(function* () {
+      const tools = yield* connectors.tools({
+        profile: resolved.ref.providerID === "openai" ? resolved.ref.profile : undefined,
+        binding: resolved.ref.providerID === "openai" ? resolved.profileBinding : undefined,
+        claude: resolved.ref.providerID === "anthropic" ? { profile: resolved.ref.profile, binding: resolved.profileBinding } : undefined,
+      }).pipe(Effect.orDie)
+      return yield* registry.materialize(permissions, capabilities, [...tools])
     }),
-  )
+  }, options))
+}))
+
+export const standaloneNode = makeLocationNode({
+  service: StandaloneService,
+  layer: Layer.effect(StandaloneService, Effect.gen(function* () {
+    const config = yield* StandaloneConfig.Service
+    const models = yield* StandaloneModel.Service
+    const tools = yield* StandaloneTools.Service
+    const coordination = yield* CoordinationService.Service
+    const cacheRuntime = yield* SessionCacheRuntime.Service
+    const continuation = yield* SessionContinuation.Service
+    const providerState = yield* SessionProviderState.Service
+    const db = (yield* Database.Service).db
+    const catalog = yield* Catalog.Service
+    return StandaloneService.of(make<StandaloneError>({
+      coordination, cacheRuntime, continuation, providerState, db, catalog,
+      entries: () => config.snapshot().pipe(Effect.map((snapshot) => snapshot.entries)),
+      guard: (input) => Effect.gen(function* () {
+        if (input.context.session.scope !== "standalone" || input.context.configGeneration === undefined || input.context.messages.some((message) => message.type === "user" && (message.files?.length ?? 0) > 0) || readToolImages(input.context.messages).length > 0)
+          return yield* new ScopeUnavailableError({ operation: "standalone model request" })
+        yield* config.assert(input.context.configGeneration)
+        yield* models.assert(input.model ?? input.context.model)
+      }),
+      materialize: (permissions, capabilities) => tools.materialize(permissions, capabilities).pipe(Effect.map((materialized) => ({
+        definitions: materialized.definitions,
+        settle: (input) => materialized.settle(input).pipe(Effect.catchIf(
+          (error): error is StandaloneConfig.InvalidError => error instanceof StandaloneConfig.InvalidError,
+          () => Effect.succeed({ result: { type: "error" as const, value: "Standalone tool configuration is no longer current" }, error: { type: "tool.execution", message: "Standalone tool configuration is no longer current" } }),
+        )),
+      }))),
+    }))
+  })),
+  deps: [StandaloneConfig.node, StandaloneModel.node, StandaloneTools.node, CoordinationService.node, SessionCacheRuntime.node, SessionContinuation.node, SessionProviderState.node, Database.node, Catalog.node],
+})
 
 export function configured(options?: SessionModelHeaders.Options) {
   return makeLocationNode({

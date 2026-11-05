@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop-main",
+  "description": "Native backend connection, Session workspace and event access for the local main window",
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "allow-desktop-preferences", "allow-desktop-state", "allow-desktop-connect", "allow-desktop-disconnect", "allow-desktop-sessions", "allow-desktop-workspaces", "allow-desktop-messages", "allow-desktop-create-session", "allow-desktop-prompt", "allow-desktop-interrupt", "allow-desktop-requests", "allow-desktop-reply", "allow-desktop-models", "allow-desktop-switch-model", "allow-desktop-pin", "allow-desktop-session"]
+}

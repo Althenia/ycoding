@@ -45,6 +45,7 @@ const locations = Layer.effect(
 const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
+    prepareTask: () => Effect.void,
     active: Effect.succeed(new Set()),
     resume: () => Effect.void,
     interrupt: () => Effect.void,

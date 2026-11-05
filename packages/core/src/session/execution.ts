@@ -11,7 +11,7 @@ import { SessionRunner } from "./runner/index"
 import { SessionSchema } from "./schema"
 import { SessionStore } from "./store"
 import { toSessionError } from "./to-session-error"
-import { StepFailedError, UserInterruptedError } from "./error"
+import { ScopeUnavailableError, StepFailedError, UserInterruptedError } from "./error"
 import { Database } from "../database/database"
 import { Hash } from "../util/hash"
 import { SessionAutonomy } from "./autonomy"
@@ -27,17 +27,17 @@ import { SessionGoal } from "./goal"
 import { SessionReviewFold } from "./review-fold"
 import { SessionCompletion } from "./completion"
 import { Job } from "../job"
-import { AppProcess } from "../process"
-import { ShellLedger } from "../shell/ledger"
+import type { ShellLedger } from "../shell/ledger"
 import { SessionStatusEvent } from "@ycoding-ai/schema/session-status-event"
 
 export interface Interface {
+  readonly prepareTask: (owner: ShellLedger.Process) => Effect.Effect<void, ScopeUnavailableError>
   /** Snapshots active execution owned by this process. */
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
   /** Starts execution while idle or joins the active execution. */
-  readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, SessionRunner.RunError>
+  readonly resume: (sessionID: SessionSchema.ID, owner?: ShellLedger.Process) => Effect.Effect<void, SessionRunner.RunError | ScopeUnavailableError>
   /** Registers newly recorded work. Repeated wakeups may coalesce. */
-  readonly wake: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly wake: (sessionID: SessionSchema.ID, owner?: ShellLedger.Process) => Effect.Effect<void, ScopeUnavailableError>
   /** Interrupt active work owned by this process. Idle interruption is a no-op. */
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   /** Resolves once this process owns no active execution for the Session. Returns immediately when idle and never starts work. */
@@ -60,7 +60,7 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Ses
 
 type InterruptReason = "user" | "shutdown" | "superseded"
 
-export function terminal(exit: Exit.Exit<void, SessionRunner.RunError>, reason?: InterruptReason) {
+export function terminal(exit: Exit.Exit<void, SessionRunner.RunError | ScopeUnavailableError>, reason?: InterruptReason) {
   if (Exit.isSuccess(exit)) return { type: "succeeded" as const }
   if (Cause.hasInterrupts(exit.cause)) return { type: "interrupted" as const, reason: reason ?? "shutdown" }
   const failure = Cause.squash(exit.cause)
@@ -79,8 +79,15 @@ export const layer = Layer.effect(
     const autonomy = yield* SessionAutonomy.Service
     const compactionExecution = yield* SessionCompactionExecution.Service
     const jobs = yield* Job.Service
-    const appProcess = yield* AppProcess.Service
-    const owner = yield* ShellLedger.identify(appProcess, process.pid)
+    let owner: ShellLedger.Process | undefined
+    const bindTaskOwner = (candidate: ShellLedger.Process) => Effect.gen(function* () {
+      yield* EventRuntime.requireTaskOwner.pipe(Effect.provideService(EventRuntime.TaskOwner, candidate))
+      if (candidate.pid !== process.pid)
+        return yield* new EventRuntime.TaskOwnerUnavailableError({ message: "Managed task owner is not the current process" })
+      if (owner && (owner.pid !== candidate.pid || owner.started !== candidate.started || owner.pgid !== candidate.pgid))
+        return yield* new EventRuntime.TaskOwnerUnavailableError({ message: "Managed task owner changed during execution" })
+      owner = candidate
+    })
     const completion = SessionCompletion.make({ db, events, jobs })
     const reportLifecycle = <A>(sessionID: SessionSchema.ID, effect: Effect.Effect<A>) =>
       effect.pipe(
@@ -113,7 +120,7 @@ export const layer = Layer.effect(
       if (activeChild) return undefined
       if ((yield* SessionReviewFold.openCount(db, sessionID)) > 0) return undefined
       const session = yield* store.get(sessionID)
-      if (!session) return undefined
+      if (!session || session.scope === "standalone") return undefined
       const activeShell = yield* Effect.gen(function* () {
         const shell = yield* Shell.Service
         return (yield* shell.list()).some((info) => info.metadata.sessionID === sessionID)
@@ -248,8 +255,8 @@ export const layer = Layer.effect(
         },
       )
     })
-    let wake: (sessionID: SessionSchema.ID) => Effect.Effect<void> = () => Effect.void
-    const coordinator: SessionRunCoordinator.Coordinator<SessionSchema.ID, SessionRunner.RunError, InterruptReason> = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError, InterruptReason>({
+    let wake: Interface["wake"] = () => Effect.void
+    const coordinator: SessionRunCoordinator.Coordinator<SessionSchema.ID, SessionRunner.RunError | ScopeUnavailableError, InterruptReason> = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError | ScopeUnavailableError, InterruptReason>({
       started: (sessionID) =>
         reportLifecycle(
           sessionID,
@@ -280,18 +287,22 @@ export const layer = Layer.effect(
           }).pipe(Effect.annotateLogs({ sessionID }))
           return
         }
-        if (
-          task &&
-          task.ownerPid !== null &&
-          (task.ownerPid !== process.pid || (owner !== undefined && task.ownerStarted !== owner.started))
-        ) {
+        if (task && (!owner || task.ownerPid !== owner.pid || task.ownerStarted !== owner.started)) {
           yield* Effect.logWarning("Session drain skipped for a managed task claimed by another process", {
             ownerPid: task.ownerPid,
           }).pipe(Effect.annotateLogs({ sessionID }))
           return
         }
+        const runnerLayer = session.scope === "standalone"
+          ? yield* Effect.gen(function* () {
+              const { SessionRunnerLLM } = yield* Effect.promise(() => import("./runner/llm"))
+              return Layer.effectContext(locations.contextEffect(session.location, [SessionRunnerLLM.standaloneNode], session.scope).pipe(
+                Effect.mapError((error) => error instanceof ScopeUnavailableError ? error : new ScopeUnavailableError({ operation: "standalone runner configuration" })),
+              ))
+            })
+          : locations.get(session.location, [LocationServiceMap.full])
         return yield* SessionRunner.Service.use((runner) => runner.drain({ sessionID, force })).pipe(
-          Effect.provide(locations.get(session.location, [LocationServiceMap.full])),
+          Effect.provide(runnerLayer),
           SessionCompactionExecution.bind(compactionExecution),
           Effect.tapCause((cause) => {
             if (Cause.hasInterruptsOnly(cause)) return Effect.void
@@ -388,7 +399,7 @@ export const layer = Layer.effect(
                     ),
                   ),
                 )
-          if (queued) yield* wake(sessionID)
+          if (queued) yield* wake(sessionID).pipe(Effect.catchTag("Session.ScopeUnavailableError", (error) => Effect.logWarning("Could not wake Session", error)))
         }),
     })
 
@@ -399,12 +410,21 @@ export const layer = Layer.effect(
       Effect.asVoid,
       Effect.catchCause((cause) => Effect.logWarning("Failed to publish Session status", cause).pipe(Effect.annotateLogs({ sessionID }))),
     )
-    wake = (sessionID) => Effect.sync(() => woken.add(sessionID)).pipe(Effect.andThen(coordinator.wake(sessionID)))
+    const requireOwner = (sessionID: SessionSchema.ID) => Effect.gen(function* () {
+      const task = yield* db.select({ id: SessionTaskTable.session_id }).from(SessionTaskTable)
+        .where(eq(SessionTaskTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      if (task && !owner) return yield* new ScopeUnavailableError({ operation: "managed task owner" })
+    })
+    const bindCandidate = (candidate?: ShellLedger.Process) => candidate
+      ? bindTaskOwner(candidate).pipe(Effect.mapError(() => new ScopeUnavailableError({ operation: "managed task owner" })))
+      : Effect.void
+    wake = (sessionID, candidate) => bindCandidate(candidate).pipe(Effect.andThen(requireOwner(sessionID)), Effect.andThen(Effect.sync(() => woken.add(sessionID))), Effect.andThen(coordinator.wake(sessionID)))
     return Service.of({
+      prepareTask: (candidate) => bindCandidate(candidate),
       active: coordinator.active,
       interrupt: (sessionID) =>
         Effect.sync(() => stopRequested.add(sessionID)).pipe(Effect.andThen(coordinator.interrupt(sessionID, "user"))),
-      resume: coordinator.run,
+      resume: (sessionID, candidate) => bindCandidate(candidate).pipe(Effect.andThen(requireOwner(sessionID)), Effect.andThen(coordinator.run(sessionID))),
       wake,
       awaitIdle: coordinator.awaitIdle,
       shutdown: coordinator.shutdown("shutdown"),
@@ -424,7 +444,6 @@ export const node = makeGlobalNode({
     LocationServiceMap.node,
     EventRuntime.node,
     Job.node,
-    AppProcess.node,
   ],
 })
 
@@ -432,6 +451,7 @@ export const node = makeGlobalNode({
 export const noopLayer = Layer.succeed(
   Service,
   Service.of({
+    prepareTask: () => Effect.fail(new ScopeUnavailableError({ operation: "managed task owner" })),
     active: Effect.succeed(new Set()),
     resume: () => Effect.void,
     wake: () => Effect.void,

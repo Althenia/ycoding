@@ -751,6 +751,7 @@ describe("LocationServiceMap", () => {
               Session.Info.make({
                 id: Session.ID.make("ses_unavailable_model"),
                 projectID: Project.ID.global,
+                scope: "bound",
                 title: "test",
                 model: {
                   id: CatalogModel.ID.make("chat"),
@@ -799,6 +800,7 @@ describe("LocationServiceMap", () => {
               Session.Info.make({
                 id: Session.ID.make("ses_aliased_model"),
                 projectID: Project.ID.global,
+                scope: "bound",
                 title: "test",
                 model: {
                   id: CatalogModel.ID.make("fast"),

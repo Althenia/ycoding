@@ -4,6 +4,7 @@ import { ToolFailure } from "@ycoding-ai/ai"
 import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { Effect, Schema } from "effect"
 import { Permission } from "../permission"
+import type { StandalonePermission } from "./standalone-permission"
 import { SessionTodo } from "../session/todo"
 import { Tool } from "./tool"
 import { Hash } from "../util/hash"
@@ -15,16 +16,7 @@ export const Input = Schema.Struct({
 export const Output = Schema.Struct({ todos: Schema.Array(SessionTodo.Info) })
 export type Output = typeof Output.Type
 
-export const Plugin = {
-  id: "ycoding.tool.todowrite",
-  effect: Effect.fn("TodoWriteTool.Plugin")(function* (ctx: PluginContext) {
-    const todos = yield* SessionTodo.Service
-    const permission = yield* Permission.Service
-    yield* ctx.tool
-      .transform((draft) =>
-        draft.add(
-          name,
-          Tool.make({
+export const make = (todos: SessionTodo.Interface, permission: StandalonePermission.Interface) => Tool.make({
             description:
               "Create and maintain a structured task list for the current coding session. Keep statuses current during multi-step work.",
             input: Input,
@@ -46,10 +38,13 @@ export const Plugin = {
                   Effect.andThen(todos.update({ sessionID: context.sessionID, todos: input.todos })),
                   Effect.as({ todos: input.todos }),
                 ),
-          }),
-          { codemode: false },
-        ),
-      )
-      .pipe(Effect.orDie)
+          })
+
+export const Plugin = {
+  id: "ycoding.tool.todowrite",
+  effect: Effect.fn("TodoWriteTool.Plugin")(function* (ctx: PluginContext) {
+    const todos = yield* SessionTodo.Service
+    const permission = yield* Permission.Service
+    yield* ctx.tool.transform((draft) => draft.add(name, make(todos, permission), { codemode: false })).pipe(Effect.orDie)
   }),
 }

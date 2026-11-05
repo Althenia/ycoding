@@ -11,6 +11,7 @@ import { Location } from "./location"
 import { makeGlobalNode } from "./effect/app-node"
 import { isDeepStrictEqual } from "node:util"
 import { Durable } from "@ycoding-ai/schema/durable-event-manifest"
+import { SessionEvent } from "@ycoding-ai/schema/session-event"
 
 export const ID = Event.ID
 export type ID = import("@ycoding-ai/schema/event").ID
@@ -22,6 +23,29 @@ export type { Data, Definition, Payload } from "@ycoding-ai/schema/event"
 
 export type Subscriber<D extends Definition = Definition> = (event: Payload<D>) => Effect.Effect<void>
 export type Unsubscribe = Effect.Effect<void>
+
+export const TaskOwner = Context.Reference<{ readonly pid: number; readonly pgid: number; readonly started: string } | undefined>(
+  "@ycoding/Event/TaskOwner",
+  { defaultValue: () => undefined },
+)
+
+export class TaskOwnerUnavailableError extends Schema.TaggedErrorClass<TaskOwnerUnavailableError>()(
+  "EventRuntime.TaskOwnerUnavailable",
+  { message: Schema.String },
+) {}
+
+export const requireTaskOwner = Effect.gen(function* () {
+  const owner = yield* TaskOwner
+  if (!owner || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || !Number.isSafeInteger(owner.pgid) || owner.pgid <= 0 || typeof owner.started !== "string" || !owner.started.trim())
+    return yield* new TaskOwnerUnavailableError({ message: "A valid process owner is required to claim a managed task" })
+})
+
+const validateTaskOwner = (definition: Definition, data: unknown) => Effect.gen(function* () {
+  if (definition.type !== SessionEvent.Task.Updated.type || typeof data !== "object" || data === null) return
+  const change = (data as { change?: { type?: string } }).change
+  if (!change || !["launched", "started", "resumed", "question_answered", "question_timed_out"].includes(change.type ?? "")) return
+  yield* requireTaskOwner
+})
 
 export const latestSequence = Effect.fn("EventRuntime.latestSequence")(function* (
   db: Database.Interface["db"],
@@ -124,6 +148,10 @@ export interface Subscribe {
 
 const isDefinition = (input: Definition | readonly Definition[]): input is Definition => !Array.isArray(input)
 
+type MaybeTaskOwnerError<T> = [Extract<T, typeof SessionEvent.Task.Updated> | Extract<typeof SessionEvent.Task.Updated, T>] extends [never]
+  ? never
+  : TaskOwnerUnavailableError
+
 export interface Interface {
   readonly publishBatch: <const D extends readonly Definition[]>(
     publications: {
@@ -134,12 +162,12 @@ export interface Interface {
       }
     },
     options?: { readonly when?: Effect.Effect<boolean> },
-  ) => Effect.Effect<ReadonlyArray<Payload>>
+  ) => Effect.Effect<ReadonlyArray<Payload>, MaybeTaskOwnerError<D[number]>>
   readonly publish: <D extends Definition>(
     definition: D,
     data: Data<D>,
     options?: PublishOptions,
-  ) => Effect.Effect<Payload<D>>
+  ) => Effect.Effect<Payload<D>, MaybeTaskOwnerError<D>>
   readonly subscribe: Subscribe
   /**
    * Durable, ordered per-aggregate log read. Forked aggregates may reserve an
@@ -161,11 +189,11 @@ export interface Interface {
   readonly replay: (
     event: SerializedEvent,
     options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, TaskOwnerUnavailableError>
   readonly replayAll: (
     events: SerializedEvent[],
     options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
-  ) => Effect.Effect<string | undefined>
+  ) => Effect.Effect<string | undefined, TaskOwnerUnavailableError>
   readonly remove: (aggregateID: string) => Effect.Effect<void>
   readonly claim: (aggregateID: string, ownerID: string) => Effect.Effect<void>
 }
@@ -434,8 +462,10 @@ export const layerWith = (options?: LayerOptions) =>
         })
       }
 
-      function publish<D extends Definition>(definition: D, data: Data<D>, options?: PublishOptions) {
+      function publish<D extends Definition>(definition: D, data: Data<D>, options?: PublishOptions): Effect.Effect<Payload<D>, MaybeTaskOwnerError<D>>
+      function publish<D extends Definition>(definition: D, data: Data<D>, options?: PublishOptions): Effect.Effect<Payload<D>, TaskOwnerUnavailableError> {
         return Effect.gen(function* () {
+          yield* validateTaskOwner(definition, data)
           const serviceLocation = Option.getOrUndefined(yield* Effect.serviceOption(Location.Service))
           const location =
             options?.location ??
@@ -457,9 +487,11 @@ export const layerWith = (options?: LayerOptions) =>
         })
       }
 
-      const publishBatch: Interface["publishBatch"] = (publications, options) =>
-        Effect.uninterruptible(
+      function publishBatch<const D extends readonly Definition[]>(publications: { readonly [K in keyof D]: { readonly definition: D[K]; readonly data: Data<D[K]>; readonly options?: PublishOptions } }, options?: { readonly when?: Effect.Effect<boolean> }): Effect.Effect<ReadonlyArray<Payload>, MaybeTaskOwnerError<D[number]>>
+      function publishBatch(publications: readonly { readonly definition: Definition; readonly data: unknown; readonly options?: PublishOptions }[], options?: { readonly when?: Effect.Effect<boolean> }): Effect.Effect<ReadonlyArray<Payload>, TaskOwnerUnavailableError> {
+        return Effect.uninterruptible(
           Effect.gen(function* () {
+            yield* Effect.forEach(publications, (publication) => validateTaskOwner(publication.definition, publication.data), { discard: true })
             const serviceLocation = Option.getOrUndefined(yield* Effect.serviceOption(Location.Service))
             const committed = yield* db
               .transaction(
@@ -530,6 +562,7 @@ export const layerWith = (options?: LayerOptions) =>
             return committed
           }),
         )
+      }
 
       function replay(
         event: SerializedEvent,
@@ -548,6 +581,7 @@ export const layerWith = (options?: LayerOptions) =>
               type: definition.type,
               data: Schema.decodeUnknownSync(definition.data)(event.data),
             } as Payload
+            yield* validateTaskOwner(definition, payload.data)
             const committed = yield* commitDurableEvent(definition, payload, {
               seq: event.seq,
               aggregateID: event.aggregateID,
@@ -581,6 +615,10 @@ export const layerWith = (options?: LayerOptions) =>
                 message: "Replay events must belong to the same aggregate",
               }),
             )
+          }
+          for (const event of events) {
+            const definition = Durable.get(event.type)
+            if (definition) yield* validateTaskOwner(definition, event.data)
           }
           for (const event of events) {
             yield* replay(event, options)

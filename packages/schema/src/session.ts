@@ -15,9 +15,13 @@ import { Permission } from "./permission.js"
 import { TokenUsage } from "./token-usage.js"
 import { Revert } from "./session-revert.js"
 import { SessionCacheDiagnostics } from "./session-cache-diagnostics.js"
+import { SessionScope, SessionScopeWithDefault } from "./session-scope.js"
 
 export const ID = SessionID
 export type ID = SessionID
+
+export const Scope = SessionScope
+export type Scope = SessionScope
 
 export const Event = SessionEvent
 
@@ -44,6 +48,7 @@ export const Info = Schema.Struct({
     messageID: SessionMessage.ID.pipe(optional),
   }).pipe(optional),
   projectID: Project.ID,
+  scope: SessionScopeWithDefault,
   agent: Agent.ID.pipe(optional),
   model: Model.Ref.pipe(optional),
   daybreak: Model.Daybreak.pipe(optional),

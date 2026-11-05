@@ -163,6 +163,7 @@ export type LocalServer = {
   readonly diagnostics: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly listChildren: (parentID: string, location: LocalLocation, cursor?: string) => Promise<{ readonly data: readonly SessionInfo[]; readonly cursor: { readonly next?: string | null; readonly previous?: string | null } }>
   readonly createSideChat: (id: string, parentID: string, location: LocalLocation) => Promise<SessionInfo>
+  readonly forkSession: (sessionID: string, location: LocalLocation, messageID?: string) => Promise<SessionInfo>
   readonly shellList: (location: LocalLocation) => Promise<readonly unknown[]>
   readonly shellRemove: (shellID: string, location: LocalLocation) => Promise<void>
   readonly messages: (sessionID: string, location: LocalLocation) => Promise<readonly SessionMessageInfo[]>
@@ -356,6 +357,7 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(() => client.session.subagent.answer({ parentID, childID, questionID, text }, request(location, timeoutMs))),
     diagnostics: (sessionID, location) => call(() => client.session.diagnostics({ sessionID }, request(location, timeoutMs))),
     listChildren: (parentID, location, cursor) => call(() => client.session.list({ parentID, limit: 50, order: "desc", ...(cursor === undefined ? {} : { cursor }) }, request(location, timeoutMs))),
+    forkSession: (sessionID, location, messageID) => call(() => client.session.fork({ sessionID, ...(messageID === undefined ? {} : { messageID }) }, request(location, timeoutMs))),
     createSideChat: (id, parentID, location) => call(async () => {
       const created = await client.session.create({ id, parentID, agent: "btw" } as Parameters<YCodingClient["session"]["create"]>[0], request(location, timeoutMs))
       if (created.parentID !== parentID || created.agent !== "btw") throw new LocalFailure("conflict", "Session ID belongs to another Session")

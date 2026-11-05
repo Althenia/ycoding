@@ -1,7 +1,7 @@
 export * as Permission from "./permission"
 
 import { makeLocationNode } from "./effect/app-node"
-import { Context, Deferred, Effect, Layer, Schema, Semaphore, Stream } from "effect"
+import { Context, Deferred, Effect, Layer, Result, Schema, Semaphore, Stream } from "effect"
 import { Permission } from "@ycoding-ai/schema/permission"
 import { Form } from "@ycoding-ai/schema/form"
 import { Coordination } from "@ycoding-ai/schema/coordination"
@@ -260,20 +260,20 @@ export interface DelegatedReplyInput {
   readonly validate: (request: Request) => Effect.Effect<boolean>
 }
 
-export interface Interface {
-  readonly replyDelegated: (input: DelegatedReplyInput) => Effect.Effect<void, NotFoundError | SessionErrors.NotFoundError>
-  readonly delegatedEligible: (input: { readonly requestID: ID; readonly fingerprint: string; readonly reply: "once" | "reject" }) => Effect.Effect<boolean, SessionErrors.NotFoundError>
+export interface Interface<E = never> {
+  readonly replyDelegated: (input: DelegatedReplyInput) => Effect.Effect<void, NotFoundError | SessionErrors.NotFoundError | E>
+  readonly delegatedEligible: (input: { readonly requestID: ID; readonly fingerprint: string; readonly reply: "once" | "reject" }) => Effect.Effect<boolean, SessionErrors.NotFoundError | E>
   readonly evaluateEffective: (
     input: EvaluateEffectiveInput,
-  ) => Effect.Effect<Permission.Effect, SessionErrors.NotFoundError>
-  readonly ask: (input: AssertInput) => Effect.Effect<AskResult, SessionErrors.NotFoundError>
-  readonly assert: (input: AssertInput) => Effect.Effect<void, Error | SessionErrors.NotFoundError>
-  readonly deferPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
-  readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError>
+  ) => Effect.Effect<Permission.Effect, SessionErrors.NotFoundError | E>
+  readonly ask: (input: AssertInput) => Effect.Effect<AskResult, SessionErrors.NotFoundError | E>
+  readonly assert: (input: AssertInput) => Effect.Effect<void, Error | SessionErrors.NotFoundError | E>
+  readonly deferPending: (sessionID: SessionSchema.ID) => Effect.Effect<void, E>
+  readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError | E>
   readonly snapshot: (id: ID) => Effect.Effect<Snapshot | undefined>
   readonly snapshots: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Snapshot>>
-  readonly reconsider: (input: ReconsiderInput) => Effect.Effect<ReconsiderResult>
-  readonly escalate: (input: EscalateInput) => Effect.Effect<EscalateResult>
+  readonly reconsider: (input: ReconsiderInput) => Effect.Effect<ReconsiderResult, E>
+  readonly escalate: (input: EscalateInput) => Effect.Effect<EscalateResult, E>
   readonly get: (id: ID) => Effect.Effect<Request | undefined>
   readonly forSession: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Request>>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
@@ -286,24 +286,22 @@ export const evaluateEffective = Effect.fn("Permission.evaluateEffective")(funct
   return yield* service.evaluateEffective(input)
 })
 
-interface Pending {
+interface Pending<E> {
   request: Request
   readonly agent?: Agent.ID
   readonly deferred: Deferred.Deferred<void, DeclinedError | CorrectedError | DeferredError>
+  readonly fence: Effect.Effect<void, E>
 }
 
-const layer = Layer.effect(
-  Service,
+export const make = <E>(config: { readonly entries: () => Effect.Effect<ReadonlyArray<Config.Entry>, E>; readonly capture: () => Effect.Effect<Effect.Effect<void, E>, E> }, decider: Decision.Interface<E>) =>
   Effect.gen(function* () {
     const events = yield* EventRuntime.Service
     const database = yield* Database.Service
-    const config = yield* Config.Service
     const location = yield* Location.Service
-    const decider = yield* Decision.Service
     const agents = yield* Agent.Service
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
-    const pending = new Map<ID, Pending>()
+    const pending = new Map<ID, Pending<E>>()
     const sessionApprovals = yield* PermissionSession.Service
     const reconsidering = new Set<ID>()
     const settlement = yield* Semaphore.make(1)
@@ -381,15 +379,16 @@ const layer = Layer.effect(
       }
     }
 
-    const create = (request: Request, agent?: Agent.ID) =>
+    const create = (request: Request, fence: Effect.Effect<void, E>, agent?: Agent.ID) =>
       exclusive(Effect.uninterruptible(
         Effect.gen(function* () {
           const deferred = yield* Deferred.make<void, DeclinedError | CorrectedError | DeferredError>()
-          const item = { request, agent, deferred }
+          const item = { request, agent, deferred, fence }
           if (pending.has(request.id))
             return yield* Effect.die(new Error(`Duplicate pending permission ID: ${request.id}`))
+          yield* fence
           if (yield* asleep(request.sessionID)) {
-            const review = yield* openReview(request).pipe(Effect.orDie)
+            const review = yield* openReview(request).pipe(Effect.catchTag("SessionReview.FullError", (error) => Effect.die(error)))
             yield* Deferred.fail(deferred, deferredError(request, "open", review.itemID))
             return item
           }
@@ -542,7 +541,7 @@ const layer = Layer.effect(
       yield* Effect.forEach(entries, (item) =>
         exclusive(Effect.uninterruptible(Effect.gen(function* () {
           if (pending.get(item.request.id) !== item) return
-          const review = yield* openReview(item.request, true).pipe(Effect.orDie)
+          const review = yield* openReview(item.request, true).pipe(Effect.catchTag("SessionReview.FullError", (error) => Effect.die(error)))
           pending.delete(item.request.id)
           yield* Deferred.fail(item.deferred, deferredError(item.request, "open", review.itemID))
           yield* events.publish(Event.Deferred, { sessionID, requestID: item.request.id, itemID: review.itemID })
@@ -624,26 +623,30 @@ const layer = Layer.effect(
     })
 
     const ask = Effect.fn("Permission.ask")(function* (input: AssertInput) {
+      const fence = yield* config.capture()
       const result = yield* evaluateInput(input)
       const value = request(input)
       if (result.effect === "ask" && !input.requireExplicitDecision && (yield* permissionMode(input.sessionID)) === "auto" &&
         !explicitRejected((yield* applicabilityOf(input)).prior))
-        return yield* autoPermissionAllow(value)
+        return yield* fence.pipe(Effect.andThen(autoPermissionAllow(value)))
       if (result.effect === "ask") {
+        yield* fence
         if (input.consumeReview !== false && (yield* SessionReviewFold.consume(database.db, events, input.sessionID, "permission", fingerprintOf(input), historicalFingerprintOf(input))))
           return { id: value.id, effect: "allow" as const }
         if (yield* asleep(input.sessionID)) {
           yield* openReview(value).pipe(Effect.catchTag("SessionReview.FullError", (error) => Effect.die(error)))
           return { id: value.id, effect: result.effect }
         }
-        yield* create(value, input.agent)
+        yield* create(value, fence, input.agent)
       }
+      yield* fence
       return { id: value.id, effect: result.effect }
     })
 
     const assert = Effect.fn("Permission.assert")((input: AssertInput) =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
+          const fence = yield* config.capture()
           const result = yield* evaluateInput(input)
           if (result.effect === "deny") {
             return yield* new BlockedError({
@@ -652,15 +655,17 @@ const layer = Layer.effect(
               resources: input.resources,
             })
           }
-          if (result.effect === "allow") return
+          if (result.effect === "allow") return yield* fence
           const authorization = yield* autonomy.snapshot(input.sessionID, { inherited: true }).pipe(
             Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID: input.sessionID })),
           )
           const mode = yield* permissionMode(input.sessionID)
           if (!input.requireExplicitDecision && mode === "auto" && !explicitRejected((yield* applicabilityOf(input)).prior)) {
+            yield* fence
             yield* autoPermissionAllow(request(input))
             return
           }
+          yield* fence
           if (input.consumeReview !== false && (yield* SessionReviewFold.consume(database.db, events, input.sessionID, "permission", fingerprintOf(input), historicalFingerprintOf(input)))) return
           const modeled = !input.requireExplicitDecision && mode === "yolo"
           const applicability = modeled ? yield* applicabilityOf(input) : undefined
@@ -674,7 +679,7 @@ const layer = Layer.effect(
               resources: input.resources,
             })
           }
-          if (current?.effect === "allow") return
+          if (current?.effect === "allow") return yield* fence
           const stale =
             assessed !== undefined &&
             assessed.type !== "escalate" &&
@@ -691,6 +696,7 @@ const layer = Layer.effect(
                 ? settled.provenance
                 : undefined
           const value = request(input, escalation)
+          yield* fence
           if (settled?.type === "approve") {
             yield* publishAssessed(value, { outcome: "allow", via: settled.provenance.authority!, reply: "once", escalation: settled.provenance })
             return
@@ -707,8 +713,8 @@ const layer = Layer.effect(
             return yield* Effect.die(deferredError(value, "open", review.itemID))
           }
           if (escalation) yield* publishAssessed(value, { outcome: "escalate", via: escalation.authority!, escalation })
-          const item = yield* create(value, input.agent)
-          return yield* restore(Deferred.await(item.deferred)).pipe(
+          const item = yield* create(value, fence, input.agent)
+          yield* restore(Deferred.await(item.deferred)).pipe(
             Effect.catchTag("Permission.DeclinedError", (error) => Effect.die(error)),
             Effect.catchTag("Permission.DeferredError", (error) => Effect.die(error)),
             Effect.ensuring(
@@ -719,6 +725,9 @@ const layer = Layer.effect(
               })),
             ),
           )
+          yield* fence
+          const latest = yield* evaluateInput(input)
+          if (latest.effect === "deny") return yield* new BlockedError({ rules: relevant(input, latest.rules), permission: input.action, resources: input.resources })
         }),
       ),
     )
@@ -738,7 +747,7 @@ const layer = Layer.effect(
     const reconsider = Effect.fn("Permission.reconsider")((input: ReconsiderInput) =>
       Effect.acquireUseRelease(
         exclusive(
-          Effect.sync((): { readonly item?: Pending; readonly result?: ReconsiderResult } => {
+          Effect.sync((): { readonly item?: Pending<E>; readonly result?: ReconsiderResult } => {
             const item = pending.get(input.requestID)
             if (item === undefined || fingerprintOf(item.request) !== input.fingerprint)
               return { result: { outcome: "stale", requestID: input.requestID, fingerprint: input.fingerprint, settled: false } }
@@ -805,6 +814,7 @@ const layer = Layer.effect(
                         const current = yield* evaluateInput(assertInput)
                         if (current.effect === "ask")
                           return { ...base, outcome: "escalated" as const, settled: false, reason: "permission-ask" }
+                        if (current.effect === "allow") yield* item.fence
                         yield* publishAssessed(item.request, {
                           outcome: current.effect,
                           via: "coordination",
@@ -848,6 +858,7 @@ const layer = Layer.effect(
                         }
                         if (current.effect === "ask" && explicitRejected((yield* applicabilityOf(assertInput)).prior))
                           return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-rejected" }
+                        yield* item.fence
                         yield* publishAssessed(item.request, {
                           outcome: "allow",
                           via: current.effect === "allow" ? "coordination" : "auto-permission",
@@ -894,6 +905,7 @@ const layer = Layer.effect(
                           return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
                         const final = yield* evaluateInput(assertInput)
                         if (final.effect !== "ask") {
+                          if (final.effect === "allow") yield* item.fence
                           yield* publishAssessed(item.request, {
                             outcome: final.effect,
                             via: "coordination",
@@ -911,6 +923,7 @@ const layer = Layer.effect(
                             via: "permission-rules" as const,
                           }
                         }
+                        if (settled.type === "approve") yield* item.fence
                         yield* publishAssessed(item.request, {
                           outcome: settled.type === "approve" ? "allow" : "deny",
                           via: settled.provenance.authority!,
@@ -1054,6 +1067,7 @@ const layer = Layer.effect(
               )
             )
               continue
+            if (Result.isFailure(yield* Effect.result(item.fence))) continue
             yield* events.publish(Event.Replied, {
               sessionID: item.request.sessionID,
               requestID: item.request.id,
@@ -1066,9 +1080,10 @@ const layer = Layer.effect(
       )),
     )
 
-    const delegatedGate = Effect.fnUntraced(function* (existing: Pending, reply: "once" | "reject", explicitDecision = false) {
+    const delegatedGate = Effect.fnUntraced(function* (existing: Pending<E>, reply: "once" | "reject", explicitDecision = false) {
       if (!explicitDecision && existing.request.metadata?.requireExplicitDecision === true) return false
       if (reply === "reject") return true
+      yield* existing.fence
       const input: AssertInput = {
         id: existing.request.id, sessionID: existing.request.sessionID, action: existing.request.action, resources: existing.request.resources,
         ...(existing.request.save === undefined ? {} : { save: existing.request.save }),
@@ -1092,6 +1107,7 @@ const layer = Layer.effect(
           const existing = pending.get(input.requestID)
           if (!existing || fingerprintOf(existing.request) !== input.fingerprint || !(yield* delegatedGate(existing, input.reply, input.explicitDecision === true)) || !(yield* input.validate(existing.request)))
             return yield* new NotFoundError({ requestID: input.requestID })
+          let guardFailure: Result.Result<never, E> | undefined
           const committed = yield* events.publishBatch([{ definition: SessionEvent.DotsDecisionSettled, data: {
             sessionID: existing.request.sessionID,
             source: input.source,
@@ -1100,7 +1116,11 @@ const layer = Layer.effect(
           } }], { when: Effect.gen(function* () {
             return pending.get(input.requestID) === existing && fingerprintOf(existing.request) === input.fingerprint &&
               (yield* delegatedGate(existing, input.reply, input.explicitDecision === true)) && (yield* input.validate(existing.request))
-          }).pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(false))) })
+          }).pipe(Effect.catch((error) => {
+            if (!(error instanceof SessionErrors.NotFoundError)) guardFailure = Result.fail(error)
+            return Effect.succeed(false)
+          })) })
+          if (guardFailure && Result.isFailure(guardFailure)) return yield* Effect.fail(guardFailure.failure)
           if (committed.length === 0) return yield* new NotFoundError({ requestID: input.requestID })
           if (input.explicitDecision) recordExplicitReply(existing.request, input.reply)
           yield* events.publish(Event.Replied, { sessionID: existing.request.sessionID, requestID: existing.request.id, reply: input.reply }).pipe(Effect.ensuring(Effect.gen(function* () {
@@ -1123,9 +1143,14 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.request).filter((request) => request.sessionID === sessionID)
     })
 
-    return Service.of({ evaluateEffective, ask, assert, deferPending, reply, replyDelegated, delegatedEligible, snapshot, snapshots, reconsider, escalate, get, forSession, list })
-  }),
-)
+    return { evaluateEffective, ask, assert, deferPending, reply, replyDelegated, delegatedEligible, snapshot, snapshots, reconsider, escalate, get, forSession, list } satisfies Interface<E>
+  })
+
+const layer = Layer.effect(Service, Effect.gen(function* () {
+  const config = yield* Config.Service
+  return yield* make({ entries: config.entries, capture: () => Effect.succeed(Effect.void) }, yield* Decision.Service)
+}))
+
 
 export const node = makeLocationNode({
   service: Service,

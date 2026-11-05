@@ -54,6 +54,7 @@ const sessionContext = Layer.mock(SessionContext.Service, {
       session: Session.Info.make({
         id: sessionID,
         projectID: Project.ID.global,
+        scope: "bound",
         title: "test",
         cost: Schema.decodeUnknownSync(Session.Info.fields.cost)(0),
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },

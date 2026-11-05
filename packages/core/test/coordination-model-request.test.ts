@@ -255,6 +255,7 @@ const execution = Layer.effect(
         sessionRunner.drain({ sessionID, force }).pipe(SessionCompactionExecution.bind(compaction)),
     })
     return SessionExecution.Service.of({
+      prepareTask: () => Effect.void,
       active: coordinator.active,
       resume: coordinator.run,
       wake: coordinator.wake,

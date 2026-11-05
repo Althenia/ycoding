@@ -14,6 +14,7 @@ import { classifyProviderFailure } from "@ycoding-ai/ai/provider-error"
 import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Cause, Clock, Effect, Exit, Fiber, FiberSet, Layer, Option, Schedule, Semaphore, Stream } from "effect"
 import { Config } from "../../config"
+import { StandaloneConfig } from "../../config/standalone"
 import { Database } from "../../database/database"
 import { EventRuntime } from "../../event"
 import { EventTable } from "../../event/sql"
@@ -26,6 +27,7 @@ import { SessionSkill } from "../skill"
 import { ToolOutputStore } from "../../tool-output-store"
 import { InstructionState } from "../instruction-state"
 import { SessionCompaction } from "../compaction"
+import { StandaloneCompaction } from "../standalone-compaction"
 import { SessionCacheDiagnostics } from "../cache-diagnostics"
 import { SessionContext } from "../context"
 import { SessionCompactionJob } from "../compaction-job"
@@ -47,7 +49,7 @@ import { RelativePath } from "../../schema"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
-import { StepFailedError } from "../error"
+import { ScopeUnavailableError, StepFailedError } from "../error"
 import { toSessionError } from "../to-session-error"
 import { SessionCompactionGate } from "./compaction-gate"
 import { SessionContinuation } from "./continuation"
@@ -118,7 +120,23 @@ const withoutUnfinishedAssistantTail = <Prepared extends { readonly request: LLM
   return { ...prepared, request: LLMRequest.update(prepared.request, { messages: kept }) }
 }
 
-const layer = Layer.effect(
+const boundSource = Effect.gen(function* () {
+  return {
+    scope: "bound" as const, requests: yield* SessionModelRequest.Service, config: yield* Config.Service, title: yield* SessionTitle.Service,
+    host: {
+      snapshots: yield* Snapshot.Service,
+      skills: yield* Skill.Service,
+      fs: yield* FSUtil.Service,
+      permission: yield* Permission.Service,
+      accounting: yield* ProjectArtifactAccounting.Service,
+      artifactSource: yield* ProjectArtifactSource.Service,
+    },
+  }
+})
+const standaloneSource = Effect.gen(function* () {
+  return { scope: "standalone" as const, requests: yield* SessionModelRequest.StandaloneService, config: yield* StandaloneConfig.Service, title: yield* SessionTitle.StandaloneService, host: undefined }
+})
+const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSource> | Effect.Success<typeof standaloneSource>, never, R>) => Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventRuntime.Service
@@ -126,29 +144,31 @@ const layer = Layer.effect(
     const llm = yield* LLMClient.Service
     const store = yield* SessionStore.Service
     const context = yield* SessionContext.Service
-    const modelRequests = yield* SessionModelRequest.Service
-    const snapshots = yield* Snapshot.Service
+    const source = yield* sourceEffect
+    const standalone = source.scope === "standalone"
     const database = yield* Database.Service
     const db = database.db
     const dotsContext = DotsContext.make({ db, events })
     const compaction = yield* SessionCompaction.Service
     const compactionJobs = yield* SessionCompactionJob.Service
-    const config = yield* Config.Service
-    const title = yield* SessionTitle.Service
+    const title = source.title
+    const readConfig = (): Effect.Effect<ReadonlyArray<Config.Entry>, ScopeUnavailableError> => source.scope === "standalone"
+      ? source.config.snapshot().pipe(Effect.map((snapshot) => snapshot.entries), Effect.mapError(() => new ScopeUnavailableError({ operation: "standalone runner configuration" })))
+      : source.config.entries()
+    const modelRequests = { prepare: (input: Parameters<SessionModelRequest.Interface["prepare"]>[0]) => source.requests.prepare(input).pipe(
+      Effect.mapError((error) => error instanceof StandaloneConfig.InvalidError ? new ScopeUnavailableError({ operation: "standalone model request" }) : error),
+    ) }
     const providerRequests = yield* SessionProviderRequest.Service
     const activity = yield* GenerationActivity.Service
     const continuation = yield* SessionContinuation.Service
     const liveState = yield* SessionLiveState.Service
-    const skills = yield* Skill.Service
-    const fs = yield* FSUtil.Service
-    const permission = yield* Permission.Service
-    const accounting = yield* ProjectArtifactAccounting.Service
-    const artifactSource = yield* ProjectArtifactSource.Service
+    const host = source.host
     const resolveRequestedSkills = Effect.fn("SessionRunner.resolveRequestedSkills")(function* (
       selected: SessionContext.Selection,
       ids: ReadonlyArray<Skill.ID>,
       catalog: ReadonlyArray<Skill.Info>,
     ) {
+      if (!host) return yield* new ScopeUnavailableError({ operation: "skill invocation" })
       return yield* Effect.forEach(ids, (id) =>
         Effect.gen(function* () {
           const skill = catalog.find((skill) => skill.id === id)
@@ -156,7 +176,7 @@ const layer = Layer.effect(
             return yield* new StepFailedError({
               error: { type: "skill.unavailable", message: `Skill unavailable: ${id}` },
             })
-          const access = yield* permission
+          const access = yield* host.permission
             .evaluateEffective({
               sessionID: selected.session.id,
               agent: selected.agent.id,
@@ -176,13 +196,14 @@ const layer = Layer.effect(
       selected: SessionContext.Selection,
       resolved: ReadonlyArray<Skill.Info>,
     ) {
+      if (!host) return yield* new ScopeUnavailableError({ operation: "skill activation" })
       yield* Effect.forEach(
         resolved,
         (skill) =>
           Effect.gen(function* () {
-            const provenance = yield* artifactSource.provenance("skill", skill.id)
+            const provenance = yield* host.artifactSource.provenance("skill", skill.id)
             yield* SessionSkill.activate(
-              { events, store, accounting, fs },
+              { events, store, accounting: host.accounting, fs: host.fs },
               { session: selected.session, skill, provenance },
             ).pipe(Effect.orDie)
           }),
@@ -205,6 +226,7 @@ const layer = Layer.effect(
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)
       if (!session) return yield* Effect.die(new Error(`Session not found: ${sessionID}`))
+      if (standalone && session.scope !== "standalone") return yield* new ScopeUnavailableError({ operation: "standalone runner" })
       return session
     })
     const failInterruptedTools = Effect.fn("SessionRunner.failInterruptedTools")(function* (
@@ -255,7 +277,7 @@ const layer = Layer.effect(
       const observedSources = new Set(
         observed.flatMap((event) => (isContextSource(event.source) ? [event.source] : [])),
       )
-      const state = yield* liveState.load(selected.session.id).pipe(Effect.orDie)
+      const state = yield* liveState.load(selected.session.id).pipe(Effect.catch((error) => error instanceof ScopeUnavailableError ? Effect.fail(error) : Effect.die(error)))
       const inheritedTeam = state.teamView === undefined ? history.present.has("team-view") : false
       const stepLimitReached = selected.agent.info.steps !== undefined && step >= selected.agent.info.steps
       const stepLimit = terminalResponseRecovery
@@ -312,8 +334,12 @@ const layer = Layer.effect(
         if (entry.type !== "user") return
         if (entry.data.metadata?.inputOrigin === "coordination") dispatchInputs.add(entry.id)
         const requested = SessionSkill.selected(entry.data.metadata)
+        if (!host) {
+          if (requested.length > 0 || (entry.data.files?.length ?? 0) > 0) return yield* new ScopeUnavailableError({ operation: "standalone input attachments" })
+          return
+        }
         if (!requested.length && !entry.data.text.includes("$")) return
-        const catalog = yield* skills.list()
+        const catalog = yield* host.skills.list()
         const ids = [
           ...new Set([
             ...requested,
@@ -374,14 +400,14 @@ const layer = Layer.effect(
         route.tried.length = 0
       }
       if (!promotion && requestTrackerState.skills?.length)
-        yield* activateRequestedSkills(selected, requestTrackerState.skills, yield* skills.list())
+        yield* activateRequestedSkills(selected, requestTrackerState.skills, host ? yield* host.skills.list() : [])
       yield* appendContextObservations(selected, currentStep, recoveryMode === "terminal-response")
-      const configEntries = yield* config.entries()
+      const configEntries = yield* readConfig()
       const fallbackFrom = (attempted: Model.Ref, error: SessionError.Error) =>
         Effect.gen(function* () {
           const primary = route.primary ?? attempted
           const next =
-            recoveryMode === "terminal-response" || selected.modelOverride !== undefined
+            standalone || recoveryMode === "terminal-response" || selected.modelOverride !== undefined
               ? undefined
               : SessionModelFallback.next(configEntries, primary, [...route.tried, attempted])
           if (next === undefined) return undefined
@@ -400,7 +426,7 @@ const layer = Layer.effect(
         Effect.gen(function* () {
           if (assistantMessageID !== undefined) return assistantMessageID
           const started = SessionMessage.ID.create()
-          const snapshot = yield* snapshots.capture()
+          const snapshot = host ? yield* host.snapshots.capture() : undefined
           yield* events.publish(SessionEvent.Step.Started, {
             sessionID: selected.session.id,
             assistantMessageID: started,
@@ -528,7 +554,7 @@ const layer = Layer.effect(
                   const selected = yield* context.select(sessionID)
                   yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
                   if (requestTrackerState.skills?.length)
-                    yield* activateRequestedSkills(selected, requestTrackerState.skills, yield* skills.list())
+                    yield* activateRequestedSkills(selected, requestTrackerState.skills, host ? yield* host.skills.list() : [])
                   yield* appendContextObservations(selected, currentStep, recoveryMode === "terminal-response")
                   const loaded = yield* context.load(selected)
                   return { context: loaded, prepared: yield* prepare(loaded, fullRebase) }
@@ -569,7 +595,7 @@ const layer = Layer.effect(
         requestTrackerState.current = requestTracker
         requestTrackerState.accountIdentityDigest = resolved.accountIdentityDigest
       }
-      const startSnapshot = yield* snapshots.capture()
+      const startSnapshot = host ? yield* host.snapshots.capture() : undefined
       const prepared = {
         ...originalPrepared,
         request: LLMRequest.update(originalPrepared.request, { id: requestTracker.requestID }),
@@ -836,10 +862,10 @@ const layer = Layer.effect(
         completeProviderRequest(outcome, publisher.stepSettlement(), "retry-fallback")
 
       const captureStepEnd = Effect.fnUntraced(function* () {
-        const snapshot = yield* snapshots.capture()
+        const snapshot = host ? yield* host.snapshots.capture() : undefined
         const files =
-          startSnapshot && snapshot
-            ? yield* snapshots
+          host && startSnapshot && snapshot
+            ? yield* host.snapshots
                 .files({ from: startSnapshot, to: snapshot })
                 .pipe(Effect.catch(() => Effect.succeed(undefined)))
             : undefined
@@ -1198,8 +1224,8 @@ const layer = Layer.effect(
       const requestTrackerState: AttemptState = { attempts: 0, route }
       const exhaustedFallback = (failure: SessionRunnerRetry.RetryableFailure) =>
         Effect.gen(function* () {
-          if (route.primary === undefined || route.attempting === undefined) return undefined
-          const next = SessionModelFallback.next(yield* config.entries(), route.primary, [
+          if (standalone || route.primary === undefined || route.attempting === undefined) return undefined
+          const next = SessionModelFallback.next(yield* readConfig(), route.primary, [
             ...route.tried,
             route.attempting,
           ])
@@ -1440,7 +1466,7 @@ const layer = Layer.effect(
 
 export const node = makeLocationNode({
   service: Service,
-  layer,
+  layer: makeLayer(boundSource),
   deps: [
     EventRuntime.node,
     SessionStepBoundary.node,
@@ -1466,6 +1492,12 @@ export const node = makeLocationNode({
     ProjectArtifactAccounting.node,
     ProjectArtifactSource.node,
   ],
+})
+
+export const standaloneNode = makeLocationNode({
+  service: Service,
+  layer: makeLayer(standaloneSource),
+  deps: [EventRuntime.node, SessionStepBoundary.node, llmClient, GenerationActivity.node, SessionContext.standaloneNode, SessionLiveState.standaloneNode, SessionModelRequest.standaloneNode, SessionProviderRequest.node, SessionContinuation.node, SessionProviderState.node, SessionCompactionJob.node, SessionStore.node, StandaloneCompaction.node, SessionTitle.standaloneNode, StandaloneConfig.node, Database.node],
 })
 
 const isInvalidPreviousResponse = (message: string) =>

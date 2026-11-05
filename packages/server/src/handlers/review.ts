@@ -41,6 +41,7 @@ export const ReviewHandler = HttpApiBuilder.group(Api, "server.review", (handler
             .pipe(
               Effect.catchTags({
                 "Session.NotFoundError": sessionNotFound,
+                "Session.ScopeUnavailableError": () => new InvalidRequestError({ message: "Session scope is unavailable" }),
                 "SessionReview.NotFoundError": () =>
                   new ReviewItemNotFoundError({
                     itemID: ctx.params.itemID,

@@ -804,6 +804,25 @@ export type Options = typeof Options.Type
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/ModelsDev") {}
 
+export class ReadonlyService extends Context.Service<ReadonlyService, Pick<Interface, "get">>()("@ycoding/ModelsDev/Readonly") {}
+
+export const standaloneNode = makeGlobalNode({
+  service: ReadonlyService,
+  layer: Layer.effect(ReadonlyService, Effect.gen(function* () {
+    const fs = yield* FSUtil.Service
+    const get = yield* Effect.gen(function* () {
+      const fromDisk = yield* fs.readJson(path.join(Global.Path.cache, "models.json")).pipe(
+        Effect.flatMap(decodeSourceProviders),
+        Effect.catch(() => Effect.succeed(undefined)),
+      )
+      const bundled = typeof YCODING_MODELS_DEV === "undefined" ? undefined : YCODING_MODELS_DEV
+      return freeze(normalize(fromDisk ?? bundled ?? {}))
+    }).pipe(Effect.cached)
+    return ReadonlyService.of({ get: () => get })
+  })),
+  deps: [FSUtil.node],
+})
+
 export const layer = (options?: Options) => Layer.effect(
   Service,
   Effect.gen(function* () {

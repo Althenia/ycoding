@@ -18,7 +18,7 @@ export const NotificationBatchSize = 100
 export type DeliveryResult = "admitted" | "retry" | "quarantined"
 
 export interface Interface {
-  readonly dispatch: Effect.Effect<void>
+  readonly dispatch: Effect.Effect<void, Session.ScopeUnavailableError>
 }
 
 export function make<Row, E, R>(dependencies: {
@@ -135,16 +135,18 @@ const layer = Layer.effect(
 
     const unsubscribe = yield* events.listen((event) =>
       event.type === SessionEvent.Execution.Started.type
-        ? lock.withLock("outbox")(notifier(Schema.decodeUnknownSync(SessionEvent.Execution.Started.data)(event.data).sessionID).dispatch)
+        ? lock.withLock("outbox")(notifier(Schema.decodeUnknownSync(SessionEvent.Execution.Started.data)(event.data).sessionID).dispatch).pipe(
+            Effect.catchTag("Session.ScopeUnavailableError", (error) => Effect.logError("Could not dispatch Session notification", { error })),
+          )
         : Effect.void,
     )
     yield* Effect.addFinalizer(() => unsubscribe)
 
     yield* events.subscribe(SessionEvent.Task.Updated).pipe(
-      Stream.runForEach(() => service.dispatch),
+      Stream.runForEach(() => service.dispatch.pipe(Effect.catchTag("Session.ScopeUnavailableError", (error) => Effect.logError("Could not dispatch Session notification", { error })))),
       Effect.forkScoped({ startImmediately: true }),
     )
-    yield* service.dispatch.pipe(Effect.forkScoped({ startImmediately: true }))
+    yield* service.dispatch.pipe(Effect.catchTag("Session.ScopeUnavailableError", (error) => Effect.logError("Could not dispatch Session notification", { error })), Effect.forkScoped({ startImmediately: true }))
     return Service.of(service)
   }),
 )

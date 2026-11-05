@@ -52,6 +52,7 @@ export const Operation = Schema.Literals([
   "session.list",
   "session.active",
   "session.get",
+  "session.fork",
   "session.messages",
   "session.capturedChanges.list",
   "session.compaction.list",

@@ -237,6 +237,16 @@ export interface Interface extends State.Transformable<Draft> {
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/Integration") {}
 
+export interface StandaloneInterface extends State.Transformable<Draft> {
+  readonly get: (id: ID) => Effect.Effect<Info | undefined>
+  readonly list: () => Effect.Effect<Info[]>
+  readonly connection: {
+    readonly snapshot: (connection: IntegrationConnection.Info) => Effect.Effect<Snapshot, AuthorizationError>
+  }
+}
+
+export class StandaloneService extends Context.Service<StandaloneService, StandaloneInterface>()("@ycoding/StandaloneIntegration") {}
+
 const attemptLifetime = Duration.toMillis(Duration.minutes(10))
 const terminalRetention = Duration.toMillis(Duration.minutes(1))
 const scrubInterval = Duration.seconds(30)
@@ -281,6 +291,107 @@ type TerminalCommandAttempt = {
 }
 type CommandAttemptEntry = PendingCommandAttempt | TerminalCommandAttempt
 
+const makeState = (events: EventRuntime.Interface, announcements: LocationAnnouncements.Gate) =>
+  State.create<Data, Draft>({
+    name: "integration",
+    initial: () => ({ integrations: new Map<ID, Entry>() }),
+    draft: (draft) => ({
+      list: () => Array.from(draft.integrations.values(), (entry) => entry.ref) as Ref[],
+      get: (id) => draft.integrations.get(id)?.ref as Ref | undefined,
+      update: (id, update) => {
+        const current = draft.integrations.get(id) ?? { ref: { id, name: id }, methods: [], implementations: new Map() }
+        if (!draft.integrations.has(id)) draft.integrations.set(id, current)
+        update(current.ref)
+        current.ref.id = id
+      },
+      remove: (id) => draft.integrations.delete(id),
+      method: {
+        list: (integrationID) => (draft.integrations.get(integrationID)?.methods as Method[] | undefined) ?? [],
+        update: (implementation) => {
+          const current = draft.integrations.get(implementation.integrationID) ?? {
+            ref: { id: implementation.integrationID, name: implementation.integrationID },
+            methods: [],
+            implementations: new Map<MethodID, Types.DeepMutable<OAuthImplementation>>(),
+          }
+          if (!draft.integrations.has(implementation.integrationID)) draft.integrations.set(implementation.integrationID, current)
+          const index = current.methods.findIndex((method) => {
+            if (method.type !== implementation.method.type) return false
+            if (method.type === "oauth" && implementation.method.type === "oauth") return method.id === implementation.method.id
+            if (method.type === "command" && implementation.method.type === "command") return method.id === implementation.method.id
+            return true
+          })
+          if (index === -1) current.methods.push(implementation.method as Types.DeepMutable<Method>)
+          else current.methods[index] = implementation.method as Types.DeepMutable<Method>
+          if (implementation.method.type === "oauth") {
+            current.implementations.set(implementation.method.id, implementation as Types.DeepMutable<OAuthImplementation>)
+          }
+        },
+        remove: (integrationID, method) => {
+          const current = draft.integrations.get(integrationID)
+          if (!current) return
+          const index = current.methods.findIndex((candidate) => {
+            if (candidate.type !== method.type) return false
+            if (candidate.type === "oauth" && method.type === "oauth") return candidate.id === method.id
+            if (candidate.type === "command" && method.type === "command") return candidate.id === method.id
+            return true
+          })
+          if (index !== -1) current.methods.splice(index, 1)
+          if (method.type === "oauth") current.implementations.delete(method.id)
+        },
+      },
+    }),
+    announce: { gate: announcements, publish: events.publish(Event.Updated, {}) },
+  })
+
+const project = (entry: Entry, connections: IntegrationConnection.Info[]) =>
+  Info.make({ id: entry.ref.id, name: entry.ref.name, methods: entry.methods, connections })
+
+const savedConnections = (saved: readonly Credential.Info[], fallback = true) => {
+  const newestFirst = saved.toReversed()
+  const active = newestFirst.find((credential) => credential.active) ?? (fallback ? newestFirst[0] : undefined)
+  return [
+    ...(active ? [active] : []),
+    ...newestFirst.filter((credential) => credential.id !== active?.id),
+  ].map((credential) => ({ type: "credential" as const, id: credential.id, label: credential.label, active: credential.id === active?.id, kind: credential.value.type }))
+}
+
+const standaloneLayer = Layer.effect(StandaloneService, Effect.gen(function* () {
+  const credentials = yield* Credential.Service
+  const events = yield* EventRuntime.Service
+  const announcements = yield* LocationAnnouncements.Current
+  const state = makeState(events, announcements)
+  return StandaloneService.of({
+    transform: state.transform,
+    reload: state.reload,
+    get: Effect.fn("StandaloneIntegration.get")(function* (id) {
+      const entry = state.get().integrations.get(id)
+      return entry ? project(entry, savedConnections(yield* credentials.list(id), false)) : undefined
+    }),
+    list: Effect.fn("StandaloneIntegration.list")(function* () {
+      const saved = Map.groupBy(yield* credentials.all(), (credential) => credential.integrationID)
+      return Array.from(state.get().integrations.values(), (entry) =>
+        project(entry, savedConnections(saved.get(entry.ref.id) ?? [], false)),
+      ).toSorted((a, b) => a.name.localeCompare(b.name))
+    }),
+    connection: {
+      snapshot: Effect.fn("StandaloneIntegration.snapshot")(function* (connection) {
+        if (connection.type !== "credential")
+          return yield* new AuthorizationError({ cause: new Error("Standalone connections require a stored credential") })
+        const credential = yield* credentials.get(connection.id)
+        if (!credential)
+          return yield* new AuthorizationError({ cause: new Error("Selected credential is unavailable") })
+        return { connection: { ...connection, kind: credential.value.type }, credential, value: credential.value }
+      }),
+    },
+  })
+}))
+
+export const standaloneNode = makeLocationNode({
+  service: StandaloneService,
+  layer: standaloneLayer,
+  deps: [Credential.node, EventRuntime.node],
+})
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -291,101 +402,16 @@ const layer = Layer.effect(
     const scope = yield* Scope.Scope
     const attempts = SynchronizedRef.makeUnsafe(new Map<AttemptID, AttemptEntry>())
     const commandAttempts = SynchronizedRef.makeUnsafe(new Map<AttemptID, CommandAttemptEntry>())
-    const state = State.create<Data, Draft>({
-      name: "integration",
-      initial: () => ({ integrations: new Map<ID, Entry>() }),
-      draft: (draft) => ({
-        list: () => Array.from(draft.integrations.values(), (entry) => entry.ref) as Ref[],
-        get: (id) => draft.integrations.get(id)?.ref as Ref | undefined,
-        update: (id, update) => {
-          const current = draft.integrations.get(id) ?? {
-            ref: { id, name: id },
-            methods: [],
-            implementations: new Map(),
-          }
-          if (!draft.integrations.has(id)) draft.integrations.set(id, current)
-          update(current.ref)
-          current.ref.id = id
-        },
-        remove: (id) => draft.integrations.delete(id),
-        method: {
-          list: (integrationID) => (draft.integrations.get(integrationID)?.methods as Method[] | undefined) ?? [],
-          update: (implementation) => {
-            const current = draft.integrations.get(implementation.integrationID) ?? {
-              ref: {
-                id: implementation.integrationID,
-                name: implementation.integrationID,
-              },
-              methods: [],
-              implementations: new Map<MethodID, Types.DeepMutable<OAuthImplementation>>(),
-            }
-            if (!draft.integrations.has(implementation.integrationID)) {
-              draft.integrations.set(implementation.integrationID, current)
-            }
-            const index = current.methods.findIndex((method) => {
-              if (method.type !== implementation.method.type) return false
-              if (method.type === "oauth" && implementation.method.type === "oauth")
-                return method.id === implementation.method.id
-              if (method.type === "command" && implementation.method.type === "command")
-                return method.id === implementation.method.id
-              return true
-            })
-            if (index === -1) current.methods.push(implementation.method as Types.DeepMutable<Method>)
-            else current.methods[index] = implementation.method as Types.DeepMutable<Method>
-            if (implementation.method.type === "oauth") {
-              current.implementations.set(
-                implementation.method.id,
-                implementation as Types.DeepMutable<OAuthImplementation>,
-              )
-            }
-          },
-          remove: (integrationID, method) => {
-            const current = draft.integrations.get(integrationID)
-            if (!current) return
-            const index = current.methods.findIndex((candidate) => {
-              if (candidate.type !== method.type) return false
-              if (candidate.type === "oauth" && method.type === "oauth") return candidate.id === method.id
-              if (candidate.type === "command" && method.type === "command") return candidate.id === method.id
-              return true
-            })
-            if (index !== -1) current.methods.splice(index, 1)
-            if (method.type === "oauth") current.implementations.delete(method.id)
-          },
-        },
-      }),
-      announce: { gate: announcements, publish: events.publish(Event.Updated, {}) },
-    })
+    const state = makeState(events, announcements)
 
     const resolveConnections = (entry: Entry | undefined, saved: readonly Credential.Info[]) => {
-      // A profile is a stored credential with a user-facing name. The active profile sorts first so
-      // the connection a request resolves is the one the user selected, and every connection
-      // reports whether it is that active profile.
-      const newestFirst = saved.toReversed()
-      const active = newestFirst.find((credential) => credential.active) ?? newestFirst[0]
-      const credentials = [
-        ...(active ? [active] : []),
-        ...newestFirst.filter((credential) => credential.id !== active?.id),
-      ].map((credential) => ({
-        type: "credential" as const,
-        id: credential.id,
-        label: credential.label,
-        active: credential.id === active?.id,
-        kind: credential.value.type,
-      }))
+      const credentials = savedConnections(saved)
       const env = (entry?.methods ?? [])
         .filter((method) => method.type === "env")
         .flatMap((method) => method.names.filter((name) => process.env[name]))
         .map((name) => ({ type: "env" as const, name }))
       return [...credentials, ...env]
     }
-
-    const project = (entry: Entry, connections: IntegrationConnection.Info[]) =>
-      Info.make({
-        id: entry.ref.id,
-        name: entry.ref.name,
-        methods: entry.methods,
-        connections,
-      })
 
     const authorize = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(Effect.mapError((cause) => new AuthorizationError({ cause })))

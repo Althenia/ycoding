@@ -90,6 +90,12 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.create",
         Effect.fn(function* (ctx) {
+          if (ctx.payload.scope === "standalone" || (ctx.payload.parentID !== undefined && (ctx.payload.scope !== undefined || ctx.payload.location !== undefined)))
+            return yield* new InvalidRequestError({ message: "Standalone creation or conflicting child placement is unavailable", field: "scope" })
+          if (ctx.payload.parentID !== undefined) {
+            const parent = yield* session.get(ctx.payload.parentID).pipe(Effect.mapError(mapSessionNotFound))
+            if (parent.scope === "standalone") return yield* new InvalidRequestError({ message: "Standalone Session creation is unavailable" })
+          }
           return {
             data: yield* session
               .create(
@@ -112,6 +118,10 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               .pipe(Effect.mapError((error) => {
                 if (error._tag === "Session.AgentNotSelectableError")
                   return new InvalidRequestError({ message: error.message, field: "agent" })
+                if (error._tag === "Session.SessionPlacementConflictError")
+                  return new ConflictError({ message: "Session ID belongs to a different placement", resource: error.sessionID })
+                if (error._tag === "Session.ScopeUnavailableError")
+                  return new InvalidRequestError({ message: "Session scope is unavailable" })
                 if (error._tag === "Session.NotFoundError") return mapSessionNotFound(error)
                 if (error._tag === "SessionRunnerModel.ProfileUnavailableError") return profileSelectionFailure()
                 return new InvalidRequestError({
@@ -264,7 +274,10 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.autonomy.get",
         Effect.fn(function* (ctx) {
           const data = yield* session.autonomy.get(ctx.params.sessionID).pipe(Effect.mapError(mapSessionNotFound))
-          const effective = yield* session.autonomy.effective(ctx.params.sessionID).pipe(Effect.mapError(mapSessionNotFound))
+          const effective = yield* session.autonomy.effective(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.ScopeUnavailableError", () => new InvalidRequestError({ message: "Session scope is unavailable" })),
+            Effect.catchTag("Session.NotFoundError", (error) => mapSessionNotFound(error)),
+          )
           return {
             data: { ...data, effective },
           }
@@ -289,8 +302,12 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               })
             })),
             Effect.catchTag("Session.NotFoundError", error => Effect.fail(mapSessionNotFound(error))),
+            Effect.catchTag("Session.ScopeUnavailableError", () => new InvalidRequestError({ message: "Session scope is unavailable" })),
           )
-          const effective = yield* session.autonomy.effective(ctx.params.sessionID).pipe(Effect.mapError(mapSessionNotFound))
+          const effective = yield* session.autonomy.effective(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.ScopeUnavailableError", () => new InvalidRequestError({ message: "Session scope is unavailable" })),
+            Effect.catchTag("Session.NotFoundError", (error) => mapSessionNotFound(error)),
+          )
           return { data: { ...data, effective } }
         }),
       )
@@ -623,6 +640,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               Effect.catchTag("Session.DestinationNotDirectoryError", (error) =>
                 Effect.fail(new InvalidRequestError({ message: `Not a directory: ${error.directory}` })),
               ),
+              Effect.catchTag("Session.ScopeUnavailableError", () => new InvalidRequestError({ message: "Session scope is unavailable" })),
             )
           return HttpApiSchema.NoContent.make()
         }),
@@ -662,6 +680,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 Effect.catchTag("Session.AttachmentError", (error) =>
                   Effect.fail(new InvalidRequestError({ message: error.message, field: "files" })),
                 ),
+                Effect.catchTag("Session.ScopeUnavailableError", () => new InvalidRequestError({ message: "Session scope is unavailable" })),
               ),
           }
         }),
@@ -719,6 +738,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 Effect.catchTag("Session.AttachmentError", (error) =>
                   Effect.fail(new InvalidRequestError({ message: error.message, field: "files" })),
                 ),
+                Effect.catchTag("Session.ScopeUnavailableError", () => new InvalidRequestError({ message: "Session scope is unavailable" })),
               ),
           }
         }),
@@ -745,6 +765,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               Effect.catchTag("Session.SkillNotFoundError", (error) =>
                 Effect.fail(new SkillNotFoundError({ skill: error.skill, message: `Skill not found: ${error.skill}` })),
               ),
+              Effect.catchTag("Session.ScopeUnavailableError", () => new InvalidRequestError({ message: "Session scope is unavailable" })),
             )
           return HttpApiSchema.NoContent.make()
         }),
@@ -755,6 +776,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
           return {
             data: yield* session.skills(ctx.params.sessionID).pipe(
               Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(mapSessionNotFound(error))),
+              Effect.catchTag("Session.ScopeUnavailableError", () => new InvalidRequestError({ message: "Session scope is unavailable" })),
               Effect.catchTags({
                 "Session.AgentNotFoundError": Effect.die,
                 "Session.MessageDecodeError": Effect.die,
@@ -788,6 +810,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               resume: ctx.payload.resume,
             })
             .pipe(
+              Effect.catchTag("Session.ScopeUnavailableError", () => new InvalidRequestError({ message: "Session scope is unavailable" })),
               Effect.catchTag("Session.NotFoundError", (error) =>
                 Effect.fail(
                   new SessionNotFoundError({
@@ -831,6 +854,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 (error) => new ServiceUnavailableError({ message: error.message, service: "shell-memory" }),
               ),
               Effect.catchTag("Shell.SpawnError", (error) => new InvalidRequestError({ message: error.message })),
+              Effect.catchTag("Session.ScopeUnavailableError", () => new InvalidRequestError({ message: "Session scope is unavailable" })),
               Effect.catchTag(
                 "Guardrail.BlockedError",
                 (error) => new InvalidRequestError({ message: error.reason, kind: "guardrail" }),
@@ -962,6 +986,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         Effect.fn(function* (ctx) {
           yield* Effect.log("session.revert.clear", { sessionID: ctx.params.sessionID })
           yield* session.revert.clear(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.ScopeUnavailableError", () => new InvalidRequestError({ message: "Session scope is unavailable" })),
             Effect.catchTag(
               "Session.NotFoundError",
               (error) =>
@@ -1108,7 +1133,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     sessionID: error.sessionID,
                     message: `Session not found: ${error.sessionID}`,
                   })
-                : new ServiceUnavailableError({ message: error.message, service: "session generation" }),
+                : error._tag === "Session.ScopeUnavailableError"
+                  ? new InvalidRequestError({ message: "Session scope is unavailable" })
+                  : new ServiceUnavailableError({ message: error.message, service: "session generation" }),
             ),
           )
           return { data: { text } }
@@ -1164,6 +1191,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.background",
         Effect.fn(function* (ctx) {
           yield* session.background(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.ScopeUnavailableError", () => new InvalidRequestError({ message: "Session scope is unavailable" })),
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
                 new SessionNotFoundError({
@@ -1199,6 +1227,7 @@ export const resolveSkillConflict = (
   input: Parameters<Session.Interface["resolveSkillConflict"]>[0],
 ) =>
   session.resolveSkillConflict(input).pipe(
+    Effect.catchTag("Session.ScopeUnavailableError", () => new InvalidRequestError({ message: "Session scope is unavailable" })),
     Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(mapSessionNotFound(error))),
     Effect.catchTag("Session.SkillConflictNotFoundError", () =>
       Effect.fail(new SkillConflictNotFoundError({ message: "Skill conflict not found" })),
@@ -1238,6 +1267,8 @@ function mapLaunchError(error: SessionOrchestration.LaunchError | SessionOrchest
 }
 
 function mapControlError(error: SessionOrchestration.ControlError) {
+  if (error._tag === "Session.ScopeUnavailableError") return new InvalidRequestError({ message: "Session scope is unavailable" })
+  if (error._tag === "SessionOrchestration.ServiceUnavailableError") return new InvalidRequestError({ message: error.message })
   if (error._tag === "SessionOrchestration.ConflictError") return new ConflictError({ message: error.message })
   return mapOwnershipError(error)
 }

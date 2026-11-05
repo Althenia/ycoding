@@ -26,6 +26,7 @@ export function sessionHttp(
     review?: Partial<SessionReview.Interface>
     onLocation?: () => void
     location?: Pick<Context.Context<never>, "mapUnsafe">
+    sessionLocation?: Layer.Layer<SessionLocationMiddleware>
   } = {},
 ) {
   const location = Context.makeUnsafe<LocationServices>(options.location?.mapUnsafe ?? new Map())
@@ -48,7 +49,7 @@ export function sessionHttp(
     }),
     Layer.mock(SessionReview.Service, options.review ?? {}),
     processIdentityLayer(sessionHttpEpoch),
-    Layer.succeed(
+    options.sessionLocation ?? Layer.succeed(
       SessionLocationMiddleware,
       SessionLocationMiddleware.of((effect) =>
         Effect.sync(() => options.onLocation?.()).pipe(Effect.andThen(Effect.provide(effect, location))),

@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "bun run --cwd packages/cli --conditions=browser src/index.ts",
     "build:tui": "bun run --cwd packages/cli build:tui --single --outdir=../../dist/tui",
+    "build:desktop": "bun run --cwd packages/desktop build",
     "build:extension": "bun packages/cli/script/chrome-extension.ts dist",
     "build:web": "bun run --cwd apps/web build && bun script/build-web-assets.ts",
     "test:web": "bun run --cwd apps/web test",
@@ -57,6 +58,7 @@
       "packages/client",
       "packages/codemode",
       "packages/core",
+      "packages/desktop",
       "packages/effect-drizzle-sqlite",
       "packages/effect-sqlite-node",
       "packages/http-recorder",

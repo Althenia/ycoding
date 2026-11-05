@@ -8,6 +8,7 @@ import { RemoteLimits, parseChunkedValue, remoteOperations, requireSession, type
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
 import { Schema } from "effect"
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
+import { Global } from "@ycoding-ai/core/global"
 import { assertPrivateEndpoint, type LocalLocation, type LocalServer } from "../src/remote-local"
 import { LocalFailure as LocalFailureClass } from "../src/remote-local"
 import {
@@ -23,6 +24,49 @@ import {
   sessionStatus,
   successFrames,
 } from "../src/remote-operations"
+
+test("remote fork verifies inherited placement and reports uncertain outcomes without retry", async () => {
+  const parent = { ...sessionInfo("ses_1", { updated: 1 }), scope: "standalone" as const }
+  const child = { ...parent, id: "ses_child", fork: { sessionID: parent.id, messageID: "msg_boundary" } }
+  for (const mode of ["ok", "foreign", "wrong-source", "wrong-message", "lost"] as const) {
+    const fixture = await harness({ sessions: [parent], results: {
+      forkSession: mode === "lost" ? new LocalFailureClass("transport", "synthetic") : child,
+      getSession: (id: string) => id === parent.id ? parent : mode === "foreign" ? { ...child, scope: "bound" } : mode === "wrong-source" ? { ...child, fork: { ...child.fork, sessionID: "ses_other" } } : mode === "wrong-message" ? { ...child, fork: { ...child.fork, messageID: "msg_other" } } : child,
+    } })
+    const frames = await executeRemoteOperation({ request: request("session.fork", { messageID: "msg_boundary" }),
+      local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions })
+    if (mode === "ok") {
+      expect(valueOf(frames)).toMatchObject({ data: { id: child.id, scope: "standalone", location: parent.location } })
+      expect(fixture.registry.ids()).toContain(child.id)
+    } else {
+      expect(errorOf(frames).code).toBe("outcome_unknown")
+      expect(fixture.registry.ids()).not.toContain(child.id)
+    }
+    expect(fixture.calls.filter((call) => call.method === "forkSession")).toHaveLength(1)
+  }
+})
+
+test("remote fork without a boundary rejects a fork at a message boundary", async () => {
+  const parent = { ...sessionInfo("ses_1", { updated: 1 }), scope: "standalone" as const }
+  const child = { ...parent, id: "ses_child", fork: { sessionID: parent.id, messageID: "msg_other" } }
+  const fixture = await harness({ sessions: [parent], results: { forkSession: child, getSession: (id: string) => id === parent.id ? parent : child } })
+  const frames = await executeRemoteOperation({ request: request("session.fork"), local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions })
+  expect(errorOf(frames).code).toBe("outcome_unknown")
+  expect(fixture.registry.ids()).not.toContain(child.id)
+  expect(fixture.calls.filter((call) => call.method === "forkSession")).toHaveLength(1)
+})
+
+test("registry rejects a changed fork before advertising it", async () => {
+  const child = { ...sessionInfo("ses_child", { updated: 1 }), scope: "standalone" as const, fork: { sessionID: "ses_1" } }
+  const foreign = { ...child, fork: { sessionID: "ses_other" } }
+  let changes = 0
+  const { local } = fakeLocal({ getSession: foreign })
+  const registry = createSessionRegistry({ local, onChange: () => changes++ })
+  const result = await registry.add(child.id, child.location, (candidate) => candidate.fork?.sessionID === "ses_1")
+  expect(result).toBeUndefined()
+  expect(registry.snapshot()).toEqual([])
+  expect(changes).toBe(0)
+})
 
 test("reads admitted pending prompts at their verified Session Location", async () => {
   const pending = [{ id: "msg_pending", sessionID: "ses_1", admittedSeq: 3, timeCreated: 100,
@@ -789,6 +833,16 @@ describe("backend Session authorization", () => {
 })
 
 describe("workspace inventory and Session creation", () => {
+  test("standalone scope and its reserved backing directory never appear as workspaces", async () => {
+    const directory = join(Global.Path.state, "standalone-sessions")
+    const sessions = [{ ...sessionInfo("ses_standalone", { updated: 1, directory }), scope: "standalone" as const }]
+    const test = await harness({ sessions, results: { projectList: [{ id: "prj_1", worktree: directory }], projectDirectories: async () => [{ directory }] } })
+    for (const input of [undefined, { sessionsOnly: true }]) {
+      const value = arrayOf(recordOf(valueOf(await executeRemoteOperation({ request: request("workspace.list", input), local: test.local, sessions: test.registry, subscriptions: test.subscriptions }))).data)
+      expect(value).toEqual([])
+    }
+  })
+
   test("passes explicit agent, model, and title choices to the local Session create", async () => {
     const directory = process.cwd()
     const sessions = [sessionInfo("ses_seed", { updated: 1, directory })]

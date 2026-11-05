@@ -179,6 +179,7 @@ const execution = Layer.effect(
       drain: (sessionID, force) => sessionRunner.drain({ sessionID, force }),
     })
     return SessionExecution.Service.of({
+      prepareTask: () => Effect.void,
       active: coordinator.active,
       resume: coordinator.run,
       wake: coordinator.wake,

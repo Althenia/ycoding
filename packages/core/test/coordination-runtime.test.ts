@@ -142,7 +142,7 @@ const pendingFor = (fixture: Fixture, sessionID: SessionSchema.ID) =>
 const noticesFor = (fixture: Fixture, sessionID: SessionSchema.ID) =>
   pendingFor(fixture, sessionID).pipe(Effect.map((rows) => rows.filter((row) => row.type === "synthetic")))
 
-const refusal = <A>(effect: Effect.Effect<A, CoordinationRuntime.RefusedError>) =>
+const refusal = <A>(effect: Effect.Effect<A, CoordinationRuntime.RefusedError | Session.ScopeUnavailableError>) =>
   effect.pipe(Effect.flip, Effect.map((error) => error.message))
 
 describe("project activation", () => {

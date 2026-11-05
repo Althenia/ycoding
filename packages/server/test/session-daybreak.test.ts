@@ -12,6 +12,7 @@ function info(daybreak: Session.Info["daybreak"]) {
   return Session.Info.make({
     id: sessionID,
     projectID: Project.ID.global,
+    scope: "bound",
     title: "test",
     daybreak,
     cost: Schema.decodeUnknownSync(Session.Info.fields.cost)(0),

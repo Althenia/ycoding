@@ -712,6 +712,7 @@ export function make(options: ClientOptions) {
             path: `/api/session`,
             body: {
               id: input?.["id"],
+              scope: input?.["scope"],
               parentID: input?.["parentID"],
               title: input?.["title"],
               agent: input?.["agent"],
@@ -719,7 +720,7 @@ export function make(options: ClientOptions) {
               location: input?.["location"],
             },
             successStatus: 200,
-            declaredStatuses: [404, 400, 401],
+            declaredStatuses: [404, 400, 409, 401],
             empty: false,
           },
           requestOptions,

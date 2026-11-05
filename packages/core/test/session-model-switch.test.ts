@@ -353,6 +353,7 @@ const execution = Layer.effect(
       drain: (sessionID, force) => drainHook(sessionID, force),
     })
     return SessionExecution.Service.of({
+      prepareTask: () => Effect.void,
       active: coordinator.active,
       resume: coordinator.run,
       wake: coordinator.wake,

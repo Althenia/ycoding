@@ -10,7 +10,7 @@ import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../src/api"
 import { PermissionHandler } from "../src/handlers/permission"
 import { LocationMiddleware, type LocationServices } from "../src/location"
-import { SessionLocationMiddleware } from "../src/middleware/session-location"
+import { PermissionLocationMiddleware, SessionPermission } from "../src/middleware/permission-location"
 
 test("request-only permission rejection preserves ownership, feedback, and missing-request failures", async () => {
   const request: Permission.Request = {
@@ -48,7 +48,7 @@ test("request-only permission rejection preserves ownership, feedback, and missi
       Layer.provide(PermissionHandler),
       Layer.provide(
         Layer.mergeAll(
-          Layer.succeed(SessionLocationMiddleware, (effect) => Effect.provide(effect, location)),
+          Layer.succeed(PermissionLocationMiddleware, (effect) => Effect.provideService(effect, SessionPermission, service)),
           Layer.succeed(LocationMiddleware, (effect) => Effect.provide(effect, location)),
           Layer.succeed(Authorization, (effect) => effect),
           Layer.succeed(SchemaErrorMiddleware, (effect) => effect),

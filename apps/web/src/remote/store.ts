@@ -73,7 +73,7 @@ import type {
   RemoteTransportStatus,
 } from "./transport"
 import { createLatencyDiagnostics } from "./latency"
-import { hasWaitingSession, sessionActivityGroup, sessionListRefreshNotice, type RemoteConnectionState } from "./view-model"
+import { boundPlacement, hasWaitingSession, sessionActivityGroup, sessionListRefreshNotice, type RemoteConnectionState } from "./view-model"
 import type { QueryClient } from "@tanstack/solid-query"
 import { Store, batch } from "@tanstack/solid-store"
 import { describeOutcome } from "./outcome"
@@ -110,6 +110,8 @@ function eventTodos(event: unknown, sessionID: string): readonly TodoView[] | un
 }
 
 export type SessionInfoView = {
+  readonly scope?: "bound" | "standalone"
+  readonly scopeExplicit?: true
   readonly id: string
   readonly parentID?: string
   readonly title: string
@@ -337,6 +339,7 @@ export type RemoteStore = {
   readonly killTeamShell: (shellID: string) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
   readonly teamShellOutput: (ownerID: string, shellID: string, cursor?: number) => Promise<{ readonly command?: string; readonly status?: string; readonly text: string; readonly cursor: number; readonly size: number; readonly truncated: boolean }>
   readonly createSideChat: () => Promise<{ readonly status: "ok"; readonly sessionID: string } | { readonly status: "failed" | "unknown"; readonly message: string }>
+  readonly forkSession: (messageID?: string) => Promise<{ readonly status: "ok"; readonly sessionID: string } | { readonly status: "failed" | "unknown"; readonly message: string }>
   readonly selectWorkspace: (workspaceID: string) => void
   readonly searchSessions: (query: string, filter?: "all" | "waiting" | "running" | "idle") => void
   readonly nextSessionsPage: () => Promise<void>
@@ -495,6 +498,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
   let activeUpload: AbortController | undefined
   let selectionToken = 0
+  const pendingForks = new Set<string>()
   const goalsInFlight = new Set<string>()
   let selectionReadyToken: number | undefined
   let selectionFailedToken: number | undefined
@@ -1524,6 +1528,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     mutation: PendingMutation,
     options: { readonly sessionID?: string; readonly operation?: RemoteOperation; readonly input?: Readonly<Record<string, unknown>>; readonly retain?: boolean } = {},
   ): Promise<RemoteRequestOutcome> => {
+    const operation = options.operation ?? mutation.operation
+    if (operation === "session.prompt" && !placementReady(options.sessionID)) {
+      const message = "Session placement is not available for sending."
+      finishMutation(mutation.id, "failed", message)
+      return { status: "failed", error: { code: "invalid_message", message } }
+    }
     const active = transport
     if (!active) {
       finishMutation(mutation.id, "failed", "The relay connection is not open")
@@ -1531,7 +1541,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
     const progress = sends.get(mutation.id)
     const token = selectionToken
-    const operation = options.operation ?? mutation.operation
     const input = options.input ?? mutation.input
     const priorModel = container.state.view?.id === options.sessionID ? container.state.view?.model : undefined
     if (progress !== undefined) progress.mutation = mutation
@@ -1664,6 +1673,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const applySnapshot = (sessionID: string, payload: unknown, base: SessionView | undefined, streamed: ReadonlyMap<string, string>): { readonly view: SessionView; readonly sealedKeys: readonly string[]; readonly before?: string; readonly coveredAssistantIDs: readonly string[]; readonly parentID?: string } | "invalid" | "stale" => {
     const snapshot = readSnapshot(payload)
     if (snapshot === undefined || snapshot.watermark === undefined) return "invalid"
+    if (snapshot.sessionID !== undefined && snapshot.sessionID !== sessionID || snapshot.watermarkSessionID !== undefined && snapshot.watermarkSessionID !== sessionID) return "invalid"
     if (base?.watermark !== undefined && snapshot.watermark !== undefined && snapshot.watermark < base.watermark) {
       return "stale"
     }
@@ -1678,6 +1688,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       generationSpeed: snapshot.generationSpeed,
       contextWindow: snapshot.contextWindow,
       ...(snapshot.title === undefined ? {} : { title: snapshot.title }),
+      ...(snapshot.sessionID !== sessionID || snapshot.scope === undefined ? {} : { scope: snapshot.scope }),
       ...(snapshot.agent === undefined ? {} : { agent: snapshot.agent }),
       ...(snapshot.model === undefined ? {} : { model: snapshot.model }),
       ...(snapshot.archived === undefined ? {} : { archived: snapshot.archived }),
@@ -2765,6 +2776,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     running?: Promise<void>
   }
   const sends = new Map<string, SendProgress>()
+  const placementReady = (sessionID: string | undefined) => sessionID !== undefined && container.state.activeSessionID === sessionID &&
+    boundPlacement(container.state.selectedSessionInfo?.id === sessionID ? container.state.selectedSessionInfo.scope : undefined,
+      container.state.view?.id === sessionID ? container.state.view.scope : undefined)
   const sendPreparation = new Map<string, Promise<void>>()
 
   const confirmSend = (id: string) => {
@@ -2784,7 +2798,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const prepared = Promise.withResolvers<void>()
     sendPreparation.set(key, prepared.promise)
     const owns = () => sends.get(progress.mutation.id) === progress && progress.deviceID === container.state.activeDeviceID &&
-      token === selectionToken && container.state.activeSessionID === sessionID && container.state.transport.kind === "open"
+      token === selectionToken && placementReady(sessionID) && container.state.transport.kind === "open"
     const run = (async () => {
       try {
         await previous
@@ -2874,6 +2888,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const acceptSend = (mutation: PendingMutation, input: { readonly files?: readonly FileAttachmentInput[]; readonly agent?: string; readonly model?: ModelRefView; readonly forceModelSwitch?: boolean }) => {
+    if (!placementReady(mutation.sessionID)) return false
     const view = container.state.view ?? createSessionView(mutation.sessionID)
     const progress: SendProgress = {
       mutation,
@@ -3538,6 +3553,45 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ team: { ...container.state.team, sideChats: [{ id, title: info.title, updatedAt: info.updatedAt }, ...container.state.team.sideChats] } })
       return { status: "ok", sessionID: id }
     },
+    forkSession: async (messageID) => {
+      const owner = transport
+      const sessionID = container.state.activeSessionID
+      const token = selectionToken
+      const source = container.state.selectedSessionInfo
+      if (!owner || !sessionID || container.state.transport.kind !== "open") return { status: "failed", message: "Session is unavailable." }
+      if (!source || source.id !== sessionID || !source.scopeExplicit || source.projectID === undefined || source.directory === undefined)
+        return { status: "failed", message: "Session placement is unavailable." }
+      if (pendingForks.has(sessionID)) return { status: "failed", message: "A fork is already in progress." }
+      pendingForks.add(sessionID)
+      try {
+      const outcome = await owner.request("session.fork", { sessionID, ...(messageID === undefined ? {} : { input: { messageID } }), timeoutMs: 10_000 })
+      const currentSource = container.state.selectedSessionInfo
+      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID)
+        return { status: "unknown", message: "The connection or Session changed; check Sessions before retrying." }
+      if (!currentSource || currentSource.id !== sessionID || !currentSource.scopeExplicit || currentSource.scope !== source.scope ||
+        currentSource.projectID !== source.projectID || currentSource.directory !== source.directory || currentSource.workspaceID !== source.workspaceID)
+        return { status: "unknown", message: "The Session placement changed; check Sessions before retrying." }
+      if (outcome.status !== "ok") {
+        if (outcome.status === "failed" && outcome.error.code === "unknown_operation") return { status: "failed", message: "Update YCoding on this machine to fork Sessions." }
+        const failure = teamActionFailure(outcome, "Fork Session")
+        return outcome.status === "failed" && outcome.error.code === "outcome_unknown" ? { ...failure, status: "unknown" } : failure
+      }
+      const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
+      const info = readSessionInfo(data)
+      const fork = typeof data === "object" && data !== null ? Reflect.get(data, "fork") : undefined
+      if (!info || !/^ses_[A-Za-z0-9_-]+$/.test(info.id) || info.id === sessionID || info.parentID !== undefined ||
+        !info.scopeExplicit || info.scope !== currentSource.scope || info.projectID !== currentSource.projectID || info.directory !== currentSource.directory || info.workspaceID !== currentSource.workspaceID ||
+        typeof fork !== "object" || fork === null || Reflect.get(fork, "sessionID") !== sessionID ||
+        Reflect.get(fork, "messageID") !== messageID)
+        return { status: "unknown", message: "The fork could not be verified; check Sessions before retrying." }
+      await selectSession(info.id, info)
+      if (!isCurrentConnection(owner) || selectionToken !== token + 1 || selectionReadyToken !== selectionToken || container.state.activeSessionID !== info.id)
+        return { status: "unknown", message: "The connection or Session changed; check Sessions before retrying." }
+      return { status: "ok", sessionID: info.id }
+      } finally {
+        pendingForks.delete(sessionID)
+      }
+    },
     selectWorkspace: (workspaceID) => {
       if (container.state.transport.kind !== "open" || container.state.connection.kind === "offline") return
       if (!container.state.sessionGroups.some((group) => group.id === workspaceID) || container.state.selectedWorkspaceID === workspaceID) return
@@ -3739,6 +3793,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         setState({ notice: "Select a session before sending a prompt." })
         return false
       }
+      if (!placementReady(sessionID)) return false
       if (container.state.transport.kind !== "open" || container.state.connection.kind === "offline") return false
       if (text.length === 0 && !input.files?.length && !input.agents?.length && !input.skills?.length) return false
       if (input.skills !== undefined && (input.skills.length > RemoteLimits.maxPromptSkills || input.skills.some((id) => !id.trim() || id.length > 128))) return false
@@ -4270,6 +4325,8 @@ export function readSessionInfo(value: unknown, options: { readonly running?: bo
   const model = readModelRef(record.model)
   return {
     id,
+    ...(record.scope === undefined ? { scope: "bound" as const } : record.scope === "bound" || record.scope === "standalone" ? { scope: record.scope } : {}),
+    ...(record.scope === "bound" || record.scope === "standalone" ? { scopeExplicit: true as const } : {}),
     ...(typeof record.parentID === "string" && record.parentID.length > 0 ? { parentID: record.parentID } : {}),
     title: typeof record.title === "string" && record.title.length > 0 ? record.title : id,
     ...(typeof record.projectID === "string" && record.projectID.length > 0 ? { projectID: record.projectID } : {}),

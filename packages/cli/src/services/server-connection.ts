@@ -12,11 +12,14 @@ export type Args = {
   readonly mismatch?: "replace" | "ignore" | "error"
   readonly diagnostics?: "sanitized"
   readonly onStart?: EnsureOptions["onStart"]
+  readonly privateServer?: Parameters<typeof Standalone.start>[0]
+  readonly managed?: "discover"
 }
 
 export type Resolved = {
   readonly endpoint: Endpoint
   readonly service?: ReturnType<typeof managedService>
+  readonly exited?: Effect.Effect<void>
 }
 
 export const resolve = Effect.fn("cli.server-connection.resolve")(function* (args: Args) {
@@ -42,7 +45,17 @@ export const resolve = Effect.fn("cli.server-connection.resolve")(function* (arg
     return { endpoint } satisfies Resolved
   }
   if (args.standalone) {
-    return { endpoint: yield* Standalone.start() } satisfies Resolved
+    const server = yield* Standalone.owned(args.privateServer)
+    return { endpoint: server.endpoint, exited: server.exited } satisfies Resolved
+  }
+  if (args.managed === "discover") {
+    const options = yield* ServiceConfig.discoveryOptions()
+    const endpoint = yield* Service.discover(options)
+    if (endpoint !== undefined) return { endpoint } satisfies Resolved
+    const existing = yield* Service.discover({ ...options, version: undefined })
+    return yield* Effect.fail(new Error(existing === undefined
+      ? "No compatible managed server is running"
+      : "Managed server version does not match the bundled desktop client"))
   }
 
   const options = yield* ServiceConfig.options()

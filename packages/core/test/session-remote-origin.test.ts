@@ -44,6 +44,7 @@ const wakes: Session.ID[] = []
 const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
+    prepareTask: () => Effect.void,
     active: Effect.succeed(new Set()),
     resume: () => Effect.void,
     wake: (sessionID) => Effect.sync(() => void wakes.push(sessionID)),

@@ -10,7 +10,6 @@ import { SessionEvent } from "./event"
 import { WorkspaceTable } from "../control-plane/workspace.sql"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
-import { AppProcess } from "../process"
 import { ShellLedger } from "../shell/ledger"
 import { SessionMessageUpdater } from "./message-updater"
 import { SessionPending } from "./pending"
@@ -207,6 +206,7 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
       fork_message_id: event.data.from,
       fork_seq: event.data.parentSeq,
       project_id: parent.project_id,
+      scope: parent.scope,
       workspace_id: parent.workspace_id,
       directory: parent.directory,
       path: parent.path,
@@ -838,8 +838,6 @@ const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const events = yield* EventRuntime.Service
     const db = (yield* Database.Service).db
-    const appProcess = yield* AppProcess.Service
-    const owner = yield* ShellLedger.identify(appProcess, process.pid)
     yield* events.project(SessionEvent.Created, (event) =>
       Effect.gen(function* () {
         const parentDaybreak = event.data.parentID
@@ -855,6 +853,7 @@ const layer = Layer.effectDiscard(
           .values({
             id: event.data.sessionID,
             project_id: event.data.projectID,
+            scope: event.data.scope ?? "bound",
             workspace_id: event.data.location.workspaceID ? Workspace.ID.make(event.data.location.workspaceID) : null,
             parent_id: event.data.parentID,
             daybreak: parentDaybreak?.daybreak ?? null,
@@ -1164,7 +1163,7 @@ const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.ContextObserved, (event) => run(db, event))
     yield* events.project(SessionEvent.GuardrailEscalated, (event) => run(db, event))
     yield* events.project(SessionEvent.Review.Withdrawn, (event) => run(db, event))
-    yield* events.project(SessionEvent.Task.Updated, (event) => projectTask(db, event, owner))
+    yield* events.project(SessionEvent.Task.Updated, (event) => Effect.flatMap(EventRuntime.TaskOwner, (owner) => projectTask(db, event, owner)))
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))
     yield* events.project(SessionEvent.Skill.Activated, (event) => run(db, event))
     yield* events.project(SessionEvent.Skill.Deactivated, (event) => run(db, event))
@@ -1431,4 +1430,4 @@ export const selectTranscriptForSession = (sessionID: SessionSchema.ID) =>
     return yield* selectTranscript(db, sessionID)
   })
 
-export const node = makeGlobalNode({ name: "session-projector", layer, deps: [EventRuntime.node, Database.node, AppProcess.node, UsageAnalytics.node] })
+export const node = makeGlobalNode({ name: "session-projector", layer, deps: [EventRuntime.node, Database.node, UsageAnalytics.projectorNode] })
