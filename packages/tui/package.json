@@ -15,6 +15,7 @@
     ".": "./src/index.tsx",
     "./builtins": "./src/feature-plugins/builtins.ts",
     "./config": "./src/config/index.tsx",
+    "./config/schema": "./src/config/schema.ts",
     "./config/keybind": "./src/config/keybind.ts",
     "./context/args": "./src/context/args.tsx",
     "./context/epilogue": "./src/context/epilogue.tsx",
