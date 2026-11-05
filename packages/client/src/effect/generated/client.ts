@@ -2318,11 +2318,12 @@ type Endpoint30_3Input = {
   readonly tabID: Endpoint30_3Request["payload"]["tabID"]
   readonly generation: Endpoint30_3Request["payload"]["generation"]
   readonly callID: Endpoint30_3Request["payload"]["callID"]
+  readonly diff?: Endpoint30_3Request["payload"]["diff"]
 }
 const Endpoint30_3 = (raw: RawClient["server.browser"]) => (input: Endpoint30_3Input) =>
   raw["browser.observe"]({
     params: { sessionID: input["sessionID"] },
-    payload: { tabID: input["tabID"], generation: input["generation"], callID: input["callID"] },
+    payload: { tabID: input["tabID"], generation: input["generation"], callID: input["callID"], diff: input["diff"] },
   }).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
@@ -2464,6 +2465,7 @@ type Endpoint31_3Input = {
   readonly tabID: Endpoint31_3Request["payload"]["tabID"]
   readonly generation: Endpoint31_3Request["payload"]["generation"]
   readonly callID: Endpoint31_3Request["payload"]["callID"]
+  readonly diff?: Endpoint31_3Request["payload"]["diff"]
   readonly instanceID: Endpoint31_3Request["payload"]["instanceID"]
 }
 const Endpoint31_3 = (raw: RawClient["server.isolatedBrowser"]) => (input: Endpoint31_3Input) =>
@@ -2473,6 +2475,7 @@ const Endpoint31_3 = (raw: RawClient["server.isolatedBrowser"]) => (input: Endpo
       tabID: input["tabID"],
       generation: input["generation"],
       callID: input["callID"],
+      diff: input["diff"],
       instanceID: input["instanceID"],
     },
   }).pipe(
