@@ -201,6 +201,22 @@ describe("CLI frontend import boundaries", () => {
     },
     coldBundleTimeout,
   )
+
+  test(
+    "keeps CLI startup modules free of the TUI renderer",
+    async () => {
+      const leaves = ["packages/tui/src/config/keybind.ts", "packages/tui/src/config/schema.ts"]
+      const main = await bundleInputs("packages/cli/src/main.ts")
+      const commands = await bundleInputs("packages/cli/src/commands/commands.ts")
+      for (const graph of [main, commands]) {
+        expect(graph.filter((file) => file.startsWith("packages/tui/") && !leaves.includes(file))).toEqual([])
+        expect(graph.filter((file) => file.includes("@opentui/") || file.includes("@opentui+"))).toEqual([])
+      }
+      expect(main).toContain("packages/tui/src/config/schema.ts")
+      expect(commands).toContain("packages/cli/src/commands/commands.ts")
+    },
+    coldBundleTimeout * 2,
+  )
 })
 
 async function bundleInputs(entrypoint: string) {
