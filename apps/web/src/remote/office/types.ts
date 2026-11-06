@@ -37,7 +37,7 @@ export type SelectedSession = {
   readonly unknownOutcome: boolean
 }
 
-type TaskState = "starting" | "running" | "waiting" | "cancelling" | "cancelled" | "completed" | "failed" | "lost"
+type TaskState = "starting" | "running" | "waiting" | "supervising" | "cancelling" | "cancelled" | "completed" | "failed" | "lost"
 
 export type TeamMember = {
   readonly sessionID: string

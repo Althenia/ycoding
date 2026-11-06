@@ -23,7 +23,8 @@ import { SessionMessage } from "../src/session/message"
 import { SessionPending } from "../src/session/pending"
 import { SessionProjector } from "../src/session/projector"
 import { SessionSchema } from "../src/session/schema"
-import { SessionPendingTable, SessionTaskTable } from "../src/session/sql"
+import { SessionPendingTable, SessionTaskNotificationTable, SessionTaskTable } from "../src/session/sql"
+import { SessionCompletion } from "../src/session/completion"
 import { SessionOrchestration } from "../src/session/orchestration"
 import { SessionOrchestrationNotifier } from "../src/session/orchestration-notifier"
 import { CoordinationDecisions } from "../src/session/coordination-decisions"
@@ -74,7 +75,7 @@ const it = testEffect(AppNodeBuilder.build(
 let launches = 0
 const launched = (sessions: Session.Interface, events: EventRuntime.Interface, parentID: SessionSchema.ID, title: string, started = true) =>
   Effect.gen(function* () {
-    const child = yield* sessions.create({ parentID, title })
+    const child = yield* sessions.create({ parentID, title, model: Schema.decodeUnknownSync(Model.Ref)({ providerID: "test", id: "model" }) })
     const launch = ++launches
     yield* events.publish(SessionEvent.Task.Updated, Schema.decodeUnknownSync(SessionEvent.Task.Updated.data)({ sessionID: child.id, change: {
       type: "launched", parentID, parentAssistantMessageID: `msg_runtime_parent_${launch}`, toolCallID: `call_runtime_${launch}`,
@@ -145,6 +146,322 @@ const setup = Effect.gen(function* () {
   return { sessions, coordination, db, events, runtime, makeRuntime, group, master, alpha, beta, outsider, subagent, other, executor, alphaChild }
 })
 type Fixture = Effect.Success<typeof setup>
+
+describe("persistent owner lifecycle and isolated delivery", () => {
+  const stateOf = (fixture: Fixture) => fixture.db.select().from(SessionTaskTable)
+    .where(eq(SessionTaskTable.session_id, fixture.subagent.id)).get().pipe(Effect.orDie)
+  const parentNotices = (fixture: Fixture) => fixture.db.select().from(SessionTaskNotificationTable)
+    .where(eq(SessionTaskNotificationTable.task_session_id, fixture.subagent.id)).all().pipe(Effect.orDie)
+  const settleOwner = (fixture: Fixture) => Effect.gen(function* () {
+    yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+    const orchestration = yield* SessionOrchestration.Service
+    yield* orchestration.settle(fixture.subagent.id, { type: "completed", excerpt: "Verified assignment" })
+  })
+
+  it.effect("live request delivery and restart handoff share one exact request identity", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      pendingByTarget.set(fixture.alpha.id, [{ kind: "permission", fingerprint: "fp_live_restart", request: { id: "per_live_restart", sessionID: fixture.alpha.id, action: "edit", resources: ["src/a.ts"] } }])
+      yield* emit(fixture, Permission.Event.Asked, { id: "per_live_restart", sessionID: fixture.alpha.id, action: "edit", resources: ["src/a.ts"] })
+      yield* fixture.runtime.recover()
+      yield* fixture.runtime.recover()
+      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(1)
+      expect(noticeMetadata((yield* noticesFor(fixture, fixture.subagent.id))[0]!)).toMatchObject({ requestID: "per_live_restart", fingerprint: "fp_live_restart" })
+      expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
+    }))
+
+  it.effect("restart clears ownership from a member archived before its event handler ran", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* settleOwner(fixture)
+      yield* fixture.events.publish(SessionEvent.Archived, { sessionID: fixture.alpha.id })
+      yield* fixture.runtime.recover()
+      yield* fixture.runtime.recover()
+      expect(yield* recordedOwner(fixture, fixture.alpha.id)).toBeUndefined()
+      expect((yield* stateOf(fixture))?.state).toBe("completed")
+      expect((yield* parentNotices(fixture)).map(row => row.type)).toEqual(["completed"])
+      expect(woken).toEqual([])
+    }))
+
+  it.effect("member activity includes a running descendant but not settled supervising ownership", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      const child = yield* launched(fixture.sessions, fixture.events, fixture.alpha.id, "active worker")
+      expect((yield* fixture.runtime.get(fixture.group.id)).members.find(member => member.sessionID === fixture.alpha.id)?.state).toBe("running")
+      const orchestration = yield* SessionOrchestration.Service
+      yield* orchestration.settle(child.id, { type: "completed" })
+      yield* settleOwner(fixture)
+      expect((yield* fixture.runtime.get(fixture.group.id)).members.find(member => member.sessionID === fixture.alpha.id)?.state).toBe("idle")
+      expect((yield* fixture.sessions.outstanding()).running.has(fixture.subagent.id)).toBe(false)
+    }))
+
+  for (const change of ["transfer", "remove"] as const)
+    it.effect(`a ${change} and a member notice serialize through the Project ownership fence`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup
+        yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const attempted = yield* Deferred.make<void>()
+        const holder = yield* fixture.coordination.withOwnership(fixture.group.id, Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))).pipe(Effect.forkChild)
+        yield* Deferred.await(entered)
+        const mutation = yield* Deferred.succeed(attempted, undefined).pipe(Effect.andThen(change === "transfer"
+          ? fixture.runtime.assign(fixture.master.id, { sessionID: fixture.alpha.id, ownerSessionID: fixture.other.id }).pipe(Effect.asVoid, Effect.orDie)
+          : fixture.coordination.update(fixture.group.id, { revision: fixture.group.revision, memberSessionIDs: [fixture.beta.id] }).pipe(Effect.asVoid, Effect.orDie)), Effect.forkChild)
+        yield* Deferred.await(attempted)
+        const delivery = yield* emit(fixture, SessionEvent.Execution.Failed, { sessionID: fixture.alpha.id, error: { type: "provider.error", message: "At fenced change" } }).pipe(Effect.forkChild)
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(holder)
+        yield* Fiber.join(mutation)
+        yield* Fiber.join(delivery)
+        expect(yield* noticesFor(fixture, fixture.subagent.id)).toEqual([])
+        expect(yield* noticesFor(fixture, fixture.other.id)).toHaveLength(change === "transfer" ? 1 : 0)
+        expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
+      }))
+
+  it.effect("attachment makes an idle completed owner supervising without execution; transfer completes its former owner once", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      const orchestration = yield* SessionOrchestration.Service
+      yield* orchestration.settle(fixture.subagent.id, { type: "completed" })
+      yield* orchestration.settle(fixture.other.id, { type: "completed" })
+      const before = yield* fixture.events.sequences([fixture.subagent.id])
+      yield* fixture.runtime.assign(fixture.master.id, { sessionID: fixture.alpha.id, ownerSessionID: fixture.subagent.id })
+      expect((yield* stateOf(fixture))?.state).toBe("supervising")
+      expect(Number((yield* fixture.events.sequences([fixture.subagent.id])).get(fixture.subagent.id))).toBe(Number(before.get(fixture.subagent.id) ?? -1) + 1)
+      expect((yield* fixture.sessions.outstanding()).running.has(fixture.subagent.id)).toBe(false)
+      expect((yield* fixture.sessions.outstanding()).sessions.has(fixture.subagent.id)).toBe(true)
+      yield* fixture.runtime.assign(fixture.master.id, { sessionID: fixture.alpha.id, ownerSessionID: fixture.other.id })
+      yield* ownerChanged(fixture, fixture.alpha.id, fixture.other.id)
+      expect((yield* stateOf(fixture))?.state).toBe("completed")
+      expect((yield* orchestration.get(fixture.master.id, fixture.other.id)).state).toBe("supervising")
+      expect(woken).toEqual([])
+      const executions = yield* fixture.db.select().from(EventTable).where(and(eq(EventTable.aggregate_id, fixture.subagent.id), eq(EventTable.type, versioned(SessionEvent.Execution.Started)))).all().pipe(Effect.orDie)
+      expect(executions).toEqual([])
+      expect((yield* parentNotices(fixture)).map(row => row.type)).toEqual(["completed", "completed"])
+    }))
+
+  it.effect("two owners and two members remain isolated from sibling Sessions and a second Project across transfer and removal", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* fixture.runtime.assign(fixture.master.id, { sessionID: fixture.alpha.id, ownerSessionID: fixture.subagent.id })
+      yield* fixture.runtime.assign(fixture.master.id, { sessionID: fixture.beta.id, ownerSessionID: fixture.other.id })
+      const foreignMember = yield* fixture.sessions.create({ location: fixture.master.location })
+      yield* fixture.coordination.create({ name: "Foreign", masterSessionID: fixture.outsider.id, memberSessionIDs: [foreignMember.id] })
+      for (const member of [fixture.alpha.id, fixture.beta.id])
+        yield* emit(fixture, SessionEvent.Execution.Failed, { sessionID: member, error: { type: "provider.error", message: "Fixture failure" } })
+      expect((yield* noticesFor(fixture, fixture.subagent.id)).map(row => noticeMetadata(row).memberSessionID)).toEqual([fixture.alpha.id])
+      expect((yield* noticesFor(fixture, fixture.other.id)).map(row => noticeMetadata(row).memberSessionID)).toEqual([fixture.beta.id])
+      for (const sessionID of [fixture.master.id, fixture.outsider.id, fixture.executor.id, fixture.alpha.id, fixture.beta.id])
+        expect(yield* noticesFor(fixture, sessionID)).toEqual([])
+      yield* fixture.runtime.assign(fixture.master.id, { sessionID: fixture.alpha.id, ownerSessionID: fixture.other.id })
+      yield* emit(fixture, SessionEvent.Execution.Failed, { sessionID: fixture.alpha.id, error: { type: "provider.error", message: "After transfer" } })
+      yield* fixture.coordination.update(fixture.group.id, { revision: fixture.group.revision, memberSessionIDs: [fixture.beta.id] })
+      yield* emit(fixture, SessionEvent.Execution.Failed, { sessionID: fixture.alpha.id, error: { type: "provider.error", message: "After removal" } })
+      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(1)
+      expect(yield* noticesFor(fixture, fixture.other.id)).toHaveLength(2)
+      expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
+      expect(yield* noticesFor(fixture, fixture.outsider.id)).toEqual([])
+    }))
+
+  for (const closed of [false, true])
+    it.effect(`a ${closed ? "resolved" : "pending"} managed-child question is reconciled on attach and restart without granting child control`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup
+        const child = yield* launched(fixture.sessions, fixture.events, fixture.alpha.id, "member worker")
+        const question = { id: QuestionID.make("qst_member_worker"), text: "Native answer required", time: 1 }
+        const asked = yield* fixture.events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "question_asked", question } })
+        yield* fixture.runtime.handle(asked)
+        yield* fixture.runtime.handle(asked)
+        const master = yield* noticesFor(fixture, fixture.master.id)
+        expect(master).toHaveLength(1)
+        expect(noticeMetadata(master[0]!)).toMatchObject({ source: "project_escalation", requestSessionID: child.id, requestID: question.id, revision: 2 })
+        if (closed) yield* fixture.events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "question_answered", answer: { questionID: question.id, text: "Authorized fixture answer" } } })
+        yield* fixture.runtime.assign(fixture.master.id, { sessionID: fixture.alpha.id, ownerSessionID: fixture.subagent.id })
+        yield* ownerChanged(fixture, fixture.alpha.id, fixture.subagent.id)
+        const restarted = yield* fixture.makeRuntime
+        yield* restarted.recover()
+        yield* restarted.recover()
+        const owner = yield* noticesFor(fixture, fixture.subagent.id)
+        expect(owner).toHaveLength(closed ? 0 : 1)
+        if (!closed) expect(noticeMetadata(owner[0]!)).toMatchObject({ requestSessionID: child.id, requestID: question.id, revision: 2, fingerprint: noticeMetadata(master[0]!).fingerprint })
+        expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(1)
+        const orchestration = yield* SessionOrchestration.Service
+        expect((yield* Effect.exit(orchestration.answer({ parentID: fixture.subagent.id, childID: child.id, questionID: question.id, text: "Not its child" })))._tag).toBe("Failure")
+      }))
+
+  it.effect("restart recovers a missed managed-child question once without any wake", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      const child = yield* launched(fixture.sessions, fixture.events, fixture.alpha.id, "waiting member worker")
+      yield* fixture.events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "question_asked", question: { id: QuestionID.make("qst_missed_worker"), text: "Wait for native answer", time: 1 } } })
+      const restarted = yield* fixture.makeRuntime
+      yield* restarted.recover()
+      yield* restarted.recover()
+      expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(1)
+      expect(woken).toEqual([])
+    }))
+
+  it.effect("failed ownership holds routine state and hands it once to a new owner without reviving the failed task", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* settleOwner(fixture)
+      const failed = yield* fixture.events.publish(SessionEvent.Task.Updated, { sessionID: fixture.subagent.id, change: { type: "failed", error: "Fixture owner failure" } })
+      yield* fixture.runtime.handle(failed)
+      yield* retainSuccess(fixture, fixture.alpha.id)
+      yield* fixture.runtime.recover()
+      expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
+      yield* fixture.runtime.assign(fixture.master.id, { sessionID: fixture.alpha.id, ownerSessionID: fixture.other.id })
+      yield* ownerChanged(fixture, fixture.alpha.id, fixture.other.id)
+      yield* fixture.runtime.recover()
+      yield* fixture.runtime.recover()
+      expect(yield* noticesFor(fixture, fixture.other.id)).toHaveLength(1)
+      expect(yield* noticesFor(fixture, fixture.subagent.id)).toEqual([])
+      expect((yield* stateOf(fixture))?.state).toBe("failed")
+      expect(woken).toEqual([])
+    }))
+
+  it.effect("settled ownership is supervising, unfinished but neither running nor waiting, with no parent completion", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* settleOwner(fixture)
+      expect((yield* stateOf(fixture))?.state).toBe("supervising")
+      expect(yield* parentNotices(fixture)).toEqual([])
+      const orchestration = yield* SessionOrchestration.Service
+      expect((yield* orchestration.page({ parentID: fixture.master.id })).summary).toEqual({ total: 2, active: 2, running: 1, waiting: 0 })
+      expect((yield* orchestration.teamView(fixture.master.id)).view.children.find(task => task.sessionID === fixture.subagent.id)?.state).toBe("supervising")
+      yield* orchestration.settle(fixture.other.id, { type: "completed" })
+      yield* fixture.db.update(SessionTaskNotificationTable).set({ delivered: true })
+        .where(eq(SessionTaskNotificationTable.task_session_id, fixture.other.id)).run().pipe(Effect.orDie)
+      expect(yield* SessionCompletion.backgroundWork(fixture.db, { list: () => Effect.succeed([]), outstandingSessions: () => Effect.succeed(new Set<SessionSchema.ID>()) }, fixture.master.id, new Set())).toBe(true)
+    }))
+
+  it.effect("started and progress reach only tied owners without wakes; a material notice resumes a supervising owner", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* activate(fixture)
+      yield* settleOwner(fixture)
+      yield* own(fixture, fixture.beta.id, fixture.master.id)
+      for (const member of [fixture.alpha.id, fixture.beta.id]) {
+        yield* emit(fixture, SessionEvent.Execution.Started, { sessionID: member })
+        yield* emit(fixture, SessionEvent.Step.Ended, { sessionID: member })
+      }
+      expect(woken).toEqual([])
+      expect((yield* stateOf(fixture))?.state).toBe("supervising")
+      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(2)
+      expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(2)
+      yield* emit(fixture, Permission.Event.Asked, { id: "per_owner_resume", sessionID: fixture.alpha.id, action: "edit", resources: ["src/a.ts"] })
+      expect((yield* stateOf(fixture))?.state).toBe("running")
+      expect(woken).toEqual([fixture.subagent.id])
+      expect(yield* parentNotices(fixture)).toEqual([])
+    }))
+
+  it.effect("unowned routine events write no transcript or wake, while a repeated question escalates once to its own Master", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* activate(fixture)
+      const foreign = yield* fixture.sessions.create({ location: fixture.master.location, title: "foreign Master" })
+      const foreignMember = yield* fixture.sessions.create({ location: fixture.master.location, title: "foreign member" })
+      yield* fixture.coordination.create({ name: "Other", masterSessionID: foreign.id, memberSessionIDs: [foreignMember.id] })
+      for (const definition of [SessionEvent.Execution.Started, SessionEvent.Step.Ended, SessionEvent.Execution.Succeeded])
+        yield* emit(fixture, definition, { sessionID: fixture.alpha.id })
+      yield* emit(fixture, SessionEvent.Execution.Interrupted, { sessionID: fixture.alpha.id, reason: "user" })
+      for (const sessionID of [fixture.master.id, fixture.subagent.id, fixture.other.id, fixture.beta.id, fixture.outsider.id, foreign.id])
+        expect(yield* noticesFor(fixture, sessionID)).toEqual([])
+      expect(woken).toEqual([])
+      const data = { form: { id: "frm_unowned", sessionID: fixture.alpha.id, title: "Human decision" } }
+      yield* emit(fixture, Form.Event.Created, data, "evt_unowned_question")
+      yield* emit(fixture, Form.Event.Created, data, "evt_unowned_question")
+      const rows = yield* noticesFor(fixture, fixture.master.id)
+      expect(rows).toHaveLength(1)
+      expect(noticeOf(rows[0]!).text).toStartWith("Project escalation:\n")
+      expect(noticeMetadata(rows[0]!)).toMatchObject({ source: "project_escalation", reason: "unowned", requestID: "frm_unowned" })
+      expect(woken).toEqual([fixture.master.id])
+      expect(yield* noticesFor(fixture, foreign.id)).toEqual([])
+    }))
+
+  it.effect("last member removal completes an idle owner once; earlier removal does not", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* settleOwner(fixture)
+      yield* own(fixture, fixture.beta.id, fixture.subagent.id)
+      const first = yield* fixture.coordination.update(fixture.group.id, { revision: fixture.group.revision, memberSessionIDs: [fixture.beta.id] })
+      yield* emit(fixture, Coordination.Event.Changed, { groupID: fixture.group.id })
+      expect((yield* stateOf(fixture))?.state).toBe("supervising")
+      yield* fixture.coordination.update(fixture.group.id, { revision: first.revision, memberSessionIDs: [] })
+      yield* emit(fixture, Coordination.Event.Changed, { groupID: fixture.group.id })
+      yield* emit(fixture, Coordination.Event.Changed, { groupID: fixture.group.id })
+      expect((yield* stateOf(fixture))?.state).toBe("completed")
+      expect((yield* parentNotices(fixture)).map(row => row.type)).toEqual(["completed"])
+    }))
+
+  for (const definition of [SessionEvent.Archived, SessionEvent.Deleted])
+    it.effect(`${definition.type} ends member ownership and completes the idle owner once`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup
+        yield* settleOwner(fixture)
+        const event = yield* fixture.events.publish(definition, { sessionID: fixture.alpha.id })
+        yield* fixture.runtime.handle(event)
+        yield* fixture.runtime.handle(event)
+        expect((yield* stateOf(fixture))?.state).toBe("completed")
+        expect((yield* parentNotices(fixture)).map(row => row.type)).toEqual(["completed"])
+      }))
+
+  it.effect("an owner cannot self-release; Master release and cancellation remain available", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* settleOwner(fixture)
+      expect(yield* refusal(fixture.runtime.release(fixture.subagent.id, { sessionID: fixture.alpha.id, reason: "completed" }))).toContain("Only the Project's Master")
+      yield* fixture.runtime.release(fixture.master.id, { sessionID: fixture.alpha.id, reason: "released" })
+      yield* ownerChanged(fixture, fixture.alpha.id)
+      expect((yield* stateOf(fixture))?.state).toBe("completed")
+      yield* own(fixture, fixture.alpha.id, fixture.other.id)
+      const orchestration = yield* SessionOrchestration.Service
+      yield* orchestration.settle(fixture.other.id, { type: "completed" })
+      pendingByTarget.set(fixture.alpha.id, [{ kind: "permission", fingerprint: "fp_cancel", request: { id: "per_cancel", sessionID: fixture.alpha.id, action: "edit", resources: ["src/a.ts"] } }])
+      const cancelled = yield* orchestration.cancel({ parentID: fixture.master.id, childID: fixture.other.id })
+      expect(cancelled.state).toBe("cancelled")
+      yield* emit(fixture, SessionEvent.Task.Updated, { sessionID: fixture.other.id, change: { type: "cancelled" } })
+      yield* emit(fixture, SessionEvent.Task.Updated, { sessionID: fixture.other.id, change: { type: "cancelled" } })
+      expect((yield* fixture.coordination.accessOf(fixture.alpha.id))?.ownerSessionID).toBe(fixture.master.id)
+      expect((yield* noticesFor(fixture, fixture.master.id)).map(noticeMetadata)).toEqual([expect.objectContaining({ source: "project_escalation", requestID: "per_cancel" })])
+    }))
+
+  it.effect("restart leaves a supervising owner idle and retains exclusive routing without replay", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* settleOwner(fixture)
+      yield* retainFailure(fixture, fixture.alpha.id, "Retained member failure")
+      const orchestration = yield* SessionOrchestration.Service
+      yield* orchestration.recover
+      const restarted = yield* fixture.makeRuntime
+      yield* restarted.recover()
+      yield* restarted.recover()
+      expect((yield* stateOf(fixture))?.state).toBe("supervising")
+      expect(woken).toEqual([])
+      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(1)
+      expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
+      expect(yield* parentNotices(fixture)).toEqual([])
+    }))
+
+  it.effect("held lifecycle state collapses on attach once without waking a paused owner", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* retainSuccess(fixture, fixture.alpha.id)
+      yield* retainSuccess(fixture, fixture.alpha.id)
+      yield* fixture.runtime.recover()
+      expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
+      yield* fixture.runtime.assign(fixture.master.id, { sessionID: fixture.alpha.id, ownerSessionID: fixture.subagent.id })
+      yield* ownerChanged(fixture, fixture.alpha.id, fixture.subagent.id)
+      yield* ownerChanged(fixture, fixture.alpha.id, fixture.subagent.id)
+      const rows = yield* noticesFor(fixture, fixture.subagent.id)
+      expect(rows).toHaveLength(1)
+      expect(noticeMetadata(rows[0]!)).toMatchObject({ source: "project_notification", event: "completed", held: { count: 2 } })
+      expect(woken).toEqual([])
+      expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
+    }))
+})
 
 const retainFailure = (fixture: Fixture, sessionID: SessionSchema.ID, message: string) => Effect.gen(function* () {
   const sequences = yield* fixture.events.sequences([sessionID])
@@ -558,7 +875,7 @@ describe("project list", () => {
       })
       expect(roster.members.find((member) => member.sessionID === fixture.beta.id)?.state).toBe("idle")
       const info = yield* fixture.runtime.get(fixture.group.id)
-      expect(info.master).toMatchObject({ sessionID: fixture.master.id, title: "master", state: "idle", pending: [] })
+      expect(info.master).toMatchObject({ sessionID: fixture.master.id, title: "master", state: "running", pending: [] })
       expect(info.members.map((member) => member.sessionID).sort()).toEqual([fixture.alpha.id, fixture.beta.id].sort())
       const [summary] = yield* fixture.runtime.summaries()
       expect(summary).toMatchObject({ id: fixture.group.id, masterSessionID: fixture.master.id, memberCount: 2, active: false })
@@ -606,6 +923,8 @@ describe("member notifications", () => {
   it.effect("each kind wakes an active Master exactly once with a compact notice, and a repeated event adds nothing", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
+      yield* own(fixture, fixture.alpha.id, fixture.master.id)
+      yield* own(fixture, fixture.beta.id, fixture.master.id)
       yield* activate(fixture)
       for (const kind of kinds(fixture.alpha.id)) {
         woken.length = 0
@@ -632,6 +951,8 @@ describe("member notifications", () => {
   it.effect("while the Project is inactive, failures and decision requests wake the Master and settled outcomes wait in its chat", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
+      yield* own(fixture, fixture.alpha.id, fixture.master.id)
+      yield* own(fixture, fixture.beta.id, fixture.master.id)
       for (const kind of kinds(fixture.beta.id)) {
         woken.length = 0
         yield* emit(fixture, kind.definition, kind.data)
@@ -659,11 +980,12 @@ describe("member notifications", () => {
       expect(woken).toEqual([])
     }))
 
-  it.effect("goes to the member's recorded owner whether or not it runs, and to the Master when it has none", () =>
+  it.effect("goes to recorded owners whether or not they run, including an explicitly owning Master", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
       yield* activate(fixture)
       yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      yield* own(fixture, fixture.beta.id, fixture.master.id)
       const driven = yield* fixture.runtime.send(fixture.subagent.id, { sessionID: fixture.alpha.id, text: "Drive it" })
       yield* fixture.events.publish(SessionEvent.InputPromoted, { sessionID: fixture.alpha.id, inputID: driven.messageID })
       woken.length = 0
@@ -712,7 +1034,7 @@ describe("member notifications", () => {
       yield* ownerChanged(fixture, fixture.alpha.id, fixture.subagent.id, "evt_owner_first")
       yield* ownerChanged(fixture, fixture.alpha.id, fixture.subagent.id, "evt_owner_first")
       expect(yield* events(fixture.subagent.id)).toEqual([
-        { source: "project_notification", groupID: fixture.group.id, memberSessionID: fixture.alpha.id, title: "alpha", event: "permission", requestID: "per_one", excerpt: "edit src/a.ts" },
+        { source: "project_notification", groupID: fixture.group.id, memberSessionID: fixture.alpha.id, title: "alpha", event: "permission", requestID: "per_one", fingerprint: "fp", excerpt: "edit src/a.ts" },
       ])
       yield* own(fixture, fixture.alpha.id, fixture.other.id)
       woken.length = 0
@@ -809,10 +1131,10 @@ describe("member notifications", () => {
       expect(notice).toMatchObject({ id: first.messageID, type: "synthetic", delivery: "steer" })
       const data = noticeOf(notice!)
       expect(data.metadata).toEqual({
-        source: "project_notification", groupID: fixture.group.id, memberSessionID: fixture.alpha.id, title: "alpha", event: "escalated",
-        requestID: "per_one", kind: "permission", excerpt: "Deletes the release branch", escalatedBy: { sessionID: fixture.subagent.id, title: "master subagent" },
+        source: "project_escalation", groupID: fixture.group.id, memberSessionID: fixture.alpha.id, reason: "Deletes the release branch", event: "escalated",
+        requestID: "per_one", fingerprint: "fp_per", kind: "permission", escalatedBy: { sessionID: fixture.subagent.id, title: "master subagent" },
       })
-      expect(data.text).toBe(`Project notification:\n${JSON.stringify(data.metadata)}`)
+      expect(data.text).toBe(`Project escalation:\n${JSON.stringify(data.metadata)}`)
       woken.length = 0
       expect(yield* fixture.runtime.escalate(fixture.subagent.id, input)).toEqual(first)
       expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(1)
@@ -849,6 +1171,8 @@ describe("member notifications", () => {
   it.effect("a deterministic notice identity survives a lookup after promotion", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
+      yield* own(fixture, fixture.alpha.id, fixture.master.id)
+      yield* own(fixture, fixture.beta.id, fixture.master.id)
       yield* activate(fixture)
       yield* emit(fixture, SessionEvent.Execution.Succeeded, { sessionID: fixture.alpha.id })
       const [notice] = yield* noticesFor(fixture, fixture.master.id)
@@ -992,12 +1316,13 @@ describe("owner-routed delivery", () => {
         expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
       }))
 
-  it.effect("an unassigned member's events reach only the Master", () =>
+  it.effect("an unassigned member holds routine state and escalates material items only to its Master", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
       yield* activate(fixture)
       for (const kind of allKinds(fixture.beta.id)) yield* emit(fixture, kind.definition, kind.data, `evt_unassigned_${kind.event}`)
-      expect(yield* noticeEvents(fixture, fixture.master.id)).toEqual(allKinds(fixture.beta.id).map((kind) => kind.event))
+      expect(yield* noticeEvents(fixture, fixture.master.id)).toEqual(["failed", "question", "permission", "review"])
+      expect((yield* noticesFor(fixture, fixture.master.id)).every(row => noticeMetadata(row).source === "project_escalation")).toBe(true)
       for (const id of [fixture.subagent.id, fixture.other.id, fixture.outsider.id, fixture.alpha.id, fixture.alphaChild.id, fixture.executor.id])
         expect(yield* noticesFor(fixture, id)).toEqual([])
     }))
@@ -1050,7 +1375,7 @@ describe("owner-routed delivery", () => {
       yield* transition(fixture, fixture.subagent.id, { type: "completed" })
       woken.length = 0
       yield* emit(fixture, SessionEvent.Execution.Succeeded, { sessionID: fixture.alpha.id }, "evt_quiet_completed")
-      expect(yield* taskState(fixture, fixture.subagent.id)).toBe("completed")
+      expect(yield* taskState(fixture, fixture.subagent.id)).toBe("supervising")
       expect(woken).toEqual([])
       yield* emit(fixture, SessionEvent.Execution.Failed, { sessionID: fixture.alpha.id, error: { type: "provider.error", message: "boom" } }, "evt_quiet_failed")
       expect(yield* taskState(fixture, fixture.subagent.id)).toBe("running")
@@ -1092,7 +1417,7 @@ describe("owner-routed delivery", () => {
         woken.length = 0
         yield* emit(fixture, SessionEvent.Execution.Succeeded, { sessionID: fixture.alpha.id }, `evt_stale_notice_${stale}`)
         expect(yield* recordedOwner(fixture, fixture.alpha.id)).toBeUndefined()
-        expect(yield* noticeEvents(fixture, fixture.master.id)).toEqual(["permission", "completed"])
+        expect(yield* noticeEvents(fixture, fixture.master.id)).toEqual(["permission"])
         expect(yield* noticesFor(fixture, owner)).toEqual([])
         expect(woken).not.toContain(owner)
       }))
@@ -1201,6 +1526,7 @@ describe("owner-routed delivery", () => {
       yield* activate(fixture)
       yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
       const failed = yield* fixture.events.publish(SessionEvent.Execution.Failed, { sessionID: fixture.alpha.id, error: { type: "provider.error", message: "once" } })
+      yield* own(fixture, fixture.beta.id, fixture.master.id)
       const succeeded = yield* fixture.events.publish(SessionEvent.Execution.Succeeded, { sessionID: fixture.beta.id })
       for (const event of [failed, failed, succeeded, succeeded]) yield* fixture.runtime.handle(event as never)
       const restarted = yield* fixture.makeRuntime
@@ -1328,14 +1654,14 @@ const liveSetup = (ownership: "recorded" | "assigned" = "recorded") => Effect.ge
 })
 
 describe("owner revival through real execution", () => {
-  live.live("completed-owner drain: the member event's notice is admitted, starts the owner task, runs a Step, settles it, and notifies the Master", () =>
+  live.live("a member notice starts the supervising owner, runs a Step, and settles it without notifying the Master", () =>
     Effect.gen(function* () {
       const fixture = yield* liveSetup()
       const notifier = yield* SessionOrchestrationNotifier.Service
       yield* fixture.events.publish(SessionEvent.Task.Updated, { sessionID: fixture.owner.id, change: { type: "completed" } })
       yield* notifier.dispatch
       yield* fixture.execution.awaitIdle(fixture.master.id)
-      expect((yield* fixture.subagentNotices).map((notice) => notice.type)).toEqual(["completed"])
+      expect((yield* fixture.subagentNotices).map((notice) => notice.type)).toEqual([])
       const before = (yield* fixture.history(fixture.owner.id)).length
       drained.length = 0
 
@@ -1366,9 +1692,9 @@ describe("owner revival through real execution", () => {
       ]
       expect(order).toEqual(order.slice().sort((left, right) => left - right))
       expect(drained).toContain(fixture.owner.id)
-      expect((yield* fixture.db.select({ state: SessionTaskTable.state }).from(SessionTaskTable).where(eq(SessionTaskTable.session_id, fixture.owner.id)).get().pipe(Effect.orDie))?.state).toBe("completed")
+      expect((yield* fixture.db.select({ state: SessionTaskTable.state }).from(SessionTaskTable).where(eq(SessionTaskTable.session_id, fixture.owner.id)).get().pipe(Effect.orDie))?.state).toBe("supervising")
       expect(yield* fixture.db.select().from(SessionPendingTable).where(eq(SessionPendingTable.session_id, fixture.owner.id)).all().pipe(Effect.orDie)).toEqual([])
-      expect((yield* fixture.subagentNotices).map((notice) => notice.type)).toEqual(["completed", "completed"])
+      expect((yield* fixture.subagentNotices).map((notice) => notice.type)).toEqual([])
     }), 30_000)
 
   live.live("a notice admitted while the owner is mid-turn stays pending through an interrupt and is consumed once on the next wake", () =>
@@ -1406,7 +1732,7 @@ describe("owner revival through real execution", () => {
 })
 
 describe("owner revival without a process identity", () => {
-  psFailing.live("when ps fails the owner task records no process owner, and a member notice still revives it, runs a Step, and reports its completion to the Master", () =>
+  psFailing.live("when ps fails the owner task records no process owner, and a member notice still revives it and settles back to supervising", () =>
     Effect.gen(function* () {
       const fixture = yield* liveSetup("assigned")
       const notifier = yield* SessionOrchestrationNotifier.Service
@@ -1417,8 +1743,8 @@ describe("owner revival without a process identity", () => {
       yield* fixture.execution.awaitIdle(fixture.owner.id)
       yield* notifier.dispatch
       yield* fixture.execution.awaitIdle(fixture.master.id)
-      expect((yield* fixture.taskRow)?.state).toBe("completed")
-      expect((yield* fixture.subagentNotices).map((notice) => notice.type)).toEqual(["completed"])
+      expect((yield* fixture.taskRow)?.state).toBe("supervising")
+      expect((yield* fixture.subagentNotices).map((notice) => notice.type)).toEqual([])
       const before = (yield* fixture.history(fixture.owner.id)).length
       drained.length = 0
 
@@ -1443,8 +1769,8 @@ describe("owner revival without a process identity", () => {
       expect(order.every((index) => index >= 0)).toBe(true)
       expect(order).toEqual(order.slice().sort((left, right) => left - right))
       expect(drained).toContain(fixture.owner.id)
-      expect(yield* fixture.taskRow).toEqual({ state: "completed", ownerPid: null, ownerStarted: null })
-      expect((yield* fixture.subagentNotices).map((notice) => notice.type)).toEqual(["completed", "completed"])
+      expect(yield* fixture.taskRow).toEqual({ state: "supervising", ownerPid: null, ownerStarted: null })
+      expect((yield* fixture.subagentNotices).map((notice) => notice.type)).toEqual([])
     }), 30_000)
 })
 

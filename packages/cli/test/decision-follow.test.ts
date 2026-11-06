@@ -42,6 +42,8 @@ function fixture(state = initial()) {
   let failLog = false
   let failGlobal = false
   let saved = structuredClone(state)
+  let work = { data: [] as string[], running: [] as string[], lost: [] as string[] }
+  let tasks: { sessionID: string; parentID?: string; state: string; revision: number; question?: { id: string; deferred?: true } }[] = []
   const reads = { global: 0, log: 0, active: 0, list: 0, snapshot: 0, pending: 0 }
   const faults: { global?: number; log?: number; snapshot?: number; pending?: number; handshake?: boolean; error?: ClientError } = {}
   const reject = (name: "global" | "log" | "snapshot" | "pending") => {
@@ -49,6 +51,7 @@ function fixture(state = initial()) {
   }
   const waiters: { predicate: (receipt: FollowReceipt) => boolean; resolve(receipt: FollowReceipt): void }[] = []
   const client: FollowClient = {
+    coordination: { async list() { return [] }, async get({ groupID }) { return { id: groupID, revision: 0, members: [] } } },
     event: { subscribe({ signal }) {
       reads.global++
       reject("global")
@@ -63,11 +66,17 @@ function fixture(state = initial()) {
     session: {
       async get({ sessionID }) { return { id: sessionID } },
       async active() { reads.active++; return {} },
+      async outstanding() { return work },
+      subagent: { async list({ parentID }) { return { data: tasks.filter((task) => (task.parentID ?? "ses_root") === parentID), summary: { total: tasks.length, active: tasks.length, running: tasks.filter((task) => task.state === "running").length, waiting: tasks.filter((task) => task.state === "waiting").length }, cursor: {} } } },
       async list({ parentID }) { reads.list++; return { data: parentID === "ses_root" ? children.map((id) => ({ id, parentID })) : [], cursor: {} } },
       async snapshot({ sessionID }) { reads.snapshot++; reject("snapshot"); return { sourceEpoch: epoch, watermark: { seq: history.get(sessionID)?.at(-1)?.durable?.seq } } },
-      log({ sessionID, after }, { signal }) {
+      log({ sessionID, after, follow }, { signal }) {
         reads.log++
         reject("log")
+        if (!follow) return (async function* () {
+          for (const event of history.get(sessionID) ?? []) if (after === undefined || (event.durable?.seq ?? 0) > after) yield event
+          yield { type: "log.synced", sourceEpoch: epoch, aggregateID: sessionID, seq: history.get(sessionID)?.at(-1)?.durable?.seq }
+        })()
         const current = queue(signal)
         logs.set(sessionID, current)
         streams.push(current)
@@ -96,12 +105,291 @@ function fixture(state = initial()) {
     return event
   }
   return { client, controller, children, history, receipts, logs, append, wait, emit, reads, faults, get global() { return global! }, streams,
+    setWork(value: typeof work) { work = value }, setTasks(value: typeof tasks) { tasks = value },
     setPending(value: FollowRequest[]) { pending = value }, setEpoch(value: string) { epoch = value }, failRead() { failRead = true }, failLog() { failLog = true }, failGlobal() { failGlobal = true },
     get saved() { return saved },
     run(overrides: { emit?: (receipt: FollowReceipt) => Promise<void>; save?: (value: FollowState) => Promise<void>; heartbeatSeconds?: number } = {}) {
       return followFamily(client, { state, signal: controller.signal, heartbeatSeconds: overrides.heartbeatSeconds ?? 3600,
         save: async (value) => { await overrides.save?.(value); saved = structuredClone(validateFollowState(value, state.rootSessionID, state.server)) }, emit: overrides.emit ?? emit })
     } }
+}
+
+for (const running of [["ses_child"], ["ses_root"], ["ses_grandchild"]]) {
+  test(`root settlement retains aggregate running activity from ${running[0]}`, async () => {
+    const f = fixture()
+    f.children.push("ses_child", "ses_grandchild")
+    f.setWork({ data: running, running, lost: [] })
+    const run = f.run()
+    try {
+      await f.wait((receipt) => receipt.kind === "ready")
+      f.append("ses_root", 1, "session.execution.succeeded")
+      expect(await f.wait((receipt) => receipt.seq === 1)).toMatchObject({ rootActive: true })
+    } finally { f.controller.abort(); await run }
+  })
+}
+
+test("a supervising owner is unfinished without claiming activity or a user decision", async () => {
+  const f = fixture()
+  f.children.push("ses_owner")
+  f.setWork({ data: ["ses_root", "ses_owner"], running: [], lost: [] })
+  f.setTasks([{ sessionID: "ses_owner", state: "supervising", revision: 4 }])
+  const run = f.run()
+  try {
+    expect(await f.wait((receipt) => receipt.kind === "ready")).toMatchObject({ rootActive: false, activity: "supervising" })
+  } finally { f.controller.abort(); await run }
+})
+
+test("native shell invalidations update activity without an execution or a poll", async () => {
+  const f = fixture()
+  const run = f.run()
+  try {
+    await f.wait((receipt) => receipt.kind === "ready")
+    f.setWork({ data: ["ses_root"], running: ["ses_root"], lost: [] })
+    f.global.push({ type: "shell.created", sourceEpoch: "epoch_one", data: { info: { id: "shell_one", metadata: { sessionID: "ses_root" } } } })
+    await f.wait((receipt) => receipt.kind === "activity" && receipt.rootActive === true)
+    f.setWork({ data: ["ses_root"], running: [], lost: [] })
+    f.global.push({ type: "shell.exited", sourceEpoch: "epoch_one", data: { id: "shell_one" } })
+    expect(await f.wait((receipt) => receipt.kind === "activity" && receipt.rootActive === false)).toMatchObject({ activity: "outstanding" })
+  } finally { f.controller.abort(); await run }
+})
+
+test("ready waits for each Session subscription's sync marker", async () => {
+  const f = fixture()
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  f.client.session.log = async function* ({ sessionID }, { signal }) {
+    entered.resolve()
+    await release.promise
+    yield { type: "log.synced", aggregateID: sessionID, sourceEpoch: "epoch_one" }
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }))
+  }
+  const run = f.run()
+  try {
+    await entered.promise
+    expect(f.receipts.some((receipt) => receipt.kind === "ready")).toBe(false)
+    release.resolve()
+    await f.wait((receipt) => receipt.kind === "ready")
+  } finally { release.resolve(); f.controller.abort(); await run }
+})
+
+test("Project escalations are identities-only, deduplicated across resume and never resolve native requests", async () => {
+  const request = { kind: "permission", sessionID: "ses_root", id: "per_escalated" }
+  const event = { type: "coordination.request.escalated", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", kind: "permission", requestID: "per_escalated", coordinationEscalation: { reasons: [{ sessionID: "ses_owner", reason: "NEVER-OUTPUT" }] } } }
+  const f = fixture()
+  f.setPending([request])
+  const run = f.run()
+  try {
+    await f.wait((receipt) => receipt.kind === "ready")
+    f.global.push(event)
+    await f.wait((receipt) => receipt.kind === "project-escalation")
+    f.global.push(event)
+    f.global.push({ type: "session.status", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", status: { type: "idle" } } })
+    await f.wait((receipt) => receipt.kind === "activity")
+    expect(f.saved.pending).toEqual([request])
+    expect(f.receipts.filter((receipt) => receipt.kind === "project-escalation")).toHaveLength(1)
+    expect(JSON.stringify(f.receipts)).not.toContain("NEVER-OUTPUT")
+  } finally { f.controller.abort(); await run }
+  const again = fixture(f.saved)
+  again.setPending([request])
+  const next = again.run()
+  try {
+    await again.wait((receipt) => receipt.kind === "ready")
+    again.global.push(event)
+    again.global.push({ type: "session.status", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", status: { type: "idle" } } })
+    await again.wait((receipt) => receipt.kind === "activity")
+    expect(again.receipts.filter((receipt) => receipt.kind === "project-escalation")).toEqual([])
+  } finally { again.controller.abort(); await next }
+})
+
+test("a reissued decision with a new revision is emitted once even when its request ID is reused", async () => {
+  const f = fixture()
+  const request = { kind: "permission", sessionID: "ses_root", id: "per_reissue", revision: 1 }
+  f.setPending([request])
+  const run = f.run()
+  try {
+    await f.wait((receipt) => receipt.kind === "pending")
+    f.setPending([{ ...request, revision: 2 }])
+    f.global.end()
+    await f.wait((receipt) => receipt.kind === "pending" && Reflect.get(receipt, "revision") === 2)
+    expect(f.receipts.filter((receipt) => receipt.kind === "pending")).toHaveLength(2)
+    expect(f.receipts.some((receipt) => receipt.kind === "no-longer-pending" && receipt.resolution === "unknown")).toBe(true)
+  } finally { f.controller.abort(); await run }
+})
+
+test("a server restart resumes saved durable cursors and reconciles pending requests", async () => {
+  const state = initial()
+  state.sourceEpoch = "epoch_old"
+  state.cursors = [{ sessionID: "ses_root", after: 2 }]
+  const f = fixture(state)
+  f.append("ses_root", 2, "session.execution.started")
+  f.append("ses_root", 3, "session.execution.interrupted")
+  const run = f.run()
+  try {
+    expect(await f.wait((receipt) => receipt.seq === 3)).toMatchObject({ type: "session.execution.interrupted" })
+  } finally { f.controller.abort(); await run }
+  expect(f.saved.sourceEpoch).toBe("epoch_one")
+  expect(f.saved.cursors).toEqual([{ sessionID: "ses_root", after: 3 }])
+})
+
+test("a child question is reconciled from its task event without answering it", async () => {
+  const f = fixture()
+  f.children.push("ses_child")
+  const run = f.run()
+  try {
+    await f.wait((receipt) => receipt.kind === "ready")
+    f.setTasks([{ sessionID: "ses_child", state: "waiting", revision: 2, question: { id: "qst_child" } }])
+    f.append("ses_child", 1, "session.task.updated")
+    expect(await f.wait((receipt) => receipt.kind === "pending")).toMatchObject({ sessionID: "ses_child", id: "qst_child", requestKind: "child-question", revision: 2, parentID: "ses_root", operation: "session.subagent.answer" })
+  } finally { f.controller.abort(); await run }
+})
+
+test("a waiting child created between family discovery and task reads is reconciled once", async () => {
+  const f = fixture()
+  f.client.session.subagent.list = async ({ parentID }) => {
+    if (parentID !== "ses_root") return { data: [], cursor: {} }
+    if (!f.children.includes("ses_racing_child")) f.children.push("ses_racing_child")
+    return { data: [{ sessionID: "ses_racing_child", parentID, state: "waiting", revision: 1, question: { id: "qst_race" } }], cursor: {} }
+  }
+  const run = f.run()
+  try {
+    await f.wait((receipt) => receipt.kind === "ready")
+    expect(f.receipts.filter((receipt) => receipt.kind === "pending")).toMatchObject([{ requestKind: "child-question", sessionID: "ses_racing_child", id: "qst_race" }])
+    f.global.push({ type: "session.created", sourceEpoch: "epoch_one", data: { sessionID: "ses_racing_child", parentID: "ses_root" } })
+    f.global.push({ type: "session.status", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", status: { type: "idle" } } })
+    await f.wait((receipt) => receipt.kind === "activity")
+    expect(f.receipts.filter((receipt) => receipt.kind === "pending")).toHaveLength(1)
+  } finally { f.controller.abort(); await run }
+})
+
+test("a live child question survives reconnect, hands off to Review once deferred and resolves without replay", async () => {
+  const f = fixture()
+  f.children.push("ses_child")
+  f.setTasks([{ sessionID: "ses_child", state: "waiting", revision: 2, question: { id: "qst_child" } }])
+  const run = f.run()
+  try {
+    await f.wait((receipt) => receipt.kind === "pending" && receipt.requestKind === "child-question")
+    f.global.end()
+    await f.wait((receipt) => receipt.kind === "ready" && f.reads.global === 2)
+    expect(f.receipts.filter((receipt) => receipt.kind === "pending")).toHaveLength(1)
+    f.setTasks([{ sessionID: "ses_child", state: "waiting", revision: 3, question: { id: "qst_child", deferred: true } }])
+    f.setPending([{ kind: "review", sessionID: "ses_child", id: "rev_child" }])
+    f.append("ses_child", 1, "session.task.updated")
+    await f.wait((receipt) => receipt.kind === "pending" && receipt.requestKind === "review")
+    expect(f.receipts.filter((receipt) => receipt.kind === "pending" && receipt.requestKind === "child-question")).toHaveLength(1)
+    f.setTasks([{ sessionID: "ses_child", state: "running", revision: 4 }])
+    f.setPending([])
+    f.append("ses_child", 2, "session.task.updated")
+    await f.wait((receipt) => receipt.kind === "no-longer-pending" && receipt.requestKind === "review")
+  } finally { f.controller.abort(); await run }
+  expect(f.saved.pending).toEqual([])
+})
+
+test("an observed child answer resolves its exact pending question once", async () => {
+  const f = fixture()
+  f.children.push("ses_child")
+  f.setTasks([{ sessionID: "ses_child", state: "waiting", revision: 2, question: { id: "qst_child" } }])
+  const run = f.run()
+  try {
+    await f.wait((receipt) => receipt.kind === "pending")
+    await f.wait((receipt) => receipt.kind === "ready")
+    f.setTasks([{ sessionID: "ses_child", state: "running", revision: 3 }])
+    const event = { id: "evt_child_answer", sourceEpoch: "epoch_one", type: "session.task.updated", durable: { aggregateID: "ses_child", seq: 1 }, data: { sessionID: "ses_child", change: { type: "question_answered", answer: { questionID: "qst_child", text: "NEVER-OUTPUT" } } } }
+    f.logs.get("ses_child")!.push(event)
+    await f.wait((receipt) => receipt.kind === "reply-observed")
+    f.logs.get("ses_child")!.push(event)
+    f.append("ses_root", 1, "session.input.admitted")
+    await f.wait((receipt) => receipt.kind === "durable" && receipt.sessionID === "ses_root")
+    expect(f.receipts.filter((receipt) => receipt.kind === "reply-observed")).toHaveLength(1)
+    expect(JSON.stringify(f.receipts)).not.toContain("NEVER-OUTPUT")
+  } finally { f.controller.abort(); await run }
+})
+
+test("a live durable gap re-reads retained events in order before reporting the later event", async () => {
+  const f = fixture()
+  const run = f.run()
+  try {
+    await f.wait((receipt) => receipt.kind === "ready")
+    await f.logs.get("ses_root")!.idle()
+    const missed = { id: "evt_missed", type: "session.execution.failed", sourceEpoch: "epoch_one", durable: { aggregateID: "ses_root", seq: 1 }, data: { sessionID: "ses_root" } }
+    f.history.set("ses_root", [missed])
+    f.append("ses_root", 2, "session.input.admitted")
+    await f.wait((receipt) => receipt.seq === 2)
+    expect(f.receipts.filter((receipt) => receipt.kind === "durable").map((receipt) => receipt.seq)).toEqual([1, 2])
+  } finally { f.controller.abort(); await run }
+})
+
+for (const running of [[], ["ses_child"]]) {
+  test(`post-cleanup idle reports ${running.length ? "running child work" : "idle after all work settles"}`, async () => {
+    const f = fixture()
+    f.children.push("ses_child")
+    const run = f.run()
+    try {
+      await f.wait((receipt) => receipt.kind === "ready")
+      f.append("ses_root", 1, "session.execution.started")
+      await f.wait((receipt) => receipt.seq === 1)
+      f.append("ses_root", 2, "session.execution.succeeded")
+      expect(await f.wait((receipt) => receipt.seq === 2)).toMatchObject({ rootActive: true })
+      f.setWork({ data: running, running, lost: [] })
+      f.global.push({ type: "session.status", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", status: { type: "idle" } } })
+      expect(await f.wait((receipt) => receipt.kind === "activity")).toMatchObject({ rootActive: running.length > 0, activity: running.length > 0 ? "running" : "idle" })
+    } finally { f.controller.abort(); await run }
+  })
+}
+
+test("owner reassignment and release emit only changed identities and survive repeated invalidations", async () => {
+  const f = fixture()
+  let owner: string | undefined = "ses_owner_one"
+  let revision = 1
+  f.client.coordination.list = async () => [{ id: "cgrp_project", masterSessionID: "ses_root" }]
+  f.client.coordination.get = async () => ({ id: "cgrp_project", revision, members: [{ sessionID: "ses_member", ...(owner === undefined ? {} : { owner: { sessionID: owner } }) }] })
+  const run = f.run()
+  try {
+    expect(await f.wait((receipt) => receipt.kind === "ownership")).toMatchObject({ type: "owner-changed", ownerSessionID: owner })
+    owner = "ses_owner_two"; revision++
+    f.global.push({ type: "coordination.updated", sourceEpoch: "epoch_one", data: { groupID: "cgrp_project", revision } })
+    await f.wait((receipt) => receipt.ownerSessionID === owner)
+    owner = undefined; revision++
+    f.global.push({ type: "coordination.updated", sourceEpoch: "epoch_one", data: { groupID: "cgrp_project", revision } })
+    await f.wait((receipt) => receipt.type === "owner-released")
+    f.global.push({ type: "coordination.updated", sourceEpoch: "epoch_one", data: { groupID: "cgrp_project", revision } })
+    await f.global.idle()
+    expect(f.receipts.filter((receipt) => receipt.kind === "ownership")).toHaveLength(3)
+  } finally { f.controller.abort(); await run }
+  expect(f.saved.ownership).toEqual([{ groupID: "cgrp_project", sessionID: "ses_member", revision }])
+})
+
+for (const cause of ["deleted", "replaced-master"] as const) {
+  for (const resumed of [false, true]) {
+    test(`ownership ends when a Project is ${cause}, ${resumed ? "during a saved-state gap" : "on its live invalidation"}`, async () => {
+      const saved = initial()
+      if (resumed) {
+        saved.sourceEpoch = "epoch_one"
+        saved.cursors = [{ sessionID: "ses_root" }]
+        saved.ownership = [{ groupID: "cgrp_project", sessionID: "ses_member", ownerSessionID: "ses_owner", revision: 1 }]
+      }
+      const f = fixture(saved)
+      let removed = resumed
+      f.client.coordination.list = async () => removed
+        ? cause === "deleted" ? [] : [{ id: "cgrp_project", masterSessionID: "ses_other" }]
+        : [{ id: "cgrp_project", masterSessionID: "ses_root" }]
+      f.client.coordination.get = async () => ({ id: "cgrp_project", revision: 1, members: [{ sessionID: "ses_member", owner: { sessionID: "ses_owner" } }] })
+      const run = f.run()
+      try {
+        await f.wait((receipt) => receipt.kind === "ready")
+        removed = true
+        f.global.push({ type: "coordination.updated", sourceEpoch: "epoch_one", data: { groupID: "cgrp_project", revision: 2 } })
+        await f.wait((receipt) => receipt.type === "owner-released")
+      } finally { f.controller.abort(); await run }
+      expect(f.saved.ownership).toEqual([])
+      expect(f.receipts.filter((receipt) => receipt.type === "owner-released")).toHaveLength(1)
+      const again = fixture(f.saved)
+      const next = again.run()
+      try { await again.wait((receipt) => receipt.kind === "ready") }
+      finally { again.controller.abort(); await next }
+      expect(again.receipts.filter((receipt) => receipt.kind === "ownership")).toEqual([])
+      expect(again.saved.ownership).toEqual([])
+    })
+  }
 }
 
 for (const kind of ["permission", "guardrail", "question", "form"] as const) {
@@ -172,11 +460,11 @@ test("follow restores pending and all dedup ledgers without duplicate callbacks"
   expect(f.saved.terminalSeen).toEqual(state.terminalSeen)
 })
 
-for (const mode of ["ahead", "epoch", "decision-error", "log-error"] as const) {
+for (const mode of ["ahead", "decision-error", "log-error"] as const) {
   test(`follow fails closed for ${mode} and cleans up streams`, async () => {
     const state = initial()
-    if (mode === "ahead" || mode === "epoch") {
-      state.sourceEpoch = mode === "epoch" ? "old_epoch" : "epoch_one"
+    if (mode === "ahead") {
+      state.sourceEpoch = "epoch_one"
       state.cursors = [{ sessionID: "ses_root", after: 1 }]
     }
     const f = fixture(state)
@@ -188,7 +476,7 @@ for (const mode of ["ahead", "epoch", "decision-error", "log-error"] as const) {
       f.failLog()
       f.logs.get("ses_root")!.end()
     }
-    await expect(run).rejects.toThrow(mode === "ahead" ? /ahead/ : mode === "epoch" ? /epoch/ : /genuine/)
+    await expect(run).rejects.toThrow(mode === "ahead" ? /ahead/ : /genuine/)
     expect(f.streams.every((stream) => stream.active === 0)).toBe(true)
   })
 }
@@ -520,6 +808,7 @@ test("follow recovery preserves ahead delivered IDs until gap-tolerant acknowled
 
 test("follow recovery healthy events and heartbeat never poll native state", async () => {
   const f = fixture()
+  f.append("ses_root", 1, "session.created")
   const run = f.run({ heartbeatSeconds: 1 })
   try {
     await f.wait((receipt) => receipt.kind === "ready")

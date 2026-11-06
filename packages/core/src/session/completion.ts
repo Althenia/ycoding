@@ -287,7 +287,7 @@ export const backgroundWork = Effect.fnUntraced(function* (
     .where(
       and(
         inArray(SessionTaskTable.parent_id, ids),
-        inArray(SessionTaskTable.state, ["starting", "running", "waiting", "cancelling"]),
+        inArray(SessionTaskTable.state, ["starting", "running", "waiting", "supervising", "cancelling"]),
       ),
     )
     .limit(1)

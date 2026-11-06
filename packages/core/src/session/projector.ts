@@ -36,6 +36,7 @@ import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { SessionContextState } from "./context-state"
 import { HistoryPrunedError } from "./error"
 import { SessionHistory } from "./history"
+import { SessionTask } from "./task"
 import { toolFileChanges } from "./tool-file-changes"
 import { UsageAnalytics } from "../usage-analytics"
 
@@ -742,7 +743,7 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
       yield* update({ state: "running", ...claim })
       return
     }
-    if (!["cancelled", "completed", "failed", "lost"].includes(task.state)) return yield* conflict()
+    if (!["supervising", "cancelled", "completed", "failed", "lost"].includes(task.state)) return yield* conflict()
     yield* update({
       state: "running",
       progress: null,
@@ -765,6 +766,11 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
   if (change.type === "backgrounded") {
     if (task.state !== "running" || task.background) return yield* conflict()
     yield* update({ background: true })
+    return
+  }
+  if (change.type === "supervising") {
+    if (task.state !== "completed" || !(yield* SessionTask.hasOwnedMembers(db, event.data.sessionID))) return yield* conflict()
+    yield* update({ state: "supervising", attempt_started: false })
     return
   }
   if (change.type === "progressed") {
@@ -798,7 +804,7 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
     return
   }
   if (change.type === "cancel_requested") {
-    if (task.state !== "starting" && task.state !== "running" && task.state !== "waiting") return yield* conflict()
+    if (task.state !== "starting" && task.state !== "running" && task.state !== "waiting" && task.state !== "supervising") return yield* conflict()
     yield* update({ state: "cancelling" })
     return
   }
@@ -809,19 +815,23 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
     return
   }
   if (change.type === "completed") {
-    if (task.state !== "running") return yield* conflict()
+    if (task.state !== "running" && task.state !== "supervising") return yield* conflict()
+    if (yield* SessionTask.hasOwnedMembers(db, event.data.sessionID)) {
+      yield* update({ state: "supervising", attempt_started: false })
+      return
+    }
     yield* update({ state: "completed" })
     if (yield* detached()) yield* notify("completed", change.excerpt)
     return
   }
   if (change.type === "failed") {
-    if (task.state !== "running") return yield* conflict()
+    if (task.state !== "running" && task.state !== "supervising") return yield* conflict()
     yield* update({ state: "failed" })
     if (yield* detached())
       yield* notify("failed", change.excerpt ?? SessionOrchestration.truncateUtf8(change.error, 16 * 1024))
     return
   }
-  if (!["starting", "running", "waiting", "cancelling"].includes(task.state)) return yield* conflict()
+  if (!["starting", "running", "waiting", "supervising", "cancelling"].includes(task.state)) return yield* conflict()
   yield* update({ state: "lost" })
   yield* notify("lost", change.excerpt)
 })

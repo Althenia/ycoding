@@ -85,7 +85,7 @@ export function Footer(props: {
   const shells = createMemo(() => {
     const session = data.session.get(props.sessionID)
     if (!session) return 0
-    return groupSessionShells(data.shell.list(session.location), data.session.list(), session.id).reduce(
+    return groupSessionShells(data.shell.listFamily(session.id), data.session.list(), session.id).reduce(
       (count, group) => count + group.shells.length,
       0,
     )

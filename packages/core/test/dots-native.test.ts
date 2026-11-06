@@ -3,7 +3,8 @@ import { existsSync, statSync } from "node:fs"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { Effect, Layer, Schema, Stream } from "effect"
+import { Deferred, Effect, Layer, Schema, Stream } from "effect"
+import { eq, sql } from "drizzle-orm"
 import { NativeDots } from "../src/dots/native"
 import { NativeDecisions } from "../src/dots/native-decisions"
 import { DotsAccess } from "../src/dots/access"
@@ -27,6 +28,8 @@ import { EventRuntime } from "../src/event"
 import { SessionEvent } from "../src/session/event"
 import { SessionMessage } from "../src/session/message"
 import { SessionPending } from "../src/session/pending"
+import { SessionTaskTable } from "../src/session/sql"
+import { Job } from "../src/job"
 import { SessionRunnerModel } from "../src/session/runner/model"
 import { CatalogModel } from "../src/model"
 import { Provider } from "../src/provider"
@@ -60,6 +63,7 @@ const setup = Effect.gen(function* () {
   const kv = yield* KV.Service
   const reviews = yield* SessionReview.Service
   const orchestration = yield* SessionOrchestration.Service
+  const jobs = yield* Job.Service
   const locations = yield* LocationServiceMap.Service
   const directory = AbsolutePath.make(process.cwd())
   const root = yield* sessions.create({ location: { directory } })
@@ -82,6 +86,7 @@ const setup = Effect.gen(function* () {
   let catalogItems = false
   let selectionRead = (_session: Session.Info) => Effect.void
   let activity: ReadonlySet<Session.ID> | undefined
+  let canonicalActivity: ReadonlySet<Session.ID> | undefined
   let interruptions = 0
   let resolveCredential: NativeDots.Options["credential"] = () => Effect.succeed(undefined)
   let libraryFactory: NonNullable<NativeDots.Options["library"]> = () => Effect.fail(new Error("Library unavailable in fixture"))
@@ -109,6 +114,7 @@ const setup = Effect.gen(function* () {
     interrupt: (id) => execution.interrupt(id).pipe(Effect.tap(() => Effect.sync(() => { interruptions++ }))),
   }, decisions,
     sessions: { ...sessions,
+      outstanding: () => sessions.outstanding().pipe(Effect.map((snapshot) => ({ ...snapshot, running: canonicalActivity ?? activity ?? snapshot.running }))),
       create: (input) => admission().pipe(Effect.andThen(sessions.create(input))),
       prompt: (input) => admission().pipe(Effect.andThen(sessions.prompt(input))),
       messages: (input) => sessions.messages(input).pipe(Effect.tap(() => Effect.sync(() => { historyReads++ }))),
@@ -134,7 +140,7 @@ const setup = Effect.gen(function* () {
   const connection = yield* Effect.promise(() => host.attach(pins))
   const channel = connection.channel({ clientID: "client", streamID: "stream" })
   const forms = yield* Form.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
-  return { root, access, sessions, store, events, forms, host, pins, connection, channel, modelReads, db, kv, reviews, orchestration, locations,
+  return { root, access, sessions, store, events, forms, host, pins, connection, channel, modelReads, db, kv, reviews, orchestration, jobs, locations,
     historyReads: () => historyReads,
     interruptions: () => interruptions,
     executorGrants: () => [...executorGrants],
@@ -145,6 +151,7 @@ const setup = Effect.gen(function* () {
     onAdmission: (read: () => Effect.Effect<void>) => { admission = read },
     withoutModels: () => { hasModels = false },
     setActivity: (ids: readonly Session.ID[]) => { activity = new Set(ids) },
+    setRunning: (ids: readonly Session.ID[]) => { canonicalActivity = new Set(ids) },
     onSelection: (read: (session: Session.Info) => Effect.Effect<void, Error>) => { selectionRead = (session) => read(session).pipe(Effect.orDie) },
     onModelRead: (read: () => Effect.Effect<void, Error>) => { modelRead = () => read().pipe(Effect.orDie) },
     onStoreRead: (read: (id: Session.ID) => Effect.Effect<void, Error>) => { storeRead = (id) => read(id).pipe(Effect.orDie) },
@@ -829,6 +836,54 @@ it.live("native escalation subscription reports pending roots initially and late
 }))
 
 type Fixture = Effect.Success<typeof setup>
+it.live("native activity reads canonical family running rather than the own execution registry", () => Effect.gen(function* () {
+  const f = yield* setup
+  const unrelated = yield* f.sessions.create({ location: f.root.location })
+  f.setActivity([])
+  f.setRunning([unrelated.id])
+  expect((yield* Effect.promise(() => f.channel.getRoot(f.root.id)))?.active).toBe(false)
+  f.setRunning([f.root.id])
+  expect((yield* Effect.promise(() => f.channel.getRoot(f.root.id)))?.active).toBe(true)
+  f.setRunning([])
+  expect((yield* Effect.promise(() => f.channel.getRoot(f.root.id)))?.active).toBe(false)
+}))
+
+it.live("native activity classifies nested task states without treating supervising or waiting as running", () => Effect.gen(function* () {
+  const f = yield* setup
+  const child = yield* f.sessions.create({ parentID: f.root.id })
+  const nested = yield* f.sessions.create({ parentID: child.id, model: metadataRef })
+  yield* f.events.publish(SessionEvent.Task.Updated, { sessionID: nested.id, change: {
+    type: "launched", parentID: child.id, parentAssistantMessageID: SessionMessage.ID.create(), toolCallID: "native-activity",
+    inputID: SessionMessage.ID.create(), description: "Synthetic activity", agent: Agent.ID.make("build"), model: metadataRef,
+    promptDigest: "synthetic", background: true, delivery: "steer",
+  } })
+  for (const [state, active] of [["starting", true], ["running", true], ["cancelling", true], ["waiting", false], ["supervising", false], ["completed", false]] as const) {
+    yield* f.db.db.update(SessionTaskTable).set({ state: sql`${state}` }).where(eq(SessionTaskTable.session_id, nested.id)).run().pipe(Effect.orDie)
+    const snapshot = yield* Effect.promise(() => f.channel.getRoot(f.root.id))
+    expect({ state, active: snapshot?.active }).toEqual({ state, active })
+  }
+}))
+
+it.live("native activity counts only running family shell jobs, not settled jobs awaiting a notice", () => Effect.gen(function* () {
+  const f = yield* setup
+  const child = yield* f.sessions.create({ parentID: f.root.id })
+  const nested = yield* f.sessions.create({ parentID: child.id })
+  const unrelated = yield* f.sessions.create({ location: f.root.location })
+  const finish = yield* Deferred.make<string>()
+  yield* f.jobs.start({ type: "shell", metadata: { sessionID: unrelated.id }, run: Effect.never })
+  yield* f.jobs.start({ type: "other", metadata: { sessionID: f.root.id }, run: Effect.never })
+  expect((yield* Effect.promise(() => f.channel.getRoot(f.root.id)))?.active).toBe(false)
+  const job = yield* f.jobs.start({ type: "shell", metadata: { sessionID: nested.id }, run: Deferred.await(finish) })
+  yield* f.jobs.background(job.id)
+  expect((yield* Effect.promise(() => f.channel.getRoot(f.root.id)))?.active).toBe(true)
+  yield* Deferred.succeed(finish, "Synthetic output")
+  expect((yield* f.jobs.wait({ id: job.id })).info?.status).toBe("completed")
+  expect((yield* f.jobs.outstandingSessions()).has(nested.id)).toBe(true)
+  expect((yield* Effect.promise(() => f.channel.getRoot(f.root.id)))?.active).toBe(false)
+  yield* f.jobs.start({ type: "shell", metadata: { sessionID: f.root.id }, run: Effect.never })
+  expect((yield* Effect.promise(() => f.channel.getRoot(f.root.id)))?.active).toBe(true)
+}))
+
 const createdData = (f: Fixture, sessionID: Session.ID) => f.sessions.log({ sessionID }).pipe(
   Stream.filter((item): item is SessionEvent.PublicDurableEvent => !EventRuntime.isSynced(item)),
   Stream.runCollect,

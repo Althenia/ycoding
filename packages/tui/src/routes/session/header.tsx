@@ -19,6 +19,8 @@ export type SessionHeaderOperationalState =
   // Penpot's resting frame displays the existing working state with its elapsed value.
   | { type: "ready" }
   | { type: "pending" }
+  | { type: "family-running" }
+  | { type: "supervising" }
   | { type: "working"; elapsed?: number; startedAt?: number }
   | { type: "thinking"; elapsed?: number; startedAt?: number }
   | { type: "tool-running"; elapsed?: number; startedAt?: number }
@@ -181,6 +183,8 @@ export function headerStatusLabel(
     return `${state.attempt - 1} failed · retry ${state.attempt} · in ${Math.max(0, Math.ceil((state.at - now) / 1_000))}s`
   if (state.type === "retrying") return `retrying · attempt ${state.attempt}`
   if (state.type === "pending") return "pending"
+  if (state.type === "family-running") return "running background work"
+  if (state.type === "supervising") return "supervising"
   if (
     state.type === "working" ||
     state.type === "thinking" ||
@@ -297,7 +301,7 @@ export function Header(
     props.connection ?? headerStatusLabel(state(), dimensions().width, identity().runningShells, now())
   const spinning = () =>
     !props.connection &&
-    ((effectiveOperational().type === "working" && !props.subagent) || effectiveOperational().type === "retrying")
+    ((effectiveOperational().type === "working" && !props.subagent) || effectiveOperational().type === "family-running" || effectiveOperational().type === "retrying")
   const brandWidth = () =>
     stringWidth(
       props.sideChat ? "BTW" : props.subagent ? `${getGlyph("subagent").glyph} subagent` : `v${InstallationVersion}`,
@@ -466,7 +470,8 @@ function resolveIdentity(props: SessionHeaderIdentity): ResolvedSessionHeaderIde
     profile: props.profile ?? sessionModel.profile,
     model: props.model ?? modelLabel,
     variant: props.variant ?? sessionModel.variant,
-    runningShells: data.shell.list(session.location).filter((shell) => shell.status === "running").length,
+    runningShells: data.shell.listFamily(session.id).filter((shell) => shell.status === "running" && typeof shell.metadata.sessionID === "string" &&
+      [session.id, ...data.session.family(session.id)].includes(shell.metadata.sessionID)).length,
   }
 }
 

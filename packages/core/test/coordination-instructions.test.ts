@@ -37,11 +37,11 @@ test("supervisors stay responsible for controlled Sessions until verified comple
     "As a supervisor, stay responsible for every Session you control until its work is verified complete",
     "keep it moving toward its outcome without waiting to be asked",
     "act on each in the turn it arrives",
-    "uses `release` with reason `completed` only after verifying the work",
+    "Supervisors cannot release themselves.",
     "The owner chain handles routine and native requests and escalates only human-only or uncertain choices",
   ]) expect(CoordinationInstructions.content).toContain(instruction)
   const entries = await Effect.runPromise(Instructions.read(CoordinationInstructions.make("supervisor")))
-  expect(entries[0]?.value).toContain("You cannot assign or transfer ownership or create members.")
+  expect(entries[0]?.value).toContain("You cannot assign, transfer or release ownership or create members.")
 })
 
 test("the voice source is present only for a scoped Session", async () => {

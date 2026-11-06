@@ -1,6 +1,6 @@
 export * as SessionTask from "./task"
 
-import { and, asc, eq, exists, inArray, sql } from "drizzle-orm"
+import { and, asc, eq, exists, gt, inArray, isNull, sql } from "drizzle-orm"
 import { Effect } from "effect"
 import type { Database } from "../database/database"
 import { KeyedMutex } from "../effect/keyed-mutex"
@@ -10,12 +10,54 @@ import { AppProcess } from "../process"
 import { ShellLedger } from "../shell/ledger"
 import { SessionEvent } from "./event"
 import { SessionTaskNotificationTable, SessionTaskTable } from "./sql"
+import { SessionTable } from "./sql"
+import { CoordinationMemberTable } from "../coordination/sql"
+import type { SessionSchema } from "./schema"
 
 type DatabaseService = Database.Interface["db"]
 
 const staleStates = ["starting", "running", "waiting", "cancelling"] as const
 const reconciled = new WeakSet<DatabaseService>()
 const locks = KeyedMutex.makeUnsafe<DatabaseService>()
+
+export const hasOwnedMembers = (db: DatabaseService, sessionID: SessionSchema.ID) =>
+  db.select({ id: CoordinationMemberTable.session_id }).from(CoordinationMemberTable)
+    .innerJoin(SessionTable, eq(SessionTable.id, CoordinationMemberTable.session_id))
+    .where(and(eq(CoordinationMemberTable.owner_session_id, sessionID), isNull(SessionTable.time_archived)))
+    .limit(1).get().pipe(Effect.orDie, Effect.map(row => row !== undefined))
+
+export const superviseAttached = Effect.fn("SessionTask.superviseAttached")(function* (db: DatabaseService, events: EventRuntime.Interface, sessionID: SessionSchema.ID) {
+  yield* events.publishBatch([{ definition: SessionEvent.Task.Updated, data: { sessionID, change: { type: "supervising" } } }], {
+    when: Effect.gen(function* () {
+      const row = yield* db.select({ state: SessionTaskTable.state }).from(SessionTaskTable)
+        .where(eq(SessionTaskTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      return row?.state === "completed" && (yield* hasOwnedMembers(db, sessionID))
+    }),
+  })
+})
+
+export const completeUnownedSupervisors = Effect.fn("SessionTask.completeUnownedSupervisors")(function* (db: DatabaseService, events: EventRuntime.Interface) {
+  let after: SessionSchema.ID | undefined
+  while (true) {
+    const rows = yield* db.select().from(SessionTaskTable)
+      .where(and(eq(SessionTaskTable.state, "supervising"), after === undefined ? undefined : gt(SessionTaskTable.session_id, after)))
+      .orderBy(asc(SessionTaskTable.session_id)).limit(100).all().pipe(Effect.orDie)
+    if (rows.length === 0) return
+    for (const row of rows) {
+      if (yield* hasOwnedMembers(db, row.session_id)) continue
+      yield* events.publishBatch([{ definition: SessionEvent.Task.Updated, data: { sessionID: row.session_id, change: { type: "completed" } },
+        options: { id: EventRuntime.ID.make(`evt_task_ownership_completed_${row.session_id}_${row.revision + 1}`) } }], {
+        when: Effect.gen(function* () {
+          const current = yield* db.select({ state: SessionTaskTable.state }).from(SessionTaskTable)
+            .where(eq(SessionTaskTable.session_id, row.session_id)).get().pipe(Effect.orDie)
+          return current?.state === "supervising" && !(yield* hasOwnedMembers(db, row.session_id))
+        }),
+      })
+    }
+    after = rows.at(-1)!.session_id
+    yield* Effect.yieldNow
+  }
+})
 
 export const reconcileStaleTasks = (db: DatabaseService, appProcess: AppProcess.Interface) =>
   locks.withLock(db)(

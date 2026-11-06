@@ -1860,6 +1860,7 @@ export type Endpoint30_3Input = {
   readonly tabID: Endpoint30_3Request["payload"]["tabID"]
   readonly generation: Endpoint30_3Request["payload"]["generation"]
   readonly callID: Endpoint30_3Request["payload"]["callID"]
+  readonly diff?: Endpoint30_3Request["payload"]["diff"]
 }
 export type Endpoint30_3Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.observe"]>>["data"]
 export type BrowserObserveOperation<E = never> = (input: Endpoint30_3Input) => Effect.Effect<Endpoint30_3Output, E>
@@ -1973,6 +1974,7 @@ export type Endpoint31_3Input = {
   readonly tabID: Endpoint31_3Request["payload"]["tabID"]
   readonly generation: Endpoint31_3Request["payload"]["generation"]
   readonly callID: Endpoint31_3Request["payload"]["callID"]
+  readonly diff?: Endpoint31_3Request["payload"]["diff"]
   readonly instanceID: Endpoint31_3Request["payload"]["instanceID"]
 }
 export type Endpoint31_3Output = EffectValue<

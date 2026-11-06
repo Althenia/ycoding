@@ -75,6 +75,18 @@ test("formats provider, model, and optional variant", () => {
   expect(module.formatSubagentElapsed(0, 48_000)).toBe("48s")
 })
 
+test("a supervising task remains unfinished and renders its ownership state without an awaiting label", async () => {
+  expect(module.isActiveSubagent("supervising")).toBe(true)
+  const status = module.taskStatusLabel("supervising")
+  expect(status).toBe("supervising")
+  const app = await renderMetadata({ status })
+  try {
+    await app.waitForFrame((frame) => frame.includes("supervising"))
+    expect(app.captureCharFrame()).not.toContain("awaiting")
+    expect(app.captureCharFrame()).not.toContain("completed")
+  } finally { app.renderer.destroy() }
+})
+
 test("sections active and inactive tasks deterministically", () => {
   const tasks: SessionOrchestrationTask[] = [
     {

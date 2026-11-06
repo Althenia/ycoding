@@ -18,6 +18,7 @@ describe("SessionOrchestration", () => {
       "starting",
       "running",
       "waiting",
+      "supervising",
       "cancelling",
       "cancelled",
       "completed",
@@ -27,6 +28,7 @@ describe("SessionOrchestration", () => {
       expect(decode(state)).toBe(state)
     }
     expect(() => decode("queued")).toThrow()
+    expect(Schema.is(SessionOrchestration.TerminalState)("supervising")).toBe(false)
   })
 
   test("records a timed-out parent question by identity only", () => {

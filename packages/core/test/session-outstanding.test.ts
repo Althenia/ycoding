@@ -92,9 +92,9 @@ it.effect("derives outstanding Sessions from pending input, active goal, tasks, 
     const release = yield* Deferred.make<void>()
     const job = yield* jobs.start({ type: "shell", metadata: { sessionID: shell }, run: Deferred.await(release).pipe(Effect.as("done")) })
     yield* jobs.background(job.id)
-    expect([...(yield* sessions.outstanding()).running].toSorted()).toEqual([executing, shell].toSorted())
+    expect([...(yield* sessions.outstanding()).running].toSorted()).toEqual([executing, parent, child, shell].toSorted())
     expect([...(yield* sessions.active)]).toEqual([executing])
-    expect([...(yield* sessions.outstanding()).sessions].toSorted()).toEqual([executing, goal, parent, pending, shell].toSorted())
+    expect([...(yield* sessions.outstanding()).sessions].toSorted()).toEqual([executing, goal, parent, child, pending, shell].toSorted())
     yield* events.publish(SessionEvent.Task.Updated, { sessionID: child, change: { type: "completed" } })
     expect((yield* db.select().from(SessionTaskNotificationTable).all())).toHaveLength(1)
     yield* Deferred.succeed(release, undefined)
@@ -200,7 +200,7 @@ for (const terminal of ["completed", "cancelled", "timeout"] as const) {
         run: terminal === "timeout" ? run.pipe(Effect.timeout("1 second")) : run })
       yield* jobs.background(job.id)
       const busy = yield* sessions.outstanding(true)
-      expect([...busy.running].toSorted()).toEqual([executing, child].toSorted())
+      expect([...busy.running].toSorted()).toEqual([executing, parent, child].toSorted())
       expect(busy.sessions.has(child)).toBe(true)
       expect([...busy.failed]).toEqual([])
       expect([...(yield* sessions.active)]).toEqual([executing])
@@ -217,6 +217,56 @@ for (const terminal of ["completed", "cancelled", "timeout"] as const) {
     }),
   )
 }
+
+for (const state of ["starting", "running", "cancelling", "waiting", "supervising"] as const) {
+  it.effect(`idle ancestors reflect a ${state} descendant without inventing execution`, () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const db = (yield* Database.Service).db
+      const root = Session.ID.make("ses_activity_root")
+      const parent = Session.ID.make("ses_activity_parent")
+      const child = Session.ID.make("ses_activity_child")
+      yield* sessions.create({ id: root, location })
+      yield* sessions.create({ id: parent, parentID: root })
+      yield* sessions.create({ id: child, parentID: parent })
+      yield* db.insert(SessionTaskTable).values({
+        session_id: child, parent_id: parent, parent_assistant_message_id: SessionMessage.ID.make("msg_activity"),
+        tool_call_id: "call_activity", input_id: SessionMessage.ID.make("msg_activity_child"),
+        description: "Activity child", agent: Agent.defaultID,
+        model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("test") }),
+        prompt_digest: "digest", background: true, delivery: "steer", state, time_created: 1, time_updated: 1,
+      }).run()
+      const work = yield* sessions.outstanding()
+      for (const id of [root, parent, child]) {
+        expect(work.sessions.has(id)).toBe(true)
+        expect(work.running.has(id)).toBe(["starting", "running", "cancelling"].includes(state))
+      }
+      expect([...(yield* sessions.active)]).toEqual([executing])
+    }),
+  )
+}
+
+it.effect("an idle grandparent remains running through a descendant shell and stops at shell settlement", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const jobs = yield* Job.Service
+    const root = Session.ID.make("ses_grand_shell_root")
+    const parent = Session.ID.make("ses_grand_shell_parent")
+    const child = Session.ID.make("ses_grand_shell_child")
+    yield* sessions.create({ id: root, location })
+    yield* sessions.create({ id: parent, parentID: root })
+    yield* sessions.create({ id: child, parentID: parent })
+    const release = yield* Deferred.make<void>()
+    const job = yield* jobs.start({ type: "shell", metadata: { sessionID: child }, run: Deferred.await(release).pipe(Effect.as("done")) })
+    yield* jobs.background(job.id)
+    expect([...(yield* sessions.outstanding()).running].toSorted()).toEqual([executing, root, parent, child].toSorted())
+    yield* Deferred.succeed(release, undefined)
+    yield* jobs.wait({ id: job.id })
+    const settled = yield* sessions.outstanding()
+    expect([...settled.running]).toEqual([executing])
+    expect(settled.sessions.has(root)).toBe(true)
+  }),
+)
 
 it.effect("does not count nonshell jobs or malformed shell owners as running", () =>
   Effect.gen(function* () {

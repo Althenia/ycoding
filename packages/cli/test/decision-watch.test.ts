@@ -744,7 +744,7 @@ test("family watch boundary: stale-epoch status cannot release a terminal before
     }, 60)
   } })
   expect(currentSent).toBe(true)
-  expect(result.result.outcome).toMatchObject({ outcome: "family", work: { state: "background" } })
+  expect(result.result.outcome).toMatchObject({ outcome: "family", work: { state: "running" } })
 }, 5_000)
 
 test("family watch boundary: more than 64 Sessions fails explicitly rather than silently missing work", async () => {
@@ -862,12 +862,12 @@ test("family checkpoint boundary: current root receipt is re-read rather than st
   expect(result.result.outcome).not.toHaveProperty("execution")
 }, 5_000)
 
-test("family watch boundary: post-cleanup busy invalidation reports a running successor as background", async () => {
+test("family watch boundary: post-cleanup busy invalidation reports a running successor as running", async () => {
   const result = await familyBoundary({ sessions: family, active: ["ses_child"], onSubscribe: (control) => {
     setTimeout(() => control.append("ses_child", succeeded(1, "ses_child")), 20)
     setTimeout(() => control.push({ id: "evt_successor_busy", created: base, type: "session.status", data: { sessionID: "ses_child", status: { type: "busy" } } }), 50)
   } })
-  expect(result.result.outcome).toMatchObject({ outcome: "family", work: { state: "background" } })
+  expect(result.result.outcome).toMatchObject({ outcome: "family", work: { state: "running" } })
 }, 5_000)
 
 test("family watch boundary: a newer terminal during assessment cannot consume its cursor with older work", async () => {
@@ -970,20 +970,20 @@ test("an idle owner with an open recovery review or a waiting child needs a deci
   expect(waiting.stdout).not.toContain("Work incomplete")
 }, 60_000)
 
-test("active background work is reported as background, never as a stall or completion", async () => {
+test("live child and shell work is running even after the root execution settles", async () => {
   const child = await watch({
     sessions: family, log: ownerRun(succeeded(9)), todos: { ses_target: [todo("Port the parser", "in_progress")] },
     tasks: { ses_target: [task("ses_child", "running", 2)] }, outstanding: { data: ["ses_target"], running: ["ses_child"] },
   }, ["ses_target", "--input", "msg_input", "--family", "--json"])
   expect(child.exit).toBe(0)
-  expect(JSON.parse(child.stdout).work).toEqual(work("background", {
+  expect(JSON.parse(child.stdout).work).toEqual(work("running", {
     todos: { open: 1, items: [todo("Port the parser", "in_progress")] },
     tasks: [{ sessionID: "ses_child", parentID: "ses_target", state: "running", revision: 2, description: "Synthetic ses_child" }],
     children: { total: 1, active: 1, running: 1, waiting: 0 }, running: ["ses_child"],
   }))
 
   const shell = await watch({ log: ownerRun(succeeded(9)), outstanding: { data: ["ses_target"], running: ["ses_target"] } }, ["ses_target", "--input", "msg_input", "--json"])
-  expect(JSON.parse(shell.stdout).work).toEqual(work("background", { running: ["ses_target"] }))
+  expect(JSON.parse(shell.stdout).work).toEqual(work("running", { running: ["ses_target"] }))
 
   const queued = await watch({ log: ownerRun(succeeded(9)), pending: { ses_target: 1 } }, ["ses_target", "--input", "msg_input"])
   expect(queued.exit).toBe(0)
@@ -1111,7 +1111,7 @@ test("a waiting or running child hidden behind a full page of pinned completed t
 
   const running = await watch({ log, tasks: { ses_target: [...pinned, task("ses_hidden", "running", 4)] } }, ["ses_target", "--input", "msg_input", "--json"])
   expect(running.exit).toBe(0)
-  expect(JSON.parse(running.stdout).work).toEqual(work("background", {
+  expect(JSON.parse(running.stdout).work).toEqual(work("running", {
     receipt: current, omittedTasks: 1, children: { total: 11, active: 1, running: 1, waiting: 0 },
   }))
 }, 60_000)
@@ -1140,7 +1140,7 @@ test("bounded child task and todo lists report how many entries were not listed"
   const json = await watch(scenario, ["ses_target", "--input", "msg_input", "--json"])
   expect(json.exit).toBe(0)
   const output = JSON.parse(json.stdout).work
-  expect(output.state).toBe("background")
+  expect(output.state).toBe("running")
   expect(output.tasks.map((item: { sessionID: string }) => item.sessionID)).toEqual(children.slice(0, 10).map((item) => item.sessionID))
   expect(output.omittedTasks).toBe(2)
   expect(output.children).toEqual({ total: 12, active: 12, running: 12, waiting: 0 })

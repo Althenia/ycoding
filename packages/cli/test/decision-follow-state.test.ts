@@ -71,7 +71,7 @@ test("follow storage rejects a symlinked parent without touching its target", as
     const real = path.join(dir, "real")
     await mkdir(real)
     await symlink(real, path.join(dir, "alias"))
-    await expect(openFollowState(path.join(dir, "alias", "state.json"), "ses_root", server)).rejects.toThrow(/symlink/)
+    await expect(openFollowState(path.join(dir, "alias", "state.json"), "ses_root", server)).rejects.toThrow(path.join(real, "state.json"))
     await expect(readFile(path.join(real, "state.json.lock"))).rejects.toThrow()
   } finally { await rm(dir, { recursive: true, force: true }) }
 })

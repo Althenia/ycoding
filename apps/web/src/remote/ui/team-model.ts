@@ -81,7 +81,7 @@ export function teamShellCommand(shell: Pick<TeamShell, "command">, output?: Pic
 }
 
 const rank: Readonly<Record<TeamSubagent["state"], number>> = {
-  waiting: 0, starting: 1, running: 1, cancelling: 2, completed: 3, cancelled: 4, failed: 5, lost: 6,
+  waiting: 0, starting: 1, running: 1, cancelling: 2, supervising: 2, completed: 3, cancelled: 4, failed: 5, lost: 6,
 }
 
 export function isManagedSubagent(session: Pick<SessionInfoView, "parentID" | "agent"> | undefined): boolean {
@@ -97,7 +97,7 @@ export const isDeferredQuestion = (task: Pick<TeamSubagent, "question">) => task
 export const canAnswerSubagent = (task: Pick<TeamSubagent, "state" | "question">) => task.question !== undefined && task.state === "waiting" && !isDeferredQuestion(task)
 
 export function canCancelSubagent(state: TeamSubagent["state"]): boolean {
-  return state === "starting" || state === "running" || state === "waiting"
+  return state === "starting" || state === "running" || state === "waiting" || state === "supervising"
 }
 
 export function pinAction(task: TeamSubagent) {

@@ -722,7 +722,7 @@ test("on the wire a thread result is never older than a status notification alre
   } finally { await f.host.stop() }
 })
 
-test("a terminal execution event reports idle even while the backend registry still lists the execution", async () => {
+test("a terminal execution event preserves aggregate activity while descendants still run", async () => {
   const f = escalationServer()
   await f.open()
   await rpc(f, 2, "thread/read", { threadId: "ses_unopened" })
@@ -730,15 +730,18 @@ test("a terminal execution event reports idle even while the backend registry st
   f.stream.emit?.(event("session.execution.started"))
   await f.settled()
   expect(statusChanges(f)).toEqual([active])
-  f.stream.emit?.(Object.assign(event("session.execution.succeeded"), { data: { sessionID: "ses_child" } }))
+  f.stream.emit?.(event("session.status", { sessionID: "ses_child", status: { type: "idle" } }))
   await f.settled()
   expect(statusChanges(f)).toEqual([active])
   f.stream.emit?.(event("session.execution.succeeded"))
   await f.settled()
-  expect(statusChanges(f)).toEqual([active, idle])
-  f.stream.emit?.(event("session.execution.started"))
+  expect(statusChanges(f)).toEqual([active])
+  const read = JSON.parse((await rpc(f, 3, "thread/read", { threadId: "ses_unopened" }))!)
+  expect(read.result.thread.status).toEqual(active.status)
+  f.status.active = false
+  f.stream.emit?.(event("session.status", { sessionID: "ses_child", status: { type: "idle" } }))
   await f.settled()
-  expect(statusChanges(f)).toEqual([active, idle, active])
+  expect(statusChanges(f)).toEqual([active, idle])
   f.server.retire()
 })
 
@@ -751,11 +754,29 @@ test("a thread result read after a terminal execution event uses the same active
   await f.settled()
   f.stream.emit?.(event("session.execution.succeeded"))
   await f.settled()
+  expect(statusChanges(f)).toEqual([active])
+  f.status.active = false
+  f.stream.emit?.(event("session.status", { status: { type: "idle" } }))
+  await f.settled()
   expect(statusChanges(f)).toEqual([active, idle])
   const read = JSON.parse((await rpc(f, 3, "thread/read", { threadId: "ses_unopened" }))!)
   expect(read.result.thread.status).toEqual({ type: "idle" })
   await f.settled()
   expect(statusChanges(f)).toEqual([active, idle])
+  f.server.retire()
+})
+
+test.each(["session.task.updated", "session.shell.started", "session.shell.ended", "session.status"])("a descendant %s refreshes lifecycle status even when pending decisions cannot be read", async (type) => {
+  const f = escalationServer()
+  await f.open()
+  await rpc(f, 2, "thread/read", { threadId: "ses_unopened" })
+  await f.settled()
+  f.pending.failures = 10
+  f.status.active = true
+  f.stream.emit?.(event(type, { sessionID: "ses_child" }))
+  await f.settled()
+  expect(statusChanges(f)).toEqual([active])
+  expect(f.messages.filter((message) => message.method === "turn/completed")).toEqual([])
   f.server.retire()
 })
 

@@ -117,7 +117,12 @@ const nativeSetup = Effect.gen(function* () {
   } })
   const access = DotsAccess.make({ db, kv, configuration: () => Effect.succeed({ ready: true, profile: credential.label }) })
   yield* access.set({ enabled: true, expectedRevision: 0 })
-  const host = yield* NativeDots.make({ access, db, events, store, sessions, execution, projects,
+  const host = yield* NativeDots.make({ access, db, events, store, sessions: {
+    ...sessions,
+    outstanding: () => sessions.outstanding().pipe(Effect.flatMap((snapshot) => execution.active.pipe(Effect.map((active) => ({
+      ...snapshot, sessions: new Set([...snapshot.sessions, ...active]), running: new Set([...snapshot.running, ...active]),
+    }))))),
+  }, execution, projects,
     kv, reviews, home: location.directory, data: location.directory, projectRoot: () => Effect.succeed(undefined),
     config: { snapshot: () => Effect.succeed({ entries: [new Config.Document({ type: "document", scope: "global", info: new Config.Info({ dots: { enabled: true, profile: credential.label } }) })], diagnostics: [] }), subscribe: () => () => {} },
     credentials: { list: () => Effect.succeed([credential]) }, credential: () => Effect.succeed(undefined),

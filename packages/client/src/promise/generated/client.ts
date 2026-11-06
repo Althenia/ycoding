@@ -2951,7 +2951,12 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/observe`,
-            body: { tabID: input["tabID"], generation: input["generation"], callID: input["callID"] },
+            body: {
+              tabID: input["tabID"],
+              generation: input["generation"],
+              callID: input["callID"],
+              diff: input["diff"],
+            },
             successStatus: 200,
             declaredStatuses: [404, 403, 409, 400, 503, 401],
             empty: false,
@@ -3092,6 +3097,7 @@ export function make(options: ClientOptions) {
               tabID: input["tabID"],
               generation: input["generation"],
               callID: input["callID"],
+              diff: input["diff"],
               instanceID: input["instanceID"],
             },
             successStatus: 200,

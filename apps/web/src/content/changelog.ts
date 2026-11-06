@@ -22,6 +22,20 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.10",
+    date: "2026-11-06",
+    title: "Persistent Project owners",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Owner subagents stay attached to their Project members. When an owner's turn ends while it still owns a member, its task shows `supervising` instead of completed and sends no completion notice; a member notification resumes it. It completes once, after its last member is removed, archived or deleted, or the Master transfers or releases ownership. A finished subagent assigned as an owner also becomes `supervising` without starting a turn." },
+      { tag: "Added", text: "`ycoding decision watch --family --follow` reports live subagent questions with their child Session, question ID and revision, ownership changes including Project deletion and Master replacement, and Project escalations, without answering or settling anything." },
+      { tag: "Changed", text: "Project notifications appear only in the member's owner Session; the Master receives them only for members it owns. Without a live owner, routine member events (started, progress, completed, interrupted) are held instead of appearing in the Master chat, and an owner attached later receives them once as one summary with the member's pending requests. Member failures, questions, permissions, guardrail reviews and subagent questions without a live owner reach the Master as separate Project escalations. Started and progress notifications never wake their receiver." },
+      { tag: "Changed", text: "Only the Master can release a member; owner subagents can no longer release themselves." },
+      { tag: "Changed", text: "A Session counts as running while its own turn, a subagent that is starting, running or cancelling, or a shell in its family runs, even when the main transcript is idle. The TUI header shows `running background work` or `supervising`, footer shell counts include the family's shells, and the web status bar and connected Dots clients use the same activity. Pending decisions remain shown as waiting, and a finished root turn no longer reports the family idle while subagents or shells still run." },
+      { tag: "Fixed", text: "A `decision watch --state` file below a symlinked directory, such as `/tmp` on macOS, is still rejected as `state-invalid`, and the message now names the canonical path to use." },
+    ],
+  },
+  {
     version: "0.11.9",
     date: "2026-11-06",
     title: "Dots Session listing",

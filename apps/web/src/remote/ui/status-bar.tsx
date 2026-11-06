@@ -6,6 +6,7 @@ import { useRemote } from "../context"
 import { autonomyCategories, autonomyLabels, autonomyModeLabel, autonomySummary, type AutonomyModes } from "../autonomy"
 import { reviewItemsInScope, sessionExecutionLabel, sessionStatusTimed } from "../projection"
 import { createRemoteQuery } from "../query"
+import { familyTaskActivity } from "../view-model"
 import { AutonomousDialog, autonomousDialogRequests } from "./autonomous-dialog"
 import { DotTrail } from "./dot-trail"
 import "./status-bar.css"
@@ -34,23 +35,27 @@ export function ComposerStatus(props: { readonly metadataMount?: HTMLElement }) 
   let popover: HTMLDivElement | undefined
   let closeGoalSheet: (() => void) | undefined
   const view = () => remote.state().view
+  const family = () => familyTaskActivity(remote.state().team?.tasks ?? [])
   const current = () => {
     const selected = view()
     if (!selected) return undefined
-    const running = remote.state().sessionStatus?.running.has(selected.id) ?? remote.state().selectedSessionInfo?.running ?? false
+    const running = family().running || (remote.state().sessionStatus?.running.has(selected.id) ?? remote.state().selectedSessionInfo?.running ?? false)
     return running && selected.status === "idle" ? { ...selected, status: "running" as const } : selected
   }
-  const waiting = () => remote.state().team?.tasks.filter((task) => task.state === "starting" || task.state === "running" || task.state === "waiting").length ?? 0
+  const waiting = () => family().waiting
   const timed = () => current() !== undefined && sessionStatusTimed(current()!, waiting())
   createEffect(() => {
     if (!timed()) return
     const timer = setInterval(() => setNow(Date.now()), 100)
     onCleanup(() => clearInterval(timer))
   })
-  const label = () => current() ? sessionExecutionLabel(current()!, now(), waiting()) : "ready"
+  const label = () => {
+    const execution = current() ? sessionExecutionLabel(current()!, now(), waiting()) : "ready"
+    return execution === "ready" && family().supervising ? "supervising" : execution
+  }
   const stateText = () => label().replace(/\? awaiting input/i, "Waiting for your decision").replace(/cooking/i, "Running")
   const elapsed = () => current()?.executionStarted === undefined ? "" : `${Math.floor(Math.max(0, now() - current()!.executionStarted!) / 60_000)}:${String(Math.floor(Math.max(0, now() - current()!.executionStarted!) / 1000) % 60).padStart(2, "0")}`
-  const visible = () => current()?.status === "running" || current()?.status === "failed" || review() > 0
+  const visible = () => current()?.status === "running" || current()?.status === "failed" || review() > 0 || waiting() > 0 || family().supervising
   const goal = () => view()?.autonomy?.goal
   const goalActive = () => goal()?.status === "active"
   const goalSetting = () => remote.state().mutations.some((mutation) => mutation.sessionID === view()?.id && mutation.operation === "session.goal.set" && mutation.state === "sending")

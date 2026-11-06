@@ -184,6 +184,10 @@ Both all-master and selected-master delivery MUST require the source Session to 
 
 ### Project concurrency (T54)
 
+Session running indicators MUST include own execution, descendant managed tasks in starting/running/cancelling, and running own or descendant shells, even while the main transcript is idle. Pending decisions MUST remain waiting, distinct from running. A supervising owner MUST retain its unfinished subagent count and literal `supervising` label without a running spinner, awaiting-input label or completed state. Footer shell counts MUST include verified family shells across Locations and exclude settled shells awaiting notification. Keep execution controls on own-execution state. Verify with `test/subagent-summary-reconnect.test.tsx` and `test/cli/tui/subagents-tab.test.tsx`.
+
+The Session header MUST label background family activity `running background work` and idle ownership `supervising`. Neither state MAY reuse a user-question or completed label. Only family-running MAY animate. Verify with `test/session-chrome.test.tsx`.
+
 Count running member Sessions, excluding the Master. A positive configured limit MUST display `<running>/<limit> members running`, filled progress cells and `at limit` when reached. A null limit MUST display `<running> members running · no limit`, with singular `member` for one; do not infer or request a separate runtime capacity. Let the narrow pane meter wrap instead of losing its count scope. Live list and chat-header counts include the Master; member position counts exclude it. Header member totals name the Master separately as `<members> members + Master`. Enforce with `test/util/coordination.test.ts` and `test/cli/tui/projects-layout.test.tsx`.
 
 ### Project Session pickers (T54)

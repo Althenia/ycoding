@@ -2853,9 +2853,9 @@ const layer = Layer.effect(
       completions: (input) => SessionCompletion.latest(db, input),
       outstanding: Effect.fn("Session.outstanding")(function* (includeFailures = false) {
         const tasks = yield* db
-          .select({ sessionID: SessionTaskTable.parent_id })
+          .select({ sessionID: SessionTaskTable.session_id, state: SessionTaskTable.state })
           .from(SessionTaskTable)
-          .where(inArray(SessionTaskTable.state, ["starting", "running", "waiting", "cancelling"]))
+          .where(inArray(SessionTaskTable.state, ["starting", "running", "waiting", "cancelling", "supervising"]))
           .all()
           .pipe(Effect.orDie)
         const notices = yield* db
@@ -2878,8 +2878,28 @@ const layer = Layer.effect(
           .all()
           .pipe(Effect.orDie)
         const active = yield* execution.active
-        const running = new Set([
+        const rows = yield* db
+          .select({ id: SessionTable.id, parentID: SessionTable.parent_id })
+          .from(SessionTable)
+          .all()
+          .pipe(Effect.orDie)
+        const parents = new Map(rows.map((row) => [row.id, row.parentID]))
+        const ancestors = (ids: Iterable<SessionSchema.ID>) => {
+          const family = new Set<SessionSchema.ID>()
+          for (const id of ids) {
+            let current: SessionSchema.ID | undefined = id
+            const seen = new Set<SessionSchema.ID>()
+            while (current && !seen.has(current)) {
+              seen.add(current)
+              family.add(current)
+              current = parents.get(current) ?? undefined
+            }
+          }
+          return family
+        }
+        const running = ancestors([
           ...active,
+          ...tasks.filter((task) => ["starting", "running", "cancelling"].includes(task.state)).map((task) => task.sessionID),
           ...(yield* jobs.list()).flatMap((job) => {
             const sessionID = job.metadata?.sessionID
             return job.type === "shell" && job.status === "running" && Schema.is(SessionSchema.ID)(sessionID)
@@ -2887,7 +2907,7 @@ const layer = Layer.effect(
               : []
           }),
         ])
-        const sessions = new Set(
+        const sessions = ancestors(
           [...tasks, ...notices, ...goals, ...pending].map((row) => row.sessionID).concat([...shellJobs, ...active]),
         )
         const lost = new Set([...(yield* ShellLedger.lostSessions(db)), ...(yield* SessionTask.lostSessions(db))])
@@ -2921,12 +2941,6 @@ const layer = Layer.effect(
           .orderBy(asc(EventTable.created), asc(EventTable.id))
           .all()
           .pipe(Effect.orDie)
-        const rows = yield* db
-          .select({ id: SessionTable.id, parentID: SessionTable.parent_id })
-          .from(SessionTable)
-          .all()
-          .pipe(Effect.orDie)
-        const parents = new Map(rows.map((row) => [row.id, row.parentID]))
         const failed = new Set<SessionSchema.ID>()
         for (const event of history) {
           const seen = new Set<SessionSchema.ID>()

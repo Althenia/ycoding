@@ -169,7 +169,8 @@ describe("post-approval: project member assignment", () => {
       expect(yield* ownerOf(fixture, fixture.alpha.id)).toEqual(ownedBy(fixture.second))
       yield* refused(fixture.runtime.release(fixture.first.id, { sessionID: fixture.alpha.id, reason: "completed" }))
       expect(yield* ownerOf(fixture, fixture.alpha.id)).toEqual(ownedBy(fixture.second))
-      yield* fixture.runtime.release(fixture.second.id, { sessionID: fixture.alpha.id, reason: "completed" })
+      yield* refused(fixture.runtime.release(fixture.second.id, { sessionID: fixture.alpha.id, reason: "completed" }))
+      yield* fixture.runtime.release(fixture.master.id, { sessionID: fixture.alpha.id, reason: "completed" })
       expect(yield* ownerOf(fixture, fixture.alpha.id)).toBeUndefined()
     }), 30_000)
 
@@ -177,11 +178,13 @@ describe("post-approval: project member assignment", () => {
     Effect.gen(function* () {
       const fixture = yield* setup
       yield* fixture.runtime.assign(fixture.master.id, { sessionID: fixture.alpha.id, ownerSessionID: fixture.first.id })
-      yield* fixture.runtime.release(fixture.first.id, { sessionID: fixture.alpha.id, reason: "completed" })
+      yield* refused(fixture.runtime.release(fixture.first.id, { sessionID: fixture.alpha.id, reason: "completed" }))
+      yield* fixture.runtime.release(fixture.master.id, { sessionID: fixture.alpha.id, reason: "completed" })
       expect(yield* ownerOf(fixture, fixture.alpha.id)).toBeUndefined()
 
       yield* fixture.runtime.assign(fixture.master.id, { sessionID: fixture.beta.id, ownerSessionID: fixture.second.id })
-      yield* fixture.runtime.release(fixture.second.id, { sessionID: fixture.beta.id, reason: "released" })
+      yield* refused(fixture.runtime.release(fixture.second.id, { sessionID: fixture.beta.id, reason: "released" }))
+      yield* fixture.runtime.release(fixture.master.id, { sessionID: fixture.beta.id, reason: "released" })
       expect(yield* ownerOf(fixture, fixture.beta.id)).toBeUndefined()
 
       yield* fixture.runtime.assign(fixture.master.id, { sessionID: fixture.alpha.id, ownerSessionID: fixture.first.id })

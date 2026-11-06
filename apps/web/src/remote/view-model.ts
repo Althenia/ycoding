@@ -18,6 +18,12 @@ import type { FormAnswerView, FormFieldView, FormView, SessionView, ShellOutputF
 
 export type FormDraft = Readonly<Record<string, FormAnswerView[string] | undefined>>
 
+export function familyTaskActivity(tasks: readonly { readonly state: string }[]) {
+  const waiting = tasks.filter((task) => task.state === "waiting").length
+  const running = tasks.some((task) => ["starting", "running", "cancelling"].includes(task.state))
+  return { running, waiting, supervising: !running && waiting === 0 && tasks.some((task) => task.state === "supervising") }
+}
+
 export function modelEffortNotice(input: { readonly known: boolean; readonly blocked: boolean; readonly variants: number }) {
   return input.known && !input.blocked && input.variants === 0
     ? "This model has no adjustable effort; it uses its own settings."

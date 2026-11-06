@@ -104,7 +104,7 @@ export const layer = Layer.effect(
         .where(
           and(
             eq(SessionTaskTable.parent_id, sessionID),
-            inArray(SessionTaskTable.state, ["starting", "running", "waiting", "cancelling"]),
+            inArray(SessionTaskTable.state, ["starting", "running", "waiting", "supervising", "cancelling"]),
           ),
         )
         .limit(1)

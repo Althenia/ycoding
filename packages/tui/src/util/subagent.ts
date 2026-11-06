@@ -1,7 +1,7 @@
 import type { SessionOrchestrationTask } from "@ycoding-ai/client"
 
 export function isActiveSubagent(state: SessionOrchestrationTask["state"]) {
-  return state === "starting" || state === "running" || state === "waiting" || state === "cancelling"
+  return state === "starting" || state === "running" || state === "waiting" || state === "cancelling" || state === "supervising"
 }
 
 export function activeSubagentSessionIDs(

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { homedir } from "node:os"
 import { deltaChunk, finishChunk, toolCallChunk } from "../../ai/test/lib/openai-chunks"
@@ -12,6 +12,105 @@ afterEach(async () => {
 
 const json = { "content-type": "application/json" }
 const home = `${process.env.YCODING_TEST_XDG_ROOT}/home`
+
+test("source CLI follow observes isolated descendant execution and resumes its durable cursor", async () => {
+  const scratch = join(homedir(), ".local/share/ycoding/tasks/session-activity-owners-20261106/watch-activity")
+  await mkdir(scratch, { recursive: true, mode: 0o700 })
+  const directory = await mkdtemp(join(scratch, "source-follow-"))
+  cleanups.push(() => rm(directory, { recursive: true, force: true }))
+  const release = Promise.withResolvers<void>()
+  const entered = Promise.withResolvers<void>()
+  let requests = 0
+  const server = await startServer(directory, { provider: { text: "Synthetic descendant settled.", reply: async () => {
+    if (++requests === 2) entered.resolve()
+    await release.promise
+    return [deltaChunk({ role: "assistant", content: "Synthetic descendant settled." }), finishChunk("stop")]
+  } } })
+  cleanups.push(async () => { release.resolve(); await server.close() })
+  const model = { providerID: server.provider!.providerID, id: server.provider!.modelID }
+  await createSession(server, "ses_follow_root", directory, model)
+  for (const [id, parentID] of [["ses_follow_child", "ses_follow_root"], ["ses_follow_grandchild", "ses_follow_child"]]) {
+    const response = await server.request("/api/session", { method: "POST", headers: json, body: JSON.stringify({ id, parentID, directory, model }) })
+    expect(response.status, await response.clone().text()).toBe(200)
+  }
+  const state = join(directory, "follow.json")
+  const start = () => {
+    const child = Bun.spawn([process.execPath, new URL("../src/index.ts", import.meta.url).pathname,
+      "decision", "watch", "ses_follow_root", "--family", "--follow", "--state", state, "--timeout", "60", "--json", "--server", server.base], {
+      stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, YCODING_PASSWORD: password },
+    })
+    const receipts: Array<Record<string, unknown>> = []
+    const listeners = new Set<() => void>()
+    const stderr = new Response(child.stderr).text()
+    const collecting = (async () => {
+      const reader = child.stdout.getReader()
+      const decoder = new TextDecoder()
+      let buffered = ""
+      try {
+        while (true) {
+          const next = await reader.read()
+          if (next.done) break
+          buffered += decoder.decode(next.value, { stream: true })
+          let end = buffered.indexOf("\n")
+          while (end >= 0) {
+            const line = buffered.slice(0, end)
+            buffered = buffered.slice(end + 1)
+            if (line.trim()) receipts.push(JSON.parse(line))
+            for (const notify of listeners) notify()
+            end = buffered.indexOf("\n")
+          }
+        }
+      } finally { reader.releaseLock() }
+    })()
+    const wait = (predicate: (receipt: Record<string, unknown>) => boolean) => new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => { listeners.delete(check); reject(new Error(`Source follower did not emit expected receipt: ${JSON.stringify(receipts)}`)) }, 45_000)
+      const check = () => {
+        const receipt = receipts.find(predicate)
+        if (!receipt) return
+        clearTimeout(timer)
+        listeners.delete(check)
+        resolve(receipt)
+      }
+      listeners.add(check)
+      check()
+    })
+    let stopped = false
+    const stop = async () => {
+      if (stopped) return
+      stopped = true
+      child.kill("SIGINT")
+      await child.exited
+      await collecting
+      expect(await stderr).toBe("")
+    }
+    cleanups.push(stop)
+    return { wait, receipts, stop }
+  }
+  const follower = start()
+  await follower.wait((receipt) => receipt.kind === "ready" && receipt.rootActive === false)
+  await prompt(server, "ses_follow_child", "msg_follow_child")
+  await prompt(server, "ses_follow_grandchild", "msg_follow_grandchild")
+  await follower.wait((receipt) => receipt.rootActive === true && receipt.activity === "running")
+  const active = await (await server.request("/api/session/active")).json() as { data: Record<string, unknown> }
+  expect(Object.keys(active.data)).not.toContain("ses_follow_root")
+  expect(Object.keys(active.data)).toContain("ses_follow_child")
+  expect(Object.keys(active.data)).toContain("ses_follow_grandchild")
+  const outstanding = await (await server.request("/api/session/outstanding")).json() as { data: string[]; running: string[] }
+  expect(outstanding.running).toEqual(expect.arrayContaining(["ses_follow_root", "ses_follow_child", "ses_follow_grandchild"]))
+  await entered.promise
+  release.resolve()
+  await follower.wait((receipt) => receipt.kind === "durable" && receipt.type === "session.execution.succeeded" && receipt.sessionID === "ses_follow_child")
+  await follower.wait((receipt) => receipt.kind === "durable" && receipt.type === "session.execution.succeeded" && receipt.sessionID === "ses_follow_grandchild")
+  await follower.wait((receipt) => receipt.kind === "activity" && receipt.rootActive === false)
+  await follower.stop()
+  const saved = JSON.parse(await readFile(state, "utf8"))
+  expect(saved.cursors.map((cursor: { sessionID: string }) => cursor.sessionID).sort()).toEqual(["ses_follow_child", "ses_follow_grandchild", "ses_follow_root"])
+  expect(saved.cursors.filter((cursor: { sessionID: string }) => cursor.sessionID !== "ses_follow_root").every((cursor: { after: number }) => cursor.after > 0)).toBe(true)
+  const resumed = start()
+  await resumed.wait((receipt) => receipt.kind === "ready")
+  await resumed.stop()
+  expect(resumed.receipts.filter((receipt) => receipt.kind === "durable")).toEqual([])
+}, 120_000)
 
 type Reply = (request: unknown) => readonly object[]
 

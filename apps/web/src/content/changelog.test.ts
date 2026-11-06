@@ -7,8 +7,20 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.9 Dots Session listing first with shared notes", async () => {
+  test("lists v0.11.10 persistent Project owners first with shared notes", async () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.10", date: "2026-11-06", title: "Persistent Project owners", tags: ["Added", "Changed", "Fixed"] })
+    expect(entry?.changes).toHaveLength(6)
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.10.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.11.10\n")
+    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of ["`supervising`", "owner subagents can no longer release themselves", "Project escalations", "never wake their receiver", "even when the main transcript is idle", "child Session, question ID and revision", "canonical path"]) expect(text).toContain(fragment)
+    expect(after("0.11.10")?.version).toBe("0.11.9")
+  })
+
+  test("retains v0.11.9 Dots Session listing with shared notes", async () => {
+    const entry = RELEASES[1]
     expect(entry).toMatchObject({ version: "0.11.9", date: "2026-11-06", title: "Dots Session listing", tags: ["Fixed"] })
     expect(entry?.changes).toHaveLength(1)
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.9.md", import.meta.url)).text()
@@ -20,7 +32,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.11.8 provider response recovery with shared notes", async () => {
-    const entry = RELEASES[1]
+    const entry = byVersion("0.11.8")
     expect(entry).toMatchObject({ version: "0.11.8", date: "2026-11-06", title: "Provider response recovery", tags: ["Fixed"] })
     expect(entry?.changes).toHaveLength(2)
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.8.md", import.meta.url)).text()
@@ -1820,7 +1832,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 52)).toEqual([
+    expect(versions.slice(0, 53)).toEqual([
+      "0.11.10",
       "0.11.9",
       "0.11.8",
       "0.11.7",

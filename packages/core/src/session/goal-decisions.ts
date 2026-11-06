@@ -43,7 +43,7 @@ export type Kind = "permission" | "guardrail" | "form" | "question" | "child_que
 export type Outcome = "settled" | "waiting" | "resumed"
 
 const kinds = ["permission", "guardrail", "form", "question", "child_question"] as const
-const activeTaskStates = ["starting", "running", "waiting", "cancelling"] as const
+const activeTaskStates = ["starting", "running", "waiting", "supervising", "cancelling"] as const
 const inputsChanged: ReadonlySet<string> = new Set(["delegation-invalid", "stale-assessment"])
 
 export const Receipt = Schema.Struct({

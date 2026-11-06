@@ -129,7 +129,7 @@ export function DialogSessionList(
         fg: deleting
           ? readableForeground(theme.text.action.destructive.default, theme.background.action.destructive.default)
           : undefined,
-        gutter: data.session.family(session.id).some((id) => data.session.status(id) === "running")
+        gutter: data.session.activity(session.id) === "running"
           ? () => <Spinner />
           : slot === undefined
             ? undefined

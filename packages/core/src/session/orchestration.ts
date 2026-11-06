@@ -81,7 +81,7 @@ const taskRank = (state: State): ListAnchor["rank"] => {
   if (state === "waiting") return 0
   if (state === "starting") return 1
   if (state === "running") return 2
-  if (state === "cancelling") return 3
+  if (state === "cancelling" || state === "supervising") return 3
   return 4
 }
 
@@ -90,6 +90,7 @@ const taskPriority = sql<number>`case ${SessionTaskTable.state}
   when 'starting' then 1
   when 'running' then 2
   when 'cancelling' then 3
+  when 'supervising' then 3
   else 4
 end`
 const pinPriority = sql<number>`case when ${SessionTable.time_pinned} is null then 1 else 0 end`
@@ -129,7 +130,7 @@ export const page = Effect.fn("SessionOrchestration.page")(function* (
         const summary = yield* db
           .select({
             total: count(),
-            active: sql<number>`coalesce(sum(case when ${SessionTaskTable.state} in ('starting', 'running', 'waiting', 'cancelling') then 1 else 0 end), 0)`,
+            active: sql<number>`coalesce(sum(case when ${SessionTaskTable.state} in ('starting', 'running', 'waiting', 'supervising', 'cancelling') then 1 else 0 end), 0)`,
             running: sql<number>`coalesce(sum(case when ${SessionTaskTable.state} = 'running' then 1 else 0 end), 0)`,
             waiting: sql<number>`coalesce(sum(case when ${SessionTaskTable.state} = 'waiting' then 1 else 0 end), 0)`,
           })
@@ -774,7 +775,7 @@ const layer = Layer.effect(
         locks.withLock(input.childID)(
           Effect.gen(function* () {
             const row = yield* owned(input.parentID, input.childID)
-            if (row.state !== "running" && !isTerminal(row.state))
+            if (row.state !== "running" && row.state !== "supervising" && !isTerminal(row.state))
               return yield* new ConflictError({ message: `Cannot send to task in ${row.state}` })
             if ((yield* SessionReviewFold.stoppedRecovery(db, input.childID)) !== undefined)
               return yield* new ConflictError({
@@ -811,7 +812,7 @@ const layer = Layer.effect(
               )
               .get()
               .pipe(Effect.orDie)
-            if (!isTerminal(row.state)) {
+            if (!isTerminal(row.state) && row.state !== "supervising") {
               yield* execution.wake(input.childID)
               const latest = yield* task(input.childID)
               if (!latest || !isTerminal(latest.state)) return yield* current(input.childID)
@@ -947,7 +948,7 @@ const layer = Layer.effect(
           Effect.gen(function* () {
             const row = yield* owned(input.parentID, input.childID)
             if (row.state === "cancelled") return (yield* withReviewState(db, [taskFromRow(row)]))[0]!
-            if (row.state !== "starting" && row.state !== "running" && row.state !== "waiting")
+            if (row.state !== "starting" && row.state !== "running" && row.state !== "waiting" && row.state !== "supervising")
               return yield* new ConflictError({ message: `Cannot cancel task in ${row.state}` })
             if (row.question_id) {
               const folded = yield* SessionReviewFold.fold(db, [input.childID])
@@ -978,7 +979,7 @@ const layer = Layer.effect(
             }
             const row = yield* task(input.sessionID)
             const admitted = yield* sessions.synthetic({ ...message, resume: false })
-            if (!input.resume || (row && row.state !== "running" && row.state !== "completed")) return admitted
+            if (!input.resume || (row && row.state !== "running" && row.state !== "supervising" && row.state !== "completed")) return admitted
             const pending = db
               .select({ id: SessionPendingTable.id })
               .from(SessionPendingTable)
@@ -986,10 +987,11 @@ const layer = Layer.effect(
               .get()
               .pipe(Effect.orDie)
             if (!(yield* pending) || (yield* sessions.get(input.sessionID)).revert) return admitted
-            if (row?.state !== "completed") {
+            if (row?.state !== "completed" && row?.state !== "supervising") {
               yield* execution.wake(input.sessionID)
               if (!row) return admitted
-              if ((yield* task(input.sessionID))?.state !== "completed" || !(yield* pending)) return admitted
+              const state = (yield* task(input.sessionID))?.state
+              if ((state !== "completed" && state !== "supervising") || !(yield* pending)) return admitted
             }
             if ((yield* SessionReviewFold.fold(db, [input.sessionID])).some(SessionReviewFold.isOpen)) return admitted
             yield* publish(input.sessionID, { type: "started" })

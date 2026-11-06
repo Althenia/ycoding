@@ -72,7 +72,7 @@ type TaskRef = {
 }
 
 type Work = {
-  readonly state: "running" | "needs-decision" | "lost" | "background" | "unconfirmed" | "completed" | "incomplete" | "idle"
+  readonly state: "running" | "needs-decision" | "supervising" | "lost" | "background" | "unconfirmed" | "completed" | "incomplete" | "idle"
   readonly receipt?: Receipt & { readonly current: boolean }
   readonly todos: { readonly sessionID: string; readonly open: number; readonly items: SessionTodoInfo[] }
   readonly decisions: DecisionItem[]
@@ -103,7 +103,7 @@ const todoLimit = 10
 const taskPageLimit = 10
 const taskParentLimit = 20
 const assessmentReserveMs = 5_000
-const activeTaskStates: readonly string[] = ["starting", "running", "waiting", "cancelling"]
+const activeTaskStates: readonly string[] = ["starting", "running", "waiting", "cancelling", "supervising"]
 const exitCodes = { settled: 0, family: 0, decision: 2, timeout: 3 } as const
 
 class InputBeforeCursor extends Error {}
@@ -440,11 +440,13 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
     const open = todos.filter((item) => item.status === "pending" || item.status === "in_progress")
     const selected = selectDecisions(items.filter((item) => scope.has(item.sessionID)), options.json)
     const current = receipt !== undefined && !superseded
-    const executing = active[target.id] !== undefined || settlement.reopened
+    const executing = active[target.id] !== undefined || settlement.reopened || running.length > 0 || children.running > 0 ||
+      tasks.some((task) => ["starting", "running", "cancelling"].includes(task.state)) || activeFamily.length > 0
     const blocked = selected.decisions.length + selected.oversized.length + selected.omitted > 0 || children.waiting > 0 ||
       tasks.some((task) => task.state === "waiting" || task.questionID !== undefined || task.recoveryItemID !== undefined)
     const state: Work["state"] = blocked ? "needs-decision"
       : executing ? "running"
+      : tasks.some((task) => task.state === "supervising") ? "supervising"
       : lost.length ? "lost"
       : running.length || pending.length || queued.length || children.active > 0 || activeFamily.some((id) => id !== target.id) ? "background"
       : !settlement.settled && execution !== undefined ? "unconfirmed"
@@ -673,7 +675,8 @@ function workLines(work: Work, family: boolean) {
   const childDecision = !family && (work.children.waiting > 0 || work.tasks.some((task) => task.questionID !== undefined || task.recoveryItemID !== undefined))
   const summary = {
     "needs-decision": `Work needs a decision before it can continue.${childDecision ? " Add --family to list child Session decisions." : ""}`,
-    running: "Work running: the Session is executing.",
+    running: "Work running: the Session, a descendant task, or a family shell is running.",
+    supervising: "Work supervising: an idle owner retains attached Project members; no user decision is pending.",
     lost: "Work lost: the service restarted while work was active and did not resume it. Resume or cancel it explicitly.",
     background: "Work continues in the background without a decision.",
     unconfirmed: "Work unconfirmed: retained history shows an open execution that the connected service does not report as active; it may run in another service process or have ended without a terminal event.",

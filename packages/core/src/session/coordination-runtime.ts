@@ -5,7 +5,7 @@ import { Form } from "@ycoding-ai/schema/form"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import type { Model } from "@ycoding-ai/schema/model"
 import { Permission } from "@ycoding-ai/schema/permission"
-import { and, asc, desc, eq, gt, gte, inArray } from "drizzle-orm"
+import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm"
 import { Cause, Context, Effect, Layer, Schema, Stream } from "effect"
 import { CoordinationDecisionRuntime } from "../coordination/decisions"
 import { CoordinationService } from "../coordination/index"
@@ -35,12 +35,14 @@ import { SessionSchema } from "./schema"
 import { Session } from "../session"
 import { SessionPendingTable, SessionTable, SessionTaskTable } from "./sql"
 import { SessionStore } from "./store"
+import { SessionTask } from "./task"
 
 export class RefusedError extends Schema.TaggedErrorClass<RefusedError>()("Coordination.RefusedError", {
   message: Schema.String,
 }) {}
 
 export const notice = "project_notification"
+export const escalation = "project_escalation"
 export const maxExcerpt = 500
 export const inactiveMessage = "Project is inactive; send a message in the master chat to resume"
 export const limitMessage = (limit: number) => `Project concurrency limit ${limit} reached`
@@ -151,12 +153,16 @@ const handledEvents = [
   Permission.Event.Asked,
   Guardrail.Event.Asked,
   Coordination.Event.OwnerChanged,
+  Coordination.Event.Changed,
+  Coordination.Event.Deleted,
+  SessionEvent.Archived,
+  SessionEvent.Deleted,
   SessionEvent.Task.Updated,
 ] as const
 type HandledEvent = EventRuntime.SubscribePayload<typeof handledEvents>
 
 const staleOwnerStates: ReadonlySet<string> = new Set(["cancelling", "cancelled", "failed", "lost"])
-const ownerEndingChanges: ReadonlySet<string> = new Set(["cancelled", "failed", "lost"])
+const ownerEndingChanges: ReadonlySet<string> = new Set(["cancelled", "failed", "lost", "question_asked"])
 
 export interface Interface {
   readonly get: (groupID: Coordination.GroupID) => Effect.Effect<Coordination.Info, CoordinationService.NotFoundError>
@@ -182,7 +188,7 @@ export interface Options {
   readonly coordination: Pick<CoordinationService.Interface, "get" | "list" | "scopeOf" | "memberOf" | "accessOf" | "withOwnership" | "activate" | "pause" | "setOwner" | "addMember">
   readonly decisions: Pick<CoordinationDecisions.Interface, "pending" | "evaluate" | "escalate">
   readonly execution: Pick<SessionExecution.Interface, "active" | "wake" | "interrupt">
-  readonly sessions: Pick<Session.Interface, "create" | "get">
+  readonly sessions: Pick<Session.Interface, "create" | "get" | "outstanding">
   readonly orchestration: Pick<SessionOrchestration.Interface, "notice">
   readonly validateModel: (sessionID: SessionSchema.ID, model: Model.Ref) => Effect.Effect<void, RefusedError>
   readonly jobs: Pick<Job.Interface, "list" | "outstandingSessions">
@@ -275,6 +281,7 @@ export function make(options: Options): Interface & { readonly handle: (event: H
     const problem = yield* ownerProblem(scope, input.ownerSessionID)
     if (problem !== undefined) return yield* refuse(problem)
     yield* coordination.setOwner(scope.groupID, { sessionID: input.sessionID, ownerSessionID: input.ownerSessionID }).pipe(Effect.orDie)
+    yield* SessionTask.superviseAttached(db, events, input.ownerSessionID)
     return { sessionID: input.sessionID, ...ownership(yield* ownerOf(scope.groupID, input.sessionID)) }
   })
 
@@ -282,8 +289,8 @@ export function make(options: Options): Interface & { readonly handle: (event: H
     const scope = yield* memberScope(caller, input.sessionID)
     const owner = yield* ownerOf(scope.groupID, input.sessionID)
     if (owner === undefined) return yield* refuse(`Session ${input.sessionID} has no owner to release`)
-    if (caller !== scope.masterSessionID && caller !== owner.sessionID)
-      return yield* refuse("Only the Project's Master or the member's owner releases its ownership")
+    if (caller !== scope.masterSessionID)
+      return yield* refuse("Only the Project's Master releases member ownership; supervisors stay attached until the Master releases or transfers it")
     yield* coordination.setOwner(scope.groupID, { sessionID: input.sessionID, reason: input.reason }).pipe(Effect.orDie)
     return { sessionID: input.sessionID }
   })
@@ -315,8 +322,9 @@ export function make(options: Options): Interface & { readonly handle: (event: H
           return yield* partial(`Session ${caller} is no longer this Project's Master`, member.id)
         const problem = input.ownerSessionID === undefined ? undefined : yield* ownerProblem(access.scope, input.ownerSessionID)
         if (problem !== undefined) return yield* partial(problem, member.id)
-        return yield* coordination.addMember(scope.groupID, { sessionID: member.id, ...(input.ownerSessionID === undefined ? {} : { ownerSessionID: input.ownerSessionID }) })
+        yield* coordination.addMember(scope.groupID, { sessionID: member.id, ...(input.ownerSessionID === undefined ? {} : { ownerSessionID: input.ownerSessionID }) })
           .pipe(Effect.mapError((error) => partial(`adding it to the Project failed: ${error.message}`, member.id)))
+        if (input.ownerSessionID !== undefined) yield* SessionTask.superviseAttached(db, events, input.ownerSessionID)
       }))
       const prompt = input.prompt === undefined
         ? undefined
@@ -388,14 +396,14 @@ export function make(options: Options): Interface & { readonly handle: (event: H
   })
 
   const stateOf = (scope: CoordinationService.Scope, sessionID: SessionSchema.ID) =>
-    execution.active.pipe(Effect.flatMap((running) => participant(scope, sessionID, running)), Effect.map((value) => value.state))
+    sessions.outstanding().pipe(Effect.flatMap(({ running }) => participant(scope, sessionID, running)), Effect.map((value) => value.state))
 
   const get: Interface["get"] = Effect.fn("CoordinationRuntime.get")(function* (groupID) {
     const group = yield* coordination.get(groupID)
     const scope: CoordinationService.Scope = {
       groupID: group.id, masterSessionID: group.masterSessionID, memberSessionIDs: group.memberSessionIDs, settings: group.settings, active: group.active,
     }
-    const running = yield* execution.active
+    const { running } = yield* sessions.outstanding()
     return {
       id: group.id,
       name: group.name,
@@ -420,7 +428,7 @@ export function make(options: Options): Interface & { readonly handle: (event: H
   const roster: Interface["roster"] = Effect.fn("CoordinationRuntime.roster")(function* (caller) {
     const scope = yield* scopeFor(caller)
     const group = yield* coordination.get(scope.groupID).pipe(Effect.orDie)
-    const running = yield* execution.active
+    const { running } = yield* sessions.outstanding()
     return {
       project: { id: scope.groupID, name: group.name, active: scope.active, concurrency: scope.settings.concurrency, ...(group.pausedReason === undefined ? {} : { pausedReason: group.pausedReason }) },
       members: yield* Effect.forEach(scope.memberSessionIDs, (sessionID) => participant(scope, sessionID, running)),
@@ -449,7 +457,7 @@ export function make(options: Options): Interface & { readonly handle: (event: H
           const current = yield* memberScope(caller, input.sessionID)
           if (current?.groupID !== scope.groupID || !current.memberSessionIDs.includes(input.sessionID)) return yield* refuse(`Session ${input.sessionID} is not a member of this Project`)
           if (current === undefined || !current.active) return yield* refuse(inactiveMessage)
-          const running = yield* execution.active
+          const { running } = yield* sessions.outstanding()
           const queued = yield* hasPendingInput(scope.memberSessionIDs)
           const busy = (sessionID: SessionSchema.ID) => running.has(sessionID) || queued.has(sessionID)
           const limit = current.settings.concurrency
@@ -534,12 +542,14 @@ export function make(options: Options): Interface & { readonly handle: (event: H
     readonly receiver: SessionSchema.ID
     readonly resume: boolean
     readonly detail: Record<string, unknown>
+    readonly escalationReason?: string
   }) {
+    const escalated = input.escalationReason !== undefined
     const data = {
-      source: notice,
+      source: escalated ? escalation : notice,
       groupID: input.scope.groupID,
       memberSessionID: input.member,
-      title: yield* titleOf(input.member),
+      ...(escalated ? { reason: input.escalationReason } : { title: yield* titleOf(input.member) }),
       event: input.event,
       ...input.detail,
     }
@@ -549,8 +559,8 @@ export function make(options: Options): Interface & { readonly handle: (event: H
       .notice({
         id,
         sessionID: input.receiver,
-        text: `Project notification:\n${JSON.stringify(data)}`,
-        description: "Project notification",
+        text: `Project ${escalated ? "escalation" : "notification"}:\n${JSON.stringify(data)}`,
+        description: `Project ${escalated ? "escalation" : "notification"}`,
         metadata: data,
         resume: input.resume,
       })
@@ -561,13 +571,34 @@ export function make(options: Options): Interface & { readonly handle: (event: H
     return id
   })
 
-  const handoff = Effect.fnUntraced(function* (scope: CoordinationService.Scope, member: SessionSchema.ID, receiver: SessionSchema.ID, wake: boolean) {
-    const pending = yield* decisions.pending({ groupID: scope.groupID, coordinatorSessionID: receiver, targetSessionID: member, limit: Coordination.maxPending })
+  const handoff = Effect.fnUntraced(function* (scope: CoordinationService.Scope, member: SessionSchema.ID, receiver: SessionSchema.ID | undefined, wake: boolean, reason = "unowned") {
+    const target = receiver ?? scope.masterSessionID
+    const pending = yield* decisions.pending({ groupID: scope.groupID, coordinatorSessionID: target, targetSessionID: member, limit: Coordination.maxPending })
     yield* Effect.forEach(pending, (item) => {
       const request = summarize(item)
-      return deliver({ scope, member, event: item.kind, identity: handoffIdentity(receiver, request), receiver, resume: wake,
-        detail: { requestID: request.requestID, excerpt: request.summary } })
+      return deliver({ scope, member, event: item.kind, identity: handoffIdentity(target, request), receiver: target, resume: wake,
+        ...(receiver === undefined ? { escalationReason: reason } : {}),
+        detail: { requestID: request.requestID, fingerprint: request.fingerprint, ...(receiver === undefined ? {} : { excerpt: request.summary }) } })
     }, { discard: true })
+    let after: SessionSchema.ID | undefined
+    while (true) {
+      const children = yield* db.select({ task: SessionTaskTable }).from(SessionTaskTable)
+        .innerJoin(SessionTable, eq(SessionTable.id, SessionTaskTable.session_id))
+        .where(and(eq(SessionTaskTable.state, "waiting"), isNotNull(SessionTaskTable.question_id), isNotNull(SessionTaskTable.question), isNotNull(SessionTaskTable.question_time),
+          isNull(SessionTable.time_archived), after === undefined ? undefined : gt(SessionTaskTable.session_id, after),
+          sql`${SessionTaskTable.session_id} in (WITH RECURSIVE family(id) AS (SELECT id FROM session WHERE id = ${member}
+            UNION SELECT child.id FROM session child JOIN family ON child.parent_id = family.id) SELECT id FROM family)`))
+        .orderBy(asc(SessionTaskTable.session_id)).limit(100).all().pipe(Effect.orDie)
+      if (children.length === 0) break
+      for (const { task } of children) {
+        const fingerprint = Hash.json({ sessionID: task.session_id, questionID: task.question_id, revision: task.revision })
+        yield* deliver({ scope, member, event: "question", identity: `child-question\0${target}\0${fingerprint}`, receiver: target, resume: wake,
+          ...(receiver === undefined ? { escalationReason: reason } : {}),
+          detail: { kind: "question", requestID: task.question_id, requestSessionID: task.session_id, revision: task.revision, fingerprint } })
+      }
+      after = children.at(-1)!.task.session_id
+      yield* Effect.yieldNow
+    }
   })
 
   const heldByHandoff = Effect.fnUntraced(function* (scope: CoordinationService.Scope, member: SessionSchema.ID, receiver: SessionSchema.ID, requestID: string) {
@@ -581,28 +612,83 @@ export function make(options: Options): Interface & { readonly handle: (event: H
 
   const releaseStale = Effect.fnUntraced(function* (scope: CoordinationService.Scope, member: SessionSchema.ID, wake: boolean) {
     yield* coordination.setOwner(scope.groupID, { sessionID: member, reason: "released" }).pipe(Effect.orDie)
-    yield* handoff(scope, member, scope.masterSessionID, wake)
+    yield* handoff(scope, member, undefined, wake, "owner-failed")
   })
 
   const receiverOf = Effect.fnUntraced(function* (scope: CoordinationService.Scope, member: SessionSchema.ID, wake: boolean) {
-    const owner = (yield* coordination.accessOf(member))?.ownerSessionID ?? scope.masterSessionID
+    const owner = (yield* ownerOf(scope.groupID, member))?.sessionID
+    if (owner === undefined) return undefined
     if ((yield* ownerProblem(scope, owner)) === undefined) return owner
     yield* releaseStale(scope, member, wake)
-    return scope.masterSessionID
+    return undefined
   })
+
+  const deliveredSequence = (scope: CoordinationService.Scope, member: SessionSchema.ID) =>
+    db.select({ sequence: sql<number | null>`max(json_extract(${EventTable.data}, '$.input.data.metadata.memberSequence'))` })
+      .from(EventTable).where(and(eq(EventTable.type, versionedType(SessionEvent.InputAdmitted.type, SessionEvent.InputAdmitted.durable.version)),
+        sql`json_extract(${EventTable.data}, '$.input.data.metadata.source') = ${notice}`,
+        sql`json_extract(${EventTable.data}, '$.input.data.metadata.groupID') = ${scope.groupID}`,
+        sql`json_extract(${EventTable.data}, '$.input.data.metadata.memberSessionID') = ${member}`)).get()
+      .pipe(Effect.orDie, Effect.map(row => row?.sequence ?? -1))
 
   const notify = Effect.fnUntraced(function* (
     scope: CoordinationService.Scope,
     member: SessionSchema.ID,
     event: NotificationEvent,
     identity: string,
-    detail: { readonly requestID?: string; readonly excerpt?: string },
+    detail: { readonly requestID?: string; readonly excerpt?: string; readonly requestSessionID?: SessionSchema.ID },
     wake = true,
   ) {
+    const previousOwner = yield* ownerOf(scope.groupID, member)
     const receiver = yield* receiverOf(scope, member, wake)
-    if (detail.requestID !== undefined && (yield* heldByHandoff(scope, member, receiver, detail.requestID))) return
-    const routed = scope.active || urgentEvents.has(event)
-    yield* deliver({ scope, member, event, identity, receiver, resume: wake && routed, detail })
+    if (detail.requestID !== undefined && (yield* heldByHandoff(scope, member, receiver ?? scope.masterSessionID, detail.requestID))) return
+    const pending = detail.requestID === undefined ? undefined :
+      (yield* decisions.pending({ groupID: scope.groupID, coordinatorSessionID: scope.masterSessionID, targetSessionID: member, limit: Coordination.maxPending }))
+        .map(summarize).find(request => request.requestID === detail.requestID)
+    if (receiver === undefined) {
+      if (!urgentEvents.has(event)) return
+      yield* deliver({ scope, member, event, identity: pending === undefined ? identity : handoffIdentity(scope.masterSessionID, pending),
+        receiver: scope.masterSessionID, resume: wake, escalationReason: previousOwner === undefined ? "unowned" : "owner-failed",
+        detail: detail.requestID === undefined ? {} : { requestID: detail.requestID, ...(detail.requestSessionID === undefined ? {} : { requestSessionID: detail.requestSessionID }), ...(pending === undefined ? {} : { fingerprint: pending.fingerprint }) } })
+      return
+    }
+    const retained = yield* db.select({ sequence: EventTable.seq }).from(EventTable).where(sql`${EventTable.id} = ${identity}`).get().pipe(Effect.orDie)
+    if (!urgentEvents.has(event) && retained !== undefined && retained.sequence <= (yield* deliveredSequence(scope, member))) return
+    const routed = event !== "started" && event !== "progress" && (scope.active || urgentEvents.has(event))
+    yield* deliver({ scope, member, event, identity: pending === undefined ? identity : handoffIdentity(receiver, pending), receiver, resume: wake && routed,
+      detail: { ...detail, ...(pending === undefined ? {} : { fingerprint: pending.fingerprint }), ...(retained === undefined ? {} : { memberSequence: retained.sequence }) } })
+  })
+
+  const deliverHeld = Effect.fnUntraced(function* (scope: CoordinationService.Scope, member: SessionSchema.ID, receiver: SessionSchema.ID, wake: boolean) {
+    const membershipTypes = [Coordination.Event.Created, Coordination.Event.Changed].map(definition => versionedType(definition.type, definition.durable.version))
+    let joined: number | undefined
+    let before: number | undefined
+    let boundary = false
+    while (!boundary) {
+      const history = yield* db.select().from(EventTable).where(and(eq(EventTable.aggregate_id, scope.groupID), inArray(EventTable.type, membershipTypes),
+        before === undefined ? undefined : lt(EventTable.seq, before))).orderBy(desc(EventTable.seq)).limit(100).all().pipe(Effect.orDie)
+      if (history.length === 0) break
+      for (const row of history) {
+        const snapshot = Schema.decodeUnknownSync(Coordination.Event.Created.data)(row.data)
+        if (!snapshot.memberSessionIDs.includes(member)) { boundary = true; break }
+        joined = row.created
+      }
+      before = history.at(-1)!.seq
+      yield* Effect.yieldNow
+    }
+    if (joined === undefined) return
+    const delivered = yield* deliveredSequence(scope, member)
+    const types = [SessionEvent.Execution.Started, SessionEvent.Step.Ended, SessionEvent.Execution.Succeeded, SessionEvent.Execution.Interrupted]
+      .map(definition => versionedType(definition.type, definition.durable.version))
+    const held = and(eq(EventTable.aggregate_id, member), gte(EventTable.created, joined), gt(EventTable.seq, delivered), inArray(EventTable.type, types))
+    const latest = yield* db.select().from(EventTable).where(held).orderBy(desc(EventTable.seq)).limit(1).get().pipe(Effect.orDie)
+    if (latest === undefined) return
+    const amount = yield* db.select({ count: count() }).from(EventTable).where(held).get().pipe(Effect.orDie)
+    const event: NotificationEvent = latest.type === types[0] ? "started" : latest.type === types[1] ? "progress" : latest.type === types[2] ? "completed" : "interrupted"
+    if (event === "completed" && (yield* workRemains(member))) return
+    yield* deliver({ scope, member, event, identity: `held\0${receiver}\0${latest.id}`, receiver,
+      resume: wake && scope.active && event !== "started" && event !== "progress",
+      detail: { memberSequence: latest.seq, held: { count: amount?.count ?? 0 } } })
   })
 
   const escalate: Interface["escalate"] = Effect.fn("CoordinationRuntime.escalate")(function* (caller, input) {
@@ -624,7 +710,8 @@ export function make(options: Options): Interface & { readonly handle: (event: H
       identity: `${input.requestID}\0${caller}`,
       receiver: scope.masterSessionID,
       resume: true,
-      detail: { requestID: input.requestID, kind: input.kind, excerpt: clip(input.reason), escalatedBy: { sessionID: caller, title: yield* titleOf(caller) } },
+      escalationReason: input.reason,
+      detail: { requestID: input.requestID, fingerprint: input.fingerprint, kind: input.kind, escalatedBy: { sessionID: caller, title: yield* titleOf(caller) } },
     })
     return { sessionID: input.sessionID, requestID: input.requestID, messageID, delivered: true, decision }
   })
@@ -641,7 +728,7 @@ export function make(options: Options): Interface & { readonly handle: (event: H
     sessionID: string,
     event: NotificationEvent,
     identity: string,
-    detail: (() => Effect.Effect<{ readonly requestID?: string; readonly excerpt?: string }, unknown>) | { readonly requestID?: string; readonly excerpt?: string },
+    detail: (() => Effect.Effect<{ readonly requestID?: string; readonly excerpt?: string }, unknown>) | { readonly requestID?: string; readonly excerpt?: string; readonly requestSessionID?: SessionSchema.ID },
   ) {
     if (!Schema.is(SessionSchema.ID)(sessionID)) return
     const scope = yield* coordination.memberOf(sessionID)
@@ -659,19 +746,51 @@ export function make(options: Options): Interface & { readonly handle: (event: H
   })
 
   const handle = Effect.fnUntraced(function* (event: HandledEvent) {
+    if (event.type === Coordination.Event.Changed.type || event.type === Coordination.Event.Deleted.type || event.type === SessionEvent.Deleted.type) {
+      yield* SessionTask.completeUnownedSupervisors(db, events)
+      return
+    }
+    if (event.type === SessionEvent.Archived.type) {
+      const scope = yield* coordination.memberOf(event.data.sessionID)
+      if (scope !== undefined && (yield* ownerOf(scope.groupID, event.data.sessionID)) !== undefined)
+        yield* coordination.setOwner(scope.groupID, { sessionID: event.data.sessionID, reason: "released" }).pipe(Effect.orDie)
+      const access = yield* coordination.accessOf(event.data.sessionID)
+      if (access !== undefined)
+        for (const member of access.ownedSessionIDs) yield* releaseStale(access.scope, member, true)
+      yield* SessionTask.completeUnownedSupervisors(db, events)
+      return
+    }
     if (event.type === SessionEvent.Execution.Started.type || event.type === SessionEvent.Step.Ended.type) {
       yield* memberEvent(event.data.sessionID, event.type === SessionEvent.Execution.Started.type ? "started" : "progress", event.id, {})
       return
     }
     if (event.type === Coordination.Event.OwnerChanged.type) {
+      yield* SessionTask.completeUnownedSupervisors(db, events)
       const scope = yield* coordination.memberOf(event.data.sessionID)
       if (scope === undefined || scope.groupID !== event.data.groupID) return
       const receiver = yield* receiverOf(scope, event.data.sessionID, true)
-      if (receiver !== (event.data.ownerSessionID ?? scope.masterSessionID)) return
+      if (receiver !== event.data.ownerSessionID) return
+      if (receiver !== undefined) {
+        yield* SessionTask.superviseAttached(db, events, receiver)
+        yield* deliverHeld(scope, event.data.sessionID, receiver, true)
+      }
       yield* handoff(scope, event.data.sessionID, receiver, true)
       return
     }
     if (event.type === SessionEvent.Task.Updated.type) {
+      if (event.data.change.type === "question_asked") {
+        let root = event.data.sessionID
+        for (let depth = 0; depth < 64; depth++) {
+          const row = yield* db.select({ parent: SessionTable.parent_id }).from(SessionTable).where(eq(SessionTable.id, root)).get().pipe(Effect.orDie)
+          if (row?.parent === null || row?.parent === undefined) break
+          root = row.parent
+        }
+        const scope = yield* coordination.memberOf(root)
+        if (scope !== undefined) {
+          yield* handoff(scope, root, yield* receiverOf(scope, root, true), true)
+        }
+        return
+      }
       const access = yield* coordination.accessOf(event.data.sessionID)
       if (access === undefined || (yield* ownerProblem(access.scope, event.data.sessionID)) === undefined) return
       for (const member of access.ownedSessionIDs) yield* releaseStale(access.scope, member, true)
@@ -716,6 +835,7 @@ export function make(options: Options): Interface & { readonly handle: (event: H
   })
 
   const recover = Effect.fn("CoordinationRuntime.recover")(function* () {
+    yield* SessionTask.completeUnownedSupervisors(db, events)
     const types = [SessionEvent.Execution.Started, SessionEvent.Step.Ended, SessionEvent.Execution.Succeeded,
       SessionEvent.Execution.Failed, SessionEvent.Execution.Interrupted].map((definition) => versionedType(definition.type, definition.durable.version))
     for (const group of yield* coordination.list()) {
@@ -737,6 +857,18 @@ export function make(options: Options): Interface & { readonly handle: (event: H
       for (const member of group.memberSessionIDs) {
         const since = joined.get(member)
         if (since === undefined) continue
+        yield* coordination.withOwnership(group.id, Effect.gen(function* () {
+          const scope = yield* coordination.memberOf(member)
+          if (scope?.groupID !== group.id) return
+          if ((yield* sessions.get(member).pipe(Effect.orDie)).time.archived !== undefined) {
+            if ((yield* ownerOf(scope.groupID, member)) !== undefined)
+              yield* coordination.setOwner(scope.groupID, { sessionID: member, reason: "released" }).pipe(Effect.orDie)
+            return
+          }
+          const receiver = yield* receiverOf(scope, member, false)
+          if (receiver !== undefined) yield* deliverHeld(scope, member, receiver, false)
+          yield* handoff(scope, member, receiver, false)
+        }))
         let after = -1
         while (true) {
           const retained = yield* db.select().from(EventTable)
@@ -779,6 +911,8 @@ export function make(options: Options): Interface & { readonly handle: (event: H
     create,
     handle: (event) =>
       Effect.gen(function* () {
+        if (event.type === Coordination.Event.Changed.type || event.type === Coordination.Event.Deleted.type)
+          return yield* coordination.withOwnership(event.data.groupID, handle(event))
         if (event.type === SessionEvent.Task.Updated.type && !ownerEndingChanges.has(event.data.change.type)) return
         const sessionID = event.type === Form.Event.Created.type ? event.data.form.sessionID : event.data.sessionID
         if (!Schema.is(SessionSchema.ID)(sessionID)) return

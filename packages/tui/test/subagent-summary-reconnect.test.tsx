@@ -21,12 +21,14 @@ test("refreshes a resident subagent summary after reconnect and rejects the pre-
   let active = 1
   let state: SessionOrchestrationTask["state"] = "running"
   let activeRequests = 0
+  let running: string[] = []
   let subagentRequests = 0
   let releaseStale!: () => void
   const stale = new Promise<void>((resolve) => {
     releaseStale = resolve
   })
   const calls = createFetch(async (url) => {
+    if (url.pathname === "/api/session/outstanding") return json({ data: running, running, failed: [], lost: [] })
     if (url.pathname === "/api/session/active") {
       activeRequests++
       return json({ data: {} })
@@ -45,7 +47,7 @@ test("refreshes a resident subagent summary after reconnect and rejects the pre-
   function Fixture() {
     data = useData()
     onMount(() => void data.session.subagent.sync(parentID))
-    return <Footer sessionID={parentID} />
+    return <box flexDirection="column"><text>{data.session.activity(parentID)}</text><Footer sessionID={parentID} /></box>
   }
 
   const config = createTuiResolvedConfig()
@@ -67,13 +69,15 @@ test("refreshes a resident subagent summary after reconnect and rejects the pre-
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width: 100, height: 3 },
+    { width: 100, height: 4 },
   )
   app.renderer.start()
 
   try {
     await app.waitForFrame((frame) => /subagents 1|sa1/.test(frame))
     expect(data.session.subagent.summary(parentID)?.active).toBe(1)
+    expect(data.session.status(parentID)).toBe("idle")
+    expect(data.session.activity(parentID)).toBe("running")
 
     data.session.subagent.invalidate(parentID)
     const pendingStale = data.session.subagent.sync(parentID)
@@ -96,6 +100,28 @@ test("refreshes a resident subagent summary after reconnect and rejects the pre-
     await waitFor(() => subagentRequests === 4, "waiting subagent refresh")
     await app.waitForFrame((frame) => /subagents 1|sa1/.test(frame))
     expect(data.session.subagent.summary(parentID)).toEqual({ total: 1, active: 1, running: 0, waiting: 1 })
+    expect(data.session.activity(parentID)).toBe("waiting")
+    state = "supervising"
+    events.disconnect()
+    await waitFor(() => activeRequests === 4 && subagentRequests === 5, "supervising reconnect")
+    await app.waitForFrame((frame) => frame.includes("supervising"))
+    expect(data.session.status(parentID)).toBe("idle")
+    running = [parentID, "ses_child"]
+    active = 0
+    events.disconnect()
+    await waitFor(() => activeRequests === 5 && subagentRequests === 6, "running-shell reconnect")
+    await app.waitForFrame((frame) => frame.includes("running") && /subagents 0|sa0/.test(frame))
+    expect(data.session.status(parentID)).toBe("idle")
+    running = []
+    events.disconnect()
+    await waitFor(() => activeRequests === 6 && subagentRequests === 7, "settled-shell reconnect")
+    await app.waitForFrame((frame) => frame.includes("idle") && /subagents 0|sa0/.test(frame))
+    running = [parentID]
+    events.emit({ id: "evt_terminal", created: 1, type: "session.execution.succeeded", data: { sessionID: parentID }, durable: { aggregateID: parentID, seq: 1, version: 1 } })
+    await app.waitForFrame((frame) => frame.includes("running"))
+    running = []
+    events.emit({ id: "evt_idle", created: 2, type: "session.status", data: { sessionID: parentID, status: { type: "idle" } } })
+    await app.waitForFrame((frame) => frame.includes("idle"))
   } finally {
     releaseStale()
     app.renderer.destroy()

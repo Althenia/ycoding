@@ -397,7 +397,9 @@ const operating = [
   "Report progress by delivery milestones, not by mixed administrative counts",
   "As Master, use `create` to start a member Session in its own managed worktree under you or an owner subagent you launched",
   "`assign` to give an existing member Session to an owner subagent you launched",
-  "uses `release` with reason `completed` only after verifying the work",
+  "only the Master uses `release` after verification or transfers ownership with `assign`",
+  "Supervisors cannot release themselves",
+  "your task remains `supervising` until ownership ends",
   "act on each in the turn it arrives",
   "Idle, failure, or a settled turn never ends ownership",
 ]
@@ -529,7 +531,7 @@ describe("Master hierarchy prompt assembly", () => {
       yield* coordination.setOwner(group.id, { sessionID, ownerSessionID: supervisor })
       const owned = systemText(yield* requestFor(supervisor, "Supervise the member"))
       expect(owned).toContain("Project role: supervisor")
-      expect(owned).toContain("You cannot assign or transfer ownership or create members")
+      expect(owned).toContain("You cannot assign, transfer or release ownership or create members")
       expect(owned).toContain("Do not execute a member's task, take over its tools, or control its subagents.")
       expect(owned).toContain(JSON.stringify(CoordinationInstructions.content).slice(1, -1))
       for (const text of hierarchy) expect(owned).toContain(text)

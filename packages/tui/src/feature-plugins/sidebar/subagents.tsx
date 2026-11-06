@@ -75,6 +75,8 @@ export function SubagentRailContent(props: {
             const value = () => {
               const q = task.question?.text?.trim()
               if (q) return Locale.truncate(q, 60)
+              if (task.state === "supervising") return "supervising"
+              if (task.state === "waiting") return "awaiting input"
               const elapsed = (task as { elapsed?: string }).elapsed ?? formatSubagentElapsed(task as SessionOrchestrationTask, props.now ?? Date.now())
               return Locale.truncate(String(elapsed ?? "running").trim() || "running", 60)
             }

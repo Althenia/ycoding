@@ -677,7 +677,7 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
             const selectedModel = yield* options.selectedModel(session)
             if (!(yield* validate(source(state, "snapshot")))) return yield* unavailable()
             const pending = yield* pendingFor(state)
-            const active = (yield* options.execution.active).has(session.id)
+            const active = (yield* options.sessions.outstanding()).running.has(session.id)
             const waiting = (["approval", "user-input"] as const).filter((kind) => pending.requests.some((request) => request.waitKind === kind))
             return { session, ...(selectedModel === undefined ? {} : { selectedModel }), active, waiting } satisfies RootSnapshot
           })

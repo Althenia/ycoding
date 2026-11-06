@@ -167,20 +167,15 @@ export function createRemoteControlAppServer(input: {
   const statusRefreshing = new Set<string>()
   const statusDirty = new Set<string>()
   const statusHeld = new Map<string, number>()
-  const executionEnded = new Set<string>()
   let escalationsStarted = false
   let stopEscalations: (() => void) | undefined
   const notify = (method: string, params: unknown) => {
     if (active) input.send(JSON.stringify({ jsonrpc: "2.0", method, params }))
   }
 
-  const observed = (snapshot: NativeDots.RootSnapshot): NativeDots.RootSnapshot =>
-    executionEnded.has(snapshot.session.id) ? { ...snapshot, active: false } : snapshot
-
   const wire = (snapshot: NativeDots.RootSnapshot, messages: readonly SessionMessage.Info[] = [], summaries: ReturnType<typeof transcriptSummaries> = []) => {
-    const current = observed(snapshot)
-    knownStatus.set(current.session.id, JSON.stringify(threadStatus(current)))
-    return threadWire(current, messages, summaries)
+    knownStatus.set(snapshot.session.id, JSON.stringify(threadStatus(snapshot)))
+    return threadWire(snapshot, messages, summaries)
   }
 
   function holdStatus(threadID: string) {
@@ -217,7 +212,7 @@ export function createRemoteControlAppServer(input: {
         if (statusHeld.has(threadID)) continue
         const snapshot = await backend.getThread(threadID).catch(() => undefined)
         if (!active || revoked.has(threadID) || !subscriptions.has(threadID) || snapshot === undefined || statusHeld.has(threadID)) continue
-        const status = threadStatus(observed(snapshot))
+        const status = threadStatus(snapshot)
         const key = JSON.stringify(status)
         const known = knownStatus.get(threadID)
         knownStatus.set(threadID, key)
@@ -268,7 +263,6 @@ export function createRemoteControlAppServer(input: {
     const completedAtMs = Date.now()
     revoked.add(threadID)
     knownStatus.delete(threadID)
-    executionEnded.delete(threadID)
     cancelRetry(threadID)
     for (const held of pending.values()) if (held.request.threadID === threadID) resolved(held.request)
     for (const [id, turn] of turns) if (turn.threadID === threadID) completeTurn(id, "interrupted", null, completedAtMs)
@@ -372,9 +366,7 @@ export function createRemoteControlAppServer(input: {
       const subscription = backend.subscribe(threadID, (event) => {
         runtimeEvent(threadID, event)
         noteSettlement(event)
-        if ("sessionID" in event.data && event.data.sessionID === threadID && event.type.startsWith("session.execution.")) {
-          if (event.type === "session.execution.started") executionEnded.delete(threadID)
-          else executionEnded.add(threadID)
+        if (event.type === "session.status" || event.type === "session.task.updated" || event.type.startsWith("session.shell.") || event.type.startsWith("session.execution.")) {
           void refreshStatus(threadID)
         }
         void surfaceApprovals(threadID).catch(() => {})
@@ -397,7 +389,6 @@ export function createRemoteControlAppServer(input: {
     const entry = subscriptions.get(threadID)
     if (!entry) return
     subscriptions.delete(threadID)
-    executionEnded.delete(threadID)
     if (entry.stop) entry.stop()
     else void entry.pending.then((stop) => stop(), () => {})
   }

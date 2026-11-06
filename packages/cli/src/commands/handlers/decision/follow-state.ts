@@ -3,7 +3,7 @@ import { lstat, mkdir, open, realpath, rename, unlink } from "node:fs/promises"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 
-export type FollowRequest = { kind: string; sessionID: string; id: string }
+export type FollowRequest = { kind: string; sessionID: string; id: string; fingerprint?: string; revision?: number; parentID?: string }
 const followFailureMessages = {
   "state-lock-held": "Selected follow state is locked; inspect its existing writer before retrying",
   "state-invalid": "Selected follow state is invalid or unsafe; inspect its shape, ownership and symlinks",
@@ -19,8 +19,11 @@ const followFailureMessages = {
 } as const
 
 export class FollowError extends Error {
-  constructor(readonly code: keyof typeof followFailureMessages) { super(`[${code}] ${followFailureMessages[code]}`) }
+  constructor(readonly code: keyof typeof followFailureMessages, canonicalPath?: string) {
+    super(`[${code}] ${followFailureMessages[code]}${canonicalPath === undefined ? "" : `; use canonical --state ${JSON.stringify(canonicalPath)}`}`)
+  }
 }
+export const followRequestKey = (request: FollowRequest) => `${request.kind}\0${request.sessionID}\0${request.id}${request.fingerprint === undefined && request.revision === undefined ? "" : `\0${request.fingerprint ?? ""}\0${request.revision ?? ""}`}`
 export type FollowState = {
   version: 1
   rootSessionID: string
@@ -31,18 +34,19 @@ export type FollowState = {
   seen: string[]
   requestSeen: string[]
   terminalSeen: string[]
+  ownership?: { groupID: string; sessionID: string; ownerSessionID?: string; revision: number }[]
 }
 
 export const followStateBytes = 1024 * 1024
 export const followLedgerLimit = 8192
 export const followID = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,255}$/.test(value)
-export const requestKinds = ["permission", "guardrail", "question", "form", "review"]
+export const requestKinds = ["permission", "guardrail", "question", "form", "review", "child-question"]
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)
 const keys = (value: Record<string, unknown>, allowed: string[]) => Object.keys(value).every((key) => allowed.includes(key))
 const sequence = (value: unknown) => value === undefined || typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 
 export function validateFollowState(value: unknown, root: string, server: string): FollowState {
-  if (!record(value) || !keys(value, ["version", "rootSessionID", "server", "sourceEpoch", "cursors", "pending", "seen", "requestSeen", "terminalSeen"]) ||
+  if (!record(value) || !keys(value, ["version", "rootSessionID", "server", "sourceEpoch", "cursors", "pending", "seen", "requestSeen", "terminalSeen", "ownership"]) ||
     value.version !== 1 || value.rootSessionID !== root || !followID(root) || value.server !== server || !/^[a-f0-9]{64}$/.test(server) ||
     value.sourceEpoch !== undefined && !followID(value.sourceEpoch)) throw new Error("Invalid follow state identity")
   if (!Array.isArray(value.cursors) || value.cursors.length > 64) throw new Error("Invalid follow cursors")
@@ -56,9 +60,12 @@ export function validateFollowState(value: unknown, root: string, server: string
   if (!Array.isArray(value.pending) || value.pending.length > followLedgerLimit) throw new Error("Invalid follow pending ledger")
   const pending = new Set<string>()
   for (const request of value.pending) {
-    if (!record(request) || !keys(request, ["kind", "sessionID", "id"]) || typeof request.kind !== "string" || !requestKinds.includes(request.kind) ||
+    if (!record(request) || !keys(request, ["kind", "sessionID", "id", "fingerprint", "revision", "parentID"]) || typeof request.kind !== "string" || !requestKinds.includes(request.kind) ||
+      request.parentID !== undefined && !followID(request.parentID) ||
+      request.fingerprint !== undefined && (typeof request.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(request.fingerprint)) ||
+      !sequence(request.revision) ||
       !followID(request.sessionID) || !request.sessionID.startsWith("ses") || !followID(request.id)) throw new Error("Invalid follow pending request")
-    const key = `${request.kind}\0${request.sessionID}\0${request.id}`
+    const key = followRequestKey(request as FollowRequest)
     if (pending.has(key)) throw new Error("Duplicate follow pending request")
     pending.add(key)
   }
@@ -68,12 +75,25 @@ export function validateFollowState(value: unknown, root: string, server: string
     for (const key of ledger) {
       if (typeof key !== "string") throw new Error("Invalid follow dedup key")
       const parts = key.split("\0")
-      if (parts.length !== 3 || (name === "seen"
+      const kind = name === "requestSeen" && parts[0]?.startsWith("project-escalation:") ? parts[0].slice("project-escalation:".length) : parts[0]
+      if ((parts.length !== 3 && (name === "seen" || parts.length !== 5 || !/^(|[a-f0-9]{64})$/.test(parts[3]!) || !/^(|0|[1-9][0-9]*)$/.test(parts[4]!) || !sequence(parts[4] === "" ? undefined : Number(parts[4])))) || (name === "seen"
         ? !followID(parts[0]) || !parts[0]!.startsWith("ses") || !followID(parts[1]) || !/^(0|[1-9][0-9]*)$/.test(parts[2]!) || !Number.isSafeInteger(Number(parts[2]))
-        : !requestKinds.includes(parts[0]!) || !followID(parts[1]) || !parts[1]!.startsWith("ses") || !followID(parts[2]))) throw new Error("Invalid follow dedup key")
+        : !requestKinds.includes(kind!) || !followID(parts[1]) || !parts[1]!.startsWith("ses") || !followID(parts[2]))) throw new Error("Invalid follow dedup key")
     }
   }
   if (value.sourceEpoch === undefined && [value.cursors, value.pending, value.seen, value.requestSeen, value.terminalSeen].some((ledger) => Array.isArray(ledger) && ledger.length > 0)) throw new Error("Follow state history requires a source epoch")
+  if (value.ownership !== undefined) {
+    if (!Array.isArray(value.ownership) || value.ownership.length > followLedgerLimit) throw new Error("Invalid follow ownership")
+    const members = new Set<string>()
+    for (const item of value.ownership) {
+      if (!record(item) || !keys(item, ["groupID", "sessionID", "ownerSessionID", "revision"]) || !followID(item.groupID) ||
+        !followID(item.sessionID) || item.ownerSessionID !== undefined && !followID(item.ownerSessionID) ||
+        typeof item.revision !== "number" || !sequence(item.revision)) throw new Error("Invalid follow ownership")
+      const key = `${item.groupID}\0${item.sessionID}`
+      if (members.has(key)) throw new Error("Duplicate follow ownership")
+      members.add(key)
+    }
+  }
   return value as FollowState
 }
 
@@ -83,7 +103,9 @@ export async function openFollowState(filename: string, root: string, server: st
   let ancestor = parent
   for (;;) {
     try {
-      if ((await lstat(ancestor)).isSymbolicLink() || await realpath(ancestor) !== ancestor) throw new FollowError("state-invalid")
+      const canonical = await realpath(ancestor)
+      if ((await lstat(ancestor)).isSymbolicLink() || canonical !== ancestor)
+        throw new FollowError("state-invalid", path.join(canonical, path.relative(ancestor, target)))
       break
     } catch (error) {
       if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error

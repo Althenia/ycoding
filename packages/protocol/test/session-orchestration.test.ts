@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test"
 import { Effect, Schema } from "effect"
+import { OpenApi } from "effect/unstable/httpapi"
+import { ClientApi } from "../src/client.js"
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { Session } from "@ycoding-ai/schema/session"
 import { Model } from "@ycoding-ai/schema/model"
@@ -12,6 +14,21 @@ import {
   SessionSubagentModel,
   SubagentCursor,
 } from "../src/groups/session.js"
+
+test("OpenAPI exposes supervising as a non-terminal task state and attachment change", () => {
+  const document = OpenApi.fromApi(ClientApi)
+  const task = document.components?.schemas?.["SessionOrchestration.Task"]
+  expect(task).toBeDefined()
+  expect(JSON.stringify(task)).toContain('"supervising"')
+  const updated = document.components?.schemas?.["session.task.updated"]
+  expect(updated).toBeDefined()
+  expect(JSON.stringify(updated)).toContain('"supervising"')
+  for (const name of ["ServerEvent", "SessionLogItem"]) {
+    const events = document.components?.schemas?.[name]
+    expect(events).toBeDefined()
+    expect(JSON.stringify(events)).toContain("session.task.updated")
+  }
+})
 
 test("validates exact child model selections without caller authority fields", () => {
   const decode = Schema.decodeUnknownSync(SessionSubagentModel, { onExcessProperty: "error" })

@@ -139,7 +139,7 @@ export type TeamTaskView = {
   readonly description: string
   readonly agent?: string
   readonly modelLabel?: string
-  readonly state: "starting" | "running" | "waiting" | "cancelling" | "cancelled" | "completed" | "failed" | "lost"
+  readonly state: "starting" | "running" | "waiting" | "supervising" | "cancelling" | "cancelled" | "completed" | "failed" | "lost"
   readonly revision: number
   readonly updatedAt: number
   readonly pinnedAt?: number
@@ -3405,7 +3405,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     cancelSubagent: async (childID) => {
       const owner = transport
       const team = container.state.team
-      if (!teamWatching || owner === undefined || team?.status !== "ready" || !team.tasks.some((task) => task.sessionID === childID && ["starting", "running", "waiting"].includes(task.state)))
+      if (!teamWatching || owner === undefined || team?.status !== "ready" || !team.tasks.some((task) => task.sessionID === childID && ["starting", "running", "waiting", "supervising"].includes(task.state)))
         return { status: "failed", message: "Subagent is not available for cancellation." }
       const rootID = team.rootID
       const token = selectionToken
@@ -4291,7 +4291,7 @@ function readTeamTask(value: unknown): TeamTaskView | undefined {
   const questionDeferred = typeof question === "object" && question !== null && Reflect.get(question, "deferred") === true
   if (typeof sessionID !== "string" || sessionID.length === 0 || typeof parentID !== "string" || parentID.length === 0 ||
     typeof description !== "string" || (agent !== undefined && typeof agent !== "string") ||
-    (state !== "starting" && state !== "running" && state !== "waiting" && state !== "cancelling" &&
+    (state !== "starting" && state !== "running" && state !== "waiting" && state !== "supervising" && state !== "cancelling" &&
       state !== "cancelled" && state !== "completed" && state !== "failed" && state !== "lost") ||
     typeof revision !== "number" || !Number.isInteger(revision) || revision < 0 ||
     typeof updatedAt !== "number" || !Number.isFinite(updatedAt)) return undefined

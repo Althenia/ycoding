@@ -52,6 +52,7 @@ const taskStateOrder = {
   starting: 1,
   running: 1,
   cancelling: 2,
+  supervising: 2,
   completed: 3,
   cancelled: 4,
   failed: 5,
@@ -132,6 +133,7 @@ export function taskStatusLabel(state: SessionOrchestrationTask["state"], stoppe
     starting: "starting",
     running: "running",
     waiting: "? awaiting",
+    supervising: "supervising",
     cancelling: "cancelling",
     cancelled: "cancelled",
     completed: "completed",
@@ -141,7 +143,7 @@ export function taskStatusLabel(state: SessionOrchestrationTask["state"], stoppe
 }
 
 export function canCancelSubagent(state: SessionOrchestrationTask["state"]) {
-  return state === "starting" || state === "running" || state === "waiting"
+  return state === "starting" || state === "running" || state === "waiting" || state === "supervising"
 }
 
 export function cancelManagedSubagent(client: CancelClient, parentID: string, childID: string) {

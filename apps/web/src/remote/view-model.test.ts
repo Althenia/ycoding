@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { ShellOutputFetch, ShellOutputView } from "./projection"
 import {
+  familyTaskActivity,
   latestPromptProcessing,
   promptReceipt,
   telemetryConsentNoticeView,
@@ -37,6 +38,14 @@ import {
   type RemoteConnectionState,
   type RemoteSessionSummary,
 } from "./view-model"
+
+test("family task activity separates running, waiting and supervising ownership", () => {
+  for (const state of ["starting", "running", "cancelling"]) expect(familyTaskActivity([{ state }])).toEqual({ running: true, waiting: 0, supervising: false })
+  expect(familyTaskActivity([{ state: "waiting" }])).toEqual({ running: false, waiting: 1, supervising: false })
+  expect(familyTaskActivity([{ state: "supervising" }])).toEqual({ running: false, waiting: 0, supervising: true })
+  expect(familyTaskActivity([{ state: "supervising" }, { state: "running" }])).toEqual({ running: true, waiting: 0, supervising: false })
+  expect(familyTaskActivity([{ state: "completed" }])).toEqual({ running: false, waiting: 0, supervising: false })
+})
 
 test("only known available models without offered effort explain their settings", () => {
   expect(modelEffortNotice({ known: true, blocked: false, variants: 0 })).toBe("This model has no adjustable effort; it uses its own settings.")

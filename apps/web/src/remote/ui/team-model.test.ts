@@ -14,6 +14,13 @@ test("only managed child Sessions hide the composer; BTW and roots keep it", () 
   expect(isManagedSubagent({ agent: "omoikane" })).toBe(false)
 })
 
+test("a supervising owner stays unfinished with a literal state label and a cancel action", () => {
+  const owner = task("ses_owner", "supervising", 3_000)
+  expect(taskStateLabel(owner)).toBe("supervising")
+  expect(canCancelSubagent(owner.state)).toBe(true)
+  expect(taskRows([owner, task("ses_done", "completed", 2_000)])).toEqual(["section:active", "ses_owner", "section:inactive", "ses_done"])
+})
+
 test("task sections keep stable ID rows across fresh objects and active-to-inactive transitions", () => {
   const first = [task("ses_a", "running", 3_000), task("ses_b", "waiting", 4_000), task("ses_c", "completed", 2_000)]
   expect(taskRows(first)).toEqual(["section:active", "ses_b", "ses_a", "section:inactive", "ses_c"])

@@ -5,6 +5,8 @@ import type { ServerWebSocket } from "bun"
 import { Deferred, Effect, Exit, Fiber, Schema, Stream } from "effect"
 import { Scope } from "effect"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
+import { Model } from "@ycoding-ai/schema/model"
+import { SessionStatusEvent } from "@ycoding-ai/schema/session-status-event"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigCoordination } from "@ycoding-ai/core/config/coordination"
@@ -28,6 +30,7 @@ import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionGoalDecisions } from "@ycoding-ai/core/session/goal-decisions"
 import { SessionPending } from "@ycoding-ai/core/session/pending"
+import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { SessionReview } from "@ycoding-ai/core/session/review"
@@ -46,7 +49,7 @@ type Question = { id: string; header: string; options?: { label: string }[] }
 type Message = {
   id?: string | number
   method?: string
-  params?: { threadId?: string; itemId?: string; requestId?: string; questions?: Question[] }
+  params?: { threadId?: string; itemId?: string; requestId?: string; questions?: Question[]; status?: { type: "idle" } | { type: "active"; activeFlags: string[] } }
   result?: unknown
   error?: { code: number; message: string }
 }
@@ -318,6 +321,41 @@ const harness = (options: { readonly customRule?: boolean; readonly goalLoop?: b
     receipts, sessionEvents, askPermission, askQuestion, askForm, askGuardrail, guardrails, poke, control, seen, goalLoop, db, durableEvents,
   }
 })
+
+it.live("a connected native client follows nested activity through root settlement without inventing a cloud turn or settling decisions", () => Effect.gen(function* () {
+  const h = yield* harness()
+  const sessions = yield* Session.Service
+  const events = yield* EventRuntime.Service
+  yield* Effect.promise(() => h.open(0, "activity"))
+  expect((yield* Effect.promise(() => h.rpc(0, "activity", "thread/read", { threadId: h.root.id }))).error).toBeUndefined()
+  const child = yield* sessions.create({ parentID: h.root.id })
+  const model = Schema.decodeUnknownSync(Model.Ref)({ providerID: "test", id: "model" })
+  const nested = yield* sessions.create({ parentID: child.id, model })
+  const changes = () => h.frames.filter((frame) => frame.stream_id === "activity" && frame.message.method === "thread/status/changed").map((frame) => frame.message.params)
+  yield* events.publish(SessionEvent.Task.Updated, { sessionID: nested.id, change: {
+    type: "launched", parentID: child.id, parentAssistantMessageID: SessionMessage.ID.create(), toolCallID: "native-activity",
+    inputID: SessionMessage.ID.create(), description: "Nested native activity", agent: Agent.ID.make("build"),
+    model, promptDigest: "synthetic", background: true, delivery: "steer",
+  } })
+  expect((yield* sessions.outstanding()).running.has(h.root.id)).toBe(true)
+  yield* Effect.promise(() => h.until(() => changes().length === 1 ? true : undefined, "nested active status"))
+  expect(changes()).toEqual([{ threadId: h.root.id, status: { type: "active", activeFlags: [] } }])
+  yield* events.publish(SessionEvent.Task.Updated, { sessionID: nested.id, change: { type: "started" } })
+  yield* events.publish(SessionEvent.Execution.Succeeded, { sessionID: h.root.id })
+  yield* events.publish(SessionStatusEvent.Status, { sessionID: h.root.id, status: { type: "idle" } })
+  yield* Effect.promise(() => h.quiet(0, "activity"))
+  expect(changes()).toHaveLength(1)
+  expect((yield* Effect.promise(() => h.rpc(0, "activity", "thread/read", { threadId: h.root.id }))).result).toMatchObject({ thread: { status: { type: "active", activeFlags: [] } } })
+  yield* events.publish(SessionEvent.Task.Updated, { sessionID: nested.id, change: { type: "completed" } })
+  yield* events.publish(SessionStatusEvent.Status, { sessionID: nested.id, status: { type: "idle" } })
+  yield* Effect.promise(() => h.until(() => changes().length === 2 ? true : undefined, "nested idle status"))
+  expect(changes().at(-1)).toEqual({ threadId: h.root.id, status: { type: "idle" } })
+  expect(h.frames.filter((frame) => frame.message.method === "turn/completed")).toEqual([])
+  expect(yield* h.receipts).toEqual([])
+  yield* h.disable
+  yield* events.publish(SessionEvent.Task.Updated, { sessionID: nested.id, change: { type: "started" } })
+  expect(changes()).toHaveLength(2)
+}), 30_000)
 
 it.live("correlates a real permission, Question and Form to one requestUserInput each and settles exactly the answered request", () => Effect.gen(function* () {
   const h = yield* harness()

@@ -591,6 +591,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         count: 1,
         startedAt: child.question.time,
       } as const
+    const activity = data.session.activity(route.sessionID)
+    if (activity === "waiting") return { type: "awaiting-input", count: data.session.subagent.summary(route.sessionID)?.waiting || 1 } as const
     // Durable execution status is the only truth about a running Session. Deriving readiness from
     // messages alone reported "ready" while a drain worked between steps, with no open assistant
     // message, so the header invited a prompt the Session could not take yet.
@@ -609,12 +611,14 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       return { type: "working", startedAt: message.time.created } as const
     }
     if (running) return { type: "working" } as const
+    if (activity === "running") return { type: "family-running" } as const
+    if (activity === "supervising" || child?.state === "supervising") return { type: "supervising" } as const
     if (parentID && session()?.agent === "btw" && queuedPending().length > 0)
       return { type: "pending" } as const
     const latest = messages().findLast((item) => item.type === "assistant")
     if (latest?.type === "assistant" && latest.error?.type.startsWith("provider."))
       return { type: "provider-error", message: safeProviderErrorMessage(latest.error) } as const
-    const waiting = data.session.subagent.summary(route.sessionID)?.active ?? 0
+    const waiting = data.session.subagent.summary(route.sessionID)?.waiting ?? 0
     if (waiting) return { type: "waiting", count: waiting } as const
     return { type: "ready" } as const
   })

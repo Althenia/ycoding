@@ -41,6 +41,17 @@ function labels(width: number) {
   return headerSegments({ ...identity, width }).map((segment) => segment.label)
 }
 
+test("family work and idle ownership have distinct rendered header labels", async () => {
+  for (const [state, label] of [[{ type: "family-running" }, "running background work"], [{ type: "supervising" }, "supervising"]] as const) {
+    const app = await renderHeader(120, state)
+    try {
+      await app.waitForFrame((frame) => frame.includes(label))
+      expect(app.captureCharFrame()).not.toContain("awaiting")
+      expect(app.captureCharFrame()).not.toContain("ready")
+    } finally { app.renderer.destroy() }
+  }
+})
+
 describe("header truncation ladder", () => {
   test("bounds long paths before they displace branch, agent or model identity", () => {
     for (const width of [120, 140, 160, 200]) {

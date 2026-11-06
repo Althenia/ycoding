@@ -903,6 +903,24 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     }
 
     let activeSnapshot: Map<string, DataSessionStatus> | undefined
+    const [familyRunning, setFamilyRunning] = createSignal<readonly string[]>([])
+    let activityRevision = 0
+    let activityRead: Promise<void> | undefined
+    let activityDirty = false
+    function syncActivity(): Promise<void> {
+      activityDirty = true
+      activityRevision++
+      if (activityRead) return activityRead
+      activityRead = (async () => {
+        while (activityDirty) {
+          activityDirty = false
+          const revision = activityRevision
+          const work = await client.api.session.outstanding()
+          if (revision === activityRevision) setFamilyRunning(work.running)
+        }
+      })().catch((error) => console.error("Failed to refresh Session activity", error)).finally(() => { activityRead = undefined })
+      return activityRead
+    }
 
     function setSessionActive(sessionID: string, status: DataSessionStatus) {
       activeSnapshot?.set(sessionID, status)
@@ -1365,6 +1383,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     }
 
     function handleEvent(event: YCodingEvent) {
+      if (/^(session\.(execution\.|task\.updated|status|shell\.)|shell\.(created|exited|deleted))/.test(event.type)) void syncActivity()
       if (event.type === "shell.exited" || event.type === "shell.deleted") {
         const keys = event.location ? [locationKey(event.location)] : Object.keys(store.location)
         keys.forEach((key) => sync.invalidate(`location.shell:${key}`))
@@ -2300,6 +2319,17 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         status(sessionID: string) {
           return store.session.active[sessionID] ?? "idle"
         },
+        activity(sessionID: string): "running" | "waiting" | "supervising" | "idle" {
+          const family = new Set([sessionID, ...(store.session.family[sessionID] ?? [])])
+          const tasks = Object.values(store.session.subagent).flatMap((page) => page.data).filter((task) => family.has(task.sessionID) || family.has(task.parentID))
+          if (tasks.some((task) => task.state === "waiting") || [...family].some((id) =>
+            (store.session.permission[id]?.length ?? 0) > 0 || (store.session.form[id]?.length ?? 0) > 0 ||
+            (store.session.guardrail[id]?.length ?? 0) > 0 || (store.session.review[id]?.length ?? 0) > 0)) return "waiting"
+          if (familyRunning().includes(sessionID) || [...family].some((id) => store.session.active[id] === "running") ||
+            tasks.some((task) => ["starting", "running", "cancelling"].includes(task.state)) ||
+            result.shell.listFamily(sessionID).some((shell) => shell.status === "running" && typeof shell.metadata.sessionID === "string" && family.has(shell.metadata.sessionID))) return "running"
+          return tasks.some((task) => task.state === "supervising") ? "supervising" : "idle"
+        },
         prediction: {
           get(sessionID: string) { return store.session.prediction[sessionID] },
           dismiss(sessionID: string) {
@@ -3119,6 +3149,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           props.recordTelemetry?.("stream.delay", Date.now() - details.created, Date.now())
         submissions.observe(details)
         if (details.type === "server.connected") {
+          void syncActivity()
           sourceEpoch = details.sourceEpoch
           const mutations = new Map<string, DataSessionStatus>()
           activeSnapshot = mutations
