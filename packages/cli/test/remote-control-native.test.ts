@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { DateTime, Schema } from "effect"
+import { Cause, DateTime, Schema } from "effect"
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { Session } from "@ycoding-ai/schema/session"
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
@@ -16,7 +16,7 @@ const candidate = (id: string): NativeDots.NativeRequest => ({
   handle: {} as NativeDots.Candidate,
 })
 
-function fixture(messages: readonly SessionMessage.Info[] = []) {
+function fixture(messages: readonly SessionMessage.Info[] = [], listFailure?: unknown) {
   let snapshot: NativeDots.RootSnapshot = { session: root, active: false, waiting: [] }
   const calls: string[] = []
   let live = true
@@ -27,13 +27,14 @@ function fixture(messages: readonly SessionMessage.Info[] = []) {
   const prompted: unknown[] = []
   const admitted = new Map<string, string>()
   const mutations: unknown[] = []
+  const diagnostics: string[] = []
   let stops = 0
   let listener: Parameters<NativeDots.Channel["subscribe"]>[1] | undefined
   let onRetire: (() => void) | undefined
   let settlement: { entered: ReturnType<typeof Promise.withResolvers<void>>; released: ReturnType<typeof Promise.withResolvers<void>> } | undefined
   let subscription: { entered: ReturnType<typeof Promise.withResolvers<void>>; released: ReturnType<typeof Promise.withResolvers<void>> } | undefined
   const channel: NativeDots.Channel = {
-    listRoots: async () => { calls.push("list"); return [snapshot] },
+    listRoots: async () => { calls.push("list"); if (listFailure !== undefined) throw listFailure; return [snapshot] },
     getRoot: async (id) => { calls.push("get"); return id === root.id ? snapshot : undefined },
     readRoot: async (id) => { calls.push("read"); if (id !== root.id) throw Error("Unavailable"); return { ...snapshot, messages: [...messages] } },
     createRoot: async (input) => { calls.push("create"); if (input.directory !== snapshot.session.location.directory) throw Error("Unrecorded"); created.push(input); return snapshot },
@@ -66,10 +67,10 @@ function fixture(messages: readonly SessionMessage.Info[] = []) {
     subscribeEscalations: async () => () => {},
   }
   const backend = createRemoteControlBackend({ channel, profile: "profile" })
-  const server = createRemoteControlAppServer({ backend, codexHome: "/synthetic", requestScope: "client:stream", send: (text) => sent.push(JSON.parse(text)) })
+  const server = createRemoteControlAppServer({ backend, codexHome: "/synthetic", requestScope: "client:stream", send: (text) => sent.push(JSON.parse(text)), onDiagnostic: (message) => diagnostics.push(message) })
   const rpc = async (method: string, params: unknown = {}, id = 1) => JSON.parse((await server.handle(JSON.stringify({ id, method, params })))!)
   const initialize = async () => { await rpc("initialize", { clientInfo: { name: "fixture" } }); await server.handle(JSON.stringify({ method: "initialized" })) }
-  return { server, sent, settled, created, prompted, calls, mutations, rpc, initialize, setSnapshot: (next: Partial<NativeDots.RootSnapshot>) => { snapshot = { ...snapshot, ...next } }, requests: () => requests, replace: (next: NativeDots.NativeRequest[]) => { requests = next }, listener: () => listener, stops: () => stops,
+  return { server, sent, settled, created, prompted, calls, mutations, diagnostics, rpc, initialize, setSnapshot: (next: Partial<NativeDots.RootSnapshot>) => { snapshot = { ...snapshot, ...next } }, requests: () => requests, replace: (next: NativeDots.NativeRequest[]) => { requests = next }, listener: () => listener, stops: () => stops,
     emit: (type: string, data: Record<string, unknown> = {}, createdAtMs = 1_700_000_000_000) => listener?.({ type, created: DateTime.makeUnsafe(createdAtMs), data: { sessionID: root.id, ...data } } as EventManifest.ServerEvent),
     revoke: () => onRetire?.(),
     holdSettlement: () => { settlement = { entered: Promise.withResolvers<void>(), released: Promise.withResolvers<void>() }; return settlement },
@@ -127,6 +128,36 @@ test.each([
   expect(result.thread.modelProvider).toBe("non-openai")
   expect(result.model).toBe("synthetic-model")
   expect(result.modelProvider).toBe("non-openai")
+  f.server.retire()
+})
+
+test("native Thread listing exposes a snapshot failure as systemError", async () => {
+  const f = fixture()
+  f.setSnapshot({ snapshotError: true })
+  f.replace([])
+  await f.initialize()
+  const reply = await f.rpc("thread/list")
+  expect(reply.error).toBeUndefined()
+  expect(reply.result.data[0]).toMatchObject({ id: root.id, status: { type: "systemError" }, model: "unknown", modelProvider: "unknown" })
+  f.server.retire()
+})
+
+test.each([
+  { error: { _tag: "SyntheticFailure", code: "IGNORED", message: "private-payload" }, kind: "SyntheticFailure" },
+  { error: { code: "EACCES", message: "private-payload" }, kind: "EACCES" },
+  { error: { code: -32000, message: "private-payload" }, kind: "-32000" },
+  { error: new TypeError("private-payload"), kind: "TypeError" },
+  { error: Cause.fail("private-payload"), kind: "Fail" },
+  { error: Object.assign(new Error("private-payload"), { _tag: "private\n/path", code: "/private/path" }), kind: "Error" },
+  { error: { _tag: "x".repeat(100), message: "private-payload" }, kind: "x".repeat(80) },
+])("native failure diagnostic records only the method and bounded kind $kind", async ({ error, kind }) => {
+  const f = fixture([], error)
+  await f.initialize()
+  expect(await f.rpc("thread/list", { threadId: "ses_private", cwd: "/private/path", text: "private-payload" }, 99)).toEqual({
+    jsonrpc: "2.0", id: 99, error: { code: -32603, message: "Remote-control request failed" },
+  })
+  expect(f.diagnostics).toEqual([`Remote-control request failed ${JSON.stringify({ method: "thread/list", kind })}`])
+  expect(f.diagnostics.join("")).not.toMatch(/private|ses_private|stack|params/)
   f.server.retire()
 })
 

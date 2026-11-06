@@ -427,10 +427,19 @@ test("release source gates retain native access, retirement and web unit contrac
 test("global Dots release gates select current mocks once and leave listener acceptance local", async () => {
   const verify = workflowJob(workflow, "verify-source")
   const steps = verify.split("\n      - name: ").slice(1)
-  for (const file of ["./test/dots-connection.test.ts", "./test/dots-connection-dialog.test.tsx"]) {
+  for (const [file, suite] of [
+    ["./test/dots-connection.test.ts", "tui-runtime"],
+    ["./test/dots-connection-dialog.test.tsx", "tui-runtime"],
+    ["./test/dots-native.test.ts", "tui-runtime"],
+    ["./test/remote-control-native.test.ts", "cli"],
+    ["./test/remote-control-sequence.test.ts", "cli"],
+  ] as const) {
     const selected = steps.filter((step) => step.split("\n").some((line) => /\bbun test\b/.test(line) && line.includes(file)))
     expect(selected, file).toHaveLength(1)
-    expect(selected[0]).toContain("if: matrix.suite == 'tui-runtime'")
+    expect(selected[0]).toContain(`if: matrix.suite == '${suite}'`)
+    const commands = selected[0]!.split("\n").filter((line) => /\bbun test\b/.test(line) && line.includes(file))
+    expect(commands, file).toHaveLength(1)
+    expect(commands[0]).not.toMatch(/\s-t\s/)
   }
   for (const [file, title] of [
     ["./test/remote-access.test.ts", "global Dots operations need no Session inventory and preserve exact revision and conflicts"],

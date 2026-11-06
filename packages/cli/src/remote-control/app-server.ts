@@ -1,6 +1,6 @@
 import { OpenAICodex } from "@ycoding-ai/core/plugin/provider/openai-codex"
 import { Platform } from "@ycoding-ai/core/util/platform"
-import { DateTime } from "effect"
+import { Cause, DateTime } from "effect"
 import { platformFamily } from "./types"
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
 import type { EventManifest } from "@ycoding-ai/schema/event-manifest"
@@ -55,6 +55,7 @@ function validHeaderValue(value: string) {
 }
 
 function threadStatus(snapshot: NativeDots.RootSnapshot) {
+  if (snapshot.snapshotError) return { type: "systemError" }
   return snapshot.active || snapshot.waiting.length > 0
     ? { type: "active", activeFlags: snapshot.waiting.map((wait) => wait === "approval" ? "waitingOnApproval" : "waitingOnUserInput") }
     : { type: "idle" }
@@ -140,6 +141,7 @@ export function createRemoteControlAppServer(input: {
   readonly codexHome: string
   readonly requestScope: string
   readonly send: (text: string) => void
+  readonly onDiagnostic?: (message: string) => void
   readonly schedule?: (run: () => void, delayMs: number) => () => void
 }) {
   const backend = input.backend
@@ -679,7 +681,17 @@ export function createRemoteControlAppServer(input: {
       try {
         const reply = await dispatch(parsed.method, params, id)
         return active ? reply : failure(id, -32600, "Native connection is retired")
-      } catch {
+      } catch (error) {
+        const cause = Cause.isCause(error) ? error : undefined
+        const value = cause ? Cause.squash(cause) : error
+        const kinds = isRecord(value)
+          ? [value._tag, value.code, typeof value.constructor === "function" ? value.constructor.name : undefined]
+          : []
+        const kind = kinds.find((item): item is string | number => (typeof item === "string" && /^[A-Za-z0-9_.-]+$/.test(item)) || (typeof item === "number" && Number.isFinite(item)))
+          ?? cause?.reasons[0]?._tag ?? typeof value
+        input.onDiagnostic?.(`Remote-control request failed ${JSON.stringify({
+          method: parsed.method.slice(0, 80).replace(/[^A-Za-z0-9_./-]/g, "_"), kind: String(kind).slice(0, 80),
+        })}`)
         return failure(id, -32603, "Remote-control request failed")
       }
     },

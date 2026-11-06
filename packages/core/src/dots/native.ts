@@ -1,6 +1,6 @@
 export * as NativeDots from "./native"
 
-import { Effect, Schema } from "effect"
+import { Cause, Effect, Schema } from "effect"
 import { existsSync, statSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -84,6 +84,7 @@ export interface RootSnapshot {
   readonly selectedModel?: Model.Ref
   readonly active: boolean
   readonly waiting: readonly ("approval" | "user-input")[]
+  readonly snapshotError?: true
 }
 
 export interface Channel {
@@ -722,7 +723,13 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
               for (const session of (yield* options.sessions.list({ parentID: null })).data) {
                 const allowed = yield* root(session.id).pipe(Effect.catch(() => Effect.succeed(undefined)))
                 if (!allowed) continue
-                const value = yield* snapshot(session, allowed).pipe(Effect.catchIf(missingSnapshot, () => Effect.succeed(undefined)))
+                const value = yield* snapshot(session, allowed).pipe(
+                  Effect.catchIf(missingSnapshot, () => Effect.succeed(undefined)),
+                  Effect.catchCauseIf((cause) => !Cause.hasInterrupts(cause), () => Effect.gen(function* () {
+                    yield* Effect.logWarning("Native Session snapshot failed", { sessionID: session.id })
+                    return { session, active: false, waiting: [], snapshotError: true } satisfies RootSnapshot
+                  })),
+                )
                 if (value) result.push({ snapshot: value, source: source(allowed, "list") })
               }
               return yield* options.db.db.transaction(() => Effect.gen(function* () {

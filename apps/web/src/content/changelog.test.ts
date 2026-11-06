@@ -7,8 +7,20 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.8 provider response recovery first with shared notes", async () => {
+  test("lists v0.11.9 Dots Session listing first with shared notes", async () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.9", date: "2026-11-06", title: "Dots Session listing", tags: ["Fixed"] })
+    expect(entry?.changes).toHaveLength(1)
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.9.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.11.9\n")
+    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of ["failed Session snapshot", "listing other Sessions", "system-error status", "opening it still reports"]) expect(text).toContain(fragment)
+    expect(after("0.11.9")?.version).toBe("0.11.8")
+  })
+
+  test("retains v0.11.8 provider response recovery with shared notes", async () => {
+    const entry = RELEASES[1]
     expect(entry).toMatchObject({ version: "0.11.8", date: "2026-11-06", title: "Provider response recovery", tags: ["Fixed"] })
     expect(entry?.changes).toHaveLength(2)
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.8.md", import.meta.url)).text()
@@ -20,7 +32,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.11.7 project owner delegation with shared notes", async () => {
-    const entry = RELEASES[1]
+    const entry = byVersion("0.11.7")
     expect(entry).toMatchObject({ version: "0.11.7", date: "2026-11-05", title: "Project owner delegation", tags: ["Added", "Changed"] })
     expect(entry?.changes).toHaveLength(6)
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.7.md", import.meta.url)).text()
@@ -1808,7 +1820,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 51)).toEqual([
+    expect(versions.slice(0, 52)).toEqual([
+      "0.11.9",
       "0.11.8",
       "0.11.7",
       "0.11.6",

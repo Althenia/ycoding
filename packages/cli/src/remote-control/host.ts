@@ -300,6 +300,7 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
       const current: { readonly server: ReturnType<typeof createRemoteControlAppServer>; seq: number; ready: boolean } = { seq: 0, ready: false, server: createRemoteControlAppServer({
         backend: createRemoteControlBackend({ channel: connection!.channel({ clientID: event.clientID, streamID: event.streamID }), profile: configuration.profile }),
         codexHome: deps.codexHome,
+        onDiagnostic: deps.onDiagnostic,
         requestScope: JSON.stringify([event.clientID, event.streamID]),
         send: (text) => {
           if (!isCurrent() || streams.get(key) !== current) return

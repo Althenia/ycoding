@@ -18,14 +18,15 @@ const chunks = (seq: number, message: unknown = initialize, target = address) =>
   }))
 }
 
-async function fixture() {
+async function fixture(listFailure?: Error) {
   const sockets: Array<{ sent: Record<string, unknown>[]; message: (text: string) => void; close: () => void }> = []
   let calls = 0
+  const diagnostics: string[] = []
   const backend: RemoteControlBackend = {
     ...requestBackend,
     createThread: async () => rootSnapshot({ id: "ses_thread", directory: "/synthetic" }),
     getThread: async () => rootSnapshot({ id: "ses_thread", directory: "/synthetic" }),
-    listThreads: async () => { calls++; return [] },
+    listThreads: async () => { calls++; if (listFailure) throw listFailure; return [] },
     prompt: async () => ({ messageID: "message" }), interrupt: async () => {},
     models: async () => [], skills: async () => [], account: async () => undefined,
   }
@@ -33,6 +34,7 @@ async function fixture() {
   const host = createRemoteControlHost({
     store: { load: async () => state, enrollment: async () => undefined, saveEnrollment: async () => state, deleteEnrollment: async () => state },
     native: nativeHost(backend), codexHome: "/synthetic",
+    onDiagnostic: (message) => diagnostics.push(message),
     fetchFn: async () => Response.json({ server_id: "server", environment_id: "env", remote_control_token: "synthetic" }),
     connect: async () => {
       const sent: Record<string, unknown>[] = []
@@ -44,8 +46,43 @@ async function fixture() {
     },
   })
   await host.connectOnce()
-  return { host, sockets, calls: () => calls, flush: () => new Promise<void>((resolve) => setImmediate(resolve)) }
+  return { host, sockets, diagnostics, calls: () => calls, flush: () => new Promise<void>((resolve) => setImmediate(resolve)) }
 }
+
+test("host forwards native request failure diagnostics without request or error payloads", async () => {
+  const f = await fixture(Object.assign(new Error("private-payload /private/path"), { _tag: "SyntheticFailure" }))
+  try {
+    const socket = f.sockets[0]
+    socket.message(frame(1))
+    await f.flush()
+    socket.message(frame(2, { id: 99, method: "thread/list", params: { threadId: "ses_private", text: "private-payload" } }))
+    await f.flush()
+    expect(socket.sent.at(-1)?.message).toEqual({ jsonrpc: "2.0", id: 99, error: { code: -32603, message: "Remote-control request failed" } })
+    expect(f.diagnostics).toEqual(['Remote-control request failed {"method":"thread/list","kind":"SyntheticFailure"}'])
+  } finally { await f.host.stop() }
+})
+
+test("host counts initialized notifications as ready even when they return no reply", async () => {
+  const f = await fixture()
+  try {
+    const socket = f.sockets[0]
+    socket.message(frame(1, { method: "initialized" }))
+    await f.flush()
+    expect(f.diagnostics).toEqual([])
+    socket.message(frame(2))
+    await f.flush()
+    expect(f.diagnostics).toEqual([])
+    const replies = socket.sent.filter((item) => item.type === "server_message").length
+    socket.message(frame(3, { method: "initialized" }))
+    await f.flush()
+    expect(f.diagnostics).toHaveLength(1)
+    expect(f.diagnostics[0]).toStartWith("Remote-control streams open=1 initialized=1 at=")
+    expect(socket.sent.filter((item) => item.type === "server_message")).toHaveLength(replies)
+    socket.message(frame(4, { method: "initialized" }))
+    await f.flush()
+    expect(f.diagnostics).toHaveLength(1)
+  } finally { await f.host.stop() }
+})
 
 test("ACK echoes controller sequence independently of server sequence and sibling streams", async () => {
   const f = await fixture()

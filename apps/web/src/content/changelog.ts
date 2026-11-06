@@ -22,6 +22,15 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.9",
+    date: "2026-11-06",
+    title: "Dots Session listing",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "A failed Session snapshot no longer prevents Dots from listing other Sessions. The affected Session remains listed with a system-error status; opening it still reports the underlying failure." },
+    ],
+  },
+  {
     version: "0.11.8",
     date: "2026-11-06",
     title: "Provider response recovery",

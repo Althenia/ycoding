@@ -3,7 +3,7 @@ import { existsSync, statSync } from "node:fs"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { Effect, Schema, Stream } from "effect"
+import { Effect, Layer, Schema, Stream } from "effect"
 import { NativeDots } from "../src/dots/native"
 import { NativeDecisions } from "../src/dots/native-decisions"
 import { DotsAccess } from "../src/dots/access"
@@ -33,6 +33,8 @@ import { Provider } from "../src/provider"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Agent } from "../src/agent"
 import { Project } from "../src/project"
+import { CoordinationService } from "../src/coordination"
+import { AppNodeBuilder } from "../src/effect/app-node-builder"
 import { AbsolutePath } from "../src/schema"
 import { CcaAuthorizationCloseError, CcaAuthorizationDeniedError } from "../src/cca/authorization"
 import { reviewLayer } from "./fixture/review"
@@ -628,6 +630,49 @@ it.live("native root metadata preserves known model-selection failures", () => E
   const f = yield* setup
   const root = yield* f.sessions.create({ location: f.root.location, model: { ...metadataRef, id: CatalogModel.ID.make("missing-model") } })
   yield* Effect.promise(async () => { await expect(f.channel.getRoot(root.id)).rejects.toThrow("missing-model") })
+}))
+
+it.live("native root listing isolates model failures and keeps a Project master readable", () => Effect.gen(function* () {
+  const f = yield* setup
+  const directory = yield* Effect.promise(() => mkdtemp(path.join(os.tmpdir(), "native-project-master-")))
+  yield* Effect.addFinalizer(() => Effect.promise(() => rm(directory, { recursive: true, force: true })))
+  const master = yield* f.sessions.create({ location: { directory: AbsolutePath.make(directory) }, model: metadataRef })
+  for (let index = 0; index < 5; index++) yield* f.sessions.create({ parentID: master.id })
+  const coordination = yield* CoordinationService.Service.pipe(Effect.provide(AppNodeBuilder.build(CoordinationService.node, [
+    [Database.node, Layer.succeed(Database.Service, f.db)],
+    [EventRuntime.node, Layer.succeed(EventRuntime.Service, f.events)],
+  ])))
+  yield* coordination.create({ name: "Synthetic Project", masterSessionID: master.id, memberSessionIDs: [] })
+  const broken = yield* f.sessions.create({ location: f.root.location, model: { ...metadataRef, id: CatalogModel.ID.make("missing-model") } })
+  const roots = yield* Effect.promise(() => f.channel.listRoots())
+  expect(roots.map((item) => item.session.id).toSorted()).toEqual([f.root.id, master.id, broken.id].toSorted())
+  expect(roots.find((item) => item.session.id === broken.id)).toEqual({ session: broken, active: false, waiting: [], snapshotError: true })
+  expect(roots.find((item) => item.session.id === master.id)).toMatchObject({ selectedModel: metadataRef, active: false, waiting: [] })
+  expect((yield* Effect.promise(() => f.channel.getRoot(master.id)))?.session.id).toBe(master.id)
+  expect((yield* Effect.promise(() => f.channel.readRoot(master.id))).messages).toEqual([])
+  yield* Effect.promise(async () => { await expect(f.channel.readRoot(broken.id)).rejects.toThrow("missing-model") })
+}))
+
+it.live("native root listing isolates snapshot defects without exposing their payload", () => Effect.gen(function* () {
+  const f = yield* setup
+  const other = yield* f.sessions.create({ location: f.root.location })
+  f.onSelection((session) => session.id === f.root.id ? Effect.fail(new Error("synthetic-private-failure")) : Effect.void)
+  const roots = yield* Effect.promise(() => f.channel.listRoots())
+  expect(roots.map((item) => item.session.id)).toEqual([f.root.id, other.id])
+  expect(roots[0]).toEqual({ session: f.root, active: false, waiting: [], snapshotError: true })
+  expect(JSON.stringify(roots)).not.toContain("synthetic-private-failure")
+  expect(roots[1]).toMatchObject({ selectedModel: metadataRef, active: false, waiting: [] })
+}))
+
+it.live("native root listing revalidates roots whose snapshots fail", () => Effect.gen(function* () {
+  const f = yield* setup
+  const other = yield* f.sessions.create({ location: f.root.location })
+  f.onSelection((session) => Effect.gen(function* () {
+    if (session.id !== f.root.id) return
+    yield* f.sessions.archive(f.root.id)
+    return yield* Effect.fail(new Error("synthetic-snapshot-failure"))
+  }))
+  expect((yield* Effect.promise(() => f.channel.listRoots())).map((item) => item.session.id)).toEqual([other.id])
 }))
 
 for (const boundary of ["permission", "guardrail"] as const) it.live(`missing Session during deferred ${boundary} validation fails closed without settlement`, () => Effect.gen(function* () {
