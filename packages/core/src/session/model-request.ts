@@ -42,6 +42,11 @@ import { AttachmentStore } from "../attachment-store"
 import { SessionEffort } from "./effort"
 import { SessionSharedContext } from "./shared-context"
 
+const retainsDisabledToolDefinitions = (route: LLMRequest["model"]["route"]) =>
+  route.protocol === "openai-responses" ||
+  route.protocol === "openrouter-responses" ||
+  ["ai-sdk:@ai-sdk/google", "ai-sdk:@ai-sdk/google-vertex", "ai-sdk:@ai-sdk/openai"].includes(route.id)
+
 const fingerprintValue = (value: unknown, ancestors: ReadonlySet<object> = new Set()): unknown => {
   if (value === undefined || value === null || typeof value === "string" || typeof value === "boolean") return value
   if (typeof value === "number") return Number.isFinite(value) ? value : String(value)
@@ -156,7 +161,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const access = yield* coordination.accessOf(session.id)
         const scoped = access !== undefined && access.role !== "executor"
         const permissions = [...basePermissions, ...CoordinationAccess.rules(scoped)]
-        const executableTools = toolsDisabled
+        const executableTools = toolsDisabled && !retainsDisabledToolDefinitions(model.route)
           ? undefined
           : yield* registry.materialize(permissions, Config.capabilities(configEntries), [
               ...(yield* connectors
@@ -262,7 +267,6 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const messages = [...history, ...(input.messages ?? [])]
         const toolDefinitions = executableTools?.definitions ?? []
         const toolsByName = new Map(toolDefinitions.map((tool) => [tool.name, tool]))
-        // Hooks may reshape available definitions but cannot advertise tools omitted by permissions or the Step limit.
         const contextEvent = yield* hooks.trigger("session", "context", {
           sessionID: session.id,
           agent: agent.id,
@@ -537,7 +541,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           ),
         ]
         const resolveToolCall = (name: string): ToolCallResolution => {
-          if (!executableTools)
+          if (toolsDisabled || !executableTools)
             return {
               type: "reject",
               error: {

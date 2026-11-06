@@ -6,6 +6,8 @@ import type {
   LanguageModelV3StreamPart,
   LanguageModelV3Usage,
 } from "@ai-sdk/provider"
+import { createGoogleGenerativeAI } from "@ai-sdk/google"
+import { createOpenAI } from "@ai-sdk/openai"
 import { AISDK } from "@ycoding-ai/core/aisdk"
 import { CatalogModel } from "@ycoding-ai/core/model"
 import { Provider } from "@ycoding-ai/core/provider"
@@ -1284,6 +1286,185 @@ it.effect("explains an empty-bodied 429 from rate-limit headers alone", () =>
     expect(JSON.stringify(error)).not.toContain("secret-oauth-token")
   }),
 )
+
+for (const packageName of ["@ai-sdk/google", "@ai-sdk/openai"]) {
+  it.effect(`AI SDK disabled-tool declarations reach ${packageName} with none`, () =>
+    Effect.gen(function* () {
+      const aisdk = yield* AISDK.Service
+      const bodies: Record<string, unknown>[] = []
+      yield* aisdk.hook.sdk((event) => {
+        const options = {
+          ...event.options,
+          apiKey: "fixture-key",
+          fetch: Object.assign(
+            async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+              bodies.push(JSON.parse(String(init?.body)))
+              return new Response("", { headers: { "content-type": "text/event-stream" } })
+            },
+            { preconnect: fetch.preconnect },
+          ),
+        }
+        event.sdk = packageName === "@ai-sdk/google" ? createGoogleGenerativeAI(options) : createOpenAI(options)
+      })
+      const input = model(packageName)
+      const resolved = yield* aisdk.model(input)
+      const language = yield* aisdk.language(input)
+      for (const toolChoice of [undefined, "none"] as const) {
+        const prepared = yield* LLMClient.prepare<LanguageModelV3CallOptions>(
+          LLM.request({
+            model: resolved,
+            prompt: "Answer without running lookup",
+            tools: [{ name: "lookup", description: "Look up a value", inputSchema: { type: "object", properties: {} } }],
+            toolChoice,
+          }),
+        )
+        const result = yield* Effect.promise(() => language.doStream(prepared.body))
+        yield* Effect.promise(() => result.stream.cancel())
+      }
+      expect(bodies).toHaveLength(2)
+      expect(bodies[1].tools).toEqual(bodies[0].tools)
+      expect(bodies[1]).toMatchObject(
+        packageName === "@ai-sdk/google"
+          ? {
+              tools: [{ functionDeclarations: [{ name: "lookup" }] }],
+              toolConfig: { functionCallingConfig: { mode: "NONE" } },
+            }
+          : {
+              tools: [{ type: "function", name: "lookup" }],
+              tool_choice: "none",
+            },
+      )
+    }),
+  )
+}
+
+for (const item of [
+  {
+    name: "rejects reasoning-only Google completion without a finish reason",
+    events: [
+      { type: "text-start", id: "text_1" },
+      { type: "text-delta", id: "text_1", delta: "" },
+      { type: "text-end", id: "text_1" },
+      { type: "reasoning-start", id: "reasoning_1" },
+      { type: "reasoning-delta", id: "reasoning_1", delta: "Thinking" },
+      { type: "reasoning-end", id: "reasoning_1" },
+    ],
+    raw: undefined,
+    message: "Provider ended the response without an answer and without a finish reason",
+  },
+  {
+    name: "rejects silent Google completion with raw OTHER",
+    events: [],
+    raw: "OTHER",
+    message: "Provider ended the response without an answer (finish reason: OTHER)",
+  },
+] as const) {
+  it.effect(`AI SDK incomplete completion ${item.name}`, () =>
+    Effect.gen(function* () {
+      const aisdk = yield* AISDK.Service
+      yield* aisdk.hook.sdk((event) => {
+        event.sdk = {
+          languageModel: () =>
+            streamModel([
+              ...item.events,
+              { type: "finish", finishReason: { unified: "other", raw: item.raw }, usage },
+            ]),
+        }
+      })
+
+      const resolved = yield* aisdk.model(model("@ai-sdk/google"))
+      const error = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(
+        Effect.provide(client),
+        Effect.flip,
+      )
+
+      expect(error).toBeInstanceOf(LLMError)
+      expect(error).toMatchObject({
+        module: "AISDK",
+        method: "stream",
+        reason: { _tag: "Transport", kind: "read", message: item.message },
+      })
+    }),
+  )
+}
+
+for (const item of [
+  {
+    name: "accepts Google text with finish other",
+    package: "@ai-sdk/google",
+    events: [
+      { type: "text-start", id: "text_1" },
+      { type: "text-delta", id: "text_1", delta: "Answer" },
+      { type: "text-end", id: "text_1" },
+    ],
+    unified: "other",
+    reason: "unknown",
+    output: "text-delta",
+  },
+  {
+    name: "accepts Google tool calls with finish other",
+    package: "@ai-sdk/google",
+    events: [{ type: "tool-call", toolCallId: "call_1", toolName: "lookup", input: "{}" }],
+    unified: "other",
+    reason: "unknown",
+    output: "tool-call",
+  },
+  {
+    name: "accepts Google tool input starts with finish other",
+    package: "@ai-sdk/google",
+    events: [{ type: "tool-input-start", id: "call_1", toolName: "lookup" }],
+    unified: "other",
+    reason: "unknown",
+    output: "tool-input-start",
+  },
+  {
+    name: "accepts Google tool input errors with finish other",
+    package: "@ai-sdk/google",
+    events: [{ type: "tool-call", toolCallId: "call_1", toolName: "lookup", input: '{"query":"partial' }],
+    unified: "other",
+    reason: "unknown",
+    output: "tool-input-error",
+  },
+  {
+    name: "accepts silent non-Google finish other",
+    package: "@ai-sdk/anthropic",
+    events: [],
+    unified: "other",
+    reason: "unknown",
+    output: "finish",
+  },
+  {
+    name: "accepts silent Google finish stop",
+    package: "@ai-sdk/google",
+    events: [],
+    unified: "stop",
+    reason: "stop",
+    output: "finish",
+  },
+] as const) {
+  it.effect(`AI SDK incomplete completion ${item.name}`, () =>
+    Effect.gen(function* () {
+      const aisdk = yield* AISDK.Service
+      yield* aisdk.hook.sdk((event) => {
+        event.sdk = {
+          languageModel: () =>
+            streamModel([
+              ...item.events,
+              { type: "finish", finishReason: { unified: item.unified, raw: undefined }, usage },
+            ]),
+        }
+      })
+
+      const resolved = yield* aisdk.model(model(item.package))
+      const response = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(
+        Effect.provide(client),
+      )
+
+      expect(response.finishReason).toBe(item.reason)
+      expect(response.events.some((event) => event.type === item.output)).toBeTrue()
+    }),
+  )
+}
 
 it.effect("repairs overlapping AI SDK cache-write usage", () =>
   Effect.gen(function* () {

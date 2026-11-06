@@ -22,6 +22,16 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.8",
+    date: "2026-11-06",
+    title: "Provider response recovery",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Gemini and Antigravity AI SDK streams that end without an answer and report an unknown or missing finish reason are retried or enter provider recovery instead of settling as silent responses and triggering \"The provider returned no answer after text-only recovery\"." },
+      { tag: "Fixed", text: "Text-only recovery and agent step-limit requests preserve the tool definitions in the cached prompt prefix on Gemini and Antigravity AI SDK routes, Vertex Gemini AI SDK routes, and OpenAI Responses routes (including Codex, the OpenAI AI SDK, and OpenRouter Responses). Tool choice stays `none`, and local tool calls are still rejected without execution." },
+    ],
+  },
+  {
     version: "0.11.7",
     date: "2026-11-05",
     title: "Project owner delegation",

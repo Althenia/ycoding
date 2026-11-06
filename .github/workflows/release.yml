@@ -90,6 +90,8 @@ jobs:
           bun test --cwd script ./typecheck-cache.integration.test.ts
           bun run typecheck
           bun run lint:effect-patterns
+          bun test --cwd packages/core ./test/aisdk.test.ts -t "AI SDK incomplete completion|AI SDK disabled-tool declarations"
+          bun test --cwd packages/core --timeout 40000 ./test/session-runner.test.ts -t "disabled-tool declarations|rejects a declared (Google|Codex|OpenAI SDK) tool during terminal recovery|fails provider-executed tool-only terminal response recovery without a third request|fails repeated (empty|reasoning-only) responses without a third response step"
 
       - name: Verify web application and relay
         if: matrix.suite == 'web'

@@ -366,6 +366,14 @@ test("release verification covers Antigravity provider and build fixtures", () =
   expect(verify).toContain("./antigravity-build.test.ts")
 })
 
+test("release verification covers incomplete provider streams and disabled tool declarations", () => {
+  const verify = workflowJob(workflow, "verify-source")
+  const step = verify.split("      - name: Check workspace and types\n")[1]?.split("\n      - name: ")[0] ?? ""
+  expect(step).toContain("if: matrix.suite == 'types'")
+  expect(step).toContain('bun test --cwd packages/core ./test/aisdk.test.ts -t "AI SDK incomplete completion|AI SDK disabled-tool declarations"')
+  expect(step).toContain('bun test --cwd packages/core --timeout 40000 ./test/session-runner.test.ts -t "disabled-tool declarations|rejects a declared (Google|Codex|OpenAI SDK) tool during terminal recovery|fails provider-executed tool-only terminal response recovery without a third request|fails repeated (empty|reasoning-only) responses without a third response step"')
+})
+
 test("release verification covers Muse provider and build fixtures", () => {
   const verify = workflowJob(workflow, "verify-source")
   expect(verify).toContain("Verify Muse provider and build fixture boundaries")

@@ -18,6 +18,9 @@ import {
   type LLMClientShape,
 } from "@ycoding-ai/ai"
 import * as AnthropicMessages from "@ycoding-ai/ai/protocols/anthropic-messages"
+import { Gemini } from "@ycoding-ai/ai/protocols/gemini"
+import { routes } from "@ycoding-ai/ai/providers/openrouter"
+import { BedrockConverse } from "@ycoding-ai/ai/protocols/bedrock-converse"
 import * as OpenAIChat from "@ycoding-ai/ai/protocols/openai-chat"
 import * as OpenAIResponses from "@ycoding-ai/ai/protocols/openai-responses"
 import { classifyProviderFailure } from "@ycoding-ai/ai/provider-error"
@@ -10465,6 +10468,123 @@ describe("SessionRunnerLLM", () => {
       expect(yield* recordedEventTypes(sessionID)).not.toContain("session.retry.scheduled.1")
     }),
   )
+
+  for (const route of [
+    { provider: "google", id: "ai-sdk:@ai-sdk/google", retain: true, base: Gemini.route },
+    { provider: "antigravity", id: "ai-sdk:@ai-sdk/google", retain: true, base: Gemini.route },
+    { provider: "google", id: "gemini", retain: false, base: Gemini.route },
+    { provider: "google-vertex", id: "google-vertex-gemini", retain: false, base: Gemini.route },
+    { provider: "google-vertex", id: "ai-sdk:@ai-sdk/google-vertex", retain: true, base: Gemini.route },
+    { provider: "anthropic", id: "anthropic-messages", retain: false, base: AnthropicMessages.route },
+    { provider: "anthropic", id: "ai-sdk:@ai-sdk/anthropic", retain: false, base: AnthropicMessages.route },
+    { provider: "google-vertex", id: "ai-sdk:@ai-sdk/google-vertex/anthropic", retain: false, base: AnthropicMessages.route },
+    { provider: "openai", id: "openai-responses", retain: true, base: OpenAIResponses.route },
+    { provider: "openai", id: "openai-responses-websocket", retain: true, base: OpenAIResponses.route },
+    { provider: "openai", id: "openai-codex-responses", retain: true, base: OpenAIResponses.route },
+    { provider: "openai", id: "openai-codex-websocket-responses", retain: true, base: OpenAIResponses.route },
+    { provider: "openai", id: "ai-sdk:@ai-sdk/openai", retain: true, base: OpenAIResponses.route },
+    { provider: "openrouter", id: "openrouter-responses", retain: true, base: routes[0] },
+    { provider: "amazon-bedrock", id: "bedrock-converse", retain: false, base: BedrockConverse.route },
+    { provider: "compatible", id: "openai-compatible-chat", retain: false, base: OpenAIChat.route },
+    { provider: "cursor", id: "ai-sdk:cursor-opencode-provider", retain: false, base: OpenAIChat.route },
+  ]) {
+    for (const mode of ["terminal recovery", "step limit"] as const) {
+      it.effect(`disabled-tool declarations for ${route.provider} ${route.id} at ${mode}`, () =>
+        Effect.gen(function* () {
+          yield* setup
+          currentModel = Model.make({
+            id: "fixture-model",
+            provider: route.provider,
+            route: route.base.with({ id: route.id, limits: testLimits }),
+          })
+          const agents = yield* Agent.Service
+          yield* agents.transform((draft) =>
+            draft.update(Agent.ID.make("build"), (agent) => {
+              agent.steps = 2
+            }),
+          )
+          const contexts = yield* SessionContext.Service
+          const modelRequests = yield* SessionModelRequest.Service
+          const selected = yield* contexts.select(sessionID)
+          const database = yield* Database.Service
+          const events = yield* EventRuntime.Service
+          yield* InstructionState.prepare(database.db, events, selected.instructions, sessionID)
+          const context = yield* contexts.load(selected)
+          const messages = [
+            Message.user("Continue after the earlier tool result"),
+            Message.assistant([{ type: "tool-call", id: "call-earlier", name: "echo", input: { text: "earlier" } }]),
+            Message.tool({ id: "call-earlier", name: "echo", result: "earlier" }),
+          ]
+          const normal = yield* modelRequests.prepare({ context, messages, step: 1 })
+          const disabled = yield* modelRequests.prepare({
+            context,
+            messages,
+            step: mode === "step limit" ? 2 : 1,
+            terminalResponseRecovery: mode === "terminal recovery",
+          })
+
+          expect(normal.request.tools.some((tool) => tool.name === "echo")).toBeTrue()
+          expect(normal.resolveToolCall("echo").type).toBe("settle")
+          expect(disabled.request.tools).toEqual(route.retain ? normal.request.tools : [])
+          if (route.retain) expect(disabled.cache.toolDigest).toBe(normal.cache.toolDigest)
+          expect(disabled.request.toolChoice).toMatchObject({ type: "none" })
+          expect(disabled.request.messages).toEqual(normal.request.messages)
+          if (route.retain && !route.id.startsWith("ai-sdk:")) {
+            const normalWire = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(normal.request)
+            const disabledWire = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(disabled.request)
+            expect(disabledWire.body.tools).toEqual(normalWire.body.tools)
+            expect(disabledWire.body.tools?.some((tool) => "name" in tool && tool.name === "echo")).toBeTrue()
+            expect(disabledWire.body.tool_choice).toBe("none")
+          }
+          expect(disabled.resolveToolCall("echo")).toMatchObject({
+            type: "reject",
+            error: {
+              type: "tool.execution",
+              message:
+                mode === "terminal recovery"
+                  ? "Tools are disabled for terminal response recovery"
+                  : "Tools are disabled after the maximum agent steps",
+            },
+          })
+          expect(executions).toEqual([])
+        }),
+      )
+    }
+  }
+
+  for (const item of [
+    { name: "Google", provider: "antigravity", route: Gemini.route.with({ id: "ai-sdk:@ai-sdk/google" }) },
+    { name: "Codex", provider: "openai", route: OpenAIResponses.route.with({ id: "openai-codex-responses" }) },
+    { name: "OpenAI SDK", provider: "openai", route: OpenAIResponses.route.with({ id: "ai-sdk:@ai-sdk/openai" }) },
+  ]) {
+    it.effect(`rejects a declared ${item.name} tool during terminal recovery without executing it`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        currentModel = Model.make({
+          id: "fixture-model",
+          provider: item.provider,
+          route: item.route.with({ limits: testLimits }),
+        })
+        yield* admit(session, "Answer without executing tools")
+        responses = [reply.silence(), reply.tool("call-recovery-tool", "echo", { text: "must not execute" })]
+
+        expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toBe(
+          "Tools are disabled for terminal response recovery",
+        )
+
+        expect(requests).toHaveLength(2)
+        expect(requests[0].tools.some((tool) => tool.name === "echo")).toBeTrue()
+        expect(requests[1].tools).toEqual(requests[0].tools)
+        expect(requests[1].toolChoice).toMatchObject({ type: "none" })
+        expect(executions).toEqual([])
+        expect(requireAssistant((yield* session.context(sessionID)).slice(-1))).toMatchObject({
+          finish: "error",
+          error: { type: "tool.execution", message: "Tools are disabled for terminal response recovery" },
+          content: [{ type: "tool", id: "call-recovery-tool", executed: false, state: { status: "error" } }],
+        })
+      }),
+    )
+  }
 
   it.effect("recovers terminal silence with one text-only terminal response step", () =>
     Effect.gen(function* () {
