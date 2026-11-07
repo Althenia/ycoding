@@ -1187,13 +1187,48 @@ test("an assessment cut off by the deadline marks a timeout result unavailable",
   expect(json.exit).toBe(3)
   expect(json.requests.some((request) => request.startsWith("GET /api/session/active"))).toBe(true)
   const output = JSON.parse(json.stdout)
-  expect(output).toMatchObject({ outcome: "timeout", sessionID: "ses_target", progress: { state: "idle" } })
+  expect(output).toMatchObject({ outcome: "timeout", sessionID: "ses_target", progress: { state: "unconfirmed" } })
   const familyJson = await watch({ sessions: family, readActive: slowActive }, ["ses_target", "--family", "--timeout", "1", "--json"])
   expect(familyJson.exit).toBe(3)
   const familyOutput = JSON.parse(familyJson.stdout)
-  expect(familyOutput).toMatchObject({ outcome: "timeout", sessionID: "ses_target", progress: { state: "idle" } })
+  expect(familyOutput).toMatchObject({ outcome: "timeout", sessionID: "ses_target", progress: { state: "unconfirmed" } })
   expect(typeof familyOutput.checkpoint).toBe("string")
   expectUnavailable(output, familyOutput)
+}, 30_000)
+
+const unavailableState = "State: unconfirmed; the Session state could not be assessed before the deadline, so whether it is executing is unknown"
+
+test("a re-armed watch past an open execution's start reports unconfirmed, not idle, when the assessment is unavailable", async () => {
+  const scenario = { log: { ses_target: [started(2), promoted(3, "msg_live")] }, active: ["ses_target"], stall: "/api/session/active" }
+  const json = await watch(scenario, ["ses_target", "--after", "3", "--timeout", "1", "--json"])
+  expect(json.exit).toBe(3)
+  const output = JSON.parse(json.stdout)
+  expect(output).toMatchObject({ outcome: "timeout", after: 3, progress: { state: "unconfirmed" } })
+  expectUnavailable(output)
+  const text = await watch(scenario, ["ses_target", "--after", "3", "--timeout", "1"])
+  expect(text.exit).toBe(3)
+  expect(text.stdout).toContain(unavailableState)
+  expect(text.stdout).not.toContain("does not report it active")
+  expect(text.stdout).not.toContain("State: idle")
+}, 30_000)
+
+test("a timeout whose assessment never ran after an aborted read reports unconfirmed", async () => {
+  const json = await watch({ stall: "/api/decision" }, ["ses_target", "--timeout", "1", "--json"])
+  expect(json.exit).toBe(3)
+  const output = JSON.parse(json.stdout)
+  expect(output).toMatchObject({ outcome: "timeout", progress: { state: "unconfirmed" } })
+  expectUnavailable(output)
+  const text = await watch({ stall: "/api/decision" }, ["ses_target", "--timeout", "1"])
+  expect(text.stdout).toContain(unavailableState)
+}, 30_000)
+
+test("a completed assessment with no execution still reports idle", async () => {
+  const json = await watch({}, ["ses_target", "--timeout", "1", "--json"])
+  expect(JSON.parse(json.stdout)).toMatchObject({ outcome: "timeout", progress: { state: "idle" }, work: { state: "idle" } })
+  const text = await watch({}, ["ses_target", "--timeout", "1"])
+  expect(text.exit).toBe(3)
+  expect(text.stdout).toContain("State: idle\n")
+  expect(text.stdout).not.toContain(unassessedLine)
 }, 30_000)
 
 test("an assessment cut off by the deadline marks a settled result unavailable", async () => {
@@ -1221,7 +1256,7 @@ test("a read cut off by the deadline outside the assessment marks the timeout re
     expect(result.exit).toBe(3)
     expect(result.requests.some((request) => request.startsWith("GET /api/session/active"))).toBe(false)
     const output = JSON.parse(result.stdout)
-    expect(output).toMatchObject({ outcome: "timeout", sessionID: "ses_target", progress: { state: "idle" } })
+    expect(output).toMatchObject({ outcome: "timeout", sessionID: "ses_target", progress: { state: "unconfirmed" } })
     outputs.push(output)
   }
   const plain = await watch({ stall: "/api/decision" }, ["ses_target", "--timeout", "1"])

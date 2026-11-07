@@ -484,7 +484,8 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
 
   const timedOut = async (): Promise<Outcome> => {
     const assessed = await assess({ settled: false, reopened: false }).catch(untilDeadline)
-    const state = assessed?.executing ? "running" as const : execution === undefined ? "idle" as const : "unconfirmed" as const
+    const state = assessed === undefined ? "unconfirmed" as const
+      : assessed.executing ? "running" as const : execution === undefined ? "idle" as const : "unconfirmed" as const
     return { outcome: "timeout", state, ...(assessed === undefined ? {} : { work: assessed.work }) }
   }
 
@@ -587,7 +588,7 @@ async function watchUntil(client: Client, options: Options, cancel: AbortSignal,
     }
   } catch (error) {
     if (cancel.aborted || error instanceof InputBeforeCursor || error instanceof FamilyCheckpointError) throw error
-    if (signal.aborted) return finish({ outcome: "timeout", state: execution === undefined ? "idle" : "unconfirmed" })
+    if (signal.aborted) return finish({ outcome: "timeout", state: "unconfirmed" })
     const checkpoint = observer?.checkpoint(anchor(), []) ?? options.checkpoint
     throw new Error(`${message(error)}; resume with: ${shellCommand(resumeCommand({ ...options, checkpoint }, anchor()))}`)
   } finally {
@@ -645,6 +646,7 @@ function render(options: Options, result: Awaited<ReturnType<typeof watchSession
     ...workField(outcome.work), ...(result.checkpoint === undefined ? {} : { checkpoint: result.checkpoint }), resume }
   const since = `${progress.startedAt ? ` since ${progress.startedAt}` : ""}${progress.toolCalls === undefined ? "" : `; ${progress.toolCalls} tool calls`}`
   const state = progress.state === "idle" ? "idle" : progress.state === "running" ? `running${since}`
+    : outcome.work === undefined ? `unconfirmed; the Session state could not be assessed before the deadline, so whether it is executing is unknown${execution === undefined ? "" : `; retained history shows an open execution${since}`}`
     : `unconfirmed; retained history shows an open execution${since}, but the connected service does not report it active`
   return [
     `No pending decision or settlement in ${session} within ${options.timeout}s.`,
