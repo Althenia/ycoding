@@ -42,10 +42,11 @@ import { AttachmentStore } from "../attachment-store"
 import { SessionEffort } from "./effort"
 import { SessionSharedContext } from "./shared-context"
 
-const retainsDisabledToolDefinitions = (route: LLMRequest["model"]["route"]) =>
-  route.protocol === "openai-responses" ||
-  route.protocol === "openrouter-responses" ||
-  ["ai-sdk:@ai-sdk/google", "ai-sdk:@ai-sdk/google-vertex", "ai-sdk:@ai-sdk/openai"].includes(route.id)
+const retainsDisabledToolDefinitions = (model: LLMRequest["model"]) =>
+  model.route.protocol === "openai-responses" ||
+  model.route.protocol === "openrouter-responses" ||
+  (model.route.id === "ai-sdk:@ai-sdk/google" && model.provider !== "antigravity") ||
+  ["ai-sdk:@ai-sdk/google-vertex", "ai-sdk:@ai-sdk/openai"].includes(model.route.id)
 
 const fingerprintValue = (value: unknown, ancestors: ReadonlySet<object> = new Set()): unknown => {
   if (value === undefined || value === null || typeof value === "string" || typeof value === "boolean") return value
@@ -161,7 +162,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const access = yield* coordination.accessOf(session.id)
         const scoped = access !== undefined && access.role !== "executor"
         const permissions = [...basePermissions, ...CoordinationAccess.rules(scoped)]
-        const executableTools = toolsDisabled && !retainsDisabledToolDefinitions(model.route)
+        const executableTools = toolsDisabled && !retainsDisabledToolDefinitions(model)
           ? undefined
           : yield* registry.materialize(permissions, Config.capabilities(configEntries), [
               ...(yield* connectors
