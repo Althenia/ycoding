@@ -7,10 +7,10 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists the consolidated v0.11.1 release first with shared notes", async () => {
+  test("lists the v0.11.1 release first with its notes", async () => {
     const entry = RELEASES[0]
     expect(entry).toMatchObject({ version: "0.11.1", date: "2026-11-07", title: "Projects, autonomy modes, native Dots and supervising owners", tags: ["Added", "Changed", "Fixed"] })
-    expect(entry?.changes).toHaveLength(134)
+    expect(entry?.changes).toHaveLength(132)
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.1.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.11.1\n")
     for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
@@ -18,6 +18,7 @@ describe("release entries", () => {
     for (const fragment of ["--follow", "`supervising`", "credit count instead of dollars", "`chatgpt-connectors`", "omit tool definitions"]) expect(text).toContain(fragment)
     expect(RELEASES.filter((release) => release.version.startsWith("0.11.")).map((release) => release.version)).toEqual(["0.11.1"])
     expect(after("0.11.1")?.version).toBe("0.10.25")
+    for (const source of [notes, text]) expect(source).not.toMatch(/Release lineage|re-release|bf6a24f|v0\.11\.(?:0|[2-9]|1[01])\b/)
   })
 
   test("retains v0.10.25 guardrail history and Muse quota fixes", () => {
