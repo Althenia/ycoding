@@ -111,6 +111,7 @@ export const Skill = Schema.Struct({
   skill: SkillSchema.ID,
   name: SkillSchema.Name,
   text: Schema.String,
+  directory: Schema.String.pipe(optional),
   conflicts: SkillSchema.Conflicts.pipe(optional),
   skillDeactivations: Schema.Array(SkillDeactivation).pipe(optional),
   artifact: ArtifactProvenance.pipe(optional),

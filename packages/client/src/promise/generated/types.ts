@@ -1733,6 +1733,7 @@ export type SessionMessageSkill = {
   skill: string
   name: string
   text: string
+  directory?: string
   conflicts?: SkillConflicts
   skillDeactivations?: Array<SessionMessageSkillDeactivation>
   artifact?: SessionMessageArtifactProvenance
@@ -2134,6 +2135,7 @@ export type SessionSkillActivated = {
     id: string
     name: string
     text: string
+    directory?: string
     conflicts?: SkillConflicts
     artifact?: SessionEventArtifactProvenance
   }
@@ -5204,6 +5206,7 @@ export type SessionLogItem =
         id: string
         name: string
         text: string
+        directory?: string
         conflicts?: SkillConflicts
         artifact?: SessionEventArtifactProvenance
       }

@@ -1,4 +1,5 @@
 import { Effect, Option, Schema } from "effect"
+import path from "path"
 import { sql } from "drizzle-orm"
 import type { Database } from "../database/database"
 import { McpSkill } from "@ycoding-ai/schema/mcp-skill"
@@ -227,4 +228,29 @@ export function mcpActivation(messages: ReadonlyArray<SessionMessage.Info>, id: 
   return undefined
 }
 
-export const SessionSkillStatus = { Conflict, Info, State, list, load, mcpActivation }
+export function localActivation(messages: ReadonlyArray<SessionMessage.Info>, id: Skill.ID) {
+  if (Skill.mcpSkillOrigin(id)) return undefined
+  const status = list(messages, []).find((candidate) => candidate.id === id && candidate.state === "active")
+  if (!status) return undefined
+  const message = messages.find((candidate) => candidate.id === status.activationMessageID)
+  if (message?.type === "skill") {
+    const directory = localDirectory(message.directory)
+    return directory === undefined ? undefined : { status, directory }
+  }
+  if (message?.type !== "assistant") return undefined
+  for (const tool of message.content.flatMap(ToolInvocation.list).toReversed()) {
+    if (tool.name !== SkillTool.name || tool.status !== "completed") continue
+    const input = Option.getOrUndefined(Schema.decodeUnknownOption(SkillTool.Input)(tool.input))
+    const output = Option.getOrUndefined(Schema.decodeUnknownOption(SkillTool.Output)(tool.structured))
+    if (input?.id !== id || !output || output.alreadyActive) continue
+    const directory = localDirectory(output.directory)
+    return directory === undefined ? undefined : { status, directory }
+  }
+  return undefined
+}
+
+function localDirectory(directory: string | undefined) {
+  return directory !== undefined && path.isAbsolute(directory) && !directory.includes("\0") ? directory : undefined
+}
+
+export const SessionSkillStatus = { Conflict, Info, State, list, load, mcpActivation, localActivation }

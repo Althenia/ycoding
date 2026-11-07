@@ -1,6 +1,7 @@
 export * as SessionSkill from "./skill"
 
 import { randomUUID } from "node:crypto"
+import path from "path"
 import { Effect } from "effect"
 import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { KeyedMutex } from "../effect/keyed-mutex"
@@ -68,6 +69,7 @@ export const activate = Effect.fn("SessionSkill.activate")(function* (
           id: input.skill.id,
           name: input.skill.name,
           text,
+          directory: path.dirname(input.skill.location),
           conflicts: input.skill.conflicts,
           artifact: provenance
             ? {

@@ -417,6 +417,7 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
             skill: event.data.id,
             name: event.data.name,
             text: event.data.text,
+            directory: event.data.directory,
             conflicts: event.data.conflicts ?? { skills: [], instructions: [] },
             artifact: event.data.artifact,
             metadata: event.metadata,

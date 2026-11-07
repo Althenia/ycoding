@@ -24,7 +24,7 @@ export const RELEASES: readonly ReleaseEntry[] = [
   {
     version: "0.11.2",
     date: "2026-11-07",
-    title: "Browser forms, waits and safer editing",
+    title: "Browser control and source-bound skill resources",
     tags: ["Added", "Changed"],
     changes: [
       { tag: "Added", text: "Fill or clear ordinary form inputs, select options, set checkbox or radio state and hover over elements. Observations include bounded control values and checked, selected, expanded and pressed state while withholding sensitive values." },
@@ -36,6 +36,8 @@ export const RELEASES: readonly ReleaseEntry[] = [
       { tag: "Changed", text: "Isolated browser results include bounded control state and matched-frame information, suppress sensitive values and messages, and discard unsafe frame URLs." },
       { tag: "Changed", text: "Editing keys require verified, attached, non-sensitive focus on both browser execution paths. Only plain Tab, Escape, arrows, Home, End, PageUp, PageDown and Shift+Tab bypass inspection; uninspectable or sensitive editing targets refuse before dispatch." },
       { tag: "Changed", text: "After upgrading the CLI, update or reload the bundled Chrome extension before pairing or continuing browser control. Bridge version 6 rejects version 5 peers. Matching packaged versions do not prove an installed extension has reloaded." },
+      { tag: "Changed", text: "Supporting files for an active skill stay with the exact SKILL.md source loaded for that activation, even if its catalog entry changes or disappears. Only the requested resource is read; no whole bundle is injected and no other same-named source is searched." },
+      { tag: "Changed", text: "Missing skill source provenance refuses supporting-file reads instead of guessing another bundle; complete compaction or switch agents before loading the skill again. Successful reads return current file content and retain containment, read permissions and capability checks." },
     ],
   },
   {

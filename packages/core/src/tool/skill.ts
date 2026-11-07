@@ -291,11 +291,14 @@ export const Plugin = {
                 if (input.resource !== undefined) {
                   if (!active) return yield* unableToLoad(input.id)
                   if (!Skill.mcpSkillOrigin(input.id)) {
-                    const local = (yield* skills.list()).find((skill) => skill.id === input.id)
-                    if (!local) return yield* unableToLoad(input.id)
+                    const activation = SessionSkillStatus.localActivation(messages, input.id)
+                    if (!activation)
+                      return yield* new ToolFailure({
+                        message: `Unable to read ${input.resource} for skill ${input.id}: the active skill has no usable source directory. Complete compaction or switch agents, then load the skill again.`,
+                      })
                     const reference = input.resource
                     return yield* Effect.gen(function* () {
-                      const base = path.dirname(local.location)
+                      const base = activation.directory
                       const target = path.resolve(base, reference)
                       if (!FSUtil.contains(base, target)) return yield* resourceFailure(input.id, reference)
                       const realBase = yield* fs.realPath(base)

@@ -334,6 +334,8 @@ Invoke a registered local skill with `$skill-id` at the start of a prompt or aft
 
 Directory skill files are read whenever the skill list is requested. This avoids stale skill content in ecosystem roots that are not watched.
 
+Once a local skill activates, supporting reads use the directory retained by that durable activation, not another source currently selected for the same catalog ID. `skill({ id, resource })` reads one requested file relative to that loaded directory or accepts an absolute path lexically inside it. Both lexical and realpath containment and the normal external_directory/read authorization remain required. A missing file or unusable activation directory fails without searching another source. Instruction text cannot supply directory provenance. A symlinked base is resolved and its canonical target authorized for each read; local content is not frozen at activation. Compaction, agent switches and conflict deactivation end access through that activation. Catalog listing and sampled file names do not eagerly inject supporting file contents.
+
 HTTP(S) sources are pulled and their resolved directories are memoized for the current Location lifetime.
 
 Skill availability is filtered through the selected agent's `skill` permission rules.

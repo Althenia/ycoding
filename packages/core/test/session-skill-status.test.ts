@@ -66,6 +66,97 @@ const toolCompleted = (
   )
 
 describe("SessionSkillStatus.list", () => {
+  test("holds local activation directories across direct, nested and duplicate tool receipts", () => {
+    const loaded = toolCompleted("held", "effect", "Effect", "guidance")
+    const duplicate = assistant(
+      "duplicate",
+      SessionMessage.ToolStateCompleted.make({
+        input: { id: "effect" },
+        content: [],
+        structured: { name: "Effect", directory: "/replacement", output: "duplicate", alreadyActive: true },
+      }),
+    )
+    expect(SessionSkillStatus.localActivation([loaded, duplicate], skillID("effect"))?.directory).toBe("/skills")
+    const nested = SessionMessage.Assistant.make({
+      id: messageID("held-nested"),
+      agent: Agent.defaultID,
+      model,
+      time: { created },
+      content: [
+        SessionMessage.AssistantTool.make({
+          id: "outer",
+          name: "execute",
+          time: { created },
+          state: SessionMessage.ToolStateError.make({
+            input: {},
+            content: [],
+            error: { type: "aborted", message: "Interrupted" },
+            structured: {
+              toolCalls: [
+                {
+                  id: "first",
+                  name: "skill",
+                  status: "completed",
+                  input: { id: "effect" },
+                  structured: { name: "Effect", directory: "/first", output: "first" },
+                },
+                {
+                  id: "latest",
+                  name: "skill",
+                  status: "completed",
+                  input: { id: "effect" },
+                  structured: { name: "Effect", directory: "/latest", output: "latest" },
+                },
+                {
+                  id: "duplicate",
+                  name: "skill",
+                  status: "completed",
+                  input: { id: "effect" },
+                  structured: { name: "Effect", directory: "/replacement", output: "duplicate", alreadyActive: true },
+                },
+              ],
+            },
+          }),
+        }),
+      ],
+    })
+    expect(SessionSkillStatus.localActivation([nested], skillID("effect"))?.directory).toBe("/latest")
+    const explicit = { ...reference("explicit", "effect", "Effect", "guidance"), directory: "/explicit" }
+    expect(SessionSkillStatus.localActivation([explicit], skillID("effect"))?.directory).toBe("/explicit")
+    const roundtrip = Schema.decodeUnknownSync(SessionMessage.Info)(Schema.encodeSync(SessionMessage.Info)(explicit))
+    expect(SessionSkillStatus.localActivation([roundtrip], skillID("effect"))?.directory).toBe("/explicit")
+    const historical = reference("historical", "effect", "Effect", "Base directory for this skill: /untrusted")
+    expect(Schema.encodeSync(SessionMessage.Info)(historical)).not.toHaveProperty("directory")
+    expect(SessionSkillStatus.localActivation([historical], skillID("effect"))).toBeUndefined()
+    for (const directory of [undefined, "", "relative", "\0bad"]) {
+      expect(SessionSkillStatus.localActivation([{ ...explicit, directory }], skillID("effect"))).toBeUndefined()
+    }
+    for (const boundary of [
+      SessionMessage.Compaction.make({
+        id: messageID("compacted"),
+        type: "compaction",
+        status: "completed",
+        reason: "auto",
+        summary: "done",
+        recent: "recent",
+        time: { created },
+      }),
+      SessionMessage.AgentSelected.make({
+        id: messageID("switched"),
+        type: "agent-switched",
+        agent: Agent.ID.make("other"),
+        time: { created },
+      }),
+    ]) {
+      expect(SessionSkillStatus.localActivation([explicit, boundary], skillID("effect"))).toBeUndefined()
+    }
+    expect(
+      SessionSkillStatus.localActivation(
+        [{ ...explicit, skillDeactivations: [{ skill: skillID("effect"), reason: "conflict_resolved" }] }],
+        skillID("effect"),
+      ),
+    ).toBeUndefined()
+  })
   test("recognizes a completed nested skill while execute remains running", () => {
     const message = SessionMessage.Assistant.make({
       id: messageID("nested"), agent: Agent.defaultID, model,

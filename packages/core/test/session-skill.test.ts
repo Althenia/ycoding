@@ -150,6 +150,7 @@ describe("Session.skill", () => {
           skill: "effect",
           name: "Effect",
           text: expect.stringContaining('<skill_content name="Effect">'),
+          directory: path.resolve("/skills/effect"),
           conflicts: {
             skills: [Skill.ID.make("other")],
             instructions: [Instruction.Key.make("core/instructions")],

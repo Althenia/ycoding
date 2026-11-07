@@ -2,7 +2,7 @@ import fs from "fs/promises"
 import path from "path"
 import { pathToFileURL } from "url"
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Layer } from "effect"
+import { DateTime, Effect, Layer, Schema } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigCapabilities } from "@ycoding-ai/core/config/capabilities"
@@ -14,7 +14,11 @@ import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
+import { Agent } from "@ycoding-ai/core/agent"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { Skill } from "@ycoding-ai/core/skill"
+import { SkillDiscovery } from "@ycoding-ai/core/skill/discovery"
 import { SkillTool } from "@ycoding-ai/core/tool/skill"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
@@ -94,6 +98,8 @@ describe("SkillTool", () => {
           }
           let current = [info]
           let active = false
+          let compacted = false
+          let activations: SessionMessage.Info[] | undefined
           let capabilities: ConfigCapabilities.Info | undefined
           const config = Layer.mock(Config.Service, {
             entries: () =>
@@ -102,8 +108,9 @@ describe("SkillTool", () => {
           const assertions: Permission.AssertInput[] = []
           const sourceActivations: Parameters<ProjectArtifactSource.Interface["activate"]>[0][] = []
           let permissionFailure: "denied" | "corrected" | "cancelled" | undefined
+          let deniedAction: string | undefined
           const authorize = (input: Permission.AssertInput): Effect.Effect<void, Permission.Error> => {
-            if (permissionFailure === "denied")
+            if (permissionFailure === "denied" && (deniedAction === undefined || deniedAction === input.action))
               return Effect.fail(
                 new Permission.BlockedError({
                   rules: [],
@@ -125,10 +132,7 @@ describe("SkillTool", () => {
                 Effect.sync(() => {
                   expect(input.metadata?.operationDigest).toMatch(/^[a-f0-9]{64}$/)
                   assertions.push(input)
-                }).pipe(
-                  Effect.asVoid,
-                  Effect.andThen(Effect.suspend(() => authorize(input))),
-                ),
+                }).pipe(Effect.asVoid, Effect.andThen(Effect.suspend(() => authorize(input)))),
               ask: () => Effect.die("unused"),
               reply: () => Effect.die("unused"),
               replyDelegated: () => Effect.die("unused"),
@@ -179,17 +183,32 @@ describe("SkillTool", () => {
                           recent: "Recent work",
                           time: { created: DateTime.makeUnsafe(0) },
                         }),
-                        ...current.map((skill) =>
-                          SessionMessage.Skill.make({
-                            id: SessionMessage.ID.make(`msg_active_${skill.id}`),
-                            type: "skill",
-                            skill: skill.id,
-                            name: skill.name,
-                            text: skill.content,
-                            conflicts: skill.conflicts,
-                            time: { created: DateTime.makeUnsafe(0) },
-                          }),
-                        ),
+                        ...(activations ??
+                          current.map((skill) =>
+                            SessionMessage.Skill.make({
+                              id: SessionMessage.ID.make(`msg_active_${skill.id}`),
+                              type: "skill",
+                              skill: skill.id,
+                              name: skill.name,
+                              text: skill.content,
+                              directory: path.dirname(skill.location),
+                              conflicts: skill.conflicts,
+                              time: { created: DateTime.makeUnsafe(0) },
+                            }),
+                          )),
+                        ...(compacted
+                          ? [
+                              SessionMessage.Compaction.make({
+                                id: SessionMessage.ID.make("msg_compaction_after_skill"),
+                                type: "compaction",
+                                status: "completed",
+                                reason: "auto",
+                                summary: "Compacted skills",
+                                recent: "Recent work",
+                                time: { created: DateTime.makeUnsafe(1) },
+                              }),
+                            ]
+                          : []),
                       ]
                     : []
                   return Effect.succeed(input.order === "asc" ? chronological : chronological.toReversed())
@@ -237,7 +256,7 @@ describe("SkillTool", () => {
             }),
           )
           const skillToolLayer = AppNodeBuilder.build(
-            LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, skillToolNode]),
+            LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, skillToolNode, FSUtil.node]),
             [
               [Permission.node, permission],
               [Config.node, config],
@@ -373,6 +392,310 @@ describe("SkillTool", () => {
               },
               { action: "read", resources: [path.join(external.path, "reference.md")], save: ["*"] },
             ])
+            const resources = [
+              { id: "keeper-vault-retrieval", resource: "references/session-discovery.md" },
+              { id: "go-developer", resource: "references/go-project-patterns.md" },
+            ]
+            const homeRoot = path.join(external.path, "home", ".agents", "skills")
+            const workspaceRoot = path.join(tmp.path, "workspace", ".agents", "skills")
+            yield* Effect.promise(async () => {
+              await fs.mkdir(homeRoot, { recursive: true })
+              for (const fixture of resources) {
+                const physical = path.join(external.path, ".dots", "skills", fixture.id)
+                const shadow = path.join(workspaceRoot, fixture.id)
+                await fs.mkdir(path.join(physical, "references"), { recursive: true })
+                await fs.mkdir(shadow, { recursive: true })
+                await fs.writeFile(
+                  path.join(physical, "SKILL.md"),
+                  `---\nname: ${fixture.id}\ndescription: Synthetic home skill\n---\nHome guidance`,
+                )
+                await fs.writeFile(path.join(physical, fixture.resource), `Synthetic ${fixture.id} reference`)
+                await fs.writeFile(
+                  path.join(shadow, "SKILL.md"),
+                  `---\nname: ${fixture.id}\ndescription: Synthetic workspace skill\n---\nWorkspace guidance`,
+                )
+                await fs.symlink(physical, path.join(homeRoot, fixture.id), "dir")
+                await fs.symlink(
+                  path.join(physical, fixture.resource),
+                  path.join(physical, "references", "contained.md"),
+                )
+                await fs.symlink(outside, path.join(physical, "references", "escape.md"))
+              }
+            })
+            const catalogs = yield* Effect.gen(function* () {
+              const resolver = yield* Skill.Service
+              yield* resolver.transform((draft) =>
+                draft.source({ type: "directory", path: AbsolutePath.make(homeRoot) }),
+              )
+              const home = yield* resolver.list()
+              yield* resolver.transform((draft) =>
+                draft.source({ type: "directory", path: AbsolutePath.make(workspaceRoot) }),
+              )
+              return { home, workspace: yield* resolver.list() }
+            }).pipe(
+              Effect.provide(
+                AppNodeBuilder.build(Skill.node, [
+                  [Config.node, config],
+                  [MCP.node, Layer.mock(MCP.Service, {})],
+                  [SkillDiscovery.node, Layer.mock(SkillDiscovery.Service, {})],
+                ]),
+              ),
+            )
+            expect(catalogs.home).toHaveLength(2)
+            expect(catalogs.workspace).toHaveLength(2)
+            const filesystem = yield* FSUtil.Service
+            current = catalogs.home
+            for (const fixture of resources) {
+              const base = path.join(homeRoot, fixture.id)
+              const physical = path.join(external.path, ".dots", "skills", fixture.id, fixture.resource)
+              const selected = current.find((skill) => skill.id === fixture.id)!
+              expect(selected.location).toBe(AbsolutePath.make(path.join(base, "SKILL.md")))
+              expect(selected.content).toBe("Home guidance")
+              expect(yield* SkillTool.instructions(filesystem, selected)).toContain(
+                `Base directory for this skill: ${base}`,
+              )
+              for (const resource of [fixture.resource, path.join(base, fixture.resource), "references/contained.md"]) {
+                const count = assertions.length
+                const result = yield* settleTool(registry, {
+                  sessionID,
+                  ...toolIdentity,
+                  call: {
+                    type: "tool-call",
+                    id: `call-home-${fixture.id}-${resource}`,
+                    name: "skill",
+                    input: { id: fixture.id, resource },
+                  },
+                })
+                expect(result).toMatchObject({
+                  result: {
+                    type: "text",
+                    value: `<skill_resource uri="${pathToFileURL(physical).href}" mime_type="text/markdown">\nSynthetic ${fixture.id} reference\n</skill_resource>`,
+                  },
+                  output: { structured: { alreadyActive: true } },
+                })
+                expect(assertions.slice(count)).toMatchObject([
+                  { action: "external_directory", resources: [path.join(path.dirname(physical), "*")] },
+                  { action: "read", resources: [physical], sessionID, agent: toolIdentity.agent },
+                ])
+              }
+              for (const resource of [
+                `${fixture.id}/${fixture.resource}`,
+                "references/missing.md",
+                "../outside.md",
+                path.join(base, "..", `${fixture.id}-sibling`, "reference.md"),
+                physical,
+                "references/escape.md",
+              ]) {
+                const count = assertions.length
+                expect(yield* resourceCall(resource, fixture.id)).toEqual({
+                  type: "error",
+                  value: `Unable to read ${resource} for skill ${fixture.id}`,
+                })
+                expect(assertions).toHaveLength(count)
+              }
+              const malformed = `${fixture.id}/${fixture.resource}`
+              const count = assertions.length
+              expect(yield* resourceCall(fixture.resource, malformed)).toEqual({
+                type: "error",
+                value: `Unable to load skill ${malformed}`,
+              })
+              expect(assertions).toHaveLength(count)
+              for (const action of ["external_directory", "read"]) {
+                deniedAction = action
+                permissionFailure = "denied"
+                const count = assertions.length
+                expect(yield* resourceCall(fixture.resource, fixture.id)).toEqual({
+                  type: "error",
+                  value: `Unable to read ${fixture.resource} for skill ${fixture.id}`,
+                })
+                expect(assertions.slice(count).map((item) => item.action)).toEqual(
+                  action === "external_directory" ? ["external_directory"] : ["external_directory", "read"],
+                )
+              }
+              deniedAction = undefined
+              permissionFailure = undefined
+              compacted = true
+              expect(yield* resourceCall(fixture.resource, fixture.id)).toEqual({
+                type: "error",
+                value: `Unable to load skill ${fixture.id}`,
+              })
+              compacted = false
+              active = false
+              expect(yield* resourceCall(fixture.resource, fixture.id)).toEqual({
+                type: "error",
+                value: `Unable to load skill ${fixture.id}`,
+              })
+              active = true
+            }
+            current = catalogs.workspace
+            for (const fixture of resources) {
+              const selected = current.find((skill) => skill.id === fixture.id)!
+              expect(selected.location).toBe(AbsolutePath.make(path.join(workspaceRoot, fixture.id, "SKILL.md")))
+              expect(selected.content).toBe("Workspace guidance")
+              expect(yield* SkillTool.instructions(filesystem, selected)).toContain(
+                `Base directory for this skill: ${path.dirname(selected.location)}`,
+              )
+              const count = assertions.length
+              expect(yield* resourceCall(fixture.resource, fixture.id)).toEqual({
+                type: "error",
+                value: `Unable to read ${fixture.resource} for skill ${fixture.id}`,
+              })
+              expect(assertions).toHaveLength(count)
+            }
+            for (const fixture of resources) {
+              const loaded = catalogs.home.find((skill) => skill.id === fixture.id)!
+              const base = path.dirname(loaded.location)
+              const physical = path.join(external.path, ".dots", "skills", fixture.id, fixture.resource)
+              yield* Effect.promise(async () => {
+                await fs.mkdir(path.join(workspaceRoot, fixture.id, "references"), { recursive: true })
+                await fs.writeFile(path.join(workspaceRoot, fixture.id, fixture.resource), "Replacement source content")
+              })
+              const expected = {
+                type: "text" as const,
+                value: `<skill_resource uri="${pathToFileURL(physical).href}" mime_type="text/markdown">\nSynthetic ${fixture.id} reference\n</skill_resource>`,
+              }
+              current = catalogs.home
+              active = false
+              const activation = yield* settleTool(registry, {
+                sessionID,
+                ...toolIdentity,
+                call: { type: "tool-call", id: `call-bind-${fixture.id}`, name: "skill", input: { id: fixture.id } },
+              })
+              expect(activation.output?.structured).toMatchObject({ directory: base })
+              const loadedOutput = Schema.decodeUnknownSync(SkillTool.Output)(activation.output?.structured)
+              const toolMessage = SessionMessage.Assistant.make({
+                id: SessionMessage.ID.make(`msg_loaded_${fixture.id}`),
+                type: "assistant",
+                agent: Agent.defaultID,
+                model: CatalogModel.Ref.make({
+                  id: CatalogModel.ID.make("synthetic"),
+                  providerID: Provider.ID.make("synthetic"),
+                }),
+                time: { created: DateTime.makeUnsafe(0) },
+                content: [
+                  SessionMessage.AssistantTool.make({
+                    id: `call-bind-${fixture.id}`,
+                    name: "skill",
+                    type: "tool",
+                    time: { created: DateTime.makeUnsafe(0) },
+                    state: SessionMessage.ToolStateCompleted.make({
+                      input: { id: fixture.id },
+                      content: [],
+                      structured: { ...loadedOutput },
+                    }),
+                  }),
+                ],
+              })
+              active = true
+              activations = [toolMessage]
+              current = catalogs.workspace
+              expect(yield* resourceCall(fixture.resource, fixture.id)).toEqual(expected)
+              current = []
+              expect(yield* resourceCall(fixture.resource, fixture.id)).toEqual(expected)
+              capabilities = new ConfigCapabilities.Info({ skills: { deny: [fixture.id] } })
+              expect(yield* resourceCall(fixture.resource, fixture.id)).toEqual({
+                type: "error",
+                value: `Unable to load skill ${fixture.id}`,
+              })
+              capabilities = undefined
+              activations = [
+                SessionMessage.Skill.make({
+                  id: SessionMessage.ID.make(`msg_explicit_${fixture.id}`),
+                  skill: loaded.id,
+                  name: loaded.name,
+                  text: SkillTool.toModelOutput(loaded, []),
+                  directory: base,
+                  time: { created: DateTime.makeUnsafe(0) },
+                }),
+              ]
+              current = catalogs.workspace
+              expect(yield* resourceCall(fixture.resource, fixture.id)).toEqual(expected)
+              for (const directory of [undefined, "", "relative/skill", "\0invalid"]) {
+                activations = [
+                  SessionMessage.Skill.make({
+                    id: SessionMessage.ID.make(`msg_unproven_${fixture.id}`),
+                    skill: loaded.id,
+                    name: loaded.name,
+                    text: SkillTool.toModelOutput(loaded, []),
+                    ...(directory === undefined ? {} : { directory }),
+                    time: { created: DateTime.makeUnsafe(0) },
+                  }),
+                ]
+                const count = assertions.length
+                expect(yield* resourceCall(fixture.resource, fixture.id)).toEqual({
+                  type: "error",
+                  value: `Unable to read ${fixture.resource} for skill ${fixture.id}: the active skill has no usable source directory. Complete compaction or switch agents, then load the skill again.`,
+                })
+                expect(assertions).toHaveLength(count)
+              }
+              expect(
+                yield* executeTool(registry, {
+                  sessionID,
+                  ...toolIdentity,
+                  call: {
+                    type: "tool-call",
+                    id: `call-duplicate-${fixture.id}`,
+                    name: "skill",
+                    input: { id: fixture.id },
+                  },
+                }),
+              ).toEqual({ type: "text", value: `Skill ${fixture.id} is already active for this session.` })
+              activations = [toolMessage]
+              compacted = true
+              expect(yield* resourceCall(fixture.resource, fixture.id)).toEqual({
+                type: "error",
+                value: `Unable to load skill ${fixture.id}`,
+              })
+              current = catalogs.home
+              const reload = yield* settleTool(registry, {
+                sessionID,
+                ...toolIdentity,
+                call: { type: "tool-call", id: `call-reload-${fixture.id}`, name: "skill", input: { id: fixture.id } },
+              })
+              expect(reload.output?.structured).toMatchObject({ directory: base })
+              expect(reload.output?.structured).not.toHaveProperty("alreadyActive")
+              compacted = false
+              expect(yield* resourceCall(fixture.resource, fixture.id)).toEqual(expected)
+              activations = [
+                {
+                  ...SessionMessage.Skill.make({
+                    id: SessionMessage.ID.make(`msg_missing_source_${fixture.id}`),
+                    skill: loaded.id,
+                    name: loaded.name,
+                    text: loaded.content,
+                    time: { created: DateTime.makeUnsafe(0) },
+                  }),
+                  directory: path.join(external.path, "missing-root", fixture.id),
+                },
+              ]
+              expect(yield* resourceCall(fixture.resource, fixture.id)).toEqual({
+                type: "error",
+                value: `Unable to read ${fixture.resource} for skill ${fixture.id}`,
+              })
+              activations = [toolMessage]
+              const retargeted = path.join(external.path, ".dots", "retargeted", fixture.id)
+              yield* Effect.promise(async () => {
+                await fs.mkdir(path.join(retargeted, "references"), { recursive: true })
+                await fs.writeFile(path.join(retargeted, fixture.resource), "Retargeted source content")
+                await fs.symlink(outside, path.join(retargeted, "references", "escape.md"))
+                await fs.rename(base, `${base}-original`)
+                await fs.symlink(retargeted, base, "dir")
+              })
+              expect(yield* resourceCall(fixture.resource, fixture.id)).toEqual({
+                type: "text",
+                value: `<skill_resource uri="${pathToFileURL(path.join(retargeted, fixture.resource)).href}" mime_type="text/markdown">\nRetargeted source content\n</skill_resource>`,
+              })
+              expect(assertions.at(-1)).toMatchObject({
+                action: "read",
+                resources: [path.join(retargeted, fixture.resource)],
+              })
+              expect(yield* resourceCall("references/escape.md", fixture.id)).toEqual({
+                type: "error",
+                value: `Unable to read references/escape.md for skill ${fixture.id}`,
+              })
+            }
+            activations = undefined
+            current = [info, externalInfo]
             active = false
             expect(yield* resourceCall("reference.md")).toEqual({ type: "error", value: "Unable to load skill effect" })
             expect(yield* resourceCall("reference.md", "missing")).toEqual({

@@ -580,6 +580,7 @@ export namespace Skill {
       id: SkillSchema.ID,
       name: SkillSchema.Name,
       text: Schema.String,
+      directory: Schema.String.pipe(optional),
       conflicts: SkillSchema.Conflicts.pipe(optional),
       artifact: ArtifactProvenance.pipe(optional),
     },

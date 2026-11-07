@@ -7,10 +7,10 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists the v0.11.2 browser release first with its notes", async () => {
+  test("lists the v0.11.2 release first with its notes", async () => {
     const entry = RELEASES[0]
-    expect(entry).toMatchObject({ version: "0.11.2", date: "2026-11-07", title: "Browser forms, waits and safer editing", tags: ["Added", "Changed"] })
-    expect(entry?.changes).toHaveLength(9)
+    expect(entry).toMatchObject({ version: "0.11.2", date: "2026-11-07", title: "Browser control and source-bound skill resources", tags: ["Added", "Changed"] })
+    expect(entry?.changes).toHaveLength(11)
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.2.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.11.2\n")
     for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
@@ -26,6 +26,17 @@ describe("release entries", () => {
       for (const fragment of ["Fill or clear", "approved same-origin frames", "continuous 500 ms", "successor tab", "permission, guardrail, credential and confirmation rules", "guidance describes", "concurrent typing", "sensitive values and messages", "before dispatch", "After upgrading the CLI, update or reload the bundled Chrome extension", "Bridge version 6 rejects version 5 peers", "installed extension has reloaded"])
         expect(source).toContain(fragment)
       expect(source).not.toMatch(/live-extension verified|historical Location cause|roadmap|milestone|\/Users\//i)
+    }
+  })
+
+  test("documents v0.11.2 loaded skill resources and reload lifecycle", async () => {
+    const entry = byVersion("0.11.2")
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.2.md", import.meta.url)).text()
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const source of [notes, text]) {
+      for (const fragment of ["exact SKILL.md source loaded for that activation", "catalog entry changes or disappears", "Only the requested resource is read", "no whole bundle is injected", "no other same-named source is searched", "Missing skill source provenance refuses", "complete compaction or switch agents", "current file content", "containment, read permissions and capability checks"])
+        expect(source).toContain(fragment)
+      expect(source).not.toMatch(/installed package restored|original.*Location.*resolved|performance gain|faster skill/i)
     }
   })
 
