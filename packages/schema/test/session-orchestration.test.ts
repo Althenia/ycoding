@@ -127,6 +127,8 @@ describe("SessionOrchestration", () => {
   test("records restart recovery as a resumed change and exposes a stopped recovery on the task", () => {
     expect(Schema.decodeUnknownSync(SessionOrchestration.Change)({ type: "resumed" })).toEqual({ type: "resumed" })
     expect(Schema.decodeUnknownSync(SessionOrchestration.NotificationType)("resumed")).toBe("resumed")
+    for (const type of ["progress", "handback"] as const)
+      expect(Schema.decodeUnknownSync(SessionOrchestration.NotificationType)(type)).toBe(type)
     const base = {
       sessionID,
       parentID,

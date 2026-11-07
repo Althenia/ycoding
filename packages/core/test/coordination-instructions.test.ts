@@ -42,6 +42,10 @@ test("supervisors stay responsible for controlled Sessions until verified comple
   ]) expect(CoordinationInstructions.content).toContain(instruction)
   const entries = await Effect.runPromise(Instructions.read(CoordinationInstructions.make("supervisor")))
   expect(entries[0]?.value).toContain("You cannot assign, transfer or release ownership or create members.")
+  const handback = "As a supervisor, record each finished milestone with `subagent_report` `progress` and ask each decision your parent must make with `subagent_report` `question`, which always wakes your parent; while you own Project members, new progress text or a turn that settles with new final text wakes your parent once, and repeated text wakes no one. Use `escalate` only for a pending member request."
+  const value = Schema.decodeUnknownSync(Schema.String)(entries[0]?.value)
+  expect(value.split(handback)).toHaveLength(2)
+  expect(value).not.toContain("a settled turn's final text notifies no one")
 })
 
 test("the voice source is present only for a scoped Session", async () => {

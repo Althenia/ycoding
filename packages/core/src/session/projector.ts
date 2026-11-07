@@ -737,6 +737,18 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
             Effect.map((row) => row !== undefined),
           )
   const conflict = () => Effect.die(new TaskProjectionConflict(`Invalid ${change.type} transition from ${task.state}`))
+  const handBack = (type: "progress" | "handback", excerpt: string | undefined) =>
+    Effect.gen(function* () {
+      if (!excerpt || !(yield* detached()) || !(yield* SessionTask.hasOwnedMembers(db, event.data.sessionID))) return
+      const previous = yield* db
+        .select({ excerpt: SessionTaskNotificationTable.excerpt })
+        .from(SessionTaskNotificationTable)
+        .where(and(eq(SessionTaskNotificationTable.task_session_id, event.data.sessionID), eq(SessionTaskNotificationTable.type, type)))
+        .orderBy(desc(SessionTaskNotificationTable.revision))
+        .get()
+        .pipe(Effect.orDie)
+      if (previous?.excerpt !== excerpt) yield* notify(type, excerpt)
+    })
 
   if (change.type === "started") {
     if (task.state === "starting") {
@@ -776,6 +788,7 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
   if (change.type === "progressed") {
     if (task.state !== "running") return yield* conflict()
     yield* update({ progress: change.progress.text, progress_time: change.progress.time })
+    yield* handBack("progress", change.progress.text)
     return
   }
   if (change.type === "question_asked") {
@@ -818,6 +831,7 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
     if (task.state !== "running" && task.state !== "supervising") return yield* conflict()
     if (yield* SessionTask.hasOwnedMembers(db, event.data.sessionID)) {
       yield* update({ state: "supervising", attempt_started: false })
+      yield* handBack("handback", change.excerpt)
       return
     }
     yield* update({ state: "completed" })

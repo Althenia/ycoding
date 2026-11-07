@@ -151,7 +151,7 @@ describe("persistent owner lifecycle and isolated delivery", () => {
   const stateOf = (fixture: Fixture) => fixture.db.select().from(SessionTaskTable)
     .where(eq(SessionTaskTable.session_id, fixture.subagent.id)).get().pipe(Effect.orDie)
   const parentNotices = (fixture: Fixture) => fixture.db.select().from(SessionTaskNotificationTable)
-    .where(eq(SessionTaskNotificationTable.task_session_id, fixture.subagent.id)).all().pipe(Effect.orDie)
+    .where(eq(SessionTaskNotificationTable.task_session_id, fixture.subagent.id)).orderBy(SessionTaskNotificationTable.revision).all().pipe(Effect.orDie)
   const settleOwner = (fixture: Fixture) => Effect.gen(function* () {
     yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
     const orchestration = yield* SessionOrchestration.Service
@@ -180,7 +180,7 @@ describe("persistent owner lifecycle and isolated delivery", () => {
       yield* fixture.runtime.recover()
       expect(yield* recordedOwner(fixture, fixture.alpha.id)).toBeUndefined()
       expect((yield* stateOf(fixture))?.state).toBe("completed")
-      expect((yield* parentNotices(fixture)).map(row => row.type)).toEqual(["completed"])
+      expect((yield* parentNotices(fixture)).map(row => row.type)).toEqual(["handback", "completed"])
       expect(woken).toEqual([])
     }))
 
@@ -327,7 +327,7 @@ describe("persistent owner lifecycle and isolated delivery", () => {
       const fixture = yield* setup
       yield* settleOwner(fixture)
       expect((yield* stateOf(fixture))?.state).toBe("supervising")
-      expect(yield* parentNotices(fixture)).toEqual([])
+      expect((yield* parentNotices(fixture)).map(row => [row.type, row.excerpt])).toEqual([["handback", "Verified assignment"]])
       const orchestration = yield* SessionOrchestration.Service
       expect((yield* orchestration.page({ parentID: fixture.master.id })).summary).toEqual({ total: 2, active: 2, running: 1, waiting: 0 })
       expect((yield* orchestration.teamView(fixture.master.id)).view.children.find(task => task.sessionID === fixture.subagent.id)?.state).toBe("supervising")
@@ -354,7 +354,7 @@ describe("persistent owner lifecycle and isolated delivery", () => {
       yield* emit(fixture, Permission.Event.Asked, { id: "per_owner_resume", sessionID: fixture.alpha.id, action: "edit", resources: ["src/a.ts"] })
       expect((yield* stateOf(fixture))?.state).toBe("running")
       expect(woken).toEqual([fixture.subagent.id])
-      expect(yield* parentNotices(fixture)).toEqual([])
+      expect((yield* parentNotices(fixture)).map(row => row.type)).toEqual(["handback"])
     }))
 
   it.effect("unowned routine events write no transcript or wake, while a repeated question escalates once to its own Master", () =>
@@ -393,7 +393,7 @@ describe("persistent owner lifecycle and isolated delivery", () => {
       yield* emit(fixture, Coordination.Event.Changed, { groupID: fixture.group.id })
       yield* emit(fixture, Coordination.Event.Changed, { groupID: fixture.group.id })
       expect((yield* stateOf(fixture))?.state).toBe("completed")
-      expect((yield* parentNotices(fixture)).map(row => row.type)).toEqual(["completed"])
+      expect((yield* parentNotices(fixture)).map(row => row.type)).toEqual(["handback", "completed"])
     }))
 
   for (const definition of [SessionEvent.Archived, SessionEvent.Deleted])
@@ -405,7 +405,7 @@ describe("persistent owner lifecycle and isolated delivery", () => {
         yield* fixture.runtime.handle(event)
         yield* fixture.runtime.handle(event)
         expect((yield* stateOf(fixture))?.state).toBe("completed")
-        expect((yield* parentNotices(fixture)).map(row => row.type)).toEqual(["completed"])
+        expect((yield* parentNotices(fixture)).map(row => row.type)).toEqual(["handback", "completed"])
       }))
 
   it.effect("an owner cannot self-release; Master release and cancellation remain available", () =>
@@ -442,7 +442,7 @@ describe("persistent owner lifecycle and isolated delivery", () => {
       expect(woken).toEqual([])
       expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(1)
       expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
-      expect(yield* parentNotices(fixture)).toEqual([])
+      expect((yield* parentNotices(fixture)).map(row => row.type)).toEqual(["handback"])
     }))
 
   it.effect("held lifecycle state collapses on attach once without waking a paused owner", () =>
@@ -1989,4 +1989,124 @@ describe("member notices for a waiting, starting or cancelling owner", () => {
       expect((yield* fixture.noticeRows(fixture.master.id, SessionEvent.InputAdmitted)).map((row) => row.event)).toEqual(["question"])
       expect(yield* fixture.decision).toEqual({ status: "pending" })
     }), 30_000)
+})
+
+const notified = testEffect(AppNodeBuilder.build(
+  LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, Session.node, SessionExecution.node, SessionOrchestration.node,
+    SessionOrchestrationNotifier.node, CoordinationService.node]),
+  [[SessionExecution.node, execution], inertRuntime],
+))
+
+describe("supervising owner handback wakes", () => {
+  const taskNotices = (fixture: Fixture, taskID: SessionSchema.ID) => fixture.db.select().from(SessionTaskNotificationTable)
+    .where(eq(SessionTaskNotificationTable.task_session_id, taskID)).orderBy(SessionTaskNotificationTable.revision).all().pipe(Effect.orDie)
+  const delivered = (fixture: Fixture, sessionID: SessionSchema.ID) => noticesFor(fixture, sessionID).pipe(Effect.map((rows) =>
+    rows.map(noticeMetadata).filter((metadata) => metadata.source === "subagent_notification")))
+  const ownerState = (fixture: Fixture) => fixture.db.select({ state: SessionTaskTable.state, progress: SessionTaskTable.progress }).from(SessionTaskTable)
+    .where(eq(SessionTaskTable.session_id, fixture.subagent.id)).get().pipe(Effect.orDie)
+  const resume = (fixture: Fixture) => fixture.events.publish(SessionEvent.Task.Updated, { sessionID: fixture.subagent.id, change: { type: "started" } })
+  const dispatch = Effect.gen(function* () {
+    const notifier = yield* SessionOrchestrationNotifier.Service
+    yield* notifier.dispatch
+    yield* notifier.dispatch
+  })
+
+  notified.effect("a settled supervising turn with a new final text wakes the parent once and keeps ownership", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      const orchestration = yield* SessionOrchestration.Service
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      yield* orchestration.settle(fixture.subagent.id, { type: "completed", excerpt: "Milestone 1 verified" })
+      yield* dispatch
+      expect((yield* ownerState(fixture))?.state).toBe("supervising")
+      expect((yield* fixture.coordination.accessOf(fixture.alpha.id))?.ownerSessionID).toBe(fixture.subagent.id)
+      expect((yield* taskNotices(fixture, fixture.subagent.id)).map((row) => [row.type, row.excerpt])).toEqual([["handback", "Milestone 1 verified"]])
+      expect(yield* delivered(fixture, fixture.master.id)).toEqual([expect.objectContaining({ childID: fixture.subagent.id, type: "handback", excerpt: "Milestone 1 verified" })])
+      expect(woken).toEqual([fixture.master.id])
+
+      yield* resume(fixture)
+      yield* orchestration.settle(fixture.subagent.id, { type: "completed", excerpt: "Milestone 1 verified" })
+      yield* resume(fixture)
+      yield* orchestration.settle(fixture.subagent.id, { type: "completed" })
+      yield* dispatch
+      expect((yield* taskNotices(fixture, fixture.subagent.id)).map((row) => row.type)).toEqual(["handback"])
+      expect(woken).toEqual([fixture.master.id])
+
+      yield* resume(fixture)
+      yield* orchestration.settle(fixture.subagent.id, { type: "completed", excerpt: "Milestone 2 verified" })
+      yield* dispatch
+      expect((yield* taskNotices(fixture, fixture.subagent.id)).map((row) => [row.type, row.excerpt]))
+        .toEqual([["handback", "Milestone 1 verified"], ["handback", "Milestone 2 verified"]])
+      expect(woken).toEqual([fixture.master.id, fixture.master.id])
+      expect((yield* ownerState(fixture))?.state).toBe("supervising")
+      expect((yield* fixture.coordination.accessOf(fixture.alpha.id))?.ownerSessionID).toBe(fixture.subagent.id)
+    }))
+
+  notified.effect("owner progress wakes the parent once per new text; a task without owned members keeps progress stored only", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      const orchestration = yield* SessionOrchestration.Service
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      yield* orchestration.progress(fixture.subagent.id, "Milestone A merged")
+      yield* orchestration.progress(fixture.subagent.id, "Milestone A merged")
+      yield* orchestration.progress(fixture.subagent.id, "Milestone B merged")
+      yield* orchestration.progress(fixture.other.id, "Unowned progress")
+      yield* dispatch
+      expect((yield* taskNotices(fixture, fixture.subagent.id)).map((row) => [row.type, row.excerpt]))
+        .toEqual([["progress", "Milestone A merged"], ["progress", "Milestone B merged"]])
+      expect((yield* ownerState(fixture))?.progress).toBe("Milestone B merged")
+      expect(yield* taskNotices(fixture, fixture.other.id)).toEqual([])
+      expect((yield* orchestration.get(fixture.master.id, fixture.other.id)).progress?.text).toBe("Unowned progress")
+      expect(woken).toEqual([fixture.master.id, fixture.master.id])
+
+      yield* orchestration.settle(fixture.subagent.id, { type: "completed" })
+      yield* resume(fixture)
+      yield* orchestration.progress(fixture.subagent.id, "Milestone B merged")
+      yield* dispatch
+      expect((yield* taskNotices(fixture, fixture.subagent.id)).map((row) => row.type)).toEqual(["progress", "progress"])
+      expect(woken).toEqual([fixture.master.id, fixture.master.id])
+    }))
+
+  notified.effect("owner questions wake the parent, escalations still reach the Master, and unrelated Sessions get nothing", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      yield* fixture.events.publish(SessionEvent.Task.Updated, { sessionID: fixture.subagent.id, change: {
+        type: "question_asked", question: { id: QuestionID.make("qst_owner_scope"), text: "Which release lane?", time: 1 } } })
+      yield* dispatch
+      expect((yield* delivered(fixture, fixture.master.id)).map((metadata) => metadata.type)).toEqual(["question"])
+      expect(woken).toEqual([fixture.master.id])
+      const escalated = yield* fixture.runtime.escalate(fixture.subagent.id, {
+        sessionID: fixture.alpha.id, requestID: "per_owner_scope", kind: "permission", fingerprint: "fp_owner_scope", reason: "Needs the human" })
+      expect(escalated).toMatchObject({ delivered: true, decision: { to: "master" } })
+      expect((yield* noticesFor(fixture, fixture.master.id)).map(noticeMetadata)).toContainEqual(expect.objectContaining({ source: "project_escalation", requestID: "per_owner_scope" }))
+      for (const sessionID of [fixture.other.id, fixture.alpha.id, fixture.beta.id, fixture.outsider.id, fixture.subagent.id])
+        expect(yield* delivered(fixture, sessionID)).toEqual([])
+      expect(woken).toEqual([fixture.master.id, fixture.master.id])
+    }))
+
+  notified.effect("an undelivered handback is still delivered after identical later text, and redelivery adds no duplicate notice", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      const orchestration = yield* SessionOrchestration.Service
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      yield* orchestration.settle(fixture.subagent.id, { type: "completed", excerpt: "Release candidate ready" })
+      yield* dispatch
+      expect(yield* delivered(fixture, fixture.master.id)).toHaveLength(1)
+      yield* fixture.db.update(SessionTaskNotificationTable).set({ delivered: false, time_delivered: null })
+        .where(eq(SessionTaskNotificationTable.task_session_id, fixture.subagent.id)).run().pipe(Effect.orDie)
+      const notifier = yield* SessionOrchestrationNotifier.Service
+      yield* resume(fixture).pipe(Effect.andThen(orchestration.settle(fixture.subagent.id, { type: "completed", excerpt: "Release candidate ready" })))
+      yield* notifier.dispatch
+      expect((yield* taskNotices(fixture, fixture.subagent.id)).map((row) => [row.type, row.delivered, row.time_delivered !== null]))
+        .toEqual([["handback", true, true]])
+      expect(yield* delivered(fixture, fixture.master.id)).toHaveLength(1)
+
+      yield* fixture.db.update(SessionTaskNotificationTable).set({ delivered: false, time_delivered: null })
+        .where(eq(SessionTaskNotificationTable.task_session_id, fixture.subagent.id)).run().pipe(Effect.orDie)
+      yield* notifier.dispatch
+      expect(yield* delivered(fixture, fixture.master.id)).toHaveLength(1)
+      expect((yield* taskNotices(fixture, fixture.subagent.id)).map((row) => row.delivered)).toEqual([true])
+      expect((yield* ownerState(fixture))?.state).toBe("supervising")
+    }))
 })

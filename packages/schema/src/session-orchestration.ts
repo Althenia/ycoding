@@ -176,7 +176,7 @@ export const Report = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("action"))
 export type Report = typeof Report.Type
 
-export const NotificationType = Schema.Literals(["question", "completed", "failed", "cancelled", "lost", "resumed"])
+export const NotificationType = Schema.Literals(["question", "completed", "failed", "cancelled", "lost", "resumed", "progress", "handback"])
 export type NotificationType = typeof NotificationType.Type
 
 export const Notification = Schema.Struct({
