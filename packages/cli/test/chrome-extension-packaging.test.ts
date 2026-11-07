@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
+import { VERSION } from "@ycoding-ai/core/browser/protocol"
 import { cp, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -117,6 +118,17 @@ test("the packaged service worker passes the extension lifecycle and marker suit
     expect(stderr).toMatch(/\d+ pass/)
   })
 }, 60000)
+
+test("packages bridge version 6 matching the runtime handshake", async () => {
+  await packaged(async (_, extension) => {
+    const protocol = await import(pathToFileURL(path.join(extension, "protocol.js")).href)
+    const sourceProtocol = await import(pathToFileURL(path.join(chromeExtensionSource, "protocol.js")).href)
+    expect(VERSION).toBe(6)
+    expect(sourceProtocol.VERSION).toBe(VERSION)
+    expect(protocol.VERSION).toBe(6)
+    expect(protocol.VERSION).toBe(VERSION)
+  })
+})
 
 test("ships only bundled, minified entries plus manifest and assets, with no source modules or sourcemaps", async () => {
   await packaged(async (_, extension) => {

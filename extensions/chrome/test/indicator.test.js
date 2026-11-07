@@ -2,13 +2,17 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { FAVICON_SVG, FONT_ALIAS, markerScript, timing, tokens } from "../indicator.js"
+import { FAVICON_SVG, FONT_ALIAS, LABELS, markerScript, timing, tokens } from "../indicator.js"
 import { createFakePage } from "./fixtures/fake-page.js"
 
 test("the page expiry outlasts several missed refreshes and is checked more often than it is refreshed", () => {
   expect(timing.expiry).toBeGreaterThanOrEqual(3 * timing.refresh)
   expect(timing.check).toBeLessThan(timing.refresh)
   expect(timing.clear).toBeLessThan(timing.mark)
+})
+
+test("offers only the Click, Type, Scroll, Hover, and Select cursor labels", () => {
+  expect(LABELS).toEqual({ click: "Click", type: "Type", scroll: "Scroll", hover: "Hover", select: "Select" })
 })
 
 test("the favicon marker is the canonical mint pixel-Y geometry on a dark tile", async () => {

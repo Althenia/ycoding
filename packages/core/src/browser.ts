@@ -67,6 +67,19 @@ export class BridgeError extends Schema.TaggedErrorClass<BridgeError>()("Browser
   message: Schema.String,
 }) {}
 
+export type DepartureReason = BrowserProtocol.RevokedReason
+
+export type TabState =
+  | { readonly state: "present"; readonly mode: "owned" | "profile" }
+  | {
+      readonly state: "departed"
+      readonly mode: "owned" | "profile"
+      readonly reason?: DepartureReason
+      readonly detachReason?: string
+      readonly successorID?: Browser.TabID
+    }
+  | { readonly state: "unknown" }
+
 export interface Transport {
   readonly send: (message: BrowserProtocol.ServerMessage) => boolean
   readonly close: (code: number, reason: string) => void
@@ -81,6 +94,10 @@ export interface Interface {
   readonly actionIdentity: (input: Omit<ActionInput, "callID">) => Effect.Effect<BrowserOperation.Identity, SessionErrors.NotFoundError | OwnershipError | FenceError | UnavailableError>
   readonly status: (sessionID: Browser.Tab["sessionID"]) => Effect.Effect<Status, SessionErrors.NotFoundError>
   readonly list: (sessionID: Browser.Tab["sessionID"]) => Effect.Effect<ReadonlyArray<Tab>, SessionErrors.NotFoundError>
+  readonly tabState: (
+    sessionID: Browser.Tab["sessionID"],
+    tabID: Browser.TabID,
+  ) => Effect.Effect<TabState, SessionErrors.NotFoundError>
   readonly start: (
     sessionID: Browser.Tab["sessionID"],
   ) => Effect.Effect<Pairing, SessionErrors.NotFoundError | BusyError>
@@ -146,6 +163,7 @@ const DEFAULT_PAIRING_TTL = Duration.minutes(2)
 const DEFAULT_COMMAND_TIMEOUT = Duration.seconds(30)
 const MAX_PAIRING_ATTEMPTS = 5
 const SETTLEMENT_LIMIT = 64
+const DEPARTED_LIMIT = 64
 const LEASE_HELD = "Chrome tab is controlled by another Session; wait for it to release control"
 
 type MutableTab = Types.DeepMutable<Tab> & {
@@ -193,6 +211,13 @@ type Pending = PendingBase &
       }
     | { readonly kind: "open" | "close"; readonly mutation: true; readonly fingerprint: string }
   )
+type Departure = {
+  readonly mode: "owned" | "profile"
+  readonly sessionID: Browser.Tab["sessionID"]
+  readonly reason?: DepartureReason
+  readonly detachReason?: string
+  successorID?: Browser.TabID
+}
 type Settlement = {
   readonly fingerprint: string
   readonly result: ActionResult
@@ -204,6 +229,7 @@ type Connection = {
   readonly generation: number
   readonly transport: Transport
   readonly tabs: Map<Browser.TabID, MutableTab>
+  readonly departed: Map<Browser.TabID, Departure>
   readonly settlements: Map<string, Settlement>
   readonly openCalls: Map<string, { readonly url: string; readonly tabID: Browser.TabID }>
   readonly closeCalls: Set<string>
@@ -338,6 +364,22 @@ export const layer = (options: Options = {}) =>
         }
       }
 
+      function depart(current: Connection, tab: MutableTab, reason?: DepartureReason, detachReason?: string) {
+        current.tabs.delete(tab.id)
+        current.departed.delete(tab.id)
+        current.departed.set(tab.id, {
+          mode: tab.mode ?? "profile",
+          sessionID: tab.sessionID,
+          ...(reason ? { reason } : {}),
+          ...(detachReason ? { detachReason } : {}),
+        })
+        while (current.departed.size > DEPARTED_LIMIT) {
+          const oldest = current.departed.keys().next().value
+          if (oldest === undefined) break
+          current.departed.delete(oldest)
+        }
+      }
+
       function failPending(current: Connection, message: string) {
         if (current.historyPending) {
           Deferred.doneUnsafe(current.historyPending.deferred, Effect.fail(new BridgeError({ message })))
@@ -397,6 +439,32 @@ export const layer = (options: Options = {}) =>
         return Array.from(connection.tabs.values())
           .filter((tab) => tab.mode !== "owned" || tab.sessionID === sessionID)
           .map((tab) => publicTab(tab, sessionID))
+      })
+
+      const tabState = Effect.fn("Browser.tabState")(function* (
+        sessionID: Browser.Tab["sessionID"],
+        tabID: Browser.TabID,
+      ): Effect.fn.Return<TabState, SessionErrors.NotFoundError> {
+        yield* assertSession(sessionID)
+        const current = connection
+        if (!current || admission.current(sessionID) === "isolated") return { state: "unknown" }
+        const tab = current.tabs.get(tabID)
+        if (tab) {
+          if (tab.mode === "owned" && tab.sessionID !== sessionID) return { state: "unknown" }
+          return { state: "present", mode: tab.mode ?? "profile" }
+        }
+        const gone = current.departed.get(tabID)
+        if (!gone || (gone.mode === "owned" && gone.sessionID !== sessionID)) return { state: "unknown" }
+        let successorID = gone.successorID
+        for (let hops = 0; successorID && !current.tabs.has(successorID) && hops < DEPARTED_LIMIT; hops++)
+          successorID = current.departed.get(successorID)?.successorID
+        return {
+          state: "departed",
+          mode: gone.mode,
+          ...(gone.reason ? { reason: gone.reason } : {}),
+          ...(gone.detachReason ? { detachReason: gone.detachReason } : {}),
+          ...(successorID && current.tabs.has(successorID) ? { successorID } : {}),
+        }
       })
 
       const start = Effect.fn("Browser.start")(function* (sessionID: Browser.Tab["sessionID"]) {
@@ -459,10 +527,14 @@ export const layer = (options: Options = {}) =>
           unclaim()
           return yield* new UnavailableError({ message: "Chrome extension bridge output queue is full" })
         }
+        const deadline = Duration.sum(
+          Duration.fromInputUnsafe(commandTimeout),
+          Duration.millis(message.type === "action" ? BrowserOperation.waitBudgetMs(message.action) : 0),
+        )
         const result = yield* Deferred.await(pending.deferred).pipe(
           Effect.tapError(() => Effect.sync(unclaim)),
           Effect.timeoutOrElse({
-            duration: commandTimeout,
+            duration: deadline,
             orElse: () => Effect.succeed(undefined),
           }),
         )
@@ -538,7 +610,7 @@ export const layer = (options: Options = {}) =>
           const before = previousByLocator.get(element.locator!)
           if (!before) return true
           const now = tab.elements.get(element.ref)
-          return !now || now.identity !== before.identity
+          return !now || now.identity !== before.identity || !BrowserOperation.sameElementState(now, before)
         })
         const removed = Array.from(previousByLocator.keys()).filter((locator) => !currentByLocator.has(locator))
         return { ...result, elements: changed, delta: { baseRevision: previous.revision, removed } }
@@ -799,13 +871,8 @@ export const layer = (options: Options = {}) =>
           tab.observationRevision !== input.observationRevision
         )
           return yield* new FenceError({ message: "Chrome tab observation is stale; observe again" })
-        let resolvedAction = input.action
-        if (input.action.type === "click" || input.action.type === "type" || input.action.type === "upload") {
-          const element = BrowserOperation.resolveElement(tab.elements, input.action)
-          if (!element) return yield* new FenceError({ message: "Semantic element reference is stale" })
-          if (element.disabled) return yield* new FenceError({ message: "Semantic element is disabled" })
-          resolvedAction = { ...input.action, ref: element.ref }
-        }
+        const classification = BrowserOperation.classify(input.action)
+        const resolvedAction = yield* resolveTarget(input.action, tab.elements)
         if (input.action.type === "upload") {
           const uploadPaths = input.action.paths
           yield* Effect.tryPromise({
@@ -832,10 +899,7 @@ export const layer = (options: Options = {}) =>
           ...((input.action.type === "group" || input.action.type === "ungroup")
             ? input.action.tabIDs.map((id) => current.tabs.get(id)!.page.origin) : [])])]
         if (tab.mode === "owned") tab.allowedOrigins = new Set(allowedOrigins)
-        const actionRef =
-          resolvedAction.type === "click" || resolvedAction.type === "type" || resolvedAction.type === "wait" || resolvedAction.type === "upload"
-            ? resolvedAction.ref
-            : undefined
+        const actionRef = "ref" in resolvedAction ? resolvedAction.ref : undefined
         const targetElement = actionRef ? tab.elements.get(actionRef) : undefined
         const frameOrigins = [...new Set([...(tab.frameOrigins ?? []),
           ...(targetElement?.frame ? [targetElement.frame.origin] : [])])]
@@ -847,7 +911,7 @@ export const layer = (options: Options = {}) =>
           sessionID: input.sessionID,
           generation: input.generation,
           documentGeneration: input.documentGeneration,
-          mutation: ["navigate", "click", "type", "group", "ungroup", "back", "forward", "reload", "key", "clipboard_write", "upload", "webmcp_invoke", "dialog"].includes(input.action.type),
+          mutation: classification.mutation,
           fingerprint,
           actionType: input.action.type,
           deferred,
@@ -973,6 +1037,7 @@ export const layer = (options: Options = {}) =>
           generation: nextGeneration++,
           transport: input.transport,
           tabs: new Map(),
+          departed: new Map(),
           settlements: new Map(),
           openCalls: new Map(),
           closeCalls: new Set(),
@@ -1015,7 +1080,7 @@ export const layer = (options: Options = {}) =>
           if (message.type === "profile_access") {
             current.profileGranted = message.enabled
             if (!message.enabled)
-              for (const tab of current.tabs.values()) if (tab.mode === "profile") current.tabs.delete(tab.id)
+              for (const tab of current.tabs.values()) if (tab.mode === "profile") depart(current, tab, "access_revoked")
             return
           }
           if (message.type === "forget") {
@@ -1040,6 +1105,8 @@ export const layer = (options: Options = {}) =>
               })
               return
             }
+            const predecessor = message.replaces === undefined ? undefined : current.departed.get(message.replaces)
+            if (predecessor?.mode === "profile") predecessor.successorID = message.tabID
             current.tabs.set(message.tabID, {
               id: message.tabID,
               sessionID: current.sessionID,
@@ -1057,7 +1124,8 @@ export const layer = (options: Options = {}) =>
           }
           if (message.type === "revoked") {
             if (current.pending?.tabID === message.tabID) failPending(current, "Chrome tab was revoked")
-            current.tabs.delete(message.tabID)
+            const revoked = current.tabs.get(message.tabID)
+            if (revoked) depart(current, revoked, message.reason, message.detachReason)
             return
           }
           const pending = current.pending
@@ -1124,7 +1192,7 @@ export const layer = (options: Options = {}) =>
             const page = safePageMaybe(message.url)
             if (!page) return
             if (tab.mode === "owned" && !tab.allowedOrigins?.has(page.origin)) {
-              current.tabs.delete(tab.id)
+              depart(current, tab, "navigated")
               current.transport.send({ type: "close", callID: "unapproved-origin", tabID: tab.id, generation: current.generation })
               return
             }
@@ -1175,7 +1243,7 @@ export const layer = (options: Options = {}) =>
           }
           if (message.type === "closed" && pending.kind === "close") {
             const result: ActionResult = { callID: pending.callID, tab: publicTab(tab, pending.sessionID), status: "completed" }
-            current.tabs.delete(tab.id)
+            depart(current, tab, "closed")
             Deferred.doneUnsafe(pending.deferred, Effect.succeed(result))
             current.pending = undefined
             return
@@ -1250,6 +1318,8 @@ export const layer = (options: Options = {}) =>
             logs: sanitizeLogs(message.logs),
             webmcpTools: sanitizeWebMcpTools(message.webmcpTools),
             dialog: sanitizeDialog(message.dialog),
+            control: BrowserOperation.sanitizeControl(message.control),
+            frame: message.frame === undefined ? undefined : safePageMaybe(message.frame),
           }
           if (pending.actionType !== "export") remember(current, pending.fingerprint, result, `${pending.sessionID}\0${pending.callID}`)
           Deferred.doneUnsafe(pending.deferred, Effect.succeed(result))
@@ -1352,7 +1422,7 @@ export const layer = (options: Options = {}) =>
         return { sessionID: trust.sessionID, serverID: trust.serverID, secret: undefined }
       })
 
-      return Service.of({ status, list, start, open, close, deliver, release, observe, clickDestination, elementFrame, actionIdentity, action, history, control, stop, forget, attach })
+      return Service.of({ status, list, tabState, start, open, close, deliver, release, observe, clickDestination, elementFrame, actionIdentity, action, history, control, stop, forget, attach })
     }),
   )
 
@@ -1499,6 +1569,24 @@ function sanitizeDialog(
   }
 }
 
+function resolveTarget(action: Browser.Action, elements: ReadonlyMap<string, BrowserOperation.Element>) {
+  return Effect.gen(function* () {
+    if (action.type !== "wait" && !BrowserOperation.isElementAction(action)) return action
+    if (action.locator !== undefined && !BrowserOperation.parseLocator(action.locator))
+      return yield* new FenceError({ message: "Locator is malformed" })
+    if (action.type === "wait") {
+      if (action.ref === undefined) return action
+      const { locator: _locator, ...wait } = action
+      return wait
+    }
+    const element = BrowserOperation.resolveElement(elements, action)
+    if (!element) return yield* new FenceError({ message: "Semantic element reference is stale" })
+    if (element.disabled) return yield* new FenceError({ message: "Semantic element is disabled" })
+    const { locator: _locator, ...target } = action
+    return { ...target, ref: element.ref } as BrowserOperation.ElementAction
+  })
+}
+
 function sanitizeObservation(
   message: Extract<BrowserProtocol.ClientMessage, { readonly type: "observation" }>,
 ): Observation | undefined {
@@ -1510,6 +1598,12 @@ function sanitizeObservation(
     name: bounded(element.name, Browser.MAX_NAME_LENGTH),
     description: element.description ? bounded(element.description, Browser.MAX_NAME_LENGTH) : undefined,
     disabled: element.disabled,
+    checked: element.checked,
+    pressed: element.pressed,
+    expanded: element.expanded,
+    selected: element.selected,
+    ...(element.sensitive || element.value === undefined ? {} : { value: bounded(element.value, Browser.MAX_NAME_LENGTH) }),
+    sensitive: element.sensitive,
     locator: element.locator ? bounded(element.locator, Browser.MAX_LOCATOR_LENGTH) : undefined,
     destination: element.destination ? safePageMaybe(element.destination) : undefined,
     frame: element.frame ? safePageMaybe(element.frame) : undefined,

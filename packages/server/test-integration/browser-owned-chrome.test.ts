@@ -1194,6 +1194,333 @@ test("observes and acts inside a cross-origin out-of-process iframe and captures
   }
 }, 120_000)
 
+async function startFormBridge(prefix: string, fixtureFetch: (request: Request) => Response | Promise<Response>) {
+  if (!chrome) throw new Error("Set YCODING_TEST_ISOLATED_BROWSER_CHROME to an installed Chrome for Testing executable")
+  if (!(await Bun.file(chrome).exists())) throw new Error("Chrome for Testing executable is unavailable")
+  const directory = await mkdtemp(join(tmpdir(), `ycoding-${prefix}-chrome-`))
+  const scope = await Effect.runPromise(Scope.make())
+  const fixture = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: fixtureFetch })
+  const origin = `http://127.0.0.1:${fixture.port}`
+  const port = await availablePort()
+  const base = `http://127.0.0.1:${port}`
+  const sessionID = `ses_browser_${prefix}_live`
+  const request = (path: string, options: RequestInit = {}) => {
+    const headers = new Headers(options.headers)
+    headers.set("authorization", auth)
+    return fetch(`${base}${path}`, { ...options, headers })
+  }
+  const observe = async (tab: Browser.Tab, callID: string) => {
+    const response = await request(`/api/session/${sessionID}/browser/observe`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tabID: tab.id, generation: tab.generation, callID }),
+    })
+    expect(response.status, await response.clone().text()).toBe(200)
+    return Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Observation }))(await response.json()).data
+  }
+  const act = (observation: Browser.Observation, callID: string, action: Browser.Schema.Action) =>
+    request(`/api/session/${sessionID}/browser/action`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        tabID: observation.tabID,
+        generation: observation.generation,
+        documentGeneration: observation.documentGeneration,
+        observationRevision: observation.revision,
+        callID,
+        action,
+      }),
+    })
+  const completed = async (response: Response) => {
+    expect(response.status, await response.clone().text()).toBe(200)
+    const result = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.ActionResult }))(await response.json()).data
+    expect(result.status).toBe("completed")
+    return result
+  }
+  const refused = async (response: Response) => {
+    const text = await response.clone().text()
+    if (response.status !== 200) {
+      expect(response.status, text).toBeGreaterThanOrEqual(400)
+      return text
+    }
+    const result = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.ActionResult }))(await response.json()).data
+    expect(result.status).not.toBe("completed")
+    return text
+  }
+  let process: ReturnType<typeof spawn> | undefined
+  let cdp: Client | undefined
+  const close = async () => {
+    try {
+      if (cdp) {
+        await cdp.send("Browser.close").catch(() => {})
+        cdp.close()
+      }
+      if (process) await terminate(process)
+    } finally {
+      try {
+        await Effect.runPromise(Scope.close(scope, Exit.void))
+      } finally {
+        await fixture.stop(true)
+        await rm(directory, { recursive: true, force: true })
+      }
+    }
+  }
+  try {
+    const startingRaw = ServerProcess.start<never, never>({
+      hostname: "127.0.0.1",
+      port,
+      password: "test-password",
+      database: { path: ":memory:" },
+      config: { directory, project: false, content: "{}" },
+      fs: { filewatcher: false, fff: false },
+    }).pipe(Effect.provideService(Scope.Scope, scope))
+    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+    const starting = startingRaw as Effect.Effect<Effect.Success<typeof startingRaw>, Effect.Error<typeof startingRaw>>
+    await Effect.runPromise(starting)
+    const created = await request("/api/session", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: sessionID, location: { directory } }),
+    })
+    expect(created.status, await created.text()).toBe(200)
+    const pairingHTTP = await request(`/api/session/${sessionID}/browser/start`, { method: "POST" })
+    expect(pairingHTTP.status).toBe(200)
+    const pairing = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Pairing }))(await pairingHTTP.json()).data
+    process = spawn(
+      chrome,
+      [
+        "--headless=new",
+        `--user-data-dir=${join(directory, "profile")}`,
+        "--remote-debugging-pipe",
+        "--use-mock-keychain",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--disable-sync",
+        "--disable-breakpad",
+        `--disable-extensions-except=${extension}`,
+        `--load-extension=${extension}`,
+        "about:blank",
+      ],
+      { detached: true, stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] },
+    )
+    const readable = process.stdio[4]
+    const writable = process.stdio[3]
+    if (!(readable instanceof Readable) || !(writable instanceof Writable))
+      throw new Error("Private Chrome did not expose its control pipe")
+    const client = connect(readable, writable)
+    cdp = client
+    await client.send("Target.setDiscoverTargets", { discover: true })
+    const worker = await eventually(async () => {
+      const infos = record(await client.send("Target.getTargets")).targetInfos
+      return Array.isArray(infos)
+        ? infos
+            .map(record)
+            .find(
+              (info) =>
+                info.type === "service_worker" &&
+                String(info.url).startsWith("chrome-extension://") &&
+                String(info.url).endsWith("service-worker.js"),
+            )
+        : undefined
+    }, "private extension service worker")
+    const extensionID = /^chrome-extension:\/\/([a-p]{32})\//.exec(string(worker.url))?.[1]
+    if (!extensionID) throw new Error("Private extension identity unavailable")
+    const popup = record(await client.send("Target.createTarget", { url: `chrome-extension://${extensionID}/popup.html` }))
+    const popupSession = string(
+      record(await client.send("Target.attachToTarget", { targetId: string(popup.targetId), flatten: true })).sessionId,
+    )
+    await client.send("Runtime.enable", {}, popupSession)
+    await eventually(
+      async () =>
+        (await evaluate(client, popupSession, "typeof chrome === 'object' && !!chrome.runtime?.sendMessage")) === true
+          ? true
+          : undefined,
+      "private extension popup",
+    )
+    const paired = record(
+      await evaluate(
+        client,
+        popupSession,
+        `chrome.runtime.sendMessage({type:'pair',serverURL:${JSON.stringify(base)},secret:${JSON.stringify(pairing.secret)}})`,
+      ),
+    )
+    expect(paired).toMatchObject({ paired: true, connected: true, profileGranted: true })
+    const status = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Status }))(
+      await (await request(`/api/session/${sessionID}/browser`)).json(),
+    ).data
+    if (!status.generation) throw new Error("Private Chrome bridge had no generation")
+    const bridgeGeneration = status.generation
+    const openOwned = async (path: string, callID: string) => {
+      const opened = await request(`/api/session/${sessionID}/browser/open`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ generation: bridgeGeneration, url: `${origin}${path}`, callID }),
+      })
+      expect(opened.status, await opened.clone().text()).toBe(200)
+      return Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Tab }))(await opened.json()).data
+    }
+    const openProfile = async (path: string) => {
+      const created = record(
+        await evaluate(client, popupSession, `chrome.tabs.create({url:${JSON.stringify(`${origin}${path}`)},active:false})`),
+      )
+      const chromeTabID = number(created.id)
+      await eventually(async () => {
+        const native = record(await evaluate(client, popupSession, `chrome.tabs.get(${chromeTabID})`))
+        return native.url === `${origin}${path}` && native.status === "complete" ? true : undefined
+      }, `loaded profile tab ${path}`)
+      return eventually(async () => {
+        const listed = Schema.decodeUnknownSync(Schema.Struct({ data: Schema.Array(Browser.Tab) }))(
+          await (await request(`/api/session/${sessionID}/browser/tabs`)).json(),
+        ).data
+        return listed.find((item) => item.mode === "profile" && item.page.path === path)
+      }, `listed profile tab ${path}`)
+    }
+    return { origin, observe, act, completed, refused, openOwned, openProfile, close }
+  } catch (error) {
+    await close()
+    throw error
+  }
+}
+
+test("fills, selects, checks, hovers, and waits in a background owned tab under focus emulation", async () => {
+  const hovers: string[] = []
+  let releaseSlow: (() => void) | undefined
+  const slow = new Promise<void>((resolve) => (releaseSlow = resolve))
+  const bridge = await startFormBridge("forms", async (request) => {
+    const url = new URL(request.url)
+    if (url.pathname === "/hovered") {
+      hovers.push(url.searchParams.get("visibility") ?? "")
+      return new Response("recorded")
+    }
+    if (url.pathname === "/slow") {
+      await slow
+      return new Response("done")
+    }
+    return new Response(
+      "<!doctype html><title>Form fixture</title>" +
+        "<label>Title <input id='title' value='old title'></label>" +
+        "<label>Notes <textarea id='notes'>old notes</textarea></label>" +
+        "<label>Country <select id='country'><option value='th'>Thailand</option><option value='jp'>Japan</option></select></label>" +
+        "<label><input type='checkbox' id='agree'> Agree</label>" +
+        "<label>Password <input type='text' id='secret' value='synthetic-owned-secret'></label>" +
+        "<button aria-label='Menu' onmouseover=\"document.getElementById('item').hidden=false;fetch('/hovered?visibility='+document.visibilityState)\">Menu</button>" +
+        "<button id='item' aria-label='Revealed item' hidden>Item</button>" +
+        "<button aria-label='Later' onclick=\"fetch('/slow').then(()=>document.body.insertAdjacentHTML('beforeend','<p>Saved later</p>'))\">Later</button>",
+      { headers: { "content-type": "text/html" } },
+    )
+  })
+  try {
+    const tab = await bridge.openOwned("/form", "forms-open")
+    const first = await bridge.observe(tab, "forms-observe-1")
+    const ref = (observation: Browser.Observation, name: string) => {
+      const element = observation.elements.find((item) => item.name === name)
+      if (!element) throw new Error(`Element ${name} was not observed`)
+      return element.ref
+    }
+    expect(first.elements.find((item) => item.name === "Title")).toMatchObject({ value: "old title" })
+    expect(first.elements.find((item) => item.name === "Agree")).toMatchObject({ checked: false })
+    const secret = first.elements.find((item) => item.name === "Password")
+    expect(secret).toMatchObject({ sensitive: true })
+    expect(secret?.value).toBeUndefined()
+
+    const filled = await bridge.completed(await bridge.act(first, "forms-fill", { type: "fill", ref: ref(first, "Title"), text: "New title" }))
+    expect(filled.control).toEqual({ value: "New title" })
+    const beforeClear = await bridge.observe(tab, "forms-observe-clear")
+    const cleared = await bridge.completed(await bridge.act(beforeClear, "forms-clear", { type: "fill", ref: ref(beforeClear, "Notes"), text: "" }))
+    expect(cleared.control).toEqual({ value: "" })
+    const beforeSelect = await bridge.observe(tab, "forms-observe-select")
+    const selected = await bridge.completed(
+      await bridge.act(beforeSelect, "forms-select", { type: "select", ref: ref(beforeSelect, "Country"), labels: ["Japan"] }),
+    )
+    expect(selected.control?.selected).toEqual([{ value: "jp", label: "Japan", index: 1 }])
+    const beforeCheck = await bridge.observe(tab, "forms-observe-check")
+    const checkedResult = await bridge.completed(
+      await bridge.act(beforeCheck, "forms-check", { type: "check", ref: ref(beforeCheck, "Agree"), checked: true }),
+    )
+    expect(checkedResult.control).toEqual({ checked: true })
+    expect(checkedResult.message).toBeUndefined()
+    const beforeSecret = await bridge.observe(tab, "forms-observe-secret")
+    const refusedText = await bridge.refused(
+      await bridge.act(beforeSecret, "forms-fill-secret", { type: "fill", ref: ref(beforeSecret, "Password"), text: "synthetic-typed-secret" }),
+    )
+    expect(refusedText).not.toContain("synthetic-owned-secret")
+    expect(refusedText).not.toContain("synthetic-typed-secret")
+
+    const beforeHover = await bridge.observe(tab, "forms-observe-hover")
+    await bridge.completed(await bridge.act(beforeHover, "forms-hover", { type: "hover", ref: ref(beforeHover, "Menu") }))
+    await eventually(async () => (hovers.length > 0 ? true : undefined), "hover handler fetch")
+    expect(hovers).toEqual(["visible"])
+    const afterHover = await bridge.observe(tab, "forms-observe-revealed")
+    await bridge.completed(
+      await bridge.act(afterHover, "forms-wait-locator", {
+        type: "wait",
+        locator: 'role=button[name="Revealed item"]',
+        timeoutMs: 5000,
+      }),
+    )
+    await bridge.completed(await bridge.act(afterHover, "forms-wait-url", { type: "wait", url: `${bridge.origin}/fo*`, timeoutMs: 1000 }))
+    await bridge.completed(await bridge.act(afterHover, "forms-wait-load", { type: "wait", load: "load", timeoutMs: 5000 }))
+    const final = await bridge.observe(tab, "forms-observe-final")
+    expect(final.elements.find((item) => item.name === "Title")).toMatchObject({ value: "New title" })
+    expect(final.elements.find((item) => item.name === "Agree")).toMatchObject({ checked: true })
+
+    await bridge.completed(await bridge.act(final, "forms-later", { type: "click", ref: ref(final, "Later") }))
+    const afterLater = await bridge.observe(tab, "forms-observe-later")
+    await bridge.refused(await bridge.act(afterLater, "forms-idle-pending", { type: "wait", load: "networkidle", timeoutMs: 1500 }))
+    releaseSlow?.()
+    await bridge.completed(await bridge.act(afterLater, "forms-idle", { type: "wait", load: "networkidle", timeoutMs: 10000 }))
+    const saved = await bridge.completed(
+      await bridge.act(afterLater, "forms-wait-text", { type: "wait", text: "Saved later", timeoutMs: 5000 }),
+    )
+    expect(saved.frame).toBeUndefined()
+  } finally {
+    releaseSlow?.()
+    await bridge.close()
+  }
+}, 120_000)
+
+test("waits for networkidle on a profile tab attached after load using requests started after attach", async () => {
+  let releaseBefore: (() => void) | undefined
+  let releaseAfter: (() => void) | undefined
+  const before = new Promise<void>((resolve) => (releaseBefore = resolve))
+  const after = new Promise<void>((resolve) => (releaseAfter = resolve))
+  const bridge = await startFormBridge("idle", async (request) => {
+    const url = new URL(request.url)
+    if (url.pathname === "/held-before") {
+      await before
+      return new Response("before")
+    }
+    if (url.pathname === "/held-after") {
+      await after
+      return new Response("after")
+    }
+    return new Response(
+      "<!doctype html><title>Idle fixture</title><script>addEventListener('load',()=>setTimeout(()=>fetch('/held-before'),0))</script>" +
+        "<button aria-label='Fetch' onclick=\"fetch('/held-after')\">Fetch</button>",
+      { headers: { "content-type": "text/html" } },
+    )
+  })
+  try {
+    const tab = await bridge.openProfile("/profile-idle")
+    const attached = await bridge.observe(tab, "idle-observe-attach")
+    await bridge.completed(await bridge.act(attached, "idle-before-attach", { type: "wait", load: "networkidle", timeoutMs: 5000 }))
+    const beforeClick = await bridge.observe(tab, "idle-observe-before-click")
+    const button = beforeClick.elements.find((item) => item.name === "Fetch")
+    if (!button) throw new Error("Fetch button was not observed")
+    await bridge.completed(await bridge.act(beforeClick, "idle-click", { type: "click", ref: button.ref }))
+    const clicked = await bridge.observe(tab, "idle-observe-clicked")
+    await bridge.refused(await bridge.act(clicked, "idle-pending", { type: "wait", load: "networkidle", timeoutMs: 1500 }))
+    releaseAfter?.()
+    await bridge.completed(await bridge.act(clicked, "idle-settled", { type: "wait", load: "networkidle", timeoutMs: 10000 }))
+  } finally {
+    releaseBefore?.()
+    releaseAfter?.()
+    await bridge.close()
+  }
+}, 120_000)
+
 const markerOwner = "ses_marker_live_owner"
 const markerOther = "ses_marker_live_other"
 

@@ -53,6 +53,20 @@ describe("IsolatedBrowser contract", () => {
     ).toBe(true)
   })
 
+  test("isolated action results carry the bounded control state and match frame", () => {
+    const result = {
+      mode: "isolated", instanceID, callID: "call_contract", tab, status: "completed",
+      control: { checked: "mixed", value: "synthetic", selected: [{ value: "a", label: "A", index: 0 }] },
+      frame: { origin: "https://child.example.test", path: "/widget" },
+    }
+    expect(Schema.decodeUnknownSync(IsolatedBrowser.ActionResult)(result) as unknown).toEqual(result)
+    expect(Schema.is(IsolatedBrowser.ActionResult)({ ...result, control: { sensitive: false } })).toBe(false)
+    expect(Schema.is(IsolatedBrowser.ActionResult)({ ...result, control: { value: "x".repeat(Browser.MAX_NAME_LENGTH + 1) } })).toBe(false)
+    expect(Schema.is(IsolatedBrowser.ActionResult)({ ...result, frame: { origin: "https://child.example.test", path: "/w#secret" } })).toBe(false)
+    expect(IsolatedBrowser.ActionResult.fields.control).toBe(Browser.ActionResult.fields.control)
+    expect(IsolatedBrowser.ActionResult.fields.frame).toBe(Browser.ActionResult.fields.frame)
+  })
+
   test("reuses bounded semantic browser operations and adds a mandatory instance fence", () => {
     expect(
       Schema.is(IsolatedBrowser.ActionInput)({

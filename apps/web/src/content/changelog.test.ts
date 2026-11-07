@@ -7,8 +7,30 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists the v0.11.1 release first with its notes", async () => {
+  test("lists the v0.11.2 browser release first with its notes", async () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.2", date: "2026-11-07", title: "Browser forms, waits and safer editing", tags: ["Added", "Changed"] })
+    expect(entry?.changes).toHaveLength(9)
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.2.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.11.2\n")
+    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
+    expect(RELEASES.filter((release) => release.version.startsWith("0.11.")).map((release) => release.version)).toEqual(["0.11.2", "0.11.1"])
+    expect(after("0.11.2")?.version).toBe("0.11.1")
+  })
+
+  test("keeps v0.11.2 browser compatibility and safety guidance explicit", async () => {
+    const entry = byVersion("0.11.2")
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.2.md", import.meta.url)).text()
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const source of [notes, text]) {
+      for (const fragment of ["Fill or clear", "approved same-origin frames", "continuous 500 ms", "successor tab", "permission, guardrail, credential and confirmation rules", "guidance describes", "concurrent typing", "sensitive values and messages", "before dispatch", "After upgrading the CLI, update or reload the bundled Chrome extension", "Bridge version 6 rejects version 5 peers", "installed extension has reloaded"])
+        expect(source).toContain(fragment)
+      expect(source).not.toMatch(/live-extension verified|historical Location cause|roadmap|milestone|\/Users\//i)
+    }
+  })
+
+  test("retains the v0.11.1 release and its notes", async () => {
+    const entry = RELEASES[1]
     expect(entry).toMatchObject({ version: "0.11.1", date: "2026-11-07", title: "Projects, autonomy modes, native Dots and supervising owners", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(132)
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.1.md", import.meta.url)).text()
@@ -16,7 +38,6 @@ describe("release entries", () => {
     for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
     for (const fragment of ["--follow", "`supervising`", "credit count instead of dollars", "`chatgpt-connectors`", "omit tool definitions"]) expect(text).toContain(fragment)
-    expect(RELEASES.filter((release) => release.version.startsWith("0.11.")).map((release) => release.version)).toEqual(["0.11.1"])
     expect(after("0.11.1")?.version).toBe("0.10.25")
     for (const source of [notes, text]) expect(source).not.toMatch(/Release lineage|re-release|bf6a24f|v0\.11\.(?:0|[2-9]|1[01])\b/)
   })
@@ -1642,7 +1663,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 43)).toEqual([
+    expect(versions.slice(0, 44)).toEqual([
+      "0.11.2",
       "0.11.1",
       "0.10.25",
       "0.10.24",

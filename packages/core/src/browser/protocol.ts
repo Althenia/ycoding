@@ -3,7 +3,7 @@ export * as BrowserProtocol from "./protocol"
 import { Browser } from "@ycoding-ai/schema/browser"
 import { Option, Schema } from "effect"
 
-export const VERSION = 5
+export const VERSION = 6
 export const MAX_FRAME_BYTES = 12 * 1024 * 1024
 export const MAX_SHARED_TABS = 8
 
@@ -29,8 +29,17 @@ const Shared = Schema.Struct({
   url: Schema.String,
   documentGeneration: Browser.DocumentGeneration,
   active: Schema.Boolean,
+  replaces: Browser.TabID.pipe(Schema.optional),
 })
-const Revoked = Schema.Struct({ type: Schema.Literal("revoked"), tabID: Browser.TabID })
+export const RevokedReason = Schema.Literals(["closed", "navigated", "detached", "access_revoked", "replaced"])
+export type RevokedReason = typeof RevokedReason.Type
+export const MAX_DETACH_REASON = 64
+const Revoked = Schema.Struct({
+  type: Schema.Literal("revoked"),
+  tabID: Browser.TabID,
+  reason: RevokedReason.pipe(Schema.optional),
+  detachReason: Schema.String.check(Schema.isMaxLength(MAX_DETACH_REASON)).pipe(Schema.optional),
+})
 const ProfileAccess = Schema.Struct({ type: Schema.Literal("profile_access"), enabled: Schema.Boolean })
 const Takeover = Schema.Struct({
   type: Schema.Literal("takeover"),
@@ -61,6 +70,12 @@ const Observation = Schema.Struct({
       name: Schema.String,
       description: Schema.String.pipe(Schema.optional),
       disabled: Schema.Boolean.pipe(Schema.optional),
+      checked: Browser.Tristate.pipe(Schema.optional),
+      pressed: Browser.Tristate.pipe(Schema.optional),
+      expanded: Schema.Boolean.pipe(Schema.optional),
+      selected: Schema.Boolean.pipe(Schema.optional),
+      value: Schema.String.pipe(Schema.optional),
+      sensitive: Schema.Literal(true).pipe(Schema.optional),
       locator: Schema.String.pipe(Schema.optional),
       destination: Schema.String.pipe(Schema.optional),
       frame: Schema.String.pipe(Schema.optional),
@@ -121,6 +136,19 @@ const Result = Schema.Struct({
     message: Schema.String,
     defaultPrompt: Schema.String.pipe(Schema.optional),
   }).pipe(Schema.optional),
+  control: Schema.Struct({
+    checked: Browser.Tristate.pipe(Schema.optional),
+    value: Schema.String.pipe(Schema.optional),
+    selected: Schema.Array(
+      Schema.Struct({
+        value: Schema.String.pipe(Schema.optional),
+        label: Schema.String,
+        index: Schema.Number,
+      }),
+    ).pipe(Schema.optional),
+    sensitive: Schema.Literal(true).pipe(Schema.optional),
+  }).pipe(Schema.optional),
+  frame: Schema.String.pipe(Schema.optional),
 })
 const HistoryResult = Schema.Struct({
   type: Schema.Literal("history_result"),
@@ -188,7 +216,7 @@ export type Handshake = typeof Pair.Type | typeof Authenticate.Type
 export type ServerMessage =
   | {
       readonly type: "paired"
-      readonly version: 5
+      readonly version: 6
       readonly generation: number
       readonly serverID: string
       readonly credential?: string

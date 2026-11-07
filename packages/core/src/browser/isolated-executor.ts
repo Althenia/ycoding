@@ -12,6 +12,7 @@ import { connect, type Client, type Event } from "./isolated-cdp"
 import { capturePage } from "./isolated-capture"
 import { makeLocationNode } from "../effect/app-node"
 import { BrowserOperation } from "./operation"
+import { IsolatedPageSafety } from "./isolated-page-safety"
 
 const INSTALLED_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 const CHROME =
@@ -24,6 +25,14 @@ const CLOSE_TIMEOUT_MS = 5_000
 const TERMINATE_TIMEOUT_MS = 500
 const KILL_TIMEOUT_MS = 1_000
 const ACTION_SETTLE_MS = 150
+const CONTROL_WORLD = "ycoding-control"
+const CONTROL_STATE_POLL_MS = 500
+const NETWORK_IDLE_QUIET_MS = 500
+const STALE_CONTEXT = /Cannot find context|Execution context was destroyed|Inspected target navigated/
+
+const valueRoles = new Set(["textbox", "searchbox", "combobox", "spinbutton", "slider", "Date", "InputTime", "DateTime", "ColorWell"])
+const inputControlRoles = new Set(["Date", "InputTime", "DateTime", "ColorWell"])
+const inputControlTypes = new Set(["color", "date", "datetime-local", "month", "range", "time", "week"])
 
 const interactiveRoles = new Set([
   "button",
@@ -71,6 +80,7 @@ const namedKeys: Readonly<Record<string, { key: string; code: string; windowsVir
   End: { key: "End", code: "End", windowsVirtualKeyCode: 35 },
   PageUp: { key: "PageUp", code: "PageUp", windowsVirtualKeyCode: 33 },
   PageDown: { key: "PageDown", code: "PageDown", windowsVirtualKeyCode: 34 },
+  Insert: { key: "Insert", code: "Insert", windowsVirtualKeyCode: 45 },
   " ": { key: " ", code: "Space", windowsVirtualKeyCode: 32 },
   Space: { key: " ", code: "Space", windowsVirtualKeyCode: 32 },
 }
@@ -102,6 +112,9 @@ export interface ActionOutput {
   readonly data?: string
   readonly webmcpTools?: ReadonlyArray<Browser.WebMcpTool>
   readonly dialog?: Browser.DialogInfo
+  readonly control?: Browser.ControlState
+  readonly frame?: Browser.Page
+  readonly message?: string
 }
 
 export interface Runtime {
@@ -246,6 +259,8 @@ async function configureRuntime(
   const refs = new Map<string, RefTarget>()
   const frameSessions = new Map<string, { targetId: string; url: string; ready?: Promise<void>; failed?: boolean }>()
   const observedFrameOrigins = new Set<string>()
+  const worlds = new Map<string, number>()
+  const networkIdle = IsolatedPageSafety.createNetworkIdleTracker()
   const logs: Browser.LogEntry[] = []
   let openDialog: (Browser.DialogInfo & { readonly sessionId?: string }) | undefined
   const pushLog = (entry: Browser.LogEntry) => {
@@ -320,6 +335,10 @@ async function configureRuntime(
   }
   const handleEvent = async (event: Event) => {
     if (closing) return
+    if (event.method.startsWith("Network.")) {
+      if (event.sessionId) networkIdle.onEvent(event.sessionId, event.method, event.params)
+      return
+    }
     if (event.method === "Page.javascriptDialogOpening") {
       const kind = typeof event.params?.type === "string" ? event.params.type : "alert"
       openDialog = {
@@ -353,6 +372,8 @@ async function configureRuntime(
       const detached = typeof event.params?.sessionId === "string" ? event.params.sessionId : undefined
       if (detached) {
         frameSessions.delete(detached)
+        networkIdle.dropSession(detached)
+        for (const key of worlds.keys()) if (key.startsWith(`${detached}|`)) worlds.delete(key)
         for (const [ref, target] of refs) if (target.sessionId === detached) refs.delete(ref)
       }
       return
@@ -381,6 +402,7 @@ async function configureRuntime(
             cdp.send("DOM.enable", {}, childSessionId),
             cdp.send("Accessibility.enable", {}, childSessionId),
             cdp.send("Runtime.enable", {}, childSessionId),
+            cdp.send("Network.enable", {}, childSessionId),
           ])
           await cdp.send(
             "Target.setAutoAttach",
@@ -463,14 +485,17 @@ async function configureRuntime(
       if (event.sessionId !== sessionId) {
         const entry = event.sessionId ? frameSessions.get(event.sessionId) : undefined
         if (entry && typeof frame.url === "string" && !frame.parentId) entry.url = frame.url
+        worlds.delete(`${event.sessionId}|${stringMaybe(frame.id)}`)
         for (const [ref, target] of refs)
           if (target.sessionId === event.sessionId && (!frame.id || target.frameId === frame.id)) refs.delete(ref)
         return
       }
       if (frame.id !== mainFrameId) {
+        worlds.delete(`${sessionId}|${stringMaybe(frame.id)}`)
         for (const [ref, target] of refs) if (target.frameId === frame.id) refs.delete(ref)
         return
       }
+      worlds.clear()
       if (initialized) documentGeneration++
       revision = 0
       refs.clear()
@@ -507,6 +532,7 @@ async function configureRuntime(
     cdp.send("DOM.enable", {}, sessionId, signal),
     cdp.send("Accessibility.enable", {}, sessionId, signal),
     cdp.send("Runtime.enable", {}, sessionId, signal),
+    cdp.send("Network.enable", {}, sessionId, signal),
     cdp.send("Inspector.enable", {}, sessionId, signal),
     cdp.send("Page.setInterceptFileChooserDialog", { enabled: true }, sessionId, signal),
     cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, sessionId, signal),
@@ -639,7 +665,8 @@ async function configureRuntime(
                 })
             }
           }
-          if (!interactiveRoles.has(role) || typeof node.backendDOMNodeId !== "number") continue
+          const inputControl = inputControlRoles.has(role)
+          if ((!interactiveRoles.has(role) && !inputControl) || typeof node.backendDOMNodeId !== "number") continue
           const backendNodeId = number(node.backendDOMNodeId)
           const key = `${session.id}\0${backendNodeId}`
           if (seen.has(key)) continue
@@ -652,12 +679,21 @@ async function configureRuntime(
           } catch {
             continue
           }
-          if (protectedInput(dom)) continue
+          if (fileInput(dom)) continue
           const attributes = attributesOf(dom.attributes)
+          if (inputControl && !(String(dom.nodeName).toLowerCase() === "input" && inputControlTypes.has((attributes.get("type") ?? "").toLowerCase()))) {
+            candidateCount--
+            continue
+          }
           const destination = attributes.get("href")
           const ref = `b${elements.length + 1}`
           refs.set(ref, { sessionId: session.id, backendNodeId, frameId: frame.id, url: frameURL })
           const elementName = bounded(stringMaybe(recordMaybe(node.name)?.value) ?? "", Browser.MAX_NAME_LENGTH)
+          const sensitive = IsolatedPageSafety.isSensitiveAttributes(
+            String(dom.nodeName),
+            attributes,
+            stringMaybe(recordMaybe(node.name)?.value) ?? "",
+          )
           const locatorBase = BrowserOperation.makeLocator({ role: bounded(role, 64), name: elementName })
           const duplicates = elements.filter((candidate) => candidate.locator?.startsWith(locatorBase)).length
           const element = {
@@ -679,6 +715,8 @@ async function configureRuntime(
             ...(destination && safePageMaybe(new URL(destination, frameURL).toString())
               ? { destination: safePageMaybe(new URL(destination, frameURL).toString()) }
               : {}),
+            ...axState(node, role, sensitive),
+            ...(sensitive ? { sensitive: true as const } : {}),
             ...(top || !page ? {} : { frame: page }),
           } satisfies Browser.Element
           elements.push({
@@ -724,26 +762,10 @@ async function configureRuntime(
     return { x: Math.min(frameQuad[0], frameQuad[6]) + cx * scaleX, y: Math.min(frameQuad[1], frameQuad[3]) + cy * scaleY }
   }
 
-  const mainWorldEvaluate = async (expression: string, signal: AbortSignal) => {
-    const response = record(
-      await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId, signal),
+  const mainWorldEvaluate = async (expression: string, signal: AbortSignal) =>
+    unwrapEvaluation(
+      record(await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId, signal)),
     )
-    if (response.exceptionDetails) {
-      const details = record(response.exceptionDetails)
-      const exception = recordMaybe(details.exception)
-      throw new globalThis.Error(
-        bounded(
-          typeof exception?.description === "string"
-            ? exception.description
-            : typeof details.text === "string"
-              ? details.text
-              : "Page evaluation failed",
-          1024,
-        ),
-      )
-    }
-    return record(response.result).value
-  }
   const modelContextExpression = (body: string) =>
     `(async () => { const mc = (typeof document !== "undefined" && document.modelContext) || (typeof navigator !== "undefined" && navigator.modelContext) || undefined; if (!mc) return { supported: false }; ${body} })()`
   const webmcpList = async (signal: AbortSignal): Promise<Browser.WebMcpTool[]> => {
@@ -767,6 +789,503 @@ async function configureRuntime(
       }))
   }
 
+  const frameIdOf = async (target: RefTarget, signal: AbortSignal) => {
+    if (target.frameId) return target.frameId
+    if (target.sessionId === sessionId) return mainFrameId
+    const tree = record(await cdp.send("Page.getFrameTree", {}, target.sessionId, signal))
+    return string(record(record(tree.frameTree).frame).id)
+  }
+  const inControlWorld = async (worldSessionId: string, frameId: string, signal: AbortSignal, run: (contextId: number) => Promise<unknown>) => {
+    const key = `${worldSessionId}|${frameId}`
+    for (let attempt = 0; ; attempt++) {
+      let contextId = worlds.get(key)
+      if (contextId === undefined) {
+        const created = record(
+          await cdp.send("Page.createIsolatedWorld", { frameId, worldName: CONTROL_WORLD }, worldSessionId, signal),
+        )
+        contextId = number(created.executionContextId)
+        worlds.set(key, contextId)
+      }
+      try {
+        return await run(contextId)
+      } catch (cause) {
+        if (!isStaleContext(cause)) throw cause
+        worlds.delete(key)
+        if (attempt > 0) throw cause
+      }
+    }
+  }
+  const callElement = async (target: RefTarget, declaration: string, args: ReadonlyArray<unknown>, signal: AbortSignal) =>
+    inControlWorld(target.sessionId, await frameIdOf(target, signal), signal, async (executionContextId) => {
+      const resolved = record(
+        await cdp.send(
+          "DOM.resolveNode",
+          { backendNodeId: target.backendNodeId, executionContextId, objectGroup: CONTROL_WORLD },
+          target.sessionId,
+          signal,
+        ),
+      )
+      try {
+        return unwrapEvaluation(
+          record(
+            await cdp.send(
+              "Runtime.callFunctionOn",
+              {
+                functionDeclaration: declaration,
+                objectId: string(record(resolved.object).objectId),
+                arguments: args.map((value) => ({ value })),
+                returnByValue: true,
+              },
+              target.sessionId,
+              signal,
+            ),
+          ),
+        )
+      } finally {
+        await cdp.send("Runtime.releaseObjectGroup", { objectGroup: CONTROL_WORLD }, target.sessionId).catch(() => {})
+      }
+    })
+  const callDocument = (worldSessionId: string, frameId: string, declaration: string, args: ReadonlyArray<unknown>, signal: AbortSignal) =>
+    inControlWorld(worldSessionId, frameId, signal, async (executionContextId) =>
+      unwrapEvaluation(
+        record(
+          await cdp.send(
+            "Runtime.callFunctionOn",
+            { functionDeclaration: declaration, executionContextId, arguments: args.map((value) => ({ value })), returnByValue: true },
+            worldSessionId,
+            signal,
+          ),
+        ),
+      ),
+    )
+  const controlState = async (target: RefTarget, signal: AbortSignal) =>
+    controlStateOf(await callElement(target, IsolatedPageSafety.F_CONTROL_STATE, [], signal))
+  const describeTarget = async (target: RefTarget, signal: AbortSignal) => {
+    const dom = record(
+      record(await cdp.send("DOM.describeNode", { backendNodeId: target.backendNodeId, depth: 0 }, target.sessionId, signal)).node,
+    )
+    return { dom, attributes: attributesOf(dom.attributes) }
+  }
+  const axNodeOf = async (target: RefTarget, signal: AbortSignal) => {
+    const response = record(
+      await cdp.send(
+        "Accessibility.getPartialAXTree",
+        { backendNodeId: target.backendNodeId, fetchRelatives: false },
+        target.sessionId,
+        signal,
+      ),
+    )
+    const nodes = Array.isArray(response.nodes) ? response.nodes.filter(isRecord) : []
+    const node = nodes.find((candidate) => candidate.backendDOMNodeId === target.backendNodeId) ?? nodes[0]
+    if (!node) throw new globalThis.Error("Element has no accessibility node")
+    return node
+  }
+  const assertEditable = async (target: RefTarget, signal: AbortSignal) => {
+    const { dom, attributes } = await describeTarget(target, signal)
+    if (fileInput(dom)) throw new globalThis.Error("Protected inputs are unsupported")
+    const name = stringMaybe(recordMaybe((await axNodeOf(target, signal)).name)?.value) ?? ""
+    if (IsolatedPageSafety.isSensitiveAttributes(String(dom.nodeName), attributes, name))
+      throw new globalThis.Error("Sensitive fields cannot be filled")
+  }
+  const elementPoint = async (target: RefTarget, signal: AbortSignal) => {
+    await cdp.send("DOM.scrollIntoViewIfNeeded", { backendNodeId: target.backendNodeId }, target.sessionId, signal)
+    const quads = record(await cdp.send("DOM.getContentQuads", { backendNodeId: target.backendNodeId }, target.sessionId, signal))
+    const quad = Array.isArray(quads.quads) && Array.isArray(quads.quads[0]) ? quads.quads[0] : undefined
+    if (!quad || quad.length < 8 || !quad.every((value) => typeof value === "number"))
+      throw new globalThis.Error("Element is not visible")
+    return mainPoint(target, quad, signal)
+  }
+  const clickTarget = async (target: RefTarget, signal: AbortSignal, onDispatch: () => void) => {
+    const { dom, attributes } = await describeTarget(target, signal)
+    if (attributes.has("download")) throw new globalThis.Error("Downloads are unsupported")
+    if (attributes.get("target") && attributes.get("target") !== "_self")
+      throw new globalThis.Error("New tabs and popups are unsupported")
+    const href = attributes.get("href")
+    if (href && !requestAllowed(new URL(href, target.url ?? initialURL).toString(), true, allowedOrigins))
+      throw new globalThis.Error("Link destination is not approved")
+    if (protectedInput(dom)) throw new globalThis.Error("Protected inputs are unsupported")
+    const { x, y } = await elementPoint(target, signal)
+    onDispatch()
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 }, sessionId, signal)
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 }, sessionId, signal)
+  }
+  const focusedFieldRefused = async (signal: AbortSignal) => {
+    const roots = [{ sessionId, frameId: mainFrameId }]
+    for (const [childSessionId, entry] of frameSessions) {
+      await entry.ready
+      if (entry.failed) throw new globalThis.Error("A frame could not be inspected for sensitive fields")
+      const tree = record(await cdp.send("Page.getFrameTree", {}, childSessionId, signal))
+      roots.push({ sessionId: childSessionId, frameId: string(record(record(tree.frameTree).frame).id) })
+    }
+    for (const root of roots) {
+      const refused = await inControlWorld(root.sessionId, root.frameId, signal, async (executionContextId) => {
+        const response = record(
+          await cdp.send(
+            "Runtime.callFunctionOn",
+            {
+              functionDeclaration: IsolatedPageSafety.F_ACTIVE_ELEMENT,
+              executionContextId,
+              objectGroup: CONTROL_WORLD,
+              returnByValue: false,
+            },
+            root.sessionId,
+            signal,
+          ),
+        )
+        unwrapEvaluation(response)
+        const objectId = stringMaybe(record(response.result).objectId)
+        if (!objectId) return true
+        try {
+          const callOnLeaf = async (functionDeclaration: string) =>
+            unwrapEvaluation(
+              record(await cdp.send("Runtime.callFunctionOn", { functionDeclaration, objectId, returnByValue: true }, root.sessionId, signal)),
+            )
+          const dom = record(
+            record(await cdp.send("DOM.describeNode", { objectId, depth: 0, pierce: true }, root.sessionId, signal)).node,
+          )
+          if (
+            dom.nodeType !== 1 ||
+            typeof dom.nodeName !== "string" ||
+            !dom.nodeName ||
+            typeof dom.backendNodeId !== "number" ||
+            !Array.isArray(dom.attributes) ||
+            dom.attributes.length % 2 !== 0 ||
+            !dom.attributes.every((attribute) => typeof attribute === "string") ||
+            (dom.shadowRoots !== undefined && !Array.isArray(dom.shadowRoots)) ||
+            (await callOnLeaf(IsolatedPageSafety.F_CONNECTED)) !== true
+          )
+            return true
+          if (
+            Array.isArray(dom.shadowRoots) &&
+            dom.shadowRoots.some((shadowRoot) =>
+              !isRecord(shadowRoot) || !["closed", "open", "user-agent"].includes(String(shadowRoot.shadowRootType)),
+            )
+          )
+            return true
+          const closedShadowRoot = (Array.isArray(dom.shadowRoots) ? dom.shadowRoots.filter(isRecord) : []).some(
+            (shadowRoot) => shadowRoot.shadowRootType === "closed",
+          )
+          let unreachableFrame: IsolatedPageSafety.FocusedLeaf["unreachableFrame"]
+          const frameUnreachable = await callOnLeaf(IsolatedPageSafety.F_FRAME_UNREACHABLE)
+          if (typeof frameUnreachable !== "boolean") return true
+          if (frameUnreachable) {
+            const owned =
+              typeof dom.frameId === "string"
+                ? roots.find((candidate) => candidate.frameId === dom.frameId && candidate.sessionId !== root.sessionId)
+                : undefined
+            const page = owned ? safePageMaybe(frameSessions.get(owned.sessionId)?.url ?? "") : undefined
+            unreachableFrame = { inspected: page !== undefined && allowedOrigins.has(page.origin) }
+            return IsolatedPageSafety.refusesEditingKey({ sensitive: false, closedShadowRoot, unreachableFrame })
+          }
+          const fieldRefused = await callOnLeaf(IsolatedPageSafety.F_REFUSE_FIELD)
+          if (fieldRefused !== false) return true
+          const tree = record(
+            await cdp.send("Accessibility.getPartialAXTree", { objectId, fetchRelatives: false }, root.sessionId, signal),
+          )
+          const node = Array.isArray(tree.nodes)
+            ? tree.nodes.filter(isRecord).find((candidate) => candidate.backendDOMNodeId === dom.backendNodeId)
+            : undefined
+          const accessibleName = recordMaybe(node?.name)?.value
+          if (typeof accessibleName !== "string") return true
+          const sensitive =
+            fileInput(dom) ||
+            IsolatedPageSafety.isSensitiveAttributes(
+              dom.nodeName,
+              attributesOf(dom.attributes),
+              accessibleName,
+            )
+          return IsolatedPageSafety.refusesEditingKey({ sensitive, closedShadowRoot })
+        } finally {
+          await cdp.send("Runtime.releaseObjectGroup", { objectGroup: CONTROL_WORLD }, root.sessionId).catch(() => {})
+        }
+      })
+      if (refused !== false) return true
+    }
+    return false
+  }
+  const settled = async (signal: AbortSignal, met: () => Promise<boolean>) => {
+    const deadline = Date.now() + CONTROL_STATE_POLL_MS
+    for (;;) {
+      if (await met()) return true
+      if (Date.now() >= deadline) return false
+      await delay(50, signal)
+    }
+  }
+
+  const fillTarget = async (
+    target: RefTarget,
+    text: string,
+    signal: AbortSignal,
+    onDispatch: () => void,
+  ): Promise<Pick<ActionOutput, "control" | "message">> => {
+    await assertEditable(target, signal)
+    const plan = record(await callElement(target, IsolatedPageSafety.F_FILL, [text, false], signal))
+    if (typeof plan.error === "string") throw new globalThis.Error(bounded(plan.error, 128))
+    onDispatch()
+    const applied = record(await callElement(target, IsolatedPageSafety.F_FILL, [text, true], signal))
+    if (typeof applied.error === "string") throw new globalThis.Error(bounded(applied.error, 128))
+    if (applied.kind === "insert") {
+      if (text === "") {
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", ...namedKeys.Delete, modifiers: 0 }, target.sessionId, signal)
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...namedKeys.Delete, modifiers: 0 }, target.sessionId, signal)
+      } else await cdp.send("Input.insertText", { text }, target.sessionId, signal)
+    }
+    const control = await controlState(target, signal)
+    return {
+      control,
+      ...(control.value !== undefined && control.value !== bounded(text, Browser.MAX_NAME_LENGTH)
+        ? { message: "The field value differs from the requested text" }
+        : {}),
+    }
+  }
+
+  const selectNative = async (
+    target: RefTarget,
+    criteria: { values?: ReadonlyArray<string>; labels?: ReadonlyArray<string>; indexes?: ReadonlyArray<number> },
+    signal: AbortSignal,
+    onDispatch: () => void,
+  ): Promise<Pick<ActionOutput, "control">> => {
+    const plan = record(await callElement(target, IsolatedPageSafety.F_SELECT, [criteria, false], signal))
+    if (typeof plan.error === "string") throw new globalThis.Error(bounded(plan.error, 128))
+    onDispatch()
+    const applied = record(await callElement(target, IsolatedPageSafety.F_SELECT, [criteria, true], signal))
+    if (typeof applied.error === "string") throw new globalThis.Error(bounded(applied.error, 128))
+    return { control: await controlState(target, signal) }
+  }
+
+  const selectListboxOption = async (
+    target: RefTarget,
+    criteria: { values?: ReadonlyArray<string>; labels?: ReadonlyArray<string>; indexes?: ReadonlyArray<number> },
+    signal: AbortSignal,
+    onDispatch: () => void,
+  ): Promise<Pick<ActionOutput, "control">> => {
+    const node = await axNodeOf(target, signal)
+    const role = stringMaybe(recordMaybe(node.role)?.value)
+    let listbox = target.backendNodeId
+    if (role === "combobox") {
+      if (axBoolean(node, "expanded") !== true)
+        throw new globalThis.Error("The combobox is collapsed. Open the list first, observe, then select")
+      const related = recordMaybe(axProperty(node, "controls")?.value)?.relatedNodes
+      let found: number | undefined
+      for (const entry of Array.isArray(related) ? related.filter(isRecord) : []) {
+        if (typeof entry.backendDOMNodeId !== "number") continue
+        const candidate = await axNodeOf({ ...target, backendNodeId: entry.backendDOMNodeId }, signal)
+        if (stringMaybe(recordMaybe(candidate.role)?.value) === "listbox") {
+          found = entry.backendDOMNodeId
+          break
+        }
+      }
+      if (found === undefined) throw new globalThis.Error("The combobox does not expose its list")
+      listbox = found
+    } else if (role !== "listbox") throw new globalThis.Error("Element is not a select or listbox")
+    if (criteria.values) throw new globalThis.Error("Option values apply only to native selects; use labels or indexes")
+    if ((criteria.labels?.length ?? criteria.indexes?.length) !== 1)
+      throw new globalThis.Error("Select exactly one option of a listbox")
+    const queried = record(
+      await cdp.send("Accessibility.queryAXTree", { backendNodeId: listbox, role: "option" }, target.sessionId, signal),
+    )
+    const options = (Array.isArray(queried.nodes) ? queried.nodes.filter(isRecord) : [])
+      .flatMap((candidate) =>
+        candidate.ignored !== true && typeof candidate.backendDOMNodeId === "number"
+          ? [{ node: candidate, backendNodeId: candidate.backendDOMNodeId }]
+          : [],
+      )
+      .map((option, index) => ({
+        ...option,
+        index,
+        label: bounded(normalizeSpace(stringMaybe(recordMaybe(option.node.name)?.value) ?? ""), Browser.MAX_NAME_LENGTH),
+      }))
+    const wanted = criteria.labels
+      ? options.find((option) => option.label === normalizeSpace(criteria.labels?.[0] ?? ""))
+      : options[criteria.indexes?.[0] ?? -1]
+    if (!wanted) throw new globalThis.Error("Option not found")
+    if (axBoolean(wanted.node, "disabled") === true) throw new globalThis.Error("Option is disabled")
+    const selectedState = (selected: boolean) => ({ control: { selected: selected ? [{ label: wanted.label, index: wanted.index }] : [] } })
+    if (axBoolean(wanted.node, "selected") === true) return selectedState(true)
+    const optionTarget = { ...target, backendNodeId: wanted.backendNodeId }
+    await clickTarget(optionTarget, signal, onDispatch)
+    let selected = false
+    await settled(signal, async () => {
+      selected = axBoolean(await axNodeOf(optionTarget, signal), "selected") === true
+      return selected
+    })
+    return selectedState(selected)
+  }
+
+  const checkTarget = async (
+    target: RefTarget,
+    checked: boolean,
+    signal: AbortSignal,
+    onDispatch: () => void,
+  ): Promise<Pick<ActionOutput, "control" | "message">> => {
+    const node = await axNodeOf(target, signal)
+    const role = stringMaybe(recordMaybe(node.role)?.value)
+    const current = axTristate(node, "checked")
+    if (current === undefined) throw new globalThis.Error("Element does not expose a checked state")
+    if (current === checked) return { control: { checked: current } }
+    if (!checked && (role === "radio" || role === "menuitemradio"))
+      throw new globalThis.Error("A radio button cannot be unchecked")
+    await clickTarget(target, signal, onDispatch)
+    let observed = current
+    await settled(signal, async () => {
+      observed = axTristate(await axNodeOf(target, signal), "checked") ?? observed
+      return observed === checked
+    })
+    return {
+      control: { checked: observed },
+      ...(observed === checked ? {} : { message: "The control did not change state" }),
+    }
+  }
+
+  const approvedFrames = async (signal: AbortSignal) => {
+    const info = record(record(await cdp.send("Target.getTargetInfo", { targetId }, undefined, signal)).targetInfo)
+    const current = safeURL(string(info.url))
+    const allowed = new Set([...allowedOrigins, ...observedFrameOrigins])
+    const sessions = [
+      { id: sessionId, url: current.toString(), failed: false, ready: undefined as Promise<void> | undefined },
+      ...[...frameSessions.entries()].map(([id, entry]) => ({ id, url: entry.url, failed: entry.failed === true, ready: entry.ready })),
+    ]
+    await Promise.all(sessions.flatMap((session) => (session.ready ? [session.ready] : [])))
+    const frames: Array<{ sessionId: string; frameId: string; top: boolean; page?: Browser.Page }> = []
+    for (const session of sessions) {
+      const main = session.id === sessionId
+      const list: { id?: string; url?: string }[] = []
+      try {
+        collectFrames(record(record(await cdp.send("Page.getFrameTree", {}, session.id, signal)).frameTree), list)
+      } catch (cause) {
+        if (main) throw cause
+        continue
+      }
+      for (const [index, frame] of list.entries()) {
+        const top = main && index === 0
+        const page = safePageMaybe(frame.url || (top ? current.toString() : session.url))
+        if (!frame.id || (!top && (!page || !allowed.has(page.origin) || session.failed))) continue
+        frames.push({ sessionId: session.id, frameId: frame.id, top, page })
+      }
+    }
+    return frames
+  }
+  const hasArea = (quads: unknown) =>
+    Array.isArray(quads) &&
+    quads.some((quad) => {
+      if (!Array.isArray(quad) || quad.length < 8 || !quad.every((value) => typeof value === "number")) return false
+      const xs = [quad[0], quad[2], quad[4], quad[6]]
+      const ys = [quad[1], quad[3], quad[5], quad[7]]
+      return Math.max(...xs) - Math.min(...xs) > 0 && Math.max(...ys) - Math.min(...ys) > 0
+    })
+  const targetVisible = (target: RefTarget, signal: AbortSignal) =>
+    cdp.send("DOM.getContentQuads", { backendNodeId: target.backendNodeId }, target.sessionId, signal).then(
+      (response) => hasArea(record(response).quads),
+      () => false,
+    )
+  const tolerateStale = async <A>(run: () => Promise<A>): Promise<A | undefined> => {
+    try {
+      return await run()
+    } catch (cause) {
+      if (isStaleContext(cause)) return undefined
+      throw cause
+    }
+  }
+
+  type WaitMatch = { readonly frame?: Browser.Page }
+  const waitCheck = (wait: Extract<Browser.Action, { type: "wait" }>, started: number, signal: AbortSignal) => {
+    if (wait.ref !== undefined || wait.locator !== undefined) {
+      const parsed = wait.ref === undefined ? BrowserOperation.parseLocator(wait.locator ?? "") : undefined
+      if (wait.ref === undefined && !parsed) throw new globalThis.Error("Locator is malformed")
+      const state = wait.state ?? (wait.ref === undefined ? "visible" : "attached")
+      const check = async (): Promise<WaitMatch | undefined> => {
+        let target: RefTarget | undefined
+        let page: Browser.Page | undefined
+        if (wait.ref !== undefined) {
+          target = refs.get(wait.ref)
+          if (
+            target &&
+            !(await callElement(target, IsolatedPageSafety.F_CONNECTED, [], signal).then((connected) => connected === true, () => false))
+          )
+            target = undefined
+          if (target && (target.sessionId !== sessionId || target.frameId !== mainFrameId)) page = safePageMaybe(target.url ?? "")
+        } else if (parsed) {
+          const seen = new Set<string>()
+          let matched = 0
+          for (const frame of await approvedFrames(signal)) {
+            const ax = record(
+              await cdp
+                .send("Accessibility.getFullAXTree", { depth: Browser.MAX_AX_DEPTH, frameId: frame.frameId }, frame.sessionId, signal)
+                .catch(() => ({})),
+            )
+            for (const node of Array.isArray(ax.nodes) ? ax.nodes.filter(isRecord) : []) {
+              if (node.ignored === true || typeof node.backendDOMNodeId !== "number") continue
+              if (stringMaybe(recordMaybe(node.role)?.value) !== parsed.role) continue
+              if (!BrowserOperation.locatorNameMatches(parsed.name, stringMaybe(recordMaybe(node.name)?.value) ?? "")) continue
+              const key = `${frame.sessionId}\0${node.backendDOMNodeId}`
+              if (seen.has(key)) continue
+              seen.add(key)
+              if (matched++ !== parsed.nth) continue
+              target = { sessionId: frame.sessionId, backendNodeId: node.backendDOMNodeId, frameId: frame.frameId }
+              page = frame.top ? undefined : frame.page
+            }
+          }
+        }
+        const attached = target !== undefined
+        const visible = target !== undefined && (await targetVisible(target, signal))
+        const met = state === "attached" ? attached : state === "visible" ? visible : state === "hidden" ? !visible : !attached
+        if (!met) return undefined
+        return state === "attached" || state === "visible" ? { frame: page } : {}
+      }
+      return { check, interval: 250 }
+    }
+    if (wait.url !== undefined) {
+      const pattern = wait.url
+      return {
+        interval: 100,
+        check: async (): Promise<WaitMatch | undefined> => {
+          const info = record(record(await cdp.send("Target.getTargetInfo", { targetId }, undefined, signal)).targetInfo)
+          const current = safeURL(string(info.url))
+          if (!allowedOrigins.has(current.origin))
+            throw new globalThis.Error("The browser crossed its approved origin boundary")
+          return IsolatedPageSafety.globMatch(pattern, `${current.origin}${current.pathname}`) ? {} : undefined
+        },
+      }
+    }
+    if (wait.text !== undefined) {
+      const needle = wait.text
+      return {
+        interval: 250,
+        check: async (): Promise<WaitMatch | undefined> => {
+          for (const frame of await approvedFrames(signal)) {
+            const present = await tolerateStale(() =>
+              callDocument(frame.sessionId, frame.frameId, IsolatedPageSafety.F_TEXT_PRESENT, [needle], signal),
+            )
+            if (present === true) return { frame: frame.top ? undefined : frame.page }
+          }
+          return undefined
+        },
+      }
+    }
+    const load = wait.load ?? "load"
+    return {
+      interval: 100,
+      check: async (): Promise<WaitMatch | undefined> => {
+        if (load === "networkidle") return networkIdle.idleFor(NETWORK_IDLE_QUIET_MS, started) ? {} : undefined
+        const readyState = await tolerateStale(() =>
+          callDocument(sessionId, mainFrameId, IsolatedPageSafety.F_READY, [], signal),
+        )
+        return readyState === "complete" || (load === "domcontentloaded" && readyState === "interactive") ? {} : undefined
+      },
+    }
+  }
+  const runWait = async (wait: Extract<Browser.Action, { type: "wait" }>, signal: AbortSignal): Promise<WaitMatch> => {
+    const started = Date.now()
+    const deadline = started + Math.min(Math.max(wait.timeoutMs ?? 5000, 0), Browser.MAX_WAIT_MS)
+    const { check, interval } = waitCheck(wait, started, signal)
+    for (;;) {
+      const match = await check()
+      if (match) return match
+      if (Date.now() >= deadline) throw new globalThis.Error("Timed out waiting for the page")
+      await delay(interval, signal)
+    }
+  }
+
   const action = (action: Browser.Action, origins: ReadonlyArray<string>) =>
     Effect.tryPromise({
       try: async (actionSignal) => {
@@ -777,7 +1296,10 @@ async function configureRuntime(
           [...allowedOrigins].map((origin) => denyClipboard(cdp, browserContextId, origin, actionSignal)),
         )
         let dispatched = false
-        let peripheral: Pick<ActionOutput, "text" | "logs" | "data" | "webmcpTools" | "dialog"> = {}
+        let peripheral: Pick<ActionOutput, "text" | "logs" | "data" | "webmcpTools" | "dialog" | "control" | "frame" | "message"> = {}
+        const onDispatch = () => {
+          dispatched = true
+        }
         const popupStart = popupRejections
         const downloadStart = downloadAttempts
         try {
@@ -789,51 +1311,29 @@ async function configureRuntime(
             dispatched = true
             await cdp.send("Page.navigate", { url: destination.toString() }, sessionId, actionSignal)
           }
-          if (action.type === "click") {
-            const target = requireRef(refs, action.ref ?? "")
-            const backendNodeId = target.backendNodeId
-            const described = record(
-              await cdp.send("DOM.describeNode", { backendNodeId, depth: 0 }, target.sessionId, actionSignal),
-            )
-            const dom = record(described.node)
-            const attributes = attributesOf(dom.attributes)
-            if (attributes.has("download")) throw new globalThis.Error("Downloads are unsupported")
-            if (attributes.get("target") && attributes.get("target") !== "_self")
-              throw new globalThis.Error("New tabs and popups are unsupported")
-            const href = attributes.get("href")
-            if (href && !requestAllowed(new URL(href, target.url ?? initialURL).toString(), true, allowedOrigins))
-              throw new globalThis.Error("Link destination is not approved")
-            if (protectedInput(dom)) throw new globalThis.Error("Protected inputs are unsupported")
-            await cdp.send("DOM.scrollIntoViewIfNeeded", { backendNodeId }, target.sessionId, actionSignal)
-            const quads = record(await cdp.send("DOM.getContentQuads", { backendNodeId }, target.sessionId, actionSignal))
-            const quad = Array.isArray(quads.quads) && Array.isArray(quads.quads[0]) ? quads.quads[0] : undefined
-            if (!quad || quad.length < 8 || !quad.every((value) => typeof value === "number"))
-              throw new globalThis.Error("Element is not visible")
-            const { x, y } = await mainPoint(target, quad, actionSignal)
-            dispatched = true
-            await cdp.send(
-              "Input.dispatchMouseEvent",
-              { type: "mousePressed", x, y, button: "left", clickCount: 1 },
-              sessionId,
-              actionSignal,
-            )
-            await cdp.send(
-              "Input.dispatchMouseEvent",
-              { type: "mouseReleased", x, y, button: "left", clickCount: 1 },
-              sessionId,
-              actionSignal,
-            )
-          }
+          if (action.type === "click") await clickTarget(requireRef(refs, action.ref ?? ""), actionSignal, onDispatch)
           if (action.type === "type") {
             const target = requireRef(refs, action.ref ?? "")
-            const backendNodeId = target.backendNodeId
-            const described = record(
-              await cdp.send("DOM.describeNode", { backendNodeId, depth: 0 }, target.sessionId, actionSignal),
-            )
-            if (protectedInput(record(described.node))) throw new globalThis.Error("Protected inputs are unsupported")
+            await assertEditable(target, actionSignal)
             dispatched = true
-            await cdp.send("DOM.focus", { backendNodeId }, target.sessionId, actionSignal)
+            await cdp.send("DOM.focus", { backendNodeId: target.backendNodeId }, target.sessionId, actionSignal)
             await cdp.send("Input.insertText", { text: action.text }, target.sessionId, actionSignal)
+          }
+          if (action.type === "fill")
+            peripheral = await fillTarget(requireRef(refs, action.ref ?? ""), action.text, actionSignal, onDispatch)
+          if (action.type === "select") {
+            const target = requireRef(refs, action.ref ?? "")
+            const criteria = { values: action.values, labels: action.labels, indexes: action.indexes }
+            peripheral = String((await describeTarget(target, actionSignal)).dom.nodeName).toLowerCase() === "select"
+              ? await selectNative(target, criteria, actionSignal, onDispatch)
+              : await selectListboxOption(target, criteria, actionSignal, onDispatch)
+          }
+          if (action.type === "check")
+            peripheral = await checkTarget(requireRef(refs, action.ref ?? ""), action.checked, actionSignal, onDispatch)
+          if (action.type === "hover") {
+            const { x, y } = await elementPoint(requireRef(refs, action.ref ?? ""), actionSignal)
+            dispatched = true
+            await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }, sessionId, actionSignal)
           }
           if (action.type === "scroll")
             await cdp.send(
@@ -865,6 +1365,8 @@ async function configureRuntime(
             const named = namedKeys[action.key]
             const single = action.key.length === 1
             if (!named && !single) throw new globalThis.Error(`Unsupported key: ${action.key.slice(0, 32)}`)
+            if (!IsolatedPageSafety.isSafeNavigationKey(action.key, action.modifiers) && (await focusedFieldRefused(actionSignal)))
+              throw new globalThis.Error("The focused element cannot be proven free of sensitive fields; keyboard text input is refused")
             const base = named ?? { key: action.key, code: "", windowsVirtualKeyCode: 0 }
             dispatched = true
             await cdp.send(
@@ -875,26 +1377,7 @@ async function configureRuntime(
             )
             await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...base, modifiers }, sessionId, actionSignal)
           }
-          if (action.type === "wait") {
-            const deadline = Date.now() + Math.min(Math.max(action.timeoutMs ?? 5000, 0), Browser.MAX_WAIT_MS)
-            for (;;) {
-              let ready = false
-              if (action.ref) {
-                const target = refs.get(action.ref)
-                if (target)
-                  ready = await cdp
-                    .send("DOM.describeNode", { backendNodeId: target.backendNodeId, depth: 0 }, target.sessionId, actionSignal)
-                    .then(() => true, () => false)
-              } else {
-                const tree = record(await cdp.send("Page.getFrameTree", {}, sessionId, actionSignal))
-                const frame = record(record(tree.frameTree).frame)
-                ready = typeof frame.url === "string" && frame.url !== "about:blank"
-              }
-              if (ready) break
-              if (Date.now() >= deadline) throw new globalThis.Error("Timed out waiting for the page")
-              await delay(100, actionSignal)
-            }
-          }
+          if (action.type === "wait") peripheral = await runWait(action, actionSignal)
           if (action.type === "dialog") {
             if (action.accept === undefined) {
               if (!openDialog) throw new globalThis.Error("No JavaScript dialog is open on this tab")
@@ -990,6 +1473,8 @@ async function configureRuntime(
     if (closePromise) return closePromise
     closePromise = (async () => {
       closing = true
+      worlds.clear()
+      networkIdle.clear()
       unsubscribe()
       await Promise.race([
         cdp
@@ -1085,6 +1570,104 @@ function safePageMaybe(input: string): Browser.Page | undefined {
     return { origin: url.origin, path: url.pathname || "/" }
   } catch {
     return undefined
+  }
+}
+
+function fileInput(node: Readonly<Record<string, unknown>>) {
+  return String(node.nodeName).toLowerCase() === "input" && (attributesOf(node.attributes).get("type") ?? "text").toLowerCase() === "file"
+}
+
+function isStaleContext(cause: unknown) {
+  return cause instanceof globalThis.Error && STALE_CONTEXT.test(cause.message)
+}
+
+function normalizeSpace(input: string) {
+  return input.replace(/\s+/g, " ").trim()
+}
+
+function collectFrames(node: Readonly<Record<string, unknown>>, output: { id?: string; url?: string }[]) {
+  const frame = recordMaybe(node.frame)
+  if (!frame) return
+  output.push({ id: stringMaybe(frame.id), url: stringMaybe(frame.url) })
+  if (Array.isArray(node.childFrames)) for (const child of node.childFrames.filter(isRecord)) collectFrames(child, output)
+}
+
+function unwrapEvaluation(response: Readonly<Record<string, unknown>>) {
+  if (response.exceptionDetails) {
+    const details = record(response.exceptionDetails)
+    const exception = recordMaybe(details.exception)
+    throw new globalThis.Error(
+      bounded(
+        typeof exception?.description === "string"
+          ? exception.description
+          : typeof details.text === "string"
+            ? details.text
+            : "Page evaluation failed",
+        1024,
+      ),
+    )
+  }
+  return record(response.result).value
+}
+
+function axProperty(node: Readonly<Record<string, unknown>>, name: string) {
+  return (Array.isArray(node.properties) ? node.properties.filter(isRecord) : []).find((property) => property.name === name)
+}
+
+function axTristate(node: Readonly<Record<string, unknown>>, name: string): boolean | "mixed" | undefined {
+  const value = recordMaybe(axProperty(node, name)?.value)?.value
+  if (value === true || value === "true") return true
+  if (value === false || value === "false") return false
+  return value === "mixed" ? "mixed" : undefined
+}
+
+function axBoolean(node: Readonly<Record<string, unknown>>, name: string) {
+  const value = recordMaybe(axProperty(node, name)?.value)?.value
+  return typeof value === "boolean" ? value : undefined
+}
+
+function axState(node: Readonly<Record<string, unknown>>, role: string, sensitive: boolean) {
+  const checked = axTristate(node, "checked")
+  const pressed = axTristate(node, "pressed")
+  const expanded = axBoolean(node, "expanded")
+  const selected = axBoolean(node, "selected")
+  const raw = recordMaybe(node.value)?.value
+  const value =
+    !sensitive && valueRoles.has(role) && (typeof raw === "string" || typeof raw === "number")
+      ? bounded(String(raw), Browser.MAX_NAME_LENGTH)
+      : undefined
+  return {
+    ...(checked !== undefined ? { checked } : {}),
+    ...(pressed !== undefined ? { pressed } : {}),
+    ...(expanded !== undefined ? { expanded } : {}),
+    ...(selected !== undefined ? { selected } : {}),
+    ...(value !== undefined ? { value } : {}),
+  }
+}
+
+function controlStateOf(input: unknown): Browser.ControlState {
+  const value = recordMaybe(input) ?? {}
+  if (value.sensitive === true) return { sensitive: true }
+  const selected = Array.isArray(value.selected)
+    ? value.selected
+        .filter(isRecord)
+        .slice(0, Browser.MAX_SELECT_OPTIONS)
+        .flatMap((option) =>
+          typeof option.label === "string" && typeof option.index === "number" && Number.isSafeInteger(option.index) && option.index >= 0
+            ? [
+                {
+                  ...(typeof option.value === "string" ? { value: bounded(option.value, Browser.MAX_NAME_LENGTH) } : {}),
+                  label: bounded(option.label, Browser.MAX_NAME_LENGTH),
+                  index: option.index,
+                },
+              ]
+            : [],
+        )
+    : undefined
+  return {
+    ...(value.checked === true || value.checked === false || value.checked === "mixed" ? { checked: value.checked } : {}),
+    ...(typeof value.value === "string" ? { value: bounded(value.value, Browser.MAX_NAME_LENGTH) } : {}),
+    ...(selected ? { selected } : {}),
   }
 }
 

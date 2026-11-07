@@ -117,7 +117,7 @@ describe("Browser selected-tab contract", () => {
     ])
       expect(Schema.is(Browser.ActionInput)({ ...base, action }), JSON.stringify(action)).toBe(true)
     for (const action of [
-      { type: "hover", ref: "b1" },
+      { type: "drag", ref: "b1" },
       { type: "key", key: "" },
       { type: "key", key: "Enter", modifiers: ["Hyper"] },
       { type: "wait", timeoutMs: Browser.MAX_WAIT_MS + 1 },
@@ -268,5 +268,121 @@ describe("Browser selected-tab contract", () => {
     }
     expect(Schema.decodeUnknownSync(Browser.Observation)(observation) as unknown).toEqual(observation)
     expect(Schema.is(Browser.ObserveInput)({ sessionID: tab.sessionID, tabID: tab.id, generation: 1, callID: "o1", diff: true })).toBe(true)
+  })
+
+  const actionBase = {
+    sessionID: "ses_contract", tabID: "btab_contract", generation: 1,
+    documentGeneration: 2, observationRevision: 3, callID: "call_contract",
+  }
+
+  test("accepts bounded fill, select, check, and hover actions and rejects unbounded or ambiguous forms", () => {
+    for (const action of [
+      { type: "fill", ref: "b1", text: "synthetic" },
+      { type: "fill", locator: 'role=textbox[name="Email"]', text: "" },
+      { type: "fill", ref: "b1", text: "x".repeat(Browser.MAX_TYPE_BYTES) },
+      { type: "select", ref: "b1", values: ["a"] },
+      { type: "select", ref: "b1", labels: ["First", "Second"] },
+      { type: "select", locator: 'role=combobox[name="Size"]', indexes: [0] },
+      { type: "select", ref: "b1", values: Array(Browser.MAX_SELECT_OPTIONS).fill("v") },
+      { type: "check", ref: "b1", checked: true },
+      { type: "check", locator: 'role=checkbox[name="Agree"]', checked: false },
+      { type: "hover", ref: "b1" },
+      { type: "hover", locator: 'role=menuitem[name="File"]' },
+    ])
+      expect(Schema.is(Browser.ActionInput)({ ...actionBase, action }), JSON.stringify(action)).toBe(true)
+    for (const action of [
+      { type: "fill", ref: "b1", text: "x".repeat(Browser.MAX_TYPE_BYTES + 1) },
+      { type: "fill", ref: "b1", text: "é".repeat(Browser.MAX_TYPE_BYTES / 2 + 1) },
+      { type: "fill", ref: "b1" },
+      { type: "select", ref: "b1" },
+      { type: "select", ref: "b1", values: ["a"], labels: ["A"] },
+      { type: "select", ref: "b1", values: ["a"], indexes: [0] },
+      { type: "select", ref: "b1", values: [] },
+      { type: "select", ref: "b1", values: Array(Browser.MAX_SELECT_OPTIONS + 1).fill("v") },
+      { type: "select", ref: "b1", indexes: [-1] },
+      { type: "select", ref: "b1", indexes: [1.5] },
+      { type: "select", ref: "b1", labels: ["x".repeat(Browser.MAX_NAME_LENGTH + 1)] },
+      { type: "check", ref: "b1" },
+      { type: "check", ref: "b1", checked: "mixed" },
+      { type: "hover", ref: "x1" },
+      { type: "hover", locator: "" },
+    ])
+      expect(Schema.is(Browser.ActionInput)({ ...actionBase, action }), JSON.stringify(action)).toBe(false)
+  })
+
+  test("accepts one wait condition and rejects combined conditions or a state without a target", () => {
+    for (const action of [
+      { type: "wait" },
+      { type: "wait", ref: "b1", state: "detached" },
+      { type: "wait", locator: 'role=heading[name="Done"]' },
+      { type: "wait", locator: 'role=dialog[name="Saved"]', state: "hidden", timeoutMs: 0 },
+      { type: "wait", url: "https://example.test/orders/*" },
+      { type: "wait", load: "domcontentloaded" },
+      { type: "wait", load: "load" },
+      { type: "wait", load: "networkidle", timeoutMs: Browser.MAX_WAIT_MS },
+      { type: "wait", text: "Order saved" },
+      { type: "wait", url: "x".repeat(Browser.MAX_URL_PATTERN_BYTES) },
+      { type: "wait", text: "x".repeat(Browser.MAX_WAIT_TEXT_BYTES) },
+    ])
+      expect(Schema.is(Browser.ActionInput)({ ...actionBase, action }), JSON.stringify(action)).toBe(true)
+    for (const action of [
+      { type: "wait", ref: "b1", url: "https://example.test/*" },
+      { type: "wait", locator: 'role=button[name="Go"]', text: "Go" },
+      { type: "wait", url: "https://example.test/*", load: "load" },
+      { type: "wait", load: "load", text: "Ready" },
+      { type: "wait", state: "visible" },
+      { type: "wait", state: "visible", url: "https://example.test/*" },
+      { type: "wait", ref: "b1", state: "enabled" },
+      { type: "wait", load: "commit" },
+      { type: "wait", url: "" },
+      { type: "wait", text: "" },
+      { type: "wait", url: "x".repeat(Browser.MAX_URL_PATTERN_BYTES + 1) },
+      { type: "wait", text: "x".repeat(Browser.MAX_WAIT_TEXT_BYTES + 1) },
+      { type: "wait", text: "Ready", timeoutMs: Browser.MAX_WAIT_MS + 1 },
+    ])
+      expect(Schema.is(Browser.ActionInput)({ ...actionBase, action }), JSON.stringify(action)).toBe(false)
+  })
+
+  test("bounds element state, control state, and match frame fields", () => {
+    const observation = {
+      tabID: tab.id, generation: 1, documentGeneration: 2, revision: 3, title: "Fixture", page: tab.page,
+      elements: [
+        { ref: "b1", role: "checkbox", name: "Agree", checked: "mixed" },
+        { ref: "b2", role: "button", name: "Bold", pressed: true },
+        { ref: "b3", role: "combobox", name: "Size", expanded: false, value: "Large" },
+        { ref: "b4", role: "option", name: "Small", selected: true },
+        { ref: "b5", role: "textbox", name: "Password", sensitive: true },
+        { ref: "b6", role: "textbox", name: "Notes", value: "x".repeat(Browser.MAX_NAME_LENGTH) },
+      ],
+      truncated: false,
+    }
+    expect(Schema.decodeUnknownSync(Browser.Observation)(observation) as unknown).toEqual(observation)
+    for (const element of [
+      { ref: "b1", role: "textbox", name: "Notes", value: "x".repeat(Browser.MAX_NAME_LENGTH + 1) },
+      { ref: "b1", role: "textbox", name: "Password", sensitive: false },
+      { ref: "b1", role: "checkbox", name: "Agree", checked: "true" },
+      { ref: "b1", role: "button", name: "Bold", pressed: "partial" },
+      { ref: "b1", role: "combobox", name: "Size", expanded: "mixed" },
+      { ref: "b1", role: "option", name: "Small", selected: "mixed" },
+    ])
+      expect(Schema.is(Browser.Observation)({ ...observation, elements: [element] }), JSON.stringify(element)).toBe(false)
+    const result = {
+      callID: "c1", tab, status: "completed",
+      control: { checked: false, value: "synthetic", selected: [{ value: "s", label: "Small", index: 0 }, { label: "Listbox", index: 2 }] },
+      frame: { origin: "https://child.example.test", path: "/widget" },
+    }
+    expect(Schema.decodeUnknownSync(Browser.ActionResult)(result) as unknown).toEqual(result)
+    expect(Schema.decodeUnknownSync(Browser.ActionResult)({ ...result, control: { sensitive: true } }).control)
+      .toEqual({ sensitive: true })
+    for (const control of [
+      { sensitive: false },
+      { checked: "on" },
+      { value: "x".repeat(Browser.MAX_NAME_LENGTH + 1) },
+      { selected: Array(Browser.MAX_SELECT_OPTIONS + 1).fill({ label: "x", index: 0 }) },
+      { selected: [{ label: "x", index: -1 }] },
+      { selected: [{ value: "x", index: 0 }] },
+    ])
+      expect(Schema.is(Browser.ActionResult)({ ...result, control }), JSON.stringify(control)).toBe(false)
+    expect(Schema.is(Browser.ActionResult)({ ...result, frame: { origin: "https://child.example.test", path: "/w?token=x" } })).toBe(false)
   })
 })

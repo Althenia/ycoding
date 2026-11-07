@@ -21,6 +21,9 @@ export const MAX_LOCATOR_LENGTH = 512
 export const MAX_CAPTURE_BYTES = 1024 * 1024
 export const MAX_TITLE_LENGTH = 512
 export const MAX_NAME_LENGTH = 1024
+export const MAX_SELECT_OPTIONS = 32
+export const MAX_URL_PATTERN_BYTES = 2048
+export const MAX_WAIT_TEXT_BYTES = 1024
 
 const utf8 = new TextEncoder()
 const boundedUtf8 = (bytes: number) =>
@@ -101,12 +104,21 @@ export const Pairing = Schema.Struct({
 }).annotate({ identifier: "Browser.Pairing" })
 export interface Pairing extends Schema.Schema.Type<typeof Pairing> {}
 
+export const Tristate = Schema.Union([Schema.Boolean, Schema.Literal("mixed")])
+export type Tristate = typeof Tristate.Type
+
 export const Element = Schema.Struct({
   ref: Schema.String.check(Schema.isPattern(/^b[1-9][0-9]{0,3}$/)),
   role: Schema.String.check(Schema.isMaxLength(64)),
   name: Schema.String.check(Schema.isMaxLength(MAX_NAME_LENGTH)),
   description: Schema.String.check(Schema.isMaxLength(MAX_NAME_LENGTH)).pipe(optional),
   disabled: Schema.Boolean.pipe(optional),
+  checked: Tristate.pipe(optional),
+  pressed: Tristate.pipe(optional),
+  expanded: Schema.Boolean.pipe(optional),
+  selected: Schema.Boolean.pipe(optional),
+  value: Schema.String.check(Schema.isMaxLength(MAX_NAME_LENGTH)).pipe(optional),
+  sensitive: Schema.Literal(true).pipe(optional),
   locator: Schema.String.check(Schema.isMaxLength(MAX_LOCATOR_LENGTH)).pipe(optional),
   destination: Page.pipe(optional),
   frame: Page.pipe(optional),
@@ -191,11 +203,74 @@ export const Key = Schema.Struct({
     .check(Schema.isMaxLength(4))
     .pipe(optional),
 })
+export const Fill = Schema.Struct({
+  type: Schema.Literal("fill"),
+  ref: Element.fields.ref.pipe(optional),
+  locator: Locator.pipe(optional),
+  text: boundedUtf8(MAX_TYPE_BYTES),
+})
+const OptionText = Schema.String.check(Schema.isMaxLength(MAX_NAME_LENGTH))
+export const selectCriterion = Schema.makeFilter<{
+  readonly values?: ReadonlyArray<string>
+  readonly labels?: ReadonlyArray<string>
+  readonly indexes?: ReadonlyArray<number>
+}>((value) => [value.values, value.labels, value.indexes].filter((list) => list !== undefined).length === 1, {
+  expected: "exactly one of values, labels, or indexes",
+  meta: { _tag: "isMaxProperties", maxProperties: 6 },
+  arbitrary: { constraint: { maxLength: 6 } },
+})
+export const Select = Schema.Struct({
+  type: Schema.Literal("select"),
+  ref: Element.fields.ref.pipe(optional),
+  locator: Locator.pipe(optional),
+  values: Schema.Array(OptionText).check(Schema.isMinLength(1), Schema.isMaxLength(MAX_SELECT_OPTIONS)).pipe(optional),
+  labels: Schema.Array(OptionText).check(Schema.isMinLength(1), Schema.isMaxLength(MAX_SELECT_OPTIONS)).pipe(optional),
+  indexes: Schema.Array(NonNegativeInt).check(Schema.isMinLength(1), Schema.isMaxLength(MAX_SELECT_OPTIONS)).pipe(optional),
+}).check(selectCriterion)
+export const Check = Schema.Struct({
+  type: Schema.Literal("check"),
+  ref: Element.fields.ref.pipe(optional),
+  locator: Locator.pipe(optional),
+  checked: Schema.Boolean,
+})
+export const Hover = Schema.Struct({
+  type: Schema.Literal("hover"),
+  ref: Element.fields.ref.pipe(optional),
+  locator: Locator.pipe(optional),
+})
+export const WaitState = Schema.Literals(["attached", "visible", "hidden", "detached"])
+export const LoadState = Schema.Literals(["domcontentloaded", "load", "networkidle"])
+export const waitCondition = Schema.makeFilter<{
+  readonly ref?: string
+  readonly locator?: string
+  readonly state?: string
+  readonly url?: string
+  readonly load?: string
+  readonly text?: string
+}>(
+  (value) => {
+    const target = value.ref !== undefined || value.locator !== undefined
+    return (
+      [target, value.url !== undefined, value.load !== undefined, value.text !== undefined].filter(Boolean).length <= 1 &&
+      (value.state === undefined || target)
+    )
+  },
+  {
+    expected: "at most one wait condition: ref or locator with optional state, url, load, or text",
+    meta: { _tag: "isMaxProperties", maxProperties: 8 },
+    arbitrary: { constraint: { maxLength: 8 } },
+  },
+)
 export const Wait = Schema.Struct({
   type: Schema.Literal("wait"),
   ref: Element.fields.ref.pipe(optional),
+  locator: Locator.pipe(optional),
+  state: WaitState.pipe(optional),
+  url: boundedUtf8(MAX_URL_PATTERN_BYTES).check(Schema.isMinLength(1)).pipe(optional),
+  load: LoadState.pipe(optional),
+  text: boundedUtf8(MAX_WAIT_TEXT_BYTES).check(Schema.isMinLength(1)).pipe(optional),
   timeoutMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(MAX_WAIT_MS)).pipe(optional),
-})
+}).check(waitCondition)
 export const ClipboardRead = Schema.Struct({ type: Schema.Literal("clipboard_read") })
 export const ClipboardWrite = Schema.Struct({
   type: Schema.Literal("clipboard_write"),
@@ -228,7 +303,7 @@ export const WebMcpInvoke = Schema.Struct({
   arguments: Schema.Json.pipe(optional),
 })
 export const Action = Schema.Union([
-  Navigate, Click, Type, Scroll, Capture, Group, Ungroup, Back, Forward, Reload, Key, Wait,
+  Navigate, Click, Type, Fill, Select, Check, Hover, Scroll, Capture, Group, Ungroup, Back, Forward, Reload, Key, Wait,
   ClipboardRead, ClipboardWrite, Upload, Download, Logs, Export, WebMcpList, WebMcpInvoke, Dialog,
 ])
 export type Action = typeof Action.Type
@@ -323,6 +398,21 @@ export const WebMcpTool = Schema.Struct({
 }).annotate({ identifier: "Browser.WebMcpTool" })
 export interface WebMcpTool extends Schema.Schema.Type<typeof WebMcpTool> {}
 
+export const SelectedOption = Schema.Struct({
+  value: OptionText.pipe(optional),
+  label: OptionText,
+  index: NonNegativeInt,
+}).annotate({ identifier: "Browser.SelectedOption" })
+export interface SelectedOption extends Schema.Schema.Type<typeof SelectedOption> {}
+
+export const ControlState = Schema.Struct({
+  checked: Tristate.pipe(optional),
+  value: Schema.String.check(Schema.isMaxLength(MAX_NAME_LENGTH)).pipe(optional),
+  selected: Schema.Array(SelectedOption).check(Schema.isMaxLength(MAX_SELECT_OPTIONS)).pipe(optional),
+  sensitive: Schema.Literal(true).pipe(optional),
+}).annotate({ identifier: "Browser.ControlState" })
+export interface ControlState extends Schema.Schema.Type<typeof ControlState> {}
+
 export const ActionResult = Schema.Struct({
   callID: CallID,
   tab: Tab,
@@ -336,6 +426,8 @@ export const ActionResult = Schema.Struct({
   savedFile: SavedFile.pipe(optional),
   webmcpTools: Schema.Array(WebMcpTool).check(Schema.isMaxLength(MAX_LOG_ENTRIES)).pipe(optional),
   dialog: DialogInfo.pipe(optional),
+  control: ControlState.pipe(optional),
+  frame: Page.pipe(optional),
 }).annotate({ identifier: "Browser.ActionResult" })
 export interface ActionResult extends Schema.Schema.Type<typeof ActionResult> {}
 

@@ -850,6 +850,8 @@ export type BrowserDialogInfo = {
   defaultPrompt?: string
 }
 
+export type BrowserSelectedOption = { value?: string; label: string; index: number }
+
 export type UsageDashboardPreparing = { status: "preparing" }
 
 export type UsageDashboardError = { status: "error"; message: string }
@@ -2759,6 +2761,12 @@ export type BrowserElement = {
   name: string
   description?: string
   disabled?: boolean
+  checked?: boolean | "mixed"
+  pressed?: boolean | "mixed"
+  expanded?: boolean
+  selected?: boolean
+  value?: string
+  sensitive?: true
   locator?: string
   destination?: BrowserPage
   frame?: BrowserPage
@@ -2769,6 +2777,13 @@ export type BrowserText = { role: string; name: string; frame?: BrowserPage }
 export type BrowserFrame = { page: BrowserPage; observed: boolean }
 
 export type BrowserLogEntry = { level: string; text: string; frame?: BrowserPage }
+
+export type BrowserControlState = {
+  checked?: boolean | "mixed"
+  value?: string
+  selected?: Array<BrowserSelectedOption>
+  sensitive?: true
+}
 
 export type ModelIncidentReport = { rows: Array<ModelIncidentReportRow>; groups: number }
 
@@ -3557,6 +3572,8 @@ export type BrowserActionResult = {
   savedFile?: BrowserSavedFile
   webmcpTools?: Array<BrowserWebMcpTool>
   dialog?: BrowserDialogInfo
+  control?: BrowserControlState
+  frame?: BrowserPage
 }
 
 export type IsolatedBrowserActionResult = {
@@ -3572,6 +3589,8 @@ export type IsolatedBrowserActionResult = {
   savedFile?: BrowserSavedFile
   webmcpTools?: Array<BrowserWebMcpTool>
   dialog?: BrowserDialogInfo
+  control?: BrowserControlState
+  frame?: BrowserPage
 }
 
 export type SessionGenerationSpeedHistory = {
@@ -10818,6 +10837,17 @@ export type BrowserActionInput = {
       | { readonly type: "navigate"; readonly url: string }
       | { readonly type: "click"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "type"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | { readonly type: "fill"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | {
+          readonly type: "select"
+          readonly ref?: string
+          readonly locator?: string
+          readonly values?: ReadonlyArray<string>
+          readonly labels?: ReadonlyArray<string>
+          readonly indexes?: ReadonlyArray<number>
+        }
+      | { readonly type: "check"; readonly ref?: string; readonly locator?: string; readonly checked: boolean }
+      | { readonly type: "hover"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | {
           readonly type: "capture"
@@ -10835,7 +10865,16 @@ export type BrowserActionInput = {
           readonly key: string
           readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
         }
-      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | {
+          readonly type: "wait"
+          readonly ref?: string
+          readonly locator?: string
+          readonly state?: "attached" | "visible" | "hidden" | "detached"
+          readonly url?: string
+          readonly load?: "domcontentloaded" | "load" | "networkidle"
+          readonly text?: string
+          readonly timeoutMs?: number
+        }
       | { readonly type: "clipboard_read" }
       | { readonly type: "clipboard_write"; readonly text: string }
       | {
@@ -10861,6 +10900,17 @@ export type BrowserActionInput = {
       | { readonly type: "navigate"; readonly url: string }
       | { readonly type: "click"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "type"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | { readonly type: "fill"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | {
+          readonly type: "select"
+          readonly ref?: string
+          readonly locator?: string
+          readonly values?: ReadonlyArray<string>
+          readonly labels?: ReadonlyArray<string>
+          readonly indexes?: ReadonlyArray<number>
+        }
+      | { readonly type: "check"; readonly ref?: string; readonly locator?: string; readonly checked: boolean }
+      | { readonly type: "hover"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | {
           readonly type: "capture"
@@ -10878,7 +10928,16 @@ export type BrowserActionInput = {
           readonly key: string
           readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
         }
-      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | {
+          readonly type: "wait"
+          readonly ref?: string
+          readonly locator?: string
+          readonly state?: "attached" | "visible" | "hidden" | "detached"
+          readonly url?: string
+          readonly load?: "domcontentloaded" | "load" | "networkidle"
+          readonly text?: string
+          readonly timeoutMs?: number
+        }
       | { readonly type: "clipboard_read" }
       | { readonly type: "clipboard_write"; readonly text: string }
       | {
@@ -10904,6 +10963,17 @@ export type BrowserActionInput = {
       | { readonly type: "navigate"; readonly url: string }
       | { readonly type: "click"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "type"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | { readonly type: "fill"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | {
+          readonly type: "select"
+          readonly ref?: string
+          readonly locator?: string
+          readonly values?: ReadonlyArray<string>
+          readonly labels?: ReadonlyArray<string>
+          readonly indexes?: ReadonlyArray<number>
+        }
+      | { readonly type: "check"; readonly ref?: string; readonly locator?: string; readonly checked: boolean }
+      | { readonly type: "hover"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | {
           readonly type: "capture"
@@ -10921,7 +10991,16 @@ export type BrowserActionInput = {
           readonly key: string
           readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
         }
-      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | {
+          readonly type: "wait"
+          readonly ref?: string
+          readonly locator?: string
+          readonly state?: "attached" | "visible" | "hidden" | "detached"
+          readonly url?: string
+          readonly load?: "domcontentloaded" | "load" | "networkidle"
+          readonly text?: string
+          readonly timeoutMs?: number
+        }
       | { readonly type: "clipboard_read" }
       | { readonly type: "clipboard_write"; readonly text: string }
       | {
@@ -10947,6 +11026,17 @@ export type BrowserActionInput = {
       | { readonly type: "navigate"; readonly url: string }
       | { readonly type: "click"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "type"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | { readonly type: "fill"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | {
+          readonly type: "select"
+          readonly ref?: string
+          readonly locator?: string
+          readonly values?: ReadonlyArray<string>
+          readonly labels?: ReadonlyArray<string>
+          readonly indexes?: ReadonlyArray<number>
+        }
+      | { readonly type: "check"; readonly ref?: string; readonly locator?: string; readonly checked: boolean }
+      | { readonly type: "hover"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | {
           readonly type: "capture"
@@ -10964,7 +11054,16 @@ export type BrowserActionInput = {
           readonly key: string
           readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
         }
-      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | {
+          readonly type: "wait"
+          readonly ref?: string
+          readonly locator?: string
+          readonly state?: "attached" | "visible" | "hidden" | "detached"
+          readonly url?: string
+          readonly load?: "domcontentloaded" | "load" | "networkidle"
+          readonly text?: string
+          readonly timeoutMs?: number
+        }
       | { readonly type: "clipboard_read" }
       | { readonly type: "clipboard_write"; readonly text: string }
       | {
@@ -10990,6 +11089,17 @@ export type BrowserActionInput = {
       | { readonly type: "navigate"; readonly url: string }
       | { readonly type: "click"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "type"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | { readonly type: "fill"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | {
+          readonly type: "select"
+          readonly ref?: string
+          readonly locator?: string
+          readonly values?: ReadonlyArray<string>
+          readonly labels?: ReadonlyArray<string>
+          readonly indexes?: ReadonlyArray<number>
+        }
+      | { readonly type: "check"; readonly ref?: string; readonly locator?: string; readonly checked: boolean }
+      | { readonly type: "hover"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | {
           readonly type: "capture"
@@ -11007,7 +11117,16 @@ export type BrowserActionInput = {
           readonly key: string
           readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
         }
-      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | {
+          readonly type: "wait"
+          readonly ref?: string
+          readonly locator?: string
+          readonly state?: "attached" | "visible" | "hidden" | "detached"
+          readonly url?: string
+          readonly load?: "domcontentloaded" | "load" | "networkidle"
+          readonly text?: string
+          readonly timeoutMs?: number
+        }
       | { readonly type: "clipboard_read" }
       | { readonly type: "clipboard_write"; readonly text: string }
       | {
@@ -11033,6 +11152,17 @@ export type BrowserActionInput = {
       | { readonly type: "navigate"; readonly url: string }
       | { readonly type: "click"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "type"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | { readonly type: "fill"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | {
+          readonly type: "select"
+          readonly ref?: string
+          readonly locator?: string
+          readonly values?: ReadonlyArray<string>
+          readonly labels?: ReadonlyArray<string>
+          readonly indexes?: ReadonlyArray<number>
+        }
+      | { readonly type: "check"; readonly ref?: string; readonly locator?: string; readonly checked: boolean }
+      | { readonly type: "hover"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | {
           readonly type: "capture"
@@ -11050,7 +11180,16 @@ export type BrowserActionInput = {
           readonly key: string
           readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
         }
-      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | {
+          readonly type: "wait"
+          readonly ref?: string
+          readonly locator?: string
+          readonly state?: "attached" | "visible" | "hidden" | "detached"
+          readonly url?: string
+          readonly load?: "domcontentloaded" | "load" | "networkidle"
+          readonly text?: string
+          readonly timeoutMs?: number
+        }
       | { readonly type: "clipboard_read" }
       | { readonly type: "clipboard_write"; readonly text: string }
       | {
@@ -11153,6 +11292,17 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "navigate"; readonly url: string }
       | { readonly type: "click"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "type"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | { readonly type: "fill"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | {
+          readonly type: "select"
+          readonly ref?: string
+          readonly locator?: string
+          readonly values?: ReadonlyArray<string>
+          readonly labels?: ReadonlyArray<string>
+          readonly indexes?: ReadonlyArray<number>
+        }
+      | { readonly type: "check"; readonly ref?: string; readonly locator?: string; readonly checked: boolean }
+      | { readonly type: "hover"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | {
           readonly type: "capture"
@@ -11170,7 +11320,16 @@ export type IsolatedBrowserActionInput = {
           readonly key: string
           readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
         }
-      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | {
+          readonly type: "wait"
+          readonly ref?: string
+          readonly locator?: string
+          readonly state?: "attached" | "visible" | "hidden" | "detached"
+          readonly url?: string
+          readonly load?: "domcontentloaded" | "load" | "networkidle"
+          readonly text?: string
+          readonly timeoutMs?: number
+        }
       | { readonly type: "clipboard_read" }
       | { readonly type: "clipboard_write"; readonly text: string }
       | {
@@ -11197,6 +11356,17 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "navigate"; readonly url: string }
       | { readonly type: "click"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "type"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | { readonly type: "fill"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | {
+          readonly type: "select"
+          readonly ref?: string
+          readonly locator?: string
+          readonly values?: ReadonlyArray<string>
+          readonly labels?: ReadonlyArray<string>
+          readonly indexes?: ReadonlyArray<number>
+        }
+      | { readonly type: "check"; readonly ref?: string; readonly locator?: string; readonly checked: boolean }
+      | { readonly type: "hover"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | {
           readonly type: "capture"
@@ -11214,7 +11384,16 @@ export type IsolatedBrowserActionInput = {
           readonly key: string
           readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
         }
-      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | {
+          readonly type: "wait"
+          readonly ref?: string
+          readonly locator?: string
+          readonly state?: "attached" | "visible" | "hidden" | "detached"
+          readonly url?: string
+          readonly load?: "domcontentloaded" | "load" | "networkidle"
+          readonly text?: string
+          readonly timeoutMs?: number
+        }
       | { readonly type: "clipboard_read" }
       | { readonly type: "clipboard_write"; readonly text: string }
       | {
@@ -11241,6 +11420,17 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "navigate"; readonly url: string }
       | { readonly type: "click"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "type"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | { readonly type: "fill"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | {
+          readonly type: "select"
+          readonly ref?: string
+          readonly locator?: string
+          readonly values?: ReadonlyArray<string>
+          readonly labels?: ReadonlyArray<string>
+          readonly indexes?: ReadonlyArray<number>
+        }
+      | { readonly type: "check"; readonly ref?: string; readonly locator?: string; readonly checked: boolean }
+      | { readonly type: "hover"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | {
           readonly type: "capture"
@@ -11258,7 +11448,16 @@ export type IsolatedBrowserActionInput = {
           readonly key: string
           readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
         }
-      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | {
+          readonly type: "wait"
+          readonly ref?: string
+          readonly locator?: string
+          readonly state?: "attached" | "visible" | "hidden" | "detached"
+          readonly url?: string
+          readonly load?: "domcontentloaded" | "load" | "networkidle"
+          readonly text?: string
+          readonly timeoutMs?: number
+        }
       | { readonly type: "clipboard_read" }
       | { readonly type: "clipboard_write"; readonly text: string }
       | {
@@ -11285,6 +11484,17 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "navigate"; readonly url: string }
       | { readonly type: "click"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "type"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | { readonly type: "fill"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | {
+          readonly type: "select"
+          readonly ref?: string
+          readonly locator?: string
+          readonly values?: ReadonlyArray<string>
+          readonly labels?: ReadonlyArray<string>
+          readonly indexes?: ReadonlyArray<number>
+        }
+      | { readonly type: "check"; readonly ref?: string; readonly locator?: string; readonly checked: boolean }
+      | { readonly type: "hover"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | {
           readonly type: "capture"
@@ -11302,7 +11512,16 @@ export type IsolatedBrowserActionInput = {
           readonly key: string
           readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
         }
-      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | {
+          readonly type: "wait"
+          readonly ref?: string
+          readonly locator?: string
+          readonly state?: "attached" | "visible" | "hidden" | "detached"
+          readonly url?: string
+          readonly load?: "domcontentloaded" | "load" | "networkidle"
+          readonly text?: string
+          readonly timeoutMs?: number
+        }
       | { readonly type: "clipboard_read" }
       | { readonly type: "clipboard_write"; readonly text: string }
       | {
@@ -11329,6 +11548,17 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "navigate"; readonly url: string }
       | { readonly type: "click"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "type"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | { readonly type: "fill"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | {
+          readonly type: "select"
+          readonly ref?: string
+          readonly locator?: string
+          readonly values?: ReadonlyArray<string>
+          readonly labels?: ReadonlyArray<string>
+          readonly indexes?: ReadonlyArray<number>
+        }
+      | { readonly type: "check"; readonly ref?: string; readonly locator?: string; readonly checked: boolean }
+      | { readonly type: "hover"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | {
           readonly type: "capture"
@@ -11346,7 +11576,16 @@ export type IsolatedBrowserActionInput = {
           readonly key: string
           readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
         }
-      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | {
+          readonly type: "wait"
+          readonly ref?: string
+          readonly locator?: string
+          readonly state?: "attached" | "visible" | "hidden" | "detached"
+          readonly url?: string
+          readonly load?: "domcontentloaded" | "load" | "networkidle"
+          readonly text?: string
+          readonly timeoutMs?: number
+        }
       | { readonly type: "clipboard_read" }
       | { readonly type: "clipboard_write"; readonly text: string }
       | {
@@ -11373,6 +11612,17 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "navigate"; readonly url: string }
       | { readonly type: "click"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "type"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | { readonly type: "fill"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | {
+          readonly type: "select"
+          readonly ref?: string
+          readonly locator?: string
+          readonly values?: ReadonlyArray<string>
+          readonly labels?: ReadonlyArray<string>
+          readonly indexes?: ReadonlyArray<number>
+        }
+      | { readonly type: "check"; readonly ref?: string; readonly locator?: string; readonly checked: boolean }
+      | { readonly type: "hover"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | {
           readonly type: "capture"
@@ -11390,7 +11640,16 @@ export type IsolatedBrowserActionInput = {
           readonly key: string
           readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
         }
-      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | {
+          readonly type: "wait"
+          readonly ref?: string
+          readonly locator?: string
+          readonly state?: "attached" | "visible" | "hidden" | "detached"
+          readonly url?: string
+          readonly load?: "domcontentloaded" | "load" | "networkidle"
+          readonly text?: string
+          readonly timeoutMs?: number
+        }
       | { readonly type: "clipboard_read" }
       | { readonly type: "clipboard_write"; readonly text: string }
       | {
@@ -11417,6 +11676,17 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "navigate"; readonly url: string }
       | { readonly type: "click"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "type"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | { readonly type: "fill"; readonly ref?: string; readonly locator?: string; readonly text: string }
+      | {
+          readonly type: "select"
+          readonly ref?: string
+          readonly locator?: string
+          readonly values?: ReadonlyArray<string>
+          readonly labels?: ReadonlyArray<string>
+          readonly indexes?: ReadonlyArray<number>
+        }
+      | { readonly type: "check"; readonly ref?: string; readonly locator?: string; readonly checked: boolean }
+      | { readonly type: "hover"; readonly ref?: string; readonly locator?: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | {
           readonly type: "capture"
@@ -11434,7 +11704,16 @@ export type IsolatedBrowserActionInput = {
           readonly key: string
           readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
         }
-      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | {
+          readonly type: "wait"
+          readonly ref?: string
+          readonly locator?: string
+          readonly state?: "attached" | "visible" | "hidden" | "detached"
+          readonly url?: string
+          readonly load?: "domcontentloaded" | "load" | "networkidle"
+          readonly text?: string
+          readonly timeoutMs?: number
+        }
       | { readonly type: "clipboard_read" }
       | { readonly type: "clipboard_write"; readonly text: string }
       | {

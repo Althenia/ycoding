@@ -28,9 +28,9 @@ import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
 
 const it = testEffect(reviewLayer())
 
-for (const target of ["same", "changed-name", "changed-destination", "ambiguous", "allow", "always", "capture-query"] as const)
-for (const action of ["ambiguous", "allow", "always"].includes(target) ? ["click", "type"] as const : ["click"] as const)
-it.live(`a browser approval survives execution end and fresh refs only for the ${target} target with ${action}`, () => Effect.gen(function* () {
+type Target = "same" | "changed-name" | "changed-destination" | "changed-text" | "ambiguous" | "allow" | "always" | "capture-query"
+
+const approvalScenario = (target: Target, action: "click" | "type" | "fill") => Effect.gen(function* () {
   const sessions = yield* Session.Service
   const database = yield* Database.Service
   const root = yield* sessions.create({ location: yield* reviewLocation })
@@ -54,14 +54,14 @@ it.live(`a browser approval survives execution end and fresh refs only for the $
   const pairing = yield* browser.start(root.id)
   const extensionID = "a".repeat(32)
   const attachment = yield* browser.attach({ origin: `chrome-extension://${extensionID}`,
-    handshake: { type: "pair", version: 5, extensionID, secret: pairing.secret }, transport: { send: (message) => Queue.offerUnsafe(outbox, message), close: () => {} } })
+    handshake: { type: "pair", version: 6, extensionID, secret: pairing.secret }, transport: { send: (message) => Queue.offerUnsafe(outbox, message), close: () => {} } })
   const paired = yield* Queue.take(outbox)
   if (paired.type !== "paired") return yield* Effect.die(new Error("Missing paired frame"))
   yield* attachment.receive({ type: "profile_access", enabled: true })
   const tabID = Browser.TabID.make("btab_review_permission")
   yield* attachment.receive({ type: "shared", mode: "profile", tabID, title: "Fixture", url: "https://example.test/form", documentGeneration: 1, active: false })
   const observe = (revision: number, ref: string, name: string, destination: string, duplicate = false, url = "https://example.test/form") => Effect.gen(function* () {
-    const role = action === "type" ? "textbox" : "button"
+    const role = action === "click" ? "button" : "textbox"
     const callID = `observe-${revision}`
     const observing = yield* browser.observe({ sessionID: root.id, tabID, generation: paired.generation, callID }).pipe(Effect.forkScoped)
     expect(yield* Queue.take(outbox)).toMatchObject({ type: "observe", callID })
@@ -94,7 +94,8 @@ it.live(`a browser approval survives execution end and fresh refs only for the $
   const act = (revision: number, ref: string) => executeTool(registry, { sessionID: root.id, ...toolIdentity,
     call: { type: "tool-call", id: `browser-action-${revision}`, name: toolName, input: { operation: "action", mode: "profile", tabID,
       generation: paired.generation, documentGeneration: 1, observationRevision: revision,
-      action: action === "type" ? { type: "type", ref, text: "Approved text" } : { type: "click", ref } } } }).pipe(Effect.exit)
+      action: action === "click" ? { type: "click", ref }
+        : { type: action, ref, text: revision === 2 && target === "changed-text" ? "Changed text" : "Approved text" } } } }).pipe(Effect.exit)
   if (target === "allow" || target === "always") {
     if (target === "always") {
       const saved = yield* PermissionSaved.Service.pipe(Effect.provide(AppNodeBuilder.build(PermissionSaved.node, [
@@ -154,4 +155,12 @@ it.live(`a browser approval survives execution end and fresh refs only for the $
     documentGeneration: 1, observationRevision: 0, status: "completed", title: "Fixture", url: "https://example.test/form" })
   expect(Exit.isSuccess(yield* Fiber.join(reissuing))).toBe(true)
   expect((yield* SessionReviewFold.fold(database.db, [root.id])).find((entry) => entry.itemID === item.itemID)?.consumed).toBe(true)
+})
+
+for (const target of ["same", "changed-name", "changed-destination", "ambiguous", "allow", "always", "capture-query"] as const)
+for (const action of ["ambiguous", "allow", "always"].includes(target) ? ["click", "type"] as const : ["click"] as const)
+it.live(`a browser approval survives execution end and fresh refs only for the ${target} target with ${action}`, () => approvalScenario(target, action))
+
+it.live("a fill approval survives fresh refs only for the same target and text", () => Effect.gen(function* () {
+  for (const target of ["same", "changed-name", "changed-text"] as const) yield* approvalScenario(target, "fill")
 }))

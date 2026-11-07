@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { createFakePage } from "./fake-page.js"
+import { runInNewContext } from "node:vm"
+import { createFakeControls, createFakePage } from "./fake-page.js"
 import { timing } from "../../indicator.js"
 
 const harness = createHarness()
@@ -38,7 +39,7 @@ describe("Chrome bridge service worker", () => {
     const restored = harness.FakeWebSocket.instances[0]
     expect(restored.outgoing).toContainEqual({
       type: "authenticate",
-      version: 5,
+      version: 6,
       extensionID: "extension-test",
       serverID: "server-restored-1",
       credential: "r".repeat(43),
@@ -280,6 +281,93 @@ describe("Chrome bridge service worker", () => {
     }
   })
 
+  test("reports why a tab was revoked and links the re-listed tab to its predecessor after leaving approved sites", async () => {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 17, active: false, url: "https://example.test/form", title: "Form" }]
+    await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "m".repeat(32) })
+    const socket = harness.FakeWebSocket.instance
+    try {
+      const first = socket.outgoing.find((message) => message.type === "shared" && message.mode === "profile")
+      expect(first.replaces).toBeUndefined()
+      const moved = { id: 17, active: false, url: "https://other.test/page", title: "Other" }
+      harness.page.profileTabs = [moved]
+      await harness.tabUpdated.emit(17, { url: moved.url }, moved)
+      await waitFor(() => socket.outgoing.filter((message) => message.type === "shared").length === 2)
+      expect(socket.outgoing).toContainEqual({ type: "revoked", tabID: first.tabID, reason: "navigated" })
+      const second = socket.outgoing.filter((message) => message.type === "shared")[1]
+      expect(second.tabID).not.toBe(first.tabID)
+      expect(second.replaces).toBe(first.tabID)
+    } finally {
+      await socket.receive({ type: "control", action: "stop" })
+    }
+  })
+
+  test("links the tab re-listed after a debugger-observed navigation to the revoked tab", async () => {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 17, active: true, url: "https://example.test/form", title: "Form" }]
+    await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "n".repeat(32) })
+    const socket = harness.FakeWebSocket.instance
+    try {
+      const first = socket.outgoing.find((message) => message.type === "shared" && message.mode === "profile")
+      await socket.receive({ type: "observe", tabID: first.tabID, generation: "bridge-1", callID: "before-frame-navigation" })
+      await harness.debuggerEvents.emit({ tabId: 17 }, "Page.frameNavigated", { frame: { url: "https://other.test/secret" } })
+      expect(socket.outgoing).toContainEqual({ type: "revoked", tabID: first.tabID, reason: "navigated" })
+      const moved = { id: 17, active: true, url: "https://other.test/secret", title: "Other" }
+      harness.page.profileTabs = [moved]
+      await harness.tabUpdated.emit(17, { url: moved.url }, moved)
+      const second = socket.outgoing.filter((message) => message.type === "shared")[1]
+      expect(second.replaces).toBe(first.tabID)
+    } finally {
+      await socket.receive({ type: "control", action: "stop" })
+    }
+  })
+
+  test("reports a closed tab as closed and never links a later tab with the same ID to it", async () => {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 18, active: false, url: "https://example.test/form", title: "Form" }]
+    await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "p".repeat(32) })
+    const socket = harness.FakeWebSocket.instance
+    try {
+      const first = socket.outgoing.find((message) => message.type === "shared" && message.mode === "profile")
+      await harness.tabRemoved.emit(18, { windowId: 1, isWindowClosing: false })
+      expect(socket.outgoing).toContainEqual({ type: "revoked", tabID: first.tabID, reason: "closed" })
+      await harness.tabUpdated.emit(18, { url: "https://example.test/form" }, harness.page.profileTabs[0])
+      const relisted = socket.outgoing.filter((message) => message.type === "shared")[1]
+      expect(relisted.replaces).toBeUndefined()
+    } finally {
+      await socket.receive({ type: "control", action: "stop" })
+    }
+  })
+
+  test("bounds Chrome's detach reason and never re-lists the detached tab", async () => {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 18, active: false, url: "https://example.test/form", title: "Form" }]
+    await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "q".repeat(32) })
+    const socket = harness.FakeWebSocket.instance
+    try {
+      const first = socket.outgoing.find((message) => message.type === "shared" && message.mode === "profile")
+      await socket.receive({ type: "observe", callID: "before-long-detach", tabID: first.tabID, generation: "bridge-1" })
+      await harness.debuggerDetach.emit({ tabId: 18 }, "x".repeat(200))
+      expect(socket.outgoing).toContainEqual({
+        type: "revoked", tabID: first.tabID, reason: "detached", detachReason: "x".repeat(64),
+      })
+      await harness.tabUpdated.emit(18, { url: "https://example.test/form" }, harness.page.profileTabs[0])
+      expect(socket.outgoing.filter((message) => message.type === "shared")).toHaveLength(1)
+    } finally {
+      await socket.receive({ type: "control", action: "stop" })
+    }
+  })
+
+  test("reports access_revoked for every profile tab when pairing is forgotten", async () => {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 18, active: false, url: "https://example.test/form", title: "Form" }]
+    await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "r".repeat(32) })
+    const socket = harness.FakeWebSocket.instance
+    const first = socket.outgoing.find((message) => message.type === "shared" && message.mode === "profile")
+    await socket.receive({ type: "control", action: "forget" })
+    expect(socket.outgoing).toContainEqual({ type: "revoked", tabID: first.tabID, reason: "access_revoked" })
+  })
+
   test("a new pairing resets native Cancel denial without reusing a separate grant", async () => {
     harness.reset()
     harness.page.profileTabs = [{ id: 18, active: false, url: "https://example.test/form", title: "Private" }]
@@ -404,7 +492,9 @@ describe("Chrome bridge service worker", () => {
       expect(harness.badges.at(-1)).toEqual({ tabId: 17, text: "ON" })
       await harness.debuggerDetach.emit({ tabId: 17 }, "canceled_by_user")
       expect(harness.badges.at(-1)).toEqual({ tabId: 17, text: "" })
-      expect(socket.outgoing).toContainEqual({ type: "revoked", tabID: shared.tabID })
+      expect(socket.outgoing).toContainEqual({
+        type: "revoked", tabID: shared.tabID, reason: "detached", detachReason: "canceled_by_user",
+      })
       await socket.receive({ type: "observe", callID: "after-cancel", tabID: shared.tabID, generation: "bridge-1" })
       expect(harness.commands.filter((item) => item.method === "Accessibility.getFullAXTree")).toHaveLength(1)
     } finally {
@@ -644,7 +734,7 @@ describe("Chrome bridge service worker", () => {
       await socket.receive({ type: "release", tabID: "btab_foreground", generation: "bridge-1" })
       expect(harness.detached).toContainEqual({ tabId: 24 })
       expect(harness.removed).toEqual([])
-      expect(socket.outgoing).toContainEqual({ type: "revoked", tabID: "btab_foreground" })
+      expect(socket.outgoing).toContainEqual({ type: "revoked", tabID: "btab_foreground", reason: "closed" })
       expect(harness.detached).not.toContainEqual({ tabId: 17 })
 
       harness.page.ownedActive = false
@@ -657,7 +747,7 @@ describe("Chrome bridge service worker", () => {
       })
       await socket.receive({ type: "release", tabID: "btab_inactive", generation: "bridge-1" })
       expect(harness.removed).toEqual([24])
-      expect(socket.outgoing).toContainEqual({ type: "revoked", tabID: "btab_inactive" })
+      expect(socket.outgoing).toContainEqual({ type: "revoked", tabID: "btab_inactive", reason: "closed" })
       await socket.receive({ type: "release", tabID: personal.tabID, generation: "bridge-1" })
       expect(harness.detached).not.toContainEqual({ tabId: 17 })
       await socket.receive({
@@ -787,7 +877,7 @@ describe("Chrome bridge service worker", () => {
       await harness.debuggerEvents.emit({ tabId: 17 }, "Page.frameNavigated", {
         frame: { url: "https://other.test/secret" },
       })
-      expect(socket.outgoing).toContainEqual({ type: "revoked", tabID: shared.tabID })
+      expect(socket.outgoing).toContainEqual({ type: "revoked", tabID: shared.tabID, reason: "navigated" })
       expect(JSON.stringify(socket.outgoing)).not.toContain("other.test")
       await socket.receive({ type: "observe", tabID: shared.tabID, generation: "bridge-1", callID: "after-revoke" })
       expect(socket.outgoing.find((item) => item.callID === "after-revoke")).toMatchObject({ type: "error" })
@@ -1064,7 +1154,7 @@ describe("Chrome bridge service worker", () => {
       await socket.receive(
         action("type-redirect", shared.tabID, observation, { type: "type", ref: "b1", text: "hello" }),
       )
-      expect(socket.outgoing).toContainEqual({ type: "revoked", tabID: shared.tabID })
+      expect(socket.outgoing).toContainEqual({ type: "revoked", tabID: shared.tabID, reason: "navigated" })
       expect(socket.outgoing.find((message) => message.callID === "type-redirect")).toMatchObject({
         type: "error",
         dispatched: true,
@@ -1325,13 +1415,8 @@ describe("Chrome bridge cross-origin frames", () => {
       )
       expect(await run("act-reload", { type: "reload" })).toMatchObject({ type: "result", status: "completed" })
       expect(harness.commands.some((item) => item.method === "Page.reload")).toBe(true)
-      expect(await run("act-key", { type: "key", key: "Enter" })).toMatchObject({ type: "result", status: "completed" })
-      expect(harness.commands).toContainEqual(
-        expect.objectContaining({
-          method: "Input.dispatchKeyEvent",
-          params: expect.objectContaining({ type: "keyDown", key: "Enter" }),
-        }),
-      )
+      expect(await run("act-key", { type: "key", key: "Enter" })).toMatchObject({ type: "error", dispatched: false })
+      expect(harness.commands.some((item) => item.method === "Input.dispatchKeyEvent")).toBe(false)
       expect(await run("act-key-shift", { type: "key", key: "Tab", modifiers: ["Shift"] })).toMatchObject({
         type: "result",
         status: "completed",
@@ -1350,7 +1435,1303 @@ describe("Chrome bridge cross-origin frames", () => {
         type: "error",
         dispatched: false,
       })
-      expect(await run("act-unknown", { type: "hover", ref: "b1" })).toMatchObject({ type: "error", dispatched: false })
+      expect(await run("act-unknown", { type: "drag", ref: "b1" })).toMatchObject({ type: "error", dispatched: false })
+    } finally {
+      await stopBridge()
+    }
+  })
+})
+
+describe("Chrome bridge form controls and waits", () => {
+  const childURL = "https://child.example.test/tempo"
+  const quad = [0, 0, 10, 0, 10, 10, 0, 10]
+  const realNow = Date.now
+  const checked = (value) => ({ name: "checked", value: { type: "tristate", value } })
+  const selectedProperty = (value) => ({ name: "selected", value: { type: "booleanOrUndefined", value } })
+  const expandedProperty = (value) => ({ name: "expanded", value: { type: "booleanOrUndefined", value } })
+  const field = (element, name, extra = {}) => ({ role: "textbox", name, element, quad, ...extra })
+
+  function useClock() {
+    let offset = 0
+    Date.now = () => realNow() + offset
+    return {
+      advance(ms) {
+        offset += ms
+      },
+      restore() {
+        Date.now = realNow
+      },
+    }
+  }
+  async function stopBridge() {
+    if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
+      await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
+  }
+  async function connect(controls, { child = false } = {}) {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 17, active: true, url: "https://example.test/form", title: "Form" }]
+    harness.page.controls = controls
+    if (child) harness.page.child = { url: childURL }
+    await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "f".repeat(32) })
+    const socket = harness.FakeWebSocket.instance
+    const shared = socket.outgoing.find((message) => message.type === "shared")
+    await socket.receive({ type: "observe", callID: "forms-attach", tabID: shared.tabID, generation: "bridge-1" })
+    if (child)
+      await harness.debuggerEvents.emit({ tabId: 17 }, "Target.attachedToTarget", {
+        sessionId: "child-1",
+        targetInfo: { targetId: "child-target", type: "iframe", url: childURL },
+        waitingForDebugger: false,
+      })
+    const reply = (callID) => socket.outgoing.find((message) => message.callID === callID)
+    const observe = async (callID, frameOrigins) => {
+      await socket.receive({ type: "observe", callID, tabID: shared.tabID, generation: "bridge-1", ...(frameOrigins ? { frameOrigins } : {}) })
+      return reply(callID)
+    }
+    const run = async (callID, observation, input, frameOrigins) => {
+      await socket.receive({ ...action(callID, shared.tabID, observation, input), ...(frameOrigins ? { frameOrigins } : {}) })
+      return reply(callID)
+    }
+    return { socket, shared, observe, run, reply }
+  }
+  const refOf = (observation, name) => {
+    const element = observation.elements.find((item) => item.name === name)
+    if (!element) throw new Error(`No observed element named ${name}`)
+    return element.ref
+  }
+  const calls = (start = 0) => harness.commands.slice(start).filter((item) => item.method === "Runtime.callFunctionOn")
+  const mouse = (start, type) =>
+    harness.commands.slice(start).filter((item) => item.method === "Input.dispatchMouseEvent" && item.params.type === type)
+  const controlWorlds = (sessionId) =>
+    harness.commands.filter(
+      (item) =>
+        item.method === "Page.createIsolatedWorld" && item.params.worldName === "ycoding-control" && item.source.sessionId === sessionId,
+    )
+
+  test("reports checked, pressed, expanded, selected, and value from the accessibility tree", async () => {
+    const { observe } = await connect({
+      11: { role: "checkbox", name: "Remember", nodeName: "INPUT", attributes: ["type", "checkbox"], properties: [checked("true")], quad },
+      12: { role: "button", name: "Bold", nodeName: "BUTTON", properties: [{ name: "pressed", value: { type: "tristate", value: "mixed" } }], quad },
+      13: { role: "combobox", name: "Country", nodeName: "INPUT", attributes: ["type", "text"], properties: [expandedProperty(true)], value: "Thailand", quad },
+      14: { role: "option", name: "Bangkok", nodeName: "DIV", properties: [selectedProperty(true)], quad },
+      15: { role: "textbox", name: "Notes", nodeName: "TEXTAREA", value: "synthetic note", quad },
+      16: { role: "slider", name: "Volume", nodeName: "INPUT", attributes: ["type", "range"], value: 5, quad },
+      17: { role: "checkbox", name: "Unset", nodeName: "INPUT", attributes: ["type", "checkbox"], properties: [checked("false")], quad },
+    })
+    try {
+      const observation = await observe("state-observe")
+      const named = (name) => observation.elements.find((item) => item.name === name)
+      expect(named("Remember")).toMatchObject({ role: "checkbox", checked: true })
+      expect(named("Remember").value).toBeUndefined()
+      expect(named("Bold")).toMatchObject({ pressed: "mixed" })
+      expect(named("Bold").expanded).toBeUndefined()
+      expect(named("Country")).toMatchObject({ expanded: true, value: "Thailand" })
+      expect(named("Bangkok")).toMatchObject({ selected: true })
+      expect(named("Notes")).toMatchObject({ value: "synthetic note" })
+      expect(named("Volume")).toMatchObject({ value: "5" })
+      expect(named("Unset")).toMatchObject({ checked: false })
+      expect(observation.elements.some((item) => item.sensitive)).toBe(false)
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("marks password, one-time-code, payment, and secret-named fields sensitive and never sends their values", async () => {
+    const { observe } = await connect({
+      21: { role: "textbox", name: "Account", nodeName: "INPUT", attributes: ["type", "password"], value: "synthetic-secret-1", quad },
+      22: { role: "textbox", name: "Code", nodeName: "INPUT", attributes: ["type", "text", "autocomplete", "one-time-code"], value: "synthetic-secret-2", quad },
+      23: { role: "textbox", name: "Card", nodeName: "INPUT", attributes: ["type", "text", "autocomplete", "cc-number"], value: "synthetic-secret-3", quad },
+      24: { role: "textbox", name: "Field", nodeName: "INPUT", attributes: ["type", "text", "name", "user_pin"], value: "synthetic-secret-4", quad },
+      25: { role: "textbox", name: "Email", nodeName: "INPUT", attributes: ["type", "email"], value: "person@example.test", quad },
+    })
+    try {
+      const observation = await observe("sensitive-observe")
+      for (const name of ["Account", "Code", "Card", "Field"]) {
+        const element = observation.elements.find((item) => item.name === name)
+        expect(element).toMatchObject({ sensitive: true })
+        expect(element.value).toBeUndefined()
+      }
+      const email = observation.elements.find((item) => item.name === "Email")
+      expect(email).toMatchObject({ value: "person@example.test" })
+      expect(email.sensitive).toBeUndefined()
+      expect(JSON.stringify(observation)).not.toContain("synthetic-secret")
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("marks label-named secret fields sensitive in observation and omits their value", async () => {
+    const { observe } = await connect({
+      26: { role: "textbox", name: "Password", nodeName: "INPUT", attributes: ["type", "text", "id", "f1"], value: "synthetic-secret-5", quad },
+      27: { role: "textbox", name: "One-time code", nodeName: "INPUT", attributes: ["type", "text", "aria-labelledby", "otp"], value: "synthetic-secret-6", quad },
+      28: { role: "textbox", name: "Verification   code", nodeName: "DIV", attributes: ["contenteditable", "true"], value: "synthetic-secret-7", quad },
+    })
+    try {
+      const observation = await observe("label-sensitive-observe")
+      for (const name of ["Password", "One-time code", "Verification   code"]) {
+        const element = observation.elements.find((item) => item.name === name)
+        expect(element).toMatchObject({ sensitive: true })
+        expect(element.value).toBeUndefined()
+      }
+      expect(JSON.stringify(observation)).not.toContain("synthetic-secret")
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("fill selects existing contents in the control world and replaces them with inserted text; empty text sends Delete", async () => {
+    const dom = createFakeControls()
+    const input = dom.control({ tag: "input", attributes: { type: "text" }, value: "old text" })
+    const area = dom.control({ tag: "textarea", value: "old area" })
+    const editor = dom.control({ tag: "div", attributes: { contenteditable: "true" }, contentEditable: true, value: "old editor" })
+    const date = dom.control({ tag: "input", attributes: { type: "date" } })
+    const short = dom.control({ tag: "input", attributes: { type: "text" }, maxLength: 3 })
+    const { observe, run } = await connect({
+      31: field(input, "Title"),
+      32: field(area, "Body"),
+      33: field(editor, "Editor"),
+      34: field(date, "Due"),
+      35: field(short, "Initials"),
+    })
+    try {
+      const observation = await observe("fill-observe")
+      const start = harness.commands.length
+      expect(await run("fill-input", observation, { type: "fill", ref: refOf(observation, "Title"), text: "new text" })).toMatchObject({
+        type: "result",
+        status: "completed",
+        control: { value: "new text" },
+      })
+      expect(input.value).toBe("new text")
+      const fills = calls(start)
+      expect(fills.map((item) => item.params.arguments.map((argument) => argument.value))).toEqual([
+        ["new text", false],
+        ["new text", true],
+        [],
+      ])
+      expect(fills.every((item) => !item.params.functionDeclaration.includes("new text"))).toBe(true)
+      expect(fills.every((item) => item.params.returnByValue === true && item.params.objectId === "node-31")).toBe(true)
+      expect(harness.commands.slice(start)).toContainEqual({ source: { tabId: 17 }, method: "Input.insertText", params: { text: "new text" } })
+      expect(
+        harness.commands.slice(start).findIndex((item) => item.method === "Input.insertText"),
+      ).toBeGreaterThan(harness.commands.slice(start).findIndex((item) => item.method === "Runtime.callFunctionOn" && item.params.arguments[1]?.value === true))
+
+      expect(await run("fill-editor", observation, { type: "fill", ref: refOf(observation, "Editor"), text: "fresh" })).toMatchObject({
+        type: "result",
+        control: { value: "fresh" },
+      })
+      expect(editor.value).toBe("fresh")
+
+      const clearStart = harness.commands.length
+      expect(await run("fill-clear", observation, { type: "fill", ref: refOf(observation, "Body"), text: "" })).toMatchObject({
+        type: "result",
+        control: { value: "" },
+      })
+      expect(area.value).toBe("")
+      const cleared = harness.commands.slice(clearStart)
+      expect(cleared.some((item) => item.method === "Input.insertText")).toBe(false)
+      expect(cleared.filter((item) => item.method === "Input.dispatchKeyEvent").map((item) => [item.params.type, item.params.key])).toEqual([
+        ["keyDown", "Delete"],
+        ["keyUp", "Delete"],
+      ])
+
+      const dateStart = harness.commands.length
+      expect(await run("fill-date", observation, { type: "fill", ref: refOf(observation, "Due"), text: "2026-11-07" })).toMatchObject({
+        type: "result",
+        control: { value: "2026-11-07" },
+      })
+      expect(harness.commands.slice(dateStart).some((item) => item.method === "Input.insertText")).toBe(false)
+      expect(date.events.map((event) => event.type)).toEqual(["input", "change"])
+
+      const differs = await run("fill-short", observation, { type: "fill", ref: refOf(observation, "Initials"), text: "abcdef" })
+      expect(differs).toMatchObject({ type: "result", control: { value: "abc" }, message: "The field value differs from the requested text" })
+      expect(harness.cursorDOM.chipText()).toEqual(["YCoding · Type"])
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("fill and type refuse sensitive and file inputs before dispatch", async () => {
+    const dom = createFakeControls()
+    const { observe, run, socket } = await connect({
+      41: field(dom.control({ tag: "input", attributes: { type: "password" }, value: "synthetic-stored-secret" }), "Account"),
+      42: field(dom.control({ tag: "input", attributes: { type: "text", autocomplete: "cc-csc" } }), "Security"),
+      43: { role: "button", name: "Upload", element: dom.control({ tag: "input", attributes: { type: "file" } }), quad },
+    })
+    try {
+      const observation = await observe("refuse-observe")
+      const start = harness.commands.length
+      for (const name of ["Account", "Security", "Upload"])
+        for (const type of ["fill", "type"]) {
+          const outcome = await run(`refuse-${type}-${name}`, observation, { type, ref: refOf(observation, name), text: "synthetic-typed-secret" })
+          expect(outcome).toMatchObject({ type: "error", dispatched: false })
+        }
+      const after = harness.commands.slice(start)
+      for (const method of ["Input.insertText", "Input.dispatchKeyEvent", "Runtime.callFunctionOn", "DOM.focus"])
+        expect(after.some((item) => item.method === method)).toBe(false)
+      expect(JSON.stringify(socket.outgoing)).not.toContain("synthetic-typed-secret")
+      expect(JSON.stringify(socket.outgoing)).not.toContain("synthetic-stored-secret")
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("refuses fill and type on a text field labelled Password by label for and never reads or sends its value", async () => {
+    const dom = createFakeControls()
+    const label = dom.label("pw-label", "  Password ")
+    const labelled = dom.control({ tag: "input", attributes: { type: "text", id: "pw" }, labels: [label], value: "synthetic-label-secret" })
+    const hidden = dom.control({ tag: "input", attributes: { type: "text", id: "pw2" }, labels: [label], value: "synthetic-label-secret" })
+    const { observe, run, socket } = await connect({
+      44: field(labelled, "Password", { value: "synthetic-label-secret" }),
+      45: field(hidden, "Field"),
+    })
+    try {
+      const observation = await observe("label-for-observe")
+      const start = harness.commands.length
+      for (const type of ["fill", "type"])
+        expect(await run(`label-for-${type}`, observation, { type, ref: refOf(observation, "Password"), text: "synthetic-typed" })).toMatchObject({
+          type: "error",
+          dispatched: false,
+        })
+      expect(calls(start)).toEqual([])
+      const pageStart = harness.commands.length
+      expect(await run("label-for-page", observation, { type: "fill", ref: refOf(observation, "Field"), text: "synthetic-typed" })).toMatchObject({
+        type: "error",
+        dispatched: false,
+      })
+      expect(calls(pageStart).map((item) => item.params.arguments[1]?.value)).toEqual([false])
+      const after = harness.commands.slice(start)
+      expect(after.some((item) => item.method === "Input.insertText" || item.method === "Input.dispatchKeyEvent")).toBe(false)
+      expect(labelled.value).toBe("synthetic-label-secret")
+      expect(hidden.focused).toBe(false)
+      expect(JSON.stringify(socket.outgoing)).not.toContain("synthetic-label-secret")
+      expect(JSON.stringify(socket.outgoing)).not.toContain("synthetic-typed")
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("refuses fill and type on a field named One-time code by aria-labelledby and never reads or sends its value", async () => {
+    const dom = createFakeControls()
+    dom.label("otp", "One-time\n code")
+    const named = dom.control({ tag: "input", attributes: { type: "text", "aria-labelledby": "missing otp" }, value: "synthetic-otp-secret" })
+    const hidden = dom.control({ tag: "input", attributes: { type: "text", "aria-labelledby": "otp" }, value: "synthetic-otp-secret" })
+    const { observe, run, socket } = await connect({
+      46: field(named, "One-time code", { value: "synthetic-otp-secret" }),
+      47: field(hidden, "Entry"),
+    })
+    try {
+      const observation = await observe("labelledby-observe")
+      const start = harness.commands.length
+      for (const type of ["fill", "type"])
+        expect(await run(`labelledby-${type}`, observation, { type, ref: refOf(observation, "One-time code"), text: "123456" })).toMatchObject({
+          type: "error",
+          dispatched: false,
+        })
+      expect(calls(start)).toEqual([])
+      const pageStart = harness.commands.length
+      expect(await run("labelledby-page", observation, { type: "fill", ref: refOf(observation, "Entry"), text: "123456" })).toMatchObject({
+        type: "error",
+        dispatched: false,
+      })
+      expect(calls(pageStart).map((item) => item.params.arguments[1]?.value)).toEqual([false])
+      expect(harness.commands.slice(start).some((item) => item.method === "Input.insertText" || item.method === "Input.dispatchKeyEvent")).toBe(false)
+      expect(JSON.stringify(socket.outgoing)).not.toContain("synthetic-otp-secret")
+      expect(JSON.stringify(socket.outgoing)).not.toContain("123456")
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("select sets native options by value, label, and index with JSON arguments and never puts option text in the function source", async () => {
+    const dom = createFakeControls()
+    const countries = [{ value: "th", label: "Thailand" }, { value: "jp", label: "Japan" }, { value: "fr", label: "France" }]
+    const single = dom.control({ tag: "select", options: countries })
+    const multiple = dom.control({ tag: "select", options: countries, multiple: true })
+    const { observe, run } = await connect({
+      51: { role: "combobox", name: "Country", element: single, quad },
+      52: { role: "listbox", name: "Visited", element: multiple, quad },
+    })
+    try {
+      const observation = await observe("select-observe")
+      const start = harness.commands.length
+      expect(await run("select-value", observation, { type: "select", ref: refOf(observation, "Country"), values: ["jp"] })).toMatchObject({
+        type: "result",
+        control: { selected: [{ value: "jp", label: "Japan", index: 1 }] },
+      })
+      expect(single.events.map((event) => [event.type, event.bubbles])).toEqual([["input", true], ["change", true]])
+      expect(await run("select-label", observation, { type: "select", ref: refOf(observation, "Country"), labels: ["France"] })).toMatchObject({
+        control: { selected: [{ value: "fr", label: "France", index: 2 }] },
+      })
+      expect(await run("select-index", observation, { type: "select", ref: refOf(observation, "Country"), indexes: [0] })).toMatchObject({
+        control: { selected: [{ value: "th", label: "Thailand", index: 0 }] },
+      })
+      expect(await run("select-many", observation, { type: "select", ref: refOf(observation, "Visited"), values: ["th", "fr"] })).toMatchObject({
+        control: { selected: [{ value: "th" }, { value: "fr" }] },
+      })
+      const selects = calls(start)
+      expect(selects.filter((item) => item.params.arguments.length === 2).map((item) => item.params.arguments[0].value)).toEqual([
+        { values: ["jp"] },
+        { values: ["jp"] },
+        { labels: ["France"] },
+        { labels: ["France"] },
+        { indexes: [0] },
+        { indexes: [0] },
+        { values: ["th", "fr"] },
+        { values: ["th", "fr"] },
+      ])
+      for (const text of ["Japan", "France", "Thailand", '"jp"', '"fr"'])
+        expect(selects.some((item) => item.params.functionDeclaration.includes(text))).toBe(false)
+      expect(harness.cursorDOM.chipText()).toEqual(["YCoding · Select"])
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("select rejects a missing option, a disabled option, and two values on a single select before dispatch", async () => {
+    const dom = createFakeControls()
+    const single = dom.control({ tag: "select", options: [{ value: "a", label: "Alpha", selected: true }, { value: "b", label: "Beta", disabled: true }, { value: "c", label: "Gamma" }] })
+    const { observe, run } = await connect({ 53: { role: "combobox", name: "Letter", element: single, quad } })
+    try {
+      const observation = await observe("select-reject-observe")
+      const ref = refOf(observation, "Letter")
+      const start = harness.commands.length
+      for (const [callID, criteria, message] of [
+        ["select-missing", { values: ["z"] }, "Option not found"],
+        ["select-disabled", { labels: ["Beta"] }, "Option is disabled"],
+        ["select-two", { values: ["a", "c"] }, "Select accepts one option"],
+      ])
+        expect(await run(callID, observation, { type: "select", ref, ...criteria })).toMatchObject({ type: "error", dispatched: false, message })
+      expect(calls(start).every((item) => item.params.arguments[1]?.value === false)).toBe(true)
+      expect(single.events).toEqual([])
+      expect(single.selectedOptions.map((option) => option.value)).toEqual(["a"])
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("select clicks one rendered listbox option and refuses a collapsed combobox", async () => {
+    const optionQuad = [20, 20, 30, 20, 30, 30, 20, 30]
+    const controls = {
+      61: { role: "listbox", name: "Fruits", nodeName: "UL", options: [62, 63], quad },
+      62: { role: "option", name: "Apple", nodeName: "LI", properties: [selectedProperty(false)], quad: [0, 40, 10, 40, 10, 50, 0, 50] },
+      63: { role: "option", name: " Banana \n", nodeName: "LI", properties: [selectedProperty(false)], quad: optionQuad },
+      64: { role: "combobox", name: "Closed", nodeName: "INPUT", attributes: ["type", "text"], properties: [expandedProperty(false)], quad },
+      65: {
+        role: "combobox",
+        name: "Open",
+        nodeName: "INPUT",
+        attributes: ["type", "text"],
+        properties: [expandedProperty(true), { name: "controls", value: { type: "idrefList", relatedNodes: [{ backendDOMNodeId: 61 }] } }],
+        quad,
+      },
+    }
+    const { observe, run } = await connect(controls)
+    try {
+      const observation = await observe("aria-observe")
+      harness.page.clickEffect = ({ x, y }) => {
+        const option = x === 25 && y === 25 ? controls[63] : x === 5 && y === 45 ? controls[62] : undefined
+        if (option) option.properties = [selectedProperty(true)]
+      }
+      const start = harness.commands.length
+      expect(await run("aria-label", observation, { type: "select", ref: refOf(observation, "Fruits"), labels: ["Banana"] })).toMatchObject({
+        type: "result",
+        control: { selected: [{ label: "Banana", index: 1 }] },
+      })
+      expect(mouse(start, "mousePressed").map((item) => [item.params.x, item.params.y])).toEqual([[25, 25]])
+      expect(harness.commands.slice(start)).toContainEqual(
+        expect.objectContaining({ method: "Accessibility.queryAXTree", params: { backendNodeId: 61, role: "option" } }),
+      )
+      const comboStart = harness.commands.length
+      expect(await run("aria-combo", observation, { type: "select", ref: refOf(observation, "Open"), indexes: [0] })).toMatchObject({
+        type: "result",
+        control: { selected: [{ label: "Apple", index: 0 }] },
+      })
+      expect(mouse(comboStart, "mousePressed")).toHaveLength(1)
+      const already = harness.commands.length
+      expect(await run("aria-already", observation, { type: "select", ref: refOf(observation, "Fruits"), indexes: [1] })).toMatchObject({
+        type: "result",
+        control: { selected: [{ label: "Banana", index: 1 }] },
+      })
+      expect(mouse(already, "mousePressed")).toEqual([])
+      const rejected = harness.commands.length
+      expect(await run("aria-closed", observation, { type: "select", ref: refOf(observation, "Closed"), labels: ["Apple"] })).toMatchObject({
+        type: "error",
+        dispatched: false,
+        message: expect.stringContaining("Open the list first"),
+      })
+      expect(await run("aria-values", observation, { type: "select", ref: refOf(observation, "Fruits"), values: ["Apple"] })).toMatchObject({
+        type: "error",
+        dispatched: false,
+      })
+      expect(await run("aria-two", observation, { type: "select", ref: refOf(observation, "Fruits"), labels: ["Apple", "Banana"] })).toMatchObject({
+        type: "error",
+        dispatched: false,
+      })
+      expect(mouse(rejected, "mousePressed")).toEqual([])
+      expect(harness.cursorDOM.chipText()).toEqual(["YCoding · Select"])
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("check does nothing when the state matches, clicks once otherwise, and reports a state that did not change", async () => {
+    const controls = {
+      71: { role: "checkbox", name: "Done", nodeName: "INPUT", attributes: ["type", "checkbox"], properties: [checked("true")], quad },
+      72: { role: "switch", name: "Alerts", nodeName: "BUTTON", properties: [checked("false")], quad: [20, 0, 30, 0, 30, 10, 20, 10] },
+      73: { role: "checkbox", name: "Stuck", nodeName: "INPUT", attributes: ["type", "checkbox"], properties: [checked("false")], quad: [40, 0, 50, 0, 50, 10, 40, 10] },
+    }
+    const { observe, run } = await connect(controls)
+    try {
+      const observation = await observe("check-observe")
+      harness.page.clickEffect = ({ x }) => {
+        if (x === 25) controls[72].properties = [checked("true")]
+      }
+      const start = harness.commands.length
+      expect(await run("check-same", observation, { type: "check", ref: refOf(observation, "Done"), checked: true })).toMatchObject({
+        type: "result",
+        status: "completed",
+        control: { checked: true },
+      })
+      expect(harness.commands.slice(start).some((item) => item.method === "Input.dispatchMouseEvent")).toBe(false)
+      const toggled = await run("check-toggle", observation, { type: "check", ref: refOf(observation, "Alerts"), checked: true })
+      expect(toggled).toMatchObject({ type: "result", control: { checked: true } })
+      expect(toggled.message).toBeUndefined()
+      expect(mouse(start, "mousePressed")).toHaveLength(1)
+      const stuckStart = harness.commands.length
+      expect(await run("check-stuck", observation, { type: "check", ref: refOf(observation, "Stuck"), checked: true })).toMatchObject({
+        type: "result",
+        status: "completed",
+        control: { checked: false },
+        message: "The control did not change state",
+      })
+      expect(mouse(stuckStart, "mousePressed")).toHaveLength(1)
+      expect(harness.cursorDOM.chipText()).toEqual(["YCoding · Click"])
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("check refuses to uncheck a radio and to check an element without checked state before dispatch", async () => {
+    const { observe, run } = await connect({
+      74: { role: "radio", name: "Express", nodeName: "INPUT", attributes: ["type", "radio"], properties: [checked("true")], quad },
+      75: { role: "button", name: "Plain", nodeName: "BUTTON", quad },
+    })
+    try {
+      const observation = await observe("check-refuse-observe")
+      const start = harness.commands.length
+      expect(await run("check-radio", observation, { type: "check", ref: refOf(observation, "Express"), checked: false })).toMatchObject({
+        type: "error",
+        dispatched: false,
+      })
+      expect(await run("check-plain", observation, { type: "check", ref: refOf(observation, "Plain"), checked: true })).toMatchObject({
+        type: "error",
+        dispatched: false,
+      })
+      expect(harness.commands.slice(start).some((item) => item.method === "Input.dispatchMouseEvent")).toBe(false)
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("hover dispatches one mouseMoved at the element point with the Hover label and no press", async () => {
+    const { observe, run } = await connect({ 76: { role: "button", name: "Menu", nodeName: "BUTTON", quad: [20, 20, 40, 20, 40, 40, 20, 40] } })
+    try {
+      const observation = await observe("hover-observe")
+      const start = harness.commands.length
+      expect(await run("hover-menu", observation, { type: "hover", ref: refOf(observation, "Menu") })).toMatchObject({
+        type: "result",
+        status: "completed",
+      })
+      const moves = harness.commands.slice(start).filter((item) => item.method === "Input.dispatchMouseEvent")
+      expect(moves).toEqual([{ source: { tabId: 17 }, method: "Input.dispatchMouseEvent", params: { type: "mouseMoved", x: 30, y: 30 } }])
+      expect(harness.cursorDOM.chipText()).toEqual(["YCoding · Hover"])
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("waits for a locator to become visible, hidden, and detached and ignores matches in unapproved frames", async () => {
+    const controls = {
+      81: { role: "button", name: "Save", nodeName: "BUTTON", quad: undefined },
+      82: { role: "heading", name: "Child total", nodeName: "H2", quad, session: "child-1" },
+    }
+    const { observe, run } = await connect(controls, { child: true })
+    try {
+      const observation = await observe("locator-observe", [])
+      const locator = 'role=button[name="Save"]'
+      expect(await run("locator-attached", observation, { type: "wait", locator, state: "attached", timeoutMs: 0 })).toMatchObject({
+        type: "result",
+        status: "completed",
+      })
+      setTimeout(() => (controls[81].quad = quad), 50)
+      expect(await run("locator-visible", observation, { type: "wait", locator, timeoutMs: 2000 })).toMatchObject({ type: "result" })
+      setTimeout(() => (controls[81].quad = undefined), 50)
+      expect(await run("locator-hidden", observation, { type: "wait", locator, state: "hidden", timeoutMs: 2000 })).toMatchObject({ type: "result" })
+      controls[81].detached = true
+      expect(await run("locator-detached", observation, { type: "wait", locator, state: "detached", timeoutMs: 0 })).toMatchObject({ type: "result" })
+      expect(await run("locator-gone", observation, { type: "wait", locator, timeoutMs: 0 })).toMatchObject({ type: "error", dispatched: false })
+      const child = 'role=heading[name="Child total"]'
+      const unapproved = await run("locator-unapproved", observation, { type: "wait", locator: child, timeoutMs: 0 }, [])
+      expect(unapproved).toMatchObject({ type: "error", dispatched: false })
+      expect(JSON.stringify(unapproved)).not.toContain("child.example.test")
+      expect(await run("locator-approved", observation, { type: "wait", locator: child, timeoutMs: 0 }, ["https://child.example.test"])).toMatchObject({
+        type: "result",
+        frame: childURL,
+      })
+      expect(await run("locator-malformed", observation, { type: "wait", locator: "button Save", timeoutMs: 0 })).toMatchObject({
+        type: "error",
+        dispatched: false,
+      })
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("key refuses printable text after Tab moves focus into a password field and sends no key event", async () => {
+    const dom = createFakeControls()
+    const secret = dom.control({ tag: "input", attributes: { type: "password" }, value: "synthetic-key-secret" })
+    const plain = dom.control({ tag: "input", attributes: { type: "text" } })
+    const { observe, run, socket } = await connect({ 101: field(plain, "Name"), 102: field(secret, "Account") })
+    try {
+      const document = harness.page.documents.main
+      document.activeElement = plain
+      harness.page.keyEffect = (params) => {
+        if (params.type === "keyDown" && params.key === "Tab") document.activeElement = secret
+      }
+      const observation = await observe("key-observe")
+      const textKeys = (start) =>
+        harness.commands.slice(start).filter((item) => item.method === "Input.dispatchKeyEvent" && item.params.text !== undefined)
+      const start = harness.commands.length
+      expect(await run("key-tab", observation, { type: "key", key: "Tab" })).toMatchObject({ type: "result", status: "completed" })
+      expect(document.activeElement).toBe(secret)
+      expect(await run("key-secret", observation, { type: "key", key: "a" })).toMatchObject({ type: "error", dispatched: false })
+      expect(textKeys(start)).toEqual([])
+      expect(secret.value).toBe("synthetic-key-secret")
+      expect(await run("key-enter", observation, { type: "key", key: "Enter" })).toMatchObject({ type: "error", dispatched: false })
+      expect(await run("key-chord", observation, { type: "key", key: "a", modifiers: ["Control"] })).toMatchObject({
+        type: "error",
+        dispatched: false,
+      })
+      expect(textKeys(start)).toEqual([])
+      expect(secret.value).toBe("synthetic-key-secret")
+      document.activeElement = plain
+      expect(await run("key-plain", observation, { type: "key", key: "b" })).toMatchObject({ type: "result", status: "completed" })
+      expect(textKeys(start).map((item) => item.params.text)).toEqual(["b"])
+      expect(plain.value).toBe("b")
+      expect(JSON.stringify(socket.outgoing)).not.toContain("synthetic-key-secret")
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("key refuses text into secret fields reached through shadow roots, frames, labels, accessible names, and file inputs", async () => {
+    const dom = createFakeControls()
+    const otp = dom.control({ tag: "input", attributes: { type: "text", autocomplete: "one-time-code" } })
+    const shadowHost = dom.control({ tag: "div" })
+    shadowHost.shadowRoot = { activeElement: otp }
+    const cardLabel = dom.label("card-label", "Card number")
+    const labelled = dom.control({ tag: "input", attributes: { type: "text" }, labels: [cardLabel] })
+    const sameOrigin = dom.control({ tag: "iframe" })
+    sameOrigin.contentDocument = { activeElement: labelled }
+    const pin = dom.control({ tag: "input", attributes: { type: "text" } })
+    const upload = dom.control({ tag: "input", attributes: { type: "file" } })
+    const crossOrigin = dom.control({ tag: "iframe" })
+    crossOrigin.contentDocument = null
+    const unknownFrame = dom.control({ tag: "iframe" })
+    unknownFrame.contentDocument = null
+    const childSecret = dom.control({ tag: "input", attributes: { type: "password" } })
+    const childPlain = dom.control({ tag: "input", attributes: { type: "text" } })
+    const plainHost = dom.control({ tag: "div" })
+    const plain = dom.control({ tag: "input", attributes: { type: "text" } })
+    plainHost.shadowRoot = { activeElement: plain }
+    const { observe, run } = await connect(
+      {
+        103: { role: "generic", name: "", element: shadowHost },
+        104: field(otp, "Code entry"),
+        105: { role: "generic", name: "", element: sameOrigin },
+        106: field(labelled, "Entry"),
+        107: field(pin, "PIN code"),
+        108: { role: "button", name: "Upload", element: upload, quad },
+        109: { role: "generic", name: "", element: crossOrigin, frameId: "child-target" },
+        110: { role: "generic", name: "", element: unknownFrame, frameId: "unknown-target" },
+        111: field(childSecret, "Child account", { session: "child-1" }),
+        112: field(childPlain, "Child notes", { session: "child-1" }),
+        113: { role: "generic", name: "", element: plainHost },
+        114: field(plain, "Plain"),
+      },
+      { child: true },
+    )
+    try {
+      const document = harness.page.documents.main
+      const observation = await observe("focus-observe", ["https://child.example.test"])
+      const start = harness.commands.length
+      for (const [callID, focused, child] of [
+        ["focus-shadow", shadowHost],
+        ["focus-frame-label", sameOrigin],
+        ["focus-name", pin],
+        ["focus-file", upload],
+        ["focus-cross-origin", crossOrigin, childSecret],
+        ["focus-unknown-frame", unknownFrame],
+      ]) {
+        document.activeElement = focused
+        harness.page.documents["child-1"].activeElement = child
+        expect(await run(callID, observation, { type: "key", key: "z" })).toMatchObject({ type: "error", dispatched: false })
+      }
+      expect(harness.commands.slice(start).some((item) => item.method === "Input.dispatchKeyEvent")).toBe(false)
+      for (const element of [otp, labelled, pin, childSecret]) expect(element.value).toBe("")
+      document.activeElement = plainHost
+      expect(await run("focus-plain-shadow", observation, { type: "key", key: "y" })).toMatchObject({ type: "result" })
+      expect(plain.value).toBe("y")
+      document.activeElement = crossOrigin
+      harness.page.documents["child-1"].activeElement = childPlain
+      expect(await run("focus-plain-child", observation, { type: "key", key: "x" })).toMatchObject({ type: "result" })
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("key refuses printable text into a password field inside a focused cross-origin iframe while Tab passes", async () => {
+    const dom = createFakeControls()
+    const frame = dom.control({ tag: "iframe" })
+    frame.contentDocument = null
+    const secret = dom.control({ tag: "input", attributes: { type: "password" }, value: "synthetic-frame-secret" })
+    const { observe, run, socket } = await connect(
+      {
+        141: { role: "generic", name: "", element: frame, frameId: "child-target" },
+        142: field(secret, "Child login", { session: "child-1" }),
+      },
+      { child: true },
+    )
+    try {
+      const frameOrigins = ["https://child.example.test"]
+      const observation = await observe("frame-key-observe", frameOrigins)
+      harness.page.documents.main.activeElement = frame
+      harness.page.documents["child-1"].activeElement = secret
+      const start = harness.commands.length
+      expect(await run("frame-key-text", observation, { type: "key", key: "a" }, frameOrigins)).toMatchObject({ type: "error", dispatched: false })
+      expect(harness.commands.slice(start).some((item) => item.method === "Input.dispatchKeyEvent")).toBe(false)
+      expect(await run("frame-key-tab", observation, { type: "key", key: "Tab" }, frameOrigins)).toMatchObject({ type: "result", status: "completed" })
+      expect(harness.commands.slice(start).filter((item) => item.method === "Input.dispatchKeyEvent").map((item) => item.params.key)).toEqual([
+        "Tab",
+        "Tab",
+      ])
+      expect(secret.value).toBe("synthetic-frame-secret")
+      expect(JSON.stringify(socket.outgoing)).not.toContain("synthetic-frame-secret")
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("key refuses printable text when the focused cross-origin frame is unapproved, has no child session, or has no provable focus", async () => {
+    const dom = createFakeControls()
+    const frame = dom.control({ tag: "iframe" })
+    frame.contentDocument = null
+    const orphan = dom.control({ tag: "iframe" })
+    orphan.contentDocument = null
+    const plain = dom.control({ tag: "input", attributes: { type: "text" } })
+    const { observe, run } = await connect(
+      {
+        143: { role: "generic", name: "", element: frame, frameId: "child-target" },
+        144: { role: "generic", name: "", element: orphan, frameId: "missing-target" },
+        145: field(plain, "Child notes", { session: "child-1" }),
+      },
+      { child: true },
+    )
+    try {
+      const approved = ["https://child.example.test"]
+      const observation = await observe("unproven-observe", approved)
+      const document = harness.page.documents.main
+      const child = harness.page.documents["child-1"]
+      const textKeys = (start) =>
+        harness.commands.slice(start).filter((item) => item.method === "Input.dispatchKeyEvent" && item.params.text !== undefined)
+      const start = harness.commands.length
+      for (const [callID, tabCallID, focused, childFocus, frameOrigins] of [
+        ["unproven-unapproved", "unproven-unapproved-tab", frame, plain, []],
+        ["unproven-no-session", "unproven-no-session-tab", orphan, plain, approved],
+        ["unproven-no-focus", "unproven-no-focus-tab", frame, null, approved],
+      ]) {
+        document.activeElement = focused
+        child.activeElement = childFocus
+        expect(await run(callID, observation, { type: "key", key: "a" }, frameOrigins)).toMatchObject({ type: "error", dispatched: false })
+        expect(await run(tabCallID, observation, { type: "key", key: "Tab" }, frameOrigins)).toMatchObject({ type: "result" })
+      }
+      expect(textKeys(start)).toEqual([])
+      expect(plain.value).toBe("")
+      document.activeElement = frame
+      child.activeElement = plain
+      expect(await run("unproven-approved-plain", observation, { type: "key", key: "a" }, approved)).toMatchObject({ type: "result" })
+      expect(textKeys(start).map((item) => item.params.text)).toEqual(["a"])
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("key refuses printable text when focus is on a host with a closed shadow root", async () => {
+    const dom = createFakeControls()
+    const host = dom.control({ tag: "x-field" })
+    host.shadowRoot = null
+    const plain = dom.control({ tag: "input", attributes: { type: "text" } })
+    const { observe, run } = await connect({
+      146: { role: "generic", name: "", element: host, shadowRoots: [{ nodeName: "#document-fragment", shadowRootType: "closed" }] },
+      147: field(plain, "Plain", { shadowRoots: [{ nodeName: "#document-fragment", shadowRootType: "user-agent" }] }),
+    })
+    try {
+      const observation = await observe("closed-shadow-observe")
+      const document = harness.page.documents.main
+      document.activeElement = host
+      const start = harness.commands.length
+      expect(await run("closed-shadow-text", observation, { type: "key", key: "a" })).toMatchObject({ type: "error", dispatched: false })
+      expect(harness.commands.slice(start).some((item) => item.method === "Input.dispatchKeyEvent")).toBe(false)
+      expect(await run("closed-shadow-escape", observation, { type: "key", key: "Escape" })).toMatchObject({ type: "result" })
+      document.activeElement = plain
+      expect(await run("user-agent-shadow-text", observation, { type: "key", key: "a" })).toMatchObject({ type: "result" })
+      expect(plain.value).toBe("a")
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  const navigationKeys = ["Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]
+    .map((key) => ({ type: "key", key }))
+    .concat([{ type: "key", key: "Tab", modifiers: ["Shift"] }])
+  const editingKeys = ["a", " ", "Space", "Enter", "Backspace", "Delete", "Insert"]
+    .map((key) => ({ type: "key", key }))
+    .concat(
+      ["Shift", "Alt", "Control", "Meta"].flatMap((modifier) =>
+        ["a", " ", "Space", "Enter", "Backspace", "Delete", "Insert", ...navigationKeys.slice(0, 10).map((item) => item.key)]
+          .filter((key) => modifier !== "Shift" || key !== "Tab")
+          .map((key) => ({ type: "key", key, modifiers: [modifier] })),
+      ),
+      ["Control", "Meta"].flatMap((modifier) =>
+        ["v", "x", "y", "z", "c"].map((key) => ({ type: "key", key, modifiers: [modifier] })),
+      ),
+      [{ type: "key", key: "Tab", modifiers: ["Control", "Shift"] }, { type: "key", key: "v", modifiers: ["Meta", "Shift"] }],
+    )
+
+  test.each([
+    "password", "autocomplete", "name", "label", "aria-labelledby", "AX name", "file", "closed root",
+    "unapproved frame", "sessionless frame", "unknown frame", "missing child focus", "missing main focus", "failed child session",
+    "child password", "child file", "child closed root",
+  ])("key safety table refuses editing and preserves navigation for %s", async (kind) => {
+    const dom = createFakeControls()
+    const sensitive = dom.control({
+      tag: "input",
+      attributes: {
+        type: kind === "password" ? "password" : kind === "file" ? "file" : "text",
+        ...(kind === "autocomplete" ? { autocomplete: "one-time-code" } : {}),
+        ...(kind === "name" ? { name: "account_password" } : {}),
+        ...(kind === "aria-labelledby" ? { "aria-labelledby": "secret-label" } : {}),
+      },
+      labels: kind === "label" ? [dom.label("card-label", "Card number")] : [],
+    })
+    dom.label("secret-label", "PIN code")
+    const host = dom.control({ tag: "x-field" })
+    const frame = dom.control({ tag: "iframe" })
+    frame.contentDocument = null
+    const child = dom.control({ tag: "input", attributes: { type: kind === "child password" ? "password" : kind === "child file" ? "file" : "text" } })
+    const { observe, run } = await connect({
+      151: field(sensitive, kind === "AX name" ? "Password" : "Entry"),
+      152: { role: "generic", name: "", element: host, shadowRoots: [{ shadowRootType: "closed" }] },
+      153: { role: "generic", name: "", element: frame, ...(kind !== "unknown frame" ? { frameId: kind === "sessionless frame" ? "missing-target" : "child-target" } : {}) },
+      154: field(child, "Child notes", { session: "child-1", ...(kind === "child closed root" ? { shadowRoots: [{ shadowRootType: "closed" }] } : {}) }),
+    }, { child: kind !== "sessionless frame" })
+    try {
+      const origins = kind === "unapproved frame" ? [] : ["https://child.example.test"]
+      const observation = await observe(`key-safety-${kind}`, origins)
+      harness.page.documents.main.activeElement = kind === "missing main focus" ? null
+        : kind === "closed root" ? host : kind.includes("frame") || kind.includes("child") ? frame : sensitive
+      harness.page.documents["child-1"].activeElement = kind === "missing child focus" ? null : child
+      if (kind === "failed child session") {
+        await harness.debuggerEvents.emit({ tabId: 17 }, "Target.detachedFromTarget", { sessionId: "child-1" })
+        harness.page.focusEmulationFails = true
+        await harness.debuggerEvents.emit({ tabId: 17 }, "Target.attachedToTarget", {
+          sessionId: "child-1",
+          targetInfo: { targetId: "child-target", type: "iframe", url: childURL },
+          waitingForDebugger: false,
+        })
+        harness.page.focusEmulationFails = false
+      }
+      for (const [index, input] of editingKeys.entries()) {
+        const start = harness.commands.length
+        expect(await run(`key-safety-edit-${index}`, observation, input, origins), JSON.stringify(input)).toMatchObject({ type: "error", dispatched: false })
+        expect(harness.commands.slice(start).filter((item) => item.method === "Input.dispatchKeyEvent")).toEqual([])
+      }
+      for (const [index, input] of navigationKeys.entries()) {
+        const start = harness.commands.length
+        expect(await run(`key-safety-nav-${index}`, observation, input, origins), JSON.stringify(input)).toMatchObject({ type: "result", status: "completed" })
+        expect(harness.commands.slice(start).filter((item) => item.method === "Input.dispatchKeyEvent")).toHaveLength(2)
+        expect(harness.commands.slice(start).some((item) => item.method === "Accessibility.getPartialAXTree" || item.method === "DOM.describeNode" || (item.method === "Runtime.callFunctionOn" && item.params.returnByValue === false))).toBe(false)
+      }
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test.each(["main", "open shadow", "same-origin frame", "approved child"])("key safety table allows ordinary-input editing in %s", async (kind) => {
+    const dom = createFakeControls()
+    const plain = dom.control({ tag: "input", attributes: { type: "text" } })
+    const host = dom.control({ tag: kind.includes("frame") || kind === "approved child" ? "iframe" : "div" })
+    if (kind === "open shadow") host.shadowRoot = { activeElement: plain }
+    if (kind === "same-origin frame") host.contentDocument = { activeElement: plain }
+    if (kind === "approved child") host.contentDocument = null
+    const { observe, run } = await connect({
+      155: field(plain, "Notes", kind === "approved child" ? { session: "child-1" } : {}),
+      156: { role: "generic", name: "", element: host, frameId: "child-target" },
+    }, { child: kind === "approved child" })
+    try {
+      const origins = ["https://child.example.test"]
+      const observation = await observe(`key-safety-plain-${kind}`, origins)
+      harness.page.documents.main.activeElement = kind === "main" ? plain : host
+      harness.page.documents["child-1"].activeElement = plain
+      for (const [index, input] of editingKeys.entries()) {
+        const start = harness.commands.length
+        expect(await run(`key-safety-plain-${index}`, observation, input, origins), JSON.stringify(input)).toMatchObject({ type: "result", status: "completed" })
+        const commands = harness.commands.slice(start)
+        expect(commands.filter((item) => item.method === "Input.dispatchKeyEvent")).toHaveLength(2)
+        expect(commands.findIndex((item) => item.method === "Accessibility.getPartialAXTree")).toBeLessThan(commands.findIndex((item) => item.method === "Input.dispatchKeyEvent"))
+        expect(commands.some((item) => item.method === "Accessibility.getPartialAXTree" && item.source.sessionId === (kind === "approved child" ? "child-1" : undefined))).toBe(true)
+        if (kind === "approved child") {
+          expect(commands.find((item) => item.method === "Runtime.releaseObject" && item.params.objectId === "node-156")?.source.sessionId).toBeUndefined()
+          expect(commands.find((item) => item.method === "Runtime.releaseObject" && item.params.objectId === "node-155")?.source.sessionId).toBe("child-1")
+        }
+      }
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test.each(["focus exception", "DOM failure", "AX failure", "empty AX", "unmatched AX", "sensitivity exception", "missing sensitivity"])("key safety table refuses editing on %s", async (failure) => {
+    const dom = createFakeControls()
+    const plain = dom.control({ tag: "input", attributes: { type: "text" } })
+    const { observe, run } = await connect({ 157: field(plain, "Notes") })
+    const send = harness.chrome.debugger.sendCommand
+    try {
+      const observation = await observe(`key-safety-inspection-${failure}`)
+      harness.page.documents.main.activeElement = plain
+      harness.chrome.debugger.sendCommand = async (source, method, params) => {
+        if (method === "DOM.describeNode" && params.objectId && failure === "DOM failure") throw new Error("DOM unavailable")
+        if (method === "Accessibility.getPartialAXTree" && params.objectId) {
+          if (failure === "AX failure") throw new Error("AX unavailable")
+          if (failure === "empty AX") return { nodes: [] }
+          if (failure === "unmatched AX") return { nodes: [{ backendDOMNodeId: 999, name: { value: "Notes" } }] }
+        }
+        if (method === "Runtime.callFunctionOn") {
+          if (failure === "focus exception" && params.returnByValue === false) return { exceptionDetails: { text: "focus unavailable" } }
+          if (params.functionDeclaration.includes("return isSensitive(this)")) {
+            if (failure === "sensitivity exception") return { exceptionDetails: { text: "inspection unavailable" } }
+            if (failure === "missing sensitivity") return { result: { type: "undefined" } }
+          }
+        }
+        return send(source, method, params)
+      }
+      for (const [index, input] of [{ type: "key", key: "a" }, { type: "key", key: "Enter" }, { type: "key", key: "v", modifiers: ["Control"] }].entries()) {
+        const start = harness.commands.length
+        expect(await run(`key-safety-inspection-${index}`, observation, input)).toMatchObject({ type: "error", dispatched: false })
+        expect(harness.commands.slice(start).filter((item) => item.method === "Input.dispatchKeyEvent")).toEqual([])
+      }
+    } finally {
+      harness.chrome.debugger.sendCommand = send
+      await stopBridge()
+    }
+  })
+
+  test.each([
+    "missing AX name", "non-string AX name", "missing DOM", "missing nodeType", "non-element nodeType",
+    "missing nodeName", "empty nodeName", "non-string nodeName", "missing backend id", "zero backend id", "non-string backend id",
+    "missing attributes", "non-array attributes", "odd attributes", "non-string attributes",
+    "null shadowRoots", "non-array shadowRoots", "null shadow entry", "missing shadow type", "unknown shadow type",
+    "disconnected leaf", "connection exception", "missing connection proof", "retained object", "retained embed", "retained iframe",
+  ])("key focus proof refuses %s before editing but preserves plain navigation", async (failure) => {
+    const dom = createFakeControls()
+    const tag = failure === "retained object" ? "object" : failure === "retained embed" ? "embed" : failure === "retained iframe" ? "iframe" : "input"
+    const plain = dom.control({ tag, attributes: tag === "input" ? { type: "text" } : {} })
+    if (tag === "iframe") plain.contentDocument = { activeElement: null }
+    const { observe, run } = await connect({ 158: field(plain, "Notes") })
+    const send = harness.chrome.debugger.sendCommand
+    try {
+      const observation = await observe(`focus-proof-${failure}`)
+      harness.page.documents.main.activeElement = plain
+      if (failure === "disconnected leaf") plain.isConnected = false
+      harness.chrome.debugger.sendCommand = async (source, method, params) => {
+        if (method === "Runtime.callFunctionOn" && params.functionDeclaration === "function () { return this.isConnected }") {
+          if (failure === "connection exception") return { exceptionDetails: { text: "connection unavailable" } }
+          if (failure === "missing connection proof") return { result: { type: "undefined" } }
+        }
+        const result = await send(source, method, params)
+        if (method === "Accessibility.getPartialAXTree" && params.objectId) {
+          if (failure === "missing AX name") delete result.nodes[0].name
+          if (failure === "non-string AX name") result.nodes[0].name = { value: 12 }
+        }
+        if (method === "DOM.describeNode" && params.objectId) {
+          if (failure === "missing DOM") return {}
+          const node = result.node
+          if (failure === "missing nodeType") delete node.nodeType
+          if (failure === "non-element nodeType") node.nodeType = 3
+          if (failure === "missing nodeName") delete node.nodeName
+          if (failure === "empty nodeName") node.nodeName = ""
+          if (failure === "non-string nodeName") node.nodeName = 12
+          if (failure === "missing backend id") delete node.backendNodeId
+          if (failure === "zero backend id") node.backendNodeId = 0
+          if (failure === "non-string backend id") node.backendNodeId = "158"
+          if (failure === "missing attributes") delete node.attributes
+          if (failure === "non-array attributes") node.attributes = {}
+          if (failure === "odd attributes") node.attributes = ["type"]
+          if (failure === "non-string attributes") node.attributes = ["type", 12]
+          if (failure === "null shadowRoots") node.shadowRoots = null
+          if (failure === "non-array shadowRoots") node.shadowRoots = {}
+          if (failure === "null shadow entry") node.shadowRoots = [null]
+          if (failure === "missing shadow type") node.shadowRoots = [{}]
+          if (failure === "unknown shadow type") node.shadowRoots = [{ shadowRootType: "unknown" }]
+        }
+        return result
+      }
+      for (const [index, input] of editingKeys.entries()) {
+        const start = harness.commands.length
+        expect(await run(`focus-proof-edit-${index}`, observation, input), JSON.stringify(input)).toMatchObject({ type: "error", dispatched: false })
+        expect(harness.commands.slice(start).filter((item) => item.method === "Input.dispatchKeyEvent")).toEqual([])
+      }
+      for (const [index, input] of navigationKeys.entries()) {
+        const start = harness.commands.length
+        expect(await run(`focus-proof-navigation-${index}`, observation, input)).toMatchObject({ type: "result", status: "completed" })
+        expect(harness.commands.slice(start).filter((item) => item.method === "Input.dispatchKeyEvent")).toHaveLength(2)
+        expect(harness.commands.slice(start).some((item) => item.method === "DOM.describeNode" || item.method === "Accessibility.getPartialAXTree")).toBe(false)
+      }
+    } finally {
+      harness.chrome.debugger.sendCommand = send
+      await stopBridge()
+    }
+  })
+
+  test("key focus proof permits an attached ordinary input with an actual empty AX name", async () => {
+    const dom = createFakeControls()
+    const plain = dom.control({ tag: "input", attributes: { type: "text" } })
+    const { observe, run } = await connect({ 159: field(plain, "") })
+    try {
+      const observation = await observe("focus-proof-empty-name")
+      harness.page.documents.main.activeElement = plain
+      for (const [index, input] of editingKeys.entries()) {
+        const start = harness.commands.length
+        expect(await run(`focus-proof-empty-name-${index}`, observation, input)).toMatchObject({ type: "result", status: "completed" })
+        expect(harness.commands.slice(start).filter((item) => item.method === "Input.dispatchKeyEvent")).toHaveLength(2)
+      }
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("observes date, time, and color inputs by their input type, fills a date with its ISO value, and ignores other roles", async () => {
+    const dom = createFakeControls()
+    const date = dom.control({ tag: "input", attributes: { type: "date" } })
+    const time = dom.control({ tag: "input", attributes: { type: "time" } })
+    const color = dom.control({ tag: "input", attributes: { type: "color" } })
+    const { observe, run } = await connect({
+      121: { role: "date", name: "Due", element: date, quad },
+      122: { role: "inputTime", name: "Start", element: time, quad },
+      123: { role: "colorWell", name: "Tint", element: color, quad },
+      124: { role: "time", name: "Clock", nodeName: "TIME", quad },
+      125: { role: "dateTime", name: "Deadline label", nodeName: "SPAN", quad },
+    })
+    try {
+      const observation = await observe("date-observe")
+      expect(observation.elements.map((item) => [item.role, item.name])).toEqual([
+        ["date", "Due"],
+        ["inputTime", "Start"],
+        ["colorWell", "Tint"],
+      ])
+      const filled = await run("date-fill", observation, { type: "fill", ref: refOf(observation, "Due"), text: "2026-11-07" })
+      expect(filled).toMatchObject({ type: "result", status: "completed", control: { value: "2026-11-07" } })
+      expect(filled.message).toBeUndefined()
+      expect(date.value).toBe("2026-11-07")
+      expect(date.events.map((event) => event.type)).toEqual(["input", "change"])
+      expect(await run("time-fill", observation, { type: "fill", ref: refOf(observation, "Start"), text: "09:30" })).toMatchObject({
+        control: { value: "09:30" },
+      })
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("observes a date input inside an approved same-origin iframe and fills it", async () => {
+    const dom = createFakeControls()
+    const inner = dom.control({ tag: "input", attributes: { type: "date" } })
+    const outer = dom.control({ tag: "input", attributes: { type: "date" } })
+    const { observe, run } = await connect({
+      131: { role: "date", name: "Arrival", element: inner, quad, frame: "same-frame" },
+      132: { role: "date", name: "Departure", element: outer, quad },
+    })
+    try {
+      harness.page.sameOriginFrame = true
+      const observation = await observe("same-frame-observe")
+      expect(observation.elements.map((item) => [item.name, item.frame])).toEqual([
+        ["Departure", undefined],
+        ["Arrival", "https://example.test/inner"],
+      ])
+      const filled = await run("same-frame-fill", observation, { type: "fill", ref: refOf(observation, "Arrival"), text: "2026-12-24" })
+      expect(filled).toMatchObject({ type: "result", status: "completed", control: { value: "2026-12-24" } })
+      expect(inner.value).toBe("2026-12-24")
+      expect(outer.value).toBe("")
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("a ref wait treats a node removed from the document as detached although Chrome still describes it", async () => {
+    const dom = createFakeControls()
+    const banner = dom.control({ tag: "input", attributes: { type: "text" } })
+    const { observe, run } = await connect({ 79: field(banner, "Banner") })
+    try {
+      const observation = await observe("ref-observe")
+      const ref = refOf(observation, "Banner")
+      expect(await run("ref-attached", observation, { type: "wait", ref, timeoutMs: 0 })).toMatchObject({ type: "result" })
+      expect(await run("ref-visible", observation, { type: "wait", ref, state: "visible", timeoutMs: 0 })).toMatchObject({ type: "result" })
+      expect(await run("ref-not-detached", observation, { type: "wait", ref, state: "detached", timeoutMs: 0 })).toMatchObject({
+        type: "error",
+        dispatched: false,
+      })
+      setTimeout(() => (banner.isConnected = false), 50)
+      const start = harness.commands.length
+      expect(await run("ref-removed", observation, { type: "wait", ref, state: "detached", timeoutMs: 2000 })).toMatchObject({
+        type: "result",
+        status: "completed",
+      })
+      expect(harness.commands.slice(start).some((item) => item.method === "DOM.describeNode")).toBe(false)
+      expect(calls(start).every((item) => item.params.functionDeclaration === "function () { return this.isConnected }")).toBe(true)
+      expect(calls(start).every((item) => item.params.arguments.length === 0 && item.params.objectId === "node-79")).toBe(true)
+      expect(await run("ref-hidden", observation, { type: "wait", ref, state: "hidden", timeoutMs: 0 })).toMatchObject({ type: "result" })
+      expect(await run("ref-gone", observation, { type: "wait", ref, timeoutMs: 0 })).toMatchObject({ type: "error", dispatched: false })
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("waits for a URL pattern over origin and path and never matches the query or fragment", async () => {
+    const { observe, run } = await connect({ 83: { role: "button", name: "Next", nodeName: "BUTTON", quad } })
+    try {
+      const first = await observe("url-observe")
+      setTimeout(() => (harness.page.profileTabs[0].url = "https://example.test/done?step=synthetic-query#synthetic-fragment"), 50)
+      const met = await run("url-met", first, { type: "wait", url: "https://example.test/do*e", timeoutMs: 2000 })
+      expect(met).toMatchObject({ type: "result", status: "completed" })
+      for (const [callID, url] of [
+        ["url-query", "*synthetic-query*"],
+        ["url-fragment", "*synthetic-fragment"],
+        ["url-full", "https://example.test/done?step=synthetic-query"],
+      ]) {
+        const observation = await observe(`${callID}-observe`)
+        const outcome = await run(callID, observation, { type: "wait", url, timeoutMs: 0 })
+        expect(outcome).toMatchObject({ type: "error", dispatched: false })
+        expect(outcome.message).not.toContain("synthetic")
+      }
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("waits for domcontentloaded and load from readyState and for networkidle from in-flight request tracking", async () => {
+    const { observe, run } = await connect({ 84: { role: "button", name: "Go", nodeName: "BUTTON", quad } })
+    const clock = useClock()
+    try {
+      const observation = await observe("load-observe")
+      expect(harness.commands).toContainEqual(expect.objectContaining({ source: { tabId: 17 }, method: "Network.enable" }))
+      harness.page.documents.main.readyState = "loading"
+      setTimeout(() => (harness.page.documents.main.readyState = "interactive"), 50)
+      const start = harness.commands.length
+      expect(await run("load-dom", observation, { type: "wait", load: "domcontentloaded", timeoutMs: 2000 })).toMatchObject({ type: "result" })
+      const ready = calls(start)
+      expect(ready.length).toBeGreaterThan(0)
+      expect(ready.every((item) => item.params.executionContextId !== undefined && item.params.objectId === undefined)).toBe(true)
+      expect(await run("load-load", observation, { type: "wait", load: "load", timeoutMs: 0 })).toMatchObject({ type: "error", dispatched: false })
+      harness.page.documents.main.readyState = "complete"
+      expect(await run("load-default", observation, { type: "wait", timeoutMs: 0 })).toMatchObject({ type: "result" })
+      const idle = run("load-idle", observation, { type: "wait", load: "networkidle", timeoutMs: 5000 })
+      await Bun.sleep(50)
+      clock.advance(500)
+      expect(await idle).toMatchObject({ type: "result", status: "completed" })
+      expect(harness.commands.some((item) => item.method === "Page.setLifecycleEventsEnabled")).toBe(false)
+      expect(harness.commands.some((item) => item.method === "Runtime.callFunctionOn" && item.params.functionDeclaration.includes("getEntriesByType"))).toBe(false)
+    } finally {
+      clock.restore()
+      await stopBridge()
+    }
+  })
+
+  test("networkidle is met after load when no request is pending", async () => {
+    const { observe, run, reply } = await connect({ 85: { role: "button", name: "Go", nodeName: "BUTTON", quad } })
+    const clock = useClock()
+    try {
+      const observation = await observe("idle-observe")
+      const idle = run("idle-quiet", observation, { type: "wait", load: "networkidle", timeoutMs: 5000 })
+      await Bun.sleep(50)
+      expect(reply("idle-quiet")).toBeUndefined()
+      clock.advance(500)
+      expect(await idle).toMatchObject({ type: "result", status: "completed" })
+    } finally {
+      clock.restore()
+      await stopBridge()
+    }
+  })
+
+  test("networkidle is not met while a request started after load is pending", async () => {
+    const { observe, run, reply } = await connect({ 86: { role: "button", name: "Go", nodeName: "BUTTON", quad } }, { child: true })
+    const clock = useClock()
+    try {
+      const observation = await observe("pending-observe", ["https://child.example.test"])
+      await harness.debuggerEvents.emit({ tabId: 17 }, "Network.requestWillBeSent", { requestId: "r1", request: { url: "https://example.test/slow" } })
+      const blocked = run("pending-main", observation, { type: "wait", load: "networkidle", timeoutMs: 5000 })
+      await Bun.sleep(50)
+      clock.advance(2000)
+      await Bun.sleep(150)
+      expect(reply("pending-main")).toBeUndefined()
+      clock.advance(3500)
+      expect(await blocked).toMatchObject({ type: "error", dispatched: false, message: expect.stringContaining("Timed out") })
+      await harness.debuggerEvents.emit({ tabId: 17 }, "Network.loadingFinished", { requestId: "r1" })
+
+      await waitFor(() => harness.commands.some((item) => item.method === "Network.enable" && item.source.sessionId === "child-1"))
+      await harness.debuggerEvents.emit({ tabId: 17, sessionId: "child-1" }, "Network.requestWillBeSent", { requestId: "c1", request: { url: childURL } })
+      const childBlocked = run("pending-child", observation, { type: "wait", load: "networkidle", timeoutMs: 5000 })
+      await Bun.sleep(50)
+      clock.advance(1000)
+      await Bun.sleep(150)
+      expect(reply("pending-child")).toBeUndefined()
+      await harness.debuggerEvents.emit({ tabId: 17 }, "Target.detachedFromTarget", { sessionId: "child-1" })
+      clock.advance(500)
+      expect(await childBlocked).toMatchObject({ type: "result", status: "completed" })
+    } finally {
+      clock.restore()
+      await stopBridge()
+    }
+  })
+
+  test("networkidle is met 500 ms after the pending request finishes and after it fails", async () => {
+    const { observe, run, reply } = await connect({ 87: { role: "button", name: "Go", nodeName: "BUTTON", quad } })
+    const clock = useClock()
+    try {
+      const observation = await observe("settle-observe")
+      for (const [requestId, settle] of [["r2", "Network.loadingFinished"], ["r3", "Network.loadingFailed"]]) {
+        await harness.debuggerEvents.emit({ tabId: 17 }, "Network.requestWillBeSent", { requestId, request: { url: "https://example.test/api" } })
+        const callID = `settle-${requestId}`
+        const pending = run(callID, observation, { type: "wait", load: "networkidle", timeoutMs: 5000 })
+        await Bun.sleep(50)
+        clock.advance(1000)
+        await Bun.sleep(150)
+        expect(reply(callID)).toBeUndefined()
+        await harness.debuggerEvents.emit({ tabId: 17 }, settle, { requestId, errorText: "net::ERR_FAILED" })
+        await Bun.sleep(150)
+        expect(reply(callID)).toBeUndefined()
+        clock.advance(500)
+        expect(await pending).toMatchObject({ type: "result", status: "completed" })
+      }
+    } finally {
+      clock.restore()
+      await stopBridge()
+    }
+  })
+
+  test("a redirected request counts once and settles once", async () => {
+    const { observe, run, reply } = await connect({ 88: { role: "button", name: "Go", nodeName: "BUTTON", quad } })
+    const clock = useClock()
+    try {
+      const observation = await observe("redirect-observe")
+      await harness.debuggerEvents.emit({ tabId: 17 }, "Network.requestWillBeSent", { requestId: "r4", request: { url: "https://example.test/a" } })
+      await harness.debuggerEvents.emit({ tabId: 17 }, "Network.requestWillBeSent", {
+        requestId: "r4",
+        request: { url: "https://example.test/b" },
+        redirectResponse: { status: 302, url: "https://example.test/a" },
+      })
+      const pending = run("redirect-wait", observation, { type: "wait", load: "networkidle", timeoutMs: 5000 })
+      await Bun.sleep(50)
+      clock.advance(1000)
+      await Bun.sleep(150)
+      expect(reply("redirect-wait")).toBeUndefined()
+      await harness.debuggerEvents.emit({ tabId: 17 }, "Network.loadingFinished", { requestId: "r4" })
+      clock.advance(500)
+      expect(await pending).toMatchObject({ type: "result", status: "completed" })
+    } finally {
+      clock.restore()
+      await stopBridge()
+    }
+  })
+
+  test("networkidle results and errors contain no URL, header or request data", async () => {
+    const { observe, run, socket } = await connect({ 89: { role: "button", name: "Go", nodeName: "BUTTON", quad } })
+    const clock = useClock()
+    try {
+      const observation = await observe("private-observe")
+      await harness.debuggerEvents.emit({ tabId: 17 }, "Network.requestWillBeSent", {
+        requestId: "r5",
+        request: {
+          url: "https://example.test/synthetic-private-path?token=synthetic-request-secret",
+          method: "POST",
+          headers: { Authorization: "synthetic-header-secret" },
+          postData: "synthetic-body-secret",
+        },
+        initiator: { type: "script", url: "https://example.test/synthetic-initiator" },
+        type: "Fetch",
+      })
+      expect(await run("private-timeout", observation, { type: "wait", load: "networkidle", timeoutMs: 0 })).toMatchObject({
+        type: "error",
+        dispatched: false,
+      })
+      await harness.debuggerEvents.emit({ tabId: 17 }, "Network.loadingFailed", { requestId: "r5", errorText: "synthetic-error-secret" })
+      const pending = run("private-idle", observation, { type: "wait", load: "networkidle", timeoutMs: 5000 })
+      await Bun.sleep(50)
+      clock.advance(500)
+      expect(await pending).toMatchObject({ type: "result", status: "completed" })
+      const sent = JSON.stringify(socket.outgoing)
+      for (const secret of ["synthetic-private-path", "synthetic-request-secret", "synthetic-header-secret", "synthetic-body-secret", "synthetic-initiator", "synthetic-error-secret", "Fetch"])
+        expect(sent).not.toContain(secret)
+    } finally {
+      clock.restore()
+      await stopBridge()
+    }
+  })
+
+  test("waits for text and returns only completion and the matching frame", async () => {
+    const { observe, run } = await connect({ 90: { role: "button", name: "Go", nodeName: "BUTTON", quad } }, { child: true })
+    try {
+      const observation = await observe("text-observe", ["https://child.example.test"])
+      harness.page.documents.main.body.innerText = "Loading"
+      setTimeout(() => (harness.page.documents.main.body.innerText = "Order\n   saved for synthetic-customer"), 50)
+      const met = await run("text-main", observation, { type: "wait", text: "Order saved", timeoutMs: 2000 })
+      expect(met).toMatchObject({ type: "result", status: "completed" })
+      expect(met.frame).toBeUndefined()
+      expect(met.text).toBeUndefined()
+      expect(JSON.stringify(met)).not.toContain("synthetic-customer")
+      harness.page.documents["child-1"].body.innerText = "Child total 42"
+      const framed = await run("text-child", observation, { type: "wait", text: "total 42", timeoutMs: 0 })
+      expect(framed).toMatchObject({ type: "result", frame: childURL })
+      expect(framed.text).toBeUndefined()
+      expect(await run("text-missing", observation, { type: "wait", text: "Absent words", timeoutMs: 0 })).toMatchObject({
+        type: "error",
+        dispatched: false,
+      })
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("creates one control world per frame document and recreates it after that frame navigates", async () => {
+    const dom = createFakeControls()
+    const main = dom.control({ tag: "input", attributes: { type: "text" } })
+    const inner = dom.control({ tag: "input", attributes: { type: "text" } })
+    const { observe, run } = await connect({ 91: field(main, "Main field"), 92: field(inner, "Child field", { session: "child-1" }) }, { child: true })
+    try {
+      const frameOrigins = ["https://child.example.test"]
+      const observation = await observe("world-observe", frameOrigins)
+      for (const callID of ["world-main-1", "world-main-2"])
+        expect(await run(callID, observation, { type: "fill", ref: refOf(observation, "Main field"), text: callID }, frameOrigins)).toMatchObject({ type: "result" })
+      for (const callID of ["world-child-1", "world-child-2"])
+        expect(await run(callID, observation, { type: "fill", ref: refOf(observation, "Child field"), text: callID }, frameOrigins)).toMatchObject({ type: "result" })
+      expect(controlWorlds(undefined)).toHaveLength(1)
+      expect(controlWorlds("child-1")).toHaveLength(1)
+      expect(controlWorlds(undefined)[0].params).toEqual({ frameId: "main-frame", worldName: "ycoding-control" })
+      expect(controlWorlds("child-1")[0].params).toEqual({ frameId: "child-frame", worldName: "ycoding-control" })
+      expect(inner.value).toBe("world-child-2")
+      await harness.debuggerEvents.emit({ tabId: 17, sessionId: "child-1" }, "Page.frameNavigated", {
+        frame: { id: "child-frame", url: "https://child.example.test/next" },
+      })
+      const next = await observe("world-observe-next", frameOrigins)
+      expect(await run("world-child-3", next, { type: "fill", ref: refOf(next, "Child field"), text: "after" }, frameOrigins)).toMatchObject({ type: "result" })
+      expect(controlWorlds("child-1")).toHaveLength(2)
+      expect(controlWorlds(undefined)).toHaveLength(1)
     } finally {
       await stopBridge()
     }
@@ -2182,6 +3563,7 @@ function createHarness() {
   const cursorDOM = createFakePage()
   const timeline = []
   const attachedNow = new Set()
+  const contexts = new Map()
   let createdURL = "about:blank"
   const storage = {
     browserPairing: {
@@ -2221,6 +3603,10 @@ function createHarness() {
     downloadItems: undefined,
     clipboardText: "clipboard-fixture",
     fileInput: false,
+    controls: undefined,
+    clickEffect: undefined,
+    keyEffect: undefined,
+    documents: fakeDocuments(),
   }
 
   class FakeWebSocket {
@@ -2283,7 +3669,7 @@ function createHarness() {
           () =>
             void this.receive({
               type: "paired",
-              version: 5,
+              version: 6,
               generation: "bridge-1",
               serverID: "server-paired",
               credential: "p".repeat(43),
@@ -2294,7 +3680,7 @@ function createHarness() {
           () =>
             void this.receive({
               type: "paired",
-              version: 5,
+              version: 6,
               generation: "bridge-1",
               serverID: message.serverID,
             }),
@@ -2328,6 +3714,7 @@ function createHarness() {
     debuggerDetach,
     tabCreated,
     tabUpdated,
+    tabRemoved,
     storage,
     alarms,
     page,
@@ -2446,9 +3833,29 @@ function createHarness() {
           if (method === "Page.getFrameTree" && source.sessionId)
             return { frameTree: { frame: { id: "child-frame", url: page.child?.url ?? "https://child.example.test/tempo" } } }
           if (method === "Page.getFrameTree")
-            return { frameTree: { frame: { id: "main-frame", url: "https://example.test/form" } } }
+            return {
+              frameTree: {
+                frame: { id: "main-frame", url: "https://example.test/form" },
+                ...(page.sameOriginFrame ? { childFrames: [{ frame: { id: "same-frame", url: "https://example.test/inner" } }] } : {}),
+              },
+            }
           if (method === "DOM.getFrameOwner") return { backendNodeId: 999 }
-          if (method === "Page.createIsolatedWorld") return { executionContextId: 1 }
+          if (method === "Page.createIsolatedWorld") {
+            if (params.worldName !== "ycoding-control") return { executionContextId: 1 }
+            const executionContextId = 100 + contexts.size
+            contexts.set(executionContextId, params.frameId === "same-frame" ? "same-frame" : (source.sessionId ?? "main"))
+            return { executionContextId }
+          }
+          const controlId =
+            params.backendNodeId ??
+            (typeof params.objectId === "string" && params.objectId.startsWith("node-")
+              ? Number(params.objectId.slice(5))
+              : typeof params.nodeId === "number" && params.nodeId >= 1000
+                ? params.nodeId - 1000
+                : undefined)
+          const control = page.controls?.[controlId]
+          if (control?.detached && method.startsWith("DOM.")) throw new Error("No node with given id found")
+          if (control?.detached && method.startsWith("Accessibility.")) throw new Error("No node with given id found")
           if (method === "Page.getLayoutMetrics" && source.sessionId)
             return { layoutViewport: { clientWidth: 400, clientHeight: 300 } }
           if (method === "Page.getLayoutMetrics")
@@ -2467,10 +3874,80 @@ function createHarness() {
             if (page.cursorPlacementHangs) return new Promise(() => {})
           }
           if (method === "Input.dispatchMouseEvent" && page.inputHangs) return new Promise(() => {})
+          if (method === "Input.dispatchMouseEvent" && params.type === "mouseReleased") page.clickEffect?.(params)
+          if (method === "Input.dispatchKeyEvent") {
+            page.keyEffect?.(params)
+            const focused = deepActive(page.documents.main)
+            if (params.type === "keyDown" && params.text && focused) focused.value = `${focused.value}${params.text}`
+          }
           if (method === "DOM.resolveNode") return { object: { objectId: `node-${params.backendNodeId}` } }
           if (method === "Runtime.callFunctionOn") {
-            return { result: { type: "undefined" } }
+            const element = params.objectId
+              ? (page.controls?.[Number(params.objectId.slice(5))]?.element ?? { isConnected: true })
+              : undefined
+            const document = params.executionContextId ? page.documents[contexts.get(params.executionContextId)] : undefined
+            if (!element && !document) return { result: { type: "undefined" } }
+            const declared = runInNewContext(`(${params.functionDeclaration})`, { Event: FakeEvent, document })
+            const value = declared.apply(element, (params.arguments ?? []).map((argument) => argument.value))
+            if (params.returnByValue === false) {
+              const id = Object.entries(page.controls ?? {}).find(([, item]) => item.element && item.element === value)?.[0]
+              const documentKey = Object.entries(page.documents).find(([, item]) => item === value)?.[0]
+              if (documentKey) return { result: { type: "object", objectId: `document-${documentKey}` } }
+              return { result: id ? { type: "object", objectId: `node-${id}` } : { type: "object", subtype: "null", value: null } }
+            }
+            return {
+              result: value === undefined ? { type: "undefined" } : { type: typeof value, value: JSON.parse(JSON.stringify(value)) },
+            }
           }
+          if (page.controls && method === "Input.insertText") {
+            const element = Object.values(page.controls).find((item) => item.element?.focused)?.element
+            if (element) {
+              element.value = element.selectedAll ? params.text : `${element.value}${params.text}`
+              element.selectedAll = false
+            }
+          }
+          if (page.controls && method === "Input.dispatchKeyEvent" && params.type === "keyDown" && params.key === "Delete") {
+            const element = Object.values(page.controls).find((item) => item.element?.focused)?.element
+            if (element?.selectedAll) {
+              element.value = ""
+              element.selectedAll = false
+            }
+          }
+          if (page.controls && method === "Accessibility.getFullAXTree")
+            return {
+              nodes: Object.entries(page.controls)
+                .filter(([, item]) => item.session === source.sessionId && !item.detached)
+                .filter(([, item]) => item.frame === (params.frameId === "same-frame" ? "same-frame" : undefined))
+                .map(([id, item]) => axNode(Number(id), item)),
+            }
+          if (control && method === "Accessibility.getPartialAXTree") return { nodes: [axNode(controlId, control)] }
+          if (method === "DOM.requestNode" && params.objectId === "document-same-frame") return { nodeId: 5000 }
+          if (page.controls && method === "DOM.querySelectorAll")
+            return {
+              nodeIds: Object.entries(page.controls)
+                .filter(([, item]) => item.session === source.sessionId && item.element?.localName === "input")
+                .filter(([, item]) => item.frame === (params.nodeId === 5000 ? "same-frame" : undefined))
+                .filter(([, item]) => ["date", "time", "datetime-local", "month", "week", "color", "range"].includes(item.element.type))
+                .map(([id]) => 1000 + Number(id)),
+            }
+          if (control && method === "Accessibility.queryAXTree")
+            return {
+              nodes: (control.options ?? [])
+                .map((id) => axNode(id, page.controls[id]))
+                .filter((item) => !params.role || item.role.value === params.role),
+            }
+          if (control && method === "DOM.describeNode")
+            return {
+              node: {
+                nodeType: 1,
+                backendNodeId: controlId,
+                nodeName: control.element?.nodeName ?? control.nodeName ?? "DIV",
+                attributes: control.element?.attributeList() ?? control.attributes ?? [],
+                ...(control.frameId ? { frameId: control.frameId } : {}),
+                ...(control.shadowRoots ? { shadowRoots: control.shadowRoots } : {}),
+              },
+            }
+          if (control && method === "DOM.getContentQuads") return { quads: control.quad ? [control.quad] : [] }
           if (method === "Runtime.evaluate" && params.expression.includes("navigator.clipboard.readText"))
             return { result: { value: page.clipboardText } }
           if (method === "Runtime.evaluate" && params.expression.includes("navigator.clipboard.writeText"))
@@ -2578,11 +4055,52 @@ function createHarness() {
       page.downloadItems = undefined
       page.clipboardText = "clipboard-fixture"
       page.fileInput = false
+      page.controls = undefined
+      page.clickEffect = undefined
+      page.keyEffect = undefined
+      page.sameOriginFrame = false
+      page.documents = fakeDocuments()
+      contexts.clear()
       cursorDOM.reset()
       timeline.length = 0
       FakeWebSocket.failConnections = false
       FakeWebSocket.instance = undefined
     },
+  }
+}
+
+function FakeEvent(type, init = {}) {
+  this.type = type
+  this.bubbles = !!init.bubbles
+  this.composed = !!init.composed
+}
+
+function deepActive(document) {
+  let element = document?.activeElement
+  for (;;) {
+    if (element?.shadowRoot?.activeElement) element = element.shadowRoot.activeElement
+    else if (element?.contentDocument?.activeElement) element = element.contentDocument.activeElement
+    else return element
+  }
+}
+
+function fakeDocuments() {
+  return {
+    main: { readyState: "complete", body: { innerText: "" } },
+    "child-1": { readyState: "complete", body: { innerText: "" } },
+    "same-frame": { readyState: "complete", body: { innerText: "" } },
+  }
+}
+
+function axNode(id, item) {
+  return {
+    nodeId: `ax-${id}`,
+    ignored: !!item.ignored,
+    role: { value: item.role },
+    name: { value: item.name ?? "" },
+    backendDOMNodeId: id,
+    properties: item.properties ?? [],
+    ...(item.value === undefined ? {} : { value: { type: typeof item.value, value: item.value } }),
   }
 }
 

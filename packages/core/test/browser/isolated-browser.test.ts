@@ -806,4 +806,116 @@ describe("isolated browser service", () => {
       { operationTimeout: "10 millis" },
     )
   })
+
+  const started = (isolated: IsolatedBrowser.Interface) =>
+    isolated.start(sessionID, { url: "https://example.test/form" })
+  const act = (isolated: IsolatedBrowser.Interface, status: IsolatedBrowser.Status, callID: string,
+    action: IsolatedBrowser.ActionInput["action"]) =>
+    isolated.action({ sessionID, instanceID: status.instanceID!, tabID: status.tab!.id, generation: 1,
+      documentGeneration: 1, observationRevision: 1, callID, action })
+
+  test("returns executor control state and match frame in isolated action results", async () => {
+    const runtime = fixtureRuntime({
+      action: (action) => Effect.succeed({
+        snapshot: { title: "Fixture", url: "https://example.test/form", documentGeneration: 1, revision: 0 },
+        ...(action.type === "check" ? { control: { checked: true } } : {}),
+        ...(action.type === "wait" ? { frame: { origin: "https://child.example.test", path: "/widget" } } : {}),
+      }),
+    })
+    await run(fixtureExecutor(runtime), Effect.gen(function* () {
+      const isolated = yield* IsolatedBrowser.Service
+      const status = yield* started(isolated)
+      expect(yield* act(isolated, status, "check-state", { type: "check", ref: "b1", checked: true }))
+        .toMatchObject({ status: "completed", control: { checked: true } })
+      const restarted = yield* isolated.list(sessionID)
+      const waited = yield* isolated.action({ sessionID, instanceID: status.instanceID!, tabID: status.tab!.id,
+        generation: 1, documentGeneration: restarted[0].documentGeneration, observationRevision: restarted[0].observationRevision,
+        callID: "wait-frame", action: { type: "wait", text: "Saved" } })
+      expect(waited).toMatchObject({ status: "completed", frame: { origin: "https://child.example.test", path: "/widget" } })
+      expect(waited.control).toBeUndefined()
+    }))
+  })
+
+  test("passes executor control, match frame, and message through, drops an unsafe frame, and withholds a sensitive value", async () => {
+    const long = "v".repeat(2000)
+    const outputs: Record<string, Partial<IsolatedBrowserExecutor.ActionOutput>> = {
+      "fill-differs": { control: { value: long }, message: "The field value differs from the requested text",
+        frame: { origin: "https://child.example.test", path: "/widget?token=hidden" } },
+      "unsafe-frame": { frame: { origin: "javascript:alert(1)", path: "/x" } },
+      "credential-frame": { frame: { origin: "https://user:pass@child.example.test", path: "/x" } },
+      "sensitive": { control: { sensitive: true, value: "synthetic-secret-value" }, message: "synthetic-secret-value" },
+      "rejected": { rejected: "The extension refused the field", control: { checked: true }, message: "ignored" },
+    }
+    const runtime = fixtureRuntime({
+      action: (action) => Effect.succeed({
+        snapshot: { title: "Fixture", url: "https://example.test/form", documentGeneration: 1, revision: 1 },
+        ...outputs[action.type === "fill" ? action.text : ""],
+      }),
+    })
+    await run(fixtureExecutor(runtime), Effect.gen(function* () {
+      const isolated = yield* IsolatedBrowser.Service
+      const status = yield* started(isolated)
+      const results: Record<string, IsolatedBrowser.ActionResult> = {}
+      for (const key of Object.keys(outputs)) {
+        yield* isolated.observe({ sessionID, instanceID: status.instanceID!, tabID: status.tab!.id, generation: 1, callID: `observe-${key}` })
+        results[key] = yield* act(isolated, status, `fill-${key}`, { type: "fill", ref: "b1", text: key })
+      }
+      expect(results["fill-differs"]).toMatchObject({ status: "completed", message: "The field value differs from the requested text",
+        frame: { origin: "https://child.example.test", path: "/widget" } })
+      expect(results["fill-differs"].control?.value).toHaveLength(1024)
+      expect(Schema.is(IsolatedBrowser.ActionResult)(results["fill-differs"])).toBe(true)
+      expect(results["unsafe-frame"].frame).toBeUndefined()
+      expect(results["credential-frame"].frame).toBeUndefined()
+      expect(results["sensitive"]).toMatchObject({ status: "completed", control: { sensitive: true } })
+      expect(results["sensitive"].control).toEqual({ sensitive: true })
+      expect(JSON.stringify(results["sensitive"])).not.toContain("synthetic-secret-value")
+      expect(results["rejected"]).toMatchObject({ status: "rejected", message: "The extension refused the field" })
+    }))
+  })
+
+  test("a timed-out fill, select, check, or hover is uncertain and closes the runtime; a timed-out wait is rejected", async () => {
+    const actions: ReadonlyArray<IsolatedBrowser.ActionInput["action"]> = [
+      { type: "fill", ref: "b1", text: "synthetic" },
+      { type: "select", ref: "b1", labels: ["Small"] },
+      { type: "check", ref: "b1", checked: true },
+      { type: "hover", ref: "b1" },
+    ]
+    for (const action of actions) {
+      let closed = 0
+      await run(fixtureExecutor(fixtureRuntime({ action: () => Effect.never, close: () => closed++ })), Effect.gen(function* () {
+        const isolated = yield* IsolatedBrowser.Service
+        const result = yield* act(isolated, yield* started(isolated), `lost-${action.type}`, action)
+        expect(result, action.type).toMatchObject({ status: "uncertain", tab: { pauseReason: "uncertain" } })
+        for (let attempt = 0; attempt < 20; attempt++) {
+          if (closed > 0) break
+          yield* Effect.sleep("5 millis")
+        }
+        expect(closed, action.type).toBeGreaterThanOrEqual(1)
+      }), { operationTimeout: "10 millis" })
+    }
+    let closed = 0
+    await run(fixtureExecutor(fixtureRuntime({ action: () => Effect.never, close: () => closed++ })), Effect.gen(function* () {
+      const isolated = yield* IsolatedBrowser.Service
+      const status = yield* started(isolated)
+      const result = yield* act(isolated, status, "lost-wait", { type: "wait", load: "load", timeoutMs: 0 })
+      expect(result).toMatchObject({ status: "rejected" })
+      expect(result.tab.pauseReason).toBeUndefined()
+      expect(closed).toBe(0)
+      expect((yield* isolated.status(sessionID)).state).toBe("ready")
+    }), { operationTimeout: "10 millis" })
+  })
+
+  test("extends the isolated operation deadline by the wait timeout", async () => {
+    const runtime = fixtureRuntime({
+      action: () => Effect.sleep("80 millis").pipe(Effect.as({
+        snapshot: { title: "Fixture", url: "https://example.test/form", documentGeneration: 1, revision: 0 },
+      })),
+    })
+    await run(fixtureExecutor(runtime), Effect.gen(function* () {
+      const isolated = yield* IsolatedBrowser.Service
+      const status = yield* started(isolated)
+      expect(yield* act(isolated, status, "slow-wait", { type: "wait", text: "Saved", timeoutMs: 500 }))
+        .toMatchObject({ status: "completed" })
+    }), { operationTimeout: "10 millis" })
+  })
 })

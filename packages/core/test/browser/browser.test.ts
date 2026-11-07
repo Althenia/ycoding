@@ -8,6 +8,7 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { BrowserProtocol } from "@ycoding-ai/core/browser/protocol"
+import { BrowserOperation } from "@ycoding-ai/core/browser/operation"
 import { BrowserAdmission } from "@ycoding-ai/core/browser/admission"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
@@ -125,7 +126,7 @@ async function attached(
   const attachment = await Effect.runPromise(
     browser.attach({
       origin: `chrome-extension://${extensionID}`,
-      handshake: { type: "pair", version: 5, extensionID, secret: pairing.secret },
+      handshake: { type: "pair", version: 6, extensionID, secret: pairing.secret },
       transport: {
         send: (message) => Queue.offerUnsafe(outbox, message),
         close,
@@ -144,7 +145,7 @@ async function pairedTrust(browser: Browser.Interface, session = sessionID) {
   const attachment = await Effect.runPromise(
     browser.attach({
       origin: `chrome-extension://${extensionID}`,
-      handshake: { type: "pair", version: 5, extensionID, secret: pairing.secret },
+      handshake: { type: "pair", version: 6, extensionID, secret: pairing.secret },
       transport: {
         send: (message) => Queue.offerUnsafe(outbox, message),
         close: () => {},
@@ -591,7 +592,7 @@ describe("paired Chrome browser service", () => {
               origin: `chrome-extension://${extensionID}`,
               handshake: {
                 type: "authenticate",
-                version: 5,
+                version: 6,
                 extensionID,
                 serverID: trust.response.serverID,
                 credential: trust.response.credential,
@@ -624,7 +625,7 @@ describe("paired Chrome browser service", () => {
           origin: `chrome-extension://${extensionID}`,
           handshake: {
             type: "authenticate",
-            version: 5,
+            version: 6,
             extensionID,
             serverID: trust.response.serverID,
             credential: trust.response.credential,
@@ -633,7 +634,7 @@ describe("paired Chrome browser service", () => {
         })
         expect(yield* Queue.take(outbox)).toMatchObject({
           type: "paired",
-          version: 5,
+          version: 6,
           serverID: trust.response.serverID,
           credential: undefined,
         })
@@ -643,7 +644,7 @@ describe("paired Chrome browser service", () => {
             origin: `chrome-extension://${extensionID}`,
             handshake: {
               type: "authenticate",
-              version: 5,
+              version: 6,
               extensionID,
               serverID: "different-server-identity",
               credential: trust.response.credential,
@@ -684,7 +685,7 @@ describe("paired Chrome browser service", () => {
               origin: `chrome-extension://${extensionID}`,
               handshake: {
                 type: "authenticate",
-                version: 5,
+                version: 6,
                 extensionID,
                 serverID: trust.response.serverID,
                 credential: trust.response.credential,
@@ -718,7 +719,7 @@ describe("paired Chrome browser service", () => {
               origin: `chrome-extension://${extensionID}`,
               handshake: {
                 type: "authenticate",
-                version: 5,
+                version: 6,
                 extensionID,
                 serverID: trust.serverID,
                 credential,
@@ -747,7 +748,7 @@ describe("paired Chrome browser service", () => {
         const pairing = yield* browser.start(sessionID)
         yield* browser.attach({
           origin: `chrome-extension://${extensionID}`,
-          handshake: { type: "pair", version: 5, extensionID, secret: pairing.secret },
+          handshake: { type: "pair", version: 6, extensionID, secret: pairing.secret },
           transport: {
             send: (message) => Queue.offerUnsafe(outbox, message),
             close: (code, reason) => closed.push({ code, reason }),
@@ -768,7 +769,7 @@ describe("paired Chrome browser service", () => {
             origin: `chrome-extension://${extensionID}`,
             handshake: {
               type: "authenticate",
-              version: 5,
+              version: 6,
               extensionID,
               serverID: first.serverID,
               credential: first.credential,
@@ -789,7 +790,7 @@ describe("paired Chrome browser service", () => {
         const rejected = yield* browser
           .attach({
             origin: "https://website.example",
-            handshake: { type: "pair", version: 5, extensionID, secret: pairing.secret },
+            handshake: { type: "pair", version: 6, extensionID, secret: pairing.secret },
             transport: { send: () => true, close: () => {} },
           })
           .pipe(Effect.exit)
@@ -800,7 +801,7 @@ describe("paired Chrome browser service", () => {
         const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
         const connected = yield* browser.attach({
           origin: `chrome-extension://${extensionID}`,
-          handshake: { type: "pair", version: 5, extensionID, secret: pairing.secret },
+          handshake: { type: "pair", version: 6, extensionID, secret: pairing.secret },
           transport: { send: (message) => Queue.offerUnsafe(outbox, message), close: () => {} },
         })
         const paired = yield* Queue.take(outbox)
@@ -808,7 +809,7 @@ describe("paired Chrome browser service", () => {
         const reused = yield* browser
           .attach({
             origin: `chrome-extension://${extensionID}`,
-            handshake: { type: "pair", version: 5, extensionID, secret: pairing.secret },
+            handshake: { type: "pair", version: 6, extensionID, secret: pairing.secret },
             transport: { send: () => true, close: () => {} },
           })
           .pipe(Effect.exit)
@@ -867,7 +868,7 @@ describe("paired Chrome browser service", () => {
             origin: `chrome-extension://${extensionID}`,
             handshake: {
               type: "authenticate",
-              version: 5,
+              version: 6,
               extensionID,
               serverID: paired.response.serverID,
               credential: paired.response.credential,
@@ -1432,6 +1433,500 @@ describe("paired profile tab leases", () => {
       yield* observed(browser, outbox, connected, sessionID, tabID, "stop-holder")
       yield* browser.stop(otherSessionID)
       expect(yield* browser.list(sessionID)).toEqual([])
+    }))
+  })
+})
+
+describe("paired Chrome tab departures", () => {
+  const setup = Effect.gen(function* () {
+    const browser = yield* Browser.Service
+    const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+    const connected = yield* Effect.promise(() => attached(browser, outbox))
+    return { browser, outbox, connected }
+  })
+  const share = (connected: Connected, tabID: typeof Browser.TabID.Type, replaces?: typeof Browser.TabID.Type) =>
+    connected.attachment.receive({
+      type: "shared", mode: "profile", tabID, title: "Fixture", url: "https://example.test/page",
+      documentGeneration: 1, active: false, ...(replaces ? { replaces } : {}),
+    })
+  const ownedTab = (browser: Browser.Interface, outbox: Queue.Queue<BrowserProtocol.ServerMessage>, connected: Connected,
+    callID: string) =>
+    Effect.gen(function* () {
+      const opening = yield* browser.open({ sessionID, generation: connected.generation,
+        url: "https://example.test/new", callID }).pipe(Effect.forkScoped)
+      const sent = yield* Queue.take(outbox)
+      if (sent.type !== "open") throw new Error("expected open frame")
+      yield* connected.attachment.receive({ type: "opened", callID: sent.callID, tabID: sent.tabID,
+        generation: sent.generation, title: "Fixture", url: sent.url, documentGeneration: 1, active: false })
+      return yield* Fiber.join(opening)
+    })
+
+  test("reports a listed tab as present in its own mode", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, outbox, connected } = yield* setup
+      const profileID = Browser.TabID.make("btab_state_profile")
+      yield* share(connected, profileID)
+      const owned = yield* ownedTab(browser, outbox, connected, "state-owned")
+      expect(yield* browser.tabState(sessionID, profileID)).toEqual({ state: "present", mode: "profile" })
+      expect(yield* browser.tabState(otherSessionID, profileID)).toEqual({ state: "present", mode: "profile" })
+      expect(yield* browser.tabState(sessionID, owned.id)).toEqual({ state: "present", mode: "owned" })
+    }))
+  })
+
+  test("reports an unlisted tab ID, and any tab while no bridge is connected, as unknown", async () => {
+    await run(Effect.gen(function* () {
+      const browser = yield* Browser.Service
+      expect(yield* browser.tabState(sessionID, Browser.TabID.make("btab_never_listed"))).toEqual({ state: "unknown" })
+      const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+      const connected = yield* Effect.promise(() => attached(browser, outbox))
+      expect(yield* browser.tabState(sessionID, Browser.TabID.make("btab_never_listed"))).toEqual({ state: "unknown" })
+      const id = Browser.TabID.make("btab_before_stop")
+      yield* share(connected, id)
+      yield* connected.attachment.receive({ type: "revoked", tabID: id, reason: "closed" })
+      yield* browser.stop(sessionID)
+      expect(yield* browser.tabState(sessionID, id)).toEqual({ state: "unknown" })
+    }))
+  })
+
+  for (const reason of ["closed", "navigated", "detached", "access_revoked", "replaced"] as const)
+    test(`reports a tab revoked as ${reason} with that reason and no page data`, async () => {
+      await run(Effect.gen(function* () {
+        const { browser, connected } = yield* setup
+        const id = Browser.TabID.make(`btab_revoked_${reason}`)
+        yield* share(connected, id)
+        yield* connected.attachment.receive({ type: "revoked", tabID: id, reason,
+          ...(reason === "detached" ? { detachReason: "target_closed" } : {}) })
+        expect(yield* browser.list(sessionID)).toEqual([])
+        const state = yield* browser.tabState(sessionID, id)
+        expect(state).toEqual({ state: "departed", mode: "profile", reason,
+          ...(reason === "detached" ? { detachReason: "target_closed" } : {}) })
+        expect(JSON.stringify(state)).not.toContain("example.test")
+      }))
+    })
+
+  test("reports a tab revoked by an extension that sends no reason as departed without a reason", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, connected } = yield* setup
+      const id = Browser.TabID.make("btab_revoked_legacy")
+      yield* share(connected, id)
+      yield* connected.attachment.receive({ type: "revoked", tabID: id })
+      expect(yield* browser.tabState(sessionID, id)).toEqual({ state: "departed", mode: "profile" })
+    }))
+  })
+
+  test("links a re-registered tab to its predecessor and follows the chain to the listed successor", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, connected } = yield* setup
+      const first = Browser.TabID.make("btab_chain_first")
+      const second = Browser.TabID.make("btab_chain_second")
+      const third = Browser.TabID.make("btab_chain_third")
+      yield* share(connected, first)
+      yield* connected.attachment.receive({ type: "revoked", tabID: first, reason: "navigated" })
+      yield* share(connected, second, first)
+      expect(yield* browser.tabState(sessionID, first)).toEqual({ state: "departed", mode: "profile",
+        reason: "navigated", successorID: second })
+      yield* connected.attachment.receive({ type: "revoked", tabID: second, reason: "replaced" })
+      yield* share(connected, third, second)
+      expect(yield* browser.tabState(sessionID, first)).toMatchObject({ state: "departed", successorID: third })
+      expect(yield* browser.tabState(sessionID, second)).toMatchObject({ state: "departed", successorID: third })
+      expect(yield* browser.tabState(sessionID, third)).toEqual({ state: "present", mode: "profile" })
+      expect((yield* browser.list(sessionID)).map((tab) => tab.lease)).toEqual([undefined])
+    }))
+  })
+
+  test("omits the successor once it has also departed without a replacement", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, connected } = yield* setup
+      const first = Browser.TabID.make("btab_gone_first")
+      const second = Browser.TabID.make("btab_gone_second")
+      yield* share(connected, first)
+      yield* connected.attachment.receive({ type: "revoked", tabID: first, reason: "navigated" })
+      yield* share(connected, second, first)
+      yield* connected.attachment.receive({ type: "revoked", tabID: second, reason: "closed" })
+      expect(yield* browser.tabState(sessionID, first)).toEqual({ state: "departed", mode: "profile", reason: "navigated" })
+    }))
+  })
+
+  test("ignores a replaces link to a tab that never departed", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, connected } = yield* setup
+      const live = Browser.TabID.make("btab_replaces_live")
+      yield* share(connected, live)
+      yield* share(connected, Browser.TabID.make("btab_replaces_claimant"), live)
+      yield* share(connected, Browser.TabID.make("btab_replaces_unknown"), Browser.TabID.make("btab_replaces_missing"))
+      expect(yield* browser.tabState(sessionID, live)).toEqual({ state: "present", mode: "profile" })
+      expect(yield* browser.tabState(sessionID, Browser.TabID.make("btab_replaces_missing"))).toEqual({ state: "unknown" })
+    }))
+  })
+
+  test("records disabling profile access as access_revoked for every profile tab and keeps owned tabs listed", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, outbox, connected } = yield* setup
+      const first = Browser.TabID.make("btab_access_first")
+      const second = Browser.TabID.make("btab_access_second")
+      yield* share(connected, first)
+      yield* share(connected, second)
+      const owned = yield* ownedTab(browser, outbox, connected, "access-owned")
+      yield* connected.attachment.receive({ type: "profile_access", enabled: false })
+      for (const id of [first, second])
+        expect(yield* browser.tabState(sessionID, id)).toEqual({ state: "departed", mode: "profile", reason: "access_revoked" })
+      expect(yield* browser.tabState(sessionID, owned.id)).toEqual({ state: "present", mode: "owned" })
+    }))
+  })
+
+  test("records an owned tab closed for reaching an unapproved origin as navigated for its Session only", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, outbox, connected } = yield* setup
+      const owned = yield* ownedTab(browser, outbox, connected, "navigated-owned")
+      yield* connected.attachment.receive({ type: "updated", tabID: owned.id, title: "Elsewhere",
+        url: "https://unapproved.test/private", documentGeneration: 2 })
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "close", tabID: owned.id })
+      expect(yield* browser.tabState(sessionID, owned.id)).toEqual({ state: "departed", mode: "owned", reason: "navigated" })
+      expect(yield* browser.tabState(otherSessionID, owned.id)).toEqual({ state: "unknown" })
+    }))
+  })
+
+  test("never reveals another Session's owned tab, whether it is listed or has departed", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, outbox, connected } = yield* setup
+      const owned = yield* ownedTab(browser, outbox, connected, "private-owned")
+      expect(yield* browser.tabState(otherSessionID, owned.id)).toEqual({ state: "unknown" })
+      yield* connected.attachment.receive({ type: "revoked", tabID: owned.id, reason: "closed" })
+      expect(yield* browser.tabState(sessionID, owned.id)).toEqual({ state: "departed", mode: "owned", reason: "closed" })
+      expect(yield* browser.tabState(otherSessionID, owned.id)).toEqual({ state: "unknown" })
+    }))
+  })
+
+  test("records an owned tab closed through the service as closed", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, outbox, connected } = yield* setup
+      const owned = yield* ownedTab(browser, outbox, connected, "close-record-owned")
+      const closing = yield* browser.close({ sessionID, tabID: owned.id, generation: connected.generation,
+        callID: "close-record" }).pipe(Effect.forkScoped)
+      const frame = yield* Queue.take(outbox)
+      if (frame.type !== "close") throw new Error("expected close frame")
+      yield* connected.attachment.receive({ type: "closed", callID: frame.callID, tabID: frame.tabID, generation: frame.generation })
+      yield* Fiber.join(closing)
+      expect(yield* browser.tabState(sessionID, owned.id)).toEqual({ state: "departed", mode: "owned", reason: "closed" })
+    }))
+  })
+
+  test("keeps only the most recent departures", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, connected } = yield* setup
+      const ids = Array.from({ length: 80 }, (_, index) => Browser.TabID.make(`btab_bounded_${index}`))
+      for (const id of ids) {
+        yield* share(connected, id)
+        yield* connected.attachment.receive({ type: "revoked", tabID: id, reason: "closed" })
+      }
+      expect(yield* browser.tabState(sessionID, ids[0])).toEqual({ state: "unknown" })
+      expect(yield* browser.tabState(sessionID, ids[79])).toMatchObject({ state: "departed", reason: "closed" })
+    }))
+  })
+
+  test("reports a revoked tab as unknown in an isolated-browser Session", async () => {
+    await run(Effect.gen(function* () {
+      const { browser, connected } = yield* setup
+      const admission = yield* BrowserAdmission.Service
+      const id = Browser.TabID.make("btab_isolated_view")
+      yield* share(connected, id)
+      admission.release(sessionID, "selected")
+      admission.claim(sessionID, "isolated")
+      expect(yield* browser.tabState(sessionID, id)).toEqual({ state: "unknown" })
+    }))
+  })
+})
+
+describe("browser operation classification and locators", () => {
+  test("classifies every action type with an unchanged permission class and mutation flag for existing types", () => {
+    const rows: ReadonlyArray<readonly [Browser.Schema.Action, BrowserOperation.Classification]> = [
+      [{ type: "navigate", url: "https://example.test/" }, { permission: "browser_navigate", mutation: true, target: "none" }],
+      [{ type: "click", ref: "b1" }, { permission: "browser_interact", mutation: true, target: "element" }],
+      [{ type: "type", ref: "b1", text: "x" }, { permission: "browser_interact", mutation: true, target: "element" }],
+      [{ type: "upload", ref: "b1", paths: ["/tmp/a"] }, { permission: "browser_interact", mutation: true, target: "element" }],
+      [{ type: "fill", ref: "b1", text: "x" }, { permission: "browser_interact", mutation: true, target: "element" }],
+      [{ type: "select", ref: "b1", values: ["a"] }, { permission: "browser_interact", mutation: true, target: "element" }],
+      [{ type: "check", ref: "b1", checked: true }, { permission: "browser_interact", mutation: true, target: "element" }],
+      [{ type: "hover", ref: "b1" }, { permission: "browser_interact", mutation: true, target: "element" }],
+      [{ type: "back" }, { permission: "browser_interact", mutation: true, target: "none" }],
+      [{ type: "forward" }, { permission: "browser_interact", mutation: true, target: "none" }],
+      [{ type: "reload" }, { permission: "browser_interact", mutation: true, target: "none" }],
+      [{ type: "key", key: "Enter" }, { permission: "browser_interact", mutation: true, target: "none" }],
+      [{ type: "clipboard_write", text: "x" }, { permission: "browser_interact", mutation: true, target: "none" }],
+      [{ type: "webmcp_invoke", name: "lookup" }, { permission: "browser_interact", mutation: true, target: "none" }],
+      [{ type: "dialog" }, { permission: "browser_read", mutation: true, target: "none" }],
+      [{ type: "dialog", accept: true }, { permission: "browser_interact", mutation: true, target: "none" }],
+      [{ type: "scroll", deltaY: 10 }, { permission: "browser_read", mutation: false, target: "none" }],
+      [{ type: "capture" }, { permission: "browser_read", mutation: false, target: "none" }],
+      [{ type: "wait" }, { permission: "browser_read", mutation: false, target: "none" }],
+      [{ type: "wait", locator: 'role=button[name="Go"]', state: "visible" }, { permission: "browser_read", mutation: false, target: "none" }],
+      [{ type: "wait", load: "networkidle" }, { permission: "browser_read", mutation: false, target: "none" }],
+      [{ type: "clipboard_read" }, { permission: "browser_read", mutation: false, target: "none" }],
+      [{ type: "download" }, { permission: "browser_read", mutation: false, target: "none" }],
+      [{ type: "logs" }, { permission: "browser_read", mutation: false, target: "none" }],
+      [{ type: "export" }, { permission: "browser_read", mutation: false, target: "none" }],
+      [{ type: "webmcp_list" }, { permission: "browser_read", mutation: false, target: "none" }],
+      [{ type: "group", tabIDs: [Browser.TabID.make("btab_a")], title: "Task" }, { permission: "browser_control", mutation: true, target: "none" }],
+      [{ type: "ungroup", tabIDs: [Browser.TabID.make("btab_a")], groupID: 0 }, { permission: "browser_control", mutation: true, target: "none" }],
+    ]
+    for (const [action, expected] of rows) expect(BrowserOperation.classify(action), JSON.stringify(action)).toEqual(expected)
+    expect([...BrowserOperation.ELEMENT_ACTIONS].sort()).toEqual(["check", "click", "fill", "hover", "select", "type", "upload"])
+    expect(BrowserOperation.waitBudgetMs({ type: "wait" })).toBe(5000)
+    expect(BrowserOperation.waitBudgetMs({ type: "wait", text: "x", timeoutMs: 12_000 })).toBe(12_000)
+    expect(BrowserOperation.waitBudgetMs({ type: "download" })).toBe(30_000)
+    expect(BrowserOperation.waitBudgetMs({ type: "download", timeoutMs: 100 })).toBe(100)
+    expect(BrowserOperation.waitBudgetMs({ type: "click", ref: "b1" })).toBe(0)
+  })
+
+  test("parses only well-formed locators and matches names truncated at 128 characters by prefix", () => {
+    expect(BrowserOperation.parseLocator('role=button[name="Save"]')).toEqual({ role: "button", name: "Save", nth: 0 })
+    expect(BrowserOperation.parseLocator('role=link[name="A \\"quoted\\" name"]|nth=2')).toEqual({ role: "link", name: 'A "quoted" name', nth: 2 })
+    expect(BrowserOperation.parseLocator('role=heading[name=""]')).toEqual({ role: "heading", name: "", nth: 0 })
+    const long = "n".repeat(200)
+    expect(BrowserOperation.parseLocator(BrowserOperation.makeLocator({ role: "button", name: long }, 3)))
+      .toEqual({ role: "button", name: long.slice(0, 128), nth: 3 })
+    for (const malformed of [
+      "button", 'role=button[name=Save]', 'role=button[name="Save"]|nth=0', 'role=button[name="Save"]|nth=01',
+      'role=button[name="Save"]|nth=10000', 'role=[name="Save"]', `role=${"r".repeat(65)}[name="Save"]`,
+      'role=button[name="Save"] ', 'role=but]ton[name="Save"]', 'role=button[name="Sa"ve"]', 'role=button[name="\\x"]',
+    ])
+      expect(BrowserOperation.parseLocator(malformed), malformed).toBeUndefined()
+    expect(BrowserOperation.locatorNameMatches(long.slice(0, 128), long)).toBe(true)
+    expect(BrowserOperation.locatorNameMatches("Save", "Save")).toBe(true)
+    expect(BrowserOperation.locatorNameMatches("Sav", "Save")).toBe(false)
+    expect(BrowserOperation.locatorNameMatches(long, long)).toBe(false)
+  })
+})
+
+type ObservedElement = Extract<BrowserProtocol.ClientMessage, { readonly type: "observation" }>["elements"][number]
+
+const formElements: ReadonlyArray<ObservedElement> = [
+  { ref: "b1", role: "textbox", name: "Email", locator: 'role=textbox[name="Email"]', value: "a@b.test" },
+  { ref: "b2", role: "combobox", name: "Size", locator: 'role=combobox[name="Size"]', expanded: false },
+  { ref: "b3", role: "checkbox", name: "Agree", locator: 'role=checkbox[name="Agree"]', checked: false },
+  { ref: "b4", role: "menuitem", name: "File", locator: 'role=menuitem[name="File"]' },
+  { ref: "b5", role: "button", name: "Bold", locator: 'role=button[name="Bold"]', pressed: false },
+  { ref: "b6", role: "option", name: "Small", locator: 'role=option[name="Small"]', selected: false },
+]
+
+function observeTab(
+  browser: Browser.Interface,
+  outbox: Queue.Queue<BrowserProtocol.ServerMessage>,
+  connected: Connected,
+  tabID: Browser.Schema.TabID,
+  callID: string,
+  elements: ReadonlyArray<ObservedElement>,
+  options: { readonly revision?: number; readonly diff?: boolean } = {},
+) {
+  return Effect.gen(function* () {
+    const observing = yield* browser.observe({ sessionID, tabID, generation: connected.generation, callID,
+      ...(options.diff ? { diff: true } : {}) }).pipe(Effect.forkScoped)
+    yield* Queue.take(outbox)
+    yield* connected.attachment.receive({ type: "observation", tabID, callID, generation: connected.generation,
+      documentGeneration: 1, revision: options.revision ?? 1, title: "Form", url: "https://example.test/form",
+      elements: [...elements], truncated: false })
+    return yield* Fiber.join(observing)
+  })
+}
+
+function sharedForm(browser: Browser.Interface, outbox: Queue.Queue<BrowserProtocol.ServerMessage>, tabID: Browser.Schema.TabID) {
+  return Effect.gen(function* () {
+    const connected = yield* Effect.promise(() => attached(browser, outbox))
+    yield* connected.attachment.receive({ type: "shared", mode: "profile", tabID, title: "Form",
+      url: "https://example.test/form", documentGeneration: 1, active: false })
+    return connected
+  })
+}
+
+const fence = (connected: Connected, tabID: Browser.Schema.TabID, callID: string, revision = 1) =>
+  ({ sessionID, tabID, generation: connected.generation, documentGeneration: 1, observationRevision: revision, callID })
+
+describe("paired Chrome form controls and waits", () => {
+  test("observation keeps element state, bounds values, and drops a value the extension marked sensitive", async () => {
+    await run(Effect.gen(function* () {
+      const browser = yield* Browser.Service
+      const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+      const tabID = Browser.TabID.make("btab_form_state")
+      const connected = yield* sharedForm(browser, outbox, tabID)
+      const observation = yield* observeTab(browser, outbox, connected, tabID, "state-observe", [
+        ...formElements,
+        { ref: "b7", role: "textbox", name: "Notes", value: "n".repeat(Browser.Schema.MAX_NAME_LENGTH + 50) },
+        { ref: "b8", role: "textbox", name: "Password", sensitive: true, value: "synthetic-secret-value" },
+      ])
+      expect(observation.elements.slice(0, 6)).toMatchObject([
+        { ref: "b1", value: "a@b.test" }, { ref: "b2", expanded: false }, { ref: "b3", checked: false },
+        { ref: "b4" }, { ref: "b5", pressed: false }, { ref: "b6", selected: false },
+      ])
+      expect(observation.elements[6]?.value).toHaveLength(Browser.Schema.MAX_NAME_LENGTH)
+      expect(observation.elements[7]).toMatchObject({ ref: "b8", sensitive: true })
+      expect(observation.elements[7]).not.toHaveProperty("value")
+      expect(JSON.stringify(observation)).not.toContain("synthetic-secret-value")
+      expect(Schema.is(Browser.Schema.Observation)(observation)).toBe(true)
+    }))
+  })
+
+  test("diff reports an element whose checked, expanded, selected, pressed, or value changed", async () => {
+    await run(Effect.gen(function* () {
+      const browser = yield* Browser.Service
+      const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+      const tabID = Browser.TabID.make("btab_form_diff")
+      const connected = yield* sharedForm(browser, outbox, tabID)
+      yield* observeTab(browser, outbox, connected, tabID, "diff-base", formElements)
+      const changed: ReadonlyArray<ObservedElement> = [
+        { ...formElements[0], value: "c@d.test" },
+        { ...formElements[1], expanded: true },
+        { ...formElements[2], checked: "mixed" },
+        formElements[3],
+        { ...formElements[4], pressed: true },
+        { ...formElements[5], selected: true },
+      ]
+      const diffed = yield* observeTab(browser, outbox, connected, tabID, "diff-next", changed, { revision: 2, diff: true })
+      expect(diffed.elements.map((element) => element.ref)).toEqual(["b1", "b2", "b3", "b5", "b6"])
+      expect(diffed.delta).toEqual({ baseRevision: 1, removed: [] })
+    }))
+  })
+
+  test("resolves fill, select, check, and hover locators to refs within the observation fences", async () => {
+    const cases: ReadonlyArray<readonly [Browser.Schema.Action, string]> = [
+      [{ type: "fill", locator: 'role=textbox[name="Email"]', text: "x@y.test" }, "b1"],
+      [{ type: "select", locator: 'role=combobox[name="Size"]', labels: ["Small"] }, "b2"],
+      [{ type: "check", locator: 'role=checkbox[name="Agree"]', checked: true }, "b3"],
+      [{ type: "hover", locator: 'role=menuitem[name="File"]' }, "b4"],
+    ]
+    for (const [action, ref] of cases)
+      await run(Effect.gen(function* () {
+        const browser = yield* Browser.Service
+        const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+        const tabID = Browser.TabID.make("btab_form_locator")
+        const connected = yield* sharedForm(browser, outbox, tabID)
+        yield* observeTab(browser, outbox, connected, tabID, "locator-observe", formElements)
+        const stale = yield* browser.action({ ...fence(connected, tabID, "stale-locator", 0), action }).pipe(Effect.exit)
+        expect(Exit.isFailure(stale), action.type).toBe(true)
+        const acting = yield* browser.action({ ...fence(connected, tabID, `locator-${action.type}`), action }).pipe(Effect.forkScoped)
+        const sent = yield* Queue.take(outbox)
+        expect(sent, action.type).toMatchObject({ type: "action", action: { type: action.type, ref } })
+        if (sent.type === "action") expect(sent.action, action.type).not.toHaveProperty("locator")
+        yield* connected.attachment.receive({ type: "result", tabID, callID: `locator-${action.type}`,
+          generation: connected.generation, documentGeneration: 1, observationRevision: 1,
+          status: "completed", title: "Form", url: "https://example.test/form" })
+        expect((yield* Fiber.join(acting)).status, action.type).toBe("completed")
+      }))
+  })
+
+  test("passes a wait locator through unresolved and rejects a malformed locator before dispatch", async () => {
+    await run(Effect.gen(function* () {
+      const browser = yield* Browser.Service
+      const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+      const tabID = Browser.TabID.make("btab_form_wait_locator")
+      const connected = yield* sharedForm(browser, outbox, tabID)
+      yield* observeTab(browser, outbox, connected, tabID, "wait-observe", formElements)
+      for (const action of [
+        { type: "wait", locator: 'role=heading[name="Saved"]', state: "visible" },
+        { type: "fill", locator: 'role=textbox[name=Email]', text: "x" },
+      ] as const) {
+        const malformed = yield* browser.action({ ...fence(connected, tabID, `malformed-${action.type}`),
+          action: { ...action, locator: `${action.locator}]` } }).pipe(Effect.exit)
+        expect(Exit.isFailure(malformed), action.type).toBe(true)
+        if (Exit.isFailure(malformed))
+          expect(Cause.squash(malformed.cause), action.type).toMatchObject({ _tag: "Browser.FenceError", message: "Locator is malformed" })
+      }
+      expect((yield* Queue.poll(outbox))._tag).toBe("None")
+      const waiting = yield* browser.action({ ...fence(connected, tabID, "wait-locator"),
+        action: { type: "wait", locator: 'role=heading[name="Saved"]', state: "visible" } }).pipe(Effect.forkScoped)
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "action",
+        action: { type: "wait", locator: 'role=heading[name="Saved"]', state: "visible" } })
+      yield* connected.attachment.receive({ type: "result", tabID, callID: "wait-locator",
+        generation: connected.generation, documentGeneration: 1, observationRevision: 1,
+        status: "completed", title: "Form", url: "https://example.test/form" })
+      expect((yield* Fiber.join(waiting)).status).toBe("completed")
+    }))
+  })
+
+  test("extends the command deadline by the wait timeout so a slow wait settles as a wait failure", async () => {
+    await run(Effect.gen(function* () {
+      const browser = yield* Browser.Service
+      const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+      const tabID = Browser.TabID.make("btab_form_wait_deadline")
+      const connected = yield* sharedForm(browser, outbox, tabID)
+      const waiting = yield* browser.action({ ...fence(connected, tabID, "slow-wait", 0),
+        action: { type: "wait", text: "Saved", timeoutMs: 400 } }).pipe(Effect.forkScoped)
+      yield* Queue.take(outbox)
+      yield* Effect.sleep("120 millis")
+      yield* connected.attachment.receive({ type: "error", tabID, callID: "slow-wait", generation: connected.generation,
+        dispatched: false, message: "Wait timed out" })
+      const result = yield* Fiber.join(waiting)
+      expect(result).toMatchObject({ status: "rejected", tab: { status: "shared" } })
+      expect(result.message).toContain("Wait timed out")
+    }))
+  })
+
+  test("a lost fill, select, check, or hover response becomes uncertain while a lost wait response stays a read failure", async () => {
+    const actions: ReadonlyArray<Browser.Schema.Action> = [
+      { type: "fill", ref: "b1", text: "synthetic" },
+      { type: "select", ref: "b2", indexes: [0] },
+      { type: "check", ref: "b3", checked: true },
+      { type: "hover", ref: "b4" },
+    ]
+    for (const action of actions)
+      await run(Effect.gen(function* () {
+        const browser = yield* Browser.Service
+        const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+        const tabID = Browser.TabID.make("btab_form_lost")
+        const connected = yield* sharedForm(browser, outbox, tabID)
+        yield* observeTab(browser, outbox, connected, tabID, "lost-observe", formElements)
+        const result = yield* browser.action({ ...fence(connected, tabID, `lost-${action.type}`), action })
+        expect(result, action.type).toMatchObject({ status: "uncertain", tab: { pauseReason: "uncertain" } })
+      }))
+    await run(Effect.gen(function* () {
+      const browser = yield* Browser.Service
+      const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+      const tabID = Browser.TabID.make("btab_form_lost_wait")
+      const connected = yield* sharedForm(browser, outbox, tabID)
+      const lost = yield* browser.action({ ...fence(connected, tabID, "lost-wait", 0),
+        action: { type: "wait", load: "networkidle", timeoutMs: 0 } }).pipe(Effect.exit)
+      expect(Exit.isFailure(lost)).toBe(true)
+      if (Exit.isFailure(lost)) expect(Cause.squash(lost.cause)).toMatchObject({ _tag: "Browser.UnavailableError" })
+      expect((yield* browser.list(sessionID))[0]).toMatchObject({ status: "shared" })
+    }))
+  })
+
+  test("returns sanitized control state and drops an unsafe match frame URL", async () => {
+    await run(Effect.gen(function* () {
+      const browser = yield* Browser.Service
+      const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+      const tabID = Browser.TabID.make("btab_form_control")
+      const connected = yield* sharedForm(browser, outbox, tabID)
+      const respond = (callID: string, revision: number, extra: object) => Effect.gen(function* () {
+        const acting = yield* browser.action({ ...fence(connected, tabID, callID, revision),
+          action: { type: "wait", text: "Saved" } }).pipe(Effect.forkScoped)
+        yield* Queue.take(outbox)
+        yield* connected.attachment.receive({ type: "result", tabID, callID, generation: connected.generation,
+          documentGeneration: 1, observationRevision: revision, status: "completed", title: "Form",
+          url: "https://example.test/form", ...extra })
+        return yield* Fiber.join(acting)
+      })
+      const long = "v".repeat(Browser.Schema.MAX_NAME_LENGTH + 10)
+      const bounded = yield* respond("control-bounded", 0, {
+        control: { checked: "mixed", value: long,
+          selected: Array.from({ length: Browser.Schema.MAX_SELECT_OPTIONS + 4 }, (_, index) => ({ value: long, label: long, index })) },
+        frame: "https://child.example.test/widget?token=hidden#frag",
+      })
+      expect(bounded.control?.checked).toBe("mixed")
+      expect(bounded.control?.value).toHaveLength(Browser.Schema.MAX_NAME_LENGTH)
+      expect(bounded.control?.selected).toHaveLength(Browser.Schema.MAX_SELECT_OPTIONS)
+      expect(bounded.control?.selected?.[0]?.label).toHaveLength(Browser.Schema.MAX_NAME_LENGTH)
+      expect(bounded.frame).toEqual({ origin: "https://child.example.test", path: "/widget" })
+      expect(Schema.is(Browser.Schema.ActionResult)(bounded)).toBe(true)
+      const unsafe = yield* respond("control-unsafe", 0, {
+        control: { sensitive: true, value: "synthetic-secret-value", selected: [{ label: "x", index: -1 }] },
+        frame: "https://user:pass@child.example.test/widget",
+      })
+      expect(unsafe.control).toEqual({ sensitive: true })
+      expect(unsafe.frame).toBeUndefined()
+      expect(JSON.stringify(unsafe)).not.toContain("synthetic-secret-value")
+      const scheme = yield* respond("control-scheme", 0, { frame: "javascript:alert(1)" })
+      expect(scheme.frame).toBeUndefined()
+      expect(scheme.control).toBeUndefined()
     }))
   })
 })

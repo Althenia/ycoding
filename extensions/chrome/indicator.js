@@ -28,7 +28,7 @@ const MARK_PATH = "M40 40h32v64H40zm144 0h32v64h-32zM40 112h64v64H72v-32H40zm112
 
 export const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" rx="48" fill="#24282F"/><path d="${MARK_PATH}" fill="#67D7A4"/></svg>`
 
-export const LABELS = { click: "Click", type: "Type", scroll: "Scroll" }
+export const LABELS = { click: "Click", type: "Type", scroll: "Scroll", hover: "Hover", select: "Select" }
 
 export const timing = {
   refresh: 5000,

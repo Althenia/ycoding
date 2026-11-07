@@ -31,6 +31,29 @@ test("browser routes are Session-scoped and expose bounded typed operations", ()
   expect(Schema.is(payload(group["browser.control"]))({ action: "activate-tab" })).toBe(false)
 })
 
+test("browser action payload accepts form-control and wait actions and rejects combined wait conditions", () => {
+  const action = payload(group["browser.action"])
+  const base = { tabID: "btab_profile", generation: 1, documentGeneration: 1, observationRevision: 1, callID: "one" }
+  for (const item of [
+    { type: "fill", ref: "b1", text: "synthetic" },
+    { type: "select", ref: "b1", labels: ["Small"] },
+    { type: "check", locator: 'role=checkbox[name="Agree"]', checked: true },
+    { type: "hover", ref: "b2" },
+    { type: "wait", locator: 'role=heading[name="Done"]', state: "visible" },
+    { type: "wait", url: "https://example.test/*" },
+    { type: "wait", load: "networkidle", timeoutMs: 1000 },
+    { type: "wait", text: "Saved" },
+  ])
+    expect(Schema.is(action)({ ...base, action: item }), JSON.stringify(item)).toBe(true)
+  for (const item of [
+    { type: "wait", text: "Saved", load: "load" },
+    { type: "wait", ref: "b1", url: "https://example.test/*" },
+    { type: "wait", state: "hidden" },
+    { type: "select", ref: "b1", values: ["a"], indexes: [0] },
+  ])
+    expect(Schema.is(action)({ ...base, action: item }), JSON.stringify(item)).toBe(false)
+})
+
 test("only the exact secret-free browser websocket path bypasses server authentication", () => {
   expect(isBrowserConnectURL(new URL("http://localhost/api/browser/connect"))).toBe(true)
   expect(isBrowserConnectURL(new URL("http://localhost/api/browser/connect?secret=leak"))).toBe(false)

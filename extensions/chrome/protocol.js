@@ -1,4 +1,4 @@
-export const VERSION = 5
+export const VERSION = 6
 export const MAX_CAPTURE_BYTES = 1024 * 1024
 export const MAX_ELEMENTS = 200
 export const MAX_TEXTS = 100
@@ -11,6 +11,8 @@ export const MAX_LOG_ENTRIES = 100
 export const MAX_EXPORT_BYTES = 8 * 1024 * 1024
 export const MAX_UPLOAD_FILES = 8
 export const MAX_SHARED_TABS = 8
+export const MAX_DETACH_REASON = 64
+export const MAX_SELECT_OPTIONS = 32
 
 export function validateServerURL(input) {
   const url = new URL(input)

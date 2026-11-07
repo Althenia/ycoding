@@ -331,7 +331,7 @@ export const layer = (options: Options = {}) =>
             const before = previousByLocator.get(element.locator!)
             if (!before) return true
             const now = instance.tab.elements.get(element.ref)
-            return !now || now.identity !== before.identity
+            return !now || now.identity !== before.identity || !BrowserOperation.sameElementState(now, before)
           })
           delta = {
             baseRevision: previous.revision,
@@ -408,21 +408,20 @@ export const layer = (options: Options = {}) =>
           instance.tab.observationRevision !== input.observationRevision
         )
           return yield* new FenceError({ message: "Isolated browser observation is stale; observe again" })
-        const element =
-          input.action.type === "click" || input.action.type === "type" || input.action.type === "upload"
-            ? BrowserOperation.resolveElement(instance.tab.elements, input.action)
-            : undefined
-        if ((input.action.type === "click" || input.action.type === "type" || input.action.type === "upload") && !element)
+        const classification = BrowserOperation.classify(input.action)
+        const action = input.action
+        if ((action.type === "wait" || BrowserOperation.isElementAction(action)) && action.locator !== undefined &&
+          !BrowserOperation.parseLocator(action.locator))
+          return yield* new FenceError({ message: "Locator is malformed" })
+        const element = BrowserOperation.isElementAction(action) ? BrowserOperation.resolveElement(instance.tab.elements, action) : undefined
+        if (BrowserOperation.isElementAction(action) && !element)
           return yield* new FenceError({ message: "Semantic element reference is stale" })
         if (element?.disabled) return yield* new FenceError({ message: "Semantic element is disabled" })
-        const resolvedAction =
-          element && (input.action.type === "click" || input.action.type === "type" || input.action.type === "upload")
-            ? { ...input.action, ref: element.ref }
-            : input.action
+        const resolvedAction: Browser.Action = element && BrowserOperation.isElementAction(action) ? { ...action, ref: element.ref } : action
         const destination = yield* destinationPage(input.action, element)
         const allowedOrigins = [...new Set([instance.tab.page.origin, ...(destination ? [destination.origin] : []),
           ...(element?.frame ? [element.frame.origin] : [])])]
-        const mutation = ["navigate", "click", "type", "back", "forward", "reload", "key", "clipboard_write", "upload", "webmcp_invoke", "dialog"].includes(input.action.type)
+        const mutation = classification.mutation
         const deferred = yield* Deferred.make<ActionResult>()
         const pending: PendingAction = { callID: input.callID, fingerprint, mutation, deferred }
         instance.pending = pending
@@ -437,7 +436,10 @@ export const layer = (options: Options = {}) =>
           .action(resolvedAction, allowedOrigins)
           .pipe(
             Effect.timeoutOrElse({
-              duration: operationTimeout,
+              duration: Duration.sum(
+                Duration.fromInputUnsafe(operationTimeout),
+                Duration.millis(BrowserOperation.waitBudgetMs(input.action)),
+              ),
               orElse: () =>
                 Effect.fail(
                   new IsolatedBrowserExecutor.Error({
@@ -462,13 +464,17 @@ export const layer = (options: Options = {}) =>
                     callID: input.callID,
                     tab: publicTab(instance.tab),
                     status: output.rejected || exportFailed ? "rejected" : "completed",
-                    message: exportFailed ? "Browser export could not be saved" : output.rejected,
+                    message: exportFailed
+                      ? "Browser export could not be saved"
+                      : output.rejected ?? (output.control?.sensitive || output.message === undefined ? undefined : bounded(output.message, 1024)),
                     capture: output.capture,
                     text: output.text,
                     logs: output.logs ? [...output.logs] : undefined,
                     savedFile,
                     webmcpTools: output.webmcpTools ? [...output.webmcpTools] : undefined,
                     dialog: output.dialog,
+                    control: BrowserOperation.sanitizeControl(output.control),
+                    frame: output.frame && safeFrame(output.frame),
                   }
                   yield* settle(result)
                 }),
@@ -612,7 +618,10 @@ export const node = makeLocationNode({
 function applyObservation(instance: Instance, observed: IsolatedBrowserExecutor.Snapshot) {
   applySnapshot(instance, observed)
   instance.tab.observationRevision = observed.revision
-  instance.tab.elements = new Map(observed.elements.map((element) => [element.ref, element]))
+  instance.tab.elements = new Map(observed.elements.map((element) => {
+    const { value, ...rest } = element
+    return [element.ref, element.sensitive || value === undefined ? rest : { ...rest, value: bounded(value, Browser.MAX_NAME_LENGTH) }]
+  }))
 }
 
 function settlePending(instance: Instance, pending: PendingAction, result: ActionResult) {
@@ -645,6 +654,15 @@ function parsePage(input: string) {
     try: () => parsePageSync(input),
     catch: () => new UnavailableError({ message: "Only credential-free HTTP and HTTPS navigation is supported" }),
   })
+}
+
+function safeFrame(frame: Browser.Page) {
+  try {
+    const page = parsePageSync(`${frame.origin}${frame.path}`)
+    return page.origin === frame.origin ? page : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function parsePageSync(input: string): Browser.Page {

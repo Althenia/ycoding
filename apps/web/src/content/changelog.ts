@@ -22,6 +22,23 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.2",
+    date: "2026-11-07",
+    title: "Browser forms, waits and safer editing",
+    tags: ["Added", "Changed"],
+    changes: [
+      { tag: "Added", text: "Fill or clear ordinary form inputs, select options, set checkbox or radio state and hover over elements. Observations include bounded control values and checked, selected, expanded and pressed state while withholding sensitive values." },
+      { tag: "Added", text: "Wait explicitly for element attachment or visibility, a URL, page load or matching text. Network-idle waits require a continuous 500 ms interval with no tracked requests in flight." },
+      { tag: "Added", text: "Fill date, time, datetime-local, month, week, color and range controls, including controls in approved same-origin frames." },
+      { tag: "Changed", text: "Browser errors distinguish a tab in another mode, a departed tab and an unknown tab. When a departed tab has a successor tab, inspect that successor before continuing." },
+      { tag: "Changed", text: "Browser-routing guidance allows another explicitly authorized browser route under the same permission, guardrail, credential and confirmation rules." },
+      { tag: "Changed", text: "Computer-control guidance describes target-process activation and key-window records for background input, and warns that concurrent typing may reach the controlled application." },
+      { tag: "Changed", text: "Isolated browser results include bounded control state and matched-frame information, suppress sensitive values and messages, and discard unsafe frame URLs." },
+      { tag: "Changed", text: "Editing keys require verified, attached, non-sensitive focus on both browser execution paths. Only plain Tab, Escape, arrows, Home, End, PageUp, PageDown and Shift+Tab bypass inspection; uninspectable or sensitive editing targets refuse before dispatch." },
+      { tag: "Changed", text: "After upgrading the CLI, update or reload the bundled Chrome extension before pairing or continuing browser control. Bridge version 6 rejects version 5 peers. Matching packaged versions do not prove an installed extension has reloaded." },
+    ],
+  },
+  {
     version: "0.11.1",
     date: "2026-11-07",
     title: "Projects, autonomy modes, native Dots and supervising owners",

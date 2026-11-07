@@ -12,6 +12,7 @@ import { BrowserTool } from "@ycoding-ai/core/tool/browser"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { Effect, Layer } from "effect"
+import { host } from "./plugin/host"
 import { imagePassthrough } from "./lib/image"
 import { executeTool, registerToolPlugin, settleTool, toolIdentity } from "./lib/tool"
 import { testEffect } from "./lib/effect"
@@ -42,6 +43,9 @@ const browser = Layer.mock(Browser.Service, {
   actionIdentity: () => Effect.succeed({ digest: "a".repeat(64), reusable: true }),
   status: () => Effect.succeed({ state: "unavailable" }),
   list: () => Effect.succeed([tab, ownedTab, profileTab, anotherProfileTab]),
+  tabState: (_session, id) => Effect.succeed([tab, ownedTab, profileTab, anotherProfileTab].find((item) => item.id === id)
+    ? { state: "present" as const, mode: id === ownedTab.id ? "owned" as const : "profile" as const }
+    : { state: "unknown" as const }),
   observe: (input) => Effect.succeed({
     tabID, generation: 1, documentGeneration: 1, revision: 2, title: "Fixture",
     page: input.callID === "unexpected-observation"
@@ -969,5 +973,340 @@ describe("BrowserTool", () => {
           "release",
         ])
       }),
+  )
+
+  const departedID = Browser.TabID.make("btab_departed_tool")
+  const successorID = Browser.TabID.make("btab_successor_tool")
+  const unknownID = Browser.TabID.make("btab_unknown_tool")
+  const noSuccessorID = Browser.TabID.make("btab_departed_plain")
+  const leasedID = Browser.TabID.make("btab_leased_state")
+  const heldProfileTab: Browser.Tab = { ...profileTab, id: leasedID, lease: "other" }
+  const states = browserTests(permission, guardrail, Layer.mock(Browser.Service, {
+    actionIdentity: () => Effect.succeed({ digest: "a".repeat(64), reusable: true }),
+    list: () => Effect.succeed([ownedTab, profileTab, heldProfileTab]),
+    tabState: (_session, id) => Effect.succeed(
+      id === ownedTab.id ? { state: "present" as const, mode: "owned" as const }
+      : id === profileTab.id || id === leasedID ? { state: "present" as const, mode: "profile" as const }
+      : id === departedID ? { state: "departed" as const, mode: "profile" as const, reason: "navigated" as const, successorID }
+      : id === noSuccessorID ? { state: "departed" as const, mode: "profile" as const, reason: "detached" as const, detachReason: "canceled_by_user" }
+      : { state: "unknown" as const }),
+    release: (input) => Effect.sync(() => { sequence.push(`release:${input.callID}`) }),
+    observe: () => Effect.succeed({ tabID: profileTab.id, generation: 1, documentGeneration: 1, revision: 1,
+      title: "Fixture", page: profileTab.page, elements: [], truncated: false }),
+  }))
+  const failureMessage = (id: string, input: object) =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      requests.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id, name: "browser", input } })
+      expect(result).toMatchObject({ type: "error" })
+      expect(sequence).toEqual([])
+      expect(requests).toEqual([])
+      return JSON.stringify(result)
+    })
+  const act = (tabID: string, mode?: string) => ({ operation: "action", tabID, generation: 1, documentGeneration: 1,
+    observationRevision: 1, action: { type: "click", ref: "b1" }, ...(mode ? { mode } : {}) })
+  states.effect("names the owned mode when an owned tab is addressed without a mode", () =>
+    Effect.gen(function* () {
+      for (const [id, input] of [
+        ["state-owned-observe", { operation: "observe", tabID: ownedTab.id, generation: 1 }],
+        ["state-owned-action", act(ownedTab.id)],
+      ] as const) {
+        const message = yield* failureMessage(id, input)
+        expect(message, id).toContain(`${ownedTab.id} is an owned tab`)
+        expect(message, id).toContain('mode:\\"owned\\"')
+        expect(message, id).not.toContain("not available in this mode")
+      }
+    }),
+  )
+  states.effect("names the profile mode when a paired profile tab is addressed with owned mode", () =>
+    Effect.gen(function* () {
+      const message = yield* failureMessage("state-profile-owned", act(profileTab.id, "owned"))
+      expect(message).toContain(`${profileTab.id} is a profile tab`)
+      expect(message).toContain('mode:\\"profile\\"')
+    }),
+  )
+  states.effect("reports a departed tab's reason and the listed successor without exposing page data", () =>
+    Effect.gen(function* () {
+      const message = yield* failureMessage("state-departed", { operation: "observe", tabID: departedID, generation: 1 })
+      expect(message).toContain("navigated outside the approved sites")
+      expect(message).toContain(`The same Chrome tab is now listed as ${successorID}; observe it before acting`)
+      expect(message).not.toContain("example.test")
+    }),
+  )
+  states.effect("reports a detached tab with Chrome's detach reason and no successor", () =>
+    Effect.gen(function* () {
+      const message = yield* failureMessage("state-detached", act(noSuccessorID))
+      expect(message).toContain("Chrome detached the debugger (canceled_by_user)")
+      expect(message).not.toContain("now listed as")
+    }),
+  )
+  states.effect("tells the model to list tabs again for an ID the connection does not list", () =>
+    Effect.gen(function* () {
+      const message = yield* failureMessage("state-unknown", { operation: "observe", tabID: unknownID, generation: 1 })
+      expect(message).toContain(`${unknownID} is not listed by the current browser connection; list tabs again`)
+    }),
+  )
+  states.effect("applies the same diagnosis to release", () =>
+    Effect.gen(function* () {
+      expect(yield* failureMessage("state-release-owned",
+        { operation: "release", mode: "profile", tabID: ownedTab.id, generation: 1 })).toContain("is an owned tab")
+      expect(yield* failureMessage("state-release-departed",
+        { operation: "release", mode: "profile", tabID: departedID, generation: 1 })).toContain(`now listed as ${successorID}`)
+      expect(yield* failureMessage("state-release-unknown",
+        { operation: "release", mode: "profile", tabID: unknownID, generation: 1 })).toContain("list tabs again")
+    }),
+  )
+  states.effect("keeps the lease failure ahead of any permission for a tab another Session holds", () =>
+    Effect.gen(function* () {
+      const message = yield* failureMessage("state-leased", { operation: "observe", tabID: leasedID, generation: 1 })
+      expect(message).toContain("controlled by another Session")
+    }),
+  )
+  states.effect("still asserts read permission before observing a listed profile tab", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "state-listed", name: "browser",
+          input: { operation: "observe", tabID: profileTab.id, generation: 1 } } })
+      expect(result).not.toMatchObject({ type: "error" })
+      expect(sequence[0]).toBe("permission:browser_read:https://example.test/form")
+    }),
+  )
+  const crossMode = browserTests(permission, guardrail, Layer.mock(Browser.Service, {
+    list: () => Effect.succeed([]),
+    tabState: (_session, id) => Effect.succeed(id === profileTab.id
+      ? { state: "present" as const, mode: "profile" as const } : { state: "unknown" as const }),
+  }))
+  crossMode.effect("names the paired mode for a paired tab addressed in isolated mode", () =>
+    Effect.gen(function* () {
+      const message = yield* failureMessage("cross-isolated-paired",
+        { operation: "observe", mode: "isolated", instanceID: isolatedInstanceID, tabID: profileTab.id, generation: 1 })
+      expect(message).toContain(`${profileTab.id} is a profile tab`)
+      expect(message).toContain('mode:\\"profile\\"')
+    }),
+  )
+  crossMode.effect("names the isolated mode for an isolated tab addressed in a paired mode", () =>
+    Effect.gen(function* () {
+      for (const mode of [undefined, "owned"]) {
+        const message = yield* failureMessage(`cross-paired-isolated-${mode ?? "default"}`,
+          act(tab.id, mode))
+        expect(message).toContain(`${tab.id} is an isolated tab`)
+        expect(message).toContain('mode:\\"isolated\\"')
+      }
+    }),
+  )
+
+  const description = Effect.gen(function* () {
+    const captured: string[] = []
+    yield* BrowserTool.Plugin.effect(host({
+      tool: {
+        transform: (callback) => Effect.sync(() => {
+          callback({ add: (_name, tool) => { captured.push(tool.description) } })
+          return { dispose: Effect.void }
+        }),
+        hook: () => Effect.die("unused tool.hook"),
+      },
+    })).pipe(Effect.provide(Layer.mergeAll(browser, isolatedBrowser, permission, guardrail)))
+    return captured[0] ?? ""
+  })
+  it.effect("scopes the computer-versus-browser routing to those two tools and keeps its safety sentences", () =>
+    Effect.gen(function* () {
+      const text = yield* description
+      expect(text).toContain("Prefer this tool over computer for anything inside a web page.")
+      expect(text).toContain("This choice is between the computer and browser tools only; it does not forbid another browser route the user explicitly authorizes, such as Playwright connectOverCDP to an existing Chrome DevTools endpoint, which stays subject to the same permission, guardrail, credential and confirmation rules.")
+      expect(text).not.toMatch(/\d{4,5}/)
+      for (const sentence of [
+        "Ask the user before irreversible submissions, purchases, payments, deletions, sending messages, or accepting legal terms; proceed without asking for reading, navigation, and reversible input that does not submit anything.",
+        "Never solve CAPTCHAs, enter passwords, one-time codes, or payment secrets: stop and hand the page to the user.",
+        "never replay an uncertain mutation\u2014observe first.",
+      ]) expect(text).toContain(sentence)
+    }),
+  )
+  it.effect("describes the new actions, sensitive fields, and wait conditions and keeps the hand-off and confirmation sentences", () =>
+    Effect.gen(function* () {
+      const text = yield* description
+      for (const sentence of [
+        "click, type, fill forms, select options, check boxes, hover, navigate",
+        "wait for elements, URLs, load states, or text",
+        "click, type, fill, select, check, hover, upload, and wait accept that locator instead of a ref when the same element must be found again after re-observing; wait also accepts a locator for an element that has not appeared yet.",
+        "Fill replaces a field's text (text:'' clears it); select picks options of a native select by values, labels, or indexes, or one option of an open listbox by label or index; check sets a checkbox, radio, or switch to checked:true or checked:false and does nothing when it already matches; hover moves the pointer over an element without clicking. These return the control's resulting state.",
+        "Elements report checked, pressed, expanded, selected, and the value of ordinary fields; sensitive:true marks a password, one-time-code, or payment field whose value is withheld and which no action may fill.",
+        "Wait takes one condition: a ref or locator with state attached, visible, hidden, or detached (default visible for a locator, attached for a ref); url, a pattern over the page origin and path where * matches any characters; load: domcontentloaded, load, or networkidle (no network request pending for 500 ms; on a paired tab attached while requests were already running, only requests started after attach are seen); or text that must appear on the page.",
+        "timeoutMs is at most 30,000; wait without a condition waits for load.",
+        "key checks the active focus in profile, owned, and isolated modes.",
+        "Only Tab, Shift+Tab, Escape, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, and PageDown bypass active-focus inspection, with no Ctrl, Meta, or Alt and Shift allowed only for Tab.",
+        "Every other supported key requires verified focus, including printable characters with Shift or Alt, Space, Enter, Backspace, Delete, Insert, Shift+Insert, and all Ctrl or Meta chords, including V and X.",
+        "Focus inspection refuses sensitive password, one-time-code, payment, or secret-named fields, file inputs, and unverified focus (including closed shadow roots and unreachable cross-origin frames) before any key event with dispatched:false.",
+        "Do not use key to bypass a sensitive-field refusal in any mode.",
+        "Never solve CAPTCHAs, enter passwords, one-time codes, or payment secrets: stop and hand the page to the user.",
+        "Ask the user before irreversible submissions, purchases, payments, deletions, sending messages, or accepting legal terms; proceed without asking for reading, navigation, and reversible input that does not submit anything.",
+      ]) expect(text).toContain(sentence)
+      expect(text.indexOf("Capture only when semantic observation is insufficient")).toBeLessThan(text.indexOf("Fill replaces a field's text"))
+      expect(text).not.toContain("click, type, and upload accept that locator")
+      expect(text).not.toContain("Keyboard safety coverage differs by mode.")
+    }),
+  )
+
+  const formActions = [
+    ["fill", { type: "fill", ref: "b1", text: "synthetic" }],
+    ["select", { type: "select", ref: "b1", labels: ["Small"] }],
+    ["check", { type: "check", ref: "b1", checked: true }],
+    ["hover", { type: "hover", ref: "b1" }],
+  ] as const
+  const waitActions = [
+    { type: "wait", locator: 'role=heading[name="Saved"]', state: "visible" },
+    { type: "wait", ref: "b1", state: "detached" },
+    { type: "wait", url: "https://example.test/*" },
+    { type: "wait", load: "networkidle" },
+    { type: "wait", text: "Saved" },
+  ] as const
+  it.effect("treats fill, select, check, and hover as interact mutations with the mode guardrail and every wait condition as a read without guardrail", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const targets = [
+        ["profile", profileTab.id, "browser_profile_mutation", {}],
+        ["owned", ownedTab.id, "browser_mutation", {}],
+        ["isolated", tab.id, "browser_mutation", { instanceID: isolatedInstanceID }],
+      ] as const
+      for (const [mode, target, guardrailAction, extra] of targets) {
+        for (const [name, action] of formActions) {
+          const id = `form-${mode}-${name}`
+          sequence.length = 0
+          requests.length = 0
+          yield* executeTool(registry, { sessionID, ...toolIdentity,
+            call: { type: "tool-call", id, name: "browser",
+              input: { operation: "action", mode, tabID: target, generation: 1, documentGeneration: 1,
+                observationRevision: 1, ...extra, action } } })
+          expect(sequence, id).toContain("permission:browser_interact:https://example.test/form")
+          expect(sequence, id).toContain(`guardrail:${guardrailAction}:https://example.test/form`)
+          expect(sequence.some((entry) => entry.endsWith(id) || entry.includes(`:${id}:`)), id).toBe(true)
+          const interact = requests.find((entry) => entry.action === "browser_interact")
+          expect(interact?.metadata, id).toMatchObject(mode === "isolated"
+            ? { operation: name }
+            : { operation: name, mode, incidentalDownloads: true, site: "https://example.test" })
+          if (mode === "isolated") expect(interact?.metadata, id).not.toHaveProperty("incidentalDownloads")
+          expect(JSON.stringify(requests), id).not.toContain("synthetic")
+          expect(JSON.stringify(guardrailRequests.at(-1)), id).not.toContain("synthetic")
+        }
+        for (const action of waitActions) {
+          const id = `wait-${mode}-${Object.keys(action).join("-")}`
+          sequence.length = 0
+          requests.length = 0
+          yield* executeTool(registry, { sessionID, ...toolIdentity,
+            call: { type: "tool-call", id, name: "browser",
+              input: { operation: "action", mode, tabID: target, generation: 1, documentGeneration: 1,
+                observationRevision: 1, ...extra, action } } })
+          expect(sequence, id).toContain("permission:browser_read:https://example.test/form")
+          expect(sequence.some((entry) => entry.startsWith("permission:browser_interact")), id).toBe(false)
+          expect(sequence.some((entry) => entry.startsWith("guardrail:")), id).toBe(false)
+          expect(sequence.some((entry) => entry.endsWith(id) || entry.includes(`:${id}:`)), id).toBe(true)
+        }
+      }
+    }),
+  )
+  it.effect("asserts frame-site read and interact before a framed fill, select, check, or hover", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      for (const [name, action] of formActions) {
+        const id = `framed-${name}`
+        sequence.length = 0
+        yield* executeTool(registry, { sessionID, ...toolIdentity,
+          call: { type: "tool-call", id, name: "browser",
+            input: { operation: "action", mode: "profile", tabID: profileTab.id, generation: 1,
+              documentGeneration: 1, observationRevision: 1, action: { ...action, ref: "b7" } } } })
+        expect(sequence, id).toContain("permission:browser_read:https://child.example.test/tempo")
+        expect(sequence, id).toContain("permission:browser_interact:https://child.example.test/tempo")
+        expect(sequence.indexOf("permission:browser_interact:https://child.example.test/tempo"), id)
+          .toBeLessThan(sequence.indexOf(`action:${id}`))
+      }
+    }),
+  )
+
+  const dispatched: Array<Browser.Schema.Action> = []
+  const childFrame = { origin: "https://child.example.test", path: "/widget" }
+  const frameBrowser = Layer.mock(Browser.Service, {
+    actionIdentity: () => Effect.succeed({ digest: "a".repeat(64), reusable: true }),
+    list: () => Effect.succeed([profileTab]),
+    elementFrame: () => Effect.succeed(undefined),
+    action: (input) => Effect.sync(() => {
+      dispatched.push(input.action)
+      sequence.push(`action:${input.callID}`)
+      return { callID: input.callID, tab: profileTab, status: "completed" as const,
+        ...(input.action.type === "wait" && input.action.text === "In frame" ? { frame: childFrame } : {}),
+        ...(input.action.type === "wait" && input.action.text === "Same site" ? { frame: { origin: profileTab.page.origin, path: "/inner" } } : {}) }
+    }),
+  })
+  const waitFrame = browserTests(permission, guardrail, frameBrowser)
+  waitFrame.effect("asserts read permission for a wait's child-frame match before returning it", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "wait-child-frame", name: "browser",
+          input: { operation: "action", mode: "profile", tabID: profileTab.id, generation: 1,
+            documentGeneration: 1, observationRevision: 1, action: { type: "wait", text: "In frame" } } } })
+      expect(JSON.stringify(result)).toContain("child.example.test")
+      expect(sequence.indexOf("permission:browser_read:https://child.example.test/widget"))
+        .toBeGreaterThan(sequence.indexOf("action:wait-child-frame"))
+      sequence.length = 0
+      yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "wait-same-frame", name: "browser",
+          input: { operation: "action", mode: "profile", tabID: profileTab.id, generation: 1,
+            documentGeneration: 1, observationRevision: 1, action: { type: "wait", text: "Same site" } } } })
+      expect(sequence.filter((entry) => entry.startsWith("permission:browser_read:https://example.test/inner"))).toEqual([])
+    }),
+  )
+  const frameDenied = browserTests(Layer.mock(Permission.Service, {
+    assert: (input) => input.resources.some((resource) => resource.startsWith("https://child.example.test"))
+      ? Effect.fail(new Permission.CorrectedError({ feedback: "Frame site denied" }))
+      : Effect.sync(() => sequence.push(`permission:${input.action}:${input.resources[0]}`)),
+  }), guardrail, frameBrowser)
+  frameDenied.effect("fails without returning the wait result when the matched frame site is denied", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "wait-frame-denied", name: "browser",
+          input: { operation: "action", mode: "profile", tabID: profileTab.id, generation: 1,
+            documentGeneration: 1, observationRevision: 1, action: { type: "wait", text: "In frame" } } } })
+      expect(result).toMatchObject({ type: "error" })
+      expect(sequence).toContain("action:wait-frame-denied")
+      expect(JSON.stringify(result)).not.toContain("completed")
+      expect(JSON.stringify(result)).not.toContain("/widget")
+    }),
+  )
+  waitFrame.effect("accepts numeric-string option indexes and wait timeouts and rejects combined wait conditions", () =>
+    Effect.gen(function* () {
+      dispatched.length = 0
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const base = { operation: "action", mode: "profile", tabID: profileTab.id, generation: "1",
+        documentGeneration: "1", observationRevision: "1" }
+      yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "string-indexes", name: "browser",
+          input: { ...base, action: { type: "select", ref: "b1", indexes: ["2", 0] } } } })
+      yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "string-timeout", name: "browser",
+          input: { ...base, action: JSON.stringify({ type: "wait", load: "load", timeoutMs: "1500" }) } } })
+      expect(dispatched).toEqual([
+        { type: "select", ref: "b1", indexes: [2, 0] },
+        { type: "wait", load: "load", timeoutMs: 1500 },
+      ])
+      for (const [id, action] of [
+        ["combined-wait", { type: "wait", text: "Saved", url: "https://example.test/*" }],
+        ["state-only-wait", { type: "wait", state: "visible" }],
+        ["combined-select", { type: "select", ref: "b1", values: ["a"], indexes: ["1"] }],
+        ["oversized-timeout", { type: "wait", text: "Saved", timeoutMs: "30001" }],
+      ] as const) {
+        const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+          call: { type: "tool-call", id, name: "browser", input: { ...base, action } } })
+        expect(result, id).toMatchObject({ type: "error" })
+        expect(sequence, id).not.toContain(`action:${id}`)
+      }
+    }),
   )
 })

@@ -323,6 +323,101 @@ export function createFakePage() {
   }
 }
 
+export function createFakeControls() {
+  const byId = new Map()
+  let active
+  const ownerDocument = {
+    getElementById: (id) => byId.get(id) ?? null,
+    createRange: () => ({
+      node: undefined,
+      selectNodeContents(node) {
+        this.node = node
+      },
+    }),
+    getSelection: () => ({
+      removeAllRanges() {},
+      addRange(range) {
+        if (range.node) range.node.selectedAll = true
+      },
+    }),
+  }
+  return {
+    label(id, textContent) {
+      const node = { id, textContent }
+      byId.set(id, node)
+      return node
+    },
+    control({
+      tag,
+      attributes = {},
+      value = "",
+      labels = [],
+      options = [],
+      multiple = false,
+      checked = false,
+      indeterminate = false,
+      disabled = false,
+      readOnly = false,
+      contentEditable = false,
+      maxLength,
+    }) {
+      const attributeMap = new Map(Object.entries(attributes))
+      let current = value
+      return {
+        localName: tag,
+        nodeName: tag.toUpperCase(),
+        type: tag === "input" ? (attributeMap.get("type") ?? "text").toLowerCase() : undefined,
+        ownerDocument,
+        labels: ["input", "textarea", "select"].includes(tag) ? labels : undefined,
+        isContentEditable: contentEditable,
+        disabled,
+        readOnly,
+        multiple,
+        checked,
+        indeterminate,
+        options: options.map((option, index) => ({
+          value: option.value ?? option.label,
+          label: option.label,
+          text: option.label,
+          index,
+          disabled: !!option.disabled,
+          selected: !!option.selected,
+        })),
+        get selectedOptions() {
+          return this.options.filter((option) => option.selected)
+        },
+        get value() {
+          return current
+        },
+        set value(next) {
+          current = next.slice(0, maxLength ?? Infinity)
+        },
+        get innerText() {
+          return current
+        },
+        get focused() {
+          return active === this
+        },
+        events: [],
+        selectedAll: false,
+        isConnected: true,
+        attributeList: () => [...attributeMap].flat(),
+        getAttribute: (name) => attributeMap.get(name) ?? null,
+        focus() {
+          active = this
+        },
+        select() {
+          this.selectedAll = true
+        },
+        dispatchEvent(event) {
+          this.events.push({ type: event.type, bubbles: event.bubbles, composed: event.composed })
+          return true
+        },
+      }
+    },
+  }
+}
+
 function createClock() {
   let timers = []
   let sequence = 0

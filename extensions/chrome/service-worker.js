@@ -2,11 +2,13 @@ import {
   MAX_AX_DEPTH,
   MAX_CAPTURE_BYTES,
   MAX_CLIPBOARD_BYTES,
+  MAX_DETACH_REASON,
   MAX_ELEMENTS,
   MAX_EXPORT_BYTES,
   MAX_FRAMES,
   MAX_HISTORY_RESULTS,
   MAX_LOG_ENTRIES,
+  MAX_SELECT_OPTIONS,
   MAX_SHARED_TABS,
   MAX_TEXTS,
   MAX_UPLOAD_FILES,
@@ -31,6 +33,115 @@ const CURSOR_WORLD = "ycoding-agent-cursor"
 const CURSOR_COMMAND_TIMEOUT_MS = 600
 const INPUT_COMMAND_TIMEOUT_MS = 2000
 const MARKER_FAILED = "YCoding could not show its control marker on this page"
+const CONTROL_WORLD = "ycoding-control"
+const NETWORK_IDLE_MS = 500
+const CONTROL_SETTLE_MS = 500
+const PAGE_SCRIPT_NEWLINE = String.fromCharCode(10)
+const LOCATOR = /^role=([^[\]|]{1,64})\[name=("(?:[^"\\]|\\.)*")\](?:\|nth=([1-9][0-9]{0,3}))?$/
+const SECRET_AUTOCOMPLETE = ["current-password", "new-password", "one-time-code", "cc-number", "cc-csc", "cc-exp", "cc-exp-month", "cc-exp-year"]
+const SECRET_NAME = /pass(?:word|code|phrase)|one[\s_-]?time|verification[\s_-]?code|security[\s_-]?code|card[\s_-]?(?:number|no)|(?:^|[^a-z0-9])(?:otp|totp|mfa|2fa|pin|cvv|cvc|csc|ccnum)(?:$|[^a-z0-9])/i
+const IS_SENSITIVE = [
+  `const isSensitive = (el) => {`,
+  `  const tag = el.localName`,
+  `  if (tag !== "input" && tag !== "textarea" && !el.isContentEditable) return false`,
+  `  if (tag === "input" && el.type === "password") return true`,
+  `  if ((el.getAttribute("autocomplete") || "").toLowerCase().split(/\\s+/).some((token) => ${JSON.stringify(SECRET_AUTOCOMPLETE)}.includes(token))) return true`,
+  `  if (["name", "id", "aria-label", "placeholder"].some((key) => ${SECRET_NAME}.test(el.getAttribute(key) || ""))) return true`,
+  `  const labels = [...(el.labels || [])]`,
+  `  for (const id of (el.getAttribute("aria-labelledby") || "").split(/\\s+/).filter(Boolean)) {`,
+  `    const label = el.ownerDocument.getElementById(id)`,
+  `    if (label) labels.push(label)`,
+  `  }`,
+  `  return labels.some((label) => ${SECRET_NAME}.test(String(label.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 256)))`,
+  `}`,
+].join(PAGE_SCRIPT_NEWLINE)
+const F_CONTROL_STATE = [
+  `function () { ${IS_SENSITIVE}`,
+  `  const el = this`,
+  `  if (isSensitive(el)) return { sensitive: true }`,
+  `  if (el.localName === "select") return { selected: [...el.selectedOptions].slice(0, 32).map((o) => ({ value: o.value.slice(0, 1024), label: (o.label || o.text).trim().slice(0, 1024), index: o.index })) }`,
+  `  if (el.localName === "input" && (el.type === "checkbox" || el.type === "radio")) return { checked: el.indeterminate ? "mixed" : el.checked }`,
+  `  if (el.localName === "input" || el.localName === "textarea") return { value: String(el.value).slice(0, 1024) }`,
+  `  if (el.isContentEditable) return { value: String(el.innerText).slice(0, 1024) }`,
+  `  return {}`,
+  `}`,
+].join(PAGE_SCRIPT_NEWLINE)
+const F_FILL = [
+  `function (text, apply) { ${IS_SENSITIVE}`,
+  `  const el = this`,
+  `  if (isSensitive(el)) return { error: "Sensitive fields cannot be filled" }`,
+  `  const setTypes = ["color", "date", "datetime-local", "month", "range", "time", "week"]`,
+  `  const textTypes = ["email", "number", "search", "tel", "text", "url"]`,
+  `  const input = el.localName === "input", area = el.localName === "textarea"`,
+  `  if ((input || area) && (el.disabled || el.readOnly)) return { error: "Field is not editable" }`,
+  `  const kind = input ? (setTypes.includes(el.type) ? "set" : textTypes.includes(el.type) ? "insert" : undefined) : area || el.isContentEditable ? "insert" : undefined`,
+  `  if (!kind) return { error: "Element cannot be filled" }`,
+  `  if (!apply) return { kind }`,
+  `  el.focus()`,
+  `  if (kind === "set") {`,
+  `    el.value = text`,
+  `    if (el.value !== text) return { error: "Field rejected the value" }`,
+  `    el.dispatchEvent(new Event("input", { bubbles: true, composed: true }))`,
+  `    el.dispatchEvent(new Event("change", { bubbles: true }))`,
+  `    return { kind }`,
+  `  }`,
+  `  if (input || area) el.select()`,
+  `  else { const range = el.ownerDocument.createRange(); range.selectNodeContents(el); const selection = el.ownerDocument.getSelection(); selection.removeAllRanges(); selection.addRange(range) }`,
+  `  return { kind }`,
+  `}`,
+].join(PAGE_SCRIPT_NEWLINE)
+const F_SELECT = [
+  `function (criteria, apply) {`,
+  `  const el = this`,
+  `  if (el.localName !== "select") return { error: "Element is not a select" }`,
+  `  if (el.disabled) return { error: "Select is disabled" }`,
+  `  const options = [...el.options], picked = []`,
+  `  const lists = [["value", criteria.values], ["label", criteria.labels], ["index", criteria.indexes]]`,
+  `  for (const [kind, list] of lists) for (const wanted of list || []) {`,
+  `    const option = options.find((candidate) => kind === "value" ? candidate.value === wanted : kind === "label" ? (candidate.label || candidate.text).trim() === String(wanted).trim() : candidate.index === wanted)`,
+  `    if (!option) return { error: "Option not found" }`,
+  `    if (option.disabled) return { error: "Option is disabled" }`,
+  `    if (!picked.includes(option)) picked.push(option)`,
+  `  }`,
+  `  if (picked.length > 1 && !el.multiple) return { error: "Select accepts one option" }`,
+  `  if (!apply) return { ok: true }`,
+  `  for (const option of options) option.selected = picked.includes(option)`,
+  `  el.dispatchEvent(new Event("input", { bubbles: true, composed: true }))`,
+  `  el.dispatchEvent(new Event("change", { bubbles: true }))`,
+  `  return { ok: true }`,
+  `}`,
+].join(PAGE_SCRIPT_NEWLINE)
+const F_READY = `function () { return document.readyState }`
+const F_TEXT_PRESENT = [
+  `function (needle) {`,
+  `  const normalize = (value) => String(value).replace(/\\s+/g, " ").trim()`,
+  `  return normalize(document.body ? document.body.innerText : "").includes(normalize(needle))`,
+  `}`,
+].join(PAGE_SCRIPT_NEWLINE)
+const F_CONNECTED = `function () { return this.isConnected }`
+const F_FOCUSED = [
+  `function () {`,
+  `  let el = document.activeElement`,
+  `  for (;;) {`,
+  `    if (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement`,
+  `    else if (el && (el.localName === "iframe" || el.localName === "frame") && el.contentDocument && el.contentDocument.activeElement) el = el.contentDocument.activeElement`,
+  `    else return el`,
+  `  }`,
+  `}`,
+].join(PAGE_SCRIPT_NEWLINE)
+const F_DOCUMENT = `function () { return document }`
+const F_SENSITIVE_ELEMENT = [
+  `function () { ${IS_SENSITIVE}`,
+  `  return isSensitive(this)`,
+  `}`,
+].join(PAGE_SCRIPT_NEWLINE)
+const FORM_INPUT_SELECTOR = ["date", "time", "datetime-local", "month", "week", "color", "range"]
+  .map((type) => `input[type="${type}" i]`)
+  .join(", ")
+const WAIT_STATES = new Set(["attached", "visible", "hidden", "detached"])
+const LOAD_STATES = new Set(["domcontentloaded", "load", "networkidle"])
+const NETWORK_EVENTS = new Set(["Network.requestWillBeSent", "Network.loadingFinished", "Network.loadingFailed"])
+const valueRoles = new Set(["textbox", "searchbox", "combobox", "spinbutton", "slider"])
 const interactiveRoles = new Set([
   "button",
   "checkbox",
@@ -66,6 +177,7 @@ const namedKeys = {
   Escape: { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 },
   Backspace: { key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 },
   Delete: { key: "Delete", code: "Delete", windowsVirtualKeyCode: 46 },
+  Insert: { key: "Insert", code: "Insert", windowsVirtualKeyCode: 45 },
   ArrowUp: { key: "ArrowUp", code: "ArrowUp", windowsVirtualKeyCode: 38 },
   ArrowDown: { key: "ArrowDown", code: "ArrowDown", windowsVirtualKeyCode: 40 },
   ArrowLeft: { key: "ArrowLeft", code: "ArrowLeft", windowsVirtualKeyCode: 37 },
@@ -99,6 +211,10 @@ const ACTION_TYPES = new Set([
   "webmcp_list",
   "webmcp_invoke",
   "dialog",
+  "fill",
+  "select",
+  "check",
+  "hover",
 ])
 
 let socket
@@ -113,6 +229,7 @@ const tabs = new Map()
 const chromeTabs = new Map()
 const groups = new Map()
 const deniedTabs = new Set()
+const navigatedAway = new Map()
 
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   handlePopup(message).then(respond, async (error) =>
@@ -168,7 +285,7 @@ chrome.tabs.onUpdated.addListener((chromeTabID, change, info) => {
   const current = tabs.get(chromeTabs.get(chromeTabID))
   if (current && info.windowId !== undefined) current.windowID = info.windowId
   if (current?.profile && change.url && !isAllowedPage(current, change.url)) {
-    void revokeTab(current).then(() => registerProfileTab(info))
+    void revokeTab(current, "navigated").then(() => registerProfileTab(info))
     return
   }
   if (current?.profile && change.url) {
@@ -189,12 +306,13 @@ chrome.tabs.onUpdated.addListener((chromeTabID, change, info) => {
 
 chrome.tabs.onRemoved.addListener((chromeTabID) => {
   deniedTabs.delete(chromeTabID)
+  navigatedAway.delete(chromeTabID)
   void persistDeniedTabs()
   const tab = tabs.get(chromeTabs.get(chromeTabID))
-  if (tab) void revokeTab(tab)
+  if (tab) void revokeTab(tab, "closed")
 })
 
-chrome.debugger.onDetach.addListener((source) => {
+chrome.debugger.onDetach.addListener((source, reason) => {
   if (source.tabId === undefined) return
   const id = chromeTabs.get(source.tabId)
   if (!id) return
@@ -208,7 +326,12 @@ chrome.debugger.onDetach.addListener((source) => {
   tabs.delete(id)
   syncRefreshTimer()
   clearBadge(source.tabId)
-  send({ type: "revoked", tabID: id })
+  send({
+    type: "revoked",
+    tabID: id,
+    reason: "detached",
+    ...(typeof reason === "string" && reason ? { detachReason: reason.slice(0, MAX_DETACH_REASON) } : {}),
+  })
   if (tab?.owned) void removeInactive(tab.chromeTabID)
 })
 
@@ -217,6 +340,10 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   const id = chromeTabs.get(source.tabId)
   const tab = id ? tabs.get(id) : undefined
   if (!tab) return
+  if (NETWORK_EVENTS.has(method)) {
+    trackNetwork(tab, source.sessionId, method, params)
+    return
+  }
   if (method === "Target.attachedToTarget") {
     registerChildSession(tab, params)
     return
@@ -260,17 +387,19 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
         (!params.frame?.id || target.frameId === params.frame.id)
       )
         tab.refs.delete(ref)
+    forgetControlWorlds(tab, source.sessionId, params.frame?.id)
     const session = source.sessionId ? tabSessions(tab).get(source.sessionId) : undefined
     if (session && !params.frame?.parentId && params.frame?.url) session.url = params.frame.url
     return
   }
   if (!isAllowedPage(tab, params.frame?.url)) {
-    void revokeTab(tab)
+    void revokeTab(tab, "navigated")
     return
   }
   tab.documentGeneration++
   tab.revision = 0
   tab.refs.clear()
+  for (const sessionId of tabSessions(tab).keys()) dropRequests(tab, sessionId)
   tabSessions(tab).clear()
   tab.logs = []
   tab.url = params.frame.url
@@ -280,7 +409,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     (info) => {
       if (tabs.get(tab.id) !== tab || tab.url !== params.frame.url) return
       if (!isAllowedPage(tab, info.url)) {
-        void revokeTab(tab)
+        void revokeTab(tab, "navigated")
         return
       }
       send({
@@ -484,6 +613,8 @@ function registerProfileTab(info) {
     return
   }
   const id = tabID()
+  const replaces = navigatedAway.get(info.id)
+  navigatedAway.delete(info.id)
   const tab = {
     id,
     chromeTabID: info.id,
@@ -510,12 +641,14 @@ function registerProfileTab(info) {
     url: info.url,
     documentGeneration: 1,
     active: !!info.active,
+    ...(replaces ? { replaces } : {}),
   })
 }
 
 async function revokePairedTabs() {
   send({ type: "profile_access", enabled: false })
-  for (const tab of [...tabs.values()].filter((item) => item.profile)) await revokeTab(tab)
+  for (const tab of [...tabs.values()].filter((item) => item.profile)) await revokeTab(tab, "access_revoked")
+  navigatedAway.clear()
   groups.clear()
   deniedTabs.clear()
   await chrome.storage.local.remove(PROFILE_DENIED_KEY)
@@ -531,12 +664,13 @@ function persistDeniedTabs() {
   })
 }
 
-async function revokeTab(tab) {
+async function revokeTab(tab, reason) {
   if (!tab || tabs.get(tab.id) !== tab) return
   chromeTabs.delete(tab.chromeTabID)
   tabs.delete(tab.id)
   clearBadge(tab.chromeTabID)
-  send({ type: "revoked", tabID: tab.id })
+  if (reason === "navigated" && tab.profile) navigatedAway.set(tab.chromeTabID, tab.id)
+  send({ type: "revoked", tabID: tab.id, reason })
   await clearMarker(tab)
   if (!tab.profile || tab.attached) await chrome.debugger.detach({ tabId: tab.chromeTabID }).catch(() => {})
   if (tab.owned && !tab.deliverable) await removeInactive(tab.chromeTabID)
@@ -595,7 +729,7 @@ async function receive(raw, current = socket) {
   if (message.type === "relinquish") await relinquish(message)
   if (message.type === "release" && message.generation === generation) {
     const tab = tabs.get(message.tabID)
-    if (tab?.owned) await revokeTab(tab)
+    if (tab?.owned) await revokeTab(tab, "closed")
   }
   if (message.type === "deliver" && message.generation === generation) {
     const tab = tabs.get(message.tabID)
@@ -703,6 +837,78 @@ async function searchHistory(message) {
 function applyFrameOrigins(tab, message) {
   if (Array.isArray(message.frameOrigins))
     tab.frameOrigins = new Set(message.frameOrigins.filter((origin) => typeof origin === "string"))
+  syncNetworkSessions(tab)
+}
+
+function approvedOrigins(tab) {
+  return new Set([...tab.allowedOrigins, ...tabFrameOrigins(tab)])
+}
+
+function originOf(url) {
+  try {
+    return safePage(url).origin
+  } catch {
+    return undefined
+  }
+}
+
+function syncNetworkSessions(tab) {
+  const allowed = approvedOrigins(tab)
+  for (const [sessionId, session] of tabSessions(tab))
+    if (!session.network && allowed.has(originOf(session.url))) session.network = enableSessionNetwork(tab, sessionId, session)
+}
+
+async function enableSessionNetwork(tab, sessionId, session) {
+  try {
+    await session.ready
+    if (session.failed) throw new Error("Frame session is unavailable")
+    await command(tab.chromeTabID, "Network.enable", {}, sessionId)
+  } catch {
+    session.networkFailed = true
+  }
+}
+
+function tabRequests(tab) {
+  tab.requests ??= new Map()
+  return tab.requests
+}
+
+function pendingRequests(tab) {
+  let count = 0
+  for (const ids of tabRequests(tab).values()) count += ids.size
+  return count
+}
+
+function settleRequests(tab) {
+  if (!pendingRequests(tab)) tab.networkQuietSince = Date.now()
+}
+
+function trackNetwork(tab, sessionId, method, params) {
+  if (sessionId && !tabSessions(tab).has(sessionId)) return
+  const requestId = params?.requestId
+  if (typeof requestId !== "string" || !requestId) return
+  const requests = tabRequests(tab)
+  const key = sessionId ?? ""
+  const ids = requests.get(key) ?? new Set()
+  if (method === "Network.requestWillBeSent") ids.add(requestId)
+  else ids.delete(requestId)
+  if (ids.size) requests.set(key, ids)
+  else requests.delete(key)
+  settleRequests(tab)
+}
+
+function dropRequests(tab, sessionId) {
+  if (tabRequests(tab).delete(sessionId)) settleRequests(tab)
+}
+
+function clearRequests(tab) {
+  tab.requests = new Map()
+  tab.networkQuietSince = undefined
+}
+
+function networkUntracked(tab) {
+  const allowed = approvedOrigins(tab)
+  return [...tabSessions(tab).values()].some((session) => session.networkFailed && allowed.has(originOf(session.url)))
 }
 
 function autoAttachParams() {
@@ -720,6 +926,7 @@ async function enableTab(tab) {
     command(tab.chromeTabID, "DOM.enable"),
     command(tab.chromeTabID, "Accessibility.enable"),
     command(tab.chromeTabID, "Runtime.enable"),
+    command(tab.chromeTabID, "Network.enable"),
   ])
   await command(tab.chromeTabID, "Target.setAutoAttach", autoAttachParams())
 }
@@ -744,11 +951,14 @@ function registerChildSession(tab, params) {
   })().catch(() => {
     session.failed = true
   })
+  syncNetworkSessions(tab)
 }
 
 function forgetChildSession(tab, sessionId) {
   if (!sessionId) return
   tabSessions(tab).delete(sessionId)
+  dropRequests(tab, sessionId)
+  forgetControlWorlds(tab, sessionId)
   for (const [ref, target] of tab.refs) if (target.sessionId === sessionId) tab.refs.delete(ref)
 }
 
@@ -971,6 +1181,72 @@ function collectFrames(node, output = []) {
   return output
 }
 
+async function frameTargets(tab) {
+  const allowed = approvedOrigins(tab)
+  const sessions = [{ sessionId: undefined, url: tab.url }, ...[...tabSessions(tab).entries()].map(([sessionId, value]) => ({ sessionId, ...value }))]
+  await Promise.all(sessions.map((session) => session.ready).filter(Boolean))
+  const targets = []
+  for (const session of sessions) {
+    let frameList
+    try {
+      const { frameTree } = await command(tab.chromeTabID, "Page.getFrameTree", {}, session.sessionId)
+      frameList = collectFrames(frameTree)
+    } catch (error) {
+      if (!session.sessionId) throw error
+      targets.push({ url: session.url || tab.url, readable: false })
+      continue
+    }
+    const failed = session.sessionId ? tabSessions(tab).get(session.sessionId)?.failed : false
+    for (const [index, frame] of frameList.entries()) {
+      const top = !session.sessionId && index === 0
+      const url = frame.url || (top ? tab.url : session.url || tab.url)
+      const origin = originOf(url)
+      targets.push({
+        sessionId: session.sessionId,
+        frameId: frame.id,
+        url,
+        top,
+        root: index === 0,
+        readable: top || (!!origin && allowed.has(origin) && !failed),
+      })
+    }
+  }
+  return targets
+}
+
+function axProperty(node, name) {
+  return node?.properties?.find((item) => item.name === name)?.value?.value
+}
+
+function tristate(value) {
+  if (value === true || value === "true") return true
+  if (value === false || value === "false") return false
+  if (value === "mixed") return "mixed"
+  return undefined
+}
+
+function booleanState(value) {
+  if (value === true || value === "true") return true
+  if (value === false || value === "false") return false
+  return undefined
+}
+
+function elementState(node, role, sensitive) {
+  const state = {}
+  const checked = tristate(axProperty(node, "checked"))
+  const pressed = tristate(axProperty(node, "pressed"))
+  const expanded = booleanState(axProperty(node, "expanded"))
+  const selected = booleanState(axProperty(node, "selected"))
+  if (checked !== undefined) state.checked = checked
+  if (pressed !== undefined) state.pressed = pressed
+  if (expanded !== undefined) state.expanded = expanded
+  if (selected !== undefined) state.selected = selected
+  const value = valueRoles.has(role) ? node.value?.value : undefined
+  if (sensitive) state.sensitive = true
+  else if (value !== undefined && value !== null) state.value = String(value).slice(0, 1024)
+  return state
+}
+
 async function observe(message) {
   let fresh
   try {
@@ -980,9 +1256,7 @@ async function observe(message) {
     await controlTabs([tab])
     applyFrameOrigins(tab, message)
     const documentGeneration = tab.documentGeneration
-    const allowed = new Set([...tab.allowedOrigins, ...tabFrameOrigins(tab)])
-    const sessions = [{ sessionId: undefined, url: tab.url }, ...[...tabSessions(tab).entries()].map(([sessionId, value]) => ({ sessionId, ...value }))]
-    await Promise.all(sessions.map((session) => session.ready).filter(Boolean))
+    const targets = await frameTargets(tab)
     tab.revision++
     tab.refs.clear()
     const elements = []
@@ -991,100 +1265,86 @@ async function observe(message) {
     const seen = new Set()
     let candidateCount = 0
     let textCount = 0
-    for (const session of sessions) {
-      let frameList
-      try {
-        const { frameTree } = await command(tab.chromeTabID, "Page.getFrameTree", {}, session.sessionId)
-        frameList = collectFrames(frameTree)
-      } catch (error) {
-        if (!session.sessionId) throw error
-        frames.push({ url: session.url || tab.url, observed: false })
+    for (const target of targets) {
+      const { sessionId, url, top } = target
+      if (!target.readable) {
+        frames.push({ url, observed: false })
         continue
       }
-      for (const [index, frame] of frameList.entries()) {
-        const top = !session.sessionId && index === 0
-        const url = frame.url || (top ? tab.url : session.url || tab.url)
-        let origin
-        try {
-          origin = safePage(url).origin
-        } catch {
-          origin = undefined
+      let tree
+      try {
+        tree = await command(
+          tab.chromeTabID,
+          "Accessibility.getFullAXTree",
+          { depth: MAX_AX_DEPTH, ...(target.frameId ? { frameId: target.frameId } : {}) },
+          sessionId,
+        )
+      } catch (error) {
+        if (top) throw error
+        frames.push({ url, observed: false })
+        continue
+      }
+      if (!top) frames.push({ url, observed: true })
+      const inputs = await formInputNodes(tab, target)
+      const byId = new Map(tree.nodes.map((item) => [item.nodeId, item]))
+      for (const node of tree.nodes) {
+        if (node.ignored) continue
+        const role = String(node.role?.value ?? "")
+        if (textRoles.has(role) && !hasEditableAncestor(node, byId)) {
+          const name = String(node.name?.value ?? "").trim()
+          if (name) {
+            textCount++
+            if (texts.length < MAX_TEXTS) texts.push({ role, name, ...(top ? {} : { frame: url }) })
+          }
         }
-        if (!top && (!origin || !allowed.has(origin) || session.failed)) {
-          frames.push({ url, observed: false })
-          continue
-        }
-        let tree
+        if (!node.backendDOMNodeId || (!interactiveRoles.has(role) && !inputs.has(node.backendDOMNodeId))) continue
+        const key = `${sessionId ?? ""}\0${node.backendDOMNodeId}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        candidateCount++
+        if (elements.length >= MAX_ELEMENTS) continue
+        let described
         try {
-          tree = await command(
+          described = await command(
             tab.chromeTabID,
-            "Accessibility.getFullAXTree",
-            { depth: MAX_AX_DEPTH, ...(frame.id ? { frameId: frame.id } : {}) },
-            session.sessionId,
+            "DOM.describeNode",
+            { backendNodeId: node.backendDOMNodeId, depth: 0 },
+            sessionId,
           )
-        } catch (error) {
-          if (top) throw error
-          frames.push({ url, observed: false })
+        } catch {
           continue
         }
-        if (!top) frames.push({ url, observed: true })
-        const byId = new Map(tree.nodes.map((item) => [item.nodeId, item]))
-        for (const node of tree.nodes) {
-          if (node.ignored) continue
-          const role = String(node.role?.value ?? "")
-          if (textRoles.has(role) && !hasEditableAncestor(node, byId)) {
-            const name = String(node.name?.value ?? "").trim()
-            if (name) {
-              textCount++
-              if (texts.length < MAX_TEXTS) texts.push({ role, name, ...(top ? {} : { frame: url }) })
-            }
-          }
-          if (!interactiveRoles.has(role) || !node.backendDOMNodeId) continue
-          const key = `${session.sessionId ?? ""}\0${node.backendDOMNodeId}`
-          if (seen.has(key)) continue
-          seen.add(key)
-          candidateCount++
-          if (elements.length >= MAX_ELEMENTS) continue
-          let described
-          try {
-            described = await command(
-              tab.chromeTabID,
-              "DOM.describeNode",
-              { backendNodeId: node.backendDOMNodeId, depth: 0 },
-              session.sessionId,
-            )
-          } catch {
-            continue
-          }
-          const ref = `b${elements.length + 1}`
-          tab.refs.set(ref, {
-            sessionId: session.sessionId,
-            backendNodeId: node.backendDOMNodeId,
-            frameId: frame.id,
-            url,
-          })
-          const attributes = attrs(described.node.attributes)
-          const href = attributes.get("href")
-          const destination = href ? new URL(href, url).toString() : undefined
-          const elementName = String(node.name?.value ?? "")
-          const locatorBase = `role=${role}[name=${JSON.stringify(elementName.slice(0, 128))}]`
-          const duplicates = elements.filter((candidate) => candidate.locator?.startsWith(locatorBase)).length
-          elements.push({
-            ref,
-            role,
-            name: elementName,
-            locator: duplicates ? `${locatorBase}|nth=${duplicates}` : locatorBase,
-            description: node.description?.value ? String(node.description.value) : undefined,
-            disabled: node.properties?.some((item) => item.name === "disabled" && item.value?.value === true) || undefined,
-            destination,
-            ...(top ? {} : { frame: url }),
-          })
-        }
+        const ref = `b${elements.length + 1}`
+        const elementName = String(node.name?.value ?? "")
+        tab.refs.set(ref, {
+          sessionId,
+          backendNodeId: node.backendDOMNodeId,
+          frameId: target.frameId,
+          url,
+          top,
+          name: elementName,
+        })
+        const attributes = attrs(described.node.attributes)
+        const href = attributes.get("href")
+        const destination = href ? new URL(href, url).toString() : undefined
+        const locatorBase = `role=${role}[name=${JSON.stringify(elementName.slice(0, 128))}]`
+        const duplicates = elements.filter((candidate) => candidate.locator?.startsWith(locatorBase)).length
+        elements.push({
+          ref,
+          role,
+          name: elementName,
+          locator: duplicates ? `${locatorBase}|nth=${duplicates}` : locatorBase,
+          description: node.description?.value ? String(node.description.value) : undefined,
+          disabled: node.properties?.some((item) => item.name === "disabled" && item.value?.value === true) || undefined,
+          destination,
+          ...elementState(node, role, isSensitiveAttributes(described.node.nodeName, attributes, elementName)),
+          ...(top ? {} : { frame: url }),
+        })
       }
     }
     const info = await tabInfo(tab)
     if (tabs.get(tab.id) !== tab || !isAllowedPage(tab, info.url)) {
-      await revokeTab(tab)
+      await revokeTab(tab, "navigated")
       return fail(message, "The shared tab changed to an unapproved site")
     }
     if (tab.documentGeneration !== documentGeneration) throw new Error("The shared tab observation is stale")
@@ -1106,6 +1366,36 @@ async function observe(message) {
     await abandonFresh(fresh)
     fail(message, safeError(error))
   }
+}
+
+async function frameDocumentNode(tab, target) {
+  const { root } = await command(tab.chromeTabID, "DOM.getDocument", { depth: 0 }, target.sessionId)
+  if (target.root) return root.nodeId
+  const document = await controlEvaluate(tab, target, F_DOCUMENT, [], false)
+  try {
+    const { nodeId } = await command(tab.chromeTabID, "DOM.requestNode", { objectId: document.objectId }, target.sessionId)
+    return nodeId
+  } finally {
+    await command(tab.chromeTabID, "Runtime.releaseObject", { objectId: document.objectId }, target.sessionId).catch(() => {})
+  }
+}
+
+async function formInputNodes(tab, target) {
+  const { sessionId } = target
+  const backendNodeIds = new Set()
+  try {
+    const { nodeIds } = await command(
+      tab.chromeTabID,
+      "DOM.querySelectorAll",
+      { nodeId: await frameDocumentNode(tab, target), selector: FORM_INPUT_SELECTOR },
+      sessionId,
+    )
+    for (const nodeId of (nodeIds ?? []).slice(0, MAX_ELEMENTS)) {
+      const { node } = await command(tab.chromeTabID, "DOM.describeNode", { nodeId, depth: 0 }, sessionId)
+      if (node?.backendNodeId) backendNodeIds.add(node.backendNodeId)
+    }
+  } catch {}
+  return backendNodeIds
 }
 
 async function abandonFresh(tab) {
@@ -1136,12 +1426,21 @@ async function act(message) {
     await controlTabs([tab])
     tab.allowedOrigins = new Set(message.allowedOrigins)
     applyFrameOrigins(tab, message)
-    if (["navigate", "click", "type", "back", "forward", "reload", "key", "webmcp_invoke"].includes(message.action.type))
+    if (
+      ["navigate", "click", "type", "fill", "select", "check", "hover", "back", "forward", "reload", "key", "webmcp_invoke"].includes(
+        message.action.type,
+      )
+    )
       tab.downloadSince = Date.now() - 1000
-    if (message.action.type === "navigate") await navigate(tab, message.action.url, () => (dispatched = true))
-    if (message.action.type === "click") await click(tab, message.action.ref, () => (dispatched = true))
-    if (message.action.type === "type")
-      await typeText(tab, message.action.ref, message.action.text, () => (dispatched = true))
+    const markDispatched = () => (dispatched = true)
+    let outcome = {}
+    if (message.action.type === "navigate") await navigate(tab, message.action.url, markDispatched)
+    if (message.action.type === "click") await click(tab, message.action.ref, markDispatched)
+    if (message.action.type === "type") await typeText(tab, message.action.ref, message.action.text, markDispatched)
+    if (message.action.type === "fill") outcome = await fill(tab, message.action.ref, message.action.text, markDispatched)
+    if (message.action.type === "select") outcome = await selectOptions(tab, message.action, markDispatched)
+    if (message.action.type === "check") outcome = await setChecked(tab, message.action, markDispatched)
+    if (message.action.type === "hover") await hover(tab, message.action.ref, markDispatched)
     if (message.action.type === "scroll") await scroll(tab, message.action.deltaY, () => (dispatched = true))
     if (message.action.type === "back") await history(tab, -1, () => (dispatched = true))
     if (message.action.type === "forward") await history(tab, 1, () => (dispatched = true))
@@ -1150,7 +1449,7 @@ async function act(message) {
       await command(tab.chromeTabID, "Page.reload", {})
     }
     if (message.action.type === "key") await dispatchKey(tab, message.action, () => (dispatched = true))
-    if (message.action.type === "wait") await waitAction(tab, message.action)
+    if (message.action.type === "wait") outcome = await waitAction(tab, message.action)
     const peripheral = ["clipboard_read", "clipboard_write", "upload", "download", "logs", "export", "webmcp_list", "webmcp_invoke", "dialog"].includes(message.action.type)
       ? await peripheralAction(tab, message.action, () => (dispatched = true))
       : {}
@@ -1158,7 +1457,7 @@ async function act(message) {
     await isActive(tab)
     const info = await tabInfo(tab)
     if (tabs.get(tab.id) !== tab || !isAllowedPage(tab, info.url)) {
-      await revokeTab(tab)
+      await revokeTab(tab, "navigated")
       throw new Error("The shared tab changed to an unapproved site")
     }
     if (info.url && info.url !== tab.url) {
@@ -1184,6 +1483,9 @@ async function act(message) {
       data: peripheral.data,
       webmcpTools: peripheral.webmcpTools,
       dialog: peripheral.dialog,
+      control: outcome.control,
+      frame: outcome.frame,
+      message: outcome.message,
     })
   } catch (error) {
     if (!dispatched) await abandonFresh(fresh)
@@ -1199,7 +1501,7 @@ async function attachProfile(tab) {
   tab.attached = true
   updateBadge(tab)
   if (tabs.get(tab.id) !== tab || !isAllowedPage(tab, (await chrome.tabs.get(tab.chromeTabID)).url)) {
-    await revokeTab(tab)
+    await revokeTab(tab, "navigated")
     throw new Error("The profile tab changed to an unapproved site or was revoked")
   }
   await enableTab(tab)
@@ -1239,45 +1541,193 @@ async function dispatchKey(tab, action, markDispatched) {
   const single = typeof action.key === "string" && action.key.length === 1
   if (!named && !single) throw new Error(`Unsupported key: ${String(action.key).slice(0, 32)}`)
   const base = named ?? { key: action.key, code: "", windowsVirtualKeyCode: 0 }
+  const text = single && !named && !modifiers
+  const safeNavigation =
+    !(modifiers & 7) &&
+    (modifiers === 8 ? action.key === "Tab" : ["Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(action.key))
+  if (!safeNavigation) await rejectSensitiveFocus(tab)
   markDispatched()
   await command(tab.chromeTabID, "Input.dispatchKeyEvent", {
     type: "keyDown",
     ...base,
     modifiers,
-    ...(single && !named && !modifiers ? { text: action.key } : {}),
+    ...(text ? { text: action.key } : {}),
   })
   await command(tab.chromeTabID, "Input.dispatchKeyEvent", { type: "keyUp", ...base, modifiers })
 }
 
-async function waitAction(tab, action) {
-  const timeout = Math.min(Math.max(action.timeoutMs ?? 5000, 0), MAX_WAIT_MS)
-  const deadline = Date.now() + timeout
-  for (;;) {
-    if (action.ref) {
-      const target = tab.refs.get(action.ref)
-      if (target) {
-        try {
-          await command(tab.chromeTabID, "DOM.describeNode", { backendNodeId: target.backendNodeId, depth: 0 }, target.sessionId)
-          return
-        } catch {}
-      }
-    } else {
-      const ready = await pageEvaluate(tab, "document.readyState").then(
-        ({ result }) => result?.value === "complete",
-        () => false,
-      )
-      if (ready) return
-    }
-    if (Date.now() >= deadline) throw new Error("Timed out waiting for the page")
-    await new Promise((resolve) => setTimeout(resolve, 100))
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+function normalizeText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim()
+}
+
+function isSensitiveAttributes(nodeName, attributes, accessibleName = "") {
+  const tag = String(nodeName).toLowerCase()
+  const editable = attributes.has("contenteditable") && attributes.get("contenteditable") !== "false"
+  if (tag !== "input" && tag !== "textarea" && !editable) return false
+  if (tag === "input" && (attributes.get("type") ?? "text").toLowerCase() === "password") return true
+  if ((attributes.get("autocomplete") ?? "").toLowerCase().split(/\s+/).some((token) => SECRET_AUTOCOMPLETE.includes(token))) return true
+  if (["name", "id", "aria-label", "placeholder"].some((key) => SECRET_NAME.test(attributes.get(key) ?? ""))) return true
+  return SECRET_NAME.test(normalizeText(accessibleName).slice(0, 256))
+}
+
+function rejectSensitiveField(node, accessibleName) {
+  const attributes = attrs(node.attributes)
+  if (String(node.nodeName).toLowerCase() === "input" && (attributes.get("type") ?? "").toLowerCase() === "file")
+    throw new Error("file inputs are unsupported")
+  if (isSensitiveAttributes(node.nodeName, attributes, accessibleName))
+    throw new Error("Sensitive fields such as passwords, one-time codes, and payment details cannot be filled or typed into")
+}
+
+function globMatch(pattern, value) {
+  let p = 0
+  let v = 0
+  let star = -1
+  let mark = 0
+  while (v < value.length) {
+    if (p < pattern.length && pattern[p] !== "*" && pattern[p] === value[v]) {
+      p++
+      v++
+    } else if (p < pattern.length && pattern[p] === "*") {
+      star = p++
+      mark = v
+    } else if (star !== -1) {
+      p = star + 1
+      v = ++mark
+    } else return false
+  }
+  while (p < pattern.length && pattern[p] === "*") p++
+  return p === pattern.length
+}
+
+function parseLocator(locator) {
+  const match = LOCATOR.exec(String(locator))
+  if (!match) return undefined
+  try {
+    const name = JSON.parse(match[2])
+    return typeof name === "string" ? { role: match[1], name, nth: match[3] ? Number(match[3]) : 0 } : undefined
+  } catch {
+    return undefined
   }
 }
 
+function controlWorld(tab, sessionId, frameId) {
+  tab.controlWorlds ??= new Map()
+  const key = `${sessionId ?? ""}|${frameId ?? ""}`
+  const cached = tab.controlWorlds.get(key)
+  if (cached) return cached
+  const worlds = tab.controlWorlds
+  const world = command(tab.chromeTabID, "Page.createIsolatedWorld", { frameId, worldName: CONTROL_WORLD }, sessionId).then(
+    ({ executionContextId }) => executionContextId,
+  )
+  worlds.set(key, world)
+  world.catch(() => {
+    if (worlds.get(key) === world) worlds.delete(key)
+  })
+  return world
+}
+
+function forgetControlWorlds(tab, sessionId, frameId) {
+  if (!tab.controlWorlds) return
+  const prefix = `${sessionId ?? ""}|`
+  for (const key of tab.controlWorlds.keys())
+    if (frameId === undefined ? key.startsWith(prefix) : key === `${prefix}${frameId}`) tab.controlWorlds.delete(key)
+}
+
+function controlCall(tab, target, functionDeclaration, values = []) {
+  return controlEvaluate(tab, target, functionDeclaration, values, true).then((result) => result?.value)
+}
+
+async function controlEvaluate(tab, target, functionDeclaration, values, returnByValue) {
+  const run = async () => {
+    const executionContextId = await controlWorld(tab, target.sessionId, target.frameId)
+    const params = { functionDeclaration, arguments: values.map((value) => ({ value })), returnByValue }
+    if (target.backendNodeId === undefined) params.executionContextId = executionContextId
+    else {
+      const { object } = await command(
+        tab.chromeTabID,
+        "DOM.resolveNode",
+        { backendNodeId: target.backendNodeId, executionContextId },
+        target.sessionId,
+      )
+      params.objectId = object?.objectId
+    }
+    const response = await command(tab.chromeTabID, "Runtime.callFunctionOn", params, target.sessionId)
+    if (response?.exceptionDetails) throw new Error("A page control function failed")
+    return response?.result
+  }
+  return run().catch((error) => {
+    if (!/Cannot find context/i.test(error instanceof Error ? error.message : String(error))) throw error
+    forgetControlWorlds(tab, target.sessionId, target.frameId)
+    return run()
+  })
+}
+
+function controlOutput(value) {
+  if (!value || typeof value !== "object") return {}
+  if (value.sensitive === true) return { sensitive: true }
+  const output = {}
+  const checked = tristate(value.checked)
+  if (checked !== undefined) output.checked = checked
+  if (typeof value.value === "string") output.value = value.value.slice(0, 1024)
+  if (Array.isArray(value.selected))
+    output.selected = value.selected.slice(0, MAX_SELECT_OPTIONS).map((option) => ({
+      ...(typeof option?.value === "string" ? { value: option.value.slice(0, 1024) } : {}),
+      label: String(option?.label ?? "").slice(0, 1024),
+      index: Number(option?.index),
+    }))
+  return output
+}
+
+function describeTarget(tab, target) {
+  return command(tab.chromeTabID, "DOM.describeNode", { backendNodeId: target.backendNodeId, depth: 0 }, target.sessionId)
+}
+
+function assertCurrent(tab, documentGeneration) {
+  if (tabs.get(tab.id) !== tab || tab.documentGeneration !== documentGeneration)
+    throw new Error("The shared tab observation is stale")
+}
+
+async function elementPoint(tab, target) {
+  await command(tab.chromeTabID, "DOM.scrollIntoViewIfNeeded", { backendNodeId: target.backendNodeId }, target.sessionId)
+  const { quads } = await command(tab.chromeTabID, "DOM.getContentQuads", { backendNodeId: target.backendNodeId }, target.sessionId)
+  const quad = quads?.[0]
+  if (!quad) throw new Error("Element is not visible")
+  return mainPoint(tab, target, quad)
+}
+
+async function axNode(tab, target) {
+  const { nodes } = await command(
+    tab.chromeTabID,
+    "Accessibility.getPartialAXTree",
+    { backendNodeId: target.backendNodeId, fetchRelatives: false },
+    target.sessionId,
+  )
+  const node = nodes?.find((item) => item.backendDOMNodeId === target.backendNodeId) ?? nodes?.[0]
+  if (!node) throw new Error("Element is not in the accessibility tree")
+  return node
+}
+
+async function settle(read, done) {
+  const deadline = Date.now() + CONTROL_SETTLE_MS
+  let value = await read()
+  while (!done(value) && Date.now() < deadline) {
+    await sleep(50)
+    value = await read()
+  }
+  return value
+}
+
 async function click(tab, ref, markDispatched) {
+  await clickTarget(tab, requireRef(tab, ref), markDispatched, LABELS.click)
+}
+
+async function clickTarget(tab, target, markDispatched, label) {
   const documentGeneration = tab.documentGeneration
-  const target = requireRef(tab, ref)
-  const { backendNodeId } = target
-  const described = await command(tab.chromeTabID, "DOM.describeNode", { backendNodeId, depth: 0 }, target.sessionId)
+  const described = await describeTarget(tab, target)
   const attributes = attrs(described.node.attributes)
   if (attributes.has("download")) throw new Error("Explicit download links are unsupported")
   if (attributes.get("target") && attributes.get("target") !== "_self")
@@ -1289,17 +1739,363 @@ async function click(tab, ref, markDispatched) {
       throw new Error("Link destination is not allowed")
   }
   rejectProtectedInput(described.node)
-  await command(tab.chromeTabID, "DOM.scrollIntoViewIfNeeded", { backendNodeId }, target.sessionId)
-  const { quads } = await command(tab.chromeTabID, "DOM.getContentQuads", { backendNodeId }, target.sessionId)
-  const quad = quads?.[0]
-  if (!quad) throw new Error("Element is not visible")
-  const { x, y } = await mainPoint(tab, target, quad)
-  if (tabs.get(tab.id) !== tab || tab.documentGeneration !== documentGeneration)
-    throw new Error("The shared tab observation is stale")
-  await moveCursor(tab, x, y, LABELS.click, true)
+  const { x, y } = await elementPoint(tab, target)
+  assertCurrent(tab, documentGeneration)
+  await moveCursor(tab, x, y, label, true)
   markDispatched()
   for (const type of ["mousePressed", "mouseReleased"])
     await inputCommand(tab, { type, x, y, button: "left", clickCount: 1 })
+}
+
+async function fill(tab, ref, text, markDispatched) {
+  const documentGeneration = tab.documentGeneration
+  const target = requireRef(tab, ref)
+  if (typeof text !== "string") throw new Error("Fill requires text")
+  const described = await describeTarget(tab, target)
+  rejectSensitiveField(described.node, target.name)
+  const planned = await controlCall(tab, target, F_FILL, [text, false])
+  if (!planned?.kind) throw new Error(planned?.error ?? "Element cannot be filled")
+  const { x, y } = await elementPoint(tab, target)
+  assertCurrent(tab, documentGeneration)
+  await moveCursor(tab, x, y, LABELS.type)
+  markDispatched()
+  const applied = await controlCall(tab, target, F_FILL, [text, true])
+  if (!applied?.kind) throw new Error(applied?.error ?? "Element cannot be filled")
+  if (applied.kind === "insert" && text) await command(tab.chromeTabID, "Input.insertText", { text }, target.sessionId)
+  if (applied.kind === "insert" && !text)
+    for (const type of ["keyDown", "keyUp"])
+      await command(tab.chromeTabID, "Input.dispatchKeyEvent", { type, ...namedKeys.Delete }, target.sessionId)
+  const control = controlOutput(await controlCall(tab, target, F_CONTROL_STATE))
+  return control.sensitive || control.value === text
+    ? { control }
+    : { control, message: "The field value differs from the requested text" }
+}
+
+function selectCriteria(action) {
+  const keys = ["values", "labels", "indexes"].filter((key) => action[key] !== undefined)
+  const list = action[keys[0]]
+  if (keys.length !== 1 || !Array.isArray(list) || !list.length || list.length > MAX_SELECT_OPTIONS)
+    throw new Error("Select takes one list of values, labels, or indexes")
+  return { [keys[0]]: list }
+}
+
+async function selectOptions(tab, action, markDispatched) {
+  const documentGeneration = tab.documentGeneration
+  const target = requireRef(tab, action.ref)
+  const criteria = selectCriteria(action)
+  const described = await describeTarget(tab, target)
+  if (String(described.node.nodeName).toLowerCase() !== "select") return selectListOption(tab, target, criteria, markDispatched)
+  const checked = await controlCall(tab, target, F_SELECT, [criteria, false])
+  if (!checked?.ok) throw new Error(checked?.error ?? "Select failed")
+  const { x, y } = await elementPoint(tab, target)
+  assertCurrent(tab, documentGeneration)
+  await moveCursor(tab, x, y, LABELS.select)
+  markDispatched()
+  const applied = await controlCall(tab, target, F_SELECT, [criteria, true])
+  if (!applied?.ok) throw new Error(applied?.error ?? "Select failed")
+  return { control: controlOutput(await controlCall(tab, target, F_CONTROL_STATE)) }
+}
+
+async function selectListOption(tab, target, criteria, markDispatched) {
+  const node = await axNode(tab, target)
+  const role = String(node.role?.value ?? "")
+  let listbox = target.backendNodeId
+  if (role === "combobox") {
+    if (booleanState(axProperty(node, "expanded")) !== true) throw new Error("Open the list first, observe, then select")
+    listbox = node.properties?.find((item) => item.name === "controls")?.value?.relatedNodes?.[0]?.backendDOMNodeId
+    if (!listbox) throw new Error("The combobox does not control a listbox")
+  } else if (role !== "listbox") throw new Error("Element is not a select or listbox")
+  if (criteria.values) throw new Error("Listbox options are selected by labels or indexes")
+  const wanted = criteria.labels ?? criteria.indexes
+  if (wanted.length !== 1) throw new Error("A listbox selects one option at a time")
+  const { nodes } = await command(
+    tab.chromeTabID,
+    "Accessibility.queryAXTree",
+    { backendNodeId: listbox, role: "option" },
+    target.sessionId,
+  )
+  const options = (nodes ?? []).filter((item) => !item.ignored && item.role?.value === "option" && item.backendDOMNodeId)
+  const index = criteria.labels
+    ? options.findIndex((item) => normalizeText(item.name?.value) === normalizeText(criteria.labels[0]))
+    : criteria.indexes[0]
+  const option = options[index]
+  if (!option) throw new Error("Option not found")
+  if (booleanState(axProperty(option, "disabled")) === true) throw new Error("Option is disabled")
+  const chosen = { label: normalizeText(option.name?.value).slice(0, 1024), index }
+  if (booleanState(axProperty(option, "selected")) === true) return { control: { selected: [chosen] } }
+  const optionTarget = { ...target, backendNodeId: option.backendDOMNodeId }
+  await clickTarget(tab, optionTarget, markDispatched, LABELS.select)
+  const selected = await settle(
+    async () => booleanState(axProperty(await axNode(tab, optionTarget).catch(() => undefined), "selected")) === true,
+    (value) => value,
+  )
+  return selected
+    ? { control: { selected: [chosen] } }
+    : { control: { selected: [] }, message: "The control did not change state" }
+}
+
+async function setChecked(tab, action, markDispatched) {
+  const target = requireRef(tab, action.ref)
+  if (typeof action.checked !== "boolean") throw new Error("Check requires checked:true or checked:false")
+  const node = await axNode(tab, target)
+  const role = String(node.role?.value ?? "")
+  const state = tristate(axProperty(node, "checked"))
+  if (state === undefined) throw new Error("Element has no checked state")
+  if (state === action.checked) return { control: { checked: state } }
+  if (!action.checked && (role === "radio" || role === "menuitemradio"))
+    throw new Error("A radio option cannot be unchecked; check another option instead")
+  await clickTarget(tab, target, markDispatched, LABELS.click)
+  const observed = await settle(
+    async () => tristate(axProperty(await axNode(tab, target).catch(() => undefined), "checked")),
+    (value) => value === action.checked,
+  )
+  const control = observed === undefined ? {} : { checked: observed }
+  return observed === action.checked ? { control } : { control, message: "The control did not change state" }
+}
+
+async function rejectSensitiveFocus(tab) {
+  let target = await mainFrameTarget(tab)
+  for (let depth = 0; depth <= MAX_FRAMES; depth++) {
+    const focused = await controlEvaluate(tab, target, F_FOCUSED, [], false)
+    if (typeof focused?.objectId !== "string" || !focused.objectId)
+      throw new Error("Editing keys require an inspectable focused target")
+    const sessionId = target.sessionId
+    try {
+      const { node } = await command(
+        tab.chromeTabID,
+        "DOM.describeNode",
+        { objectId: focused.objectId, depth: 1, pierce: true },
+        target.sessionId,
+      )
+      if (
+        node?.nodeType !== 1 ||
+        typeof node.nodeName !== "string" ||
+        !node.nodeName.trim() ||
+        !Number.isSafeInteger(node.backendNodeId) ||
+        node.backendNodeId <= 0 ||
+        !Array.isArray(node.attributes) ||
+        node.attributes.length % 2 !== 0 ||
+        !node.attributes.every((attribute) => typeof attribute === "string") ||
+        (node.shadowRoots !== undefined && (
+          !Array.isArray(node.shadowRoots) ||
+          node.shadowRoots.some((root) => !root || typeof root !== "object" || Array.isArray(root) || !["open", "closed", "user-agent"].includes(root.shadowRootType))
+        ))
+      ) throw new Error("The focused target could not be inspected as an element")
+      const connected = await command(tab.chromeTabID, "Runtime.callFunctionOn", {
+        functionDeclaration: F_CONNECTED,
+        objectId: focused.objectId,
+        returnByValue: true,
+      }, sessionId)
+      if (connected?.exceptionDetails || connected?.result?.value !== true)
+        throw new Error("Editing keys require an attached focused target")
+      if (node.shadowRoots?.some((root) => root.shadowRootType === "closed"))
+        throw new Error("Editing keys cannot be sent while focus is inside a closed shadow root")
+      const nodeName = node.nodeName.toLowerCase()
+      if (nodeName === "object" || nodeName === "embed")
+        throw new Error("Editing keys cannot be sent to an unverified embedded target")
+      if (nodeName === "iframe" || nodeName === "frame") {
+        const child = [...tabSessions(tab)].find(([, session]) => node.frameId && session.targetId === node.frameId)
+        if (!child || child[1].failed || !approvedOrigins(tab).has(originOf(child[1].url)))
+          throw new Error("Editing keys cannot be sent while focus is in a frame YCoding cannot inspect")
+        target = { sessionId: child[0], frameId: node.frameId }
+        continue
+      }
+      const { nodes } = await command(
+        tab.chromeTabID,
+        "Accessibility.getPartialAXTree",
+        { objectId: focused.objectId, fetchRelatives: false },
+        target.sessionId,
+      )
+      const accessible = Array.isArray(nodes) ? nodes.find((item) => item?.backendDOMNodeId === node.backendNodeId) : undefined
+      if (typeof accessible?.name?.value !== "string")
+        throw new Error("The focused target cannot be inspected in the accessibility tree")
+      rejectSensitiveField(node, accessible.name.value)
+      if ((await controlCall(tab, { ...target, backendNodeId: node.backendNodeId }, F_SENSITIVE_ELEMENT)) !== false)
+        throw new Error("Sensitive fields such as passwords, one-time codes, and payment details cannot be filled or typed into")
+      return
+    } finally {
+      await command(tab.chromeTabID, "Runtime.releaseObject", { objectId: focused.objectId }, sessionId).catch(() => {})
+    }
+  }
+  throw new Error("Editing keys cannot be sent while focus is in a frame YCoding cannot inspect")
+}
+
+async function hover(tab, ref, markDispatched) {
+  const documentGeneration = tab.documentGeneration
+  const target = requireRef(tab, ref)
+  await describeTarget(tab, target)
+  const { x, y } = await elementPoint(tab, target)
+  assertCurrent(tab, documentGeneration)
+  await moveCursor(tab, x, y, LABELS.hover)
+  markDispatched()
+  await inputCommand(tab, { type: "mouseMoved", x, y })
+}
+
+async function visibleNode(tab, target) {
+  const response = await command(
+    tab.chromeTabID,
+    "DOM.getContentQuads",
+    { backendNodeId: target.backendNodeId },
+    target.sessionId,
+  ).catch(() => undefined)
+  return (response?.quads ?? []).some((quad) => {
+    if (!Array.isArray(quad) || quad.length < 8) return false
+    const xs = [quad[0], quad[2], quad[4], quad[6]]
+    const ys = [quad[1], quad[3], quad[5], quad[7]]
+    return Math.max(...xs) - Math.min(...xs) > 0 && Math.max(...ys) - Math.min(...ys) > 0
+  })
+}
+
+async function connectedNode(tab, target) {
+  return controlCall(tab, target, F_CONNECTED).then(
+    (value) => value === true,
+    () => false,
+  )
+}
+
+async function targetState(tab, target, state) {
+  const attached = !!target && (await connectedNode(tab, target))
+  if (state === "attached") return attached
+  if (state === "detached") return !attached
+  const visible = attached && (await visibleNode(tab, target))
+  return state === "visible" ? visible : !visible
+}
+
+async function locatorMatches(tab, locator) {
+  const matches = []
+  for (const frame of await frameTargets(tab)) {
+    if (!frame.readable) continue
+    let tree
+    try {
+      tree = await command(
+        tab.chromeTabID,
+        "Accessibility.getFullAXTree",
+        { depth: MAX_AX_DEPTH, ...(frame.frameId ? { frameId: frame.frameId } : {}) },
+        frame.sessionId,
+      )
+    } catch (error) {
+      if (frame.top) throw error
+      continue
+    }
+    for (const node of tree.nodes ?? []) {
+      if (node.ignored || !node.backendDOMNodeId || String(node.role?.value ?? "") !== locator.role) continue
+      if (String(node.name?.value ?? "").slice(0, 128) !== locator.name) continue
+      matches.push({ sessionId: frame.sessionId, backendNodeId: node.backendDOMNodeId, frameId: frame.frameId, url: frame.url, top: frame.top })
+    }
+  }
+  return matches
+}
+
+async function mainFrameTarget(tab) {
+  const { frameTree } = await command(tab.chromeTabID, "Page.getFrameTree")
+  return { sessionId: undefined, frameId: frameTree.frame.id }
+}
+
+function matchedFrame(target) {
+  return target && !target.top ? { frame: target.url } : {}
+}
+
+function waitCondition(tab, action, started) {
+  const targeted = action.ref !== undefined || action.locator !== undefined
+  const conditions = [targeted, action.url !== undefined, action.load !== undefined, action.text !== undefined].filter(Boolean)
+  if (conditions.length > 1 || (action.state !== undefined && !targeted)) throw new Error("Wait takes one condition")
+  if (action.state !== undefined && !WAIT_STATES.has(action.state)) throw new Error("Unsupported wait state")
+  if (action.ref !== undefined) {
+    requireRef(tab, action.ref)
+    const state = action.state ?? "attached"
+    return {
+      subject: "the element",
+      interval: 250,
+      check: async () => {
+        const target = tab.refs.get(action.ref)
+        return (await targetState(tab, target, state)) && (state === "attached" || state === "visible" ? matchedFrame(target) : {})
+      },
+    }
+  }
+  if (action.locator !== undefined) {
+    const locator = parseLocator(action.locator)
+    if (!locator) throw new Error("Locator is malformed")
+    const state = action.state ?? "visible"
+    return {
+      subject: "the element",
+      interval: 250,
+      check: async () => {
+        const matches = await locatorMatches(tab, locator).catch(() => undefined)
+        if (!matches) return false
+        const target = matches[locator.nth]
+        if (state === "attached") return !!target && matchedFrame(target)
+        if (state === "detached") return !target && {}
+        const visible = !!target && (await visibleNode(tab, target))
+        return state === "visible" ? visible && matchedFrame(target) : !visible && {}
+      },
+    }
+  }
+  if (action.url !== undefined) {
+    if (typeof action.url !== "string" || !action.url) throw new Error("Wait URL pattern is empty")
+    return {
+      subject: "the URL",
+      interval: 100,
+      check: async () => {
+        const info = await tabInfo(tab)
+        if (tabs.get(tab.id) !== tab || !isAllowedPage(tab, info.url)) {
+          await revokeTab(tab, "navigated")
+          throw new Error("The shared tab changed to an unapproved site")
+        }
+        const page = safePage(info.url)
+        return globMatch(action.url, `${page.origin}${page.path}`) && {}
+      },
+    }
+  }
+  if (action.text !== undefined) {
+    if (typeof action.text !== "string" || !action.text) throw new Error("Wait text is empty")
+    return {
+      subject: "the text",
+      interval: 250,
+      check: async () => {
+        for (const frame of await frameTargets(tab)) {
+          if (!frame.readable) continue
+          const present = await controlCall(tab, { sessionId: frame.sessionId, frameId: frame.frameId }, F_TEXT_PRESENT, [action.text]).catch(
+            () => false,
+          )
+          if (present === true) return matchedFrame(frame)
+        }
+        return false
+      },
+    }
+  }
+  const load = action.load ?? "load"
+  if (!LOAD_STATES.has(load)) throw new Error("Unsupported load state")
+  if (load === "networkidle")
+    return {
+      subject: "network idle",
+      interval: 100,
+      check: async () => {
+        if (networkUntracked(tab)) throw new Error("Network activity cannot be tracked in a frame of this page")
+        if (pendingRequests(tab)) return false
+        return Date.now() - Math.max(started, tab.networkQuietSince ?? 0) >= NETWORK_IDLE_MS && {}
+      },
+    }
+  return {
+    subject: "the page to load",
+    interval: 100,
+    check: async () => {
+      const state = await controlCall(tab, await mainFrameTarget(tab), F_READY).catch(() => undefined)
+      return (load === "load" ? state === "complete" : state === "interactive" || state === "complete") && {}
+    },
+  }
+}
+
+async function waitAction(tab, action) {
+  const timeout = Math.min(Math.max(action.timeoutMs ?? 5000, 0), MAX_WAIT_MS)
+  const started = Date.now()
+  const deadline = started + timeout
+  const condition = waitCondition(tab, action, started)
+  for (;;) {
+    const met = await condition.check()
+    if (met) return met
+    if (Date.now() >= deadline) throw new Error(`Timed out after ${timeout} ms waiting for ${condition.subject}`)
+    await sleep(condition.interval)
+  }
 }
 
 async function scroll(tab, deltaY, markDispatched) {
@@ -1314,6 +2110,7 @@ async function scroll(tab, deltaY, markDispatched) {
 function forgetDocument(tab) {
   tab.world = undefined
   tab.fontInstalled = false
+  tab.controlWorlds = undefined
 }
 
 function isolatedWorld(tab) {
@@ -1529,19 +2326,13 @@ async function inputCommand(tab, params) {
 async function typeText(tab, ref, text, markDispatched) {
   const documentGeneration = tab.documentGeneration
   const target = requireRef(tab, ref)
-  const { backendNodeId } = target
-  const described = await command(tab.chromeTabID, "DOM.describeNode", { backendNodeId, depth: 0 }, target.sessionId)
-  rejectProtectedInput(described.node)
-  if (tabs.get(tab.id) !== tab || tab.documentGeneration !== documentGeneration)
-    throw new Error("The shared tab observation is stale")
-  await command(tab.chromeTabID, "DOM.scrollIntoViewIfNeeded", { backendNodeId }, target.sessionId)
-  const { quads } = await command(tab.chromeTabID, "DOM.getContentQuads", { backendNodeId }, target.sessionId)
-  const quad = quads?.[0]
-  if (!quad) throw new Error("Element is not visible")
-  const { x, y } = await mainPoint(tab, target, quad)
+  const described = await describeTarget(tab, target)
+  rejectSensitiveField(described.node, target.name)
+  assertCurrent(tab, documentGeneration)
+  const { x, y } = await elementPoint(tab, target)
   await moveCursor(tab, x, y, LABELS.type)
   markDispatched()
-  await command(tab.chromeTabID, "DOM.focus", { backendNodeId }, target.sessionId)
+  await command(tab.chromeTabID, "DOM.focus", { backendNodeId: target.backendNodeId }, target.sessionId)
   await command(tab.chromeTabID, "Input.insertText", { text }, target.sessionId)
 }
 
@@ -1618,6 +2409,7 @@ async function releaseControl(tab) {
   tab.revision = 0
   tab.refs.clear()
   tabSessions(tab).clear()
+  clearRequests(tab)
   tab.logs = []
 }
 
@@ -1774,7 +2566,7 @@ function rejectProtectedInput(node) {
 async function isActive(tab) {
   const info = await tabInfo(tab)
   if (tabs.get(tab.id) !== tab || !isAllowedPage(tab, info.url)) {
-    await revokeTab(tab)
+    await revokeTab(tab, "navigated")
     throw new Error("The shared tab changed to an unapproved site")
   }
   tab.active = info.active
