@@ -937,4 +937,37 @@ describe("Agent", () => {
       }
     }),
   )
+
+  it.effect("directs every maintained agent to reuse valid evidence, run the deciding check and report stalls while keeping safety clauses", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
+        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
+      )
+      const strengthened = [
+        "reuse settled results, pivot a missing broad search to a likely file, symbol, caller or directory, and repeat reads only for changed inputs or new evidence. When a permitted direct check can decide the question, run it promptly instead of repeating source checks or extending the investigation. When work stalls or repeats without new evidence, report the actual blocker precisely.",
+      ]
+      const unchanged = [
+        "Require confirmation before external writes, purchases, destructive or irreversible actions, dependency changes, data or schema migrations, CI/CD changes, public-contract breaks and material scope expansion. If your permission ceiling prevents asking, do not act; report the blocker.",
+        "Before overwriting or deleting data, check whether version control can restore it; treat untracked or ignored data as unrecoverable.",
+        "Never run full-repository, full-workspace, or entire-package test suites, including through package scripts, CI wrappers, or batches that reconstruct a full suite.",
+        "Reuse attributable evidence tied to the relevant source revision, inputs and environment, disclosing reused versus newly run results and rerunning only failed or invalidated checks instead of demanding every check run in this session",
+        "Use native and local tools exclusively whenever they support the required capability; use connectors only for capabilities unavailable through both. Never discover or invoke tools.chatgpt.ycoding* from a local YCoding Session.",
+      ]
+      for (const id of ["zeus", "GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein"]) {
+        const item = yield* agent.get(Agent.ID.make(id))
+        if (!item?.system) throw new Error(`expected ${id} with a system prompt`)
+        for (const clause of [...strengthened, ...unchanged]) {
+          expect(item.system.split(clause)).toHaveLength(2)
+          expect(item.system.indexOf(clause)).toBeLessThan(item.system.indexOf("You are "))
+        }
+      }
+      for (const id of ["GSD", "architech", "god", "yangi"]) {
+        const item = yield* agent.get(Agent.ID.make(id))
+        const clause = "use bounded low-frequency observation needed to supervise active work and detect stalls early"
+        expect(item?.system?.split(clause)).toHaveLength(2)
+        expect(item?.system).toContain("Await notifications and do not poll.")
+      }
+    }),
+  )
 })
