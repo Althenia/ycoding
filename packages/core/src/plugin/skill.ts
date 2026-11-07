@@ -15,12 +15,16 @@ import path from "path"
 import { fileURLToPath } from "url"
 import ycodingContent from "./skill/ycoding.md" with { type: "text" }
 import reportContent from "./skill/report.md" with { type: "text" }
+import chatgptConnectorsContent from "./skill/chatgpt-connectors.md" with { type: "text" }
 
 export const YCodingContent = ycodingContent
 export const ReportContent = reportContent
+export const ChatGPTConnectorsContent = chatgptConnectorsContent
 
 export const YCodingDescription =
   "Use this skill for questions about YCoding behavior, configuration, troubleshooting, plugins, hooks, Clients, Server, API, agents, commands, skills, tools, permissions, MCP, providers, models, themes, keymaps, the CLI, the TUI, and contributing to this repository."
+const CHATGPT_CONNECTORS_DESCRIPTION =
+  "Use when a YCoding Session needs ChatGPT account connector tools (tools.chatgpt.*): finding which connectors are available, calling them in Code Mode, handling their permissions and failures, or moving files through ChatGPT Library. Do not use for ChatGPT tasks that operate YCoding or for local YCoding operations."
 const REPORT_DESCRIPTION =
   "Use when the user wants to report a YCoding issue or bug. Collect standard diagnostics, add reproduction context, and publish the issue with the GitHub CLI."
 
@@ -38,6 +42,18 @@ export const Plugin = define({
             description: YCodingDescription,
             location: AbsolutePath.make("/builtin/ycoding.md"),
             content: YCodingContent,
+          }),
+        }),
+      )
+      draft.source(
+        Skill.EmbeddedSource.make({
+          type: "embedded",
+          skill: Skill.Info.make({
+            id: Skill.ID.make("chatgpt-connectors"),
+            name: Skill.Name.make("ChatGPT connectors"),
+            description: CHATGPT_CONNECTORS_DESCRIPTION,
+            location: AbsolutePath.make("/builtin/chatgpt-connectors.md"),
+            content: ChatGPTConnectorsContent,
           }),
         }),
       )
