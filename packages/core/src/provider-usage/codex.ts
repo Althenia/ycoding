@@ -74,7 +74,7 @@ export function normalize(input: NormalizeInput) {
   const plan = accountType(global) ?? accountType(root)
   const byID = object(root.rateLimitsByLimitId ?? root.rate_limits_by_limit_id, false) ?? {}
   const windows = [
-    ...snapshotWindows(global, string(global.limitId ?? global.limit_id) ?? "codex", false),
+    ...snapshotWindows(global, string(global.limitId ?? global.limit_id) ?? "codex", false, global.credits ?? root.credits),
     ...Object.entries(byID).flatMap(([id, value]) => snapshotWindows(object(value), id, true)),
     ...additionalWindows(root.additionalRateLimits ?? root.additional_rate_limits),
     ...resetCreditWindows(root.rateLimitResetCredits ?? root.rate_limit_reset_credits),
@@ -104,7 +104,7 @@ export function accountHeaders(value: Credential.OAuth) {
   }
 }
 
-function snapshotWindows(value: Record<string, unknown>, limitID: string, named: boolean) {
+function snapshotWindows(value: Record<string, unknown>, limitID: string, named: boolean, credits = value.credits) {
   const label = limitLabel(limitID)
   return [
     ...rateWindow(
@@ -121,7 +121,7 @@ function snapshotWindows(value: Record<string, unknown>, limitID: string, named:
       "secondary",
       named,
     ),
-    ...creditWindows(value.credits, `${limitID}-credits`, named ? `${label} credits` : "Credits"),
+    ...creditWindows(credits, `${limitID}-credits`, named ? `${label} credits` : "Credits"),
     ...individualLimitWindows(value.individualLimit ?? value.individual_limit, limitID, label, named),
   ]
 }
@@ -171,16 +171,15 @@ function additionalWindows(value: unknown) {
 
 function creditWindows(value: unknown, id: string, label: string) {
   if (!record(value)) return []
-  const hasCredits = boolean(value.hasCredits ?? value.has_credits)
-  if (hasCredits === false) return []
   const unlimited = boolean(value.unlimited)
-  const balance = money(value.balance, `${id}.balance`)
+  const balance =
+    money(value.balance, `${id}.balance`) ?? (boolean(value.hasCredits ?? value.has_credits) === false ? 0 : undefined)
   if (!unlimited && balance === undefined) return []
   return [
     new ProviderUsage.Window({
       id: safeID(id),
       label,
-      unit: "usd",
+      unit: "count",
       ...(unlimited ? { unlimited: true } : {}),
       ...(balance === undefined ? {} : { remaining: balance }),
     }),

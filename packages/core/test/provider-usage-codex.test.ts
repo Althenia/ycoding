@@ -42,7 +42,7 @@ describe("CodexUsage", () => {
       windows: [
         { id: "codex-primary", label: "5-hour", used: 25, resetAt: 1_790_000_000_000 },
         { id: "codex-secondary", label: "Weekly", used: 18, resetAt: 1_790_500_000_000 },
-        { id: "codex-credits", label: "Credits", unit: "usd", remaining: 18.5 },
+        { id: "codex-credits", label: "Credits", unit: "count", remaining: 18.5 },
         { id: "codex-spark-primary", label: "Spark 5-hour", used: 7 },
         { id: "reset-credits", unit: "count", remaining: 2 },
       ],
@@ -138,6 +138,77 @@ describe("CodexUsage", () => {
         { id: "codex-credits", unlimited: true },
       ],
     })
+  })
+
+  test("reads top-level WHAM credits and reset credits beside a nested rate limit", () => {
+    const snapshot = CodexUsage.normalize({
+      providerID,
+      label: "Codex",
+      updatedAt: 100,
+      source: "provider_internal_api",
+      stability: "best_effort",
+      response: {
+        plan_type: "pro",
+        rate_limit: {
+          allowed: true,
+          limit_reached: false,
+          primary_window: { used_percent: 22, limit_window_seconds: 18000, reset_at: 1_790_000_000 },
+          secondary_window: { used_percent: 9, limit_window_seconds: 604800, reset_at: 1_790_500_000 },
+        },
+        credits: { has_credits: true, unlimited: false, balance: "9370.4" },
+        rate_limit_reset_credits: {
+          available_count: 2,
+          credits: [{ status: "available", expires_at: "2026-12-01T00:00:00Z" }],
+        },
+      },
+    })
+
+    expect(snapshot.windows).toEqual([
+      expect.objectContaining({ id: "codex-primary", unit: "percent", used: 22 }),
+      expect.objectContaining({ id: "codex-secondary", unit: "percent", used: 9 }),
+      expect.objectContaining({ id: "codex-credits", label: "Credits", unit: "count", remaining: 9370.4 }),
+      expect.objectContaining({ id: "reset-credits", label: "Reset credits", unit: "count", remaining: 2 }),
+    ])
+    expect(snapshot.windows.find((window) => window.id === "codex-credits")?.unlimited).toBeUndefined()
+  })
+
+  test("reports a WHAM account without credits as a measured zero balance", () => {
+    const snapshot = CodexUsage.normalize({
+      providerID,
+      label: "Codex",
+      updatedAt: 100,
+      source: "provider_internal_api",
+      stability: "best_effort",
+      response: {
+        rate_limit: { primary_window: { used_percent: 4, limit_window_seconds: 18000, reset_at: 1_790_000_000 } },
+        credits: { has_credits: false, unlimited: false, balance: null },
+        rate_limit_reset_credits: { available_count: 0, credits: [] },
+      },
+    })
+
+    expect(snapshot.windows).toEqual([
+      expect.objectContaining({ id: "codex-primary", used: 4 }),
+      expect.objectContaining({ id: "codex-credits", unit: "count", remaining: 0 }),
+      expect.objectContaining({ id: "reset-credits", unit: "count", remaining: 0 }),
+    ])
+  })
+
+  test("reports unlimited top-level WHAM credits without a balance", () => {
+    const snapshot = CodexUsage.normalize({
+      providerID,
+      label: "Codex",
+      updatedAt: 100,
+      source: "provider_internal_api",
+      stability: "best_effort",
+      response: {
+        rate_limit: { primary_window: { used_percent: 4, limit_window_seconds: 18000, reset_at: 1_790_000_000 } },
+        credits: { has_credits: true, unlimited: true, balance: null },
+      },
+    })
+
+    const credits = snapshot.windows.find((window) => window.id === "codex-credits")
+    expect(credits).toMatchObject({ unit: "count", unlimited: true })
+    expect(credits?.remaining).toBeUndefined()
   })
 
   test("labels weekly-only account and Spark windows by reported duration", () => {
