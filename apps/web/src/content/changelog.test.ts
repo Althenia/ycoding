@@ -7,220 +7,17 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.11 owner handbacks and provider recovery first with shared notes", async () => {
+  test("lists the consolidated v0.11.1 release first with shared notes", async () => {
     const entry = RELEASES[0]
-    expect(entry).toMatchObject({ version: "0.11.11", date: "2026-11-07", title: "Owner handbacks and provider recovery", tags: ["Changed", "Fixed"] })
-    expect(entry?.changes).toHaveLength(5)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.11.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.11\n")
+    expect(entry).toMatchObject({ version: "0.11.1", date: "2026-11-07", title: "Projects, autonomy modes, native Dots and supervising owners", tags: ["Added", "Changed", "Fixed"] })
+    expect(entry?.changes).toHaveLength(134)
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.1.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.11.1\n")
     for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["wakes its parent", "credit count instead of dollars", "in-stream provider error", "`unconfirmed` instead of `idle`", "omit tool definitions", "misses the prompt cache"]) expect(text).toContain(fragment)
-    expect(after("0.11.11")?.version).toBe("0.11.10")
-  })
-
-  test("retains v0.11.10 persistent Project owners with shared notes", async () => {
-    const entry = RELEASES[1]
-    expect(entry).toMatchObject({ version: "0.11.10", date: "2026-11-06", title: "Persistent Project owners", tags: ["Added", "Changed", "Fixed"] })
-    expect(entry?.changes).toHaveLength(6)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.10.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.10\n")
-    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["`supervising`", "owner subagents can no longer release themselves", "Project escalations", "never wake their receiver", "even when the main transcript is idle", "child Session, question ID and revision", "canonical path"]) expect(text).toContain(fragment)
-    expect(after("0.11.10")?.version).toBe("0.11.9")
-  })
-
-  test("retains v0.11.9 Dots Session listing with shared notes", async () => {
-    const entry = byVersion("0.11.9")
-    expect(entry).toMatchObject({ version: "0.11.9", date: "2026-11-06", title: "Dots Session listing", tags: ["Fixed"] })
-    expect(entry?.changes).toHaveLength(1)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.9.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.9\n")
-    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["failed Session snapshot", "listing other Sessions", "system-error status", "opening it still reports"]) expect(text).toContain(fragment)
-    expect(after("0.11.9")?.version).toBe("0.11.8")
-  })
-
-  test("retains v0.11.8 provider response recovery with shared notes", async () => {
-    const entry = byVersion("0.11.8")
-    expect(entry).toMatchObject({ version: "0.11.8", date: "2026-11-06", title: "Provider response recovery", tags: ["Fixed"] })
-    expect(entry?.changes).toHaveLength(2)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.8.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.8\n")
-    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["Gemini", "Antigravity", "retried", "OpenAI Responses", "Codex", "OpenRouter Responses", "tool definitions", "none", "rejected", "cached prompt prefix"]) expect(text).toContain(fragment)
-    expect(after("0.11.8")?.version).toBe("0.11.7")
-  })
-
-  test("retains v0.11.7 project owner delegation with shared notes", async () => {
-    const entry = byVersion("0.11.7")
-    expect(entry).toMatchObject({ version: "0.11.7", date: "2026-11-05", title: "Project owner delegation", tags: ["Added", "Changed"] })
-    expect(entry?.changes).toHaveLength(6)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.7.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.7\n")
-    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["`create`", "managed Git worktree", "first message", "guardrail", "not allowed by configuration", "permission ceiling", "effective deny rules", "later non-deny agent rule", "identical action text (or `*`)", "identical resource text (or `*`)", "current owner", "resumes", "Waiting and starting", "never receive member notifications", "not delivered twice", "no background work", "compaction barrier", "does not read the member's goal state", "open reviews", "active revert", "descendant Sessions", "has not been verified", "exactly one receiver", "deterministic notice identity", "replaying earlier events at startup does not wake any Session or resend notices already delivered", "owner subagents", "verified", "OAuth", "API key", "credential material", "decision watch --family", "queued work", "`background`", "plain watch", "assessment: \"unavailable\""]) expect(text).toContain(fragment)
-    expect(after("0.11.7")?.version).toBe("0.11.6")
-  })
-
-  test("retains v0.11.6 browser and computer controls with shared notes", async () => {
-    const entry = byVersion("0.11.6")
-    expect(entry).toMatchObject({ version: "0.11.6", date: "2026-11-05", tags: ["Added", "Changed"] })
-    expect(entry?.changes).toHaveLength(7)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.6.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.6\n")
-    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["locator", "dialog", "favicon", "Pinned", "Edge", "Brave", "desktop.observe", "desktop.paste", "desktop.history", "non-activating", "permission", "guardrail", "locked"]) expect(text).toContain(fragment)
-    expect(after("0.11.6")?.version).toBe("0.11.5")
-  })
-
-  test("retains v0.11.5 instruction caching and search guardrails with shared notes", async () => {
-    const entry = byVersion("0.11.5")
-    expect(entry).toMatchObject({ version: "0.11.5", date: "2026-11-03", tags: ["Changed", "Fixed"] })
-    expect(entry?.changes).toHaveLength(3)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.5.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.5\n")
-    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["OpenAI Responses", "instruction", "volatile", "have not been measured", "read-only", "destructive", "custom", "catastrophic", "bounded"]) expect(text).toContain(fragment)
-    expect(notes).toContain("2044b664eecffa53b6c4197bfb391dd8407c7321")
-    expect(notes).toContain("fe6924e3115e167354d43bb045485cb556f98230")
-    expect(text).toContain("clarification changes no production behavior")
-    expect(text).toContain("Durable Session-state observations")
-    expect(text).not.toContain("Live volatile state remains unmarked")
-    expect(after("0.11.5")?.version).toBe("0.11.4")
-  })
-
-  test("retains v0.11.4 remote prompt recovery and model controls with shared notes", async () => {
-    const entry = byVersion("0.11.4")
-    expect(entry).toMatchObject({ version: "0.11.4", date: "2026-11-03", tags: ["Fixed"] })
-    expect(entry?.changes).toHaveLength(4)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.4.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.4\n")
-    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["before promotion", "bounded", "same message ID", "Stop", "restart", "Gemini", "Antigravity", "text-only recovery", "no adjustable effort", "status checking", "cancellation"]) expect(text).toContain(fragment)
-    expect(after("0.11.4")?.version).toBe("0.11.3")
-  })
-
-  test("retains restarted v0.11.3 SQL review boundaries", () => {
-    const entry = byVersion("0.11.3")
-    expect(entry).toMatchObject({
-      version: "0.11.3",
-      date: "2026-11-01",
-      title: "Bounded SQL classification and preserved review evidence",
-      tags: ["Changed", "Fixed"],
-    })
-    expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(1)
-    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(3)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of [
-      "restarted at v0.11.0", "2026-10-26", "different build",
-      "literal printing", "bounded read-only queries", "later destructive operation",
-      "confirmed and uncertain evidence", "execution is unproven", "arbitrary interpreter",
-      "local-client file operations", "unresolved import targets", "known outside targets",
-      "custom rules", "explicit permission denies",
-    ]) expect(text).toContain(fragment)
-    expect(after("0.11.3")?.version).toBe("0.11.2")
-  })
-
-  test("v0.11.3 shared notes retain reset lineage and match the web changes", async () => {
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.3.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.3\n")
-    for (const change of byVersion("0.11.3")?.changes ?? []) expect(notes).toContain(change.text)
-    expect(notes).toContain("906b6cc733211f1be27c8a0ab90f56e7e1210394")
-    expect(notes).toContain("6023b5b3be8a986a43bb08861d905aa68f647464")
-    expect(notes).toContain("https://github.com/Althenia/ycoding/actions/runs/40313815078")
-    expect(notes).toContain("Historical CI records and artifacts remain unchanged")
-  })
-
-  test("retains v0.11.2 account skills, agent prompt contracts, and quieter outside-repository reviews", () => {
-    const entry = byVersion("0.11.2")
-    expect(entry).toMatchObject({
-      version: "0.11.2",
-      date: "2026-11-01",
-      title: "Account connector skills, outcome delivery contracts, and quieter API reviews",
-      tags: ["Added", "Changed", "Fixed"],
-    })
-    expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(1)
-    expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(1)
-    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(4)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of [
-      "ChatGPT account connector skills",
-      "/api/integration/openai/account-skills",
-      "bounded list and detail",
-      "item count",
-      "outcome ownership",
-      "live-verified states",
-      "provider display name",
-      "/api/session/outstanding",
-      "not file operands",
-      "external-directory warning",
-      "urllib",
-      "requests",
-      "strings and comments",
-      "Path(path).write_text",
-      "os.remove",
-      "script files stay exempt",
-      "@file",
-      "file://",
-      "hard reviews",
-      "explicit permission denies",
-      "dynamically",
-      "unconfirmed outside work",
-    ]) expect(text).toContain(fragment)
-    for (const excluded of ["CCA", "Flora", "milestone", "ses_"]) expect(text).not.toContain(excluded)
-    expect(after("0.11.2")?.version).toBe("0.11.1")
-  })
-
-  test("retains v0.11.1 continuous decision follow with its public limits", () => {
-    const entry = byVersion("0.11.1")
-    expect(entry).toMatchObject({ version: "0.11.1", date: "2026-10-31", title: "Continuous decision follow, memory maintenance and open surfaces", tags: ["Added", "Changed", "Fixed"] })
-    expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(6)
-    expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(3)
-    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(5)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of [
-      "YCODING_MUSE_CLIENT_ID", "YCODING_MUSE_CLIENT_SECRET", "subscription tier name", "overage percentages above 100%", "`x-tbh-contributor-mode`",
-      "decision watch <root> --family --follow", "until you cancel it", "identifiers only", "never printed",
-      "descendants created after the watch starts", "reconnects", "heartbeat", "`--timeout`", "`--state`",
-      "owner-only permissions", "replaced atomically", "symbolic links", "concurrent writer", "start a new state file",
-      "`epoch-mismatch`", "`state-lock-held`", "never a path, server address, version or request content", "work-completion, task and review events", "ten consecutive failed reconnects", "nothing restarts", "cannot be reconstructed", "rereads current state only at startup", "shows only that the follow process is running", "requires `--family`", "rejects `--input`, `--after` and `--checkpoint`", "never answers, approves, resumes or retries",
-      "does not wake an idle or completed external task", "native follow process", "at-least-once, not exactly-once", "can print an observation again", "stable identifiers", "returns one bounded result, then exits",
-      "outcome: \"family\"", "`--checkpoint <token>`", "at most 64 Sessions", "BM25", "`expectedDigest`", "recoverable trash", "open tonal surfaces", "borderless tonal planes", "report the exact gap",
-      "private provider-side namespace", "Session, history and runtime tool names are unchanged", "Direct Meta API keys and `META_API_KEY` are unaffected",
-      "Antigravity Claude replays each thinking signature with its own thinking block", "thinking history without a nonempty signature is left out of Claude's provider request while the Session transcript keeps it",
-    ]) expect(text).toContain(fragment)
-    for (const excluded of ["CCA", "Flora", "milestone", "ses_", "exactly once"]) expect(text).not.toContain(excluded)
-    expect(after("0.11.1")?.version).toBe("0.11.0")
-  })
-
-  test("lists v0.11.0 projects, autonomy modes, goal decisions and native Dots after v0.11.1", () => {
-    const entry = byVersion("0.11.0")
-    expect(entry).toMatchObject({ version: "0.11.0", date: "2026-10-31", title: "Projects, autonomy modes, goal decisions and native Dots", tags: ["Added", "Changed", "Fixed"] })
-    expect(entry?.changes).toHaveLength(75)
-    expect(entry?.changes.filter((change) => change.tag === "Added")).toHaveLength(38)
-    expect(entry?.changes.filter((change) => change.tag === "Changed")).toHaveLength(23)
-    expect(entry?.changes.filter((change) => change.tag === "Fixed")).toHaveLength(14)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of [
-      "Projects pair one Master Session", "recorded owner", "notification filters", "account connectors", "Library tools",
-      "Autonomous control", "Assessing options", "active goal", "no extra permission", "next Step boundary", "Antigravity", "Weekly limit",
-      "Code Mode `execute`", "cross-origin iframes", "desktop.query", "received-output throughput",
-      "global `dots.enabled: true`", "Dots connection", "within 20 seconds", "executor online", "decision watch", "work assessment", "expectedTarget",
-      "counts and a time", "thread status change", "older status", "ended", "exactly once", "ChatGPT's own rename request", "HTTP status", "does not send that rename again", "never adopts",
-      "Breaking Change: incoming Relay MCP/OAuth", "decision-input", "bridge protocol version 5", "prepared, render-ready data", "folio head", "flat sections",
-      "<data>/tasks/<task>", "account profiles, Session databases and keys", "Newly defined custom agents do not inherit", "configured overrides of built-in agents retain it",
-      "Restarting the service no longer fails running managed child Sessions", "Opening a subagent from Team",
-    ]) expect(text).toContain(fragment)
-    for (const excluded of ["CCA", "Flora", "milestone"]) expect(text).not.toContain(excluded)
-    expect(after("0.11.0")?.version).toBe("0.10.25")
+    for (const fragment of ["--follow", "`supervising`", "credit count instead of dollars", "`chatgpt-connectors`", "omit tool definitions"]) expect(text).toContain(fragment)
+    expect(RELEASES.filter((release) => release.version.startsWith("0.11.")).map((release) => release.version)).toEqual(["0.11.1"])
+    expect(after("0.11.1")?.version).toBe("0.10.25")
   })
 
   test("retains v0.10.25 guardrail history and Muse quota fixes", () => {
@@ -1844,19 +1641,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 54)).toEqual([
-      "0.11.11",
-      "0.11.10",
-      "0.11.9",
-      "0.11.8",
-      "0.11.7",
-      "0.11.6",
-      "0.11.5",
-      "0.11.4",
-      "0.11.3",
-      "0.11.2",
+    expect(versions.slice(0, 43)).toEqual([
       "0.11.1",
-      "0.11.0",
       "0.10.25",
       "0.10.24",
       "0.10.23",
