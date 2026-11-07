@@ -1388,6 +1388,74 @@ for (const item of [
   )
 }
 
+const googleStream = (chunks: ReadonlyArray<unknown>) => (event: AISDK.SDKEvent) => {
+  event.sdk = createGoogleGenerativeAI({
+    ...event.options,
+    apiKey: "fixture-key",
+    fetch: Object.assign(
+      async () =>
+        new Response(chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join(""), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      { preconnect: fetch.preconnect },
+    ),
+  })
+}
+const thought = { candidates: [{ content: { role: "model", parts: [{ text: "Thinking", thought: true }] } }] }
+
+for (const item of [
+  {
+    name: "an overloaded error after reasoning is a retryable provider failure",
+    chunks: [thought, { error: { code: 503, message: "The model is overloaded. Please try again later.", status: "UNAVAILABLE" } }],
+    reason: { _tag: "ProviderInternal", message: "The model is overloaded. Please try again later." },
+  },
+  {
+    name: "an invalid-argument error is a non-retryable request failure",
+    chunks: [{ error: { code: 400, message: "Request contains an invalid argument.", status: "INVALID_ARGUMENT" } }],
+    reason: { _tag: "InvalidRequest", message: "Request contains an invalid argument." },
+  },
+  {
+    name: "an error after answer text still fails the stream",
+    chunks: [
+      { candidates: [{ content: { role: "model", parts: [{ text: "Partial answer" }] } }] },
+      { error: { code: 500, message: "Internal error encountered.", status: "INTERNAL" } },
+    ],
+    reason: { _tag: "ProviderInternal", message: "Internal error encountered." },
+  },
+  {
+    name: "a reasoning-only stream without a finish reason or error stays an incomplete read",
+    chunks: [thought],
+    reason: { _tag: "Transport", kind: "read", message: "Provider ended the response without an answer and without a finish reason" },
+  },
+] as const) {
+  it.effect(`AI SDK Google in-stream error: ${item.name}`, () =>
+    Effect.gen(function* () {
+      const aisdk = yield* AISDK.Service
+      yield* aisdk.hook.sdk(googleStream(item.chunks))
+      const resolved = yield* aisdk.model(model("@ai-sdk/google"))
+      const error = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(
+        Effect.provide(client),
+        Effect.flip,
+      )
+      expect(error).toBeInstanceOf(LLMError)
+      expect(error).toMatchObject({ module: "AISDK", method: "stream", reason: item.reason })
+    }),
+  )
+}
+
+it.effect("AI SDK Google stream with a finish reason and no error settles normally", () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    yield* aisdk.hook.sdk(googleStream([
+      { candidates: [{ content: { role: "model", parts: [{ text: "Done" }] }, finishReason: "STOP" }] },
+    ]))
+    const resolved = yield* aisdk.model(model("@ai-sdk/google"))
+    const response = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(Effect.provide(client))
+    expect(response.text).toBe("Done")
+    expect(response.events.find(LLMEvent.is.finish)?.reason).toBe("stop")
+  }),
+)
+
 for (const item of [
   {
     name: "accepts Google text with finish other",

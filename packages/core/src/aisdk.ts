@@ -762,7 +762,7 @@ function streamLanguage(
     Stream.make(LLMEvent.stepStart({ index: state.step })),
     Stream.unwrap(
       Effect.tryPromise({
-        try: () => language.doStream(options),
+        try: () => language.doStream(google ? { ...options, includeRawChunks: true } : options),
         catch: (error) => llmError("doStream", error),
       }).pipe(
         Effect.map((result) =>
@@ -791,9 +791,12 @@ function streamPartEvents(
   event: LanguageModelV3StreamPart,
 ): Effect.Effect<ReadonlyArray<LLMEvent>, LLMError> {
   switch (event.type) {
+    case "raw": {
+      const failure = state.google ? googleStreamError(event.rawValue) : undefined
+      return failure === undefined ? Effect.succeed([]) : Effect.fail(failure)
+    }
     case "stream-start":
     case "response-metadata":
-    case "raw":
     case "file":
     case "source":
     case "tool-approval-request":
@@ -1309,6 +1312,23 @@ function streamedProviderReason(error: Record<string, unknown>) {
     sources.map((source) => meaningfulProviderMessage(text(source.message))).find((value) => value !== undefined) ??
     (code ? `Provider reported ${code}` : "Provider stream failed")
   return classifyProviderFailure({ message, code })
+}
+
+function googleStreamError(value: unknown) {
+  if (!isRecord(value) || !isRecord(value.error)) return undefined
+  const error = value.error
+  const code = typeof error.status === "string" && error.status.length > 0 ? error.status : undefined
+  return new LLMError({
+    module: "AISDK",
+    method: "stream",
+    reason: classifyProviderFailure({
+      status: typeof error.code === "number" ? error.code : undefined,
+      code,
+      message:
+        meaningfulProviderMessage(typeof error.message === "string" ? error.message : undefined) ??
+        (code ? `Provider reported ${code}` : "Provider stream failed"),
+    }),
+  })
 }
 
 function llmError(method: string, error: unknown) {
