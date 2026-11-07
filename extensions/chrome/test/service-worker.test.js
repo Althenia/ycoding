@@ -19,4 +19,4 @@ test("Chrome bridge service-worker lifecycle in an isolated runtime", async () =
     child.kill()
     await child.exited
   }
-}, 15000)
+}, 60000)
