@@ -7,18 +7,18 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists the v0.11.4 release first with its notes", async () => {
+  test("lists the v0.11.3 release first with its notes", async () => {
     const entry = RELEASES[0]
-    expect(entry).toMatchObject({ version: "0.11.4", date: "2026-11-08", title: "Recovery from empty provider responses", tags: ["Fixed"] })
+    expect(entry).toMatchObject({ version: "0.11.3", date: "2026-11-08", title: "Recovery from empty provider responses", tags: ["Fixed"] })
     expect(entry?.changes).toHaveLength(4)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.4.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.4\n")
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.3.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.11.3\n")
     for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["bounded text-only recovery request per input", "empty `stop` response stays a silent reply", "never rewritten to `stop`", "dim notice on standard error", "reports that error message instead of its partial text", "no longer retried with backoff"]) expect(text).toContain(fragment)
+    for (const fragment of ["bounded text-only recovery request per input", "empty `stop` response stays a silent reply", "never rewritten to `stop`", "dim notice on standard error", "keeps exit status 130", "reports that error message instead of its partial text", "no longer retried with backoff"]) expect(text).toContain(fragment)
     expect(text).not.toMatch(/roadmap|milestone|\/Users\/|step_incomplete|provider\.incomplete/i)
-    expect(RELEASES.filter((release) => release.version.startsWith("0.11.")).map((release) => release.version)).toEqual(["0.11.4", "0.11.2", "0.11.1"])
-    expect(after("0.11.4")?.version).toBe("0.11.2")
+    expect(RELEASES.filter((release) => release.version.startsWith("0.11.")).map((release) => release.version)).toEqual(["0.11.3", "0.11.2", "0.11.1"])
+    expect(after("0.11.3")?.version).toBe("0.11.2")
   })
 
   test("retains the v0.11.2 release with its notes", async () => {
@@ -1688,7 +1688,7 @@ describe("release entries", () => {
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
     expect(versions.slice(0, 45)).toEqual([
-      "0.11.4",
+      "0.11.3",
       "0.11.2",
       "0.11.1",
       "0.10.25",

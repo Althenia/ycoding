@@ -588,7 +588,7 @@ export const usePages: readonly DocPage[] = [
             items: [
               "Reusing a Session ID resumes that Session instead of creating a separate history.",
               "A prompt message ID belongs to one Session and one input kind. Reuse across Sessions or input kinds is rejected.",
-              "Each logical step is one model request. A settled response with no assistant text and no tool continuation can receive one bounded text-only recovery step.",
+              "Each logical step is one model request. A settled response with no assistant text and no tool continuation, or a response that ends without settling and has no completed tool call, can receive one bounded text-only recovery step; a response that stays answerless closes its step as an error without failing the Session.",
             ],
           },
         ],
