@@ -768,6 +768,29 @@ test("setup installs the latest Bun on baseline and native runners without a ver
   expect(setupBun).not.toContain("packageManager")
 })
 
+test("setup retries the pinned Bun action once, then installs the same Bun version from npm and fails the job if that fails", () => {
+  const pinned = "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6"
+  expect(setupBun.split(pinned)).toHaveLength(3)
+  expect(setupBun.match(/\n {8}bun-version: latest\n/g)).toHaveLength(2)
+  expect(setupBun).toContain("      id: bun-attempt-1\n      continue-on-error: true\n")
+  expect(setupBun).toContain("      id: bun-attempt-2\n      if: steps.bun-attempt-1.outcome == 'failure'\n      continue-on-error: true\n")
+  const fallback = setupBun.split("    - name: Install Bun from the npm registry\n")[1]?.split("\n    - name:")[0] ?? ""
+  expect(fallback).toContain("      if: steps.bun-attempt-1.outcome == 'failure' && steps.bun-attempt-2.outcome == 'failure'\n")
+  expect(fallback).not.toContain("continue-on-error")
+  for (const entry of [
+    "Linux-X64) package=@oven/bun-linux-x64-baseline",
+    "macOS-X64) package=@oven/bun-darwin-x64-baseline",
+    "macOS-ARM64) package=@oven/bun-darwin-aarch64",
+    "Windows-X64) package=@oven/bun-windows-x64-baseline",
+  ])
+    expect(fallback).toContain(entry)
+  expect(fallback).toContain("set -euo pipefail")
+  expect(fallback).toContain('"$package@latest"')
+  expect(fallback).toContain('test "$installed" = "$expected"')
+  expect(fallback).not.toContain("|| true")
+  expect(setupBun.indexOf("Install Bun from the npm registry")).toBeLessThan(setupBun.indexOf("Install dependencies"))
+})
+
 test("setup installs Bun dependencies cold, without an Actions dependency cache or cache-warming workflow", async () => {
   expect(setupBun).not.toContain("actions/cache")
   expect(setupBun).toContain("bun install ${{ inputs.install-flags }}")
