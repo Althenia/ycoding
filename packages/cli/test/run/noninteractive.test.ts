@@ -575,6 +575,129 @@ describe("runNonInteractivePrompt", () => {
     expect(output.stderr.indexOf("> build · test-model")).toBeLessThan(output.stderr.indexOf("Execution failed"))
   })
 
+  const unsettledMessage = "Provider did not settle the step"
+  const unsettledStep = (): ServerEvent => {
+    const step = stepFailed(unsettledMessage)
+    if (step.type !== "session.step.failed") throw new Error("expected a step failure")
+    step.data.error = { type: "provider.invalid-output", message: unsettledMessage }
+    return step
+  }
+
+  test("JSON output keeps the exit status and reports no error when an unsettled step is followed by a successful run", async () => {
+    const output = await capture({
+      format: "json",
+      turn: (messageID) => [prompted(messageID), stepStarted(), unsettledStep(), settled()],
+    })
+
+    expect(
+      output.stdout
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      expect.objectContaining({ type: "step_start" }),
+      expect.objectContaining({ type: "run_finish", status: "succeeded", steps: 1 }),
+    ])
+    expect(output.exitCode).not.toBe(1)
+    expect(output.stderr).toBe("")
+  })
+
+  test("text output prints a dim notice and keeps the exit status when an unsettled step is followed by a successful run", async () => {
+    const output = await capture({
+      turn: (messageID) => [prompted(messageID), stepStarted(), unsettledStep(), settled()],
+    })
+
+    expect(output.stdout).toBe("")
+    expect(output.stderr).toContain(unsettledMessage)
+    expect(output.stderr).not.toContain("Error:")
+    expect(output.exitCode).not.toBe(1)
+  })
+
+  test("JSON output reports a held invalid-output step before a later different step failure and exits 1", async () => {
+    const output = await capture({
+      format: "json",
+      turn: (messageID) => [
+        prompted(messageID),
+        stepStarted(),
+        unsettledStep(),
+        stepFailed("Connection reset"),
+        settled(),
+      ],
+    })
+
+    expect(
+      output.stdout
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      expect.objectContaining({ type: "step_start" }),
+      expect.objectContaining({ type: "error", error: { type: "provider.invalid-output", message: unsettledMessage } }),
+      expect.objectContaining({ type: "error", error: { type: "provider.transport", message: "Connection reset" } }),
+      expect.objectContaining({ type: "run_finish", status: "failed", steps: 2 }),
+    ])
+    expect(output.exitCode).toBe(1)
+  })
+
+  test("a held invalid-output step flushed before a user interrupt is reported as an error and the exit status is 130", async () => {
+    const interrupted = settled("interrupted")
+    let signalled = false
+    const event = Object.defineProperty({ ...interrupted }, "type", {
+      enumerable: true,
+      get() {
+        if (!signalled) {
+          signalled = true
+          process.emit("SIGINT")
+        }
+        return "session.execution.interrupted"
+      },
+    }) as ServerEvent
+    const output = await capture({
+      format: "json",
+      turn: (messageID) => [prompted(messageID), stepStarted(), unsettledStep(), event],
+    })
+
+    expect(
+      output.stdout
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      expect.objectContaining({ type: "step_start" }),
+      expect.objectContaining({ type: "error", error: { type: "provider.invalid-output", message: unsettledMessage } }),
+      expect.objectContaining({ type: "run_finish", status: "interrupted" }),
+    ])
+    expect(output.exitCode).toBe(130)
+  })
+
+  test("JSON output reports an invalid-output step as the run error when the run then fails", async () => {
+    const output = await capture({
+      format: "json",
+      turn: (messageID) => [
+        prompted(messageID),
+        stepStarted(),
+        unsettledStep(),
+        executionFailed(unsettledMessage),
+      ],
+    })
+
+    expect(
+      output.stdout
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      expect.objectContaining({ type: "step_start" }),
+      expect.objectContaining({
+        type: "error",
+        error: { type: "provider.invalid-output", message: unsettledMessage },
+      }),
+      expect.objectContaining({ type: "run_finish", status: "failed", steps: 1 }),
+    ])
+    expect(output.exitCode).toBe(1)
+    expect(output.stderr).toBe("")
+  })
+
   test("reports a missing terminal finish as the current provider failure", async () => {
     const output = await capture({
       format: "json",

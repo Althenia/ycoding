@@ -748,7 +748,6 @@ function streamLanguage(
   const reasoningConfig = options.providerOptions?.bedrock?.reasoningConfig
   const state = {
     step: 0,
-    hasAnswer: false,
     toolNames: {} as Record<string, string>,
     cursor,
     google,
@@ -782,7 +781,6 @@ function streamLanguage(
 function streamPartEvents(
   state: {
     step: number
-    hasAnswer: boolean
     toolNames: Record<string, string>
     cursor: boolean
     google: boolean
@@ -806,7 +804,6 @@ function streamPartEvents(
         LLMEvent.textStart({ id: event.id, providerMetadata: providerMetadata(event.providerMetadata) }),
       ])
     case "text-delta":
-      if (event.delta.length > 0) state.hasAnswer = true
       return Effect.succeed([
         LLMEvent.textDelta({
           id: event.id,
@@ -835,7 +832,6 @@ function streamPartEvents(
         LLMEvent.reasoningEnd({ id: event.id, providerMetadata: providerMetadata(event.providerMetadata) }),
       ])
     case "tool-input-start":
-      state.hasAnswer = true
       state.toolNames[event.id] = event.toolName
       return Effect.succeed([
         LLMEvent.toolInputStart({
@@ -858,7 +854,6 @@ function streamPartEvents(
         }),
       ])
     case "tool-call":
-      state.hasAnswer = true
       state.toolNames[event.toolCallId] = event.toolName
       return ProviderShared.parseToolInput("aisdk", event.toolName, event.input).pipe(
         Effect.map((input) => [
@@ -894,20 +889,6 @@ function streamPartEvents(
         }),
       ])
     case "finish": {
-      if (state.google && event.finishReason.unified === "other" && !state.hasAnswer)
-        return Effect.fail(
-          new LLMError({
-            module: "AISDK",
-            method: "stream",
-            reason: new TransportReason({
-              kind: "read",
-              message:
-                event.finishReason.raw === undefined
-                  ? "Provider ended the response without an answer and without a finish reason"
-                  : `Provider ended the response without an answer (finish reason: ${event.finishReason.raw})`,
-            }),
-          }),
-        )
       const reported = state.cursor
         ? cursorUsage(event.providerMetadata, event.usage)
         : usage(event.usage, event.providerMetadata, state.outputMayIncludeUnreportedReasoning, state.google)

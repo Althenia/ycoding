@@ -324,6 +324,8 @@ const reply = {
     LLMEvent.finish({ reason: "tool-calls" }),
   ],
 }
+const noAnswerAfterRecovery =
+  "The provider returned no answer after text-only recovery. Retry the request or choose another model."
 const testLimits = { context: 262_144, output: 8_192 } as const
 const defined = <Value>(value: Value | undefined): Value => {
   if (value === undefined) throw new Error("expected a defined value")
@@ -4543,7 +4545,48 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  for (const terminal of ["failure", "provider-error", "interruption", "missing-settlement"] as const)
+  it.effect("records received-output estimate for the unsettled request before its recovery request", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const events = yield* EventRuntime.Service
+      const recorded: Array<{ readonly outcome?: string }> = []
+      const unsubscribe = yield* events.listen((event) =>
+        Effect.sync(() => {
+          if (event.type === SessionEvent.ProviderRequestRecorded.type)
+            recorded.push((event as EventRuntime.Payload<typeof SessionEvent.ProviderRequestRecorded>).data)
+        }),
+      )
+      currentModel = Model.make({ id: "speed-model", provider: "openai", route: OpenAIChat.route })
+      responseStreams = [
+        Stream.concat(
+          Stream.fromIterable([
+            LLMEvent.stepStart({ index: 0 }),
+            LLMEvent.textStart({ id: "partial-unsettled" }),
+            LLMEvent.textDelta({ id: "partial-unsettled", text: "12345678" }),
+          ]),
+          Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(
+            Stream.flatMap(() =>
+              Stream.concat(
+                Stream.succeed(LLMEvent.textDelta({ id: "partial-unsettled", text: "abcdefgh" })),
+                Stream.fromEffect(TestClock.adjust("7 seconds")).pipe(Stream.flatMap(() => Stream.empty)),
+              ),
+            ),
+          ),
+        ),
+        Stream.fromIterable(reply.text("Recovered", "text-unsettled-recovery")),
+      ]
+      yield* admit(session, "missing-settlement")
+      yield* session.resume(sessionID)
+      const requests = yield* SessionProviderRequest.Service
+      expect((yield* requests.recentSteps(sessionID)).at(-2)?.timing).toMatchObject({
+        receivedOutput: { estimatedTokens: 2, durationNs: 2_000_000_000 },
+      })
+      expect(recorded.map((record) => record.outcome)).toEqual(["failed", "completed"])
+      yield* unsubscribe
+    }),
+  )
+
+  for (const terminal of ["failure", "provider-error", "interruption"] as const)
     it.effect(`records received-output estimate at ${terminal}`, () =>
       Effect.gen(function* () {
         const session = yield* setup
@@ -10882,7 +10925,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("fails provider-executed tool-only terminal response recovery without a third request", () =>
+  it.effect("settles provider-executed tool-only terminal response recovery as incomplete without a third request", () =>
     Effect.gen(function* () {
       const session = yield* setup
       yield* admit(session, "Answer without hosted tools")
@@ -10907,13 +10950,12 @@ describe("SessionRunnerLLM", () => {
         ],
       ]
 
-      expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toBe(
-        "The provider returned no answer after text-only recovery. Retry the request or choose another model.",
-      )
+      yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
       expect(requireAssistant((yield* session.context(sessionID)).slice(-1))).toMatchObject({
         finish: "error",
+        error: { type: "provider.invalid-output", message: noAnswerAfterRecovery },
         content: [{ type: "tool", id: "call-hosted-recovery", executed: true, state: { status: "completed" } }],
       })
     }),
@@ -10975,16 +11017,10 @@ describe("SessionRunnerLLM", () => {
         ),
       ).toMatchObject([
         { finish: "stop", content: [] },
-        {
-          finish: "error",
-          error: {
-            type: "provider.invalid-output",
-            message:
-              "The provider returned no answer after text-only recovery. Retry the request or choose another model.",
-          },
-        },
+        { finish: "stop", content: [] },
         { finish: "stop", content: [{ type: "text", text: "Steered answer" }] },
       ])
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.step.failed.1")
     }),
   )
 
@@ -11025,33 +11061,103 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  for (const content of ["empty", "reasoning-only"] as const) {
-    it.effect(`fails repeated ${content} responses without a third response step`, () =>
-      Effect.gen(function* () {
-        const session = yield* setup
-        yield* admit(session, "Answer once")
-        responses = ["initial", "recovery"].map((id) =>
-          content === "empty" ? reply.silence() : fragmentFixture("reasoning", id, ["Thinking"]).completeEvents,
-        )
+  it.effect("ends repeated explicit empty stop responses as a silent reply without a third response step", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Acknowledge only if needed")
+      responses = [reply.silence(), reply.silence()]
 
-        expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toBe(
-          "The provider returned no answer after text-only recovery. Retry the request or choose another model.",
-        )
+      yield* session.resume(sessionID)
 
-        expect(requests).toHaveLength(2)
-        expect((yield* recordedEventTypes(sessionID)).filter((type) => type === "session.step.started.1")).toHaveLength(
-          2,
+      expect(requests).toHaveLength(2)
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types.filter((type) => type === "session.step.started.1")).toHaveLength(2)
+      expect(types).not.toContain("session.step.failed.1")
+      expect(types).not.toContain("session.execution.failed.1")
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toMatchObject([
+        { finish: "stop", content: [] },
+        { finish: "stop", content: [] },
+      ])
+    }),
+  )
+
+  it.effect("settles repeated reasoning-only responses as incomplete, not as an answer, without a third step", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Answer once")
+      responses = ["initial", "recovery"].map((id) => fragmentFixture("reasoning", id, ["Thinking"]).completeEvents)
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types.filter((type) => type === "session.step.started.1")).toHaveLength(2)
+      expect(types.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
+      expect(types).not.toContain("session.execution.failed.1")
+      const assistants = (yield* session.context(sessionID)).filter((message) => message.type === "assistant")
+      expect(assistants).toMatchObject([
+        { finish: "stop", content: [{ type: "reasoning", text: "Thinking" }] },
+        {
+          finish: "error",
+          error: { type: "provider.invalid-output", message: noAnswerAfterRecovery },
+          content: [{ type: "reasoning", text: "Thinking" }],
+        },
+      ])
+      expect(assistants.some((message) => message.content.some((part) => part.type === "text"))).toBe(false)
+    }),
+  )
+
+  it.effect("keeps an unknown finish reason and settles repeated unknown-finish endings as incomplete", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Answer once")
+      const unknownFinish = (id: string) =>
+        fragmentFixture("reasoning", id, ["Thinking"]).completeEvents.map((event) =>
+          LLMEvent.is.stepFinish(event)
+            ? LLMEvent.stepFinish({ index: event.index, reason: "unknown" })
+            : LLMEvent.is.finish(event)
+              ? LLMEvent.finish({ reason: "unknown" })
+              : event,
         )
-        expect((yield* recordedEventTypes(sessionID)).filter((type) => type === "session.step.failed.1")).toHaveLength(
-          1,
-        )
-        expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toMatchObject([
-          { finish: "stop", content: content === "empty" ? [] : [{ type: "reasoning", text: "Thinking" }] },
-          { finish: "error", content: content === "empty" ? [] : [{ type: "reasoning", text: "Thinking" }] },
-        ])
-      }),
-    )
-  }
+      responses = [unknownFinish("initial"), unknownFinish("recovery")]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      const assistants = (yield* session.context(sessionID)).filter((message) => message.type === "assistant")
+      expect(assistants).toMatchObject([
+        { finish: "unknown", content: [{ type: "reasoning", text: "Thinking" }] },
+        { finish: "error", error: { type: "provider.invalid-output", message: noAnswerAfterRecovery } },
+      ])
+      expect(assistants.map((message) => message.finish)).not.toContain("stop")
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.execution.failed.1")
+    }),
+  )
+
+  it.effect("answers after an unknown-finish reasoning-only ending through one recovery request", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Answer once")
+      responses = [
+        fragmentFixture("reasoning", "initial", ["Thinking"]).completeEvents.map((event) =>
+          LLMEvent.is.stepFinish(event)
+            ? LLMEvent.stepFinish({ index: event.index, reason: "unknown" })
+            : LLMEvent.is.finish(event)
+              ? LLMEvent.finish({ reason: "unknown" })
+              : event,
+        ),
+        reply.text("Recovered answer", "text-after-unknown"),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toMatchObject([
+        { finish: "unknown", content: [{ type: "reasoning", text: "Thinking" }] },
+        { finish: "stop", content: [{ type: "text", text: "Recovered answer" }] },
+      ])
+    }),
+  )
 
   it.effect("fails a local tool emitted during terminal response recovery without executing it", () =>
     Effect.gen(function* () {
@@ -11103,7 +11209,84 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("fails missing step settlement after assistant text without recovery", () =>
+  it.effect("recovers once after missing step settlement with assistant text and keeps the partial text", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Answer directly")
+      const unsettled = (id: string, text: string) => [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.textStart({ id }),
+        LLMEvent.textDelta({ id, text }),
+        LLMEvent.textEnd({ id }),
+      ]
+      responses = [unsettled("text-unsettled", "Partial answer"), reply.text("Completed answer", "text-completed")]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.tools).toEqual([])
+      expect(JSON.stringify(requests[1]?.messages)).not.toContain("Partial answer")
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toMatchObject([
+        {
+          finish: "error",
+          error: { type: "provider.invalid-output", message: "Provider did not settle the step" },
+          content: [{ type: "text", text: "Partial answer" }],
+        },
+        { finish: "stop", content: [{ type: "text", text: "Completed answer" }] },
+      ])
+    }),
+  )
+
+  it.effect("continues the tool loop when a step ends without settlement after a completed local tool call", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Use the echo tool")
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "call-unsettled-after-call", name: "echo", input: { text: "ran" } }),
+        ],
+        reply.text("Saw the result", "text-after-unsettled-call"),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(executions).toEqual(["ran"])
+      expect(requests[1]?.tools).not.toEqual([])
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toMatchObject([
+        { finish: "error", error: { type: "provider.invalid-output", message: "Provider did not settle the step" } },
+        { finish: "stop", content: [{ type: "text", text: "Saw the result" }] },
+      ])
+    }),
+  )
+
+  it.effect("never executes a tool input that ends without a call or a settlement and closes the step incomplete", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Use the echo tool")
+      responses = [
+        fragmentFixture("tool input", "call-unsettled-input", ['{"text":"never']).partialEvents,
+        reply.text("Answered after recovery", "text-after-unsettled-tool-input"),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(executions).toEqual([])
+      const assistants = (yield* session.context(sessionID)).filter((message) => message.type === "assistant")
+      expect(assistants).toMatchObject([
+        {
+          finish: "error",
+          error: { type: "provider.invalid-output", message: "Provider did not settle the step" },
+          content: [{ type: "tool", id: "call-unsettled-input", state: { status: "error" } }],
+        },
+        { finish: "stop", content: [{ type: "text", text: "Answered after recovery" }] },
+      ])
+    }),
+  )
+
+  it.effect("settles repeated missing step settlement with assistant text as incomplete without a third request", () =>
     Effect.gen(function* () {
       const session = yield* setup
       yield* admit(session, "Answer directly")
@@ -11114,14 +11297,21 @@ describe("SessionRunnerLLM", () => {
         LLMEvent.textEnd({ id: "text-unsettled" }),
       ]
 
-      expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toBe("Provider did not settle the step")
+      yield* session.resume(sessionID)
 
-      expect(requests).toHaveLength(1)
-      expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({
-        finish: "error",
-        error: { type: "provider.invalid-output", message: "Provider did not settle the step" },
-        content: [{ type: "text", text: "Partial answer" }],
-      })
+      expect(requests).toHaveLength(2)
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types.filter((type) => type === "session.step.failed.1")).toHaveLength(2)
+      expect(types).not.toContain("session.step.ended.1")
+      expect(types).not.toContain("session.execution.failed.1")
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toMatchObject([
+        { finish: "error", content: [{ type: "text", text: "Partial answer" }] },
+        {
+          finish: "error",
+          error: { type: "provider.invalid-output", message: "Provider did not settle the step" },
+          content: [{ type: "text", text: "Partial answer" }],
+        },
+      ])
     }),
   )
 

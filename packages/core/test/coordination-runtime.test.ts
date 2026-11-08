@@ -948,6 +948,30 @@ describe("member notifications", () => {
       expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(6)
     }))
 
+  for (const latest of [
+    { name: "a clean latest message reports its text", incomplete: false, excerpt: "Member result" },
+    { name: "an incomplete latest message reports the error message without its partial text", incomplete: true, excerpt: "Provider did not settle the step" },
+  ] as const)
+    it.effect(`a completed member with ${latest.name}`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup
+        yield* own(fixture, fixture.alpha.id, fixture.master.id)
+        yield* activate(fixture)
+        const assistantMessageID = SessionMessage.ID.create()
+        yield* fixture.events.publish(SessionEvent.Step.Started, { sessionID: fixture.alpha.id, assistantMessageID, agent: Agent.ID.make("build"), model: fixtureModel })
+        yield* fixture.events.publish(SessionEvent.Text.Started, { sessionID: fixture.alpha.id, assistantMessageID, ordinal: 0 })
+        yield* fixture.events.publish(SessionEvent.Text.Ended, { sessionID: fixture.alpha.id, assistantMessageID, ordinal: 0, text: latest.incomplete ? "Partial member text" : "Member result" })
+        if (latest.incomplete)
+          yield* fixture.events.publish(SessionEvent.Step.Failed, { sessionID: fixture.alpha.id, assistantMessageID, error: { type: "provider.invalid-output", message: "Provider did not settle the step" } })
+        else
+          yield* fixture.events.publish(SessionEvent.Step.Ended, { sessionID: fixture.alpha.id, assistantMessageID, finish: "stop", cost: Money.USD.zero,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })
+        yield* emit(fixture, SessionEvent.Execution.Succeeded, { sessionID: fixture.alpha.id }, "evt_member_excerpt")
+        const latestNotice = (yield* noticesFor(fixture, fixture.master.id)).at(-1)
+        expect(noticeMetadata(latestNotice!)).toMatchObject({ event: "completed", memberSessionID: fixture.alpha.id, excerpt: latest.excerpt })
+        expect(JSON.stringify(latestNotice!.data)).not.toContain("Partial member text")
+      }))
+
   it.effect("while the Project is inactive, failures and decision requests wake the Master and settled outcomes wait in its chat", () =>
     Effect.gen(function* () {
       const fixture = yield* setup

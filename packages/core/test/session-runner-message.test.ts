@@ -956,4 +956,39 @@ Earlier work
       },
     ])
   })
+
+  describe("assistant messages that failed with partial text", () => {
+    const failed = (name: string, error: { type: string; message: string }) =>
+      SessionMessage.Assistant.make({
+        id: id(name),
+        type: "assistant",
+        agent: build,
+        model,
+        content: [SessionMessage.AssistantText.make({ type: "text", text: `Partial ${name}` })],
+        finish: "error",
+        error,
+        time: { created, completed: created },
+      })
+    const user = SessionMessage.User.make({ id: id("next-user"), type: "user", text: "Next question", time: { created } })
+    const replayed = (error: { type: string; message: string }) =>
+      JSON.stringify(withProvenance([failed("ending", error), user], model))
+
+    test("omits an unsettled step ending and an answerless ending after recovery from later requests", () => {
+      expect(replayed({ type: "provider.invalid-output", message: "Provider did not settle the step" })).not.toContain(
+        "Partial ending",
+      )
+      expect(
+        replayed({
+          type: "provider.invalid-output",
+          message: "The provider returned no answer after text-only recovery. Retry the request or choose another model.",
+        }),
+      ).not.toContain("Partial ending")
+    })
+
+    test("replays a fatal invalid-output message with partial text", () => {
+      expect(replayed({ type: "provider.invalid-output", message: "Provider returned malformed output" })).toContain(
+        "Partial ending",
+      )
+    })
+  })
 })

@@ -214,6 +214,8 @@ ycoding run --isolated --config eval.jsonc --model openai/gpt-5 "Fix the failing
 - `step_finish`: `part.reason`, `part.cost` (USD), and `part.tokens` (`input`, `output`, `reasoning`, `cache.read`, `cache.write`). It adds `part.contextLimit`, `part.contextBreakdown`, and `part.providerCache` only when the step reports them.
 - `run_finish`: exactly one line after the last event, including after an `error` line and after an interrupted run. It is not written when the run fails before the prompt is submitted or when prompt admission fails with an error.
 
+The run holds every `session.step.failed` event of error type `provider.invalid-output` until the run ends. When the run succeeds, the held failure writes no `error` line and leaves the exit status unchanged; text output prints its message as a dim notice on standard error. When the run fails, or when a step failure of any other type arrives first, the held failure is written as an `error` line before it and the exit status is 1. When the run ends interrupted, the held failure is written as an `error` line and the exit status is 130 when the process received an interrupt signal and 1 otherwise. A succeeded run whose only step ended without settling therefore writes `step_start`, no `step_finish`, and `run_finish` with status `succeeded`.
+
 `run_finish` fields:
 
 | Field        | Meaning                                                                                                                                                                                                                                                                                                              |

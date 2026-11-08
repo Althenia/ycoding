@@ -81,6 +81,7 @@ export async function runNonInteractivePrompt(input: Input) {
   let submitted = false
   let promoted = false
   let emittedError = false
+  const deferredEndings: Array<{ time: number; error: { type: string; message: string } }> = []
   let blockerRejected = false
   let interrupted = false
   let admission: AbortController | undefined
@@ -195,7 +196,27 @@ export async function runNonInteractivePrompt(input: Input) {
     })
   }
 
+  const reportError = (time: number, error: { type: string; message: string }) => {
+    emittedError = true
+    process.exitCode = 1
+    if (!emit("error", time, { error })) UI.error(error.message)
+  }
+
+  const flushDeferredEndings = () => {
+    const endings = deferredEndings.splice(0)
+    for (const ending of endings) reportError(ending.time, ending.error)
+    if (endings.length > 0 && interrupted) process.exitCode = 130
+  }
+
   const consume = async () => {
+    try {
+      await consumeEvents()
+    } finally {
+      if (terminal !== "succeeded") flushDeferredEndings()
+    }
+  }
+
+  const consumeEvents = async () => {
     while (!controller.signal.aborted) {
       const next = await stream.next().catch((error) => {
         if (!emittedError) throw error
@@ -519,13 +540,17 @@ export async function runNonInteractivePrompt(input: Input) {
       if (event.type === "session.step.failed") {
         metrics.settled(event.data)
         if (interrupted || blockerRejected) continue
-        emittedError = true
-        process.exitCode = 1
-        if (!emit("error", time, { error: event.data.error })) UI.error(event.data.error.message)
+        if (event.data.error.type === "provider.invalid-output") {
+          deferredEndings.push({ time, error: event.data.error })
+          continue
+        }
+        flushDeferredEndings()
+        reportError(time, event.data.error)
         continue
       }
       if (event.type === "session.execution.failed") {
         terminal = "failed"
+        flushDeferredEndings()
         if (!emittedError && !blockerRejected) {
           emittedError = true
           process.exitCode = 1
@@ -535,6 +560,7 @@ export async function runNonInteractivePrompt(input: Input) {
       }
       if (event.type === "session.execution.interrupted") {
         terminal = "interrupted"
+        flushDeferredEndings()
         if (event.data.reason === "user" && interrupted) process.exitCode = 130
         if (event.data.reason !== "user" && !emittedError) {
           emittedError = true
@@ -546,6 +572,10 @@ export async function runNonInteractivePrompt(input: Input) {
       }
       if (event.type === "session.execution.succeeded") {
         terminal = "succeeded"
+        if (input.format !== "json")
+          for (const ending of deferredEndings.splice(0))
+            UI.println(`${UI.Style.TEXT_DIM}${ending.error.message}${UI.Style.TEXT_NORMAL}`)
+        deferredEndings.length = 0
         return
       }
     }

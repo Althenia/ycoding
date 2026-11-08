@@ -120,6 +120,7 @@ export const layer = Layer.effect(
       }).pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
       if (activeShell) return undefined
       const assistant = yield* SessionHistory.latest(db, sessionID, "assistant")
+      if (assistant?.error !== undefined) return undefined
       const latestAssistantText = assistant?.content
         .filter((part): part is Extract<(typeof assistant.content)[number], { type: "text" }> => part.type === "text")
         .map((part) => part.text)
@@ -227,11 +228,15 @@ export const layer = Layer.effect(
         })
         return
       }
-      const assistant = yield* SessionHistory.latest(db, sessionID, "assistant")
-      const text = assistant?.content
-        .filter((part): part is Extract<(typeof assistant.content)[number], { type: "text" }> => part.type === "text")
-        .map((part) => part.text)
-        .join("")
+      const latestAssistant = yield* SessionHistory.latest(db, sessionID, "assistant")
+      const assistant = latestAssistant?.error === undefined ? latestAssistant : undefined
+      const text =
+        latestAssistant?.error !== undefined
+          ? latestAssistant.error.message
+          : assistant?.content
+              .filter((part): part is Extract<(typeof assistant.content)[number], { type: "text" }> => part.type === "text")
+              .map((part) => part.text)
+              .join("")
       const excerpt = text === undefined ? undefined : SessionOrchestration.truncateUtf8(text, 16 * 1024)
       yield* events.publishBatch(
         [{ definition: SessionEvent.Task.Updated, data: { sessionID, change: { type: "completed", excerpt } } }],

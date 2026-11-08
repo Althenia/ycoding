@@ -22,6 +22,18 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.4",
+    date: "2026-11-08",
+    title: "Recovery from empty provider responses",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "A provider response that ends without an answer or without a finish reason no longer fails the Session. Empty, reasoning-only, unknown-finish and unsettled endings, including Gemini and Antigravity streams that end with finish reason `other`, receive one bounded text-only recovery request per input. That request omits the unfinished assistant output, which providers that reject assistant prefill answered with a request error. An empty `stop` response stays a silent reply. Any other ending that stays answerless closes its step as an error, keeps its partial output in the transcript, leaves the Session idle and is never recorded as an answer; the provider's finish reason is never rewritten to `stop`." },
+      { tag: "Fixed", text: "`ycoding run` exits with its ordinary status when such an ending is followed by a successful run. JSON output has no `error` line for it and text output prints a dim notice on standard error. A failed or interrupted run still reports the ending as an error." },
+      { tag: "Fixed", text: "A delegated child, subagent or Project member whose last message ended with an error reports that error message instead of its partial text, and a goal-managed Session does not start a goal continuation after it." },
+      { tag: "Fixed", text: "A Gemini or Antigravity stream that ends with finish reason `other` and no answer is no longer retried with backoff or routed to a fallback model; it receives the recovery request. Transport, authentication, tool and in-stream provider errors, and interruption, still fail or stop the Session." },
+    ],
+  },
+  {
     version: "0.11.2",
     date: "2026-11-07",
     title: "Browser control and source-bound skill resources",

@@ -1340,7 +1340,7 @@ for (const packageName of ["@ai-sdk/google", "@ai-sdk/openai"]) {
 
 for (const item of [
   {
-    name: "rejects reasoning-only Google completion without a finish reason",
+    name: "settles reasoning-only Google completion without a finish reason as unknown",
     events: [
       { type: "text-start", id: "text_1" },
       { type: "text-delta", id: "text_1", delta: "" },
@@ -1350,13 +1350,13 @@ for (const item of [
       { type: "reasoning-end", id: "reasoning_1" },
     ],
     raw: undefined,
-    message: "Provider ended the response without an answer and without a finish reason",
+    reasoning: "Thinking",
   },
   {
-    name: "rejects silent Google completion with raw OTHER",
+    name: "settles silent Google completion with raw OTHER as unknown",
     events: [],
     raw: "OTHER",
-    message: "Provider ended the response without an answer (finish reason: OTHER)",
+    reasoning: undefined,
   },
 ] as const) {
   it.effect(`AI SDK incomplete completion ${item.name}`, () =>
@@ -1373,17 +1373,16 @@ for (const item of [
       })
 
       const resolved = yield* aisdk.model(model("@ai-sdk/google"))
-      const error = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(
+      const response = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(
         Effect.provide(client),
-        Effect.flip,
       )
 
-      expect(error).toBeInstanceOf(LLMError)
-      expect(error).toMatchObject({
-        module: "AISDK",
-        method: "stream",
-        reason: { _tag: "Transport", kind: "read", message: item.message },
-      })
+      expect(response.text).toBe("")
+      expect(response.events.find(LLMEvent.is.finish)?.reason).toBe("unknown")
+      expect(response.events.find(LLMEvent.is.stepFinish)?.reason).toBe("unknown")
+      expect(response.events.filter(LLMEvent.is.reasoningDelta).map((event) => event.text).join("")).toBe(
+        item.reasoning ?? "",
+      )
     }),
   )
 }
@@ -1421,11 +1420,6 @@ for (const item of [
       { error: { code: 500, message: "Internal error encountered.", status: "INTERNAL" } },
     ],
     reason: { _tag: "ProviderInternal", message: "Internal error encountered." },
-  },
-  {
-    name: "a reasoning-only stream without a finish reason or error stays an incomplete read",
-    chunks: [thought],
-    reason: { _tag: "Transport", kind: "read", message: "Provider ended the response without an answer and without a finish reason" },
   },
 ] as const) {
   it.effect(`AI SDK Google in-stream error: ${item.name}`, () =>

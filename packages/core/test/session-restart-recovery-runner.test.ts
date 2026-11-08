@@ -522,3 +522,105 @@ for (const rejectsAssistantPrefill of [true, false])
           expect(executions).toEqual([])
         }),
     )
+
+const unsettledText = (value: string, id: string) => [
+  LLMEvent.stepStart({ index: 0 }),
+  LLMEvent.textStart({ id }),
+  LLMEvent.textDelta({ id, text: value }),
+  LLMEvent.textEnd({ id }),
+]
+
+const reasoning = (value: string, id: string, settled: boolean) => [
+  LLMEvent.stepStart({ index: 0 }),
+  LLMEvent.reasoningStart({ id }),
+  LLMEvent.reasoningDelta({ id, text: value }),
+  LLMEvent.reasoningEnd({ id }),
+  ...(settled ? [LLMEvent.stepFinish({ index: 0, reason: "stop" }), LLMEvent.finish({ reason: "stop" })] : []),
+]
+
+const lastTurnRole = (request: LLMRequest) => request.messages.findLast((message) => message.role !== "system")?.role
+
+const rootSession = Effect.gen(function* () {
+  const agents = yield* Agent.Service
+  yield* agents.transform((draft) =>
+    draft.update(Agent.ID.make("build"), (agent) => {
+      agent.mode = "primary"
+    }),
+  )
+  const session = yield* Session.Service
+  return yield* session.create({ location: { directory: runnerDirectory }, agent: Agent.ID.make("build") })
+})
+
+const ask = (sessionID: Session.ID, value: string) =>
+  Effect.gen(function* () {
+    const session = yield* Session.Service
+    const execution = yield* SessionExecution.Service
+    yield* session.prompt({ sessionID, text: value, resume: false })
+    yield* execution.resume(sessionID)
+    yield* execution.awaitIdle(sessionID)
+  })
+
+const recoveries = [
+  {
+    name: "unsettled partial text",
+    first: unsettledText("Partial answ", "text-partial"),
+    leaked: "Partial answ",
+  },
+  {
+    name: "unsettled reasoning only",
+    first: reasoning("Unfinished thou", "reasoning-unsettled", false),
+    leaked: "Unfinished thou",
+  },
+  {
+    name: "settled reasoning only",
+    first: reasoning("Settled thou", "reasoning-settled", true),
+    leaked: "Settled thou",
+  },
+] as const
+
+for (const rejectsAssistantPrefill of [true, false])
+  for (const recovery of recoveries)
+    it.live(
+      `a recovery request after ${recovery.name} ends on a user turn and omits the unfinished output (${rejectsAssistantPrefill ? "provider rejects" : "provider accepts"} assistant prefill)`,
+      () =>
+        Effect.gen(function* () {
+          yield* reset(recovery.first, text("Recovered.", "text-recovered"))
+          provider.rejectsAssistantPrefill = rejectsAssistantPrefill
+          const root = yield* rootSession
+          yield* ask(root.id, "Answer once").pipe(
+            Effect.ensuring(Effect.sync(() => (provider.rejectsAssistantPrefill = false))),
+          )
+          expect(requests).toHaveLength(2)
+          expect(lastTurnRole(requests[1]!)).toBe("user")
+          expect(JSON.stringify(requests[1]!.messages)).not.toContain(recovery.leaked)
+          const assistants = (yield* (yield* Session.Service).context(root.id)).filter(
+            (message) => message.type === "assistant",
+          )
+          expect(assistants.at(-1)).toMatchObject({ finish: "stop", content: [{ type: "text", text: "Recovered." }] })
+        }),
+    )
+
+it.live("a user turn after an incomplete ending omits the unfinished output from the next request", () =>
+  Effect.gen(function* () {
+    yield* reset(
+      unsettledText("Partial answ", "text-partial-first"),
+      unsettledText("Partial answ", "text-partial-recovery"),
+      text("Next answer.", "text-next"),
+    )
+    const root = yield* rootSession
+    yield* ask(root.id, "First question")
+    expect(requests).toHaveLength(2)
+    const session = yield* Session.Service
+    expect(
+      (yield* session.context(root.id))
+        .filter((message) => message.type === "assistant")
+        .map((message) => message.error?.type),
+    ).toEqual(["provider.invalid-output", "provider.invalid-output"])
+    yield* ask(root.id, "Next question")
+    expect(requests).toHaveLength(3)
+    expect(lastTurnRole(requests[2]!)).toBe("user")
+    expect(JSON.stringify(requests[2]!.messages)).not.toContain("Partial answ")
+    expect(JSON.stringify(requests[2]!.messages)).toContain("First question")
+    expect(JSON.stringify(requests[2]!.messages)).toContain("Next question")
+  }),
+)

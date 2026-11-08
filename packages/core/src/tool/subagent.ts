@@ -100,6 +100,8 @@ export const make = Effect.fn("SubagentTool.make")(function* () {
 
   const latestAssistantText = Effect.fn("SubagentTool.latestAssistantText")(function* (sessionID: SessionSchema.ID) {
     const messages = yield* runtime.session.messages({ sessionID, order: "desc", limit: 20 })
+    const latest = messages.find((message) => message.type === "assistant")
+    if (latest?.type === "assistant" && latest.error !== undefined) return latest.error.message
     const assistant = messages.find(
       (message) => message.type === "assistant" && message.time.completed !== undefined && message.error === undefined,
     )

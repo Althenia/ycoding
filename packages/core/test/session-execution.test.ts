@@ -340,10 +340,85 @@ completionIt.effect("keeps recorded work and its completion read after the settl
   }),
 )
 
+for (const item of [
+  { name: "a clean latest message", incomplete: false, excerpt: "Child result" },
+  { name: "an incomplete latest message with partial text", incomplete: true, excerpt: "Provider did not settle the step" },
+] as const)
+  completionIt.effect(`a succeeded managed child drain reports its result excerpt from ${item.name}`, () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const events = yield* EventRuntime.Service
+      const parentID = Session.ID.make("ses_excerpt_parent")
+      const childID = Session.ID.make("ses_excerpt_child")
+      yield* seedSessions(database, [parentID, childID])
+      yield* database.db
+        .insert(SessionTaskTable)
+        .values({
+          session_id: childID,
+          parent_id: parentID,
+          parent_assistant_message_id: SessionMessage.ID.make("msg_parent"),
+          tool_call_id: "call_excerpt_child",
+          input_id: SessionMessage.ID.make("msg_child_input"),
+          description: "excerpt child",
+          agent: Agent.ID.make("reviewer"),
+          model: CatalogModel.Ref.make({ providerID: Provider.ID.make("test"), id: CatalogModel.ID.make("model") }),
+          prompt_digest: "digest",
+          background: false,
+          delivery: "steer",
+          state: "running",
+        })
+        .run()
+      yield* admitCompletionInput(database, events, childID, "msg_child_pending")
+      const model = { id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") }
+      const assistantMessageID = SessionMessage.ID.make("msg_excerpt_assistant")
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, ({ sessionID }) =>
+        Effect.gen(function* () {
+          yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID, agent: Agent.defaultID, model })
+          yield* events.publish(SessionEvent.Text.Started, { sessionID, assistantMessageID, ordinal: 0 })
+          yield* events.publish(SessionEvent.Text.Ended, {
+            sessionID,
+            assistantMessageID,
+            ordinal: 0,
+            text: item.incomplete ? "Partial child text" : "Child result",
+          })
+          if (item.incomplete)
+            yield* events.publish(SessionEvent.Step.Failed, {
+              sessionID,
+              assistantMessageID,
+              error: { type: "provider.invalid-output", message: "Provider did not settle the step" },
+            })
+          else
+            yield* events.publish(SessionEvent.Step.Ended, {
+              sessionID,
+              assistantMessageID,
+              finish: "stop",
+              cost: Money.USD.zero,
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            })
+        }),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.wake(childID)
+      yield* execution.awaitIdle(childID)
+
+      const history = yield* database.db.select().from(EventTable).all().pipe(Effect.orDie)
+      expect(history.some((row) => row.type === "session.execution.failed.1")).toBe(false)
+      const updates = history
+        .filter((row) => row.type === "session.task.updated.1")
+        .map((row) => Schema.decodeUnknownSync(SessionEvent.Task.Updated.data)(row.data).change)
+      expect(updates.filter((change) => change.type === "completed")).toEqual([
+        { type: "completed", excerpt: item.excerpt },
+      ])
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
 function completionExchange(
   database: Database.Service["Service"], events: EventRuntime.Interface, sessionID: Session.ID,
   options: {
-    declaration?: boolean; text?: string; finish?: "stop" | "length"; phase?: "commentary";
+    declaration?: boolean; text?: string; finish?: "stop" | "length" | "unknown"; phase?: "commentary";
     providerExecuted?: boolean; beforeDeclaration?: Effect.Effect<void>; afterDeclaration?: Effect.Effect<void>; failedStep?: boolean;
     suffix?: string; nested?: boolean; nestedError?: boolean; nestedDurable?: boolean; nestedFailed?: boolean;
   } = {},
@@ -398,6 +473,7 @@ for (const scenario of [
   { name: "blank final reply", options: { text: " \n\t" } },
   { name: "commentary without final reply", options: { phase: "commentary" as const } },
   { name: "truncated final reply", options: { finish: "length" as const } },
+  { name: "unknown-finish final reply", options: { finish: "unknown" as const } },
   { name: "failed final step", options: { failedStep: true } },
   { name: "provider-executed declaration", options: { providerExecuted: true } },
 ]) {
@@ -422,6 +498,7 @@ for (const scenario of [
   { name: "program error", options: { nestedError: true }, expected: 0 },
   { name: "failed declaration", options: { nestedFailed: true }, expected: 0 },
   { name: "unfinished final reply", options: { finish: "length" as const }, expected: 0 },
+  { name: "unknown-finish final reply", options: { finish: "unknown" as const }, expected: 0 },
   { name: "failed final reply", options: { failedStep: true }, expected: 0 },
 ]) {
   completionIt.effect(`durable nested completion respects ${scenario.name}`, () => Effect.gen(function* () {
@@ -1354,6 +1431,48 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
+  it.effect("does not continue a goal-managed Session after a drain whose latest message ended unsettled", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = Session.ID.make("ses_goal_incomplete")
+      yield* seedSessions(database, [sessionID])
+      const autonomy = SessionAutonomy.make({ db: database.db })
+      yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
+
+      let drains = 0
+      let steered = 0
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(
+        scope,
+        () =>
+          Effect.gen(function* () {
+            drains += 1
+            yield* recordAssistant(
+              database,
+              sessionID,
+              drains,
+              [{ type: "text", text: "Partial work" }],
+              { type: "provider.invalid-output", message: "Provider did not settle the step" },
+            )
+          }),
+        undefined,
+        undefined,
+        undefined,
+        () => Effect.sync(() => `steer ${++steered}`),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.resume(sessionID)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(drains).toBe(1)
+      expect(steered).toBe(0)
+      expect(yield* autonomy.get(sessionID)).toMatchObject({ goal: { status: "active", iteration: 0 } })
+      expect(yield* admittedInputs(database)).toEqual([])
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
   it.effect("uses only the newest assistant question for goal continuations", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
@@ -1677,6 +1796,7 @@ function recordAssistant(
   sessionID: Session.ID,
   seq: number,
   content: ReadonlyArray<{ type: "text"; text: string }>,
+  error?: { type: string; message: string },
 ) {
   const created = DateTime.makeUnsafe(seq)
   const {
@@ -1690,6 +1810,7 @@ function recordAssistant(
       agent: Agent.defaultID,
       model: { id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") },
       content,
+      ...(error === undefined ? {} : { error, finish: "error" as const }),
       time: { created, completed: created },
     }),
   )

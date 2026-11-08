@@ -512,6 +512,7 @@ export function make(options: Options): Interface & { readonly handle: (event: H
   const excerptOf = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
     const assistant = yield* SessionHistory.latest(db, sessionID, "assistant")
     if (assistant === undefined || assistant.type !== "assistant") return undefined
+    if (assistant.error !== undefined) return clip(assistant.error.message)
     const text = assistant.content
       .filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
       .map((part) => part.text)

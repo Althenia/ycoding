@@ -16,6 +16,7 @@ import type { CatalogModel } from "../../model"
 import { SessionMessage } from "../message"
 import type { FileAttachment } from "@ycoding-ai/schema/prompt"
 import { SessionProviderState } from "../provider-state"
+import { isUnfinishedEnding } from "./unfinished-ending"
 import { Hash } from "../../util/hash"
 import { SessionSharedContext } from "../shared-context"
 
@@ -248,6 +249,8 @@ const assistant = (
   const sameAccount =
     accountIdentityDigest !== undefined &&
     materialized.get(SessionProviderState.accountKey(message.id))?.accountIdentityDigest === accountIdentityDigest
+  if (isUnfinishedEnding(message.error) && !message.content.some((part) => part.type === "tool"))
+    return []
   const reuseProviderMetadata = sameModel && sameAccount && message.error === undefined
   const content = message.content.flatMap((item, ordinal): ContentPart[] => {
     if (item.type === "text")

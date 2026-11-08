@@ -70,6 +70,7 @@ import { eq, sql } from "drizzle-orm"
 import { fixedLocations } from "./fixture/location-map"
 
 const childText = "child final response"
+const partialChildText = "child partial response"
 const childModel = CatalogModel.Ref.make({ id: CatalogModel.ID.make("child"), providerID: Provider.ID.make("test") })
 const parentModel = CatalogModel.Ref.make({ id: CatalogModel.ID.make("parent"), providerID: Provider.ID.make("test") })
 const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
@@ -113,8 +114,16 @@ const executionNode = makeGlobalNode({
           sessionID,
           assistantMessageID,
           ordinal: 0,
-          text: childText,
+          text: session?.title.includes("incomplete") ? partialChildText : childText,
         })
+        if (session?.title.includes("incomplete")) {
+          yield* events.publish(SessionEvent.Step.Failed, {
+            sessionID,
+            assistantMessageID,
+            error: { type: "provider.invalid-output", message: "Provider did not settle the step" },
+          })
+          return
+        }
         yield* events.publish(SessionEvent.Step.Ended, {
           sessionID,
           assistantMessageID,
@@ -2338,6 +2347,51 @@ describe("SubagentTool", () => {
           expect(synthetic[0]?.text).toContain("Subagent notification:")
           expect(synthetic[0]?.text).toContain(`"childID":"${childID}"`)
           expect(synthetic[0]?.text).toContain(childText)
+        }),
+      ),
+    ),
+  )
+
+  it.live("a background child whose last step ended unsettled notifies the error message without partial text", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ location })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
+          yield* waitForTool(registry, SubagentTool.name)
+          const events = yield* EventRuntime.Service
+          const admitted = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
+            Stream.filter((event) => event.data.sessionID === parent.id && event.data.input.type === "synthetic"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped({ startImmediately: true }),
+          )
+
+          yield* settleTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-incomplete-subagent",
+              name: SubagentTool.name,
+              input: { agent: "reviewer", description: "incomplete background review", prompt: "review", background: true },
+            },
+          })
+
+          Array.from(yield* Fiber.join(admitted))
+          const database = yield* Database.Service
+          yield* SessionPending.promoteSteers(database.db, events, parent.id)
+          const synthetic = (yield* sessions.context(parent.id)).filter((message) => message.type === "synthetic")
+          expect(synthetic).toHaveLength(1)
+          expect(synthetic[0]?.text).toContain("Provider did not settle the step")
+          expect(synthetic[0]?.text).not.toContain(partialChildText)
         }),
       ),
     ),

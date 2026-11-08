@@ -337,6 +337,24 @@ test("terminal live diagnostics replace measured speed and restore an interrupte
   expect(snapshot?.contextWindow).toBeUndefined()
 })
 
+test("a step that ended without settling keeps its partial text, records the notice, and does not fail the run", () => {
+  let view = apply(createSessionView("ses_a"), "session.execution.started", {}, 1_000)
+  view = apply(view, "session.step.started", { assistantMessageID: "msg_incomplete" }, 1_100)
+  view = apply(view, "session.text.started", { assistantMessageID: "msg_incomplete", ordinal: 0 }, 1_200)
+  view = apply(view, "session.text.delta", { assistantMessageID: "msg_incomplete", ordinal: 0, delta: "Partial" }, 1_300)
+  view = apply(view, "session.step.failed", { assistantMessageID: "msg_incomplete",
+    error: { type: "provider.invalid-output", message: "Provider did not settle the step" } }, 1_400)
+  view = apply(view, "session.execution.succeeded", {}, 1_500)
+  expect(view.messages.find((message) => message.id === "msg_incomplete")).toMatchObject({
+    kind: "assistant",
+    completed: 1_400,
+    error: "Provider did not settle the step",
+    parts: [{ kind: "text", text: "Partial" }],
+  })
+  expect(view.status).toBe("idle")
+  expect(view.lastError).toBeUndefined()
+})
+
 test("ends the elapsed clock on an idle status before the next execution starts", () => {
   const started = apply(createSessionView("ses_a"), "session.execution.started", {}, 1_000)
   const retry = apply(apply(started, "session.step.started", { assistantMessageID: "msg_a" }, 1_100), "session.retry.scheduled", { assistantMessageID: "msg_a", attempt: 2, at: 6_000, error: { code: "rate_limit", message: "Slow down" } }, 2_000)

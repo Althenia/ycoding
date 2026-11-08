@@ -62,6 +62,7 @@ import { renderTeamObservation } from "../orchestration-view"
 import { SessionHistory } from "../history"
 import { ModelIncident } from "../../model-incident/index"
 import { MAX_STEPS_PROMPT, MAX_STEPS_RESET_PROMPT } from "./max-steps"
+import { ANSWERLESS_AFTER_RECOVERY_MESSAGE, UNSETTLED_STEP_MESSAGE } from "./unfinished-ending"
 import { DotsPeer } from "../../dots/peer"
 import { DotsContext } from "../../dots/context"
 import { and, eq, inArray, sql } from "drizzle-orm"
@@ -425,7 +426,7 @@ const layer = Layer.effect(
       const attempting = initialContext.model.ref
       const primary = (route.primary ??= selectedModel ?? attempting)
       route.attempting = attempting
-      const fromProjectedHistory = promotion === undefined && recoveryMode === "normal"
+      const fromProjectedHistory = promotion === undefined
       const prepare = (loaded: SessionContext.Loaded, fullRebase = false) =>
         modelRequests
           .prepare({
@@ -1076,8 +1077,10 @@ const layer = Layer.effect(
           const missingSettlement =
             stream._tag === "Success" && !providerFailed && publisher.stepSettlement() === undefined
           let carriedStepFailure: SessionError.Error | undefined
+          let unfinishedEnding = false
           if (missingSettlement && !publisher.stepFailure()) {
-            const error = { type: "provider.invalid-output", message: "Provider did not settle the step" } as const
+            unfinishedEnding = !(recoveryMode === "terminal-response" && needsContinuation)
+            const error = { type: "provider.invalid-output", message: UNSETTLED_STEP_MESSAGE } as const
             if (publisher.hasStepStarted()) yield* serialized(publisher.failAssistant(error))
             if (!publisher.hasStepStarted() && assistantMessageID !== undefined) {
               carriedStepFailure = error
@@ -1093,18 +1096,22 @@ const layer = Layer.effect(
             }
           }
           const existingStepFailure = publisher.stepFailure() ?? carriedStepFailure
+          const explicitSilentReply =
+            publisher.stepSettlement()?.finish === "stop" && !publisher.hasRetryEvidence() && !needsContinuation
           if (
             recoveryMode === "terminal-response" &&
             !existingStepFailure &&
+            !explicitSilentReply &&
             (!publisher.stepSettlement() || !publisher.hasAssistantText() || needsContinuation)
-          )
+          ) {
+            unfinishedEnding = !needsContinuation && stream._tag === "Success"
             yield* serialized(
               publisher.failAssistant({
                 type: "provider.invalid-output",
-                message:
-                  "The provider returned no answer after text-only recovery. Retry the request or choose another model.",
+                message: ANSWERLESS_AFTER_RECOVERY_MESSAGE,
               }),
             )
+          }
           const stepFailure = publisher.stepFailure() ?? carriedStepFailure
           const stepSettlement = publisher.stepSettlement()
           const failureOutcome = streamInterrupted || toolsInterrupted || stepFailure?.type === "aborted"
@@ -1131,15 +1138,9 @@ const layer = Layer.effect(
           const recoverableTerminalSilence =
             recoveryMode !== "terminal-response" &&
             missingSettlement &&
-            !publisher.hasAssistantText() &&
             !needsContinuation &&
             (!publisher.hasStepStarted() || stepFailure?.type === "provider.invalid-output")
-          const promotePendingSteerAfterExhaustedRecovery =
-            recoveryMode === "terminal-response" &&
-            !publisher.hasAssistantText() &&
-            !needsContinuation &&
-            stepFailure?.type === "provider.invalid-output" &&
-            (yield* SessionPending.has(db, session.id, "steer"))
+          const settledIncomplete = unfinishedEnding && !recoverableTerminalSilence
           const promotePendingSteerAfterProviderRecovery =
             recoveryMode === "provider" &&
             postOutputProviderFailure &&
@@ -1154,17 +1155,14 @@ const layer = Layer.effect(
           if (
             stepFailure &&
             !recoverableTerminalSilence &&
-            !promotePendingSteerAfterExhaustedRecovery &&
+            !settledIncomplete &&
             !promotePendingSteerAfterProviderRecovery &&
             !recoverableProviderFailure
           )
             return yield* new StepFailedError({ error: stepFailure })
           return {
             _tag: "Completed",
-            needsContinuation:
-              needsContinuation ||
-              promotePendingSteerAfterExhaustedRecovery ||
-              promotePendingSteerAfterProviderRecovery,
+            needsContinuation: needsContinuation || promotePendingSteerAfterProviderRecovery,
             step: currentStep,
             promoted,
             providerRecovery: recoverableProviderFailure

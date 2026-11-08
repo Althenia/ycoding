@@ -1495,6 +1495,63 @@ describe("Mini transport", () => {
     await transport.close()
   })
 
+  test("resolves a turn whose step ended without settling and the run succeeded", async () => {
+    const events = feed()
+    events.push(connected())
+    const client = sdk({ streams: [events] })
+    const ui = footer()
+    const transport = await createSessionTransport({
+      sdk: client,
+      sessionID: "ses_1",
+      thinking: false,
+      footer: ui.api,
+    })
+    spyOn(client.session, "prompt").mockImplementation((request) => {
+      queueMicrotask(() => {
+        events.push({
+          id: "evt_incomplete_prompted",
+          created: 1,
+          type: "session.input.promoted",
+          durable: durable("ses_1", 1),
+          data: { sessionID: "ses_1", inputID: "msg_incomplete_prompt" },
+        })
+        events.push({
+          id: "evt_incomplete_step",
+          created: 2,
+          type: "session.step.failed",
+          durable: durable("ses_1", 2),
+          data: {
+            sessionID: "ses_1",
+            assistantMessageID: "msg_assistant",
+            error: { type: "provider.invalid-output", message: "Provider did not settle the step" },
+          },
+        })
+        events.push({
+          id: "evt_incomplete_settled",
+          created: 3,
+          type: "session.execution.succeeded",
+          durable: durable("ses_1", 3),
+          data: { sessionID: "ses_1" },
+        })
+      })
+      return ok({ data: promptAdmission(request) }) as never
+    })
+
+    await transport.runPromptTurn({
+      agent: undefined,
+      model: undefined,
+      variant: undefined,
+      prompt: { messageID: "msg_incomplete_prompt", text: "hello", parts: [] },
+      files: [],
+      includeFiles: true,
+    })
+
+    expect(
+      ui.commits.filter((commit) => commit.kind === "error" && commit.text === "Provider did not settle the step"),
+    ).toHaveLength(1)
+    await transport.close()
+  })
+
   test("dedupes a retained live step failure from resize projection", async () => {
     const events = feed()
     events.push(connected())
