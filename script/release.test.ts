@@ -67,7 +67,7 @@ test("native archive finalization transfers each prepared archive once and leave
   expect(release).toContain("merge-multiple: true")
   expect(release).toContain('bun script/release-archive.ts finalize "$RELEASE_VERSION" downloaded release')
   expect(release).not.toContain("uses: ./.github/actions/setup-bun")
-  expect(release).toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6")
+  expect(release).toContain("uses: ./.github/actions/install-bun")
   const publish = release.split("      - name: Publish GitHub release\n")[1] ?? ""
   expect(publish).toStartWith("        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')\n")
   expect(release.indexOf("release-archive.ts finalize")).toBeLessThan(release.indexOf("- name: Publish GitHub release"))
@@ -759,24 +759,45 @@ test("obsolete Pages publishing is replaced by the web asset publisher", async (
 })
 
 const setupBun = await Bun.file(path.join(import.meta.dir, "../.github/actions/setup-bun/action.yml")).text()
+const installBun = await Bun.file(path.join(import.meta.dir, "../.github/actions/install-bun/action.yml")).text()
 
-test("setup installs the latest Bun on baseline and native runners without a version pin", () => {
-  expect(setupBun).toContain("https://github.com/oven-sh/bun/releases/latest/download/bun-${OS}-x64-baseline.zip")
-  expect(setupBun).toContain("bun-download-url: ${{ steps.bun-url.outputs.url }}")
-  expect(setupBun).toMatch(/\n {8}bun-version: latest\n/)
-  expect(setupBun).not.toContain("bun-version-file")
-  expect(setupBun).not.toContain("packageManager")
+test("every Bun-installing job installs the pinned Bun through the hardened install action", async () => {
+  const workflows = path.join(import.meta.dir, "../.github/workflows")
+  for (const name of ["release.yml", "test.yml", "typecheck.yml"]) {
+    const content = await Bun.file(path.join(workflows, name)).text()
+    expect(content).not.toContain("oven-sh/setup-bun")
+    expect(content).not.toContain("bun-download-url")
+    expect(content).not.toContain("bun-version")
+  }
+  expect(setupBun).toContain("      uses: ./.github/actions/install-bun\n")
+  expect(setupBun).not.toContain("oven-sh/setup-bun")
+  expect(setupBun.indexOf("uses: ./.github/actions/install-bun")).toBeLessThan(setupBun.indexOf("Install dependencies"))
+  expect(workflowJob(workflow, "release-tui")).toContain("      - name: Install Bun\n        uses: ./.github/actions/install-bun\n")
+  for (const job of ["verify-source", "build", "deploy-web"]) expect(workflowJob(workflow, job)).toContain("uses: ./.github/actions/setup-bun")
 })
 
-test("setup retries the pinned Bun action once, then installs the same Bun version from npm and fails the job if that fails", () => {
+test("install pins one Bun version for the release download, the setup action and the npm fallback", () => {
+  const pins = installBun.match(/version=\d+\.\d+\.\d+/g) ?? []
+  expect(pins).toEqual(["version=1.4.4"])
+  expect(installBun).toContain("      id: bun-pin\n")
+  expect(installBun).toContain("releases/download/bun-v${{ steps.bun-pin.outputs.version }}/bun-${OS}-x64-baseline.zip")
+  expect(installBun).not.toContain("releases/latest")
+  expect(installBun).not.toContain("latest")
+  expect(installBun.match(/\n {8}bun-version: \$\{\{ steps\.bun-pin\.outputs\.version \}\}\n/g)).toHaveLength(2)
+  expect(installBun.match(/\n {8}bun-download-url: \$\{\{ steps\.bun-url\.outputs\.url \}\}\n/g)).toHaveLength(2)
+  expect(installBun).not.toContain("bun-version-file")
+  expect(installBun).not.toContain("packageManager")
+})
+
+test("install retries the pinned Bun action once, then installs the same pinned Bun from npm and fails the job if that fails", () => {
   const pinned = "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6"
-  expect(setupBun.split(pinned)).toHaveLength(3)
-  expect(setupBun.match(/\n {8}bun-version: latest\n/g)).toHaveLength(2)
-  expect(setupBun).toContain("      id: bun-attempt-1\n      continue-on-error: true\n")
-  expect(setupBun).toContain("      id: bun-attempt-2\n      if: steps.bun-attempt-1.outcome == 'failure'\n      continue-on-error: true\n")
-  const fallback = setupBun.split("    - name: Install Bun from the npm registry\n")[1]?.split("\n    - name:")[0] ?? ""
+  expect(installBun.split(pinned)).toHaveLength(3)
+  expect(installBun).toContain("      id: bun-attempt-1\n      continue-on-error: true\n")
+  expect(installBun).toContain("      id: bun-attempt-2\n      if: steps.bun-attempt-1.outcome == 'failure'\n      continue-on-error: true\n")
+  const fallback = installBun.split("    - name: Install Bun from the npm registry\n")[1] ?? ""
   expect(fallback).toContain("      if: steps.bun-attempt-1.outcome == 'failure' && steps.bun-attempt-2.outcome == 'failure'\n")
   expect(fallback).not.toContain("continue-on-error")
+  expect(fallback).toContain("BUN_VERSION: ${{ steps.bun-pin.outputs.version }}")
   for (const entry of [
     "Linux-X64) package=@oven/bun-linux-x64-baseline",
     "macOS-X64) package=@oven/bun-darwin-x64-baseline",
@@ -785,10 +806,11 @@ test("setup retries the pinned Bun action once, then installs the same Bun versi
   ])
     expect(fallback).toContain(entry)
   expect(fallback).toContain("set -euo pipefail")
-  expect(fallback).toContain('"$package@latest"')
-  expect(fallback).toContain('test "$installed" = "$expected"')
+  expect(fallback).toContain('"$package@$BUN_VERSION"')
+  expect(fallback).toContain('test "$installed" = "$BUN_VERSION"')
   expect(fallback).not.toContain("|| true")
-  expect(setupBun.indexOf("Install Bun from the npm registry")).toBeLessThan(setupBun.indexOf("Install dependencies"))
+  expect(installBun).not.toContain("actions/setup-node")
+  expect(installBun).not.toContain("bun install")
 })
 
 test("setup installs Bun dependencies cold, without an Actions dependency cache or cache-warming workflow", async () => {
