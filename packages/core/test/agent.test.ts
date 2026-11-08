@@ -559,14 +559,14 @@ describe("Agent", () => {
         Effect.provideService(Location.Service, Location.Service.of(testLocation)),
       )
       const duties = {
-        architech: ["requirements through entry points", "trust boundaries", "rollback", "caller-reachable failures", "Delegate implementation"],
-        god: ["ground truth", "false premises", "acceptance criteria", "Delegate execution"],
-        GSD: ["critical path", "independent lanes", "Delegate implementation"],
-        yangi: ["proven simple solution", "narrow and reversible", "Delegate execution"],
-        occam: ["smallest complete change", "minimal evidence"],
-        omoikane: ["callers, contracts, data flow", "dependency direction", "rollback"],
-        wittgenstein: ["no narration", "four short bullets"],
-        zeus: ["independent ground truth", "false premises", "largest useful verified result"],
+        architech: ["big picture", "direction", "what is lacking", "what should be removed", "what must be added", "requirements through entry points", "trust boundaries", "rollback", "caller-reachable failures", "Delegate implementation"],
+        god: ["infer intent and missing context", "without asking unnecessary questions", "ground truth", "false premises", "acceptance criteria", "Delegate execution"],
+        GSD: ["relentless output-oriented", "push past obstacles", "critical path", "independent lanes", "Delegate implementation"],
+        yangi: ["Do what was assigned without hesitation or unnecessary questions", "proven simple solution", "narrow and reversible", "Delegate execution"],
+        occam: ["Do the assigned work directly without ceremony", "smallest complete change", "minimal evidence"],
+        omoikane: ["big picture", "what is lacking", "should be removed", "must be added", "callers, contracts, data flow", "dependency direction", "rollback"],
+        wittgenstein: ["Do what was assigned immediately", "no narration", "four short bullets"],
+        zeus: ["infer missing context", "push through obstacles", "independent ground truth", "false premises", "largest useful verified result"],
       }
       for (const [id, required] of Object.entries(duties)) {
         const item = yield* agent.get(Agent.ID.make(id))
@@ -587,6 +587,8 @@ describe("Agent", () => {
         )
       const responsibilities = {
         architech: [
+          /sees the big picture, sets the architectural direction/,
+          /Determine what the system lacks, what obsolete or redundant parts to remove, and what capabilities or boundaries to add/,
           /actors, components, boundaries, contracts, state, data flow/,
           /fact, inference, assumption or unknown/,
           /idempotency, ordering, concurrency, recovery, cleanup/,
@@ -596,13 +598,58 @@ describe("Agent", () => {
           /dependency direction, operability, rollback cost and lasting complexity/,
           /give the outcome with exact checks and results/,
         ],
-        GSD: [/Find the critical path/, /independent lanes/, /Delegate implementation of every ready lane/, /Check each child's evidence against live files/],
-        god: [/Rank evidence/, /acceptance criteria/, /Calibrate every statement to its evidence/, /Never present a guess as a finding/],
-        yangi: [/proven, minimal path/, /Never repeat a settled check/, /fewest subagents/, /Read the final diff once/],
-        occam: [/Read the minimal evidence/, /delete or reuse before adding/, /narrowest test/, /Return the outcome, exact check results/],
-        omoikane: [/place the boundary in the system/, /pick one decisively/, /tests at its edges/, /evidence that would resolve it/],
-        wittgenstein: [/assume only what is narrow and reversible/, /every required affected check/, /Omit any bullet with nothing to say/],
-        zeus: [/trusting the evidence nearest runtime/, /exact unknown, the checks performed and the evidence still required/, /exact blocker and the largest useful verified result/],
+        GSD: [
+          /Measure progress only by working, verified output/,
+          /Find the critical path/,
+          /independent lanes/,
+          /Delegate implementation of every ready lane/,
+          /keep driving until the deliverable works/,
+          /Check each child's evidence against live files/,
+        ],
+        god: [
+          /Infer unspoken context, conventions and edge cases directly from the live system/,
+          /Intuit the real need from the request and surrounding system/,
+          /Rank evidence/,
+          /acceptance criteria/,
+          /Calibrate every statement to its evidence/,
+          /Never present a guess as a finding/,
+        ],
+        yangi: [
+          /Start from the assignment as given/,
+          /proven, minimal path/,
+          /Never repeat a settled check/,
+          /fewest subagents/,
+          /Read the final diff once/,
+        ],
+        occam: [
+          /Do the assigned work directly without ceremony/,
+          /Read the minimal evidence/,
+          /delete or reuse before adding/,
+          /narrowest test/,
+          /Return the outcome, exact check results/,
+        ],
+        omoikane: [
+          /See the big picture around your boundary, understand the direction the system is moving/,
+          /place the boundary in the system/,
+          /Identify what is lacking in the boundary, what obsolete or redundant parts should be removed, and what must be added/,
+          /pick one decisively/,
+          /tests at its edges/,
+          /evidence that would resolve it/,
+        ],
+        wittgenstein: [
+          /Do what was assigned immediately/,
+          /infer local details from the code/,
+          /assume only what is narrow and reversible/,
+          /every required affected check/,
+          /Omit any bullet with nothing to say/,
+        ],
+        zeus: [
+          /Reach independent ground truth and infer missing context/,
+          /trusting the evidence nearest runtime/,
+          /exact unknown, the checks performed and the evidence still required/,
+          /push through obstacles to implement the root-cause solution/,
+          /exact blocker and the largest useful verified result/,
+        ],
       }
       for (const [id, patterns] of Object.entries(responsibilities)) {
         const text = yield* body(id)

@@ -10,7 +10,7 @@ describe("release entries", () => {
   test("lists the v0.11.2 release first with its notes", async () => {
     const entry = RELEASES[0]
     expect(entry).toMatchObject({ version: "0.11.2", date: "2026-11-07", title: "Browser control and source-bound skill resources", tags: ["Added", "Changed"] })
-    expect(entry?.changes).toHaveLength(11)
+    expect(entry?.changes).toHaveLength(12)
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.2.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.11.2\n")
     for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)

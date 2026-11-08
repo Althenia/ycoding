@@ -38,6 +38,7 @@ export const RELEASES: readonly ReleaseEntry[] = [
       { tag: "Changed", text: "After upgrading the CLI, update or reload the bundled Chrome extension before pairing or continuing browser control. Bridge version 6 rejects version 5 peers. Matching packaged versions do not prove an installed extension has reloaded." },
       { tag: "Changed", text: "Supporting files for an active skill stay with the exact SKILL.md source loaded for that activation, even if its catalog entry changes or disappears. Only the requested resource is read; no whole bundle is injected and no other same-named source is searched." },
       { tag: "Changed", text: "Missing skill source provenance refuses supporting-file reads instead of guessing another bundle; complete compaction or switch agents before loading the skill again. Successful reads return current file content and retain containment, read permissions and capability checks." },
+      { tag: "Changed", text: "Built-in primary (`GSD`, `architech`, `god`, `yangi`) and task-subagent (`occam`, `omoikane`, `wittgenstein`, `zeus`) prompts sharpen each specialist's posture: relentless output-driven completion (`GSD`, `zeus`), big-picture system direction and add/remove gap analysis (`architech`, `omoikane`), intuitive context inference from live evidence without unnecessary questions (`god`, `zeus`), and immediate no-questions execution along the minimal proven path (`yangi`, `occam`, `wittgenstein`)." },
     ],
   },
   {
