@@ -542,20 +542,19 @@ describe("CCA executor host lifecycle", () => {
     expect(JSON.parse(await readFile(harness.statePath, "utf8"))).toMatchObject({ status: "completed", executorID, installationID, displayName: "Desk Mac" })
   })
 
-  test("a configured Dots label registers the stored executor first, then sends only a rename for the stored installation once", async () => {
+  test("a configured Dots label reconciles the stored executor first and skips the rename when Flora confirms it", async () => {
     const harness = await fixture({ stored: completed(), configuration: enabled(), name: "Desk Mac", flora: [json(200, { executor_id: executorID, custom_display_name: "Desk Mac" })] })
     await harness.create().start()
     await harness.until("socket")
     await harness.until("flora")
-    expect(harness.flora.map((post) => post.body)).toEqual([{ installation_id: "synthetic-proof-installation", custom_display_name: "Desk Mac" }])
-    expect(harness.events.indexOf("register")).toBeLessThan(harness.events.indexOf("flora"))
+    expect(harness.flora.map((post) => post.body)).toEqual([{ displayName: "Desk Mac", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots }])
+    expect(harness.events.indexOf("flora")).toBeLessThan(harness.events.indexOf("register"))
     expect(harness.registrations[0]!.url).toBe(registerURL)
-    expect(JSON.parse(await readFile(harness.statePath, "utf8"))).toEqual({ ...completed(), selectedCapabilityRoots: harness.roots, customDisplayName: "Desk Mac", updatedAt: expect.any(String) })
+    expect(JSON.parse(await readFile(harness.statePath, "utf8"))).toEqual({ ...completed(), selectedCapabilityRoots: harness.roots, customDisplayName: "Desk Mac", displayName: "Desk Mac", updatedAt: expect.any(String) })
     expect(harness.diagnostics).toEqual(["CCA executor connected"])
     harness.sockets[0]!.drop()
     await harness.until("socket", 2)
-    expect(harness.flora).toHaveLength(2)
-    expect(harness.flora[1]!.body).toEqual({ displayName: "Desk Mac", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots })
+    expect(harness.flora).toHaveLength(1)
   })
 
   test("a cold start reconciles a completed enrollment and adopts a changed executor for transport", async () => {
@@ -568,6 +567,64 @@ describe("CCA executor host lifecycle", () => {
     expect(JSON.parse(await readFile(harness.statePath, "utf8"))).toMatchObject({ installationID: "synthetic-proof-installation", executorID: replacement })
     expect(harness.registrations[0]!.url).toContain(encodeURIComponent(replacement))
     expect(harness.diagnostics).toContain("CCA executor registration-executor-changed")
+  })
+
+  test("rename-pending enrollment still reconciles at cold start", async () => {
+    const replacement = "ccarenv_b64_synthetic-work-reconciled-0001"
+    const replacementRegisterURL = `https://codex-cloud-environments.chatgpt.com/api/cloud/environment/${encodeURIComponent(replacement)}/register`
+    const harness = await fixture({
+      stored: completed({ displayName: null, customDisplayName: null }),
+      configuration: enabled(),
+      name: "Work",
+      flora: [json(200, { executor_id: replacement, custom_display_name: "Work" })],
+    })
+    await harness.create().start()
+    await harness.until("socket")
+    expect(harness.flora).toHaveLength(1)
+    expect(harness.flora[0]!.body).toEqual({ displayName: "Work", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots })
+    const stored = JSON.parse(await readFile(harness.statePath, "utf8"))
+    expect(stored.executorID).toBe(replacement)
+    expect(stored.customDisplayName).toBe("Work")
+    expect(stored.renameDeclined).toBeUndefined()
+    expect(harness.registrations.map((entry) => entry.url)).toEqual([replacementRegisterURL])
+    expect(harness.diagnostics).toContain("CCA executor registration-executor-changed")
+  })
+
+  test("reconcile returning same ID without name confirmation still renames after registry", async () => {
+    const harness = await fixture({
+      stored: completed({ displayName: "Old name" }),
+      configuration: enabled(),
+      name: "Work",
+      flora: [json(200, { executor_id: executorID, custom_display_name: null })],
+    })
+    await harness.create().start()
+    await harness.until("socket")
+    expect(harness.flora).toHaveLength(2)
+    expect(harness.flora[0]!.body).toEqual({ displayName: "Work", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots })
+    expect(harness.flora[1]!.body).toEqual({ installation_id: "synthetic-proof-installation", custom_display_name: "Work" })
+    expect(harness.registrations.map((entry) => entry.url)).toEqual([registerURL])
+    expect(JSON.parse(await readFile(harness.statePath, "utf8")).renameDeclined).toMatchObject({ label: "Work", outcome: "unconfirmed" })
+    expect(harness.diagnostics).toContain("CCA executor registration-rename-unconfirmed")
+  })
+
+  test("declined rename label does not block reconcile", async () => {
+    const replacement = "ccarenv_b64_synthetic-declined-reconciled-0001"
+    const harness = await fixture({
+      stored: completed({ renameDeclined: { label: "Old Mac", outcome: "unconfirmed", at: "2026-10-01T00:00:00.000Z" } }),
+      configuration: enabled(),
+      name: "Work",
+      flora: [json(200, { executor_id: replacement, custom_display_name: "Work" })],
+    })
+    await harness.create().start()
+    await harness.until("socket")
+    expect(harness.flora).toHaveLength(1)
+    expect(harness.flora[0]!.body).toEqual({ displayName: "Work", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots })
+    const stored = JSON.parse(await readFile(harness.statePath, "utf8"))
+    expect(stored.executorID).toBe(replacement)
+    expect(stored.renameDeclined).toBeUndefined()
+    expect(harness.registrations.map((entry) => entry.url)).toEqual([
+      `https://codex-cloud-environments.chatgpt.com/api/cloud/environment/${encodeURIComponent(replacement)}/register`,
+    ])
   })
 
   test("a failed reconcile keeps the stored executor for transport without hot retry", async () => {
@@ -595,7 +652,7 @@ describe("CCA executor host lifecycle", () => {
     expect(JSON.parse(await readFile(harness.statePath, "utf8"))).toMatchObject({ status: "completed", executorID })
   })
 
-  test("a rename answered with another executor adopts it, re-registers transport, and records no decline", async () => {
+  test("a reconcile answered with another executor adopts it, confirms its name, and sends no rename", async () => {
     const replacement = "ccarenv_b64_synthetic-rename-replacement-0001"
     const replacementRegisterURL = `https://codex-cloud-environments.chatgpt.com/api/cloud/environment/${encodeURIComponent(replacement)}/register`
     const harness = await fixture({ stored: completed(), configuration: enabled(), name: "Desk Mac", flora: [
@@ -603,10 +660,11 @@ describe("CCA executor host lifecycle", () => {
       json(200, { executor_id: replacement, custom_display_name: "Desk Mac" }),
     ] })
     await harness.create().start()
-    await harness.until("CCA executor registration-rename-executor-changed")
     await harness.until("socket")
-    expect(harness.diagnostics).toEqual(["CCA executor registration-rename-executor-changed"])
-    expect(harness.registrations.map((entry) => entry.url)).toEqual([registerURL, replacementRegisterURL])
+    expect(harness.flora.map((post) => post.body)).toEqual([{ displayName: "Desk Mac", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots }])
+    expect(harness.diagnostics).toContain("CCA executor registration-executor-changed")
+    for (const message of harness.diagnostics) expect(message).not.toContain("rename")
+    expect(harness.registrations.map((entry) => entry.url)).toEqual([replacementRegisterURL])
     const stored = JSON.parse(await readFile(harness.statePath, "utf8"))
     expect(stored.executorID).toBe(replacement)
     expect(stored.customDisplayName).toBe("Desk Mac")
@@ -617,108 +675,136 @@ describe("CCA executor host lifecycle", () => {
     expect(harness.flora).toHaveLength(2)
   })
 
-  test("a rename whose answer does not confirm the label is reported, persists no label and is not repeated for that label", async () => {
+  test("an unconfirmed rename after reconcile records the server label and the decline without repeating", async () => {
     const harness = await fixture({ stored: completed(), configuration: enabled(), name: "Desk Mac", flora: [json(200, { executor_id: executorID, custom_display_name: "Other Mac" })] })
     await harness.create().start()
     await harness.until("CCA executor registration-rename-unconfirmed")
     await harness.until("socket")
+    expect(harness.flora.map((post) => post.body)).toEqual([
+      { displayName: "Desk Mac", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots },
+      { installation_id: "synthetic-proof-installation", custom_display_name: "Desk Mac" },
+    ])
     const stored = JSON.parse(await readFile(harness.statePath, "utf8"))
-    expect(stored.customDisplayName).toBeUndefined()
+    expect(stored.customDisplayName).toBe("Other Mac")
+    expect(stored.displayName).toBeUndefined()
     expect(stored.renameDeclined).toEqual({ label: "Desk Mac", outcome: "unconfirmed", at: expect.any(String) })
     expect(stored.executorID).toBe(executorID)
     harness.set(enabled(2))
     await harness.until("socket", 2)
-    expect(harness.flora).toHaveLength(2)
+    expect(harness.flora).toHaveLength(3)
   })
 
-  test("a rename is sent once: a retryable failure is not replayed and is recorded as uncertain", async () => {
+  test("a reconcile retried after one failure confirms the label without a rename", async () => {
     const harness = await fixture({ stored: completed(), configuration: enabled(), name: "Desk Mac", flora: [json(503, { error: "synthetic" }), json(200, { executor_id: executorID, custom_display_name: "Desk Mac" })] })
     await harness.create().start()
-    await harness.until("CCA executor registration-rename-unconfirmed")
     await harness.until("socket")
-    expect(harness.flora).toHaveLength(1)
-    expect(JSON.parse(await readFile(harness.statePath, "utf8")).renameDeclined).toEqual({ label: "Desk Mac", outcome: "uncertain", at: expect.any(String) })
+    expect(harness.flora.map((post) => post.body)).toEqual([
+      { displayName: "Desk Mac", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots },
+      { displayName: "Desk Mac", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots },
+    ])
+    expect(harness.waits).toEqual([1_000])
+    const stored = JSON.parse(await readFile(harness.statePath, "utf8"))
+    expect(stored.customDisplayName).toBe("Desk Mac")
+    expect(stored.renameDeclined).toBeUndefined()
+    expect(harness.diagnostics).toEqual(["CCA executor connected"])
     harness.set(enabled(2))
     await harness.until("socket", 2)
-    expect(harness.flora).toHaveLength(2)
+    expect(harness.flora).toHaveLength(3)
   })
 
-  test("a rename whose response is lost after dispatch is sent once and never repeated after a restart", async () => {
+  test("a reconcile retried after a dropped response still renames once when the server does not confirm", async () => {
     const harness = await fixture({ stored: completed(), configuration: enabled(), name: "Desk Mac", flora: [new Error("synthetic connection reset")] })
     await harness.create().start()
     await harness.until("CCA executor registration-rename-unconfirmed")
     await harness.until("socket")
-    expect(harness.flora).toHaveLength(1)
-    expect(JSON.parse(await readFile(harness.statePath, "utf8")).renameDeclined).toEqual({ label: "Desk Mac", outcome: "uncertain", at: expect.any(String) })
+    expect(harness.flora.map((post) => post.body)).toEqual([
+      { displayName: "Desk Mac", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots },
+      { displayName: "Desk Mac", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots },
+      { installation_id: "synthetic-proof-installation", custom_display_name: "Desk Mac" },
+    ])
+    expect(harness.waits).toEqual([1_000])
+    expect(JSON.parse(await readFile(harness.statePath, "utf8")).renameDeclined).toEqual({ label: "Desk Mac", outcome: "unconfirmed", at: expect.any(String) })
     harness.set(enabled(2))
     await harness.until("socket", 2)
     harness.sockets[1]!.drop()
     await harness.until("socket", 3)
-    expect(harness.flora).toHaveLength(2)
+    expect(harness.flora).toHaveLength(4)
   })
 
-  test("a host stopped after the rename was dispatched records it as uncertain and a restart does not send it again", async () => {
+  test("a host stopped during reconcile records no decline and renames after the restart confirms nothing", async () => {
     const harness = await fixture({ stored: completed(), configuration: enabled(), name: "Desk Mac", floraStall: true })
     const first = harness.create()
     await first.start()
     await harness.until("flora")
     await first.stop()
     expect(harness.flora).toHaveLength(1)
-    expect(JSON.parse(await readFile(harness.statePath, "utf8")).renameDeclined).toEqual({ label: "Desk Mac", outcome: "uncertain", at: expect.any(String) })
+    expect(JSON.parse(await readFile(harness.statePath, "utf8")).renameDeclined).toBeUndefined()
     harness.stall.on = false
     await harness.create().start()
+    await harness.until("CCA executor registration-rename-unconfirmed")
     await harness.until("socket")
-    expect(harness.flora).toHaveLength(2)
+    expect(harness.flora).toHaveLength(3)
+    expect(JSON.parse(await readFile(harness.statePath, "utf8")).renameDeclined).toEqual({ label: "Desk Mac", outcome: "unconfirmed", at: expect.any(String) })
   })
 
-  test("a rename whose intent cannot be recorded is not sent, is reported and leaves identity untouched", async () => {
+  test("a rename intent that cannot be recorded still reconciles first and leaves identity untouched", async () => {
     const harness = await fixture({ stored: completed(), configuration: enabled(), name: "Desk Mac" })
-    const before = await readFile(harness.statePath, "utf8")
+    const before = JSON.parse(await readFile(harness.statePath, "utf8"))
     await chmod(harness.statePath, 0o400)
     try {
       await harness.create().start()
       await harness.until("CCA executor registration-update-failed")
       await harness.until("socket")
-      expect(harness.flora).toEqual([])
-      expect(await readFile(harness.statePath, "utf8")).toBe(before)
+      expect(harness.flora.map((post) => post.body)).toEqual([{ displayName: "Desk Mac", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots }])
+      const stored = JSON.parse(await readFile(harness.statePath, "utf8"))
+      expect({ ...stored, updatedAt: before.updatedAt }).toEqual(before)
+      expect(harness.registrations).toHaveLength(1)
     } finally {
       await chmod(harness.statePath, 0o600)
     }
   })
 
-  test("a changed label after a declined rename is attempted once", async () => {
+  test("a changed label confirmed by reconcile needs no rename and keeps an unrelated decline", async () => {
     const harness = await fixture({
       stored: completed({ renameDeclined: { label: "Old Mac", outcome: "unconfirmed", at: "2026-10-01T00:00:00.000Z" } }),
       configuration: enabled(), name: "Desk Mac", flora: [json(200, { executor_id: executorID, custom_display_name: "Desk Mac" })],
     })
     await harness.create().start()
-    await harness.until("flora")
     await harness.until("socket")
-    expect(harness.flora.map((post) => post.body.custom_display_name)).toEqual(["Desk Mac"])
+    expect(harness.flora.map((post) => post.body)).toEqual([{ displayName: "Desk Mac", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots }])
     await new Promise<void>((resolve) => setTimeout(resolve, 10))
     const stored = JSON.parse(await readFile(harness.statePath, "utf8"))
     expect(stored.customDisplayName).toBe("Desk Mac")
+    expect(stored.displayName).toBe("Desk Mac")
+    expect(stored.renameDeclined).toEqual({ label: "Old Mac", outcome: "unconfirmed", at: "2026-10-01T00:00:00.000Z" })
+  })
+
+  test("a registry rejection of the stored executor stops the run after reconcile without a rename", async () => {
+    const harness = await fixture({ stored: completed(), configuration: enabled(), name: "Desk Mac", register: [404] })
+    await harness.create().start()
+    await harness.until("CCA executor registration-rejected status=404")
+    expect(harness.flora.map((post) => post.body)).toEqual([{ displayName: "Desk Mac", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots }])
+    expect(harness.sockets).toEqual([])
+    expect(harness.diagnostics).toEqual(["CCA executor registration-rejected status=404"])
+    const stored = JSON.parse(await readFile(harness.statePath, "utf8"))
+    expect(stored.executorID).toBe(executorID)
     expect(stored.renameDeclined).toBeUndefined()
   })
 
-  test("a registry rejection of the stored executor stops the run before any rename request", async () => {
-    const harness = await fixture({ stored: completed(), configuration: enabled(), name: "Desk Mac", register: [404] })
-    const before = await readFile(harness.statePath, "utf8")
-    await harness.create().start()
-    await harness.until("CCA executor registration-rejected status=404")
-    expect(harness.flora).toEqual([])
-    expect(harness.sockets).toEqual([])
-    expect(harness.diagnostics).toEqual(["CCA executor registration-rejected status=404"])
-    expect(await readFile(harness.statePath, "utf8")).toBe(before)
-  })
-
-  test("a roots change re-registers with the configured label and records it", async () => {
+  test("a roots change reconciles with the configured label, then renames when the server does not confirm", async () => {
     const harness = await fixture({ stored: completed(), configuration: enabled(), storedRoots: "absent", name: "Desk Mac" })
     await harness.create().start()
+    await harness.until("CCA executor registration-rename-unconfirmed")
     await harness.until("socket")
-    expect(harness.flora.map((post) => post.body)).toEqual([{ displayName: "Desk Mac", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots }])
+    expect(harness.flora.map((post) => post.body)).toEqual([
+      { displayName: "Desk Mac", installation_id: "synthetic-proof-installation", selected_capability_roots: harness.roots },
+      { installation_id: "synthetic-proof-installation", custom_display_name: "Desk Mac" },
+    ])
     expect(harness.events.indexOf("flora")).toBeLessThan(harness.events.indexOf("register"))
-    expect(JSON.parse(await readFile(harness.statePath, "utf8"))).toMatchObject({ executorID, selectedCapabilityRoots: harness.roots, displayName: "Desk Mac" })
+    const stored = JSON.parse(await readFile(harness.statePath, "utf8"))
+    expect(stored).toMatchObject({ executorID, selectedCapabilityRoots: harness.roots })
+    expect(stored.displayName).toBeUndefined()
+    expect(stored.renameDeclined).toEqual({ label: "Desk Mac", outcome: "unconfirmed", at: expect.any(String) })
   })
 
   test("the host opens only the registered rendezvous socket and never codex-cloud-backend", async () => {

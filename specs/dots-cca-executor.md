@@ -25,7 +25,7 @@ Enrollment state lives in `cca-executor.json` in the YCoding state directory, in
 | Stored state | Host action |
 | --- | --- |
 | Absent | Enroll once with the display label and the remote-control `installation_id`; persist the outcome with the label as `displayName` |
-| `completed` for the current account | Reuse `executor_id`, but first reconcile once per host run: re-post the stored `installation_id` with the current label and roots and adopt the server-confirmed `executor_id` (no-op when unchanged); a run that will send a rename skips the reconcile because the rename carries the identity check |
+| `completed` for the current account | Reuse `executor_id`, but first reconcile once per host run: re-post the stored `installation_id` with the current label and roots and adopt the server-confirmed `executor_id` (no-op when unchanged). The reconcile runs even when a rename is pending: when the server does not confirm the posted label, the recorded display label is left unchanged so the rename still fires, and a declined label never blocks the reconcile. A refused registry registration still stops the run before any rename |
 | `failed` (definitive 4xx) | Stop until the next configuration change; then remove the file and enroll once |
 | `pending` or `uncertain` | Never enroll; stop with `enrollment-uncertain` until the file is replaced or removed |
 | `completed` for another account | Never enroll; stop with `enrollment-account-mismatch` |

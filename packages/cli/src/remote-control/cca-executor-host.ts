@@ -233,14 +233,7 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
     if (typeof state.executorID !== "string" || !state.executorID.trim()) throw new EnrollmentProblem("enrollment-unreadable")
     const registered = state.displayName ?? hostname()
     const label = configuredName ?? registered
-    const configuredLabel = configuredName?.trim().slice(0, 100)
-    const recordedLabel = (state.customDisplayName ?? state.displayName ?? hostname()).trim().slice(0, 100)
-    const renamePending =
-      configuredLabel !== undefined &&
-      configuredLabel.length > 0 &&
-      configuredLabel !== recordedLabel &&
-      state.renameDeclined?.label !== configuredLabel
-    if (!run.reconciled && !renamePending) {
+    if (!run.reconciled) {
       run.reconciled = true
       try {
         const reconciled = await reconcileCcaExecutor({

@@ -330,7 +330,7 @@ async function postWithRetry(input: RegistrationRetryInput, body: string): Promi
     try {
       return await postCcaRegistration({ ...input, body })
     } catch (error) {
-      if (attempt >= reregistrationAttempts || !(error instanceof CcaRegistrationError) || !error.retryable) throw error
+      if (attempt >= reregistrationAttempts || input.signal?.aborted || !(error instanceof CcaRegistrationError) || !error.retryable) throw error
       await wait(reregistrationRetryDelayMs, input.signal)
       return register(attempt + 1)
     }
@@ -371,12 +371,21 @@ export async function reconcileCcaExecutor(input: RegistrationRetryInput & {
   readonly roots: readonly CcaCapabilityRoot[]
 }): Promise<{ readonly state: CcaExperimentState; readonly executorChanged: boolean }> {
   const reregistered = await reregisterCcaExecutor(input)
+  const confirmed =
+    reregistered.state.customDisplayName !== undefined &&
+    reregistered.state.customDisplayName !== null &&
+    reregistered.state.customDisplayName === reregistered.state.displayName
+  const restored = !confirmed && !reregistered.executorChanged
+  const settled = restored
+    ? { ...reregistered.state, displayName: input.state.displayName, updatedAt: new Date().toISOString() }
+    : reregistered.state
+  if (restored) await writeFile(input.statePath, JSON.stringify(settled, null, 2), { mode: 0o600 })
   const priorDecline = input.state.renameDeclined
   const superseded =
     priorDecline !== undefined &&
-    (reregistered.executorChanged || priorDecline.label === reregistered.state.customDisplayName)
-  if (!superseded) return reregistered
-  const state: CcaExperimentState = { ...reregistered.state, renameDeclined: undefined, updatedAt: new Date().toISOString() }
+    (reregistered.executorChanged || priorDecline.label === settled.customDisplayName)
+  if (!superseded) return { state: settled, executorChanged: reregistered.executorChanged }
+  const state: CcaExperimentState = { ...settled, renameDeclined: undefined, updatedAt: new Date().toISOString() }
   await writeFile(input.statePath, JSON.stringify(state, null, 2), { mode: 0o600 })
   return { state, executorChanged: reregistered.executorChanged }
 }

@@ -664,6 +664,16 @@ describe("cca-executor-registration", () => {
       expect(result.state.renameDeclined).toEqual(declined)
       expect(JSON.parse(await readFile(statePath, "utf8")).renameDeclined).toEqual(declined)
     })
+    test("leaves the recorded display name alone when the server does not confirm the posted label", async () => {
+      const statePath = path.join(await createTempDir(), "experiment.json")
+      await writeFile(statePath, JSON.stringify({ ...storedState, displayName: "Old name" }), { mode: 0o600 })
+      const scripted = scriptedFetch([renamed("ccarenv_b64_existing", null)])
+      const result = await reconcileCcaExecutor(reconcileInput(statePath, scripted.fetch, { state: { ...storedState, displayName: "Old name" } }))
+      expect(result.executorChanged).toBe(false)
+      expect(result.state.displayName).toBe("Old name")
+      expect(result.state.customDisplayName).toBeNull()
+      expect(JSON.parse(await readFile(statePath, "utf8")).displayName).toBe("Old name")
+    })
     test.each([
       { name: "a network failure", responses: [() => { throw new Error("synthetic network failure") }, () => { throw new Error("synthetic network failure") }], posts: 2 },
       { name: "two 503 responses", responses: [status(503), status(503)], posts: 2 },
