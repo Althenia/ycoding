@@ -218,7 +218,25 @@ export function make(input: MakeInput): Interface {
     })
 
     const current = observed()
-    if (!refresh && current) return yield* profiled(current, profileSource !== undefined)
+    const cacheKey = selected ? `${providerID}:${selected.id}:${selected.accountGeneration}` : undefined
+    const mergeClaudeObservation = (observation: ProviderUsage.Snapshot, fetched: ProviderUsage.Snapshot) => {
+      const windows = ClaudeUsage.merge(observation, fetched).windows
+      if (windows.length === observation.windows.length && fetched.status === "available" && !fetched.message)
+        return observation
+      return new ProviderUsage.Snapshot({ ...fetched, windows,
+        status: fetched.status === "stale" || now() - fetched.updatedAt >= (input.ttlMs?.[providerID] ?? minute)
+          ? "stale" : fetched.status })
+    }
+    if (!refresh && current) {
+      const claudeHeaders = providerID === "anthropic" && profileSource && selected && cacheKey &&
+        current.source === "response_headers" && input.adapters[providerID]
+      if (claudeHeaders && cachedOnly && cacheKey && selected) {
+        const cached = yield* cache.peek({ key: cacheKey, generation: selected.generation })
+        if (cached && cached.source === "provider_internal_api" && (cached.status === "available" || cached.status === "stale"))
+          return yield* profiled(mergeClaudeObservation(current, cached))
+      }
+      if (!claudeHeaders || cachedOnly) return yield* profiled(current, profileSource !== undefined)
+    }
 
     const adapter = input.adapters[providerID]
     if (!adapter) return unavailable(providerID, "unsupported", "Provider usage is unsupported")
@@ -229,9 +247,9 @@ export function make(input: MakeInput): Interface {
         : unavailable(providerID, "unsupported", "No supported credential is configured")
     }
 
-    const cacheKey = `${providerID}:${selected.id}:${selected.accountGeneration}`
+    const selectedCacheKey = `${providerID}:${selected.id}:${selected.accountGeneration}`
     if (cachedOnly) {
-      const cached = yield* cache.peek({ key: cacheKey, generation: selected.generation })
+      const cached = yield* cache.peek({ key: selectedCacheKey, generation: selected.generation })
       return cached
         ? yield* profiled(cached)
         : unavailable(providerID, "unsupported", "Provider usage has not been loaded", selected.value)
@@ -240,7 +258,7 @@ export function make(input: MakeInput): Interface {
     const updatedAt = Math.max(0, Math.trunc(now()))
     const snapshot = yield* cache
       .get({
-        key: cacheKey,
+        key: selectedCacheKey,
         generation: selected.generation,
         ttlMs: input.ttlMs?.[providerID] ?? minute,
         refresh,
@@ -272,6 +290,12 @@ export function make(input: MakeInput): Interface {
       )
     const fetched = yield* profiled(snapshot)
     const latest = observed()
+    if (latest && providerID === "anthropic" && profileSource && latest.source === "response_headers" &&
+      (snapshot.status === "error" || snapshot.status === "unauthorized" || snapshot.status === "unsupported"))
+      return yield* profiled(new ProviderUsage.Snapshot({ providerID: latest.providerID, label: latest.label,
+        status: latest.status, source: latest.source, stability: latest.stability, updatedAt: latest.updatedAt,
+        windows: latest.windows, ...(latest.profile === undefined ? {} : { profile: latest.profile }),
+        ...(snapshot.message === undefined ? {} : { message: snapshot.message }) }))
     // A no-data unsupported snapshot (for example the Muse placeholder, whose timestamp is
     // only its generation time) carries no quota, so it cannot supersede a stored observation.
     if (
@@ -281,7 +305,12 @@ export function make(input: MakeInput): Interface {
           snapshot.windows.length === 0 &&
           (providerID !== "muse" || snapshot.message === "Quota is reported after the next Muse response")))
     )
-      return yield* profiled(latest, profileSource !== undefined)
+      return yield* profiled(
+        providerID === "anthropic" && profileSource && latest.source === "response_headers" &&
+          fetched.source === "provider_internal_api" && (fetched.status === "available" || fetched.status === "stale")
+          ? mergeClaudeObservation(latest, fetched) : latest,
+        profileSource !== undefined,
+      )
     return fetched
   })
 
@@ -648,7 +677,7 @@ export function createMuseUsageAdapter(http: HttpClient.HttpClient): Adapter {
   }
 }
 
-const claudeOAuth = (
+export const claudeOAuth = (
   http: HttpClient.HttpClient,
   store: ReturnType<typeof createClaudeCodeCredentialStore>,
   input: AdapterInput,
@@ -671,7 +700,8 @@ const claudeOAuth = (
         message: "Claude subscription usage requires a Claude Code OAuth account",
       })
     const source = input.credential.value.metadata.source
-    return yield* Effect.tryPromise({
+    let accessToken = ""
+    const snapshot = yield* Effect.tryPromise({
       try: () =>
         ClaudeUsage.loadOAuth({
           providerID: input.providerID,
@@ -679,12 +709,14 @@ const claudeOAuth = (
           updatedAt: input.updatedAt,
           resolve: () => store.resolve(source),
           refresh: () => store.refresh(source),
-          request: (accessToken) =>
-            Effect.runPromise(
-              jsonResponse(http, "https://api.anthropic.com/api/oauth/usage", accessToken, {
+          request: (token) => {
+            accessToken = token
+            return Effect.runPromise(
+              jsonResponse(http, "https://api.anthropic.com/api/oauth/usage", token, {
                 "anthropic-beta": "oauth-2025-04-20",
               }),
-            ),
+            )
+          },
         }),
       catch: (cause) =>
         cause instanceof ClaudeUsage.RequestError
@@ -693,6 +725,28 @@ const claudeOAuth = (
               ...(cause.retryAfter === undefined ? {} : { retryAfter: cause.retryAfter }),
             })
           : new Error("Claude usage refresh failed"),
+    })
+    const balance = yield* Effect.gen(function* () {
+      const profile = yield* json(http, "https://api.anthropic.com/api/oauth/profile", accessToken)
+      const org = record(profile) && record(profile.organization) ? profile.organization.uuid : undefined
+      if (typeof org !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(org))
+        return yield* Effect.fail(new Error("Invalid Claude organization"))
+      const current = yield* Effect.tryPromise(() => store.reload(source))
+      if (!current || current.accessToken !== accessToken) return yield* Effect.fail(new Error("Claude account changed"))
+      const body = yield* json(http, `https://api.anthropic.com/api/oauth/organizations/${org}/prepaid/credits`, accessToken, {
+        "x-organization-uuid": org,
+        "anthropic-version": "2023-06-01",
+      })
+      if (!record(body) || typeof body.amount !== "number" || !Number.isFinite(body.amount) || body.amount < 0 ||
+        typeof body.currency !== "string" || body.currency.toUpperCase() !== "USD")
+        return yield* Effect.fail(new Error("Invalid Claude prepaid balance"))
+      const latest = yield* Effect.tryPromise(() => store.reload(source))
+      if (!latest || latest.accessToken !== accessToken) return yield* Effect.fail(new Error("Claude account changed"))
+      return new ProviderUsage.Window({ id: "prepaid-balance", label: "Prepaid balance", unit: "usd", remaining: body.amount / 100 })
+    }).pipe(Effect.option)
+    return new ProviderUsage.Snapshot({ ...snapshot,
+      windows: [...snapshot.windows, ...(balance._tag === "Some" ? [balance.value] : [])],
+      ...(balance._tag === "None" ? { message: "Prepaid balance unavailable" } : {}),
     })
   })
 
@@ -1002,41 +1056,43 @@ export const openAI = (
     }
     if (input.credential.value.type !== "key")
       return yield* Effect.fail(new Error("OpenAI usage requires an API key or ChatGPT OAuth credential"))
-    if (!OpenAIUsage.isAdminCredential(input.credential.value.metadata))
-      return new ProviderUsage.Snapshot({
-        providerID: input.providerID,
-        label: input.label,
-        status: "unauthorized",
-        source: "provider_api",
-        stability: "stable",
-        updatedAt: input.updatedAt,
-        windows: [],
-        message: "Organization usage requires an explicitly configured admin credential",
-      })
+    const key = input.credential.value.key
+    const balance = Effect.gen(function* () {
+      const body = yield* json(http, "https://api.openai.com/v1/dashboard/billing/credit_grants", key)
+      if (!record(body) || typeof body.total_available !== "number" || !Number.isFinite(body.total_available) || body.total_available < 0)
+        return yield* Effect.fail(new Error("Invalid OpenAI API credit balance"))
+      return new ProviderUsage.Window({ id: "api-credit-balance", label: "API credit balance", unit: "usd", remaining: body.total_available })
+    })
+    if (!OpenAIUsage.isAdminCredential(input.credential.value.metadata)) {
+      const window = yield* balance
+      return new ProviderUsage.Snapshot({ providerID: input.providerID, label: input.label, status: "available",
+        source: "provider_internal_api", stability: "best_effort", updatedAt: input.updatedAt, windows: [window] })
+    }
     const now = new Date(input.updatedAt)
     const weekStart = utcWeekStart(now)
     const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1) / 1000
     const end = Math.floor(now.getTime() / 1000)
     const query = `start_time=${Math.min(weekStart, monthStart)}&end_time=${end}&bucket_width=1d&limit=31`
-    const usage = yield* pages(
-      http,
-      `https://api.openai.com/v1/organization/usage/completions?${query}`,
-      input.credential.value.key,
-    )
-    const costs = yield* pages(
-      http,
-      `https://api.openai.com/v1/organization/costs?${query}`,
-      input.credential.value.key,
-    )
-    return OpenAIUsage.normalize({
-      providerID: input.providerID,
-      label: input.label,
-      updatedAt: input.updatedAt,
-      weekStart,
-      monthStart,
-      usage,
-      costs,
-    })
+    let usageFailure: Error | undefined
+    const snapshot = yield* Effect.gen(function* () {
+      const usage = yield* pages(http, `https://api.openai.com/v1/organization/usage/completions?${query}`, key)
+      const costs = yield* pages(http, `https://api.openai.com/v1/organization/costs?${query}`, key)
+      return OpenAIUsage.normalize({ providerID: input.providerID, label: input.label, updatedAt: input.updatedAt,
+        weekStart, monthStart, usage, costs })
+    }).pipe(Effect.catch((error) => {
+      usageFailure = error
+      return Effect.succeed(undefined)
+    }))
+    if (!snapshot) {
+      const window = yield* balance.pipe(Effect.catch((error) => Effect.fail(usageFailure ?? error)))
+      return new ProviderUsage.Snapshot({ providerID: input.providerID, label: input.label, status: "available",
+        source: "provider_internal_api", stability: "best_effort", updatedAt: input.updatedAt, windows: [window],
+        message: "Organization usage unavailable" })
+    }
+    const credit = yield* balance.pipe(Effect.option)
+    return credit._tag === "Some"
+      ? new ProviderUsage.Snapshot({ ...snapshot, source: "provider_internal_api", stability: "best_effort", windows: [...snapshot.windows, credit.value] })
+      : new ProviderUsage.Snapshot({ ...snapshot, message: "API credit balance unavailable" })
   })
 
 const meta = (http: HttpClient.HttpClient, input: AdapterInput) =>

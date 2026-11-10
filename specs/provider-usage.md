@@ -28,7 +28,7 @@ A window may include a group name, used, limit, remaining, unlimited, reset time
 ## Status values
 
 - `available`: a current provider snapshot exists;
-- `stale`: refresh failed and an older valid snapshot is retained;
+- `stale`: an older valid snapshot is retained after refresh failure or alongside a newer observation past its cache lifetime;
 - `unsupported`: the provider or configured credential has no supported usage path;
 - `unauthorized`: the usage source rejected the credential;
 - `error`: refresh failed and no previous valid snapshot exists.
@@ -58,6 +58,8 @@ The adapter uses the documented current-key endpoint. A credential explicitly ma
 
 Organization usage and cost endpoints are activated only for an API key explicitly marked as an admin usage credential. Ordinary inference keys are not silently treated as organization-admin credentials.
 
+The undocumented credit-grants endpoint can report `api-credit-balance` as an aggregate USD API credit balance for a key with billing access. It does not distinguish purchased, promotional, or subscription grants. Rejection or missing data does not invent a balance; organization usage and credit balance are independent measurements.
+
 ### Claude subscription
 
 Claude Code OAuth accounts use two sources:
@@ -65,7 +67,7 @@ Claude Code OAuth accounts use two sources:
 1. recognized unified quota response headers from normal Claude requests;
 2. the provider-owned OAuth usage snapshot endpoint for cold start, weekly model lanes, and extra-usage values.
 
-Live response observations replace overlapping older OAuth windows. The OAuth usage request retries once after a forced credential refresh on HTTP 401.
+Live response observations replace overlapping older OAuth windows while retaining account-bound prepaid data from the cached OAuth snapshot. The OAuth usage request retries once after a forced credential refresh on HTTP 401. The managed account's OAuth profile identifies the organization for the prepaid credits endpoint; the same token must remain current through the read. A USD `prepaid-balance` window reports the provider's prepaid amount, separate from the monthly extra-usage limit. Unavailable or non-USD prepaid data is omitted without discarding subscription quota.
 
 ### Codex and Spark
 
@@ -91,7 +93,7 @@ Other seats keep the legacy entitlement path, whose lanes report a percentage of
 
 Successful API snapshots are cached by provider and credential identity. Concurrent refreshes for the same cache key are single-flight. A refresh failure returns a stale copy when one exists.
 
-Observed response data is stored separately by provider and applies only to the provider's default profile. A newer observation takes precedence over that profile's older API snapshot. A forced API refresh does not erase a newer observation.
+Observed response data is stored separately and can be bound to a credential account generation. A newer observation takes precedence over overlapping API windows. Claude account-bound response headers retain non-overlapping cached OAuth windows. Normal reads load a missing OAuth snapshot and refresh it after its cache lifetime; a failed refresh retains a stale snapshot, or the observed quota and a safe error message when no snapshot exists. Cache-only reads do not fetch. A forced API refresh does not erase a newer observation.
 
 No cache key contains a credential secret.
 

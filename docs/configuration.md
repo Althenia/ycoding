@@ -4,6 +4,8 @@ This document is the canonical configuration reference for the current YCoding r
 
 ## Configure by task
 
+Provider usage reads may retrieve credit balances: OpenAI API keys use an undocumented legacy credit-grants endpoint returning aggregate API credits, while managed Claude Code accounts use the OAuth profile and organization prepaid endpoints. These reads are best effort and may be unauthorized or unsupported. USD balances are separate from subscription quotas, extra-usage spend, and locally recorded usage; absent balances remain unreported.
+
 | Task                                      | Read                                                                                                                                                                       |
 | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Choose which configuration wins           | [Discovery and precedence](#runtime-configuration-discovery-and-precedence), [JSON/JSONC](#json-and-jsonc-behavior).                                                       |

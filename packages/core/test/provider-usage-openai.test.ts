@@ -24,11 +24,12 @@ describe("OpenAIUsage", () => {
           urls.push(request.url.split("?")[0]!)
           expect(request.headers.originator).toBeUndefined()
           expect(request.headers["user-agent"]).toBeUndefined()
+          if (request.url.includes("credit_grants"))
+            return HttpClientResponse.fromWeb(request, Response.json({}, { status: 403 }))
           return HttpClientResponse.fromWeb(request, Response.json({ data: [], has_more: false }))
         }),
       )
-      const snapshot = await Effect.runPromise(
-        ProviderUsageRuntime.openAI(
+      const invoke = ProviderUsageRuntime.openAI(
           http,
           {
             providerID,
@@ -42,17 +43,19 @@ describe("OpenAIUsage", () => {
             }),
           },
           { snapshot: () => Effect.die("API keys must not resolve ChatGPT OAuth") },
-        ),
-      )
+        )
+      const snapshot = admin ? await Effect.runPromise(invoke) : undefined
+      if (!admin) await expect(Effect.runPromise(invoke)).rejects.toBeDefined()
+      if (snapshot)
       expect(snapshot).toMatchObject({
-        status: admin ? "available" : "unauthorized",
+        status: "available",
         source: "provider_api",
         stability: "stable",
       })
       expect(urls).toEqual(
         admin
-          ? ["https://api.openai.com/v1/organization/usage/completions", "https://api.openai.com/v1/organization/costs"]
-          : [],
+          ? ["https://api.openai.com/v1/organization/usage/completions", "https://api.openai.com/v1/organization/costs", "https://api.openai.com/v1/dashboard/billing/credit_grants"]
+          : ["https://api.openai.com/v1/dashboard/billing/credit_grants"],
       )
     })
 
