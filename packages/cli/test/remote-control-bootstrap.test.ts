@@ -68,7 +68,7 @@ test.each([false, true])("bootstrap registers the host status, follows configura
   expect(events).toEqual(["attach", "subscribe", "subscribe"])
   expect(await transport?.status()).toMatchObject({ state: "off", hostname: expect.any(String) })
   expect(await transport?.computer()).toEqual({ state: "unavailable", problem: "configuration" })
-  expect(await transport?.attachComputer()).toEqual({ state: "unavailable", problem: "configuration" })
+  expect(await transport?.attachComputer({ replaceOthers: false })).toEqual({ state: "unavailable", problem: "configuration" })
   await stop()
   expect(events).toEqual(["attach", "subscribe", "subscribe", "detach", "unsubscribe", "unsubscribe"])
   expect(transport).toBeUndefined()

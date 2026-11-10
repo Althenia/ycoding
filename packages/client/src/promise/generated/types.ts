@@ -13019,7 +13019,7 @@ export type DotsSetOutput = { data: DotsNativeStatus }["data"]
 
 export type DotsAttachInput = {
   readonly replaceOthers: {
-    readonly replaceOthers: true
+    readonly replaceOthers: boolean
     readonly expectedTarget?: {
       readonly dotID: string
       readonly threadID: string
@@ -13028,7 +13028,7 @@ export type DotsAttachInput = {
     }
   }["replaceOthers"]
   readonly expectedTarget?: {
-    readonly replaceOthers: true
+    readonly replaceOthers: boolean
     readonly expectedTarget?: {
       readonly dotID: string
       readonly threadID: string

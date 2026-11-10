@@ -62,7 +62,7 @@ const base: Dots.NativeStatus = { access: { enabled: true, revision: 4 }, config
 
 async function renderComputerDialog(initial: Dots.NativeStatus, width = 100) {
   let current = initial
-  const attaches: { replaceOthers: true }[] = []
+  const attaches: { replaceOthers: boolean }[] = []
   const errors: unknown[] = []
   let finish!: (value: Dots.NativeStatus) => void
   let fail!: (error: unknown) => void
@@ -121,17 +121,17 @@ for (const width of [60, 100]) {
   })
 }
 
-test("Dots dialog confirms before detaching other computers, then attaches once and refreshes", async () => {
+test("Dots dialog confirms before attaching, then attaches once and refreshes", async () => {
   const view = await renderComputerDialog({ ...base, computer: { state: "detached" } })
   try {
     await view.app.waitForFrame((frame) => frame.includes("Use this computer for Dots tasks"))
     view.app.mockInput.pressArrow("down")
     view.app.mockInput.pressEnter()
-    await view.app.waitForFrame((frame) => frame.includes("detach your other computers"))
+    await view.app.waitForFrame((frame) => frame.includes("stay connected"))
     expect(view.attaches).toEqual([])
     view.app.mockInput.pressEnter()
     await view.app.waitForFrame((frame) => frame.includes("Updating access"))
-    expect(view.attaches).toEqual([{ replaceOthers: true }])
+    expect(view.attaches).toEqual([{ replaceOthers: false }])
     view.app.mockInput.pressEnter()
     expect(view.attaches).toHaveLength(1)
     view.settle({ ...base, computer: { state: "attached" } })
@@ -147,10 +147,11 @@ test("Dots dialog cancel leaves the computer detached without a request", async 
     await view.app.waitForFrame((frame) => frame.includes("Use this computer for Dots tasks"))
     view.app.mockInput.pressArrow("down")
     view.app.mockInput.pressEnter()
-    await view.app.waitForFrame((frame) => frame.includes("detach your other computers"))
+    await view.app.waitForFrame((frame) => frame.includes("stay connected"))
     view.app.mockInput.pressArrow("down")
     view.app.mockInput.pressEnter()
-    await view.app.waitForFrame((frame) => frame.includes("Use this computer for Dots tasks") && !frame.includes("detach your other computers"))
+    await view.app.waitForFrame((frame) => frame.includes("Use this computer for Dots tasks") && !frame.includes("stay connected"))
+    expect(view.frame()).toContain("Use this computer for Dots tasks")
     expect(view.attaches).toEqual([])
   } finally { view.app.renderer.destroy() }
 })
@@ -161,7 +162,7 @@ test("Dots dialog shows an attach failure and does not retry", async () => {
     await view.app.waitForFrame((frame) => frame.includes("Use this computer for Dots tasks"))
     view.app.mockInput.pressArrow("down")
     view.app.mockInput.pressEnter()
-    await view.app.waitForFrame((frame) => frame.includes("detach your other computers"))
+    await view.app.waitForFrame((frame) => frame.includes("stay connected"))
     view.app.mockInput.pressEnter()
     await view.app.waitForFrame((frame) => frame.includes("Updating access"))
     view.reject(new Error("executor refused"))

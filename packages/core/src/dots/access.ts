@@ -46,14 +46,14 @@ export interface ComputerStatus {
 export interface Transport {
   readonly status: () => Promise<TransportStatus>
   readonly computer: () => Promise<ComputerStatus>
-  readonly attachComputer: (expectedTarget?: Dots.ComputerTarget) => Promise<ComputerStatus>
+  readonly attachComputer: (input: Dots.ComputerAttach) => Promise<ComputerStatus>
 }
 
 export interface Interface {
   readonly get: () => Effect.Effect<Dots.Access, Error>
   readonly set: (input: Dots.AccessSet) => Effect.Effect<Dots.Access, Error>
   readonly status: () => Effect.Effect<Dots.NativeStatus, Error>
-  readonly attachComputer: (expectedTarget?: Dots.ComputerTarget) => Effect.Effect<Dots.NativeStatus, Error>
+  readonly attachComputer: (input: Dots.ComputerAttach) => Effect.Effect<Dots.NativeStatus, Error>
   readonly subscribe: (listener: () => void) => () => void
   readonly attachTransport: (transport: Transport) => () => void
 }
@@ -169,13 +169,13 @@ export function make(input: {
       )
     }),
     status: () => observe((transport) => transport.computer()),
-    attachComputer: Effect.fn("DotsAccess.attachComputer")(function* (expectedTarget?: Dots.ComputerTarget) {
+    attachComputer: Effect.fn("DotsAccess.attachComputer")(function* (input: Dots.ComputerAttach) {
       const initial = yield* snapshot()
       const owner = initial.owner
       if (!owner) return yield* new Error({ code: "unavailable", message: "The native transport is unavailable" })
       const ready = owner === attached && initial.access.enabled && initial.configuration.ready
       const result = ready
-        ? yield* Effect.tryPromise(() => owner.transport.attachComputer(expectedTarget)).pipe(Effect.catch(() => Effect.succeed(computerFailure)))
+        ? yield* Effect.tryPromise(() => owner.transport.attachComputer(input)).pipe(Effect.catch(() => Effect.succeed(computerFailure)))
         : { state: "unavailable" as const, problem: "configuration" as const }
       return yield* observe(() => Promise.resolve(result), initial)
     }),

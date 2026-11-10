@@ -24,7 +24,7 @@ test("attachment forwards the observed target without routing by display name", 
     return { status: "ok", value: { data: status } }
   } }
   await dotsClient(link, scope).attach(target)
-  expect(sent).toEqual({ replaceOthers: true, expectedTarget: target })
+  expect(sent).toEqual({ replaceOthers: false, expectedTarget: target })
 })
 const status = { access: { enabled: false, revision: 2 }, configuration: { ready: true, profile: "native-test" }, connection: { state: "off", hostname: "test-computer" } } satisfies RemoteDotsStatus
 
@@ -52,7 +52,7 @@ test("rejects malformed status and never replays an unknown mutation", async () 
   expect(calls).toEqual(["dots.get", "dots.set"])
 })
 
-test("attaches this computer with the literal replaceOthers payload and parses the returned status", async () => {
+test("attaches this computer with the non-replacing payload and parses the returned status", async () => {
   const calls: unknown[] = []
   const attached = { ...status, access: { enabled: true, revision: 3 }, connection: { state: "connected" } } satisfies RemoteDotsStatus
   const link: RemoteLink = { recoveries: () => 0, recovered: async () => false, request: async (_scope, operation, request) => {
@@ -60,7 +60,7 @@ test("attaches this computer with the literal replaceOthers payload and parses t
     return { status: "ok", value: { data: attached } }
   } }
   expect(await dotsClient(link, scope).attach()).toEqual({ status: "ok", value: attached })
-  expect(calls).toEqual([{ operation: "dots.attach", sessionID: undefined, input: { replaceOthers: true } }])
+  expect(calls).toEqual([{ operation: "dots.attach", sessionID: undefined, input: { replaceOthers: false } }])
 })
 
 test("attach surfaces failed and unknown outcomes without replay and rejects malformed status", async () => {

@@ -21,7 +21,7 @@ export function dotsClient(link: RemoteLink, scope: QueryScope) {
       return { status: "ok" as const, value: read(outcome.value) }
     },
     attach: async (expectedTarget?: RemoteDotsComputerTarget) => {
-      const outcome = await link.request(scope, "dots.attach", { input: { replaceOthers: true, ...(expectedTarget === undefined ? {} : { expectedTarget }) }, timeoutMs: RemoteLimits.dotsAttachMs })
+      const outcome = await link.request(scope, "dots.attach", { input: { replaceOthers: false, ...(expectedTarget === undefined ? {} : { expectedTarget }) }, timeoutMs: RemoteLimits.dotsAttachMs })
       if (outcome.status !== "ok") return outcome
       return { status: "ok" as const, value: read(outcome.value) }
     },

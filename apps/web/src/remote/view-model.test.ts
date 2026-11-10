@@ -132,8 +132,9 @@ describe("Dots connection display", () => {
     const view = (state: "attached" | "detached" | "unavailable", override: Partial<typeof input> & { error?: string } = {}, enabled = true) =>
       dotsConnectionView({ ...input, ...override, status: { ...status, access: { enabled, revision: 3 }, computer: { state } } })
     expect(view("detached")).toMatchObject({ canAttach: true, attachAction: "Use this computer for Dots tasks" })
-    expect(view("detached").attachConfirmation).toContain("detach")
-    expect(view("detached").attachConfirmation).toContain("other computers")
+    expect(view("detached").attachConfirmation).toContain("stay connected")
+    expect(view("detached").attachConfirmation).toContain("Other computers")
+    expect(view("detached").attachConfirmation).toContain("ChatGPT")
     expect(view("attached").canAttach).toBe(false)
     expect(view("unavailable").canAttach).toBe(false)
     expect(view("detached", {}, false).canAttach).toBe(false)

@@ -27,7 +27,7 @@ export default Runtime.handler(DotsCommand.commands.attach, Effect.fn("cli.dots.
     const response = await fetch(new URL(method === "GET" ? "/api/dots" : "/api/dots/computer", connection.endpoint.url), {
       method,
       headers,
-      ...(method === "POST" ? { body: JSON.stringify({ replaceOthers: true, ...(expectedTarget === undefined ? {} : { expectedTarget }) }) } : {}),
+      ...(method === "POST" ? { body: JSON.stringify({ replaceOthers: false, ...(expectedTarget === undefined ? {} : { expectedTarget }) }) } : {}),
     })
     const text = await response.text()
     if (!response.ok) throw new Error(`Dots request failed (${response.status}): ${text}`)

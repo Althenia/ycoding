@@ -51,7 +51,7 @@ export function dotsConnectionView(input: { readonly status?: RemoteDotsStatus; 
     canAttach: input.online && !input.loading && !input.pending && !input.error && status?.access.enabled === true && status.computer?.state === "detached",
     refreshing: input.refreshing,
     attachAction: "Use this computer for Dots tasks",
-    attachConfirmation: "This detaches your other computers from your Dot, so Dots tasks run on this computer only. Continue?",
+    attachConfirmation: "Other computers stay connected. Choose which computer runs a Dots task in ChatGPT. Continue?",
     notice: !input.online ? "Reconnect to this machine to read or change Dots."
       : input.pending ? "Changing Dots access…"
       : input.loading ? "Loading Dots connection…"

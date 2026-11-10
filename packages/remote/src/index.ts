@@ -936,7 +936,7 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
   if (operation === "dots.set") return isRecord(input) && Object.keys(input).length === 2 &&
     typeof input.enabled === "boolean" && typeof input.expectedRevision === "number" &&
     Number.isSafeInteger(input.expectedRevision) && input.expectedRevision >= 0
-  if (operation === "dots.attach") return isRecord(input) && Object.keys(input).every((key) => key === "replaceOthers" || key === "expectedTarget") && input.replaceOthers === true &&
+  if (operation === "dots.attach") return isRecord(input) && Object.keys(input).every((key) => key === "replaceOthers" || key === "expectedTarget") && typeof input.replaceOthers === "boolean" &&
     (input.expectedTarget === undefined || readDotsComputerTarget(input.expectedTarget) !== null)
   if (operation === "session.delete") return input === undefined || isRecord(input) && Object.keys(input).length === 0
   if (operation.startsWith("coordination.")) return validCoordinationInput(operation, input)

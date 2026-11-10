@@ -5,15 +5,19 @@ import { createSessionRegistry, createSubscriptions, executeRemoteOperation } fr
 
 const status: RemoteDotsStatus = { access: { enabled: false, revision: 2 }, configuration: { ready: true, profile: "Synthetic" }, connection: { state: "off" } }
 
-test("remote attachment dispatch preserves the target receipt", async () => {
+test("remote attachment dispatch preserves the replace mode and target receipt", async () => {
   const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
   const calls: unknown[][] = []
   const local = new Proxy({} as LocalServer, { get: (_target, name) => async (...args: unknown[]) => { calls.push([name, ...args]); return status } })
-  const result = await executeRemoteOperation({ local, sessions: createSessionRegistry({ local }), subscriptions: createSubscriptions(), request: {
-    type: "request", id: "req_target", operation: "dots.attach", input: { replaceOthers: true, expectedTarget: target },
+  const dispatch = (input: Record<string, unknown>) => executeRemoteOperation({ local, sessions: createSessionRegistry({ local }), subscriptions: createSubscriptions(), request: {
+    type: "request", id: "req_target", operation: "dots.attach", input,
   } })
-  expect(result).toMatchObject([{ ok: true }])
-  expect(calls).toEqual([["dotsAttach", target]])
+  expect(await dispatch({ replaceOthers: false, expectedTarget: target })).toMatchObject([{ ok: true }])
+  expect(await dispatch({ replaceOthers: true, expectedTarget: target })).toMatchObject([{ ok: true }])
+  expect(calls).toEqual([
+    ["dotsAttach", { replaceOthers: false, expectedTarget: target }],
+    ["dotsAttach", { replaceOthers: true, expectedTarget: target }],
+  ])
 })
 
 test("global Dots operations need no Session inventory and preserve exact revision and conflicts", async () => {
@@ -29,13 +33,15 @@ test("global Dots operations need no Session inventory and preserve exact revisi
   const run = (operation: string, input?: Record<string, unknown>, sessionID?: string) => executeRemoteOperation({ request: { type: "request", id: "req_access", operation, sessionID, input } as RemoteRequest, local, sessions, subscriptions })
   expect(await run("dots.get")).toEqual([{ type: "response", id: "req_access", ok: true, value: { data: status } }])
   expect(await run("dots.set", { enabled: true, expectedRevision: 2 })).toEqual([{ type: "response", id: "req_access", ok: true, value: { data: status } }])
+  expect(await run("dots.attach", { replaceOthers: false })).toEqual([{ type: "response", id: "req_access", ok: true, value: { data: status } }])
   expect(await run("dots.attach", { replaceOthers: true })).toEqual([{ type: "response", id: "req_access", ok: true, value: { data: status } }])
   expect(calls).toEqual([
     ["dotsGet"],
     ["dotsSet", { enabled: true, expectedRevision: 2 }],
-    ["dotsAttach"],
+    ["dotsAttach", { replaceOthers: false }],
+    ["dotsAttach", { replaceOthers: true }],
   ])
-  for (const input of [undefined, {}, { replaceOthers: false }, { replaceOthers: "true" }, { replaceOthers: true, environmentID: "env_other" }])
+  for (const input of [undefined, {}, { replaceOthers: "true" }, { replaceOthers: 1 }, { replaceOthers: true, environmentID: "env_other" }, { replaceOthers: false, expectedTarget: { dotID: "dot-a" } }])
     expect(await run("dots.attach", input)).toMatchObject([{ ok: false, error: { code: "invalid_message" } }])
   expect(await run("dots.attach", { replaceOthers: true }, "ses_existing")).toMatchObject([{ ok: false, error: { code: "invalid_message" } }])
   calls.length = 2
@@ -53,7 +59,7 @@ test("global Dots operations need no Session inventory and preserve exact revisi
   expect(await run("dots.set", { enabled: true, expectedRevision: 2 })).toMatchObject([{ ok: false, error: { code: "outcome_unknown" } }])
   expect(await run("dots.attach", { replaceOthers: true })).toMatchObject([{ ok: false, error: { code: "outcome_unknown" } }])
   expect(calls).toHaveLength(5)
-  expect(calls.at(-1)).toEqual(["dotsAttach"])
+  expect(calls.at(-1)).toEqual(["dotsAttach", { replaceOthers: true }])
 })
 
 test("global Dots local adapter sends no Session or Location and only revision-fenced fields", async () => {
@@ -66,13 +72,13 @@ test("global Dots local adapter sends no Session or Location and only revision-f
     const local = createLocalServer({ url: server.url.href })
     expect(await local.dotsGet()).toEqual(status)
     expect(await local.dotsSet({ enabled: true, expectedRevision: 2 })).toEqual(status)
-    expect(await local.dotsAttach()).toEqual(status)
+    expect(await local.dotsAttach({ replaceOthers: false })).toEqual(status)
     const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
-    expect(await local.dotsAttach(target)).toEqual(status)
+    expect(await local.dotsAttach({ replaceOthers: true, expectedTarget: target })).toEqual(status)
     expect(requests).toEqual([
       { path: "/api/dots", query: "", method: "GET", directory: null, workspace: null, body: undefined },
       { path: "/api/dots", query: "", method: "PUT", directory: null, workspace: null, body: { enabled: true, expectedRevision: 2 } },
-      { path: "/api/dots/computer", query: "", method: "POST", directory: null, workspace: null, body: { replaceOthers: true } },
+      { path: "/api/dots/computer", query: "", method: "POST", directory: null, workspace: null, body: { replaceOthers: false } },
       { path: "/api/dots/computer", query: "", method: "POST", directory: null, workspace: null, body: { replaceOthers: true, expectedTarget: target } },
     ])
   } finally { await server.stop(true) }

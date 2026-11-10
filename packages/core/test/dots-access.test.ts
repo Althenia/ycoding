@@ -32,7 +32,7 @@ for (const operation of ["status", "attach"] as const) for (const change of ["pr
       computer: async () => ({ state: "attached", name: "Old executor", target }),
       attachComputer: async () => { await delayed(); return { state: "attached", name: "Old executor", target } },
     })
-    const pending = yield* (operation === "status" ? access.status() : access.attachComputer(target)).pipe(Effect.forkChild)
+    const pending = yield* (operation === "status" ? access.status() : access.attachComputer({ replaceOthers: false, expectedTarget: target })).pipe(Effect.forkChild)
     yield* Deferred.await(entered)
     if (change === "profile") profile = "new-profile"
     if (change === "access") yield* access.set({ enabled: false, expectedRevision: 1 })
@@ -66,8 +66,8 @@ it.live("status preserves separate names and exact target receipts through attac
   const before = yield* f.access.status()
   expect(before.connection).toEqual({ state: "connected", hostname: "box.local", name: "Native desk" })
   expect(before.computer).toEqual({ state: "detached", name: "Executor desk", target })
-  expect((yield* f.access.attachComputer(target)).computer).toEqual({ state: "attached", name: "Executor desk", target })
-  expect(received).toEqual(target)
+  expect((yield* f.access.attachComputer({ replaceOthers: false, expectedTarget: target })).computer).toEqual({ state: "attached", name: "Executor desk", target })
+  expect(received).toEqual({ replaceOthers: false, expectedTarget: target })
   release()
 }))
 
@@ -80,7 +80,7 @@ it.live("an unconfirmed attachment explains that the mutation must not be replay
     status: async () => ({ state: "connected" }),
     attachComputer: async () => { calls++; return { state: "unavailable", problem: "unconfirmed" } },
   })
-  expect((yield* f.access.attachComputer()).computer?.message).toContain("Do not repeat")
+  expect((yield* f.access.attachComputer({ replaceOthers: false })).computer?.message).toContain("Do not repeat")
   expect(calls).toBe(1)
   release()
 }))
@@ -92,6 +92,23 @@ const setup = Effect.gen(function* () {
   const make = () => DotsAccess.make({ db, kv, configuration })
   return { db, kv, make, access: make(), unavailable: () => { ready = false } }
 })
+
+it.live("computer attachment forwards the replaceOthers consent to the transport", () => Effect.gen(function* () {
+  const f = yield* setup
+  yield* f.access.set({ enabled: true, expectedRevision: 0 })
+  let received: unknown
+  const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+  const release = f.access.attachTransport({
+    status: async () => ({ state: "connected" }),
+    computer: async () => ({ state: "detached" }),
+    attachComputer: async (input) => { received = input; return { state: "attached" } },
+  })
+  expect((yield* f.access.attachComputer({ replaceOthers: false, expectedTarget: target })).computer?.state).toBe("attached")
+  expect(received).toEqual({ replaceOthers: false, expectedTarget: target })
+  expect((yield* f.access.attachComputer({ replaceOthers: true, expectedTarget: target })).computer?.state).toBe("attached")
+  expect(received).toEqual({ replaceOthers: true, expectedTarget: target })
+  release()
+}))
 
 it.live("global access defaults off despite historical family grants and persists independently of Session creation", () => Effect.gen(function* () {
   const f = yield* setup
@@ -265,7 +282,7 @@ it.live("a connected transport never makes the computer attached and an unlisted
 
 it.live("computer attachment requires a transport and enabled access and reports the attach outcome", () => Effect.gen(function* () {
   const f = yield* setup
-  expect((yield* f.access.attachComputer().pipe(Effect.flip)).code).toBe("unavailable")
+  expect((yield* f.access.attachComputer({ replaceOthers: false }).pipe(Effect.flip)).code).toBe("unavailable")
   let attaches = 0
   let outcome: DotsAccess.ComputerStatus = { state: "detached", problem: "rejected" }
   const release = f.access.attachTransport({
@@ -273,17 +290,17 @@ it.live("computer attachment requires a transport and enabled access and reports
     computer: async () => ({ state: "detached" }),
     attachComputer: async () => { attaches++; return outcome },
   })
-  expect((yield* f.access.attachComputer()).computer).toEqual({ state: "unavailable", message: "Turn on Dots access with a ready ChatGPT profile to attach this computer." })
+  expect((yield* f.access.attachComputer({ replaceOthers: false })).computer).toEqual({ state: "unavailable", message: "Turn on Dots access with a ready ChatGPT profile to attach this computer." })
   expect(attaches).toBe(0)
   yield* f.access.set({ enabled: true, expectedRevision: 0 })
-  expect((yield* f.access.attachComputer()).computer).toEqual({ state: "detached", message: "ChatGPT refused the attach request." })
+  expect((yield* f.access.attachComputer({ replaceOthers: false })).computer).toEqual({ state: "detached", message: "ChatGPT refused the attach request." })
   outcome = { state: "attached" }
-  const attached = yield* f.access.attachComputer()
+  const attached = yield* f.access.attachComputer({ replaceOthers: false })
   expect(attached.computer).toEqual({ state: "attached" })
   expect(attached.connection.state).toBe("connected")
   expect(attaches).toBe(2)
   f.unavailable()
-  expect((yield* f.access.attachComputer()).computer?.state).toBe("unavailable")
+  expect((yield* f.access.attachComputer({ replaceOthers: false })).computer?.state).toBe("unavailable")
   expect(attaches).toBe(2)
   release()
 }))

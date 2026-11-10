@@ -805,7 +805,7 @@ async function run(input: OperationInput) {
   const validated = validate(request)
   if (validated.kind === "dots.get") return { data: await input.local.dotsGet() }
   if (validated.kind === "dots.set") return { data: await input.local.dotsSet(validated.input) }
-  if (validated.kind === "dots.attach") return { data: await (validated.expectedTarget === undefined ? input.local.dotsAttach() : input.local.dotsAttach(validated.expectedTarget)) }
+  if (validated.kind === "dots.attach") return { data: await input.local.dotsAttach({ replaceOthers: validated.replaceOthers, ...(validated.expectedTarget === undefined ? {} : { expectedTarget: validated.expectedTarget }) }) }
   if (validated.kind === "workspace.list") return { data: validated.sessionsOnly
     ? await sessionWorkspaces(input.local, input.sessions.snapshot(), input.cache)
     : await workspaceList(input) }
@@ -1149,7 +1149,7 @@ type Reply = "once" | "always" | "reject"
 type Validated =
   | { readonly kind: "dots.get" }
   | { readonly kind: "dots.set"; readonly input: Dots.AccessSet }
-  | { readonly kind: "dots.attach"; readonly expectedTarget?: Dots.ComputerTarget }
+  | { readonly kind: "dots.attach"; readonly replaceOthers: boolean; readonly expectedTarget?: Dots.ComputerTarget }
   | { readonly kind: "latency.append"; readonly samples: readonly RemoteLatencySample[] }
   | { readonly kind: "latency.list"; readonly input: { readonly limit?: number; readonly before?: string } }
   | { readonly kind: "keepAwake.get" }
@@ -1376,10 +1376,10 @@ function validate(request: RemoteRequest): Validated {
       return { kind: "dots.get" }
     }
     if (request.operation === "dots.attach") {
-      if (fields.replaceOthers !== true) throw new OperationError("invalid_message", "Attaching this computer requires replaceOthers: true")
+      if (typeof fields.replaceOthers !== "boolean") throw new OperationError("invalid_message", "Attaching this computer requires an explicit replaceOthers choice")
       const expectedTarget = fields.expectedTarget === undefined ? undefined : readDotsComputerTarget(fields.expectedTarget)
       if (expectedTarget === null) throw new OperationError("invalid_message", "The Dots target receipt is invalid. Refresh and confirm the current computer.")
-      return { kind: "dots.attach", ...(expectedTarget === undefined ? {} : { expectedTarget }) }
+      return { kind: "dots.attach", replaceOthers: fields.replaceOthers, ...(expectedTarget === undefined ? {} : { expectedTarget }) }
     }
     const enabled = requireBoolean(fields.enabled, "enabled")
     if (typeof fields.expectedRevision !== "number" || !Number.isSafeInteger(fields.expectedRevision) || fields.expectedRevision < 0)

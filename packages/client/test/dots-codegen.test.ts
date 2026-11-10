@@ -16,7 +16,8 @@ test("Dots contracts compile for both clients", () => {
   const attach = ClientApi.groups["server.dots"].endpoints["dots.attach"].payload.values().next().value?.schemas[0]
   if (!attach) throw new Error("Canonical Dots attach payload is missing")
   expect(Schema.decodeUnknownSync(attach)({ replaceOthers: true })).toEqual({ replaceOthers: true })
-  for (const value of [{}, { replaceOthers: false }, { replaceOthers: "true" }, { replaceOthers: true, environmentID: "env" }])
+  expect(Schema.decodeUnknownSync(attach)({ replaceOthers: false })).toEqual({ replaceOthers: false })
+  for (const value of [{}, { replaceOthers: "true" }, { replaceOthers: true, environmentID: "env" }])
     expect(() => Schema.decodeUnknownSync(attach)(value)).toThrow()
   const access = ClientApi.groups["server.dots"].endpoints["dots.set"].payload.values().next().value?.schemas[0]
   if (!access) throw new Error("Canonical Dots access payload is missing")

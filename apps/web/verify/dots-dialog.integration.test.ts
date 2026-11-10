@@ -51,7 +51,7 @@ test("named Dots computers render distinct registered names and confirm their ex
     await page.evaluate(`const button = document.querySelector('[aria-label="Confirm computer change"] .button--primary'); button.click(); button.click()`)
     await wait(page, `${fact("Executor")} === 'Attached'`)
     expect(await page.evaluate<unknown[]>(`window.remoteMutationReport().filter(entry => entry.operation === 'dots.attach').map(entry => entry.input)`)).toEqual([
-      { replaceOthers: true, expectedTarget: { dotID: "dot_fixture", threadID: "thread_fixture", environmentID: "env_dev_studio", revision: "a".repeat(64) } },
+      { replaceOthers: false, expectedTarget: { dotID: "dot_fixture", threadID: "thread_fixture", environmentID: "env_dev_studio", revision: "a".repeat(64) } },
     ])
     expect(await page.evaluate<string>(fact("Name"))).toBe("Native desk")
     expect(await page.evaluate<string>(fact("Executor name"))).toBe("Executor desk")

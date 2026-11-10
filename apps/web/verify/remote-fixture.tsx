@@ -683,7 +683,7 @@ function createFixtureStore(): Fixture {
   const dotsOutcome = (operation: "dots.get" | "dots.set" | "dots.attach", input: Readonly<Record<string, unknown>> | undefined, deviceID: string): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
     if (operation === "dots.attach") {
       mutationRequests.push({ operation, input })
-      if (!dotsState(deviceID).enabled || !accountParams.get("dotsExecutorName") || input?.replaceOthers !== true || JSON.stringify(input.expectedTarget) !== JSON.stringify(dotsTarget(deviceID)))
+      if (!dotsState(deviceID).enabled || !accountParams.get("dotsExecutorName") || typeof input?.replaceOthers !== "boolean" || JSON.stringify(input.expectedTarget) !== JSON.stringify(dotsTarget(deviceID)))
         return { status: "failed", error: { code: "invalid_message", message: "Refresh and confirm the current computer." } }
       dotsAttached.add(deviceID)
       return { status: "ok", value: { data: dotsStatus(deviceID) } }

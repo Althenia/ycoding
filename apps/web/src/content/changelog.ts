@@ -22,6 +22,18 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.4",
+    date: "2026-11-10",
+    title: "Multiple Dots computers and provider credit balances",
+    tags: ["Added", "Changed"],
+    changes: [
+      { tag: "Added", text: "Provider usage can show best-effort USD balances for OpenAI API credits and managed Claude OAuth prepaid credits, separately from subscription quotas and recorded spend. Availability depends on the account; ordinary Anthropic API-key balances remain unavailable." },
+      { tag: "Added", text: "Normal Claude usage reads refresh missing or expired balance data. A failed refresh keeps observed subscription quota and shows a reporting warning instead of inventing a balance." },
+      { tag: "Changed", text: "Attach this computer to a Dot from the CLI, TUI or web connection dialog without disconnecting other computers. Choose the computer for the next turn in ChatGPT." },
+      { tag: "Changed", text: "The `dots.attach` API accepts an explicit `replaceOthers` boolean: `replaceOthers: false` keeps other computers attached, while `replaceOthers: true` replaces the other attached desktops. Confirmation stays bound to the observed Dot, thread and computer. Failed or uncertain attachment is re-read, never automatically retried or switched to a replacing grant." },
+    ],
+  },
+  {
     version: "0.11.3",
     date: "2026-11-08",
     title: "Recovery from empty provider responses",

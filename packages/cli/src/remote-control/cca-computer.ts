@@ -36,7 +36,7 @@ export interface CcaComputerStatus {
 
 export interface CcaComputerControl {
   readonly computer: () => Promise<CcaComputerStatus>
-  readonly attach: (expectedTarget?: Dots.ComputerTarget) => Promise<CcaComputerStatus>
+  readonly attach: (input: Dots.ComputerAttach) => Promise<CcaComputerStatus>
 }
 
 export interface CcaComputerControlDeps {
@@ -229,8 +229,9 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
     }
   }
 
-  async function connect(target: Target): Promise<"ok" | "rejected" | "uncertain"> {
-    const path = `/tbo/${encodeURIComponent(target.dotID)}/computers/${encodeURIComponent(target.environmentID)}/connect-and-replace`
+  async function connect(target: Target, replaceOthers: boolean): Promise<"ok" | "rejected" | "uncertain"> {
+    const grant = replaceOthers ? "connect-and-replace" : "connect"
+    const path = `/tbo/${encodeURIComponent(target.dotID)}/computers/${encodeURIComponent(target.environmentID)}/${grant}`
     const response = await send("POST", path, { expected_thread_id: target.threadID }, target.credential, AbortSignal.timeout(RemoteLimits.dotsConnectMs)).catch(() => undefined)
     if (response === undefined) return "uncertain"
     await response.body?.cancel().catch(() => {})
@@ -290,7 +291,7 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
     }
   }
 
-  async function attachOnce(owner: Binding, expectedTarget?: Dots.ComputerTarget): Promise<CcaComputerStatus> {
+  async function attachOnce(owner: Binding, replaceOthers: boolean, expectedTarget?: Dots.ComputerTarget): Promise<CcaComputerStatus> {
     const key = owner.key
     latestKey = key
     generation++
@@ -302,7 +303,7 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
       return before.status
     }
     const current = await validate(owner)
-    const outcome = await connect({ ...before.target, credential: current.credential })
+    const outcome = await connect({ ...before.target, credential: current.credential }, replaceOthers)
     const result = await reconcile(owner, before.status, outcome)
     generation++
     store(key, result)
@@ -311,13 +312,14 @@ export function createCcaComputerControl(deps: CcaComputerControlDeps): CcaCompu
 
   return {
     computer,
-    attach: async (expectedTarget) => {
+    attach: async (input) => {
       try {
         const owner = await binding()
-        const key = JSON.stringify([owner.key, expectedTarget === undefined ? null : [expectedTarget.dotID, expectedTarget.threadID, expectedTarget.environmentID, expectedTarget.revision]])
+        const target = input.expectedTarget
+        const key = JSON.stringify([owner.key, input.replaceOthers, target === undefined ? null : [target.dotID, target.threadID, target.environmentID, target.revision]])
         const existing = attaching.get(key)
         if (existing) return existing
-        const pending = attachOnce(owner, expectedTarget).catch((error: unknown) => unavailable(error instanceof Problem ? error.problem : "connection"))
+        const pending = attachOnce(owner, input.replaceOthers, target).catch((error: unknown) => unavailable(error instanceof Problem ? error.problem : "connection"))
         attaching.set(key, pending)
         void pending.finally(() => { if (attaching.get(key) === pending) attaching.delete(key) })
         return pending

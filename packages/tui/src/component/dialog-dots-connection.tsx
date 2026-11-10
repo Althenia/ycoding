@@ -73,8 +73,8 @@ export function DialogDotsConnection(props: { connection: ReturnType<typeof crea
   const confirmOptions = [
     {
       value: "attach-confirm",
-      title: "Detach other computers and use this one",
-      details: ["This will detach your other computers from your Dot, so Dots tasks run only on this computer."],
+      title: "Use this computer",
+      details: ["Other computers stay connected. Choose which computer runs a Dots task in ChatGPT."],
       detailsWrap: true,
     },
     { value: "attach-cancel", title: "Cancel" },

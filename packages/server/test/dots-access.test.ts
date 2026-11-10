@@ -60,18 +60,18 @@ test("global Dots HTTP requires authentication without Session middleware and en
     expect((await request("GET", undefined, "/api/session/ses_root/dots/access")).status).toBe(404)
     calls.length = 0
     expect((await request("POST", { replaceOthers: true }, "/api/dots/computer", false)).status).toBe(401)
-    for (const body of [{}, { replaceOthers: false }, { replaceOthers: "true" }, { replaceOthers: true, environmentID: "env_other" }])
+    for (const body of [{}, { replaceOthers: "true" }, { replaceOthers: 1 }, { replaceOthers: true, environmentID: "env_other" }])
       expect((await request("POST", body, "/api/dots/computer")).status).toBe(400)
     expect(calls).toEqual([])
-    const attached = await request("POST", { replaceOthers: true }, "/api/dots/computer")
+    const attached = await request("POST", { replaceOthers: false }, "/api/dots/computer")
     expect(attached.status).toBe(200)
     expect(await attached.json()).toEqual({ data: { access: state, configuration: { ready: true, profile: "trusted" }, connection: { state: "connected" }, computer: { state: "attached" } } })
-    expect(calls).toEqual(["attach"])
+    expect(calls).toEqual([{ replaceOthers: false }])
     const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
     expect((await request("POST", { replaceOthers: true, expectedTarget: target }, "/api/dots/computer")).status).toBe(200)
-    expect(calls).toEqual(["attach", target])
+    expect(calls).toEqual([{ replaceOthers: false }, { replaceOthers: true, expectedTarget: target }])
     expect((await request("POST", { replaceOthers: true, expectedTarget: { ...target, revision: "short" } }, "/api/dots/computer")).status).toBe(400)
-    expect(calls).toEqual(["attach", target])
+    expect(calls).toEqual([{ replaceOthers: false }, { replaceOthers: true, expectedTarget: target }])
   } finally {
     await handler.dispose()
   }

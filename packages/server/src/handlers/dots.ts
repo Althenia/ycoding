@@ -18,6 +18,6 @@ export const DotsHandler = HttpApiBuilder.group(Api, "server.dots", (handlers) =
     }))
     .handle("dots.attach", Effect.fn(function* (ctx) {
       const access = yield* DotsAccess.Service
-      return { data: yield* access.attachComputer(ctx.payload.expectedTarget).pipe(Effect.mapError((error) => new InvalidRequestError({ message: error.message }))) }
+      return { data: yield* access.attachComputer(ctx.payload).pipe(Effect.mapError((error) => new InvalidRequestError({ message: error.message }))) }
     })),
 )

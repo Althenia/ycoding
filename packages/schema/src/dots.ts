@@ -56,7 +56,7 @@ export const NativeStatus = Schema.Struct({
 }).annotate({ identifier: "Dots.NativeStatus" })
 
 export interface ComputerAttach extends Schema.Schema.Type<typeof ComputerAttach> {}
-export const ComputerAttach = Schema.Struct({ replaceOthers: Schema.Literal(true), expectedTarget: ComputerTarget.pipe(optional) })
+export const ComputerAttach = Schema.Struct({ replaceOthers: Schema.Boolean, expectedTarget: ComputerTarget.pipe(optional) })
   .annotate({ identifier: "Dots.ComputerAttach", parseOptions: { onExcessProperty: "error" } })
 
 export interface Target extends Schema.Schema.Type<typeof Target> {}

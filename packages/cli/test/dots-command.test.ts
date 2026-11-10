@@ -33,11 +33,11 @@ async function withServer(current: unknown, attached: unknown, use: (url: string
   }
 }
 
-test("dots attach explains replacement in help without starting a server", async () => {
+test("dots attach explains non-replacing attachment in help without starting a server", async () => {
   const result = await cli(["attach", "--help"])
   expect(result.exit).toBe(0)
   expect(result.stderr).toBe("")
-  expect(result.stdout).toContain("replacing your other attached computers")
+  expect(result.stdout).toContain("Attach this computer to your Dot")
   expect(result.stdout).toContain("--yes")
 })
 
@@ -52,20 +52,20 @@ test("dots attach displays the observed name and forwards its exact target recei
     const result = await cli(["attach", "--yes", "--server", url])
     expect(result.exit).toBe(0)
     expect(result.stdout).toContain("Executor desk")
-    expect(JSON.parse(seen[1]!.body)).toEqual({ replaceOthers: true, expectedTarget: target })
+    expect(JSON.parse(seen[1]!.body)).toEqual({ replaceOthers: false, expectedTarget: target })
   })
 }, 30000)
 
-test("dots attach posts explicit replacement consent with --yes and prints the re-read state", async () => {
+test("dots attach posts non-replacing consent with --yes and prints the re-read state", async () => {
   await withServer(status({ state: "detached" }), status({ state: "attached" }), async (url, seen) => {
     const result = await cli(["attach", "--yes", "--server", url])
     expect(result.exit).toBe(0)
     expect(result.stdout).toContain("Computer: detached")
-    expect(result.stdout).toContain("detaches your other computers")
+    expect(result.stdout).toContain("keeps your other computers connected")
     expect(result.stdout).toContain("Computer: attached")
     expect(seen).toEqual([
       { method: "GET", path: "/api/dots", body: "" },
-      { method: "POST", path: "/api/dots/computer", body: '{"replaceOthers":true}' },
+      { method: "POST", path: "/api/dots/computer", body: '{"replaceOthers":false}' },
     ])
   })
 }, 30000)

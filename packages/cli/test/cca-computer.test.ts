@@ -16,6 +16,7 @@ const dotID = "tbo_synthetic_dot_0001"
 const threadID = "thr_synthetic_root_0001"
 const listURL = `${base}/tbo/${dotID}/computers?expected_thread_id=${threadID}`
 const attachURL = `${base}/tbo/${dotID}/computers/${encodeURIComponent(executorID)}/connect-and-replace?expected_thread_id=${threadID}`
+const plainAttachURL = `${base}/tbo/${dotID}/computers/${encodeURIComponent(executorID)}/connect?expected_thread_id=${threadID}`
 
 const configuration: NativeDots.Configuration = {
   enabled: true, accessRevision: 1, profile: "dots", credentialID: "credential-1", accountID, accountGeneration: 1,
@@ -331,7 +332,7 @@ describe("observation deadline", () => {
 
   test("a stalled attach pre-read settles inside the budget without posting", async () => {
     const { control, seen } = await fixture({ observeMs: budgetMs, routes: read([stalled]) })
-    expect(await control.attach()).toEqual({ state: "unavailable", problem: "connection" })
+    expect(await control.attach({ replaceOthers: false })).toEqual({ state: "unavailable", problem: "connection" })
     expect(seen.filter((item) => item.method === "POST")).toEqual([])
   })
 
@@ -376,7 +377,7 @@ describe("attach", () => {
     const { control, seen } = await fixture({
       routes: merge(read([computers([row()])]), { [`POST ${attachURL}`]: [new Response(null, { status: 204 })] }, read([computers([row({ is_attached: true })])])),
     })
-    expect(await control.attach()).toEqual({ state: "attached", target })
+    expect(await control.attach({ replaceOthers: true })).toEqual({ state: "attached", target })
     const posts = seen.filter((item) => item.method === "POST")
     expect(posts.map((item) => item.url)).toEqual([attachURL])
     expect(posts[0]!.body).toBeUndefined()
@@ -387,12 +388,47 @@ describe("attach", () => {
     expect(seen.length).toBe(7)
   })
 
+  test("non-replacing attach posts connect once and leaves attached peers listed", async () => {
+    const { control, seen } = await fixture({
+      routes: merge(
+        read([computers([row({ environment_id: "other", display_name: "Shared desk", is_attached: true }), row({ display_name: "Shared desk" })])]),
+        { [`POST ${plainAttachURL}`]: [new Response(null, { status: 204 })] },
+        read([computers([row({ environment_id: "other", display_name: "Shared desk", is_attached: true }), row({ display_name: "Shared desk", is_attached: true })])]),
+      ),
+    })
+    const status = await control.attach({ replaceOthers: false })
+    expect(status).toEqual({ state: "attached", name: "Shared desk", target })
+    const posts = seen.filter((item) => item.method === "POST")
+    expect(posts.map((item) => item.url)).toEqual([plainAttachURL])
+    expect(posts[0]!.body).toBeUndefined()
+    expect(posts[0]!.headers.authorization).toBe(`Bearer ${access}`)
+    expect(posts[0]!.headers.originator).toBe("Codex Desktop")
+    expect(seen.map((item) => item.method)).toEqual(["GET", "GET", "GET", "POST", "GET", "GET", "GET"])
+  })
+
+  test("replacing and non-replacing attaches with the same target post separately", async () => {
+    const { control, seen } = await fixture({
+      routes: merge(
+        read([computers([row()])]),
+        read([computers([row()])]),
+        { [`POST ${plainAttachURL}`]: [new Response(null, { status: 204 })] },
+        { [`POST ${attachURL}`]: [new Response(null, { status: 204 })] },
+        read([computers([row({ is_attached: true })])]),
+        read([computers([row({ is_attached: true })])]),
+      ),
+    })
+    const [first, second] = await Promise.all([control.attach({ replaceOthers: false }), control.attach({ replaceOthers: true })])
+    expect(first).toEqual({ state: "attached", target })
+    expect(second).toEqual({ state: "attached", target })
+    expect(seen.filter((item) => item.method === "POST").map((item) => item.url).sort()).toEqual([attachURL, plainAttachURL].sort())
+  })
+
   test("reads fresh state before posting even when a cached read exists", async () => {
     const { control, seen } = await fixture({
       routes: merge(read([computers([row()])]), read([computers([row({ is_attached: true })])])),
     })
     expect(await control.computer()).toEqual({ state: "detached", target })
-    expect(await control.attach()).toEqual({ state: "attached", target })
+    expect(await control.attach({ replaceOthers: false })).toEqual({ state: "attached", target })
     expect(seen.filter((item) => item.method === "POST")).toEqual([])
   })
 
@@ -406,14 +442,14 @@ describe("attach", () => {
     ]
     for (const item of cases) {
       const { control, seen } = await fixture({ routes: read([item.rows]) })
-      expect(await control.attach()).toEqual({ ...item.expected, ...(item.expected.state === "unavailable" ? {} : { target }) })
+      expect(await control.attach({ replaceOthers: false })).toEqual({ ...item.expected, ...(item.expected.state === "unavailable" ? {} : { target }) })
       expect(seen.filter((entry) => entry.method === "POST")).toEqual([])
     }
   })
 
   test("never posts without enabled access", async () => {
     const { control, seen } = await fixture({ routes: {}, configuration: { enabled: false } })
-    expect(await control.attach()).toEqual({ state: "unavailable", problem: "configuration" })
+    expect(await control.attach({ replaceOthers: false })).toEqual({ state: "unavailable", problem: "configuration" })
     expect(seen).toEqual([])
   })
 
@@ -421,34 +457,46 @@ describe("attach", () => {
     const { control, seen } = await fixture({
       routes: merge(read([computers([row()])]), { [`POST ${attachURL}`]: [json(409, { detail: "secret detail" })] }, read([computers([row()])])),
     })
-    const status = await control.attach()
+    const status = await control.attach({ replaceOthers: true })
     expect(status).toEqual({ state: "detached", problem: "rejected", target })
     expect(JSON.stringify(status)).not.toContain("secret")
     expect(seen.filter((item) => item.method === "POST").length).toBe(1)
+  })
+
+  test("a refused non-replacing attach posts once to connect and never falls back to replacement", async () => {
+    const { control, seen } = await fixture({
+      routes: merge(read([computers([row()])]), { [`POST ${plainAttachURL}`]: [json(409, { detail: "secret detail" })] }, read([computers([row()])])),
+    })
+    const status = await control.attach({ replaceOthers: false })
+    expect(status).toEqual({ state: "detached", problem: "rejected", target })
+    expect(JSON.stringify(status)).not.toContain("secret")
+    const posts = seen.filter((item) => item.method === "POST")
+    expect(posts).toHaveLength(1)
+    expect(posts.map((item) => item.url)).toEqual([plainAttachURL])
   })
 
   test("trusts only the re-read after an uncertain or unconfirmed attach", async () => {
     const network = await fixture({
       routes: merge(read([computers([row()])]), { [`POST ${attachURL}`]: [new Error("reset")] }, read([computers([row({ is_attached: true })])])),
     })
-    expect(await network.control.attach()).toEqual({ state: "attached", target })
+    expect(await network.control.attach({ replaceOthers: true })).toEqual({ state: "attached", target })
     expect(network.seen.filter((item) => item.method === "POST").length).toBe(1)
 
     const server = await fixture({
       routes: merge(read([computers([row()])]), { [`POST ${attachURL}`]: [json(502, {})] }, read([computers([row()])])),
     })
-    expect(await server.control.attach()).toEqual({ state: "detached", problem: "unconfirmed", target })
+    expect(await server.control.attach({ replaceOthers: true })).toEqual({ state: "detached", problem: "unconfirmed", target })
     expect(server.seen.filter((item) => item.method === "POST").length).toBe(1)
 
     const accepted = await fixture({
       routes: merge(read([computers([row()])]), { [`POST ${attachURL}`]: [new Response(null, { status: 204 })] }, read([computers([row()])])),
     })
-    expect(await accepted.control.attach()).toEqual({ state: "detached", problem: "unconfirmed", target })
+    expect(await accepted.control.attach({ replaceOthers: true })).toEqual({ state: "detached", problem: "unconfirmed", target })
 
     const unreadable = await fixture({
       routes: merge(read([computers([row()])]), { [`POST ${attachURL}`]: [new Response(null, { status: 204 })] }, read([json(500, {})])),
     })
-    expect(await unreadable.control.attach()).toEqual({ state: "unavailable", problem: "unconfirmed" })
+    expect(await unreadable.control.attach({ replaceOthers: true })).toEqual({ state: "unavailable", problem: "unconfirmed" })
   })
 
   test("joins concurrent attach calls into one post", async () => {
@@ -461,9 +509,9 @@ describe("attach", () => {
         read([computers([row({ is_attached: true })])]),
       ),
     })
-    const first = control.attach()
+    const first = control.attach({ replaceOthers: true })
     await until(() => seen.some((item) => item.method === "POST"))
-    const second = control.attach()
+    const second = control.attach({ replaceOthers: true })
     release()
     expect(await Promise.all([first, second])).toEqual([{ state: "attached", target }, { state: "attached", target }])
     expect(seen.filter((item) => item.method === "POST").length).toBe(1)
@@ -482,7 +530,7 @@ describe("attach", () => {
     })
     const stale = control.computer()
     await until(() => seen.some((item) => item.url === listURL))
-    expect(await control.attach()).toEqual({ state: "attached", target })
+    expect(await control.attach({ replaceOthers: true })).toEqual({ state: "attached", target })
     release()
     expect(await stale).toEqual({ state: "detached", target })
     expect(await control.computer()).toEqual({ state: "attached", target })

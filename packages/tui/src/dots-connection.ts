@@ -115,7 +115,7 @@ export function createDotsConnection(input: {
     if (disposed || writing || !confirming() || !canAttach()) return
     setConfirming(false)
     setAttachFailure(undefined)
-    await mutate(() => input.attach({ replaceOthers: true, ...(attachTarget === undefined ? {} : { expectedTarget: attachTarget }) }), (error) => setAttachFailure(errorMessage(error)))
+    await mutate(() => input.attach({ replaceOthers: false, ...(attachTarget === undefined ? {} : { expectedTarget: attachTarget }) }), (error) => setAttachFailure(errorMessage(error)))
   }
 
   createEffect(on(

@@ -6,7 +6,7 @@ export const DotsCommand = Spec.make("dots", {
   description: "Manage this computer's Dots connection",
   commands: [
     Spec.make("attach", {
-      description: "Attach this computer to your Dot, replacing your other attached computers",
+      description: "Attach this computer to your Dot",
       params: {
         server: Flag.string("server").pipe(
           Flag.withDescription("Connect to a server URL instead of the background service"),
@@ -14,7 +14,7 @@ export const DotsCommand = Spec.make("dots", {
         ),
         yes: Flag.boolean("yes").pipe(
           Flag.withAlias("y"),
-          Flag.withDescription("Confirm detaching your other computers from the Dot without asking"),
+          Flag.withDescription("Confirm attaching this computer to the Dot without asking"),
           Flag.withDefault(false),
         ),
       },
@@ -23,7 +23,7 @@ export const DotsCommand = Spec.make("dots", {
 })
 
 export const dotsAttachWarning =
-  "Attaching this computer detaches your other computers from your Dot. Your Dot's cloud computer stays attached."
+  "This keeps your other computers connected. Choose which computer runs a Dots task in ChatGPT."
 
 export function dotsComputerLine(status: Dots.NativeStatus) {
   const computer = status.computer ?? { state: "unavailable" as const }

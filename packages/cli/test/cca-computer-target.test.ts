@@ -80,19 +80,19 @@ test("observed names are presentation only and target receipts identify the enro
   for (const value of [principal.accountID, principal.credentialID, "synthetic-token"]) expect(sent).not.toContain(value)
   f.rename("Renamed desk")
   await writeFile(f.statePath, JSON.stringify({ ...enrollment, updatedAt: "later", displayName: "Renamed desk" }))
-  const result = await f.control.attach(before.target)
+  const result = await f.control.attach({ replaceOthers: false, expectedTarget: before.target })
   expect(result.state).toBe("attached")
   expect(result.name).toBe("Renamed desk")
   expect(result.target).toEqual(before.target)
   expect(f.posts).toHaveLength(1)
-  expect(f.posts[0]!.url).toContain("/computers/env-synthetic/connect-and-replace?")
+  expect(f.posts[0]!.url).toContain("/computers/env-synthetic/connect?")
 })
 
 test("a displayed target cannot drift to another Dot before confirmation", async () => {
   const f = await fixture()
   const observed = await f.control.computer()
   f.dot("dot-new")
-  expect(await f.control.attach(observed.target)).toMatchObject({ state: "unavailable", problem: "target-changed" })
+  expect(await f.control.attach({ replaceOthers: false, expectedTarget: observed.target })).toMatchObject({ state: "unavailable", problem: "target-changed" })
   expect(f.posts).toEqual([])
 })
 
@@ -101,7 +101,7 @@ test.each(["off", "revision", "generation", "executor", "status", "account"] as 
   const entered = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
   f.delay(async () => { entered.resolve(); await release.promise })
-  const pending = f.control.attach()
+  const pending = f.control.attach({ replaceOthers: false })
   await entered.promise
   if (change === "off") f.configure({ enabled: false })
   if (change === "revision") f.configure({ ...principal, accessRevision: 3 })
@@ -119,13 +119,13 @@ test.each(["off", "revision", "generation", "executor", "status", "account"] as 
 test("a stale receipt revision never dispatches, even when its tuple still matches", async () => {
   const f = await fixture()
   const observed = await f.control.computer()
-  expect(await f.control.attach({ ...observed.target!, revision: "b".repeat(64) })).toMatchObject({ state: "unavailable", problem: "target-changed" })
+  expect(await f.control.attach({ replaceOthers: false, expectedTarget: { ...observed.target!, revision: "b".repeat(64) } })).toMatchObject({ state: "unavailable", problem: "target-changed" })
   expect(f.posts).toEqual([])
 })
 
 test.each(["status", "account"] as const)("cached status validates enrollment %s before reuse", async (change) => {
   const f = await fixture()
-  await f.control.attach()
+  await f.control.attach({ replaceOthers: false })
   await writeFile(f.statePath, JSON.stringify({ ...enrollment, ...(change === "status" ? { status: "pending" } : { accountHash: "mismatch" }) }))
   expect(await f.control.computer()).toMatchObject({ state: "unavailable", problem: "enrollment" })
 })
@@ -133,7 +133,7 @@ test.each(["status", "account"] as const)("cached status validates enrollment %s
 test("the dispatch uses a refreshed token from the same pinned principal", async () => {
   const f = await fixture()
   f.delay(async () => { f.token("synthetic-refreshed") })
-  expect((await f.control.attach()).state).toBe("attached")
+  expect((await f.control.attach({ replaceOthers: false })).state).toBe("attached")
   expect(f.posts[0]!.headers.get("authorization")).toBe("Bearer synthetic-refreshed")
 })
 
@@ -142,10 +142,10 @@ test("a different principal does not join an in-flight attachment and its old re
   const entered = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
   f.postDelay(async () => { entered.resolve(); await release.promise })
-  const first = f.control.attach()
+  const first = f.control.attach({ replaceOthers: false })
   await entered.promise
   f.configure({ enabled: false })
-  expect(await f.control.attach()).toMatchObject({ state: "unavailable", problem: "configuration" })
+  expect(await f.control.attach({ replaceOthers: false })).toMatchObject({ state: "unavailable", problem: "configuration" })
   release.resolve()
   expect((await first).state).toBe("unavailable")
   expect(f.posts).toHaveLength(1)
@@ -159,7 +159,7 @@ test.each(["configuration", "enrollment", "read", "target"] as const)("an alread
     if (change === "read") f.failReads()
     if (change === "target") f.dot("dot-other")
   })
-  const result = await f.control.attach()
+  const result = await f.control.attach({ replaceOthers: false })
   expect(result).toMatchObject({ problem: "unconfirmed" })
   expect(result.state).not.toBe("attached")
   expect(f.posts).toHaveLength(1)
@@ -170,7 +170,7 @@ test.each(["configuration", "enrollment", "read", "target"] as const)("an alread
 test("unconfirmed detached reconciliation is cached instead of plain detached", async () => {
   const f = await fixture()
   f.remainDetached()
-  const result = await f.control.attach()
+  const result = await f.control.attach({ replaceOthers: false })
   expect(result.problem).toBe("unconfirmed")
   expect(await f.control.computer()).toEqual(result)
   expect(f.posts).toHaveLength(1)
@@ -182,11 +182,11 @@ test("equal expected-target tuples coalesce even with different property inserti
   const entered = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
   f.postDelay(async () => { entered.resolve(); await release.promise })
-  const first = f.control.attach(target)
+  const first = f.control.attach({ replaceOthers: false, expectedTarget: target })
   await entered.promise
   const reordered = { revision: target.revision, environmentID: target.environmentID, threadID: target.threadID, dotID: target.dotID }
   const readCount = f.configurationReads()
-  const second = f.control.attach(reordered)
+  const second = f.control.attach({ replaceOthers: false, expectedTarget: reordered })
   await f.afterConfigurationReads(readCount + 2)
   await new Promise<void>((resolve) => setImmediate(resolve))
   release.resolve()

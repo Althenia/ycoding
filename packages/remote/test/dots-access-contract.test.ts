@@ -10,6 +10,8 @@ test("names and exact target receipts survive remote status and attachment valid
   const value = { access: { enabled: true, revision: 1 }, configuration: { ready: true }, connection: { state: "connected", hostname: "box.local", name: "Named desk" }, computer: { state: "detached", name: "Executor desk", target } } satisfies RemoteDotsStatus
   expect(readDotsStatus(value)).toEqual(value)
   expect(parse("dots.attach", { replaceOthers: true, expectedTarget: target }).ok).toBe(true)
+  expect(parse("dots.attach", { replaceOthers: false, expectedTarget: target }).ok).toBe(true)
+  expect(parse("dots.attach", { replaceOthers: false }).ok).toBe(true)
   for (const invalid of [{ ...target, revision: "short" }, { ...target, environmentID: "" }, { ...target, accountID: "extra" }])
     expect(parse("dots.attach", { replaceOthers: true, expectedTarget: invalid }).ok).toBe(false)
   expect(readDotsStatus({ ...value, computer: { ...value.computer, target: { ...target, revision: "short" } } })).toBeUndefined()
@@ -31,9 +33,10 @@ test("global Dots controls reject Session and Location scope and preserve exact 
   expect(remoteOperationAccess["dots.set"]).toBe("mutation")
 })
 
-test("computer attachment requires exact replacement consent without Session scope", () => {
+test("computer attachment requires an explicit replaceOthers boolean without Session scope", () => {
   expect(parse("dots.attach", { replaceOthers: true }).ok).toBe(true)
-  for (const input of [undefined, {}, { replaceOthers: false }, { replaceOthers: "true" }, { replaceOthers: true, environmentID: "env_other" }, { replaceOthers: true, directory: "/synthetic" }])
+  expect(parse("dots.attach", { replaceOthers: false }).ok).toBe(true)
+  for (const input of [undefined, {}, { replaceOthers: "true" }, { replaceOthers: 1 }, { replaceOthers: true, environmentID: "env_other" }, { replaceOthers: false, directory: "/synthetic" }])
     expect(parse("dots.attach", input).ok).toBe(false)
   for (const sessionID of ["ses_test", null]) expect(parse("dots.attach", { replaceOthers: true }, sessionID).ok).toBe(false)
   expect(remoteOperationAccess["dots.attach"]).toBe("mutation")

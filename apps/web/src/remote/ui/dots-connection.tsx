@@ -109,7 +109,7 @@ export function DotsConnection(props: { readonly returnFocus: HTMLElement; reado
           <div class="stack" role="group" aria-label="Confirm computer change">
             <p class="field__hint">{view().attachConfirmation}</p>
             <div class="dots-connection__actions">
-              <button type="button" class="button button--primary" disabled={!view().canAttach} onClick={attach}>Detach others and use this computer</button>
+              <button type="button" class="button button--primary" disabled={!view().canAttach} onClick={attach}>Use this computer</button>
               <button type="button" class="button button--secondary" onClick={() => setConfirmingAttach(false)}>Cancel</button>
             </div>
           </div>
