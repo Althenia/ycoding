@@ -36,7 +36,7 @@ describe("release entries", () => {
   })
 
   test("retains the v0.11.3 release with its notes", async () => {
-    const entry = RELEASES[1]
+    const entry = RELEASES[2]
     expect(entry).toMatchObject({ version: "0.11.3", date: "2026-11-08", title: "Recovery from empty provider responses", tags: ["Fixed"] })
     expect(entry?.changes).toHaveLength(4)
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.3.md", import.meta.url)).text()
