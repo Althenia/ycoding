@@ -247,15 +247,16 @@ const rank = (values: ReadonlyArray<number>, percent: number) => {
 
 const generation = (timing: Timing | undefined) => {
   if (!timing) return undefined
+  const provider = timing.generationDurationNs
   const duration =
-    timing.generationDurationNs !== undefined
-      ? timing.generationDurationNs
+    provider !== undefined && provider >= 1_000_000_000
+      ? provider
       : (timing.observedGenerationDurationNs ?? 0) >= 1_000_000_000
         ? timing.observedGenerationDurationNs
         : undefined
   const tokens = timing.generatedTokens
   if (duration === undefined || tokens === undefined || duration <= 0 || tokens <= 0) return undefined
-  return { tokens, duration, provider: timing.generationDurationNs !== undefined }
+  return { tokens, duration, provider: provider !== undefined && provider >= 1_000_000_000 }
 }
 
 const speedOracle = (specs: ReadonlyArray<Spec>) => {
@@ -272,7 +273,7 @@ const speedOracle = (specs: ReadonlyArray<Spec>) => {
     generationSamples: valid.length,
     providerTimedSamples: valid.filter((value) => value.provider).length,
     observedSamples: valid.filter((value) => !value.provider).length,
-    ...(rates.length === 0
+    ...(rates.length < 3
       ? {}
       : {
           generationP50TokensPerSecond: rank(rates, 50),

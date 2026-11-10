@@ -221,18 +221,19 @@ test("speed reports request-average and aggregate throughput separately with sam
       ]) {
         const openai = providerRow(report, "openai").speed!
         expect(openai.generationSamples).toBe(2)
-        expect(openai.meanTokensPerSecond).toBeCloseTo((100 + 100 / 9) / 2, 9)
         expect(openai.outputTokensPerSecond).toBeCloseTo(20, 9)
-        expect(openai.meanTokensPerSecond! > openai.outputTokensPerSecond!).toBe(true)
-        expect(openai.generationP50TokensPerSecond).toBeCloseTo(100 / 9, 9)
-        expect(openai.generationP90TokensPerSecond).toBeCloseTo(100, 9)
-        expect(openai.generationP95TokensPerSecond).toBeCloseTo(100, 9)
+        expect(openai.meanTokensPerSecond).toBeUndefined()
+        expect(openai.generationP50TokensPerSecond).toBeUndefined()
+        expect(openai.generationP90TokensPerSecond).toBeUndefined()
+        expect(openai.generationP95TokensPerSecond).toBeUndefined()
         expect(openai).toMatchObject({ firstOutputP50Ms: 200, firstOutputP95Ms: 300, firstOutputP99Ms: 300 })
         expect(openai).toMatchObject({ totalP50Ms: 1_800_000, totalP95Ms: 3_600_000, totalP99Ms: 3_600_000 })
         const anthropic = providerRow(report, "anthropic").speed!
-        expect(anthropic.meanTokensPerSecond).toBeCloseTo(15, 9)
         expect(anthropic.outputTokensPerSecond).toBeCloseTo(15, 9)
-        expect(anthropic.generationP95TokensPerSecond).toBeCloseTo(15, 9)
+        expect(anthropic.meanTokensPerSecond).toBeUndefined()
+        expect(anthropic.generationP50TokensPerSecond).toBeUndefined()
+        expect(anthropic.generationP90TokensPerSecond).toBeUndefined()
+        expect(anthropic.generationP95TokensPerSecond).toBeUndefined()
         expect(anthropic).toMatchObject({ firstOutputP99Ms: 50, totalP99Ms: 900 })
       }
       const backend = yield* sessions.usageReportAll({ group: "provider" })
@@ -283,10 +284,17 @@ test("percentiles come from merged stored samples for one, two, three and twenty
           first: [rank(firsts, 50), rank(firsts, 95), rank(firsts, 99)],
           total: [rank(totals, 50), rank(totals, 95), rank(totals, 99)],
         })
-        expect(speed.generationP50TokensPerSecond).toBeCloseTo(rank(rates, 50), 9)
-        expect(speed.generationP90TokensPerSecond).toBeCloseTo(rank(rates, 90), 9)
-        expect(speed.generationP95TokensPerSecond).toBeCloseTo(rank(rates, 95), 9)
-        expect(speed.meanTokensPerSecond).toBeCloseTo(rates.reduce((sum, rate) => sum + rate, 0) / rates.length, 9)
+        if (size >= 3) {
+          expect(speed.generationP50TokensPerSecond).toBeCloseTo(rank(rates, 50), 9)
+          expect(speed.generationP90TokensPerSecond).toBeCloseTo(rank(rates, 90), 9)
+          expect(speed.generationP95TokensPerSecond).toBeCloseTo(rank(rates, 95), 9)
+          expect(speed.meanTokensPerSecond).toBeCloseTo(rates.reduce((sum, rate) => sum + rate, 0) / rates.length, 9)
+        } else {
+          expect(speed.generationP50TokensPerSecond).toBeUndefined()
+          expect(speed.generationP90TokensPerSecond).toBeUndefined()
+          expect(speed.generationP95TokensPerSecond).toBeUndefined()
+          expect(speed.meanTokensPerSecond).toBeUndefined()
+        }
       }
     }).pipe(Effect.provide(fixture.runtime), Effect.scoped),
   )

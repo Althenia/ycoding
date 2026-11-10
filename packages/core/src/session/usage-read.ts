@@ -1347,7 +1347,7 @@ const speed = Effect.fnUntraced(function* (
       generationSamples: row.generationSamples,
       providerTimedSamples: row.providerTimedSamples,
       observedSamples: row.observedSamples,
-      ...(generation
+      ...(row.generationSamples >= 3 && generation
         ? {
             generationP50TokensPerSecond: generation[0],
             generationP90TokensPerSecond: generation[1],

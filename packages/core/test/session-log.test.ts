@@ -372,10 +372,6 @@ describe("Session.log", () => {
         generationSamples: 2,
         providerTimedSamples: 2,
         observedSamples: 0,
-        generationP50TokensPerSecond: 10 / 3,
-        generationP90TokensPerSecond: 20,
-        generationP95TokensPerSecond: 20,
-        meanTokensPerSecond: (10 / 3 + 20) / 2,
       })
       expect(global.rows).toEqual(local.rows)
       expect(local.rows[0]?.model).toMatchObject({ providerID: "custom", id: "speed" })
@@ -392,6 +388,54 @@ describe("Session.log", () => {
         observedSamples: 0,
       })
       expect(SessionProviderRequest.reportSpeed(absent.slice(1))).toBeUndefined()
+    }),
+  )
+  it.effect("clips sub-second provider windows and suppresses mean and percentiles below three samples", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const events = yield* EventRuntime.Service
+      const created = yield* session.create({ location })
+      const timings = [
+        { generatedTokens: 500, generationDurationNs: 50_000_000 },
+        { generatedTokens: 40, generationDurationNs: 2_000_000_000 },
+        { generatedTokens: 60, generationDurationNs: 3_000_000_000 },
+      ]
+      for (const [index, timing] of timings.entries())
+        yield* events.publish(SessionEvent.ProviderRequestRecorded, {
+          id: ProviderRequest.ID.make(`prq_toksfix_${index}`),
+          sessionID: created.id,
+          source: "step",
+          agent: Agent.ID.make("build"),
+          model: CatalogModel.Ref.make({ providerID: Provider.ID.make("custom"), id: CatalogModel.ID.make("speed") }),
+          routeID: "test",
+          promptCacheKey: "cache",
+          systemDigest: "system",
+          toolDigest: "tool",
+          request: index + 1,
+          attempts: 1,
+          invalidation: "first-request",
+          continuation: "full",
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          ...(timing === undefined ? {} : { timing }),
+          time: DateTime.makeUnsafe(index),
+        })
+      const report = yield* session.usageReport({ sessionID: created.id, group: "model" })
+      const speed = report.rows[0]?.speed
+      expect(speed?.generationSamples).toBe(2)
+      expect(speed?.outputTokensPerSecond).toBe(20)
+      expect(speed?.meanTokensPerSecond).toBeUndefined()
+      expect(speed?.generationP50TokensPerSecond).toBeUndefined()
+      expect(speed?.generationP90TokensPerSecond).toBeUndefined()
+      expect(speed?.generationP95TokensPerSecond).toBeUndefined()
+      const ledger = yield* SessionProviderRequest.Service
+      const records = yield* ledger.list(created.id)
+      const direct = SessionProviderRequest.reportSpeed(records)
+      expect(direct?.generationSamples).toBe(2)
+      expect(direct?.outputTokensPerSecond).toBe(20)
+      expect(direct?.meanTokensPerSecond).toBeUndefined()
+      expect(direct?.generationP50TokensPerSecond).toBeUndefined()
+      expect(direct?.generationP90TokensPerSecond).toBeUndefined()
+      expect(direct?.generationP95TokensPerSecond).toBeUndefined()
     }),
   )
   it.effect("reads durable provider usage through the Session service", () =>

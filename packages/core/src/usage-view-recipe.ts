@@ -249,13 +249,15 @@ export function contribution(
     value.busy_ms = total
     samples.push([1, total])
   }
-  const providerTimed = timing !== undefined && Object.hasOwn(timing, "generationDurationNs")
+  const provider = timing?.generationDurationNs
   const observed = timing?.observedGenerationDurationNs
-  const duration = providerTimed
-    ? timing?.generationDurationNs
+  const providerValid = provider !== undefined && provider >= 1_000_000_000
+  const duration = providerValid
+    ? provider
     : observed !== undefined && observed >= 1_000_000_000
       ? observed
       : undefined
+  const providerTimed = providerValid && duration !== undefined
   const generated = timing?.generatedTokens
   if (exact(duration) && exact(generated)) {
     value.generation_samples = 1
@@ -344,7 +346,7 @@ export function speed(row: ViewRow, ranks: ReadonlyMap<number, number>): Provide
     generationSamples: generation,
     providerTimedSamples: row.provider_timed,
     observedSamples: row.observed,
-    ...(generation > 0
+    ...(generation >= 3
       ? {
           generationP50TokensPerSecond: ranks.get(4)!,
           generationP90TokensPerSecond: ranks.get(5)!,

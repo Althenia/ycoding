@@ -95,9 +95,9 @@ const grains = (family: Family, predicate: SQL) => {
       json_extract(r.tokens, '$.cache.write') AS cache_write,
       json_extract(r.timing, '$.firstOutputMs') AS first_ms, json_extract(r.timing, '$.totalMs') AS total_ms,
       json_extract(r.timing, '$.generatedTokens') AS gen_tokens,
-      CASE WHEN json_type(r.timing, '$.generationDurationNs') IS NOT NULL THEN json_extract(r.timing, '$.generationDurationNs')
+      CASE WHEN json_extract(r.timing, '$.generationDurationNs') >= 1000000000 THEN json_extract(r.timing, '$.generationDurationNs')
         WHEN json_extract(r.timing, '$.observedGenerationDurationNs') >= 1000000000 THEN json_extract(r.timing, '$.observedGenerationDurationNs') END AS gen_duration,
-      json_type(r.timing, '$.generationDurationNs') IS NOT NULL AS provider_timed
+      CASE WHEN json_extract(r.timing, '$.generationDurationNs') >= 1000000000 THEN 1 ELSE 0 END AS provider_timed
     FROM ${sql.raw(config.source)} AS r WHERE ${predicate}
   ),
   grain AS MATERIALIZED (

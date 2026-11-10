@@ -153,14 +153,20 @@ export function reportSpeed(records: readonly CostedRecord[]): ProviderRequest.S
     .flatMap((record) => (record.timing?.totalMs === undefined ? [] : [record.timing.totalMs]))
     .toSorted((a, b) => a - b)
   const generation = records.flatMap((record) => {
-    const duration = record.timing?.generationDurationNs ?? record.timing?.observedGenerationDurationNs
-    if (record.timing?.generationDurationNs === undefined && (duration ?? 0) < 1_000_000_000) return []
+    const provider = record.timing?.generationDurationNs
+    const observed = record.timing?.observedGenerationDurationNs
+    const duration = provider !== undefined && provider >= 1_000_000_000
+      ? provider
+      : observed !== undefined && observed >= 1_000_000_000
+        ? observed
+        : undefined
+    if (duration === undefined) return []
     const tokens = record.timing?.generatedTokens
     if (!Number.isSafeInteger(tokens) || !tokens || tokens <= 0 ||
       !Number.isSafeInteger(duration) || !duration || duration <= 0) return []
     const tokensPerSecond = tokens * 1_000_000_000 / duration
     if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) return []
-    return [{ tokens, durationNs: duration, tokensPerSecond, providerTimed: record.timing?.generationDurationNs !== undefined }]
+    return [{ tokens, durationNs: duration, tokensPerSecond, providerTimed: duration === provider }]
   })
   const duration = generation.reduce((sum, sample) => sum + sample.durationNs, 0)
   const rates = generation.map((sample) => sample.tokensPerSecond).toSorted((a, b) => a - b)
@@ -170,7 +176,7 @@ export function reportSpeed(records: readonly CostedRecord[]): ProviderRequest.S
     generationSamples: generation.length,
     providerTimedSamples: generation.filter((sample) => sample.providerTimed).length,
     observedSamples: generation.filter((sample) => !sample.providerTimed).length,
-    ...(rates.length === 0
+    ...(rates.length < 3
       ? {}
       : {
           generationP50TokensPerSecond: rates[Math.ceil(rates.length * 0.5) - 1],

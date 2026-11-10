@@ -163,10 +163,33 @@ export function generationSpeed(
   const recentRecords = [...records, ...(current === undefined ? [] : [current])]
   const newest = recentRecords.at(-1)?.model
   if (!newest) return undefined
-  const recent = recentRecords.flatMap((record) => {
+  const measured = (timing: Pick<ProviderRequest.Record, "model" | "timing">["timing"]) => {
+    const tokens = timing?.generatedTokens
+    const provider = timing?.generationDurationNs
+    const observed = timing?.observedGenerationDurationNs
+    const durationNs = provider !== undefined && provider >= 1_000_000_000
+      ? provider
+      : observed !== undefined && observed >= 1_000_000_000
+        ? observed
+        : undefined
+    if (!Number.isSafeInteger(tokens) || !tokens || tokens <= 0 ||
+      !Number.isSafeInteger(durationNs) || !durationNs || durationNs <= 0) return undefined
+    const tokensPerSecond = tokens * 1_000_000_000 / durationNs
+    if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) return undefined
+    return { tokens, durationNs, tokensPerSecond }
+  }
+  const candidates = recentRecords.flatMap((record) => {
     if (record.model.providerID !== newest.providerID || record.model.id !== newest.id) return []
-    const sample = GenerationMeter.sample(record.timing?.receivedOutput)
-    return sample === undefined ? [] : [{ model: record.model, ...sample }]
+    const counted = measured(record.timing)
+    const estimated = GenerationMeter.sample(record.timing?.receivedOutput)
+    if (counted === undefined && estimated === undefined) return []
+    return [{ model: record.model, counted, estimated }]
+  })
+  const useMeasured = candidates.length > 0 && candidates.every((item) => item.counted !== undefined)
+  type Pooled = { readonly model: (typeof candidates)[number]["model"]; readonly tokens: number; readonly durationNs: number; readonly tokensPerSecond: number; readonly estimated?: true }
+  const recent: Pooled[] = candidates.flatMap((item) => {
+    const sample = useMeasured ? item.counted : item.estimated
+    return sample === undefined ? [] : [{ model: item.model, ...sample }]
   }).slice(-8)
   const tokens = recent.reduce((sum, sample) => sum + sample.tokens, 0)
   const durationNs = recent.reduce((sum, sample) => sum + sample.durationNs, 0)

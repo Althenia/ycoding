@@ -15,7 +15,8 @@ test("builds settled history only from received-output intervals", () => {
   expect(record({ receivedOutput: { estimatedTokens: 80, durationNs: 2_000_000_000 } }))
     .toEqual({ model, tokens: 80, durationNs: 2_000_000_000, tokensPerSecond: 40, estimated: true })
   expect(record({ receivedOutput: { estimatedTokens: 80, durationNs: 999_999_999 } })).toBeUndefined()
-  expect(record({ generatedTokens: 80, observedGenerationDurationNs: 2_000_000_000 })).toBeUndefined()
+  expect(record({ generatedTokens: 80, observedGenerationDurationNs: 2_000_000_000 }))
+    .toEqual({ model, tokens: 80, durationNs: 2_000_000_000, tokensPerSecond: 40 })
   expect(record({ estimatedTokens: 80, estimatedGenerationDurationNs: 2_000_000_000 })).toBeUndefined()
 })
 
@@ -104,10 +105,26 @@ test("retains earlier model samples across another model and output-free steps",
   expect(SessionUsage.generationTiming(undefined, { started: 0n, ended: 1_000_000n, streamedCharacters: 0 })).toBeUndefined()
 })
 
-test("estimates a cumulative character count exactly like the equivalent string", () => {
-  expect(["", "a", "ab", "abc", "abcd", "x".repeat(4_002), "😀😀", "日本語テキスト"].map(Token.estimate)).toEqual([0, 0, 1, 1, 1, 1_001, 1, 2])
+test("estimates a cumulative character count exactly like the equivalent string", () => {  expect(["", "a", "ab", "abc", "abcd", "x".repeat(4_002), "😀😀", "日本語テキスト"].map(Token.estimate)).toEqual([0, 0, 1, 1, 1, 1_001, 1, 2])
   for (const value of ["", "a", "ab", "abc", "abcdef", "x".repeat(4_002), "😀😀", "日本語テキスト"])
     expect(Token.estimateLength(value.length)).toBe(Token.estimate(value))
   const chunks = ["ab", "c", "😀", "def", "x".repeat(9)]
   expect(Token.estimateLength(chunks.reduce((sum, chunk) => sum + chunk.length, 0))).toBe(Token.estimate(chunks.join("")))
+})
+
+test("adopts measured provider counts when every pooled sample is provider-timed", () => {
+  const hidden = { model, timing: { generatedTokens: 8040, generationDurationNs: 2_000_000_000, receivedOutput: { estimatedTokens: 2000, durationNs: 2_000_000_000 } } }
+  const other = { model: { ...model, variant: CatalogModel.VariantID.make("high") }, timing: { generatedTokens: 8040, generationDurationNs: 2_000_000_000, receivedOutput: { estimatedTokens: 2000, durationNs: 2_000_000_000 } } }
+  const history = SessionCacheDiagnostics.generationSpeed([hidden, other], { model })
+  expect(history?.latest).toEqual({ model, tokens: 16080, durationNs: 4_000_000_000, tokensPerSecond: 4020 })
+  expect(history?.latest).not.toHaveProperty("estimated")
+  expect(history?.recent).toHaveLength(2)
+  for (const sample of history?.recent ?? []) expect(sample).not.toHaveProperty("estimated")
+})
+
+test("keeps estimated received-output fallback when any pooled sample lacks provider counts", () => {
+  const measured = { model, timing: { generatedTokens: 80, generationDurationNs: 2_000_000_000, receivedOutput: { estimatedTokens: 20, durationNs: 2_000_000_000 } } }
+  const estimated = { model, timing: { receivedOutput: { estimatedTokens: 60, durationNs: 2_000_000_000 } } }
+  const history = SessionCacheDiagnostics.generationSpeed([measured, estimated], { model })
+  expect(history?.latest).toMatchObject({ tokens: 80, durationNs: 4_000_000_000, tokensPerSecond: 20, estimated: true })
 })

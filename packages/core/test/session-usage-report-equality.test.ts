@@ -220,11 +220,15 @@ function expectedMetrics(group: readonly Fixture[]) {
   const total = group.flatMap((row) => row.timing?.totalMs ?? [])
   const generation = group.flatMap((row) => {
     const observed = row.timing?.observedGenerationDurationNs
-    const duration =
-      row.timing?.generationDurationNs ?? (observed !== undefined && observed >= 1e9 ? observed : undefined)
+    const provider = row.timing?.generationDurationNs
     const tokens = row.timing?.generatedTokens
+    const duration = provider !== undefined && provider >= 1e9
+      ? provider
+      : observed !== undefined && observed >= 1e9
+        ? observed
+        : undefined
     return duration !== undefined && duration > 0 && tokens !== undefined && tokens > 0
-      ? [{ duration, tokens, providerTimed: row.timing?.generationDurationNs !== undefined }]
+      ? [{ duration, tokens, providerTimed: duration === provider }]
       : []
   })
   return {
@@ -267,7 +271,7 @@ function expectedMetrics(group: readonly Fixture[]) {
             generationSamples: generation.length,
             providerTimedSamples: generation.filter((sample) => sample.providerTimed).length,
             observedSamples: generation.filter((sample) => !sample.providerTimed).length,
-            ...(generation.length === 0
+            ...(generation.length < 3
               ? {}
               : {
                   generationP50TokensPerSecond: nearestRank(

@@ -53,7 +53,7 @@ type GenerationSpeedHistoryView = {
   readonly model?: ModelRefView
   readonly unreportedReason?: string
   readonly latest?: GenerationSpeedSampleView
-  readonly live?: { readonly requestID: string; readonly attempt: number; readonly sample?: GenerationSpeedSampleView }
+  readonly live?: { readonly requestID: string; readonly attempt: number; readonly sample?: GenerationSpeedSampleView; readonly final?: GenerationSpeedSampleView }
   readonly recent: readonly GenerationSpeedSampleView[]
 }
 
@@ -82,7 +82,9 @@ function readGenerationSpeed(value: unknown): GenerationSpeedHistoryView | undef
   if (rawLive !== undefined && (!isRecord(rawLive) || typeof rawLive.requestID !== "string" || !rawLive.requestID.startsWith("prq_") || positiveInteger(rawLive.attempt) === undefined)) return undefined
   const sample = isRecord(rawLive) && rawLive.sample !== undefined ? readGenerationSpeedSample(rawLive.sample) : undefined
   if (isRecord(rawLive) && rawLive.sample !== undefined && (!sample || sample.estimated !== true)) return undefined
-  const live = isRecord(rawLive) ? { requestID: rawLive.requestID as string, attempt: rawLive.attempt as number, ...(sample ? { sample } : {}) } : undefined
+  const final = isRecord(rawLive) && rawLive.final !== undefined ? readGenerationSpeedSample(rawLive.final) : undefined
+  if (isRecord(rawLive) && rawLive.final !== undefined && (!final || final.estimated !== true)) return undefined
+  const live = isRecord(rawLive) ? { requestID: rawLive.requestID as string, attempt: rawLive.attempt as number, ...(sample ? { sample } : {}), ...(final ? { final } : {}) } : undefined
   const model = readModelRef(value.model)
   const unreportedReason = stringField(value.unreportedReason)
   return { recent, ...(latest === undefined ? {} : { latest }), ...(live === undefined ? {} : { live }), ...(model ? { model } : {}),
@@ -113,7 +115,7 @@ const sameModel = (left: ModelRefView | undefined, right: ModelRefView | undefin
 export function generationSpeedDisplay(view: SessionView | undefined, selected: ModelRefView | undefined) {
   const history = view?.generationSpeed
   if (!history) return undefined
-  const latest = history.live === undefined ? history.latest : history.live.sample
+  const latest = history.live === undefined ? history.latest : (history.live.sample ?? history.live.final)
   const model = latest?.model ?? history.model
   if (!latest || !model || !selected || model.providerID !== selected.providerID || model.id !== selected.id) return undefined
   const rate = latest.tokensPerSecond

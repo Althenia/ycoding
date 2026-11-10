@@ -298,6 +298,23 @@ test("live generation speed overrides and then restores settled history", () => 
   expect(readSnapshot({ session: { model }, messages: [], generationSpeed: { ...history, live } })?.generationSpeed).toEqual({ ...history, live })
 })
 
+test("shows live final during tool phase when no live sample exists", () => {
+  const model = { providerID: "openai", id: "speed" }
+  const latest = { model, tokens: 120, durationNs: 2_000_000_000, tokensPerSecond: 60 }
+  const final = { model, tokens: 90, durationNs: 1_000_000_000, tokensPerSecond: 90, estimated: true }
+  const history = { model, latest, recent: [latest], live: { requestID: "prq_tool", attempt: 1, final } }
+  const view = apply(createSessionView("ses_a"), "session.diagnostics.updated", {
+    sessionID: "ses_a", diagnostics: { generationSpeed: history },
+  })
+  expect(view.generationSpeed?.live).toEqual({ requestID: "prq_tool", attempt: 1, final })
+  expect(generationSpeedDisplay(view, model)).toMatchObject({ label: "≈ 90 tok/s" })
+  const unestimated = apply(createSessionView("ses_a"), "session.diagnostics.updated", {
+    sessionID: "ses_a",
+    diagnostics: { generationSpeed: { ...history, live: { requestID: "prq_tool", attempt: 1, final: { ...final, estimated: undefined } } } },
+  })
+  expect(unestimated.generationSpeed).toBeUndefined()
+})
+
 test("rejects malformed live generation history", () => {
   const model = { providerID: "openai", id: "speed" }
   const sample = { model, tokens: 10, durationNs: 1_000_000_000, tokensPerSecond: 10, estimated: true }

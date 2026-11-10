@@ -108,7 +108,7 @@ test("keeps samples provider/model-specific while retaining variant changes", ()
     .toMatchObject({ recent: [{ model: first.model, tokens: 40, durationNs: 1_000_000_000, tokensPerSecond: 40, estimated: true }], latest: { tokensPerSecond: 40 } })
 })
 
-test("excludes historical short samples and provider-timed records", () => {
+test("excludes historical short samples and adopts valid provider-timed records", () => {
   const measured = { model: model("anthropic"), timing: {
     generatedTokens: 12, observedGenerationDurationNs: 2_000_000_000,
   } }
@@ -118,9 +118,12 @@ test("excludes historical short samples and provider-timed records", () => {
   const reported = { model: model("anthropic"), timing: {
     generatedTokens: 12, generationDurationNs: 71_223_792,
   } }
-  expect(SessionCacheDiagnostics.generationSpeed([measured, burst])?.latest).toBeUndefined()
-  expect(SessionCacheDiagnostics.generationSpeed([measured, burst])?.recent).toEqual([])
-  expect(SessionCacheDiagnostics.generationSpeed([measured, burst], reported)?.latest).toBeUndefined()
+  expect(SessionCacheDiagnostics.generationSpeed([measured, burst])?.latest)
+    .toMatchObject({ tokens: 12, durationNs: 2_000_000_000, tokensPerSecond: 6 })
+  expect(SessionCacheDiagnostics.generationSpeed([measured, burst])?.latest).not.toHaveProperty("estimated")
+  expect(SessionCacheDiagnostics.generationSpeed([measured, burst])?.recent).toHaveLength(1)
+  expect(SessionCacheDiagnostics.generationSpeed([measured, burst], reported)?.latest)
+    .toMatchObject({ tokens: 12, durationNs: 2_000_000_000, tokensPerSecond: 6 })
 })
 
 test("includes estimates and profile changes in the weighted rate", () => {
