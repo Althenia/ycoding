@@ -9,8 +9,8 @@ const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.ve
 describe("release entries", () => {
   test("lists the v0.11.4 release first with its notes", async () => {
     const entry = RELEASES[0]
-    expect(entry).toMatchObject({ version: "0.11.4", date: "2026-11-10", title: "Multiple Dots computers and provider credit balances", tags: ["Added", "Changed"] })
-    expect(entry?.changes).toHaveLength(4)
+    expect(entry).toMatchObject({ version: "0.11.4", date: "2026-11-10", title: "Multiple Dots computers and provider credit balances", tags: ["Added", "Changed", "Fixed"] })
+    expect(entry?.changes).toHaveLength(5)
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.4.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.11.4\n")
     for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)

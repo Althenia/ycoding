@@ -13,6 +13,7 @@ import {
   decodeCcaRegistrationResponse,
   loadCcaExperimentState,
   renameCcaExecutor,
+  reconcileCcaExecutor,
   reregisterCcaExecutor,
   runCcaRegistration,
   safeExecutorSummary,
@@ -374,14 +375,31 @@ describe("cca-executor-registration", () => {
     expect(JSON.stringify(stored)).not.toContain("leaked-secret-body")
   })
 
-  test("a rename answered with another executor keeps the enrolled one and records the offer", async () => {
-    const { statePath } = await writeStored()
-    const result = await renameCcaExecutor(renameInput(statePath, scriptedFetch([renamed("ccarenv_b64_replacement", "Desk Mac")]).fetch))
+  test("a rename answered with another executor and the requested name adopts it and clears the declined record", async () => {
+    const declined = { label: "Old", outcome: "unconfirmed", at: "2026-10-01T00:00:00.000Z" } as const
+    const statePath = path.join(await createTempDir(), "experiment.json")
+    await writeFile(statePath, JSON.stringify({ ...storedState, renameDeclined: declined }), { mode: 0o600 })
+    const result = await renameCcaExecutor(renameInput(statePath, scriptedFetch([renamed("ccarenv_b64_replacement", "Desk Mac")]).fetch, { state: { ...storedState, renameDeclined: declined } }))
     expect(result.outcome).toBe("executor-changed")
+    expect(result.persisted).toBe(true)
+    expect(result.state.executorID).toBe("ccarenv_b64_replacement")
+    expect(result.state.customDisplayName).toBe("Desk Mac")
+    expect(result.state.renameDeclined).toBeUndefined()
+    const stored = JSON.parse(await readFile(statePath, "utf8"))
+    expect(stored.executorID).toBe("ccarenv_b64_replacement")
+    expect(stored.customDisplayName).toBe("Desk Mac")
+    expect(stored.renameDeclined).toBeUndefined()
+    expect(JSON.stringify(stored)).not.toContain("leaked-secret-body")
+  })
+
+  test("a rename answered with another executor but the wrong name keeps the stored executor as unconfirmed", async () => {
+    const { statePath } = await writeStored()
+    const result = await renameCcaExecutor(renameInput(statePath, scriptedFetch([renamed("ccarenv_b64_replacement", "Other")]).fetch))
+    expect(result).toMatchObject({ outcome: "unconfirmed", persisted: true })
     expect(result.state.executorID).toBe("ccarenv_b64_existing")
-    expect(JSON.parse(await readFile(statePath, "utf8"))).toEqual({
-      ...storedState, updatedAt: expect.any(String),
-      renameDeclined: { label: "Desk Mac", outcome: "executor-changed", offeredExecutorID: "ccarenv_b64_replacement", at: expect.any(String) },
+    expect(JSON.parse(await readFile(statePath, "utf8"))).toMatchObject({
+      executorID: "ccarenv_b64_existing",
+      renameDeclined: { label: "Desk Mac", outcome: "unconfirmed", at: expect.any(String) },
     })
   })
 
@@ -594,5 +612,82 @@ describe("cca-executor-registration", () => {
     await expect(loadCcaExperimentState(statePath)).rejects.toThrow()
     await writeFile(statePath, JSON.stringify({ notAnExperimentState: 1 }), "utf8")
     await expect(loadCcaExperimentState(statePath)).rejects.toThrow(/missing required fields/)
+  })
+
+  describe("executor reconcile", () => {
+    const reconcileInput = (statePath: string, fetch: CcaFetch, extra: Partial<Parameters<typeof reconcileCcaExecutor>[0]> = {}) => ({
+      credential, state: storedState, displayName: "my-mac", statePath, roots: ccaExecutorCapabilityRoots("/synthetic/home"), fetch, ...extra,
+    })
+
+    test("adopts a different executor returned for the stored installation and clears a stale declined record", async () => {
+      const declined = { label: "Old", outcome: "unconfirmed", at: "2026-10-01T00:00:00.000Z" } as const
+      const statePath = path.join(await createTempDir(), "experiment.json")
+      await writeFile(statePath, JSON.stringify({ ...storedState, renameDeclined: declined }), { mode: 0o600 })
+      const scripted = scriptedFetch([renamed("ccarenv_b64_reconciled", "my-mac")])
+      const result = await reconcileCcaExecutor(reconcileInput(statePath, scripted.fetch, { state: { ...storedState, renameDeclined: declined } }))
+      expect(scripted.posts).toEqual([{
+        url: ccaExecutorRegistrationURL,
+        body: { displayName: "my-mac", installation_id: experimentInstallationID, selected_capability_roots: ccaExecutorCapabilityRoots("/synthetic/home") },
+        headers: buildCcaHeaders(credential),
+      }])
+      expect(result.executorChanged).toBe(true)
+      expect(result.state.executorID).toBe("ccarenv_b64_reconciled")
+      expect(result.state.customDisplayName).toBe("my-mac")
+      expect(result.state.renameDeclined).toBeUndefined()
+      const stored = JSON.parse(await readFile(statePath, "utf8"))
+      expect(stored.executorID).toBe("ccarenv_b64_reconciled")
+      expect(stored.renameDeclined).toBeUndefined()
+      if (process.platform !== "win32") expect((await stat(statePath)).mode & 0o777).toBe(0o600)
+    })
+
+    test("keeps the stored executor when the server echoes it and clears the matching declined record", async () => {
+      const declined = { label: "my-mac", outcome: "unconfirmed", at: "2026-10-01T00:00:00.000Z" } as const
+      const statePath = path.join(await createTempDir(), "experiment.json")
+      await writeFile(statePath, JSON.stringify({ ...storedState, renameDeclined: declined }), { mode: 0o600 })
+      const scripted = scriptedFetch([renamed("ccarenv_b64_existing", "my-mac")])
+      const result = await reconcileCcaExecutor(reconcileInput(statePath, scripted.fetch, { state: { ...storedState, renameDeclined: declined } }))
+      expect(scripted.posts).toHaveLength(1)
+      expect(result.executorChanged).toBe(false)
+      expect(result.state.executorID).toBe("ccarenv_b64_existing")
+      const stored = JSON.parse(await readFile(statePath, "utf8"))
+      expect(stored.executorID).toBe("ccarenv_b64_existing")
+      expect(stored.renameDeclined).toBeUndefined()
+    })
+
+    test("preserves a declined record for another label so its rename stays unrepeated", async () => {
+      const declined = { label: "Old", outcome: "unconfirmed", at: "2026-10-01T00:00:00.000Z" } as const
+      const statePath = path.join(await createTempDir(), "experiment.json")
+      await writeFile(statePath, JSON.stringify({ ...storedState, renameDeclined: declined }), { mode: 0o600 })
+      const scripted = scriptedFetch([renamed("ccarenv_b64_existing", "my-mac")])
+      const result = await reconcileCcaExecutor(reconcileInput(statePath, scripted.fetch, { state: { ...storedState, renameDeclined: declined } }))
+      expect(result.executorChanged).toBe(false)
+      expect(result.state.renameDeclined).toEqual(declined)
+      expect(JSON.parse(await readFile(statePath, "utf8")).renameDeclined).toEqual(declined)
+    })
+    test.each([
+      { name: "a network failure", responses: [() => { throw new Error("synthetic network failure") }, () => { throw new Error("synthetic network failure") }], posts: 2 },
+      { name: "two 503 responses", responses: [status(503), status(503)], posts: 2 },
+      { name: "a definitive 403", responses: [status(403)], posts: 1 },
+      { name: "an unparseable body", responses: [() => new Response("not json", { status: 200 })], posts: 1 },
+    ])("leaves a completed enrollment byte-identical when reconcile cannot confirm: $name", async ({ responses, posts }) => {
+      const { statePath, before } = await writeStored()
+      const observed: number[] = []
+      const scripted = scriptedFetch(responses)
+      await expect(reconcileCcaExecutor({
+        credential, state: storedState, displayName: "my-mac", statePath, roots: ccaExecutorCapabilityRoots("/synthetic/home"),
+        fetch: scripted.fetch, wait: async (ms) => { observed.push(ms) },
+      })).rejects.toThrow()
+      expect(scripted.posts).toHaveLength(posts)
+      expect(await readFile(statePath, "utf8")).toBe(before)
+    })
+
+    test("posts the enrollment file's own installation ID, never a replacement", async () => {
+      const ownInstallation = "installation-of-this-account-123"
+      const statePath = path.join(await createTempDir(), "experiment.json")
+      await writeFile(statePath, JSON.stringify({ ...storedState, installationID: ownInstallation }), { mode: 0o600 })
+      const scripted = scriptedFetch([renamed("ccarenv_b64_existing", "my-mac")])
+      await reconcileCcaExecutor({ credential, state: { ...storedState, installationID: ownInstallation }, displayName: "my-mac", statePath, roots: ccaExecutorCapabilityRoots("/synthetic/home"), fetch: scripted.fetch })
+      expect((scripted.posts[0]!.body as { installation_id: string }).installation_id).toBe(ownInstallation)
+    })
   })
 })

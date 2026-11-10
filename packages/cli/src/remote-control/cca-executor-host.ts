@@ -10,6 +10,7 @@ import { createCcaSessionRegistry, type CcaSessionRegistry, type CcaSessionResou
 import {
   ccaExecutorCapabilityRoots,
   loadCcaExperimentState,
+  reconcileCcaExecutor,
   renameCcaExecutor,
   reregisterCcaExecutor,
   runCcaRegistration,
@@ -112,6 +113,7 @@ type ServeRun = {
   identity: CcaNoiseIdentity | undefined
   registration: { readonly executorID: string; readonly result: CcaRegistrationResult } | undefined
   labelSynced: boolean
+  reconciled: boolean
   readonly sessions: CcaSessionRegistry
 }
 
@@ -213,7 +215,10 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
         fetch: fetchFn,
         refreshCredential: refreshFloraCredential,
       }).then(
-        (result) => result.state,
+        (result) => {
+          run.reconciled = true
+          return result.state
+        },
         async (error: unknown) => {
           const recorded = await readEnrollment()
           if (recorded === undefined) throw error
@@ -228,6 +233,33 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
     if (typeof state.executorID !== "string" || !state.executorID.trim()) throw new EnrollmentProblem("enrollment-unreadable")
     const registered = state.displayName ?? hostname()
     const label = configuredName ?? registered
+    const configuredLabel = configuredName?.trim().slice(0, 100)
+    const recordedLabel = (state.customDisplayName ?? state.displayName ?? hostname()).trim().slice(0, 100)
+    const renamePending =
+      configuredLabel !== undefined &&
+      configuredLabel.length > 0 &&
+      configuredLabel !== recordedLabel &&
+      state.renameDeclined?.label !== configuredLabel
+    if (!run.reconciled && !renamePending) {
+      run.reconciled = true
+      try {
+        const reconciled = await reconcileCcaExecutor({
+          credential: { access: credential.access, accountID: credential.accountID },
+          state,
+          displayName: label,
+          statePath: deps.statePath,
+          roots,
+          fetch: fetchFn,
+          refreshCredential: refreshFloraCredential,
+          wait: (ms) => wait(ms, signal),
+          signal,
+        })
+        if (reconciled.executorChanged) report("registration-executor-changed")
+        state = reconciled.state
+      } catch {
+        report("registration-update-failed")
+      }
+    }
     const rootsChanged = !sameCcaCapabilityRoots(state.selectedCapabilityRoots, roots)
     if (rootsChanged) {
       run.labelSynced = true
@@ -257,15 +289,15 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
   async function syncLabel(
     credential: RemoteControlCredential.Resolved,
     configuration: EnabledConfiguration,
-    enrolled: { readonly state: CcaExperimentState; readonly configuredName: string | undefined },
+    enrolled: { readonly state: CcaExperimentState; readonly configuredName: string | undefined; readonly executorID: string },
     signal: AbortSignal,
     run: ServeRun,
-  ) {
+  ): Promise<string> {
     const label = enrolled.configuredName?.trim().slice(0, 100)
-    if (!label || run.labelSynced) return
+    if (!label || run.labelSynced) return enrolled.executorID
     run.labelSynced = true
     const current = (enrolled.state.customDisplayName ?? enrolled.state.displayName ?? hostname()).trim().slice(0, 100)
-    if (label === current || enrolled.state.renameDeclined?.label === label) return
+    if (label === current || enrolled.state.renameDeclined?.label === label) return enrolled.executorID
     try {
       const result = await renameCcaExecutor({
         credential: { access: credential.access, accountID: credential.accountID },
@@ -275,12 +307,13 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
         fetch: fetchFn,
         signal,
       })
-      if (signal.aborted) return
+      if (signal.aborted) return enrolled.executorID
       if (result.outcome === "unrecorded" || !result.persisted) report("registration-update-failed")
       if (result.outcome === "executor-changed") report("registration-rename-executor-changed")
       if (result.outcome === "unconfirmed" || result.outcome === "uncertain") report("registration-rename-unconfirmed")
+      return result.state.executorID ?? enrolled.executorID
     } catch {
-      return
+      return enrolled.executorID
     }
   }
 
@@ -403,7 +436,7 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
     } catch (error) {
       return error instanceof EnrollmentProblem ? rejected(error.category) : retry("enrollment-failed")
     }
-    const executorID = enrolled.executorID
+    let executorID = enrolled.executorID
     if (signal.aborted) return stopped
 
     run.identity ??= await createCcaNoiseIdentity().catch(() => undefined)
@@ -438,9 +471,16 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
       const failed = await register()
       if (failed !== undefined) return failed
     }
-    const registration = run.registration!.result
-    await syncLabel(credential, configuration, enrolled, signal, run)
+    let registration = run.registration!.result
+    const syncedExecutorID = await syncLabel(credential, configuration, enrolled, signal, run)
     if (signal.aborted) return stopped
+    if (syncedExecutorID !== executorID) {
+      executorID = syncedExecutorID
+      run.registration = undefined
+      const failed = await register()
+      if (failed !== undefined) return failed
+      registration = run.registration!.result
+    }
 
     const ended = new AbortController()
     const end = () => ended.abort()
@@ -518,6 +558,7 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
       identity: undefined,
       registration: undefined,
       labelSynced: false,
+      reconciled: false,
       sessions: createCcaSessionRegistry(deps.detachedSessionTtlMs === undefined ? {} : { ttlMs: deps.detachedSessionTtlMs }),
     }
     let backoff = ccaReconnectInitialMs

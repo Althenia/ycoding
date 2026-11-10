@@ -67,7 +67,6 @@ export type CcaPrefixClass = "ccarenv_b64_" | "ccarenv_" | "env_e_" | "unknown"
 export type CcaRenameDeclined = {
   readonly label: string
   readonly outcome: "executor-changed" | "unconfirmed" | "uncertain"
-  readonly offeredExecutorID?: string
   readonly at: string
 }
 
@@ -365,6 +364,23 @@ export async function reregisterCcaExecutor(input: RegistrationRetryInput & {
   return { state, executorChanged }
 }
 
+export async function reconcileCcaExecutor(input: RegistrationRetryInput & {
+  readonly state: CcaExperimentState
+  readonly displayName?: string
+  readonly statePath: string
+  readonly roots: readonly CcaCapabilityRoot[]
+}): Promise<{ readonly state: CcaExperimentState; readonly executorChanged: boolean }> {
+  const reregistered = await reregisterCcaExecutor(input)
+  const priorDecline = input.state.renameDeclined
+  const superseded =
+    priorDecline !== undefined &&
+    (reregistered.executorChanged || priorDecline.label === reregistered.state.customDisplayName)
+  if (!superseded) return reregistered
+  const state: CcaExperimentState = { ...reregistered.state, renameDeclined: undefined, updatedAt: new Date().toISOString() }
+  await writeFile(input.statePath, JSON.stringify(state, null, 2), { mode: 0o600 })
+  return { state, executorChanged: reregistered.executorChanged }
+}
+
 export type CcaRenameResult = {
   readonly outcome: "confirmed" | "executor-changed" | "unconfirmed" | "uncertain" | "unrecorded"
   readonly persisted: boolean
@@ -438,8 +454,17 @@ export async function renameCcaExecutor(input: {
     return { outcome, persisted: await write(state), state }
   }
   const stamp = (current: CcaExperimentState, record: CcaRenameDeclined): CcaExperimentState => ({ ...current, renameDeclined: record, updatedAt: new Date().toISOString() })
-  if (decoded.executorID !== input.state.executorID)
-    return resolve("executor-changed", (current) => stamp(current, declined({ outcome: "executor-changed", offeredExecutorID: decoded.executorID })))
+  if (decoded.executorID !== input.state.executorID) {
+    if (decoded.customDisplayName !== label)
+      return resolve("unconfirmed", (current) => stamp(current, declined({ outcome: "unconfirmed" })))
+    return resolve("executor-changed", (current) => ({
+      ...current,
+      executorID: decoded.executorID,
+      customDisplayName: label,
+      renameDeclined: undefined,
+      updatedAt: new Date().toISOString(),
+    }))
+  }
   if (decoded.customDisplayName !== label) return resolve("unconfirmed", (current) => stamp(current, declined({ outcome: "unconfirmed" })))
   return resolve("confirmed", ({ renameDeclined: _intent, ...current }) => ({ ...current, customDisplayName: label, updatedAt: new Date().toISOString() }))
 }
