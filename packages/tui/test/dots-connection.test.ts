@@ -58,7 +58,7 @@ test("attachment confirms the displayed target even if refreshed status changes"
   try {
     view.state.requestAttach()
     const pending = view.state.attach()
-    expect(view.attaches[0]!.input).toEqual({ replaceOthers: true, expectedTarget: target })
+    expect(view.attaches[0]!.input).toEqual({ replaceOthers: false, expectedTarget: target })
     view.attaches[0]!.result.resolve(withComputer({ state: "attached", target }))
     await flush()
     view.reads.at(-1)!.result.resolve(withComputer({ state: "attached", target }))
@@ -234,7 +234,7 @@ describe("global Dots connection", () => {
     } finally { view.dispose() }
   })
 
-  test("a confirmed attachment posts replaceOthers once, serializes through settlement, and refreshes", async () => {
+  test("a confirmed attachment posts non-replacing consent once, serializes through settlement, and refreshes", async () => {
     const view = await opened({ state: "detached" })
     try {
       view.state.requestAttach()
@@ -242,7 +242,7 @@ describe("global Dots connection", () => {
       await view.state.attach()
       view.state.requestAttach()
       await view.state.toggle()
-      expect(view.attaches.map((item) => item.input)).toEqual([{ replaceOthers: true }])
+      expect(view.attaches.map((item) => item.input)).toEqual([{ replaceOthers: false }])
       expect(view.writes).toHaveLength(0)
       expect(view.state.pending()).toBe(true)
       expect(view.state.confirmingAttach()).toBe(false)
