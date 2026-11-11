@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import { runInNewContext } from "node:vm"
-import { describeView, formatSeconds, questionError, readCredentials } from "../view/model.js"
+import {
+  canCatchup,
+  catchupPayload,
+  describeView,
+  formatChatAuthor,
+  formatQuestionSources,
+  formatSeconds,
+  formatSegmentSource,
+  questionError,
+  readCredentials,
+} from "../view/model.js"
 import { createCapture } from "../view/capture.js"
 import { createDelivery } from "../view/delivery.js"
 
@@ -103,6 +113,49 @@ describe("Meeting Passage live view-model", () => {
     expect(questionError("no_transcript")).toContain("transcript")
     expect(questionError("select_meeting")).toContain("meeting")
     expect(questionError("answer_failed")).toContain("Retry")
+  })
+
+  test("segment sources name the audio channel or consented chat label", () => {
+    expect(formatSegmentSource({ source: "remote" })).toBe("Remote / Meet tab")
+    expect(formatSegmentSource({ source: "microphone" })).toBe("You / microphone")
+    expect(formatSegmentSource({ source: "chat", speakerID: "chat:Priya" })).toBe("Google Meet chat · Priya")
+    expect(formatSegmentSource({ source: "chat", speakerID: "Teammate" })).toBe("Google Meet chat · Teammate")
+    expect(formatSegmentSource({ source: "chat" })).toBe("Google Meet chat · participant")
+    expect(formatSegmentSource({ source: "chat", speakerID: "chat:" })).toBe("Google Meet chat · participant")
+    expect(formatSegmentSource({ source: "unknown" })).toBe("Source unreported")
+    expect(formatSegmentSource("remote")).toBe("Source unreported")
+    expect(formatSegmentSource(undefined)).toBe("Source unreported")
+  })
+
+  test("question provenance lists segment, chat, skill, document and knowledge refs", () => {
+    expect(
+      formatQuestionSources([
+        { kind: "segment", id: "seg-1" },
+        { kind: "chat", id: "seg-2" },
+        { kind: "skill", id: "garm" },
+        { kind: "document", id: "docs/meeting-intelligence.md" },
+        { kind: "knowledge", id: "repository:decisions/auth" },
+      ]),
+    ).toBe(
+      "Context · segment:seg-1 · chat:seg-2 · skill:garm · doc:docs/meeting-intelligence.md · knowledge:repository:decisions/auth",
+    )
+    expect(formatQuestionSources([])).toBe("Context")
+    expect(formatQuestionSources(undefined)).toBe("Context")
+    expect(formatQuestionSources([{ kind: "segment", id: "" }, undefined])).toBe("Context")
+  })
+
+  test("catch-up builds a modeless payload, labels its author and gates on transcript", () => {
+    expect(catchupPayload("")).toEqual({ mode: "catchup" })
+    expect(catchupPayload("  focus on rollout  ")).toEqual({ mode: "catchup", question: "focus on rollout" })
+    expect(catchupPayload(undefined)).toEqual({ mode: "catchup" })
+    expect(formatChatAuthor({ mode: "catchup" })).toBe("You · Catch me up")
+    expect(formatChatAuthor({ mode: "catchup", question: "rollout focus" })).toBe("You · Catch me up · rollout focus")
+    expect(formatChatAuthor({ question: "status?" })).toBe("You · status?")
+    expect(formatChatAuthor({})).toBe("You · Question unreported")
+    expect(canCatchup({ hasTranscript: true, busy: false })).toBe(true)
+    expect(canCatchup({ hasTranscript: true, busy: true })).toBe(false)
+    expect(canCatchup({ hasTranscript: false, busy: false })).toBe(false)
+    expect(canCatchup(undefined)).toBe(false)
   })
 })
 

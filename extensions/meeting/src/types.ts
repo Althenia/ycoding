@@ -1,5 +1,18 @@
 export type AudioSource = "remote" | "microphone"
 
+export type EvidenceSource = AudioSource | "chat"
+
+export interface GoogleMeetAssociation {
+  code: string
+  url: string
+}
+
+export interface QuestionSourceRef {
+  kind: "segment" | "chat" | "skill" | "document" | "mcp" | "knowledge"
+  id: string
+  label?: string
+}
+
 export interface Meeting {
   id: string
   title: string
@@ -9,13 +22,14 @@ export interface Meeting {
   updatedAt: string
   captureID?: string
   error?: string
+  meet?: GoogleMeetAssociation
 }
 
 export interface TranscriptSegment {
   id: string
   meetingID: string
   sequence: number
-  source: AudioSource
+  source: EvidenceSource
   speakerID: string
   startMs: number
   endMs: number
@@ -63,7 +77,7 @@ export interface KnowledgeProposal {
   meetingID: string
   server: string
   target: string
-  operation: "replace"
+  operation: "replace" | "create"
   existingContent: string
   suggestedContent: string
   explanation: string
@@ -128,7 +142,7 @@ export interface MeetingView {
     processedSeconds: number
     backlog: number
     error?: string
-    sources?: { remote: string; microphone: string }
+    sources?: { remote: string; microphone: string; chat?: string }
   }
   analysis: { status: string; error?: string; latencyMs?: number }
   config: Record<string, unknown>

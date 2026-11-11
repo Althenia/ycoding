@@ -18,6 +18,7 @@
             <p class="eyebrow">YCoding Meeting · Passage</p>
             <h1 id="meeting-title">YCoding Meeting</h1>
             <p id="meeting-status" class="status">Connecting</p>
+            <p id="meet-session" class="mono hint" hidden></p>
           </div>
         </div>
         <ol class="stages" aria-label="Meeting stages">
@@ -71,6 +72,17 @@
             <div class="actions">
               <button id="tab-only" type="button" hidden>Use tab audio only · fresh Start</button
               ><button id="settings-help" type="button">Microphone site settings help</button>
+            </div>
+            <div id="meet-link-group">
+              <label class="field" for="meet-input">Google Meet code or link (optional)</label>
+              <input
+                id="meet-input"
+                type="text"
+                maxlength="512"
+                placeholder="abc-defg-hij or meet.google.com/abc-defg-hij"
+              />
+              <div class="actions"><button id="meet-save" type="button">Associate Google Meet</button></div>
+              <p id="meet-feedback" class="hint" role="status" aria-live="polite"></p>
             </div>
           </div>
           <section class="runtime" aria-label="Runtime reports">
@@ -136,6 +148,42 @@
             incomplete.
           </p>
         </section>
+        <section id="transcript-section" aria-label="Google Meet chat context" hidden>
+          <details id="meet-chat-details" hidden>
+            <summary>Add Google Meet chat message</summary>
+            <div class="details-body">
+              <form id="chat-note-form" novalidate>
+                <label class="field" for="chat-note-sender">Participant label (optional)</label>
+                <input
+                  id="chat-note-sender"
+                  type="text"
+                  maxlength="80"
+                  placeholder="Interviewer or teammate"
+                />
+                <label class="field" for="chat-note-text">Message from Google Meet chat</label>
+                <textarea
+                  id="chat-note-text"
+                  rows="2"
+                  maxlength="4000"
+                  placeholder="Paste a question, link, or note shared in Google Meet chat"
+                ></textarea>
+                <label class="check"
+                  ><input id="chat-note-consent" type="checkbox" /><span
+                    ><strong>Chat consent confirmed</strong>
+                    <small
+                      >Participants consented to include this Google Meet chat message in local meeting
+                      context.</small
+                    ></span
+                  ></label
+                >
+                <div class="actions"><button id="chat-note-submit" type="submit">Add chat context</button></div>
+                <p id="chat-note-feedback" class="feedback" role="status" aria-live="polite">
+                  Nothing added yet.
+                </p>
+              </form>
+            </div>
+          </details>
+        </section>
         <section id="transcript" class="transcript" aria-labelledby="transcript-title" tabindex="-1">
           <div class="section-head">
             <div>
@@ -179,8 +227,11 @@
             <div id="actions-list"></div>
           </section>
           <section id="chat-panel" class="ask-panel" aria-labelledby="chat-title">
-            <h2 id="chat-title">Ask AI</h2>
-            <p class="hint">Advisory only · transcript so far · no tools or actions · latest 50 questions</p>
+            <h2 id="chat-title">Contextual chat</h2>
+            <p class="hint">
+              Grounded in transcript, Meet chat, skills, workspace docs, MCP and YCoding Memory · read-only
+              advisory, never mutating files or running shell commands
+            </p>
             <div id="chat-history" class="chat-history"><p class="hint">No questions yet.</p></div>
             <form id="chat-form">
               <label for="question">Your question</label
@@ -193,6 +244,7 @@
               ></textarea>
               <div class="actions">
                 <button id="ask" type="submit" class="primary" disabled aria-describedby="chat-feedback">Ask AI</button
+                ><button id="catchup" type="button">Catch me up</button
                 ><button id="retry-question" type="button" hidden>Retry answer</button>
               </div>
               <p id="chat-feedback" class="feedback" role="status" aria-live="polite">
@@ -207,6 +259,7 @@
               Confirm or reject findings and review knowledge proposals in the terminal. This page cannot approve
               changes.
             </p>
+            <div id="proposals-list"></div>
             <details>
               <summary>Terminal handoff</summary>
               <div class="details-body">
@@ -256,6 +309,15 @@
                       <small>Retrieval is read-only here · writes require approval</small></span
                     ></label
                   >
+                  <label class="check"
+                    ><input id="owner-memory" type="checkbox" /><span
+                      ><strong>Use YCoding Memory knowledge</strong>
+                      <small
+                        >Retrieve repository and shared knowledge concepts and propose meeting knowledge summaries
+                        (writes still require YCoding approval).</small
+                      ></span
+                    ></label
+                  >
                   <div id="owner-bindings"></div>
                   <p id="owner-bindings-status" class="hint">No connector bindings loaded yet.</p>
                   <div class="owner-add">
@@ -269,6 +331,34 @@
                     <span class="select-wrap"><select id="owner-add-write"></select></span>
                     <button id="owner-add" type="button">Add connector binding</button>
                   </div>
+                </fieldset>
+                <fieldset id="owner-speech-fieldset">
+                  <legend>Speech transcription</legend>
+                  <p class="hint">
+                    Applies to future transcription only. The running session keeps its existing speech backend.
+                  </p>
+                  <label class="field" for="owner-speech-provider">Provider</label>
+                  <span class="select-wrap"
+                    ><select id="owner-speech-provider">
+                      <option value="huggingface">huggingface</option>
+                      <option value="openai">openai</option>
+                    </select></span
+                  >
+                  <label class="field" for="owner-speech-model">Model</label>
+                  <span class="select-wrap"
+                    ><select id="owner-speech-model">
+                      <option value="gpt-transcribe">gpt-transcribe</option>
+                      <option value="gpt-4o-mini-transcribe">gpt-4o-mini-transcribe</option>
+                      <option value="gpt-4o-transcribe">gpt-4o-transcribe</option>
+                      <option value="whisper-1">whisper-1</option>
+                      <option value="biodatlab/whisper-th-large-v3-combined"
+                        >biodatlab/whisper-th-large-v3-combined</option
+                      >
+                      <option value="openai/whisper-large-v3">openai/whisper-large-v3</option>
+                    </select></span
+                  >
+                  <label class="field" for="owner-openai-profile">OpenAI key profile</label>
+                  <span class="select-wrap"><select id="owner-openai-profile"></select></span>
                 </fieldset>
                 <div class="actions">
                   <button id="owner-save" type="submit" class="primary" aria-describedby="owner-feedback">

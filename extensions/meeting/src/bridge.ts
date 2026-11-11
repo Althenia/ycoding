@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { viewAssets, viewPolicy } from "../view/assets"
+import { parseGoogleMeet } from "./meet"
 import type { OwnerSettingsUpdate } from "./runtime"
 
 export type CaptureMessage =
@@ -23,7 +24,9 @@ export async function startBridge(options: {
   onCapture: (input: CaptureMessage) => Promise<unknown>
   onDisconnect?: () => void
   onView?: () => unknown
-  onAsk?: (question: string) => Promise<unknown>
+  onAsk?: (question: string, options?: { mode?: "ask" | "catchup" }) => Promise<unknown>
+  onViewMeet?: (meet: string) => Promise<unknown>
+  onViewChatNote?: (input: { sender?: string; text: string; consent: true }) => Promise<unknown>
   onOwnerRead?: () => Promise<unknown>
   onOwnerUpdate?: (input: OwnerSettingsUpdate) => Promise<unknown>
 }): Promise<{ url: string; close: () => Promise<void> }> {
@@ -53,7 +56,7 @@ export async function startBridge(options: {
     async fetch(request): Promise<Response> {
       const address = new URL(request.url)
       const origin = request.headers.get("origin")
-      const viewRoute = ["/view/state", "/view/control", "/view/ask", "/view/capture"].includes(address.pathname)
+      const viewRoute = ["/view/state", "/view/control", "/view/ask", "/view/capture", "/view/meet", "/view/chat-note"].includes(address.pathname)
       const ownerRoute = address.pathname === "/view/owner/settings"
       const headers: Record<string, string> = {
         "cache-control": "no-store",
@@ -174,25 +177,91 @@ export async function startBridge(options: {
         return result ? safeReply(reply, result.value) : reply(500, { error: "control_failed" })
       }
       if (address.pathname === "/view/ask") {
-        if (
-          !record(body.value) ||
-          !keys(body.value, ["question"]) ||
-          typeof body.value.question !== "string" ||
-          !body.value.question.trim() ||
-          body.value.question.length > 2000
-        )
+        if (!record(body.value) || !keysWithin(body.value, ["question", "mode"]) || !Object.keys(body.value).length)
           return reply(400, { error: "invalid_question" })
+        const mode = body.value.mode
+        if (mode !== undefined && mode !== "ask" && mode !== "catchup") return reply(400, { error: "invalid_question" })
         if (!options.onAsk) return reply(503, { error: "ask_unavailable" })
         server.timeout(request, 180)
-        const result = await options.onAsk(body.value.question.trim()).then(
-          (value) => ({ value }),
-          () => undefined,
-        )
+        let result: { value: unknown } | undefined
+        if (mode === "catchup") {
+          if (
+            body.value.question !== undefined &&
+            (typeof body.value.question !== "string" || body.value.question.length > 2000)
+          )
+            return reply(400, { error: "invalid_question" })
+          const q =
+            typeof body.value.question === "string" && body.value.question.trim()
+              ? body.value.question.trim()
+              : "Catch me up on this meeting so far, related context, and what needs attention next."
+          result = await options.onAsk(q, { mode: "catchup" }).then(
+            (value) => ({ value }),
+            () => undefined,
+          )
+        } else {
+          if (
+            typeof body.value.question !== "string" ||
+            !body.value.question.trim() ||
+            body.value.question.length > 2000
+          )
+            return reply(400, { error: "invalid_question" })
+          const trimmed = body.value.question.trim()
+          result = await (mode === "ask" ? options.onAsk(trimmed, { mode: "ask" }) : options.onAsk(trimmed)).then(
+            (value) => ({ value }),
+            () => undefined,
+          )
+        }
         if (!result) return reply(502, { error: "answer_failed" })
         if (record(result.value) && result.value.busy === true) return reply(409, { error: "busy" })
         if (record(result.value) && result.value.status === "error")
           return reply(result.value.error === "answer_failed" ? 502 : 422, result.value)
         return safeReply(reply, result.value)
+      }
+      if (address.pathname === "/view/meet") {
+        if (
+          !options.onViewMeet ||
+          !record(body.value) ||
+          !keys(body.value, ["meet"]) ||
+          typeof body.value.meet !== "string" ||
+          parseGoogleMeet(body.value.meet) === undefined
+        )
+          return reply(400, { error: "invalid_meet" })
+        server.timeout(request, 180)
+        const result = await options.onViewMeet(body.value.meet).then(
+          (value) => ({ value }),
+          () => undefined,
+        )
+        if (!result) return reply(400, { error: "invalid_meet" })
+        return safeReply(reply, result.value)
+      }
+      if (address.pathname === "/view/chat-note") {
+        if (
+          !options.onViewChatNote ||
+          !record(body.value) ||
+          !keysWithin(body.value, ["sender", "text", "consent"]) ||
+          body.value.consent !== true ||
+          typeof body.value.text !== "string" ||
+          !body.value.text.trim() ||
+          body.value.text.length > 4000 ||
+          (body.value.sender !== undefined &&
+            (typeof body.value.sender !== "string" || body.value.sender.length > 80 || /[\x00-\x1f]/.test(body.value.sender)))
+        )
+          return reply(400, { error: "invalid_chat_note" })
+        server.timeout(request, 180)
+        const textValue = body.value.text
+        const senderValue = typeof body.value.sender === "string" ? body.value.sender : undefined
+        const outcome = await options
+          .onViewChatNote({ ...(senderValue ? { sender: senderValue } : {}), text: textValue, consent: true })
+          .then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          )
+        if ("error" in outcome) {
+          const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
+          if (/not active/i.test(message)) return reply(409, { error: "meeting_not_active" })
+          return reply(500, { error: "chat_note_failed" })
+        }
+        return safeReply(reply, outcome.value)
       }
       if (address.pathname === "/control") {
         if (record(body.value) && body.value.action === "view") {
@@ -277,7 +346,8 @@ function boundedName(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 200
 }
 function ownerSettingsUpdate(value: unknown): OwnerSettingsUpdate | undefined {
-  if (!record(value) || !keysWithin(value, ["askModel", "knowledge"]) || !Object.keys(value).length) return undefined
+  if (!record(value) || !keysWithin(value, ["askModel", "knowledge", "transcription"]) || !Object.keys(value).length)
+    return undefined
   const update: OwnerSettingsUpdate = {}
   if (Object.hasOwn(value, "askModel")) {
     if (value.askModel === "inherit") update.askModel = "inherit"
@@ -300,10 +370,13 @@ function ownerSettingsUpdate(value: unknown): OwnerSettingsUpdate | undefined {
   if (Object.hasOwn(value, "knowledge")) {
     if (
       !record(value.knowledge) ||
-      !keys(value.knowledge, ["mcpEnabled", "bindings"]) ||
+      !keysWithin(value.knowledge, ["mcpEnabled", "memoryEnabled", "bindings"]) ||
+      !Object.hasOwn(value.knowledge, "mcpEnabled") ||
       typeof value.knowledge.mcpEnabled !== "boolean" ||
+      !Object.hasOwn(value.knowledge, "bindings") ||
       !Array.isArray(value.knowledge.bindings) ||
-      value.knowledge.bindings.length > 4
+      value.knowledge.bindings.length > 4 ||
+      (Object.hasOwn(value.knowledge, "memoryEnabled") && typeof value.knowledge.memoryEnabled !== "boolean")
     )
       return undefined
     const bindings: NonNullable<OwnerSettingsUpdate["knowledge"]>["bindings"] = []
@@ -326,7 +399,31 @@ function ownerSettingsUpdate(value: unknown): OwnerSettingsUpdate | undefined {
         enabled: binding.enabled ?? true,
       })
     }
-    update.knowledge = { mcpEnabled: value.knowledge.mcpEnabled, bindings }
+    update.knowledge = {
+      mcpEnabled: value.knowledge.mcpEnabled,
+      ...(typeof value.knowledge.memoryEnabled === "boolean" ? { memoryEnabled: value.knowledge.memoryEnabled } : {}),
+      bindings,
+    }
+  }
+  if (Object.hasOwn(value, "transcription")) {
+    if (
+      !record(value.transcription) ||
+      !keysWithin(value.transcription, ["provider", "model", "openaiProfile"]) ||
+      (value.transcription.provider !== "huggingface" && value.transcription.provider !== "openai") ||
+      !boundedName(value.transcription.model) ||
+      !(
+        value.transcription.openaiProfile === undefined ||
+        value.transcription.openaiProfile === null ||
+        (boundedName(value.transcription.openaiProfile) &&
+          !/^sk-[A-Za-z0-9_-]{8,}/.test(value.transcription.openaiProfile.trim()))
+      )
+    )
+      return undefined
+    update.transcription = {
+      provider: value.transcription.provider,
+      model: value.transcription.model,
+      ...(value.transcription.openaiProfile !== undefined ? { openaiProfile: value.transcription.openaiProfile } : {}),
+    }
   }
   return update
 }

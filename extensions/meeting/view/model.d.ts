@@ -39,4 +39,9 @@ export function describeView(view: ViewInput): {
   remote: string
   microphone: string
 }
+export function formatSegmentSource(segment: unknown): string
+export function formatQuestionSources(sources: unknown): string
+export function catchupPayload(question: unknown): { mode: "catchup"; question?: string }
+export function formatChatAuthor(entry: unknown): string
+export function canCatchup(state: unknown): boolean
 export function questionError(error: string): string

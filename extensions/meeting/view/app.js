@@ -1,7 +1,12 @@
 import {
+  canCatchup,
+  catchupPayload,
   decodeModelChoice,
   describeView,
   encodeModelChoice,
+  formatChatAuthor,
+  formatQuestionSources,
+  formatSegmentSource,
   ownerBindingStatus,
   ownerModelStatus,
   questionError,
@@ -27,6 +32,7 @@ let current,
   askPending = false,
   stopPending = false
 let retryQuestion,
+  retryMode,
   polling,
   activeRead,
   closed = false
@@ -37,8 +43,12 @@ let ownerData,
   ownerDraft = [],
   ownerLoadedAskValue,
   ownerLoadedKnowledge,
+  ownerLoadedMemory = true,
+  ownerLoadedSpeech,
   ownerPending = false,
   ownerDenied = false
+let meetPending = false,
+  chatNotePending = false
 const requests = new Set()
 const segments = new Map()
 const chats = new Map()
@@ -118,6 +128,12 @@ function updateControls() {
   node("retry-audio").setAttribute("aria-describedby", "control-feedback")
   node("ask").disabled = !available || askPending || current?.ask?.busy === true || !current?.meeting
   node("retry-question").disabled = node("ask").disabled
+  const hasTranscript = records(current?.segments).some(
+    (segment) => typeof segment.text === "string" && segment.text.trim(),
+  )
+  node("catchup").disabled =
+    !available || !canCatchup({ hasTranscript, busy: askPending || current?.ask?.busy === true })
+  node("meet-save").disabled = !available || meetPending
   node("confirm-stop").disabled = node("stop").disabled
   node("confirm-stop").setAttribute("aria-describedby", "control-feedback")
   if (!available)
@@ -191,6 +207,9 @@ function renderCapture() {
   node("recovery-limit").hidden = !current?.audio?.error
   node("questions-panel").hidden = phase !== "review"
   node("actions-panel").hidden = phase !== "review"
+  const chatOpen = ["ready", "recording"].includes(current?.meeting?.status)
+  node("transcript-section").hidden = !chatOpen
+  node("meet-chat-details").hidden = !chatOpen
   node("handoff").hidden = !["review", "recovery"].includes(phase)
   text("summary-title", phase === "review" ? "Summary" : "Working summary")
   const failures = {
@@ -294,7 +313,7 @@ function renderSegments() {
     }
     row.dataset.source = segment.source
     row.dataset.state = segment.state
-    const meta = `${timestamp(segment.startMs)} · ${segment.source === "remote" ? "Remote / Meet tab" : segment.source === "microphone" ? "You / microphone" : "Source unreported"} · ${segment.state === "temporary" ? "Temporary" : segment.state === "final" ? "Final" : "State unreported"} · ${original ? "Original" : "Corrected"} · ${id}`
+    const meta = `${timestamp(segment.startMs)} · ${formatSegmentSource(segment)} · ${segment.state === "temporary" ? "Temporary" : segment.state === "final" ? "Final" : "State unreported"} · ${original ? "Original" : "Corrected"} · ${id}`
     const content = original ? segment.rawText : segment.text
     if (row.firstChild.textContent !== meta) row.firstChild.textContent = meta
     if (row.lastChild.textContent !== (content ?? "Text unreported")) {
@@ -416,15 +435,26 @@ function renderChat() {
       node("chat-history").append(row)
       chats.set(entry.id, row)
     }
-    const question = `You · ${entry.question || "Question unreported"}`
+    const question = formatChatAuthor(entry)
     const answer =
       entry.status === "pending"
         ? "Pending · reading the transcript so far…"
         : entry.status === "error"
           ? questionError(entry.error)
           : `Advisory · ${entry.answer || "Answer unreported"}`
-    if (row.firstChild.textContent !== question) row.firstChild.textContent = question
-    if (row.lastChild.textContent !== answer) row.lastChild.textContent = answer
+    if (row.children[0].textContent !== question) row.children[0].textContent = question
+    if (row.children[1].textContent !== answer) row.children[1].textContent = answer
+    const provenance =
+      Array.isArray(entry.sources) && entry.sources.length > 0 ? formatQuestionSources(entry.sources) : ""
+    const extra = row.children[2]
+    if (provenance) {
+      if (!extra) {
+        const meta = document.createElement("p")
+        meta.className = "mono hint"
+        meta.textContent = provenance
+        row.append(meta)
+      } else if (extra.textContent !== provenance) extra.textContent = provenance
+    } else if (extra) extra.remove()
   }
   const retained = new Set(list.map((entry) => entry.id))
   for (const [id, row] of chats) {
@@ -432,10 +462,39 @@ function renderChat() {
     row.remove()
     chats.delete(id)
   }
-  if (!askPending && list.at(-1)?.status === "error" && !retryQuestion) {
-    retryQuestion = list.at(-1).question
+  if (!askPending && list.at(-1)?.status === "error" && !retryQuestion && !retryMode) {
+    retryQuestion = typeof list.at(-1).question === "string" ? list.at(-1).question : ""
+    retryMode = list.at(-1).mode === "catchup" ? "catchup" : undefined
     node("retry-question").hidden = false
     text("chat-feedback", questionError(list.at(-1).error))
+  }
+}
+
+function renderProposals() {
+  const list = records(current?.proposals)
+  node("proposals-list").replaceChildren(
+    ...list.map((proposal) => {
+      const entry = document.createElement("article")
+      entry.className = "proposal"
+      const label = document.createElement("h3")
+      label.textContent = `${proposal.operation === "create" ? "Create" : "Replace"} · ${proposal.status || "Status unreported"}`
+      const target = document.createElement("p")
+      target.className = "mono"
+      target.textContent = `${proposal.server || "Server unreported"}/${proposal.target || "target unreported"}`
+      const explanation = document.createElement("p")
+      explanation.textContent = proposal.explanation || "Explanation unreported"
+      const handoff = document.createElement("p")
+      handoff.className = "hint"
+      handoff.textContent = `Approve in YCoding: ycoding meeting --approve-proposal ${proposal.id} --confirm or /meeting approve ${proposal.id} confirm`
+      entry.append(label, target, explanation, handoff)
+      return entry
+    }),
+  )
+  if (!list.length) {
+    const message = document.createElement("p")
+    message.className = "hint"
+    message.textContent = "No knowledge proposals reported."
+    node("proposals-list").append(message)
   }
 }
 
@@ -448,6 +507,7 @@ function render(value) {
     chats.clear()
     node("chat-history").replaceChildren()
     retryQuestion = undefined
+    retryMode = undefined
     node("retry-question").hidden = true
     reviewRetained = false
   }
@@ -460,6 +520,9 @@ function render(value) {
     text("meeting-title", current.meeting?.title || "YCoding Meeting")
     text("meeting-status", view.status)
     node("meeting-status").dataset.tone = view.tone
+    const meet = current.meeting?.meet
+    node("meet-session").hidden = !(typeof meet?.code === "string" && meet.code)
+    text("meet-session", typeof meet?.code === "string" && meet.code ? `Google Meet · ${meet.code}` : "")
     text("health-status", view.health)
     node("health-status").dataset.tone = view.tone
     text("source-status", `Remote · ${view.remote} / You · ${view.microphone}`)
@@ -486,6 +549,7 @@ function render(value) {
     renderCapture()
     renderSegments()
     renderFindings()
+    renderProposals()
     renderChat()
   })
   updateControls()
@@ -560,9 +624,17 @@ async function control(action) {
   }
 }
 
-async function ask(question) {
+async function ask(question, mode) {
   if (askPending || current?.ask?.busy || denied || !connected) return
-  if (!question.trim() || question.length > 2000) {
+  const focus = typeof question === "string" ? question.trim() : ""
+  if (mode === "catchup") {
+    if (focus.length > 2000) {
+      text("chat-feedback", questionError("invalid_question"))
+      node("question").setAttribute("aria-invalid", "true")
+      node("question").focus()
+      return
+    }
+  } else if (!focus || focus.length > 2000) {
     text("chat-feedback", questionError("invalid_question"))
     node("question").setAttribute("aria-invalid", "true")
     node("question").focus()
@@ -570,18 +642,20 @@ async function ask(question) {
   }
   askPending = true
   retryQuestion = undefined
+  retryMode = undefined
   node("retry-question").hidden = true
   node("question").removeAttribute("aria-invalid")
   text("chat-feedback", "Answering · one question at a time; other submits are disabled.")
   updateControls()
   try {
-    const value = await request("/view/ask", { question: question.trim() })
+    const value = await request("/view/ask", mode === "catchup" ? catchupPayload(focus) : { question: focus })
     if (closed) return
     if (value?.status !== "answered") throw new Error(value?.error || "answer_failed")
     text("chat-feedback", "Answered · advisory only; no tools or actions were used.")
   } catch (error) {
     if (!closed && !denied) {
-      retryQuestion = question
+      retryQuestion = focus
+      retryMode = mode === "catchup" ? "catchup" : undefined
       node("retry-question").hidden = false
       text("chat-feedback", questionError(error instanceof Error ? error.message : "answer_failed"))
     }
@@ -589,6 +663,73 @@ async function ask(question) {
     askPending = false
     updateControls()
     await refresh()
+  }
+}
+
+async function associateMeet() {
+  if (meetPending || denied || !connected) return
+  const value = node("meet-input").value.trim()
+  meetPending = true
+  updateControls()
+  text("meet-feedback", "Associating Google Meet…")
+  try {
+    await request("/view/meet", { meet: value })
+    if (closed) return
+    text(
+      "meet-feedback",
+      value ? "Google Meet associated with this meeting." : "Google Meet association cleared for this meeting.",
+    )
+    await refresh()
+  } catch (error) {
+    if (!closed && !denied)
+      text(
+        "meet-feedback",
+        error instanceof Error && error.message === "invalid_meet"
+          ? "Invalid Google Meet code or URL. Use abc-defg-hij or meet.google.com/abc-defg-hij."
+          : "Google Meet could not be associated. Inspect the runtime state before retrying.",
+      )
+  } finally {
+    meetPending = false
+    updateControls()
+  }
+}
+
+async function submitChatNote(event) {
+  event.preventDefault()
+  if (chatNotePending || denied || !connected) return
+  const sender = node("chat-note-sender").value.trim()
+  const message = node("chat-note-text").value.trim()
+  if (!message) {
+    text("chat-note-feedback", "Enter the Google Meet chat message before adding context.")
+    node("chat-note-text").focus()
+    return
+  }
+  if (!node("chat-note-consent").checked) {
+    text(
+      "chat-note-feedback",
+      "Confirm chat consent before adding this message to meeting context.",
+    )
+    node("chat-note-consent").focus()
+    return
+  }
+  chatNotePending = true
+  text("chat-note-feedback", "Adding chat context…")
+  try {
+    await request("/view/chat-note", { ...(sender ? { sender } : {}), text: message, consent: true })
+    if (closed) return
+    node("chat-note-text").value = ""
+    text("chat-note-feedback", "Chat context added.")
+    await refresh()
+  } catch (error) {
+    if (!closed && !denied)
+      text(
+        "chat-note-feedback",
+        error instanceof Error && error.message === "consent_required"
+          ? "Confirm chat consent before adding this message to meeting context."
+          : "Chat context could not be added. Inspect the runtime state before retrying.",
+      )
+  } finally {
+    chatNotePending = false
   }
 }
 
@@ -748,6 +889,37 @@ function renderOwnerAdd() {
   if (full) text("owner-bindings-status", "4 of 4 connector bindings · remove one before adding another.")
 }
 
+function renderOwnerSpeech(transcription) {
+  const settings = transcription && typeof transcription === "object" ? transcription : undefined
+  const provider = typeof settings?.provider === "string" && settings.provider ? settings.provider : "huggingface"
+  const model =
+    typeof settings?.model === "string" && settings.model
+      ? settings.model
+      : "biodatlab/whisper-th-large-v3-combined"
+  const profile = typeof settings?.openaiProfile === "string" ? settings.openaiProfile : ""
+  ownerLoadedSpeech = JSON.stringify({ provider, model, ...(profile ? { openaiProfile: profile } : {}) })
+  node("owner-speech-provider").value = ["huggingface", "openai"].includes(provider) ? provider : "huggingface"
+  const knownModel = [...node("owner-speech-model").options].some((option) => option.value === model)
+  if (!knownModel && model) {
+    const extra = document.createElement("option")
+    extra.value = model
+    extra.textContent = `${model} · Unavailable`
+    extra.disabled = true
+    node("owner-speech-model").append(extra)
+  }
+  node("owner-speech-model").value = model
+  const profiles = Array.isArray(settings?.openaiKeyProfiles)
+    ? settings.openaiKeyProfiles.filter((name) => typeof name === "string" && name)
+    : []
+  node("owner-openai-profile").replaceChildren(
+    ownerOption("", "Default OpenAI key resolution"),
+    ...profiles.map((name) => ownerOption(name, name)),
+  )
+  if (profile && !profiles.includes(profile))
+    node("owner-openai-profile").append(ownerOption(profile, `${profile} · Unavailable`, true))
+  node("owner-openai-profile").value = profile
+}
+
 function renderOwner(data) {
   if (!data || typeof data !== "object" || !Array.isArray(data.models) || !data.knowledge)
     throw new Error("invalid_owner_settings")
@@ -763,6 +935,9 @@ function renderOwner(data) {
   ownerLoadedKnowledge = JSON.stringify({ mcpEnabled: data.knowledge.mcpEnabled === true, bindings: savedBindings })
   ownerDraft = savedBindings.map((binding) => ({ ...binding }))
   node("owner-mcp").checked = data.knowledge.mcpEnabled === true
+  ownerLoadedMemory = data.knowledge.memoryEnabled !== false
+  node("owner-memory").checked = ownerLoadedMemory
+  renderOwnerSpeech(data.transcription)
   const ask = data.askModel && typeof data.askModel === "object" ? data.askModel : undefined
   node("owner-model").replaceChildren(
     ownerOption("inherit", "Inherit analysis model"),
@@ -840,9 +1015,16 @@ async function saveOwner() {
     mcpEnabled: node("owner-mcp").checked,
     bindings: ownerDraft.map((binding) => ({ ...binding, enabled: binding.enabled !== false })),
   }
+  if (node("owner-memory").checked !== ownerLoadedMemory) knowledge.memoryEnabled = node("owner-memory").checked
+  const speech = {
+    provider: node("owner-speech-provider").value,
+    model: node("owner-speech-model").value,
+  }
+  if (node("owner-openai-profile").value) speech.openaiProfile = node("owner-openai-profile").value
   const update = {}
   if (!sameAsk) update.askModel = askModel
   if (JSON.stringify(knowledge) !== ownerLoadedKnowledge) update.knowledge = knowledge
+  if (JSON.stringify(speech) !== ownerLoadedSpeech) update.transcription = speech
   if (!Object.keys(update).length) {
     text("owner-feedback", "No owner setting changes to save.")
     return
@@ -850,6 +1032,7 @@ async function saveOwner() {
   ownerPending = true
   node("owner-model-fieldset").disabled = true
   node("owner-knowledge-fieldset").disabled = true
+  node("owner-speech-fieldset").disabled = true
   node("owner-save").disabled = true
   text("owner-feedback", "Saving owner settings…")
   try {
@@ -873,6 +1056,7 @@ async function saveOwner() {
     ownerPending = false
     node("owner-model-fieldset").disabled = false
     node("owner-knowledge-fieldset").disabled = false
+    node("owner-speech-fieldset").disabled = false
     node("owner-save").disabled = false
     renderOwnerVariants(node("owner-variant").value || undefined)
     renderOwnerBindings()
@@ -960,8 +1144,11 @@ node("chat-form").addEventListener("submit", (event) => {
   void ask(node("question").value)
 })
 node("retry-question").addEventListener("click", () => {
-  if (retryQuestion) void ask(retryQuestion)
+  if (retryQuestion || retryMode) void ask(retryQuestion || "", retryMode)
 })
+node("catchup").addEventListener("click", () => void ask(node("question").value, "catchup"))
+node("meet-save").addEventListener("click", () => void associateMeet())
+node("chat-note-form").addEventListener("submit", (event) => void submitChatNote(event))
 node("owner-retry").addEventListener("click", () => void loadOwner())
 node("owner-model").addEventListener("change", () => renderOwnerVariants())
 node("owner-add-server").addEventListener("change", () => renderOwnerAdd())

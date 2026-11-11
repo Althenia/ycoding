@@ -5,7 +5,8 @@ import { z } from "zod"
 import { AudioBackpressure, AudioProcessor, reconcileOverlap } from "./audio"
 import type { CaptureMessage } from "./bridge"
 import { meetingConfigSchema, type MeetingConfig } from "./config"
-import { MeetingIntelligence, type MeetingMCP } from "./intelligence"
+import { MeetingIntelligence, type MeetingMCP, type MeetingMemoryAdapter } from "./intelligence"
+import { normalizeChatSpeaker, parseGoogleMeet } from "./meet"
 import { MeetingStore } from "./store"
 import {
   createProvider,
@@ -13,9 +14,10 @@ import {
   listModels,
   sanitizeTranscriptionError,
   type AudioChunk,
+  type CreateProviderOptions,
   type TranscriptionProvider,
 } from "./transcription"
-import type { MeetingView, TranscriptSegment } from "./types"
+import type { Meeting, MeetingView, TranscriptSegment } from "./types"
 
 const controlSchema = z
   .object({
@@ -41,6 +43,9 @@ const controlSchema = z
       "delete",
       "retry",
       "reconcile",
+      "set-meet",
+      "chat-note",
+      "knowledge-summarize",
     ]),
     meetingID: z.string().max(200).optional(),
     sessionID: z.string().max(200).optional(),
@@ -53,6 +58,11 @@ const controlSchema = z
     config: z.unknown().optional(),
     authorized: z.literal(true).optional(),
     confirmed: z.literal(true).optional(),
+    meet: z.string().min(1).max(512).optional(),
+    sender: z.string().max(80).optional(),
+    consent: z.literal(true).optional(),
+    scope: z.enum(["repository", "knowledge"]).optional(),
+    target: z.string().min(1).max(200).optional(),
   })
   .strict()
 
@@ -60,7 +70,13 @@ export interface OwnerSettingsUpdate {
   askModel?: MeetingConfig["analysis"]["askModel"]
   knowledge?: {
     mcpEnabled: boolean
+    memoryEnabled?: boolean
     bindings: MeetingConfig["knowledge"]["bindings"]
+  }
+  transcription?: {
+    provider: string
+    model: string
+    openaiProfile?: string | null
   }
 }
 
@@ -96,6 +112,8 @@ export class MeetingRuntime {
       generate: (sessionID: string, prompt: string) => Promise<string>
       mcp: MeetingMCP
       providerFactory?: typeof createProvider
+      memory?: MeetingMemoryAdapter
+      providerOptions?: CreateProviderOptions
     },
   ) {
     this.config = options.config
@@ -112,6 +130,9 @@ export class MeetingRuntime {
       bindings: activeBindings(this.config),
       maxCharacters: this.config.analysis.maxCharacters,
       retrievalTTL: this.config.knowledge.retrievalTTL,
+      memory: options.memory,
+      memoryEnabled: this.config.knowledge.memoryEnabled,
+      memoryScope: this.config.knowledge.memoryScope,
     })
     options.store.recover()
     if (this.config.storage.retentionDays !== null) options.store.retain(this.config.storage.retentionDays)
@@ -176,9 +197,26 @@ export class MeetingRuntime {
         ...(update.askModel !== undefined ? { askModel: update.askModel } : {}),
       },
       knowledge: update.knowledge
-        ? { ...previous.knowledge, mcpEnabled: update.knowledge.mcpEnabled, bindings: update.knowledge.bindings }
+        ? {
+            ...previous.knowledge,
+            mcpEnabled: update.knowledge.mcpEnabled,
+            ...(update.knowledge.memoryEnabled !== undefined ? { memoryEnabled: update.knowledge.memoryEnabled } : {}),
+            bindings: update.knowledge.bindings,
+          }
         : previous.knowledge,
+      transcription: update.transcription
+        ? {
+            ...previous.transcription,
+            provider: update.transcription.provider,
+            model: update.transcription.model,
+            openaiProfile: update.transcription.openaiProfile || undefined,
+          }
+        : previous.transcription,
     })
+    if (JSON.stringify(next.transcription) !== JSON.stringify(previous.transcription)) {
+      await this.configure(next)
+      return
+    }
     this.config = next
     try {
       await this.saveConfig()
@@ -187,7 +225,31 @@ export class MeetingRuntime {
       throw error
     }
     this.intelligence.options.bindings = activeBindings(next)
+    this.intelligence.options.memoryEnabled = next.knowledge.memoryEnabled
+    this.intelligence.options.memoryScope = next.knowledge.memoryScope
     this.intelligence.retrieval.clear()
+  }
+
+  private armedMeeting(): Meeting | undefined {
+    return this.selected ? this.options.store.getMeeting(this.selected) : undefined
+  }
+
+  private statusView(meetingID?: string) {
+    return this.status(meetingID)
+  }
+
+  private requireMeeting(meetingID?: string): string {
+    const id = meetingID ?? this.selected
+    if (!id || !this.options.store.getMeeting(id)) throw new Error("Select or start a meeting first")
+    return id
+  }
+
+  setMeet(meet: string) {
+    return this.control({ action: "set-meet", meet })
+  }
+
+  addChatNote(input: { sender?: string; text: string; consent: true }) {
+    return this.control({ action: "chat-note", ...input })
   }
 
   private async mutate(input: z.infer<typeof controlSchema>) {
@@ -197,22 +259,74 @@ export class MeetingRuntime {
       if (this.active) throw new Error("Stop the current recording before arming another")
       if (this.audio?.stats().backlog)
         throw new Error("Explicitly retry retained failed audio before arming another meeting")
+      const parsed = input.meet ? parseGoogleMeet(input.meet) : undefined
+      if (input.meet && !parsed) throw new Error("Invalid Google Meet code or URL")
       await this.load()
       const meeting = store.createMeeting({
         id: randomUUID(),
-        title: input.title ?? "Meeting",
+        title: input.title?.trim() || (parsed ? `Google Meet (${parsed.code})` : "Meeting"),
         sessionID: await this.options.createSession(input.sessionID),
+        ...(parsed ? { meet: parsed } : {}),
       })
       this.previous.clear()
       this.selected = meeting.id
       return this.status()
+    }
+    if (input.action === "set-meet") {
+      if (!input.meet) throw new Error("Invalid Google Meet code or URL")
+      const parsed = parseGoogleMeet(input.meet)
+      if (!parsed) throw new Error("Invalid Google Meet code or URL")
+      const targetID = input.meetingID ?? this.active ?? this.armedMeeting()?.id ?? store.listMeetings()[0]?.id
+      if (!targetID || !store.getMeeting(targetID)) throw new Error("No meeting selected")
+      store.updateMeeting(targetID, { meet: parsed })
+      this.selected = targetID
+      return this.statusView(targetID)
+    }
+    if (input.action === "chat-note") {
+      if (input.consent !== true) throw new Error("Chat note consent is required")
+      if (!input.text || !input.text.trim() || input.text.length > 4000) throw new Error("Chat note text is required")
+      const targetID = input.meetingID ?? this.active ?? this.armedMeeting()?.id
+      const meeting = targetID ? store.getMeeting(targetID) : undefined
+      if (!meeting || (meeting.status !== "ready" && meeting.status !== "recording"))
+        throw new Error("Meeting is not active for chat notes")
+      const startMs = Math.max(0, Date.now() - Date.parse(meeting.createdAt))
+      const segment: TranscriptSegment = {
+        id: randomUUID(),
+        meetingID: meeting.id,
+        sequence: store.nextSequence(meeting.id),
+        source: "chat",
+        speakerID: normalizeChatSpeaker(input.sender),
+        startMs,
+        endMs: startMs + 1,
+        rawText: input.text,
+        text: input.text.trim(),
+        state: "final",
+        model: "google-meet-chat",
+        createdAt: new Date().toISOString(),
+      }
+      store.putSegment(segment)
+      if (this.config.analysis.incremental && !this.shutdown) this.schedule(this.intelligence.analyze(meeting.id), meeting.id)
+      return this.statusView(meeting.id)
+    }
+    if (input.action === "knowledge-summarize") {
+      const meetingID = this.requireMeeting(input.meetingID)
+      await this.intelligence.summarizeKnowledge(meetingID, { scope: input.scope, target: input.target })
+      return this.statusView(meetingID)
     }
     if (input.action === "select") {
       if (!id || !store.getMeeting(id)) throw new Error("Meeting not found")
       this.selected = id
       return this.status()
     }
-    if (input.action === "models") return { ...this.status(id), models: await listModels(this.config.transcription) }
+    if (input.action === "models") {
+      const openaiAvailable = this.options.providerOptions?.resolveOpenAIApiKey
+        ? await this.options.providerOptions.resolveOpenAIApiKey(this.config.transcription.openaiProfile).then(
+            () => true,
+            () => false,
+          )
+        : undefined
+      return { ...this.status(id), models: await listModels(this.config.transcription, { openaiAvailable }) }
+    }
     if (input.action === "model-install") {
       if (!input.model || input.authorized !== true)
         throw new Error("Explicit model download authorization is required")
@@ -354,7 +468,7 @@ export class MeetingRuntime {
   private async load() {
     if (this.provider) return
     this.health = { ...this.health, status: "loading", error: undefined }
-    const provider = (this.options.providerFactory ?? createProvider)(this.config.transcription)
+    const provider = (this.options.providerFactory ?? createProvider)(this.config.transcription, this.options.providerOptions)
     try {
       await provider.initialize(this.config.transcription)
       const health = await provider.healthCheck()
@@ -539,7 +653,7 @@ export class MeetingRuntime {
       await this.provider?.dispose()
       this.provider = undefined
       const selected = { ...this.config.transcription, provider: fallback.provider, model: fallback.model }
-      const provider = (this.options.providerFactory ?? createProvider)(selected)
+      const provider = (this.options.providerFactory ?? createProvider)(selected, this.options.providerOptions)
       try {
         await provider.initialize(selected)
         const result = await provider.transcribe(chunk, { hints })
@@ -661,6 +775,8 @@ export class MeetingRuntime {
       this.intelligence.options.bindings = activeBindings(next)
       this.intelligence.options.maxCharacters = next.analysis.maxCharacters
       this.intelligence.options.retrievalTTL = next.knowledge.retrievalTTL
+      this.intelligence.options.memoryEnabled = next.knowledge.memoryEnabled
+      this.intelligence.options.memoryScope = next.knowledge.memoryScope
       this.intelligence.retrieval.clear()
       await this.saveConfig()
       if (recovering) {

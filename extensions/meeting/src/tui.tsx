@@ -177,6 +177,51 @@ export function MeetingPage(props: {
     const [action, ...args] = input.trim().split(/\s+/).filter(Boolean)
     const meetingID = selected()
     const expected = generation
+    if (action === "knowledge-summarize") {
+      const scope = args[0] === "repository" || args[0] === "knowledge" ? args[0] : undefined
+      const target = scope ? args[1] : args[0]
+      await run(
+        {
+          action,
+          ...(meetingID ? { meetingID } : {}),
+          ...(scope ? { scope } : {}),
+          ...(target ? { target } : {}),
+        },
+        expected,
+      )
+      return
+    }
+    if (action === "catchup") {
+      const question = args.join(" ")
+      try {
+        const result = await props.control({ action, ...(question ? { question } : {}) })
+        if (isMeetingView(result)) {
+          publish(result, expected)
+          return
+        }
+        if (typeof result === "object" && result !== null && "answer" in result && typeof result.answer === "string") {
+          setNotice(result.answer)
+          await refresh()
+          return
+        }
+        if (typeof result === "object" && result !== null && "error" in result && typeof result.error === "string") {
+          setError(result.error)
+          return
+        }
+        setNotice("Catch-up requested.")
+      } catch (reason) {
+        if (mounted && generation === expected) setError(reason instanceof Error ? reason.message : String(reason))
+      }
+      return
+    }
+    if (action === "meet") {
+      if (!args.length) {
+        setNotice("Usage: /meeting meet <url-or-code>")
+        return
+      }
+      await run({ action: "set-meet", meet: args.join(" "), ...(meetingID ? { meetingID } : {}) }, expected)
+      return
+    }
     if (action === "approve" || action === "reject") {
       const [proposalID, confirmation] = args
       const needsReview = !latest
@@ -367,9 +412,13 @@ export function MeetingPage(props: {
               <text fg={meeting.id === selected() ? theme.text.action.primary.default : theme.text.default}>
                 {meeting.id === selected() ? "› " : "  "}
                 {displayValue(meeting.title)} · {meeting.status} · {displayValue(meeting.id)}
+                {meeting.meet?.url ? ` · ${displayValue(meeting.meet.url)}` : ""}
               </text>
             )}
           </For>
+          {view()?.meeting?.meet?.url ? (
+            <text>Meet: {displayValue(view()?.meeting?.meet?.url)}</text>
+          ) : null}
           <text fg={theme.text.feedback.info.default}>Capture and health</text>
           <text>
             Health: {view()?.health.status} · {displayValue(view()?.health.provider)}/
@@ -443,7 +492,7 @@ export function MeetingPage(props: {
             {(proposal) => (
               <box flexDirection="column">
                 <text>
-                  {proposal.status}
+                  {proposal.status} · {proposal.operation}
                   {proposal.status === "manual" ? " · manual review; no writer is available" : ""} ·{" "}
                   {displayValue(proposal.server)}/{displayValue(proposal.target)} · {displayValue(proposal.id)}
                 </text>

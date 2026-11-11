@@ -27,13 +27,14 @@ const meetingSchema: z.ZodType<Meeting> = z.strictObject({
   updatedAt: timestamp,
   captureID: id.optional(),
   error: z.string().optional(),
+  meet: z.strictObject({ code: id, url: z.string().url() }).optional(),
 })
 const segmentSchema: z.ZodType<TranscriptSegment> = z
   .strictObject({
     id,
     meetingID: id,
     sequence,
-    source: z.enum(["remote", "microphone"]),
+    source: z.enum(["remote", "microphone", "chat"]),
     speakerID: id,
     startMs: nonnegative,
     endMs: nonnegative,
@@ -80,7 +81,7 @@ const proposalSchema: z.ZodType<KnowledgeProposal> = z.strictObject({
   meetingID: id,
   server: id,
   target: id,
-  operation: z.literal("replace"),
+  operation: z.enum(["replace", "create"]),
   existingContent: z.string(),
   suggestedContent: z.string(),
   explanation: z.string(),
@@ -209,13 +210,17 @@ export class MeetingStore {
     }
   }
 
-  createMeeting(input: Pick<Meeting, "id" | "title" | "sessionID">): Meeting {
+  createMeeting(input: { id: string; title: string; sessionID: string; meet?: { code: string; url: string } }): Meeting {
     const now = new Date().toISOString()
     const meeting = meetingSchema.parse({ ...input, status: "ready", createdAt: now, updatedAt: now })
     return this.transaction(() => {
       const existing = this.getMeeting(meeting.id)
       if (existing) {
-        if (existing.title !== meeting.title || existing.sessionID !== meeting.sessionID)
+        if (
+          existing.title !== meeting.title ||
+          existing.sessionID !== meeting.sessionID ||
+          JSON.stringify(existing.meet ?? null) !== JSON.stringify(meeting.meet ?? null)
+        )
           throw new Error("Changed meeting replay")
         return existing
       }
@@ -247,12 +252,14 @@ export class MeetingStore {
       })
   }
 
-  updateMeeting(meetingID: string, patch: Partial<Pick<Meeting, "status" | "captureID" | "error">>): Meeting {
+  updateMeeting(meetingID: string, patch: Partial<Pick<Meeting, "title" | "status" | "captureID" | "error" | "meet">>): Meeting {
     const validated = z
       .strictObject({
+        title: z.string().optional(),
         status: z.enum(["ready", "recording", "stopping", "stopped", "interrupted", "error"]).optional(),
         captureID: id.optional(),
         error: z.string().optional(),
+        meet: z.strictObject({ code: id, url: z.string().url() }).optional(),
       })
       .parse(patch)
     return this.transaction(() => {

@@ -4,6 +4,10 @@ import { homedir } from "node:os"
 import path from "node:path"
 import { z } from "zod"
 import workerSource from "../../python/worker.py" with { type: "text" }
+import { createOpenAIProvider } from "./openai.ts"
+import type { CreateProviderOptions, OpenAICredentialResolver } from "./openai.ts"
+
+export type { CreateProviderOptions, OpenAICredentialResolver }
 
 export type ModelDefinition = {
   id: string
@@ -13,7 +17,7 @@ export type ModelDefinition = {
   architecture?: string
 }
 const MODELS = new Map<string, ModelDefinition>()
-const PROVIDERS = new Map<string, (config: TranscriptionConfig) => TranscriptionProvider>()
+const PROVIDERS = new Map<string, (config: TranscriptionConfig, options?: CreateProviderOptions) => TranscriptionProvider>()
 
 const MAX_REQUEST_BYTES = 12 * 1024 * 1024
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -64,6 +68,25 @@ export const transcriptionConfigSchema = z
       .min(1)
       .max(20 * 60 * 1000)
       .default(10 * 60 * 1000),
+    openaiProfile: z
+      .string()
+      .min(1)
+      .max(200)
+      .refine((v) => !/^sk-[A-Za-z0-9_-]{8,}/.test(v.trim()), "Store OpenAI API keys in YCoding credentials, not in meeting settings")
+      .optional(),
+    openaiBaseUrl: z
+      .string()
+      .url()
+      .refine(
+        (v) => {
+          const u = new URL(v)
+          return (
+            !u.username && !u.password && (u.protocol === "https:" || (u.protocol === "http:" && (u.hostname === "127.0.0.1" || u.hostname === "localhost")))
+          )
+        },
+        "OpenAI base URL must use HTTPS or loopback HTTP",
+      )
+      .optional(),
   })
   .superRefine((config, context) => {
     if (config.overlapSeconds >= config.chunkSeconds) {
@@ -124,7 +147,12 @@ registerModel({
   task: "transcribe",
   architecture: "WhisperForConditionalGeneration",
 })
+registerModel({ id: "gpt-transcribe", provider: "openai", language: "*", task: "transcribe" })
+registerModel({ id: "gpt-4o-mini-transcribe", provider: "openai", language: "*", task: "transcribe" })
+registerModel({ id: "gpt-4o-transcribe", provider: "openai", language: "*", task: "transcribe" })
+registerModel({ id: "whisper-1", provider: "openai", language: "*", task: "transcribe" })
 registerProvider("huggingface", createHuggingFaceProvider)
+registerProvider("openai", (config, options) => createOpenAIProvider(config, options))
 
 export function registerModel(model: ModelDefinition): void {
   if (!model.id || model.id.length > 256) throw new Error("Model ID must contain between 1 and 256 characters")
@@ -141,7 +169,10 @@ export function registerModel(model: ModelDefinition): void {
   MODELS.set(model.id, { ...model })
 }
 
-export function registerProvider(id: string, factory: (config: TranscriptionConfig) => TranscriptionProvider): void {
+export function registerProvider(
+  id: string,
+  factory: (config: TranscriptionConfig, options?: CreateProviderOptions) => TranscriptionProvider,
+): void {
   if (!/^[a-z][a-z0-9-]*$/.test(id)) throw new Error("Invalid transcription provider ID")
   PROVIDERS.set(id, factory)
 }
@@ -150,7 +181,7 @@ function modelIDs(provider: string) {
   return [...MODELS.values()].filter((model) => model.provider === provider).map((model) => model.id)
 }
 
-export async function listModels(input: Partial<TranscriptionConfig> = {}) {
+export async function listModels(input: Partial<TranscriptionConfig> = {}, options?: { openaiAvailable?: boolean }) {
   const config = transcriptionConfigSchema.parse({ ...defaultTranscriptionConfig, ...input })
   const worker = new Worker(config)
   try {
@@ -161,7 +192,11 @@ export async function listModels(input: Partial<TranscriptionConfig> = {}) {
     })
     if (!response.inventory) throw new Error("Transcription worker omitted model inventory")
     const inventory = new Map(response.inventory.map((item) => [item.id, item]))
-    return [...MODELS.values()].map((model) => ({ ...model, ...(inventory.get(model.id) ?? { installed: false }) }))
+    const openaiAvailable = options?.openaiAvailable ?? Boolean(process.env.OPENAI_API_KEY?.trim())
+    return [...MODELS.values()].map((model) => {
+      if (model.provider === "openai") return { ...model, installed: openaiAvailable }
+      return { ...model, ...(inventory.get(model.id) ?? { installed: false }) }
+    })
   } finally {
     await worker.close()
   }
@@ -203,13 +238,13 @@ export async function installModel(
   }
 }
 
-export function createProvider(input: TranscriptionConfig): TranscriptionProvider {
+export function createProvider(input: TranscriptionConfig, options?: CreateProviderOptions): TranscriptionProvider {
   const config = transcriptionConfigSchema.parse(input)
   const compatibility = getModelCompatibility(config)
   if (!compatibility.supported) throw new Error(compatibility.reason)
   const factory = PROVIDERS.get(config.provider)
   if (!factory) throw new Error("Unsupported provider")
-  return factory(config)
+  return factory(config, options)
 }
 
 function createHuggingFaceProvider(config: TranscriptionConfig): TranscriptionProvider {
@@ -310,6 +345,8 @@ export function sanitizeTranscriptionError(error: unknown): string {
       .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
       .replace(/\s+/g, " ")
       .trim()
+      .replace(/sk-[A-Za-z0-9_-]{8,}/g, "[REDACTED]")
+      .replace(/Bearer\s+[^\s"']+/gi, "Bearer [REDACTED]")
       .slice(0, 300) || "Transcription failed"
   )
 }

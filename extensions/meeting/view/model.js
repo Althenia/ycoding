@@ -141,6 +141,54 @@ export function describeView(view) {
   }
 }
 
+export function formatSegmentSource(segment) {
+  if (!segment || typeof segment !== "object") return "Source unreported"
+  if (segment.source === "remote") return "Remote / Meet tab"
+  if (segment.source === "microphone") return "You / microphone"
+  if (segment.source === "chat") {
+    const raw = typeof segment.speakerID === "string" && segment.speakerID ? segment.speakerID : "participant"
+    return `Google Meet chat · ${raw.replace(/^chat:/, "") || "participant"}`
+  }
+  return "Source unreported"
+}
+
+const sourcePrefix = {
+  segment: "segment",
+  chat: "chat",
+  skill: "skill",
+  document: "doc",
+  mcp: "mcp",
+  knowledge: "knowledge",
+}
+
+export function formatQuestionSources(sources) {
+  const refs = Array.isArray(sources) ? sources : []
+  const parts = ["Context"]
+  for (const ref of refs) {
+    if (!ref || typeof ref !== "object" || typeof ref.id !== "string" || !ref.id) continue
+    const prefix =
+      typeof ref.kind === "string" && ref.kind ? (sourcePrefix[ref.kind] ?? ref.kind) : "ref"
+    parts.push(`${prefix}:${ref.id}`)
+  }
+  return parts.join(" · ")
+}
+
+export function catchupPayload(question) {
+  const trimmed = typeof question === "string" ? question.trim() : ""
+  return trimmed ? { mode: "catchup", question: trimmed } : { mode: "catchup" }
+}
+
+export function formatChatAuthor(entry) {
+  if (entry && typeof entry === "object" && entry.mode === "catchup")
+    return entry.question ? `You · Catch me up · ${entry.question}` : "You · Catch me up"
+  const question = entry && typeof entry === "object" && entry.question ? entry.question : ""
+  return `You · ${question || "Question unreported"}`
+}
+
+export function canCatchup(state) {
+  return !!(state && state.hasTranscript === true && state.busy !== true)
+}
+
 export function questionError(error) {
   return (
     {

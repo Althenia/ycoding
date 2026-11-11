@@ -89,6 +89,66 @@ test("ycoding meeting starts the runtime, arms a meeting, serves the live view a
   }
 }, 120_000)
 
+test("ycoding meeting help lists the Google Meet and one-shot flags", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-meeting-cli-help-"))
+  try {
+    const env = { ...process.env, XDG_DATA_HOME: path.join(root, "data"), YCODING_CONFIG_DIR: path.join(root, "config") }
+    const result = await output(run(["meeting", "--help"], env))
+    expect(result.code).toBe(0)
+    for (const flag of [
+      "--meet",
+      "--title",
+      "--speech-provider",
+      "--speech-model",
+      "--openai-profile",
+      "--status",
+      "--catchup",
+      "--ask",
+      "--summarize-knowledge",
+      "--approve-proposal",
+      "--reject-proposal",
+      "--confirm",
+    ])
+      expect(result.text).toContain(flag)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 60_000)
+
+test("ycoding meeting one-shot flags fail clearly without a running runtime or confirmation", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-meeting-cli-oneshot-"))
+  const project = path.join(root, "project")
+  await mkdir(project)
+  try {
+    const env = {
+      ...process.env,
+      XDG_DATA_HOME: path.join(root, "data"),
+      YCODING_CONFIG_DIR: path.join(root, "config"),
+      YCODING_DISABLE_MODELS_FETCH: "1",
+    }
+    const status = await output(run(["meeting", project, "--status"], env))
+    expect(status.code).not.toBe(0)
+    expect(status.text).toContain("No meeting runtime is active")
+    const approve = await output(run(["meeting", project, "--approve-proposal", "proposal-1"], env))
+    expect(approve.code).not.toBe(0)
+    expect(approve.text).toContain("--confirm")
+    const ask = await output(run(["meeting", project, "--ask", "What changed?"], env))
+    expect(ask.code).not.toBe(0)
+    expect(ask.text).toContain("No meeting runtime is active")
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 60_000)
+
+function output(child: ChildProcessWithoutNullStreams) {
+  const chunks: string[] = []
+  child.stdout.on("data", (chunk) => chunks.push(String(chunk)))
+  child.stderr.on("data", (chunk) => chunks.push(String(chunk)))
+  return new Promise<{ code: number | null; text: string }>((resolve) => {
+    child.once("exit", (code) => resolve({ code, text: chunks.join("") }))
+  })
+}
+
 const protocolWorker = `#!/usr/bin/env node
 const readline = require("node:readline")
 readline.createInterface({ input: process.stdin }).on("line", (line) => {

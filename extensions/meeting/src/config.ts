@@ -51,6 +51,8 @@ export const meetingConfigSchema = z
       .default(() => ({ model: "inherit" as const, askModel: "inherit" as const, incremental: true, maxCharacters: 32000 })),
     knowledge: z
       .object({
+        memoryEnabled: z.boolean().default(true),
+        memoryScope: z.enum(["repository", "knowledge"]).default("repository"),
         mcpEnabled: z.boolean().default(true),
         autoApply: z.literal(false).default(false),
         requireApproval: z.literal(true).default(true),
@@ -72,6 +74,8 @@ export const meetingConfigSchema = z
       })
       .strict()
       .default(() => ({
+        memoryEnabled: true,
+        memoryScope: "repository" as const,
         mcpEnabled: true,
         autoApply: false as const,
         requireApproval: true as const,

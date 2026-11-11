@@ -229,6 +229,22 @@ textarea {
 textarea::placeholder {
   color: var(--muted);
 }
+input[type="text"] {
+  display: block;
+  width: 100%;
+  min-height: var(--control-height);
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-control);
+  padding: var(--gap) var(--padding);
+  margin: var(--gap) 0;
+  caret-color: var(--focus);
+}
+input[type="text"]::placeholder {
+  color: var(--muted);
+}
 ::selection {
   background: var(--accent);
   color: var(--on-accent);
@@ -609,6 +625,10 @@ code {
   border-left: 3px solid var(--success);
   padding-left: var(--padding);
 }
+.segment[data-source="chat"] {
+  border-left: 3px solid var(--accent);
+  padding-left: var(--padding);
+}
 .segment[data-state="temporary"] {
   border-bottom-style: dashed;
 }
@@ -692,6 +712,23 @@ dialog .actions {
 }
 .owner-add > button {
   margin-top: var(--gap);
+}
+#meet-link-group {
+  margin-top: var(--padding);
+}
+#meet-chat-details {
+  margin-bottom: var(--padding);
+}
+#proposals-list > * + * {
+  margin-top: var(--gap);
+}
+.proposal {
+  border-bottom: 1px solid var(--border);
+  padding: var(--gap) 0;
+}
+.proposal p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .chat-history {
   display: grid;
@@ -829,6 +866,7 @@ dialog .actions {
   button,
   summary,
   textarea,
+  input,
   select {
     forced-color-adjust: auto;
   }
