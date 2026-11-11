@@ -73,6 +73,7 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
   let stepFailed = false
   let providerFailed = false
   let retryEvidence = false
+  let outputContent = false
   let assistantText = false
   let openText: { ordinal: number; length: number; breaks: SessionMessage.TextBreak[] } | undefined
   let lastNotice: SessionMessage.ID | undefined
@@ -401,6 +402,7 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
         })
         return
       case "text-delta":
+        if (event.text.length > 0) outputContent = true
         if (event.text.trim().length > 0) retryEvidence = true
         const deltaTextPhase = textPhase(event.providerMetadata)
         const deltaTextOrdinal = yield* text.append(
@@ -439,6 +441,7 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
         })
         return
       case "reasoning-delta":
+        if (event.text.length > 0) outputContent = true
         if (event.text.trim().length > 0) retryEvidence = true
         const reasoningDeltaContentOrdinal = reasoningContentOrdinals.get(event.id)
         if (reasoningDeltaContentOrdinal === undefined)
@@ -667,6 +670,7 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
     failIncompleteToolInputs,
     hasProviderError: () => providerFailed,
     hasRetryEvidence: () => retryEvidence,
+    hasOutputContent: () => outputContent,
     hasAssistantText: () => assistantText,
     hasStepStarted: () => stepStarted,
     currentMessageID: () => assistantMessageID,

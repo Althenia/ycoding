@@ -589,6 +589,7 @@ const layer = Layer.effect(
       const ownedToolFibers: Array<Fiber.Fiber<void, ToolOutputStore.Error>> = []
       const providerStateCaptures: SessionProviderState.CaptureInput[] = []
       let needsContinuation = false
+      let rejectedRecoveryTool = false
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
         agent: agent.id,
@@ -714,7 +715,7 @@ const layer = Layer.effect(
             const tool = prepared.resolveToolCall(event.name)
             if (tool.type === "reject") {
               yield* serialized(publisher.failUnsettledTools(tool.error))
-              if (recoveryMode === "terminal-response") yield* serialized(publisher.failAssistant(tool.error))
+              if (recoveryMode === "terminal-response") rejectedRecoveryTool = true
               return
             }
             needsContinuation = true
@@ -1097,12 +1098,15 @@ const layer = Layer.effect(
           }
           const existingStepFailure = publisher.stepFailure() ?? carriedStepFailure
           const explicitSilentReply =
-            publisher.stepSettlement()?.finish === "stop" && !publisher.hasRetryEvidence() && !needsContinuation
+            publisher.stepSettlement()?.finish === "stop" &&
+            !publisher.hasRetryEvidence() &&
+            !publisher.hasOutputContent() &&
+            !needsContinuation
           if (
             recoveryMode === "terminal-response" &&
             !existingStepFailure &&
             !explicitSilentReply &&
-            (!publisher.stepSettlement() || !publisher.hasAssistantText() || needsContinuation)
+            (!publisher.stepSettlement() || !publisher.hasAssistantText() || needsContinuation || rejectedRecoveryTool)
           ) {
             unfinishedEnding = !needsContinuation && stream._tag === "Success"
             yield* serialized(

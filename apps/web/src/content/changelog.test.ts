@@ -9,13 +9,13 @@ const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.ve
 describe("release entries", () => {
   test("lists the v0.11.5 release first with its notes", async () => {
     const entry = RELEASES[0]
-    expect(entry).toMatchObject({ version: "0.11.5", date: "2026-11-10", title: "Dots executor reconcile and realistic generation speed", tags: ["Fixed"] })
-    expect(entry?.changes).toHaveLength(2)
+    expect(entry).toMatchObject({ version: "0.11.5", date: "2026-11-10", title: "Meeting context and reliable recovery", tags: ["Added", "Fixed"] })
+    expect(entry?.changes).toHaveLength(6)
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.5.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.11.5\n")
     for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["even when a computer rename is pending", "instead of staying missing from the Dot's computers", "provider-measured output tokens", "sub-second generation windows", "at least three samples"])
+    for (const fragment of ["even when a computer rename is pending", "instead of staying missing from the Dot's computers", "provider-measured output tokens", "sub-second generation windows", "at least three samples", "Google Meet", "consent", "OpenAI speech", "audio", "Catch up", "review", "never executed", "Whitespace-only", "silent reply"])
       expect(text).toContain(fragment)
     expect(text).not.toMatch(/installer|live-verified|roadmap|milestone|\/Users\//i)
     expect(after("0.11.5")?.version).toBe("0.11.4")

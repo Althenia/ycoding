@@ -10617,9 +10617,7 @@ describe("SessionRunnerLLM", () => {
         yield* admit(session, "Answer without executing tools")
         responses = [reply.silence(), reply.tool("call-recovery-tool", "echo", { text: "must not execute" })]
 
-        expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toBe(
-          "Tools are disabled for terminal response recovery",
-        )
+        yield* session.resume(sessionID)
 
         expect(requests).toHaveLength(2)
         expect(requests[0].tools.some((tool) => tool.name === "echo")).toBeTrue()
@@ -10628,8 +10626,8 @@ describe("SessionRunnerLLM", () => {
         expect(executions).toEqual([])
         expect(requireAssistant((yield* session.context(sessionID)).slice(-1))).toMatchObject({
           finish: "error",
-          error: { type: "tool.execution", message: "Tools are disabled for terminal response recovery" },
-          content: [{ type: "tool", id: "call-recovery-tool", executed: false, state: { status: "error" } }],
+          error: { type: "provider.invalid-output", message: noAnswerAfterRecovery },
+          content: [{ type: "tool", id: "call-recovery-tool", executed: false, state: { status: "error", error: { message: "Tools are disabled for terminal response recovery" } } }],
         })
       }),
     )
@@ -11061,6 +11059,28 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  for (const kind of ["text", "reasoning"] as const) {
+    it.effect(`settles whitespace-only ${kind} after recovery as incomplete without a third request`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* admit(session, "Answer once")
+        responses = [reply.silence(), fragmentFixture(kind, "blank-recovery", [" \n\t"]).completeEvents]
+
+        yield* session.resume(sessionID)
+
+        expect(requests).toHaveLength(2)
+        expect(requests[1]?.toolChoice).toMatchObject({ type: "none" })
+        expect(executions).toEqual([])
+        expect(requireAssistant((yield* session.context(sessionID)).slice(-1))).toMatchObject({
+          finish: "error",
+          error: { type: "provider.invalid-output", message: noAnswerAfterRecovery },
+          content: [{ type: kind, text: " \n\t" }],
+        })
+        expect(yield* recordedEventTypes(sessionID)).not.toContain("session.execution.failed.1")
+      }),
+    )
+  }
+
   it.effect("ends repeated explicit empty stop responses as a silent reply without a third response step", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -11159,23 +11179,61 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("fails a local tool emitted during terminal response recovery without executing it", () =>
+  it.effect("settles a local tool emitted during terminal response recovery without executing it", () =>
     Effect.gen(function* () {
       const session = yield* setup
       yield* admit(session, "Answer without tools")
       responses = [reply.silence(), reply.tool("call-recovery-tool", "echo", { text: "must not execute" })]
 
-      expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toBe(
-        "Tools are disabled for terminal response recovery",
-      )
+      yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
       expect(executions).toEqual([])
       expect(requireAssistant((yield* session.context(sessionID)).slice(-1))).toMatchObject({
         finish: "error",
-        error: { type: "tool.execution", message: "Tools are disabled for terminal response recovery" },
-        content: [{ type: "tool", id: "call-recovery-tool", state: { status: "error" } }],
+        error: { type: "provider.invalid-output", message: noAnswerAfterRecovery },
+        content: [{ type: "tool", id: "call-recovery-tool", executed: false, state: { status: "error", error: { message: "Tools are disabled for terminal response recovery" } } }],
       })
+    }),
+  )
+
+  it.effect("settles rejected recovery tools and partial text after an unknown ending without another request", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Answer once")
+      const unknown = fragmentFixture("reasoning", "unknown", ["Thinking"]).completeEvents.map((event) =>
+        LLMEvent.is.stepFinish(event)
+          ? LLMEvent.stepFinish({ index: event.index, reason: "unknown" })
+          : LLMEvent.is.finish(event)
+            ? LLMEvent.finish({ reason: "unknown" })
+            : event,
+      )
+      responses = [unknown, [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.textStart({ id: "partial" }),
+        LLMEvent.textDelta({ id: "partial", text: "Partial answer" }),
+        LLMEvent.textEnd({ id: "partial" }),
+        LLMEvent.toolCall({ id: "call-one", name: "echo", input: { text: "one" } }),
+        LLMEvent.toolCall({ id: "call-two", name: "echo", input: { text: "two" } }),
+        LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+        LLMEvent.finish({ reason: "tool-calls" }),
+      ], reply.text("Must not run", "third")]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.toolChoice).toMatchObject({ type: "none" })
+      expect(executions).toEqual([])
+      const assistants = (yield* session.context(sessionID)).filter((message) => message.type === "assistant")
+      expect(assistants).toMatchObject([
+        { finish: "unknown", content: [{ type: "reasoning", text: "Thinking" }] },
+        { finish: "error", error: { type: "provider.invalid-output", message: noAnswerAfterRecovery }, content: [
+          { type: "text", text: "Partial answer" },
+          { type: "tool", id: "call-one", executed: false, state: { status: "error", error: { message: "Tools are disabled for terminal response recovery" } } },
+          { type: "tool", id: "call-two", executed: false, state: { status: "error", error: { message: "Tools are disabled for terminal response recovery" } } },
+        ] },
+      ])
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.execution.failed.1")
     }),
   )
 
