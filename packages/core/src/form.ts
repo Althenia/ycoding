@@ -638,9 +638,12 @@ export const layer = Layer.effect(
                     }
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "refused" }
                   }
-                  const native = yield* restore(
-                    decisionAnswer(decision, sessionID, entry.form, { autoAnswer: mode === "auto", yolo: mode === "yolo" }),
-                  )
+                  const native =
+                    input.answer === undefined || mode === "auto"
+                      ? yield* restore(
+                          decisionAnswer(decision, sessionID, entry.form, { autoAnswer: mode === "auto", yolo: mode === "yolo" }),
+                        )
+                      : undefined
                   if (native?.type === "answer" && input.answer !== undefined && Hash.json(input.answer) !== Hash.json(native.answer))
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "answer-not-deterministic" }
                   const outcome: SleepOutcome =
