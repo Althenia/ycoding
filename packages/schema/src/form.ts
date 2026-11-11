@@ -236,7 +236,7 @@ export const ReplySource = Schema.Union([
     kind: Schema.Literal("coordinator"),
     coordinatorSessionID: Schema.String,
     groupID: Schema.String.pipe(optional),
-    via: Schema.Literals(["auto-answer", "yolo", "coordination"]).pipe(optional),
+    via: Schema.Literals(["auto-answer", "yolo", "goal", "coordination"]).pipe(optional),
     confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
     rationale: Schema.String.check(Schema.isMaxLength(500), Schema.isPattern(/\S/)).pipe(optional),
   }),

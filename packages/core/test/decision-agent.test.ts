@@ -568,6 +568,32 @@ it.effect("a YOLO answer invocation runs the evaluator agent and audits canonica
   expect(JSON.stringify(audits)).not.toContain("read")
 }))
 
+it.effect("a YOLO free-text answer invocation sends the goal and recorded human instruction to the evaluator and keeps an abstention unanswered", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_agent_yolo_text_context")
+  const database = yield* Database.Service
+  yield* database.db.update(SessionTable).set({
+    autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "yolo", goal: {
+      text: "Ship the synthetic feature", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3,
+    } },
+  }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+  const data = { text: "Name feature branches with the feature/ prefix.", metadata: { inputOrigin: "human" }, files: [], agents: [], time: { created: 1 } }
+  yield* database.db.insert(SessionMessageTable).values({
+    id: SessionMessage.ID.make("msg_yolo_text_context"), session_id: sessionID, type: "user", seq: 1, data,
+  }).run().pipe(Effect.orDie)
+  state.refusal = true
+  const decisions = yield* Decision.Service
+  const output = yield* decisions.evaluate({ provider: "agent", request: { state: { question: "Which branch name should the feature use?" }, questions: [{
+    type: "text", name: "decision", instructions: "Give the bounded free-text answer", maxLength: 200,
+  }] } }, { sessionID, purpose: "answer", authority: "yolo", invocationKey: "que_text:0" })
+  const wire = JSON.stringify(requests[0].messages)
+  expect(JSON.stringify(requests[0].system)).toContain("YOLO answer evaluator")
+  expect(wire).toContain("Ship the synthetic feature")
+  expect(wire).toContain("Name feature branches with the feature/ prefix.")
+  expect(wire).toContain("Which branch name should the feature use?")
+  expect(requests[0].tools).toEqual([])
+  expect(output.response.answers).toEqual([expect.objectContaining({ type: "refusal", confidence: 0 })])
+}))
+
 it.effect("a baseline invocation runs the decision agent and audits an unavailable helper as failed", () => Effect.gen(function* () {
   const sessionID = yield* seed("ses_agent_baseline_audit")
   state.unavailable = true

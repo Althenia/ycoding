@@ -117,7 +117,7 @@ export function explicitDecisionReason(input: {
   const action = input.action ?? ""
   const evidence = [action, ...(input.resources ?? []), ...(input.ruleIDs ?? []), metadataText(input.metadata)].join("\n").toLowerCase()
   const mutation = input.kind !== "question" && !readActions.has(action)
-  const sensitive = /(credential|secret|api[_-]?key|access[_-]?token|private[_-]?key|id_rsa|\.env(?:\.|\b)|\.aws\/|\.ssh\/|keychain|password|oauth|\baccount\b)/
+  const sensitive = /(credential|secret|api[ _-]?key|access[ _-]?token|private[ _-]?key|id_rsa|\.env(?:\.|\b)|\.aws\/|\.ssh\/|keychain|password|oauth|\baccount\b)/
   if ((mutation || input.kind === "question") && sensitive.test(evidence)) return "explicit-decision:credentials-account"
   if (mutation && /(\.github\/workflows\/|\.gitlab-ci|jenkinsfile|\.circleci\/|\bci\/cd\b|\bcicd\b)/.test(evidence)) return "explicit-decision:ci-cd"
   if ((mutation || input.kind === "question") && /(db:migrate|database migration|prisma migrate|drizzle[^\n]*migrat|alembic upgrade|rails db:migrate|migrat[^\n]*(prod|production)|(prod|production)[^\n]*migrat)/.test(evidence))

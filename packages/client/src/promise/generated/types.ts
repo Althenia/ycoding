@@ -4109,7 +4109,7 @@ export type FormReplySource =
       kind: "coordinator"
       coordinatorSessionID: string
       groupID?: string
-      via?: "auto-answer" | "yolo" | "coordination"
+      via?: "auto-answer" | "yolo" | "goal" | "coordination"
       confidence?: number
       rationale?: string
     }

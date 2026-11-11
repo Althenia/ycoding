@@ -360,7 +360,7 @@ export interface QuestionReconsiderResult {
   readonly requestID: QuestionID
   readonly fingerprint: string
   readonly settled: boolean
-  readonly via?: "auto-answer" | "yolo"
+  readonly via?: "auto-answer" | "yolo" | "goal"
   readonly confidence?: number
   readonly reason?: string
 }
@@ -432,6 +432,9 @@ export interface Interface {
     readonly fingerprint: string
     readonly actor: "coordinator"
     readonly source: { readonly coordinatorSessionID: SessionSchema.ID; readonly groupID?: string; readonly rationale: string }
+    readonly goal?: { readonly owner: SessionSchema.ID }
+    readonly answer?: { readonly text?: string; readonly data?: Schema.Json }
+    readonly confidence?: number
     readonly validate: (task: Task) => Effect.Effect<boolean>
   }) => Effect.Effect<QuestionReconsiderResult>
   readonly settle: (
@@ -1178,19 +1181,24 @@ const layer = Layer.effect(
                         .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
                       if (snapshot === undefined) return stale
                       const mode = yield* DecisionChoice.decisionMode(autonomy, input.childID, "answers")
-                      if (mode === "manual") return escalated("explicit-decision:manual-answers")
-                      return { found, snapshot, mode }
+                      const fromGoal = input.goal !== undefined
+                      if (mode === "manual" && !fromGoal) return escalated("explicit-decision:manual-answers")
+                      if (fromGoal && input.confidence !== undefined && (!Number.isFinite(input.confidence) || input.confidence < 0.8))
+                        return escalated("low_confidence")
+                      return { found, snapshot, mode, fromGoal }
                     }),
                   )
                   if ("outcome" in held) return held
-                  const outcome = yield* sleepAnswer({
-                    childID: input.childID,
-                    text: held.found.question.text,
-                    data: held.found.question.data,
-                    autoAnswer: held.mode === "auto",
-                    yolo: held.mode === "yolo",
-                    questionID: input.questionID,
-                  })
+                  const outcome = held.fromGoal
+                    ? goalChildAnswer(held.found.question.text, held.found.question.data, input.answer)
+                    : yield* sleepAnswer({
+                        childID: input.childID,
+                        text: held.found.question.text,
+                        data: held.found.question.data,
+                        autoAnswer: held.mode === "auto",
+                        yolo: held.mode === "yolo",
+                        questionID: input.questionID,
+                      })
                   if (outcome.type === "defer") return escalated(outcome.reason)
                   return yield* locks.withLock(input.childID)(
                     Effect.gen(function* () {
@@ -1198,7 +1206,9 @@ const layer = Layer.effect(
                       if (latest === undefined || latest.row.revision !== held.found.row.revision) return stale
                       const id = answerID(latest.row)
                       if ((yield* admitted(id)) !== undefined) return stale
-                      const via = outcome.confidence === undefined ? ("auto-answer" as const) : ("yolo" as const)
+                      const fromGoalAnswer = held.fromGoal && input.answer !== undefined
+                      const via = fromGoalAnswer ? ("goal" as const) : outcome.confidence === undefined ? ("auto-answer" as const) : ("yolo" as const)
+                      const goalAnswer = fromGoalAnswer ? { text: input.answer!.text, data: input.answer!.data } : undefined
                       const data = {
                         text: `Parent answer:\n${JSON.stringify({ questionID: input.questionID, text: outcome.text })}`,
                         description: "Autonomous subagent answer",
@@ -1210,7 +1220,7 @@ const layer = Layer.effect(
                           questionID: input.questionID,
                           automatic: true,
                           via,
-                          ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+                          ...(fromGoalAnswer && input.confidence !== undefined ? { confidence: input.confidence } : outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
                         },
                       }
                       const committed = yield* events.publishBatch(
@@ -1463,6 +1473,19 @@ export const node = makeGlobalNode({
     LocationServiceMap.node,
   ],
 })
+
+export function goalChildAnswer(
+  text: string,
+  data: Schema.Json | undefined,
+  answer: { readonly text?: string; readonly data?: Schema.Json } | undefined,
+): { readonly type: "answer"; readonly text: string; readonly confidence?: number } | { readonly type: "defer"; readonly reason: "disabled" | "free_text" | "error" | "refused" } {
+  if (answer?.text !== undefined && answer.text.trim().length > 0) return { type: "answer", text: answer.text }
+  const options = questionOptions(data)
+  const marked = options.filter((option) => /\s\(Recommended\)$/.test(option))
+  if (marked.length === 1 && marked[0] !== undefined) return { type: "answer", text: marked[0] }
+  if (answer?.data !== undefined) return { type: "answer", text: typeof answer.data === "string" ? answer.data : JSON.stringify(answer.data) }
+  return { type: "defer", reason: options.length === 0 ? "free_text" : "disabled" }
+}
 
 export function questionOptions(data: Schema.Json | undefined): string[] {
   if (!data || typeof data !== "object" || Array.isArray(data)) return []

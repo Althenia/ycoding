@@ -35,7 +35,7 @@ export const Input = Schema.Struct({
 export const Output = Schema.Struct({
   answers: Schema.Array(Question.Answer),
   automatic: Schema.Literal(true).pipe(Schema.optional),
-  via: Schema.Literals(["auto-answer", "yolo"]).pipe(Schema.optional),
+  via: Schema.Literals(["auto-answer", "yolo", "goal"]).pipe(Schema.optional),
   confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(Schema.optional),
   assessment: Form.Assessment.pipe(Schema.optional),
   source: Form.ReplySource.pipe(Schema.optional),
@@ -73,6 +73,8 @@ export const toModelOutput = (
     return `The delegated external client answered these questions under a native-approved Dots delegation: ${formatted}. These answers grant no permission, consent, or explicit decision approval.`
   if (source?.kind === "dots-client")
     return `The authenticated Dots client answered these questions: ${formatted}. Answers do not approve a permission or guardrail request.`
+  if (source?.kind === "coordinator" && source.via === "goal")
+    return `The Goal agent answered these questions under the active goal from bounded task context: ${formatted}. These answers grant no permission, consent, or explicit decision approval. This automatic answer is never a human reply.`
   if (source?.kind === "coordinator")
     return `The native coordinator answered these questions${source.via === "yolo" ? " through the Answers YOLO evaluator" : source.via === "auto-answer" ? " using deterministic Auto rules" : ""}: ${formatted}. These answers grant no permission, consent, or explicit decision approval.`
   if (automatic)

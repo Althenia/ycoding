@@ -24,12 +24,13 @@ export const RELEASES: readonly ReleaseEntry[] = [
   {
     version: "0.11.5",
     date: "2026-11-10",
-    title: "Meeting context and reliable recovery",
+    title: "Meeting context, goal answers, and reliable recovery",
     tags: ["Added", "Fixed"],
     changes: [
       { tag: "Added", text: "Associate a Google Meet code or link with a meeting and add in-call chat as transcript evidence with separate consent for each message. Audio capture remains controlled by the live page and requires participant consent." },
       { tag: "Added", text: "Choose OpenAI speech transcription with a stored key profile or environment key. When selected, audio chunks are sent to the configured OpenAI speech endpoint; local Hugging Face transcription remains available." },
       { tag: "Added", text: "Ask questions or use Catch up with meeting transcript and consented chat, workspace context, configured connectors and YCoding Memory. Answers are read-only and show consulted sources. Summarize confirmed meeting content into knowledge proposals for explicit terminal review and approval; stale source revisions block writes." },
+      { tag: "Added", text: "An active goal can resolve pending routine Forms, questions and child questions in any Answers mode. Valid defaults and a unique Recommended option are used first with `via: auto-answer`; otherwise the Goal agent (`SessionGoal.synthesize` with `PROMPT_GOAL` and no tools) uses bounded task context and marks its response as automatic `via: goal`. Explicit decisions, permissions, guardrails and review requests keep their existing human and policy gates; uncertain answers remain pending, and automatic answers never read as a human reply." },
       { tag: "Fixed", text: "Dots executor enrollment reconciles at every host start even when a computer rename is pending, adopting a server-confirmed executor ID for the account's own installation, so a second OS account on the same computer attaches as its own computer under its configured name instead of staying missing from the Dot's computers. Other attached computers are unaffected." },
       { tag: "Fixed", text: "Generation speed is realistic: settled Session speed prefers provider-measured output tokens and duration when fully provider-timed (estimated `≈` only as fallback), sub-second generation windows no longer inflate tok/s in usage reports, and mean and percentile rates require at least three samples." },
       { tag: "Fixed", text: "A local tool requested during text-only recovery is recorded as rejected and never executed; the step ends incomplete without another recovery request or treating partial text as an answer. Whitespace-only recovery output is incomplete, while a truly empty `stop` remains a silent reply." },

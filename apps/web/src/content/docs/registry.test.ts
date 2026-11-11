@@ -194,6 +194,7 @@ describe("structured decision documentation", () => {
     expect(text).not.toContain("/guardrail-decision")
     expect(text).toContain("confidence 0.8 or higher")
     expect(text).toContain("Answers set to Auto (Manual by default)")
+    expect(text).toContain("An active goal may resolve pending routine questions using the Goal agent in any Answers mode.")
     expect(text).not.toContain("auto_answer")
     expect(text).toContain("guardrails.decide_reviews on (the default when omitted)")
     expect(text).not.toContain("decide_reviews: true (default false)")

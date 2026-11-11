@@ -18,6 +18,9 @@ test("native Dots Form attribution identifies the native source without exposing
 test("Form attribution preserves coordinator and historical delegated sources", () => {
   const coordinator = renderToString(() => <FormAssessment value={undefined} settled="automatic" source={{ kind: "coordinator", coordinatorSessionID: "ses_coordinator", via: "auto-answer" }} />)
   expect(coordinator).toContain("answered by coordinator ses_coordinator via Answers Auto")
+  const goal = renderToString(() => <FormAssessment value={undefined} settled="automatic" source={{ kind: "coordinator", coordinatorSessionID: "ses_goal_owner", via: "goal" }} />)
+  expect(goal).toContain("answered by coordinator ses_goal_owner via Goal agent")
+  expect(goal).not.toContain("answered by you")
   const delegated = renderToString(() => <FormAssessment value={undefined} settled="client" source={{ kind: "dots-delegation", anchorSessionID: "ses_anchor", delegationID: "delegation_history", revision: 1, exchangeID: "exchange_history" }} />)
   expect(delegated).toContain("answered by external client via Dots delegation delegation_history")
   expect(delegated).toContain("anchor ses_anchor")

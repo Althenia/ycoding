@@ -1466,7 +1466,7 @@ export function readFormReplySource(value: unknown): FormReplySourceView | undef
   }
   if (source.kind !== "coordinator" || typeof source.coordinatorSessionID !== "string" ||
     (source.groupID !== undefined && typeof source.groupID !== "string") ||
-    (source.via !== undefined && source.via !== "coordination" && source.via !== "yolo" && source.via !== "auto-answer") ||
+    (source.via !== undefined && source.via !== "coordination" && source.via !== "yolo" && source.via !== "goal" && source.via !== "auto-answer") ||
     (source.confidence !== undefined && (typeof source.confidence !== "number" || !Number.isFinite(source.confidence) || source.confidence < 0 || source.confidence > 1)) ||
     (source.rationale !== undefined && (typeof source.rationale !== "string" || !source.rationale.trim() || source.rationale.length > 500))) return undefined
   return { kind: source.kind, coordinatorSessionID: source.coordinatorSessionID,

@@ -59,10 +59,10 @@ Durable state owns prompt admission, session history, instructions, compaction r
 
 Autonomy state is `{ mode: "normal", permissions, guardrails, answers, goal?, sleep? }`, where each category is `manual`, `yolo`, or `auto` and defaults to `manual`. The three categories are independent; one write may set any nonempty subset atomically:
 
-- `manual`: no helper model is called for the category; unresolved requests await an authorized typed decision or defer to the review box asleep;
+- `manual`: no helper model is called at ask time; unresolved requests await an authorized typed decision or defer to the review box asleep. An active goal can use the Goal agent for pending routine questions;
 - `yolo`: a hidden agentic evaluator (`yolo-permission`, `yolo-guardrail`, or `yolo-answer`; all tools denied) judges only that category's requests that deterministic rules left unresolved, through the same Decision API and authentication route as explicit `decision` calls. Only the answers evaluator generates required free text, after typed bounded validation;
 - `auto`: deterministic rules only, with no model fallback. Permissions approve ask requests; guardrails approve ordinary standard reviews while the root family is awake, never hard or custom-rule reviews; answers supply a valid explicit default or exactly one `Recommended` option, inventing no placeholder;
-- `goal`: repeated progress toward a durable goal until completion, stop, or a bounded no-progress terminal state. A goal grants no permission, answer, or review authority.
+- `goal`: repeated progress toward a durable goal until completion, stop, or a bounded no-progress terminal state. The active goal loop may resolve pending routine questions using deterministic defaults with `via: auto-answer` or the Goal agent with `via: goal` attribution; automatic answers never read as a human reply. It grants no permission or review authority.
 
 Effective modes follow managed-task ancestry and are displayed with their inheriting Session: permissions take `auto` over `yolo` over `manual` across the Session and its managed-task ancestors; guardrails use the root family's choice; answers take the Session's own `auto`, otherwise `yolo` from the Session or a managed-task ancestor (an ancestor's `auto` does not propagate). Setting a local category to `manual` cannot cancel inherited authority.
 

@@ -444,7 +444,7 @@ describe("Agent", () => {
         Effect.provideService(Location.Service, Location.Service.of(testLocation)),
       )
       const native = [
-        "Manual: requires an explicit decision; no helper assessment or match verification",
+        "Manual: requires an explicit decision at ask time; no helper assessment or match verification",
         "Auto: deterministic rules only, no model fallback",
         "permissions inherit Auto across managed-task ancestry",
         "guardrails use the root family's mode",
@@ -456,7 +456,7 @@ describe("Agent", () => {
         "denies and custom rules are never verified",
         "Hard and custom-rule reviews require explicit client approval",
         "awake, ask the user; asleep, defer to the review box",
-        "Goals and sleep grant no permission, answer or review authority",
+        "Goals grant no permission or review authority; sleep grants none",
         "do not retry deferred actions", "normal choices and attribution",
         "/autonomous", "Only the user creates, replaces or resumes a goal",
         "get, report, complete, stop or clear", "Never change objective text",
@@ -471,7 +471,7 @@ describe("Agent", () => {
       }
       const helpers = {
         compaction: ["TOON", "conversation_memory", "in_progress", "pending", "blocked", "accepted", "rejected", "superseded", "active skills", "empty collections", "not a conversation reply"],
-        goal: ["observable completion condition", "preserve the active goal exactly", "Newer explicit user constraints", "Do not revive a cancelled operation", "automatic answers are not human instructions", "disabled answering remains manual", "one imperative sentence", "no Markdown"],
+        goal: ["observable completion condition", "preserve the active goal exactly", "Newer explicit user constraints", "Do not revive a cancelled operation", "automatic answers are not human instructions", "active goal may resolve pending routine questions", "one imperative sentence", "no Markdown"],
         prediction: ["user's next message", "2–40 words", "400 characters", "no useful prediction", "never imply authorization"],
         summary: ["two or three first-person sentences", "validation steps", "unanswered final question", "verbatim", "no new question", "may add one extra sentence"],
         btw: ["read-only", "parent", "explicitly requests and approves", "files, state or external systems"],

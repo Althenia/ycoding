@@ -56,6 +56,8 @@ interface Tap {
 }
 
 const decisionCalls: Decision.Input[] = []
+const goalCalls: Array<{ readonly owner: string; readonly prompt: string }> = []
+let goalImpl: (owner: SessionSchema.ID, prompt: string) => Effect.Effect<SessionGoalDecisions.GoalSynthesis, { readonly reason: string }> = () => Effect.succeed({ text: "feature/synthetic" })
 const wakes: SessionSchema.ID[] = []
 const interrupts: SessionSchema.ID[] = []
 const reconsiderCalls: string[] = []
@@ -159,6 +161,8 @@ const reset = Effect.sync(() => {
   locateCalls = 0
   policy = ConfigCoordination.resolve()
   decide = () => Effect.die("the Decision helper must not be called")
+  goalCalls.length = 0
+  goalImpl = () => Effect.succeed({ text: "feature/synthetic" })
 })
 
 const makeTap = Effect.gen(function* () {
@@ -293,6 +297,8 @@ const startLoop = Effect.gen(function* () {
     events,
     autonomy,
     execution,
+    synthesizeGoal: (owner, prompt) =>
+      Effect.sync(() => void goalCalls.push({ owner, prompt })).pipe(Effect.andThen(goalImpl(owner, prompt))),
     orchestration: {
       questionSnapshots: orchestration.questionSnapshots,
       reconsiderQuestion: (input: ChildReconsiderInput) => {
@@ -1080,16 +1086,20 @@ const questionInput = (label: string) => ({
   questions: [{ header: "Mode", question: "Which?", options: [{ label, description: "First" }], custom: false }],
 })
 
-it.live("B9 under Manual a Question-service request waits with human-only:manual-answers, resumes on reply and not on rejection", () =>
+const explicitQuestionInput = (label: string) => ({
+  questions: [{ header: "Plan", question: "Approve the purchase of the paid plan?", options: [{ label, description: "First" }], custom: false }],
+})
+
+it.live("B9 under Manual an explicit-decision Question-service request waits, resumes on reply and not on rejection", () =>
   Effect.gen(function* () {
     const f = yield* setup()
-    const waiting = yield* f.questions.ask({ sessionID: f.root.id, ...questionInput("One") }).pipe(Effect.exit, Effect.forkScoped)
+    const waiting = yield* f.questions.ask({ sessionID: f.root.id, ...explicitQuestionInput("One") }).pipe(Effect.exit, Effect.forkScoped)
     yield* awaitReceipts(f.root.id, 1)
     const [request] = yield* f.questions.list()
     const [receipt] = yield* receipts(f, f.root.id)
     expect(receipt.goalDecision).toMatchObject({
       outcome: "waiting",
-      reason: "human-only:manual-answers",
+      reason: "explicit-decision:purchase-spend",
       candidate: { kind: "question", sessionID: f.root.id, requestID: request.id, fingerprint: Question.fingerprint(request) },
     })
     expect(receipt.goalDecision.rationale.length).toBeGreaterThan(0)
@@ -1105,10 +1115,10 @@ it.live("B9 under Manual a Question-service request waits with human-only:manual
     expect((yield* Fiber.join(waiting))._tag).toBe("Success")
     yield* awaitReceipts(f.root.id, 2)
     yield* awaitWakes(1)
-    expect(outcomes(yield* receipts(f, f.root.id))).toEqual(["resumed:", "waiting:human-only:manual-answers"].toSorted())
+    expect(outcomes(yield* receipts(f, f.root.id))).toEqual(["resumed:", "waiting:explicit-decision:purchase-spend"].toSorted())
     expect(wakes).toEqual([f.root.id])
 
-    const rejected = yield* f.questions.ask({ sessionID: f.root.id, ...questionInput("Two") }).pipe(Effect.exit, Effect.forkScoped)
+    const rejected = yield* f.questions.ask({ sessionID: f.root.id, ...explicitQuestionInput("Two") }).pipe(Effect.exit, Effect.forkScoped)
     yield* awaitReceipts(f.root.id, 3)
     const [second] = yield* f.questions.list()
     yield* f.questions.reject(second.id)
@@ -1134,17 +1144,17 @@ it.live("B9 under Auto the existing ask-time answer settles a Recommended option
   }),
 )
 
-it.live("B10 under Manual a child question waits with human-only:manual-answers, is never answered, resumes on its answer and not on cancellation", () =>
+it.live("B10 under Manual an explicit-decision child question waits, is never answered, resumes on its answer and not on cancellation", () =>
   Effect.gen(function* () {
     const f = yield* setup()
     const child = yield* managedChild(f)
-    const { question } = yield* f.orchestration.question(child.id, "Need synthetic evidence")
+    const { question } = yield* f.orchestration.question(child.id, "Approve the purchase of the paid plan for synthetic evidence?")
     yield* awaitReceipts(f.root.id, 1)
 
     const [receipt] = yield* receipts(f, f.root.id)
     expect(receipt.goalDecision).toMatchObject({
       outcome: "waiting",
-      reason: "human-only:manual-answers",
+      reason: "explicit-decision:purchase-spend",
       candidate: { kind: "child_question", sessionID: child.id, requestID: question.id },
     })
     yield* f.loop.inspect(f.root.id)
@@ -1154,18 +1164,18 @@ it.live("B10 under Manual a child question waits with human-only:manual-answers,
 
     yield* f.orchestration.answer({ parentID: f.root.id, childID: child.id, questionID: question.id, text: "Evidence" })
     yield* awaitReceipts(f.root.id, 2)
-    expect(outcomes(yield* receipts(f, f.root.id))).toEqual(["resumed:", "waiting:human-only:manual-answers"].toSorted())
+    expect(outcomes(yield* receipts(f, f.root.id))).toEqual(["resumed:", "waiting:explicit-decision:purchase-spend"].toSorted())
     expect(wakes).toEqual([])
 
     const lapsed = yield* managedChild(f)
-    const timedOut = yield* f.orchestration.question(lapsed.id, "Lapsed evidence")
+    const timedOut = yield* f.orchestration.question(lapsed.id, "Approve the purchase of the paid plan for lapsed evidence?")
     yield* awaitReceipts(f.root.id, 3)
     yield* f.events.publish(SessionEvent.Task.Updated, { sessionID: lapsed.id, change: { type: "question_timed_out", questionID: timedOut.question.id } })
     yield* replay(f, SessionEvent.Task.Updated.type)
     expect((yield* receipts(f, f.root.id)).filter((item) => item.goalDecision.outcome === "resumed")).toHaveLength(1)
 
     const other = yield* managedChild(f)
-    yield* f.orchestration.question(other.id, "Cancelled evidence")
+    yield* f.orchestration.question(other.id, "Approve the purchase of the paid plan for cancelled evidence?")
     yield* awaitReceipts(f.root.id, 4)
     yield* f.orchestration.cancel({ parentID: f.root.id, childID: other.id })
     yield* replay(f, SessionEvent.Task.Updated.type)
@@ -1211,13 +1221,13 @@ const formReplies = () => tap.seen.filter((event) => event.type === Form.Event.R
 
 it.live("B11 a native client that settles the Form first leaves the loop with a stale result, no retry and no settled receipt", () =>
   Effect.gen(function* () {
-    const f = yield* setup()
+    const f = yield* setup({ goal: false })
     const form = yield* f.forms.create(recommendedForm(f.root.id))
     const fingerprint = Form.fingerprint(form)
-    yield* awaitReceipts(f.root.id, 1)
+    expect(yield* receipts(f, f.root.id)).toEqual([])
     hooks.form = (input, real) => nativeFormReply(f, form, fingerprint).pipe(Effect.orDie, Effect.andThen(real(input)))
 
-    yield* f.autonomy.set({ sessionID: f.root.id, answers: "auto" })
+    yield* f.autonomy.setGoal({ sessionID: f.root.id, text: goalText })
     yield* reconsidered(1)
     yield* f.loop.inspect(f.root.id)
     yield* f.loop.inspect(f.root.id)
@@ -1231,13 +1241,13 @@ it.live("B11 a native client that settles the Form first leaves the loop with a 
 
 it.live("B11 a Form settled by the loop first rejects a later native reply with the old fingerprint", () =>
   Effect.gen(function* () {
-    const f = yield* setup()
+    const f = yield* setup({ goal: false })
     const form = yield* f.forms.create(recommendedForm(f.root.id))
     const fingerprint = Form.fingerprint(form)
-    yield* awaitReceipts(f.root.id, 1)
+    expect(yield* receipts(f, f.root.id)).toEqual([])
 
-    yield* f.autonomy.set({ sessionID: f.root.id, answers: "auto" })
-    yield* awaitReceipts(f.root.id, 2)
+    yield* f.autonomy.setGoal({ sessionID: f.root.id, text: goalText })
+    yield* awaitReceipts(f.root.id, 1)
 
     expect((yield* receipts(f, f.root.id)).find((item) => item.goalDecision.outcome === "settled")!.goalDecision).toMatchObject({
       via: "auto-answer",
@@ -1253,17 +1263,17 @@ it.live("B11 a Form settled by the loop first rejects a later native reply with 
 
 it.live("B11 a concurrent native reply and loop settlement produce exactly one Form settlement", () =>
   Effect.gen(function* () {
-    const f = yield* setup()
+    const f = yield* setup({ goal: false })
     const form = yield* f.forms.create(recommendedForm(f.root.id))
     const fingerprint = Form.fingerprint(form)
-    yield* awaitReceipts(f.root.id, 1)
+    expect(yield* receipts(f, f.root.id)).toEqual([])
     const native = yield* Deferred.make<Exit.Exit<void, unknown>>()
     hooks.form = (input, real) =>
       Effect.all([real(input), nativeFormReply(f, form, fingerprint).pipe(Effect.exit, Effect.tap((exit) => Deferred.succeed(native, exit)))], {
         concurrency: "unbounded",
       }).pipe(Effect.map(([result]) => result))
 
-    yield* f.autonomy.set({ sessionID: f.root.id, answers: "auto" })
+    yield* f.autonomy.setGoal({ sessionID: f.root.id, text: goalText })
     const nativeExit = yield* Deferred.await(native)
     yield* f.loop.inspect(f.root.id)
 
@@ -1353,7 +1363,7 @@ it.live("D2 dismissing a deferred question never resumes or settles it", () =>
   Effect.gen(function* () {
     const f = yield* setup()
     const kid = yield* f.sessions.create({ parentID: f.root.id })
-    yield* f.questions.ask({ sessionID: kid.id, ...questionInput("One") }).pipe(Effect.exit, Effect.forkScoped)
+    yield* f.questions.ask({ sessionID: kid.id, ...explicitQuestionInput("One") }).pipe(Effect.exit, Effect.forkScoped)
     yield* awaitReceipts(f.root.id, 1)
     yield* f.autonomy.set({ sessionID: f.root.id, sleep: true })
     yield* f.questions.deferPending(kid.id)
@@ -1363,7 +1373,7 @@ it.live("D2 dismissing a deferred question never resumes or settles it", () =>
     yield* replay(f, SessionEvent.Review.Decided.type)
     yield* f.loop.reconcile(f.root.id)
 
-    expect(outcomes(yield* receipts(f, f.root.id))).toEqual(["waiting:human-only:manual-answers"])
+    expect(outcomes(yield* receipts(f, f.root.id))).toEqual(["waiting:explicit-decision:purchase-spend"])
     expect(wakes).toEqual([])
     expect(reconsiderCalls).toEqual([])
   }),
@@ -1392,7 +1402,7 @@ it.live("D2 a recovery stop is decided natively only: no settlement, no resume a
     const questionID = QuestionID.make("qst_goal_recovery")
     yield* f.events.publish(SessionEvent.Task.Updated, {
       sessionID: child.id,
-      change: { type: "question_asked", question: { id: questionID, text: "Restart recovery", time: 1 } },
+      change: { type: "question_asked", question: { id: questionID, text: "Restart recovery: approve the purchase of the paid plan?", time: 1 } },
     })
     yield* awaitReceipts(f.root.id, 1)
     const item = yield* f.reviews.open({
@@ -1413,7 +1423,7 @@ it.live("D2 a recovery stop is decided natively only: no settlement, no resume a
     yield* f.loop.reconcile(f.root.id)
 
     expect((yield* f.orchestration.get(f.root.id, child.id)).state).toBe("lost")
-    expect(outcomes(yield* receipts(f, f.root.id))).toEqual(["waiting:human-only:manual-answers"])
+    expect(outcomes(yield* receipts(f, f.root.id))).toEqual(["waiting:explicit-decision:purchase-spend"])
     expect(wakes).toEqual([])
     expect(reconsiderCalls).toEqual([])
   }),
@@ -1848,8 +1858,9 @@ it.live("G1 a cancelled or timed-out Form never resumes the owner", () =>
   Effect.gen(function* () {
     const f = yield* setup()
     const kid = yield* f.sessions.create({ parentID: f.root.id })
-    const cancelled = yield* f.forms.create({ ...recommendedForm(kid.id), title: "Cancelled synthetic form" })
-    const lapsed = yield* f.forms.create({ ...recommendedForm(kid.id), title: "Lapsed synthetic form" })
+    const purchaseOptions = [{ value: "Buy the paid plan", label: "Buy the paid plan" }]
+    const cancelled = yield* f.forms.create({ ...recommendedForm(kid.id), title: "Cancelled synthetic purchase", fields: [{ key: "branch", type: "string", required: true, options: purchaseOptions }] })
+    const lapsed = yield* f.forms.create({ ...recommendedForm(kid.id), title: "Lapsed synthetic purchase", fields: [{ key: "branch", type: "string", required: true, options: purchaseOptions }] })
     yield* awaitReceipts(f.root.id, 2)
 
     yield* f.forms.cancel(cancelled.id)
@@ -2095,21 +2106,18 @@ it.live("CQ7 an explicit-decision wording only in a child question option stays 
   }),
 )
 
-it.live("Q1 a mode change alone settles one pending Question-service request through the loop with provenance", () =>
+it.live("Q1 goal activation settles an already-pending Question-service request through the loop with provenance", () =>
   Effect.gen(function* () {
-    const f = yield* setup()
+    const f = yield* setup({ goal: false })
     running.add(f.root.id)
     const waiting = yield* f.questions.ask({ sessionID: f.root.id, ...questionInput("One (Recommended)") }).pipe(Effect.forkScoped)
-    yield* awaitReceipts(f.root.id, 1)
-    const [request] = yield* f.questions.list()
-    expect(outcomes(yield* receipts(f, f.root.id))).toEqual(["waiting:human-only:manual-answers"])
+    yield* tap.until((seen) => seen.some((entry) => entry.type === Question.Event.Asked.type))
+    expect(yield* f.questions.list()).toHaveLength(1)
+    expect(yield* receipts(f, f.root.id)).toEqual([])
 
-    yield* f.autonomy.set({ sessionID: f.root.id, answers: "auto" })
-    yield* awaitReceipts(f.root.id, 3)
-    for (let index = 0; index < 2; index++) {
-      yield* replay(f, Question.Event.Asked.type)
-      yield* f.loop.reconcile(f.root.id)
-    }
+    yield* f.autonomy.setGoal({ sessionID: f.root.id, text: goalText })
+    const [request] = yield* f.questions.list()
+    yield* awaitReceipts(f.root.id, 1)
 
     const settled = (yield* receipts(f, f.root.id)).filter((item) => item.goalDecision.outcome === "settled")
     expect(settled).toHaveLength(1)
@@ -2128,19 +2136,15 @@ it.live("Q1 a mode change alone settles one pending Question-service request thr
   }),
 )
 
-it.live("Q2 a mode change alone settles one waiting child question through the loop with provenance", () =>
+it.live("Q2 goal activation settles an already-pending child question through the loop with provenance", () =>
   Effect.gen(function* () {
-    const f = yield* setup()
+    const f = yield* setup({ goal: false })
     const waiting = yield* waitingChild(f)
-    yield* awaitReceipts(f.root.id, 1)
-    expect(outcomes(yield* receipts(f, f.root.id))).toEqual(["waiting:human-only:manual-answers"])
+    expect((yield* f.orchestration.get(f.root.id, waiting.child.id)).state).toBe("waiting")
+    expect(yield* receipts(f, f.root.id)).toEqual([])
 
-    yield* f.autonomy.set({ sessionID: waiting.child.id, answers: "auto" })
-    yield* awaitReceipts(f.root.id, 3)
-    for (let index = 0; index < 2; index++) {
-      yield* replay(f, SessionEvent.Task.Updated.type)
-      yield* f.loop.reconcile(f.root.id)
-    }
+    yield* f.autonomy.setGoal({ sessionID: f.root.id, text: goalText })
+    yield* awaitReceipts(f.root.id, 1)
 
     const settled = (yield* receipts(f, f.root.id)).filter((item) => item.goalDecision.outcome === "settled")
     expect(settled).toHaveLength(1)
@@ -2157,18 +2161,15 @@ it.live("Q2 a mode change alone settles one waiting child question through the l
 )
 
 for (const delegated of [false, true])
-  it.live(`Q3 an external ${delegated ? "replyDelegated" : "reply"} between the mode change and the reconsider settles once and the loop sees stale without retry`, () =>
+  it.live(`Q3 an external ${delegated ? "replyDelegated" : "reply"} before the goal reconsider settles once and the loop sees stale without retry`, () =>
     Effect.gen(function* () {
       const f = yield* setup()
       running.add(f.root.id)
-      const asking = yield* f.questions.ask({ sessionID: f.root.id, ...questionInput("One (Recommended)") }).pipe(Effect.forkScoped)
-      yield* awaitReceipts(f.root.id, 1)
-      const [request] = yield* f.questions.list()
       hooks.question = (input, real) =>
         (delegated
           ? f.questions.replyDelegated({
               requestID: input.requestID,
-              fingerprint: Question.fingerprint(request),
+              fingerprint: input.fingerprint,
               source: {
                 kind: "dots-client",
                 anchorSessionID: f.root.id,
@@ -2184,29 +2185,27 @@ for (const delegated of [false, true])
           : f.questions.reply({ requestID: input.requestID, answers: [["One (Recommended)"]] })
         ).pipe(Effect.orDie, Effect.andThen(real(input)))
 
-      yield* f.autonomy.set({ sessionID: f.root.id, answers: "auto" })
+      const asking = yield* f.questions.ask({ sessionID: f.root.id, ...questionInput("One (Recommended)") }).pipe(Effect.forkScoped)
       yield* reconsidered(1)
       yield* f.loop.inspect(f.root.id)
       yield* f.loop.inspect(f.root.id)
 
       expect(tap.seen.filter((entry) => entry.type === Question.Event.Replied.type)).toHaveLength(1)
       expect(yield* Fiber.join(asking)).not.toHaveProperty("automatic")
-      expect(reconsiderCalls).toEqual([`question:${request.id}`])
+      expect(reconsiderCalls).toHaveLength(1)
       expect((yield* receipts(f, f.root.id)).filter((item) => item.goalDecision.outcome === "settled")).toEqual([])
     }),
   )
 
-it.live("Q3 an external parent answer between the mode change and the reconsider settles once and the loop sees stale without retry", () =>
+it.live("Q3 an external parent answer before the goal reconsider settles once and the loop sees stale without retry", () =>
   Effect.gen(function* () {
     const f = yield* setup()
-    const waiting = yield* waitingChild(f)
-    yield* awaitReceipts(f.root.id, 1)
     hooks.child = (input, real) =>
       f.orchestration
         .answer({ parentID: input.parentID, childID: input.childID, questionID: input.questionID, text: "Fast" })
         .pipe(Effect.orDie, Effect.andThen(real(input)))
 
-    yield* f.autonomy.set({ sessionID: waiting.child.id, answers: "auto" })
+    const waiting = yield* waitingChild(f)
     yield* reconsidered(1)
     yield* f.loop.inspect(f.root.id)
     yield* f.loop.inspect(f.root.id)
@@ -2234,26 +2233,183 @@ it.live("Q4 an explicit human-only question text is never settled by the loop un
   }),
 )
 
-it.live("Q5 a Question-service request already assessed under YOLO is not run again under an unchanged key and runs once after the key changes", () =>
+it.live("Q5 a Question-service request already assessed under YOLO is not run again under an unchanged key and the Goal agent settles once after the key changes", () =>
   Effect.gen(function* () {
     const f = yield* setup()
     yield* f.autonomy.set({ sessionID: f.root.id, answers: "yolo" })
     decide = scripted("Yes", 0.5)
+    goalImpl = () => Effect.succeed({ text: "Yes" })
     yield* f.questions
       .ask({ sessionID: f.root.id, questions: [{ header: "Mode", question: "Which?", options: [{ label: "Yes", description: "First" }, { label: "No", description: "Second" }] }] })
       .pipe(Effect.forkScoped)
     yield* awaitReceipts(f.root.id, 1)
     expect(decisionCalls).toHaveLength(1)
+    expect(goalCalls).toHaveLength(0)
     expect(outcomes(yield* receipts(f, f.root.id))).toEqual(["waiting:yolo-assessed"])
     yield* f.loop.inspect(f.root.id)
     expect(decisionCalls).toHaveLength(1)
+    expect(goalCalls).toHaveLength(0)
     expect(reconsiderCalls).toEqual([])
 
     yield* f.autonomy.set({ sessionID: f.root.id, permissions: "yolo" })
-    yield* reconsidered(1)
-    yield* f.loop.inspect(f.root.id)
+    yield* awaitReceipts(f.root.id, 2)
     expect(reconsiderCalls).toHaveLength(1)
-    expect(decisionCalls).toHaveLength(2)
-    expect(yield* f.questions.list()).toHaveLength(1)
+    expect(decisionCalls).toHaveLength(1)
+    expect(goalCalls).toHaveLength(1)
+    expect(yield* f.questions.list()).toHaveLength(0)
   }),
 )
+
+const textDecision = (text: string, confidence: number) => (input: Decision.Input) =>
+  Effect.succeed(
+    Schema.decodeUnknownSync(Decision.Output)({
+      provider: "agent",
+      response: {
+        model: { providerID: "test", id: "decision-model" },
+        semantics: "model-estimate",
+        version: 1,
+        answers: input.request.questions.map((item) => ({ name: item.name, type: "text", answer: null, choice: null, score: null, text, confidence })),
+      },
+    }),
+  )
+
+const refusedDecision = (input: Decision.Input) =>
+  Effect.succeed(
+    Schema.decodeUnknownSync(Decision.Output)({
+      provider: "agent",
+      response: {
+        model: { providerID: "test", id: "decision-model" },
+        semantics: "model-estimate",
+        version: 1,
+        answers: input.request.questions.map((item) => ({ name: item.name, type: "refusal", answer: null, choice: null, score: null, confidence: 0 })),
+      },
+    }),
+  )
+
+const branchQuestion = "Which branch name should the feature use?"
+
+const questionForm = (sessionID: SessionSchema.ID, field: Form.Field): Form.CreateInput => ({
+  sessionID,
+  title: "Questions",
+  metadata: { kind: "question", tool: { messageID: "msg_synthetic", callID: "call_synthetic" } },
+  fields: [field],
+})
+
+const branchField: Form.Field = { key: "q0", title: "Branch", description: branchQuestion, type: "string", options: [], custom: true, required: true }
+
+const askBranch = {
+  question: (f: Fixture) => f.questions.ask({ sessionID: f.root.id, questions: [{ header: "Branch", question: branchQuestion, options: [] }] }),
+  form: (f: Fixture) => f.forms.ask(questionForm(f.root.id, branchField)),
+}
+
+const pendingCount = {
+  question: (f: Fixture) => f.questions.list().pipe(Effect.map((items) => items.length)),
+  form: (f: Fixture) => f.forms.snapshots(f.root.id).pipe(Effect.map((items) => items.filter((item) => item.state.status === "pending").length)),
+}
+
+for (const kind of ["question", "form"] as const)
+  it.live(`G1 the goal agent answers a free-text ${kind} under Manual with goal attribution`, () =>
+    Effect.gen(function* () {
+      const f = yield* setup()
+      running.add(f.root.id)
+      goalImpl = () => Effect.succeed({ text: "feature/synthetic" })
+      const waiting = yield* askBranch[kind](f).pipe(Effect.forkScoped)
+      yield* awaitReceipts(f.root.id, 1)
+
+      expect(goalCalls).toHaveLength(1)
+      expect(goalCalls[0].prompt).toContain("Which branch name")
+      expect(goalCalls[0].prompt).toContain(goalText)
+      expect(decisionCalls).toHaveLength(0)
+      expect(reconsiderCalls).toHaveLength(1)
+      expect(yield* Fiber.join(waiting)).toMatchObject({
+        status: "answered",
+        source: { kind: "coordinator", coordinatorSessionID: f.root.id, via: "goal" },
+      })
+      const settled = (yield* receipts(f, f.root.id)).filter((item) => item.goalDecision.outcome === "settled")
+      expect(settled).toHaveLength(1)
+      expect(settled[0].goalDecision).toMatchObject({
+        via: "goal",
+        reason: "allowed",
+        candidate: { kind },
+        requirement: { goalDigest: Hash.sha256(goalText), iteration: 0, revision: expect.any(Number) },
+      })
+      expect(settled[0].text).toMatch(/Goal agent under the active goal/i)
+      expect(yield* pendingCount[kind](f)).toBe(0)
+    }),
+  )
+
+it.live("G1 the goal agent answers a free-text child question under Manual and its text is the Goal answer", () =>
+  Effect.gen(function* () {
+    const f = yield* setup()
+    goalImpl = () => Effect.succeed({ text: "feature/synthetic" })
+    const child = yield* managedChild(f)
+    const { question } = yield* f.orchestration.question(child.id, branchQuestion)
+    yield* awaitReceipts(f.root.id, 1)
+
+    expect(goalCalls).toHaveLength(1)
+    expect(decisionCalls).toHaveLength(0)
+    expect(reconsiderCalls).toHaveLength(1)
+    expect((yield* answerInputs(f, child.id)).map((item) => (item.type === "synthetic" ? item.data.text : ""))).toEqual([
+      expect.stringContaining("feature/synthetic"),
+    ])
+    expect(answeredEvents()).toHaveLength(1)
+    expect(question.id.length).toBeGreaterThan(0)
+    const settled = (yield* receipts(f, f.root.id)).filter((item) => item.goalDecision.outcome === "settled")
+    expect(settled).toHaveLength(1)
+    expect(settled[0].goalDecision).toMatchObject({ via: "goal", candidate: { kind: "child_question", sessionID: child.id } })
+  }),
+)
+
+const unsettledCases = [
+  ["a refusal", "refused"],
+  ["a low-confidence synthesis", "low_confidence"],
+  ["a provider failure", "provider-failed"],
+] as const
+
+for (const kind of ["question", "form"] as const)
+  for (const [name, reason] of unsettledCases)
+    it.live(`G2 ${name} leaves a free-text ${kind} waiting for a human and never invents an answer`, () =>
+      Effect.gen(function* () {
+        const f = yield* setup()
+        goalImpl = () => Effect.fail({ reason } as const)
+        yield* askBranch[kind](f).pipe(Effect.forkScoped)
+        yield* awaitReceipts(f.root.id, 1)
+        yield* f.loop.inspect(f.root.id)
+
+        expect(goalCalls).toHaveLength(1)
+        expect(decisionCalls).toHaveLength(0)
+        expect(reconsiderCalls).toHaveLength(0)
+        expect(outcomes(yield* receipts(f, f.root.id))).toEqual([`waiting:${reason}`])
+        expect(yield* pendingCount[kind](f)).toBe(1)
+        expect(tap.seen.filter((entry) => entry.type === Question.Event.Replied.type || entry.type === Form.Event.Replied.type)).toEqual([])
+      }),
+    )
+
+const explicitFields = [
+  ["question text", { key: "q0", title: "Plan", description: "Approve the purchase of the paid plan?", type: "string", options: [{ value: "Yes (Recommended)", label: "Yes (Recommended)" }, { value: "No", label: "No" }], custom: false }, "purchase-spend"],
+  ["option label", { key: "q0", title: "Plan", description: "Which?", type: "string", options: [{ value: "Buy the paid plan (Recommended)", label: "Buy the paid plan (Recommended)" }, { value: "Skip", label: "Skip" }], custom: false }, "purchase-spend"],
+  ["free-text question", { key: "q0", title: "Plan", description: "What password should the deployment use?", type: "string", options: [], custom: true, required: true }, "credentials-account"],
+  ["free-text question naming an API key", { key: "q0", title: "Deploy", description: "Paste the API key for the deployment", type: "string", options: [], custom: true, required: true }, "credentials-account"],
+  ["free-text question naming a private key", { key: "q0", title: "Deploy", description: "Which private key should sign the release?", type: "string", options: [], custom: true, required: true }, "credentials-account"],
+  ["free-text question naming an access token", { key: "q0", title: "Deploy", description: "Enter the access token for the registry", type: "string", options: [], custom: true, required: true }, "credentials-account"],
+] as const satisfies ReadonlyArray<readonly [string, Form.Field, string]>
+
+for (const mode of ["auto", "yolo"] as const)
+  for (const [name, field, rule] of explicitFields)
+    it.live(`G3 a question Form whose ${name} needs an explicit decision stays waiting under answers ${mode} without a helper call`, () =>
+      Effect.gen(function* () {
+        const f = yield* setup()
+        yield* f.forms.ask(questionForm(f.root.id, field)).pipe(Effect.forkScoped)
+        yield* awaitReceipts(f.root.id, 1)
+
+        yield* f.autonomy.set({ sessionID: f.root.id, answers: mode })
+        yield* f.loop.inspect(f.root.id)
+        yield* f.loop.inspect(f.root.id)
+
+        expect(outcomes(yield* receipts(f, f.root.id))).toEqual([`waiting:explicit-decision:${rule}`])
+        expect(reconsiderCalls).toEqual([])
+        expect(decisionCalls).toEqual([])
+        expect(goalCalls).toEqual([])
+        expect(yield* pendingCount.form(f)).toBe(1)
+      }),
+    )

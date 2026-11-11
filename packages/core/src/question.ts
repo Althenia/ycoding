@@ -62,13 +62,23 @@ export type Outcome =
       readonly status: "answered"
       readonly answers: ReadonlyArray<Answer>
       readonly automatic?: true
-      readonly via?: "auto-answer" | "yolo"
+      readonly via?: "auto-answer" | "yolo" | "goal"
       readonly confidence?: number
       readonly assessment?: Form.Assessment
       readonly source?: Form.ReplySource
     }
   | { readonly status: "timed_out"; readonly seconds: number }
   | { readonly status: "deferred"; readonly itemID: SessionReviewFold.ID }
+
+export function deterministicQuestionAnswers(questions: ReadonlyArray<Info>): ReadonlyArray<Answer> | undefined {
+  const answers: Answer[] = []
+  for (const question of questions) {
+    const recommended = recommendedLabels(question)
+    if (!recommended) return undefined
+    answers.push(recommended)
+  }
+  return validateAnswers(questions, answers) ? undefined : answers
+}
 
 export function validateAnswers(
   questions: ReadonlyArray<Info>,
@@ -127,6 +137,9 @@ export interface ReconsiderInput {
   readonly fingerprint: string
   readonly actor: "coordinator"
   readonly source: { readonly coordinatorSessionID: string; readonly groupID?: string; readonly rationale: string }
+  readonly goal?: { readonly owner: string }
+  readonly answer?: ReadonlyArray<Answer>
+  readonly confidence?: number
   readonly validate: (request: Request) => Effect.Effect<boolean>
 }
 
@@ -135,7 +148,7 @@ export interface ReconsiderResult {
   readonly requestID: ID
   readonly fingerprint: string
   readonly settled: boolean
-  readonly via?: "auto-answer" | "yolo"
+  readonly via?: "auto-answer" | "yolo" | "goal"
   readonly confidence?: number
   readonly reason?: string
 }
@@ -513,7 +526,77 @@ const layer = Layer.effect(
                     .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
                   if (snapshot === undefined) return stale
                   const mode = yield* DecisionChoice.decisionMode(autonomy, sessionID, "answers")
-                  if (mode === "manual") return escalated("explicit-decision:manual-answers")
+                  const fromGoal = input.goal !== undefined
+                  if (mode === "manual" && !fromGoal) return escalated("explicit-decision:manual-answers")
+                  if (fromGoal) {
+                    if (input.confidence !== undefined && (!Number.isFinite(input.confidence) || input.confidence < 0.8))
+                      return escalated("low_confidence")
+                    if (input.answer !== undefined) {
+                      if (validateAnswers(entry.request.questions, input.answer)) return escalated("invalid-answer")
+                      const via = "goal" as const
+                      return yield* exclusive(
+                        Effect.gen(function* () {
+                          if (pending.get(input.requestID) !== entry) return stale
+                          if (!(yield* input.validate(entry.request))) return escalated("delegation-invalid")
+                          if (!(yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot))) return escalated("stale-assessment")
+                          yield* events.publish(Event.Replied, {
+                            sessionID,
+                            requestID: input.requestID,
+                            answers: input.answer!.map((answer) => [...answer]),
+                          })
+                          yield* Deferred.succeed(entry.deferred, {
+                            status: "answered",
+                            answers: input.answer!,
+                            automatic: true,
+                            via,
+                            ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
+                            source: {
+                              kind: "coordinator",
+                              coordinatorSessionID: input.source.coordinatorSessionID,
+                              ...(input.source.groupID === undefined ? {} : { groupID: input.source.groupID }),
+                              via,
+                              rationale: input.source.rationale,
+                              ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
+                            },
+                          })
+                          pending.delete(input.requestID)
+                          return { ...base, outcome: "allowed", settled: true, via, ...(input.confidence === undefined ? {} : { confidence: input.confidence }) } satisfies ReconsiderResult
+                        }),
+                      )
+                    }
+                    const deterministic = deterministicQuestionAnswers(entry.request.questions)
+                    if (deterministic !== undefined) {
+                      return yield* exclusive(
+                        Effect.gen(function* () {
+                          if (pending.get(input.requestID) !== entry) return stale
+                          if (!(yield* input.validate(entry.request))) return escalated("delegation-invalid")
+                          if (!(yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot))) return escalated("stale-assessment")
+                          const via = "auto-answer" as const
+                          yield* events.publish(Event.Replied, {
+                            sessionID,
+                            requestID: input.requestID,
+                            answers: deterministic.map((answer) => [...answer]),
+                          })
+                          yield* Deferred.succeed(entry.deferred, {
+                            status: "answered",
+                            answers: deterministic,
+                            automatic: true,
+                            via,
+                            source: {
+                              kind: "coordinator",
+                              coordinatorSessionID: input.source.coordinatorSessionID,
+                              ...(input.source.groupID === undefined ? {} : { groupID: input.source.groupID }),
+                              via,
+                              rationale: input.source.rationale,
+                            },
+                          })
+                          pending.delete(input.requestID)
+                          return { ...base, outcome: "allowed", settled: true, via } satisfies ReconsiderResult
+                        }),
+                      )
+                    }
+                    return escalated("refused")
+                  }
                   const yolo = mode === "yolo"
                   const assessments: Form.FieldAssessment[] = entry.request.questions.flatMap((question, index) =>
                     question.options.length === 0

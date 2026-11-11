@@ -30,6 +30,7 @@ import { SessionPending } from "./pending"
 import { SessionReviewFold } from "./review-fold"
 import { SessionSchema } from "./schema"
 import { SessionTable, SessionTaskTable } from "./sql"
+import { SessionGoal } from "./goal"
 import { SessionStore } from "./store"
 
 const receiptPrefix = "msg_goaldec_"
@@ -71,6 +72,12 @@ export interface Located {
   readonly form?: Pick<Form.Interface, "snapshots" | "reconsider">
   readonly question?: Pick<Question.Interface, "list" | "reconsider">
   readonly shell?: Pick<Shell.Interface, "list">
+  readonly goal?: Pick<SessionGoal.Interface, "synthesize">
+  readonly session?: SessionSchema.Info
+}
+
+export interface GoalSynthesis {
+  readonly text: string
 }
 
 export interface Options {
@@ -81,6 +88,7 @@ export interface Options {
   readonly orchestration: Pick<SessionOrchestration.Interface, "questionSnapshots" | "reconsiderQuestion">
   readonly policy: () => Effect.Effect<ConfigCoordination.Resolved>
   readonly locate: (sessionID: SessionSchema.ID) => Effect.Effect<Located | undefined, never, Scope.Scope>
+  readonly synthesizeGoal?: (owner: SessionSchema.ID, prompt: string) => Effect.Effect<GoalSynthesis, { readonly reason: string }, Scope.Scope>
   readonly now?: Effect.Effect<number>
 }
 
@@ -164,10 +172,20 @@ interface Reference {
   readonly source?: { readonly messageID: SessionMessage.ID; readonly callID: string }
 }
 
+interface GoalAnswer {
+  readonly form?: Form.Answer
+  readonly question?: ReadonlyArray<Question.Answer>
+  readonly child?: { readonly text?: string; readonly data?: Schema.Json }
+  readonly confidence?: number
+}
+
 interface Candidate extends Reference {
   readonly subject: Subject
   readonly assessedByYolo: boolean
-  readonly reconsider: (call: ReconsiderCall) => Effect.Effect<Settlement>
+  readonly rawForm?: Form.Info
+  readonly rawQuestion?: Question.Request
+  readonly rawChild?: ChildTask
+  readonly reconsider: (call: ReconsiderCall, goalAnswer?: GoalAnswer) => Effect.Effect<Settlement>
 }
 
 type ChildTask = Effect.Success<ReturnType<SessionOrchestration.Interface["questionSnapshots"]>>[number]["task"]
@@ -234,7 +252,11 @@ const childSubject = (task: ChildTask): Subject => ({
 const formSubject = (form: Form.Info): Subject => ({
   kind: "form",
   title: form.title,
-  fields: form.fields.map((field) => ("title" in field ? (field.title ?? field.key) : field.key)),
+  fields: form.fields.flatMap((field) => [
+    field.title ?? field.key,
+    ...(field.description === undefined ? [] : [field.description]),
+    ...("options" in field && field.options !== undefined ? field.options.map((option) => option.label) : []),
+  ]),
   metadata: form.metadata,
 })
 
@@ -367,7 +389,8 @@ export function make(options: Options): Interface {
     if (subject.kind !== "form" && !CoordinationDecisions.routineEligible({ kind: subject.kind === "permission" ? "permission" : "review", action: subject.action, resources: subject.resources }))
       return "unknown-semantics"
     const category = categoryOf(subject.kind)
-    if ((yield* DecisionChoice.decisionMode(autonomy, sessionID, category)) === "manual") return `human-only:manual-${category}`
+    const mode = yield* DecisionChoice.decisionMode(autonomy, sessionID, category)
+    if (mode === "manual" && subject.kind !== "form") return `human-only:manual-${category}`
     return yield* delegation(subject)
   })
 
@@ -384,11 +407,14 @@ export function make(options: Options): Interface {
 
   const textOf = (candidate: Reference, outcome: Outcome, detail: { readonly via?: string; readonly reason?: string }) => {
     const subject = label(candidate)
+    const settledBy = detail.via === "goal"
+      ? "by the Goal agent under the active goal from bounded task context; this automatic answer is never a human reply"
+      : `by the native ${detail.via ?? "coordination"} path`
     const text =
       outcome === "waiting"
         ? `Pending ${subject} is waiting for a human decision (${detail.reason ?? "unspecified"}); the goal loop did not settle it. This record authorizes nothing.`
         : outcome === "settled"
-          ? `Pending ${subject} was settled (${detail.reason ?? "unspecified"}) by the native ${detail.via ?? "coordination"} path; the waiting call received that result. This record authorizes nothing.`
+          ? `Pending ${subject} was settled (${detail.reason ?? "unspecified"}) ${settledBy}; the waiting call received that result. This record authorizes nothing.`
           : `Pending ${subject} was settled or answered natively. This record authorizes nothing.`
     return DecisionChoice.redactText(text).slice(0, textLimit)
   }
@@ -430,7 +456,7 @@ export function make(options: Options): Interface {
     return true
   })
 
-  const collect = Effect.fnUntraced(function* (family: ReadonlyArray<Row>) {
+  const collect = Effect.fnUntraced(function* (owner: SessionSchema.ID, family: ReadonlyArray<Row>) {
     const members = family.filter((member) => !member.archived)
     const ids = new Set(members.map((member) => member.id))
     const found: Candidate[] = []
@@ -496,12 +522,16 @@ export function make(options: Options): Interface {
             action: "form",
             subject: formSubject(snapshot.form),
             assessedByYolo: snapshot.form.assessment?.mode === "yolo",
-            reconsider: (call) =>
+            rawForm: snapshot.form,
+            reconsider: (call, goalAnswer) =>
               forms.reconsider({
                 id: snapshot.form.id,
                 fingerprint: snapshot.fingerprint,
                 actor: "coordinator",
                 source: call.source,
+                goal: { owner },
+                ...(goalAnswer?.form === undefined ? {} : { answer: goalAnswer.form }),
+                ...(goalAnswer?.confidence === undefined ? {} : { confidence: goalAnswer.confidence }),
                 validate: (form) => call.validate(form.sessionID, formSubject(form)),
               }),
           })
@@ -519,12 +549,16 @@ export function make(options: Options): Interface {
               action: "question",
               subject: questionSubject(request),
               assessedByYolo: request.assessment?.mode === "yolo",
-              reconsider: (call) =>
+              rawQuestion: request,
+              reconsider: (call, goalAnswer) =>
                 questions.reconsider({
                   requestID: request.id,
                   fingerprint: Question.fingerprint(request),
                   actor: "coordinator",
                   source: call.source,
+                  goal: { owner },
+                  ...(goalAnswer?.question === undefined ? {} : { answer: goalAnswer.question }),
+                  ...(goalAnswer?.confidence === undefined ? {} : { confidence: goalAnswer.confidence }),
                   validate: (current) => call.validate(current.sessionID, questionSubject(current)),
                 }),
             })
@@ -541,7 +575,8 @@ export function make(options: Options): Interface {
             action: "child_question",
             subject: childSubject(child.task),
             assessedByYolo: false,
-            reconsider: (call) =>
+            rawChild: child.task,
+            reconsider: (call, goalAnswer) =>
               orchestration.reconsiderQuestion({
                 parentID: child.task.parentID,
                 childID: child.task.sessionID,
@@ -549,6 +584,9 @@ export function make(options: Options): Interface {
                 fingerprint: child.fingerprint,
                 actor: "coordinator",
                 source: call.source,
+                goal: { owner },
+                ...(goalAnswer?.child === undefined ? {} : { answer: goalAnswer.child }),
+                ...(goalAnswer?.confidence === undefined ? {} : { confidence: goalAnswer.confidence }),
                 validate: (task) => call.validate(task.sessionID, childSubject(task)),
               }),
           })
@@ -567,10 +605,126 @@ export function make(options: Options): Interface {
   }
 
   const rationaleFor = (candidate: Candidate) =>
-    `The goal loop re-applied the requesting Session's current ${categoryOf(candidate.kind)} policy to a routine ${candidate.kind} request.`
+    candidate.subject.kind === "form"
+      ? `The Goal agent settled a routine ${candidate.kind} request from bounded task context; an automatic answer is never a human reply.`
+      : `The goal loop re-applied the requesting Session's current ${categoryOf(candidate.kind)} policy to a routine ${candidate.kind} request.`
+
+  const goalTextOf = Effect.fnUntraced(function* (owner: SessionSchema.ID) {
+    const snapshot = yield* autonomy.snapshot(owner).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+    return snapshot?.state.goal?.status === "active" ? snapshot.state.goal.text : undefined
+  })
+
+  const hasDeterministicAnswer = (candidate: Candidate): boolean => {
+    if (candidate.kind === "question" && candidate.rawQuestion !== undefined) {
+      return Question.deterministicQuestionAnswers(candidate.rawQuestion.questions) !== undefined
+    }
+    if (candidate.kind === "form" && candidate.rawForm !== undefined) {
+      return Form.deterministicFormAnswer(candidate.rawForm) !== undefined
+    }
+    if (candidate.kind === "child_question" && candidate.rawChild?.question !== undefined) {
+      const options = SessionOrchestration.questionOptions(candidate.rawChild.question.data)
+      return options.filter((option) => /\s\(Recommended\)$/.test(option)).length === 1
+    }
+    return false
+  }
+
+  const goalPromptFor = (candidate: Candidate, goalText: string): string => {
+    const subject = candidate.subject
+    const title = subject.kind === "form" ? subject.title : `${subject.kind} ${candidate.requestID}`
+    const fields = subject.kind === "form" ? subject.fields.join("\n") : `${(subject as { readonly action: string }).action}`
+    return [
+      `Active goal: ${goalText}`,
+      `Pending routine ${candidate.kind} request: ${title}`,
+      `Context: ${fields}`.slice(0, 2000),
+      "Provide only the concise answer text that best serves this request from bounded task context. Do not invent facts, credentials, or identifiers the evidence does not supply. If the evidence does not support an answer, reply with an empty response.",
+    ].join("\n")
+  }
+
+  const goalToAnswer = (candidate: Candidate, text: string): GoalAnswer | undefined => {
+    const trimmed = text.trim()
+    if (!trimmed) return undefined
+    if (candidate.kind === "question" && candidate.rawQuestion !== undefined) {
+      const request = candidate.rawQuestion
+      if (request.questions.length === 1) {
+        const q = request.questions[0]!
+        const labels = q.options.map((option) => option.label)
+        if (labels.length === 0) return { question: [[trimmed]] }
+        const exact = labels.find((label) => label === trimmed)
+        if (exact !== undefined) return { question: [[exact]] }
+        if (q.custom !== false) return { question: [[trimmed]] }
+        return undefined
+      }
+      if (request.questions.every((q) => q.options.length === 0)) return { question: request.questions.map(() => [trimmed]) }
+      return undefined
+    }
+    if (candidate.kind === "form" && candidate.rawForm !== undefined) {
+      const form = candidate.rawForm
+      if (form.fields.length === 1) {
+        const field = form.fields[0] as Form.Field & { readonly key: string; readonly options?: ReadonlyArray<{ readonly value: Schema.Json; readonly label: string }>; readonly custom?: boolean }
+        const options = field.options ?? []
+        if (options.length === 0) return { form: { [field.key]: trimmed } as Form.Answer }
+        const exact = options.find((option) => option.label === trimmed)
+        if (exact !== undefined) return { form: { [field.key]: exact.value as Form.Answer[string] } as Form.Answer }
+        if (field.custom !== false) return { form: { [field.key]: trimmed } as Form.Answer }
+        return undefined
+      }
+      return undefined
+    }
+    if (candidate.kind === "child_question") return { child: { text: trimmed } }
+    return undefined
+  }
+
+  const synthesizeText = (owner: SessionSchema.ID, prompt: string): Effect.Effect<string, { readonly reason: string }, Scope.Scope> => {
+    if (options.synthesizeGoal !== undefined) return options.synthesizeGoal(owner, prompt).pipe(Effect.map((result) => result.text)) as Effect.Effect<string, { readonly reason: string }, Scope.Scope>
+    return Effect.gen(function* () {
+      const located = yield* locate(owner)
+      const goal = located?.goal
+      const session = located?.session
+      if (goal === undefined || session === undefined) return yield* Effect.fail({ reason: "provider-failed" } as const)
+      return yield* goal.synthesize({ session, text: prompt }).pipe(
+        Effect.mapError((error) => ({
+          reason: error.code === "goal.model_unavailable" ? "provider-failed" : error.code === "goal.stale_calculation" ? "stale-assessment" : "refused",
+        })),
+      )
+    })
+  }
+
+  const runReconsider = Effect.fnUntraced(function* (
+    owner: SessionSchema.ID,
+    requirement: Requirement,
+    candidate: Candidate,
+    key: string,
+    rationale: string,
+    validate: (sessionID: string, current: Subject) => Effect.Effect<boolean>,
+    goalAnswer?: GoalAnswer,
+  ) {
+    const reconsider = candidate.reconsider
+    const exit = yield* reconsider({ source: { coordinatorSessionID: owner, rationale }, validate }, goalAnswer).pipe(Effect.exit)
+    if (Exit.isFailure(exit)) {
+      yield* Effect.uninterruptible(
+        record({ owner, requirement, candidate, outcome: "waiting", discriminator: key, reason: "reconsider-failed", rationale }),
+      )
+      if (Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.failCause(exit.cause)
+      yield* Effect.logWarning("Goal decision reconsideration failed", { cause: Cause.pretty(exit.cause) })
+      return { settled: false as const, repeat: false as const }
+    }
+    const result = exit.value
+    if (result.outcome === "stale") return { settled: false as const, repeat: false as const }
+    if (result.settled) {
+      yield* record({ owner, requirement, candidate, outcome: "settled", discriminator: key, via: result.via, reason: result.outcome, rationale })
+      return { settled: true as const, repeat: false as const }
+    }
+    if (result.reason === "native-assessment-in-progress") return { settled: false as const, repeat: false as const, unmark: true as const }
+    if (result.reason !== undefined && inputsChanged.has(result.reason)) {
+      if ((yield* capture(owner)) !== undefined)
+        yield* record({ owner, requirement, candidate, outcome: "waiting", discriminator: key, reason: result.reason, rationale })
+      return { settled: false as const, repeat: true as const }
+    }
+    yield* record({ owner, requirement, candidate, outcome: "waiting", discriminator: key, reason: result.reason ?? "escalated", rationale })
+    return { settled: false as const, repeat: false as const }
+  })
 
   const settle = Effect.fnUntraced(function* (owner: SessionSchema.ID, requirement: Requirement, candidate: Candidate) {
-    const reconsider = candidate.reconsider
     const authority = yield* autonomy.snapshot(candidate.sessionID, { inherited: true }).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
     if (authority === undefined) return false
     const context = SessionDecisionContext.authorityDigest(yield* SessionDecisionContext.read(db, candidate.sessionID))
@@ -599,32 +753,46 @@ export function make(options: Options): Interface {
         if (candidate.kind === "guardrail" && (yield* autonomy.isAsleep(candidate.sessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(true))))) return false
         return (yield* humanOnly(candidate.sessionID, current)) === undefined
       })
-    const exit = yield* reconsider({ source: { coordinatorSessionID: owner, rationale }, validate }).pipe(Effect.exit)
-    if (Exit.isFailure(exit)) {
-      yield* Effect.uninterruptible(
-        record({ owner, requirement, candidate, outcome: "waiting", discriminator: key, reason: "reconsider-failed", rationale }),
-      )
-      if (Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.failCause(exit.cause)
-      yield* Effect.logWarning("Goal decision reconsideration failed", { cause: Cause.pretty(exit.cause) })
+    const isQuestionLike = candidate.kind === "form" || candidate.kind === "question" || candidate.kind === "child_question"
+    if (!isQuestionLike) {
+      const result = yield* runReconsider(owner, requirement, candidate, key, rationale, validate)
+      if ("unmark" in result && result.unmark === true) known.delete(key)
+      return result.repeat
+    }
+    if (hasDeterministicAnswer(candidate)) {
+      const result = yield* runReconsider(owner, requirement, candidate, key, rationale, validate)
+      if ("unmark" in result && result.unmark === true) known.delete(key)
+      return result.repeat
+    }
+    const goalText = yield* goalTextOf(owner)
+    if (goalText === undefined) {
+      yield* record({ owner, requirement, candidate, outcome: "waiting", discriminator: key, reason: "refused", rationale })
       return false
     }
-    const result = exit.value
-    if (result.outcome === "stale") return false
-    if (result.settled) {
-      yield* record({ owner, requirement, candidate, outcome: "settled", discriminator: key, via: result.via, reason: result.outcome, rationale })
+    const prompt = goalPromptFor(candidate, goalText)
+    const synthesized = yield* synthesizeText(owner, prompt).pipe(
+      Effect.map((text) => ({ _tag: "ok" as const, text })),
+      Effect.catchIf(
+        (error): error is { readonly reason: string } => true,
+        (failure) => Effect.succeed({ _tag: "fail" as const, reason: failure.reason }),
+      ),
+    )
+    if (synthesized._tag === "fail") {
+      const reason = synthesized.reason ?? "refused"
+      yield* record({ owner, requirement, candidate, outcome: "waiting", discriminator: key, reason, rationale })
+      if (inputsChanged.has(reason)) {
+        if ((yield* capture(owner)) !== undefined) return true
+      }
       return false
     }
-    if (result.reason === "native-assessment-in-progress") {
-      known.delete(key)
+    const goalAnswer = goalToAnswer(candidate, synthesized.text)
+    if (goalAnswer === undefined) {
+      yield* record({ owner, requirement, candidate, outcome: "waiting", discriminator: key, reason: "refused", rationale })
       return false
     }
-    if (result.reason !== undefined && inputsChanged.has(result.reason)) {
-      if ((yield* capture(owner)) !== undefined)
-        yield* record({ owner, requirement, candidate, outcome: "waiting", discriminator: key, reason: result.reason, rationale })
-      return true
-    }
-    yield* record({ owner, requirement, candidate, outcome: "waiting", discriminator: key, reason: result.reason ?? "escalated", rationale })
-    return false
+    const result = yield* runReconsider(owner, requirement, candidate, key, rationale, validate, goalAnswer)
+    if ("unmark" in result && result.unmark === true) known.delete(key)
+    return result.repeat
   })
 
   const handleCandidate = Effect.fnUntraced(function* (owner: SessionSchema.ID, requirement: Requirement, candidate: Candidate) {
@@ -643,7 +811,7 @@ export function make(options: Options): Interface {
       return false
     }
     const family = yield* subtree(owner, true)
-    const candidates = yield* collect(family)
+    const candidates = yield* collect(owner, family)
     const repeats = yield* Effect.forEach(candidates, (candidate) =>
       handleCandidate(owner, requirement, candidate).pipe(
         Effect.catchCause((cause) =>
@@ -901,7 +1069,10 @@ export const locate =
     const shell = loaded.built.includes(Shell.node.name)
       ? Context.get(yield* locations.contextEffect(loaded.ref, [Shell.node]).pipe(Effect.orDie), Shell.Service)
       : undefined
-    return { permission, guardrail, form, question, shell } satisfies Located
+    const goal = loaded.built.includes(SessionGoal.node.name)
+      ? Context.get(yield* locations.contextEffect(loaded.ref, [SessionGoal.node]).pipe(Effect.orDie), SessionGoal.Service)
+      : undefined
+    return { permission, guardrail, form, question, shell, goal, session } satisfies Located
   })
 
 export const layer = Layer.effect(

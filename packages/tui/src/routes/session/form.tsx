@@ -1095,7 +1095,7 @@ export function FormAssessment(props: { value: unknown; fieldKey?: string; settl
     const reply = source()
     if (reply?.kind === "dots-delegation" || reply?.kind === "dots-client") return `answered by external client via Dots delegation ${escapeTerminalText(reply.delegationID)} · anchor ${escapeTerminalText(reply.anchorSessionID)}`
     if (reply?.kind === "dots-native") return `answered by native Dots client · root ${escapeTerminalText(reply.rootSessionID)}`
-    if (reply?.kind === "coordinator") return `answered by coordinator ${escapeTerminalText(reply.coordinatorSessionID)}${reply.via === "yolo" ? " via Answers YOLO" : reply.via === "auto-answer" ? " via Answers Auto" : ""}`
+    if (reply?.kind === "coordinator") return `answered by coordinator ${escapeTerminalText(reply.coordinatorSessionID)}${reply.via === "goal" ? " via Goal agent" : reply.via === "yolo" ? " via Answers YOLO" : reply.via === "auto-answer" ? " via Answers Auto" : ""}`
     if (props.source !== undefined) return "answer source unreported"
     return props.settled === "automatic" ? "automatically answered" : "answered by client"
   }

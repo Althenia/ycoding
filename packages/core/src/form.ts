@@ -38,7 +38,7 @@ export type When = Form.When
 export const State = Form.State
 export type State = typeof State.Type
 export type TerminalState = Exclude<State, { readonly status: "pending" }>
-export type AskResult = TerminalState & { readonly automatic?: true; readonly via?: "auto-answer" | "yolo"; readonly confidence?: number; readonly assessment?: Form.Assessment; readonly source?: ReplySource }
+export type AskResult = TerminalState & { readonly automatic?: true; readonly via?: "auto-answer" | "yolo" | "goal"; readonly confidence?: number; readonly assessment?: Form.Assessment; readonly source?: ReplySource }
 
 export const Answer = Form.Answer
 export type Answer = typeof Answer.Type
@@ -77,6 +77,7 @@ export interface ReconsiderInput {
   readonly actor: "coordinator"
   readonly source: { readonly coordinatorSessionID: string; readonly groupID?: string; readonly rationale: string }
   readonly answer?: Answer
+  readonly goal?: { readonly owner: string }
   readonly confidence?: number
   readonly validate: (snapshot: Info) => Effect.Effect<boolean>
 }
@@ -92,7 +93,7 @@ export interface ReconsiderResult {
   readonly requestID: ID
   readonly fingerprint: string
   readonly settled: boolean
-  readonly via?: "auto-answer" | "yolo" | "coordination"
+  readonly via?: "auto-answer" | "yolo" | "goal" | "coordination"
   readonly confidence?: number
   readonly source?: ReplySource
   readonly reason?: string
@@ -564,14 +565,82 @@ export const layer = Layer.effect(
                     .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
                   if (authorization === undefined) return { ...base, outcome: "stale" as const, settled: false }
                   const mode = yield* DecisionChoice.decisionMode(autonomy, sessionID, "answers")
-                  if (mode === "manual")
+                  if (mode === "manual" && input.goal === undefined)
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:manual-answers" }
-                  const native =
-                    input.answer === undefined || mode === "auto"
-                      ? yield* restore(
-                          decisionAnswer(decision, sessionID, entry.form, { autoAnswer: mode === "auto", yolo: mode === "yolo" }),
-                        )
-                      : undefined
+                  const fromGoal = input.goal !== undefined
+                  if (fromGoal) {
+                    if (input.answer !== undefined) {
+                      const invalid = validateAnswer(entry.form, input.answer)
+                      if (invalid) return { ...base, outcome: "escalated" as const, settled: false, reason: "invalid-answer" }
+                      const via = input.confidence === undefined || Number.isFinite(input.confidence) ? ("goal" as const) : ("goal" as const)
+                      const outcome: SleepOutcome = {
+                        type: "answer",
+                        answer: input.answer,
+                        via,
+                        ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
+                      }
+                      return yield* exclusive(
+                        Effect.gen(function* () {
+                          const current = yield* find(input.id).pipe(
+                            Effect.catchTag("Form.NotFoundError", () => Effect.succeed(undefined)),
+                          )
+                          if (current === undefined || current.state.status !== "pending" || fingerprint(current.form) !== input.fingerprint)
+                            return { ...base, outcome: "stale" as const, settled: false }
+                          if (!(yield* input.validate(current.form)))
+                            return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                          if (!(yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, authorization)))
+                            return { ...base, outcome: "escalated" as const, settled: false, reason: "stale-assessment" }
+                          const source: ReplySource = {
+                            kind: "coordinator",
+                            coordinatorSessionID: input.source.coordinatorSessionID,
+                            ...(input.source.groupID === undefined ? {} : { groupID: input.source.groupID }),
+                            via,
+                            rationale: input.source.rationale,
+                            ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+                          }
+                          yield* complete(current, { status: "answered", answer: outcome.answer }, source)
+                          return {
+                            ...base,
+                            outcome: "allowed" as const,
+                            settled: true,
+                            via,
+                            ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+                            source,
+                          }
+                        }),
+                      )
+                    }
+                    const deterministic = deterministicFormAnswer(entry.form)
+                    if (deterministic !== undefined) {
+                      const outcome: SleepOutcome = { type: "answer", answer: deterministic, via: "auto-answer" as const }
+                      return yield* exclusive(
+                        Effect.gen(function* () {
+                          const current = yield* find(input.id).pipe(
+                            Effect.catchTag("Form.NotFoundError", () => Effect.succeed(undefined)),
+                          )
+                          if (current === undefined || current.state.status !== "pending" || fingerprint(current.form) !== input.fingerprint)
+                            return { ...base, outcome: "stale" as const, settled: false }
+                          if (!(yield* input.validate(current.form)))
+                            return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                          if (!(yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, authorization)))
+                            return { ...base, outcome: "escalated" as const, settled: false, reason: "stale-assessment" }
+                          const source: ReplySource = {
+                            kind: "coordinator",
+                            coordinatorSessionID: input.source.coordinatorSessionID,
+                            ...(input.source.groupID === undefined ? {} : { groupID: input.source.groupID }),
+                            via: "auto-answer" as const,
+                            rationale: input.source.rationale,
+                          }
+                          yield* complete(current, { status: "answered", answer: outcome.answer }, source)
+                          return { ...base, outcome: "allowed" as const, settled: true, via: "auto-answer" as const, source }
+                        }),
+                      )
+                    }
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "refused" }
+                  }
+                  const native = yield* restore(
+                    decisionAnswer(decision, sessionID, entry.form, { autoAnswer: mode === "auto", yolo: mode === "yolo" }),
+                  )
                   if (native?.type === "answer" && input.answer !== undefined && Hash.json(input.answer) !== Hash.json(native.answer))
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "answer-not-deterministic" }
                   const outcome: SleepOutcome =
@@ -747,7 +816,7 @@ interface AutoMode {
 }
 
 type SleepOutcome =
-  | { readonly type: "answer"; readonly answer: Answer; readonly via: "auto-answer" | "yolo"; readonly confidence?: number; readonly assessments?: ReadonlyArray<Form.FieldAssessment> }
+  | { readonly type: "answer"; readonly answer: Answer; readonly via: "auto-answer" | "yolo" | "goal"; readonly confidence?: number; readonly assessments?: ReadonlyArray<Form.FieldAssessment> }
   | {
       readonly type: "defer"
       readonly reason: "disabled" | "free_text" | "error" | DecisionChoice.UnsettledReason
@@ -1005,6 +1074,33 @@ function decisionValue(
       )
     }),
   )
+}
+
+export function deterministicFormAnswer(form: Pick<Info, "fields">): Answer | undefined {
+  const answer: Record<string, Form.Value> = {}
+  for (const field of form.fields) {
+    if (field.type === "external") return undefined
+    const active = isActive(field as InputField, answer)
+    if (!active) continue
+    const typed = field as InputField
+    if (typed.default !== undefined && !validateField(typed, typed.default)) {
+      answer[typed.key] = typed.default
+      continue
+    }
+    const options = (typed as { readonly options?: ReadonlyArray<{ readonly value: Form.Value; readonly label: string }> }).options
+    if (options !== undefined && options.length > 0) {
+      const marked = options.filter((option) => RECOMMENDED.test(option.label))
+      if (marked.length === 1 && marked[0] !== undefined && !validateField(typed, marked[0].value)) {
+        answer[typed.key] = marked[0].value
+        continue
+      }
+    }
+    const required = typed.required === true || (form as Info).metadata?.kind === "question"
+    if (!required) continue
+    return undefined
+  }
+  if (Object.keys(answer).length === 0) return undefined
+  return validateAnswer(form, answer) ? undefined : answer
 }
 
 export function validateAnswer(form: Pick<Info, "fields">, answer: Answer) {

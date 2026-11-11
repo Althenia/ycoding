@@ -84,6 +84,16 @@ test("a native coordinator reply keeps its coordinator attribution", async () =>
   }
 })
 
+test("a goal-agent reply keeps coordinator attribution with the goal-agent suffix, never the human", async () => {
+  const app = await render({ kind: "coordinator", coordinatorSessionID: "ses_goal_owner", via: "goal" })
+  try {
+    await app.waitForFrame((frame) => frame.includes("answered by coordinator ses_goal_owner via Goal agent"))
+    expect(app.captureCharFrame()).not.toContain("answered by you")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 for (const mode of ["dark", "light"] as const) for (const width of [32, 120]) test(`native Dots reply ${mode} at ${width} retains safe attribution`, async () => {
   const privateFields = {
     profile: "private_profile", credentialID: "private_credential", accountID: "private_account", accountGeneration: 491,
