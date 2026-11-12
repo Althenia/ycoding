@@ -28,7 +28,7 @@ function invocation(input: Source): Decision.Invocation {
 }
 
 export function decisionMode(
-  autonomy: SessionAutonomy.Interface,
+  autonomy: Pick<SessionAutonomy.Interface, "decisionMode">,
   sessionID: SessionSchema.ID,
   category: Category,
 ): Effect.Effect<DecisionMode> {

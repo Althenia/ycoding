@@ -68,7 +68,7 @@ const execution = Layer.mock(SessionExecution.Service, {
   interrupt: (sessionID) => Effect.sync(() => { interrupted.push(sessionID) }),
 })
 const it = testEffect(AppNodeBuilder.build(
-  LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, Session.node, SessionExecution.node, SessionOrchestration.node, CoordinationService.node]),
+  LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, Session.node, SessionExecution.node, SessionOrchestration.node, CoordinationService.node, SessionAutonomy.node]),
   [[SessionExecution.node, execution], inertRuntime],
 ))
 
@@ -123,6 +123,7 @@ const setup = Effect.gen(function* () {
   const coordination = yield* CoordinationService.Service
   const { db } = yield* Database.Service
   const events = yield* EventRuntime.Service
+  const autonomy = yield* SessionAutonomy.Service
   const location = { directory: AbsolutePath.make(tmpdir()) }
   const master = yield* sessions.create({ location, title: "master" })
   const alpha = yield* sessions.create({ location, title: "alpha" })
@@ -135,7 +136,7 @@ const setup = Effect.gen(function* () {
   const group = yield* coordination.create({ name: "Docs", masterSessionID: master.id, memberSessionIDs: [alpha.id, beta.id] })
   const makeRuntime = Effect.gen(function* () {
     return CoordinationRuntime.make({
-      db, events, coordination, decisions: decisions as never, execution: yield* SessionExecution.Service, sessions,
+      db, events, coordination, decisions: decisions as never, execution: yield* SessionExecution.Service, sessions, autonomy,
       orchestration: yield* SessionOrchestration.Service,
       jobs: { list: () => Effect.succeed([]), outstandingSessions: () => Effect.succeed(new Set(outstanding)) },
       validateModel: (_sessionID, model) =>
@@ -143,7 +144,7 @@ const setup = Effect.gen(function* () {
     })
   })
   const runtime = yield* makeRuntime
-  return { sessions, coordination, db, events, runtime, makeRuntime, group, master, alpha, beta, outsider, subagent, other, executor, alphaChild }
+  return { sessions, coordination, autonomy, db, events, runtime, makeRuntime, group, master, alpha, beta, outsider, subagent, other, executor, alphaChild }
 })
 type Fixture = Effect.Success<typeof setup>
 
@@ -734,6 +735,58 @@ describe("project send", () => {
       expect(woken).toEqual([fixture.alpha.id, fixture.beta.id])
     }))
 
+  const waitingQuestion = (fixture: Fixture) => ({ kind: "question", fingerprint: "fp_wait", state: {}, form: { id: "frm_wait", sessionID: fixture.alpha.id, title: "Choose output format", fields: [] } })
+
+  it.effect("a subagent's queue to its member waiting on a question is refused with the request named, and admits and wakes nothing", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* activate(fixture)
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      pendingByTarget.set(fixture.alpha.id, [waitingQuestion(fixture)])
+      const message = yield* refusal(fixture.runtime.send(fixture.subagent.id, { sessionID: fixture.alpha.id, text: "Status?", delivery: "queue" }))
+      expect(message).toContain("question frm_wait")
+      expect(message).toMatch(/answer/)
+      expect(message).toMatch(/escalate/)
+      expect(message).toMatch(/interrupt/)
+      expect(yield* pendingFor(fixture, fixture.alpha.id)).toEqual([])
+      expect(woken).toEqual([])
+    }))
+
+  for (const pending of [
+    { kind: "permission", id: "per_wait", item: (fixture: Fixture) => ({ kind: "permission", fingerprint: "fp_per", request: { id: "per_wait", sessionID: fixture.alpha.id, action: "edit", resources: ["src/a.ts"] } }) },
+    { kind: "review", id: "grq_wait", item: (fixture: Fixture) => ({ kind: "review", fingerprint: "fp_rev", request: { id: "grq_wait", rootSessionID: fixture.alpha.id, sessionID: fixture.alpha.id, action: "mcp_execute", resources: ["ycoding/session_prompt"], ruleIDs: ["custom.review"], reason: "Custom rule", standard: false } }) },
+  ]) it.effect(`steer and queue from the owner and from the Master are refused while a ${pending.kind} request is pending`, () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* activate(fixture)
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      pendingByTarget.set(fixture.alpha.id, [pending.item(fixture)])
+      for (const caller of [fixture.master.id, fixture.subagent.id])
+        for (const delivery of ["steer", "queue"] as const)
+          expect(yield* refusal(fixture.runtime.send(caller, { sessionID: fixture.alpha.id, text: "Status?", delivery }))).toContain(`${pending.kind} ${pending.id}`)
+      expect(yield* pendingFor(fixture, fixture.alpha.id)).toEqual([])
+      expect(woken).toEqual([])
+    }))
+
+  it.effect("a retry of a message admitted before the request appeared is reconciled once, and a new message is admitted and wakes the member after the request settles", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* activate(fixture)
+      const messageID = SessionMessage.ID.create()
+      yield* fixture.runtime.send(fixture.master.id, { sessionID: fixture.alpha.id, text: "Once", messageID })
+      pendingByTarget.set(fixture.alpha.id, [waitingQuestion(fixture)])
+      expect(yield* fixture.runtime.send(fixture.master.id, { sessionID: fixture.alpha.id, text: "Once", messageID })).toMatchObject({ messageID, reconciled: true })
+      expect(yield* pendingFor(fixture, fixture.alpha.id)).toHaveLength(1)
+      expect(yield* refusal(fixture.runtime.send(fixture.master.id, { sessionID: fixture.alpha.id, text: "Twice" }))).toContain("question frm_wait")
+      expect(yield* pendingFor(fixture, fixture.alpha.id)).toHaveLength(1)
+      woken.length = 0
+      pendingByTarget.delete(fixture.alpha.id)
+      const admitted = yield* fixture.runtime.send(fixture.master.id, { sessionID: fixture.alpha.id, text: "Twice" })
+      expect(admitted.reconciled).toBe(false)
+      expect(yield* pendingFor(fixture, fixture.alpha.id)).toHaveLength(2)
+      expect(woken).toEqual([fixture.alpha.id])
+    }))
+
   it.effect("validates a model override at the member's Location before admitting", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
@@ -784,6 +837,7 @@ describe("project inspect", () => {
     { name: "a disabled explicit flag", metadata: { requireExplicitDecision: false }, field: { key: "format", title: "Format" }, delegation: "routine" },
   ]) it.effect(`classifies Form inspection from ${sample.name}`, () => Effect.gen(function* () {
     const fixture = yield* setup
+    yield* fixture.autonomy.set({ sessionID: fixture.alpha.id, answers: "yolo" })
     const requestID = Form.ID.make("frm_inspection_classification")
     pendingByTarget.set(fixture.alpha.id, [{
       kind: "question", fingerprint: "fp_inspection", state: {},
@@ -794,6 +848,26 @@ describe("project inspect", () => {
     expect(detail).not.toHaveProperty("metadata")
     expect(evaluated).toEqual([])
   }))
+
+  it.effect("reports a member question's delegation as explicit-decision:manual-answers under Manual answers and leaves other classes unchanged", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      const requestID = Form.ID.make("frm_manual_inspection")
+      const form = (metadata?: Record<string, unknown>) => ({ id: requestID, sessionID: fixture.alpha.id, title: "Choose output format", metadata, fields: [{ type: "string", key: "format", title: "Format" }] })
+      const inspect = () => fixture.runtime.inspect(fixture.master.id, { sessionID: fixture.alpha.id, requestID })
+      for (const [mode, delegation] of [["manual", "explicit-decision:manual-answers"], ["yolo", "routine"], ["auto", "routine"]] as const) {
+        yield* fixture.autonomy.set({ sessionID: fixture.alpha.id, answers: mode })
+        pendingByTarget.set(fixture.alpha.id, [{ kind: "question", fingerprint: "fp_manual", state: {}, form: form() }])
+        expect(yield* inspect()).toMatchObject({ kind: "question", delegation })
+      }
+      yield* fixture.autonomy.set({ sessionID: fixture.alpha.id, answers: "manual" })
+      pendingByTarget.set(fixture.alpha.id, [
+        { kind: "question", fingerprint: "fp_manual", state: {}, form: form({ requireExplicitDecision: true }) },
+        { kind: "permission", fingerprint: "fp_edit", request: { id: "per_manual_edit", sessionID: fixture.alpha.id, action: "edit", resources: ["src/a.ts"] } },
+      ])
+      expect(yield* inspect()).toMatchObject({ delegation: "explicit-decision:request" })
+      expect(yield* fixture.runtime.inspect(fixture.master.id, { sessionID: fixture.alpha.id, requestID: "per_manual_edit" })).toMatchObject({ kind: "permission", delegation: "routine" })
+    }))
 
   it.effect("returns bounded redacted pending request detail with its delegation class and refuses unknown requests", () =>
     Effect.gen(function* () {
@@ -827,6 +901,7 @@ describe("project inspect", () => {
   it.effect("shows the recorded owner the same detail, with bounded redacted question fields and visible escalation reasons", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
+      yield* fixture.autonomy.set({ sessionID: fixture.alpha.id, answers: "yolo" })
       yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
       pendingByTarget.set(fixture.alpha.id, [
         { kind: "permission", fingerprint: "fp_per", request: { id: "per_unknown", sessionID: fixture.alpha.id, action: "mcp_execute", resources: ["ycoding/session_prompt"], coordinationEscalation: { reasons: [{ sessionID: fixture.master.id, reason: "Hold --token=abc123xyz" }] } } },
@@ -1325,7 +1400,7 @@ describe("owner-routed delivery", () => {
         const real = yield* SessionOrchestration.Service
         let attempts = 0
         const interruptible = CoordinationRuntime.make({
-          db: fixture.db, events: fixture.events, coordination: fixture.coordination, decisions: decisions as never, execution: yield* SessionExecution.Service, sessions: fixture.sessions,
+          db: fixture.db, events: fixture.events, coordination: fixture.coordination, decisions: decisions as never, execution: yield* SessionExecution.Service, sessions: fixture.sessions, autonomy: fixture.autonomy,
           orchestration: { notice: (input) => (++attempts === 1 ? (mode === "after admission" ? real.notice(input).pipe(Effect.andThen(Effect.interrupt)) : Effect.interrupt) : real.notice(input)) },
           jobs: { list: () => Effect.succeed([]), outstandingSessions: () => Effect.succeed(new Set(outstanding)) },
           validateModel: () => Effect.void,
@@ -1659,6 +1734,7 @@ const liveSetup = (ownership: "recorded" | "assigned" = "recorded") => Effect.ge
   yield* coordination.activate(group.id)
   const runtime = CoordinationRuntime.make({
     db, events, coordination, decisions: decisions as never, execution, sessions, orchestration: yield* SessionOrchestration.Service,
+    autonomy: { decisionMode: () => Effect.succeed("manual") },
     jobs: { list: () => Effect.succeed([]), outstandingSessions: () => Effect.succeed(new Set<SessionSchema.ID>()) },
     validateModel: () => Effect.void,
   })
@@ -1827,7 +1903,7 @@ const questionSetup = (answers: "yolo" | "manual") => Effect.gen(function* () {
   yield* coordination.setOwner(group.id, { sessionID: alpha.id, ownerSessionID: owner.id })
   yield* autonomy.set({ sessionID: alpha.id, answers })
   const runtime = CoordinationRuntime.make({
-    db, events, coordination, execution: yield* SessionExecution.Service, sessions, orchestration: yield* SessionOrchestration.Service,
+    db, events, coordination, autonomy, execution: yield* SessionExecution.Service, sessions, orchestration: yield* SessionOrchestration.Service,
     decisions: CoordinationDecisions.make({
       policy: () => Effect.succeed(ConfigCoordination.resolve()),
       accessOf: coordination.accessOf,
@@ -1928,7 +2004,7 @@ const ownerStateSetup = (initial: "waiting" | "starting" | "cancelling") => Effe
   yield* coordination.setOwner(group.id, { sessionID: alpha.id, ownerSessionID: owner.id })
   yield* autonomy.set({ sessionID: alpha.id, answers: "manual" })
   const runtime = CoordinationRuntime.make({
-    db, events, coordination, execution, sessions, orchestration,
+    db, events, coordination, autonomy, execution, sessions, orchestration,
     decisions: CoordinationDecisions.make({
       policy: () => Effect.succeed(ConfigCoordination.resolve()),
       accessOf: coordination.accessOf,
@@ -2017,7 +2093,7 @@ describe("member notices for a waiting, starting or cancelling owner", () => {
 
 const notified = testEffect(AppNodeBuilder.build(
   LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, Session.node, SessionExecution.node, SessionOrchestration.node,
-    SessionOrchestrationNotifier.node, CoordinationService.node]),
+    SessionOrchestrationNotifier.node, CoordinationService.node, SessionAutonomy.node]),
   [[SessionExecution.node, execution], inertRuntime],
 ))
 

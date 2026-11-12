@@ -24,6 +24,7 @@ import { AbsolutePath } from "../schema"
 import { Hash } from "../util/hash"
 import { CoordinationDecisions } from "./coordination-decisions"
 import { SessionEvent } from "./event"
+import { SessionAutonomy } from "./autonomy"
 import { SessionExecution } from "./execution"
 import { SessionHistory } from "./history"
 import { SessionMessage } from "./message"
@@ -46,6 +47,8 @@ export const escalation = "project_escalation"
 export const maxExcerpt = 500
 export const inactiveMessage = "Project is inactive; send a message in the master chat to resume"
 export const limitMessage = (limit: number) => `Project concurrency limit ${limit} reached`
+export const waitingMessage = (sessionID: SessionSchema.ID, pending: ReadonlyArray<Coordination.PendingRequest>) =>
+  `Session ${sessionID} is waiting on ${pending.map((request) => `${request.kind} ${request.requestID}`).join(", ")} and cannot receive input until each settles; settle it with answer, escalate it, or interrupt the member to withdraw it`
 
 export interface SendInput {
   readonly sessionID: SessionSchema.ID
@@ -187,6 +190,7 @@ export interface Options {
   readonly events: EventRuntime.Interface
   readonly coordination: Pick<CoordinationService.Interface, "get" | "list" | "scopeOf" | "memberOf" | "accessOf" | "withOwnership" | "activate" | "pause" | "setOwner" | "addMember">
   readonly decisions: Pick<CoordinationDecisions.Interface, "pending" | "evaluate" | "escalate">
+  readonly autonomy: Pick<SessionAutonomy.Interface, "decisionMode">
   readonly execution: Pick<SessionExecution.Interface, "active" | "wake" | "interrupt">
   readonly sessions: Pick<Session.Interface, "create" | "get" | "outstanding">
   readonly orchestration: Pick<SessionOrchestration.Interface, "notice">
@@ -227,7 +231,7 @@ export const authorizeMember = Effect.fn("CoordinationRuntime.authorizeMember")(
 const clip = (text: string) => (text.length > maxExcerpt ? `${text.slice(0, maxExcerpt - 1)}…` : text)
 
 export function make(options: Options): Interface & { readonly handle: (event: HandledEvent) => Effect.Effect<void>; readonly recover: () => Effect.Effect<void> } {
-  const { db, events, coordination, decisions, execution, sessions, orchestration, jobs } = options
+  const { db, events, coordination, decisions, execution, sessions, orchestration, jobs, autonomy } = options
   const senders = new Map<SessionSchema.ID, SessionSchema.ID>()
   const sendLock = KeyedMutex.makeUnsafe<Coordination.GroupID>()
 
@@ -457,6 +461,8 @@ export function make(options: Options): Interface & { readonly handle: (event: H
           const current = yield* memberScope(caller, input.sessionID)
           if (current?.groupID !== scope.groupID || !current.memberSessionIDs.includes(input.sessionID)) return yield* refuse(`Session ${input.sessionID} is not a member of this Project`)
           if (current === undefined || !current.active) return yield* refuse(inactiveMessage)
+          const waiting = (yield* decisions.pending({ groupID: scope.groupID, coordinatorSessionID: caller, targetSessionID: input.sessionID, limit: Coordination.maxPending })).map(summarize)
+          if (waiting.length > 0) return yield* refuse(waitingMessage(input.sessionID, waiting))
           const { running } = yield* sessions.outstanding()
           const queued = yield* hasPendingInput(scope.memberSessionIDs)
           const busy = (sessionID: SessionSchema.ID) => running.has(sessionID) || queued.has(sessionID)
@@ -722,7 +728,7 @@ export function make(options: Options): Interface & { readonly handle: (event: H
     const item = (yield* decisions.pending({ groupID: scope.groupID, coordinatorSessionID: caller, targetSessionID: input.sessionID, limit: Coordination.maxPending }))
       .find((pending) => (pending.kind === "question" ? pending.form.id : pending.request.id) === input.requestID)
     if (item === undefined) return yield* refuse(`Request ${input.requestID} is not pending for Session ${input.sessionID}`)
-    return requestDetail(item)
+    return requestDetail(item, (yield* DecisionChoice.decisionMode(autonomy, input.sessionID, "answers")) === "manual")
   })
 
   const memberEvent = Effect.fnUntraced(function* (
@@ -930,7 +936,7 @@ export function make(options: Options): Interface & { readonly handle: (event: H
 const text = (value: string, limit = 500) => DecisionChoice.redactText(value).slice(0, limit)
 const boundedResources = (resources: ReadonlyArray<string>) => resources.slice(0, 20).map((resource) => text(resource))
 
-function requestDetail(item: CoordinationDecisions.PendingSnapshot): RequestDetail {
+function requestDetail(item: CoordinationDecisions.PendingSnapshot, manualAnswers: boolean): RequestDetail {
   const escalation = (value: Coordination.Escalation | undefined) => CoordinationEscalation.redacted(value)
   if (item.kind === "question") {
     const explicit = CoordinationDecisions.explicitDecisionReason({
@@ -950,7 +956,7 @@ function requestDetail(item: CoordinationDecisions.PendingSnapshot): RequestDeta
         ...("required" in field && field.required !== undefined ? { required: field.required } : {}),
         ...("options" in field && field.options !== undefined ? { options: field.options.slice(0, 20).map((option) => text(typeof option === "string" ? option : option.value, 200)) } : {}),
       })),
-      delegation: explicit ?? "routine", ...escalation(item.form.coordinationEscalation),
+      delegation: explicit ?? (manualAnswers ? "explicit-decision:manual-answers" : "routine"), ...escalation(item.form.coordinationEscalation),
     }
   }
   const request = item.request
@@ -981,6 +987,7 @@ const layer: Layer.Layer<
   never,
   | CoordinationService.Service
   | CoordinationDecisions.Service
+  | SessionAutonomy.Service
   | Database.Service
   | EventRuntime.Service
   | SessionExecution.Service
@@ -995,6 +1002,7 @@ const layer: Layer.Layer<
     const coordination = yield* CoordinationService.Service
     const database = yield* Database.Service
     const decisions = yield* CoordinationDecisions.Service
+    const autonomy = yield* SessionAutonomy.Service
     const events = yield* EventRuntime.Service
     const execution = yield* SessionExecution.Service
     const sessions = yield* Session.Service
@@ -1017,7 +1025,7 @@ const layer: Layer.Layer<
       )
     })
     const jobs = yield* Job.Service
-    const runtime = make({ db: database.db, events, coordination, decisions, execution, sessions, orchestration, validateModel, jobs })
+    const runtime = make({ db: database.db, events, coordination, decisions, autonomy, execution, sessions, orchestration, validateModel, jobs })
     yield* events.subscribe(handledEvents).pipe(Stream.runForEach(runtime.handle), Effect.forkScoped({ startImmediately: true }))
     yield* runtime.recover()
     return Service.of(runtime)
@@ -1027,5 +1035,5 @@ const layer: Layer.Layer<
 export const node: Node.GlobalNode<Service> = makeGlobalNode({
   service: Service,
   layer,
-  deps: [CoordinationService.node, CoordinationDecisionRuntime.node, Database.node, EventRuntime.node, SessionExecution.node, Session.node, SessionOrchestration.node, SessionStore.node, LocationServiceMap.node, Job.node],
+  deps: [CoordinationService.node, CoordinationDecisionRuntime.node, SessionAutonomy.node, Database.node, EventRuntime.node, SessionExecution.node, Session.node, SessionOrchestration.node, SessionStore.node, LocationServiceMap.node, Job.node],
 })

@@ -139,6 +139,9 @@ test("the tool description names the supervision chain", () => {
   expect(CoordinationTool.description).toContain("decline")
   for (const text of [
     "Executor children inherit no controller authority.",
+    "A member with a pending question, permission or review cannot receive input until the request settles, so the send is refused naming each pending request; settle it with answer, escalate it, or interrupt the member to withdraw it.",
+    "The request stays open as the member's prompt: the user answers it in that member Session, and messages or answers relayed through the Master cannot settle it.",
+    "a question reports explicit-decision:manual-answers while the member's answers mode is Manual",
     "delegates implementation to executors",
     "inspect:",
     "decline-only (answer may only decline)",
@@ -220,7 +223,15 @@ const runtimeNode = makeGlobalNode({
       sessions: yield* Session.Service,
       orchestration: yield* SessionOrchestration.Service,
       execution: yield* SessionExecution.Service,
-      decisions: { pending: () => Effect.succeed([]), evaluate: () => Effect.die("unused"), escalate: () => Effect.die("unused") },
+      autonomy: { decisionMode: () => Effect.succeed("manual") },
+      decisions: {
+        pending: () => Effect.succeed([]),
+        evaluate: () => Effect.die("unused"),
+        escalate: (input) => Effect.succeed({
+          outcome: "escalated" as const, kind: input.kind, requestID: input.requestID, fingerprint: input.fingerprint, actor: "coordinator" as const, settled: false as const,
+          to: "client" as const, coordinationEscalation: { reasons: [{ sessionID: input.coordinatorSessionID, reason: input.reason }] },
+        }),
+      },
       validateModel: () => Effect.void,
       jobs: { list: () => Effect.succeed([]), outstandingSessions: () => Effect.succeed(new Set<SessionSchema.ID>()) },
     }))
@@ -303,11 +314,24 @@ const projectSetup = Effect.gen(function* () {
   return { sessions, events, coordination, git, database, master, group, call, parsed, managed, count, exists }
 })
 
-describe("project create through the tool registry", () => {
+describe("project tool through the tool registry", () => {
   afterAll(async () => {
     await repository[Symbol.asyncDispose]()
     await fs.rm(data, { recursive: true, force: true })
   })
+
+  integration.live("a Master escalation to the user names the member Session where the user answers and states that messages cannot settle it", () =>
+    Effect.gen(function* () {
+      const fixture = yield* projectSetup
+      const member = yield* fixture.sessions.create({ location: { directory: AbsolutePath.make(data) }, title: "Docs lane" })
+      yield* fixture.coordination.addMember(fixture.group.id, { sessionID: member.id })
+      const result = yield* fixture.call("escalate-client", "project", { action: "escalate", sessionID: member.id, requestID: "frm_wait", kind: "question", fingerprint: "fp_wait", reason: "Needs the user" })
+      expect(result.type).toBe("text")
+      const text = String(result.value)
+      expect(text).toContain("stays open as the member's prompt")
+      expect(text).toContain(`answers it in member Session ${member.id} (Docs lane)`)
+      expect(text).toContain("messages or answers relayed through the Master cannot settle it")
+    }), 60_000)
 
   integration.live("creates members through the worktree tool's path and refuses an existing name with the worktree tool's message", () =>
     Effect.gen(function* () {

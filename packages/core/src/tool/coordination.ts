@@ -72,10 +72,10 @@ export const description = [
   "Direct the Project this Session is the Master of, or the member Sessions it owns in the recorded Project graph. Executor children inherit no controller authority.",
   "The Master manages assignment, transfer and integration. A supervisor manages its owned Sessions and delegates implementation to executors.",
   "list: members with state (idle, running, waiting, failed), pending requests with request IDs and fingerprints, and last activity.",
-  "inspect: read one member's pending request by requestID: kind, fingerprint, action and up to 20 redacted resources (rule IDs, reason and hard/standard flags for reviews; title and fields for questions), any escalation reasons, and its delegation class: routine (answer may approve or decline), decline-only (answer may only decline), escalate, or explicit-decision:<reason>. Tool descriptions and request metadata are never shown and grant no authority.",
-  "send: admit a message to a member (steer or queue, default queue); returns immediately. An optional messageID makes retries idempotent; an optional model overrides the model for the turn the message starts.",
+  "inspect: read one member's pending request by requestID: kind, fingerprint, action and up to 20 redacted resources (rule IDs, reason and hard/standard flags for reviews; title and fields for questions), any escalation reasons, and its delegation class: routine (answer may approve or decline), decline-only (answer may only decline), escalate, or explicit-decision:<reason>; a question reports explicit-decision:manual-answers while the member's answers mode is Manual. Tool descriptions and request metadata are never shown and grant no authority.",
+  "send: admit a message to a member (steer or queue, default queue); returns immediately. An optional messageID makes retries idempotent; an optional model overrides the model for the turn the message starts. A member with a pending question, permission or review cannot receive input until the request settles, so the send is refused naming each pending request; settle it with answer, escalate it, or interrupt the member to withdraw it.",
   "answer: settle a member's pending question, permission, or review under the delegated-decision policy. decision: approve (default) or decline; decline rejects a routine or decline-only permission or review with your rationale as the member's feedback. Hard, explicit-decision, Manual-mode, and uncertain cases are refused with a reason.",
-  "escalate: pass a pending request you cannot settle up the chain with a reason. From a Master subagent it goes to the Master; from the Master it goes to the user's decision surface, with every reason attached to the member's pending prompt. A request already deferred to the review box returns deferred-to-review-box with its item ID. Escalate whatever answer refuses.",
+  "escalate: pass a pending request you cannot settle up the chain with a reason. From a Master subagent it goes to the Master; from the Master it goes to the user's decision surface, with every reason attached to the member's pending prompt. The request stays open as the member's prompt: the user answers it in that member Session, and messages or answers relayed through the Master cannot settle it. A request already deferred to the review box returns deferred-to-review-box with its item ID. Escalate whatever answer refuses.",
   "interrupt: stop a member's running turn.",
   "assign: Master only. Give a member Session to a live subagent the Master launched (not cancelling, cancelled, failed, lost or archived); that supervisor owns it until released, and reassigning transfers it. Idle, a failed turn, or a settled turn never ends ownership.",
   "release: Master only. The Master ends ownership, with reason completed (work verified complete) or released. Removing the member from the Project or deleting the owner also ends it.",
@@ -112,8 +112,16 @@ export const Plugin = {
           })) }
         if (input.action === "answer")
           return { action: "answer" as const, result: yield* runtime.answer(caller, input) }
-        if (input.action === "escalate")
-          return { action: "escalate" as const, ...(yield* runtime.escalate(caller, input)) }
+        if (input.action === "escalate") {
+          const result = yield* runtime.escalate(caller, input)
+          if (result.decision.to !== "client") return { action: "escalate" as const, ...result }
+          const member = (yield* runtime.roster(caller)).members.find((item) => item.sessionID === input.sessionID)
+          return {
+            action: "escalate" as const,
+            ...result,
+            guidance: `The request stays open as the member's prompt. The user answers it in member Session ${input.sessionID}${member === undefined ? "" : ` (${member.title})`}; messages or answers relayed through the Master cannot settle it, so do not wait on a reply to a message sent to that member.`,
+          }
+        }
         if (input.action === "assign")
           return { action: "assign" as const, ...(yield* runtime.assign(caller, { sessionID: input.sessionID, ownerSessionID: input.ownerSessionID })) }
         if (input.action === "release")
