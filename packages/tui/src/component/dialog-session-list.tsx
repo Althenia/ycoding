@@ -1,4 +1,4 @@
-import { createMemo, createResource, createSignal, onMount } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount } from "solid-js"
 import path from "path"
 import type { SessionInfo } from "@ycoding-ai/client"
 import { useDialog } from "../ui/dialog"
@@ -10,6 +10,8 @@ import { Locale } from "../util/locale"
 import { useTheme } from "../context/theme"
 import { useClient } from "../context/client"
 import { useLocal } from "../context/local"
+import { useLocation } from "../context/location"
+import { useEvent } from "../context/event"
 import { createDebouncedSignal } from "../util/signal"
 import { useToast } from "../ui/toast"
 import { DialogSessionRename } from "./dialog-session-rename"
@@ -17,6 +19,18 @@ import { Spinner } from "./spinner"
 import { errorMessage } from "../util/error"
 import { readableForeground } from "../theme/component"
 import { isBackgroundSession } from "../util/session"
+
+const REFRESH_EVENTS = new RegExp(
+  `^(${[
+    String.raw`session\.(created|deleted|renamed|archived|unarchived|moved|status)`,
+    String.raw`session\.(task\.updated|execution\.|shell\.|review\.)`,
+    String.raw`permission\.`,
+    String.raw`guardrail\.`,
+    String.raw`form\.`,
+    String.raw`question\.`,
+    String.raw`shell\.(created|exited|deleted)`,
+  ].join("|")})`,
+)
 
 export function DialogSessionList(
   props: {
@@ -31,17 +45,119 @@ export function DialogSessionList(
   const { theme, mode } = useTheme()
   const client = useClient()
   const local = useLocal()
+  const location = useLocation()
+  const event = useEvent()
   const toast = useToast()
   const [filter, setFilter] = createSignal("")
   const shortcuts = Keymap.useShortcuts()
   const [search, setSearch] = createDebouncedSignal("", 150)
   const [toDelete, setToDelete] = createSignal<string>()
+  const [global, setGlobal] = createSignal<{
+    waiting: ReadonlySet<string>
+    running: ReadonlySet<string>
+  }>({ waiting: new Set<string>(), running: new Set<string>() })
+  const activeProject = createMemo(() => (location.current ?? data.location.info())?.project)
+  let releaseRetained: (() => void) | undefined
+  let disposed = false
+  let refreshing = false
+  let refreshDirty = false
+  let refreshGeneration = 0
+
+  async function decisionRoot(sessionID: string) {
+    let current: string | undefined = sessionID
+    const seen = new Set<string>()
+    while (current && !seen.has(current) && seen.size < 16) {
+      seen.add(current)
+      const info: SessionInfo | undefined =
+        data.session.get(current) ?? (await client.api.session.get({ sessionID: current }).catch(() => undefined))
+      if (!info) return undefined
+      if (isBackgroundSession(info)) return undefined
+      if (!info.parentID) return info.id
+      current = info.parentID
+    }
+    return undefined
+  }
+
+  async function decisionRoots(decisions: Awaited<ReturnType<typeof client.api.decision.list>>) {
+    const roots = await Promise.all(decisions.map((item) => decisionRoot(item.sessionID)))
+    return new Set(roots.filter((root): root is string => root !== undefined))
+  }
+
+  async function loadGlobal(generation: number) {
+    const stale = () => disposed || generation !== refreshGeneration
+    await data.session.syncRoots(activeProject()?.id).catch(() => undefined)
+    if (stale()) return
+    const [decisions, outstanding] = await Promise.allSettled([
+      client.api.decision.list(),
+      client.api.session.outstanding(),
+    ])
+    if (stale()) return
+    const waiting = decisions.status === "fulfilled" ? await decisionRoots(decisions.value) : global().waiting
+    if (stale()) return
+    const running = outstanding.status === "fulfilled" ? new Set(outstanding.value.running ?? []) : global().running
+    const candidates = outstanding.status === "fulfilled" ? (outstanding.value.data ?? []) : []
+    const release = data.session.retain(new Set([...waiting, ...running, ...candidates]))
+    releaseRetained?.()
+    releaseRetained = release
+    await Promise.all(
+      [...waiting, ...candidates]
+        .filter((sessionID) => !data.session.get(sessionID))
+        .map((sessionID) => data.session.sync(sessionID).catch(() => undefined)),
+    )
+    if (stale()) return
+    const roots = candidates.filter((sessionID) => {
+      const session = data.session.get(sessionID)
+      return session !== undefined && !session.parentID && !isBackgroundSession(session)
+    })
+    await Promise.all(roots.map((sessionID) => data.session.subagent.sync(sessionID).catch(() => undefined)))
+    if (stale()) return
+    setGlobal({ waiting, running })
+  }
+
+  async function refreshGlobal() {
+    if (refreshing) {
+      refreshDirty = true
+      return
+    }
+    refreshing = true
+    refreshDirty = true
+    try {
+      while (refreshDirty) {
+        refreshDirty = false
+        await loadGlobal(++refreshGeneration)
+        if (disposed) break
+      }
+    } finally {
+      refreshing = false
+    }
+  }
+
+  onCleanup(() => {
+    disposed = true
+    releaseRetained?.()
+  })
+  onCleanup(
+    event.subscribe((item) => {
+      if (REFRESH_EVENTS.test(item.type)) void refreshGlobal()
+    }),
+  )
+  createEffect(
+    on(
+      () => activeProject()?.id,
+      () => void refreshGlobal(),
+      { defer: true },
+    ),
+  )
+
+  function ensureResident(sessionID: string) {
+    if (data.session.get(sessionID)) return Promise.resolve()
+    return data.session.sync(sessionID).catch(() => undefined)
+  }
 
   const [searchResults] = createResource(search, async (query) => {
     if (!query) return
     try {
-      if (!data.location.info()) await data.location.sync()
-      const current = data.location.info()
+      const current = location.current ?? (await data.location.sync().then(() => data.location.info()))
       if (!current) throw new Error("Location unavailable")
       const response = await client.api.session.list({
         project: current.project.id,
@@ -97,13 +213,41 @@ export function DialogSessionList(
   })
 
   const options = createMemo(() => {
-    const sessionMap = new Map(
-      sessions()
-        .filter((session) => !session.parentID)
-        .map((session) => [session.id, session]),
-    )
-    const pinned = (props.pinned ?? local.session.pinned()).filter((sessionID) => sessionMap.has(sessionID))
-    const pinnedSet = new Set(pinned)
+    const project = activeProject()
+    const byID = new Map<string, SessionInfo>()
+    for (const session of data.session.list()) {
+      if (!session.parentID && !isBackgroundSession(session)) byID.set(session.id, session)
+    }
+    for (const session of sessions()) {
+      if (!session.parentID && !byID.has(session.id)) byID.set(session.id, session)
+    }
+    const isWaiting = (session: SessionInfo) =>
+      !session.time.archived &&
+      (data.session.activity(session.id) === "waiting" ||
+        global().waiting.has(session.id) ||
+        (data.session.subagent.summary(session.id)?.waiting ?? 0) > 0)
+    const isRunning = (session: SessionInfo) =>
+      !session.time.archived &&
+      (data.session.activity(session.id) === "running" || global().running.has(session.id))
+    const pinnedSessions = props.pinned
+      ? props.pinned.flatMap((sessionID) => {
+          const session = byID.get(sessionID)
+          return session ? [session] : []
+        })
+      : [...byID.values()]
+          .filter((session) => session.time.pinned !== undefined)
+          .toSorted((a, b) => a.time.pinned! - b.time.pinned! || a.id.localeCompare(b.id))
+    const pinnedSet = new Set(pinnedSessions.map((session) => session.id))
+    const waitingSessions: SessionInfo[] = []
+    const runningSessions: SessionInfo[] = []
+    for (const session of [...byID.values()].toSorted((a, b) => b.time.updated - a.time.updated)) {
+      if (pinnedSet.has(session.id)) continue
+      if (isWaiting(session)) {
+        waitingSessions.push(session)
+        continue
+      }
+      if (isRunning(session)) runningSessions.push(session)
+    }
     const slotByID = new Map(local.session.slots().map((sessionID, index) => [sessionID, index + 1]))
 
     const option = (session: SessionInfo, category: string) => {
@@ -111,7 +255,7 @@ export function DialogSessionList(
       const messageCount = props.messageCounts?.[session.id]
       const footer =
         messageCount === undefined
-          ? directory !== data.location.info()?.project.directory
+          ? directory !== project?.directory
             ? Locale.truncate(path.basename(directory), 20)
             : ""
           : `${messageCount.toLocaleString("en-US")} msgs`
@@ -129,22 +273,47 @@ export function DialogSessionList(
         fg: deleting
           ? readableForeground(theme.text.action.destructive.default, theme.background.action.destructive.default)
           : undefined,
-        gutter: data.session.activity(session.id) === "running"
-          ? () => <Spinner />
-          : slot === undefined
-            ? undefined
-            : () => <text fg={theme.hue.accent[mode() === "light" ? 800 : 200]}>{slot}</text>,
+        state: isWaiting(session) ? ("awaitingInput" as const) : undefined,
+        gutter: isWaiting(session)
+          ? undefined
+          : isRunning(session)
+            ? () => <Spinner />
+            : slot === undefined
+              ? undefined
+              : () => <text fg={theme.hue.accent[mode() === "light" ? 800 : 200]}>{slot}</text>,
       }
     }
 
-    const remaining = sessions()
-      .filter((session) => !session.parentID && !pinnedSet.has(session.id))
-      .map((session) => option(session, "Recent"))
+    const query = filter().trim().toLowerCase()
+    const matches = (session: SessionInfo) => !query || session.title.toLowerCase().includes(query)
+    const shown = new Set<string>()
+    const take = (list: readonly SessionInfo[], category: string, filterByQuery = true) =>
+      list.flatMap((session) => {
+        if (shown.has(session.id) || (filterByQuery && !matches(session))) return []
+        shown.add(session.id)
+        return [option(session, category)]
+      })
 
-    return [...pinned.map((sessionID) => option(sessionMap.get(sessionID)!, "Pinned")), ...remaining]
+    const recentSessions = project
+      ? sessions()
+          .filter(
+            (session) => !session.parentID && !isBackgroundSession(session) && session.projectID === project.id,
+          )
+          .slice(0, 50)
+      : []
+
+    return [
+      ...take(pinnedSessions, "Pinned"),
+      ...take(waitingSessions, "Waiting for action"),
+      ...take(runningSessions, "Running"),
+      ...take(recentSessions, "Recent", false),
+    ]
   })
 
-  onMount(() => dialog.setSize("large"))
+  onMount(() => {
+    dialog.setSize("large")
+    void refreshGlobal()
+  })
 
   function archive(sessionID: string) {
     void client.api.session.archive({ sessionID }).catch((error) => {
@@ -167,9 +336,9 @@ export function DialogSessionList(
   }
 
   function toggleArchive(sessionID: string) {
-    const session = sessions().find((item) => item.id === sessionID)
+    const session = data.session.get(sessionID)
     if (session?.time.archived) {
-      unarchive(sessionID)
+      void ensureResident(sessionID).then(() => unarchive(sessionID))
       return
     }
     let open = true
@@ -186,7 +355,7 @@ export function DialogSessionList(
           onCancel={reopen}
           onConfirm={() => {
             reopen()
-            archive(sessionID)
+            void ensureResident(sessionID).then(() => archive(sessionID))
           }}
         />
       ),
@@ -234,7 +403,8 @@ export function DialogSessionList(
         {
           command: "session.pin.toggle",
           title: "pin/unpin",
-          onTrigger: (option: { value: string }) => local.session.togglePin(option.value),
+          onTrigger: (option: { value: string }) =>
+            void ensureResident(option.value).then(() => local.session.togglePin(option.value)),
         },
         {
           command: "session.delete",

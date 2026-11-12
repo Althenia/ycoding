@@ -146,6 +146,7 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (url.pathname === "/api/session") return json({ data: [], cursor: {} })
     if (url.pathname === "/api/session/active") return json({ data: {} })
     if (url.pathname === "/api/session/outstanding") return json({ data: [], running: [], failed: [], lost: [] })
+    if (url.pathname === "/api/decision") return json({ data: [] })
     if (url.pathname === "/api/dots")
       return json({ data: { access: { enabled: false, revision: 0 }, configuration: { ready: false }, connection: { state: "unavailable" } } })
     if (/^\/api\/session\/[^/]+\/snapshot$/.test(url.pathname))

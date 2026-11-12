@@ -186,6 +186,10 @@ jobs:
         if: matrix.suite == 'tui-runtime'
         run: bun test --cwd packages/tui --timeout 40000 ./test/session-footer-autonomy.test.tsx ./test/isolated-browser-dialog.test.tsx ./test/cli/tui/projects-layout.test.tsx ./test/theme-v1-parity.test.ts
 
+      - name: Verify session switcher grouping
+        if: matrix.suite == 'tui-runtime'
+        run: bun test --cwd packages/tui --timeout 40000 ./test/dialog-session-list-groups.test.tsx
+
       - name: Verify compact Project and transcript layouts
         if: matrix.suite == 'tui-runtime'
         run: |

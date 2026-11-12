@@ -756,6 +756,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const subagentGeneration = new Map<string, number>()
     const metadataRecency = new Set<string>()
     const metadataReads = new Map<object, string>()
+    const retainedSessionSets = new Set<ReadonlySet<string>>()
     const sync = createSync(pruneMetadata)
     onCleanup(sync.dispose)
 
@@ -916,7 +917,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           activityDirty = false
           const revision = activityRevision
           const work = await client.api.session.outstanding()
-          if (revision === activityRevision) setFamilyRunning(work.running)
+          if (revision === activityRevision) setFamilyRunning(work.running ?? [])
         }
       })().catch((error) => console.error("Failed to refresh Session activity", error)).finally(() => { activityRead = undefined })
       return activityRead
@@ -1284,6 +1285,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         ...Object.keys(store.session.input).filter((id) => store.session.input[id]?.length),
         ...Object.keys(store.session.permission).filter((id) => store.session.permission[id]?.length),
         ...Object.keys(store.session.form).filter((id) => store.session.form[id]?.length),
+        ...Object.values(store.session.info)
+          .filter((session) => session.time.pinned !== undefined)
+          .map((session) => session.id),
+        ...(familyRunning() ?? []),
+        ...Object.keys(store.session.review).filter((id) => store.session.review[id]?.length),
         ...Object.entries(store.session.guardrail).flatMap(([id, requests]) =>
           requests.length ? [id, ...requests.map((request) => request.sessionID)] : [],
         ),
@@ -1308,6 +1314,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           .filter((id): id is string => id !== undefined),
         ...sync.pendingSessions(),
         ...metadataReads.values(),
+        ...[...retainedSessionSets].flatMap((ids) => [...ids]),
         ...(props.selectedSessionID?.() ? [props.selectedSessionID()!] : []),
       ])
       const protectedRoots = new Set([...protectedIDs].map(resolveRoot))
@@ -1569,6 +1576,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               "pinned",
               event.type === "session.pinned" ? event.created : undefined,
             )
+          if (!store.session.info[event.data.sessionID] && event.type === "session.pinned") {
+            result.session.invalidate(event.data.sessionID)
+            void result.session.sync(event.data.sessionID).catch(() => undefined)
+          }
           break
         case "session.moved":
           if (store.session.info[event.data.sessionID]) {
@@ -2445,6 +2456,59 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             registerSession(sessionID)
           })
         },
+        retain(sessionIDs: ReadonlySet<string>) {
+          retainedSessionSets.add(sessionIDs)
+          return () => {
+            retainedSessionSets.delete(sessionIDs)
+          }
+        },
+        syncRoots(projectID?: string) {
+          return sync.run(
+            "session.roots",
+            async (current) => {
+              const targetProjectID = projectID ?? store.location[locationKey(defaultLocation())]?.info?.project.id
+              const found: SessionInfo[] = []
+              let cursor: string | undefined
+              do {
+                const page = await client.api.session.list({
+                  parentID: null,
+                  background: "exclude",
+                  limit: 200,
+                  order: "desc",
+                  ...(cursor === undefined ? {} : { cursor }),
+                })
+                if (!current()) return
+                found.push(...page.data.filter((session) => !session.parentID))
+                cursor = page.cursor.next ?? undefined
+              } while (cursor !== undefined)
+              const projectRoots = new Set(
+                found
+                  .filter((session) => session.time.pinned === undefined && session.projectID === targetProjectID)
+                  .slice(0, 50)
+                  .map((session) => session.id),
+              )
+              const kept = found.filter(
+                (session) =>
+                  session.time.pinned !== undefined ||
+                  projectRoots.has(session.id) ||
+                  store.session.info[session.id] !== undefined,
+              )
+              setStore(
+                "session",
+                "info",
+                produce((draft) => {
+                  for (const session of kept) draft[session.id] = session
+                }),
+              )
+              for (const session of kept.toReversed()) {
+                sync.complete(`session:${session.id}`)
+                registerSession(session.id)
+              }
+              pruneMetadata()
+            },
+            true,
+          )
+        },
         invalidate(sessionID: string) {
           sync.invalidate(`session:${sessionID}`)
         },
@@ -3216,13 +3280,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                   for (const session of response.data) draft[session.id] = session
                 }),
               )
-              for (const session of response.data) {
+              for (const session of response.data.toReversed()) {
                 sync.complete(`session:${session.id}`)
                 registerSession(session.id)
               }
               pruneMetadata()
             })
             .catch((error) => console.error("Failed to preload sessions", error))
+          void result.session.syncRoots().catch((error) => console.error("Failed to preload session roots", error))
           return
         }
         applyingSequence = "durable" in details ? details.durable.seq : undefined
