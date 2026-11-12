@@ -141,11 +141,11 @@ test("the tool description names the supervision chain", () => {
     "Executor children inherit no controller authority.",
     "A member with a pending question, permission or review cannot receive input until the request settles, so the send is refused naming each pending request; settle it with answer, escalate it, or interrupt the member to withdraw it.",
     "The request stays open as the member's prompt: the user answers it in that member Session, and messages or answers relayed through the Master cannot settle it.",
-    "a question reports explicit-decision:manual-answers while the member's answers mode is Manual",
+    "explicit-decision:<reason> (only the user decides it; escalate it)",
     "delegates implementation to executors",
     "inspect:",
     "decline-only (answer may only decline)",
-    "Hard, explicit-decision, Manual-mode, and uncertain cases are refused with a reason.",
+    "A deny rule still denies. Explicit-decision requests, every guardrail review, and uncertain cases are refused with a reason.",
     "assign: Master only.",
     "create: Master only.",
     "release: Master only. The Master",
@@ -173,9 +173,20 @@ test("effectiveDenies keeps repeated identical denies and keeps only the last of
   expect(Permission.effectiveDenies([])).toEqual([])
 })
 
-test("scope gating denies only the project tool", () => {
-  expect(CoordinationAccess.rules(true)).toEqual([])
-  expect(CoordinationAccess.rules(false)).toEqual([{ action: "project", resource: "*", effect: "deny" }])
+test("scope gating denies the project tool outside controller roles and file edits and mutating shell commands to the Master's family", () => {
+  const project = { action: "project", resource: "*", effect: "deny" } as const
+  const edit = { action: "edit", resource: "*", effect: "deny" } as const
+  expect(CoordinationAccess.visibility(undefined, false)).toEqual([project])
+  expect(CoordinationAccess.visibility("executor", false)).toEqual([project])
+  expect(CoordinationAccess.visibility("executor", true)).toEqual([project, edit])
+  expect(CoordinationAccess.visibility("master", true)).toEqual([edit])
+  expect(CoordinationAccess.visibility("supervisor", true)).toEqual([edit])
+  expect(CoordinationAccess.execution(false, { action: "shell", resources: ["git commit -m x"] })).toEqual([])
+  expect(CoordinationAccess.execution(true, { action: "edit", resources: ["src/a.ts"] })).toEqual([edit])
+  expect(CoordinationAccess.execution(true, { action: "shell", resources: ["git status", "git commit -m x", "sed -i s/a/b/ f", "bun run build"] })).toEqual([
+    edit,
+    ...["git commit -m x", "sed -i s/a/b/ f", "bun run build"].map((resource) => ({ action: "shell", resource, effect: "deny" }) as const),
+  ])
 })
 
 const repository = await tmpdir()
@@ -223,7 +234,6 @@ const runtimeNode = makeGlobalNode({
       sessions: yield* Session.Service,
       orchestration: yield* SessionOrchestration.Service,
       execution: yield* SessionExecution.Service,
-      autonomy: { decisionMode: () => Effect.succeed("manual") },
       decisions: {
         pending: () => Effect.succeed([]),
         evaluate: () => Effect.die("unused"),

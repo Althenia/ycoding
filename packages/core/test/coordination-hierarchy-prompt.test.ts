@@ -377,7 +377,7 @@ const hierarchy = [
   "As Master, decompose the user's work into independent scopes without waiting to be asked",
   "As a supervisor, stay responsible for every Session you control until its work is verified complete",
   "keep supervising after each turn settles",
-  "The owner chain handles routine and native requests and escalates only human-only or uncertain choices",
+  "As a supervisor, resolve your members' routine issues and judgment calls yourself within your existing authority",
   "Never send a member a message only to acknowledge a report or notification",
 ]
 const unimplemented = ["owner_session_id", "enforce"]
@@ -389,7 +389,7 @@ const operating = [
   "do not require an acknowledgment for each command",
   "name that writer in the assignment",
   "Cite evidence by a compact reference such as a file, hash, or message ID instead of repeating or truncating it",
-  "When blocked, name the real dependency or approval you await and continue from the event that resolves it",
+  "When blocked, name the real dependency or approval you await; when a human answer or a cleared prerequisite arrives, continue the affected work from that event without waiting for a reminder",
   "After a dispatch error, verify that the requested agent is registered and read the Session's actual state before acting again",
   "Require each assignment to complete its feature or cohesive milestone across all affected layers, including code, tests, contracts, docs and consumers, before one consolidated verification pass, never alternating tiny edits with repeated checks, builds or tests, and to preserve required boundary reproduction and pre-implementation tests.",
   "Require batched corrections, reruns of only failed or invalidated checks, and reuse of valid evidence for unchanged sources, contracts and environment, including at integration and merge.",
@@ -515,13 +515,14 @@ describe("Master hierarchy prompt assembly", () => {
       expect(system).not.toContain("Main")
       expect(system).toContain("Do not execute a member's task, take over its tools, or control its subagents.")
       expect(system).toContain("Verify assignments and completion evidence against the user's current direction.")
-      expect(system).toContain("Manual-mode requests remain human-only.")
+      expect(system).toContain("Only safety items reach the human: hard and custom-rule reviews;")
+      expect(system).not.toContain("Manual-mode")
       expect(system).not.toContain("assigns member Sessions directly")
       expect(system).not.toContain("directly or through supervising subagents")
     }),
   )
 
-  it.effect("a subagent that durably owns a member Session gets the supervising text; its executor child gets none", () =>
+  it.effect("a subagent that durably owns a member Session gets the supervising text; its executor child gets the Master's-subagent text and none of it", () =>
     Effect.gen(function* () {
       const { coordination, group } = yield* setupProject
       const supervisor = Session.ID.make("ses_coord_supervisor")
@@ -536,9 +537,9 @@ describe("Master hierarchy prompt assembly", () => {
       expect(owned).toContain(JSON.stringify(CoordinationInstructions.content).slice(1, -1))
       for (const text of hierarchy) expect(owned).toContain(text)
       const executor = systemText(yield* requestFor(supervisorExecutor, "Executor work"))
-      expect(executor).toContain("Project role: executor")
-      expect(executor).toContain("Own execution and verification of your assigned scope.")
-      expect(executor).toContain("Manage only your own direct subagents when delegation is permitted.")
+      expect(executor).toContain("Project role: Master's subagent. You make no Project changes")
+      expect(executor).not.toContain("Project role: executor")
+      expect(executor).not.toContain("Own execution and verification of your assigned scope.")
       expect(executor).not.toContain("Coordinate and supervise only")
       for (const text of [...hierarchy, ...operating]) expect(executor).not.toContain(text)
     }),
@@ -552,9 +553,9 @@ describe("Master hierarchy prompt assembly", () => {
       yield* coordination.setOwner(group.id, { sessionID, ownerSessionID: supervisor })
       expect(systemText(yield* requestFor(supervisor, "Supervise"))).toContain("Coordinate and supervise only")
       yield* coordination.setOwner(group.id, { sessionID })
-      expect(JSON.stringify(yield* requestFor(supervisor, "After release"))).toContain(
-        "The Project coordination role above no longer applies to this Session. Disregard it.",
-      )
+      const released = JSON.stringify(yield* requestFor(supervisor, "After release"))
+      expect(released).toContain("The Project coordination role above no longer applies to this Session. Disregard it.")
+      expect(released).toContain("Project role: Master's subagent. You make no Project changes")
     }),
   )
 })

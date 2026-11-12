@@ -77,7 +77,7 @@ function masterReply(request: unknown) {
   return say("Master acknowledged.")
 }
 
-/** The owner inspects each question notice, attempts to answer it, then escalates it. */
+/** The owner inspects each question notice, then escalates it. */
 function ownerReply(request: unknown) {
   const called = calledIDs(request)
   for (const notice of noticesIn(request)) {
@@ -87,15 +87,10 @@ function ownerReply(request: unknown) {
     if (!called.has(`call_inspect_${requestID}`)) return call(`call_inspect_${requestID}`, "project", { action: "inspect", ...target })
     const inspected = toolOutput(request, `call_inspect_${requestID}`)
     if (inspected === undefined) return say("Waiting for inspection.")
-    const detail = (JSON.parse(inspected) as { request: { fingerprint: string; fields: Array<{ key: string }> } }).request
-    if (!called.has(`call_answer_${requestID}`))
-      return call(`call_answer_${requestID}`, "project", {
-        action: "answer", ...target, kind: "question", fingerprint: detail.fingerprint,
-        rationale: "Synthetic owner attempt to answer a human-only question.", answer: { [detail.fields[0]!.key]: "Synthetic answer" },
-      })
+    const detail = (JSON.parse(inspected) as { request: { fingerprint: string } }).request
     if (!called.has(`call_escalate_${requestID}`))
       return call(`call_escalate_${requestID}`, "project", {
-        action: "escalate", ...target, kind: "question", fingerprint: detail.fingerprint, reason: "Human-only question; the Master must route it.",
+        action: "escalate", ...target, kind: "question", fingerprint: detail.fingerprint, reason: "The Master holds the evidence for this question.",
       })
   }
   return say("Owner acknowledged.")
@@ -376,7 +371,7 @@ test("a delegated owner alone receives its member's notices and is resumed after
   expect(server.logs.filter((line) => line.includes("Project event handling failed"))).toEqual([])
 }, 180_000)
 
-test("a member question wakes only its owner, watch reports it, Manual refuses the owner's answer, escalation reaches the Master, and cancelling the owner hands the request to the Master", async () => {
+test("a member question wakes only its owner, watch reports it, the owner's escalation reaches the Master, and cancelling the owner hands the request to the Master", async () => {
   const ownerHeld = gate()
   const releaseOwner = gate()
   cleanups.push(async () => releaseOwner.open(undefined))
@@ -409,8 +404,6 @@ test("a member question wakes only its owner, watch reports it, Manual refuses t
   expect(decision.decisions.map((item) => [item.id, item.sessionID])).toEqual([[formID, beta.sessionID]])
   expect(["form", "question"]).toContain(decision.decisions[0]!.kind)
 
-  const answered = JSON.parse(await until(async () => toolResultFrom(standIn, `call_answer_${formID}`), "the owner never attempted an answer"))
-  expect(answered).toMatchObject({ action: "answer", result: { outcome: "escalated", settled: false, requestID: formID, reason: "explicit-decision:manual-answers" } })
   const escalated = JSON.parse(await until(async () => toolResultFrom(standIn, `call_escalate_${formID}`), "the owner never escalated"))
   expect(escalated).toMatchObject({ action: "escalate", sessionID: beta.sessionID, requestID: formID, delivered: true, decision: { outcome: "escalated", to: "master" } })
 

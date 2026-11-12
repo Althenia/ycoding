@@ -48,7 +48,6 @@ const makeRuntime = Effect.gen(function* () {
     db: database.db, events, coordination, sessions, execution: yield* SessionExecution.Service,
     orchestration: yield* SessionOrchestration.Service,
     decisions: { pending: () => Effect.succeed([]) } as never,
-    autonomy: { decisionMode: () => Effect.succeed("manual") },
     validateModel: (_sessionID, model) =>
       unavailableModels.has(model.id) ? Effect.fail(new CoordinationRuntime.RefusedError({ message: `Model ${model.id} is not available` })) : Effect.void,
     jobs: { list: () => Effect.succeed([]), outstandingSessions: () => Effect.succeed(new Set<SessionSchema.ID>()) },

@@ -565,7 +565,7 @@ export const layer = Layer.effect(
                     .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
                   if (authorization === undefined) return { ...base, outcome: "stale" as const, settled: false }
                   const mode = yield* DecisionChoice.decisionMode(autonomy, sessionID, "answers")
-                  if (mode === "manual" && input.goal === undefined)
+                  if (mode === "manual" && input.goal === undefined && input.answer === undefined)
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:manual-answers" }
                   const fromGoal = input.goal !== undefined
                   if (fromGoal) {
@@ -639,13 +639,11 @@ export const layer = Layer.effect(
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "refused" }
                   }
                   const native =
-                    input.answer === undefined || mode === "auto"
+                    input.answer === undefined
                       ? yield* restore(
                           decisionAnswer(decision, sessionID, entry.form, { autoAnswer: mode === "auto", yolo: mode === "yolo" }),
                         )
                       : undefined
-                  if (native?.type === "answer" && input.answer !== undefined && Hash.json(input.answer) !== Hash.json(native.answer))
-                    return { ...base, outcome: "escalated" as const, settled: false, reason: "answer-not-deterministic" }
                   const outcome: SleepOutcome =
                     native?.type === "defer"
                       ? native

@@ -24,7 +24,6 @@ import { AbsolutePath } from "../schema"
 import { Hash } from "../util/hash"
 import { CoordinationDecisions } from "./coordination-decisions"
 import { SessionEvent } from "./event"
-import { SessionAutonomy } from "./autonomy"
 import { SessionExecution } from "./execution"
 import { SessionHistory } from "./history"
 import { SessionMessage } from "./message"
@@ -134,7 +133,7 @@ export interface EscalateResult {
   readonly decision: CoordinationDecisions.EscalateResult
 }
 
-export type Delegation = "routine" | "decline-only" | "escalate" | `explicit-decision:${string}`
+export type Delegation = "routine" | "decline-only" | `explicit-decision:${string}`
 
 export type RequestDetail =
   | { readonly kind: "permission"; readonly requestID: string; readonly fingerprint: string; readonly action: string; readonly resources: ReadonlyArray<string>; readonly delegation: Delegation; readonly coordinationEscalation?: Coordination.Escalation }
@@ -190,7 +189,6 @@ export interface Options {
   readonly events: EventRuntime.Interface
   readonly coordination: Pick<CoordinationService.Interface, "get" | "list" | "scopeOf" | "memberOf" | "accessOf" | "withOwnership" | "activate" | "pause" | "setOwner" | "addMember">
   readonly decisions: Pick<CoordinationDecisions.Interface, "pending" | "evaluate" | "escalate">
-  readonly autonomy: Pick<SessionAutonomy.Interface, "decisionMode">
   readonly execution: Pick<SessionExecution.Interface, "active" | "wake" | "interrupt">
   readonly sessions: Pick<Session.Interface, "create" | "get" | "outstanding">
   readonly orchestration: Pick<SessionOrchestration.Interface, "notice">
@@ -231,7 +229,7 @@ export const authorizeMember = Effect.fn("CoordinationRuntime.authorizeMember")(
 const clip = (text: string) => (text.length > maxExcerpt ? `${text.slice(0, maxExcerpt - 1)}…` : text)
 
 export function make(options: Options): Interface & { readonly handle: (event: HandledEvent) => Effect.Effect<void>; readonly recover: () => Effect.Effect<void> } {
-  const { db, events, coordination, decisions, execution, sessions, orchestration, jobs, autonomy } = options
+  const { db, events, coordination, decisions, execution, sessions, orchestration, jobs } = options
   const senders = new Map<SessionSchema.ID, SessionSchema.ID>()
   const sendLock = KeyedMutex.makeUnsafe<Coordination.GroupID>()
 
@@ -728,7 +726,7 @@ export function make(options: Options): Interface & { readonly handle: (event: H
     const item = (yield* decisions.pending({ groupID: scope.groupID, coordinatorSessionID: caller, targetSessionID: input.sessionID, limit: Coordination.maxPending }))
       .find((pending) => (pending.kind === "question" ? pending.form.id : pending.request.id) === input.requestID)
     if (item === undefined) return yield* refuse(`Request ${input.requestID} is not pending for Session ${input.sessionID}`)
-    return requestDetail(item, (yield* DecisionChoice.decisionMode(autonomy, input.sessionID, "answers")) === "manual")
+    return requestDetail(item)
   })
 
   const memberEvent = Effect.fnUntraced(function* (
@@ -936,10 +934,10 @@ export function make(options: Options): Interface & { readonly handle: (event: H
 const text = (value: string, limit = 500) => DecisionChoice.redactText(value).slice(0, limit)
 const boundedResources = (resources: ReadonlyArray<string>) => resources.slice(0, 20).map((resource) => text(resource))
 
-function requestDetail(item: CoordinationDecisions.PendingSnapshot, manualAnswers: boolean): RequestDetail {
+function requestDetail(item: CoordinationDecisions.PendingSnapshot): RequestDetail {
   const escalation = (value: Coordination.Escalation | undefined) => CoordinationEscalation.redacted(value)
   if (item.kind === "question") {
-    const explicit = CoordinationDecisions.explicitDecisionReason({
+    const explicit = CoordinationDecisions.coordinatorDecisionReason({
       kind: "question", action: "question", resources: [],
       metadata: {
         requireExplicitDecision: item.form.metadata?.requireExplicitDecision,
@@ -956,13 +954,13 @@ function requestDetail(item: CoordinationDecisions.PendingSnapshot, manualAnswer
         ...("required" in field && field.required !== undefined ? { required: field.required } : {}),
         ...("options" in field && field.options !== undefined ? { options: field.options.slice(0, 20).map((option) => text(typeof option === "string" ? option : option.value, 200)) } : {}),
       })),
-      delegation: explicit ?? (manualAnswers ? "explicit-decision:manual-answers" : "routine"), ...escalation(item.form.coordinationEscalation),
+      delegation: explicit ?? "routine", ...escalation(item.form.coordinationEscalation),
     }
   }
   const request = item.request
-  const routine = CoordinationDecisions.routineEligible({ kind: item.kind, action: request.action, resources: request.resources })
+  const routine = CoordinationDecisions.coordinatorRoutine({ kind: item.kind, action: request.action, resources: request.resources })
   if (item.kind === "permission") {
-    const explicit = CoordinationDecisions.explicitDecisionReason({ kind: "permission", action: request.action, resources: request.resources, metadata: request.metadata })
+    const explicit = CoordinationDecisions.coordinatorDecisionReason({ kind: "permission", action: request.action, resources: request.resources, metadata: request.metadata })
     return {
       kind: "permission", requestID: request.id, fingerprint: item.fingerprint, action: request.action,
       resources: boundedResources(request.resources), delegation: explicit ?? (routine ? "routine" : "decline-only"),
@@ -970,12 +968,12 @@ function requestDetail(item: CoordinationDecisions.PendingSnapshot, manualAnswer
     }
   }
   const review = item.request
-  const explicit = CoordinationDecisions.explicitDecisionReason({ kind: "review", action: review.action, resources: review.resources, metadata: review.metadata, hardReview: review.hardReview, ruleIDs: review.ruleIDs })
+  const explicit = CoordinationDecisions.coordinatorDecisionReason({ kind: "review", action: review.action, resources: review.resources, metadata: review.metadata, hardReview: review.hardReview, ruleIDs: review.ruleIDs, standard: review.standard })
   return {
     kind: "review", requestID: review.id, fingerprint: item.fingerprint, action: review.action,
     resources: boundedResources(review.resources), ruleIDs: review.ruleIDs.slice(0, 20), reason: text(review.reason),
     hardReview: review.hardReview === true, standard: review.standard,
-    delegation: explicit ?? (routine ? "routine" : review.standard ? "decline-only" : "escalate"),
+    delegation: explicit ?? (routine ? "routine" : "decline-only"),
     ...escalation(review.coordinationEscalation),
   }
 }
@@ -987,7 +985,6 @@ const layer: Layer.Layer<
   never,
   | CoordinationService.Service
   | CoordinationDecisions.Service
-  | SessionAutonomy.Service
   | Database.Service
   | EventRuntime.Service
   | SessionExecution.Service
@@ -1002,7 +999,6 @@ const layer: Layer.Layer<
     const coordination = yield* CoordinationService.Service
     const database = yield* Database.Service
     const decisions = yield* CoordinationDecisions.Service
-    const autonomy = yield* SessionAutonomy.Service
     const events = yield* EventRuntime.Service
     const execution = yield* SessionExecution.Service
     const sessions = yield* Session.Service
@@ -1025,7 +1021,7 @@ const layer: Layer.Layer<
       )
     })
     const jobs = yield* Job.Service
-    const runtime = make({ db: database.db, events, coordination, decisions, autonomy, execution, sessions, orchestration, validateModel, jobs })
+    const runtime = make({ db: database.db, events, coordination, decisions, execution, sessions, orchestration, validateModel, jobs })
     yield* events.subscribe(handledEvents).pipe(Stream.runForEach(runtime.handle), Effect.forkScoped({ startImmediately: true }))
     yield* runtime.recover()
     return Service.of(runtime)
@@ -1035,5 +1031,5 @@ const layer: Layer.Layer<
 export const node: Node.GlobalNode<Service> = makeGlobalNode({
   service: Service,
   layer,
-  deps: [CoordinationService.node, CoordinationDecisionRuntime.node, SessionAutonomy.node, Database.node, EventRuntime.node, SessionExecution.node, Session.node, SessionOrchestration.node, SessionStore.node, LocationServiceMap.node, Job.node],
+  deps: [CoordinationService.node, CoordinationDecisionRuntime.node, Database.node, EventRuntime.node, SessionExecution.node, Session.node, SessionOrchestration.node, SessionStore.node, LocationServiceMap.node, Job.node],
 })

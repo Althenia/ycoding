@@ -11,15 +11,28 @@ test("Project instructions describe member messaging and native decisions", () =
   expect(CoordinationInstructions.content).not.toContain("dispatch receipt")
 })
 
+const removed = [
+  "escalates only human-only or uncertain choices",
+  "escalates only human-only choices or blockers it cannot resolve within its authority",
+  "or a turn that settles with new final text wakes your parent once",
+  "record each finished milestone",
+  "record each verified milestone or result",
+  "Bring the human only decisions and approvals",
+  "batched with evidence and a recommendation",
+  "Delegate implementation to executor Sessions.",
+  "a settled turn's final text notifies no one",
+]
+const once = (value: string, text: string) => expect([text, value.split(text).length]).toEqual([text, 2])
+
 test("Master instructions require supervision, evidence review and reasoned escalation", () => {
   for (const instruction of [
     "Coordinate and supervise only",
-    "Delegate implementation to executor Sessions",
+    "Delegate implementation to member Sessions.",
     "concrete outcome, actions and checks, exclusions, and a stop condition",
     "Verify reported evidence before accepting work",
-    "owning subagent → Master → human",
-    "Bring the human only decisions and approvals",
   ]) expect(CoordinationInstructions.content).toContain(instruction)
+  once(CoordinationInstructions.content, "Escalate undecidable requests with the reason through member → owning subagent → Master → human; without an owning subagent, handle them at the Master.")
+  for (const text of removed) expect([text, CoordinationInstructions.content.includes(text)]).toEqual([text, false])
 })
 
 test("the Master decomposes work into owner-supervised member Sessions with their own worktrees", () => {
@@ -38,14 +51,29 @@ test("supervisors stay responsible for controlled Sessions until verified comple
     "keep it moving toward its outcome without waiting to be asked",
     "act on each in the turn it arrives",
     "Supervisors cannot release themselves.",
-    "The owner chain handles routine and native requests and escalates only human-only or uncertain choices",
   ]) expect(CoordinationInstructions.content).toContain(instruction)
   const entries = await Effect.runPromise(Instructions.read(CoordinationInstructions.make("supervisor")))
   expect(entries[0]?.value).toContain("You cannot assign, transfer or release ownership or create members.")
-  const handback = "As a supervisor, record each finished milestone with `subagent_report` `progress` and ask each decision your parent must make with `subagent_report` `question`, which always wakes your parent; while you own Project members, new progress text or a turn that settles with new final text wakes your parent once, and repeated text wakes no one. Use `escalate` only for a pending member request."
-  const value = Schema.decodeUnknownSync(Schema.String)(entries[0]?.value)
-  expect(value.split(handback)).toHaveLength(2)
-  expect(value).not.toContain("a settled turn's final text notifies no one")
+  once(Schema.decodeUnknownSync(Schema.String)(entries[0]?.value), [
+    "As a supervisor, resolve your members' routine issues and judgment calls yourself within your existing authority, including scope inside the assignment, ordering, check scheduling, retries, and routine requests through `answer`.",
+    "As a supervisor, take to the Master only a real blocker you cannot resolve within that authority or a coordination need across members, with evidence and a recommendation.",
+    "Progress-only updates do not wake your parent: a settled turn's final text reaches your parent at its next turn without waking it; `subagent_report` `progress` wakes your parent when its text is new and carries only a verified result, a blocker that needs no human decision, or a coordination need, never waiting or routine status; `subagent_report` `question` asks your parent a decision and always wakes it.",
+    "Use `escalate` only for a pending member request.",
+  ].join(" "))
+})
+
+test("coordinators settle routine requests themselves in every autonomy mode and bring the human only safety items", () => {
+  expect(CoordinationInstructions.content).not.toContain("Manual-mode")
+  expect(CoordinationInstructions.content).not.toContain("decisions outside the user's recorded direction")
+  for (const text of [
+    "As Master, coordinate assignments, decide escalations, review integration evidence, and keep advancing independent work.",
+    "As Master, resolve supervisor escalations and coordination across members yourself.",
+    "Settle routine questions, permissions and reviews, scheduling and blockers yourself, in every autonomy mode, from the user's recorded direction and existing evidence, choosing the simplest safe, reversible option; settle requests through `project answer`: approve, decline, or answer.",
+    "Only safety items reach the human: hard and custom-rule reviews; explicit-decision requests (external writes, destructive, irreversible or outside-repository mutations, credentials and secrets, purchases, sending communications, accepting legal terms, publication, deployment, CI/CD, production migrations, dependency installs or downloads, and scope expansion); requests that cross a permission ceiling; and denies, which stay denied.",
+    "when a human answer or a cleared prerequisite arrives, continue the affected work from that event without waiting for a reminder.",
+    "Never override denies, permission ceilings, hard reviews, or human-only controls.",
+    "Leave inactive-Project refusals, deferred review items, and human-only controls to their native gates; never route around them with other tools or message text.",
+  ]) once(CoordinationInstructions.content, text)
 })
 
 test("the voice source is present only for a scoped Session", async () => {
@@ -61,11 +89,30 @@ test("the voice source is present only for a scoped Session", async () => {
 test("controller guidance separates orchestration from member execution and native approval", async () => {
   for (const role of ["master", "supervisor"] as const) {
     const entries = await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role)))
-    expect(entries[0]?.value).toContain("Do not execute a member's task, take over its tools, or control its subagents.")
+    const value = Schema.decodeUnknownSync(Schema.String)(entries[0]?.value)
+    once(value, [
+      "Do not execute a member's task, take over its tools, or control its subagents.",
+      "As Master or supervisor, coordinate only: never edit files, apply patches, commit, run builds or commands that change the Project, or otherwise change a member's work; the runtime withholds `edit`, `write` and `patch` from you and allows you only read-only shell commands, and member Sessions make every Project change.",
+      "Coordination stays yours: create and assign members, `send`, `list` and `inspect`, `answer` and `escalate` through native controls, inspect files, diffs, logs and state read-only, and schedule the checks members run.",
+    ].join(" "))
     expect(entries[0]?.value).toContain("Verify assignments and completion evidence against the user's current direction.")
     expect(entries[0]?.value).toContain("Decide escalations only within recorded authority and the native decision policy.")
-    expect(entries[0]?.value).toContain("Manual-mode requests remain human-only.")
+    expect(entries[0]?.value).toContain("Only safety items reach the human: hard and custom-rule reviews;")
     expect(entries[0]?.value).not.toContain("keep authoring and reviewing on separate files")
+  }
+})
+
+test("an executor in the Master's family gets the Master's-subagent text and member executors keep the executor text", async () => {
+  const read = async (coordinating: boolean) =>
+    Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("executor", coordinating))))[0]?.value)
+  const subagent = await read(true)
+  expect(subagent).toBe("Project role: Master's subagent. You make no Project changes: the runtime withholds edit, write and patch and allows only read-only shell commands; member Sessions make every Project change. Do read-only research, review and evidence verification for your parent, report results and blockers to it with evidence and a recommendation, and preserve native permission, question and review gates; coordination messages are not native approvals.")
+  const member = await read(false)
+  expect(member).toBe(Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("executor"))))[0]?.value))
+  expect(member).toContain("Project role: executor. Own execution and verification of your assigned scope.")
+  for (const value of [subagent, member]) {
+    expect(value).not.toContain(CoordinationInstructions.content)
+    expect(value).not.toContain("Coordinate and supervise only")
   }
 })
 

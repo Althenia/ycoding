@@ -146,7 +146,7 @@ const fixtureTools = AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, To
   Layer.tap((context) => {
     const registry = Context.get(context, ToolRegistry.Service)
     return registry.register(
-      Object.fromEntries(toolNamesFixture.map((name) => [name, fixtureTool(name)])),
+      Object.fromEntries(toolNamesFixture.map((name) => [name, name === "patch" || name === "write" ? Tool.withPermission(fixtureTool(name), "edit") : fixtureTool(name)])),
       { codemode: false },
     )
   }),
@@ -425,12 +425,13 @@ describe("project tool and model request materialization", () => {
     }),
   )
 
-  it.effect("a Master keeps every ordinary tool, gains the project tool, and gets the Master instructions", () =>
+  it.effect("a Master gains the project tool, keeps shell, read and MCP tools without the file-edit tools, and gets the Master instructions", () =>
     Effect.gen(function* () {
       yield* setupProject
       const request = yield* requestFor(otherSessionID, "Coordinate the team")
       const names = toolNames(request)
-      expect(names).toEqual(expect.arrayContaining(["project", "shell", "patch", "edit", "write", "read", "mcp_fixture_update"]))
+      expect(names).toEqual(expect.arrayContaining(["project", "shell", "read", "mcp_fixture_update"]))
+      for (const name of ["edit", "write", "patch"]) expect(names).not.toContain(name)
       expect(JSON.stringify(request)).toContain("Project notifications")
       expect(JSON.stringify(request?.system)).toContain("Coordinate and supervise only")
     }),
@@ -445,21 +446,32 @@ describe("project tool and model request materialization", () => {
       yield* insertSession(memberChild, sessionID)
       const masterRequest = yield* requestFor(masterChild, "Drive the member")
       expect(toolNames(masterRequest)).not.toContain("project")
+      for (const name of ["edit", "write", "patch"]) expect(toolNames(masterRequest)).not.toContain(name)
       expect(JSON.stringify(masterRequest?.system)).not.toContain("Coordinate and supervise only")
+      expect(JSON.stringify(masterRequest?.system)).toContain("Project role: Master's subagent. You make no Project changes")
+      expect(JSON.stringify(masterRequest?.system)).not.toContain("Project role: executor")
       yield* fixture.coordination.setOwner(fixture.group.id, { sessionID, ownerSessionID: masterChild })
       const supervising = yield* requestFor(masterChild, "Supervise the member")
       expect(toolNames(supervising)).toContain("project")
+      for (const name of ["edit", "write", "patch"]) expect(toolNames(supervising)).not.toContain(name)
       expect(JSON.stringify(supervising)).toContain("Project role: supervisor")
       const executor = Session.ID.make("ses_coord_owned_executor")
       yield* insertSession(executor, masterChild)
-      expect(toolNames(yield* requestFor(executor, "Implement the assignment"))).not.toContain("project")
+      const executorRequest = yield* requestFor(executor, "Implement the assignment")
+      expect(toolNames(executorRequest)).not.toContain("project")
+      expect(toolNames(executorRequest)).toContain("shell")
+      expect(toolNames(executorRequest)).not.toContain("edit")
       yield* fixture.coordination.setOwner(fixture.group.id, { sessionID })
-      expect(toolNames(yield* requestFor(masterChild, "After release"))).not.toContain("project")
+      const released = yield* requestFor(masterChild, "After release")
+      expect(toolNames(released)).not.toContain("project")
+      expect(toolNames(released)).not.toContain("edit")
       const memberRequest = yield* requestFor(sessionID, "Member work")
       expect(toolNames(memberRequest)).not.toContain("project")
+      expect(toolNames(memberRequest)).toContain("edit")
       expect(JSON.stringify(memberRequest?.system)).not.toContain("Coordinate and supervise only")
       const childRequest = yield* requestFor(memberChild, "Member child work")
       expect(toolNames(childRequest)).not.toContain("project")
+      expect(toolNames(childRequest)).toContain("edit")
       expect(JSON.stringify(childRequest?.system)).not.toContain("Coordinate and supervise only")
       expect(toolNames(yield* requestFor(memberChild, "Again"))).toContain("shell")
     }),

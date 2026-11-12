@@ -9,16 +9,17 @@ import { AppNodeBuilder } from "../src/effect/app-node-builder"
 import { LayerNode } from "../src/effect/layer-node"
 import { EventRuntime } from "../src/event"
 import { EventTable } from "../src/event/sql"
+import { KV } from "../src/kv"
 import { CoordinationService } from "../src/coordination/index"
 import { CoordinationGroupTable, CoordinationMemberTable } from "../src/coordination/sql"
 import { Session } from "../src/session"
 import { SessionExecution } from "../src/session/execution"
 
 const runtime = AppNodeBuilder.build(
-  LayerNode.group([Database.node, EventRuntime.node, Session.node, CoordinationService.node]),
+  LayerNode.group([Database.node, EventRuntime.node, KV.node, Session.node, CoordinationService.node]),
   [[SessionExecution.node, SessionExecution.noopLayer]],
 )
-type Services = Database.Service | EventRuntime.Service | Session.Service | CoordinationService.Service
+type Services = Database.Service | EventRuntime.Service | KV.Service | Session.Service | CoordinationService.Service
 const run = <A, E>(body: Effect.Effect<A, E, Services>, layer: Layer.Layer<Services, unknown> = runtime) =>
   Effect.runPromise(body.pipe(Effect.provide(layer), Effect.scoped))
 
@@ -291,17 +292,38 @@ describe("Project scope", () => {
       expect(seen).toHaveLength(3)
     })))
 
-  test("a backend restart leaves every Project inactive", () =>
+  test("a backend restart keeps every Project the user did not pause active", () =>
+    run(Effect.gen(function* () {
+      const ids = yield* setup
+      const service = yield* CoordinationService.Service
+      const group = yield* create(ids)
+      const idle = yield* service.create({ name: "Idle", masterSessionID: ids.other.id, memberSessionIDs: [ids.spare.id] })
+      yield* service.activate(group.id)
+      const restarted = yield* CoordinationService.Service.pipe(Effect.provide(Layer.fresh(CoordinationService.layer)))
+      for (const id of [group.id, idle.id]) {
+        expect((yield* restarted.get(id)).active).toBe(true)
+        expect((yield* restarted.get(id)).pausedReason).toBeUndefined()
+      }
+      expect((yield* restarted.scopeOf(ids.master.id))?.active).toBe(true)
+    })))
+
+  test("a user-paused Project stays paused across a restart until its Master is prompted again", () =>
     run(Effect.gen(function* () {
       const ids = yield* setup
       const service = yield* CoordinationService.Service
       const group = yield* create(ids)
       yield* service.activate(group.id)
-      expect((yield* service.get(group.id)).active).toBe(true)
-      const restarted = yield* CoordinationService.Service.pipe(Effect.provide(Layer.fresh(CoordinationService.layer)))
+      yield* ids.sessions.interrupt(ids.master.id)
+      const restart = () => CoordinationService.Service.pipe(Effect.provide(Layer.fresh(CoordinationService.layer)))
+      const restarted = yield* restart()
       expect((yield* restarted.get(group.id)).active).toBe(false)
-      expect((yield* restarted.get(group.id)).pausedReason).toBe("restart")
+      expect((yield* restarted.get(group.id)).pausedReason).toBe("interrupted")
       expect((yield* restarted.scopeOf(ids.master.id))?.active).toBe(false)
+      yield* restarted.activate(group.id)
+      expect((yield* restarted.get(group.id)).active).toBe(true)
+      const again = yield* restart()
+      expect((yield* again.get(group.id)).active).toBe(true)
+      expect((yield* again.get(group.id)).pausedReason).toBeUndefined()
     })))
 })
 

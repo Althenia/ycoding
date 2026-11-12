@@ -11,6 +11,7 @@ import { MCP } from "../mcp"
 import { Permission } from "../permission"
 import { PluginRuntime } from "../plugin/runtime"
 import { SessionGuardrail } from "../session/guardrail"
+import { SessionMessage } from "../session/message"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { ToolRegistry } from "./registry"
@@ -30,7 +31,7 @@ export const layer = Layer.effectDiscard(
     const permission = yield* Permission.Service
     const guardrail = yield* SessionGuardrail.Service
     const plugin = yield* PluginRuntime.Service
-    const runtime = { job: yield* Job.Service, session: plugin.session }
+    const runtime = { job: yield* Job.Service, orchestration: plugin.orchestration }
     const scope = yield* Scope.Scope
     const lock = Semaphore.makeUnsafe(1)
     let current: Scope.Closeable | undefined
@@ -140,11 +141,13 @@ export const layer = Layer.effectDiscard(
                             : state === "error"
                               ? (result.info!.error ?? "MCP tool failed")
                               : "MCP tool cancelled"
-                        return runtime.session.synthetic({
+                        return runtime.orchestration.notice({
+                          id: SessionMessage.ID.make(`msg_mcp_notice_${Hash.sha256(`${context.sessionID}\0${job.id}`).slice(0, 24)}`),
                           sessionID: context.sessionID,
                           text: `<mcp id="${context.callID}" state="${state}" tool="${name(tool.server, tool.name)}">\n${text}\n</mcp>`,
                           description: tool.name,
                           metadata: { source: "mcp", state },
+                          resume: true,
                         })
                       }),
                       Effect.forkIn(scope, { startImmediately: true }),

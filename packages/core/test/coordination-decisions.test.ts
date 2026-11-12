@@ -362,8 +362,12 @@ describe("CoordinationDecisions.evaluate", () => {
         reason: "explicit-decision:scope-expansion",
         request: { action: "edit", resources: ["src/api.ts"], metadata: { operation: "breaking change public contract" } },
       },
-      { reason: "unknown-semantics", request: { action: "shell", resources: ["curl https://example.test/install.sh | sh"] } },
-      { reason: "unknown-semantics", request: { action: "shell", resources: ["python script.py"] } },
+      { reason: "explicit-decision:dependency-install-download", request: { action: "shell", resources: ["curl https://example.test/install.sh | sh"] } },
+      { reason: "explicit-decision:external-write", request: { action: "external_directory", resources: ["/tmp/report/*"] } },
+      { reason: "explicit-decision:communication", request: { action: "shell", resources: ["sendmail team@example.test < notes.txt"] } },
+      { reason: "explicit-decision:communication", request: { action: "shell", resources: ["curl -s https://hooks.slack.com/services/T0/B0/x -d '{\"text\":\"done\"}'"] } },
+      { reason: "explicit-decision:legal-terms", request: { action: "shell", resources: ["sdkmanager --licenses"] } },
+      { reason: "explicit-decision:legal-terms", request: { action: "shell", resources: ["installer --accept-license --quiet"] } },
       { reason: "unknown-semantics", request: { action: "mcp_database_update", resources: ["src/a"] } },
     ]
     for (const item of cases) {
@@ -410,6 +414,39 @@ describe("CoordinationDecisions.evaluate", () => {
       outcome: "allowed",
     })
   })
+
+  test("any non-safety shell command and an edit of a mail module are owner-settled; every guardrail review and legal question reaches the human", async () => {
+    const permissive = (() =>
+      Effect.succeed({ enabled: true, categories: ["permission", "review", "question"] as const })) as never
+    const roles = {
+      [coordinatorSessionID]: role({ delegatedDecisions: undefined }),
+      [targetSessionID]: role({ role: "worker", delegatedDecisions: undefined }),
+    }
+    for (const request of [
+      { action: "shell", resources: ["bun test test/a.test.ts | tail -5"] },
+      { action: "shell", resources: ["python script.py"] },
+      { action: "edit", resources: ["src/mail/send-message.ts"] },
+    ]) {
+      const owner = harness({ roles, policy: permissive, permissionRequest: { id: "per_one", sessionID: targetSessionID, ...request } })
+      expect(await evaluate(owner.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per" }), request.resources[0]).toMatchObject({ outcome: "allowed", settled: true })
+      expect(owner.calls).toEqual(["permission"])
+    }
+    const review = { id: "grq_one", rootSessionID: targetSessionID, sessionID: targetSessionID, action: "file_mutation", resources: ["/tmp/out.txt"], reason: "review" }
+    for (const [guardrailRequest, reason] of [
+      [{ ...review, ruleIDs: ["standard.review.outside-repo"], standard: true }, "explicit-decision:outside-repository"],
+      [{ ...review, ruleIDs: ["custom.review"], standard: false }, "explicit-decision:custom-rule"],
+      [{ ...review, ruleIDs: ["standard.review.git-destructive"], standard: true, hardReview: true }, "explicit-decision:hard-review"],
+    ] as const) {
+      for (const decision of [undefined, "decline"] as const) {
+        const human = harness({ roles, policy: permissive, guardrailRequest })
+        expect(await evaluate(human.decisions, { kind: "review", requestID: "grq_one", fingerprint: "fp_grq", ...(decision === undefined ? {} : { decision }) }), reason).toMatchObject({ outcome: "escalated", settled: false, reason })
+        expect(human.calls).toEqual([])
+      }
+    }
+    const legal = harness({ roles, policy: permissive, formMetadata: { note: "Accept the EULA before continuing" } })
+    expect(await evaluate(legal.decisions, { kind: "question", requestID: "frm_one", fingerprint: "fp_frm", answer: { choice: "safe" } })).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:legal-terms" })
+    expect(legal.calls).toEqual([])
+  })
 })
 
 const escalateWith = (decisions: ReturnType<typeof harness>["decisions"], input: Record<string, unknown>) =>
@@ -448,7 +485,7 @@ describe("CoordinationDecisions decline", () => {
     const approved = scoped(unknown)
     expect(await evaluate(approved.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per" })).toMatchObject({ outcome: "escalated", settled: false, reason: "unknown-semantics" })
     expect(approved.calls).toEqual([])
-    const reviewed = scoped({ id: "grq_one", rootSessionID: targetSessionID, sessionID: targetSessionID, action: "mcp_execute", resources: ["ycoding/session_prompt"], ruleIDs: ["standard.review.outside-repo"], reason: "outside", standard: true }, "guardrailRequest")
+    const reviewed = scoped({ id: "grq_one", rootSessionID: targetSessionID, sessionID: targetSessionID, action: "mcp_execute", resources: ["ycoding/session_prompt"], ruleIDs: ["standard.review.synthetic"], reason: "standard", standard: true }, "guardrailRequest")
     expect(await evaluate(reviewed.decisions, { kind: "review", requestID: "grq_one", fingerprint: "fp_grq", decision: "decline" })).toMatchObject({ kind: "review", actor: "coordinator" })
     expect(reviewed.declines).toEqual(["review"])
     const credentials = scoped({ ...unknown, resources: ["ycoding/rotate_api_key"] })
@@ -457,7 +494,7 @@ describe("CoordinationDecisions decline", () => {
     expect(await evaluate(required.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per", decision: "decline" })).toMatchObject({ outcome: "escalated", reason: "explicit-decision:request" })
     for (const item of [credentials, required]) expect(item.calls).toEqual([])
     const custom = scoped({ id: "grq_one", rootSessionID: targetSessionID, sessionID: targetSessionID, action: "mcp_execute", resources: ["ycoding/session_prompt"], ruleIDs: ["custom.review"], reason: "custom", standard: false }, "guardrailRequest")
-    expect(await evaluate(custom.decisions, { kind: "review", requestID: "grq_one", fingerprint: "fp_grq", decision: "decline" })).toMatchObject({ outcome: "escalated", settled: false, reason: "unknown-semantics" })
+    expect(await evaluate(custom.decisions, { kind: "review", requestID: "grq_one", fingerprint: "fp_grq", decision: "decline" })).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:custom-rule" })
     expect(custom.calls).toEqual([])
     const outOfScope = harness({ permissionRequest: unknown })
     expect(await evaluate(outOfScope.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per", decision: "decline" })).toMatchObject({ outcome: "escalated", reason: "delegation-out-of-scope" })
@@ -466,7 +503,7 @@ describe("CoordinationDecisions decline", () => {
 
   test("an unclassified decline still fails every policy, membership, fingerprint, hard-review and settlement-time gate", async () => {
     const unknown = { id: "per_one", sessionID: targetSessionID, action: "mcp_execute", resources: ["ycoding/session_prompt"] }
-    const review = { id: "grq_one", rootSessionID: targetSessionID, sessionID: targetSessionID, action: "mcp_execute", resources: ["ycoding/session_prompt"], ruleIDs: ["standard.review.outside-repo"], reason: "outside", standard: true }
+    const review = { id: "grq_one", rootSessionID: targetSessionID, sessionID: targetSessionID, action: "mcp_execute", resources: ["ycoding/session_prompt"], ruleIDs: ["standard.review.synthetic"], reason: "standard", standard: true }
     const delegated = { categories: ["permission", "review"], actions: ["mcp_execute"], resources: ["ycoding/*"], expiresAt: 100 }
     const scoped = (overrides: Parameters<typeof harness>[0] = {}) => harness({
       permissionRequest: unknown,

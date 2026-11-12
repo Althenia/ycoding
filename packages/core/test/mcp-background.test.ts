@@ -22,9 +22,17 @@ import { Hash } from "@ycoding-ai/core/util/hash"
 
 const sessionID = Session.ID.make("ses_mcp_background")
 
+type Notification = {
+  route: "session.synthetic" | "orchestration.notice"
+  id?: string
+  text: string
+  description?: string
+  resume?: boolean
+}
+
 const state: {
   latch?: Deferred.Deferred<void>
-  notification?: Deferred.Deferred<{ text: string; description?: string }>
+  notification?: Deferred.Deferred<Notification>
   calls: Array<{ name: string; args?: Record<string, unknown> }>
   digests: string[]
   permissionDigests: string[]
@@ -98,6 +106,10 @@ const runtime = Layer.effect(
       data: { text: "MCP tool completed" },
       delivery: "steer",
     })
+    const notify = (notification: Notification) =>
+      state.notification
+        ? Deferred.succeed(state.notification, notification).pipe(Effect.as(synthetic))
+        : Effect.succeed(synthetic)
     return PluginRuntime.Service.of({
       session: {
         get: unavailable,
@@ -108,12 +120,7 @@ const runtime = Layer.effect(
         command: unavailable,
         resume: unavailable,
         interrupt: unavailable,
-        synthetic: (input) =>
-          state.notification
-            ? Deferred.succeed(state.notification, { text: input.text, description: input.description }).pipe(
-                Effect.as(synthetic),
-              )
-            : Effect.succeed(synthetic),
+        synthetic: (input) => notify({ route: "session.synthetic", id: input.id, text: input.text, description: input.description, resume: input.resume }),
         compact: unavailable,
       },
       job: jobs,
@@ -135,7 +142,7 @@ const runtime = Layer.effect(
         settle: unavailable,
         background: unavailable,
         teamView: unavailable,
-        notice: unavailable,
+        notice: (input) => notify({ route: "orchestration.notice", id: input.id, text: input.text, description: input.description, resume: input.resume }),
         recover: unavailable(),
         resolveRecovery: unavailable,
       },
@@ -193,7 +200,7 @@ describe("MCP tool backgrounding", () => {
     Effect.gen(function* () {
       reset()
       state.latch = yield* Deferred.make<void>()
-      state.notification = yield* Deferred.make<{ text: string; description?: string }>()
+      state.notification = yield* Deferred.make<Notification>()
       const jobs = yield* Job.Service
       const registry = yield* ToolRegistry.Service
       yield* waitForTool(registry, "lean-ctx_ctx_shell")
@@ -212,9 +219,12 @@ describe("MCP tool backgrounding", () => {
       expect((yield* jobs.get("call_mcp_background"))?.title).toBe("ctx_shell (command, token)")
 
       yield* Deferred.succeed(state.latch, undefined)
-      expect(yield* Deferred.await(state.notification)).toMatchObject({
+      expect(yield* Deferred.await(state.notification)).toEqual({
+        route: "orchestration.notice",
+        id: `msg_mcp_notice_${Hash.sha256(`${sessionID}\0call_mcp_background`).slice(0, 24)}`,
         description: "ctx_shell",
-        text: expect.stringContaining('<mcp id="call_mcp_background" state="completed" tool="lean-ctx_ctx_shell">'),
+        text: '<mcp id="call_mcp_background" state="completed" tool="lean-ctx_ctx_shell">\nfull MCP output\n</mcp>',
+        resume: true,
       })
     }),
   )
@@ -271,7 +281,7 @@ describe("MCP tool backgrounding", () => {
     Effect.gen(function* () {
       reset()
       state.latch = yield* Deferred.make<void>()
-      state.notification = yield* Deferred.make<{ text: string; description?: string }>()
+      state.notification = yield* Deferred.make<Notification>()
       const jobs = yield* Job.Service
       const registry = yield* ToolRegistry.Service
       const scope = yield* Scope.Scope

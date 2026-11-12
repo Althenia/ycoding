@@ -7,8 +7,8 @@ import { makeGlobalNode } from "../effect/app-node"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { EventRuntime } from "../event"
 import { Session } from "../session"
-import { SessionExecution } from "./execution"
 import { SessionEvent } from "./event"
+import { SessionOrchestration } from "./orchestration"
 import { SessionOrchestrationIdentity } from "./orchestration-identity"
 import { SessionTaskNotificationTable, SessionTaskTable } from "./sql"
 import { SessionTask } from "./task"
@@ -53,7 +53,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const events = yield* EventRuntime.Service
-    const execution = yield* SessionExecution.Service
+    const orchestration = yield* SessionOrchestration.Service
     const sessions = yield* Session.Service
 
     const lock = KeyedMutex.makeUnsafe<string>()
@@ -87,18 +87,15 @@ const layer = Layer.effect(
           revision: notification.revision,
           excerpt: notification.excerpt ?? undefined,
         }
-        return sessions
-          .synthetic({
-            id,
-            sessionID: task.parent_id,
-            text: `Subagent notification:\n${JSON.stringify(data)}`,
-            description: "Subagent notification",
-            metadata: data,
-            delivery: "steer",
-            resume: false,
-          })
+        const message = {
+          id,
+          sessionID: task.parent_id,
+          text: `Subagent notification:\n${JSON.stringify(data)}`,
+          description: "Subagent notification",
+          metadata: data,
+        }
+        return (parentID === undefined ? orchestration.notice({ ...message, resume: notification.type !== "handback" }) : sessions.synthetic({ ...message, resume: false }))
           .pipe(
-            Effect.andThen(parentID === undefined ? execution.wake(task.parent_id) : Effect.void),
             Effect.as("admitted" as const),
             Effect.catchTag("Session.NotFoundError", () =>
               Effect.logWarning("Parent Session missing for subagent notification").pipe(
@@ -133,11 +130,11 @@ const layer = Layer.effect(
     })
     const service = { dispatch: lock.withLock("outbox")(notifier().dispatch) }
 
-    const unsubscribe = yield* events.listen((event) =>
-      event.type === SessionEvent.Execution.Started.type
-        ? lock.withLock("outbox")(notifier(Schema.decodeUnknownSync(SessionEvent.Execution.Started.data)(event.data).sessionID).dispatch)
-        : Effect.void,
-    )
+    const unsubscribe = yield* events.listen((event) => {
+      if (event.type !== SessionEvent.Execution.Started.type) return Effect.void
+      const parentID = Schema.decodeUnknownSync(SessionEvent.Execution.Started.data)(event.data).sessionID
+      return lock.withLock(`restart\0${parentID}`)(notifier(parentID).dispatch)
+    })
     yield* Effect.addFinalizer(() => unsubscribe)
 
     yield* events.subscribe(SessionEvent.Task.Updated).pipe(
@@ -152,5 +149,5 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, EventRuntime.node, SessionExecution.node, Session.node],
+  deps: [Database.node, EventRuntime.node, SessionOrchestration.node, Session.node],
 })

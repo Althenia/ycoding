@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Cause, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { Agent } from "@ycoding-ai/core/agent"
+import { CoordinationService } from "@ycoding-ai/core/coordination/index"
 import { Database } from "@ycoding-ai/core/database/database"
 import { Decision } from "@ycoding-ai/core/decision"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -36,6 +37,7 @@ const it = testEffect(
       SessionAutonomy.node,
       PermissionSaved.node,
       Agent.node,
+      CoordinationService.node,
       Permission.node,
     ]),
     [
@@ -771,5 +773,48 @@ describe("Permission delegated settlement", () => {
       expect(yield* service.snapshot(pending.request.id)).toBeDefined()
       yield* service.reply({ requestID: pending.request.id, reply: "reject" })
       expect((yield* Fiber.join(pending.fiber).pipe(Effect.exit))._tag).toBe("Failure")
+    }))
+})
+
+describe("Project coordinator execution boundary", () => {
+  const master = Session.ID.make("ses_test")
+  const masterChild = Session.ID.make("ses_coord_master_child")
+  const member = Session.ID.make("ses_coord_member")
+  const memberChild = Session.ID.make("ses_coord_member_child")
+  const project = Effect.gen(function* () {
+    yield* setup([{ action: "*", resource: "*", effect: "allow" }])
+    const { db } = yield* Database.Service
+    for (const [id, parent] of [[member, null], [masterChild, master], [memberChild, member]] as const)
+      yield* db.insert(SessionTable).values({ id, parent_id: parent, project_id: Project.ID.global, directory: "/project", title: id, agent: "test" })
+        .onConflictDoNothing().run().pipe(Effect.orDie)
+    yield* (yield* CoordinationService.Service).create({ name: "Boundary", masterSessionID: master, memberSessionIDs: [member] })
+    const saved = yield* PermissionSaved.Service
+    yield* saved.add({ projectID: Project.ID.global, action: "edit", resources: ["*"] })
+    yield* saved.add({ projectID: Project.ID.global, action: "shell", resources: ["git commit -m x"] })
+  })
+  const outcome = (sessionID: Session.ID, action: string, resource: string) =>
+    Permission.Service.use((service) => service.assert(assertion({ sessionID, action, resources: [resource] }))).pipe(
+      Effect.match({ onFailure: (error) => error.message, onSuccess: () => "allowed" }),
+    )
+  const requests = [["edit", "src/a.ts"], ["shell", "git commit -m x"], ["shell", "echo x > f"], ["shell", "git diff"]] as const
+
+  it.effect("denies a Master-family Session's edits and mutating shell commands over agent allows and saved approvals while read-only shell keeps its normal effect", () =>
+    Effect.gen(function* () {
+      yield* project
+      const denial = "Permission denied: edit. This Session is a Project coordinator; member Sessions make Project changes."
+      for (const sessionID of [master, masterChild])
+        expect(yield* Effect.forEach(requests, ([action, resource]) => outcome(sessionID, action, resource))).toEqual([
+          denial,
+          "Permission denied: shell. This Session is a Project coordinator; member Sessions make Project changes.",
+          "Permission denied: shell. This Session is a Project coordinator; member Sessions make Project changes.",
+          "allowed",
+        ])
+    }))
+
+  it.effect("leaves member Sessions and their descendants under their normal rules", () =>
+    Effect.gen(function* () {
+      yield* project
+      for (const sessionID of [member, memberChild])
+        expect(yield* Effect.forEach(requests, ([action, resource]) => outcome(sessionID, action, resource))).toEqual(["allowed", "allowed", "allowed", "allowed"])
     }))
 })

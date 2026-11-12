@@ -165,6 +165,26 @@ export function routineEligible(input: {
   return false
 }
 
+export function coordinatorRoutine(input: Parameters<typeof routineEligible>[0]) {
+  return input.action === "shell" || routineEligible(input)
+}
+
+export function coordinatorDecisionReason(input: Parameters<typeof explicitDecisionReason>[0] & { readonly standard?: boolean }) {
+  const reason = explicitDecisionReason(input)
+  if (reason !== undefined) return reason
+  if (input.kind === "review" && (input.ruleIDs ?? []).includes("standard.review.outside-repo")) return "explicit-decision:outside-repository"
+  if (input.kind === "review" && input.standard === false) return "explicit-decision:custom-rule"
+  if (input.kind !== "question" && (readActions.has(input.action ?? "") || localWriteActions.has(input.action ?? ""))) return undefined
+  const evidence = [input.action ?? "", ...(input.resources ?? []), ...(input.ruleIDs ?? []), metadataText(input.metadata)].join("\n").toLowerCase()
+  if (input.kind !== "question" && /\b(?:curl|wget)\b[^\n]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b/.test(evidence)) return "explicit-decision:dependency-install-download"
+  if (
+    /(\bsendmail\b|(?:^|\n|[;&|]\s*)(?:mailx?|mutt)\s|\bsmtp\b|hooks\.slack\.com|chat\.postmessage|discord(?:app)?\.com\/api\/webhooks|webhook\.office\.com|\b(?:slack|discord|teams)\b[^\n]*\b(?:send|post|webhook)\b|\bsend\s+(?:an?\s+)?(?:e-?mail|message|chat))/.test(evidence)
+  )
+    return "explicit-decision:communication"
+  if (/\b(?:accept|agree)\w*[^\n]*\b(?:terms|licen[cs]es?|eulas?|agreements?)\b|sdkmanager\s+--licenses/.test(evidence)) return "explicit-decision:legal-terms"
+  return undefined
+}
+
 export function make(deps: Dependencies): Interface {
   const authorize = Effect.fnUntraced(function* (input: PendingInput, inspectMaster = false) {
     const access = yield* deps.accessOf(input.coordinatorSessionID)
@@ -242,14 +262,14 @@ export function make(deps: Dependencies): Interface {
       const snapshot = yield* deps.permission.snapshot(input.requestID as Permission.ID)
       if (snapshot === undefined || snapshot.request.sessionID !== input.targetSessionID || snapshot.fingerprint !== input.fingerprint)
         return stale
-      const explicit = explicitDecisionReason({
+      const explicit = coordinatorDecisionReason({
         kind: input.kind,
         action: snapshot.request.action,
         resources: snapshot.request.resources,
         metadata: snapshot.request.metadata,
       })
       if (explicit !== undefined) return { ...base, outcome: "escalated" as const, settled: false, reason: explicit }
-      if (!declining && !routineEligible({ kind: input.kind, action: snapshot.request.action, resources: snapshot.request.resources }))
+      if (!declining && !coordinatorRoutine({ kind: input.kind, action: snapshot.request.action, resources: snapshot.request.resources }))
         return { ...base, outcome: "escalated" as const, settled: false, reason: "unknown-semantics" }
       const initial = yield* validate(input, snapshot.request.action, snapshot.request.resources)
       if (!initial.ok) return { ...base, outcome: "escalated" as const, settled: false, reason: initial.reason }
@@ -258,14 +278,14 @@ export function make(deps: Dependencies): Interface {
         fingerprint: input.fingerprint,
         actor: "coordinator",
         source,
-        ...decision,
+        decision: input.decision ?? "approve",
         validate: (request) =>
           validate(input, request.action, request.resources).pipe(
             Effect.map(
               (checked) =>
                 checked.ok &&
-                (declining || routineEligible({ kind: input.kind, action: request.action, resources: request.resources })) &&
-                explicitDecisionReason({ kind: input.kind, action: request.action, resources: request.resources, metadata: request.metadata }) ===
+                (declining || coordinatorRoutine({ kind: input.kind, action: request.action, resources: request.resources })) &&
+                coordinatorDecisionReason({ kind: input.kind, action: request.action, resources: request.resources, metadata: request.metadata }) ===
                   undefined,
             ),
           ),
@@ -278,17 +298,17 @@ export function make(deps: Dependencies): Interface {
         .requestSnapshot(input.targetSessionID, input.requestID as SessionGuardrail.RequestSnapshot["request"]["id"])
         .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)))
       if (snapshot === undefined || snapshot.fingerprint !== input.fingerprint) return stale
-      const explicit = explicitDecisionReason({
+      const explicit = coordinatorDecisionReason({
         kind: input.kind,
         action: snapshot.request.action,
         resources: snapshot.request.resources,
         metadata: snapshot.request.metadata,
         hardReview: snapshot.request.hardReview,
         ruleIDs: snapshot.request.ruleIDs,
+        standard: snapshot.request.standard,
       })
       if (explicit !== undefined) return { ...base, outcome: "escalated" as const, settled: false, reason: explicit }
-      const unclassifiedDecline = declining && snapshot.request.standard
-      if (!unclassifiedDecline && !routineEligible({ kind: input.kind, action: snapshot.request.action, resources: snapshot.request.resources }))
+      if (!declining && !coordinatorRoutine({ kind: input.kind, action: snapshot.request.action, resources: snapshot.request.resources }))
         return { ...base, outcome: "escalated" as const, settled: false, reason: "unknown-semantics" }
       const initial = yield* validate(input, snapshot.request.action, snapshot.request.resources)
       if (!initial.ok) return { ...base, outcome: "escalated" as const, settled: false, reason: initial.reason }
@@ -305,14 +325,15 @@ export function make(deps: Dependencies): Interface {
               Effect.map(
                 (checked) =>
                   checked.ok &&
-                  ((declining && request.standard) || routineEligible({ kind: input.kind, action: request.action, resources: request.resources })) &&
-                  explicitDecisionReason({
+                  (declining || coordinatorRoutine({ kind: input.kind, action: request.action, resources: request.resources })) &&
+                  coordinatorDecisionReason({
                     kind: input.kind,
                     action: request.action,
                     resources: request.resources,
                     metadata: request.metadata,
                     hardReview: request.hardReview,
                     ruleIDs: request.ruleIDs,
+                    standard: request.standard,
                   }) === undefined,
               ),
             ),
@@ -339,7 +360,7 @@ export function make(deps: Dependencies): Interface {
       fields: snapshot.form.fields.map((field) => ("title" in field ? (field.title ?? field.key) : field.key)),
       metadata: snapshot.form.metadata,
     }
-    const explicit = explicitDecisionReason({ kind: input.kind, action: "question", resources: [], metadata: formEvidence })
+    const explicit = coordinatorDecisionReason({ kind: input.kind, action: "question", resources: [], metadata: formEvidence })
     if (explicit !== undefined) return { ...base, outcome: "escalated" as const, settled: false, reason: explicit }
     const initial = yield* validate(input, "question", [])
     if (!initial.ok) return { ...base, outcome: "escalated" as const, settled: false, reason: initial.reason }
@@ -355,7 +376,7 @@ export function make(deps: Dependencies): Interface {
           Effect.map(
             (checked) =>
               checked.ok &&
-              explicitDecisionReason({
+              coordinatorDecisionReason({
                 kind: input.kind,
                 action: "question",
                 resources: [],

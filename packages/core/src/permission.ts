@@ -25,6 +25,8 @@ import { SessionMessage } from "./session/message"
 import { SessionReviewFold } from "./session/review-fold"
 import { SessionAssessment } from "./session/assessment"
 import { CoordinationEscalation } from "./session/coordination-escalation"
+import { CoordinationAccess } from "./session/coordination-access"
+import { CoordinationService } from "./coordination/index"
 import { SessionDecisionContext } from "./session/decision-context"
 import { Hash } from "./util/hash"
 import { TemporaryPath } from "./temporary-path"
@@ -122,9 +124,12 @@ export class BlockedError extends Schema.TaggedErrorClass<BlockedError>()("Permi
   rules: Permission.Ruleset,
   permission: Schema.String,
   resources: Schema.Array(Schema.String),
+  coordinator: Schema.Boolean.pipe(Schema.optional),
 }) {
   override get message() {
-    return `Permission denied: ${this.permission}`
+    return this.coordinator
+      ? `Permission denied: ${this.permission}. This Session is a Project coordinator; member Sessions make Project changes.`
+      : `Permission denied: ${this.permission}`
   }
 }
 
@@ -318,6 +323,7 @@ const layer = Layer.effect(
     const agents = yield* Agent.Service
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
+    const coordination = yield* CoordinationService.Service
     const pending = new Map<ID, Pending>()
     const sessionApprovals = yield* PermissionSession.Service
     const reconsidering = new Set<ID>()
@@ -360,13 +366,21 @@ const layer = Layer.effect(
       return { agent: agent?.permissions ?? missingAgentPermissions, ceiling: session.permissionCeiling ?? [] }
     })
 
-    const configured = (sessionID: SessionSchema.ID, agentID?: Agent.ID) =>
-      ruleSources(sessionID, agentID).pipe(Effect.map((sources) => [...sources.agent, ...sources.ceiling]))
+    const coordinatorRules = Effect.fnUntraced(function* (input: Pick<AssertInput, "sessionID" | "action" | "resources">) {
+      return CoordinationAccess.execution((yield* coordination.scopeOf(input.sessionID)) !== undefined, input)
+    })
+
+    const configured = Effect.fnUntraced(function* (input: Pick<AssertInput, "sessionID" | "agent" | "action" | "resources">) {
+      const sources = yield* ruleSources(input.sessionID, input.agent)
+      const coordinator = yield* coordinatorRules(input)
+      return { rules: [...sources.agent, ...sources.ceiling, ...coordinator], coordinator }
+    })
 
     const evaluateInput = Effect.fnUntraced(function* (input: AssertInput) {
-      const rules = yield* configured(input.sessionID, input.agent)
-      if (denied(input, rules)) return decision(input, rules, [])
-      const result = decision(input, rules, yield* savedRules(input))
+      const { rules, coordinator } = yield* configured(input)
+      const coordinatorDenied = denied(input, coordinator)
+      if (denied(input, rules)) return { ...decision(input, rules, []), coordinator: coordinatorDenied }
+      const result = { ...decision(input, rules, yield* savedRules(input)), coordinator: coordinatorDenied }
       return input.requireExplicitDecision ? { ...result, effect: "ask" as const } : result
     })
 
@@ -464,7 +478,8 @@ const layer = Layer.effect(
     const applicabilityOf = Effect.fnUntraced(function* (input: AssertInput) {
       const sources = yield* ruleSources(input.sessionID, input.agent)
       const saved = yield* savedRules(input)
-      const rules = [...sources.agent, ...sources.ceiling, ...saved]
+      const coordinator = yield* coordinatorRules(input)
+      const rules = [...sources.agent, ...sources.ceiling, ...saved, ...coordinator]
       const fingerprint = fingerprintOf(input)
       const reviews = (yield* SessionReviewFold.fold(database.db, [input.sessionID]))
         .filter((item) => item.kind === "permission" && SessionReviewFold.matchesFingerprint(item.payload, fingerprint, historicalFingerprintOf(input)))
@@ -481,7 +496,9 @@ const layer = Layer.effect(
           return {
             resource: resource.slice(0, 1000),
             rule: { action: rule.action, resource: rule.resource, effect: rule.effect },
-            origin: sources.ceiling.includes(rule)
+            origin: coordinator.includes(rule)
+              ? ("coordinator" as const)
+              : sources.ceiling.includes(rule)
               ? ("ceiling" as const)
               : sources.agent.includes(rule)
                 ? ("agent" as const)
@@ -665,6 +682,7 @@ const layer = Layer.effect(
               rules: relevant(input, result.rules),
               permission: input.action,
               resources: input.resources,
+              ...(result.coordinator ? { coordinator: true } : {}),
             })
           }
           if (result.effect === "allow") return
@@ -687,6 +705,7 @@ const layer = Layer.effect(
               rules: relevant(input, current.rules),
               permission: input.action,
               resources: input.resources,
+              ...(current.coordinator ? { coordinator: true } : {}),
             })
           }
           if (current?.effect === "allow") return
@@ -800,8 +819,6 @@ const layer = Layer.effect(
                         if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
                         if (!(yield* input.validate(item.request)))
                           return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
-                        if ((yield* permissionMode(assertInput.sessionID)) === "manual")
-                          return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:manual-permissions" }
                         yield* publishAssessed(item.request, { outcome: "deny", via: "coordination", reply: "reject", coordination: input.source })
                         yield* publishReplied(item.request, "reject")
                         pending.delete(input.requestID)
@@ -843,6 +860,34 @@ const layer = Layer.effect(
                   if (initial.effect !== "ask") return yield* settleRules()
                   if (assertInput.requireExplicitDecision)
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:request" }
+                  if (input.decision === "approve")
+                    return yield* exclusive(
+                      Effect.gen(function* () {
+                        if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
+                        if (!(yield* input.validate(item.request)))
+                          return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                        const current = yield* evaluateInput(assertInput)
+                        if (current.effect === "ask" && explicitRejected((yield* applicabilityOf(assertInput)).prior))
+                          return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-rejected" }
+                        const allowed = current.effect !== "deny"
+                        yield* publishAssessed(item.request, {
+                          outcome: allowed ? "allow" : "deny",
+                          via: "coordination",
+                          reply: allowed ? "once" : "reject",
+                          coordination: input.source,
+                        })
+                        yield* publishReplied(item.request, allowed ? "once" : "reject")
+                        pending.delete(input.requestID)
+                        if (allowed) yield* Deferred.succeed(item.deferred, undefined)
+                        else yield* Deferred.fail(item.deferred, new DeclinedError())
+                        return {
+                          ...base,
+                          outcome: allowed ? ("allowed" as const) : ("denied" as const),
+                          settled: true,
+                          via: current.effect === "ask" ? ("coordination" as const) : ("permission-rules" as const),
+                        }
+                      }),
+                    )
                   const authorization = yield* autonomy.snapshot(assertInput.sessionID, { inherited: true }).pipe(
                     Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID: assertInput.sessionID })),
                   )
@@ -1057,7 +1102,8 @@ const layer = Layer.effect(
             if (item.request.sessionID !== existing.request.sessionID || item.request.action !== existing.request.action) continue
             if (item.request.metadata?.requireExplicitDecision === true) continue
             const input = { ...item.request }
-            const rules = yield* configured(item.request.sessionID, item.agent).pipe(
+            const rules = yield* configured({ sessionID: item.request.sessionID, agent: item.agent, action: item.request.action, resources: item.request.resources }).pipe(
+              Effect.map((configured) => configured.rules),
               Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)),
             )
             if (!rules) continue
@@ -1145,5 +1191,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [EventRuntime.node, Database.node, Config.node, Location.node, Decision.node, Agent.node, SessionAutonomy.node, SessionStore.node, PermissionSaved.node, PermissionSession.node],
+  deps: [EventRuntime.node, Database.node, Config.node, Location.node, Decision.node, Agent.node, SessionAutonomy.node, SessionStore.node, PermissionSaved.node, PermissionSession.node, CoordinationService.node],
 })

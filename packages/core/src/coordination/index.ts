@@ -8,6 +8,7 @@ import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { EventRuntime } from "../event"
+import { KV } from "../kv"
 import { SessionTable } from "../session/sql"
 import { CoordinationGroupTable, CoordinationMemberTable } from "./sql"
 
@@ -103,9 +104,14 @@ export const layer = Layer.effect(
     const events = yield* EventRuntime.Service
     const lock = KeyedMutex.makeUnsafe<string>()
     const ownershipLock = KeyedMutex.makeUnsafe<Coordination.GroupID>()
+    const kv = yield* KV.Service
+    const pauseKey = (groupID: Coordination.GroupID) => `coordination.paused.${groupID}`
     const active = new Set<Coordination.GroupID>()
-    const existing = yield* db.select({ id: CoordinationGroupTable.id }).from(CoordinationGroupTable).all().pipe(Effect.orDie)
-    const pausedReasons = new Map<Coordination.GroupID, Coordination.PausedReason>(existing.map(({ id }) => [id, "restart"]))
+    const pausedReasons = new Map<Coordination.GroupID, Coordination.PausedReason>()
+    for (const { id } of yield* db.select({ id: CoordinationGroupTable.id }).from(CoordinationGroupTable).all().pipe(Effect.orDie)) {
+      if ((yield* kv.get(pauseKey(id))) === undefined) active.add(id)
+      else pausedReasons.set(id, "interrupted")
+    }
     const now = Clock.currentTimeMillis
 
     const decode = <S extends Schema.Decoder<unknown>>(schema: S, input: unknown) =>
@@ -337,6 +343,7 @@ export const layer = Layer.effect(
             if (masterSessionID !== current.master_session_id) {
               active.delete(groupID)
               pausedReasons.delete(groupID)
+              yield* kv.remove(pauseKey(groupID))
             }
             yield* updated(groupID, revision)
             return yield* groupOf(yield* row(groupID))
@@ -361,6 +368,7 @@ export const layer = Layer.effect(
             )
             active.delete(groupID)
             pausedReasons.delete(groupID)
+            yield* kv.remove(pauseKey(groupID))
             yield* updated(groupID, current.revision + 1)
           }),
         ),
@@ -486,7 +494,11 @@ export const layer = Layer.effect(
           : Effect.suspend(() => {
               active.add(groupID)
               pausedReasons.delete(groupID)
-              return row(groupID).pipe(Effect.flatMap((found) => updated(groupID, found.revision)), Effect.ignore)
+              return kv.remove(pauseKey(groupID)).pipe(
+                Effect.andThen(row(groupID)),
+                Effect.flatMap((found) => updated(groupID, found.revision)),
+                Effect.ignore,
+              )
             }),
 
       pause: (groupID) =>
@@ -495,7 +507,11 @@ export const layer = Layer.effect(
           : Effect.suspend(() => {
               active.delete(groupID)
               pausedReasons.set(groupID, "interrupted")
-              return row(groupID).pipe(Effect.flatMap((found) => updated(groupID, found.revision)), Effect.ignore)
+              return kv.set(pauseKey(groupID), true).pipe(
+                Effect.andThen(row(groupID)),
+                Effect.flatMap((found) => updated(groupID, found.revision)),
+                Effect.ignore,
+              )
             }),
     }
     return Service.of({
@@ -506,4 +522,4 @@ export const layer = Layer.effect(
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node, EventRuntime.node] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node, EventRuntime.node, KV.node] })

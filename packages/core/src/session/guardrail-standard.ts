@@ -936,7 +936,7 @@ const shellReaders = new Set([
   "cd", "exit", "ps", "pgrep", "lsof",
 ])
 
-function readOnlyShell(command: string) {
+export function readOnlyShell(command: string) {
   const text: string[] = []
   let quote: "'" | '"' | undefined
   for (let index = 0; index < command.length; index++) {

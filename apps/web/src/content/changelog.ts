@@ -22,6 +22,20 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.7",
+    date: "2026-11-12",
+    title: "Coordinator-only Projects, owner-settled requests and idle subagent wakes",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "Every Session in a Project Master's family, including the Master and its supervisors, now only coordinates. It no longer has the edit, write or patch tools, and its file edits and shell commands other than recognized read-only commands are denied regardless of agent allows, saved approvals, permission modes, goals or coordinator answers. The denial explains that the Session is a Project coordinator and that member Sessions make Project changes. Read-only shell commands, read and search tools, Project and subagent controls, and MCP and plugin tools stay available; MCP and plugin tools are not classified, so only the coordinator instructions keep them from changing the Project." },
+      { tag: "Changed", text: "The Master and supervisors now settle routine member questions and permission requests themselves in every autonomy mode, including Manual: a coordinator's answer settles a member question, its approval allows a routine permission request once, and its decline rejects one. Any shell command outside the classes that need your decision counts as routine. Supervisors resolve their members' routine issues and take to the Master only blockers they cannot resolve or coordination needs across members, and the Master resolves supervisor escalations itself." },
+      { tag: "Changed", text: "A member request reaches you only when it needs your decision: every guardrail review (hard, custom-rule and outside-repository), and requests for external writes, destructive or irreversible actions, credentials and accounts, purchases and paid spending, publication, deployment and releases, CI/CD changes, production migrations, dependency installs or downloads, public-contract breaks or scope expansion, sending messages or email, and accepting terms, licenses or agreements. Requests marked for an explicit decision, requests you already rejected, tool requests whose effects are not classified, and uncertain cases also reach you, and deny rules and permission ceilings stay denied. Sending messages or email and accepting terms, licenses or agreements are new classes, and downloading a script and piping it into a shell counts as a dependency download. Project inspect reports a pending question as routine in every answers mode and custom-rule and outside-repository reviews as needing an explicit decision." },
+      { tag: "Changed", text: "A backend restart keeps Projects active. A Project you pause by interrupting its Master stays paused across restarts until your next message in the Master chat." },
+      { tag: "Changed", text: "A subagent that owns Project members notifies its parent when it reports new progress text or settles a turn with new final text. New progress text wakes the parent; the final text of a settled turn reaches the parent at its next turn without waking it." },
+      { tag: "Fixed", text: "A subagent whose task is completed or supervising now resumes and handles a notification from its own child or the completion of its background MCP tool call, instead of leaving it pending until its next turn. Notifications wait while the subagent has an open review or a staged revert, and notifications held across a restart still wait until the parent next runs." },
+    ],
+  },
+  {
     version: "0.11.6",
     date: "2026-11-12",
     title: "Session switcher groups and Project coordination fixes",
