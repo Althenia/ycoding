@@ -168,7 +168,7 @@ export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<ReadonlyArray<Info>>
   readonly state: (id: ID) => Effect.Effect<State, NotFoundError>
   readonly snapshot: (id: ID) => Effect.Effect<Snapshot | undefined>
-  readonly snapshots: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Snapshot>>
+  readonly snapshots: (sessionID: SessionSchema.ID, family?: ReadonlyArray<SessionSchema.ID>) => Effect.Effect<ReadonlyArray<Snapshot>>
   readonly reconsider: (input: ReconsiderInput) => Effect.Effect<ReconsiderResult>
   readonly escalate: (input: EscalateInput) => Effect.Effect<EscalateResult>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, AlreadySettledError | InvalidAnswerError | NotFoundError>
@@ -512,10 +512,11 @@ export const layer = Layer.effect(
       ),
     )
 
-    const snapshots = Effect.fn("Form.snapshots")(function* (sessionID: SessionSchema.ID) {
+    const snapshots = Effect.fn("Form.snapshots")(function* (sessionID: SessionSchema.ID, family?: ReadonlyArray<SessionSchema.ID>) {
+      const sessions: ReadonlyArray<string> = family ?? [sessionID]
       const entries = yield* Cache.values(forms)
       return Array.from(entries)
-        .filter((entry) => entry.state.status === "pending" && entry.form.sessionID === sessionID)
+        .filter((entry) => entry.state.status === "pending" && sessions.includes(entry.form.sessionID))
         .slice(0, 50)
         .map((entry) => ({ form: entry.form, fingerprint: fingerprint(entry.form), state: entry.state }))
     })

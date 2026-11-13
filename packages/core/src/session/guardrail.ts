@@ -182,10 +182,11 @@ export interface Interface {
   readonly requestSnapshot: (
     sessionID: Session.ID,
     requestID: Guardrail.RequestID,
+    family?: ReadonlyArray<Session.ID>,
   ) => Effect.Effect<RequestSnapshot | undefined, SessionErrors.NotFoundError>
   readonly reconsider: (input: ReconsiderInput) => Effect.Effect<ReconsiderResult, SessionErrors.NotFoundError>
   readonly escalate: (input: EscalateInput) => Effect.Effect<EscalateResult, SessionErrors.NotFoundError>
-  readonly requestSnapshots: (sessionID: Session.ID) => Effect.Effect<ReadonlyArray<RequestSnapshot>, SessionErrors.NotFoundError>
+  readonly requestSnapshots: (sessionID: Session.ID, family?: ReadonlyArray<Session.ID>) => Effect.Effect<ReadonlyArray<RequestSnapshot>, SessionErrors.NotFoundError>
   readonly deferPending: (sessionID: Session.ID) => Effect.Effect<void, SessionErrors.NotFoundError>
   readonly forSession: (
     sessionID: Session.ID,
@@ -1179,28 +1180,31 @@ export const layer = Layer.effect(
     const requestSnapshot = Effect.fn("SessionGuardrail.requestSnapshot")(function* (
       sessionID: Session.ID,
       requestID: Guardrail.RequestID,
+      family?: ReadonlyArray<Session.ID>,
     ) {
       const rootSessionID = yield* root(sessionID)
+      const sessions = family ?? [sessionID]
       return yield* withRootLock(
         rootSessionID,
         Effect.sync(() => {
           const item = pending.get(requestID)
-          return item === undefined || item.request.rootSessionID !== rootSessionID || item.request.sessionID !== sessionID
+          return item === undefined || item.request.rootSessionID !== rootSessionID || !sessions.includes(item.request.sessionID)
             ? undefined
             : { request: item.request, fingerprint: requestFingerprint(item.request) }
         }),
       )
     })
 
-    const requestSnapshots = Effect.fn("SessionGuardrail.requestSnapshots")(function* (sessionID: Session.ID) {
+    const requestSnapshots = Effect.fn("SessionGuardrail.requestSnapshots")(function* (sessionID: Session.ID, family?: ReadonlyArray<Session.ID>) {
       const rootSessionID = yield* root(sessionID)
+      const sessions = family ?? [sessionID]
       return yield* withRootLock(
         rootSessionID,
         Effect.sync(() =>
           Array.from(pending.values())
             .filter(
               (item) =>
-                item.request.rootSessionID === rootSessionID && item.request.sessionID === sessionID && !item.decisionModel,
+                item.request.rootSessionID === rootSessionID && sessions.includes(item.request.sessionID) && !item.decisionModel,
             )
             .slice(0, 50)
             .map((item) => ({ request: item.request, fingerprint: requestFingerprint(item.request) })),

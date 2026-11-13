@@ -88,7 +88,7 @@ const launched = (sessions: Session.Interface, events: EventRuntime.Interface, p
 
 const pendingByTarget = new Map<SessionSchema.ID, ReadonlyArray<unknown>>()
 const evaluated: unknown[] = []
-type EscalationInput = { readonly groupID: string; readonly coordinatorSessionID: SessionSchema.ID; readonly targetSessionID: SessionSchema.ID; readonly kind: "question" | "permission" | "review"; readonly requestID: string; readonly fingerprint: string; readonly reason: string }
+type EscalationInput = { readonly groupID: string; readonly coordinatorSessionID: SessionSchema.ID; readonly targetSessionID: SessionSchema.ID; readonly kind: "question" | "permission" | "review"; readonly requestID: string; readonly fingerprint: string; readonly reason: string; readonly descendantSessionIDs?: ReadonlyArray<SessionSchema.ID> }
 const escalations: EscalationInput[] = []
 const escalationOutcome: { to?: "master" | "client" | "none" } = {}
 const decisions = {
@@ -810,7 +810,7 @@ describe("project answer and interrupt", () => {
       })
       expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:hard-review", requestID: "per_one" })
       expect(evaluated).toEqual([{
-        groupID: fixture.group.id, coordinatorSessionID: fixture.subagent.id, targetSessionID: fixture.alpha.id,
+        groupID: fixture.group.id, coordinatorSessionID: fixture.subagent.id, targetSessionID: fixture.alpha.id, descendantSessionIDs: [fixture.alphaChild.id],
         requestID: "per_one", kind: "permission", fingerprint: "fp", rationale: "In scope", confidence: 0.9, decision: "decline",
       }])
     }))
@@ -1070,15 +1070,45 @@ describe("member notifications", () => {
       expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(7)
     }))
 
-  it.effect("ignores the Master, outsiders, and subagents of members", () =>
+  it.effect("ignores the Master, outsiders, and lifecycle events of members' subagents", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
       yield* activate(fixture)
       for (const id of [fixture.master.id, fixture.outsider.id, fixture.alphaChild.id, fixture.subagent.id])
-        for (const kind of kinds(id)) if (kind.event !== "interrupted") yield* emit(fixture, kind.definition, kind.data)
+        for (const kind of kinds(id))
+          if (kind.event !== "interrupted" && (id !== fixture.alphaChild.id || !("requestID" in kind))) yield* emit(fixture, kind.definition, kind.data)
       for (const id of [fixture.master.id, fixture.outsider.id, fixture.alpha.id, fixture.beta.id, fixture.subagent.id, fixture.alphaChild.id])
         expect(yield* noticesFor(fixture, id)).toEqual([])
       expect(woken).toEqual([])
+    }))
+
+  it.effect("requests raised by a member's subagents reach the member's owner with the requesting Session, or the Master as escalations when unowned", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* activate(fixture)
+      const nested = yield* fixture.sessions.create({ parentID: fixture.alphaChild.id, title: "alpha grandchild" })
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      woken.length = 0
+      yield* emit(fixture, Guardrail.Event.Asked, { id: "grq_descendant", rootSessionID: fixture.alpha.id, sessionID: nested.id, action: "shell", resources: ["rm -rf build"], ruleIDs: ["r1"], reason: "Deletes files", standard: true })
+      yield* emit(fixture, Permission.Event.Asked, { id: "per_descendant", sessionID: fixture.alphaChild.id, action: "edit", resources: ["src/a.ts"] })
+      yield* emit(fixture, Form.Event.Created, { form: { id: "frm_descendant", sessionID: fixture.alphaChild.id, title: "Pick", fields: [{ key: "branch", type: "string", required: true }] } })
+      const routed = (event: string, requestID: string, requestSessionID: SessionSchema.ID) =>
+        expect.objectContaining({ source: "project_notification", memberSessionID: fixture.alpha.id, event, requestID, requestSessionID })
+      expect((yield* noticesFor(fixture, fixture.subagent.id)).map(noticeMetadata)).toEqual([
+        routed("review", "grq_descendant", nested.id),
+        routed("permission", "per_descendant", fixture.alphaChild.id),
+        routed("question", "frm_descendant", fixture.alphaChild.id),
+      ])
+      expect(woken).toEqual([fixture.subagent.id, fixture.subagent.id, fixture.subagent.id])
+      for (const id of [fixture.master.id, fixture.outsider.id, fixture.alpha.id, fixture.beta.id, fixture.other.id, fixture.alphaChild.id, nested.id])
+        expect(yield* noticesFor(fixture, id)).toEqual([])
+
+      yield* own(fixture, fixture.alpha.id)
+      yield* emit(fixture, Guardrail.Event.Asked, { id: "grq_descendant_unowned", rootSessionID: fixture.alpha.id, sessionID: nested.id, action: "shell", resources: ["rm -rf dist"], ruleIDs: ["r1"], reason: "Deletes files", standard: true })
+      expect((yield* noticesFor(fixture, fixture.master.id)).map(noticeMetadata)).toEqual([expect.objectContaining({
+        source: "project_escalation", memberSessionID: fixture.alpha.id, event: "review", reason: "unowned", requestID: "grq_descendant_unowned", requestSessionID: nested.id,
+      })])
+      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(3)
     }))
 
   it.effect("goes to recorded owners whether or not they run, including an explicitly owning Master", () =>
@@ -1224,7 +1254,7 @@ describe("member notifications", () => {
         decision: { outcome: "escalated", to: "master", coordinationEscalation: { reasons: [{ sessionID: fixture.subagent.id, reason: "Deletes the release branch" }] } },
       })
       expect(escalations[0]).toEqual({
-        groupID: fixture.group.id, coordinatorSessionID: fixture.subagent.id, targetSessionID: fixture.alpha.id,
+        groupID: fixture.group.id, coordinatorSessionID: fixture.subagent.id, targetSessionID: fixture.alpha.id, descendantSessionIDs: [fixture.alphaChild.id],
         requestID: "per_one", kind: "permission", fingerprint: "fp_per", reason: "Deletes the release branch",
       })
       expect(woken).toEqual([fixture.master.id])
@@ -2021,6 +2051,133 @@ describe("member questions", () => {
       })
       expect(result).toMatchObject({ outcome: "allowed", settled: true, via: "coordination" })
       expect(yield* fixture.form.state(fixture.id)).toEqual({ status: "answered", answer: { branch: "safe" } })
+    }), 30_000)
+})
+
+const descendantSetup = Effect.gen(function* () {
+  running.clear()
+  woken.length = 0
+  const sessions = yield* Session.Service
+  const events = yield* EventRuntime.Service
+  const coordination = yield* CoordinationService.Service
+  const form = yield* Form.Service
+  const db = (yield* Database.Service).db
+  const location = { directory: AbsolutePath.make(tmpdir()) }
+  const master = yield* sessions.create({ location, title: "master", model: fixtureModel })
+  const alpha = yield* sessions.create({ location, title: "alpha", model: fixtureModel })
+  const outsider = yield* sessions.create({ location, title: "outsider", model: fixtureModel })
+  const owner = yield* launched(sessions, events, master.id, "owner")
+  const helper = yield* sessions.create({ parentID: alpha.id, title: "helper", model: fixtureModel })
+  const nested = yield* sessions.create({ parentID: helper.id, title: "nested", model: fixtureModel })
+  const group = yield* coordination.create({ name: "Descendants", masterSessionID: master.id, memberSessionIDs: [alpha.id] })
+  yield* coordination.setOwner(group.id, { sessionID: alpha.id, ownerSessionID: owner.id })
+  yield* coordination.activate(group.id)
+  const runtime = CoordinationRuntime.make({
+    db, events, coordination, execution: yield* SessionExecution.Service, sessions, orchestration: yield* SessionOrchestration.Service,
+    decisions: CoordinationDecisions.make({
+      policy: () => Effect.succeed(ConfigCoordination.resolve()),
+      accessOf: coordination.accessOf,
+      form,
+      permission: { snapshots: () => Effect.succeed([]) } as never,
+      guardrail: { requestSnapshots: () => Effect.succeed([]) } as never,
+    }),
+    jobs: { list: () => Effect.succeed([]), outstandingSessions: () => Effect.succeed(new Set<SessionSchema.ID>()) },
+    validateModel: () => Effect.void,
+  })
+  const ask = (sessionID: SessionSchema.ID, id: string) => Effect.gen(function* () {
+    const formID = Form.ID.create(id)
+    const created = yield* events.subscribe(Form.Event.Created).pipe(Stream.runHead, Effect.forkScoped({ startImmediately: true }))
+    yield* form.create({ id: formID, sessionID, title: "Choose the branch", fields: [{ key: "branch", type: "string", required: true, options: [{ value: "safe", label: "Safe" }] }] })
+    yield* runtime.handle(Option.getOrThrow(yield* Fiber.join(created)))
+    return formID
+  })
+  const notices = (sessionID: SessionSchema.ID) =>
+    db.select().from(SessionPendingTable).where(eq(SessionPendingTable.session_id, sessionID)).all().pipe(Effect.orDie,
+      Effect.map((rows) => rows.filter((row) => row.type === "synthetic").map(noticeMetadata)))
+  return { db, form, runtime, master, alpha, outsider, owner, helper, nested, ask, notices }
+})
+
+describe("member descendant requests", () => {
+  questions.effect("a nested subagent's form reaches the member's owner, is listed without blocking the member, and only the member's family requests are inspected and answered through the member", () =>
+    Effect.gen(function* () {
+      const fixture = yield* descendantSetup
+      const id = yield* fixture.ask(fixture.nested.id, "frm_nested_branch")
+      expect(yield* fixture.notices(fixture.owner.id)).toEqual([expect.objectContaining({
+        source: "project_notification", memberSessionID: fixture.alpha.id, event: "question", requestID: id, requestSessionID: fixture.nested.id,
+      })])
+      expect(woken).toEqual([fixture.owner.id])
+      for (const sessionID of [fixture.master.id, fixture.alpha.id, fixture.helper.id, fixture.nested.id, fixture.outsider.id])
+        expect(yield* fixture.notices(sessionID)).toEqual([])
+      const member = (yield* fixture.runtime.roster(fixture.master.id)).members.find((item) => item.sessionID === fixture.alpha.id)
+      expect(member?.pending).toEqual([expect.objectContaining({ kind: "question", requestID: id, requestSessionID: fixture.nested.id })])
+      expect(member?.state).toBe("idle")
+      const detail = yield* fixture.runtime.inspect(fixture.owner.id, { sessionID: fixture.alpha.id, requestID: id })
+      expect(detail).toMatchObject({ kind: "question", requestID: id, requestSessionID: fixture.nested.id, delegation: "routine" })
+      expect(yield* fixture.runtime.send(fixture.owner.id, { sessionID: fixture.alpha.id, text: "Continue the assignment" })).toMatchObject({ sessionID: fixture.alpha.id, reconciled: false })
+      expect(yield* fixture.runtime.escalate(fixture.owner.id, {
+        sessionID: fixture.alpha.id, requestID: id, kind: "question", fingerprint: detail.fingerprint, reason: "The Master knows the release branch",
+      })).toMatchObject({ delivered: true, requestSessionID: fixture.nested.id, decision: { outcome: "escalated", to: "master" } })
+      expect(yield* fixture.notices(fixture.master.id)).toEqual([expect.objectContaining({
+        source: "project_escalation", event: "escalated", memberSessionID: fixture.alpha.id, requestID: id, requestSessionID: fixture.nested.id,
+      })])
+      const result = yield* fixture.runtime.answer(fixture.owner.id, {
+        sessionID: fixture.alpha.id, requestID: id, kind: "question", fingerprint: detail.fingerprint,
+        rationale: "The assignment names the safe branch", confidence: 0.95, answer: { branch: "safe" },
+      })
+      expect(result).toMatchObject({ outcome: "allowed", settled: true, via: "coordination" })
+      expect(yield* fixture.form.state(id)).toEqual({ status: "answered", answer: { branch: "safe" } })
+
+      const foreign = Form.ID.create("frm_outsider_branch")
+      yield* fixture.form.create({ id: foreign, sessionID: fixture.outsider.id, title: "Choose the branch", fields: [{ key: "branch", type: "string", required: true, options: [{ value: "safe", label: "Safe" }] }] })
+      const snapshot = yield* fixture.form.snapshot(foreign)
+      expect(yield* refusal(fixture.runtime.inspect(fixture.owner.id, { sessionID: fixture.alpha.id, requestID: foreign })))
+        .toBe(`Request ${foreign} is not pending for Session ${fixture.alpha.id}`)
+      expect(yield* fixture.runtime.answer(fixture.owner.id, {
+        sessionID: fixture.alpha.id, requestID: foreign, kind: "question", fingerprint: snapshot!.fingerprint,
+        rationale: "Not part of this member", confidence: 0.95, answer: { branch: "safe" },
+      })).toMatchObject({ outcome: "stale", settled: false })
+      expect(yield* fixture.form.state(foreign)).toEqual({ status: "pending" })
+    }), 30_000)
+
+  questions.effect("requests from an archived descendant or a Session below it are not notified, listed, inspected or answered", () =>
+    Effect.gen(function* () {
+      const fixture = yield* descendantSetup
+      yield* fixture.db.run(sql`UPDATE session SET time_archived = 1 WHERE id = ${fixture.helper.id}`).pipe(Effect.orDie)
+      for (const [sessionID, name] of [[fixture.helper.id, "frm_archived_helper"], [fixture.nested.id, "frm_below_archived"]] as const) {
+        const id = yield* fixture.ask(sessionID, name)
+        const snapshot = yield* fixture.form.snapshot(id)
+        for (const receiver of [fixture.master.id, fixture.owner.id, fixture.alpha.id]) expect(yield* fixture.notices(receiver)).toEqual([])
+        expect(woken).toEqual([])
+        expect((yield* fixture.runtime.roster(fixture.master.id)).members.find((item) => item.sessionID === fixture.alpha.id)?.pending).toEqual([])
+        expect(yield* refusal(fixture.runtime.inspect(fixture.owner.id, { sessionID: fixture.alpha.id, requestID: id })))
+          .toBe(`Request ${id} is not pending for Session ${fixture.alpha.id}`)
+        expect(yield* fixture.runtime.answer(fixture.owner.id, {
+          sessionID: fixture.alpha.id, requestID: id, kind: "question", fingerprint: snapshot!.fingerprint,
+          rationale: "Archived Session", confidence: 0.95, answer: { branch: "safe" },
+        })).toMatchObject({ outcome: "stale", settled: false })
+        expect(yield* fixture.form.state(id)).toEqual({ status: "pending" })
+      }
+    }), 30_000)
+
+  questions.effect("a member's own request keeps it waiting beyond the pending cap and a request past the cap still escalates with its Session", () =>
+    Effect.gen(function* () {
+      const fixture = yield* descendantSetup
+      const field = { key: "branch", type: "string" as const, required: true, options: [{ value: "safe", label: "Safe" }] }
+      const descendantIDs: Form.ID[] = []
+      for (let index = 0; index <= Coordination.maxPending; index++) {
+        const id = Form.ID.create(`frm_flood_${index}`)
+        descendantIDs.push(id)
+        yield* fixture.form.create({ id, sessionID: fixture.nested.id, title: "Choose the branch", fields: [field] })
+      }
+      const own = Form.ID.create("frm_flood_own")
+      yield* fixture.form.create({ id: own, sessionID: fixture.alpha.id, title: "Choose the branch", fields: [field] })
+      const member = (yield* fixture.runtime.roster(fixture.master.id)).members.find((item) => item.sessionID === fixture.alpha.id)
+      expect(member?.state).toBe("waiting")
+      const last = descendantIDs[descendantIDs.length - 1]!
+      const snapshot = yield* fixture.form.snapshot(last)
+      expect(yield* fixture.runtime.escalate(fixture.owner.id, {
+        sessionID: fixture.alpha.id, requestID: last, kind: "question", fingerprint: snapshot!.fingerprint, reason: "The Master knows the release branch",
+      })).toMatchObject({ delivered: true, requestSessionID: fixture.nested.id, decision: { outcome: "escalated", to: "master", requestSessionID: fixture.nested.id } })
     }), 30_000)
 })
 

@@ -70,6 +70,7 @@ test("coordinators settle every member request through answer in every autonomy 
     "As Master, resolve supervisor escalations and coordination across members yourself.",
     "Settle every member request yourself through `project answer` in every autonomy mode, Manual included, from the user's recorded direction and existing evidence, choosing the simplest safe, reversible option: routine, decline-only and every explicit-decision class, hard and custom-rule guardrail reviews, outside-repository reviews, permissions, and questions and forms.",
     "`approve` allows once, `decline` rejects with your rationale as the member's feedback, and `answer` settles a question or form.",
+    "A request raised by a member's subagent or deeper descendant is that member's request: it appears with `requestSessionID`, and you `inspect`, `answer` or `escalate` it with the member's `sessionID`.",
     "`inspect` reports the delegation class (routine, decline-only, explicit-decision:<reason>) as risk information for your decision; it never limits `answer`.",
     "Deny rules and permission ceilings still hold: approving something a deny rule or the permission ceiling covers leaves it denied.",
     "A guardrail review raised by an invalid guardrail configuration cannot be approved because its deny rules are unreadable: `answer` returns `escalated` with reason `configuration-invalid`, and a decline settles it.",

@@ -128,6 +128,7 @@ export interface EscalateInput {
 export interface EscalateResult {
   readonly sessionID: SessionSchema.ID
   readonly requestID: string
+  readonly requestSessionID?: SessionSchema.ID
   readonly messageID?: SessionMessage.ID
   readonly delivered: boolean
   readonly decision: CoordinationDecisions.EscalateResult
@@ -135,10 +136,11 @@ export interface EscalateResult {
 
 export type Delegation = "routine" | "decline-only" | `explicit-decision:${string}`
 
-export type RequestDetail =
+export type RequestDetail = { readonly requestSessionID?: SessionSchema.ID } & (
   | { readonly kind: "permission"; readonly requestID: string; readonly fingerprint: string; readonly action: string; readonly resources: ReadonlyArray<string>; readonly delegation: Delegation; readonly coordinationEscalation?: Coordination.Escalation }
   | { readonly kind: "review"; readonly requestID: string; readonly fingerprint: string; readonly action: string; readonly resources: ReadonlyArray<string>; readonly ruleIDs: ReadonlyArray<string>; readonly reason: string; readonly hardReview: boolean; readonly standard: boolean; readonly delegation: Delegation; readonly coordinationEscalation?: Coordination.Escalation }
   | { readonly kind: "question"; readonly requestID: string; readonly fingerprint: string; readonly title: string; readonly fields: ReadonlyArray<{ readonly key: string; readonly type: string; readonly title?: string; readonly required?: boolean; readonly options?: ReadonlyArray<string> }>; readonly delegation: Delegation; readonly coordinationEscalation?: Coordination.Escalation }
+)
 
 export type NotificationEvent = "started" | "progress" | "completed" | "failed" | "interrupted" | "question" | "permission" | "review" | "escalated"
 
@@ -342,13 +344,36 @@ export function make(options: Options): Interface & { readonly handle: (event: H
       } satisfies CreateResult
     }).pipe(Effect.withSpan("CoordinationRuntime.create"))
 
-  const summarize = (item: CoordinationDecisions.PendingSnapshot): Coordination.PendingRequest => {
+  const summarize = (member: SessionSchema.ID, item: CoordinationDecisions.PendingSnapshot): Coordination.PendingRequest => {
+    const origin = requestOrigin(member, item)
     if (item.kind === "permission")
-      return { kind: "permission", requestID: item.request.id, fingerprint: item.fingerprint, summary: clip([item.request.action, ...item.request.resources].join(" ")) }
+      return { kind: "permission", requestID: item.request.id, fingerprint: item.fingerprint, summary: clip([item.request.action, ...item.request.resources].join(" ")), ...origin }
     if (item.kind === "review")
-      return { kind: "review", requestID: item.request.id, fingerprint: item.fingerprint, summary: clip(`${item.request.action} ${item.request.resources.join(" ")}: ${item.request.reason}`) }
-    return { kind: "question", requestID: item.form.id, fingerprint: item.fingerprint, summary: clip(item.form.title) }
+      return { kind: "review", requestID: item.request.id, fingerprint: item.fingerprint, summary: clip(`${item.request.action} ${item.request.resources.join(" ")}: ${item.request.reason}`), ...origin }
+    return { kind: "question", requestID: item.form.id, fingerprint: item.fingerprint, summary: clip(item.form.title), ...origin }
   }
+
+  const descendantsOf = (member: SessionSchema.ID) =>
+    db.all<{ id: SessionSchema.ID }>(sql`WITH RECURSIVE family(id) AS (
+      SELECT ${SessionTable.id} FROM ${SessionTable} WHERE ${SessionTable.id} = ${member}
+      UNION SELECT child.id FROM session child JOIN family ON child.parent_id = family.id WHERE child.time_archived IS NULL
+    ) SELECT id FROM family WHERE id != ${member}`).pipe(Effect.orDie, Effect.map((rows) => rows.map((row) => row.id)))
+
+  const familyPending = Effect.fnUntraced(function* (scope: CoordinationService.Scope, coordinatorSessionID: SessionSchema.ID, member: SessionSchema.ID) {
+    return yield* decisions.pending({
+      groupID: scope.groupID, coordinatorSessionID, targetSessionID: member, descendantSessionIDs: yield* descendantsOf(member), limit: Coordination.maxPending,
+    })
+  })
+
+  const rootOf = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+    let root = sessionID
+    for (let depth = 0; depth < 64; depth++) {
+      const row = yield* db.select({ parent: SessionTable.parent_id }).from(SessionTable).where(eq(SessionTable.id, root)).get().pipe(Effect.orDie)
+      if (row?.parent === null || row?.parent === undefined) break
+      root = row.parent
+    }
+    return root
+  })
 
   const lastFailed = (sessionID: SessionSchema.ID) =>
     db
@@ -377,9 +402,10 @@ export function make(options: Options): Interface & { readonly handle: (event: H
       .where(eq(SessionTable.id, sessionID))
       .get()
       .pipe(Effect.orDie)
-    const pending = (yield* decisions.pending({ groupID: scope.groupID, coordinatorSessionID: scope.masterSessionID, targetSessionID: sessionID, limit: Coordination.maxPending })).map(summarize)
+    const own = yield* decisions.pending({ groupID: scope.groupID, coordinatorSessionID: scope.masterSessionID, targetSessionID: sessionID, limit: Coordination.maxPending })
+    const pending = (sessionID === scope.masterSessionID ? own : yield* familyPending(scope, scope.masterSessionID, sessionID)).map((item) => summarize(sessionID, item))
     const state: Coordination.MemberState =
-      pending.length > 0 ? "waiting" : running.has(sessionID) ? "running" : (yield* lastFailed(sessionID)) ? "failed" : "idle"
+      own.length > 0 ? "waiting" : running.has(sessionID) ? "running" : (yield* lastFailed(sessionID)) ? "failed" : "idle"
     const sender = yield* runningSender(scope, sessionID, running)
     const driver = sender !== undefined
       ? yield* db.select({ sessionID: SessionTable.id, title: SessionTable.title }).from(SessionTable).where(eq(SessionTable.id, sender)).get().pipe(Effect.orDie)
@@ -459,7 +485,8 @@ export function make(options: Options): Interface & { readonly handle: (event: H
           const current = yield* memberScope(caller, input.sessionID)
           if (current?.groupID !== scope.groupID || !current.memberSessionIDs.includes(input.sessionID)) return yield* refuse(`Session ${input.sessionID} is not a member of this Project`)
           if (current === undefined || !current.active) return yield* refuse(inactiveMessage)
-          const waiting = (yield* decisions.pending({ groupID: scope.groupID, coordinatorSessionID: caller, targetSessionID: input.sessionID, limit: Coordination.maxPending })).map(summarize)
+          const waiting = (yield* decisions.pending({ groupID: scope.groupID, coordinatorSessionID: caller, targetSessionID: input.sessionID, limit: Coordination.maxPending }))
+            .map((item) => summarize(input.sessionID, item))
           if (waiting.length > 0) return yield* refuse(waitingMessage(input.sessionID, waiting))
           const { running } = yield* sessions.outstanding()
           const queued = yield* hasPendingInput(scope.memberSessionIDs)
@@ -497,6 +524,7 @@ export function make(options: Options): Interface & { readonly handle: (event: H
       groupID: scope.groupID,
       coordinatorSessionID: caller,
       targetSessionID: input.sessionID,
+      descendantSessionIDs: yield* descendantsOf(input.sessionID),
       requestID: input.requestID,
       kind: input.kind,
       fingerprint: input.fingerprint,
@@ -578,12 +606,13 @@ export function make(options: Options): Interface & { readonly handle: (event: H
 
   const handoff = Effect.fnUntraced(function* (scope: CoordinationService.Scope, member: SessionSchema.ID, receiver: SessionSchema.ID | undefined, wake: boolean, reason = "unowned") {
     const target = receiver ?? scope.masterSessionID
-    const pending = yield* decisions.pending({ groupID: scope.groupID, coordinatorSessionID: target, targetSessionID: member, limit: Coordination.maxPending })
+    const pending = yield* familyPending(scope, target, member)
     yield* Effect.forEach(pending, (item) => {
-      const request = summarize(item)
+      const request = summarize(member, item)
       return deliver({ scope, member, event: item.kind, identity: handoffIdentity(target, request), receiver: target, resume: wake,
         ...(receiver === undefined ? { escalationReason: reason } : {}),
-        detail: { requestID: request.requestID, fingerprint: request.fingerprint, ...(receiver === undefined ? {} : { excerpt: request.summary }) } })
+        detail: { requestID: request.requestID, fingerprint: request.fingerprint, ...(request.requestSessionID === undefined ? {} : { requestSessionID: request.requestSessionID }),
+          ...(receiver === undefined ? {} : { excerpt: request.summary }) } })
     }, { discard: true })
     let after: SessionSchema.ID | undefined
     while (true) {
@@ -607,9 +636,9 @@ export function make(options: Options): Interface & { readonly handle: (event: H
   })
 
   const heldByHandoff = Effect.fnUntraced(function* (scope: CoordinationService.Scope, member: SessionSchema.ID, receiver: SessionSchema.ID, requestID: string) {
-    const pending = yield* decisions.pending({ groupID: scope.groupID, coordinatorSessionID: receiver, targetSessionID: member, limit: Coordination.maxPending })
+    const pending = yield* familyPending(scope, receiver, member)
     for (const item of pending) {
-      const request = summarize(item)
+      const request = summarize(member, item)
       if (request.requestID === requestID && (yield* noticeDelivered(receiver, noticeID(scope, member, item.kind, handoffIdentity(receiver, request))))) return true
     }
     return false
@@ -648,8 +677,8 @@ export function make(options: Options): Interface & { readonly handle: (event: H
     const receiver = yield* receiverOf(scope, member, wake)
     if (detail.requestID !== undefined && (yield* heldByHandoff(scope, member, receiver ?? scope.masterSessionID, detail.requestID))) return
     const pending = detail.requestID === undefined ? undefined :
-      (yield* decisions.pending({ groupID: scope.groupID, coordinatorSessionID: scope.masterSessionID, targetSessionID: member, limit: Coordination.maxPending }))
-        .map(summarize).find(request => request.requestID === detail.requestID)
+      (yield* familyPending(scope, scope.masterSessionID, member))
+        .map((item) => summarize(member, item)).find(request => request.requestID === detail.requestID)
     if (receiver === undefined) {
       if (!urgentEvents.has(event)) return
       yield* deliver({ scope, member, event, identity: pending === undefined ? identity : handoffIdentity(scope.masterSessionID, pending),
@@ -698,16 +727,19 @@ export function make(options: Options): Interface & { readonly handle: (event: H
 
   const escalate: Interface["escalate"] = Effect.fn("CoordinationRuntime.escalate")(function* (caller, input) {
     const scope = yield* memberScope(caller, input.sessionID)
+    const descendantSessionIDs = yield* descendantsOf(input.sessionID)
     const decision = yield* decisions.escalate({
       groupID: scope.groupID,
       coordinatorSessionID: caller,
       targetSessionID: input.sessionID,
+      descendantSessionIDs,
       requestID: input.requestID,
       kind: input.kind,
       fingerprint: input.fingerprint,
       reason: input.reason,
     })
-    if (decision.to !== "master") return { sessionID: input.sessionID, requestID: input.requestID, delivered: false, decision }
+    const origin = decision.requestSessionID === undefined ? {} : { requestSessionID: decision.requestSessionID }
+    if (decision.to !== "master") return { sessionID: input.sessionID, requestID: input.requestID, ...origin, delivered: false, decision }
     const messageID = yield* deliver({
       scope,
       member: input.sessionID,
@@ -716,17 +748,17 @@ export function make(options: Options): Interface & { readonly handle: (event: H
       receiver: scope.masterSessionID,
       resume: true,
       escalationReason: input.reason,
-      detail: { requestID: input.requestID, fingerprint: input.fingerprint, kind: input.kind, escalatedBy: { sessionID: caller, title: yield* titleOf(caller) } },
+      detail: { requestID: input.requestID, fingerprint: input.fingerprint, kind: input.kind, ...origin, escalatedBy: { sessionID: caller, title: yield* titleOf(caller) } },
     })
-    return { sessionID: input.sessionID, requestID: input.requestID, messageID, delivered: true, decision }
+    return { sessionID: input.sessionID, requestID: input.requestID, ...origin, messageID, delivered: true, decision }
   })
 
   const inspect: Interface["inspect"] = Effect.fn("CoordinationRuntime.inspect")(function* (caller, input) {
     const scope = yield* memberScope(caller, input.sessionID)
-    const item = (yield* decisions.pending({ groupID: scope.groupID, coordinatorSessionID: caller, targetSessionID: input.sessionID, limit: Coordination.maxPending }))
+    const item = (yield* familyPending(scope, caller, input.sessionID))
       .find((pending) => (pending.kind === "question" ? pending.form.id : pending.request.id) === input.requestID)
     if (item === undefined) return yield* refuse(`Request ${input.requestID} is not pending for Session ${input.sessionID}`)
-    return requestDetail(item)
+    return { ...requestDetail(item), ...requestOrigin(input.sessionID, item) }
   })
 
   const memberEvent = Effect.fnUntraced(function* (
@@ -739,6 +771,15 @@ export function make(options: Options): Interface & { readonly handle: (event: H
     const scope = yield* coordination.memberOf(sessionID)
     if (scope === undefined) return
     yield* notify(scope, sessionID, event, identity, typeof detail === "function" ? yield* detail() : detail)
+  })
+
+  const requestEvent = Effect.fnUntraced(function* (sessionID: string, event: NotificationEvent, requestID: string, excerpt: string) {
+    if (!Schema.is(SessionSchema.ID)(sessionID)) return
+    const member = yield* rootOf(sessionID)
+    const scope = yield* coordination.memberOf(member)
+    if (scope === undefined) return
+    if (member !== sessionID && !(yield* descendantsOf(member)).includes(sessionID)) return
+    yield* notify(scope, member, event, requestID, { requestID, excerpt, ...(member === sessionID ? {} : { requestSessionID: sessionID }) })
   })
 
   const workRemains = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
@@ -784,12 +825,7 @@ export function make(options: Options): Interface & { readonly handle: (event: H
     }
     if (event.type === SessionEvent.Task.Updated.type) {
       if (event.data.change.type === "question_asked") {
-        let root = event.data.sessionID
-        for (let depth = 0; depth < 64; depth++) {
-          const row = yield* db.select({ parent: SessionTable.parent_id }).from(SessionTable).where(eq(SessionTable.id, root)).get().pipe(Effect.orDie)
-          if (row?.parent === null || row?.parent === undefined) break
-          root = row.parent
-        }
+        const root = yield* rootOf(event.data.sessionID)
         const scope = yield* coordination.memberOf(root)
         if (scope !== undefined) {
           yield* handoff(scope, root, yield* receiverOf(scope, root, true), true)
@@ -827,16 +863,16 @@ export function make(options: Options): Interface & { readonly handle: (event: H
     }
     if (event.type === Form.Event.Created.type) {
       const form = event.data.form
-      yield* memberEvent(form.sessionID, "question", form.id, { requestID: form.id, excerpt: clip(form.title) })
+      yield* requestEvent(form.sessionID, "question", form.id, clip(form.title))
       return
     }
     if (event.type === Permission.Event.Asked.type) {
       const data = event.data
-      yield* memberEvent(data.sessionID, "permission", data.id, { requestID: data.id, excerpt: clip([data.action, ...data.resources].join(" ")) })
+      yield* requestEvent(data.sessionID, "permission", data.id, clip([data.action, ...data.resources].join(" ")))
       return
     }
     const data = event.data
-    yield* memberEvent(data.sessionID, "review", data.id, { requestID: data.id, excerpt: clip(`${data.action} ${data.resources.join(" ")}: ${data.reason}`) })
+    yield* requestEvent(data.sessionID, "review", data.id, clip(`${data.action} ${data.resources.join(" ")}: ${data.reason}`))
   })
 
   const recover = Effect.fn("CoordinationRuntime.recover")(function* () {
@@ -932,6 +968,11 @@ export function make(options: Options): Interface & { readonly handle: (event: H
 }
 
 const text = (value: string, limit = 500) => DecisionChoice.redactText(value).slice(0, limit)
+
+function requestOrigin(member: SessionSchema.ID, item: CoordinationDecisions.PendingSnapshot) {
+  const sessionID = item.kind === "question" ? item.form.sessionID : item.request.sessionID
+  return sessionID === member ? {} : { requestSessionID: SessionSchema.ID.make(sessionID) }
+}
 const boundedResources = (resources: ReadonlyArray<string>) => resources.slice(0, 20).map((resource) => text(resource))
 
 function requestDetail(item: CoordinationDecisions.PendingSnapshot): RequestDetail {

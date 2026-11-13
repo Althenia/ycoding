@@ -23,6 +23,7 @@ export interface EvaluateInput {
   readonly confidence?: number
   readonly answer?: Form.Answer
   readonly decision?: Decision
+  readonly descendantSessionIDs?: ReadonlyArray<SessionSchema.ID>
 }
 
 export type Decision = "approve" | "decline"
@@ -35,6 +36,7 @@ export interface EscalateInput {
   readonly kind: Kind
   readonly fingerprint: string
   readonly reason: string
+  readonly descendantSessionIDs?: ReadonlyArray<SessionSchema.ID>
 }
 
 export interface EscalateResult {
@@ -48,6 +50,7 @@ export interface EscalateResult {
   readonly coordinationEscalation?: Coordination.Escalation
   readonly reason?: string
   readonly reviewItemID?: string
+  readonly requestSessionID?: SessionSchema.ID
 }
 
 export interface Result {
@@ -77,6 +80,7 @@ export interface PendingInput {
   readonly groupID: Coordination.GroupID
   readonly coordinatorSessionID: SessionSchema.ID
   readonly targetSessionID: SessionSchema.ID
+  readonly descendantSessionIDs?: ReadonlyArray<SessionSchema.ID>
   readonly limit?: number
 }
 
@@ -185,6 +189,9 @@ export function coordinatorDecisionReason(input: Parameters<typeof explicitDecis
   return undefined
 }
 
+const familyOf = (input: { readonly targetSessionID: SessionSchema.ID; readonly descendantSessionIDs?: ReadonlyArray<SessionSchema.ID> }) =>
+  [input.targetSessionID, ...(input.descendantSessionIDs ?? [])]
+
 export function make(deps: Dependencies): Interface {
   const authorize = Effect.fnUntraced(function* (input: PendingInput, inspectMaster = false) {
     const access = yield* deps.accessOf(input.coordinatorSessionID)
@@ -217,11 +224,12 @@ export function make(deps: Dependencies): Interface {
   const pending = Effect.fn("CoordinationDecisions.pending")(function* (input: PendingInput) {
     if (!(yield* authorize(input, true)).ok) return [] as ReadonlyArray<PendingSnapshot>
     const limit = Math.max(1, Math.min(50, Math.trunc(input.limit ?? 20)))
-    const permissions = yield* deps.permission.snapshots(input.targetSessionID)
+    const sessions = familyOf(input)
+    const permissions = yield* deps.permission.snapshots(input.targetSessionID, sessions)
     const reviews = yield* deps.guardrail
-      .requestSnapshots(input.targetSessionID)
+      .requestSnapshots(input.targetSessionID, sessions)
       .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed([] as ReadonlyArray<SessionGuardrail.RequestSnapshot>)))
-    const questions = yield* deps.form.snapshots(input.targetSessionID)
+    const questions = yield* deps.form.snapshots(input.targetSessionID, sessions)
     return [
       ...permissions.slice(0, limit).map((item): PendingSnapshot => ({ kind: "permission", request: item.request, fingerprint: item.fingerprint })),
       ...reviews.slice(0, limit).map((item): PendingSnapshot => ({ kind: "review", request: item.request, fingerprint: item.fingerprint })),
@@ -260,7 +268,7 @@ export function make(deps: Dependencies): Interface {
 
     if (input.kind === "permission") {
       const snapshot = yield* deps.permission.snapshot(input.requestID as Permission.ID)
-      if (snapshot === undefined || snapshot.request.sessionID !== input.targetSessionID || snapshot.fingerprint !== input.fingerprint)
+      if (snapshot === undefined || !familyOf(input).includes(snapshot.request.sessionID) || snapshot.fingerprint !== input.fingerprint)
         return stale
       const initial = yield* validate(input, snapshot.request.action, snapshot.request.resources)
       if (!initial.ok) return { ...base, outcome: "escalated" as const, settled: false, reason: initial.reason }
@@ -277,14 +285,14 @@ export function make(deps: Dependencies): Interface {
 
     if (input.kind === "review") {
       const snapshot = yield* deps.guardrail
-        .requestSnapshot(input.targetSessionID, input.requestID as SessionGuardrail.RequestSnapshot["request"]["id"])
+        .requestSnapshot(input.targetSessionID, input.requestID as SessionGuardrail.RequestSnapshot["request"]["id"], familyOf(input))
         .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)))
       if (snapshot === undefined || snapshot.fingerprint !== input.fingerprint) return stale
       const initial = yield* validate(input, snapshot.request.action, snapshot.request.resources)
       if (!initial.ok) return { ...base, outcome: "escalated" as const, settled: false, reason: initial.reason }
       const result = yield* deps.guardrail
         .reconsider({
-          sessionID: input.targetSessionID,
+          sessionID: snapshot.request.sessionID,
           requestID: input.requestID as SessionGuardrail.RequestSnapshot["request"]["id"],
           fingerprint: input.fingerprint,
           actor: "coordinator",
@@ -303,7 +311,7 @@ export function make(deps: Dependencies): Interface {
     const snapshot = yield* deps.form.snapshot(input.requestID as Form.ID)
     if (
       snapshot === undefined ||
-      snapshot.form.sessionID !== input.targetSessionID ||
+      !familyOf(input).some((sessionID) => sessionID === snapshot.form.sessionID) ||
       snapshot.fingerprint !== input.fingerprint ||
       snapshot.state.status !== "pending"
     )
@@ -349,42 +357,38 @@ export function make(deps: Dependencies): Interface {
       ...(result.coordinationEscalation === undefined ? {} : { coordinationEscalation: result.coordinationEscalation }),
       ...(result.reason === undefined ? {} : { reason: result.reason }),
       ...(result.reviewItemID === undefined ? {} : { reviewItemID: result.reviewItemID }),
+      ...(result.requestSessionID === undefined || result.requestSessionID === input.targetSessionID
+        ? {}
+        : { requestSessionID: result.requestSessionID }),
     }
   })
 
-  const nativeEscalation = (input: EscalateInput, native: CoordinationEscalation.Input) => {
-    const stale = Effect.succeed(CoordinationEscalation.result(input.requestID, native))
-    if (input.kind === "permission")
-      return deps.permission.snapshot(input.requestID as Permission.ID).pipe(
-        Effect.flatMap((snapshot) =>
-          snapshot === undefined || (snapshot.request.sessionID === input.targetSessionID && snapshot.fingerprint === input.fingerprint)
-            ? deps.permission.escalate({ ...native, sessionID: input.targetSessionID, requestID: input.requestID as Permission.ID })
-            : stale,
-        ),
+  const nativeEscalation = Effect.fnUntraced(function* (input: EscalateInput, native: CoordinationEscalation.Input) {
+    const stale: CoordinationEscalation.Result<string> & { readonly requestSessionID?: SessionSchema.ID } = CoordinationEscalation.result(input.requestID, native)
+    const family = familyOf(input)
+    if (input.kind === "permission") {
+      const snapshot = yield* deps.permission.snapshot(input.requestID as Permission.ID)
+      if (snapshot !== undefined && (!family.includes(snapshot.request.sessionID) || snapshot.fingerprint !== input.fingerprint)) return stale
+      const sessionID = snapshot?.request.sessionID ?? input.targetSessionID
+      return { ...(yield* deps.permission.escalate({ ...native, sessionID, requestID: input.requestID as Permission.ID })), requestSessionID: sessionID }
+    }
+    if (input.kind === "review") {
+      const requestID = input.requestID as SessionGuardrail.RequestSnapshot["request"]["id"]
+      const snapshot = yield* deps.guardrail
+        .requestSnapshot(input.targetSessionID, requestID, family)
+        .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)))
+      if (snapshot !== undefined && snapshot.fingerprint !== input.fingerprint) return stale
+      const sessionID = snapshot?.request.sessionID ?? input.targetSessionID
+      return yield* deps.guardrail.escalate({ ...native, sessionID, requestID }).pipe(
+        Effect.map((result) => ({ ...result, requestSessionID: sessionID })),
+        Effect.catchTag("Session.NotFoundError", () => Effect.succeed(stale)),
       )
-    if (input.kind === "review")
-      return deps.guardrail
-        .requestSnapshot(input.targetSessionID, input.requestID as SessionGuardrail.RequestSnapshot["request"]["id"])
-        .pipe(
-          Effect.flatMap((snapshot) =>
-            snapshot === undefined || snapshot.fingerprint === input.fingerprint
-              ? deps.guardrail.escalate({
-                  ...native,
-                  sessionID: input.targetSessionID,
-                  requestID: input.requestID as SessionGuardrail.RequestSnapshot["request"]["id"],
-                })
-              : stale,
-          ),
-          Effect.catchTag("Session.NotFoundError", () => stale),
-        )
-    return deps.form.snapshot(input.requestID as Form.ID).pipe(
-      Effect.flatMap((snapshot) =>
-        snapshot?.form.sessionID === input.targetSessionID && snapshot.fingerprint === input.fingerprint
-          ? deps.form.escalate({ ...native, id: snapshot.form.id })
-          : stale,
-      ),
-    )
-  }
+    }
+    const snapshot = yield* deps.form.snapshot(input.requestID as Form.ID)
+    const sessionID = family.find((member) => member === snapshot?.form.sessionID)
+    if (snapshot === undefined || sessionID === undefined || snapshot.fingerprint !== input.fingerprint) return stale
+    return { ...(yield* deps.form.escalate({ ...native, id: snapshot.form.id })), requestSessionID: sessionID }
+  })
 
   return { evaluate, pending, escalate }
 }

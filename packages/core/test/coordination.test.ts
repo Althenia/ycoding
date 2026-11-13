@@ -13,13 +13,14 @@ import { KV } from "../src/kv"
 import { CoordinationService } from "../src/coordination/index"
 import { CoordinationGroupTable, CoordinationMemberTable } from "../src/coordination/sql"
 import { Session } from "../src/session"
+import { SessionAutonomy } from "../src/session/autonomy"
 import { SessionExecution } from "../src/session/execution"
 
 const runtime = AppNodeBuilder.build(
-  LayerNode.group([Database.node, EventRuntime.node, KV.node, Session.node, CoordinationService.node]),
+  LayerNode.group([Database.node, EventRuntime.node, KV.node, Session.node, SessionAutonomy.node, CoordinationService.node]),
   [[SessionExecution.node, SessionExecution.noopLayer]],
 )
-type Services = Database.Service | EventRuntime.Service | KV.Service | Session.Service | CoordinationService.Service
+type Services = Database.Service | EventRuntime.Service | KV.Service | Session.Service | SessionAutonomy.Service | CoordinationService.Service
 const run = <A, E>(body: Effect.Effect<A, E, Services>, layer: Layer.Layer<Services, unknown> = runtime) =>
   Effect.runPromise(body.pipe(Effect.provide(layer), Effect.scoped))
 

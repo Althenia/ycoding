@@ -163,6 +163,9 @@ test("the tool description names the supervision chain", () => {
     "A supervising or completed owner resumes only when the notification wakes its receiver (urgent, or the Project is active), no review is open on that owner and the owner Session has no active revert.",
     "Waiting and starting owners keep notifications pending until they run.",
     "Cancelling, cancelled, failed and lost owners never receive member notifications.",
+    "A pending request raised by a member's subagent or any deeper descendant Session is listed under that member with requestSessionID naming the requesting Session; inspect, answer and escalate it with the member's sessionID. It neither makes the member waiting nor blocks send.",
+    "A request from a member's descendant stays open in its requesting Session, returned as requestSessionID, and the reasons attach to that Session's prompt.",
+    "Questions, forms, permission asks and guardrail reviews raised by a member's descendant Sessions are member events whose notifications carry requestSessionID.",
   ]) expect(CoordinationTool.description).toContain(text)
   for (const text of ["only the user decides it", "answer may only decline", "every guardrail review, and uncertain cases are refused", "Escalate whatever answer refuses"])
     expect([text, CoordinationTool.description.includes(text)]).toEqual([text, false])

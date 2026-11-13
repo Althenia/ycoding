@@ -2659,6 +2659,7 @@ export type CoordinationPendingRequest = {
   requestID: string
   fingerprint: string
   summary: string
+  requestSessionID?: string
 }
 
 export type GuardrailDecided = {

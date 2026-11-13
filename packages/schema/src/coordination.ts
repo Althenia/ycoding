@@ -101,6 +101,7 @@ export const PendingRequest = Schema.Struct({
   requestID: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
   fingerprint: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
   summary: Schema.String.check(Schema.isMaxLength(500)),
+  requestSessionID: SessionID.pipe(optional),
 }).annotate({ identifier: "Coordination.PendingRequest" })
 
 export interface Participant extends Schema.Schema.Type<typeof Participant> {}

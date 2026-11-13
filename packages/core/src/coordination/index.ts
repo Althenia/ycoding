@@ -9,6 +9,7 @@ import { makeGlobalNode } from "../effect/app-node"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { EventRuntime } from "../event"
 import { KV } from "../kv"
+import { SessionAutonomy } from "../session/autonomy"
 import { SessionTable } from "../session/sql"
 import { CoordinationGroupTable, CoordinationMemberTable } from "./sql"
 
@@ -105,6 +106,7 @@ export const layer = Layer.effect(
     const lock = KeyedMutex.makeUnsafe<string>()
     const ownershipLock = KeyedMutex.makeUnsafe<Coordination.GroupID>()
     const kv = yield* KV.Service
+    const autonomy = yield* SessionAutonomy.Service
     const pauseKey = (groupID: Coordination.GroupID) => `coordination.paused.${groupID}`
     const active = new Set<Coordination.GroupID>()
     const pausedReasons = new Map<Coordination.GroupID, Coordination.PausedReason>()
@@ -203,6 +205,19 @@ export const layer = Layer.effect(
     const updated = (groupID: Coordination.GroupID, revision: number) =>
       events.publish(Coordination.Event.Updated, { groupID, revision: Coordination.Revision.make(revision) }).pipe(Effect.asVoid)
 
+    const inheritMasterAutonomy = Effect.fnUntraced(function* (masterSessionID: Session.ID, sessionIDs: ReadonlyArray<Session.ID>) {
+      if (sessionIDs.length === 0) return
+      const modes = yield* autonomy.effectiveDecisions(masterSessionID).pipe(Effect.orDie)
+      yield* Effect.forEach(
+        sessionIDs,
+        (sessionID) =>
+          autonomy
+            .set({ sessionID, permissions: modes.permissions, guardrails: modes.guardrails, answers: modes.answers })
+            .pipe(Effect.orDie),
+        { discard: true },
+      )
+    })
+
     const insertMembers = (
       groupID: Coordination.GroupID,
       sessionIDs: ReadonlyArray<Session.ID>,
@@ -280,6 +295,7 @@ export const layer = Layer.effect(
                   }),
               },
             )
+            yield* inheritMasterAutonomy(input.masterSessionID, input.memberSessionIDs)
             yield* updated(groupID, 0)
             return yield* groupOf(yield* row(groupID))
           }),
@@ -310,7 +326,8 @@ export const layer = Layer.effect(
               return yield* new ConflictError({ message: `Project ${groupID} revision is ${current.revision}, expected ${input.revision}` })
             const name = input.name ?? current.name
             const masterSessionID = input.masterSessionID ?? current.master_session_id
-            const memberSessionIDs = input.memberSessionIDs ?? (yield* memberIDs(groupID))
+            const previousMemberIDs = yield* memberIDs(groupID)
+            const memberSessionIDs = input.memberSessionIDs ?? previousMemberIDs
             const settings = input.settings ?? settingsOf(current)
             yield* validateSessions(groupID, masterSessionID, memberSessionIDs)
             const at = yield* now
@@ -340,6 +357,7 @@ export const layer = Layer.effect(
                   }),
               },
             )
+            yield* inheritMasterAutonomy(masterSessionID, memberSessionIDs.filter((id) => !previousMemberIDs.includes(id)))
             if (masterSessionID !== current.master_session_id) {
               active.delete(groupID)
               pausedReasons.delete(groupID)
@@ -482,6 +500,7 @@ export const layer = Layer.effect(
                 ? []
                 : [{ definition: Coordination.Event.OwnerChanged, data: { groupID, revision, sessionID: input.sessionID, ownerSessionID: input.ownerSessionID } }]),
             ])
+            yield* inheritMasterAutonomy(current.master_session_id, [input.sessionID])
             yield* updated(groupID, revision)
             return yield* groupOf(yield* row(groupID))
           }),
@@ -522,4 +541,4 @@ export const layer = Layer.effect(
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node, EventRuntime.node, KV.node] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node, EventRuntime.node, KV.node, SessionAutonomy.node] })

@@ -291,7 +291,7 @@ export interface Interface {
   readonly deferPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError>
   readonly snapshot: (id: ID) => Effect.Effect<Snapshot | undefined>
-  readonly snapshots: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Snapshot>>
+  readonly snapshots: (sessionID: SessionSchema.ID, family?: ReadonlyArray<SessionSchema.ID>) => Effect.Effect<ReadonlyArray<Snapshot>>
   readonly reconsider: (input: ReconsiderInput) => Effect.Effect<ReconsiderResult>
   readonly escalate: (input: EscalateInput) => Effect.Effect<EscalateResult>
   readonly get: (id: ID) => Effect.Effect<Request | undefined>
@@ -762,9 +762,10 @@ const layer = Layer.effect(
       return item === undefined ? undefined : { request: item.request, fingerprint: fingerprintOf(item.request) }
     })
 
-    const snapshots = Effect.fn("Permission.snapshots")(function* (sessionID: SessionSchema.ID) {
+    const snapshots = Effect.fn("Permission.snapshots")(function* (sessionID: SessionSchema.ID, family?: ReadonlyArray<SessionSchema.ID>) {
+      const sessions = family ?? [sessionID]
       return Array.from(pending.values())
-        .filter((item) => item.request.sessionID === sessionID)
+        .filter((item) => sessions.includes(item.request.sessionID))
         .slice(0, 50)
         .map((item) => ({ request: item.request, fingerprint: fingerprintOf(item.request) }))
     })
