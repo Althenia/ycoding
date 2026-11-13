@@ -59,8 +59,24 @@ export function createProviderAuth(options: {
     }
     publish({ ...state, phase: operation === "provider.auth.key" ? "complete" : "pending" })
   }
+  const refresh = async (integrationID: string, label: string) => {
+    if (disposed || !options.current() || state.phase === "sending" || state.attempt) return
+    const started = ++revision
+    publish({ ...state, phase: "sending", integrationID, message: undefined })
+    const outcome = await request("provider.auth.refresh", { integrationID, label })
+    if (started !== revision) return
+    if (outcome.status !== "ok") { failed(outcome); return }
+    const result = readRefresh(outcome.value)
+    if (!result) { publish({ ...state, phase: "unknown", message: "The machine returned an unreadable refresh answer. Check profile status before trying again; this action was not replayed." }); return }
+    const message = result.status === "refreshed" ? `Refreshed ${label}.` : `Refresh failed for ${label}: ${result.message}`
+    const listed = await request("provider.auth.list")
+    if (started !== revision) return
+    const integrations = listed.status === "ok" ? readProviderAuthList(listed.value) : undefined
+    publish({ ...state, phase: "ready", integrations: integrations ?? state.integrations, message })
+  }
   return {
     state: () => state,
+    refresh,
     load: async () => {
       if (disposed || !options.current() || state.phase === "sending") return
       if (state.attempt) return
@@ -83,7 +99,7 @@ export function createProviderAuth(options: {
       if (outcome.status !== "ok") { failed(outcome); return }
       const status = readProviderAuthStatus(outcome.value)
       if (!status) { publish({ ...state, phase: "unknown", message: "The machine returned an unreadable status. Check again before repeating authentication." }); return }
-      publish({ ...state, attempt: status.status === "pending" ? state.attempt : undefined, phase: status.status === "complete" ? "complete" : status.status === "pending" ? "pending" : "failed", message: status.status === "failed" ? "Authentication failed. Try connecting again." : status.status === "expired" ? "Authentication expired. Connect again." : undefined })
+      publish({ ...state, attempt: status.status === "pending" ? state.attempt : undefined, phase: status.status === "complete" ? "complete" : status.status === "pending" ? "pending" : "failed", message: status.status === "failed" ? status.message ? `Authentication failed: ${status.message}` : "Authentication failed. Try connecting again." : status.status === "expired" ? "Authentication expired. Connect again." : undefined })
     },
     cancel: () => state.attempt && state.integrationID ? cancel(state.integrationID, state.attempt.attemptID) : Promise.resolve(),
     dispose: () => { disposed = true; if (state.attempt && state.integrationID && state.phase !== "complete") void cancel(state.integrationID, state.attempt.attemptID) },
@@ -108,7 +124,7 @@ export function readProviderAuthAttempt(value: unknown): ProviderAuthAttempt | u
 export function readProviderAuthStatus(value: unknown): ProviderAuthStatus | undefined {
   const item = data(value)
   if (!record(item) || !time(item.time) || (item.status !== "pending" && item.status !== "complete" && item.status !== "failed" && item.status !== "expired")) return
-  return { status: item.status, time: { created: item.time.created, expires: item.time.expires } }
+  return { status: item.status, ...(text(item.message) ? { message: item.message } : {}), time: { created: item.time.created, expires: item.time.expires } }
 }
 
 export function readProviderAuthList(value: unknown): readonly ProviderAuthInfo[] | undefined {
@@ -116,7 +132,7 @@ export function readProviderAuthList(value: unknown): readonly ProviderAuthInfo[
   if (!Array.isArray(items) || items.length > 500) return
   const projected = items.map((item): ProviderAuthInfo | undefined => {
     if (!record(item) || !text(item.id, 128) || !text(item.name, 256) || !Array.isArray(item.providers) || !item.providers.every((id) => text(id, 128)) || !Array.isArray(item.profiles) || !Array.isArray(item.methods)) return
-    const profiles = item.profiles.map((profile) => record(profile) && text(profile.name, 128) && typeof profile.active === "boolean" ? { name: profile.name, active: profile.active } : undefined)
+    const profiles = item.profiles.map(readProfile)
     const methods = item.methods.map((method): ProviderAuthInfo["methods"][number] | undefined => {
       if (!record(method) || (method.type !== "key" && method.type !== "oauth" && method.type !== "command") || !text(method.label, 256) || typeof method.available !== "boolean" || (method.type !== "key" && !text(method.id, 128))) return
       if (method.reason !== undefined && !text(method.reason)) return
@@ -127,6 +143,21 @@ export function readProviderAuthList(value: unknown): readonly ProviderAuthInfo[
     return { id: item.id, name: item.name, providers: item.providers, profiles: profiles.filter((profile) => profile !== undefined), methods: methods.filter((method) => method !== undefined) }
   })
   return projected.some((item) => !item) ? undefined : projected.filter((item) => item !== undefined)
+}
+
+function readProfile(profile: unknown): ProviderAuthInfo["profiles"][number] | undefined {
+  if (!record(profile) || !text(profile.name, 128) || typeof profile.active !== "boolean" || (profile.kind !== "oauth" && profile.kind !== "key")) return undefined
+  if (profile.status !== "connected" && profile.status !== "expired" && profile.status !== "refresh_failed") return undefined
+  if (profile.message !== undefined && !text(profile.message)) return undefined
+  return { name: profile.name, active: profile.active, kind: profile.kind, status: profile.status, ...(profile.message === undefined ? {} : { message: profile.message }) }
+}
+
+function readRefresh(value: unknown): { readonly status: "refreshed" } | { readonly status: "failed"; readonly message: string } | undefined {
+  const item = data(value)
+  if (!record(item)) return undefined
+  if (item.status === "refreshed" && typeof item.expires === "number" && Number.isFinite(item.expires)) return { status: "refreshed" }
+  if (item.status === "failed" && text(item.message)) return { status: "failed", message: item.message }
+  return undefined
 }
 
 function validPrompt(value: unknown): value is ProviderAuthPrompt {

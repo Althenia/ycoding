@@ -6,7 +6,7 @@ export function createProviderAuthFixture() {
   let status: "pending" | "complete" = "pending"
   let readFailed = false
   let keyUnknown = false
-  const profiles: { name: string; active: boolean }[] = [{ name: "Work", active: true }]
+  const profiles: { name: string; active: boolean; kind: "oauth" | "key"; status: "connected" | "expired" | "refresh_failed"; message?: string }[] = [{ name: "Work", active: true, kind: "oauth", status: "connected" }]
   const time = { created: Date.now(), expires: Date.now() + 600000 }
   return {
     report: () => ({ acceptedKey, acceptedCode, profiles }),
@@ -19,7 +19,10 @@ export function createProviderAuthFixture() {
         acceptedKey = input.key === "synthetic-test-key"
         if (keyUnknown) { keyUnknown = false; return { status: "unknown", error: { code: "outcome_unknown", message: "Unconfirmed" } } }
         profiles.forEach((profile) => { profile.active = false })
-        profiles.push({ name: String(input.label), active: true })
+        const label = String(input.label)
+        const replaced = profiles.find((profile) => profile.name === label)
+        if (replaced) Object.assign(replaced, { active: true, kind: "key", status: "connected" })
+        else profiles.push({ name: label, active: true, kind: "key", status: "connected" })
         return { status: "ok", value: { data: { status: "complete" } } }
       }
       if (operation === "provider.auth.begin") { status = "pending"; return { status: "ok", value: { data: { type: "oauth", attemptID: "con_fixture", mode: "auto", url: "https://example.com/authorize", instructions: "Enter code ABCD-EFGH", ...(input.methodID === "manual" ? { manualCode: true } : {}), time } } } }
@@ -27,6 +30,7 @@ export function createProviderAuthFixture() {
         if (readFailed) { readFailed = false; return { status: "failed", error: { code: "internal_error", message: "synthetic-private-diagnostic" } } }
         return { status: "ok", value: { data: { status, time } } }
       }
+      if (operation === "provider.auth.refresh") return { status: "ok", value: { data: { status: "refreshed", expires: Date.now() + 3600000 } } }
       if (operation === "provider.auth.complete") { acceptedCode = input.code === "synthetic-test-code"; status = "complete"; return { status: "ok", value: { data: { status: "submitted" } } } }
       return { status: "ok", value: { data: { status: "cancelled" } } }
     },

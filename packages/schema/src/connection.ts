@@ -13,6 +13,8 @@ export const CredentialInfo = Schema.Struct({
   active: Schema.Boolean,
   /** Whether the stored credential came from an OAuth sign-in or an API key. Absent from older servers. */
   kind: Schema.Literals(["oauth", "key"]).pipe(optional),
+  status: Schema.Literals(["connected", "expired", "refresh_failed"]).pipe(optional),
+  message: optional(Schema.String),
 }).annotate({ identifier: "Connection.CredentialInfo" })
 
 export interface EnvInfo extends Schema.Schema.Type<typeof EnvInfo> {}

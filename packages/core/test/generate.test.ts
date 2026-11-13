@@ -114,6 +114,7 @@ const generate = (input: {
             update: () => Effect.die("unused"),
             activate: () => Effect.die("unused"),
             remove: () => Effect.die("unused"),
+            refresh: () => Effect.die("unused"),
           },
           oauth: {
             connect: () => Effect.die("unused"),

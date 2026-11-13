@@ -2,6 +2,7 @@ import { Integration } from "@ycoding-ai/core/integration"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
+import { response } from "../location"
 
 export const CredentialHandler = HttpApiBuilder.group(Api, "server.credential", (handlers) =>
   handlers
@@ -19,6 +20,13 @@ export const CredentialHandler = HttpApiBuilder.group(Api, "server.credential", 
         const integration = yield* Integration.Service
         yield* integration.connection.activate(ctx.params.credentialID)
         return HttpApiSchema.NoContent.make()
+      }),
+    )
+    .handle(
+      "credential.refresh",
+      Effect.fn(function* (ctx) {
+        const integration = yield* Integration.Service
+        return yield* response(integration.connection.refresh(ctx.params.credentialID))
       }),
     )
     .handle(

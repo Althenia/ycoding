@@ -93,12 +93,12 @@ export class UnsupportedPackageError extends Schema.TaggedErrorClass<Unsupported
   }
 }
 
-export class ClaudeCodeReconnectError extends Schema.TaggedErrorClass<ClaudeCodeReconnectError>()(
-  "SessionRunnerModel.ClaudeCodeReconnectError",
-  { providerID: Provider.ID, modelID: CatalogModel.ID },
+export class ReconnectRequiredError extends Schema.TaggedErrorClass<ReconnectRequiredError>()(
+  "SessionRunnerModel.ReconnectRequiredError",
+  { providerID: Provider.ID, providerName: Schema.String, detail: Schema.String },
 ) {
   override get message() {
-    return `Claude profile requires reconnect for ${this.providerID}/${this.modelID}. Sign in to this profile again.`
+    return `${this.providerName} sign-in expired or was revoked and could not be refreshed: ${this.detail.trim().replace(/\.+$/, "")}. Reconnect ${this.providerName}: run /connect, choose ${this.providerName}, then Reconnect.`
   }
 }
 
@@ -108,7 +108,7 @@ export type Error =
   | ModelUnavailableError
   | VariantUnavailableError
   | UnsupportedPackageError
-  | ClaudeCodeReconnectError
+  | ReconnectRequiredError
   | Integration.AuthorizationError
 
 export interface Resolved {
@@ -122,6 +122,7 @@ export interface Resolved {
   readonly connectionIdentityDigest: string
   readonly accountIdentityDigest?: string
   readonly profileBinding?: SessionEvent.ProfileBinding
+  readonly oauth?: { readonly credentialID: Credential.ID; readonly providerName: string }
 }
 
 export interface Interface {
@@ -243,7 +244,7 @@ export const fromCatalogModel = (
   dependencies: Dependencies = {},
   _connection?: IntegrationConnection.Info,
   snapshot?: Integration.Snapshot,
-): Effect.Effect<Model, UnsupportedPackageError | ClaudeCodeReconnectError> => {
+): Effect.Effect<Model, UnsupportedPackageError | ReconnectRequiredError> => {
   const packageName = Provider.packageName(model.package)
   const source = packageName === "@ai-sdk/anthropic" ? claudeCodeCredentialSource(credential) : undefined
   if (
@@ -252,7 +253,13 @@ export const fromCatalogModel = (
     ((credential?.type === "oauth" && credential.methodID === Integration.MethodID.make("claude-code")) ||
       (model.settings?.apiKey === claudeCodeSentinel && credential?.type !== "key"))
   )
-    return Effect.fail(new ClaudeCodeReconnectError({ providerID: model.providerID, modelID: model.id }))
+    return Effect.fail(
+      new ReconnectRequiredError({
+        providerID: model.providerID,
+        providerName: model.providerID,
+        detail: "the Claude profile is not linked to a managed Claude sign-in",
+      }),
+    )
   const resolved = produce(model, (draft) => {
     if (draft.settings?.apiKey === "") delete draft.settings.apiKey
     if (draft.settings?.apiKey === claudeCodeSentinel) {
@@ -548,6 +555,7 @@ const layer = Layer.effect(
         const selected = selectedConfiguration.model
         const effectiveSession = { ...session, model: selectedConfiguration.ref }
         const provider = yield* catalog.provider.get(selected.providerID)
+        const providerName = provider?.name ?? selected.providerID
         const integrationID = provider?.integrationID ?? Integration.ID.make(selected.providerID)
         const storedBinding = options?.rebind
           ? undefined
@@ -587,7 +595,21 @@ const layer = Layer.effect(
                 active: matching[0]!.active,
               })
         const snapshot = connection
-          ? yield* integrations.connection.snapshot(connection, options?.refresh === false ? { refresh: false } : undefined)
+          ? yield* integrations.connection
+              .snapshot(connection, options?.refresh === false ? { refresh: false } : undefined)
+              .pipe(
+                Effect.catchTag("Integration.Authorization", (error) =>
+                  Effect.gen(function* () {
+                    const stored = connection.type === "credential" ? yield* credentials.get(connection.id) : undefined
+                    if (stored?.value.type !== "oauth") return yield* error
+                    return yield* new ReconnectRequiredError({
+                      providerID: selected.providerID,
+                      providerName,
+                      detail: error.cause instanceof globalThis.Error ? error.cause.message : String(error.cause),
+                    })
+                  }),
+                ),
+              )
           : undefined
         const credential = snapshot?.value
         const credentialInfo = snapshot?.credential
@@ -613,6 +635,10 @@ const layer = Layer.effect(
           },
           connection,
           snapshot,
+        ).pipe(
+          Effect.catchTag("SessionRunnerModel.ReconnectRequiredError", (error) =>
+            Effect.fail(new ReconnectRequiredError({ providerID: error.providerID, providerName, detail: error.detail })),
+          ),
         )
         const variant = effectiveSession.model?.variant
         const identity = credentialInfo
@@ -623,6 +649,9 @@ const layer = Layer.effect(
           ref: selectedConfiguration.ref,
           cost: contextual.cost,
           accountIdentityDigest: identity,
+          ...(credentialInfo?.value.type === "oauth"
+            ? { oauth: { credentialID: credentialInfo.id, providerName } }
+            : {}),
           ...(profile === undefined || !credentialInfo
             ? {}
             : {

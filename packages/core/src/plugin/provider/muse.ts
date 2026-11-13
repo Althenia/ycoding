@@ -729,17 +729,17 @@ export const MusePlugin = define({
               profileKey,
               identity(snapshot) ? tiers.get(identity(snapshot)!) : undefined,
             )
-          await response.body?.cancel()
           const id = identity(snapshot)!
           const cached = keys.get(id)
           if (cached && (await cached) === key && keys.get(id) === cached) keys.delete(id)
-          const renewed = await keyFor(snapshot, init?.signal ?? undefined)
+          const renewed = await keyFor(snapshot, init?.signal ?? undefined).catch(() => undefined)
+          if (!renewed) return response
+          await response.body?.cancel()
           headers.set("authorization", `Bearer ${renewed.api_key}`)
           const retried = await send(`${renewed.base_url.replace(/\/$/, "")}/responses`, { ...init, headers, body })
           if (retried.status !== 401) return observeMuseUsage(retried, usage, profileKey, tiers.get(id))
-          await retried.body?.cancel()
           if ((await keys.get(id)) === renewed) keys.delete(id)
-          throw new Error(reconnect)
+          return retried
         }
         evt.options.fetch = wrapped
         evt.options.baseURL = baseURL

@@ -7,7 +7,7 @@
  * or absent.
  */
 
-import type { CreateEnrollmentResponse, RemoteDotsComputerTarget, RemoteDotsStatus } from "@ycoding-ai/remote"
+import type { CreateEnrollmentResponse, ProviderAuthInfo, RemoteDotsComputerTarget, RemoteDotsStatus } from "@ycoding-ai/remote"
 import { autonomySummary, autonomyTone, type AutonomyMode } from "./autonomy"
 import type { KeepAwakeState } from "./keep-awake"
 import type { ProviderAuthState } from "./provider-auth"
@@ -32,6 +32,19 @@ export function modelEffortNotice(input: { readonly known: boolean; readonly blo
 
 export function providerProfileRefreshVisible(input: { readonly phase: ProviderAuthState["phase"]; readonly hasAttempt: boolean }) {
   return !input.hasAttempt && (input.phase === "failed" || input.phase === "unknown" || input.phase === "unsupported")
+}
+
+export function providerProfileView(profile: ProviderAuthInfo["profiles"][number]) {
+  return {
+    kind: profile.kind === "oauth" ? "OAuth" : "API key",
+    state: profile.status === "connected" ? "Connected" : profile.status === "expired" ? "Expired" : profile.message ? `Refresh failed: ${profile.message}` : "Refresh failed",
+    tone: profile.status === "connected" ? "ok" : profile.status === "expired" ? "warning" : "danger",
+    canRefresh: profile.kind === "oauth",
+  } as const
+}
+
+export function providerProfileMethod(profile: Pick<ProviderAuthInfo["profiles"][number], "kind">, methods: ProviderAuthInfo["methods"]) {
+  return methods.find((method) => method.available && method.type === profile.kind)
 }
 
 export function dotsConnectionView(input: { readonly status?: RemoteDotsStatus; readonly computer?: string; readonly online: boolean; readonly loading: boolean; readonly refreshing: boolean; readonly pending: boolean; readonly error?: string }) {

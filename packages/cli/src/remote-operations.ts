@@ -2280,6 +2280,7 @@ const mutations: ReadonlySet<string> = new Set([
   "provider.auth.begin",
   "provider.auth.complete",
   "provider.auth.cancel",
+  "provider.auth.refresh",
   "machine.latency.append",
   "machine.telemetry.consent.set",
   "machine.keepAwake.set",

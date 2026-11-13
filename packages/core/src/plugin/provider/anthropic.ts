@@ -178,14 +178,18 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
                 ),
               })),
             ),
-          refresh: (credential) =>
-            Effect.fail(
-              new Error(
-                claudeCodeCredentialSource(credential)
-                  ? "Managed Claude profile requires reconnect. Sign in again."
-                  : "Claude profile requires reconnect. Sign in to this profile again.",
+          refresh: (credential) => {
+            const managed = claudeCodeCredentialSource(credential)
+            if (!managed)
+              return Effect.fail(new Error("Claude profile is not linked to a managed Claude sign-in; reconnect it"))
+            return Effect.tryPromise(() => store.refresh(managed)).pipe(
+              Effect.flatMap((refreshed) =>
+                refreshed
+                  ? Effect.succeed(credential)
+                  : Effect.fail(new Error("Claude rejected the managed profile's stored refresh token")),
               ),
-            ),
+            )
+          },
           label: (credential: Credential.OAuth) => {
             const source = claudeCodeCredentialSource(credential)
             return accounts.find((account) => account.source === source)?.label

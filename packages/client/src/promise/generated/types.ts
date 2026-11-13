@@ -14,6 +14,7 @@ export type TelemetryRequestSample = {
     | "provider.auth.status"
     | "provider.auth.complete"
     | "provider.auth.cancel"
+    | "provider.auth.refresh"
     | "coordination.settings"
     | "coordination.list"
     | "coordination.create"
@@ -594,6 +595,8 @@ export type ConnectionCredentialInfo = {
   label: string
   active: boolean
   kind?: "oauth" | "key"
+  status?: "connected" | "expired" | "refresh_failed"
+  message?: string
 }
 
 export type ConnectionEnvInfo = { type: "env"; name: string }
@@ -672,6 +675,8 @@ export type McpResourceTemplate = {
   description?: string
   mimeType?: string
 }
+
+export type IntegrationRefreshResult = { status: "refreshed"; expires: number } | { status: "failed"; message: string }
 
 export type ProjectVcs = "git" | "hg"
 
@@ -6136,6 +6141,7 @@ export type ServerTelemetryAppendInput = {
             | "provider.auth.status"
             | "provider.auth.complete"
             | "provider.auth.cancel"
+            | "provider.auth.refresh"
             | "coordination.settings"
             | "coordination.list"
             | "coordination.create"
@@ -8306,8 +8312,21 @@ export type IntegrationConnectKeyInput = {
   readonly location?: {
     readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
   }["location"]
-  readonly key: { readonly key: string; readonly label?: string | undefined }["key"]
-  readonly label?: { readonly key: string; readonly label?: string | undefined }["label"]
+  readonly key: {
+    readonly key: string
+    readonly label?: string | undefined
+    readonly credentialID?: string | undefined
+  }["key"]
+  readonly label?: {
+    readonly key: string
+    readonly label?: string | undefined
+    readonly credentialID?: string | undefined
+  }["label"]
+  readonly credentialID?: {
+    readonly key: string
+    readonly label?: string | undefined
+    readonly credentialID?: string | undefined
+  }["credentialID"]
 }
 
 export type IntegrationConnectKeyOutput = void
@@ -8321,17 +8340,26 @@ export type IntegrationOauthConnectInput = {
     readonly methodID: string
     readonly inputs: { readonly [x: string]: string }
     readonly label?: string | undefined
+    readonly credentialID?: string | undefined
   }["methodID"]
   readonly inputs: {
     readonly methodID: string
     readonly inputs: { readonly [x: string]: string }
     readonly label?: string | undefined
+    readonly credentialID?: string | undefined
   }["inputs"]
   readonly label?: {
     readonly methodID: string
     readonly inputs: { readonly [x: string]: string }
     readonly label?: string | undefined
+    readonly credentialID?: string | undefined
   }["label"]
+  readonly credentialID?: {
+    readonly methodID: string
+    readonly inputs: { readonly [x: string]: string }
+    readonly label?: string | undefined
+    readonly credentialID?: string | undefined
+  }["credentialID"]
 }
 
 export type IntegrationOauthConnectOutput = {
@@ -8579,6 +8607,18 @@ export type CredentialActivateInput = {
 }
 
 export type CredentialActivateOutput = void
+
+export type CredentialRefreshInput = {
+  readonly credentialID: { readonly credentialID: string }["credentialID"]
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+}
+
+export type CredentialRefreshOutput = {
+  location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
+  data: IntegrationRefreshResult
+}
 
 export type CredentialRemoveInput = {
   readonly credentialID: { readonly credentialID: string }["credentialID"]

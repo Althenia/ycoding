@@ -68,6 +68,9 @@ export type Info = Integration.Info
 export const Inputs = Integration.Inputs
 export type Inputs = Integration.Inputs
 
+export const RefreshResult = Integration.RefreshResult
+export type RefreshResult = Integration.RefreshResult
+
 export type OAuthAuthorization = {
   readonly url: string
   readonly instructions: string
@@ -189,7 +192,9 @@ export interface Interface extends State.Transformable<Draft> {
       readonly key: string
       /** User-facing label for the stored credential. */
       readonly label?: string
+      readonly credentialID?: Credential.ID
     }) => Effect.Effect<void, AuthorizationError>
+    readonly refresh: (credentialID: Credential.ID) => Effect.Effect<RefreshResult>
     /** Updates a stored credential exposed as a connection. */
     readonly update: (
       credentialID: Credential.ID,
@@ -207,6 +212,7 @@ export interface Interface extends State.Transformable<Draft> {
       readonly methodID: MethodID
       readonly inputs: Inputs
       readonly label?: string
+      readonly credentialID?: Credential.ID
     }) => Effect.Effect<Attempt, AuthorizationError>
     /** Returns the current state of an OAuth attempt. */
     readonly status: (input: {
@@ -251,6 +257,7 @@ type PendingAttempt = {
   integrationID: ID
   methodID: MethodID
   label?: string
+  credentialID?: Credential.ID
   scope: Scope.Closeable
   time: AttemptTime
 }
@@ -356,28 +363,52 @@ const layer = Layer.effect(
       announce: { gate: announcements, publish: events.publish(Event.Updated, {}) },
     })
 
-    const resolveConnections = (entry: Entry | undefined, saved: readonly Credential.Info[]) => {
+    const status = Effect.fnUntraced(function* (credential: Credential.Info, now: number) {
+      const failure = yield* credentials.refreshFailure(credential.id)
+      if (failure !== undefined) return { status: "refresh_failed" as const, message: failure }
+      if (credential.value.type === "oauth" && credential.value.expires <= now) return { status: "expired" as const }
+      return { status: "connected" as const }
+    })
+
+    const resolveConnections = Effect.fnUntraced(function* (
+      entry: Entry | undefined,
+      saved: readonly Credential.Info[],
+    ) {
       // A profile is a stored credential with a user-facing name. The active profile sorts first so
       // the connection a request resolves is the one the user selected, and every connection
       // reports whether it is that active profile.
       const newestFirst = saved.toReversed()
       const active = newestFirst.find((credential) => credential.active) ?? newestFirst[0]
-      const credentials = [
-        ...(active ? [active] : []),
-        ...newestFirst.filter((credential) => credential.id !== active?.id),
-      ].map((credential) => ({
-        type: "credential" as const,
-        id: credential.id,
-        label: credential.label,
-        active: credential.id === active?.id,
-        kind: credential.value.type,
-      }))
+      const now = yield* Clock.currentTimeMillis
+      const credentialConnections = yield* Effect.forEach(
+        [...(active ? [active] : []), ...newestFirst.filter((credential) => credential.id !== active?.id)],
+        (credential) =>
+          status(credential, now).pipe(
+            Effect.map((state) => ({
+              type: "credential" as const,
+              id: credential.id,
+              label: credential.label,
+              active: credential.id === active?.id,
+              kind: credential.value.type,
+              ...state,
+            })),
+          ),
+      )
       const env = (entry?.methods ?? [])
         .filter((method) => method.type === "env")
         .flatMap((method) => method.names.filter((name) => process.env[name]))
         .map((name) => ({ type: "env" as const, name }))
-      return [...credentials, ...env]
-    }
+      return [...credentialConnections, ...env]
+    })
+
+    const target = Effect.fnUntraced(function* (integrationID: ID, credentialID: Credential.ID | undefined) {
+      if (credentialID === undefined) return undefined
+      const credential = yield* credentials.get(credentialID)
+      if (credential?.integrationID === integrationID) return credential
+      return yield* new AuthorizationError({
+        cause: new Error(`Credential ${credentialID} is not a profile of ${integrationID}`),
+      })
+    })
 
     const project = (entry: Entry, connections: IntegrationConnection.Info[]) =>
       Info.make({
@@ -427,7 +458,11 @@ const layer = Layer.effect(
               .get()
               .integrations.get(attempt.integrationID)
               ?.implementations.get(attempt.methodID)
-            const persistence = yield* Effect.sync(() => attempt.label ?? implementation?.label?.(exit.value)).pipe(
+            const persistence = yield* (
+              attempt.credentialID === undefined
+                ? Effect.sync(() => attempt.label ?? implementation?.label?.(exit.value))
+                : target(attempt.integrationID, attempt.credentialID).pipe(Effect.map((credential) => credential?.label))
+            ).pipe(
               Effect.flatMap((label) =>
                 credentials.create({
                   integrationID: attempt.integrationID,
@@ -572,11 +607,13 @@ const layer = Layer.effect(
       readonly methodID: MethodID
       readonly inputs: Inputs
       readonly label?: string
+      readonly credentialID?: Credential.ID
     }) {
       const method = state.get().integrations.get(input.integrationID)?.implementations.get(input.methodID)
       if (!method) {
         return yield* Effect.die(new Error(`OAuth method not found: ${input.integrationID}/${input.methodID}`))
       }
+      yield* target(input.integrationID, input.credentialID)
       const attemptScope = yield* Scope.fork(scope)
       const authorization = yield* authorize(method.authorize(input.inputs)).pipe(
         Scope.provide(attemptScope),
@@ -594,6 +631,7 @@ const layer = Layer.effect(
           integrationID: input.integrationID,
           methodID: input.methodID,
           label: input.label,
+          credentialID: input.credentialID,
           scope: attemptScope,
           time,
         }),
@@ -718,19 +756,21 @@ const layer = Layer.effect(
       get: Effect.fn("Integration.get")(function* (id) {
         const entry = state.get().integrations.get(id)
         if (!entry) return undefined
-        return project(entry, resolveConnections(entry, yield* credentials.list(id)))
+        return project(entry, yield* resolveConnections(entry, yield* credentials.list(id)))
       }),
       list: Effect.fn("Integration.list")(function* () {
         const saved = Map.groupBy(yield* credentials.all(), (credential) => credential.integrationID)
-        return Array.from(state.get().integrations.values(), (entry) =>
-          project(entry, resolveConnections(entry, saved.get(entry.ref.id) ?? [])),
-        ).toSorted((a, b) => a.name.localeCompare(b.name))
+        return (yield* Effect.forEach(state.get().integrations.values(), (entry) =>
+          resolveConnections(entry, saved.get(entry.ref.id) ?? []).pipe(
+            Effect.map((connections) => project(entry, connections)),
+          ),
+        )).toSorted((a, b) => a.name.localeCompare(b.name))
       }),
       connection: {
         snapshot,
         active: Effect.fn("Integration.connection.active")(function* (id) {
           const entry = state.get().integrations.get(id)
-          return resolveConnections(entry, yield* credentials.list(id))[0]
+          return (yield* resolveConnections(entry, yield* credentials.list(id)))[0]
         }),
         resolve: Effect.fn("Integration.connection.resolve")(function* (connection) {
           return (yield* snapshot(connection)).value
@@ -741,13 +781,36 @@ const layer = Layer.effect(
             .integrations.get(input.integrationID)
             ?.methods.some((method) => method.type === "key")
           if (!method) return yield* Effect.die(new Error(`Key method not found: ${input.integrationID}`))
+          const replaced = yield* target(input.integrationID, input.credentialID)
           yield* credentials.create({
             integrationID: input.integrationID,
-            label: input.label,
+            label: replaced?.label ?? input.label,
             value: Credential.Key.make({ type: "key", key: input.key }),
           })
           yield* events.publish(Event.ConnectionUpdated, { integrationID: input.integrationID })
           yield* events.publish(Event.Updated, {})
+        }),
+        refresh: Effect.fn("Integration.connection.refresh")(function* (credentialID) {
+          const credential = yield* credentials.get(credentialID)
+          if (!credential) return { status: "failed" as const, message: `Credential not found: ${credentialID}` }
+          const name = state.get().integrations.get(credential.integrationID)?.ref.name ?? credential.integrationID
+          if (credential.value.type === "key")
+            return { status: "failed" as const, message: "API keys do not refresh; replace the key instead" }
+          const implementation = state
+            .get()
+            .integrations.get(credential.integrationID)
+            ?.implementations.get(credential.value.methodID)
+          if (!implementation?.refresh)
+            return { status: "failed" as const, message: `${name} sign-in cannot be refreshed; reconnect instead` }
+          const exit = yield* credentials
+            .refresh(credential, implementation.refresh(credential.value))
+            .pipe(Effect.exit)
+          if (Exit.isFailure(exit)) return { status: "failed" as const, message: message(exit.cause) }
+          if (exit.value?.value.type !== "oauth")
+            return { status: "failed" as const, message: "Credential changed during refresh; select the profile again" }
+          yield* events.publish(Event.ConnectionUpdated, { integrationID: credential.integrationID })
+          yield* events.publish(Event.Updated, {})
+          return { status: "refreshed" as const, expires: exit.value.value.expires }
         }),
         update: Effect.fn("Integration.connection.update")(function* (credentialID, updates) {
           const credential = yield* credentials.get(credentialID)

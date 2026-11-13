@@ -15,3 +15,45 @@
 .overlay--provider-connect .input {
   max-inline-size: 100%;
 }
+
+.provider-profiles {
+  display: grid;
+  gap: var(--yc-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.provider-profile {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yc-space-2) var(--yc-space-3);
+  overflow-wrap: anywhere;
+}
+
+.provider-profile__name {
+  font-weight: 600;
+}
+
+.provider-profile__kind {
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-2xs);
+  letter-spacing: var(--yc-tracking-wide);
+  text-transform: uppercase;
+}
+
+.provider-profile__state--warning {
+  color: var(--yc-yellow-strong);
+}
+
+.provider-profile__state--danger {
+  color: var(--yc-danger);
+}
+
+.provider-profile__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-2);
+  margin-inline-start: auto;
+}

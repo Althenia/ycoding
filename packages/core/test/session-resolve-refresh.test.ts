@@ -15,6 +15,7 @@ import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
+import { toSessionError } from "@ycoding-ai/core/session/to-session-error"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(
@@ -48,6 +49,7 @@ const setup = Effect.gen(function* () {
   )
   yield* catalog.transform((draft) => {
     draft.provider.update(providerID, (item) => {
+      item.name = "OpenAI"
       item.package = Provider.aisdk("@ai-sdk/openai")
     })
     draft.model.update(providerID, modelID, (item) => {
@@ -95,6 +97,36 @@ it.effect("a read-only resolution never refreshes a near-expiry account while no
   const normal = yield* fixture.models.resolve(session("Work"))
   expect(fixture.refreshes).toEqual(["fixture-Work"])
   expect(normal.accountIdentityDigest).toBe(readonly.accountIdentityDigest)
+}))
+
+it.effect("an expired OAuth sign-in whose automatic refresh fails asks the user to reconnect the named provider", () => Effect.gen(function* () {
+  const fixture = yield* setup
+  const integrationID = Integration.ID.make(providerID)
+  yield* fixture.integrations.transform((draft) =>
+    draft.method.update({
+      integrationID,
+      method: { type: "oauth", id: methodID, label: "Fixture refresh" },
+      authorize: () => Effect.die("No live authorization"),
+      refresh: (value) =>
+        Effect.suspend(() => {
+          fixture.refreshes.push(value.refresh)
+          return Effect.fail(new Error("invalid_grant: Refresh token not found or invalid"))
+        }),
+    }),
+  )
+  const failure = yield* fixture.models.resolve(session("Work")).pipe(Effect.flip)
+  const message =
+    "OpenAI sign-in expired or was revoked and could not be refreshed: invalid_grant: Refresh token not found or invalid. Reconnect OpenAI: run /connect, choose OpenAI, then Reconnect."
+  expect(failure).toBeInstanceOf(SessionRunnerModel.ReconnectRequiredError)
+  expect(failure.message).toBe(message)
+  expect(toSessionError(failure)).toEqual({ type: "provider.auth", message })
+  expect(fixture.refreshes).toEqual(["refresh-Work"])
+}))
+
+it.effect("a resolution backed by a stored OAuth sign-in names that credential and the provider", () => Effect.gen(function* () {
+  const fixture = yield* setup
+  const resolved = yield* fixture.models.resolve(session("Personal"))
+  expect(resolved.oauth).toEqual({ credentialID: fixture.profiles[1].id, providerName: "OpenAI" })
 }))
 
 it.effect("a read-only connection snapshot leaves the stored credential untouched and the default snapshot refreshes", () => Effect.gen(function* () {

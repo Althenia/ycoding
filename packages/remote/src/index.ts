@@ -26,7 +26,7 @@
 
 /** Envelope revision. Bump only with a coordinated relay/agent/client release. */
 import { parseProviderAuthInput, providerAuthOperations } from "./provider-auth.ts"
-export { parseProviderAuthInput, providerAuthOperations, isProviderAuthorizationURL, type ProviderAuthOperation, type ProviderAuthInput, type ProviderAuthTarget, type ProviderAuthInfo, type ProviderAuthAttempt, type ProviderAuthStatus, type ProviderAuthPrompt } from "./provider-auth.ts"
+export { parseProviderAuthInput, providerAuthOperations, isProviderAuthorizationURL, type ProviderAuthOperation, type ProviderAuthInput, type ProviderAuthTarget, type ProviderAuthInfo, type ProviderAuthAttempt, type ProviderAuthStatus, type ProviderAuthRefresh, type ProviderAuthPrompt } from "./provider-auth.ts"
 
 export const RemoteProtocolVersion = 4
 
@@ -299,6 +299,7 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "provider.auth.status": "mutation",
   "provider.auth.complete": "mutation",
   "provider.auth.cancel": "mutation",
+  "provider.auth.refresh": "mutation",
   "workspace.list": "read",
   "session.list": "read",
   "session.active": "read",

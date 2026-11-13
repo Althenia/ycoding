@@ -800,7 +800,7 @@ Report concrete defects with file and symbol evidence.`,
         blocks: [
           {
             kind: "paragraph",
-            text: "One provider can hold several named profiles: multiple accounts or API keys. A profile is the user-facing name of a stored credential. The TUI's `/connect`, Connect integration, and model selector's connect action, or the web palette's Connect provider, ask for that name; reusing a name updates that profile. Connecting makes that profile the machine's provider default. The web sends keys and manual authorization codes through the authenticated relay and keeps credential storage on the selected machine.",
+            text: "One provider can hold several named profiles: multiple accounts or API keys. A profile is the user-facing name of a stored credential. The TUI's `/connect`, Connect integration, and model selector's connect action, or the web palette's Connect provider, ask for that name; reusing a name replaces that profile's credential only after the new sign-in or key succeeds. Connecting makes that profile the machine's provider default. The web sends keys and manual authorization codes through the authenticated relay and keeps credential storage on the selected machine.",
           },
           {
             kind: "list",

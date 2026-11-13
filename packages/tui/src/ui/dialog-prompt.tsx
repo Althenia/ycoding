@@ -13,6 +13,7 @@ export type DialogPromptProps = {
   value?: string
   busy?: boolean
   busyText?: string
+  mask?: boolean
   onConfirm?: (value: string) => void
   onCancel?: () => void
 }
@@ -22,6 +23,7 @@ export function DialogPrompt(props: DialogPromptProps) {
   const { theme } = useTheme().contextual("elevated")
   const shortcuts = Keymap.useShortcuts()
   const [textareaTarget, setTextareaTarget] = createSignal<TextareaRenderable>()
+  const [length, setLength] = createSignal(0)
   let textarea: TextareaRenderable
 
   function confirm() {
@@ -78,8 +80,15 @@ export function DialogPrompt(props: DialogPromptProps) {
       <DialogSearchRow />
       <box minHeight={3} paddingTop={1} paddingLeft={6} paddingRight={4}>
         {props.description?.()}
+        <Show when={props.mask}>
+          <text fg={length() ? theme.text.formfield.default : theme.text.subdued} wrapMode="none" overflow="hidden">
+            {length() ? "•".repeat(length()) : (props.placeholder ?? "")}
+          </text>
+        </Show>
         <textarea
           height={1}
+          visible={!props.mask}
+          onContentChange={() => setLength(textarea.plainText.length)}
           ref={(val: TextareaRenderable) => {
             textarea = val
             setTextareaTarget(val)

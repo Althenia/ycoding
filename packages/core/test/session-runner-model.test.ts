@@ -742,7 +742,7 @@ describe("SessionRunnerModel", () => {
         ).pipe(Effect.exit);
 
         expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure") expect(String(result.cause)).toContain("ClaudeCodeReconnectError");
+        if (result._tag === "Failure") expect(String(result.cause)).toContain("ReconnectRequiredError");
         expect(runtime).toBeUndefined();
       }),
   );
@@ -758,7 +758,7 @@ describe("SessionRunnerModel", () => {
         { loadAISDK: () => { loaded = true; return Effect.die("selected missing profile cannot load") } },
       ).pipe(Effect.exit)
       expect(result._tag).toBe("Failure")
-      if (result._tag === "Failure") expect(String(result.cause)).toContain("ClaudeCodeReconnectError")
+      if (result._tag === "Failure") expect(String(result.cause)).toContain("ReconnectRequiredError")
       expect(loaded).toBe(false)
     }),
   );

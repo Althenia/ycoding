@@ -17,6 +17,7 @@ import { DialogPrompt } from "../ui/dialog-prompt"
 import { DialogSelect } from "../ui/dialog-select"
 import { Link } from "../ui/link"
 import { useToast } from "../ui/toast"
+import { errorMessage } from "../util/error"
 
 const INTEGRATION_PRIORITY: Record<string, number> = {
   ycoding: 0,
@@ -53,9 +54,22 @@ export function credentialConnections(integration: IntegrationInfo) {
   )
 }
 
+type CredentialConnection = Extract<ConnectionInfo, { type: "credential" }>
+
+export function connectionStatusText(connection: CredentialConnection) {
+  if (connection.status === "expired") return "Expired"
+  if (connection.status === "refresh_failed") return `Refresh failed: ${connection.message ?? "unknown error"}`
+  return "Connected"
+}
+
 export function connectionSummary(integration: IntegrationInfo) {
   return integration.connections
-    .map((connection) => (connection.type === "credential" ? connection.label : `$${connection.name}`))
+    .map((connection) => {
+      if (connection.type !== "credential") return `$${connection.name}`
+      if (connection.status === "expired") return `${connection.label} (expired)`
+      if (connection.status === "refresh_failed") return `${connection.label} (refresh failed)`
+      return connection.label
+    })
     .join(", ")
 }
 
@@ -155,6 +169,7 @@ function manageConnections(
                     title: connection.label,
                     value: `${connection.id}:default`,
                     description: "Default profile",
+                    footer: connectionStateLabel(connection),
                     state: "connected" as const,
                     onSelect: () => undefined,
                   },
@@ -164,6 +179,7 @@ function manageConnections(
                     title: `Make ${connection.label} the default`,
                     value: `${connection.id}:default`,
                     description: "Used when a model has no profile",
+                    footer: connectionStateLabel(connection),
                     onSelect: () => {
                       void client.api.credential
                         .activate({ credentialID: connection.id, location: location(data) })
@@ -173,6 +189,61 @@ function manageConnections(
                   },
                 ],
           ),
+          ...credentialConnections(integration).flatMap((connection) => {
+            if (connection.kind === "oauth") {
+              const oauthMethods = methods.filter((method): method is IntegrationOAuthMethod => method.type === "oauth")
+              return [
+                {
+                  title: `Refresh ${connection.label}`,
+                  value: `${connection.id}:refresh`,
+                  description: connectionStatusText(connection),
+                  onSelect: () => {
+                    void client.api.credential
+                      .refresh({ credentialID: connection.id, location: location(data) })
+                      .then((result) => {
+                        const outcome = result.data
+                        if (outcome.status === "refreshed") {
+                          return refreshed(data, dialog, toast, { variant: "success", message: `Refreshed ${connection.label}` })
+                        }
+                        return refreshed(data, dialog, toast, { variant: "error", message: outcome.message })
+                      })
+                      .catch(toast.error)
+                  },
+                },
+                ...(oauthMethods.length
+                  ? [
+                      {
+                        title: `Reconnect ${connection.label}`,
+                        value: `${connection.id}:reconnect`,
+                        description: "Sign in again and replace this profile",
+                        onSelect: () => reconnect(integration, oauthMethods, connection, dialog, onConnected),
+                      },
+                    ]
+                  : []),
+              ]
+            }
+            if (connection.kind === "key") {
+              const keyMethod = methods.find((method): method is Extract<ConnectMethod, { type: "key" }> => method.type === "key")
+              if (!keyMethod) return []
+              return [
+                {
+                  title: `Replace key for ${connection.label}`,
+                  value: `${connection.id}:replace`,
+                  description: connectionStatusText(connection),
+                  onSelect: () =>
+                    dialog.replace(() => (
+                      <KeyMethod
+                        integration={integration}
+                        method={keyMethod}
+                        credential={connection}
+                        onConnected={onConnected}
+                      />
+                    )),
+                },
+              ]
+            }
+            return []
+          }),
           ...credentialConnections(integration).map((connection) => ({
             title: `Disconnect ${connection.label}`,
             value: `${connection.id}:remove`,
@@ -187,6 +258,47 @@ function manageConnections(
       />
     )
   })
+}
+
+function connectionStateLabel(connection: CredentialConnection) {
+  if (connection.status === "expired") return "Expired"
+  if (connection.status === "refresh_failed") return "Refresh failed"
+  return "Connected"
+}
+
+function reconnect(
+  integration: IntegrationInfo,
+  oauthMethods: IntegrationOAuthMethod[],
+  connection: CredentialConnection,
+  dialog: ReturnType<typeof useDialog>,
+  onConnected?: OnIntegrationConnected,
+) {
+  if (oauthMethods.length === 1) {
+    void beginOAuth(integration, oauthMethods[0], dialog, onConnected, undefined, connection.id)
+    return
+  }
+  dialog.replace(() => (
+    <DialogSelect
+      title={`Reconnect ${connection.label}`}
+      options={oauthMethods.map((method) => ({
+        title: method.label,
+        value: method.id,
+        onSelect: () => void beginOAuth(integration, method, dialog, onConnected, undefined, connection.id),
+      }))}
+    />
+  ))
+}
+
+function refreshed(
+  data: ReturnType<typeof useData>,
+  dialog: ReturnType<typeof useDialog>,
+  toast: ReturnType<typeof useToast>,
+  result: { variant: "success" | "error"; message: string },
+) {
+  data.location.integration.invalidate()
+  void data.location.integration.sync().catch(toast.error)
+  toast.show(result)
+  dialog.clear()
 }
 
 function selectMethod(
@@ -422,7 +534,8 @@ function CommandView(props: { title: string; output: string; message: string }) 
 function KeyMethod(props: {
   integration: IntegrationInfo
   method: Extract<ConnectMethod, { type: "key" }>
-  label: string
+  label?: string
+  credential?: CredentialConnection
   onConnected?: OnIntegrationConnected
 }) {
   const data = useData()
@@ -434,8 +547,13 @@ function KeyMethod(props: {
 
   return (
     <DialogPrompt
-      title={props.method.label ?? `Connect ${props.integration.name}`}
+      title={
+        props.credential
+          ? `Replace key for ${props.credential.label}`
+          : (props.method.label ?? `Connect ${props.integration.name}`)
+      }
       placeholder="API key"
+      mask
       onConfirm={(key) => {
         if (!key) return
         void client.api.integration.connect
@@ -443,7 +561,7 @@ function KeyMethod(props: {
             integrationID: props.integration.id,
             location: location(data),
             key,
-            label: props.label,
+            ...(props.credential ? { credentialID: props.credential.id } : { label: props.label }),
           })
           .then(() => connected(props.integration, data, dialog, toast, props.onConnected))
           .catch((cause) => setError(message(cause)))
@@ -461,11 +579,19 @@ export async function beginOAuth(
   dialog: ReturnType<typeof useDialog>,
   onConnected?: OnIntegrationConnected,
   label?: string,
+  credentialID?: string,
 ) {
   const inputs = method.prompts?.length ? await promptInputs(dialog, method.prompts) : {}
   if (inputs === null) return
   dialog.replace(() => (
-    <OAuthStarting integration={integration} method={method} inputs={inputs} label={label} onConnected={onConnected} />
+    <OAuthStarting
+      integration={integration}
+      method={method}
+      inputs={inputs}
+      label={label}
+      credentialID={credentialID}
+      onConnected={onConnected}
+    />
   ))
 }
 
@@ -474,6 +600,7 @@ function OAuthStarting(props: {
   method: IntegrationOAuthMethod
   inputs: Record<string, string>
   label?: string
+  credentialID?: string
   onConnected?: OnIntegrationConnected
 }) {
   const data = useData()
@@ -488,7 +615,7 @@ function OAuthStarting(props: {
         location: location(data),
         methodID: props.method.id,
         inputs: props.inputs,
-        label: props.label,
+        ...(props.credentialID ? { credentialID: props.credentialID } : { label: props.label }),
       })
       .then((result) => {
         if (result.data.mode === "code") {
@@ -844,6 +971,5 @@ function location(data: ReturnType<typeof useData>) {
 }
 
 function message(cause: unknown) {
-  if (cause instanceof Error) return cause.message
-  return "Authentication failed"
+  return errorMessage(cause) || "Authentication failed"
 }

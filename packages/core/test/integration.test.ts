@@ -19,6 +19,7 @@ const failingCredentialNode = makeGlobalNode({
       list: () => Effect.succeed([]),
       get: () => Effect.succeed(undefined),
       refresh: () => Effect.die("unused Credential.refresh"),
+      refreshFailure: () => Effect.succeed(undefined),
       create: () => Effect.die(new Error("credential persistence failed")),
       update: () => Effect.void,
       activate: () => Effect.void,
@@ -635,6 +636,7 @@ describe("Integration", () => {
               label: "Personal",
               active: true,
               kind: "key",
+              status: "connected",
             },
             {
               type: "credential",
@@ -642,6 +644,7 @@ describe("Integration", () => {
               label: "Work",
               active: false,
               kind: "key",
+              status: "connected",
             },
             { type: "env", name: "INTEGRATION_TEST_ACME_KEY" },
           ])
@@ -651,6 +654,7 @@ describe("Integration", () => {
             label: "Personal",
             active: true,
             kind: "key",
+            status: "connected",
           })
           expect(work.id).not.toBe(personal.id)
 
@@ -662,6 +666,7 @@ describe("Integration", () => {
             label: "Work",
             active: true,
             kind: "key",
+            status: "connected",
           })
 
           // Removing the active profile promotes the remaining one.
@@ -672,6 +677,7 @@ describe("Integration", () => {
             label: "Personal",
             active: true,
             kind: "key",
+            status: "connected",
           })
         }),
       (previous) =>
@@ -721,8 +727,8 @@ describe("Integration", () => {
           const listed = (yield* integrations.list()).find((info) => info.id === integrationID)
           const fetched = yield* integrations.get(integrationID)
           const expected = [
-            { type: "credential", id: signedIn.id, label: "Signed In", active: true, kind: "oauth" },
-            { type: "credential", id: keyed.id, label: "Keyed", active: false, kind: "key" },
+            { type: "credential", id: signedIn.id, label: "Signed In", active: true, kind: "oauth", status: "connected" },
+            { type: "credential", id: keyed.id, label: "Keyed", active: false, kind: "key", status: "connected" },
             { type: "env", name: "INTEGRATION_TEST_KINDS_KEY" },
           ] as const
           expect(listed?.connections).toEqual(expected)
@@ -730,8 +736,8 @@ describe("Integration", () => {
 
           const encoded = Schema.encodeSync(Integration.Info)(fetched!)
           expect(encoded.connections.map((connection) => Object.keys(connection).toSorted())).toEqual([
-            ["active", "id", "kind", "label", "type"],
-            ["active", "id", "kind", "label", "type"],
+            ["active", "id", "kind", "label", "status", "type"],
+            ["active", "id", "kind", "label", "status", "type"],
             ["name", "type"],
           ])
           const serialized = JSON.stringify(encoded.connections)

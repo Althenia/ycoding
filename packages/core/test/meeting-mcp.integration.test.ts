@@ -452,6 +452,7 @@ function knowledgeLayer(url: string) {
             update: unusedIntegration,
             activate: unusedIntegration,
             remove: unusedIntegration,
+            refresh: unusedIntegration,
           },
           oauth: {
             connect: unusedIntegration,

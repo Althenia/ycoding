@@ -57,11 +57,73 @@ test("provider authentication projects safe methods and binds attempts to their 
   expect(valueOf(await run("provider.auth.status", { integrationID: "test", attemptID: "con_auth" }))).toMatchObject({ data: { status: "failed", message: "Authentication failed. Try connecting again." } })
   expect(errorOf(await run("provider.auth.complete", { integrationID: "other", attemptID: "con_auth", code: "secret-code" })).code).toBe("invalid_message")
   expect(errorOf(await run("provider.auth.begin", { integrationID: "test", methodID: "browser", label: "New", inputs: {} })).code).toBe("invalid_message")
-  expect(fixture.calls.filter((call) => call.method === "integrationOAuthBegin")).toEqual([{ method: "integrationOAuthBegin", args: [{ directory: "/work" }, "test", "device", {}, "New"] }])
+  expect(fixture.calls.filter((call) => call.method === "integrationOAuthBegin")).toEqual([{ method: "integrationOAuthBegin", args: [{ directory: "/work" }, "test", "device", {}, "New", undefined] }])
   expect(valueOf(await run("provider.auth.begin", { integrationID: "test", methodID: "cli", label: "CLI", inputs: {} }))).toMatchObject({ data: { type: "command" } })
   expect(JSON.stringify(valueOf(await run("provider.auth.status", { integrationID: "test", attemptID: "con_cli" })))).not.toContain("private-token")
   expect(errorOf(await run("provider.auth.key", { target: { sessionID: "ses_missing" }, integrationID: "test", label: "New", key: "secret-key" })).code).toBe("session_not_allowed")
   expect(fixture.calls.some((call) => call.method === "integrationKey")).toBe(false)
+})
+
+test("provider profiles project kind, status and failure message without credential identifiers", async () => {
+  const fixture = await harness({ results: { providerIntegrations: [{ providerID: "test", integrationID: "test" }], integrationList: [{ id: "test", name: "Test", connections: [
+    { type: "credential", id: "cred_work", label: "Work", active: true, kind: "oauth", status: "refresh_failed", message: "invalid_grant" },
+    { type: "credential", id: "cred_old", label: "Old", active: false, kind: "oauth", status: "expired" },
+    { type: "credential", id: "cred_key", label: "Key", active: false, kind: "key", status: "connected" },
+    { type: "env", name: "TEST_API_KEY" },
+  ], methods: [{ type: "key" }] }] } })
+  const frames = await executeRemoteOperation({ request: request("provider.auth.list", { target: { sessionID: "ses_1" } }), local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions, cache: createOperationCache() })
+  expect(valueOf(frames)).toMatchObject({ data: [{ id: "test", profiles: [
+    { name: "Work", active: true, kind: "oauth", status: "refresh_failed", message: "invalid_grant" },
+    { name: "Old", active: false, kind: "oauth", status: "expired" },
+    { name: "Key", active: false, kind: "key", status: "connected" },
+  ] }] })
+  expect(valueOf(frames)).not.toMatchObject({ data: [{ profiles: [{}, { message: expect.anything() }, {}] }] })
+  expect(JSON.stringify(frames)).not.toMatch(/cred_/)
+})
+
+test("provider key and sign-in replace an existing profile in place and never echo the key", async () => {
+  const fixture = await harness({ results: { providerIntegrations: [{ providerID: "test", integrationID: "test" }],
+    integrationList: [{ id: "test", name: "Test", connections: [{ type: "credential", id: "cred_work", label: "Work", active: true, kind: "key", status: "connected" }],
+      methods: [{ type: "key" }, { type: "oauth", id: "device", label: "Device", remote: true }] }],
+    integrationOAuthBegin: { attemptID: "con_auth", mode: "auto", url: "https://example.com/auth", instructions: "Enter code", time: { created: 1, expires: Date.now() + 10000 } },
+  } })
+  const cache = createOperationCache()
+  const run = (operation: RemoteRequest["operation"], fields: Record<string, unknown>) => executeRemoteOperation({ request: request(operation, { target: { sessionID: "ses_1" }, ...fields }), local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions, cache })
+  const keyed = [await run("provider.auth.key", { integrationID: "test", label: "Work", key: "sk-synthetic-key" }), await run("provider.auth.key", { integrationID: "test", label: "Fresh", key: "sk-synthetic-key" })]
+  expect(fixture.calls.filter((call) => call.method === "integrationKey").map((call) => call.args)).toEqual([
+    [{ directory: "/work" }, "test", "sk-synthetic-key", "Work", "cred_work"],
+    [{ directory: "/work" }, "test", "sk-synthetic-key", "Fresh", undefined],
+  ])
+  await run("provider.auth.begin", { integrationID: "test", methodID: "device", label: "Work", inputs: {} })
+  await run("provider.auth.begin", { integrationID: "test", methodID: "device", label: "Fresh", inputs: {} })
+  expect(fixture.calls.filter((call) => call.method === "integrationOAuthBegin").map((call) => call.args)).toEqual([
+    [{ directory: "/work" }, "test", "device", {}, "Work", "cred_work"],
+    [{ directory: "/work" }, "test", "device", {}, "Fresh", undefined],
+  ])
+  expect(JSON.stringify(keyed)).not.toContain("sk-synthetic-key")
+})
+
+test("provider refresh resolves the profile label to its credential and reports the machine's outcome", async () => {
+  const results: Partial<Record<keyof LocalServer, unknown>> = { providerIntegrations: [{ providerID: "test", integrationID: "test" }],
+    integrationList: [{ id: "test", name: "Test", connections: [{ type: "credential", id: "cred_work", label: "Work", active: true, kind: "oauth", status: "connected" }], methods: [{ type: "key" }] }],
+    credentialRefresh: { status: "refreshed", expires: 1234 } }
+  const fixture = await harness({ results })
+  const cache = createOperationCache()
+  const run = (fields: Record<string, unknown>) => executeRemoteOperation({ request: request("provider.auth.refresh", { target: { sessionID: "ses_1" }, ...fields }), local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions, cache })
+  const refreshed = await run({ integrationID: "test", label: "Work" })
+  expect(valueOf(refreshed)).toEqual({ data: { status: "refreshed", expires: 1234 } })
+  expect(fixture.calls.filter((call) => call.method === "credentialRefresh")).toEqual([{ method: "credentialRefresh", args: [{ directory: "/work" }, "cred_work"] }])
+  expect(JSON.stringify(refreshed)).not.toContain("cred_")
+  expect(errorOf(await run({ integrationID: "test", label: "Missing" })).code).toBe("invalid_message")
+  expect(errorOf(await run({ integrationID: "absent", label: "Work" })).code).toBe("invalid_message")
+  expect(fixture.calls.filter((call) => call.method === "credentialRefresh")).toHaveLength(1)
+  results.credentialRefresh = { status: "failed", message: `invalid_grant\n${"x".repeat(3000)}\0tail` }
+  const failed = recordOf(recordOf(valueOf(await run({ integrationID: "test", label: "Work" }))).data)
+  const failedMessage = String(failed.message)
+  expect(failed.status).toBe("failed")
+  expect(failedMessage.length).toBeLessThanOrEqual(2048)
+  expect(failedMessage).toStartWith("invalid_grant")
+  expect(failedMessage).not.toMatch(/[\r\n\0]/)
 })
 
 test("provider authentication reserves its bounded attempt slot before asynchronous authorization starts", async () => {

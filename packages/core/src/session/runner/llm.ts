@@ -54,6 +54,8 @@ import { SessionContinuation } from "./continuation"
 import { SessionProviderState } from "../provider-state"
 import { SessionRunnerRetry } from "./retry"
 import { SessionModelFallback } from "./fallback"
+import { SessionRunnerModel } from "./model"
+import { Integration } from "../../integration"
 import type { Model } from "@ycoding-ai/schema/model"
 import { SessionUsage } from "../usage"
 import { GenerationActivity } from "../../generation-activity"
@@ -79,6 +81,7 @@ type AttemptState = {
   mixedAccountProvenance?: boolean
   contextBreakdown?: ReturnType<typeof SessionContextPressure.breakdown>
   attempts: number
+  authRefresh?: "used"
   continuationFallback?: boolean
   overflowRecovery?: "pending" | "used"
   skills?: ReadonlyArray<Skill.ID>
@@ -145,6 +148,7 @@ const layer = Layer.effect(
     const permission = yield* Permission.Service
     const accounting = yield* ProjectArtifactAccounting.Service
     const artifactSource = yield* ProjectArtifactSource.Service
+    const integrations = yield* Integration.Service
     const resolveRequestedSkills = Effect.fn("SessionRunner.resolveRequestedSkills")(function* (
       selected: SessionContext.Selection,
       ids: ReadonlyArray<Skill.ID>,
@@ -967,8 +971,39 @@ const layer = Layer.effect(
           // thrown LLM failure records the assistant failure unless a provider error was
           // already recorded from the stream. Terminal publication waits for owned tools.
           if (overflowFailure && !overflowLimit) yield* publish(overflowFailure)
+          const rejectedOAuth =
+            llmFailure !== undefined &&
+            !streamInterrupted &&
+            !publisher.hasProviderError() &&
+            !publisher.hasRetryEvidence() &&
+            llmFailure.reason._tag === "Authentication" &&
+            llmFailure.reason.kind === "invalid"
+              ? resolved.oauth
+              : undefined
+          const refreshed =
+            rejectedOAuth === undefined
+              ? undefined
+              : requestTrackerState.authRefresh === undefined
+                ? yield* integrations.connection.refresh(rejectedOAuth.credentialID)
+                : { status: "failed" as const, message: "the provider rejected the refreshed sign-in" }
+          if (refreshed !== undefined) requestTrackerState.authRefresh = "used"
+          if (refreshed?.status === "refreshed")
+            return {
+              _tag: "RestartAfterRefresh",
+              step: currentStep,
+              promoted,
+              assistantMessageID: publisher.hasStepStarted() ? yield* publisher.startAssistant() : undefined,
+            } as const
+          const reconnect =
+            rejectedOAuth !== undefined && refreshed?.status === "failed"
+              ? new SessionRunnerModel.ReconnectRequiredError({
+                  providerID: resolved.ref.providerID,
+                  providerName: rejectedOAuth.providerName,
+                  detail: refreshed.message,
+                })
+              : undefined
           if (llmFailure && !streamInterrupted && !publisher.hasProviderError()) {
-            const error = toSessionError(llmFailure)
+            const error = toSessionError(reconnect ?? llmFailure)
             if (fallbackNext !== undefined && !publisher.hasRetryEvidence() && SessionModelFallback.immediate(llmFailure)) {
               yield* serialized(publisher.flush())
               return {
@@ -1151,6 +1186,7 @@ const layer = Layer.effect(
             (yield* SessionPending.has(db, session.id, "steer"))
           if (overflowLimit) return yield* new StepFailedError({ error: overflowLimit })
           if (streamInterrupted) return yield* Effect.interrupt
+          if (reconnect) return yield* reconnect
           if (stream._tag === "Failure" && !recoverableProviderFailure && !promotePendingSteerAfterProviderRecovery)
             return yield* Effect.failCause(stream.cause)
           if ((toolsInterrupted || infraError !== undefined) && settledFailure)
@@ -1290,7 +1326,7 @@ const layer = Layer.effect(
           requestTrackerState.continuationFallback = true
           assistantMessageID = attempt.assistantMessageID ?? assistantMessageID
         }
-        if (attempt._tag === "RestartAfterOverflow")
+        if (attempt._tag === "RestartAfterOverflow" || attempt._tag === "RestartAfterRefresh")
           assistantMessageID = attempt.assistantMessageID ?? assistantMessageID
         if (attempt._tag === "RestartWithFallback") {
           assistantMessageID = attempt.assistantMessageID
@@ -1467,6 +1503,7 @@ export const node = makeLocationNode({
     Permission.node,
     ProjectArtifactAccounting.node,
     ProjectArtifactSource.node,
+    Integration.node,
   ],
 })
 

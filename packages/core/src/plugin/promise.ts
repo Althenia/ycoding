@@ -3,6 +3,7 @@ export * as PluginPromise from "./promise"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 import type { AnyTool, PluginContext as Context, PluginDefinition as Plugin } from "@ycoding-ai/plugin"
 import { Agent } from "@ycoding-ai/schema/agent"
+import { Credential } from "@ycoding-ai/schema/credential"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Location } from "@ycoding-ai/schema/location"
 import { Model } from "@ycoding-ai/schema/model"
@@ -99,7 +100,11 @@ export function fromPromise(plugin: Plugin) {
             connect: {
               key: (input) =>
                 run(
-                  host.integration.connect.key({ ...input, integrationID: Integration.ID.make(input.integrationID) }),
+                  host.integration.connect.key({
+                    ...input,
+                    integrationID: Integration.ID.make(input.integrationID),
+                    credentialID: input.credentialID === undefined ? undefined : Credential.ID.make(input.credentialID),
+                  }),
                 ),
             },
             oauth: {
@@ -109,6 +114,7 @@ export function fromPromise(plugin: Plugin) {
                     ...input,
                     integrationID: Integration.ID.make(input.integrationID),
                     methodID: Integration.MethodID.make(input.methodID),
+                    credentialID: input.credentialID === undefined ? undefined : Credential.ID.make(input.credentialID),
                   }),
                 ),
               status: (input) =>

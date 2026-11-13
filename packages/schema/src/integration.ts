@@ -5,7 +5,7 @@ import { optional } from "./schema.js"
 import { ephemeral, inventory } from "./event.js"
 import { Connection } from "./connection.js"
 import { ascending } from "./identifier.js"
-import { statics } from "./schema.js"
+import { NonNegativeInt, statics } from "./schema.js"
 import { IntegrationID, IntegrationMethodID } from "./integration-id.js"
 
 export const ID = IntegrationID
@@ -154,3 +154,11 @@ export const CommandAttemptStatus = Schema.Union([
   .pipe(Schema.toTaggedUnion("status"))
   .annotate({ identifier: "Integration.CommandAttemptStatus" })
 export type CommandAttemptStatus = typeof CommandAttemptStatus.Type
+
+export const RefreshResult = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("refreshed"), expires: NonNegativeInt }),
+  Schema.Struct({ status: Schema.Literal("failed"), message: Schema.String }),
+])
+  .pipe(Schema.toTaggedUnion("status"))
+  .annotate({ identifier: "Integration.RefreshResult" })
+export type RefreshResult = typeof RefreshResult.Type

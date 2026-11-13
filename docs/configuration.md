@@ -1194,6 +1194,50 @@ inheriting the whole owning Session model retains its profile. Explicit profile 
 only within their provider. See the
 [profile isolation contract](../specs/provider-profiles.md).
 
+### Connection state, refresh, reconnect and key replacement
+
+Every stored profile reports a connection state: **Connected**, **Expired** (an OAuth sign-in whose
+access token is past its expiry), or **Refresh failed** with the last refresh error. A refresh failure
+lasts until a later refresh succeeds or the profile's value is replaced, and is kept in the Server
+process only. A provider with no stored profile is **Not linked**; environment-variable connections
+carry no state. Server credential connections expose the state as `status` (`connected`, `expired`,
+`refresh_failed`) with the failure text in `message`.
+
+Each surface offers the same three actions on an existing profile:
+
+- **Refresh** (OAuth profiles) forces a token refresh with the stored refresh token and reports
+  success or the exact failure. It leaves the profile unchanged when it fails. A key profile cannot be
+  refreshed.
+- **Reconnect** (OAuth profiles) reruns the full sign-in for that profile. The stored credential is
+  replaced in place, keeping its ID and name, only after the new sign-in succeeds; cancelling or
+  failing the sign-in leaves the old credential intact. The sign-in asks for no profile name and asks
+  for a method only when the provider has several OAuth methods.
+- **Replace key** (key profiles) stores a new key in the same profile, keeping its ID and name. A key
+  for an unconnected provider uses the ordinary connect flow.
+
+Entered keys are masked in the TUI and the web, and never appear in responses, state projections,
+toasts, errors or logs.
+
+In the TUI, `/connect` lists each provider with its state (`Linked · Work (expired)`,
+`Not linked`). Selecting a connected provider opens its profile dialog: each profile shows its state,
+**Refresh `<name>`** and **Reconnect `<name>`** for OAuth profiles, **Replace key for `<name>`** for key
+profiles, plus **Add profile**, **Make `<name>` the default** and **Disconnect `<name>`**. In the web,
+**Connect provider** shows the same state and actions through the authenticated relay.
+
+Server routes: `POST /api/credential/{credentialID}/refresh` returns
+`{ status: "refreshed", expires }` or `{ status: "failed", message }`. `POST
+/api/integration/{integrationID}/connect/oauth` and `POST /api/integration/{integrationID}/connect/key`
+accept an optional `credentialID` naming an existing profile of that integration to replace in place;
+an unknown profile or one from another integration is rejected with HTTP 400. From the shell:
+`ycoding api credential.refresh --param credentialID=<id>`, and
+`ycoding api integration.connect.key --param integrationID=<id> -d '{"key":"<key>","credentialID":"<id>"}'`
+or `integration.oauth.connect` with `{"methodID":"<method>","inputs":{},"credentialID":"<id>"}`.
+
+When a provider request fails because its sign-in expired or was revoked, the runtime refreshes the
+credential once and retries once. If the refresh fails, or the retry is rejected again, the Session
+reports an authentication error naming the provider and directing the user to **Reconnect** it from
+`/connect`.
+
 ### ChatGPT account connectors
 
 `account_connectors.chatgpt` enables the selected account's native Library tools and hosted MCP catalog. It is disabled when omitted or when `enabled` is false; disabled configuration makes no discovery requests and advertises neither surface.

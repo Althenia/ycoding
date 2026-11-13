@@ -1244,7 +1244,8 @@ describe("MusePlugin", () => {
         })
         if (failure === "always") {
           const result = yield* inference(aisdk, model, saved).pipe(Effect.flip)
-          expect(String(result)).toContain("log in again")
+          expect(result).toMatchObject({ statusCode: 401 })
+          expect(String(result)).not.toContain("log in again")
           expect(requests).toHaveLength(2)
         }
         if (failure !== "always") {

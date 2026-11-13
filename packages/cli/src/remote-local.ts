@@ -96,8 +96,9 @@ export type LocalEventStream = {
 export type LocalServer = {
   readonly integrationList: (location: LocalLocation) => Promise<readonly IntegrationInfo[]>
   readonly providerIntegrations: (location: LocalLocation) => Promise<readonly ProviderIntegrationRef[]>
-  readonly integrationKey: (location: LocalLocation, integrationID: string, key: string, label: string) => Promise<void>
-  readonly integrationOAuthBegin: (location: LocalLocation, integrationID: string, methodID: string, inputs: Readonly<Record<string, string>>, label: string) => Promise<Awaited<ReturnType<YCodingClient["integration"]["oauth"]["connect"]>>["data"]>
+  readonly integrationKey: (location: LocalLocation, integrationID: string, key: string, label: string, credentialID?: string) => Promise<void>
+  readonly credentialRefresh: (location: LocalLocation, credentialID: string) => Promise<Awaited<ReturnType<YCodingClient["credential"]["refresh"]>>["data"]>
+  readonly integrationOAuthBegin: (location: LocalLocation, integrationID: string, methodID: string, inputs: Readonly<Record<string, string>>, label: string, credentialID?: string) => Promise<Awaited<ReturnType<YCodingClient["integration"]["oauth"]["connect"]>>["data"]>
   readonly integrationOAuthStatus: (location: LocalLocation, integrationID: string, attemptID: string) => Promise<IntegrationAttemptStatus>
   readonly integrationOAuthComplete: (location: LocalLocation, integrationID: string, attemptID: string, code: string) => Promise<void>
   readonly integrationOAuthCancel: (location: LocalLocation, integrationID: string, attemptID: string) => Promise<void>
@@ -497,8 +498,9 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       }),
     integrationList: (location) => call(async () => (await client.integration.list({}, request(location, timeoutMs))).data),
     providerIntegrations: (location) => call(async () => (await client.provider.integrations({}, request(location, timeoutMs))).data),
-    integrationKey: (location, integrationID, key, label) => call(async () => { await client.integration.connect.key({ integrationID, key, label }, request(location, timeoutMs)) }),
-    integrationOAuthBegin: (location, integrationID, methodID, inputs, label) => call(async () => (await client.integration.oauth.connect({ integrationID, methodID, inputs: { ...inputs }, label }, request(location, timeoutMs))).data),
+    integrationKey: (location, integrationID, key, label, credentialID) => call(async () => { await client.integration.connect.key({ integrationID, key, label, ...(credentialID ? { credentialID } : {}) }, request(location, timeoutMs)) }),
+    credentialRefresh: (location, credentialID) => call(async () => (await client.credential.refresh({ credentialID }, request(location, timeoutMs))).data),
+    integrationOAuthBegin: (location, integrationID, methodID, inputs, label, credentialID) => call(async () => (await client.integration.oauth.connect({ integrationID, methodID, inputs: { ...inputs }, label, ...(credentialID ? { credentialID } : {}) }, request(location, timeoutMs))).data),
     integrationOAuthStatus: (location, integrationID, attemptID) => call(async () => (await client.integration.oauth.status({ integrationID, attemptID }, request(location, timeoutMs))).data),
     integrationOAuthComplete: (location, integrationID, attemptID, code) => call(async () => { await client.integration.oauth.complete({ integrationID, attemptID, code }, request(location, timeoutMs)) }),
     integrationOAuthCancel: (location, integrationID, attemptID) => call(async () => { await client.integration.oauth.cancel({ integrationID, attemptID }, request(location, timeoutMs)) }),

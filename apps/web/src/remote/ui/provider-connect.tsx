@@ -4,8 +4,9 @@ import { Modal } from "../../ui/modal"
 import { CustomSelect } from "../../ui/custom-select"
 import { useRemote } from "../context"
 import type { CatalogTarget } from "../catalog"
+import type { ProviderAuthInfo } from "@ycoding-ai/remote"
 import { createProviderAuth, providerAuthPrompts, type ProviderAuthState } from "../provider-auth"
-import { providerProfileRefreshVisible } from "../view-model"
+import { providerProfileMethod, providerProfileRefreshVisible, providerProfileView } from "../view-model"
 import "./provider-connect.css"
 
 export function ProviderConnect(props: { readonly target: CatalogTarget; readonly returnFocus: HTMLElement; readonly onClose: () => void; readonly onConnected?: (providerID: string) => void }) {
@@ -37,6 +38,22 @@ export function ProviderConnect(props: { readonly target: CatalogTarget; readonl
     const visible = Object.fromEntries(prompts().map((prompt) => [prompt.key, inputs()[prompt.key] ?? ""]))
     void auth.begin(integrationID(), methodID(), label().trim(), visible)
   }
+  const idle = () => current() && !busy() && !attemptActive()
+  const reconnect = (profile: ProviderAuthInfo["profiles"][number]) => {
+    const chosen = providerProfileMethod(profile, methods())
+    if (!auth || !chosen || !idle()) return
+    const id = chosen.id ?? "key"
+    notified = false
+    setMethodID(id); setLabel(profile.name); setInputs({}); setSecret("")
+    if (providerAuthPrompts(chosen.prompts ?? [], {}).length === 0) void auth.begin(integrationID(), id, profile.name, {})
+  }
+  const replaceKey = (profile: ProviderAuthInfo["profiles"][number]) => {
+    const chosen = providerProfileMethod(profile, methods())
+    if (!chosen || !idle()) return
+    notified = false
+    setMethodID(chosen.id ?? "key"); setLabel(profile.name); setInputs({}); setSecret("")
+    document.getElementById("provider-api-key")?.focus()
+  }
   createEffect(() => {
     if (timer) clearTimeout(timer)
     const value = state()
@@ -61,12 +78,24 @@ export function ProviderConnect(props: { readonly target: CatalogTarget; readonl
           setLabel(next ?? "default")
         }} />
         <Show when={integration()}>{(item) => <>
-          <Show when={item().profiles.length}><p class="field__hint">Existing profiles: {item().profiles.map((profile) => `${profile.name}${profile.active ? " (provider default)" : ""}`).join(", ")}</p></Show>
+          <Show when={item().profiles.length}><ul class="provider-profiles" aria-label="Existing profiles"><For each={item().profiles}>{(profile) => {
+            const view = () => providerProfileView(profile)
+            const available = () => providerProfileMethod(profile, methods()) !== undefined
+            return <li class="provider-profile">
+              <span class="provider-profile__name">{profile.name}{profile.active ? " (provider default)" : ""}</span>
+              <span class="provider-profile__kind">{view().kind}</span>
+              <span class={`provider-profile__state provider-profile__state--${view().tone}`}>{view().state}</span>
+              <span class="provider-profile__actions">
+                <Show when={view().canRefresh}><button type="button" class="button button--secondary button--small" aria-label={`Refresh ${profile.name}`} disabled={!idle()} onClick={() => void auth?.refresh(integrationID(), profile.name)}>Refresh</button></Show>
+                <Show when={view().canRefresh} fallback={<button type="button" class="button button--secondary button--small" aria-label={`Replace key for ${profile.name}`} disabled={!idle() || !available()} onClick={() => replaceKey(profile)}>Replace key</button>}><button type="button" class="button button--secondary button--small" aria-label={`Reconnect ${profile.name}`} disabled={!idle() || !available()} onClick={() => reconnect(profile)}>Reconnect</button></Show>
+              </span>
+            </li>
+          }}</For></ul></Show>
           <Show when={methods().length > 0} fallback={<p role="status" class="field__hint">This provider requires machine-local configuration. Configure its environment or credentials on the backend machine, then refresh provider profiles.</p>}><CustomSelect label="Authentication method" value={methodID()} placeholder="Choose a method" disabled={!current() || busy() || attemptActive()} options={methods().map((entry) => ({ value: entry.id ?? "key", label: entry.label }))} onChange={(id) => { setMethodID(id); setInputs({}); setSecret("") }} /></Show>
           <Show when={method()}>{(selected) => <>
             <Show when={!selected().available}><p role="status" class="field__hint">{selected().reason}</p></Show>
             <Show when={selected().type === "command"}><p class="field__hint">Runs the registered authentication command on this machine. Any browser interaction that command requires may need to be completed on the machine.</p></Show>
-            <div class="field"><label class="field__label" for="provider-profile-name">Profile name</label><input id="provider-profile-name" class="input" autocomplete="off" maxlength="128" value={label()} disabled={busy() || attemptActive()} onInput={(event) => setLabel(event.currentTarget.value)} /><Show when={integration()?.profiles.some((profile) => profile.name === label().trim())}><p class="field__hint">Connecting replaces this existing profile and makes it provider default.</p></Show></div>
+            <div class="field"><label class="field__label" for="provider-profile-name">Profile name</label><input id="provider-profile-name" class="input" autocomplete="off" maxlength="128" value={label()} disabled={busy() || attemptActive()} onInput={(event) => setLabel(event.currentTarget.value)} /><Show when={integration()?.profiles.some((profile) => profile.name === label().trim())}><p class="field__hint">Connecting replaces this existing profile only after it succeeds, keeps the old credential on cancel or failure, and makes it provider default.</p></Show></div>
             <Show when={selected().type === "key"}><div class="field"><label class="field__label" for="provider-api-key">API key</label><input id="provider-api-key" class="input" type="password" autocomplete="off" spellcheck={false} maxlength="8192" value={secret()} disabled={busy()} onInput={(event) => setSecret(event.currentTarget.value)} /></div></Show>
             <For each={prompts()}>{(prompt) => <Show when={prompt.type === "select"} fallback={<div class="field"><label class="field__label" for={`provider-input-${prompt.key}`}>{prompt.message}</label><input id={`provider-input-${prompt.key}`} class="input" autocomplete="off" maxlength="2048" value={inputs()[prompt.key] ?? ""} disabled={busy() || attemptActive()} onInput={(event) => setInputs({ ...inputs(), [prompt.key]: event.currentTarget.value })} /></div>}>
               <CustomSelect label={prompt.message} value={inputs()[prompt.key]} placeholder="Choose an option" disabled={busy() || attemptActive()} options={prompt.type === "select" ? prompt.options.map((option) => ({ value: option.value, label: option.label })) : []} onChange={(value) => setInputs({ ...inputs(), [prompt.key]: value })} />

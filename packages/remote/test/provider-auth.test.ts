@@ -10,6 +10,7 @@ test("provider authentication admits only bounded explicit inputs and a backend-
     ["provider.auth.status", { target, integrationID: "openai", attemptID: "con_existing" }],
     ["provider.auth.complete", { target, integrationID: "anthropic", attemptID: "con_existing", code: "synthetic-code" }],
     ["provider.auth.cancel", { target, integrationID: "openai", attemptID: "con_existing" }],
+    ["provider.auth.refresh", { target, integrationID: "openai", label: "Work" }],
   ] as const
   for (const [operation, input] of requests) {
     const frame = { type: "request", id: "req_auth", operation, input }
@@ -21,6 +22,22 @@ test("provider authentication admits only bounded explicit inputs and a backend-
   }
   for (const input of [{ target, integrationID: "openai", label: "", key: "synthetic" }, { target, integrationID: "openai", label: "Work", key: "" }, { target, integrationID: "openai", label: "Work", key: "x".repeat(8193) }])
     expect(parseClientMessage(JSON.stringify({ type: "request", id: "req_auth", operation: "provider.auth.key", input })).ok).toBe(false)
+})
+
+test("provider refresh requires exactly a target, an integration and a bounded profile label", () => {
+  const target = { sessionID: "ses_existing" }
+  const refresh = (input: unknown) => parseClientMessage(JSON.stringify({ type: "request", id: "req_auth", operation: "provider.auth.refresh", input })).ok
+  expect(refresh({ target, integrationID: "openai", label: "Work" })).toBe(true)
+  for (const input of [
+    { target, integrationID: "openai" },
+    { target, label: "Work" },
+    { target, integrationID: "openai", label: "" },
+    { target, integrationID: "openai", label: "Wo\nrk" },
+    { target, integrationID: "openai", label: "x".repeat(129) },
+    { target, integrationID: "openai", label: "Work", credentialID: "cred_private" },
+    { target, integrationID: "openai", label: "Work", key: "sk-synthetic-key" },
+  ])
+    expect(refresh(input)).toBe(false)
 })
 
 test("provider authorization links admit HTTPS without embedded credentials or loopback hosts", () => {

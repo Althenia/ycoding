@@ -117,6 +117,72 @@ it.effect("retains named Claude profiles while requiring independent managed sig
   }),
 )
 
+it.effect("refreshes a managed Claude profile through its own sign-in store and reports a rejected refresh", () =>
+  Effect.gen(function* () {
+    const credentials = yield* Credential.Service
+    const integrations = yield* Integration.Service
+    let stored: ClaudeCodeCredentials = {
+      accessToken: "at-synthetic-1",
+      refreshToken: "rt-synthetic-1",
+      expiresAt: Date.now() + 3_600_000,
+      subscriptionType: "max",
+    }
+    const tokenRequests: Array<{ url: string; refreshToken: string | null }> = []
+    let endpoint: "accept" | "reject" = "accept"
+    const managed = {
+      list: async () => [{ label: "Claude Max", source: profileA, credentials: stored }],
+      read: async (name) => (name === profileA ? stored : null),
+      write: async (_name, next) => {
+        stored = next
+        return true
+      },
+    } satisfies ClaudeCodeCredentialSource
+    const tokenEndpoint: typeof fetch = Object.assign(
+      async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const href = typeof url === "string" ? url : url instanceof URL ? url.href : url.url
+        const body = init?.body instanceof URLSearchParams ? init.body : new URLSearchParams()
+        tokenRequests.push({ url: href, refreshToken: body.get("refresh_token") })
+        return endpoint === "accept"
+          ? Response.json({ access_token: "at-synthetic-2", refresh_token: "rt-synthetic-2", expires_in: 3600 })
+          : Response.json({ error: "invalid_grant" }, { status: 400 })
+      },
+      { preconnect: fetch.preconnect },
+    )
+    const profile = yield* credentials.create({
+      integrationID: Integration.ID.make("anthropic"),
+      label: "Personal",
+      value: Credential.OAuth.make({
+        type: "oauth",
+        methodID: claudeCodeMethodID,
+        access: profileA,
+        refresh: "",
+        expires: Number.MAX_SAFE_INTEGER,
+        metadata: { authKind: "claude-code", managed: true, source: profileA },
+      }),
+    })
+    yield* addPlugin(makeAnthropicPlugin({ credentialSource: managed, fetch: tokenEndpoint }))
+
+    expect(yield* integrations.connection.refresh(profile.id)).toEqual({
+      status: "refreshed",
+      expires: Number.MAX_SAFE_INTEGER,
+    })
+    expect(tokenRequests).toEqual([{ url: "https://claude.ai/v1/oauth/token", refreshToken: "rt-synthetic-1" }])
+    expect(stored).toMatchObject({ accessToken: "at-synthetic-2", refreshToken: "rt-synthetic-2" })
+    expect((yield* credentials.get(profile.id))?.value).toMatchObject({
+      access: profileA,
+      metadata: { managed: true, source: profileA },
+    })
+
+    endpoint = "reject"
+    expect(yield* integrations.connection.refresh(profile.id)).toEqual({
+      status: "failed",
+      message: "Claude rejected the managed profile's stored refresh token",
+    })
+    expect(tokenRequests.map((request) => request.refreshToken)).toEqual(["rt-synthetic-1", "rt-synthetic-2"])
+    expect(stored).toMatchObject({ accessToken: "at-synthetic-2", refreshToken: "rt-synthetic-2" })
+  }),
+)
+
 it.effect("migrates linked profiles once without changing API key and unrelated OAuth credentials", () =>
   Effect.gen(function* () {
     const credentials = yield* Credential.Service

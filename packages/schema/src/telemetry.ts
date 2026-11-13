@@ -42,6 +42,7 @@ export const Operation = Schema.Literals([
   "provider.auth.status",
   "provider.auth.complete",
   "provider.auth.cancel",
+  "provider.auth.refresh",
   "coordination.settings",
   "coordination.list",
   "coordination.create",

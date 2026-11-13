@@ -60,6 +60,7 @@ export function toSessionError(cause: unknown): SessionError.Error {
     cause instanceof SessionRunnerModel.UnsupportedPackageError
   )
     return { type: "provider.no-route", message: cause.message }
+  if (cause instanceof SessionRunnerModel.ReconnectRequiredError) return { type: "provider.auth", message: cause.message }
   if (cause instanceof Integration.AuthorizationError) return { type: "provider.auth", message: cause.message }
   if (cause instanceof ToolOutputStore.StorageError) return { type: "unknown", message: cause.message }
   return { type: "unknown", message: cause instanceof Error ? cause.message : String(cause) }

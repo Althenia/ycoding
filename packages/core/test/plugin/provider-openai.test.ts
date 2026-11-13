@@ -2,7 +2,9 @@ import { AISDK } from "@ycoding-ai/core/aisdk"
 import { Money } from "@ycoding-ai/schema/money"
 import { describe, expect } from "bun:test"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
-import { Deferred, Effect } from "effect"
+import { LLM, LLMError } from "@ycoding-ai/ai"
+import { LLMClient, RequestExecutor } from "@ycoding-ai/ai/route"
+import { Deferred, Effect, Layer } from "effect"
 import { TestClock } from "effect/testing"
 import { HttpClient, HttpClientResponse, UrlParams } from "effect/unstable/http"
 import { Catalog } from "@ycoding-ai/core/catalog"
@@ -11,6 +13,7 @@ import { Integration } from "@ycoding-ai/core/integration"
 import { CatalogModel } from "@ycoding-ai/core/model"
 import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
+import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { OpenAIPlugin, authorizeURL } from "@ycoding-ai/core/plugin/provider/openai"
 import { OpenAICodex } from "@ycoding-ai/core/plugin/provider/openai-codex"
 import { Provider } from "@ycoding-ai/core/provider"
@@ -232,6 +235,47 @@ describe("OpenAIPlugin", () => {
         options: { name: "custom-openai", apiKey: "test" },
       })
       expect(result.sdk?.responses("gpt-5").provider).toBe("custom-openai.responses")
+    }),
+  )
+
+  it.effect("surfaces a ChatGPT OAuth 401 as the invalid-authentication failure the runner refreshes on", () =>
+    Effect.gen(function* () {
+      const authorizations: Array<string | undefined> = []
+      const standIn = HttpClient.make((request) =>
+        Effect.sync(() => {
+          authorizations.push(request.headers.authorization)
+          return HttpClientResponse.fromWeb(request, Response.json({ error: { message: "rejected" } }, { status: 401 }))
+        }),
+      )
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(
+        CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.openai, CatalogModel.ID.make("gpt-5.5")),
+          package: Provider.aisdk("@ai-sdk/openai"),
+        }),
+        Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make("chatgpt-browser"),
+          access: "at-synthetic-1",
+          refresh: "rt-synthetic-1",
+          expires: Date.now() + 60_000,
+          metadata: { accountID: "acct-synthetic" },
+        }),
+      )
+      const failure = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(
+        Effect.provide(
+          LLMClient.layer.pipe(
+            Layer.provide(RequestExecutor.layer),
+            Layer.provide(Layer.succeed(HttpClient.HttpClient, standIn)),
+          ),
+        ),
+        Effect.flip,
+      )
+      expect(resolved.route.id).toBe("openai-codex-responses")
+      expect(authorizations).toEqual(["Bearer at-synthetic-1"])
+      expect(failure).toBeInstanceOf(LLMError)
+      expect(failure.reason).toMatchObject({ _tag: "Authentication", kind: "invalid" })
+      expect(failure.message).not.toContain("at-synthetic-1")
+      expect(failure.reason.message).not.toContain("at-synthetic-1")
     }),
   )
 

@@ -40,6 +40,7 @@ export interface Interface {
   /** Returns one stored credential by ID. */
   readonly get: (id: ID) => Effect.Effect<Info | undefined>
   readonly refresh: (expected: Info, refresh: Effect.Effect<OAuth, unknown>) => Effect.Effect<Info | undefined, unknown>
+  readonly refreshFailure: (id: ID) => Effect.Effect<string | undefined>
   /**
    * Stores a credential as a named profile. Re-using an existing profile name for the same
    * integration updates that profile in place; the stored profile becomes the active one.
@@ -80,6 +81,7 @@ const layer = Layer.effect(
     const { db } = yield* Database.Service
     const scope = yield* Scope.Scope
     const refreshing = new Map<string, Deferred.Deferred<Info | undefined, unknown>>()
+    const failures = new Map<ID, string>()
     const decode = Schema.decodeUnknownSync(Value)
     const stored = (row: typeof CredentialTable.$inferSelect) => {
       if (!row.integration_id) return
@@ -169,10 +171,12 @@ const layer = Layer.effect(
               Effect.gen(function* () {
                 const current = yield* rotated()
                 if (current?.value.type === "oauth") return current.value
+                failures.set(expected.id, error instanceof Error ? error.message : String(error))
                 return yield* Effect.fail(error)
               }),
             ),
           )
+          failures.delete(expected.id)
           const rows = yield* db
             .update(CredentialTable)
             .set({ value, generation: sql`${CredentialTable.generation} + 1` })
@@ -195,6 +199,7 @@ const layer = Layer.effect(
         )
         return yield* Deferred.await(deferred)
       }),
+      refreshFailure: (id) => Effect.sync(() => failures.get(id)),
       create: Effect.fn("Credential.create")(function* (input) {
         const label = input.label ?? "default"
         const existing = yield* db
@@ -247,6 +252,7 @@ const layer = Layer.effect(
             }),
           )
           .pipe(Effect.orDie)
+        failures.delete(credential.id)
         const persisted = yield* db
           .select()
           .from(CredentialTable)
@@ -272,6 +278,7 @@ const layer = Layer.effect(
           .where(eq(CredentialTable.id, id))
           .run()
           .pipe(Effect.orDie)
+        if (updates.value !== undefined) failures.delete(id)
       }),
       activate: Effect.fn("Credential.activate")(function* (id) {
         const credential = yield* db
@@ -322,6 +329,7 @@ const layer = Layer.effect(
             }),
           )
           .pipe(Effect.orDie)
+        failures.delete(id)
       }),
     })
   }),

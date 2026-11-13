@@ -111,13 +111,13 @@ test("R1-F retains structured budget refusal and missing-session responses", asy
 })
 
 test("a missing Claude profile returns an actionable reconnect error during model switching", async () => {
-  await using f = fixture(() => Effect.fail(new SessionRunnerModel.ClaudeCodeReconnectError({
-    providerID: model.providerID, modelID: model.id,
+  await using f = fixture(() => Effect.fail(new SessionRunnerModel.ReconnectRequiredError({
+    providerID: model.providerID, providerName: "Anthropic", detail: "the Claude profile is not linked to a managed Claude sign-in",
   })))
   const response = await f.request()
   expect(response.status).toBe(500)
   const body = await response.json()
   expect(body).toMatchObject({ _tag: "UnknownError", ref: expect.stringMatching(/^err_[a-f0-9]{8}$/) })
-  expect(body.message).toMatch(/Claude profile.*reconnect.*Sign in/i)
-  expect(JSON.stringify(body)).not.toContain("SessionRunnerModel.ClaudeCodeReconnectError")
+  expect(body.message).toMatch(/Anthropic sign-in.*Reconnect Anthropic/)
+  expect(JSON.stringify(body)).not.toContain("SessionRunnerModel.ReconnectRequiredError")
 })

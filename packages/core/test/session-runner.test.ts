@@ -995,6 +995,8 @@ const it = testEffect(
       PluginHooks.node,
       echoNode,
       SessionRunnerModel.node,
+      Credential.node,
+      Integration.node,
       SessionTodo.node,
       SessionAutonomy.node,
       InstructionBuiltIns.node,
@@ -12767,6 +12769,151 @@ describe("SessionRunnerLLM model fallback", () => {
         expect(types.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
       }),
     )
+
+  const oauthRejected = () =>
+    new LLMError({
+      module: "test",
+      method: "stream",
+      reason: new AuthenticationReason({ message: "Provider request failed with HTTP 401", kind: "invalid" }),
+    })
+
+  const oauthAccount = (refresh: "succeeds" | "fails") =>
+    Effect.gen(function* () {
+      const integrations = yield* Integration.Service
+      const credentials = yield* Credential.Service
+      const integrationID = Integration.ID.make("fixture-cloud")
+      const methodID = Integration.MethodID.make("fixture-oauth")
+      const tokenRequests: string[] = []
+      yield* integrations.transform((draft) => {
+        draft.update(integrationID, (item) => {
+          item.name = "Fixture Cloud"
+        })
+        draft.method.update({
+          integrationID,
+          method: { type: "oauth", id: methodID, label: "Fixture sign-in" },
+          authorize: () => Effect.die("No live authorization"),
+          refresh: (value) =>
+            Effect.suspend(() => {
+              tokenRequests.push(value.refresh)
+              return refresh === "succeeds"
+                ? Effect.succeed(
+                    Credential.OAuth.make({
+                      ...value,
+                      access: "at-synthetic-2",
+                      refresh: "rt-synthetic-2",
+                      expires: Date.now() + 7_200_000,
+                    }),
+                  )
+                : Effect.fail(new Error("invalid_grant: Refresh token not found or invalid"))
+            }),
+        })
+      })
+      const credential = yield* credentials.create({
+        integrationID,
+        label: "Work",
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID,
+          access: "at-synthetic-1",
+          refresh: "rt-synthetic-1",
+          expires: Date.now() + 3_600_000,
+        }),
+      })
+      const used: string[] = []
+      actualModelResolver = {
+        resolve: () =>
+          Effect.gen(function* () {
+            const snapshot = yield* integrations.connection
+              .snapshot({ type: "credential", id: credential.id, label: credential.label, active: true })
+              .pipe(Effect.orDie)
+            if (snapshot.value?.type === "oauth") used.push(snapshot.value.access)
+            return {
+              ...SessionRunnerModel.resolved(currentModel),
+              oauth: { credentialID: credential.id, providerName: "Fixture Cloud" },
+            }
+          }),
+      }
+      return {
+        tokenRequests,
+        used,
+        stored: () => credentials.get(credential.id).pipe(Effect.map((item) => item?.value)),
+      }
+    })
+
+  const reconnectMessage = (detail: string) =>
+    `Fixture Cloud sign-in expired or was revoked and could not be refreshed: ${detail}. Reconnect Fixture Cloud: run /connect, choose Fixture Cloud, then Reconnect.`
+
+  it.effect("refreshes a rejected OAuth sign-in once and retries the Step once", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const account = yield* oauthAccount("succeeds")
+      responseStreams = [Stream.fail(oauthRejected()), Stream.fromIterable(reply.text("Recovered after refresh", "text-refresh"))]
+      yield* admit(session, "Answer after a rejected sign-in")
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(account.tokenRequests).toEqual(["rt-synthetic-1"])
+      expect(account.used.at(-1)).toBe("at-synthetic-2")
+      expect(yield* account.stored()).toMatchObject({ access: "at-synthetic-2", refresh: "rt-synthetic-2" })
+      expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({
+        finish: "stop",
+        content: [{ type: "text", text: "Recovered after refresh" }],
+      })
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types.filter((type) => type === "session.step.started.1")).toHaveLength(1)
+      expect(types).not.toContain("session.step.failed.1")
+      expect(types).not.toContain("session.retry.scheduled.1")
+    }),
+  )
+
+  it.effect("fails a rejected OAuth sign-in with a reconnect error when its refresh fails", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/backup"])
+      const account = yield* oauthAccount("fails")
+      responseStreams = [Stream.fail(oauthRejected()), Stream.fromIterable(reply.text("Unused", "text-unused"))]
+      yield* admit(session, "Answer after a revoked sign-in")
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+
+      const message = reconnectMessage("invalid_grant: Refresh token not found or invalid")
+      expect(failure).toBeInstanceOf(SessionRunnerModel.ReconnectRequiredError)
+      expect(failure.message).toBe(message)
+      expect(requests).toHaveLength(1)
+      expect(account.tokenRequests).toEqual(["rt-synthetic-1"])
+      expect(yield* account.stored()).toMatchObject({ access: "at-synthetic-1", refresh: "rt-synthetic-1" })
+      const assistant = requireAssistant(yield* session.context(sessionID))
+      expect(assistant).toMatchObject({ error: { type: "provider.auth", message } })
+      expect(JSON.stringify(assistant)).not.toContain("synthetic")
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types).not.toContain("session.step.rerouted.1")
+      expect(types.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
+    }),
+  )
+
+  it.effect("fails with a reconnect error when the refreshed OAuth sign-in is rejected again", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const account = yield* oauthAccount("succeeds")
+      responseStreams = [
+        Stream.fail(oauthRejected()),
+        Stream.fail(oauthRejected()),
+        Stream.fromIterable(reply.text("Unused", "text-unused")),
+      ]
+      yield* admit(session, "Answer after a rejected refreshed sign-in")
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+
+      const message = reconnectMessage("the provider rejected the refreshed sign-in")
+      expect(failure).toBeInstanceOf(SessionRunnerModel.ReconnectRequiredError)
+      expect(failure.message).toBe(message)
+      expect(requests).toHaveLength(2)
+      expect(account.tokenRequests).toEqual(["rt-synthetic-1"])
+      expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({
+        error: { type: "provider.auth", message },
+      })
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
+    }),
+  )
 
   it.effect("fails with the last model's error once every configured model has been tried", () =>
     Effect.gen(function* () {

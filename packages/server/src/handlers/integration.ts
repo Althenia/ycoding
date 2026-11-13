@@ -62,6 +62,7 @@ export const IntegrationHandler = HttpApiBuilder.group(Api, "server.integration"
               integrationID: ctx.params.integrationID,
               key: ctx.payload.key,
               label: ctx.payload.label,
+              credentialID: ctx.payload.credentialID,
             }),
           )
           return HttpApiSchema.NoContent.make()
@@ -78,6 +79,7 @@ export const IntegrationHandler = HttpApiBuilder.group(Api, "server.integration"
                 methodID: ctx.payload.methodID,
                 inputs: ctx.payload.inputs,
                 label: ctx.payload.label,
+                credentialID: ctx.payload.credentialID,
               }),
             ),
           )

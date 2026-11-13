@@ -3,6 +3,7 @@ import { Integration } from "@ycoding-ai/schema/integration"
 import { Location } from "@ycoding-ai/schema/location"
 import { Schema } from "effect"
 import { HttpApi, OpenApi } from "effect/unstable/httpapi"
+import { CredentialGroup } from "../src/groups/credential.js"
 import { IntegrationGroup } from "../src/groups/integration.js"
 
 const connect = IntegrationGroup.endpoints["integration.oauth.connect"]
@@ -71,4 +72,61 @@ test("integration list and get decode credential connections from servers that p
   const expected = [["cred_old", false, undefined], ["cred_new", true, "oauth"], ["ACME_KEY"]]
   expect(summary(listed.data[0]?.connections)).toEqual(expected)
   expect(summary(fetched.data?.connections)).toEqual(expected)
+})
+
+test("credential refresh returns a refreshed expiry or the exact failure message", () => {
+  const refresh = CredentialGroup.endpoints["credential.refresh"]
+  expect(refresh.method).toBe("POST")
+  expect(refresh.path).toBe("/api/credential/:credentialID/refresh")
+  const location = { directory: "/project", project: { id: "proj_test", directory: "/project" } }
+  const decode = Schema.decodeUnknownSync(Location.response(Integration.RefreshResult))
+  expect(decode({ location, data: { status: "refreshed", expires: 10 } }).data).toEqual({ status: "refreshed", expires: 10 })
+  expect(decode({ location, data: { status: "failed", message: "invalid_grant" } }).data).toEqual({
+    status: "failed",
+    message: "invalid_grant",
+  })
+  expect(() => decode({ location, data: { status: "refreshed" } })).toThrow()
+  expect(() => decode({ location, data: { status: "pending", message: "x" } })).toThrow()
+  const document = OpenApi.fromApi(HttpApi.make("credential-test").add(CredentialGroup))
+  const operation = document.paths["/api/credential/{credentialID}/refresh"]?.post
+  expect(operation?.operationId).toBe("credential.refresh")
+  expect(operation?.responses?.[200]?.content?.["application/json"]?.schema).toMatchObject({
+    properties: { data: { $ref: "#/components/schemas/Integration.RefreshResult" } },
+  })
+})
+
+test("OAuth and key connection payloads accept an optional replacement target", () => {
+  for (const [name, base] of [
+    ["integration.oauth.connect", { methodID: "browser", inputs: {} }],
+    ["integration.connect.key", { key: "sk-synthetic-key" }],
+  ] as const) {
+    const payload = IntegrationGroup.endpoints[name].payload.values().next().value?.schemas[0]
+    if (!payload) throw new Error(`${name} has no request schema`)
+    expect(Schema.is(payload)({ ...base, credentialID: "cred_target" })).toBe(true)
+    expect(Schema.is(payload)(base)).toBe(true)
+    expect(Schema.is(payload)({ ...base, credentialID: 7 })).toBe(false)
+  }
+})
+
+test("credential connections carry connection status and the last refresh failure", () => {
+  const location = { directory: "/project", project: { id: "proj_test", directory: "/project" } }
+  const integration = {
+    id: "acme",
+    name: "Acme",
+    methods: [],
+    connections: [
+      { type: "credential", id: "cred_a", label: "A", active: true, kind: "oauth", status: "connected" },
+      { type: "credential", id: "cred_b", label: "B", active: false, kind: "oauth", status: "expired" },
+      { type: "credential", id: "cred_c", label: "C", active: false, kind: "oauth", status: "refresh_failed", message: "invalid_grant" },
+      { type: "env", name: "ACME_KEY" },
+    ],
+  }
+  const decoded = Schema.decodeUnknownSync(Location.response(Schema.Array(Integration.Info)))({ location, data: [integration] })
+  expect(JSON.parse(JSON.stringify(decoded.data[0]?.connections))).toEqual(integration.connections)
+  expect(() =>
+    Schema.decodeUnknownSync(Location.response(Schema.Array(Integration.Info)))({
+      location,
+      data: [{ ...integration, connections: [{ type: "credential", id: "cred_d", label: "D", active: true, status: "revoked" }] }],
+    }),
+  ).toThrow()
 })

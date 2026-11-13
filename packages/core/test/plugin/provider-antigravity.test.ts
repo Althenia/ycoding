@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { fileURLToPath } from "node:url"
 import type { LanguageModelV3CallOptions, LanguageModelV3ToolResultOutput } from "@ai-sdk/provider"
-import { LLM, LLMEvent, Message, ToolDefinition } from "@ycoding-ai/ai"
+import { LLM, LLMError, LLMEvent, Message, ToolDefinition } from "@ycoding-ai/ai"
 import { LLMClient, RequestExecutor } from "@ycoding-ai/ai/route"
 import { Project } from "@ycoding-ai/schema/project"
 import { AISDK } from "@ycoding-ai/core/aisdk"
@@ -1138,6 +1138,46 @@ describe("AntigravityPlugin", () => {
       expect(finish?.usage?.outputTokens).toBe(5)
     })
   }
+
+  test("surfaces a gateway 401 as the invalid-authentication failure the runner refreshes on", async () => {
+    const { createGoogleGenerativeAI } = await import("@ai-sdk/google")
+    const authorizations: (string | null)[] = []
+    const sdk = createGoogleGenerativeAI({
+      apiKey: "placeholder",
+      fetch: Object.assign(
+        createAntigravityFetch(
+          async (_input, init) => {
+            authorizations.push(new Headers(init?.headers).get("authorization"))
+            return Response.json({ error: { message: "rejected", status: "UNAUTHENTICATED" } }, { status: 401 })
+          },
+          { access: "at-synthetic-1", project: "project-1" },
+        ),
+        { preconnect: fetch.preconnect },
+      ),
+    })
+    const failure = await Effect.runPromise(
+      Effect.gen(function* () {
+        const aisdk = yield* AISDK.Service
+        yield* aisdk.hook.sdk((event) => {
+          event.sdk = sdk
+        })
+        const model = yield* SessionRunnerModel.fromCatalogModel(
+          CatalogModel.Info.make({
+            ...CatalogModel.Info.empty(Provider.ID.make("antigravity"), CatalogModel.ID.make("gemini-fixture")),
+            package: Provider.aisdk("@ai-sdk/google"),
+          }),
+          undefined,
+          { loadAISDK: aisdk.model },
+        )
+        return yield* LLMClient.generate(LLM.request({ model, prompt: "Hello" })).pipe(Effect.flip)
+      }).pipe(Effect.scoped, Effect.provide(AISDK.locationLayer), Effect.provide(client)),
+    )
+    expect(authorizations).toEqual(["Bearer at-synthetic-1"])
+    expect(failure).toBeInstanceOf(LLMError)
+    expect(failure.reason).toMatchObject({ _tag: "Authentication", kind: "invalid" })
+    expect(failure.message).not.toContain("at-synthetic-1")
+    expect(failure.reason.message).not.toContain("at-synthetic-1")
+  })
 
   test("fetch wrap unwraps an SSE line delivered in single-byte chunks", async () => {
     const payload = `data: ${JSON.stringify({ response: { candidates: [{ content: { parts: [{ text: "คิด 🤔".repeat(800) }] } }] }, traceId: "t3" })}\r\n\r\n`

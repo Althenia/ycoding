@@ -1,4 +1,5 @@
 import { Agent } from "@ycoding-ai/schema/agent"
+import { Credential } from "@ycoding-ai/schema/credential"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Location } from "@ycoding-ai/schema/location"
 import { Session } from "@ycoding-ai/schema/session"
@@ -84,6 +85,7 @@ export const IntegrationGroup = HttpApiGroup.make("server.integration")
       payload: Schema.Struct({
         key: Schema.String,
         label: Schema.optional(Schema.String),
+        credentialID: Schema.optional(Credential.ID),
       }),
       success: HttpApiSchema.NoContent,
       error: InvalidRequestError,
@@ -93,7 +95,8 @@ export const IntegrationGroup = HttpApiGroup.make("server.integration")
         OpenApi.annotations({
           identifier: "integration.connect.key",
           summary: "Connect with key",
-          description: "Run a key authentication method and store the resulting credential.",
+          description:
+            "Run a key authentication method and store the resulting credential, replacing the key of `credentialID` in place when given.",
         }),
       ),
   )
@@ -105,6 +108,7 @@ export const IntegrationGroup = HttpApiGroup.make("server.integration")
         methodID: Integration.MethodID,
         inputs: Inputs,
         label: Schema.optional(Schema.String),
+        credentialID: Schema.optional(Credential.ID),
       }),
       success: Location.response(Integration.Attempt),
       error: InvalidRequestError,
@@ -114,7 +118,8 @@ export const IntegrationGroup = HttpApiGroup.make("server.integration")
         OpenApi.annotations({
           identifier: "integration.oauth.connect",
           summary: "Begin OAuth connection",
-          description: "Start an OAuth attempt and return the authorization details.",
+          description:
+            "Start an OAuth attempt and return the authorization details. With `credentialID`, a successful attempt replaces that profile in place.",
         }),
       ),
   )

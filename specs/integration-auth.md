@@ -6,6 +6,26 @@ An automatic attempt advertises `manualCode: true` only when its provider can ac
 
 The terminal's automatic OAuth dialog shows manual entry only for an advertised capable attempt. Opening its code prompt retains the attempt and its status polling. Closing the dialog cancels the pending attempt; successful settlement does not cancel it.
 
+## Reconnect, key replacement, and refresh
+
+`integration.oauth.connect` and `integration.connect.key` accept an optional `credentialID` naming an existing stored profile of the same integration. An unknown credential or one belonging to another integration fails with `400` (`integration_authorization`) before any authorization starts or any credential changes.
+
+- **Reconnect**: an OAuth attempt with `credentialID` runs the full flow. Only a successful settlement replaces that credential's value in place: the credential ID and label are kept and the profile becomes active. Cancellation, expiry, or a failed callback leaves the stored credential unchanged. If the target is removed while the attempt is pending, the attempt fails and no new profile is created.
+- **Key replacement**: a key connection with `credentialID` replaces that credential's value with the new key in place, keeps its ID and label, and makes it active. Without `credentialID`, the key is stored under `label` (default `default`); reusing a label updates that profile.
+- **Refresh**: `credential.refresh` (`POST /api/credential/:credentialID/refresh`, Location-scoped) forces a token refresh with the stored refresh token, regardless of expiry, and returns `Integration.RefreshResult`: `{ status: "refreshed", expires }` with the new expiry, or `{ status: "failed", message }`. Failure messages cover an unknown credential, a key credential (`API keys do not refresh; replace the key instead`), an OAuth method without refresh support (`<integration> sign-in cannot be refreshed; reconnect instead`), a credential changed concurrently, or the exact error text of the provider refresh. A failed refresh leaves the stored value unchanged. A successful refresh publishes `integration.connection.updated` and `integration.updated`.
+
+Secrets entered or stored through these paths are never returned in responses or connection projections.
+
+## Connection status
+
+`integration.list` and `integration.get` report a `status` on every stored-credential connection:
+
+- `refresh_failed` with `message` set to the exact failure text, when the last refresh of that credential in the current server process failed and no later refresh succeeded and its value was not replaced or removed;
+- otherwise `expired` for an OAuth credential whose expiry has passed;
+- otherwise `connected`, including every key credential.
+
+Environment connections carry no status. An integration with no connections is not connected. Refresh failures are kept in server memory only and reset when the server restarts.
+
 ## Account connector skills discovery
 
 The Location-scoped read endpoint `GET /api/integration/:integrationID/account-skills` (`integration.accountSkills.read`) inspects available ChatGPT connector skills using an established integration credential without mutating account data or performing new authentication.

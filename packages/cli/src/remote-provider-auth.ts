@@ -1,4 +1,4 @@
-import { isProviderAuthorizationURL, type ProviderAuthInfo, type ProviderAuthInput, type ProviderAuthAttempt, type ProviderAuthStatus } from "@ycoding-ai/remote"
+import { isProviderAuthorizationURL, type ProviderAuthInfo, type ProviderAuthInput, type ProviderAuthAttempt, type ProviderAuthRefresh, type ProviderAuthStatus } from "@ycoding-ai/remote"
 import type { LocalLocation, LocalServer } from "./remote-local"
 import { LocalFailure } from "./remote-local"
 
@@ -7,14 +7,15 @@ export type ProviderAuthEntry = { readonly integrationID: string; readonly targe
 export async function executeProviderAuth(input: { readonly fields: ProviderAuthInput; readonly location: LocalLocation; readonly local: LocalServer; readonly attempts: Map<string, ProviderAuthEntry>; readonly now: () => number }) {
   const fields = input.fields
   for (const [id, entry] of input.attempts) if (entry.expires <= input.now()) input.attempts.delete(id)
-  if (fields.kind === "list" || fields.kind === "key" || fields.kind === "begin") {
+  if (fields.kind === "list" || fields.kind === "key" || fields.kind === "begin" || fields.kind === "refresh") {
     const providers = await input.local.providerIntegrations(input.location)
     const integrations = await input.local.integrationList(input.location)
     const offered = integrations.filter((integration) => providers.some((provider) => provider.integrationID === integration.id))
     if (fields.kind === "list") {
       const data: ProviderAuthInfo[] = offered.map((integration) => ({ id: integration.id, name: integration.name,
         providers: providers.filter((provider) => provider.integrationID === integration.id).map((provider) => provider.providerID),
-        profiles: integration.connections.flatMap((connection) => connection.type === "credential" ? [{ name: connection.label, active: connection.active }] : []),
+        profiles: integration.connections.flatMap((connection): ProviderAuthInfo["profiles"] => connection.type === "credential"
+          ? [{ name: connection.label, active: connection.active, kind: connection.kind ?? "key", status: connection.status ?? "connected", ...(connection.message ? { message: boundedMessage(connection.message) } : {}) }] : []),
         methods: integration.methods.flatMap((method): ProviderAuthInfo["methods"] => {
           if (method.type === "env") return []
           if (method.type === "key") return [{ type: "key" as const, label: method.label ?? "API key", available: true }]
@@ -28,9 +29,21 @@ export async function executeProviderAuth(input: { readonly fields: ProviderAuth
     }
     const integration = offered.find((item) => item.id === fields.integrationID)
     if (!integration) throw new ProviderAuthError("Provider integration is unavailable at this Location.")
+    if (fields.kind === "refresh") {
+      const credentialID = credentialFor(integration, fields.label)
+      if (!credentialID) throw new ProviderAuthError("No provider profile has that name.")
+      const result = await input.local.credentialRefresh(input.location, credentialID)
+      if (result.status === "refreshed") {
+        if (typeof result.expires !== "number" || !Number.isFinite(result.expires)) throw new ProviderAuthError("The machine returned an unreadable expiry time.")
+        const data: ProviderAuthRefresh = { status: "refreshed", expires: result.expires }
+        return { data }
+      }
+      const data: ProviderAuthRefresh = { status: "failed", message: boundedMessage(result.message) }
+      return { data }
+    }
     if (fields.kind === "key") {
       if (!integration.methods.some((method) => method.type === "key")) throw new ProviderAuthError("API-key sign-in is unavailable for this integration.")
-      await input.local.integrationKey(input.location, fields.integrationID, fields.key, fields.label)
+      await input.local.integrationKey(input.location, fields.integrationID, fields.key, fields.label, credentialFor(integration, fields.label))
       return { data: { status: "complete" } }
     }
     const method = integration.methods.find((method) => (method.type === "oauth" || method.type === "command") && method.id === fields.methodID)
@@ -48,7 +61,7 @@ export async function executeProviderAuth(input: { readonly fields: ProviderAuth
     const reservation = `pending_${crypto.randomUUID()}`
     input.attempts.set(reservation, { integrationID: fields.integrationID, target: JSON.stringify(fields.target), location: input.location, type: method.type, expires: input.now() + 600000 })
     try {
-      const oauth = method.type === "oauth" ? await input.local.integrationOAuthBegin(input.location, fields.integrationID, method.id, fields.inputs, fields.label) : undefined
+      const oauth = method.type === "oauth" ? await input.local.integrationOAuthBegin(input.location, fields.integrationID, method.id, fields.inputs, fields.label, credentialFor(integration, fields.label)) : undefined
       const command = method.type === "command" ? await input.local.integrationCommandBegin(input.location, fields.integrationID, method.id, fields.label) : undefined
       const attempt = oauth ?? command
       if (!attempt) throw new ProviderAuthError("Authentication could not begin.")
@@ -89,6 +102,14 @@ export async function executeProviderAuth(input: { readonly fields: ProviderAuth
 }
 
 export class ProviderAuthError extends Error {}
+
+function credentialFor(integration: { readonly connections: readonly { readonly type: string; readonly label?: string; readonly id?: string }[] }, label: string) {
+  return integration.connections.find((connection) => connection.type === "credential" && connection.label === label)?.id
+}
+
+function boundedMessage(value: string) {
+  return value.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").trim().slice(0, 2048)
+}
 
 function requireAttemptTime(value: { readonly created: number | string; readonly expires: number | string }) {
   if (typeof value.created !== "number" || !Number.isFinite(value.created) || typeof value.expires !== "number" || !Number.isFinite(value.expires)) throw new ProviderAuthError("The machine returned an unreadable authentication time.")

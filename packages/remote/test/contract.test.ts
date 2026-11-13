@@ -810,6 +810,7 @@ describe("remote operations", () => {
       "provider.auth.status",
       "provider.auth.complete",
       "provider.auth.cancel",
+      "provider.auth.refresh",
       "workspace.list",
       "session.list",
       "session.active",

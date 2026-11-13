@@ -1,4 +1,6 @@
 import { Credential } from "@ycoding-ai/schema/credential"
+import { Integration } from "@ycoding-ai/schema/integration"
+import { Location } from "@ycoding-ai/schema/location"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { LocationQuery, locationQueryOpenApi } from "./location.js"
@@ -33,6 +35,22 @@ export const CredentialGroup = HttpApiGroup.make("server.credential")
           identifier: "credential.activate",
           summary: "Activate credential",
           description: "Make a stored credential the active provider profile.",
+        }),
+      ),
+  )
+  .add(
+    HttpApiEndpoint.post("credential.refresh", "/api/credential/:credentialID/refresh", {
+      params: { credentialID: Credential.ID },
+      query: LocationQuery,
+      success: Location.response(Integration.RefreshResult),
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "credential.refresh",
+          summary: "Refresh credential",
+          description:
+            "Refresh a stored OAuth credential with its refresh token and report the new expiry or the exact failure.",
         }),
       ),
   )

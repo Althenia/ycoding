@@ -2,6 +2,13 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-11-13: Refresh, reconnect, and connection status
+
+- Add optional `status: "connected" | "expired" | "refresh_failed"` and `message` to `Connection.CredentialInfo`. Servers that include this change always populate `status` for stored-credential connections in `integration.list` and `integration.get`; `message` carries the exact refresh failure text only with `refresh_failed`. Environment connections carry no status. Refresh failures live in server memory; no database migration runs.
+- Add `Integration.RefreshResult` (`{ status: "refreshed", expires }` or `{ status: "failed", message }`) and the Location-scoped `credential.refresh` operation (`POST /api/credential/:credentialID/refresh`), which forces a token refresh of a stored OAuth credential.
+- Add optional `credentialID` to the `integration.oauth.connect` and `integration.connect.key` payloads. It names an existing profile of the same integration whose value is replaced in place, keeping its ID and label, after a successful OAuth settlement or key submission; an unknown or foreign target fails with `400`. Replacement advances the credential's account generation; refresh does not.
+- Additive only. Regenerate the Promise and Effect clients from Protocol and Schema.
+
 ## 2026-11-05: Report credential connection kind
 
 - Add optional `kind: "oauth" | "key"` to `Connection.CredentialInfo`. Servers that include this change always populate it from the stored credential in `integration.list`, `integration.get`, and the active connection returned to plugins; servers that predate it omit it, and clients decode responses without it. Connections passed to `connection.resolve` may omit `kind` or carry a different value; resolution uses the stored credential. Connection payloads contain no secret fields or values. Regenerate the Promise client types from Schema.

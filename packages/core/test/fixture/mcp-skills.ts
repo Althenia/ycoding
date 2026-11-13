@@ -345,6 +345,7 @@ export const skillsMcpLayer = (url: string) => {
             update: unused,
             activate: unused,
             remove: unused,
+            refresh: unused,
           },
           oauth: { connect: unused, status: unused, complete: unused, cancel: unused },
           command: { connect: unused, status: unused, cancel: unused },

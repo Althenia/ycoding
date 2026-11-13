@@ -852,6 +852,7 @@ export type Endpoint12_3Input = {
   readonly location?: Endpoint12_3Request["query"]["location"]
   readonly key: Endpoint12_3Request["payload"]["key"]
   readonly label?: Endpoint12_3Request["payload"]["label"]
+  readonly credentialID?: Endpoint12_3Request["payload"]["credentialID"]
 }
 export type Endpoint12_3Output = EffectValue<ReturnType<RawClient["server.integration"]["integration.connect.key"]>>
 export type IntegrationConnectKeyOperation<E = never> = (
@@ -865,6 +866,7 @@ export type Endpoint12_4Input = {
   readonly methodID: Endpoint12_4Request["payload"]["methodID"]
   readonly inputs: Endpoint12_4Request["payload"]["inputs"]
   readonly label?: Endpoint12_4Request["payload"]["label"]
+  readonly credentialID?: Endpoint12_4Request["payload"]["credentialID"]
 }
 export type Endpoint12_4Output = EffectValue<ReturnType<RawClient["server.integration"]["integration.oauth.connect"]>>
 export type IntegrationOauthConnectOperation<E = never> = (
@@ -1043,17 +1045,26 @@ export type Endpoint14_1Input = {
 export type Endpoint14_1Output = EffectValue<ReturnType<RawClient["server.credential"]["credential.activate"]>>
 export type CredentialActivateOperation<E = never> = (input: Endpoint14_1Input) => Effect.Effect<Endpoint14_1Output, E>
 
-type Endpoint14_2Request = Parameters<RawClient["server.credential"]["credential.remove"]>[0]
+type Endpoint14_2Request = Parameters<RawClient["server.credential"]["credential.refresh"]>[0]
 export type Endpoint14_2Input = {
   readonly credentialID: Endpoint14_2Request["params"]["credentialID"]
   readonly location?: Endpoint14_2Request["query"]["location"]
 }
-export type Endpoint14_2Output = EffectValue<ReturnType<RawClient["server.credential"]["credential.remove"]>>
-export type CredentialRemoveOperation<E = never> = (input: Endpoint14_2Input) => Effect.Effect<Endpoint14_2Output, E>
+export type Endpoint14_2Output = EffectValue<ReturnType<RawClient["server.credential"]["credential.refresh"]>>
+export type CredentialRefreshOperation<E = never> = (input: Endpoint14_2Input) => Effect.Effect<Endpoint14_2Output, E>
+
+type Endpoint14_3Request = Parameters<RawClient["server.credential"]["credential.remove"]>[0]
+export type Endpoint14_3Input = {
+  readonly credentialID: Endpoint14_3Request["params"]["credentialID"]
+  readonly location?: Endpoint14_3Request["query"]["location"]
+}
+export type Endpoint14_3Output = EffectValue<ReturnType<RawClient["server.credential"]["credential.remove"]>>
+export type CredentialRemoveOperation<E = never> = (input: Endpoint14_3Input) => Effect.Effect<Endpoint14_3Output, E>
 
 export interface CredentialApi<E = never> {
   readonly update: CredentialUpdateOperation<E>
   readonly activate: CredentialActivateOperation<E>
+  readonly refresh: CredentialRefreshOperation<E>
   readonly remove: CredentialRemoveOperation<E>
 }
 

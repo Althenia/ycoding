@@ -85,7 +85,9 @@ describe("SessionModelFallback.unavailable", () => {
       SessionModelFallback.unavailable(new SessionRunnerModel.ProfileUnavailableError({ providerID, profile: "Work" })),
     ).toBe(false)
     expect(
-      SessionModelFallback.unavailable(new SessionRunnerModel.ClaudeCodeReconnectError({ providerID, modelID })),
+      SessionModelFallback.unavailable(
+        new SessionRunnerModel.ReconnectRequiredError({ providerID, providerName: "Anthropic", detail: "Sign-in rejected" }),
+      ),
     ).toBe(false)
   })
 })

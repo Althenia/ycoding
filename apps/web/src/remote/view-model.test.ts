@@ -25,7 +25,9 @@ import {
   sessionStateChips,
   keepAwakeIndicator,
   modelEffortNotice,
+  providerProfileMethod,
   providerProfileRefreshVisible,
+  providerProfileView,
   attachConfirmationValid,
   detachConfirmationValid,
   dotsConnectionView,
@@ -64,6 +66,23 @@ test("provider profile refresh is offered only after failure without an active a
   expect(providerProfileRefreshVisible({ phase: "unsupported", hasAttempt: false })).toBe(true)
   expect(providerProfileRefreshVisible({ phase: "pending", hasAttempt: true })).toBe(false)
   expect(providerProfileRefreshVisible({ phase: "ready", hasAttempt: false })).toBe(false)
+})
+
+test("provider profiles show kind and connection state", () => {
+  const profile = (kind: "oauth" | "key", status: "connected" | "expired" | "refresh_failed", message?: string) => ({ name: "work", active: true, kind, status, ...(message ? { message } : {}) })
+  expect(providerProfileView(profile("oauth", "connected"))).toEqual({ kind: "OAuth", state: "Connected", tone: "ok", canRefresh: true })
+  expect(providerProfileView(profile("oauth", "expired"))).toEqual({ kind: "OAuth", state: "Expired", tone: "warning", canRefresh: true })
+  expect(providerProfileView(profile("oauth", "refresh_failed", "invalid_grant"))).toEqual({ kind: "OAuth", state: "Refresh failed: invalid_grant", tone: "danger", canRefresh: true })
+  expect(providerProfileView(profile("oauth", "refresh_failed"))).toMatchObject({ state: "Refresh failed" })
+  expect(providerProfileView(profile("key", "connected"))).toEqual({ kind: "API key", state: "Connected", tone: "ok", canRefresh: false })
+})
+
+test("reconnect and key replacement pick the matching available method", () => {
+  const methods = [{ type: "oauth" as const, id: "off", label: "Off", available: false }, { type: "key" as const, label: "API key", available: true }, { type: "oauth" as const, id: "browser", label: "Browser", available: true }, { type: "command" as const, id: "cmd", label: "Command", available: true }]
+  expect(providerProfileMethod({ kind: "oauth" }, methods)?.id).toBe("browser")
+  expect(providerProfileMethod({ kind: "key" }, methods)?.type).toBe("key")
+  expect(providerProfileMethod({ kind: "oauth" }, [methods[0]!, methods[1]!])).toBeUndefined()
+  expect(providerProfileMethod({ kind: "key" }, [methods[0]!, { ...methods[1]!, available: false }])).toBeUndefined()
 })
 
 describe("Dots connection display", () => {
