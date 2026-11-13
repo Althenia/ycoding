@@ -1,6 +1,7 @@
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
 import type { Dots } from "@ycoding-ai/schema/dots"
 import { createHash } from "node:crypto"
+import { Schema } from "effect"
 import { RemoteLimits } from "@ycoding-ai/remote"
 import type { RemoteControlCredential } from "@ycoding-ai/core/remote-control/credential"
 import { buildCcaHeaders, defaultTimeoutMs, loadCcaExperimentState, markCcaExecutorRemoved, type CcaFetch } from "./cca-executor-registration"
@@ -111,6 +112,8 @@ export function ccaRestSend(fetchFn: CcaFetch, method: "GET" | "POST" | "DELETE"
   })
 }
 
+const decodeJson = Schema.decodeUnknownPromise(Schema.fromJsonString(Schema.Unknown))
+
 async function cappedJson(response: Response, maxBytes: number) {
   const declared = Number(response.headers.get("content-length"))
   if (Number.isFinite(declared) && declared > maxBytes) throw new CcaComputerFailure("connection")
@@ -128,7 +131,7 @@ async function cappedJson(response: Response, maxBytes: number) {
     }
     chunks.push(value)
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown
+  return decodeJson(Buffer.concat(chunks).toString("utf8"))
 }
 
 export async function ccaRestGet(fetchFn: CcaFetch, path: string, query: Record<string, string | undefined>, resolved: RemoteControlCredential.Resolved, deadline: AbortSignal, base = ccaComputerBaseURL, options: { readonly headers?: Record<string, string>; readonly maxBytes?: number } = {}) {
