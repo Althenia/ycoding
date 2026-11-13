@@ -24,7 +24,7 @@
   overflow: hidden;
   --app-strip-h: 0px;
   /* The selected conversation reads as one centered column. */
-  --remote-column: 880px;
+  --remote-column: 720px;
 }
 
 .app:has(> .status-strip) {
@@ -470,8 +470,11 @@ body:has(.app) {
   border-block-end: 1px solid var(--yc-border);
 }
 
-.workspace__heading { display: flex; flex-wrap: wrap; align-items: center; gap: var(--yc-space-2) var(--yc-space-4); inline-size: min(100%, var(--remote-column)); min-inline-size: 0; margin-inline: auto; }
+.workspace__heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: var(--yc-space-2) var(--yc-space-4); inline-size: auto; min-inline-size: 0; margin-inline: 0; }
 .workspace__heading { flex: 1; }
+.companion__activity-heading { display: flex; align-items: start; justify-content: space-between; gap: var(--yc-space-2); }
+.companion__activity-heading h2, .companion__activity-heading p { margin: 0; }
+.companion__activity-heading p { color: var(--yc-text-muted); font-size: var(--yc-size-xs); }
 .conversation-header__actions { display: inline-flex; flex: none; align-items: center; gap: var(--yc-space-1); }
 .conversation-header__actions .new-session__trigger { display: none; }
 .workspace__heading .presentation-switch { flex: none; }
@@ -675,6 +678,7 @@ body:has(.app) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.workspaces-page .workspace-nav__item > span { min-inline-size: 0; overflow-wrap: anywhere; }
 
 .workspace-select {
   display: grid;
@@ -1271,7 +1275,7 @@ body:has(.app) {
 
 .app--empty .empty-conversation > *,
 .app--empty .workspace__scroll > .route-panel > .new-session-composer {
-  inline-size: min(100%, 640px);
+  inline-size: min(100%, var(--remote-column));
   margin-inline: auto;
 }
 
@@ -1356,9 +1360,7 @@ body:has(.app) {
   padding-block-start: var(--yc-space-4);
 }
 
-.app--conversation.app--selected {
-  --remote-column: var(--yc-measure-wide);
-}
+.app--conversation.app--selected .composer-resident { border-block-start: 1px solid var(--yc-border); background: var(--yc-bg); }
 
 .app--conversation.app--selected .workspace__main {
   grid-template-rows: minmax(0, 1fr) auto auto auto;
@@ -1420,12 +1422,11 @@ body:has(.app) {
   margin-inline: auto;
 }
 .app--conversation.app--selected .workspace__scroll > .remote-conversation-view { inline-size: 100%; margin-inline: 0; }
-.app--conversation.app--selected .workspace__scroll > .route-panel > .new-session-composer { inline-size: min(100%, 640px); }
+.app--conversation.app--selected .workspace__scroll > .route-panel > .new-session-composer { inline-size: min(100%, var(--remote-column)); }
 
 @media (min-width: 1024px) {
   .app--conversation.app--selected .workspace__scroll > *,
   .app--conversation.app--selected .workspace__scroll > .remote-conversation-view > *,
-  .app--conversation.app--selected .workspace__heading,
   .app--conversation.app--selected .composer > *,
   .app--conversation.app--selected .todo-panel__inner {
     inline-size: min(calc(100% - var(--yc-space-12)), var(--remote-column));
@@ -2397,7 +2398,8 @@ body:has(.app) {
 .companion { display: grid; gap: var(--yc-space-3); min-inline-size: 0; }
 .companion__header, .companion__tabs { display: flex; align-items: center; gap: var(--yc-space-2); }
 .companion__header { flex-wrap: wrap; }
-.companion__header strong { flex: 1; font: var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono); }
+.companion__header > .rl-pane-kicker { flex: 1; font: var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono); }
+.companion__header .rl-pane-policy, .rl-pane-tabs-row, .companion__tabs .rl-pane-tab { display:flex; align-items:center; gap:var(--yc-space-2); }
 .companion__header button, .companion__tabs button { min-block-size: var(--yc-hit-min); padding-inline: var(--yc-space-2); border: 1px solid var(--yc-border); border-radius: var(--yc-radius-sm); background: var(--yc-surface-raised); color: var(--yc-text); }
 .companion__tabs [aria-selected="true"] { border-color: var(--yc-border-strong); font-weight: var(--yc-weight-semibold); }
 .companion__header button:not([aria-label]) { border-radius:var(--yc-radius-pill); background:var(--yc-green-soft); color:var(--yc-green-strong); font:var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); }
@@ -2405,6 +2407,8 @@ body:has(.app) {
 #companion-context p, #companion-changes > p { margin:0 0 var(--yc-space-2); color:var(--yc-text-muted); font:var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); }
 #companion-context .companion__context-eyebrow { font-size:11px; line-height:var(--yc-leading-2xs); font-weight:var(--yc-weight-semibold); letter-spacing:var(--yc-tracking-wide); }
 #companion-context .companion__context-total { color:var(--yc-text); font:var(--yc-weight-medium) var(--yc-size-4xl)/40px var(--yc-font-mono); }
+#companion-context .rl-context-total { display:flex; flex-wrap:wrap; align-items:baseline; gap:0 var(--yc-space-1); }
+#companion-context .companion__context-capacity, #companion-context .rl-context-total b { color:var(--yc-text-muted); font:var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); }
 .companion__context-bar { display:flex; overflow:hidden; block-size:8px; margin-block-end:var(--yc-space-3); border-radius:var(--yc-radius-pill); }
 .companion__context-bar-segment { flex-basis:0; min-inline-size:0; }
 .companion__context-breakdown { display:grid; gap:var(--yc-space-1); margin:0 0 var(--yc-space-2); }
@@ -2448,7 +2452,10 @@ body:has(.app) {
 .file-change-card > .file-change-card__files { flex: 1 0 100%; inline-size: 100%; }
 .app-header__new-chat { display: none; }
 .team-control__panel.team-control--exiting { pointer-events: none; }
-@media (min-width: 768px) {
+@media (max-width: 1180px) {
+  .team-control__panel { position: fixed; z-index: var(--yc-z-overlay); inset-block: 0; inset-inline-end: 0; inline-size: min(520px, 100vw); }
+}
+@media (min-width: 1181px) {
   .app--team-open { grid-template-columns: var(--yc-rail-w) minmax(0, 1fr) min(520px, 40vw); grid-template-areas: "rail header companion" "rail workspace companion"; }
   .app--team-open .conversation-breadcrumb { flex: 1 0 200px; }
   .app--team-open:has(> .status-strip) { grid-template-areas: "rail header companion" "rail connection companion" "rail workspace companion"; }
@@ -2474,7 +2481,7 @@ body:has(.app) {
   }
 
   .workspace__rail { display: none; }
-  .companion__header > strong { display:none; }
+  .companion__header > .rl-pane-kicker { display:none; }
   .app .app-header__menu,
   .app .app-header__inner > .brand { display: inline-flex; }
   .app .app-header__new-chat { display: inline-flex; }

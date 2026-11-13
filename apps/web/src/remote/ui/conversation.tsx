@@ -33,6 +33,7 @@ import { ProjectEscalationNote } from "./project-escalation"
 import { guardrailHeading } from "./guardrail-label"
 import { Markdown } from "./markdown"
 import { DotTrail } from "./dot-trail"
+import { SharedCompactionDivider, SharedMessageTurn, SharedTurnHead } from "./shared-workspace"
 import { FileChangeCard } from "./file-change-card"
 import { ImagePreview, UserImage } from "./image"
 import { LoadingPlaceholder } from "./loading"
@@ -381,10 +382,7 @@ function ReasoningPart(props: { readonly text: () => string; readonly parts: () 
 }
 
 function TurnHead(props: { readonly children: JSX.Element }): JSX.Element {
-  return <header class="transcript-message__head">
-    <img class="transcript-message__mark" src="/brand/ycoding-mark.svg" alt="" width={16} height={16} />
-    {props.children}
-  </header>
+  return <SharedTurnHead>{props.children}</SharedTurnHead>
 }
 
 export function MessageRow(props: { readonly message: () => RemoteMessageView; readonly continued?: boolean; readonly head?: boolean }): JSX.Element {
@@ -420,41 +418,14 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
   }
   return (
     <Show when={kind() !== "notice"} fallback={<p class="notice">{noticeText(props.message())}</p>}>
-      <article class={`transcript-message transcript-message--${kind()}`}>
-        <Show when={kind() === "oversized"}>
-          <p class="transcript-message__unavailable" role="status">{oversized()?.state === "error" ? "Content too large or unavailable" : oversized()?.state === "pending" ? "Waiting for content" : "Loading content"}</p>
-          <Show when={oversized()?.state === "error"}><button type="button" class="button button--ghost button--small" onClick={() => void remote.store.loadOversizedMessage(props.message().id)}>Retry full content</button></Show>
-        </Show>
-        <Show when={kind() === "user"}>
-          <Show when={userText(props.message()).trim() !== ""}><p class="transcript-message__bubble">{userText(props.message())}</p></Show>
-          <For each={attachmentKeys()}>{(key) => {
+      <SharedMessageTurn kind={kind()} text={userText(props.message()).trim() !== "" ? userText(props.message()) : undefined} attachments={<For each={attachmentKeys()}>{(key) => {
             const attachment = () => attachments()[Number(key.slice(0, key.indexOf(":")))]!
             const size = () => attachment().bytes < 1_024 ? `${attachment().bytes} B` : `${(attachment().bytes / 1_024).toFixed(1)} KB`
             return ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(attachment().mime)
               ? <UserImage name={attachment().name} mime={attachment().mime} digest={attachment().digest} deviceID={remote.state().activeDeviceID ?? ""} sessionID={remote.state().activeSessionID ?? ""} />
               : <span class="transcript-file">{attachment().name} · {size()}</span>
-          }}</For>
-          <span class="transcript-message__receipt" role="status" aria-label={receipt().label}>
-            <Show when={receipt().mark === "✓"} fallback={<span aria-hidden="true">{receipt().mark}</span>}><Icon name="check" size={14} /></Show>{receipt().text}
-          </span>
-          <Show when={promptMutation()}>{(mutation) => <div class="transcript-message__send-error" role={mutation().state === "failed" ? "alert" : "status"}>
-            <span>{mutation().state === "unknown" ? "Outcome unknown" : "Send failed"}: {mutation().detail}</span>
-            <button type="button" class="button button--secondary button--small" onClick={() => void remote.store.retryMutation(mutation().id)}>Retry send</button>
-          </div>}</Show>
-        </Show>
-
-        <Show when={kind() === "assistant"}>
-          <Show when={props.head !== false}>
-            <TurnHead><span class="transcript-message__footer">{agent()}<Show when={assistantOf(props.message())?.model}>{(model) => <> · {modelDisplayLabel(model(), models())}<Show when={model().variant}> · {model().variant}</Show></>}</Show><Show when={assistantOf(props.message())?.completed}>{(end) => <> · {formatPartDuration(end() - (assistantOf(props.message())?.created ?? end()))}</>}</Show></span></TurnHead>
-          </Show>
-          <Show when={assistantOf(props.message())?.parts.some((part) => part.kind === "text" && part.text.trim() !== "")}><h3 class="transcript-message__agent">{agent()}</h3></Show>
-          <AssistantParts parts={() => assistantOf(props.message())?.parts ?? []} />
-          <Show when={!props.continued}>
-            <Show when={assistantOf(props.message())?.error}><p class="transcript-message__error" role="status">{assistantOf(props.message())?.error}</p></Show>
-          </Show>
-        </Show>
-
-        <Show when={peer()}>{(label) => <section aria-label={label()}><h3 class="transcript-message__agent">{label()}</h3><p class="transcript-message__system">{systemText(props.message())}</p></section>}</Show>
+          }}</For>} receiptLabel={receipt().label} receipt={<><Show when={receipt().mark === "✓"} fallback={<span aria-hidden="true">{receipt().mark}</span>}><Icon name="check" size={14} /></Show>{receipt().text}</>} sendError={<Show when={promptMutation()}>{(mutation) => <div class="transcript-message__send-error" role={mutation().state === "failed" ? "alert" : "status"}>
+            <span>{mutation().state === "unknown" ? "Outcome unknown" : "Send failed"}: {mutation().detail}</span><button type="button" class="button button--secondary button--small" onClick={() => void remote.store.retryMutation(mutation().id)}>Retry send</button></div>}</Show>} head={<Show when={props.head !== false}><TurnHead><span class="transcript-message__footer">{agent()}<Show when={assistantOf(props.message())?.model}>{(model) => <> · {modelDisplayLabel(model(), models())}<Show when={model().variant}> · {model().variant}</Show></>}</Show><Show when={assistantOf(props.message())?.completed}>{(end) => <> · {formatPartDuration(end() - (assistantOf(props.message())?.created ?? end()))}</>}</Show></span></TurnHead></Show>} agent={assistantOf(props.message())?.parts.some((part) => part.kind === "text" && part.text.trim() !== "") ? agent() : undefined} body={<AssistantParts parts={() => assistantOf(props.message())?.parts ?? []} />} error={<Show when={!props.continued && assistantOf(props.message())?.error}><p class="transcript-message__error" role="status">{assistantOf(props.message())?.error}</p></Show>} fileChanges={<Show when={!props.continued && showFileChanges()}><FileChangeCard files={fileChanges} /></Show>} shellHeader={<><Icon name="terminal" size={16} /><code>{shellOf(props.message())?.command ?? ""}</code><span class="shell__status">{shellStatus(props.message())}</span></>} shellOutput={<ShellOutputSection shellID={shellOf(props.message())?.shellID ?? ""} output={shellOf(props.message())?.output} fetch={shellOf(props.message())?.outputFetch} status={shellOf(props.message())?.status} />} content={<>
         <Show when={(kind() === "system" || kind() === "synthetic") && !peer()}>
           <Show when={guardrail()} fallback={
           <Show when={parentAnswer(props.message())} fallback={<Show when={syntheticNotice()} fallback={<Show when={observation()} fallback={<p class="transcript-message__system">{fallbackText()}</p>}>{(summary) => <details class="transcript-message__observation"><summary>{summary()}</summary><pre tabindex="0">{systemText(props.message())}</pre></details>}</Show>}>
@@ -463,29 +434,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
           }>{(provenance) => <details class="transcript-notice transcript-notice--waiting"><summary><Icon name="chevron-right" size={16} />{fallbackText()}</summary><DecisionProvenance provenance={provenance()} /></details>}</Show>
         </Show>
 
-        <Show when={kind() === "shell"}>
-          <div class="shell">
-            <div class="shell__header">
-              <Icon name="terminal" size={16} />
-              <code>{shellOf(props.message())?.command ?? ""}</code>
-              <span class="shell__status">{shellStatus(props.message())}</span>
-            </div>
-            <ShellOutputSection
-              shellID={shellOf(props.message())?.shellID ?? ""}
-              output={shellOf(props.message())?.output}
-              fetch={shellOf(props.message())?.outputFetch}
-              status={shellOf(props.message())?.status}
-            />
-          </div>
-        </Show>
-
-        <Show when={kind() === "compaction"}>
-          <CompactionDivider message={props.message} />
-        </Show>
-        <Show when={kind() === "assistant" && !props.continued && showFileChanges()}>
-          <FileChangeCard files={fileChanges} />
-        </Show>
-      </article>
+      </>} unavailable={oversized()?.state === "error" ? "Content too large or unavailable" : oversized()?.state === "pending" ? "Waiting for content" : "Loading content"} onRetry={oversized()?.state === "error" ? () => void remote.store.loadOversizedMessage(props.message().id) : undefined} peerLabel={peer()} peerText={systemText(props.message())} compaction={<CompactionDivider message={props.message} />} />
     </Show>
   )
 }
@@ -660,18 +609,7 @@ function CompactionDivider(props: { readonly message: () => RemoteMessageView })
     return ""
   }
   const completed = () => current()?.status === "completed" && metrics() !== undefined
-  return <div class={`transcript-compaction${completed() ? " transcript-compaction--completed" : ""}`}>
-    <div class="transcript-compaction__heading"><span class="transcript-compaction__rule" /><strong class="transcript-compaction__label">{label()}</strong><span class="transcript-compaction__rule" /></div>
-    <div class="transcript-compaction__details" aria-hidden={!completed()}>
-      <p class="transcript-compaction__total">{completed() && history() ? `~${compactTokenCount(history()!.totalSavedTokens)} tokens saved total` : ""}</p>
-      <div class="transcript-compaction__bar" role="img" aria-label={completed() ? `${reduction()}% of input tokens removed` : undefined}>
-        <span class="transcript-compaction__removed" style={{ width: `${Math.max(0, Math.min(100, reduction()))}%` }} />
-        <span class="transcript-compaction__retained" />
-      </div>
-      <p class="transcript-compaction__number">{completed() ? `${ordinal() === undefined ? "" : `Compression #${ordinal()} (`}~${compactTokenCount(saved())} tokens removed, ${reduction()}% reduction${ordinal() === undefined ? "" : ")"}` : ""}</p>
-      <p class="transcript-compaction__items">{completed() ? `Items: ${metrics()!.excludedMessages} messages compressed · ${timestamp()}` : ""}</p>
-    </div>
-  </div>
+  return <SharedCompactionDivider completed={completed()} label={label()} total={completed() && history() ? `~${compactTokenCount(history()!.totalSavedTokens)} tokens saved total` : ""} reduction={reduction()} number={completed() ? `${ordinal() === undefined ? "" : `Compression #${ordinal()} (`}~${compactTokenCount(saved())} tokens removed, ${reduction()}% reduction${ordinal() === undefined ? "" : ")"}` : ""} items={completed() ? `Items: ${metrics()!.excludedMessages} messages compressed · ${timestamp()}` : ""} />
 }
 const guardrailAction = (request: PendingRequestView) => (request.kind === "guardrail" ? request.action : "")
 const guardrailReason = (request: PendingRequestView) => (request.kind === "guardrail" ? request.reason : "")

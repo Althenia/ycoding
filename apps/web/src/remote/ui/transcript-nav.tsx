@@ -1,7 +1,6 @@
 import { For, Show, createComputed, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Portal } from "solid-js/web"
 import { createDebouncer, createThrottler } from "@tanstack/solid-pacer"
-import { Icon } from "../../ui/icon"
 import { useRemote } from "../context"
 import { hasCompactionCheckpoint, type RemoteMessageView } from "../projection"
 import type { GuardrailDecisionView } from "../decision-grades"
@@ -11,37 +10,14 @@ import { transcriptRows, type TranscriptRow } from "./transcript-rows"
 export { rowKey } from "./transcript-rows"
 import { LoadingPlaceholder } from "./loading"
 import { createRowVirtualizer, sameKeys } from "./virtual-rows"
+import { JumpControls, PromptRail, followState, jumpBehavior, navigationTargets, pillClearance, promptTicks, promptsInView, sameSet } from "./transcript-rail"
 import "./transcript-nav.css"
-
-export function followState(following: boolean, event: { readonly kind: "scroll" | "content" | "jump" | "top" | "session"; readonly distance: number }): boolean {
-  if (event.kind === "top") return false
-  if (event.kind === "session" || event.kind === "jump") return true
-  if (event.kind === "content") return following
-  return event.distance <= (following ? 48 : 1)
-}
-
-export function navigationTargets(scrollTop: number, following: boolean) {
-  return { top: scrollTop > 8, bottom: !following }
-}
-
-export function jumpBehavior(): ScrollBehavior {
-  return matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth"
-}
-
-export function JumpControls(props: { readonly onTop?: () => void; readonly onBottom?: () => void; readonly hidden?: boolean; readonly clearance?: number }): JSX.Element {
-  return <div class="transcript-navigation__controls" style={{ "margin-block-end": `${props.clearance ?? 0}px` }} classList={{ "transcript-navigation__controls--visible": props.hidden !== true && (props.onTop !== undefined || props.onBottom !== undefined) }}><Show when={props.onTop}>{(jump) => <button type="button" aria-label="Jump to top" onClick={jump()}><Icon name="arrow-up" size={18} /></button>}</Show><Show when={props.onBottom}>{(jump) => <button type="button" aria-label="Jump to latest" onClick={jump()}><Icon name="arrow-down" size={18} /></button>}</Show></div>
-}
 
 export function estimateRowHeight(message: RemoteMessageView | undefined): number {
   if (message === undefined) return 120
   if (message.kind === "compaction") return 196
   if (message.kind === "user") return 64
   return 176
-}
-
-export function promptPreview(text: string): string {
-  const normalized = text.replace(/\s+/g, " ").trim()
-  return normalized.length > 90 ? `${normalized.slice(0, 89)}…` : normalized
 }
 
 export type TranscriptPosition = { readonly top: number; readonly key?: string; readonly offset?: number }
@@ -54,8 +30,6 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   const away = () => !following()
   const [scrollTop, setScrollTop] = createSignal(0)
   const [visible, setVisible] = createSignal<ReadonlySet<string>>(new Set())
-  const [hovered, setHovered] = createSignal<string>()
-  const [tooltipTop, setTooltipTop] = createSignal(0)
   const [jumpSlot, setJumpSlot] = createSignal<HTMLElement>()
   const [clearance, setClearance] = createSignal(0)
   const targets = () => navigationTargets(scrollTop(), !away())
@@ -63,13 +37,8 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   const checkpoint = createMemo(() => hasCompactionCheckpoint(props.messages()))
   const ids = createMemo(() => rows().map((row) => row.id), [], { equals: sameKeys })
   const byKey = createMemo(() => new Map(rows().map((entry) => [entry.id, entry])))
-  const prompts = createMemo(() => rows().flatMap((row) => row.kind === "message" && row.message.kind === "user" ? [row.message] : []))
-  const preview = (id: string) => {
-    const item = byKey().get(id)
-    return item?.kind === "message" && item.message.kind === "user" ? promptPreview(item.message.text) : ""
-  }
+  const ticks = createMemo(() => promptTicks(rows(), (row) => row.kind === "message" && row.message.kind === "user" ? { id: row.id, text: row.message.text } : undefined))
   let wrapper: HTMLDivElement | undefined
-  let railSlot: HTMLDivElement | undefined
   let list: HTMLOListElement | undefined
   let scrollRoot: HTMLElement | undefined
   let jumping = false
@@ -90,11 +59,11 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   const showPromptsInView = () => {
     if (!active() || !wrapper || !scrollRoot) return
     const viewport = scrollRoot.getBoundingClientRect()
-    const next = new Set([...wrapper.querySelectorAll<HTMLElement>("[data-prompt-id]")].filter((row) => {
+    const next = promptsInView(viewport, [...wrapper.querySelectorAll<HTMLElement>("[data-prompt-id]")].map((row) => {
       const bounds = row.getBoundingClientRect()
-      return bounds.top < viewport.bottom && bounds.bottom > viewport.top
-    }).map((row) => row.dataset.promptId!))
-    setVisible((previous) => previous.size === next.size && [...next].every((id) => previous.has(id)) ? previous : next)
+      return { id: row.dataset.promptId!, top: bounds.top, bottom: bounds.bottom }
+    }))
+    setVisible((previous) => sameSet(previous, next) ? previous : next)
     const slot = jumpSlot()
     const controls = slot?.querySelector<HTMLElement>(".transcript-navigation__controls")
     if (!slot || !controls) return
@@ -103,9 +72,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     const bottom = bounds.top + controls.offsetTop + controls.offsetHeight + clearance()
     const left = bounds.left + controls.offsetLeft
     const gap = Number.parseFloat(getComputedStyle(controls).bottom)
-    setClearance([...scrollRoot.querySelectorAll<HTMLElement>(".request__actions")].map((row) => row.getBoundingClientRect()).sort((a, b) => b.top - a.top).reduce((offset: number, row) =>
-      row.left < left + controls.offsetWidth && row.right > left && row.top < bottom - offset && row.bottom > bottom - offset - controls.offsetHeight
-        ? bottom - row.top + gap : offset, 0))
+    setClearance(pillClearance({ left, width: controls.offsetWidth, bottom, height: controls.offsetHeight, gap }, [...scrollRoot.querySelectorAll<HTMLElement>(".request__actions")].map((row) => row.getBoundingClientRect())))
   }
   const visibility = createThrottler(showPromptsInView, { wait: 100 })
   const settle = createDebouncer(() => {
@@ -243,11 +210,6 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     row?.focus({ preventScroll: true })
     virtual.virtualizer.scrollToIndex(index, { align: "start", behavior: jumpBehavior() })
   }
-  const revealPrompt = (id: string, button: HTMLButtonElement) => {
-    setHovered(id)
-    setTooltipTop(button.getBoundingClientRect().top - (railSlot?.getBoundingClientRect().top ?? 0))
-  }
-
   onMount(() => {
     mounted = true
     const root = scrollRoot ??= wrapper?.closest<HTMLElement>(".workspace__scroll") ?? undefined
@@ -326,14 +288,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   })
 
   return <div class="transcript-navigation" classList={{ "transcript-navigation--empty": rows().length === 0 }} ref={wrapper}>
-    <div class="transcript-navigation__rail-slot" ref={railSlot}>
-      <Show when={prompts().length > 0}>
-        <nav class="transcript-navigation__rail" aria-label="Conversation prompts">
-          <div class="transcript-navigation__ticks"><For each={prompts().map((prompt) => prompt.id)}>{(id) => <button type="button" class="transcript-navigation__tick" classList={{ "transcript-navigation__tick--visible": visible().has(id) }} aria-label={`Go to prompt: ${preview(id)}`} onMouseEnter={(event) => revealPrompt(id, event.currentTarget)} onMouseLeave={(event) => { if (document.activeElement !== event.currentTarget) setHovered(undefined) }} onFocus={(event) => revealPrompt(id, event.currentTarget)} onBlur={() => setHovered(undefined)} onClick={() => selectPrompt(id)}><span class="transcript-navigation__tick-mark" /></button>}</For></div>
-        </nav>
-        <Show when={hovered()}>{(id) => <div class="transcript-navigation__tooltip" role="tooltip" style={{ top: `${tooltipTop()}px` }}>{preview(id())}</div>}</Show>
-      </Show>
-    </div>
+    <PromptRail prompts={ticks()} visible={visible()} onSelect={selectPrompt} />
     <Show when={!checkpoint() && remote.state().history?.status === "loading"}><div class="transcript-navigation__history-loading"><LoadingPlaceholder kind="history" label="Loading older messages…" /></div></Show>
     <Show when={!checkpoint() && remote.state().history?.status === "idle" && !remote.state().history?.before}><p class="transcript-navigation__beginning">Beginning of conversation</p></Show>
     <Show when={!checkpoint() && remote.state().history?.status === "error"}><p class="transcript-navigation__history-error" role="alert">{remote.state().history?.error} <button type="button" onClick={() => void loadOlder()}>Retry older history</button></p></Show>

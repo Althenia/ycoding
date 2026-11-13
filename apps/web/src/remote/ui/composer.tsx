@@ -18,6 +18,7 @@ import { ModelControl, ReasoningEffort } from "./model-control"
 import { requestAutonomousDialog } from "./autonomous-dialog"
 import { ComposerStatus } from "./status-bar"
 import { composerDockCollapsed, type ComposerDockEvent } from "./composer-dock"
+import { SharedComposerSurface } from "./shared-workspace"
 import "./composer.css"
 
 const composerDockStorageKey = "ycoding.remote.composer-collapsed"
@@ -531,10 +532,7 @@ export function MiniComposer(props: {
           <div class="composer__selection-options"><ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} /><ModelControl models={catalog()?.models ?? []} selected={selectedModel()} selectionKey={modelKey()} recent={recentModels()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} /></div>
         </section>
     </Portal></Show>
-    <div class="composer" classList={{ "composer--collapsed": collapsed(), "composer--phone-summary": props.phoneSummary === true, "composer--metadata-in-transcript": metadataMount() !== undefined }}>
-    <div class="composer__row" classList={{ "composer__row--dragging": dragging() }} onDragOver={(event) => { if (event.dataTransfer?.types.includes("Files")) { event.preventDefault(); setDragging(true) } }} onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false) }} onDrop={(event) => { setDragging(false); if (!event.dataTransfer?.files.length) return; event.preventDefault(); void addFiles(Array.from(event.dataTransfer.files)) }}>
-      <div class="composer__body" aria-hidden={collapsed()} inert={collapsed()}><div class="composer__body-inner">
-      <div ref={inputWrap} class="mini-composer__input-wrap">
+    <SharedComposerSurface classList={{ "composer--collapsed": collapsed(), "composer--phone-summary": props.phoneSummary === true, "composer--metadata-in-transcript": metadataMount() !== undefined }} collapsed={collapsed()} dragging={dragging()} onSubmit={(event) => event.preventDefault()} onDragOver={(event) => { if (event.dataTransfer?.types.includes("Files")) { event.preventDefault(); setDragging(true) } }} onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false) }} onDrop={(event) => { setDragging(false); if (!event.dataTransfer?.files.length) return; event.preventDefault(); void addFiles(Array.from(event.dataTransfer.files)) }} fieldRef={(element) => { inputWrap = element }} field={<>
         <input ref={fileInput} class="composer__file-input" type="file" multiple aria-label="Choose files" onChange={(event) => { void addFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = "" }} /><button type="button" class="composer__attach" aria-label="Attach files" aria-description="Attaches files chosen in this browser (up to 20 MiB per file, 40 MiB total). Host filesystem paths are not read by the browser." title="Attach files chosen in this browser; host filesystem paths are not read." disabled={props.disabled || reading() > 0} onClick={() => fileInput?.click()}><Icon name="plus" /></button>
         <textarea ref={input} class="composer__input" rows={1} aria-label="Message your agent" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={suggesting()} aria-controls={suggesting() ? "composer-autocomplete" : undefined} aria-activedescendant={options().length ? `composer-option-${active()}` : undefined}
           placeholder={prediction()?.text ?? "Message YCoding"} disabled={props.disabled} value={props.text}
@@ -555,7 +553,7 @@ export function MiniComposer(props: {
           <Show when={searchingFiles() && !fileSearching() && !fileError() && fileResult().length === 0}><p class="mini-composer__suggestions-status" role="status">No matching files in this workspace.</p></Show>
           <Show when={fileError()}><p class="mini-composer__suggestions-status" role="status">{fileError()}</p><button type="button" class="mini-composer__suggestions-retry" aria-label="Retry file search" onPointerDown={(event) => event.preventDefault()} onClick={retryFiles}>Retry</button></Show>
         </div></Show>
-      </div>
+      </>} feedback={<>
       <p class="composer__attachment-disclosure">Device files only · browser cannot read host paths</p>
       <Show when={attachments().length}><div class="composer__attachments" aria-label="Attachments"><For each={attachments()}>{(item) => <div class="composer__attachment"><Show when={item.mime.startsWith("image/")}><img src={item.uri} alt="" /></Show><span class="composer__attachment-name" title={item.name}>{item.name}</span><span class="composer__attachment-size">{item.size < 1024 ? `${item.size} B` : `${(item.size / 1024).toFixed(1)} KiB`}</span><button type="button" aria-label={`Remove ${item.name}`} onClick={() => { setAttachments((items) => items.filter((entry) => entry.id !== item.id)); setAttachmentError(undefined) }}><Icon name="close" /></button></div>}</For><span class="composer__attachments-summary">{attachmentCapacitySummary(attachments())}</span></div></Show>
       <Show when={attachmentError()}><p class="composer__attachment-error" role="alert">{attachmentError()}</p></Show>
@@ -564,8 +562,7 @@ export function MiniComposer(props: {
       </Show>
       <Show when={modelChoice().warning}>{(warning) => <p class="field__hint composer__model-warning" role="status">{warning()}</p>}</Show>
       <Show when={upload()}>{(value) => <div class="composer__upload" role="status"><span>Uploading {value().name} · {value().percent}%</span><progress aria-label={`Uploading ${value().name}`} value={value().percent} max="100" /><button type="button" onClick={() => remote.store.cancelUpload()}>Cancel upload</button></div>}</Show>
-      </div></div>
-      <div class="composer__controls">
+      </>} controls={<>
         <div class="composer__control-set" aria-hidden={collapsed()} inert={collapsed()}>
         <Show when={contextWindow()}><div class="composer__context"><button ref={contextTrigger} type="button" class="composer__context-trigger" aria-label={contextAccessible()} aria-controls="session-companion-panel" aria-expanded={props.companionContextOpen === true} onMouseEnter={() => { if (window.matchMedia("(hover: hover)").matches) showContext() }} onMouseLeave={queueContextClose} onFocus={showContext} onBlur={() => { if (!contextPinned()) queueContextClose() }} onClick={() => { closeContext(); props.onOpenContext?.() }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeContext() } }}>{ring()}</button><Show when={contextOpen()}><div class="composer__context-popover" classList={{ "composer__context-popover--leaving": contextLeaving() }} role="tooltip" aria-hidden={contextLeaving()} inert={contextLeaving()} onMouseEnter={contextClose.cancel} onMouseLeave={queueContextClose} onAnimationEnd={finishContext} onAnimationCancel={finishContext}><strong>Context window</strong><span>{contextLabel()}</span><span>{contextWindow()?.tokens}</span></div></Show></div></Show>
         <ModelControl models={catalog()?.models ?? []} selected={selectedModel()} selectionKey={modelKey()} recent={recentModels()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} />
@@ -579,10 +576,7 @@ export function MiniComposer(props: {
           <Show when={props.running && props.onInterrupt}><button type="button" class="mini-composer__interrupt" aria-label="Interrupt the running step" onClick={props.onInterrupt}><Icon name="stop" /></button></Show>
           </div>
         </div>
-      </div>
-    </div>
-    <Show when={!collapsed()}><ReasoningEffort models={catalog()?.models ?? []} selected={selectedModel()} disabled={props.disabled || catalog()?.status !== "ready"} onChange={chooseModel} /></Show>
-    <Show when={sessionTarget()}><div class="composer__dock" aria-label="Composer dock">
+      </>} effort={<Show when={!collapsed()}><ReasoningEffort models={catalog()?.models ?? []} selected={selectedModel()} disabled={props.disabled || catalog()?.status !== "ready"} onChange={chooseModel} /></Show>} status={<Show when={sessionTarget()}><div class="composer__dock" aria-label="Composer dock">
       <span class="composer__prediction-slot"><Show when={prediction() && !collapsed()}><button type="button" class="button button--ghost composer__use-prediction" onClick={usePrediction}>Use suggestion</button></Show></span>
       <Show when={collapsed() && props.showStatus}><ComposerStatus /></Show>
       <button ref={dockToggle} type="button" class="button button--ghost composer__dock-toggle" aria-label={collapsed() ? "Show composer" : "Hide composer"} aria-expanded={!collapsed()} onClick={() => {
@@ -590,8 +584,7 @@ export function MiniComposer(props: {
       setDock("toggle")
       queueMicrotask(() => (next ? dockToggle : input)?.focus({ preventScroll: true }))
     }}><Icon name="chevron-down" size={16} /><span>{collapsed() ? "Show composer" : "Hide composer"}</span></button>
-    </div></Show>
-    </div>
+    </div></Show>} />
     <Show when={promptGenerate()} keyed>{(request) => <PromptGenerateDialog sessionSelected={sessionTarget()} returnFocus={request.returnFocus} onClose={() => setPromptGenerate(undefined)} onConfirm={(mode, memory) => {
       if (sessionTarget()) {
         void remote.store.requestPromptGenerate({ mode, intent: request.intent, memory })

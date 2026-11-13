@@ -8,6 +8,9 @@ const version = "9.9.9"
 const targets = ["darwin-arm64", "darwin-x64", "linux-x64", "windows-x64"] as const
 const extension = ["icons/ycoding-128.png", "icons/ycoding-16.png", "icons/ycoding-32.png", "icons/ycoding-48.png", "manifest.json", "popup.css", "popup.html", "popup.js", "protocol.js", "service-worker.js"]
 const app = "YCoding Computer Use.app"
+const desktop = "YCoding Desktop.app"
+const desktopArchive = `YCoding-Desktop-v${version}-darwin-arm64.zip`
+const desktopEntries = ["", "Contents/", "Contents/Frameworks/", "Contents/Info.plist", "Contents/MacOS/", "Contents/MacOS/launcher", "Contents/Resources/", "Contents/Resources/AppIcon.icns", "Contents/Resources/metadata.json", "Contents/Resources/1z1pg577pmla1.tar.zst"].map((entry) => `${desktop}/${entry}`).sort()
 
 function execute(root: string, args: string[]) {
   return Bun.spawnSync([process.execPath, script, ...args], { cwd: root, stdout: "pipe", stderr: "pipe" })
@@ -29,6 +32,18 @@ async function fixture(root: string, target: string) {
   return source
 }
 
+async function desktopFixture(root: string) {
+  const source = path.join(root, "desktop", desktop)
+  await fs.mkdir(path.join(source, "Contents/Frameworks"), { recursive: true })
+  await Bun.write(path.join(source, "Contents/Info.plist"), "<plist>\n<dict>\n    <key>CFBundleExecutable</key>\n    <string>launcher</string>\n    <key>CFBundleIdentifier</key>\n    <string>app.ycoding.desktop</string>\n    <key>CFBundleIconFile</key>\n    <string>AppIcon</string>\n</dict>\n</plist>\n")
+  await Bun.write(path.join(source, "Contents/MacOS/launcher"), "synthetic launcher\n")
+  await fs.chmod(path.join(source, "Contents/MacOS/launcher"), 0o755)
+  await Bun.write(path.join(source, "Contents/Resources/AppIcon.icns"), "synthetic icon\n")
+  await Bun.write(path.join(source, "Contents/Resources/metadata.json"), JSON.stringify({ identifier: "app.ycoding.desktop", name: "YCoding Desktop", channel: "stable", hash: "1z1pg577pmla1" }, null, 2))
+  await Bun.write(path.join(source, "Contents/Resources/1z1pg577pmla1.tar.zst"), "synthetic payload\n")
+  return source
+}
+
 async function archives(root: string) {
   const input = path.join(root, "downloaded")
   await fs.mkdir(input)
@@ -40,6 +55,8 @@ async function archives(root: string) {
       : Bun.spawnSync(["tar", "-czf", filename, "ycoding", "ycoding-chrome-extension", ...(target.startsWith("darwin") ? [app] : [])], { cwd: source, env: { ...process.env, COPYFILE_DISABLE: "1" } })
     expect(result.exitCode).toBe(0)
   }
+  await desktopFixture(root)
+  expect(Bun.spawnSync(["zip", "-qr", path.join(input, desktopArchive), desktop], { cwd: path.join(root, "desktop") }).exitCode).toBe(0)
   return input
 }
 
@@ -90,6 +107,48 @@ if (process.platform === "darwin") test("native archive create excludes macOS ex
   }
 })
 
+if (process.platform === "darwin") test("desktop archive create preserves the app bundle without macOS metadata", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-desktop-archive-"))
+  try {
+    const source = await desktopFixture(root)
+    expect(Bun.spawnSync(["xattr", "-w", "com.ycoding.fixture", "synthetic", path.join(source, "Contents/MacOS/launcher")]).exitCode).toBe(0)
+    const result = execute(root, ["create-desktop", version, source, "prepared"])
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    expect(await fs.readdir(path.join(root, "prepared"))).toEqual([desktopArchive])
+    const listing = Bun.spawnSync(["unzip", "-Z1", path.join(root, "prepared", desktopArchive)], { stdout: "pipe" }).stdout.toString().trim().split("\n")
+    expect(listing.sort()).toEqual(desktopEntries)
+    const extract = path.join(root, "extracted")
+    expect(Bun.spawnSync(["unzip", "-q", path.join(root, "prepared", desktopArchive), "-d", extract]).exitCode).toBe(0)
+    expect((await fs.stat(path.join(extract, desktop, "Contents/MacOS/launcher"))).mode & 0o111).not.toBe(0)
+    expect(Bun.spawnSync(["xattr", path.join(extract, desktop, "Contents/MacOS/launcher")], { stdout: "pipe" }).stdout.toString()).not.toContain("com.ycoding.fixture")
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+for (const invalid of ["nonexecutable launcher", "extra file", "missing icon", "payload hash mismatch", "wrong identifier", "renamed application"])
+  test(`desktop archive create rejects ${invalid} before writing an archive`, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-desktop-invalid-"))
+    try {
+      let source = await desktopFixture(root)
+      if (invalid === "nonexecutable launcher") await fs.chmod(path.join(source, "Contents/MacOS/launcher"), 0o644)
+      if (invalid === "extra file") await Bun.write(path.join(source, "Contents/Resources/update.json"), "{}")
+      if (invalid === "missing icon") await fs.unlink(path.join(source, "Contents/Resources/AppIcon.icns"))
+      if (invalid === "payload hash mismatch") await fs.rename(path.join(source, "Contents/Resources/1z1pg577pmla1.tar.zst"), path.join(source, "Contents/Resources/other.tar.zst"))
+      if (invalid === "wrong identifier") await Bun.write(path.join(source, "Contents/Resources/metadata.json"), JSON.stringify({ identifier: "app.example.desktop", name: "YCoding Desktop", channel: "stable", hash: "1z1pg577pmla1" }))
+      if (invalid === "renamed application") {
+        await fs.rename(source, path.join(root, "desktop", "Other.app"))
+        source = path.join(root, "desktop", "Other.app")
+      }
+      const result = execute(root, ["create-desktop", version, source, "prepared"])
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stderr.toString()).toContain("Invalid desktop release payload")
+      expect(await Bun.file(path.join(root, "prepared", desktopArchive)).exists()).toBe(false)
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
 for (const invalid of ["missing executable", "nonexecutable", "extra LICENSE", "extra NOTICE", "extra unknown", "extra nested extension", "extra app file", "missing icon", "empty signature", "invalid plist", "symlink"])
   test(`native archive create rejects ${invalid} before writing an archive`, async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-native-invalid-"))
@@ -124,9 +183,9 @@ test("native archive finalize needs no installed dependencies and publishes only
     const result = Bun.spawnSync([process.execPath, path.join(checkout, "script/release-archive.ts"), "finalize", version, input, "release"], { cwd: root, stdout: "pipe", stderr: "pipe" })
     expect(result.exitCode, result.stderr.toString()).toBe(0)
     const files = await fs.readdir(path.join(root, "release"))
-    expect(files.sort()).toEqual(["LICENSE", "NOTICE", `ycoding-${version}-checksums.txt`, ...targets.map((target) => `ycoding-${version}-${target}.${target === "windows-x64" ? "zip" : "tar.gz"}`)].sort())
+    expect(files.sort()).toEqual(["LICENSE", "NOTICE", `ycoding-${version}-checksums.txt`, desktopArchive, ...targets.map((target) => `ycoding-${version}-${target}.${target === "windows-x64" ? "zip" : "tar.gz"}`)].sort())
     const lines = (await Bun.file(path.join(root, "release", `ycoding-${version}-checksums.txt`)).text()).trim().split("\n")
-    expect(lines).toHaveLength(6)
+    expect(lines).toHaveLength(7)
     for (const line of lines) {
       expect(line).toMatch(/^[a-f0-9]{64}  /)
       expect(new Bun.CryptoHasher("sha256").update(await Bun.file(path.join(root, "release", line.slice(66))).arrayBuffer()).digest("hex")).toBe(line.slice(0, 64))
@@ -137,22 +196,22 @@ test("native archive finalize needs no installed dependencies and publishes only
   }
 })
 
-for (const target of targets)
+for (const target of [...targets, "desktop"])
   test(`native archive finalize rejects the missing ${target} target`, async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-native-missing-"))
     try {
       const input = await archives(root)
-      await fs.unlink(path.join(input, `ycoding-${version}-${target}.${target === "windows-x64" ? "zip" : "tar.gz"}`))
+      await fs.unlink(path.join(input, target === "desktop" ? desktopArchive : `ycoding-${version}-${target}.${target === "windows-x64" ? "zip" : "tar.gz"}`))
       const result = execute(root, ["finalize", version, input, "release"])
       expect(result.exitCode).not.toBe(0)
-      expect(result.stderr.toString()).toContain("Expected exactly four release archives")
+      expect(result.stderr.toString()).toContain("Expected exactly five release archives")
       expect(await Bun.file(path.join(root, "release", `ycoding-${version}-checksums.txt`)).exists()).toBe(false)
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }
   })
 
-for (const invalid of ["wrong version", "extra file", "corrupt archive", "nonexecutable archive", "missing archive app", "extra archive entry", "oversized archive listing", "symlink archive entry", "linked archive", "nonempty output"])
+for (const invalid of ["wrong version", "extra file", "corrupt archive", "nonexecutable archive", "missing archive app", "extra archive entry", "oversized archive listing", "symlink archive entry", "linked archive", "nonempty output", "extra desktop entry", "nonexecutable desktop launcher", "desktop payload hash mismatch"])
   test(`native archive finalize rejects ${invalid} without a checksum manifest`, async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-native-received-"))
     try {
@@ -181,6 +240,14 @@ for (const invalid of ["wrong version", "extra file", "corrupt archive", "nonexe
         await fs.symlink(path.join(root, "outside.tar.gz"), linux)
       }
       if (invalid === "nonempty output") await Bun.write(path.join(root, "release/private.json"), "{}")
+      if (invalid.includes("desktop")) {
+        const source = path.join(root, "desktop", desktop)
+        if (invalid === "extra desktop entry") await Bun.write(path.join(source, "Contents/Resources/update.json"), "{}")
+        if (invalid === "nonexecutable desktop launcher") await fs.chmod(path.join(source, "Contents/MacOS/launcher"), 0o644)
+        if (invalid === "desktop payload hash mismatch") await fs.rename(path.join(source, "Contents/Resources/1z1pg577pmla1.tar.zst"), path.join(source, "Contents/Resources/other.tar.zst"))
+        await fs.unlink(path.join(input, desktopArchive))
+        expect(Bun.spawnSync(["zip", "-qr", path.join(input, desktopArchive), desktop], { cwd: path.join(root, "desktop") }).exitCode).toBe(0)
+      }
       const result = execute(root, ["finalize", version, input, "release"])
       expect(result.exitCode).not.toBe(0)
       expect(result.stderr.toString()).toMatch(/release archives|release archive|Release archive|Release output/)

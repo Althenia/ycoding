@@ -1,8 +1,8 @@
 import type { RemoteDeviceInfo } from "@ycoding-ai/remote"
 
-type RemoteScenarioName = "conversation-workspace" | "conversation-landing" | "session-list" | "session-list-waiting" | "conversation-tool-terminal-output" | "permission-guardrail-hard-review-form-requests" | "empty-backend" | "selected-machine-offline" | "signed-out" | "devices-enrollment" | "autonomy-goal-notification-settings" | "usage-quotas" | "coordination-projects"
+type RemoteScenarioName = "conversation-workspace" | "conversation-landing" | "session-list" | "workspace-directory" | "session-list-waiting" | "conversation-tool-terminal-output" | "permission-guardrail-hard-review-form-requests" | "empty-backend" | "selected-machine-offline" | "signed-out" | "devices-enrollment" | "autonomy-goal-notification-settings" | "usage-quotas" | "coordination-projects"
 type RemoteScenarioViewport = 1440 | 768 | 390
-type RemoteScenarioView = "chat" | "sessions" | "projects" | "usage" | "settings"
+type RemoteScenarioView = "chat" | "sessions" | "projects" | "workspaces" | "usage" | "settings"
 
 export type WireSession = {
   readonly id: string
@@ -312,6 +312,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     sessions: sessionListSessions,
     expectedText: ["Async Auth Token Revocation Migration", "auth-gate"],
   }
+  if (name === "workspace-directory") return { ...common, view: "workspaces", sessions: sessionListSessions, expectedText: ["Workspaces", "Repositories previously opened"] }
   if (name === "session-list-waiting") return {
     ...common, view: "sessions", noSelection: true, permissions: [], guardrails: [], forms: [],
     sessions: [
@@ -434,7 +435,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
   }
 }
 
-const scenarioNames: readonly RemoteScenarioName[] = ["conversation-workspace", "session-list", "conversation-tool-terminal-output", "permission-guardrail-hard-review-form-requests", "devices-enrollment", "autonomy-goal-notification-settings", "usage-quotas", "coordination-projects"]
+const scenarioNames: readonly RemoteScenarioName[] = ["conversation-workspace", "session-list", "workspace-directory", "conversation-tool-terminal-output", "permission-guardrail-hard-review-form-requests", "devices-enrollment", "autonomy-goal-notification-settings", "usage-quotas", "coordination-projects"]
 const viewports: readonly RemoteScenarioViewport[] = [1440, 768, 390]
 
 export const REMOTE_SCENARIOS = [

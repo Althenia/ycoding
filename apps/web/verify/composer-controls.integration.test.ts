@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { launchBrowser } from "./cdp"
@@ -17,9 +17,19 @@ beforeAll(async () => {
   for (let index = 0; index < 60 && !(await ready()); index++) await Bun.sleep(100)
   if (!(await ready())) throw new Error("Vite did not start")
   browser = await launchBrowser(browserPath, 1440, 900)
-  captures = await mkdtemp(join(tmpdir(), "ycoding-composer-speed-"))
+  const directory = process.env.YCODING_WEB_CAPTURE_DIR ?? tmpdir()
+  captures = await mkdtemp(join(directory, "composer-verify-"))
 })
-afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited; if (captures) await rm(captures, { recursive: true }) })
+afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
+
+test("composer input capsule uses the approved 26px radius", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.mini-composer__mount .mini-composer__input-wrap') !== null`)
+    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.mini-composer__mount .mini-composer__input-wrap')).borderRadius`)).toBe("26px")
+  } finally { await page.close() }
+})
 
 test("CDP media choices survive changes to independent media features", async () => {
   const page = await browser!.openPage()
@@ -300,7 +310,7 @@ test("phone tool-running status shows its full words inside its pill and footer,
       expect(bounds.inside).toBe(true)
       expect(bounds.footerInside).toBe(true)
       expect(bounds.belowIdentity).toBe(true)
-      await Bun.write(new URL(`../../../.cache/tmp/composer-tool-390-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      await Bun.write(join(captures, `composer-tool-390-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
     } finally { await page.close() }
   }
 }, 30_000)
@@ -426,7 +436,7 @@ test("the Autonomous dialog cycles one category, sets all three, contains focus,
       await page.evaluate(`${trigger}.focus(); ${trigger}.click()`)
       await wait(page, `document.querySelector('dialog.overlay--autonomous[open]') !== null`)
       await page.evaluate(`Promise.all(document.querySelector('dialog.overlay--autonomous').getAnimations({ subtree: true }).map(animation => animation.finished))`)
-      await Bun.write(new URL(`../../../.cache/tmp/composer-autonomous-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      await Bun.write(join(captures, `composer-autonomous-${width}.png`), Buffer.from(await page.screenshot(), "base64"))
       expect(await page.evaluate<string>(`document.querySelector('dialog.overlay--autonomous').getAttribute('aria-label')`)).toBe("Autonomous")
       expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')`)).toBe("Autonomous settings")
       expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.autonomous__row .autonomous__title')].map(item => item.textContent)`)).toEqual(["Permissions", "Guardrails", "Answers"])
@@ -453,7 +463,7 @@ test("the Autonomous dialog cycles one category, sets all three, contains focus,
       expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { permissions: "manual" } })
       expect(await page.evaluate<number>(`window.composerRequests().length`)).toBe(4)
       expect(await page.evaluate<string>(`${trigger}.getAttribute('aria-label')`)).toBe("Autonomous: Permissions Manual, Guardrails Auto, Answers YOLO")
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.mini-composer__mount .session-status__mode')].map(chip => chip.title)`)).toEqual(["Guardrails Auto", "Answers YOLO"])
+      expect(await page.evaluate<number>(`document.querySelectorAll('.mini-composer__mount .session-status__mode').length`)).toBe(0)
 
       await press(page, keys.three)
       expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { permissions: "auto", guardrails: "auto", answers: "auto" } })
@@ -742,13 +752,14 @@ test("Conversation autonomy controls issue Session-scoped relay operations", asy
   }
 }, 45_000)
 
-test("brand and repository actions replace the visible new-session heading", async () => {
+test("brand, new-session heading and repository actions remain visible", async () => {
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
     await wait(page, `document.querySelector('.new-session-composer__brand') !== null`)
     expect(await page.evaluate<string>(`document.querySelector('.new-session-composer__brand')?.textContent`)).toContain("YCoding")
-    expect(await page.evaluate<boolean>(`getComputedStyle(document.querySelector('.new-session-composer h2')).position === 'absolute'`)).toBe(true)
+    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer h2').innerText`)).toBe("Start with a conversation.")
+    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer h2').getBoundingClientRect().height > 0`)).toBe(true)
     expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer button[aria-label="Refresh repositories"] svg') !== null`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
@@ -809,7 +820,7 @@ test("lightning toggles paired fast models, preserves available effort, and keep
     expect(on.color).not.toBe(off.color)
     expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("High")
     expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.textContent`)).toContain("GPT-6 Sol")
-    await Bun.write(new URL("../../../.cache/tmp/composer-fast-desktop.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+    await Bun.write(join(captures, "composer-fast-desktop.png"), Buffer.from(await page.screenshot(), "base64"))
     expect(await page.evaluate<number>(`window.composerRequests().length`)).toBe(0)
     await type(page, ".mini-composer__mount textarea", "Use fast model")
     await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Send prompt"]')?.click()`)
@@ -838,7 +849,7 @@ test("lightning toggles paired fast models, preserves available effort, and keep
     expect(unavailable.reason).toContain("No alternate model speed")
     expect(unavailable.rect).toBe(44)
     expect(unavailable.offset).toBe(lightningOffset)
-    await Bun.write(new URL("../../../.cache/tmp/composer-fast-unavailable.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+    await Bun.write(join(captures, "composer-fast-unavailable.png"), Buffer.from(await page.screenshot(), "base64"))
     await type(page, ".mini-composer__mount textarea", "Use Lite")
     await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Send prompt"]')?.click()`)
     expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)?.input`)).toMatchObject({ model: { providerID: "openai", id: "gpt-6-lite" } })
@@ -864,7 +875,7 @@ test("a Session already using a paired fast model displays its base and an activ
     await wait(page, `document.querySelector('button[aria-label="Model speed"]') !== null`)
     const geometry = await page.evaluate<{ target: boolean; contained: boolean; overflow: boolean; label: string; pressed: string | null }>(`(() => { const button=document.querySelector('button[aria-label="Model speed"]'), surface=document.querySelector('.model-control__surface'), control=button.getBoundingClientRect(), box=surface.getBoundingClientRect(); return { target:control.width>=44 && control.height>=44, contained:control.left>=box.left && control.right<=box.right, overflow:document.documentElement.scrollWidth>innerWidth, label:document.querySelector('.model-control__switch span')?.textContent ?? '', pressed:button.getAttribute('aria-pressed') } })()`)
     expect(geometry).toEqual({ target: true, contained: true, overflow: false, label: "GPT-6 Sol", pressed: "true" })
-    await Bun.write(new URL("../../../.cache/tmp/composer-fast-phone.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+    await Bun.write(join(captures, "composer-fast-phone.png"), Buffer.from(await page.screenshot(), "base64"))
     await page.evaluate(`document.querySelector('button[aria-label="Model speed"]').click(); [...document.querySelectorAll('.model-control__choices [role="option"]')].find(option=>option.textContent==='Standard').click()`)
     expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("High")
     expect(await page.evaluate<string>(`document.querySelector('button[aria-label="Model speed"]')?.getAttribute('aria-pressed')`)).toBe("false")
@@ -1028,7 +1039,7 @@ test("paste, picker and drop add removable file chips and send exact file inputs
     await wait(page, `document.querySelectorAll('.mini-composer__mount .composer__attachment').length === 3`)
     expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .composer__attachment')?.textContent`)).toContain("capture.png")
     expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`)).toBe(true)
-    await Bun.write(new URL(`../../../.cache/tmp/composer-attached-390-light.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+    await Bun.write(join(captures, "composer-attached-390-light.png"), Buffer.from(await page.screenshot(), "base64"))
     await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Remove notes.txt"]')?.click()`)
     expect(await page.evaluate<number>(`document.querySelectorAll('.mini-composer__mount .composer__attachment').length`)).toBe(2)
     await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Send prompt"]')?.click()`)
@@ -1101,13 +1112,13 @@ test("composer states and effort surface retain layout at four sizes in both the
       const overlaps = await page.evaluate<string[]>(`(() => { const controls = [...document.querySelectorAll('.mini-composer__mount .composer__controls button, .mini-composer__mount .session-status__slot')].filter(item => item.getBoundingClientRect().width > 0 && getComputedStyle(item).visibility !== 'hidden'); return controls.flatMap((a, index) => controls.slice(index + 1).flatMap(b => { const x = a.getBoundingClientRect(), y = b.getBoundingClientRect(); return x.right <= y.left || y.right <= x.left || x.bottom <= y.top || y.bottom <= x.top ? [] : [a.className + ' / ' + b.className] })) })()`)
       expect(overlaps).toEqual([])
       await Bun.sleep(240)
-      await Bun.write(new URL(`../../../.cache/tmp/composer-${state}-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      await Bun.write(join(captures, `composer-${state}-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
       }
       if (width! < 768) await page.evaluate(`document.querySelector('.composer__mobile-trigger')?.click()`)
       await page.evaluate(`document.querySelector(${JSON.stringify(width! < 768 ? '.composer__selection-sheet button[aria-label="Model"]' : '.mini-composer__mount .composer__controls button[aria-label="Model"]')})?.click()`)
       await wait(page, `document.querySelector('.model-control__surface') !== null`)
       expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.model-control__surface')).animationName`)).toBe("none")
-      await Bun.write(new URL(`../../../.cache/tmp/composer-effort-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      await Bun.write(join(captures, `composer-effort-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
     } finally { await page.close() }
   }
 }, 90_000)
@@ -1228,7 +1239,8 @@ test("keyboard and mouse autocomplete, pending identity, and creation work acros
         await type(page, input, "/plan now")
         await page.evaluate(`document.querySelector('.mini-composer__mount .composer__delivery-toggle')?.click()`)
         await page.pressKey("Enter", "Enter", 13)
-        expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toMatchObject({ operation: "session.command", input: { command: "plan", arguments: "now", delivery: "queue", agent: "architect", model: { variant: "max" } } })
+        expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toMatchObject({ operation: "session.command", input: { command: "plan", arguments: "now", delivery: "queue", model: { variant: "max" } } })
+        expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)?.input.agent`)).toBeUndefined()
         await page.evaluate(`document.querySelector('main > button')?.click()`)
         await wait(page, `document.querySelector('.mini-composer__mount button[aria-label="Interrupt the running step"]') !== null`)
         await page.evaluate(`document.querySelector('.mini-composer__mount button[aria-label="Interrupt the running step"]')?.click()`)
@@ -1246,7 +1258,7 @@ test("keyboard and mouse autocomplete, pending identity, and creation work acros
         expect(layout.overflow).toBe(false)
         expect(layout.controlsInside).toBe(true)
         if (width! < 768) expect(layout.touchTargets).toBe(true)
-        await Bun.write(new URL(`../../../.cache/tmp/composer-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await Bun.write(join(captures, `composer-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
       } finally { await page.close() }
     }
   }
@@ -1333,6 +1345,9 @@ test("selected slash, dollar, at and hash suggestions dispatch their TUI-equival
 
     await type(page, ".new-session-composer textarea", "/go")
     expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.new-session-composer [role="option"]')].map((option) => option.textContent ?? '')`)).not.toContainEqual(expect.stringContaining("/goal"))
+    await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Repository"]')?.click()`)
+    await wait(page, `document.querySelector('.mini-picker__surface [role="option"]') !== null`)
+    await page.evaluate(`[...document.querySelectorAll('.mini-picker__surface [role="option"]')].find(item => item.textContent.includes('Other repository'))?.click()`)
     await type(page, ".new-session-composer textarea", "/goal new objective")
     await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]')?.click()`)
     expect(await page.evaluate<string>(`document.querySelector('.new-session-composer [role="alert"]')?.textContent ?? ''`)).toContain("Open a session")
@@ -1425,12 +1440,12 @@ test("a failed or uncertain composer goal returns to the empty draft with its ou
       await wait(page, `document.querySelector('${mount} textarea') !== null`)
       await type(page, `${mount} textarea`, "/goal ship it safely")
       await page.evaluate(`document.querySelector('${mount} button[aria-label="Send prompt"]')?.click()`)
-      await wait(page, `document.querySelector('${mount} .session-status__goal-setting') !== null`)
+      await wait(page, `document.querySelector('.conversation-metadata .session-status__goal-setting') !== null`)
       await page.evaluate(`window.remoteReleaseGoal(${JSON.stringify(result)})`)
       await wait(page, `document.querySelector('.mutation-toast--${toast}') !== null`)
       expect(await page.evaluate<string>(`document.querySelector('.mutation-toast')?.textContent ?? ''`)).toContain("Set goal")
       expect(await page.evaluate<string>(`document.querySelector('${mount} textarea').value`)).toBe("/goal ship it safely")
-      expect(await page.evaluate<boolean>(`document.querySelector('${mount} .session-status__goal-setting') === null && document.querySelector('${mount} .session-status__goal-trigger').getAttribute('aria-busy') === null`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('.conversation-metadata .session-status__goal-setting') === null && document.querySelector('${mount} .session-status__goal-trigger').getAttribute('aria-busy') === null`)).toBe(true)
       expect(await page.evaluate<number>(`window.remoteMutationReport().filter(item => item.operation === 'session.goal.set').length`)).toBe(1)
     } finally { await page.close() }
   }

@@ -1,9 +1,415 @@
-import { expect, test } from "bun:test"
+import { expect, test, mock } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 
 const root = path.join(import.meta.dir, "..")
 const read = (file: string) => fs.readFile(path.join(root, file), "utf8")
+
+test("desktop parity exposes theme schemes, registered folder selection, typed dialogs and review cards", async () => {
+  const source = await read("src/renderer.tsx")
+  for (const name of ["DESKTOP_THEMES", "isDesktopThemeID", "resolveDesktopTheme", "schemeStylesheet", "FolderExplorerDialog", "openedDirectories", "desktopSlashCommand", "GuardrailCard", "ReviewCard", "model-slider__flow", "composer-attachments"]) expect(source).toContain(name)
+  for (const method of ["browseDirectory", "openDirectory", "createDirectory", "pickDirectory", "integrations", "manageIntegration", "mcpServers", "manageMcp", "manageSession", "vcsDiff", "systemSnapshot", "manageSystem", "openExternalUrl"]) expect(source).toContain(`api.${method}(`)
+  expect(source).toContain('id="desktop-schemes"')
+  expect(source).toContain("document.documentElement.dataset.scheme = resolvedTheme.scheme")
+  expect(source).toContain("delete document.documentElement.dataset.scheme")
+  expect(source).toContain("onCreateProjectInDirectory=")
+  expect(source).toContain("explorer={")
+})
+
+test("folder picks register before exposing the canonical location to chat or project consumers", async () => {
+  const { pickDesktopPath } = await import("../src/renderer")
+  for (const mode of ["directory", "create-directory"] as const) {
+    const calls: string[] = []
+    let release: (() => void) | undefined
+    const opened = new Promise<void>((resolve) => { release = resolve })
+    const result = pickDesktopPath({ mode, title: "Synthetic workspace", onPick: (directory) => { calls.push(`pick:${directory}`) } }, "/synthetic/link", { openDirectory: async ({ directory }) => { calls.push(`open:${directory}`); await opened; return { directory: "/synthetic/canonical", revision: 4, projectID: "project_synthetic" } } })
+    expect(calls).toEqual(["open:/synthetic/link"])
+    release?.(); await result
+    expect(calls).toEqual(["open:/synthetic/link", "pick:/synthetic/canonical"])
+  }
+})
+
+test("failed and retired folder registration never starts a chat, while file picks do not register a folder", async () => {
+  const { pickDesktopPath } = await import("../src/renderer")
+  const picked: string[] = []
+  const options = { mode: "directory" as const, title: "Synthetic workspace", onPick: (path: string) => { picked.push(path) } }
+  await expect(pickDesktopPath(options, "/synthetic/folder", { openDirectory: async () => { throw new Error("Inventory unavailable") } })).rejects.toThrow("Inventory unavailable")
+  await expect(pickDesktopPath(options, "/synthetic/folder", { openDirectory: async () => ({ directory: "/synthetic/folder", revision: 4, projectID: "project_synthetic" }) }, () => false)).rejects.toThrow("connection changed")
+  expect(picked).toEqual([])
+  await pickDesktopPath({ ...options, mode: "file" }, "/synthetic/folder/plan.md", { openDirectory: async () => { throw new Error("Files must not register directories") } })
+  expect(picked).toEqual(["/synthetic/folder/plan.md"])
+  await pickDesktopPath({ ...options, mode: "file" }, "/retired.md", { openDirectory: async () => { throw new Error("Must not run") } }, () => false)
+  expect(picked).toEqual(["/synthetic/folder/plan.md"])
+})
+
+test("all theme labels, schemes and persistence reach the desktop appearance controls", async () => {
+  const { DESKTOP_THEMES, resolveDesktopTheme } = await import("../src/form-rules")
+  expect(DESKTOP_THEMES.map((theme) => theme.label)).toEqual(["System", "Light", "Dark", "One Dark (light)", "One Dark", "One Dark Pro", "High contrast (light)", "High contrast (dark)"])
+  expect(DESKTOP_THEMES.map((theme) => resolveDesktopTheme(theme.id, false))).toEqual([{ theme: "light" }, { theme: "light" }, { theme: "dark" }, { theme: "light", scheme: "onedark" }, { theme: "dark", scheme: "onedark" }, { theme: "dark", scheme: "onedark-pro" }, { theme: "light", scheme: "high-contrast" }, { theme: "dark", scheme: "high-contrast" }])
+  const source = await read("src/renderer.tsx")
+  expect(source).toContain('localStorage.getItem("ycoding.desktop.theme")')
+  expect(source).toContain("isDesktopThemeID(saved)")
+  expect(source).toContain('localStorage.setItem("ycoding.desktop.theme", preference)')
+  expect(source).toContain('<style id="desktop-schemes">{schemeStylesheet()}</style>')
+  expect(source).toContain('label="Color scheme"')
+  expect(source).toContain('theme.id !== themePreference()')
+})
+
+test("folder exploration reaches every folder-entry path and creates only validated names", async () => {
+  const source = await read("src/renderer.tsx")
+  for (const text of ['mode: "directory"', 'mode: "create-directory"', 'mode: "file"', "validateFolderSegment(name())", "api.createDirectory({ parentDirectory, name: valid.name })", "api.pickDirectory({ startingFolder: currentDir() })", "Choose in Finder…", "desktop-dialog__breadcrumbs", "Show hidden", "onOpenFolder=", "onCreateFolder=", "onCreateProject=", "onCreateProjectInDirectory=", "onBrowseFolder=", "explorer={selectedWorkspace()", "onNavigate: setExplorerDir", "showHidden: explorerHidden()", "setExplorerDir(undefined)", "openedDirectories().has(newDirectory())"]) expect(source).toContain(text)
+  const create = source.slice(source.indexOf("const create = () => perform"), source.indexOf("return <DesktopDialog title={props.options.title}"))
+  expect(create.indexOf("if (!valid.valid)")).toBeLessThan(create.indexOf("api.createDirectory("))
+  expect(create).toContain('refresh(["workspaces"]); refresh(["projects"]); listing.refetch()')
+  expect(create).toContain("navigate(opened.directory)")
+  expect(source.match(/>Open folder…<\/button>/g)?.length).toBe(2)
+  expect(source.match(/>New folder…<\/button>/g)?.length).toBe(2)
+})
+
+test("composer routes every built-in command and alias before backend commands", async () => {
+  const { composerSlash } = await import("../src/renderer")
+  const { DESKTOP_BUILT_IN_SLASH_COMMANDS } = await import("../src/form-rules")
+  expect(DESKTOP_BUILT_IN_SLASH_COMMANDS.length).toBeGreaterThanOrEqual(39)
+  for (const command of DESKTOP_BUILT_IN_SLASH_COMMANDS) {
+    const name = command.name === "themes" ? "theme" : command.name
+    for (const alias of [command.name, ...command.aliases ?? []]) expect(composerSlash(`/${alias}`, [alias])).toEqual({ kind: "local", name, args: "" })
+  }
+  for (const [input, name, args] of [["/rename Synthetic title", "rename", "Synthetic title"], ["/daybreak red", "daybreak", "red"], ["/find needle", "find", "needle"], ["/autonomous manual", "autonomous", "manual"], ["/theme onedark-pro", "theme", "onedark-pro"]] as const) expect(composerSlash(input, [])).toEqual({ kind: "local", name, args })
+  expect(composerSlash("/build target", ["build"])).toEqual({ kind: "backend", name: "build", args: "target" })
+  expect(composerSlash("/not-installed", [])).toEqual({ kind: "prompt" })
+  expect(composerSlash("ordinary text", [])).toEqual({ kind: "prompt" })
+})
+
+test("provider, MCP, VCS and system dialogs expose only typed supported operations", async () => {
+  const source = await read("src/renderer.tsx")
+  for (const name of ["connect-key", "oauth-start", "oauth-status", "oauth-complete", "oauth-cancel", "command-start", "command-status", "command-cancel", "wellknown-add", "credential-activate", "credential-rename", "credential-remove", "browser-start", "browser-forget", "isolated-browser-start", "isolated-browser-stop", "artifact-enable", "artifact-disable", "remote-set", "resolve-skill-conflict"]) expect(source).toContain(`"${name}"`)
+  expect(source).toContain('type="password" autocomplete="off"')
+  expect(source).toContain('const secret = key()[item.id] ?? ""; setKey((previous) => ({ ...previous, [item.id]: "" }))')
+  expect(source).toContain('const authorizationCode = code(); setCode("")')
+  expect(source).toContain('refresh(["models"]); refresh(["new-chat-models"])')
+  expect(source).toContain('api.openExternalUrl({ url: link() })')
+  expect(source).toContain('label: "Working tree (git)"')
+  expect(source).toContain('label: "Branch"')
+  expect(source).toContain('label: "Branch diff"')
+  expect(source).toContain('"Git working-tree diff"')
+  expect(source).toContain("path: file.file, patch: file.patch")
+  expect(source).toContain("Plugin discovery is read-only. Configure plugin changes in ycoding.json")
+  expect(source).not.toContain('kind: "plugin-add"')
+  for (const group of ["Session", "Model & Agent", "Workspace & Git", "Providers & MCP", "Navigation", "Customize", "Settings", "System"]) expect(source).toContain(`"${group}"`)
+  for (const title of ["Status & Debug", "Agents & Skills", "Browser", "Remote & Pairing", "Artifacts & Plugins", "Dots"]) expect(source).toContain(`"${title}"`)
+})
+
+test("request attention counts canonical review item identities alongside other waiting requests", async () => {
+  const { pendingRequestIDs } = await import("../src/renderer")
+  expect(pendingRequestIDs({ permissions: [], forms: [] })).toEqual([])
+  expect(pendingRequestIDs({ permissions: [{ id: "permission_synthetic" }], forms: [{ id: "form_synthetic" }], guardrails: [{ id: "guardrail_synthetic" }], reviews: [{ itemID: "review_synthetic" }] })).toEqual(["permission_synthetic", "form_synthetic", "guardrail_synthetic", "review_synthetic"])
+  const source = await read("src/renderer.tsx")
+  for (const text of ["<GuardrailCard", "<ReviewCard", 'kind: "guardrail", sessionID: props.data.sessionID', 'kind: "review", sessionID: props.data.sessionID', "itemID: item.itemID, decision", 'props.onReply("once")', 'props.onReply("reject")', 'kind: "recovery", choice: "continue"', 'kind: "recovery", choice: "stop"', "payload().questions", "Complete the required fields before sending."]) expect(source).toContain(text)
+  expect(source.match(/api\.reply\(/g)).toHaveLength(1)
+  expect(source).toContain("const known = new Set(data ? pendingRequestIDs(data) : [])")
+  expect(source).toContain("<Show when={unanswerable()}>")
+})
+
+test("workspace attachments preserve mentioned file ranges and remove duplicate URIs", async () => {
+  const { promptFilesFor } = await import("../src/renderer")
+  const mention = { uri: "file:///synthetic/plan.md", name: "plan.md", mention: { start: 0, end: 8, text: "@plan.md" } }
+  const attached = [{ uri: "file:///synthetic/image.png", name: "image.png" }, { uri: mention.uri, name: "plan.md" }]
+  expect(promptFilesFor(attached, [mention])).toEqual([attached[0]!, mention])
+  expect(attached).toHaveLength(2)
+  expect(promptFilesFor([], [])).toEqual([])
+})
+
+test("artifact controls preserve revision, version and digest expectations", async () => {
+  const { artifactMutationOf } = await import("../src/renderer")
+  const artifact = { scope: "project", kind: "skill", id: "synthetic-skill", revision: 3, currentVersionID: "version_synthetic", currentDigest: "a".repeat(64), name: "Synthetic skill" }
+  expect(artifactMutationOf(artifact)).toEqual({ scope: "project", kind: "skill", id: "synthetic-skill", expectedRevision: 3, expectedVersionID: "version_synthetic", expectedDigest: "a".repeat(64) })
+  for (const missing of ["currentVersionID", "currentDigest", "revision", "id"]) expect(artifactMutationOf({ ...artifact, [missing]: undefined })).toBeUndefined()
+  expect(artifactMutationOf({ ...artifact, kind: "unknown" })).toBeUndefined()
+})
+
+test("copy and find use visible assistant prose rather than reasoning or internal envelopes", async () => {
+  const { latestAssistantText, transcriptText } = await import("../src/renderer")
+  const assistant = { id: "msg_synthetic", type: "assistant" as const, agent: "default", model: { id: "synthetic", providerID: "synthetic" }, time: { created: 1, completed: 2 }, content: [{ id: "part_reason", type: "reasoning" as const, text: "Private reasoning", time: { created: 1 } }, { id: "part_text", type: "text" as const, text: "Visible response", time: { created: 1 } }] }
+  expect(transcriptText(assistant)).toBe("Visible response")
+  expect(latestAssistantText([assistant])).toBe("Visible response")
+  expect(latestAssistantText([])).toBeUndefined()
+  const source = await read("src/renderer.tsx")
+  for (const text of ["formatSessionExportMarkdown({", "parsePromptStashes(localStorage.getItem(key))", "pushPromptStash(", 'class="conversation__find"', "matching turns", 'case "variants"', 'case "undo"', 'case "redo"', 'case "timeline"', 'case "stash"', 'kind: "kill-shell"', 'kind: "cancel-subagent"', 'defaultOpen={thinkingExpanded()}', "result.value.item.id"]) expect(source).toContain(text)
+})
+
+const jsxRuntime = () => ({ jsxDEV: (type: unknown, props: unknown) => ({ type, props }), jsx: (type: unknown, props: unknown) => ({ type, props }), jsxs: (type: unknown, props: unknown) => ({ type, props }), Fragment: () => null })
+mock.module("solid-js/jsx-dev-runtime", jsxRuntime)
+mock.module("solid-js/jsx-runtime", jsxRuntime)
+mock.module("../src/bridge", () => ({ desktop: {} }))
+mock.module("@tanstack/solid-router", () => {
+  const route = () => ({ addChildren: () => ({}), useParams: () => ({}) })
+  return { createRootRoute: route, createRoute: route, createRouter: () => ({}), createHashHistory: () => ({}), Link: () => null, Outlet: () => null, RouterProvider: () => null, useLocation: () => () => ({}), useNavigate: () => () => {} }
+})
+
+test("desktop navigation maps every shared destination to its own active route", async () => {
+  const { desktopDestinations } = await import("../src/renderer")
+  const routes = ["/projects", "/sessions", "/workspaces", "/usage", "/settings"] as const
+  expect(desktopDestinations("/workspaces").map((item) => item.route)).toEqual([...routes])
+  for (const route of routes) expect(desktopDestinations(route).filter((item) => item.current).map((item) => item.route)).toEqual([route])
+})
+
+test("standalone chat exposes a repository menu and reads its model catalog", async () => {
+  const source = await read("src/renderer.tsx")
+  const start = source.slice(source.indexOf("function NewChat()"), source.indexOf("export function toolSteps"))
+  expect(start).toContain('role="menu"')
+  expect(start).toContain('role="menuitem"')
+  expect(start).toContain('directory: newDirectory().trim()')
+  expect(start).not.toContain('<select value={newDirectory()}')
+  expect(start).toContain('<ModelPopover')
+  expect(start.indexOf('await api.createSession')).toBeLessThan(start.indexOf('await api.switchModel'))
+  expect(start.indexOf('await api.switchModel')).toBeLessThan(start.indexOf('await api.prompt'))
+  expect(start.indexOf('await api.setAutonomy')).toBeLessThan(start.indexOf('await api.prompt'))
+  expect(start).toContain('if (draft.autonomyAttempted)')
+  expect(start).toContain('await api.autonomy(draft.sessionID)')
+  expect(start).toContain('if (draft.switchAttempted)')
+  expect(start).toContain('await api.models(draft.sessionID)')
+})
+
+test("shared disclosures, activity, diff and context have compact desktop styling", async () => {
+  const styles = await read("src/style.css")
+  for (const selector of [".transcript-reasoning > summary", ".transcript-message__head", ".transcript-compaction__heading", ".transcript-compaction__bar", ".rl-diff-line > .rl-diff-num", ".rl-diff-line > .rl-diff-sign", ".rl-activity-row__body", "#companion-context", ".rl-context-total > strong"]) expect(styles).toContain(selector)
+  expect(styles).toContain("32px 32px 16px minmax(max-content, 1fr)")
+})
+
+test("revert requires confirmation before restoring files and committing history", async () => {
+  const source = await read("src/renderer.tsx")
+  expect(source).toContain('if (!(await confirm(prompt))) return')
+  expect(source).toContain('immediately restores captured files and may overwrite working-tree changes')
+  expect(source).toContain('Session messages after the selected boundary will be removed')
+  expect(source).toContain('setRevertUncertain(true)')
+})
+
+test("desktop adapters scope paged reads and use range totals", async () => {
+  const source = await read("src/renderer.tsx")
+  expect(source).toContain('api.usage({ range: range() })')
+  expect(source).toContain('data().report.total.logical')
+  expect(source).toContain('cursor: current.subagentNext, revision: current.revision')
+  expect(source).toContain('cursor: current.repositoriesNext, revision: current.revision')
+  expect(source).toContain('page.sessionID !== ownerSessionID || page.shellID !== id')
+  expect(source).toContain('turns={data().turns?.map')
+  expect(source).toContain('api.workspaceDirectories!({ projectID: selectedWorkspace()!.projectID, directory: selectedWorkspace()!.directory })')
+})
+
+test("child shell output uses the shell owner rather than the parent Session", async () => {
+  const { shellOwner } = await import("../src/renderer")
+  const shells = [{ id: "sh_child", ownerSessionID: "ses_child" }, { id: "sh_root", ownerSessionID: "ses_root" }]
+  expect(shellOwner(shells, "sh_child", "ses_root")).toBe("ses_child")
+  expect(shellOwner(shells, "sh_root", "ses_root")).toBe("ses_root")
+  expect(shellOwner(shells, "sh_missing", "ses_root")).toBe("ses_root")
+})
+
+test("workspace detail defaults to the first repository only without a selection and otherwise resolves only the canonical key", async () => {
+  const { selectedWorkspaceOf, workspaceKeyOf } = await import("../src/renderer")
+  const items = [{ projectID: "one", directory: "/one" }, { projectID: "two", directory: "/two" }]
+  expect(selectedWorkspaceOf([], undefined)).toBeUndefined()
+  expect(selectedWorkspaceOf(items, undefined)).toEqual(items[0])
+  expect(selectedWorkspaceOf(items, workspaceKeyOf(items[1]!))).toEqual(items[1])
+  expect(selectedWorkspaceOf(items, "two")).toBeUndefined()
+  expect(selectedWorkspaceOf(items, "/two")).toBeUndefined()
+  expect(selectedWorkspaceOf(items, "missing")).toBeUndefined()
+  expect(selectedWorkspaceOf([], "missing")).toBeUndefined()
+  const copies = [{ projectID: "proj_1", directory: "/repo/main" }, { projectID: "proj_1", directory: "/repo/wt-2" }]
+  expect(selectedWorkspaceOf(copies, workspaceKeyOf(copies[1]!))).toEqual(copies[1])
+  expect(selectedWorkspaceOf(copies, "proj_1")).toBeUndefined()
+  expect(selectedWorkspaceOf(copies, "/repo/wt-2")).toBeUndefined()
+})
+
+test("a Session is current only when its opened identity matches", async () => {
+  const { lastOpenedSessionOf } = await import("../src/renderer")
+  const rows = [{ id: "ses_first" }, { id: "ses_open" }]
+  expect(lastOpenedSessionOf(rows, undefined)).toBeUndefined()
+  expect(lastOpenedSessionOf(rows, "ses_missing")).toBeUndefined()
+  expect(lastOpenedSessionOf(rows, "ses_open")).toEqual(rows[1])
+})
+
+test("revert confirmation blocks dispatch and uncertain outcomes require reset", async () => {
+  const { createActionGuard } = await import("../src/renderer")
+  let accepted = false, revision = "1", fail = false
+  const calls: string[] = []
+  const guard = createActionGuard(() => accepted, () => revision, async (action: string) => { calls.push(action); if (fail) throw new Error("unconfirmed"); return action })
+  for (const action of ["stage", "commit", "clear"]) expect((await guard.run(action, "confirm")).status).toBe("cancelled")
+  expect(calls).toEqual([])
+  accepted = true
+  for (const action of ["stage", "commit", "clear"]) expect((await guard.run(action, "confirm")).status).toBe("completed")
+  expect(calls).toEqual(["stage", "commit", "clear"])
+  fail = true
+  const beforeFailed = calls.length
+  expect((await guard.run("stage", "confirm")).status).toBe("unconfirmed")
+  expect((await guard.run("commit", "confirm")).status).toBe("blocked")
+  expect(calls.length - beforeFailed).toBe(1)
+  guard.reset(); fail = false
+  expect((await guard.run("clear", "confirm")).status).toBe("completed")
+  const changed = createActionGuard(() => true, () => revision, async (action: string) => { calls.push(action); revision = "2"; return action })
+  const beforeChanged = calls.length
+  expect((await changed.run("stage", "confirm")).status).toBe("unconfirmed")
+  expect((await changed.run("clear", "confirm")).status).toBe("blocked")
+  expect(calls.length - beforeChanged).toBe(1)
+  changed.reset()
+  expect((await changed.run("clear", "confirm")).status).toBe("completed")
+})
+
+test("authoritative revert is visible on reopen and new stages require confirmation before prompt", async () => {
+  const { activeRevertOf, createPromptGuard } = await import("../src/renderer")
+  const revert = { messageID: "msg_1" }
+  expect(activeRevertOf({ revert }, undefined)).toEqual(revert)
+  expect(activeRevertOf(undefined, revert)).toEqual(revert)
+  let current = "1:5", accepted = false, dispatches = 0, observed: typeof revert | undefined
+  const calls: string[] = []
+  const draft = { promptID: "msg_1", text: "Keep this draft", attachments: ["a.txt"] }
+  const sent: typeof draft[] = []
+  const guard = createPromptGuard({ scope: () => current, read: async () => ({ revision: 5, item: { id: "ses_a", revert } }), confirm: () => { calls.push("confirm"); return accepted }, observe: (value) => { observed = value }, dispatch: async (value: typeof draft) => { calls.push("prompt"); dispatches++; sent.push(value) } })
+  expect((await guard.run("ses_a", 5, undefined, draft)).status).toBe("declined")
+  expect(dispatches).toBe(0)
+  expect(sent).toHaveLength(0)
+  expect(draft).toEqual({ promptID: "msg_1", text: "Keep this draft", attachments: ["a.txt"] })
+  expect(observed).toEqual(revert)
+  accepted = true
+  expect((await guard.run("ses_a", 5, undefined, draft)).status).toBe("completed")
+  expect(dispatches).toBe(1)
+  expect(calls).toEqual(["confirm", "confirm", "prompt"])
+})
+
+test("prompt preflight and dispatch failures or connection changes block replay", async () => {
+  const { createPromptGuard } = await import("../src/renderer")
+  for (const failure of ["read", "write", "change-read", "change-write", "wrong-revision", "wrong-session"] as const) {
+    let scope = "1:5", dispatches = 0
+    const guard = createPromptGuard({ scope: () => scope, read: async () => { if (failure === "read") throw new Error("offline"); if (failure === "change-read") scope = "2:6"; return { revision: failure === "wrong-revision" ? 6 : 5, item: { id: failure === "wrong-session" ? "ses_b" : "ses_a" } } }, confirm: () => true, observe: () => {}, dispatch: async () => { dispatches++; if (failure === "write") throw new Error("unconfirmed"); if (failure === "change-write") scope = "2:6" } })
+    expect((await guard.run("ses_a", 5, undefined, undefined)).status).toBe("unconfirmed")
+    expect((await guard.run("ses_a", 5, undefined, undefined)).status).toBe("blocked")
+    expect(dispatches).toBe(failure === "write" || failure === "change-write" ? 1 : 0)
+  }
+})
+
+test("autonomy labels distinguish unknown, sleeping, uniform, mixed and active goals", async () => {
+  const { autonomyLabels } = await import("../src/renderer")
+  expect(autonomyLabels(undefined)).toEqual({ goal: "Goal · Unknown", autonomy: "Autonomy · Unknown" })
+  const view = { effective: { permissions: "auto", guardrails: "auto", answers: "auto", asleep: false }, goal: null } as const
+  expect(autonomyLabels(view)).toEqual({ goal: "Goal · Off", autonomy: "Autonomy · Auto" })
+  expect(autonomyLabels({ ...view, goal: { text: "Example", status: "active" }, effective: { ...view.effective, asleep: true } })).toEqual({ goal: "Goal · Active", autonomy: "Autonomy · Asleep" })
+  expect(autonomyLabels({ ...view, effective: { ...view.effective, answers: "manual" } })).toEqual({ goal: "Goal · Off", autonomy: "Autonomy · Mixed" })
+})
+
+test("autonomy acknowledgements must match the submitted goal and modes", async () => {
+  const { autonomyMatches, createActionGuard } = await import("../src/renderer")
+  const state = { permissions: "auto", guardrails: "manual", answers: "auto", goal: { text: "Example", status: "active", maxNoProgress: 3 }, sleep: null }
+  expect(autonomyMatches(state, { permissions: "auto", guardrails: "manual", answers: "auto" })).toBe(true)
+  expect(autonomyMatches(state, { permissions: "yolo" })).toBe(false)
+  expect(autonomyMatches({ ...state, goal: { ...state.goal, text: "Synthesized objective" } }, { goal: "Raw user goal" })).toBe(true)
+  expect(autonomyMatches({ ...state, goal: { ...state.goal, text: "Raw user goal", status: "stopped" } }, { goal: "Raw user goal" })).toBe(false)
+  expect(autonomyMatches(state, { goal: true, maxNoProgress: 3 })).toBe(true)
+  expect(autonomyMatches(state, { goal: true, maxNoProgress: 4 })).toBe(false)
+  expect(autonomyMatches(state, { sleep: true })).toBe(false)
+  let dispatched = 0
+  const guard = createActionGuard(() => true, () => "connected", async () => { dispatched++; return { ...state, goal: { ...state.goal, text: "Synthesized objective" } } })
+  const result = await guard.run({ goal: "Raw user goal" }, "confirm")
+  expect(result.status).toBe("completed")
+  if (result.status === "completed") {
+    expect(autonomyMatches(result.value, { goal: "Raw user goal" })).toBe(true)
+    expect(result.value.goal.text).toBe("Synthesized objective")
+  }
+  expect(dispatched).toBe(1)
+  const source = await read("src/renderer.tsx")
+  expect(source).toContain('setPolicyGoal(result.value.autonomy.goal?.text ?? "")')
+  expect(autonomyMatches(state, { goal: null })).toBe(false)
+  expect(autonomyMatches({ ...state, goal: null }, { goal: null })).toBe(true)
+  expect(autonomyMatches({ ...state, goal: { text: "Example", status: "stopped" } }, { goal: null })).toBe(true)
+})
+
+test("shared context control preserves its label, expansion and click callback", async () => {
+  const { SharedContextRingButton } = await import("../../../apps/web/src/remote/ui/shared-workspace")
+  let clicks = 0
+  const node = SharedContextRingButton({ label: "42%", ariaLabel: "Open context", expanded: false, fraction: 0.42, onClick: () => { clicks++ } }) as unknown as { type: string; props: { "aria-label": string; "aria-expanded": boolean; onClick: () => void } }
+  expect(node.type).toBe("button")
+  expect(node.props["aria-label"]).toBe("Open context")
+  expect(node.props["aria-expanded"]).toBe(false)
+  node.props.onClick()
+  expect(clicks).toBe(1)
+})
+
+test("live snapshot projections fence revision and Session and expose bounded notices", async () => {
+  const { currentSnapshot, surfaceNotices } = await import("../src/renderer")
+  const activity = { revision: 4, sessionID: "ses_a", subagents: [{ sessionID: "ses_b" }], total: 3, activeTotal: 1, subagentNext: "cursor", unattributedShellCount: 2 }
+  expect(currentSnapshot(activity, 4, "ses_a")).toEqual(activity)
+  expect(currentSnapshot(activity, 5, "ses_a")).toBeUndefined()
+  expect(currentSnapshot(activity, 4, "ses_b")).toBeUndefined()
+  expect(surfaceNotices.activity(activity)).toEqual(["Showing 1 of 3 subagents (1 active)", "2 repository shell(s) without Session attribution omitted"])
+  expect(surfaceNotices.projects({ repositories: [1, 2], repositoriesNext: "cursor" })).toBe("Showing first 2 repositories; narrow search or use CLI for full inventory")
+  expect(surfaceNotices.usage({ hasMoreModels: true, report: { rows: [1], rowCount: 8 } })).toBe("Showing top 1 of 8 model rows")
+  expect(surfaceNotices.changes([{ additions: 3, deletions: 1 }, { additions: 2, deletions: 4 }])).toBe("2 files · +5 / -5")
+})
+
+test("companion projects all loaded descendants with live status", async () => {
+  const { companionChildren } = await import("../src/renderer")
+  const row = (id: string, parentID?: string) => ({ id, parentID, title: id, location: { directory: "/fixture" }, time: { updated: 1 }, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0 })
+  const rows = [row("root"), row("child", "root"), row("grandchild", "child"), row("other")]
+  expect(companionChildren(rows, "root", { busy: new Set(["child"]), waiting: new Map([["grandchild", new Set(["request"])]]) }).map(({ row, status }) => [row.id, status])).toEqual([["child", "Running"], ["grandchild", "Waiting for you"]])
+  expect(companionChildren(rows, "other", { busy: new Set(), waiting: new Map() })).toEqual([])
+})
+
+test("effort selection accepts only offered variants and respects a lock", async () => {
+  const { effortChoice } = await import("../src/renderer")
+  const choice = { model: 0, profile: "", variant: "low" }
+  expect(effortChoice(choice, ["low", "high"], "high", false)).toEqual({ ...choice, variant: "high" })
+  expect(effortChoice(choice, ["low"], "high", false)).toEqual(choice)
+  expect(effortChoice(choice, ["low", "high"], "high", true)).toEqual(choice)
+})
+
+test("context breakdown is absent for zero and reports each measured category", async () => {
+  const { contextBreakdown } = await import("../src/renderer")
+  expect(contextBreakdown(undefined)).toEqual([])
+  expect(contextBreakdown({ system: 0, tools: 0, user: 0, assistant: 0, reasoning: 0, toolCalls: 0, other: 0 })).toEqual([])
+  const result = contextBreakdown({ system: 25, tools: 0, user: 75, assistant: 0, reasoning: 0, toolCalls: 0, other: 0 })
+  expect(result).toHaveLength(7)
+  expect(result[0]).toEqual({ label: "System", tokens: 25, percent: 25 })
+  expect(result[2]).toEqual({ label: "User", tokens: 75, percent: 75 })
+})
+
+test("tool projections keep structured inputs, outputs and failures distinct", async () => {
+  const { toolSteps } = await import("../src/renderer")
+  const steps = toolSteps([
+    { id: "tool_a", type: "tool", name: "read", state: { status: "completed", input: { path: "a.txt" }, structured: {}, content: [{ type: "text", text: "contents" }] }, time: { created: 0, completed: 1000 } },
+    { id: "tool_b", type: "tool", name: "test", state: { status: "error", input: {}, structured: {}, content: [], error: { type: "error", message: "failed" } }, time: { created: 0 } },
+  ])
+  expect(steps.map((step) => step.status)).toEqual(["completed", "failed"])
+  expect(steps[0]?.inputText).toContain("a.txt")
+  expect(steps[0]?.outputText).toContain("contents")
+  expect(steps[1]?.errorText).toContain("failed")
+})
+
+test("retained transcript projection does not claim provider prompt membership", async () => {
+  const { retainedMessages } = await import("../src/renderer")
+  const rows = [{ id: "one", type: "user", text: "hello", time: { created: 1 } }, { id: "two", type: "user", text: "later", time: { created: 2 } }] as const
+  expect(retainedMessages(rows).map((item) => item.id)).toEqual(["one", "two"])
+})
+
+test("startup connects automatically and presents recovery without a backend chooser", async () => {
+  const source = await read("src/renderer.tsx")
+  expect(source).toContain('preferences.selection ?? { mode: "shared" }')
+  expect(source).toContain('connection().status === "idle"')
+  expect(source).toContain("Connecting to your workspace")
+  expect(source).toContain("YCoding checks the server before opening your Sessions.")
+  expect(source).toContain("Connection details")
+  expect(source).not.toContain("Choose a backend")
+})
+
+test("new chats send standalone or with an explicitly selected repository", async () => {
+  const source = await read("src/renderer.tsx")
+  expect(source).toContain('!newDirectory() || available().some((item) => item.directory === newDirectory())')
+  expect(source).toContain('draft.directory ? { directory: draft.directory, sessionID: draft.sessionID } : { sessionID: draft.sessionID }')
+  expect(source).toContain('No Project or filesystem Workspace is required.')
+  expect(source).toContain('locked={!!newPending()}')
+})
+
+test("the workspace has a Review Home rail, dock, companion and reference geometry", async () => {
+  const [source, style] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
+  for (const item of ["rl-shell", "rl-app", "rl-nav", "rl-top", "rl-intro", "rl-capsule", "rl-companion", "rl-context-ring", "composer-bar"]) expect(source).toContain(item)
+  for (const token of ["--rl-rail: 216px", "--rl-rail-compact: 64px", "--rl-companion: 520px", "--rl-column: 58rem"]) expect(style).toContain(token)
+})
 
 test("the rail takes its groups from the pure railGroups and sends search, cursor and pin requests", async () => {
   const [source, style] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
@@ -92,8 +498,8 @@ test("context comes from reported diagnostics and is unknown when none are repor
   expect(source).toContain("Context unknown")
   expect(source).toContain("the conversation was compacted after")
   expect(source).toContain("the model changed after")
-  expect(source).toContain("· latest response</summary>")
-  expect(source).toContain("<Show when={total() > 0 ? value().breakdown : undefined}>")
+  expect(source).toContain("% used · latest response")
+  expect(source).toContain("contextBreakdown(current()?.breakdown).length ? current()?.breakdown : undefined")
   expect(source).toContain("A subagent Session of this chat is waiting for you.")
   const imported = /import \{([^}]*)\} from "\.\/form-rules"/.exec(source)?.[1] ?? ""
   for (const name of ["activeFields", "buildAnswer", "initialValues", "problemOf", "valueFor", "withValue", "invalidIndexes", "restoresFocus"]) expect(imported).toMatch(new RegExp(`\\b${name}\\b`))
@@ -101,15 +507,18 @@ test("context comes from reported diagnostics and is unknown when none are repor
   expect(source).toContain("aria-describedby={described()}")
   expect(source).toContain("Session tokens")
   expect(source).not.toContain("Context window unavailable")
-  expect(styles).toContain(".context__used { font-size: 36px; line-height: 40px; font-weight: 500;")
-  expect(styles).toContain(".context__capacity { font-size: 13px;")
+  for (const selector of [".companion__context-total", ".companion__context-capacity", ".companion__context-bar", ".companion__context-breakdown", ".reasoning-effort__labels", ".rl-context-ring > span"]) expect(styles).toContain(selector)
+  for (const category of ["system", "tools", "user", "assistant", "reasoning", "toolCalls", "other"]) expect(styles).toContain(`[data-category="${category}"]`)
+  const shared = await fs.readFile(path.join(root, "../../apps/web/src/remote/ui/shared-workspace.tsx"), "utf8")
+  expect(shared.indexOf("<h3>Shell processes")).toBeLessThan(shared.indexOf("<h3>Subagent tasks"))
+  expect(source).toContain('kind="user" markdownText={message().text}')
 })
 
-test("the narrow drawer makes the main column inert and reasoning-only turns say so", async () => {
+test("the narrow drawer makes the main column inert and reasoning is disclosed", async () => {
   const source = await read("src/renderer.tsx")
   expect(source).toContain('createEffect(() => main?.toggleAttribute("inert", railOpen() && drawer()))')
   expect(source).not.toContain("attr:inert")
-  expect(source).toContain("Reasoning is not shown in the desktop app.")
+  expect(source).toContain("<SharedReasoningDisclosure")
 })
 
 test("repeat announcements are new nodes and opening a Session announces nothing historic", async () => {
@@ -124,7 +533,7 @@ test("sending keeps the prompt identity and locks unconfirmed drafts", async () 
   expect(source).toContain("promptID: `msg_${crypto.randomUUID()}`")
   expect(source).toContain("sessionID: `ses_${crypto.randomUUID()}`")
   expect(source).toContain("readOnly={props.locked}")
-  expect(source).toContain('disabled={sending() || !reading() || (!pending() && !text().trim())}')
+  expect(source).toContain('disabled={sending() || !reading() || unsure() || revertBusy() || revertUncertain() || (!pending() && !text().trim())}')
   expect(source).toContain("pendings.set(props.sessionID, value)")
 })
 
@@ -132,11 +541,11 @@ test("results from a previous connection generation are ignored and unconfirmed 
   const source = await read("src/renderer.tsx")
   expect(source).toContain("if (connection().generation !== generation) return\n        setNewPending({ ...draft, created: true })")
   expect(source).toContain("if (connection().generation !== generation) return\n      setNewPending(undefined)")
-  expect(source).toContain("if (connection().generation !== generation) return\n      hold(undefined)")
+  expect(source).toContain('if (options.scope() !== starting) throw new Error("The connection changed while sending.")')
   expect(source).toContain("connection().generation !== generation || !samePaging(state(), current)) return")
   expect(source).toContain("connection().generation === generation && samePaging(state(), current)")
   expect(source).toContain("unconfirmed.add(sessionID)")
-  expect(source).toContain("Check the transcript before sending again.")
+  expect(source).toContain("Review the transcript and staged revert before continuing.")
   expect(source).toContain("The private backend is not running. Start it again to continue; unsent drafts are kept.")
   expect(source).toContain('queryKey: ["messages", ...scope(), props.sessionID]')
   expect(source).toContain("api.onResync(")
@@ -144,7 +553,7 @@ test("results from a previous connection generation are ignored and unconfirmed 
 
 test("unknown message types are labelled and the transcript is not a live region", async () => {
   const source = await read("src/renderer.tsx")
-  expect(source).toContain("entry is not shown in the desktop app.")
+  expect(source).toContain("Unsupported message: {role()}")
   expect(source).not.toContain('role="log"')
   expect(source).not.toContain('aria-live="polite"')
   expect(source).toContain("finished a response.")
@@ -154,9 +563,8 @@ test("unknown message types are labelled and the transcript is not a live region
 test("the transcript keeps the reader's position and row identity", async () => {
   const source = await read("src/renderer.tsx")
   expect(source).toContain("<Index each={turns()}>")
-  expect(source).toContain("scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48")
+  expect(source).toContain("followState(following(), { kind: \"scroll\", distance: scrollDistance() })")
   expect(source).toContain("if (following()) toEnd()")
-  expect(source).toContain("Jump to latest")
   expect(source).toContain("ref={focusHeading}")
 })
 
@@ -173,14 +581,140 @@ test("the command palette is a labelled modal combobox with keyboard navigation 
   expect(source).toContain("Searches the most recent Sessions only")
 })
 
+test("rail destinations, palette navigation, header ownership and settings disclosures stay aligned", async () => {
+  const [source, styles] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
+  expect(source).toContain('item.id === "usage" ? "usage" : "settings"')
+  expect(styles).toContain("@media (hover: hover) { .rl-nav-item:hover { background: var(--yc-surface-sunken); color: var(--yc-text); } }")
+  expect(styles).toContain('.rl-nav-item[aria-current="page"] { background: var(--yc-green-soft); color: var(--yc-text); font-weight: 600; }')
+  expect(styles).toContain('.rl-nav-item[aria-current="page"] .rl-ico { color: var(--yc-green-strong); }')
+  expect(styles).toMatch(/@media \(forced-colors: active\) \{ [\s\S]*?\.rl-nav-item\[aria-current="page"\],/)
+  expect(styles).toMatch(/@media \(pointer: coarse\) \{ \.rl-nav-item,/)
+  expect(source).toContain("desktopDestinations(location().pathname).filter((item) => !item.current)")
+  expect(source).toContain("label: `Go to ${item.label}`")
+  expect(source).toContain("const connectionOwnership = ()")
+  expect(source.match(/\{connectionOwnership\(\)\}/g)?.length).toBe(3)
+  expect(source).toContain("This Mac · {newDirectory() || \"No workspace selected\"} · {connectionOwnership()}")
+  expect(source).toContain("{item().location.directory} · {props.sessionID} · {connectionOwnership()}")
+  expect(source).toContain("sub={`${subtitle} · ${connectionOwnership()}`}")
+  expect(source).toContain('<ul class="st-rows">')
+  expect(source).toContain('<p class="st-muted">No saved permissions.</p>')
+  expect(source).toContain('connection().mode === "own" ? "Closing this window stops its private backend." : "Closing this window leaves the shared backend running."')
+  expect(source).toContain('<p role="alert" class="desktop__error">{error().message}</p>')
+  expect(styles).toContain(".rl-send:disabled { background: var(--yc-surface-sunken); color: var(--yc-text-muted); opacity: 1; }")
+  expect(styles).toContain(".rl-page .ws-stack > * { min-width: 0; }")
+  expect(styles).toContain(".rl-owned-menu button strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }")
+  expect(styles).toContain('.rl-icon[aria-pressed="true"] { background: var(--yc-green-soft); color: var(--yc-green-strong); }')
+  expect(styles).toContain("::selection { background: var(--yc-green-soft); color: var(--yc-text); }")
+  expect(styles).toContain("::-webkit-scrollbar { width: var(--yc-scrollbar-size); height: var(--yc-scrollbar-size); }")
+  expect(styles).toContain("::-webkit-scrollbar-button { display: none; }")
+  expect(styles).toContain("::-webkit-scrollbar-thumb:active")
+  expect(styles).toContain("scrollbar-color: var(--yc-border-strong) transparent")
+  expect(styles).not.toContain(".desktop__field select")
+  expect(styles).not.toContain("select:focus-visible")
+  expect(styles).toContain(".desktop-select__trigger")
+  expect(styles).toContain(".model-popover")
+  expect(styles).toContain(".composer-suggestions")
+  expect(styles).toContain(".palette__option-icon")
+  expect(styles).toContain(".palette__option-text")
+  expect(styles).toContain(".rl-intro-title")
+  expect(styles).toContain(".composer-field")
+  expect(styles).toContain('data-align="end"')
+  expect(source).toContain('role="combobox"')
+  expect(source).toContain("workspace: workspaceBase(currentSessionRow()!.location.directory)")
+  expect(source).toContain("workspaceBase(row.location.directory)")
+  expect(source).toContain("categories.join")
+  expect(source).not.toContain("JSON.stringify(group.settings.delegatedDecisions)")
+  expect(styles).toContain("@media (hover: hover) { button:hover:not(:disabled)")
+  expect(styles).toContain("@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-name: none !important; animation-duration: 0s !important; transition-duration: 0s !important;")
+  expect(source).toContain('createSignal<ThemePreference>("system")')
+  expect(source).toContain("document.documentElement.style.colorScheme = resolved")
+  expect(source).toContain("label: `Theme: ${theme.label}`")
+  expect(source).toContain("theme.id !== themePreference()")
+  expect(styles).toContain('.conversation[data-new-chat] > :not(.rl-companion) { margin-inline-end: var(--rl-companion); }')
+  expect(source).not.toContain("window.confirm")
+  expect(source).toContain('refresh(["fileChanges", ...scope(), sessionID])')
+  expect(styles).toContain(".rl-page .ws-split > *, .rl-page .ws-workspaces-list, .rl-page .ws-workspaces-detail { min-width: 0; }")
+  expect(styles).toContain(".rl-page .rl-option-text { justify-items: stretch; text-align: start; }")
+  expect(styles).not.toContain(".rl-page .rl-option-text { justify-items: start;")
+  expect(source).toContain("export function confirmInPage")
+  expect(source).toContain("<ConfirmDialog />")
+  expect(source).toContain('class="confirm"')
+  expect(styles).toContain(".confirm { inset-block: 20dvh auto;")
+  expect(source).toContain("transcript-notice-pill--center")
+  expect(source).toContain("<span>Model:")
+  expect(source).toContain("<span>Agent:")
+  expect(source).toContain("<span>Skill:")
+  expect(styles).toContain(".conversation:has(.rl-companion) > .rl-companion { width: 100%; }")
+  expect(styles).toContain("inset-block: 10dvh auto;")
+  expect(styles).toContain(".palette[open] { display: flex; flex-direction: column;")
+  expect(styles).toContain(".palette__list:empty { display: none; }")
+  expect(styles).toContain("inset-block: auto 0;")
+  expect(source).toContain('aria-label="Close commands"')
+  expect(styles).toContain(".st-form { display: grid; gap: 8px; padding: 12px;")
+  expect(styles).toContain(".st-form-actions { display: flex; flex-wrap: wrap; gap: 8px; }")
+  expect(source).toContain('<label class="rl-field"><span>Copy directory</span>')
+  for (const cls of [".rl-revert {", ".rl-edited-actions {", ".rl-quiet {", ".rl-pane-kicker {", ".shell {", ".shell__header {", ".transcript-compaction__total {", ".transcript-compaction__number {", ".transcript-compaction__items {"]) expect(styles).toContain(cls)
+})
+
 test("the narrow layout turns the rail into a drawer and coarse pointers get full-size targets", async () => {
   const [source, styles] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
   expect(source).toContain('aria-expanded={railOpen()}')
   expect(source).toContain("Back to chat")
   expect(styles).toMatch(/@media \(max-width: 48rem\)[\s\S]*\.workspace__rail\[data-open\] \{ display: grid; \}/)
   expect(styles).toMatch(/@media \(pointer: coarse\)[\s\S]*\.workspace__session[\s\S]*min-block-size: var\(--yc-hit-min\)/)
+  expect(styles).toMatch(/@media \(pointer: coarse\) \{ \.companion__tabs\.rl-pane-tabs \.rl-pane-tab > button, \.rl-companion \.rl-icon, [^}]*min-height: var\(--yc-hit-min\); min-width: var\(--yc-hit-min\)/)
+  expect(source).toContain('const opener = visible(".rl-companion-toggle") ?? visible(".rl-context-ring")')
+  expect(source).toContain("item.getClientRects().length")
   expect(styles).toContain(".conversation__scroll { min-block-size: 0; overflow-y: auto;")
-  expect(styles).toContain('.transcript__turn[data-speaker="user"] { justify-self: end;')
+  expect(styles).not.toContain('.transcript__turn[data-speaker="user"] {')
+  expect(styles).toContain(".rl-me { justify-self: end; max-inline-size: min(48rem, 88%); }")
+})
+
+test("conversation header truncates on phone and companion grid reserves the scroll row", async () => {
+  const styles = await read("src/style.css")
+  expect(styles).toContain(".rl-ident { flex: 1; min-inline-size: 0;")
+  expect(styles).toContain(".rl-title,.rl-presence,.rl-presence > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }")
+  expect(styles).toContain(".rl-context-ring > span { display: none; }")
+  expect(styles).not.toContain(".desktop__palette")
+  expect(styles).toContain("> .conversation__scroll { grid-row: 3; }")
+  expect(styles).toContain("> .rl-dock { grid-row: 4; }")
+  expect(styles).toContain("grid-row: 1 / 5;")
+})
+
+test("composer and header expose workspace file attachments and staged autonomy", async () => {
+  const [source, styles, contract] = await Promise.all([read("src/renderer.tsx"), read("src/style.css"), read("src/contract.ts")])
+  expect(contract).toContain("export type Prompt = { readonly sessionID: string; readonly promptID: string; readonly text: string; readonly files?: readonly PromptFile[]; readonly agents?: readonly PromptAgent[] }")
+  expect(source.match(/<AttachButton directory=/g)?.length).toBe(2)
+  expect(source).toContain('aria-label="Attach files" disabled={props.locked || !props.onChange || !reading()}')
+  expect(source).toContain('title: "Attach workspace file", mode: "file"')
+  expect(source).toContain('uri: `file://${path}`, name')
+  expect(source).toContain('class="composer-attachments"')
+  expect(source).toContain('aria-label={`Remove ${file.name ?? file.uri}`}')
+  expect(source.match(/files: promptFilesFor\(files\(\), mentioned.files\)/g)?.length).toBe(2)
+  expect(source).not.toContain("<span>Companion</span>")
+  expect(source).not.toContain("Commands <kbd>")
+  expect(source.match(/class="rl-icon rl-companion-toggle" aria-label=\{companionOpen\(\) \? "Close Session companion" : "Open Session companion"\}/g)?.length).toBe(2)
+  expect(source.match(/class="rl-icon desktop__palette" aria-label=\{`Commands \$\{mac \? "⌘K" : "Ctrl K"\}`\}/g)?.length).toBe(2)
+  expect(source).not.toContain("Staged autonomy <select")
+  expect(source).toContain('role="menuitemradio" aria-checked={newAutonomy() === mode}')
+  expect(source).toContain('const trigger = event.currentTarget.closest(".rl-autonomy")?.querySelector<HTMLButtonElement>(\'button[aria-haspopup="menu"]\'); setNewAutonomy(mode); setAutonomyMenuOpen(false); trigger?.focus()')
+  expect(styles).toContain(".rl-top-actions .rl-icon .rl-ico { display: block;")
+  expect(styles).toMatch(/@media \(pointer: coarse\) \{ \.rl-top-actions \.rl-icon, \.rl-attach[^}]*min-height: var\(--yc-hit-min\)/)
+  expect(styles).toContain(".rl-autonomy .rl-owned-menu { top: auto; bottom: calc(100% + 4px);")
+  expect(styles).toMatch(/@media \(pointer: coarse\) \{ \.rl-shell \.rl-icon, [^}]*\.rl-pane-tabs \.rl-pane-tab > button:last-child:not\(\[role="tab"\]\)[^}]*min-width: var\(--yc-hit-min\); min-height: var\(--yc-hit-min\)/)
+  expect(styles).toMatch(/@media \(pointer: coarse\) \{[^@]*\.rl-shell \.rl-btn, [^}]*\.rl-page \.rl-option > \.rl-btn[^}]*\.rl-capsule textarea[^}]*min-height: var\(--yc-hit-min\)/)
+  expect(styles).toContain(".companion__activity-heading .button { min-block-size: 32px;")
+  expect(styles).toContain(".rl-intro .rl-menu-anchor > .rl-btn { min-block-size: 40px; padding: 0 16px; border-radius: var(--rl-pill);")
+  expect(styles).toContain(".rl-page .rl-option-text { grid-template-columns: minmax(0, 1fr); }")
+  expect(styles).toContain(".rl-page .rl-option-text .rl-option-name { max-width: 100%; }")
+  expect(styles).toContain("@media (pointer: coarse) { .rl-composer-context .rl-autonomy > button { min-height: var(--yc-hit-min); } .rl-page .rl-pin-btn, .rl-page .rl-option > .rl-btn { min-width: var(--yc-hit-min); justify-content: center; } }")
+  expect(styles).toContain(".rl-page .rl-page-head { flex-wrap: wrap; }")
+  expect(styles).toContain(".rl-page .rl-page-title, .rl-page .rl-page-actions { min-width: min-content; }")
+  expect(styles).toContain("@media (max-width: 700px) { .rl-top-actions .rl-companion-toggle { display: none; } }")
+  expect(source).not.toContain('title="Attaching files')
+  expect(source).not.toContain('title={`Commands')
+  expect(source).not.toContain('title="Staged autonomy')
+  expect(source).not.toContain("Attaching files is not available")
 })
 
 test("the design document records the rules the interface implements", async () => {
@@ -201,12 +735,13 @@ test("the model picker uses the catalog revision, stops while running and report
   expect(source).toContain('failure(catalog.result().error, "Models could not be read. Refresh to retry.")')
   expect(source).toContain("catalog.result().isError ? undefined : catalog.result().data")
   expect(source).toContain("visibleModels(data()?.models ?? [], data()?.current)")
-  expect(source).toContain("<Show when={data() && blocked()}>")
+  expect(source).toContain("<Show when={blocked()}>")
   expect(source.match(/Stop the running chat before switching models\./g)?.length).toBe(1)
   expect(source).toContain("Refresh models")
-  expect(source).toContain("<ModelPicker sessionID={props.sessionID} model={item().model} running={running()} />")
+  expect(source).toContain("<ModelPicker sessionID={props.sessionID} model={item().model} running={running()} agent={item().agent} sessionUsage={usage(item())} autonomyLabel={policyLabels().autonomy}")
   expect(source).not.toContain("Changing it is not available in the desktop app")
-  expect(style).toMatch(/\.model-picker__form select \{[^}]*text-overflow: ellipsis/)
+  expect(source).toContain("model-popover__option")
+  expect(source).toContain("onPick={(next) => void switchTo(next)}")
 })
 
 test("a form submits unless locked, reveals every error and keeps focus after a lock clears", async () => {
@@ -218,4 +753,361 @@ test("a form submits unless locked, reveals every error and keeps focus after a 
   expect(source).toContain('role="alert" class="desktop__error">{text()}</p>')
   expect(source.match(/unlockFocus\(\(\) => props\.locked/g)?.length).toBe(2)
   expect(source.match(/tabindex="-1" ref=\{heading\}/g)?.length).toBe(2)
+})
+
+test("session read refetches on mount and narrow dock styles bound the composer", async () => {
+  const [source, styles] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
+  const line = source.split("\n").find((entry) => entry.includes("const sessionRead = observe")) ?? ""
+  expect(line).toContain('queryKey: ["session", ...scope(), props.sessionID] as const')
+  expect(line).toContain('api.session({ sessionID: props.sessionID })')
+  expect(line).toContain('refetchOnMount: "always" as const')
+  expect(styles).toMatch(/\.reasoning-effort \{[^}]*min-width: 0;/)
+  expect(styles).toMatch(/\.rl-dock \{[^}]*max-height: 55%;/)
+})
+
+test("desktop renderer owns every select surface and the composer control row", async () => {
+  const source = await read("src/renderer.tsx")
+  const styles = await read("src/style.css")
+  expect(source).not.toContain("<select")
+  expect(source).toContain("function DesktopSelect")
+  expect(source).toContain('aria-haspopup="listbox"')
+  expect(source).toContain("aria-activedescendant")
+  expect(source).not.toContain("SharedEffortControl")
+  expect(source).not.toContain("Choose Switch model in the model menu")
+  expect(source).toContain('class="composer-bar"')
+  expect(source).toContain("composer-chip")
+  expect(source).toContain("desktop-popover")
+  expect(styles).not.toContain(".rl-effort-control")
+  expect(styles).not.toContain(".desktop__field select")
+})
+
+test("rail rows are icon driven with readable workspace names", async () => {
+  const source = await read("src/renderer.tsx")
+  expect(source).toContain('<Icon name="refresh" />')
+  expect(source).toContain("palette__option-icon")
+  expect(source).toContain('<Icon name={action.icon} />')
+  expect(source).toContain("workspaceBase(session.location.directory)")
+  expect(source).toContain("· more")
+  expect(source).not.toContain(", more available")
+  expect(source).toContain("title={session.location.directory}")
+  expect(source).toContain('<Icon name="panel-left" />')
+})
+
+test("focus rings sit on composite wrappers, scrollbars stay thin and dialogs are purpose sized", async () => {
+  const styles = await read("src/style.css")
+  expect(styles).toContain("--yc-scrollbar-size: 6px")
+  expect(styles).toContain("--yc-focus-ring-soft:")
+  expect(styles).toContain(".rl-capsule:focus-within")
+  expect(styles).toContain(".rl-capsule textarea:focus-visible { outline: none; box-shadow: none; }")
+  expect(styles).toContain("box-shadow: 0 0 0 1px var(--yc-green), 0 0 0 4px var(--yc-focus-ring-soft)")
+  expect(styles).toContain("min(54rem, calc(100dvw - (2 * var(--yc-space-6))))")
+  expect(styles).toContain("min(28rem, calc(100dvw - (2 * var(--yc-space-5))))")
+  expect(styles).toContain("@keyframes desktop-rise")
+  expect(styles).toContain("translateY(calc(var(--yc-space-1) / 2))")
+  expect(styles).not.toMatch(/@keyframes (desktop-rise|desktop-handoff|ws-reveal) \{ from \{ opacity: 0/)
+  expect(styles).toContain(".relay-settings .st-section-head h3 { display: inline-flex; align-items: center; gap: 6px;")
+  expect(styles).toContain(".relay-settings .st-section-head h3 > svg { flex: none; inline-size: 16px; block-size: 16px; overflow: visible; }")
+  expect(styles).toContain(".transcript-tools__button { display: flex; max-inline-size: 100%; min-inline-size: 0; }")
+  expect(styles).toContain(".rl-companion .companion__activity-heading { padding: 12px 20px 4px; }")
+  expect(styles).toContain('@media (prefers-reduced-motion: reduce)')
+  expect(styles).toContain('html[data-animations="off"]')
+  expect(styles).not.toMatch(/transition:[^;]*\ball\b/)
+})
+
+test("composer autocomplete is wired to the catalog bridge with honest states", async () => {
+  const source = await read("src/renderer.tsx")
+  expect(source).toContain("api.composerCatalog")
+  expect(source).toContain("api.findFiles")
+  expect(source).toContain("composerTrigger(")
+  expect(source).toContain("mentionPayload(")
+  expect(source).toContain("slashAction(")
+  expect(source).toContain("Suggestions unavailable")
+  expect(source).toContain("No matches")
+  expect(source).toContain("api.command")
+  expect(source).toContain("api.compact")
+  expect(source).toContain("await api.composerCatalog(newDirectory().trim()")
+  expect(source).toContain("draft.command")
+  expect(source).toContain("await api.composerCatalog(props.sessionID)")
+})
+
+test("transcript renders Markdown through the visibility filter with structured synthetic cards", async () => {
+  const [source, styles] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
+  expect(source).toContain("visibleDesktopMessages(messages.result().data ?? [])")
+  expect(source).toContain("groupAssistantParts(message().content)")
+  expect(source).toContain("classifyDesktopSynthetic(props.message)")
+  expect(source).toContain('from "../../../apps/web/src/remote/ui/markdown"')
+  expect(source).toContain('<div class="transcript-message__text rl-bubble"><Markdown text={group.text} /></div>')
+  expect(source).toContain("markdownText={message().text}")
+  expect(source).toContain("transcript-notice-card")
+  expect(source).toContain("Goal · steer")
+  expect(source).toContain("Parent answer")
+  expect(source).toContain("toolDisplaySummary(part.name, part.state.input)")
+  expect(source).toContain('markdown: part.name === "subagent" || part.name === "question"')
+  expect(source).toContain("Copied link")
+  expect(source).toContain("copyTranscriptLink")
+  expect(styles).toContain(".transcript-md__code")
+  expect(styles).toContain(".transcript-md__table")
+  expect(styles).toContain(".rl-disclosure-card")
+  expect(styles).toContain(".rl-disclosure-chev")
+})
+
+test("the model popover reasoning effort is an animated slider and icons are the unified web family", async () => {
+  const [source, styles] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
+  expect(source).toContain('role="slider"')
+  expect(source).toContain("effortStopsFor(variants())")
+  expect(source).toContain("effortStopIndex(stops(), props.choice.variant)")
+  expect(source).toContain("effortStopFraction(selectedIdx(), stops().length)")
+  expect(source).toContain('aria-label="Reset reasoning effort"')
+  expect(source).toContain("model-slider__track")
+  expect(source).toContain("model-slider__sparkles")
+  expect(source).toContain('<span class="model-slider__flow" aria-hidden="true" />')
+  expect(source).toContain("x: sparkle.x / 2")
+  expect(source).toContain("x: 50 + sparkle.x / 2")
+  expect(source).toContain('from "../../../apps/web/src/ui/icon"')
+  expect(source).toContain('stroke-width="1.6"')
+  expect(source.match(/stroke-width="2"/g)?.length).toBe(1)
+  expect(styles).toContain("svg { display: block; flex: none; }")
+  expect(styles).toContain(".model-slider__thumb")
+  expect(styles).toContain("--composer-effort-gradient")
+  expect(styles).toContain('.palette[data-query-empty="true"]')
+  expect(styles).toContain("min-block-size: min(26rem, 62dvh)")
+  expect(styles).toContain("max-block-size: min(44rem, 82dvh)")
+  expect(styles).not.toContain(".rl-page .rl-page-head > .rl-icon .rl-ico { transform: rotate(180deg); }")
+  expect(styles).toContain("font: 400 var(--yc-size-sm)/var(--yc-leading-sm) var(--yc-font-sans)")
+  expect(styles).not.toContain("font-weight: 600; color: var(--yc-text); background: var(--yc-surface); border: 1px solid var(--yc-border-strong); border-radius: var(--yc-radius-pill); min-block-size: var(--yc-hit-min)")
+  expect(source).toContain('theme={themePreference() === "system" ? "system" : resolveDesktopTheme(themePreference(), false).theme}')
+  expect(source).toContain("onThemeChange={applyThemePreference}")
+  expect(source).toContain("notificationsOpen={notificationsOpen()}")
+  expect(source).toContain("concurrencyControl={(project) =>")
+  expect(source).toContain("function ThemeToggle()")
+  expect(source).toContain('group: "Customize"')
+})
+
+test("destination pages focus their heading, the slider reset keeps the popover open and animations share one window-local signal", async () => {
+  const [source, styles] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
+  expect(source).toContain('[data-page-heading]')
+  expect(source).toContain('focus({ preventScroll: true })')
+  expect(styles).toContain(".rl-page-scroll { flex: 1; min-block-size: 0; overflow-y: auto; overscroll-behavior: contain;")
+  expect(styles).toContain("margin-inline: auto; margin-block: 0;")
+  expect(source).toContain("let slider: HTMLDivElement | undefined")
+  expect(source).toContain("slider?.focus()")
+  expect(source).toContain("model-slider__reset")
+  expect(source.match(/onPointerDown=\{\(event\) => event.preventDefault\(\)\}/g)?.length).toBeGreaterThanOrEqual(2)
+  expect(source).toContain("const [animationsEnabled, setAnimationsEnabled] = createSignal(true)")
+  expect(source).toContain("animations={animationsEnabled()}")
+  expect(source).toContain("onToggleAnimations={applyAnimationsPreference}")
+  expect(source).toContain("applyAnimationsPreference(")
+  expect(source).not.toContain("animationGuard")
+})
+
+test("the effort slider binds inline geometry, keeps stop labels outside the slider role, and avoids WebKit :has() invalidation", async () => {
+  const [source, styles] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
+  expect(source).toMatch(/class="model-slider__fill" style=\{\{ width: `calc\(28px \+ \$\{fraction\(\)\} \* \(100% - 28px\)\)` \}\}/)
+  expect(source).toMatch(/class="model-slider__thumb" style=\{\{ left: `calc\(14px \+ \$\{fraction\(\)\} \* \(100% - 28px\)\)` \}\}/)
+  const slider = source.indexOf('class="model-slider"')
+  const labels = source.indexOf('class="model-slider__labels"')
+  const thumb = source.indexOf('class="model-slider__thumb"')
+  expect(source.slice(thumb, labels)).toMatch(/^[^]*<\/div><\/div><div $/)
+  expect(labels).toBeGreaterThan(slider)
+  expect(styles).toContain('.rl-page .rl-radio[data-has-icon="true"]')
+  expect(styles).not.toContain(".rl-radio:has(> svg)")
+  expect(styles).not.toContain(".rl-option:not(:has(> .rl-ico))")
+  expect(styles).toMatch(/\.rl-page \.rl-list label\.rl-option[^{]*\{ grid-template-columns: auto minmax\(0, 1fr\); justify-items: start;/)
+  expect(styles).toContain('.model-slider__label[data-active="true"]')
+})
+
+test("desktop usage quotas, hidden-window transitions, model popover layout, search input and collapsed rail expose the verified contracts", async () => {
+  const [source, styles] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
+  expect(source).toContain("formatQuotaProviders(data().quotas ?? [], Date.now())")
+  expect(styles).toContain(".rl-progress > :is(i, span)")
+  expect(source).toContain('document.documentElement.dataset.hidden = "true"')
+  expect(source).toContain('document.addEventListener("visibilitychange", syncDocumentVisibility)')
+  expect(styles).toContain('html[data-hidden="true"] *, html[data-hidden="true"] *::before, html[data-hidden="true"] *::after { transition-duration: 0s !important; }')
+  expect(styles).toContain(".desktop-popover.model-popover { display: flex; flex-direction: column;")
+  expect(styles).toContain(".model-popover > :not(.model-popover__list) { flex: none; }")
+  expect(styles).toMatch(/\.model-popover__list \{[^}]*flex: 1 1 auto; min-block-size: 7rem; max-block-size: 12\.5rem; overflow-y: auto;/)
+  expect(styles).toContain(".rl-page .rl-field .rl-input-icon input, .rl-page .rl-input-icon input, .rl-input-icon input {")
+  expect(source).toContain('class="rl-new-chat" aria-label="New chat" title={`New chat (${mac ? "⌘N" : "Ctrl N"})`}')
+  expect(source).toContain('class="rl-nav-attention" aria-label={`Needs action: ${grouped().groups.find((group) => group.key === "needs")?.rows.length ?? 0}`} title="Needs action"')
+  expect(source).toContain('<Link class="rl-nav-item" to={item.route} aria-label={item.label} title={item.label}')
+})
+
+const declarations = (css: string, selector: string) => [...css.matchAll(new RegExp(`(?:^|\\n|\\})\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\{([^}]*)\\}`, "g"))].map((match) => match[1]).join(" ")
+
+test("every screen shares responsive conversation and page tracks", async () => {
+  const style = await read("src/style.css")
+  expect(style).toContain("--rl-column: 58rem")
+  expect(style).toMatch(/@media \(min-width: 1280px\) \{ :root \{ --rl-column: 74rem;/)
+  expect(style).toMatch(/@media \(min-width: 1600px\) \{ :root \{ --rl-column: 84rem;/)
+  expect(style).toContain("--rl-page-max: var(--yc-content-max);")
+  expect(style).toMatch(/@media \(min-width: 1440px\) \{ :root \{ --rl-page-max: var\(--yc-content-max-wide\);/)
+  expect(style).toMatch(/@media \(min-width: 1920px\) \{ :root \{ --rl-page-max: 1760px;/)
+  for (const selector of [".rl-col", ".rl-notices"]) expect(declarations(style, selector)).toContain("width: min(var(--rl-column), calc(100% - (2 * var(--yc-gutter))))")
+  for (const selector of [".rl-page .rl-page-head", ".rl-page-content"]) {
+    const body = declarations(style, selector)
+    expect(body).toContain("width: min(var(--rl-page-max), 100%)")
+    expect(body).toContain("margin-inline: auto")
+    expect(body).toContain("padding-inline: var(--yc-gutter)")
+  }
+  expect(style).toMatch(/\.rl-page \.ws-projects \{[^}]*grid-template-columns: minmax\(280px, 380px\) minmax\(0, 1fr\)/)
+  expect(style).toMatch(/\.rl-page \.ws-workspaces \{[^}]*grid-template-columns: minmax\(300px, 400px\) minmax\(0, 1fr\)/)
+  expect(style).toMatch(/\.relay-settings \.st-tiles \{[^}]*repeat\(4, minmax\(0, 1fr\)\)/)
+  expect(style).toContain(".transcript-md > :is(p, ul, ol, blockquote) { max-inline-size: 100%; }")
+  expect(style).toMatch(/\.rl-page \.relay-settings \.st-section \{[^}]*border: 1px solid var\(--yc-border\)/)
+  expect(style).toMatch(/\.rl-settings-grid \{[^}]*repeat\(2, minmax\(0, 1fr\)\)/)
+})
+
+test("stream blocks share one column, edge and radius", async () => {
+  const [style, source] = await Promise.all([read("src/style.css"), read("src/renderer.tsx")])
+  expect(declarations(style, ".rl-me,.rl-them")).not.toContain("max-width: 92%")
+  expect(style).not.toContain("max-width: 92%")
+  expect(style).not.toContain("border-radius: 22px")
+  expect(style).not.toContain("border-bottom-left-radius: 6px")
+  expect(style).not.toContain("22px 22px 6px 22px")
+  expect(declarations(style, ".rl-thread")).toContain("grid-template-columns: minmax(0, 1fr)")
+  expect(declarations(style, ".transcript")).toContain("grid-template-columns: minmax(0, 1fr)")
+  expect(declarations(style, ".transcript__turn[data-layout=\"block\"]")).toContain("inline-size: 100%")
+  expect(declarations(style, ".transcript__turn[data-layout=\"pill\"]")).toContain("justify-self: center")
+  expect(declarations(style, ".rl-me")).toContain("max-inline-size: min(48rem, 88%)")
+  for (const selector of [".rl-them .rl-bubble", ".rl-edited-card", ".transcript-compaction", ".shell", ".transcript-notice-card"]) expect(declarations(style, selector)).toContain("border-radius: var(--yc-radius-lg)")
+  expect(source).toContain("data-layout={layout()}")
+})
+
+test("running compaction is indeterminate and loading states are skeletons", async () => {
+  const [style, source] = await Promise.all([read("src/style.css"), read("src/renderer.tsx")])
+  expect(source).toContain("status={props.message.status}")
+  expect(source).not.toContain("Metrics not reported")
+  expect(source).toContain("formatCompactCount(metrics()!.inputTokens)")
+  expect(source).toContain("formatCount(metrics()!.retainedTokens)")
+  for (const label of ["Loading the transcript…", "Loading usage…", "Loading settings…", "Loading Sessions…"]) expect(source).not.toContain(`<p role="status">${label}</p>`)
+  expect(source).toContain('<SharedLoadingSkeleton kind="conversation" label="Loading the transcript…" />')
+  expect(source).toContain('<SharedLoadingSkeleton kind="page" label="Loading usage…" />')
+  expect(source).toContain('<SharedLoadingSkeleton kind="page" label="Loading settings…" />')
+  expect(source).toContain('<SharedLoadingSkeleton kind="list" label="Loading Sessions…" />')
+  expect(style).toContain("@keyframes desktop-indeterminate")
+  expect(style).toContain("@keyframes desktop-shimmer")
+  expect(declarations(style, ".transcript-compaction__indeterminate")).toContain("animation: desktop-indeterminate")
+  expect(declarations(style, ".rl-skeleton::after")).toContain("animation: desktop-shimmer")
+  expect(style).toMatch(/@keyframes desktop-(indeterminate|shimmer) \{ from \{ transform: translate3d/)
+  expect(style).not.toMatch(/@keyframes desktop-(indeterminate|shimmer) \{ from \{ opacity/)
+})
+
+test("the effort slider drags, aligns every stop label and bounds the switch wait", async () => {
+  const [style, source] = await Promise.all([read("src/style.css"), read("src/renderer.tsx")])
+  expect(declarations(style, ".desktop-popover.model-popover")).toContain("inline-size: min(28rem, calc(100dvw - (2 * var(--yc-space-5))))")
+  expect(declarations(style, ".model-slider")).toContain("user-select: none")
+  expect(declarations(style, ".model-slider")).toContain("touch-action: none")
+  expect(declarations(style, ".model-slider__label")).toContain("white-space: nowrap")
+  expect(declarations(style, ".model-slider__label")).toContain("position: absolute")
+  expect(declarations(style, ".model-slider__labels")).toContain("position: relative")
+  expect(source).toContain('window.addEventListener("pointermove"')
+  expect(source).toContain('window.addEventListener("pointerup"')
+  expect(source).toContain('window.addEventListener("pointercancel"')
+  expect(source).toContain("onPointerDown={startDrag}")
+  expect(source).toContain('if (props.busy || event.button !== 0 && event.pointerType === "mouse") return\n    event.preventDefault(); event.stopPropagation()')
+  expect(source).toContain("effortStopFraction(index(), stops().length)")
+  expect(source).toContain('class="model-slider__ticks"')
+  expect(source.indexOf('class="model-slider__ticks"')).toBeLessThan(source.indexOf('class="model-slider__fill"'))
+  expect(source).toContain("12_000")
+  expect(source).toContain("Switching timed out")
+  expect(source).toContain('queries.setQueryData(["models", ...scope(), props.sessionID], { ...found, current: model })')
+  expect(source).toContain("setPendingChoice")
+  expect(source).toContain("choice={pendingChoice() ?? choice()}")
+  expect(source).toContain('class="desktop__error model-popover__status"')
+})
+
+test("numbers are formatted by shared rules on every screen", async () => {
+  const source = await read("src/renderer.tsx")
+  expect(source).toContain("formatQuotaProviders(data().quotas ?? [], Date.now())")
+  expect(source).toContain("requests={formatCount(data().report.total.logical)}")
+  expect(source).toContain("inputTokens={formatCompactCount(data().report.total.tokens.input)}")
+  expect(source).toContain("formatCompactCount(data().report.total.tokens.cache.read)")
+  expect(source).not.toContain("${data().report.total.tokens.cache.read}")
+  expect(source).toContain("formatDurationMs(entry.sample.durationMs)")
+  expect(source).not.toContain("${entry.sample.durationMs} ms")
+  expect(source).not.toContain("${row.logical} requests")
+})
+
+test("semantic palette tokens exist in both themes and component rules never use raw colors", async () => {
+  const style = await read("src/style.css")
+  const light = declarations(style, ":root")
+  const dark = declarations(style, ':root[data-theme="dark"]') + declarations(style, '[data-theme="dark"]')
+  for (const token of ["--yc-info-strong", "--yc-info-soft", "--yc-violet-strong", "--yc-violet-soft", "--yc-teal-strong", "--yc-teal-soft", "--yc-meter-warn"]) {
+    expect(light).toContain(`${token}:`)
+    expect(dark).toContain(`${token}:`)
+  }
+  expect(style).toContain('[data-scheme="high-contrast"]')
+  expect(declarations(style, ".rl-avatar")).toContain("var(--yc-violet-soft)")
+  expect(declarations(style, ".transcript-reasoning__tag")).toContain("var(--yc-violet-strong)")
+  expect(style).toMatch(/\.rl-page\[data-surface="settings"\] \.rl-page-mark/)
+  expect(style).toMatch(/\.st-quota-row\[data-level="warn"\] \.rl-progress > :is\(i, span\) \{[^}]*var\(--yc-meter-warn\)/)
+  expect(declarations(style, ".relay-settings .st-chip")).toContain("background: var(--yc-surface-sunken)")
+  expect(style).toMatch(/\.palette__option\[data-group="Customize"\]/)
+  const component = style.split("\n").filter((line) => !/^(:root|\[data-theme|:root\[data-theme|\.model-popover|\[data-theme="dark"\] \.model-popover|@media[^{]*\{ :root|@media[^{]*\{ \[data|\[data-scheme)/.test(line) && !line.includes("--yc-brand-") && !line.includes("--rl-context-") && !line.includes("--rl-diff-"))
+  expect(component.filter((line) => /#[0-9a-fA-F]{3,8}\b|rgba?\(/.test(line))).toEqual([])
+})
+
+test("live-verified polish: USD grouping, quota grid areas, composer dock parity, scroll alignment and model list divider", async () => {
+  const [source, style, design] = await Promise.all([read("src/renderer.tsx"), read("src/style.css"), read("DESIGN.md")])
+  expect(source).not.toContain(".toFixed(")
+  expect(source).toContain("formatUsd(cost)")
+  expect(source).toContain("formatUsd(session.cost)")
+  expect(source).not.toContain("<div class=\"rl-dock\"><div class=\"rl-col\"><div class=\"rl-capsule\">")
+  expect(source).toContain('<div class="rl-dock"><div class="rl-col"><SharedComposerSurface formClass="composer" busy={busy()} onSubmit={(event) => { event.preventDefault(); void start() }} field={<div class="rl-capsule">')
+  const row = declarations(style, ".relay-settings .st-quota-row")
+  expect(row).toContain("display: grid")
+  expect(row).toContain('grid-template-areas: "label value" "bar bar"')
+  expect(declarations(style, ".relay-settings .st-quota-label")).toContain("grid-area: label")
+  expect(declarations(style, ".relay-settings .st-quota-value")).toContain("grid-area: value")
+  expect(declarations(style, ".relay-settings .st-quota-row > :is(.rl-progress, .st-track-empty)")).toContain("grid-area: bar")
+  expect(style).not.toContain(".st-quota-label { flex-basis: 100%; }")
+  expect(declarations(style, ".rl-scroll")).toContain("overflow-y: scroll; overflow-x: auto;")
+  expect(declarations(style, ".rl-dock")).toContain("padding: 8px var(--yc-scrollbar-size) 12px 0;")
+  expect(declarations(style, ".rl-dock")).toContain("max-height: 55%;")
+  const list = declarations(style, ".model-popover__list")
+  expect(list).toContain("padding-block-end: var(--yc-space-2)")
+  expect(list).toContain("border-block-end: 1px solid var(--yc-border)")
+  expect(design).toContain("84rem from 1600px")
+  expect(design).not.toContain("82ch")
+})
+
+test("the desktop conversation ticks only user turns and reuses the shared rail and jump pill", async () => {
+  const { desktopPromptTicks } = await import("../src/renderer")
+  const turns = [
+    { id: "u1", type: "user", text: "Plan the work\nin steps" },
+    { id: "a1", type: "assistant", content: [] },
+    { id: "s1", type: "system", text: "context" },
+    { id: "u2", type: "user", text: "Second prompt" },
+  ] as never
+  expect(desktopPromptTicks(turns)).toEqual([{ id: "u1", text: "Plan the work\nin steps" }, { id: "u2", text: "Second prompt" }])
+  expect(desktopPromptTicks([])).toEqual([])
+  const source = await read("src/renderer.tsx")
+  expect(source).toContain('from "../../../apps/web/src/remote/ui/transcript-rail"')
+  expect(source).toContain("<PromptRail")
+  expect(source).toContain("<JumpControls")
+  expect(source).toContain("navigationTargets(scrollTop(), following())")
+  expect(source).not.toContain("conversation__jump\"")
+  expect(source).not.toContain(">Jump to latest<")
+  const style = await read("src/style.css")
+  expect(style).toMatch(/\.conversation__jump-slot \{[^}]*position: relative;[^}]*block-size: 0;/)
+  expect(style).not.toMatch(/\.conversation__jump \{/)
+})
+
+test("the Edited files card belongs to the turn that captured the edit, never to the Session aggregate", async () => {
+  const { turnEditPlacements } = await import("../src/form-rules")
+  const messages = [{ id: "msg_u1", type: "user" }, { id: "msg_a1", type: "assistant" }, { id: "msg_u2", type: "user" }, { id: "msg_a2", type: "assistant" }]
+  const file = (path: string, additions: number, deletions: number) => ({ path, patch: `${path}:${additions}`, additions, deletions })
+  expect(turnEditPlacements(messages, [{ id: "msg_u1", type: "user", files: [] }, { id: "msg_u2", type: "user", files: [] }]).size).toBe(0)
+  expect(turnEditPlacements(messages, undefined).size).toBe(0)
+  const earlier = turnEditPlacements(messages, [{ id: "msg_u1", type: "user", files: [file("x.ts", 1, 1)] }, { id: "msg_u2", type: "user", files: [] }])
+  expect([...earlier.keys()]).toEqual(["msg_a1"])
+  expect(earlier.get("msg_a1")).toEqual({ turnID: "msg_u1", files: [file("x.ts", 1, 1)] })
+  const running = turnEditPlacements([...messages.slice(0, 2), { id: "msg_u3", type: "user" }, { id: "msg_a3", type: "assistant" }], [{ id: "msg_u1", type: "user", files: [file("x.ts", 1, 1)] }])
+  expect([...running.keys()]).toEqual(["msg_a1"])
+  const own = turnEditPlacements(messages, [{ id: "msg_u1", type: "user", files: [] }, { id: "msg_u2", type: "user", files: [file("a.ts", 1, 0), file("a.ts", 2, 1), file("b.ts", 0, 4)] }])
+  expect([...own.keys()]).toEqual(["msg_a2"])
+  expect(own.get("msg_a2")).toEqual({ turnID: "msg_u2", files: [{ path: "a.ts", patch: "a.ts:2", additions: 3, deletions: 1 }, file("b.ts", 0, 4)] })
+  const source = await read("src/renderer.tsx")
+  expect(source).not.toContain("files={changeData()!.items}")
+  expect(source).toContain("editPlacements().get(item().id)")
 })

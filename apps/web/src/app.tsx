@@ -65,7 +65,7 @@ export function createAppRouter(options: { readonly createRemoteStore?: () => Re
       )
     },
   })
-  const preloads = { usage: preloadUsage, settings: preloadKeepAwake, projects: preloadCoordination, sessions: undefined, session: undefined }
+  const preloads = { usage: preloadUsage, settings: preloadKeepAwake, projects: preloadCoordination, workspaces: preloadWorkspaces, sessions: undefined, session: undefined }
   return createRouter({
     history: options.history,
     caseSensitive: true,

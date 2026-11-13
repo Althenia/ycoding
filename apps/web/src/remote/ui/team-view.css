@@ -14,6 +14,8 @@
 .team-view__tab-label { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; }
 .team-view__count { color: var(--yc-text-muted); font-family: var(--yc-font-mono); font-size: var(--yc-size-2xs); font-variant-numeric: tabular-nums; }
 .team-view__tabs button[aria-selected="true"] .team-view__count { color: var(--yc-green-strong); }
+.team-view__group-heading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--yc-space-2); }
+.team-view__group-heading h3 { margin: 0; font-size: var(--yc-size-xs); font-weight: var(--yc-weight-semibold); }
 
 .team-view button:focus-visible, .team-view__confirmation button:focus-visible { outline: 2px solid var(--yc-focus); outline-offset: 2px; }
 .team-view button:disabled { opacity: 0.55; }

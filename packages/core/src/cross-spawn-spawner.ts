@@ -1,5 +1,5 @@
 import type { NonEmptyReadonlyArray } from "effect/Array"
-import { NodeFileSystem, NodePath, NodeSink, NodeStream } from "@effect/platform-node"
+import { NodeSink, NodeStream } from "@effect/platform-node"
 import {
   Deferred,
   Clock,
@@ -33,6 +33,11 @@ import { filesystem, path } from "./effect/app-node-platform"
 import { ProcessGroup } from "./shell/process-group"
 
 const toError = (err: unknown): Error => (err instanceof globalThis.Error ? err : new globalThis.Error(String(err)))
+
+const isSystemError = (err: unknown): err is NodeJS.ErrnoException =>
+  err instanceof globalThis.Error &&
+  typeof (err as NodeJS.ErrnoException).code === "string" &&
+  typeof (err as NodeJS.ErrnoException).syscall === "string"
 
 const toTag = (err: NodeJS.ErrnoException): PlatformError.SystemErrorTag => {
   switch (err.code) {
@@ -315,7 +320,14 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
   const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
     Effect.callback<readonly [NodeChildProcess.ChildProcess, ExitSignal], PlatformError.PlatformError>((resume) => {
       const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
-      const proc = launch(command.command, command.args, opts)
+      let proc: NodeChildProcess.ChildProcess
+      try {
+        proc = launch(command.command, command.args, opts)
+      } catch (err) {
+        if (!isSystemError(err)) throw err
+        resume(Effect.fail(toPlatformError("spawn", err, command)))
+        return Effect.void
+      }
       const captured: Capture = { prefix: [], collecting: true, claimed: false }
       captured.stdout = buffer(proc.stdout, "stdout", captured)
       captured.stderr = buffer(proc.stderr, "stderr", captured)
@@ -381,22 +393,38 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
         yield* Deferred.await(signal)
         return
       }
-      if (!group)
-        return yield* Effect.fail(toPlatformError("kill", new Error("Missing process-group identity"), command))
+      if (command.options.detached === false) {
+        const send = (name: NodeJS.Signals) => Effect.suspend(() => {
+          if (Deferred.isDoneUnsafe(signal)) return Effect.void
+          return Effect.try({ try: () => { proc.kill(name) }, catch: toError }).pipe(
+            Effect.catch((error) => Deferred.isDoneUnsafe(signal) ? Effect.void : Effect.fail(toPlatformError("kill", error, command))),
+          )
+        })
+        yield* send(opts?.killSignal ?? command.options.killSignal ?? "SIGTERM")
+        yield* Deferred.await(signal).pipe(
+          Effect.timeoutOrElse({
+            duration: opts?.forceKillAfter ?? command.options.forceKillAfter ?? Duration.seconds(3),
+            orElse: () => send("SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.timeout(1_000)),
+          }),
+          Effect.mapError((error) => toPlatformError("kill", toError(error), command)),
+        )
+        return
+      }
+      const ownedGroup = group ?? (yield* Effect.fail(toPlatformError("kill", new Error("Missing process-group identity"), command)))
       const gone = Effect.gen(function* () {
         while (true) {
-          const members = yield* group.members
+          const members = yield* ownedGroup.members
           if (members.length === 0) return
           yield* Effect.sleep(25)
         }
       })
-      yield* group
+      yield* ownedGroup
         .signal(opts?.killSignal ?? command.options.killSignal ?? "SIGTERM")
         .pipe(Effect.mapError((error) => toPlatformError("kill", error, command)))
       yield* gone.pipe(
         Effect.timeoutOrElse({
           duration: opts?.forceKillAfter ?? command.options.forceKillAfter ?? Duration.seconds(3),
-          orElse: () => group.signal("SIGKILL").pipe(Effect.andThen(gone), Effect.timeout(1_000)),
+          orElse: () => ownedGroup.signal("SIGKILL").pipe(Effect.andThen(gone), Effect.timeout(1_000)),
         }),
         Effect.mapError((error) => toPlatformError("kill", toError(error), command)),
       )
@@ -455,7 +483,7 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
               Effect.flatMap(([proc, signal]) =>
                 Effect.gen(function* () {
                   const group =
-                    process.platform === "win32"
+                    process.platform === "win32" || command.options.detached === false
                       ? undefined
                       : yield* ProcessGroup.make(proc.pid!, command.options.detached ?? true, processSystem)
                   return [proc, signal, group] as const

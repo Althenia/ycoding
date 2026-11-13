@@ -795,3 +795,46 @@ describe("Windows taskkill close race", () => {
     })
   }
 })
+
+describe.skipIf(process.platform !== "darwin")("synchronous spawn failures", () => {
+  const spawnExit = (command: ChildProcess.Command) =>
+    Effect.exit(ChildProcessSpawner.ChildProcessSpawner.use((spawner) => spawner.spawn(command)))
+
+  const oversized = "x".repeat(3 * 1024 * 1024)
+
+  for (const scenario of [
+    { name: "an over-long command path", code: "ENAMETOOLONG", command: () => ChildProcess.make(`/${"a".repeat(5000)}`) },
+    { name: "an over-long argument", code: "E2BIG", command: () => ChildProcess.make("/bin/echo", [oversized]) },
+  ]) {
+    fx.effect(
+      `fails ${scenario.name} in the typed channel and keeps ${scenario.code}`,
+      Effect.gen(function* () {
+        const exit = yield* spawnExit(scenario.command())
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (!Exit.isFailure(exit)) return
+        expect(exit.cause.reasons.map((reason) => reason._tag)).toEqual(["Fail"])
+        const reason = exit.cause.reasons[0]
+        if (reason?._tag !== "Fail") throw new Error("expected a typed failure")
+        const error = reason.error as PlatformError.PlatformError
+        expect(error._tag).toBe("PlatformError")
+        expect(error.reason).toMatchObject({ _tag: "Unknown", module: "ChildProcess", method: "spawn", syscall: "spawn" })
+        expect((error.reason as { cause?: NodeJS.ErrnoException }).cause?.code).toBe(scenario.code)
+      }),
+    )
+  }
+
+  fx.effect(
+    "leaves a programming error from the launcher as a defect",
+    Effect.gen(function* () {
+      const exit = yield* spawnExit(ChildProcess.make("/bin/echo", ["a\0b"]))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (!Exit.isFailure(exit)) return
+      expect(exit.cause.reasons.map((reason) => reason._tag)).toEqual(["Die"])
+      const reason = exit.cause.reasons[0]
+      if (reason?._tag !== "Die") throw new Error("expected a defect")
+      expect(reason.defect).toBeInstanceOf(TypeError)
+      expect((reason.defect as NodeJS.ErrnoException).code).toBe("ERR_INVALID_ARG_VALUE")
+      expect((reason.defect as NodeJS.ErrnoException).syscall).toBeUndefined()
+    }),
+  )
+})

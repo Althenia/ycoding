@@ -68,6 +68,8 @@ describe("quiet workspace", () => {
           await until(page, `document.querySelector('dialog.overlay--command-palette') === null`)
         }
       }
+      await page.evaluate(`document.querySelector('[aria-label="Show workspace sidebar"]').click()`)
+      await until(page, `document.querySelector('.workspace__rail').getBoundingClientRect().width === 216`)
     } finally { await page.close() }
   }, 30_000)
 
@@ -85,8 +87,8 @@ describe("quiet workspace", () => {
       expect(typography.heading).toEqual({ fontSize: "18px", lineHeight: "24px", fontWeight: "700", color: typography.primary, fontFamily: typography.sans })
       expect(typography.eyebrow).toEqual({ fontSize: "11px", lineHeight: "16px", fontWeight: "600", color: typography.muted, fontFamily: typography.mono })
       expect(typography.totalText).toBe("24K")
-      expect(typography.capacityText).toBe(" / 128K tokens")
-      expect(typography.caption).toBe("19% used · 81% left")
+      expect(typography.capacityText).toBe("/ 128K tokens · 104,000 remaining")
+      expect(await page.evaluate<string>(`document.querySelector('#companion-context .rl-context-total b').textContent`)).toBe("19% used · 81% left")
       expect([typography.count, typography.rows]).toEqual([7, 7])
       await page.setViewport(390, 844)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1&theme=dark`)
@@ -459,6 +461,59 @@ describe("quiet workspace", () => {
       expect(await page.evaluate<string[]>(`window.requestLog.filter(item => item.operation === 'session.pin' || item.operation === 'session.unpin').map(item => item.operation)`)).toEqual(["session.pin"])
     } finally { await page.close() }
   }, 30_000)
+  test("five workspace destinations have distinct routes, current-page state and working history", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      await page.setViewport(1440, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two`)
+      await until(page, `document.querySelector('.remote-nav') !== null`)
+      for (const [label, path] of [["Projects", "/remote/projects"], ["Sessions", "/remote/sessions"], ["Workspaces", "/remote/workspaces"], ["Usage", "/remote/usage"], ["Settings", "/remote/settings"]] as const) {
+        const previous = await page.evaluate<string>(`location.pathname`)
+        await page.evaluate(`document.querySelector('.remote-nav a[title=${JSON.stringify(label)}]').click()`)
+        await until(page, `location.pathname === ${JSON.stringify(path)} && document.querySelector('.remote-nav a[title=${JSON.stringify(label)}]')?.getAttribute('aria-current') === 'page'`)
+        expect(await page.evaluate<number>(`document.querySelectorAll('.remote-nav [aria-current="page"]').length`)).toBe(1)
+        if (label === "Workspaces") {
+          await until(page, `document.querySelector('.workspaces-page')?.innerText.includes('Other repository')`)
+          expect(await page.evaluate<boolean>(`document.querySelectorAll('.workspace__rail').length === 1 && document.querySelectorAll('.workspaces-page h1').length === 1`)).toBe(true)
+        }
+        await page.evaluate(`history.back()`)
+        const previousLabel = previous === "/remote/session" ? "Sessions" : previous.split("/").at(-1)!.replace(/^./, (first) => first.toUpperCase())
+        await until(page, `location.pathname === ${JSON.stringify(previous)} && document.querySelector('.remote-nav a[title=${JSON.stringify(previousLabel)}]')?.getAttribute('aria-current') === 'page'`)
+        await page.evaluate(`history.forward()`)
+        await until(page, `location.pathname === ${JSON.stringify(path)} && document.querySelector('.remote-nav a[title=${JSON.stringify(label)}]')?.getAttribute('aria-current') === 'page'`)
+      }
+      await page.evaluate(`history.back()`)
+      await until(page, `location.pathname === '/remote/usage' && document.querySelector('.remote-nav a[title="Usage"]')?.getAttribute('aria-current') === 'page'`)
+      await page.evaluate(`history.forward()`)
+      await until(page, `location.pathname === '/remote/settings' && document.querySelector('.remote-nav a[title="Settings"]')?.getAttribute('aria-current') === 'page'`)
+      expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote/settings")
+    } finally { await page.close() }
+  }, 30_000)
+  test("workspace directory shows actual repositories and reports empty and failed reads on phone", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      await page.setViewport(390, 844)
+      for (const [query, text] of [["", "Other repository"], ["&workspaces=many", "llama-cpp-proxy-with-a-long-repository-name"], ["&workspaces=empty", "No previously opened workspaces"], ["&workspaces=error", "Workspace inventory unavailable"]] as const) {
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=workspaces${query}`)
+        await until(page, `document.querySelector('.workspaces-page')?.innerText.includes(${JSON.stringify(text)})`)
+        expect(await page.evaluate<boolean>(`(() => { const page=document.querySelector('.workspaces-page'); return page.getBoundingClientRect().width > 0 && document.documentElement.scrollWidth <= innerWidth })()`)).toBe(true)
+      }
+    } finally { await page.close() }
+  }, 30_000)
+  test("companion overlays at 1180px and docks above it", async () => {
+    for (const width of [1180, 1181]) {
+      const page = await requireBrowser().openPage()
+      try {
+        await page.setViewport(width, 900)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two`)
+        await until(page, `document.querySelector('[aria-label="Open Team"]:not([disabled])') !== null`)
+        await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
+        await until(page, `document.querySelector('.team-control__panel') !== null`)
+        expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.team-control__panel')).position`)).toBe(width === 1180 ? "fixed" : "static")
+        expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 30_000)
   test("Team shows the current Session context, autonomy and active goal", async () => {
     const page = await requireBrowser().openPage()
     try {
@@ -466,14 +521,15 @@ describe("quiet workspace", () => {
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1`)
       await until(page, `document.querySelector('[aria-label="Open Team"]:not([disabled])') !== null`)
       await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
-      await until(page, `document.querySelector('.team-view__session-summary') !== null`)
-      const summary = await page.evaluate<string>(`document.querySelector('.team-view__session-summary').innerText`)
+      await until(page, `document.querySelector('.companion__header') !== null`)
+      await page.evaluate(`document.querySelector('.companion__tabs [aria-controls="companion-context"]').click()`)
+      const summary = await page.evaluate<string>(`document.querySelector('#companion-context').innerText`)
       expect(summary).toContain("19% used · 81% left")
-      expect(summary).toContain("Autonomous")
-      expect(summary).toContain("Goal active · Ship the remote workspace")
-      expect(await page.evaluate<boolean>(`document.querySelector('.team-view__session-summary .team-view__meter') !== null`)).toBe(true)
+      expect(await page.evaluate<string>(`document.querySelector('.companion__header').innerText`)).toContain("Autonomous")
+      expect(await page.evaluate<string>(`document.querySelector('.companion__header').innerText`)).toContain("Goal · Active")
+      expect(await page.evaluate<boolean>(`document.querySelector('.team-view__session-summary') === null`)).toBe(true)
       expect(await page.evaluate<boolean>(`document.querySelector('.workspace__main').getBoundingClientRect().right <= document.querySelector('.team-control__panel').getBoundingClientRect().left`)).toBe(true)
-      await page.evaluate(`document.querySelector('.team-view__session-summary button').click()`)
+      await page.evaluate(`[...document.querySelectorAll('.companion__header button')].find(button => button.textContent.includes('Autonomous')).click()`)
       await until(page, `document.querySelector('dialog[aria-label="Autonomous"]') !== null`)
     } finally { await page.close() }
   }, 30_000)
@@ -492,7 +548,7 @@ describe("quiet workspace", () => {
         expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${panel} .session-filters button')].map(button => button.textContent.trim())`)).toEqual(["All", "Waiting", "Running", "Idle"])
         expect(await page.evaluate<number>(`new Set([...document.querySelectorAll('${panel} .session-filters button')].map(button => Math.round(button.getBoundingClientRect().top))).size`)).toBe(1)
         expect(await page.evaluate<string>(`document.querySelector('${panel} .session-panel__summary').textContent`)).toBe("1 waiting · 1 running · 1 pinned shown")
-        expect(await page.evaluate<string>(`document.querySelector('${panel} .session-list').innerText`)).toContain("Pinned")
+        expect(await page.evaluate<string>(`document.querySelector('${panel} .session-list').textContent`)).toContain("Pinned")
         expect(await page.evaluate<string>(`document.querySelector('${panel} .session-list').innerText`)).toContain("Waiting for approval")
         await page.evaluate(`document.querySelector('${panel} .session-filters button:nth-child(2)').click()`)
         await until(page, `document.querySelector('${panel} .session-filters button:nth-child(2)')?.getAttribute('aria-pressed') === 'true'`)
@@ -511,7 +567,9 @@ describe("quiet workspace", () => {
         expect(await page.evaluate<string>(`document.querySelector('.file-change-card__diff').innerText`)).toContain("export { next }")
         if (width >= 768) {
           await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
-          await until(page, `document.querySelector('.team-view__session-summary')?.innerText.includes('19% used')`)
+          await until(page, `document.querySelector('.companion__tabs [aria-controls="companion-context"]') !== null`)
+          await page.evaluate(`document.querySelector('.companion__tabs [aria-controls="companion-context"]').click()`)
+          await until(page, `document.querySelector('#companion-context')?.innerText.includes('19% used')`)
           await until(page, `document.querySelector('.team-control__panel:not(.team-control--entering)') !== null`)
           await page.evaluate(`Promise.all(document.querySelector('.team-control__panel').getAnimations().map(animation => animation.finished.catch(() => undefined)))`)
         }
@@ -604,7 +662,7 @@ describe("quiet workspace", () => {
               undersized: links.filter(link => { const box=link.getBoundingClientRect();return box.width < 44 || box.height < (innerWidth < 768 ? 44 : parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense'))) }).length,
             }
           })()`)
-          expect(state.links).toEqual(width < 768 ? ["/remote/sessions", "/remote/usage", "/remote/settings"] : ["/remote/projects", "/remote/sessions", "/remote/sessions", "/remote/usage", "/remote/settings"])
+          expect(state.links).toEqual(width < 768 ? ["/remote/sessions", "/remote/usage", "/remote/settings"] : ["/remote/projects", "/remote/sessions", "/remote/workspaces", "/remote/usage", "/remote/settings"])
           expect(state.current).toBe(view === "usage" ? "Usage" : view === "settings" ? "Settings" : "Sessions")
           expect(state.rail).toBe(width < 768 ? 0 : 216)
           expect(state.headerLinks).toBe(0)
@@ -652,14 +710,14 @@ describe("quiet workspace", () => {
       expect(await page.evaluate<{ width: number; links: number; focus: string; picker: boolean; bodyHidden: boolean }>(`(() => {
         const rail=document.querySelector('.workspace__rail');const body=rail.querySelector('.workspace__rail-body');
         return {width:rail.getBoundingClientRect().width,links:rail.querySelectorAll('.remote-nav a').length,focus:document.activeElement?.getAttribute('aria-label') ?? '',picker:document.querySelector('.sessions-page__workspace-select').getBoundingClientRect().height>0,bodyHidden:body.inert && body.getClientRects().length===0}
-      })()`)).toEqual({ width: 60, links: 3, focus: "Show workspace sidebar", picker: true, bodyHidden: true })
+      })()`)).toEqual({ width: 60, links: 5, focus: "Show workspace sidebar", picker: true, bodyHidden: true })
       expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.workspace__rail .remote-nav a')].every(link => { const box=link.getBoundingClientRect();return box.width>=44&&box.height>=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense')) })`)).toBe(true)
       expect(await page.evaluate<boolean>(`parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense')) >= 36`)).toBe(true)
       await page.evaluate(`document.querySelector('.workspace__rail .remote-nav a[href="/remote/settings"]').click()`)
       await until(page, `document.querySelector('.app--settings') !== null`)
       expect(await page.evaluate<boolean>(`['.workspace-resume','.workspace-new-session button'].every(selector => {const element=document.querySelector('.workspace__rail '+selector),box=element.getBoundingClientRect();return box.width>=44&&box.height>=44&&box.right<=60})`)).toBe(true)
       await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Show workspace sidebar"]').click()`)
-      await until(page, `document.querySelector('.workspace__rail').getBoundingClientRect().width === 288`)
+      await until(page, `document.querySelector('.workspace__rail').getBoundingClientRect().width === 216`)
       expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label') ?? ''`)).toBe("Hide workspace sidebar")
     } finally { await page.close() }
   }, 30_000)

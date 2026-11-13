@@ -6,7 +6,7 @@ import "./file-change-card.css"
 
 type CapturedFile = RemoteCapturedChangesPage["data"][number]
 
-export function FileChangeCard(props: { readonly files: () => readonly CapturedFile[]; readonly inCompanion?: boolean }): JSX.Element {
+export function FileChangeCard(props: { readonly files: () => readonly CapturedFile[]; readonly inCompanion?: boolean; readonly onOpenChanges?: (path?: string) => void }): JSX.Element {
   const [open, setOpen] = createSignal(props.inCompanion === true)
   const filesID = createUniqueId()
   const totals = createMemo(() => summarizeFileChanges(props.files()))
@@ -20,7 +20,7 @@ export function FileChangeCard(props: { readonly files: () => readonly CapturedF
         </span>
         <span class="file-change-card__chevron" aria-hidden="true"><Icon name="chevron-down" size={14} /></span>
       </button>
-      <Show when={!props.inCompanion}><button type="button" class="file-change-card__view" onClick={() => window.dispatchEvent(new CustomEvent("ycoding:open-companion", { detail: "changes" }))}>View changes</button></Show>
+      <Show when={!props.inCompanion}><button type="button" class="file-change-card__view" onClick={() => props.onOpenChanges ? props.onOpenChanges(props.files()[0]?.path) : window.dispatchEvent(new CustomEvent("ycoding:open-companion", { detail: "changes" }))}>View changes</button></Show>
       <ul class="file-change-card__files" id={filesID} hidden={!open()}><For each={props.files().map((file) => file.path)}>{(path) => <FileChangeRow file={() => props.files().find((file) => file.path === path)!} />}</For></ul>
     </section>
   )

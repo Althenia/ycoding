@@ -282,6 +282,25 @@ describe("AppProcess", () => {
     }
   })
 
+  describe.skipIf(process.platform !== "darwin")("operating-system spawn failures", () => {
+    it.effect(
+      "surfaces a synchronous spawn failure as AppProcessError carrying the original code",
+      Effect.gen(function* () {
+        const svc = yield* AppProcess.Service
+        const exit = yield* Effect.exit(svc.run(ChildProcess.make("/bin/echo", ["x".repeat(3 * 1024 * 1024)])))
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (!Exit.isFailure(exit)) return
+        expect(exit.cause.reasons.map((reason) => reason._tag)).toEqual(["Fail"])
+        const reason = exit.cause.reasons[0]
+        if (reason?._tag !== "Fail") throw new Error("expected a typed failure")
+        expect(reason.error).toBeInstanceOf(AppProcess.AppProcessError)
+        const cause = (reason.error as AppProcess.AppProcessError).cause as { _tag?: string; reason?: { cause?: NodeJS.ErrnoException } }
+        expect(cause._tag).toBe("PlatformError")
+        expect(cause.reason?.cause?.code).toBe("E2BIG")
+      }),
+    )
+  })
+
   describe("inherited platform methods", () => {
     it.effect(
       "string returns stdout as string",

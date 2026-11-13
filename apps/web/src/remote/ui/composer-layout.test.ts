@@ -23,17 +23,20 @@ test("the expanded dock follows the capsule at its end edge and the collapsed ha
   expect(base(".composer__dock-toggle")).toMatchObject({ "min-inline-size": "var(--yc-hit-min)", "min-block-size": "var(--yc-hit-min)" })
 })
 
-test("the composer is one raised capsule whose field is borderless and transparent", () => {
+test("the composer has one outlined capsule and an unframed row", () => {
   expect(base(".composer .composer__row")).toMatchObject({
-    padding: "var(--yc-space-2)",
-    border: "1px solid var(--yc-border-strong)",
-    "border-radius": "var(--yc-radius-xl)",
-    background: "var(--yc-surface-raised)",
-    "box-shadow": "var(--yc-shadow-md)",
+    padding: "0",
+    border: "0",
+    "border-radius": "0",
+    background: "transparent",
+    "box-shadow": "none",
   })
-  expect(base('[data-theme="dark"] .composer .composer__row')["border-color"]).toBe("var(--yc-border)")
+  expect(base(".mini-composer__input-wrap")).toMatchObject({
+    border: "1px solid var(--yc-border-strong)",
+    "border-radius": "26px",
+    background: "var(--yc-bg)",
+  })
   expect(base(".composer__input, .composer__input:hover, .composer__input:focus-visible")).toMatchObject({ border: "0", background: "transparent" })
-  expect(base(".composer .composer__row:focus-within")["border-color"]).toBe("var(--yc-focus)")
 })
 
 test("content-level light-mode pickers and attach keep their strong outline", () => {

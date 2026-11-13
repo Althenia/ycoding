@@ -130,6 +130,8 @@ export function acceptNextMessagePrediction(view: SessionView | undefined, draft
 }
 
 export function workspaceDestination(path: string) {
+  if (path === "/remote/projects") return "/remote/projects"
+  if (path === "/remote/workspaces") return "/remote/workspaces"
   if (path === "/remote/usage") return "/remote/usage"
   if (path === "/remote/settings") return "/remote/settings"
   return "/remote/sessions"

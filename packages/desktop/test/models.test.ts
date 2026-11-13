@@ -13,6 +13,11 @@ const invalid = "This model is not in the current list. Refresh models and choos
 const repository = "Choose a previously opened repository."
 const optionKeys = ["id", "providerID", "name", "enabled", "status", "limit", "variants", "profiles"]
 
+test("standalone model sources accept omitted and empty directories", () => {
+  for (const input of [undefined, {}, { directory: "" }]) expect(modelSource(input)).toEqual({})
+  for (const input of [null, { directory: 1 }, { extra: true }, { directory: "relative" }]) expect(() => modelSource(input)).toThrow()
+})
+
 function info(overrides: Partial<Info>): Info {
   return {
     id: "synthetic-model",
@@ -122,6 +127,16 @@ test("malformed backend model entries are dropped whole and never reach the outp
   for (const value of [undefined, null, {}, "models", { data: [] }]) expect(() => projectModels(value)).toThrow("The backend returned an invalid model list. Refresh to retry.")
 })
 
+test("model limits are safe integers and profile names are nonempty", () => {
+  for (const limit of [{ context: 1.5, output: 1 }, { context: 1, output: 0.5 }, { context: Number.MAX_SAFE_INTEGER + 1, output: 1 }])
+    expect(projectModels([info({ limit })])).toEqual([])
+  expect(projectModels([info({ profiles: [{ name: "", active: true }] })])).toEqual([])
+  const model = { id: "synthetic-model", providerID: "synthetic-provider", profile: "" }
+  expect(() => projectDefault({ selection: model })).toThrow()
+  expect(() => currentModel({ model })).toThrow()
+  expect(projectModels([info({ limit: { context: 0, output: Number.MAX_SAFE_INTEGER } })])).toHaveLength(1)
+})
+
 test("backend IDs, names and variant IDs longer than 1024 bytes are refused, never truncated", () => {
   const longest = "x".repeat(1024)
   const kept = projectModels([info({ id: longest, providerID: longest, name: longest, variants: [{ id: longest }], profiles: [{ name: "work", active: true, variants: [longest] }] })])
@@ -212,7 +227,6 @@ test("a model source is a Session ID or an absolute directory of at most 4096 by
   for (const value of [
     null,
     [],
-    {},
     { directory: 1 },
     { directory: "relative/repo" },
     { directory: `${longest}x` },

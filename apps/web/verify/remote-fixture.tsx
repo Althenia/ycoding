@@ -1576,6 +1576,14 @@ if (accountParams.get("grades") === "1") messages = [...messages, {
 }]
 
 const fixture = createFixtureStore()
+Object.assign(window, { remoteComposerState: (mode: "prediction" | "upload" | "catalog-error" | "fallback" | "queued") => fixture.store.container.setState((state) => ({
+  ...state,
+  ...(mode === "queued" ? { drafts: { ...state.drafts, [sessionID]: "Follow up after current step" }, queuedPromptDrafts: { ...state.queuedPromptDrafts, [sessionID]: "Follow up after current step" } } : {}),
+  ...(mode === "upload" ? { upload: { sessionID, name: "capture.png", percent: 25 } } : {}),
+  ...(mode === "catalog-error" ? { catalogs: Object.fromEntries(Object.entries(state.catalogs).map(([key, value]) => [key, { ...value, status: "error", message: "Catalog could not be loaded" }])) } : {}),
+  ...(mode === "fallback" && state.selectedSessionInfo ? { selectedSessionInfo: { ...state.selectedSessionInfo, model: { providerID: "openrouter", id: "perceptron/perceptron-mk1.5" } } } : {}),
+  ...(mode === "prediction" && state.view ? { view: { ...state.view, status: "idle", messages: [{ kind: "assistant", id: "msg_keyboard_prediction", created: 1, completed: 2, parts: [{ kind: "text", ordinal: 0, text: "The build is fixed." }] }], prediction: { sessionID, sourceMessageID: "msg_keyboard_prediction", text: "Run the focused tests" } } } : {}),
+})) })
 Object.assign(window, { transcriptDelta: fixture.transcriptDelta, transcriptRefresh: fixture.transcriptRefresh, responseSnapshot: fixture.responseSnapshot, responseStatus: () => fixture.store.state().view?.status })
 Object.assign(window, { remoteReadingTail: fixture.readingTail })
 Object.assign(window, { remoteQuestionAssessment: fixture.assessQuestion })

@@ -330,7 +330,7 @@ function composite(foreground: string, background: string): string {
 
 async function stylesheets() {
   const tokens = await stylesheet("tokens.css")
-  const base = await stylesheet("base.css")
+  const base = `${await stylesheet("base.css")}\n${await stylesheet("../ui/button.css")}`
   const light = declarations(tokens, THEME_SELECTORS.light)
   const overrides = declarations(tokens, THEME_SELECTORS.dark)
   const modes = { light, dark: { ...light, ...overrides } }

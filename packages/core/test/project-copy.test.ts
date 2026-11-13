@@ -157,6 +157,32 @@ describe("ProjectCopy", () => {
     }),
   )
 
+  it.live("registers the project worktree as its own copy source", () =>
+    Effect.gen(function* () {
+      const input = yield* setup()
+      const copy = yield* ProjectCopy.Service
+      yield* input.db.delete(ProjectDirectoryTable).run().pipe(Effect.orDie)
+      const parent = abs(path.join(path.dirname(input.root.path), path.basename(input.root.path) + "-copy-healed"))
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => fs.rm(parent, { recursive: true, force: true })).pipe(Effect.ignore),
+      )
+      const created = yield* copy.create({
+        projectID: input.projectID,
+        strategy: gitWorktree,
+        sourceDirectory: input.sourceDirectory,
+        directory: parent,
+        name: "copy",
+      })
+      expect(created.directory).toBe(abs(path.join(parent, "copy")))
+      expect(yield* stored(input.projectID)).toEqual(
+        [
+          { directory: input.sourceDirectory, strategy: null },
+          { directory: created.directory, strategy: "git_worktree" },
+        ].toSorted((a, b) => a.directory.localeCompare(b.directory)),
+      )
+    }),
+  )
+
   it.live("creates a named branch when the internal branch option is supplied", () =>
     Effect.gen(function* () {
       const input = yield* setup()

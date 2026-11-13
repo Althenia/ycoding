@@ -18,6 +18,47 @@ const unconfirmed = "The pin change was not confirmed. Refresh Sessions to see w
 const different = "The backend returned a different Session. Refresh and choose again."
 const invalidSession = "The backend returned an invalid Session. Refresh to retry."
 
+test("malformed Session cursor envelopes are refused", () => {
+  for (const cursor of [false, null, { next: "" }, { next: "x".repeat(4097) }, { next: 1 }, { next: false }, { next: {} }])
+    expect(() => projectSessions({ data: [], cursor }, 1)).toThrow(invalidList)
+  expect(projectSessions({ data: [] }, 1)).toEqual({ revision: 1, items: [] })
+})
+
+test("null Session cursor values from optional wire fields are accepted with next omitted", () => {
+  for (const cursor of [{ previous: null, next: null }, { next: null }]) {
+    const page = projectSessions({ data: [], cursor }, 1)
+    expect(page).toEqual({ revision: 1, items: [] })
+    expect(Object.hasOwn(page, "next")).toBe(false)
+  }
+  const paged = projectSessions({ data: [], cursor: { previous: null, next: "synthetic-next" } }, 1)
+  expect(paged.next).toBe("synthetic-next")
+})
+
+test("new Sessions use the server location or an explicitly available repository", async () => {
+  const resources = await syntheticBundle()
+  const routes: string[] = []
+  const bodies: unknown[] = []
+  using server = peer(routes, () => 101, async (route, request) => {
+    if (route === "/api/project/inventory") return Response.json({ data: [{ projectID: "prj_synthetic", projectWorktree: "/synthetic/repo", directory: "/synthetic/repo", sessions: 1, timeActive: 1, available: true }], cursor: {} })
+    if (route === "/api/session" && request.method === "POST") {
+      bodies.push(await request.json())
+      return Response.json({ data: record() })
+    }
+    return undefined
+  })
+  const controller = new BackendController(resources, { env, launch })
+  try {
+    await controller.connect({ mode: "shared", server: server.url.href })
+    await controller.createSession({ sessionID })
+    await controller.createSession({ sessionID, directory: "" })
+    await controller.createSession({ sessionID, directory: "/synthetic/repo" })
+    expect(bodies).toEqual([{ id: sessionID }, { id: sessionID }, { id: sessionID, location: { directory: "/synthetic/repo" } }])
+  } finally {
+    await controller.disconnect()
+    await fs.rm(resources, { recursive: true, force: true })
+  }
+}, 30_000)
+
 type Backend = { list: (query: URLSearchParams) => unknown; get: () => Promise<Response>; pin: () => Promise<Response> }
 type Observed = { routes: string[]; lists: Record<string, string>[]; pins: string[] }
 type Connection = { readonly pid?: () => number; readonly firstStreamEnds?: Promise<void>; readonly onState?: (state: ConnectionState) => void }
@@ -39,11 +80,33 @@ function record(overrides: Record<string, unknown> = {}) {
     title: "Synthetic",
     location: { directory: "/synthetic/repo", workspaceID: hidden },
     subpath: hidden,
-    revert: { messageID: hidden },
     origin: { type: hidden },
     ...overrides,
   }
 }
+
+test("Session reads retain and validate staged reverts without snapshot or patch data", async () => {
+  const revert = { messageID: "msg_boundary", snapshot: hidden, files: [{ file: "a.ts", patch: hidden, status: "modified", additions: 2, deletions: 1 }, { file: "b.ts", additions: 0, deletions: 0 }] }
+  const expected = { messageID: "msg_boundary", files: [{ file: "a.ts", status: "modified" as const, additions: 2, deletions: 1 }, { file: "b.ts", additions: 0, deletions: 0 }] }
+  const state = backend()
+  state.get = () => Promise.resolve(Response.json({ data: record({ revert }) }))
+  state.list = () => ({ data: [record({ revert })], cursor: {} })
+  await connected(state, async (controller) => {
+    const single = await controller.session({ sessionID })
+    const page = await controller.sessions({})
+    expect(single.item.revert).toEqual(expected)
+    expect(page.items[0]?.revert).toEqual(expected)
+    expect(JSON.stringify(single.item)).not.toContain(hidden)
+  })
+  expect(projectSessionRecord(sessionID, record({ revert: { messageID: "msg_" } })).revert).toEqual({ messageID: "msg_" })
+  for (const invalid of [null, {}, { messageID: "other" }, { messageID: 1 }, { messageID: "msg_valid", files: null },
+    { messageID: "msg_valid", files: [{}] }, { messageID: "msg_valid", files: [{ file: "x", additions: -1, deletions: 0 }] },
+    { messageID: "msg_valid", files: [{ file: "x", additions: 0.5, deletions: 0 }] }, { messageID: "msg_valid", files: [{ file: "x", additions: 0, deletions: 0, status: "other" }] }]) {
+    const value = record({ revert: invalid })
+    expect(projectSessions({ data: [value] }, 1).items).toEqual([])
+    expect(() => projectSessionRecord(sessionID, value)).toThrow(invalidSession)
+  }
+})
 
 function backend(): Backend {
   return {
@@ -102,7 +165,7 @@ test("Session items keep only the rail's fields, including the pinned time", () 
   const [minimal] = projectSessions({ data: [record({ parentID: undefined, agent: undefined, model: undefined, time: { created: 1, updated: 2, pinned: undefined } })] }, 7).items
   expect(Object.keys(minimal ?? {})).toEqual(["id", "title", "location", "time", "tokens", "cost"])
   expect(Object.keys(minimal?.time ?? {})).toEqual(["updated"])
-  expect(Object.keys(projectSessions({ data: [], cursor: { next: null } }, 7))).toEqual(["revision", "items"])
+  expect(Object.keys(projectSessions({ data: [], cursor: {} }, 7))).toEqual(["revision", "items"])
 })
 
 test("malformed backend Session entries are dropped whole, and a malformed list or cursor is refused", () => {

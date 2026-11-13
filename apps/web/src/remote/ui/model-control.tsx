@@ -6,6 +6,7 @@ import type { ModelRefView } from "../projection"
 import { modelEffortNotice } from "../view-model"
 import { containTab, createSheetFrame } from "./composer-sheet"
 import { effortLabel, effortLevel, modelSelection, modelSpeeds, orderedModelOptions, orderedVariants, profileForModel, switchModelSpeed, variantsForModel, type ModelSpeed } from "./composer-logic"
+import { SharedEffortControl } from "./shared-workspace"
 
 const sparkles = [
   { x: 6, y: 34, delay: 0, size: 2 }, { x: 13, y: 66, delay: 0.7, size: 1.5 }, { x: 21, y: 28, delay: 1.3, size: 2.5 },
@@ -18,23 +19,12 @@ export function ReasoningEffort(props: { readonly models: readonly ModelOption[]
   const option = () => props.models.find((item) => item.providerID === props.selected?.providerID && item.id === props.selected?.id)
   const stops = () => orderedVariants(variantsForModel(option(), props.selected?.profile), option())
   const stale = () => props.selected?.variant !== undefined && !stops().includes(props.selected.variant)
-  const index = () => props.selected?.variant === undefined ? 0 : stops().indexOf(props.selected.variant) + 1
   const choose = (variant?: string) => {
     const current = props.selected
     if (!current) return
     props.onChange({ providerID: current.providerID, id: current.id, ...(current.profile === undefined ? {} : { profile: current.profile }), ...(variant === undefined ? {} : { variant }) })
   }
-  return <section class="reasoning-effort" aria-label="Reasoning effort">
-    <div class="reasoning-effort__heading"><span>REASONING EFFORT</span><button type="button" disabled={props.disabled || !props.selected} onClick={() => choose()}>{props.selected?.variant === undefined ? "Model default" : effortLabel(props.selected.variant, option())} ↻</button></div>
-    <Show when={option()} fallback={<p>Model capabilities have not been reported.</p>}>
-      <Show when={!stale()} fallback={<p>Saved effort is not offered. Reset it before sending.</p>}>
-        <Show when={stops().length} fallback={<p>No adjustable effort · model settings apply.</p>}>
-          <input type="range" aria-label="Reasoning effort" aria-valuetext={props.selected?.variant === undefined ? "Model default" : effortLabel(props.selected.variant, option())} min="0" max={stops().length} step="1" value={index()} disabled={props.disabled} onInput={(event) => choose(stops()[Number(event.currentTarget.value) - 1])} />
-          <div class="reasoning-effort__labels"><span>Default</span><For each={stops()}>{(stop) => <span>{effortLabel(stop, option())}</span>}</For></div>
-        </Show>
-      </Show>
-    </Show>
-  </section>
+  return <SharedEffortControl variants={stops().map((value) => ({ value, label: effortLabel(value, option()) }))} current={props.selected?.variant} currentLabel={props.selected?.variant === undefined ? "Model default" : effortLabel(props.selected.variant, option())} available={option() !== undefined} stale={stale()} selected={props.selected !== undefined} disabled={props.disabled} onSelect={choose} />
 }
 
 export function ModelControl(props: { readonly models: readonly ModelOption[]; readonly selected?: ModelRefView; readonly selectionKey?: string; readonly recent?: readonly ModelRefView[]; readonly disabled?: boolean; readonly pending?: boolean; readonly rememberedVariant?: (model: ModelOption, profile?: string) => string | undefined; readonly onChange: (model: ModelRefView) => void }) {

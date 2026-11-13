@@ -10,18 +10,58 @@ import path from "node:path"
 import { ServerConnection } from "../src/services/server-connection"
 import { Standalone } from "../src/services/standalone"
 
-test("desktop shared managed discovery refuses missing service without starting it", async () => {
+test("desktop shared managed discovery starts a missing service with the bundled executable", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-desktop-discovery-"))
-  const ensure = spyOn(Service, "ensure").mockImplementation(() => Effect.fail(new Error("Unexpected service startup")))
-  const args = { mismatch: "error" as const, managed: "discover" as const }
+  const endpoint = { url: "http://127.0.0.1:49123" }
+  const ensure = spyOn(Service, "ensure").mockImplementation(() => Effect.succeed(endpoint))
+  const args = { managedCommand: ["/synthetic/resources/ycoding", "serve", "--service"] }
   try {
-    await expect(Effect.runPromise(ServerConnection.resolve(args).pipe(
+    const result = await Effect.runPromise(ServerConnection.resolve(args).pipe(
       Effect.provide(Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
       Effect.provide(NodeFileSystem.layer),
       Effect.scoped,
-    ))).rejects.toThrow("No compatible managed server is running")
+    ))
+    expect(result.endpoint).toEqual(endpoint)
+    expect(ensure.mock.calls[0]?.[0]?.command).toEqual(args.managedCommand)
+  } finally {
+    ensure.mockRestore()
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+test("desktop shared managed discovery reuses a compatible service", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-desktop-discovery-"))
+  const endpoint = { url: "http://127.0.0.1:49123", auth: undefined }
+  const discover = spyOn(Service, "discover").mockImplementation(() => Effect.succeed(endpoint))
+  const ensure = spyOn(Service, "ensure").mockImplementation(() => Effect.fail(new Error("Unexpected service startup")))
+  try {
+    const result = await Effect.runPromise(ServerConnection.resolve({ managedCommand: ["/synthetic/resources/ycoding", "serve", "--service"] }).pipe(
+      Effect.provide(Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
+      Effect.provide(NodeFileSystem.layer),
+      Effect.scoped,
+    ))
+    expect(result.endpoint).toEqual(endpoint)
     expect(ensure).not.toHaveBeenCalled()
   } finally {
+    discover.mockRestore()
+    ensure.mockRestore()
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+test("desktop shared managed discovery leaves an incompatible service running", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-desktop-discovery-"))
+  const discover = spyOn(Service, "discover").mockImplementation((options) => Effect.succeed(options?.version === undefined ? { url: "http://127.0.0.1:49123", auth: undefined } : undefined))
+  const ensure = spyOn(Service, "ensure").mockImplementation(() => Effect.fail(new Error("Unexpected service startup")))
+  try {
+    await expect(Effect.runPromise(ServerConnection.resolve({ mismatch: "error", managedCommand: ["/synthetic/resources/ycoding", "serve", "--service"] }).pipe(
+      Effect.provide(Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") })),
+      Effect.provide(NodeFileSystem.layer),
+      Effect.scoped,
+    ))).rejects.toThrow("version does not match")
+    expect(ensure).not.toHaveBeenCalled()
+  } finally {
+    discover.mockRestore()
     ensure.mockRestore()
     await fs.rm(root, { recursive: true, force: true })
   }

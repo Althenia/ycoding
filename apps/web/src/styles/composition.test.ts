@@ -16,7 +16,7 @@ const BREAKPOINTS = [360, 480, 640, 768, 1024, 1280, 1600] as const
 const PHONE_LAYOUT_QUERY = "@media (max-width: 767px), (max-height: 599px) and (pointer: coarse)"
 const COARSE_LANDSCAPE_QUERY = "@media (max-height: 599px) and (pointer: coarse) and (orientation: landscape)"
 
-const SURFACE_FILES = ["base.css", "site.css", "docs.css", "remote.css"] as const
+const SURFACE_FILES = ["base.css", "../ui/button.css", "../ui/modal.css", "site.css", "docs.css", "remote.css"] as const
 
 const STYLESHEETS = [...SURFACE_FILES, "tokens.css"] as const
 
@@ -106,6 +106,11 @@ describe("responsive contract", () => {
           // A keyframes prelude is not a condition on width; only media queries carry
           // a breakpoint that must be declared.
           if (!condition.startsWith("@media")) continue
+          if (condition === "@media (max-width: 1180px)" || condition === "@media (min-width: 1181px)") {
+            expect(name).toBe("remote.css")
+            expect(rule.header.startsWith(condition.includes("max-width") ? ".team-control__panel" : ".app--team-open")).toBe(true)
+            continue
+          }
           if (condition === PHONE_LAYOUT_QUERY || condition === COARSE_LANDSCAPE_QUERY || condition === "@media (max-width: 767px) and (max-height: 480px)" || condition === "@media (max-height: 599px)") {
             expect(name).toBe("remote.css")
             continue
@@ -214,7 +219,8 @@ describe("responsive contract", () => {
       expect(listed(block)["inline-size"]).toBe("min(100%, var(--yc-content-max))")
       expect(listed(block, 1600)["inline-size"]).toBe("min(100%, var(--yc-content-max-wide))")
     }
-    expect(listed(".app--conversation.app--selected")["--remote-column"]).toBe("var(--yc-measure-wide)")
+    expect(listed(".app")["--remote-column"]).toBe("720px")
+    expect(listed(".app--conversation.app--selected")["--remote-column"]).toBeUndefined()
     expect(listed(".app--conversation.app--selected", 1600)).toEqual({})
     const transcript = await readStylesheet("../remote/ui/transcript.css")
     expect(transcript.rules.filter((rule) => rule.header.includes(".transcript-md") && rule.declarations["max-inline-size"]?.includes("--yc-measure"))).toEqual([])
@@ -502,3 +508,62 @@ function stepped(sheet: Stylesheet, selector: string, min: number) {
       rule.header === selector && rule.conditions.some((condition) => widthThreshold(condition)?.min === min),
   )
 }
+
+describe("modal primitive stylesheet ownership", () => {
+  const read = (path: string) => Bun.file(new URL(path, import.meta.url)).text()
+  const EXTRACTED_KEYFRAMES = ["yc-fade-in", "yc-sheet-in", "yc-sheet-out", "yc-fade-out", "yc-slide-in", "yc-slide-out", "yc-dialog-in", "yc-dialog-out"]
+
+  test("the modal primitive imports its stylesheets and the web base entry delivers them", async () => {
+    const modal = await read("../ui/modal.tsx")
+    expect(modal).toContain('import "./button.css"')
+    expect(modal).toContain('import "./modal.css"')
+    const base = await read("base.css")
+    expect(base).toContain('@import "../ui/button.css";')
+    expect(base).toContain('@import "../ui/modal.css";')
+  })
+
+  test("the button family and overlay primitive live once in their primitive stylesheets", async () => {
+    const base = await readStylesheet("base.css")
+    const leftover = base.rules.filter(
+      (rule) =>
+        /^\.(button|overlay)/.test(rule.header) ||
+        rule.conditions.some((condition) => EXTRACTED_KEYFRAMES.some((name) => condition === `@keyframes ${name}`)) ||
+        (rule.header.startsWith(".overlay") && rule.conditions.length > 0),
+    )
+    expect(leftover.map((rule) => rule.header)).toEqual([])
+    const button = await readStylesheet("../ui/button.css")
+    const solid = (selector: string) => declarationsWhere(button, (rule) => rule.header === selector && rule.conditions.length === 0)
+    expect(solid(".button")).toMatchObject({ display: "inline-flex", "min-block-size": "var(--yc-control-h)", background: "var(--button-bg)" })
+    expect(solid(".button--primary")).toBeDefined()
+    expect(solid(".button--secondary")["--button-bg"]).toBe("var(--yc-surface-raised)")
+    expect(solid(".button--ghost")).toMatchObject({ "--button-bg": "transparent", "--button-border": "transparent" })
+    expect(solid(".button--icon")).toMatchObject({ "inline-size": "var(--yc-control-h)", padding: "0" })
+    expect(Number(solid(".button[disabled]").opacity)).toBeLessThan(1)
+  })
+
+  test("the overlay stylesheet owns the reset, surface, sheet geometry, and gated motion", async () => {
+    const modal = await readStylesheet("../ui/modal.css")
+    const base = (selector: string) => declarationsWhere(modal, (rule) => rule.header === selector && rule.conditions.length === 0)
+    expect(base(".overlay")).toMatchObject({ border: "0", padding: "0", background: "transparent" })
+    expect(base(".overlay::backdrop").background).toBe("rgba(11, 15, 20, 0.45)")
+    expect(base(".overlay__surface")).toMatchObject({ position: "fixed", background: "var(--yc-surface-raised)" })
+    expect(base(".overlay--sheet .overlay__surface")).toMatchObject({ "inset-inline": "0", "inset-block-end": "0", "inline-size": "100%" })
+    for (const part of [".overlay__head", ".overlay__title", ".overlay__close", ".overlay__body"]) expect(Object.keys(base(part)).length).toBeGreaterThan(0)
+    const keyframes = new Set(modal.rules.flatMap((rule) => rule.conditions.filter((condition) => condition.startsWith("@keyframes "))))
+    for (const name of EXTRACTED_KEYFRAMES) expect(keyframes.has(`@keyframes ${name}`)).toBe(true)
+    const animated = modal.rules.filter((rule) => rule.declarations["animation"] !== undefined || rule.declarations["animation-name"] !== undefined)
+    expect(animated.length).toBeGreaterThan(0)
+    for (const rule of animated) expect({ header: rule.header, gated: rule.conditions.includes("@media (prefers-reduced-motion: no-preference)") }).toEqual({ header: rule.header, gated: true })
+  })
+
+  test("every modal and picker class resolves to an owned rule", async () => {
+    const owned = [...(await readStylesheet("../ui/button.css")).rules, ...(await readStylesheet("../ui/modal.css")).rules].map((rule) => rule.header).join(" ")
+    const modal = await read("../ui/modal.tsx")
+    const select = await read("../ui/custom-select.tsx")
+    for (const name of ["overlay", "overlay__surface", "overlay__head", "overlay__title", "overlay__close", "overlay__body", "overlay--sheet"]) {
+      expect(modal + select).toContain(name)
+      expect(owned).toContain(`.${name}`)
+    }
+    for (const name of ["button", "button--ghost", "button--icon", "button--secondary"]) expect(owned).toContain(`.${name}`)
+  })
+})

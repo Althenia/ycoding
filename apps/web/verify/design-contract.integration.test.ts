@@ -98,9 +98,8 @@ describe("web design contract inventory", () => {
       if (!state.signIn) expect(state.path).toContain(`app--${scenario.view === "chat" ? scenario.noSelection ? "conversation" : "selected" : scenario.view}`)
       if (!state.signIn && scenario.view === "chat" && !scenario.noSelection) expect({ sessionID: state.sessionID, deviceID: state.deviceID }).toEqual({ sessionID: "ses_fixture", deviceID: "dev_studio" })
       if (!state.signIn) {
-        expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.remote-nav a[aria-current="page"], .bottom-nav a[aria-current="page"]')].filter(link => getComputedStyle(link).display !== "none" && link.getBoundingClientRect().width > 0).map(link => link.textContent?.trim() ?? "")`)).toEqual([
-          scenario.view === "usage" ? "Usage" : scenario.view === "settings" ? "Settings" : "Sessions",
-        ])
+        const current = scenario.view === "usage" ? "Usage" : scenario.view === "settings" ? "Settings" : scenario.view === "projects" ? "Projects" : scenario.view === "workspaces" ? "Workspaces" : "Sessions"
+        expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.remote-nav a[aria-current="page"], .bottom-nav a[aria-current="page"]')].filter(link => getComputedStyle(link).display !== "none" && link.getBoundingClientRect().width > 0).map(link => link.textContent?.trim() ?? "")`)).toEqual(scenario.viewport < 768 && (scenario.view === "projects" || scenario.view === "workspaces") ? [] : [current])
       }
       const settled = `${JSON.stringify(scenario.expectedText)}.every((text) => document.body.innerText.includes(text))`
       for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(settled)); attempt += 1) await Bun.sleep(100)

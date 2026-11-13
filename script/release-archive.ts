@@ -6,6 +6,7 @@ import { BrowserExtension } from "../packages/core/src/browser/extension"
 const targets = ["darwin-arm64", "darwin-x64", "linux-x64", "windows-x64"] as const
 type Target = typeof targets[number]
 const application = "YCoding Computer Use.app"
+const desktopApplication = "YCoding Desktop.app"
 
 function payload(target: Target, withApplication: boolean) {
   return [
@@ -31,6 +32,27 @@ function includesApplication(target: Target, version: string) {
 
 function filename(target: Target, version: string) {
   return `ycoding-${version}-${target}.${target === "windows-x64" ? "zip" : "tar.gz"}`
+}
+
+function desktopFilename(version: string) {
+  return `YCoding-Desktop-v${version}-darwin-arm64.zip`
+}
+
+function desktopPayload(hash: string) {
+  return ["", "Contents/", "Contents/Frameworks/", "Contents/Info.plist", "Contents/MacOS/", "Contents/MacOS/launcher", "Contents/Resources/", "Contents/Resources/AppIcon.icns", "Contents/Resources/metadata.json", `Contents/Resources/${hash}.tar.zst`]
+    .map((entry) => `${desktopApplication}/${entry}`)
+    .sort()
+}
+
+function desktopHash(metadata: string, plist: string) {
+  const parsed: unknown = (() => { try { return JSON.parse(metadata) } catch { return undefined } })()
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("Invalid desktop release payload: metadata")
+  const fields = parsed as Record<string, unknown>
+  if (fields.identifier !== "app.ycoding.desktop" || fields.name !== "YCoding Desktop" || fields.channel !== "stable" || typeof fields.hash !== "string" || !/^[0-9a-z]+$/.test(fields.hash))
+    throw new Error("Invalid desktop release payload: metadata")
+  for (const [key, value] of [["CFBundleIdentifier", "app.ycoding.desktop"], ["CFBundleExecutable", "launcher"], ["CFBundleIconFile", "AppIcon"]])
+    if (!new RegExp(`<key>${key}</key>\\s*<string>${value.replaceAll(".", "\\.")}</string>`).test(plist)) throw new Error(`Invalid desktop release payload: ${key}`)
+  return fields.hash
 }
 
 function run(command: string[], cwd?: string) {
@@ -90,6 +112,41 @@ async function validateArchive(file: string, target: Target, version: string) {
   if (zip) run(["unzip", "-t", file])
 }
 
+async function validateDesktopPayload(app: string) {
+  if (path.basename(app) !== desktopApplication) throw new Error("Invalid desktop release payload: application name")
+  const contents = path.join(app, "Contents")
+  const hash = desktopHash(await Bun.file(path.join(contents, "Resources/metadata.json")).text().catch(() => ""), await Bun.file(path.join(contents, "Info.plist")).text().catch(() => ""))
+  const entries = [`${desktopApplication}/`, ...(await tree(app)).map((entry) => `${desktopApplication}/${entry}`)].sort()
+  if (JSON.stringify(entries) !== JSON.stringify(desktopPayload(hash))) throw new Error("Invalid desktop release payload: unexpected or missing entries")
+  if (((await fs.stat(path.join(contents, "MacOS/launcher"))).mode & 0o111) === 0) throw new Error("Invalid desktop release payload: launcher is not executable")
+}
+
+async function validateDesktopArchive(file: string) {
+  const info = await fs.lstat(file)
+  if (!info.isFile() || info.isSymbolicLink() || info.size === 0) throw new Error("Invalid desktop release archive file")
+  const names = run(["unzip", "-Z1", file]).trimEnd().split("\n")
+  const hash = desktopHash(run(["unzip", "-p", file, `${desktopApplication}/Contents/Resources/metadata.json`]), run(["unzip", "-p", file, `${desktopApplication}/Contents/Info.plist`]))
+  if (JSON.stringify([...names].sort()) !== JSON.stringify(desktopPayload(hash))) throw new Error("Invalid desktop release archive entries")
+  const modes = run(["unzip", "-Z", "-l", file]).split("\n").filter((line) => /^[bcdhlps-][rwx-]/.test(line))
+  if (modes.length !== names.length) throw new Error("Invalid desktop release archive modes")
+  for (const [index, name] of names.entries()) {
+    const mode = modes[index]!.split(/\s/)[0]!
+    if (mode[0] !== (name.endsWith("/") ? "d" : "-")) throw new Error("Invalid desktop release archive entry type")
+    if (name.endsWith("/MacOS/launcher") && !mode.includes("x")) throw new Error("Invalid desktop release archive executable mode")
+  }
+  run(["unzip", "-t", file])
+}
+
+async function createDesktop(version: string, app: string, output: string) {
+  await validateDesktopPayload(app)
+  await fs.mkdir(output, { recursive: true })
+  const file = path.join(output, desktopFilename(version))
+  if (await Bun.file(file).exists()) throw new Error("Release archive already exists")
+  run(["ditto", "-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--noacl", "--keepParent", app, file])
+  await validateDesktopArchive(file)
+  console.log(`Prepared ${desktopFilename(version)}`)
+}
+
 async function create(target: Target, version: string, directory: string, output: string) {
   await validatePayload(directory, target)
   await fs.mkdir(output, { recursive: true })
@@ -102,16 +159,17 @@ async function create(target: Target, version: string, directory: string, output
 }
 
 async function finalize(version: string, directory: string, output: string) {
-  const expected = targets.map((target) => filename(target, version))
-  if (JSON.stringify((await fs.readdir(directory)).sort()) !== JSON.stringify([...expected].sort())) throw new Error("Expected exactly four release archives")
+  const expected = [...targets.map((target) => filename(target, version)), desktopFilename(version)]
+  if (JSON.stringify((await fs.readdir(directory)).sort()) !== JSON.stringify([...expected].sort())) throw new Error("Expected exactly five release archives")
   await fs.mkdir(output, { recursive: true })
   if ((await fs.readdir(output)).length !== 0) throw new Error("Release output must be empty")
   for (const target of targets) await validateArchive(path.join(directory, filename(target, version)), target, version)
+  await validateDesktopArchive(path.join(directory, desktopFilename(version)))
   for (const name of expected) await fs.copyFile(path.join(directory, name), path.join(output, name))
   for (const name of ["LICENSE", "NOTICE"]) await fs.copyFile(path.join(import.meta.dir, "..", name), path.join(output, name))
   const checksums = await Promise.all([...expected, "LICENSE", "NOTICE"].map(async (name) => `${createHash("sha256").update(new Uint8Array(await Bun.file(path.join(output, name)).arrayBuffer())).digest("hex")}  ${name}\n`))
   await Bun.write(path.join(output, `ycoding-${version}-checksums.txt`), checksums.join(""))
-  console.log("Validated four release archives and all six asset checksums")
+  console.log("Validated five release archives and all seven asset checksums")
 }
 
 await main()
@@ -126,9 +184,13 @@ async function main() {
     await create(target, version, path.resolve(args[3]!), path.resolve(args[4]!))
     return
   }
+  if (args[0] === "create-desktop" && args.length === 4) {
+    await createDesktop(version, path.resolve(args[2]!), path.resolve(args[3]!))
+    return
+  }
   if (args[0] === "finalize" && args.length === 4) {
     await finalize(version, path.resolve(args[2]!), path.resolve(args[3]!))
     return
   }
-  throw new Error("Use create <target> <version> <source> <output> or finalize <version> <source> <output>")
+  throw new Error("Use create <target> <version> <source> <output>, create-desktop <version> <application> <output> or finalize <version> <source> <output>")
 }

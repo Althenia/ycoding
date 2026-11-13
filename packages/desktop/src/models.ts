@@ -18,8 +18,9 @@ export const text = (value: unknown): value is string => typeof value === "strin
 export const bounded = (value: unknown): value is string => text(value) && utf8Length(value) <= 1024
 const ids = (value: unknown): value is string[] => Array.isArray(value) && value.every(bounded)
 export const amount = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0
+const limitCount = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 const status = (value: unknown): value is ModelStatus => statuses.some((item) => item === value)
-const profileName = (value: unknown): value is string => text(value) && utf8Length(value) <= 256
+const profileName = (value: unknown): value is string => text(value) && value.length > 0 && utf8Length(value) <= 256
 
 function projectProfile(value: unknown): ModelProfileOption | undefined {
   const name = own(value, "name")
@@ -40,7 +41,7 @@ function projectModel(value: unknown): ModelOption | undefined {
   const output = own(limit, "output")
   const variants = own(value, "variants")
   const profiles = own(value, "profiles")
-  if (!bounded(id) || !bounded(providerID) || !bounded(name) || typeof enabled !== "boolean" || !status(state) || !amount(context) || !amount(output) ||
+  if (!bounded(id) || !bounded(providerID) || !bounded(name) || typeof enabled !== "boolean" || !status(state) || !limitCount(context) || !limitCount(output) ||
     !Array.isArray(variants) || (profiles !== undefined && !Array.isArray(profiles))) return undefined
   const variantIDs = variants.map((variant) => own(variant, "id"))
   const projected = (profiles ?? []).map(projectProfile)
@@ -59,7 +60,9 @@ function reference(value: unknown): ModelSelection | undefined {
 
 export function modelSource(value: unknown): ModelSource {
   if (typeof value === "string") return { sessionID: session(value) }
-  if (typeof value !== "object" || value === null || Array.isArray(value) || Object.keys(value).join() !== "directory" || !("directory" in value)) throw new DesktopError(repository)
+  if (value === undefined) return {}
+  if (typeof value !== "object" || value === null || Array.isArray(value) || Object.keys(value).some((key) => key !== "directory")) throw new DesktopError(repository)
+  if (!("directory" in value) || value.directory === "") return {}
   const directory = value.directory
   if (typeof directory !== "string" || utf8Length(directory) > 4096 || !path.isAbsolute(directory)) throw new DesktopError(repository)
   return { directory }

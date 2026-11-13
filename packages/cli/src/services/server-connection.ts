@@ -14,6 +14,7 @@ export type Args = {
   readonly onStart?: EnsureOptions["onStart"]
   readonly privateServer?: Parameters<typeof Standalone.start>[0]
   readonly managed?: "discover"
+  readonly managedCommand?: EnsureOptions["command"]
 }
 
 export type Resolved = {
@@ -27,10 +28,20 @@ export const resolve = Effect.fn("cli.server-connection.resolve")(function* (arg
     return yield* Effect.fail(new Error("--server and --standalone cannot be combined"))
   if (args.server !== undefined) {
     const password = yield* Env.password
-    const endpoint = {
-      url: args.server,
-      auth: password ? { type: "basic" as const, username: "ycoding", password: Redacted.value(password) } : undefined,
-    } satisfies Endpoint
+    let auth: Endpoint["auth"] = password
+      ? { type: "basic" as const, username: "ycoding", password: Redacted.value(password) }
+      : undefined
+    const target = URL.canParse(args.server) ? new URL(args.server).href : undefined
+    if (auth === undefined && target !== undefined) {
+      for (const file of yield* ServiceConfig.registrationFiles()) {
+        const registered = yield* Service.registration({ file })
+        if (registered !== undefined && URL.canParse(registered.url) && new URL(registered.url).href === target) {
+          auth = registered.auth
+          break
+        }
+      }
+    }
+    const endpoint = { url: args.server, auth } satisfies Endpoint
     const client = YCoding.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
     const health = yield* Effect.tryPromise({
       try: () => client.health.get({ signal: AbortSignal.timeout(5_000) }),
@@ -58,7 +69,12 @@ export const resolve = Effect.fn("cli.server-connection.resolve")(function* (arg
       : "Managed server version does not match the bundled desktop client"))
   }
 
-  const options = yield* ServiceConfig.options()
+  const configured = yield* ServiceConfig.options()
+  const options = { ...configured, ...(args.managedCommand ? { command: args.managedCommand } : {}) }
+  if (args.managedCommand) {
+    const endpoint = yield* Service.discover(options)
+    if (endpoint !== undefined) return { endpoint } satisfies Resolved
+  }
   return {
     endpoint: yield* resolveManaged({ ...options, onStart: args.onStart }, args.mismatch ?? "replace"),
     service: managedService(options),

@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
+import { join } from "node:path"
 import { launchBrowser } from "./cdp"
 
 const port = 4396
 const executable = process.env.YCODING_WEB_CHROME
+const captureDirectory = process.env.YCODING_WEB_CAPTURE_DIR
 if (!executable) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
 let server: ReturnType<typeof Bun.spawn> | undefined
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
@@ -23,6 +25,30 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
+test("Session companion Activity exposes its stacked sections as named regions", async () => {
+  if (!browser) throw new Error("Browser not started")
+  const page = await browser.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&presentation=conversation&team=two`)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Open Team"]') !== null`); attempt += 1) await Bun.sleep(25)
+    await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('#team-panel-shell .team-view__shell') !== null`); attempt += 1) await Bun.sleep(25)
+    expect(await page.evaluate<{ readonly nestedTabs: number; readonly sections: readonly { readonly id: string; readonly label: string; readonly visible: boolean }[]; readonly summary: boolean }>(`(() => {
+      const team = document.querySelector('#companion-activity .team-view')
+      const sections = [...team.querySelectorAll(':scope > section[id^="team-panel-"]')]
+      return {
+        nestedTabs: team.querySelectorAll('[role="tablist"], [role="tabpanel"]').length,
+        sections: sections.map((section) => ({ id: section.id, label: document.getElementById(section.getAttribute('aria-labelledby'))?.textContent, visible: section.getClientRects().length > 0 })),
+        summary: team.querySelector('.team-view__session-summary') !== null,
+      }
+    })()`)).toEqual({ nestedTabs: 0, sections: [
+      { id: "team-panel-shell", label: "Shell processes", visible: true },
+      { id: "team-panel-subagents", label: "Subagent tasks", visible: true },
+      { id: "team-panel-side-chats", label: "Side chats", visible: true },
+    ], summary: false })
+  } finally { await page.close() }
+}, 15_000)
+
 test("a running Team shell disappears once killing succeeds", async () => {
   if (!browser) throw new Error("Browser not started")
   const page = await browser.openPage()
@@ -30,8 +56,7 @@ test("a running Team shell disappears once killing succeeds", async () => {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&presentation=conversation&team=two`)
     for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Open Team"]') !== null`); attempt += 1) await Bun.sleep(25)
     await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
-    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view [data-tab="shell"]') !== null`); attempt += 1) await Bun.sleep(25)
-    await page.evaluate(`document.querySelector('.team-view [data-tab="shell"]').click()`)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('#team-panel-shell') !== null`); attempt += 1) await Bun.sleep(25)
     for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__shell')?.textContent.includes('running') ?? false`); attempt += 1) await Bun.sleep(25)
     expect(await page.evaluate<boolean>(`document.querySelector('.team-view__shell')?.textContent.includes('running') ?? false`)).toBe(true)
     await page.evaluate(`document.querySelector('.team-view__shell [data-action="kill"]').click(); document.querySelector('dialog[aria-label="Kill shell"] [data-action="confirm"]').click()`)
@@ -97,8 +122,8 @@ test("Team shell lists a marked preview and opens the complete command on demand
     try {
       await page.setViewport(width, height)
       await page.navigate(`http://127.0.0.1:${port}/verify/team-fixture.html?mode=team&longShell&theme=${theme}`)
-      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view [data-tab="shell"]') !== null`); attempt += 1) await Bun.sleep(25)
-      await page.evaluate(`document.querySelector('.team-view [data-tab="shell"]').click()`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('#team-panel-shell') !== null`); attempt += 1) await Bun.sleep(25)
+      await page.evaluate(`document.querySelector('.team-view [data-tab="shell"]')?.click()`)
       expect(await page.evaluate<string>(`document.querySelector('.team-view__shell .team-view__title').textContent`)).toBe(`${command.slice(0, 255)}…`)
       expect(await page.evaluate<string[]>(`window.teamEvents()`)).toEqual([])
       await page.evaluate(`document.querySelector('.team-view__shell [data-action="output"]').click()`)
@@ -149,7 +174,7 @@ test("real remote Team opens on phone, tablet, and desktop with no Office activi
       for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__task[data-session-id="ses_child"]') !== null`); attempt += 1) await Bun.sleep(25)
       for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__task[data-session-id="ses_child"]')?.textContent.includes('$0.25') ?? false`); attempt += 1) await Bun.sleep(25)
       expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.team-view__task[data-session-id="ses_child"] .team-view__usage-cell')].map((cell) => cell.querySelector('dt').textContent + '=' + cell.querySelector('dd').textContent)`)).toEqual(["Tokens (inclusive)=20", "Cost (inclusive)=$0.25", "Context=800 / 2,000", "Cache=75% hit"])
-      expect(await page.evaluate<boolean>(`document.querySelector('.team-view [role="tablist"]') !== null && document.querySelector('.team-view__task[data-session-id="ses_child"]') !== null && (document.querySelector('.team-view')?.closest('dialog[open]') !== null) === (innerWidth < 768) && document.documentElement.scrollWidth <= innerWidth && (window.remoteOperationReport().operations['session.family.activity'] ?? 0) === 0`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('.team-view [role="tablist"]') === null && document.querySelectorAll('.team-view > section[role="region"]').length === 3 && document.querySelector('.team-view__task[data-session-id="ses_child"]') !== null && (document.querySelector('.team-view')?.closest('dialog[open]') !== null) === (innerWidth < 768) && document.documentElement.scrollWidth <= innerWidth && (window.remoteOperationReport().operations['session.family.activity'] ?? 0) === 0`)).toBe(true)
     } finally { await page.close() }
   }
 }, 30_000)
@@ -168,12 +193,10 @@ test("real remote Team cancels, kills, creates and opens a BTW side chat; manage
     await page.evaluate(`window.remoteTeamControl.cancelled()`)
     for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__task[data-session-id="ses_child"]')?.textContent.includes('cancelled') ?? false`); attempt += 1) await Bun.sleep(25)
     expect(await page.evaluate<boolean>(`document.querySelector('.team-view__task[data-session-id="ses_child"]')?.textContent.includes('cancelled') ?? false`)).toBe(true)
-    await page.evaluate(`document.querySelector('.team-view [data-tab="shell"]').click()`)
     for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__shell [data-action="kill"]') !== null`); attempt += 1) await Bun.sleep(25)
     await page.evaluate(`document.querySelector('.team-view__shell [data-action="kill"]').click(); document.querySelector('dialog[aria-label="Kill shell"] [data-action="confirm"]').click()`)
     for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__shell') === null`); attempt += 1) await Bun.sleep(25)
     expect(await page.evaluate<boolean>(`document.querySelector('.team-view__shell') === null`)).toBe(true)
-    await page.evaluate(`document.querySelector('.team-view [data-tab="side-chats"]').click()`)
     for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view [data-action="new-side-chat"]') !== null`); attempt += 1) await Bun.sleep(25)
     await page.evaluate(`document.querySelector('.team-view [data-action="new-side-chat"]').click()`)
     for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.composer textarea') !== null`); attempt += 1) await Bun.sleep(25)
@@ -260,14 +283,14 @@ test("Team tabs keep keyed rows, counts, and navigation across phone, tablet, an
     try {
       await page.setViewport(width, height)
       await page.navigate(`http://127.0.0.1:${port}/verify/team-fixture.html?mode=team&theme=${theme}`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.team-view [role="tablist"]') !== null`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<{ readonly tabs: readonly string[]; readonly sections: readonly string[]; readonly rows: number; readonly overflow: boolean; readonly sheet: boolean; readonly smallTargets: readonly string[] }>(`(() => ({ tabs: [...document.querySelectorAll('.team-view [role="tab"]')].map((item) => item.textContent.trim()), sections: [...document.querySelectorAll('.team-view__section h3')].map((item) => item.textContent.trim()), rows: document.querySelectorAll('.team-view__task').length, overflow: document.documentElement.scrollWidth > innerWidth, sheet: document.querySelector('.team-view')?.closest('dialog[open]') !== null, smallTargets: [...document.querySelectorAll('.team-view button')].filter((button) => button.getClientRects().length > 0 && button.getBoundingClientRect().height < (innerWidth < 768 || matchMedia('(pointer: coarse)').matches ? 43.5 : 31.5)).map((button) => button.textContent.trim() + ':' + button.getBoundingClientRect().height) }))()`)).toEqual({ tabs: ["Subagents 4", "Shell 1", "Side chats 1"], sections: ["ACTIVE", "INACTIVE"], rows: 3, overflow: false, sheet: width < 768, smallTargets: [] })
-      await Bun.write(new URL(`../../../.cache/tmp/team-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.team-view__task') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<{ readonly tabs: readonly string[]; readonly headings: readonly string[]; readonly sections: readonly string[]; readonly rows: number; readonly overflow: boolean; readonly sheet: boolean; readonly smallTargets: readonly string[] }>(`(() => ({ tabs: [...document.querySelectorAll('.team-view [role="tab"]')].map((item) => item.textContent.trim()), headings: [...document.querySelectorAll('.team-view__group-heading h3')].map((item) => item.textContent.trim()), sections: [...document.querySelectorAll('.team-view__section h3')].map((item) => item.textContent.trim()), rows: document.querySelectorAll('.team-view__task').length, overflow: document.documentElement.scrollWidth > innerWidth, sheet: document.querySelector('.team-view')?.closest('dialog[open]') !== null, smallTargets: [...document.querySelectorAll('.team-view button')].filter((button) => button.getClientRects().length > 0 && button.getBoundingClientRect().height < (innerWidth < 768 || matchMedia('(pointer: coarse)').matches ? 43.5 : 31.5)).map((button) => button.textContent.trim() + ':' + button.getBoundingClientRect().height) }))()`)).toEqual({ tabs: width < 768 ? [] : ["Subagents 4", "Shell 1", "Side chats 1"], headings: width < 768 ? ["Shell processes", "Subagent tasks", "Side chats"] : [], sections: ["ACTIVE", "INACTIVE"], rows: 3, overflow: false, sheet: width < 768, smallTargets: [] })
+      if (captureDirectory) await Bun.write(join(captureDirectory, `team-${width}-${theme}-${crypto.randomUUID()}.png`), Buffer.from(await page.screenshot(), "base64"))
       await page.evaluate(`window.teamRow = document.querySelector('.team-view__task[data-session-id="ses_child"]'); window.teamRefresh()`)
       expect(await page.evaluate<boolean>(`window.teamRow === document.querySelector('.team-view__task[data-session-id="ses_child"]')`)).toBe(true)
       await page.evaluate(`window.teamComplete('ses_child')`)
       expect(await page.evaluate<boolean>(`window.teamRow === document.querySelector('.team-view__task[data-session-id="ses_child"]') && window.teamRow.previousElementSibling?.classList.contains('team-view__section') === false`)).toBe(true)
-      await page.evaluate(`document.querySelector('.team-view [data-tab="shell"]').click(); document.querySelector('.team-view [data-tab="subagents"]').click()`)
+      await page.evaluate(`document.querySelector('.team-view [data-tab="shell"]')?.click(); document.querySelector('.team-view [data-tab="subagents"]')?.click()`)
       expect(await page.evaluate<boolean>(`window.teamRow === document.querySelector('.team-view__task[data-session-id="ses_child"]')`)).toBe(true)
       await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="open"]').click()`)
       expect(await page.evaluate<string>(`window.teamSelected()`)).toBe("ses_child")
@@ -330,7 +353,7 @@ test("Team keeps one titled header, sheet padding, and a non-overlapping older c
       await page.navigate(`http://127.0.0.1:${port}/verify/team-fixture.html?mode=team&crowded&theme=${theme}`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.team-view__more') !== null`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`(() => { const panel = document.querySelector('.team-view'), body = panel.closest('dialog')?.querySelector('.overlay__body'); if (body) body.scrollTop = body.scrollHeight; else panel.querySelector('.team-view__list').scrollTop = panel.querySelector('.team-view__list').scrollHeight })()`)
-      await Bun.write(new URL(`../../../.cache/tmp/phone-settings-${process.env.PHONE_CAPTURE_PHASE ?? "after"}-team-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      if (captureDirectory) await Bun.write(join(captureDirectory, `team-settings-${width}-${theme}-${crypto.randomUUID()}.png`), Buffer.from(await page.screenshot(), "base64"))
       const layout = await page.evaluate<{ readonly headings: number; readonly closes: number; readonly count: string; readonly left: number; readonly right: number; readonly token: number; readonly olderClear: boolean; readonly listScrolls: boolean; readonly olderVisible: boolean }>(`(() => {
         const panel = document.querySelector('.team-view'), sheet = panel.closest('dialog'), head = sheet?.querySelector('.overlay__head') ?? panel.querySelector('.team-view__header');
         const body = sheet?.querySelector('.overlay__body'), card = panel.querySelector('.team-view__task'), list = panel.querySelector('.team-view__list'), more = panel.querySelector('.team-view__more');
@@ -384,7 +407,6 @@ test("Team controls confirm cancellation and shell kill, answer a blocked child,
     await page.evaluate(`(() => { const field=document.querySelector('.team-answer textarea'); field.value='staging'; field.dispatchEvent(new InputEvent('input',{bubbles:true})); document.querySelector('.team-answer button[type="submit"]').click() })()`)
     for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`window.teamEvents().some((item) => item.startsWith('answer:'))`); attempt += 1) await Bun.sleep(25)
     expect(await page.evaluate<string[]>(`window.teamEvents()`)).toContain("answer:ses_waiting:qst_1:staging")
-    await page.evaluate(`document.querySelector('.team-view [role="tab"][data-tab="shell"]').click()`)
     expect(await page.evaluate<string>(`document.querySelector('.team-view__owner')?.textContent ?? ''`)).toBe("Main session")
     await page.evaluate(`document.querySelector('.team-view__shell [data-action="output"]').click()`)
     expect(await page.evaluate<string[]>(`window.teamEvents()`)).toContain("output:ses_root:sh_1")
@@ -392,10 +414,9 @@ test("Team controls confirm cancellation and shell kill, answer a blocked child,
     expect(await page.evaluate<string>(`document.querySelector('.team-view__output')?.textContent ?? ''`)).toContain("Tests passed")
     await page.evaluate(`document.querySelector('.team-view__shell [data-action="kill"]').click()`)
     for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Kill shell"][open]') !== null`); attempt += 1) await Bun.sleep(25)
-    expect(await page.evaluate<{ readonly confirm: boolean; readonly dialogs: readonly string[]; readonly killDisabled: boolean; readonly tab: string | null; readonly events: readonly string[] }>(`({ confirm: document.querySelector('dialog[aria-label="Kill shell"][open]') !== null, dialogs: [...document.querySelectorAll('dialog[open]')].map((item) => item.getAttribute('aria-label')), killDisabled: document.querySelector('.team-view__shell [data-action="kill"]')?.disabled ?? true, tab: document.querySelector('.team-view [aria-selected="true"]')?.getAttribute('data-tab') ?? null, events: window.teamEvents() })`)).toMatchObject({ confirm: true, killDisabled: false, tab: "shell" })
+    expect(await page.evaluate<{ readonly confirm: boolean; readonly dialogs: readonly string[]; readonly killDisabled: boolean; readonly events: readonly string[] }>(`({ confirm: document.querySelector('dialog[aria-label="Kill shell"][open]') !== null, dialogs: [...document.querySelectorAll('dialog[open]')].map((item) => item.getAttribute('aria-label')), killDisabled: document.querySelector('.team-view__shell [data-action="kill"]')?.disabled ?? true, events: window.teamEvents() })`)).toMatchObject({ confirm: true, killDisabled: false })
     await page.evaluate(`document.querySelector('dialog[aria-label="Kill shell"] [data-action="confirm"]').click()`)
     expect(await page.evaluate<string[]>(`window.teamEvents()`)).toContain("kill:sh_1")
-    await page.evaluate(`document.querySelector('.team-view [role="tab"][data-tab="side-chats"]').click()`)
     await page.evaluate(`document.querySelector('.team-view__side-chat [data-action="open"]').click()`)
     expect(await page.evaluate<string>(`window.teamSelected()`)).toBe("ses_btw")
     await page.evaluate(`document.querySelector('.team-view [data-action="new-side-chat"]').click()`)
@@ -541,13 +562,13 @@ test("phone subagent context keeps task details out of the reading area", async 
         return { compact: bar.getBoundingClientRect().height <= maxHeight, room: document.querySelector('.workspace__scroll').getBoundingClientRect().height > 3 * bar.getBoundingClientRect().height, visibleDetails: [...bar.querySelectorAll('.subagent-bar__description, .subagent-bar__metrics, .subagent-bar__rollup')].filter((item) => item.getClientRects().length > 0).length, overflow: document.documentElement.scrollWidth > innerWidth, smallTargets: [...bar.querySelectorAll('button')].filter((button) => button.getClientRects().length > 0 && (button.getBoundingClientRect().height < 43.5 || button.getBoundingClientRect().width < 43.5)).length }
       })()`)
       expect(layout).toEqual({ compact: true, room: true, visibleDetails: 0, overflow: false, smallTargets: 0 })
-      if (width === 390) await Bun.write(new URL("../.cache/subagent-mobile/closed.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      if (width === 390 && captureDirectory) await Bun.write(join(captureDirectory, `subagent-closed-${crypto.randomUUID()}.png`), Buffer.from(await page.screenshot(), "base64"))
       await page.evaluate(`window.childTranscript = document.querySelector('.conversation-pane'); window.childScrollTop = document.querySelector('.workspace__scroll').scrollTop; document.querySelector('.subagent-bar [aria-label="Subagent details"]').focus({ preventScroll: true })`)
       expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === 'Subagent details'`)).toBe(true)
       await page.pressKey(" ", "Space", 32)
       expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Subagent details"][open]') !== null`)).toBe(true)
       await page.evaluate(`Promise.all(document.querySelector('dialog[aria-label="Subagent details"]').getAnimations({ subtree: true }).map((animation) => animation.finished))`)
-      if (width === 390) await Bun.write(new URL("../.cache/subagent-mobile/details.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      if (width === 390 && captureDirectory) await Bun.write(join(captureDirectory, `subagent-details-${crypto.randomUUID()}.png`), Buffer.from(await page.screenshot(), "base64"))
       await page.pressEscape()
       expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === 'Subagent details'`)).toBe(true)
       expect(await page.evaluate<boolean>(`document.querySelector('.conversation-pane') === window.childTranscript && document.querySelector('.workspace__scroll').scrollTop === window.childScrollTop`)).toBe(true)
@@ -595,11 +616,29 @@ test("subagent details preserve complete metrics and answer access without growi
   }
 }, 30_000)
 
-test("Team tabs and row actions are keyboard operable, and Escape closes the phone sheet", async () => {
+test("Team regions and row actions are keyboard operable, and Escape closes the phone sheet", async () => {
   if (!browser) throw new Error("Browser not started")
   const page = await browser.openPage()
   try {
     await page.setViewport(390, 844)
+    await page.navigate(`http://127.0.0.1:${port}/verify/team-fixture.html?mode=team`)
+    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.team-view__task [data-action="open"]') !== null`); attempt += 1) await Bun.sleep(50)
+    expect(await page.evaluate<boolean>(`document.querySelectorAll('.team-view > section[role="region"]').length === 3 && document.querySelector('.team-view [role="tablist"]') === null`)).toBe(true)
+    await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="open"]').focus()`)
+    await page.pressKey(" ", "Space", 32)
+    expect(await page.evaluate<string[]>(`window.teamEvents()`)).toContain("open:ses_child")
+    await page.pressEscape()
+    expect(await page.evaluate<boolean>(`(() => { const view = document.querySelector('.team-view'); return view === null || view.closest('dialog[inert]:not([open])') !== null })()`)).toBe(true)
+    for (let attempt = 0; attempt < 20 && await page.evaluate<boolean>(`document.querySelector('.team-view') !== null`); attempt += 1) await Bun.sleep(50)
+    expect(await page.evaluate<boolean>(`document.querySelector('.team-view') === null`)).toBe(true)
+  } finally { await page.close() }
+})
+
+test("standalone Team tabs support arrow, End and Home keys", async () => {
+  if (!browser) throw new Error("Browser not started")
+  const page = await browser.openPage()
+  try {
+    await page.setViewport(1440, 900)
     await page.navigate(`http://127.0.0.1:${port}/verify/team-fixture.html?mode=team`)
     for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.team-view [data-tab="subagents"]') !== null`); attempt += 1) await Bun.sleep(50)
     expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.team-view [role="tab"]')].every((tab) => { const panel=document.getElementById(tab.getAttribute('aria-controls')); return panel?.getAttribute('role')==='tabpanel' && panel.hidden === (tab.getAttribute('aria-selected')!=='true') })`)).toBe(true)
@@ -610,13 +649,6 @@ test("Team tabs and row actions are keyboard operable, and Escape closes the pho
     expect(await page.evaluate<string>(`document.querySelector('.team-view [aria-selected="true"]')?.getAttribute('data-tab') ?? ''`)).toBe("side-chats")
     await page.pressKey("Home", "Home", 36)
     expect(await page.evaluate<string>(`document.querySelector('.team-view [aria-selected="true"]')?.getAttribute('data-tab') ?? ''`)).toBe("subagents")
-    await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="open"]').focus()`)
-    await page.pressKey(" ", "Space", 32)
-    expect(await page.evaluate<string[]>(`window.teamEvents()`)).toContain("open:ses_child")
-    await page.pressEscape()
-    expect(await page.evaluate<boolean>(`(() => { const view = document.querySelector('.team-view'); return view === null || view.closest('dialog[inert]:not([open])') !== null })()`)).toBe(true)
-    for (let attempt = 0; attempt < 20 && await page.evaluate<boolean>(`document.querySelector('.team-view') !== null`); attempt += 1) await Bun.sleep(50)
-    expect(await page.evaluate<boolean>(`document.querySelector('.team-view') === null`)).toBe(true)
   } finally { await page.close() }
 })
 

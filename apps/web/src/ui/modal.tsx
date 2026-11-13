@@ -1,5 +1,7 @@
 import { createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Icon } from "./icon"
+import "./button.css"
+import "./modal.css"
 
 /**
  * Native modal dialog: one primitive, three presentations.
@@ -47,6 +49,13 @@ export function Modal(props: {
   }
   onMount(() => {
     element?.showModal()
+    queueMicrotask(() => {
+      if (!element?.open || element.contains(document.activeElement)) return
+      const control = element.querySelector<HTMLElement>('[autofocus]:not([disabled])')
+        ?? element.querySelector<HTMLElement>('input[type="radio"]:checked:not([disabled])')
+        ?? element.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])')
+      control?.focus({ preventScroll: true })
+    })
     props.requestClose?.(close)
   })
   onCleanup(() => {

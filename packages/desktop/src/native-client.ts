@@ -1,11 +1,14 @@
 import { YCoding, type YCodingEvent } from "@ycoding-ai/client"
 import { headers, type Endpoint } from "@ycoding-ai/client/service"
+import { describeError } from "./app-log"
 import { DesktopError } from "./contract"
 
 type Health = Awaited<ReturnType<ReturnType<typeof YCoding.make>["health"]["get"]>>
 type Options = {
   readonly signal: AbortSignal
+  readonly fetch?: typeof globalThis.fetch
   readonly version?: string
+  readonly log?: (line: string) => void
   readonly onEvent?: (event: YCodingEvent) => void | Promise<void>
   readonly onStatus?: (status: { readonly status: "connected"; readonly health: Health } | { readonly status: "reconnecting" }) => void
   readonly reconnect?: (signal: AbortSignal) => Promise<Endpoint>
@@ -16,7 +19,7 @@ export async function connectNative(endpoint: Endpoint, options: Options) {
   const abort = () => lifetime.abort(options.signal.reason)
   options.signal.addEventListener("abort", abort, { once: true })
   if (options.signal.aborted) abort()
-  let api = YCoding.make({ baseUrl: endpoint.url, headers: headers(endpoint) })
+  let api = YCoding.make({ baseUrl: endpoint.url, headers: headers(endpoint), ...(options.fetch ? { fetch: options.fetch } : {}) })
   let current: Health | undefined
   const ready = Promise.withResolvers<void>()
   let established = false
@@ -30,7 +33,7 @@ export async function connectNative(endpoint: Endpoint, options: Options) {
         let next = api
         if (established && options.reconnect) {
           const moved = await options.reconnect(request.signal)
-          next = YCoding.make({ baseUrl: moved.url, headers: headers(moved) })
+          next = YCoding.make({ baseUrl: moved.url, headers: headers(moved), ...(options.fetch ? { fetch: options.fetch } : {}) })
         }
         const health = await next.health.get({ signal: AbortSignal.any([request.signal, AbortSignal.timeout(5_000)]) })
         if (health.healthy !== true || !Number.isSafeInteger(health.pid) || health.pid <= 0 || typeof health.sourceEpoch !== "string" || typeof health.version !== "string")
@@ -54,6 +57,7 @@ export async function connectNative(endpoint: Endpoint, options: Options) {
           if (!lifetime.signal.aborted) await options.onEvent?.(next.value)
         }
       } catch (error) {
+        if (!established && !(error instanceof DesktopError) && !lifetime.signal.aborted) options.log?.(`Native backend connection error: ${describeError(error)}`)
         if (!established) {
           ready.reject(error instanceof DesktopError ? error : new DesktopError("Could not establish native backend health and events. Check the endpoint and retry."))
           return

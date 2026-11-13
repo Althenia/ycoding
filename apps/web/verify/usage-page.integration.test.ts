@@ -598,9 +598,9 @@ test("three same-device reloads and Refresh update values without removing cards
           idle: button.getAttribute('aria-busy'), target: rect.height, width: rect.width,
           icon: !!button.querySelector('svg[aria-hidden="true"]') };
       })()`)
-      expect(refresh).toMatchObject({ accessibleName: "Refresh quotas", title: "Refresh quotas", text: "", idle: "false", icon: true })
+      expect(refresh).toMatchObject({ accessibleName: "Refresh quotas", title: "Refresh quotas", text: "Refresh", idle: "false", icon: true })
       expect(refresh.target).toBeGreaterThanOrEqual(44)
-      if (width === 390) expect(refresh.width).toBe(refresh.target)
+      expect(refresh.width).toBeGreaterThanOrEqual(refresh.target)
       await page.evaluate(`(() => {
         const selectors = '.usage-provider, .usage-tile, .usage-chart, .usage-distribution, .usage-meter > span, .usage-donut__arc, .usage-distribution__legend li, .usage-chart__bar';
         const root = document.querySelector('.usage-page');

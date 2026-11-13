@@ -1,16 +1,16 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
-import { Effect } from "effect"
+import { Cause, Effect, References, Runtime } from "effect"
 import { Observability } from "@ycoding-ai/core/observability"
 import { InstallationChannel, InstallationVersion, InstallationLocal } from "@ycoding-ai/core/installation/version"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Global } from "@ycoding-ai/core/global"
 import { AppProcess } from "@ycoding-ai/core/process"
 import { Npm } from "@ycoding-ai/core/npm"
-import { Runtime } from "./framework/runtime"
+import type { run } from "./framework/runtime"
 import { Updater } from "./services/updater"
 import { Config } from "./config"
 
-type Program = ReturnType<typeof Runtime.run>
+type Program = ReturnType<typeof run>
 
 export function main(program: Program) {
   Effect.logInfo("cli starting", {
@@ -50,6 +50,11 @@ export function main(program: Program) {
       ),
     ),
     Effect.tap(() => Effect.sync(() => process.exit(process.exitCode ?? 0))),
-    NodeRuntime.runMain,
+    Effect.tapCause((cause) =>
+      Cause.hasInterruptsOnly(cause) || !Runtime.getErrorReported(Cause.squash(cause))
+        ? Effect.void
+        : Effect.logError(cause).pipe(Effect.provideService(References.LogToStderr, true)),
+    ),
+    NodeRuntime.runMain({ disableErrorReporting: true }),
   )
 }

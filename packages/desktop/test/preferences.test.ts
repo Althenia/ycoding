@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { readPreferences, savePreferences, validateSelection } from "../src/preferences"
+import { appendAppLog } from "../src/app-log"
 
 test.each([
   [{ mode: "own" }, { mode: "own" }],
@@ -62,4 +63,19 @@ test("reports corrupt or blocked preferences without overwriting them", async ()
   } finally {
     await fs.rm(root, { recursive: true, force: true })
   }
+})
+
+test("the app log appends timestamped lines and keeps one bounded previous file", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-desktop-log-"))
+  const file = path.join(directory, "logs", "desktop.log")
+  await appendAppLog(file, "first line", 64)
+  expect(await fs.readFile(file, "utf8")).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z first line\n$/)
+  await appendAppLog(file, "x".repeat(100), 64)
+  await appendAppLog(file, "after rotation", 64)
+  expect(await fs.readFile(file + ".1", "utf8")).toContain("x".repeat(100))
+  const current = await fs.readFile(file, "utf8")
+  expect(current).toContain("after rotation")
+  expect(current).not.toContain("first line")
+  expect((await fs.stat(file)).mode & 0o777).toBe(0o600)
+  await expect(appendAppLog(path.join(file, "nested", "desktop.log"), "unwritable", 64)).resolves.toBeUndefined()
 })

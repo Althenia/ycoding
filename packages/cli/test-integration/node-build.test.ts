@@ -37,7 +37,7 @@ macTest("builds and smokes a macOS Node CLI with its complete signed computer ap
       })
       expect(result.error).toBeUndefined()
       expect(result.status, result.stdout + result.stderr).toBe(1)
-      expect(result.stdout).toContain("Meeting requires the native ycoding executable; it is not supported by the Node CLI.")
+      expect(result.stderr).toContain("Meeting requires the native ycoding executable; it is not supported by the Node CLI.")
       expect(result.stdout).not.toContain("Live page:")
     }
     await expect(stat(path.join(directory, "data/ycoding/meeting"))).rejects.toMatchObject({ code: "ENOENT" })

@@ -7,6 +7,7 @@ import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { bundledBackend } from "../src/resources"
+import { profile, syntheticEnvironment } from "../src/backend-confinement"
 
 export type FakeRequest = { readonly method: string; readonly path: string; readonly model?: string }
 export type Command = readonly [string, ...string[]]
@@ -17,69 +18,17 @@ type Backend = Awaited<ReturnType<typeof bundledGrant>>
 const sandbox = "/usr/bin/sandbox-exec"
 const systemReads = ["/usr/lib", "/System/Library", "/System/Cryptexes/OS", "/System/Volumes/Preboot/Cryptexes/OS"]
 const devices = ["/dev/null", "/dev/random", "/dev/urandom"]
-const icuData = "/usr/share/icu/icudt78l.dat"
 const probeTools = ["/bin/bash", "/bin/cat", "/bin/ls", "/usr/bin/nc"]
 const credentialName = /KEY|TOKEN|SECRET|PASSWORD|AUTH|CREDENTIAL|COOKIE|SOCK/
 const denied = "Operation not permitted"
 
 export async function syntheticEnv(root: string, provider: string) {
-  const home = process.env.HOME
-  if (!home) throw new Error("HOME must be set.")
-  const env: Record<string, string> = { HOME: home, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" }
-  for (const key of ["LANG", "USER", "LOGNAME"]) {
-    const value = process.env[key]
-    if (value !== undefined) env[key] = value
-  }
-  const tmp = path.join(root, "tmp")
-  const testHome = path.join(root, "home")
-  await Promise.all([fs.mkdir(tmp), fs.mkdir(testHome)])
-  return {
-    ...env,
-    TMPDIR: tmp,
-    YCODING_TEST_HOME: testHome,
-    XDG_CACHE_HOME: path.join(root, "cache"),
-    XDG_CONFIG_HOME: path.join(root, "config"),
-    XDG_DATA_HOME: path.join(root, "data"),
-    XDG_STATE_HOME: path.join(root, "state"),
-    YCODING_DB: path.join(root, "runtime.db"),
-    YCODING_DISABLE_MODELS_FETCH: "1",
-    YCODING_DISABLE_AUTOUPDATE: "1",
-    YCODING_DISABLE_PROJECT_CONFIG: "1",
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-    YCODING_CONFIG_CONTENT: JSON.stringify({
-      autoupdate: false,
-      share: "disabled",
-      capabilities: { home_roots: false },
-      model: "desktop-fake/echo",
-      providers: {
-        "desktop-fake": {
-          name: "Desktop synthetic",
-          package: "@ycoding-ai/ai/providers/openai-compatible",
-          settings: { baseURL: provider, apiKey: "synthetic-key" },
-          models: { echo: { name: "Synthetic echo" } },
-        },
-      },
-    }),
-  }
+  return syntheticEnvironment(root, provider, process.env)
 }
 
 function inside(child: string, parent: string) {
   const relative = path.relative(parent, child)
   return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
-}
-
-function quoted(value: string) {
-  if (!path.isAbsolute(value) || path.normalize(value) !== value || /["\\\p{Cc}]/u.test(value)) throw new Error(`Unsupported confinement path: ${JSON.stringify(value)}`)
-  return `"${value}"`
-}
-
-function ancestors(target: string) {
-  const list: string[] = []
-  for (let current = path.dirname(target); ; current = path.dirname(current)) {
-    list.push(current)
-    if (current === path.dirname(current)) return list
-  }
 }
 
 async function ownedDirectory(parent: string, home: string) {
@@ -99,35 +48,6 @@ async function bundledGrant(resources: string, home: string) {
   if (await fs.realpath(directory) !== directory || binary.executable !== path.join(directory, "ycoding") || !info.isFile() || inside(home, root))
     throw new Error("The bundled backend must be a canonical, digest-verified directory that does not contain HOME.")
   return { resources: root, directory, manifest, executable: binary.executable, version: binary.version }
-}
-
-function profile(input: { readonly owned: string; readonly cwd: string; readonly backend: Backend; readonly connect: readonly number[]; readonly tools?: readonly string[] }) {
-  for (const port of input.connect)
-    if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error(`Unsupported confinement port: ${port}`)
-  const tools = input.tools ?? []
-  const executables = [input.backend.executable, ...tools]
-  const subpaths = [...systemReads, input.backend.directory, input.cwd]
-  const literals = [input.backend.manifest, ...devices, ...tools, icuData]
-  const metadata = [...new Set([...subpaths, ...literals, input.owned].flatMap(ancestors))]
-  const list = (kind: string, items: readonly string[]) => items.map((item) => `(${kind} ${quoted(item)})`).join(" ")
-  return [
-    "(version 1)",
-    "(deny default)",
-    '(import "dyld-support.sb")',
-    "(allow process-fork)",
-    `(allow process-exec ${list("literal", executables)})`,
-    "(allow signal (target same-sandbox))",
-    "(allow process-info* (target same-sandbox))",
-    "(allow sysctl-read)",
-    "(allow dynamic-code-generation)",
-    `(allow file-read-metadata ${list("literal", metadata)})`,
-    `(allow file-read* ${list("subpath", subpaths)} ${list("literal", literals)})`,
-    `(allow file-map-executable ${list("subpath", systemReads)} ${list("literal", executables)})`,
-    `(allow file-read* file-write* ${list("subpath", [input.owned])})`,
-    `(allow file-write-data ${list("literal", ["/dev/null"])})`,
-    '(allow network-bind network-inbound (local ip "localhost:*"))',
-    ...input.connect.map((port) => `(allow network-outbound (remote ip "localhost:${port}"))`),
-  ].join("\n")
 }
 
 async function execute(command: Command, env: Record<string, string>) {

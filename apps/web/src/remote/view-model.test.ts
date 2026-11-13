@@ -189,6 +189,8 @@ test("keep-awake chrome is absent until settled or off and distinguishes active,
 
 test("Focus navigation groups Session creation and detail under Sessions", () => {
   for (const path of ["/remote", "/remote/session", "/remote/sessions"]) expect(workspaceDestination(path)).toBe("/remote/sessions")
+  expect(workspaceDestination("/remote/projects")).toBe("/remote/projects")
+  expect(workspaceDestination("/remote/workspaces")).toBe("/remote/workspaces")
   expect(workspaceDestination("/remote/usage")).toBe("/remote/usage")
   expect(workspaceDestination("/remote/settings")).toBe("/remote/settings")
 })

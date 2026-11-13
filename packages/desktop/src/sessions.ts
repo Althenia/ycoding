@@ -46,6 +46,23 @@ export function pinRequest(value: unknown): PinRequest {
   return { sessionID: session(own(value, "sessionID")), revision, pinned }
 }
 
+function projectRevert(value: unknown): SessionItem["revert"] | null {
+  if (!plain(value)) return null
+  const messageID = own(value, "messageID")
+  const files = own(value, "files")
+  if (!text(messageID) || !messageID.startsWith("msg_") || (files !== undefined && !Array.isArray(files))) return null
+  const projected: NonNullable<NonNullable<SessionItem["revert"]>["files"]>[number][] = []
+  for (const entry of files ?? []) {
+    const file = own(entry, "file")
+    const status = own(entry, "status")
+    const additions = own(entry, "additions")
+    const deletions = own(entry, "deletions")
+    if (!plain(entry) || !text(file) || (status !== undefined && status !== "added" && status !== "deleted" && status !== "modified") || !isRevision(additions) || !isRevision(deletions)) return null
+    projected.push({ file, ...(status === undefined ? {} : { status }), additions, deletions })
+  }
+  return { messageID, ...(files === undefined ? {} : { files: projected }) }
+}
+
 function projectSession(value: unknown): SessionItem | undefined {
   const id = own(value, "id")
   const parentID = own(value, "parentID")
@@ -68,9 +85,11 @@ function projectSession(value: unknown): SessionItem | undefined {
   const read = own(own(tokens, "cache"), "read")
   const write = own(own(tokens, "cache"), "write")
   const cost = own(value, "cost")
+  const rawRevert = own(value, "revert")
+  const revert = rawRevert === undefined ? undefined : projectRevert(rawRevert)
   if (!isSessionID(id) || (parentID !== undefined && !isSessionID(parentID)) || !text(title) || !text(directory) || !amount(updated) ||
     !time(active) || !time(archived) || !time(pinned) || (agent !== undefined && !text(agent)) || reference === null ||
-    !amount(input) || !amount(output) || !amount(reasoning) || !amount(read) || !amount(write) || !amount(cost)) return undefined
+    !amount(input) || !amount(output) || !amount(reasoning) || !amount(read) || !amount(write) || !amount(cost) || revert === null) return undefined
   return {
     id,
     ...(parentID === undefined ? {} : { parentID }),
@@ -79,6 +98,7 @@ function projectSession(value: unknown): SessionItem | undefined {
     time: { updated, ...(active === undefined ? {} : { active }), ...(archived === undefined ? {} : { archived }), ...(pinned === undefined ? {} : { pinned }) },
     ...(agent === undefined ? {} : { agent }),
     ...(reference === undefined ? {} : { model: reference }),
+    ...(revert === undefined ? {} : { revert }),
     tokens: { input, output, reasoning, cache: { read, write } },
     cost,
   }
@@ -86,7 +106,8 @@ function projectSession(value: unknown): SessionItem | undefined {
 
 export function projectSessions(value: unknown, revision: number): Sessions {
   const data = own(value, "data")
-  const next = own(own(value, "cursor"), "next")
-  if (!Array.isArray(data) || (next !== undefined && next !== null && !cursor(next))) throw new DesktopError(invalidList)
+  const envelope = own(value, "cursor")
+  const next = own(envelope, "next")
+  if (!Array.isArray(data) || (envelope !== undefined && !plain(envelope)) || (next !== undefined && next !== null && !cursor(next))) throw new DesktopError(invalidList)
   return { revision, items: data.flatMap((item: unknown) => projectSession(item) ?? []), ...(cursor(next) ? { next } : {}) }
 }

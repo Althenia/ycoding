@@ -62,7 +62,7 @@ test("native archive finalization transfers each prepared archive once and leave
   expect(build).toContain('bun script/release-archive.ts create "${{ matrix.target }}" "$RELEASE_VERSION"')
   expect(build).toContain("compression-level: 0")
   expect(build).toContain("name: release-archive-${{ matrix.target }}")
-  expect(release).toContain("needs: [verify-source, build]")
+  expect(release).toContain("needs: [verify-source, build, build-desktop]")
   expect(release).toContain("pattern: release-archive-*")
   expect(release).toContain("merge-multiple: true")
   expect(release).toContain('bun script/release-archive.ts finalize "$RELEASE_VERSION" downloaded release')
@@ -254,7 +254,7 @@ test("app preview Worker deploys only after the relay and only when the reposito
 
 test("GitHub Release publication waits for every check and web deployment waits for publication", () => {
   const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
-  expect(tui).toContain("needs: [verify-source, build]")
+  expect(tui).toContain("needs: [verify-source, build, build-desktop]")
   expect(tui).toContain("github.event_name == 'push'")
   expect(workflow.split("\n  deploy-web:")[1]).toContain("needs: release-tui")
 })
@@ -681,7 +681,8 @@ test("packaging overlaps source verification without bypassing publication or de
   const dependencies = [
     ["verify-source", undefined],
     ["build", undefined],
-    ["release-tui", "[verify-source, build]"],
+    ["build-desktop", undefined],
+    ["release-tui", "[verify-source, build, build-desktop]"],
     ["deploy-web", "release-tui"],
   ] as const
   expect(jobs.filter((_, index) => index % 2 === 0).sort()).toEqual(dependencies.map(([name]) => name).sort())
@@ -704,6 +705,35 @@ test("packaging overlaps source verification without bypassing publication or de
   expect(verify).toContain("persist-credentials: false")
   expect(verify).toContain("git merge-base --is-ancestor \"$GITHUB_SHA\" origin/main")
   expect(verify).toContain("      - name: Verify tag is reachable from main\n        if: github.event_name == 'push'\n")
+})
+
+test("release workflow builds and archives the macOS desktop app from the locked Electrobun package", () => {
+  const desktop = workflowJob(workflow, "build-desktop")
+  const pinned = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../packages/desktop/package.json"), "utf8")).dependencies.electrobun as string
+  const base = `https://github.com/blackboardsh/electrobun/releases/download/v${pinned}`
+  expect(desktop).toContain("runs-on: macos-26")
+  expect(desktop).toContain("      - name: Setup Bun\n        uses: ./.github/actions/setup-bun\n        with:\n          install-flags: --frozen-lockfile\n")
+  expect(desktop).toContain(`test "$(node -p 'require(process.argv[1]).version' "$sdk/package.json")" = "${pinned}"`)
+  expect(pinned).toBe("1.18.1")
+  expect(desktop).toContain(`${base}/electrobun-cli-darwin-arm64.tar.gz`)
+  expect(desktop).toContain(`${base}/electrobun-core-darwin-arm64.tar.gz`)
+  expect(desktop).toContain('echo "1ef4a4b42a957d3349f491f7fbe53153d1d5f427bacbda340c8d7fadce6b58d9  electrobun-cli-darwin-arm64.tar.gz" | shasum -a 256 -c -')
+  expect(desktop).toContain('echo "474c24f3af26eb5d59ce9fa90483fef2a35974fcdedebb8df969aebc4350e62f  electrobun-core-darwin-arm64.tar.gz" | shasum -a 256 -c -')
+  expect(desktop).not.toContain("secrets.")
+  expect(desktop).not.toContain("YCODING_MACOS_SIGNING")
+  expect(desktop).not.toMatch(/^    env:/m)
+  const build = '/bin/sh packages/desktop/script/build.sh --outdir="$RUNNER_TEMP/desktop"'
+  const archive = 'bun script/release-archive.ts create-desktop "$RELEASE_VERSION" "$RUNNER_TEMP/desktop/YCoding Desktop.app" dist/release-archive/desktop-darwin-arm64'
+  expect(desktop).toContain(build)
+  expect(desktop).toContain(archive)
+  const upload = desktop.split("      - name: Upload desktop archive\n")[1] ?? ""
+  expect(upload).toContain("name: release-archive-desktop-darwin-arm64")
+  expect(upload).toContain("path: dist/release-archive/desktop-darwin-arm64/")
+  expect(upload).toContain("compression-level: 0")
+  expect(upload).toContain("if-no-files-found: error")
+  const order = ["- name: Provision Electrobun native assets", build, "- name: Verify desktop backend version", archive, "- name: Upload desktop archive"].map((marker) => desktop.indexOf(marker))
+  expect(order.every((index) => index >= 0)).toBe(true)
+  expect(order).toEqual([...order].sort((a, b) => a - b))
 })
 
 test.each([

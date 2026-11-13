@@ -140,7 +140,7 @@ export function TeamView(props: {
   }
   createEffect(() => {
     const current = output()
-    if (!current || current.loading || current.error || tab() !== "shell") return
+    if (!current || current.loading || current.error || (!props.sheet && tab() !== "shell")) return
     const item = props.data().shells.find((entry) => entry.id === current.shellID)
     const status = current.page?.status ?? item?.status
     const live = status === "running"
@@ -164,21 +164,8 @@ export function TeamView(props: {
   const canControl = () => controlsAvailable() && props.data().status === "ready"
   const sectionCount = (id: string) => props.data().tasks.filter((entry) => isActiveSubagent(entry.state) === (id === "section:active")).length
   const tabCount = (value: Tab) => value === "subagents" ? props.data().total ?? props.data().tasks.length : value === "shell" ? props.data().shells.length : props.data().sideChats.length
-  const panel = <section class="team-view" ref={section} aria-label="Team">
-    <Show when={!props.sheet}><div class="team-view__header"><TeamHeading data={props.data} /><button type="button" class="team-view__close" aria-label="Close Team" onClick={props.onClose}><Icon name="close" size={18} /></button></div></Show>
-    <Show when={props.sessionSummary?.()}>{(summary) => <section class="team-view__session-summary" aria-label="Session context and autonomy">
-      <Show when={summary().contextLabel}><strong>Context window</strong><span>{summary().contextLabel} · {summary().contextTokens}</span><span class="team-view__meter" role="img" aria-label={summary().contextLabel}><span style={{ "inline-size": `${Math.min(100, (summary().contextFraction ?? 0) * 100)}%` }} /></span></Show>
-      <Show when={summary().autonomyLabel}><button type="button" class="team-view__button" onClick={props.onOpenAutonomy}>{summary().autonomyLabel}</button></Show>
-      <Show when={summary().goalText}><span>Goal active · {summary().goalText}</span></Show>
-    </section>}</Show>
-    <div class="team-view__tabs" role="tablist" aria-label="Team sections">
-      <For each={tabs}>{(value, index) => <button type="button" role="tab" data-tab={value} aria-selected={tab() === value} aria-controls={`team-panel-${value}`}
-        tabIndex={tab() === value ? 0 : -1} onClick={() => selectTab(value)} onKeyDown={(event) => moveTab(event, index())}>
-        <Icon name={tabMeta[value].icon} size={16} /><span class="team-view__tab-label">{tabMeta[value].label}</span>{" "}<span class="team-view__count">{tabCount(value)}</span>
-      </button>}</For>
-    </div>
-    <Show when={error()}>{(message) => <p class="team-view__error" role="alert">{message()}</p>}</Show>
-    <div id="team-panel-subagents" role="tabpanel" aria-label="Subagents" aria-busy={props.data().status === "loading" || props.data().refreshing === true || controlsChecking()} hidden={tab() !== "subagents"} inert={tab() !== "subagents"}>
+  const subagentsPanel = <section id="team-panel-subagents" role={props.sheet ? "region" : "tabpanel"} aria-label={props.sheet ? undefined : "Subagents"} aria-labelledby={props.sheet ? "team-heading-subagents" : undefined} aria-busy={props.data().status === "loading" || props.data().refreshing === true || controlsChecking()} hidden={!props.sheet && tab() !== "subagents"} inert={!props.sheet && tab() !== "subagents"}>
+        <Show when={props.sheet}><div class="team-view__group-heading"><h3 id="team-heading-subagents">Subagent tasks</h3><span class="team-view__count">{tabCount("subagents")}</span></div></Show>
         <Show when={!firstLoad()} fallback={<LoadingPlaceholder kind="team" label="Loading subagents…" />}>
           <Show when={props.data().status === "unsupported" || props.data().status === "error"}><p class="team-view__note" role="status">{props.data().status === "unsupported" ? "Update YCoding on this machine to view subagents." : "Subagents could not be loaded."}</p></Show>
           <Show when={props.data().status === "ready" && controlsUnsupported()}><p class="team-view__note" role="status">Update YCoding on this machine to manage subagents.</p></Show>
@@ -224,8 +211,9 @@ export function TeamView(props: {
           </button></Show>
           </Show>
         </Show>
-    </div>
-    <div id="team-panel-shell" role="tabpanel" aria-label="Shell" hidden={tab() !== "shell"} inert={tab() !== "shell"}>
+    </section>
+  const shellPanel = <section id="team-panel-shell" role={props.sheet ? "region" : "tabpanel"} aria-label={props.sheet ? undefined : "Shell"} aria-labelledby={props.sheet ? "team-heading-shell" : undefined} hidden={!props.sheet && tab() !== "shell"} inert={!props.sheet && tab() !== "shell"}>
+        <Show when={props.sheet}><div class="team-view__group-heading"><h3 id="team-heading-shell">Shell processes</h3><span class="team-view__count">{tabCount("shell")}</span></div></Show>
         <Show when={props.data().shellStatus !== "unsupported" && (props.data().shellStatus === "ready" || props.data().shells.length > 0)} fallback={props.data().shellStatus === "loading" ? <LoadingPlaceholder kind="team" label="Loading shells…" /> : <p role="status">{props.data().shellStatus === "unsupported" ? "Update YCoding on this machine to manage shells." : "Shells could not be loaded."}</p>}>
           <ul class="team-view__list"><For each={shells()}>{(id) => id.startsWith("owner:")
             ? <li class="team-view__owner"><h3>{ownerLabel(id.slice(6))}</h3></li>
@@ -242,8 +230,9 @@ export function TeamView(props: {
             <Show when={current().page && current().page!.cursor < current().page!.size}><button type="button" disabled={current().loading} onClick={() => readOutput(current().ownerID, current().shellID, current().page?.cursor)}>Load more output</button></Show>
             <Show when={current().page?.truncated}><p>Output was truncated on the device.</p></Show></section>}</Show>
         </Show>
-    </div>
-    <div id="team-panel-side-chats" role="tabpanel" aria-label="Side chats" hidden={tab() !== "side-chats"} inert={tab() !== "side-chats"}>
+    </section>
+  const sideChatsPanel = <section id="team-panel-side-chats" role={props.sheet ? "region" : "tabpanel"} aria-label={props.sheet ? undefined : "Side chats"} aria-labelledby={props.sheet ? "team-heading-side-chats" : undefined} hidden={!props.sheet && tab() !== "side-chats"} inert={!props.sheet && tab() !== "side-chats"}>
+        <Show when={props.sheet}><div class="team-view__group-heading"><h3 id="team-heading-side-chats">Side chats</h3><span class="team-view__count">{tabCount("side-chats")}</span></div></Show>
         <Show when={props.data().sideChatStatus !== "unsupported" && (props.data().sideChatStatus === "ready" || props.data().sideChats.length > 0)} fallback={props.data().sideChatStatus === "loading" ? <LoadingPlaceholder kind="team" label="Loading side chats…" /> : <p role="status">{props.data().sideChatStatus === "unsupported" ? "Update YCoding on this machine to use side chats." : "Side chats could not be loaded."}</p>}>
           <button type="button" class="team-view__button team-view__button--primary" data-action="new-side-chat" disabled={working() !== undefined} onClick={() => {
             if (working() !== undefined) return
@@ -260,7 +249,24 @@ export function TeamView(props: {
           <Show when={props.data().sideChatNext}><button type="button" class="team-view__more" data-action="older-side-chats" disabled={props.data().sideChatLoading} onClick={() => runRead(props.onLoadOlderSideChats)}>{props.data().sideChatLoading ? "Loading older…" : "Load older side chats"}</button></Show>
           <Show when={props.data().sideChatLoading}><LoadingPlaceholder kind="team" label="Loading older side chats…" /></Show>
         </Show>
-    </div>
+    </section>
+  const panel = <section class="team-view" classList={{ "team-view--sheet": props.sheet }} ref={section} aria-label="Team">
+    <Show when={!props.sheet}><div class="team-view__header"><TeamHeading data={props.data} /><button type="button" class="team-view__close" aria-label="Close Team" onClick={props.onClose}><Icon name="close" size={18} /></button></div></Show>
+    <Show when={!props.sheet && props.sessionSummary?.()}>{(summary) => <section class="team-view__session-summary" aria-label="Session context and autonomy">
+      <Show when={summary().contextLabel}><strong>Context window</strong><span>{summary().contextLabel} · {summary().contextTokens}</span><span class="team-view__meter" role="img" aria-label={summary().contextLabel}><span style={{ "inline-size": `${Math.min(100, (summary().contextFraction ?? 0) * 100)}%` }} /></span></Show>
+      <Show when={summary().autonomyLabel}><button type="button" class="team-view__button" onClick={props.onOpenAutonomy}>{summary().autonomyLabel}</button></Show>
+      <Show when={summary().goalText}><span>Goal active · {summary().goalText}</span></Show>
+    </section>}</Show>
+    <Show when={!props.sheet}><div class="team-view__tabs" role="tablist" aria-label="Team sections">
+      <For each={tabs}>{(value, index) => <button type="button" role="tab" data-tab={value} aria-selected={tab() === value} aria-controls={`team-panel-${value}`}
+        tabIndex={tab() === value ? 0 : -1} onClick={() => selectTab(value)} onKeyDown={(event) => moveTab(event, index())}>
+        <Icon name={tabMeta[value].icon} size={16} /><span class="team-view__tab-label">{tabMeta[value].label}</span>{" "}<span class="team-view__count">{tabCount(value)}</span>
+      </button>}</For>
+    </div></Show>
+    <Show when={error()}>{(message) => <p class="team-view__error" role="alert">{message()}</p>}</Show>
+    <Show when={props.sheet} fallback={<>{subagentsPanel}{shellPanel}{sideChatsPanel}</>}>
+      {shellPanel}{subagentsPanel}{sideChatsPanel}
+    </Show>
   </section>
   return <>
     {panel}

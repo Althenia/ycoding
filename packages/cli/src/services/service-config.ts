@@ -85,6 +85,11 @@ export const discoveryOptions = Effect.fnUntraced(function* () {
   return { file, version: InstallationVersion }
 })
 
+export const registrationFiles = Effect.fnUntraced(function* () {
+  const { file, legacyFile } = yield* paths
+  return file === legacyFile ? [file] : [file, legacyFile]
+})
+
 export const options = Effect.fnUntraced(function* () {
   const { file, legacyFile } = yield* paths
   yield* migrateRegistration(legacyFile, file)

@@ -1,4 +1,4 @@
-import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
+import type { Endpoint } from "@ycoding-ai/client/effect/service"
 import { CrossSpawnSpawner } from "@ycoding-ai/core/cross-spawn-spawner"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Deferred, Effect, Schema, Stream } from "effect"
@@ -11,6 +11,7 @@ const decodeReady = Schema.decodeUnknownPromise(Schema.fromJsonString(Ready))
 
 type Options = {
   readonly command?: ReadonlyArray<string>
+  readonly detached?: boolean
   /** Environment overrides for the private server, applied over the inherited environment. */
   readonly env?: Readonly<Record<string, string>>
 }
@@ -20,6 +21,7 @@ function command(password: string, options: Options) {
   if (!executable) throw new Error("Failed to resolve standalone server command")
   return ChildProcess.make(executable, [...args, "--stdio", "--port", "0"], {
     cwd: process.cwd(),
+    detached: options.detached,
     // Explicit entry wins over anything inherited, so a user-exported
     // YCODING_PASSWORD cannot shadow the child's lease credential.
     env: { ...options.env, YCODING_PASSWORD: password },

@@ -1,5 +1,5 @@
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
-import { Deferred, Effect, Option } from "effect"
+import { Deferred, Effect, Option, Scope } from "effect"
 import path from "node:path"
 import { DesktopHostCommand } from "../desktop-host"
 import { Runtime } from "../../framework/runtime"
@@ -24,14 +24,18 @@ export default Runtime.handler(DesktopHostCommand, (input) => Effect.scoped(Effe
     process.stdin.off("end", ended)
     process.stdin.off("error", ended)
   }))
-  yield* Effect.raceFirst(Deferred.await(eof), Effect.gen(function* () {
+  let owned: { pid: number; exited: Effect.Effect<void> } | undefined
+  return yield* Effect.acquireUseRelease(Scope.make(), (scope) => Effect.raceFirst(Deferred.await(eof), Effect.gen(function* () {
     const connection = yield* ServerConnection.resolve({
       server,
       standalone: input.mode === "own",
-      privateServer: { command: [input.backend, "serve"] },
-      managed: "discover",
+      privateServer: { command: [input.backend, "serve"], detached: false },
+      managedCommand: [input.backend, "serve", "--service"],
+      mismatch: "error",
       diagnostics: "sanitized",
     })
+    if (input.mode === "own" && "pid" in connection.endpoint && typeof connection.endpoint.pid === "number" && connection.exited)
+      owned = { pid: Number(connection.endpoint.pid), exited: connection.exited }
     yield* Effect.tryPromise(() => new Promise<void>((resolve, reject) => {
       process.stdout.write(JSON.stringify({ type: "desktop.endpoint", version: InstallationVersion, endpoint: connection.endpoint }) + "\n",
         (error) => error ? reject(error) : resolve())
@@ -40,5 +44,12 @@ export default Runtime.handler(DesktopHostCommand, (input) => Effect.scoped(Effe
     if (!exited) return yield* Effect.never
     yield* exited
     return yield* Effect.fail(new Error("Desktop private backend exited"))
-  }))
+  })).pipe(Effect.provideService(Scope.Scope, scope)), (scope, exit) => Scope.close(scope, exit).pipe(Effect.andThen(Effect.gen(function* () {
+    if (input.mode !== "own") return
+    if (owned) yield* owned.exited.pipe(Effect.timeout(1_000))
+    const terminal = { type: "desktop.retired", ...(owned ? { pid: owned.pid } : {}) }
+    yield* Effect.tryPromise(() => new Promise<void>((resolve, reject) => {
+      process.stdout.write(JSON.stringify(terminal) + "\n", (error) => error ? reject(error) : resolve())
+    }))
+  })), Effect.orDie))
 })))

@@ -100,8 +100,8 @@ for (const [name, args, message, requests] of [
       ? (request) => new URL(request.url).pathname === "/openapi.json" ? new Response("unavailable", { status: 503 }) : undefined
       : undefined)
     expect(result.exit).not.toBe(0)
-    expect(result.stdout).toContain(message)
-    expect(result.stderr).toBe("")
+    expect(result.stderr).toContain(message)
+    expect(result.stdout).toBe("")
     expect(result.requests).toEqual([...requests])
   }, 30_000)
 }

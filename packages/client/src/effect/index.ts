@@ -1,6 +1,7 @@
 // TODO: Keep additional network capabilities inside Schema and Protocol as the client grows; /effect must never import
 // Core or Server. Preserve these datatype exports so internal model reorganizations do not require caller migrations.
 import type { Effect } from "effect"
+export { Schema } from "effect"
 
 export * from "./generated/index"
 export type {
@@ -19,12 +20,14 @@ export type {
 } from "./api.js"
 export { Agent } from "@ycoding-ai/schema/agent"
 export { Command } from "@ycoding-ai/schema/command"
+export { Coordination } from "@ycoding-ai/schema/coordination"
 export { Credential } from "@ycoding-ai/schema/credential"
 export { Event } from "@ycoding-ai/schema/event"
 export { EventLog } from "@ycoding-ai/schema/event-log"
 export { FileSystem } from "@ycoding-ai/schema/filesystem"
 export { Form } from "@ycoding-ai/schema/form"
 export { Integration } from "@ycoding-ai/schema/integration"
+export { KeepAwake } from "@ycoding-ai/schema/keep-awake"
 export { Location } from "@ycoding-ai/schema/location"
 export { Model } from "@ycoding-ai/schema/model"
 export { Permission } from "@ycoding-ai/schema/permission"
@@ -41,6 +44,7 @@ export { SessionPending } from "@ycoding-ai/schema/session-pending"
 export { SessionWorkCompletion } from "@ycoding-ai/schema/session-work-completion"
 export { SessionMessage } from "@ycoding-ai/schema/session-message"
 export { Skill } from "@ycoding-ai/schema/skill"
+export { Telemetry } from "@ycoding-ai/schema/telemetry"
 export { Prompt } from "@ycoding-ai/schema/prompt"
 export { PromptInput } from "@ycoding-ai/schema/prompt-input"
 export type { YCodingEvent } from "@ycoding-ai/protocol/groups/event"

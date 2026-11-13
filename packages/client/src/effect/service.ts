@@ -228,14 +228,23 @@ type LocalService = {
   readonly legacy: boolean
 }
 
-const probe = Effect.fnUntraced(function* (info: Info, allowLegacy = false) {
-  const endpoint = {
+function registeredEndpoint(info: Info) {
+  return {
     url: info.url,
     auth:
       info.password === undefined
         ? undefined
         : { type: "basic" as const, username: "ycoding", password: info.password },
   } satisfies Endpoint
+}
+
+export const registration = Effect.fn("service.registration")(function* (options: { readonly file?: string } = {}) {
+  const info = yield* read(options.file)
+  return info === undefined ? undefined : registeredEndpoint(info)
+})
+
+const probe = Effect.fnUntraced(function* (info: Info, allowLegacy = false) {
+  const endpoint = registeredEndpoint(info)
   const response = yield* Effect.tryPromise(() =>
     fetch(new URL("/api/health", info.url), {
       headers: headers(endpoint),
@@ -335,4 +344,4 @@ const requestStop = Effect.fnUntraced(function* (service: LocalService) {
 })
 
 /** Effect-based local service lifecycle operations. */
-export const Service = { discover, incumbent, ensure, stop, headers, Info }
+export const Service = { discover, incumbent, registration, ensure, stop, headers, Info }

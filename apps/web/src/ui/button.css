@@ -1,0 +1,96 @@
+.button {
+  --button-bg: var(--yc-surface-raised);
+  --button-fg: var(--yc-text);
+  --button-border: var(--yc-border-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--yc-space-2);
+  min-block-size: var(--yc-control-h);
+  padding: 0 var(--yc-control-pad-x);
+  background: var(--button-bg);
+  color: var(--button-fg);
+  border: var(--yc-border-width) solid var(--button-border);
+  border-radius: var(--yc-radius-md);
+  font-size: var(--yc-size-sm);
+  font-weight: var(--yc-weight-semibold);
+  line-height: 1;
+  /* A wrapped label would squeeze a two-control row instead of growing it. */
+  white-space: nowrap;
+  text-decoration: none;
+  transition: background-color var(--yc-dur-quick) var(--yc-ease-standard),
+    border-color var(--yc-dur-quick) var(--yc-ease-standard),
+    translate var(--yc-dur-quick) var(--yc-ease-standard);
+}
+
+.button:hover {
+  background: color-mix(in srgb, var(--button-bg) 92%, var(--yc-text) 8%);
+}
+
+.button:active {
+  translate: 0 1px;
+}
+
+.button[disabled] {
+  opacity: 0.55;
+  translate: none;
+}
+
+.button--primary {
+  --button-bg: var(--yc-primary-bg);
+  --button-fg: var(--yc-primary-fg);
+  --button-border: var(--yc-primary-bg);
+  /* Declared directly as well as through the variant variables: the pinned
+     contrast checks read the resolved pair from this rule. */
+  background: var(--yc-primary-bg);
+  color: var(--yc-primary-fg);
+}
+
+.button--primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--yc-primary-bg) 92%, var(--yc-text) 8%);
+  color: var(--yc-primary-fg);
+}
+
+.button--secondary {
+  --button-bg: var(--yc-surface-raised);
+  --button-fg: var(--yc-text);
+  --button-border: var(--yc-border-strong);
+}
+
+.button--ghost {
+  --button-bg: transparent;
+  --button-fg: var(--yc-text-muted);
+  --button-border: transparent;
+}
+
+.button--ghost:hover {
+  --button-fg: var(--yc-text);
+  background: var(--yc-surface-sunken);
+}
+
+.button--danger {
+  --button-bg: var(--yc-surface-raised);
+  --button-fg: var(--yc-danger);
+  --button-border: color-mix(in srgb, var(--yc-danger) 45%, var(--yc-border));
+}
+
+.button--large {
+  min-block-size: 52px;
+  padding-inline: 22px;
+  font-size: var(--yc-size-md);
+}
+
+/* Dense is a pointer decision, never a width decision. */
+.button--small {
+  min-block-size: var(--yc-control-h-dense);
+  padding-inline: var(--yc-space-3);
+}
+
+.button--icon {
+  inline-size: var(--yc-control-h);
+  padding: 0;
+}
+
+.button--block {
+  inline-size: 100%;
+}

@@ -15,6 +15,8 @@ import { Database } from "../database/database"
 import { Location } from "../location"
 import { Event } from "@ycoding-ai/schema/project-directories"
 import { ProjectCopy } from "@ycoding-ai/schema/project-copy"
+import { eq } from "drizzle-orm"
+import { ProjectTable } from "./sql"
 
 export const StrategyID = ProjectCopy.StrategyID
 export type StrategyID = typeof StrategyID.Type
@@ -159,11 +161,25 @@ const layer = Layer.effect(
 
     const strategies = () => Array.from(registry.values())
 
+    const worktreeSource = Effect.fnUntraced(function* (projectID: Project.ID) {
+      const project = yield* db
+        .select({ worktree: ProjectTable.worktree })
+        .from(ProjectTable)
+        .where(eq(ProjectTable.id, projectID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!project) return undefined
+      const directory = AbsolutePath.make(yield* fs.resolve(project.worktree))
+      if (!(yield* fs.isDir(directory))) return undefined
+      yield* changed(projectID, yield* directories.create({ projectID, directory, behavior: "ignore" }))
+      return directory
+    })
+
     const source = Effect.fnUntraced(function* (input: AbsolutePath, projectID: Project.ID) {
       const sourceDirectory = yield* canonical(input)
-      if (!(yield* directories.contains({ projectID, directory: sourceDirectory })))
-        return yield* new SourceDirectoryNotFoundError({ directory: sourceDirectory })
-      return sourceDirectory
+      if (yield* directories.contains({ projectID, directory: sourceDirectory })) return sourceDirectory
+      if ((yield* worktreeSource(projectID)) === sourceDirectory) return sourceDirectory
+      return yield* new SourceDirectoryNotFoundError({ directory: sourceDirectory })
     })
 
     const getStrategy = Effect.fnUntraced(function* (id: StrategyID) {
@@ -219,6 +235,7 @@ const layer = Layer.effect(
     })
 
     const refresh = Effect.fn("ProjectCopy.refresh")(function* (input: RefreshInput) {
+      yield* worktreeSource(input.projectID)
       const stored = yield* directories.list(input.projectID)
       const checked = yield* Effect.forEach(
         stored,

@@ -40,7 +40,7 @@
 .composer__dock-toggle svg { inline-size:16px; block-size:16px; }
 .composer__dock-toggle[aria-expanded="false"] svg { transform:rotate(180deg); }
 .composer__body { display:grid; grid-template-rows:1fr; transition:grid-template-rows var(--yc-dur-base) var(--yc-ease-standard); }
-.composer__body-inner { min-block-size:0; }
+.composer__body-inner { min-block-size:0; min-inline-size:0; }
 .composer__control-set { display:contents; }
 .composer--collapsed .composer__control-set { display:none; }
 .composer--collapsed .composer__body { grid-template-rows:0fr; overflow:hidden; }
@@ -50,8 +50,9 @@
 .composer-resident:has(.composer--collapsed) { min-block-size:0; }
 .composer__dock { position:static; z-index:1; order:1; align-self:end; display:flex; align-items:center; justify-content:flex-end; gap:var(--yc-space-2); }
 .composer--collapsed .composer__dock { order:0; align-self:stretch; position:relative; inset:auto; min-block-size:var(--yc-hit-min); justify-content:space-between; padding-inline:var(--yc-space-3); border:0; border-radius:var(--yc-radius-xl); background:var(--yc-surface); }
+.composer--collapsed .session-status > :is(.session-status__autonomous-trigger, .session-status__goal-trigger) { display:none; }
 .composer__row { position: relative; display:flex; flex-direction:column; }
-.mini-composer__input-wrap { position: relative; min-inline-size: 0; padding: 0 var(--yc-space-1); border: 1px solid var(--yc-border-strong); border-radius: 26px; }
+.mini-composer__input-wrap { position: relative; min-inline-size: 0; padding: 0 var(--yc-space-1); border: 1px solid var(--yc-border-strong); border-radius: 26px; background: var(--yc-bg); }
 .mini-composer__input-wrap:focus-within { outline: 2px solid var(--yc-border-strong); outline-offset: 2px; }
 .composer__input, .composer__input:hover, .composer__input:focus-visible { display: block; inline-size: 100%; min-block-size: 52px; max-block-size: 40vh; field-sizing: content; resize: none; padding: var(--yc-space-3) 52px; border: 0; border-radius: 26px; outline: 0; background: transparent; color: var(--yc-text); box-shadow: none; font: inherit; }
 .composer__attach { position: absolute; inset-inline-start: var(--yc-space-1); inset-block-start: var(--yc-space-1); }
@@ -82,8 +83,8 @@
 .mini-picker__option:hover, .mini-picker__option--active { background: var(--yc-green-soft); }
 .mini-picker__empty { padding: var(--yc-space-2); color: var(--yc-text-muted); }
 .mini-picker__scrim { position: fixed; inset: 0; z-index: calc(var(--yc-z-overlay) + 1); background: rgb(0 0 0 / .4); }
-.new-session-composer { display:flex; flex-direction:column; justify-content:center; inline-size:min(100%,760px); min-block-size:100%; margin-inline:auto; padding:var(--yc-space-4); }
-.app--conversation.app--selected .workspace__scroll > .new-session-composer { inline-size:min(100%,640px); }
+.new-session-composer { display:flex; flex-direction:column; justify-content:center; inline-size:min(100%, var(--remote-column)); min-block-size:100%; margin-inline:auto; padding:var(--yc-space-4); }
+.app--conversation.app--selected .workspace__scroll > .new-session-composer { inline-size:min(100%, var(--remote-column)); }
 .new-session-composer__repository { display: flex; flex-wrap: wrap; align-items: center; gap: var(--yc-space-2); margin-block: var(--yc-space-4); }
 .new-session-composer__repository .mini-picker__trigger { min-inline-size:160px; max-inline-size:300px; }
 .new-session-composer__repository .loading-placeholder--repository { inline-size:160px; }
@@ -92,6 +93,36 @@
 .new-session-composer .composer { border: 0; padding: 0; }
 .app--conversation.app--selected .new-session-composer .composer > .composer__row { inline-size:100%; margin-inline:0; }
 @media (max-width: 767px) {
+  :is(:root, .app)[data-keyboard-open] .composer-resident:not(.route-panel--idle) { max-block-size:none; overflow-y:visible; }
+  :is(:root, .app)[data-keyboard-open].app--conversation.app--selected .workspace__main > .conversation-jump-slot { block-size:0; }
+  :is(:root, .app)[data-keyboard-open].app--conversation.app--selected .workspace__main > .conversation-jump-slot:has(.transcript-navigation__controls--visible) { block-size:var(--yc-hit-min); }
+  :is(:root, .app)[data-keyboard-open] .conversation-jump-slot .transcript-navigation__controls { inset-block-end:0; }
+  :is(:root, .app)[data-keyboard-open] .conversation-jump-slot button { min-inline-size:var(--yc-hit-min); min-block-size:var(--yc-hit-min); }
+  :is(:root, .app)[data-keyboard-open] .composer__catalog-status button { min-inline-size:var(--yc-hit-min); min-block-size:var(--yc-hit-min); }
+  :is(:root, .app)[data-keyboard-open] .workspace__topbar { padding-block:0; gap:0; }
+  :is(:root, .app)[data-keyboard-open] .workspace__topbar .conversation-breadcrumb__identity { display:flex; align-items:baseline; gap:var(--yc-space-1); min-inline-size:0; }
+  :is(:root, .app)[data-keyboard-open] .workspace__topbar .conversation-breadcrumb__identity :is(h1, .conversation-breadcrumb__project) { min-inline-size:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .composer__summary { flex-wrap:nowrap; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .composer__body-inner > :last-child { min-block-size:var(--yc-hit-min); padding-inline-end:calc(var(--yc-hit-min) + var(--yc-space-2)); }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .composer__row:has(.mini-composer__interrupt) .composer__body-inner > :last-child { padding-inline-end:calc(var(--yc-hit-min) * 2 + var(--yc-space-2)); }
+  :is(:root, .app)[data-keyboard-open] .mini-composer__input-wrap { display:grid; grid-template-columns:var(--yc-hit-min) minmax(0, 1fr) var(--yc-hit-min); align-items:center; }
+  :is(:root, .app)[data-keyboard-open] .mini-composer__input-wrap .composer__queue-indicator { grid-column:1 / -1; min-inline-size:0; padding-block:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  :is(:root, .app)[data-keyboard-open] .mini-composer__input-wrap :is(.composer__attach, .mini-composer__send) { position:static; transform:none; }
+  :is(:root, .app)[data-keyboard-open] :is(.composer__input, .composer__input:hover, .composer__input:focus-visible) { min-block-size:var(--yc-hit-min); padding:var(--yc-space-1); }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .composer__attachment-disclosure { margin-block:0; padding-block:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .composer__row .composer__actions { position:absolute; inset-inline-end:var(--yc-space-2); inset-block-end:0; inline-size:auto; padding:0; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .reasoning-effort { grid-template-columns:auto minmax(0, 1fr) auto; align-items:center; column-gap:var(--yc-space-2); padding-block:0; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .reasoning-effort__heading { display:contents; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .reasoning-effort__heading > button { order:1; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .reasoning-effort__labels { grid-column:1 / -1; order:2; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .reasoning-effort > p { grid-column:1 / -1; order:2; font-size:var(--yc-size-2xs); line-height:var(--yc-leading-2xs); }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary :is(.composer__upload, .composer__catalog-status) { display:flex; align-items:center; flex-wrap:nowrap; gap:var(--yc-space-1); min-inline-size:0; padding-block:0; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .composer__attachments { display:flex; flex-wrap:wrap; align-items:center; gap:calc(var(--yc-space-1) / 2); min-inline-size:0; padding-block:0; padding-inline-start:var(--yc-space-1); }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .composer__attachment { flex:1 1 6.5rem; min-inline-size:0; max-inline-size:100%; gap:calc(var(--yc-space-1) / 2); padding-inline:var(--yc-space-1) 0; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .composer__attachments-summary { flex:0 1 4.5rem; min-inline-size:2.5rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary :is(.composer__upload > span, .composer__catalog-status > p) { flex:1; min-inline-size:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-block:0; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary :is(.composer__upload, .composer__catalog-status) button { flex:none; min-inline-size:var(--yc-hit-min); min-block-size:var(--yc-hit-min); }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .composer__upload progress { flex:0 1 var(--yc-hit-min); min-inline-size:var(--yc-space-4); }
   .composer { padding: 0 var(--yc-space-1) max(var(--yc-space-1), env(safe-area-inset-bottom)); }
   .composer__input, .composer__input:hover, .composer__input:focus-visible { min-block-size: 52px; padding: var(--yc-space-2) 52px; }
   .composer__controls { padding:var(--yc-space-1); }
@@ -103,10 +134,8 @@
   .new-session-composer { padding: var(--yc-space-3); }
 }
 :is(:root, .app)[data-keyboard-open] .composer { padding-block-end:var(--yc-space-1); margin-block-end:var(--yc-keyboard-inset, 0px); }
-.composer .composer__row { padding:var(--yc-space-2); border:1px solid var(--yc-border-strong); border-radius:var(--yc-radius-xl); background:var(--yc-surface-raised); box-shadow:var(--yc-shadow-md); }
-[data-theme="dark"] .composer .composer__row { border-color:var(--yc-border); }
-.composer .composer__row:focus-within { border-color:var(--yc-focus); box-shadow:var(--yc-shadow-md), 0 0 0 3px color-mix(in srgb, var(--yc-focus) 24%, transparent); }
-.composer .composer__row--dragging { border-color:var(--yc-green-strong); box-shadow:var(--yc-shadow-md), 0 0 0 3px var(--yc-green-soft); }
+.composer .composer__row { padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }
+.composer .composer__row--dragging .mini-composer__input-wrap { outline:2px solid var(--yc-green-strong); }
 @media (prefers-reduced-motion:no-preference) { .composer__input { transition:border-color var(--yc-dur-quick) var(--yc-ease-standard), box-shadow var(--yc-dur-quick) var(--yc-ease-standard); } }
 .composer__file-input { display:none; }
 .composer__attachments { display:flex; flex-wrap:wrap; gap:var(--yc-space-1); min-inline-size:0; padding:0 var(--yc-space-2) var(--yc-space-2); }
@@ -140,6 +169,7 @@
 .composer__actions { display:flex; align-items:center; flex:none; gap:var(--yc-space-1); margin-inline-start:auto; }
 .composer__controls :is(button,.session-status__slot) { flex-shrink:0; }
 .composer__controls :is(button,.mini-picker__trigger,.model-control__trigger) { font:var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); }
+@media (min-width: 768px) { .composer__controls :is(.model-control__trigger, .mini-picker__trigger) { border:0; background:transparent; box-shadow:none; color:var(--yc-text-muted); } }
 .composer__controls :is(button,[role="slider"]):focus-visible, .new-session-composer :is(button,[role="slider"]):focus-visible { outline:2px solid var(--yc-focus); outline-offset:2px; }
 .composer__controls svg,.mini-picker__surface svg,.new-session-composer__repository svg { display:block; flex:none; inline-size:16px; block-size:16px; }
 .composer__attach,.composer__delivery-toggle,.mini-composer__send,.mini-composer__interrupt { display:grid; place-items:center; inline-size:36px; block-size:36px; min-block-size:36px; border:0; border-radius:var(--yc-radius-pill); }
@@ -267,11 +297,25 @@
 @media (max-width: 767px) { .composer__mobile-trigger { display:flex; min-block-size:var(--yc-hit-min); } }
 @media (max-width: 767px) { .composer--phone-summary .composer__controls { display:contents; } .composer--phone-summary .composer__summary { display:flex; flex-wrap:wrap; align-items:center; order:-1; gap:var(--yc-space-1); min-inline-size:0; padding:var(--yc-space-1) var(--yc-space-1) 0; } }
 @media (max-width: 767px) { .composer--phone-summary .composer__control-set > :is(.mini-picker, .model-control, .composer__context, .composer__speed, .composer__spacer) { display:none; } .composer--phone-summary .composer__actions { order:1; inline-size:100%; margin-inline-start:0; padding:0 var(--yc-space-1) var(--yc-space-1); } .composer--phone-summary .composer__attach + .composer__delivery-toggle { margin-inline-end:auto; } }
-@media (max-width: 359px) {
+@media (max-width: 767px) {
   .composer--phone-summary .composer__row:not(:has(.composer__attachments, .composer__attachment-error, .composer__catalog-status, .composer__model-warning, .composer__upload)) .composer__attachment-disclosure { min-block-size: var(--yc-hit-min); padding-inline-end: calc(var(--yc-hit-min) * 2 + var(--yc-space-2)); }
-  .composer--phone-summary .composer__row:not(:has(.composer__attachments, .composer__attachment-error, .composer__catalog-status, .composer__model-warning, .composer__upload)) .composer__actions { position: absolute; inset-inline-end: var(--yc-space-2); inset-block-end: var(--yc-space-2); inline-size: auto; padding: 0; }
+  .composer--phone-summary .composer__row:not(:has(.composer__attachments, .composer__attachment-error, .composer__catalog-status, .composer__model-warning, .composer__upload)) .composer__actions { position: absolute; inset-inline-end: var(--yc-space-2); inset-block-end: 0; inline-size: auto; padding: 0; }
+}
+@media (max-width: 359px) {
+  .composer--phone-summary .composer__row:not(:has(.composer__attachments, .composer__attachment-error, .composer__catalog-status, .composer__model-warning, .composer__upload)) .composer__actions { inset-block-end: var(--yc-space-2); }
   .composer--phone-summary .reasoning-effort { padding-block: 0; }
-  .composer--phone-summary:not(.composer--collapsed):not(:has(.composer__use-prediction)) .composer__dock { position: absolute; inset-inline-end: calc(var(--yc-hit-min) * 3 + var(--yc-space-2)); inset-block-end: calc(var(--yc-hit-min) + var(--yc-leading-2xs)); }
+  .composer--phone-summary .reasoning-effort { grid-template-columns:minmax(0, 1fr); }
+  .composer--phone-summary .reasoning-effort__heading { display:flex; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .reasoning-effort { grid-template-columns:auto minmax(0, 1fr) auto; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .reasoning-effort__heading { display:contents; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .reasoning-effort__heading > :is(span, button) { max-inline-size:10ch; white-space:normal; }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary .reasoning-effort__heading > button { min-inline-size:var(--yc-hit-min); }
+  .composer--phone-summary:not(.composer--collapsed):not(:has(.composer__use-prediction)) { display:grid; grid-template-columns:minmax(0, 1fr); }
+  .composer--phone-summary:not(.composer--collapsed):not(:has(.composer__use-prediction)) > .composer__row { grid-column:1; grid-row:1; }
+  .composer--phone-summary:not(.composer--collapsed):not(:has(.composer__use-prediction)) > .reasoning-effort { grid-column:1; grid-row:2; }
+  .composer--phone-summary:not(.composer--collapsed):not(:has(.composer__use-prediction)) > .composer__dock { position:relative; inset:auto; order:0; grid-column:1; grid-row:2; align-self:start; justify-self:end; inline-size:auto; margin-inline-end:calc(var(--yc-hit-min) * 3 + var(--yc-space-2)); }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary:not(.composer--collapsed):not(:has(.composer__use-prediction)) > .reasoning-effort { padding-inline-end:calc(var(--yc-hit-min) + var(--yc-space-3)); }
+  :is(:root, .app)[data-keyboard-open] .composer--phone-summary:not(.composer--collapsed):not(:has(.composer__use-prediction)) > .composer__dock { margin-inline-end:var(--yc-space-3); }
   .composer--phone-summary:not(.composer--collapsed):not(:has(.composer__use-prediction)) .composer__dock-toggle { inline-size: var(--yc-hit-min); padding-inline: 0; }
   .composer--phone-summary:not(.composer--collapsed):not(:has(.composer__use-prediction)) .composer__dock-toggle span { display: none; }
   .composer--phone-summary:not(.composer--collapsed):not(:has(.composer__use-prediction)) .composer__prediction-slot { display: none; }
