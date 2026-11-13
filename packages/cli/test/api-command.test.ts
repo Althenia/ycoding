@@ -61,6 +61,32 @@ test("CLI api command exits 0 on 2xx response from synthetic server", async () =
   }
 })
 
+test("CLI api command writes a multi-megabyte response completely to a piped stdout", async () => {
+  const body = JSON.stringify({ blob: "x".repeat(4 * 1024 * 1024) })
+  const server = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const url = new URL(req.url)
+      if (url.pathname === "/api/health") return Response.json({ version: "local" })
+      if (url.pathname === "/large") return new Response(body, { headers: { "content-type": "application/json" } })
+      return new Response("Not found", { status: 404 })
+    },
+  })
+  try {
+    const proc = Bun.spawn(["bun", "run", "src/index.ts", "api", "--server", `http://localhost:${server.port}`, "GET", "/large"], {
+      cwd: path.resolve(__dirname, ".."),
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()])
+    expect(exitCode).toBe(0)
+    expect(stdout.length).toBe(body.length + 1)
+    expect(JSON.parse(stdout)).toEqual(JSON.parse(body))
+  } finally {
+    void server.stop(true)
+  }
+}, 30000)
+
 test("CLI api command exits 1 on non-2xx response from synthetic server", async () => {
   const server = Bun.serve({
     port: 0,

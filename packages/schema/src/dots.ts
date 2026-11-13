@@ -38,6 +38,14 @@ export const ComputerTarget = Schema.Struct({
   revision: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
 }).annotate({ identifier: "Dots.ComputerTarget", parseOptions: { onExcessProperty: "error" } })
 
+const StatusIdentifier = Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9_-]{0,63}$/))
+
+export interface DotEnvironment extends Schema.Schema.Type<typeof DotEnvironment> {}
+export const DotEnvironment = Schema.Struct({
+  status: StatusIdentifier,
+  capabilities: Schema.Array(Schema.Struct({ type: StatusIdentifier, status: StatusIdentifier })).check(Schema.isMaxLength(16)),
+}).annotate({ identifier: "Dots.DotEnvironment" })
+
 export const NativeStatus = Schema.Struct({
   access: Access,
   configuration: Schema.Struct({ ready: Schema.Boolean, profile: DisplayName.pipe(optional), message: DisplayMessage.pipe(optional) }),
@@ -48,9 +56,12 @@ export const NativeStatus = Schema.Struct({
     message: DisplayMessage.pipe(optional),
   }),
   computer: Schema.Struct({
-    state: Schema.Literals(["attached", "detached", "unavailable"]),
+    state: Schema.Literals(["attached", "detached", "unavailable", "removed"]),
     name: DisplayName.pipe(optional),
     target: ComputerTarget.pipe(optional),
+    readiness: Schema.Literals(["connected", "offline", "unknown"]).pipe(optional),
+    usableForTasks: Schema.Boolean.pipe(optional),
+    dotEnvironment: DotEnvironment.pipe(optional),
     message: DisplayMessage.pipe(optional),
   }).pipe(optional),
 }).annotate({ identifier: "Dots.NativeStatus" })
@@ -58,6 +69,14 @@ export const NativeStatus = Schema.Struct({
 export interface ComputerAttach extends Schema.Schema.Type<typeof ComputerAttach> {}
 export const ComputerAttach = Schema.Struct({ replaceOthers: Schema.Boolean, expectedTarget: ComputerTarget.pipe(optional) })
   .annotate({ identifier: "Dots.ComputerAttach", parseOptions: { onExcessProperty: "error" } })
+
+export interface ComputerDetach extends Schema.Schema.Type<typeof ComputerDetach> {}
+export const ComputerDetach = Schema.Struct({ expectedTarget: ComputerTarget.pipe(optional) })
+  .annotate({ identifier: "Dots.ComputerDetach", parseOptions: { onExcessProperty: "error" } })
+
+export interface ComputerRemove extends Schema.Schema.Type<typeof ComputerRemove> {}
+export const ComputerRemove = Schema.Struct({ expectedTarget: ComputerTarget.pipe(optional) })
+  .annotate({ identifier: "Dots.ComputerRemove", parseOptions: { onExcessProperty: "error" } })
 
 export interface Target extends Schema.Schema.Type<typeof Target> {}
 export const Target = Schema.Struct({
@@ -455,3 +474,142 @@ export const delegated = (metadata: Readonly<Record<string, unknown>> | undefine
 
 export const peer = (metadata: Readonly<Record<string, unknown>> | undefined) =>
   metadata === undefined ? undefined : Option.getOrUndefined(decodePeer(metadata.dots))
+
+const ConversationID = Identity.check(Schema.isMaxLength(256))
+const ConversationLabel = (max: number) => Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(max), Schema.isPattern(/^[^\u0000-\u001f\u007f-\u009f]*$/))
+const ConversationText = (max: number) => Schema.String.check(Schema.isMaxLength(max))
+const Timestamp = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(64))
+
+export const ConversationStatus = Schema.Literals(["idle", "active", "waiting-approval", "waiting-input", "not-loaded", "error"])
+  .annotate({ identifier: "Dots.ConversationStatus" })
+export type ConversationStatus = typeof ConversationStatus.Type
+
+export interface ConversationThread extends Schema.Schema.Type<typeof ConversationThread> {}
+export const ConversationThread = Schema.Struct({
+  threadID: ConversationID,
+  kind: Schema.Literals(["root", "task"]),
+  name: ConversationLabel(256).pipe(optional),
+  preview: ConversationLabel(500).pipe(optional),
+  status: ConversationStatus.pipe(optional),
+  updatedAt: NonNegativeInt.pipe(optional),
+}).annotate({ identifier: "Dots.ConversationThread" })
+
+export interface Task extends Schema.Schema.Type<typeof Task> {}
+export const Task = Schema.Struct({
+  taskID: ConversationID,
+  title: ConversationText(500),
+  description: ConversationText(4000).pipe(optional),
+  status: StatusIdentifier,
+  latestUpdate: ConversationText(4000).pipe(optional),
+  emoji: ConversationText(16).pipe(optional),
+  createdAt: Timestamp,
+  updatedAt: Timestamp,
+}).annotate({ identifier: "Dots.Task" })
+
+export interface ThreadList extends Schema.Schema.Type<typeof ThreadList> {}
+export const ThreadList = Schema.Struct({
+  dotID: ConversationID,
+  rootThreadID: ConversationID.pipe(optional),
+  threads: Schema.Array(ConversationThread).check(Schema.isMaxLength(2000)),
+  tasks: Schema.Array(Task).check(Schema.isMaxLength(1000)),
+}).annotate({ identifier: "Dots.ThreadList" })
+
+const ConversationPageFields = {
+  cursor: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(4096)).pipe(optional),
+  limit: PositiveInt.check(Schema.isLessThanOrEqualTo(50)).pipe(optional),
+}
+export interface ConversationPage extends Schema.Schema.Type<typeof ConversationPage> {}
+export const ConversationPage = Schema.Struct(ConversationPageFields)
+  .annotate({ identifier: "Dots.ConversationPage", parseOptions: { onExcessProperty: "error" } })
+
+export interface TaskUpdates extends Schema.Schema.Type<typeof TaskUpdates> {}
+export const TaskUpdates = Schema.Struct({
+  taskID: ConversationID,
+  updates: Schema.Array(Schema.Struct({ updateID: ConversationID, text: ConversationText(8000), createdAt: Timestamp })).check(Schema.isMaxLength(50)),
+  nextCursor: ConversationPageFields.cursor,
+}).annotate({ identifier: "Dots.TaskUpdates" })
+
+const Truncated = Schema.Literal(true).pipe(optional)
+export const TranscriptItem = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("userMessage"), itemID: ConversationID, text: ConversationText(65536), truncated: Truncated }),
+  Schema.Struct({ type: Schema.Literal("agentMessage"), itemID: ConversationID, text: ConversationText(65536), truncated: Truncated }),
+  Schema.Struct({ type: Schema.Literal("commandExecution"), itemID: ConversationID, command: ConversationText(8192), exitCode: Schema.Int.pipe(optional) }),
+  Schema.Struct({ type: Schema.Literal("fileChange"), itemID: ConversationID, paths: Schema.Array(ConversationText(4096)).check(Schema.isMaxLength(100)) }),
+  Schema.Struct({ type: Schema.Literal("other"), itemID: ConversationID, itemType: Schema.String.check(Schema.isPattern(/^[A-Za-z][A-Za-z0-9_]{0,63}$/)) }),
+]).annotate({ identifier: "Dots.TranscriptItem" })
+export type TranscriptItem = typeof TranscriptItem.Type
+
+export interface TranscriptTurn extends Schema.Schema.Type<typeof TranscriptTurn> {}
+export const TranscriptTurn = Schema.Struct({
+  turnID: ConversationID,
+  status: Schema.Literals(["inProgress", "completed", "interrupted", "failed"]).pipe(optional),
+  items: Schema.Array(TranscriptItem).check(Schema.isMaxLength(500)),
+}).annotate({ identifier: "Dots.TranscriptTurn" })
+
+export interface Transcript extends Schema.Schema.Type<typeof Transcript> {}
+export const Transcript = Schema.Struct({
+  thread: ConversationThread,
+  turns: Schema.Array(TranscriptTurn).check(Schema.isMaxLength(50)),
+  nextCursor: ConversationPageFields.cursor,
+}).annotate({ identifier: "Dots.Transcript" })
+
+export interface ThreadSend extends Schema.Schema.Type<typeof ThreadSend> {}
+export const ThreadSend = Schema.Struct({
+  text: Schema.String.check(Schema.isMaxLength(32768), Schema.isPattern(/\S/)),
+  clientMessageID: ConversationID,
+  mode: Schema.Literals(["send", "queue"]),
+}).annotate({ identifier: "Dots.ThreadSend", parseOptions: { onExcessProperty: "error" } })
+
+export interface SendResult extends Schema.Schema.Type<typeof SendResult> {}
+export const SendResult = Schema.Struct({
+  admission: Schema.Literals(["started", "steered", "duplicate", "unknown"]),
+  turnID: ConversationID.pipe(optional),
+}).annotate({ identifier: "Dots.SendResult" })
+
+export interface ThreadInterrupt extends Schema.Schema.Type<typeof ThreadInterrupt> {}
+export const ThreadInterrupt = Schema.Struct({ turnID: ConversationID })
+  .annotate({ identifier: "Dots.ThreadInterrupt", parseOptions: { onExcessProperty: "error" } })
+
+export interface InterruptResult extends Schema.Schema.Type<typeof InterruptResult> {}
+export const InterruptResult = Schema.Struct({ outcome: Schema.Literals(["interrupted", "unknown"]) })
+  .annotate({ identifier: "Dots.InterruptResult" })
+
+export interface ResumeResult extends Schema.Schema.Type<typeof ResumeResult> {}
+export const ResumeResult = Schema.Struct({
+  outcome: Schema.Literals(["resumed", "unconfirmed", "unknown"]),
+  threadID: ConversationID.pipe(optional),
+  rootChanged: Schema.Boolean.pipe(optional),
+}).annotate({ identifier: "Dots.ResumeResult" })
+
+export interface PendingRequest extends Schema.Schema.Type<typeof PendingRequest> {}
+export const PendingRequest = Schema.Struct({
+  requestID: ConversationID,
+  threadID: ConversationID,
+  turnID: ConversationID.pipe(optional),
+  kind: Schema.Literals(["command-approval", "file-change-approval", "permissions-approval", "user-input"]),
+  reason: ConversationText(2000).pipe(optional),
+  command: ConversationText(8192).pipe(optional),
+  cwd: ConversationText(4096).pipe(optional),
+  questions: Schema.Array(Schema.Struct({
+    questionID: ConversationID,
+    header: ConversationText(256).pipe(optional),
+    question: ConversationText(2000),
+    options: Schema.Array(Schema.Struct({ label: ConversationText(256), description: ConversationText(1000).pipe(optional) })).check(Schema.isMaxLength(32)).pipe(optional),
+  })).check(Schema.isMaxLength(16)).pipe(optional),
+}).annotate({ identifier: "Dots.PendingRequest" })
+
+export interface PendingRequests extends Schema.Schema.Type<typeof PendingRequests> {}
+export const PendingRequests = Schema.Struct({
+  threadID: ConversationID,
+  requests: Schema.Array(PendingRequest).check(Schema.isMaxLength(256)),
+}).annotate({ identifier: "Dots.PendingRequests" })
+
+export const RequestResponse = Schema.Struct({
+  decision: Schema.Literals(["accept", "acceptForSession", "decline", "cancel"]).pipe(optional),
+  answers: Schema.Record(ConversationID, Schema.Array(ConversationText(4000)).check(Schema.isMinLength(1), Schema.isMaxLength(16))).pipe(optional),
+}).annotate({ identifier: "Dots.RequestResponse", parseOptions: { onExcessProperty: "error" } })
+export type RequestResponse = typeof RequestResponse.Type
+
+export interface RespondResult extends Schema.Schema.Type<typeof RespondResult> {}
+export const RespondResult = Schema.Struct({ outcome: Schema.Literals(["sent", "unknown"]) })
+  .annotate({ identifier: "Dots.RespondResult" })

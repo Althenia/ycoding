@@ -806,6 +806,8 @@ async function run(input: OperationInput) {
   if (validated.kind === "dots.get") return { data: await input.local.dotsGet() }
   if (validated.kind === "dots.set") return { data: await input.local.dotsSet(validated.input) }
   if (validated.kind === "dots.attach") return { data: await input.local.dotsAttach({ replaceOthers: validated.replaceOthers, ...(validated.expectedTarget === undefined ? {} : { expectedTarget: validated.expectedTarget }) }) }
+  if (validated.kind === "dots.detach") return { data: await input.local.dotsDetach(validated.input) }
+  if (validated.kind === "dots.remove") return { data: await input.local.dotsRemove(validated.input) }
   if (validated.kind === "workspace.list") return { data: validated.sessionsOnly
     ? await sessionWorkspaces(input.local, input.sessions.snapshot(), input.cache)
     : await workspaceList(input) }
@@ -1150,6 +1152,7 @@ type Validated =
   | { readonly kind: "dots.get" }
   | { readonly kind: "dots.set"; readonly input: Dots.AccessSet }
   | { readonly kind: "dots.attach"; readonly replaceOthers: boolean; readonly expectedTarget?: Dots.ComputerTarget }
+  | { readonly kind: "dots.detach" | "dots.remove"; readonly input: Dots.ComputerDetach }
   | { readonly kind: "latency.append"; readonly samples: readonly RemoteLatencySample[] }
   | { readonly kind: "latency.list"; readonly input: { readonly limit?: number; readonly before?: string } }
   | { readonly kind: "keepAwake.get" }
@@ -1369,11 +1372,16 @@ function dashboardReport(value: unknown, field: string): Readonly<Record<string,
 
 function validate(request: RemoteRequest): Validated {
   const fields = validateFields(request)
-  if (request.operation === "dots.get" || request.operation === "dots.set" || request.operation === "dots.attach") {
+  if (request.operation === "dots.get" || request.operation === "dots.set" || request.operation === "dots.attach" || request.operation === "dots.detach" || request.operation === "dots.remove") {
     if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Dots controls do not accept a Session")
     if (request.operation === "dots.get") {
       if (request.input !== undefined) throw new OperationError("invalid_message", "Dots status does not accept input")
       return { kind: "dots.get" }
+    }
+    if (request.operation === "dots.detach" || request.operation === "dots.remove") {
+      const expectedTarget = fields.expectedTarget === undefined ? undefined : readDotsComputerTarget(fields.expectedTarget)
+      if (expectedTarget === null) throw new OperationError("invalid_message", "The Dots target receipt is invalid. Refresh and confirm the current computer.")
+      return { kind: request.operation, input: expectedTarget === undefined ? {} : { expectedTarget } }
     }
     if (request.operation === "dots.attach") {
       if (typeof fields.replaceOthers !== "boolean") throw new OperationError("invalid_message", "Attaching this computer requires an explicit replaceOthers choice")
@@ -2209,6 +2217,8 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "dots.get": [],
   "dots.set": ["enabled", "expectedRevision"],
   "dots.attach": ["replaceOthers", "expectedTarget"],
+  "dots.detach": ["expectedTarget"],
+  "dots.remove": ["expectedTarget"],
   "session.attachment.upload": ["uploadID", "index", "last", "data"],
   "session.skill": ["id", "skill", "resume"],
   "session.get": [],
@@ -2289,6 +2299,8 @@ const mutations: ReadonlySet<string> = new Set([
   "session.command",
   "dots.set",
   "dots.attach",
+  "dots.detach",
+  "dots.remove",
   "session.skill",
   "session.prompt",
   "session.interrupt",

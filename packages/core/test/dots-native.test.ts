@@ -43,7 +43,9 @@ import { CcaAuthorizationCloseError, CcaAuthorizationDeniedError } from "../src/
 import { reviewLayer } from "./fixture/review"
 import { testEffect } from "./lib/effect"
 
-const idleComputer = { computer: async () => ({ state: "detached" as const }), attachComputer: async () => ({ state: "detached" as const }) }
+const unavailable = async () => ({ ok: false as const, problem: "durable-unavailable" as const })
+const unavailableConversation = { threads: unavailable, taskUpdates: unavailable, read: unavailable, send: unavailable, interrupt: unavailable, resume: unavailable, requests: unavailable, respond: unavailable }
+const idleComputer = { computer: async () => ({ state: "detached" as const }), attachComputer: async () => ({ state: "detached" as const }), detachComputer: async () => ({ state: "detached" as const }), removeComputer: async () => ({ state: "unavailable" as const, problem: "configuration" as const }), conversation: unavailableConversation }
 
 const it = testEffect(reviewLayer())
 const metadataModel = CatalogModel.Info.make({

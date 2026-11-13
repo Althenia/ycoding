@@ -2846,10 +2846,131 @@ const Endpoint39_2 = (raw: RawClient["server.dots"]) => (input: Endpoint39_2Inpu
     Effect.map((value) => value.data),
   )
 
+type Endpoint39_3Request = Parameters<RawClient["server.dots"]["dots.detach"]>[0]
+type Endpoint39_3Input = { readonly expectedTarget?: Endpoint39_3Request["payload"]["expectedTarget"] }
+const Endpoint39_3 = (raw: RawClient["server.dots"]) => (input?: Endpoint39_3Input) =>
+  raw["dots.detach"]({ payload: { expectedTarget: input?.["expectedTarget"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint39_4Request = Parameters<RawClient["server.dots"]["dots.remove"]>[0]
+type Endpoint39_4Input = { readonly expectedTarget?: Endpoint39_4Request["payload"]["expectedTarget"] }
+const Endpoint39_4 = (raw: RawClient["server.dots"]) => (input?: Endpoint39_4Input) =>
+  raw["dots.remove"]({ payload: { expectedTarget: input?.["expectedTarget"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+const Endpoint39_5 = (raw: RawClient["server.dots"]) => () =>
+  raw["dots.threads"]({}).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint39_6Request = Parameters<RawClient["server.dots"]["dots.task.updates"]>[0]
+type Endpoint39_6Input = {
+  readonly taskID: Endpoint39_6Request["params"]["taskID"]
+  readonly cursor?: Endpoint39_6Request["query"]["cursor"]
+  readonly limit?: Endpoint39_6Request["query"]["limit"]
+}
+const Endpoint39_6 = (raw: RawClient["server.dots"]) => (input: Endpoint39_6Input) =>
+  raw["dots.task.updates"]({
+    params: { taskID: input["taskID"] },
+    query: { cursor: input["cursor"], limit: input["limit"] },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint39_7Request = Parameters<RawClient["server.dots"]["dots.thread.read"]>[0]
+type Endpoint39_7Input = {
+  readonly threadID: Endpoint39_7Request["params"]["threadID"]
+  readonly cursor?: Endpoint39_7Request["query"]["cursor"]
+  readonly limit?: Endpoint39_7Request["query"]["limit"]
+}
+const Endpoint39_7 = (raw: RawClient["server.dots"]) => (input: Endpoint39_7Input) =>
+  raw["dots.thread.read"]({
+    params: { threadID: input["threadID"] },
+    query: { cursor: input["cursor"], limit: input["limit"] },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint39_8Request = Parameters<RawClient["server.dots"]["dots.thread.send"]>[0]
+type Endpoint39_8Input = {
+  readonly threadID: Endpoint39_8Request["params"]["threadID"]
+  readonly text: Endpoint39_8Request["payload"]["text"]
+  readonly clientMessageID: Endpoint39_8Request["payload"]["clientMessageID"]
+  readonly mode: Endpoint39_8Request["payload"]["mode"]
+}
+const Endpoint39_8 = (raw: RawClient["server.dots"]) => (input: Endpoint39_8Input) =>
+  raw["dots.thread.send"]({
+    params: { threadID: input["threadID"] },
+    payload: { text: input["text"], clientMessageID: input["clientMessageID"], mode: input["mode"] },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint39_9Request = Parameters<RawClient["server.dots"]["dots.thread.interrupt"]>[0]
+type Endpoint39_9Input = {
+  readonly threadID: Endpoint39_9Request["params"]["threadID"]
+  readonly turnID: Endpoint39_9Request["payload"]["turnID"]
+}
+const Endpoint39_9 = (raw: RawClient["server.dots"]) => (input: Endpoint39_9Input) =>
+  raw["dots.thread.interrupt"]({ params: { threadID: input["threadID"] }, payload: { turnID: input["turnID"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+const Endpoint39_10 = (raw: RawClient["server.dots"]) => () =>
+  raw["dots.resume"]({}).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint39_11Request = Parameters<RawClient["server.dots"]["dots.thread.requests"]>[0]
+type Endpoint39_11Input = { readonly threadID: Endpoint39_11Request["params"]["threadID"] }
+const Endpoint39_11 = (raw: RawClient["server.dots"]) => (input: Endpoint39_11Input) =>
+  raw["dots.thread.requests"]({ params: { threadID: input["threadID"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint39_12Request = Parameters<RawClient["server.dots"]["dots.thread.respond"]>[0]
+type Endpoint39_12Input = {
+  readonly threadID: Endpoint39_12Request["params"]["threadID"]
+  readonly requestID: Endpoint39_12Request["params"]["requestID"]
+  readonly decision?: Endpoint39_12Request["payload"]["decision"]
+  readonly answers?: Endpoint39_12Request["payload"]["answers"]
+}
+const Endpoint39_12 = (raw: RawClient["server.dots"]) => (input: Endpoint39_12Input) =>
+  raw["dots.thread.respond"]({
+    params: { threadID: input["threadID"], requestID: input["requestID"] },
+    payload: { decision: input["decision"], answers: input["answers"] },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
 const adaptGroup39 = (raw: RawClient["server.dots"]) => ({
   get: Endpoint39_0(raw),
   set: Endpoint39_1(raw),
   attach: Endpoint39_2(raw),
+  detach: Endpoint39_3(raw),
+  remove: Endpoint39_4(raw),
+  threads: Endpoint39_5(raw),
+  task: { updates: Endpoint39_6(raw) },
+  thread: {
+    read: Endpoint39_7(raw),
+    send: Endpoint39_8(raw),
+    interrupt: Endpoint39_9(raw),
+    requests: Endpoint39_11(raw),
+    respond: Endpoint39_12(raw),
+  },
+  resume: Endpoint39_10(raw),
 })
 
 const Endpoint40_0 = (raw: RawClient["server.decision"]) => () =>

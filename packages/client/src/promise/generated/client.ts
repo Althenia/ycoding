@@ -422,6 +422,24 @@ import type {
   DotsSetOutput,
   DotsAttachInput,
   DotsAttachOutput,
+  DotsDetachInput,
+  DotsDetachOutput,
+  DotsRemoveInput,
+  DotsRemoveOutput,
+  DotsThreadsOutput,
+  DotsTaskUpdatesInput,
+  DotsTaskUpdatesOutput,
+  DotsThreadReadInput,
+  DotsThreadReadOutput,
+  DotsThreadSendInput,
+  DotsThreadSendOutput,
+  DotsThreadInterruptInput,
+  DotsThreadInterruptOutput,
+  DotsResumeOutput,
+  DotsThreadRequestsInput,
+  DotsThreadRequestsOutput,
+  DotsThreadRespondInput,
+  DotsThreadRespondOutput,
   DecisionListOutput,
 } from "./types"
 import { ClientError } from "./client-error"
@@ -3440,6 +3458,127 @@ export function make(options: ClientOptions) {
             body: { replaceOthers: input["replaceOthers"], expectedTarget: input["expectedTarget"] },
             successStatus: 200,
             declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      detach: (input?: DotsDetachInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: DotsDetachOutput }>(
+          {
+            method: "POST",
+            path: `/api/dots/computer/detach`,
+            body: { expectedTarget: input?.["expectedTarget"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      remove: (input?: DotsRemoveInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: DotsRemoveOutput }>(
+          {
+            method: "POST",
+            path: `/api/dots/computer/remove`,
+            body: { expectedTarget: input?.["expectedTarget"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      threads: (requestOptions?: RequestOptions) =>
+        request<{ readonly data: DotsThreadsOutput }>(
+          {
+            method: "GET",
+            path: `/api/dots/threads`,
+            successStatus: 200,
+            declaredStatuses: [409, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      task: {
+        updates: (input: DotsTaskUpdatesInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: DotsTaskUpdatesOutput }>(
+            {
+              method: "GET",
+              path: `/api/dots/tasks/${encodeURIComponent(input.taskID)}/updates`,
+              query: { cursor: input["cursor"], limit: input["limit"] },
+              successStatus: 200,
+              declaredStatuses: [409, 400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+      },
+      thread: {
+        read: (input: DotsThreadReadInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: DotsThreadReadOutput }>(
+            {
+              method: "GET",
+              path: `/api/dots/thread/${encodeURIComponent(input.threadID)}`,
+              query: { cursor: input["cursor"], limit: input["limit"] },
+              successStatus: 200,
+              declaredStatuses: [409, 400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        send: (input: DotsThreadSendInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: DotsThreadSendOutput }>(
+            {
+              method: "POST",
+              path: `/api/dots/thread/${encodeURIComponent(input.threadID)}/message`,
+              body: { text: input["text"], clientMessageID: input["clientMessageID"], mode: input["mode"] },
+              successStatus: 200,
+              declaredStatuses: [409, 400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        interrupt: (input: DotsThreadInterruptInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: DotsThreadInterruptOutput }>(
+            {
+              method: "POST",
+              path: `/api/dots/thread/${encodeURIComponent(input.threadID)}/interrupt`,
+              body: { turnID: input["turnID"] },
+              successStatus: 200,
+              declaredStatuses: [409, 400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        requests: (input: DotsThreadRequestsInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: DotsThreadRequestsOutput }>(
+            {
+              method: "GET",
+              path: `/api/dots/thread/${encodeURIComponent(input.threadID)}/requests`,
+              successStatus: 200,
+              declaredStatuses: [409, 400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        respond: (input: DotsThreadRespondInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: DotsThreadRespondOutput }>(
+            {
+              method: "POST",
+              path: `/api/dots/thread/${encodeURIComponent(input.threadID)}/requests/${encodeURIComponent(input.requestID)}`,
+              body: { decision: input["decision"], answers: input["answers"] },
+              successStatus: 200,
+              declaredStatuses: [409, 400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+      },
+      resume: (requestOptions?: RequestOptions) =>
+        request<{ readonly data: DotsResumeOutput }>(
+          {
+            method: "POST",
+            path: `/api/dots/resume`,
+            successStatus: 200,
+            declaredStatuses: [409, 400, 401],
             empty: false,
           },
           requestOptions,

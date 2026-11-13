@@ -40,6 +40,15 @@ export function main(program: Program) {
     ),
     Effect.provide(NodeServices.layer),
     Effect.scoped,
+    Effect.tap(() =>
+      Effect.promise(() =>
+        Promise.all(
+          [process.stdout, process.stderr].map(
+            (stream) => new Promise<void>((resolve) => stream.end(() => resolve())),
+          ),
+        ),
+      ),
+    ),
     Effect.tap(() => Effect.sync(() => process.exit(process.exitCode ?? 0))),
     NodeRuntime.runMain,
   )

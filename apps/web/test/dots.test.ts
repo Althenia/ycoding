@@ -89,7 +89,35 @@ test("every Dots request carries its explicit shared budget", async () => {
   await client.get()
   await client.set(true, 2)
   await client.attach()
+  await client.detach()
   for (const timeout of Object.values(timeouts)) expect(Number.isFinite(timeout) && timeout! > 0).toBe(true)
-  expect(timeouts).toEqual({ "dots.get": RemoteLimits.dotsStatusMs, "dots.set": RemoteLimits.dotsStatusMs, "dots.attach": RemoteLimits.dotsAttachMs })
+  expect(timeouts).toEqual({ "dots.get": RemoteLimits.dotsStatusMs, "dots.set": RemoteLimits.dotsStatusMs, "dots.attach": RemoteLimits.dotsAttachMs, "dots.detach": RemoteLimits.dotsAttachMs })
   expect(RemoteLimits.dotsAttachMs).toBeGreaterThan(RemoteLimits.dotsStatusMs)
+})
+
+test("detaches this computer with the exact target receipt and parses the returned status", async () => {
+  const calls: unknown[] = []
+  const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+  const detached = { ...status, access: { enabled: true, revision: 3 }, connection: { state: "connected" }, computer: { state: "detached", target } } satisfies RemoteDotsStatus
+  const link: RemoteLink = { recoveries: () => 0, recovered: async () => false, request: async (_scope, operation, request) => {
+    calls.push({ operation, sessionID: request?.sessionID, input: request?.input })
+    return { status: "ok", value: { data: detached } }
+  } }
+  expect(await dotsClient(link, scope).detach()).toEqual({ status: "ok", value: detached })
+  expect(await dotsClient(link, scope).detach(target)).toEqual({ status: "ok", value: detached })
+  expect(calls).toEqual([
+    { operation: "dots.detach", sessionID: undefined, input: {} },
+    { operation: "dots.detach", sessionID: undefined, input: { expectedTarget: target } },
+  ])
+})
+
+test("detach surfaces unknown outcomes without replay and rejects malformed status", async () => {
+  const outcomes: RemoteRequestOutcome[] = [{ status: "unknown", error: { code: "outcome_unknown", message: "unknown" } }, { status: "ok", value: { data: { nonsense: true } } }]
+  let calls = 0
+  const link: RemoteLink = { recoveries: () => 0, recovered: async () => false, request: async () => outcomes[calls++]! }
+  const client = dotsClient(link, scope)
+  expect((await client.detach()).status).toBe("unknown")
+  const failure = await client.detach().catch((error: unknown) => error)
+  expect(failure instanceof Error ? failure.message : "").toContain("invalid Dots status")
+  expect(calls).toBe(2)
 })

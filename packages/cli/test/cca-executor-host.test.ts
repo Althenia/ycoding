@@ -17,7 +17,9 @@ import {
 import { ccaExecutorCapabilityRoots, ccaExecutorRegistrationURL } from "../src/remote-control/cca-executor-registration"
 import { ccaExecServerUserAgent } from "../src/remote-control/cca-executor-transport"
 import { defaultDotsLabel } from "../src/remote-control/label"
-import { unexpectedExecutorHost } from "./fixture/cca-scope"
+import { WebSocketServer, type NodeWebSocket as ServerSocket } from "ws"
+import { ccaDurableOptOutNotificationMethods, startCcaDurableClient, type CcaDurableClient } from "../src/remote-control/cca-durable-host"
+import { idleDurableConnector, unexpectedExecutorHost } from "./fixture/cca-scope"
 
 const access = "synthetic-access-token-host-0001"
 const accountID = "synthetic-account-host-0001"
@@ -80,6 +82,7 @@ async function fixture(options: {
   readonly realWait?: boolean
   readonly storedRoots?: "current" | "absent" | readonly unknown[]
   readonly name?: string
+  readonly durableURL?: string
 }) {
   const directory = await mkdtemp(path.join(tmpdir(), "ycoding-cca-host-"))
   const statePath = path.join(directory, "cca-executor.json")
@@ -117,6 +120,7 @@ async function fixture(options: {
   const opened: string[] = []
   const waits: number[] = []
   const diagnostics: string[] = []
+  const durableDials: { readonly url: string; readonly protocols: readonly string[]; readonly headers: Record<string, string> }[] = []
   let clock = 0
   const fetchFn = async (url: string, init?: RequestInit) => {
     const entry = { url, headers: { ...(init?.headers as Record<string, string>) }, body: JSON.parse(String(init?.body)) }
@@ -173,6 +177,12 @@ async function fixture(options: {
       record("socket")
       return socket
     },
+    ...(options.durableURL === undefined
+      ? { connectDurable: (url: string, protocols: readonly string[], headers: Record<string, string>) => {
+        durableDials.push({ url, protocols: [...protocols], headers })
+        return idleDurableConnector()
+      } }
+      : { durableURL: options.durableURL }),
     now: () => clock,
     random: () => 0,
     onDiagnostic: (message) => {
@@ -193,7 +203,7 @@ async function fixture(options: {
   }
   cleanups.push(() => rm(directory, { recursive: true, force: true }))
   return {
-    statePath, events, until, flora, stall, registrations, sockets, opened, waits, diagnostics, listeners, create, roots,
+    statePath, events, until, flora, stall, registrations, sockets, opened, waits, diagnostics, listeners, create, roots, durableDials,
     set: (next: NativeDots.Configuration) => {
       configuration = next
       for (const listener of [...listeners]) listener()
@@ -341,6 +351,14 @@ describe("CCA executor host lifecycle", () => {
     expect(harness.registrations).toEqual([])
     expect(harness.waits).toEqual([])
     expect(await readFile(harness.statePath, "utf8")).toBe(before)
+  })
+
+  test("a removed enrollment is treated as absent and enrolled once when access turns on", async () => {
+    const harness = await fixture({ configuration: enabled(), stored: completed({ status: "removed", executorID: undefined }) })
+    await harness.create().start()
+    await harness.until("socket")
+    expect(harness.flora).toHaveLength(1)
+    expect(JSON.parse(await readFile(harness.statePath, "utf8"))).toMatchObject({ status: "completed", executorID })
   })
 
   test("a Flora 500 leaves no enrollment state and the host retries the enrollment after backoff", async () => {
@@ -807,7 +825,7 @@ describe("CCA executor host lifecycle", () => {
     expect(stored.renameDeclined).toEqual({ label: "Desk Mac", outcome: "unconfirmed", at: expect.any(String) })
   })
 
-  test("the host opens only the registered rendezvous socket and never codex-cloud-backend", async () => {
+  test("the host dials the rendezvous socket per connection and one durable host socket with the desktop subprotocols and no bearer header", async () => {
     const harness = await fixture({ configuration: enabled(), stored: completed() })
     await harness.create().start()
     await harness.until("served")
@@ -815,7 +833,12 @@ describe("CCA executor host lifecycle", () => {
     await harness.until("served", 2)
     await new Promise<void>((resolve) => setTimeout(resolve, 10))
     expect(harness.opened).toEqual([signedURL, signedURL])
-    for (const url of harness.opened) expect(url).not.toContain("codex-cloud-backend")
+    expect(harness.durableDials).toHaveLength(1)
+    const dial = harness.durableDials[0]
+    expect(dial.url).toBe("wss://codex-cloud-backend.chatgpt.com/")
+    expect(dial.protocols).toEqual(["codex-app-server", "codex-client.desktop", `openai-bearer.${access}`])
+    expect(dial.headers).toEqual({ "X-OpenAI-Product-Sku": "codex", "ChatGPT-Account-Id": accountID, originator: "Codex Desktop", "User-Agent": expect.stringMatching(/^Codex Desktop\/\S+ \(.+; .+\)$/) })
+    expect(JSON.stringify(dial.headers)).not.toContain(access)
   })
 
   test("diagnostics are fixed categories without credentials, identifiers, URLs, or paths", async () => {
@@ -857,5 +880,305 @@ describe("CCA executor host lifecycle", () => {
     await harness.create().start()
     await harness.until("CCA executor connection-failed")
     expect(harness.diagnostics.filter((message) => message.includes("status="))).toEqual([])
+  })
+})
+
+type DurableMessage = { readonly id?: string | number; readonly method?: string; readonly params?: any; readonly result?: unknown; readonly jsonrpc?: string }
+type DurableReply = { readonly result: unknown } | { readonly error: { readonly code: number; readonly message: string } }
+
+async function durableServer(script: {
+  readonly reject?: readonly number[]
+  readonly reply?: (message: DurableMessage, socket: ServerSocket) => DurableReply | undefined | null
+} = {}) {
+  const handshakes: { readonly protocols: string; readonly headers: Record<string, string | string[] | undefined> }[] = []
+  const messages: DurableMessage[] = []
+  const sockets: ServerSocket[] = []
+  const closed: number[] = []
+  const rejects = [...(script.reject ?? [])]
+  const server = new WebSocketServer({
+    port: 0,
+    handleProtocols: (protocols) => (protocols.has("codex-app-server") ? "codex-app-server" : false),
+    verifyClient: (info, done) => {
+      handshakes.push({ protocols: info.req.headers["sec-websocket-protocol"] ?? "", headers: { ...info.req.headers } })
+      const status = rejects.shift()
+      if (status === undefined) done(true)
+      else done(false, status)
+    },
+  })
+  server.on("connection", (socket) => {
+    const index = sockets.push(socket) - 1
+    socket.on("close", () => closed.push(index))
+    socket.on("message", (data) => {
+      const message: DurableMessage = JSON.parse(String(data))
+      messages.push(message)
+      if (message.id === undefined || message.method === undefined) return
+      const scripted = script.reply?.(message, socket)
+      if (scripted === null) return
+      const reply = scripted ?? (message.method === "initialize"
+        ? { result: { userAgent: "codex_cloud/0.167.0", codexHome: "/synthetic", platformFamily: "unix", platformOs: "linux" } }
+        : message.method === "thread/list" ? { result: { data: [], nextCursor: null } } : { result: {} })
+      socket.send(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...reply }))
+    })
+  })
+  await new Promise<void>((resolve) => server.once("listening", () => resolve()))
+  const address = server.address()
+  if (address === null || typeof address === "string") throw new Error("Synthetic Durable server has no port")
+  const url = `ws://127.0.0.1:${address.port}/`
+  const until = async (predicate: () => boolean) => {
+    for (let index = 0; index < 2000 && !predicate(); index++) await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(predicate()).toBe(true)
+  }
+  const stop = () => new Promise<void>((resolve) => {
+    for (const client of server.clients) client.terminate()
+    server.close(() => resolve())
+  })
+  cleanups.push(stop)
+  return { url, handshakes, messages, sockets, closed, until, of: (method: string) => messages.filter((message) => message.method === method) }
+}
+
+const durableThread = (id: string, threadSource: string, environmentId: string) => ({ id, threadSource, environments: [{ environmentId }], name: id })
+
+describe("CCA durable host client and executor readiness", () => {
+  test("the handshake offers the desktop subprotocols and headers, initializes without jsonrpc and then sends initialized", async () => {
+    const durable = await durableServer()
+    const harness = await fixture({ configuration: enabled(), stored: completed(), durableURL: durable.url })
+    await harness.create().start()
+    await harness.until("CCA executor durable-connected")
+    await durable.until(() => durable.of("initialized").length === 1)
+    expect(durable.handshakes).toHaveLength(1)
+    const handshake = durable.handshakes[0]
+    expect(handshake.protocols.split(/,\s*/)).toEqual(["codex-app-server", "codex-client.desktop", `openai-bearer.${access}`])
+    expect(handshake.headers["x-openai-product-sku"]).toBe("codex")
+    expect(handshake.headers["chatgpt-account-id"]).toBe(accountID)
+    expect(handshake.headers.originator).toBe("Codex Desktop")
+    expect(handshake.headers["user-agent"]).toMatch(/^Codex Desktop\//)
+    expect(handshake.headers.authorization).toBeUndefined()
+    expect(handshake.headers["sec-websocket-extensions"]).toBeUndefined()
+    expect(handshake.headers["x-codex-app-server-compression"]).toBeUndefined()
+    const [initialize, initialized] = durable.messages
+    expect(initialize).toEqual({
+      id: expect.stringMatching(/^initialize:[0-9a-f-]{36}$/),
+      method: "initialize",
+      params: {
+        clientInfo: { name: "Codex Desktop", title: "Codex Desktop", version: expect.stringMatching(/^\d+\.\d+\.\d+$/) },
+        capabilities: { experimentalApi: true, optOutNotificationMethods: [...ccaDurableOptOutNotificationMethods] },
+      },
+    })
+    expect(initialize.params.capabilities.optOutNotificationMethods).toHaveLength(75)
+    expect(initialize.params.capabilities.optOutNotificationMethods.at(-1)).toBe("turn/diff/updated")
+    expect(initialized).toEqual({ method: "initialized", params: {} })
+  })
+
+  test("a 401 handshake retries once with the credential refreshed for the pinned account, then stops until the configuration changes", async () => {
+    const durable = await durableServer({ reject: [401, 401] })
+    const rejectedTokens: (string | undefined)[] = []
+    const harness = await fixture({
+      configuration: enabled(), stored: completed(), durableURL: durable.url,
+      credential: (configuration, rejected) => {
+        if (!configuration.enabled) return undefined
+        rejectedTokens.push(rejected)
+        return { access: rejected === undefined ? access : `${access}-refreshed`, accountID, key: "credential-key-1", profile: "dots", credentialID: "credential-1", accountGeneration: 1 }
+      },
+    })
+    await harness.create().start()
+    await harness.until("CCA executor durable-rejected")
+    await new Promise<void>((resolve) => setTimeout(resolve, 50))
+    expect(durable.handshakes.map((handshake) => handshake.protocols.split(/,\s*/)[2])).toEqual([`openai-bearer.${access}`, `openai-bearer.${access}-refreshed`])
+    expect(rejectedTokens.filter((token) => token !== undefined)).toContain(access)
+    expect(harness.diagnostics.filter((message) => message.startsWith("CCA executor durable-"))).toEqual(["CCA executor durable-rejected"])
+    harness.set(enabled(2))
+    await durable.until(() => durable.handshakes.length === 3)
+  })
+
+  test("a 401 followed by an accepted refreshed handshake connects with the refreshed credential", async () => {
+    const durable = await durableServer({ reject: [401] })
+    const harness = await fixture({
+      configuration: enabled(), stored: completed(), durableURL: durable.url,
+      credential: (configuration, rejected) => configuration.enabled
+        ? { access: rejected === access ? `${access}-refreshed` : access, accountID, key: "credential-key-1", profile: "dots", credentialID: "credential-1", accountGeneration: 1 }
+        : undefined,
+    })
+    await harness.create().start()
+    await harness.until("CCA executor durable-connected")
+    expect(durable.handshakes.map((handshake) => handshake.protocols.split(/,\s*/)[2])).toEqual([`openai-bearer.${access}`, `openai-bearer.${access}-refreshed`])
+  })
+
+  test("reconnects with a 1 s doubling backoff that resets after initialization", async () => {
+    const durable = await durableServer({ reject: [503, 503] })
+    const harness = await fixture({ configuration: enabled(), stored: completed(), durableURL: durable.url })
+    await harness.create().start()
+    await harness.until("CCA executor durable-connected")
+    expect(harness.waits).toEqual([1_000, 2_000])
+    durable.sockets[0].close()
+    await harness.until("CCA executor durable-connected", 2)
+    expect(harness.waits).toEqual([1_000, 2_000, 1_000])
+    expect(durable.handshakes).toHaveLength(4)
+  })
+
+  test("readiness lists durable threads in pages and reports only Dot threads that name this executor with the enrolled roots", async () => {
+    const durable = await durableServer({
+      reply: (message) => message.method !== "thread/list" ? undefined : message.params.cursor === null
+        ? { result: { data: [durableThread("thr-aeon", "aeon", executorID), durableThread("thr-user", "user", executorID), durableThread("thr-child-other", "aeon_child", "ccarenv_other")], nextCursor: "page-2" } }
+        : { result: { data: [durableThread("thr-cloud", "cloud_threads.create", executorID), { id: "thr-none", threadSource: "aeon_child" }], nextCursor: null } },
+    })
+    const harness = await fixture({ configuration: enabled(), stored: completed(), durableURL: durable.url })
+    await harness.create().start()
+    await harness.until("CCA executor readiness-sent")
+    expect(durable.of("thread/list").map((message) => message.params)).toEqual([
+      { cursor: null, limit: 100, archived: false, useStateDbOnly: true },
+      { cursor: "page-2", limit: 100, archived: false, useStateDbOnly: true },
+    ])
+    const ready = durable.of("thread/environmentReady")
+    expect(ready.map((message) => message.params.threadId).sort((a, b) => a.localeCompare(b))).toEqual(["thr-aeon", "thr-cloud"])
+    const roots = harness.roots.map((root) => ({ id: root.id, location: { type: "environment", environmentId: executorID, path: root.path } }))
+    for (const message of ready) {
+      expect(message.id).toMatch(/^thread\/environmentReady:[0-9a-f-]{36}$/)
+      expect(message.jsonrpc).toBeUndefined()
+      expect(message.params).toEqual({ threadId: message.params.threadId, environmentId: executorID, selectedCapabilityRoots: roots })
+    }
+  })
+
+  test("a failed readiness report is retried alone after 5 s and a clean pass sends nothing again", async () => {
+    let failures = 1
+    const durable = await durableServer({
+      reply: (message) => {
+        if (message.method === "thread/list") return { result: { data: [durableThread("thr-a", "aeon", executorID), durableThread("thr-b", "aeon_child", executorID)], nextCursor: null } }
+        if (message.method === "thread/environmentReady" && message.params.threadId === "thr-a" && failures-- > 0) return { error: { code: -32000, message: "synthetic private failure" } }
+        return undefined
+      },
+    })
+    const harness = await fixture({ configuration: enabled(), stored: completed(), durableURL: durable.url })
+    await harness.create().start()
+    await harness.until("CCA executor readiness-failed")
+    await harness.until("CCA executor readiness-sent", 2)
+    expect(harness.waits).toContain(5_000)
+    expect(durable.of("thread/list")).toHaveLength(1)
+    expect(durable.of("thread/environmentReady").map((message) => message.params.threadId)).toEqual(expect.arrayContaining(["thr-a", "thr-b"]))
+    expect(durable.of("thread/environmentReady").slice(2).map((message) => message.params.threadId)).toEqual(["thr-a"])
+    for (const message of harness.diagnostics) expect(message).not.toContain("synthetic private failure")
+  })
+
+  test("readiness is sent again in full after the executor reconnects and after the durable connection reconnects", async () => {
+    const durable = await durableServer({
+      reply: (message) => message.method === "thread/list" ? { result: { data: [durableThread("thr-a", "aeon", executorID)], nextCursor: null } } : undefined,
+    })
+    const harness = await fixture({ configuration: enabled(), stored: completed(), durableURL: durable.url })
+    await harness.create().start()
+    await harness.until("CCA executor readiness-sent")
+    harness.sockets[0].drop()
+    await harness.until("CCA executor readiness-sent", 2)
+    expect(durable.of("thread/list")).toHaveLength(2)
+    durable.sockets[0].close()
+    await harness.until("CCA executor readiness-sent", 3)
+    expect(durable.of("thread/list")).toHaveLength(3)
+    expect(durable.of("thread/environmentReady").map((message) => message.params.threadId)).toEqual(["thr-a", "thr-a", "thr-a"])
+  })
+
+  test("turning access off closes the durable connection and stop awaits its teardown", async () => {
+    const durable = await durableServer()
+    const harness = await fixture({ configuration: enabled(), stored: completed(), durableURL: durable.url })
+    const host = harness.create()
+    await host.start()
+    await harness.until("CCA executor durable-connected")
+    expect(host.durable()?.connected()).toBe(true)
+    harness.set({ enabled: false })
+    await durable.until(() => durable.closed.length === 1)
+    await host.stop()
+    expect(host.durable()).toBeUndefined()
+    const count = durable.messages.length
+    await new Promise<void>((resolve) => setTimeout(resolve, 30))
+    expect(durable.messages).toHaveLength(count)
+    expect(durable.handshakes).toHaveLength(1)
+  })
+
+  test("diagnostics for the durable host are closed categories without tokens or identifiers", async () => {
+    const durable = await durableServer({ reject: [503] })
+    const harness = await fixture({ configuration: enabled(), stored: completed(), durableURL: durable.url })
+    await harness.create().start()
+    await harness.until("CCA executor durable-connected")
+    const allowed = new RegExp(`^CCA executor (${ccaExecutorHostDiagnostics.join("|")})( status=[1-5]\\d\\d)?$`)
+    expect(harness.diagnostics).toContain("CCA executor durable-failed")
+    for (const message of harness.diagnostics) {
+      expect(allowed.test(message)).toBe(true)
+      for (const secret of [access, accountID, executorID, durable.url]) expect(message).not.toContain(secret)
+    }
+  })
+})
+
+describe("CCA durable host requests", () => {
+  async function client(reply?: (message: DurableMessage, socket: ServerSocket) => DurableReply | undefined | null) {
+    const durable = await durableServer({ reply })
+    const states: boolean[] = []
+    const instance: CcaDurableClient = startCcaDurableClient({
+      credential: async () => ({ access, accountID }),
+      url: durable.url,
+      wait: () => new Promise<void>((resolve) => setTimeout(resolve, 5)),
+      random: () => 0,
+      onState: (connected) => states.push(connected),
+    })
+    cleanups.push(() => instance.close())
+    await durable.until(() => instance.connected())
+    return { durable, instance, states }
+  }
+  const approval = (id: string | number, threadId: string, method = "item/commandExecution/requestApproval") =>
+    JSON.stringify({ id, method, params: { threadId, turnId: "turn-1", itemId: "item-1", command: "rm -rf build" } })
+
+  test("captures approval requests only for watched threads and answers each exactly once", async () => {
+    const { durable, instance } = await client()
+    const server = durable.sockets[0]
+    instance.watch("thr-a")
+    await durable.until(() => durable.of("thread/resume").length === 1)
+    expect(durable.of("thread/resume")[0].params).toEqual({ threadId: "thr-a", excludeTurns: true })
+    server.send(approval("srv-1", "thr-a"))
+    server.send(approval("srv-2", "thr-other"))
+    server.send(JSON.stringify({ id: "srv-3", method: "item/tool/call", params: { threadId: "thr-a" } }))
+    server.send(approval(7, "thr-a", "item/fileChange/requestApproval"))
+    await durable.until(() => instance.pending("thr-a").length === 2)
+    expect(instance.pending("thr-other")).toEqual([])
+    expect(instance.pending("thr-a").map((request) => [request.requestID, request.method])).toEqual([["srv-1", "item/commandExecution/requestApproval"], ["7", "item/fileChange/requestApproval"]])
+    expect(await instance.answer("thr-a", "srv-1", { decision: "accept" })).toBe("sent")
+    expect(await instance.answer("thr-a", "srv-1", { decision: "accept" })).toBe("stale")
+    expect(await instance.answer("thr-other", "7", { decision: "decline" })).toBe("stale")
+    expect(await instance.answer("thr-a", "7", { decision: "decline" })).toBe("sent")
+    await durable.until(() => durable.messages.filter((message) => message.method === undefined).length === 2)
+    expect(durable.messages.filter((message) => message.method === undefined)).toEqual([{ id: "srv-1", result: { decision: "accept" } }, { id: 7, result: { decision: "decline" } }])
+    expect(durable.messages.some((message) => message.id === "srv-2" || message.id === "srv-3")).toBe(false)
+  })
+
+  test("a request resolved elsewhere or retired with its connection becomes stale and is never answered", async () => {
+    const { durable, instance, states } = await client()
+    instance.watch("thr-a")
+    durable.sockets[0].send(approval("srv-1", "thr-a"))
+    durable.sockets[0].send(approval("srv-2", "thr-a"))
+    await durable.until(() => instance.pending("thr-a").length === 2)
+    durable.sockets[0].send(JSON.stringify({ method: "serverRequest/resolved", params: { threadId: "thr-a", requestId: "srv-1" } }))
+    await durable.until(() => instance.pending("thr-a").length === 1)
+    expect(await instance.answer("thr-a", "srv-1", { decision: "accept" })).toBe("stale")
+    durable.sockets[0].close()
+    await durable.until(() => states.includes(false))
+    expect(await instance.answer("thr-a", "srv-2", { decision: "accept" })).toBe("stale")
+    await durable.until(() => durable.of("thread/resume").length === 2)
+    expect(durable.messages.filter((message) => message.method === undefined)).toEqual([])
+  })
+
+  test("requests report results, errors, not-sent before initialization and unknown when the connection drops mid-request", async () => {
+    let hold: ServerSocket | undefined
+    const { durable, instance } = await client((message, socket) => {
+      if (message.method === "turn/interrupt") return { error: { code: -32600, message: "no active turn to interrupt" } }
+      if (message.method === "turn/addUserMessage") {
+        hold = socket
+        return null
+      }
+      return undefined
+    })
+    expect(await instance.request("thread/goal/get", { threadId: "thr-a" })).toEqual({ kind: "result", result: {} })
+    expect(await instance.request("turn/interrupt", { threadId: "thr-a", turnId: "turn-1" })).toEqual({ kind: "error", code: -32600, message: "no active turn to interrupt" })
+    const pending = instance.request("turn/addUserMessage", { threadId: "thr-a" })
+    await durable.until(() => hold !== undefined)
+    hold!.terminate()
+    expect(await pending).toEqual({ kind: "unknown" })
+    expect(durable.of("turn/addUserMessage")).toHaveLength(1)
+    await instance.close()
+    expect(await instance.request("thread/goal/get", {})).toEqual({ kind: "not-sent" })
   })
 })

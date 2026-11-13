@@ -74,8 +74,32 @@ test("global Dots status keeps a valid computer state and rejects an invalid one
 
 test("remote exposes only access administration and computer attachment for Dots", () => {
   expect(remoteOperations.filter((operation) => operation.startsWith("dots.") || operation.startsWith("session.dots."))).toEqual([
-    "dots.get", "dots.set", "dots.attach",
+    "dots.get", "dots.set", "dots.attach", "dots.detach", "dots.remove",
   ])
   for (const operation of ["session.dots.access.get", "session.dots.access.set", "session.dots.bind", "session.dots.exchange.create", "dots.bind", "dots.prompt", "dots.settle", "local.app.open", "artifact.demo.preview", "mcp.request"])
     expect(parse(operation).ok).toBe(false)
+})
+
+test("computer detachment and removal accept an optional exact target receipt without Session scope", () => {
+  const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+  for (const operation of ["dots.detach", "dots.remove"] as const) {
+    expect(parse(operation).ok).toBe(true)
+    expect(parse(operation, {}).ok).toBe(true)
+    expect(parse(operation, { expectedTarget: target }).ok).toBe(true)
+    for (const input of [{ replaceOthers: false }, { expectedTarget: { ...target, revision: "short" } }, { expectedTarget: { ...target, accountID: "extra" } }, { directory: "/synthetic" }])
+      expect(parse(operation, input).ok).toBe(false)
+    for (const sessionID of ["ses_test", null]) expect(parse(operation, {}, sessionID).ok).toBe(false)
+    expect(remoteOperationAccess[operation]).toBe("mutation")
+  }
+})
+
+test("remote status keeps readiness, task usability, the Dot environment and the removed state, and rejects malformed values", async () => {
+  const { readDotsStatus } = await import("../src/index")
+  const status: RemoteDotsStatus = { access: { enabled: true, revision: 1 }, configuration: { ready: true }, connection: { state: "connected" } }
+  const computer = { state: "attached", readiness: "offline", usableForTasks: false, dotEnvironment: { status: "offline", capabilities: [{ type: "remote_desktop", status: "ready" }] } } as const
+  expect(readDotsStatus({ ...status, computer })).toEqual({ ...status, computer })
+  expect(readDotsStatus({ ...status, computer: { state: "removed", message: "Removed" } })).toEqual({ ...status, computer: { state: "removed", message: "Removed" } })
+  for (const invalid of [{ readiness: "ready" }, { usableForTasks: 1 }, { dotEnvironment: null }, { dotEnvironment: { status: "x" } },
+    { dotEnvironment: { status: "offline", capabilities: [{ type: "a" }] } }, { dotEnvironment: { status: "Off Line", capabilities: [] } }])
+    expect(readDotsStatus({ ...status, computer: { state: "attached", ...invalid } })).toBeUndefined()
 })

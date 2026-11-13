@@ -80,6 +80,8 @@ export type TelemetryRequestSample = {
     | "dots.get"
     | "dots.set"
     | "dots.attach"
+    | "dots.detach"
+    | "dots.remove"
     | "session.skill"
     | "usage.providers"
     | "usage.summary"
@@ -893,6 +895,62 @@ export type CoordinationMemberState = "idle" | "running" | "waiting" | "failed"
 export type DotsAccess = { enabled: boolean; revision: number }
 
 export type DotsComputerTarget = { dotID: string; threadID: string; environmentID: string; revision: string }
+
+export type DotsDotEnvironment = { status: string; capabilities: Array<{ type: string; status: string }> }
+
+export type DotsConversationStatus = "idle" | "active" | "waiting-approval" | "waiting-input" | "not-loaded" | "error"
+
+export type DotsTask = {
+  taskID: string
+  title: string
+  description?: string
+  status: string
+  latestUpdate?: string
+  emoji?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type DotsTaskUpdates = {
+  taskID: string
+  updates: Array<{ updateID: string; text: string; createdAt: string }>
+  nextCursor?: string
+}
+
+export type DotsTranscriptItem =
+  | { type: "userMessage"; itemID: string; text: string; truncated?: true }
+  | { type: "agentMessage"; itemID: string; text: string; truncated?: true }
+  | { type: "commandExecution"; itemID: string; command: string; exitCode?: number }
+  | { type: "fileChange"; itemID: string; paths: Array<string> }
+  | { type: "other"; itemID: string; itemType: string }
+
+export type DotsSendResult = { admission: "started" | "steered" | "duplicate" | "unknown"; turnID?: string }
+
+export type DotsInterruptResult = { outcome: "interrupted" | "unknown" }
+
+export type DotsResumeResult = {
+  outcome: "resumed" | "unconfirmed" | "unknown"
+  threadID?: string
+  rootChanged?: boolean
+}
+
+export type DotsPendingRequest = {
+  requestID: string
+  threadID: string
+  turnID?: string
+  kind: "command-approval" | "file-change-approval" | "permissions-approval" | "user-input"
+  reason?: string
+  command?: string
+  cwd?: string
+  questions?: Array<{
+    questionID: string
+    header?: string
+    question: string
+    options?: Array<{ label: string; description?: string }>
+  }>
+}
+
+export type DotsRespondResult = { outcome: "sent" | "unknown" }
 
 export type TelemetrySample = TelemetryRequestSample | TelemetryLongTaskSample | TelemetryClientSample
 
@@ -2818,12 +2876,32 @@ export type DotsNativeStatus = {
     message?: string
   }
   computer?: {
-    state: "attached" | "detached" | "unavailable"
+    state: "attached" | "detached" | "unavailable" | "removed"
     name?: string
     target?: DotsComputerTarget
+    readiness?: "connected" | "offline" | "unknown"
+    usableForTasks?: boolean
+    dotEnvironment?: DotsDotEnvironment
     message?: string
   }
 }
+
+export type DotsConversationThread = {
+  threadID: string
+  kind: "root" | "task"
+  name?: string
+  preview?: string
+  status?: DotsConversationStatus
+  updatedAt?: number
+}
+
+export type DotsTranscriptTurn = {
+  turnID: string
+  status?: "inProgress" | "completed" | "interrupted" | "failed"
+  items: Array<DotsTranscriptItem>
+}
+
+export type DotsPendingRequests = { threadID: string; requests: Array<DotsPendingRequest> }
 
 export type TelemetryPage = { data: Array<{ receivedAt: number; sample: TelemetrySample }>; cursor: { next?: string } }
 
@@ -3594,6 +3672,15 @@ export type IsolatedBrowserActionResult = {
   control?: BrowserControlState
   frame?: BrowserPage
 }
+
+export type DotsThreadList = {
+  dotID: string
+  rootThreadID?: string
+  threads: Array<DotsConversationThread>
+  tasks: Array<DotsTask>
+}
+
+export type DotsTranscript = { thread: DotsConversationThread; turns: Array<DotsTranscriptTurn>; nextCursor?: string }
 
 export type SessionGenerationSpeedHistory = {
   model?: ModelRef
@@ -6115,6 +6202,8 @@ export type ServerTelemetryAppendInput = {
             | "dots.get"
             | "dots.set"
             | "dots.attach"
+            | "dots.detach"
+            | "dots.remove"
             | "session.skill"
             | "usage.providers"
             | "usage.summary"
@@ -13039,5 +13128,90 @@ export type DotsAttachInput = {
 }
 
 export type DotsAttachOutput = { data: DotsNativeStatus }["data"]
+
+export type DotsDetachInput = {
+  readonly expectedTarget?: {
+    readonly expectedTarget?: {
+      readonly dotID: string
+      readonly threadID: string
+      readonly environmentID: string
+      readonly revision: string
+    }
+  }["expectedTarget"]
+}
+
+export type DotsDetachOutput = { data: DotsNativeStatus }["data"]
+
+export type DotsRemoveInput = {
+  readonly expectedTarget?: {
+    readonly expectedTarget?: {
+      readonly dotID: string
+      readonly threadID: string
+      readonly environmentID: string
+      readonly revision: string
+    }
+  }["expectedTarget"]
+}
+
+export type DotsRemoveOutput = { data: DotsNativeStatus }["data"]
+
+export type DotsThreadsOutput = { data: DotsThreadList }["data"]
+
+export type DotsTaskUpdatesInput = {
+  readonly taskID: { readonly taskID: string }["taskID"]
+  readonly cursor?: { readonly cursor?: string | undefined; readonly limit?: number | undefined }["cursor"]
+  readonly limit?: { readonly cursor?: string | undefined; readonly limit?: number | undefined }["limit"]
+}
+
+export type DotsTaskUpdatesOutput = { data: DotsTaskUpdates }["data"]
+
+export type DotsThreadReadInput = {
+  readonly threadID: { readonly threadID: string }["threadID"]
+  readonly cursor?: { readonly cursor?: string | undefined; readonly limit?: number | undefined }["cursor"]
+  readonly limit?: { readonly cursor?: string | undefined; readonly limit?: number | undefined }["limit"]
+}
+
+export type DotsThreadReadOutput = { data: DotsTranscript }["data"]
+
+export type DotsThreadSendInput = {
+  readonly threadID: { readonly threadID: string }["threadID"]
+  readonly text: { readonly text: string; readonly clientMessageID: string; readonly mode: "send" | "queue" }["text"]
+  readonly clientMessageID: {
+    readonly text: string
+    readonly clientMessageID: string
+    readonly mode: "send" | "queue"
+  }["clientMessageID"]
+  readonly mode: { readonly text: string; readonly clientMessageID: string; readonly mode: "send" | "queue" }["mode"]
+}
+
+export type DotsThreadSendOutput = { data: DotsSendResult }["data"]
+
+export type DotsThreadInterruptInput = {
+  readonly threadID: { readonly threadID: string }["threadID"]
+  readonly turnID: { readonly turnID: string }["turnID"]
+}
+
+export type DotsThreadInterruptOutput = { data: DotsInterruptResult }["data"]
+
+export type DotsResumeOutput = { data: DotsResumeResult }["data"]
+
+export type DotsThreadRequestsInput = { readonly threadID: { readonly threadID: string }["threadID"] }
+
+export type DotsThreadRequestsOutput = { data: DotsPendingRequests }["data"]
+
+export type DotsThreadRespondInput = {
+  readonly threadID: { readonly threadID: string; readonly requestID: string }["threadID"]
+  readonly requestID: { readonly threadID: string; readonly requestID: string }["requestID"]
+  readonly decision?: {
+    readonly decision?: "accept" | "acceptForSession" | "decline" | "cancel"
+    readonly answers?: { readonly [x: string]: ReadonlyArray<string> }
+  }["decision"]
+  readonly answers?: {
+    readonly decision?: "accept" | "acceptForSession" | "decline" | "cancel"
+    readonly answers?: { readonly [x: string]: ReadonlyArray<string> }
+  }["answers"]
+}
+
+export type DotsThreadRespondOutput = { data: DotsRespondResult }["data"]
 
 export type DecisionListOutput = { data: Array<DecisionItem> }["data"]

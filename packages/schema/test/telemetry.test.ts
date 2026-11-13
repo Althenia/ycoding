@@ -44,6 +44,8 @@ test("accepts request telemetry for every Session Dots control in closed samples
     "dots.get",
     "dots.set",
     "dots.attach",
+    "dots.detach",
+    "dots.remove",
   ] as const
   for (const operation of names) {
     expect(Schema.decodeUnknownSync(Telemetry.Operation)(operation)).toBe(operation)

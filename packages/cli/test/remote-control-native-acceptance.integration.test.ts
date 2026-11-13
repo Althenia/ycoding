@@ -44,6 +44,7 @@ import { remoteControlTransport } from "../src/remote-control/bootstrap"
 import { createRemoteControlHost } from "../src/remote-control/host"
 import { connectRemoteControlSocket } from "../src/remote-control/socket"
 import { createRemoteControlStateStore } from "../src/remote-control/state"
+import { unavailableConversation } from "./fixture/cca-scope"
 
 type Question = { id: string; header: string; options?: { label: string }[] }
 type Message = {
@@ -190,7 +191,7 @@ const harness = (options: { readonly customRule?: boolean; readonly goalLoop?: b
     fetchFn: async () => Response.json({ server_id: "synthetic-server", environment_id: environmentID, remote_control_token: "synthetic-token" }),
     connect: (_url, headers) => connectRemoteControlSocket(`ws://127.0.0.1:${server.port}`, headers),
   })
-  const unregister = native.attachTransport(remoteControlTransport(host.status, { computer: async () => ({ state: "unavailable", problem: "configuration" }), attach: async () => ({ state: "unavailable", problem: "configuration" }) }))
+  const unregister = native.attachTransport(remoteControlTransport(host.status, { computer: async () => ({ state: "unavailable", problem: "configuration" }), attach: async () => ({ state: "unavailable", problem: "configuration" }), detach: async () => ({ state: "unavailable", problem: "configuration" }), remove: async () => ({ state: "unavailable", problem: "configuration" }) }, unavailableConversation))
   yield* Effect.addFinalizer(() => Effect.promise(async () => { unregister(); await host.shutdown() }))
 
   const until = <A>(read: () => A | undefined, label: string, ms = 5_000) => {

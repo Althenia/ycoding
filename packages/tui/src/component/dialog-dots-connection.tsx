@@ -17,6 +17,7 @@ export function DotsConnectionCommand() {
     get: (signal) => client.api.dots.get({ signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) }),
     set: (input) => client.api.dots.set(input, { signal: AbortSignal.timeout(5000) }),
     attach: (input) => client.api.dots.attach(input, { signal: AbortSignal.timeout(5000) }),
+    detach: (input) => client.api.dots.detach(input, { signal: AbortSignal.timeout(5000) }),
     error: (error) => toast.error(error),
   })
   Keymap.createLayer(() => ({
@@ -36,7 +37,8 @@ export function DialogDotsConnection(props: { connection: ReturnType<typeof crea
   onMount(connection.open)
   onCleanup(connection.close)
   const action = () => connection.status()?.access.enabled ? "Disconnect" : "Connect"
-  const computerLabels = { attached: "Attached", detached: "Not attached", unavailable: "Unavailable" } as const
+  const computerLabels = { attached: "Attached", detached: "Not attached", unavailable: "Unavailable", removed: "Removed" } as const
+  const readinessLabels = { connected: "Connected", offline: "Offline", unknown: "Unknown" } as const
   const options = createMemo(() => {
     const status = connection.status()
     const reported = status?.connection.state
@@ -55,18 +57,26 @@ export function DialogDotsConnection(props: { connection: ReturnType<typeof crea
         ...(status?.connection.name ? [`Name: ${status.connection.name}`] : []),
         ...(computer?.name ? [`Executor name: ${computer.name}`] : []),
         ...(computer ? [`Executor: ${computerLabels[computer.state]}`] : []),
+        ...(computer?.readiness ? [`Cloud readiness: ${readinessLabels[computer.readiness]}`] : []),
+        ...(computer?.usableForTasks === undefined ? [] : [`Usable for Dots tasks: ${computer.usableForTasks ? "Yes" : "No"}`]),
+        ...(computer?.dotEnvironment ? [`Dot environment: ${[computer.dotEnvironment.status, ...computer.dotEnvironment.capabilities.map((item) => `${item.type} ${item.status}`)].join(" · ")}`] : []),
         ...(computer?.message ? [computer.message] : []),
         `Connection: ${reported ? reported[0].toUpperCase() + reported.slice(1) : "Unreported"}${status && !connection.ready() && !connection.pending() ? " (last reported)" : ""}`,
         ...(!connection.connected() ? ["Backend disconnected. Reconnect to refresh status."] : []),
         ...(status?.configuration.message ? [status.configuration.message] : []),
         ...(status?.connection.message ? [status.connection.message] : []),
         ...(connection.attachFailure() ? [`Could not use this computer: ${connection.attachFailure()}`] : []),
+        ...(connection.detachFailure() ? [`Could not detach this computer: ${connection.detachFailure()}`] : []),
         ...(connection.failure() ? [`Status unavailable: ${connection.failure()}`, "Press r to refresh."] : []),
       ],
       detailsWrap: true,
     }, ...(connection.canAttach() ? [{
       value: "attach",
       title: "Use this computer for Dots tasks",
+      description: "Asks to confirm first",
+    }] : []), ...(connection.canDetach() ? [{
+      value: "detach",
+      title: "Detach this computer from Dots tasks",
       description: "Asks to confirm first",
     }] : [])]
   })
@@ -79,20 +89,40 @@ export function DialogDotsConnection(props: { connection: ReturnType<typeof crea
     },
     { value: "attach-cancel", title: "Cancel" },
   ]
-  return <Show when={connection.confirmingAttach()} fallback={<DialogSelect
+  const detachOptions = [
+    {
+      value: "detach-confirm",
+      title: "Detach this computer",
+      details: ["This computer will stop running Dots tasks. Other computers stay connected."],
+      detailsWrap: true,
+    },
+    { value: "detach-cancel", title: "Cancel" },
+  ]
+  const main = () => <DialogSelect
     title="Dots connection"
     options={options()}
     renderFilter={false}
     skipFilter
     preserveSelection
-    locked={!connection.canToggle() && !connection.canAttach()}
+    locked={!connection.canToggle() && !connection.canAttach() && !connection.canDetach()}
     onSelect={(option) => {
       if (option.value === "attach") connection.requestAttach()
+      else if (option.value === "detach") connection.requestDetach()
       else void connection.toggle()
     }}
     bindings={[{ bind: "r", title: "Refresh Dots connection", group: "Dialog", run: () => { void connection.refresh() } }]}
     footer={<text fg={theme.text.subdued}>{connection.canToggle() ? `enter ${action().toLowerCase()} · ` : ""}r refresh · esc close</text>}
-  />}>
+  />
+  return <Show when={connection.confirmingAttach()} fallback={<Show when={connection.confirmingDetach()} fallback={main()}>
+    <DialogSelect
+      title="Detach this computer from Dots tasks?"
+      options={detachOptions}
+      renderFilter={false}
+      skipFilter
+      onSelect={(option) => { if (option.value === "detach-confirm") void connection.detach(); else connection.cancelDetach() }}
+      footer={<text fg={theme.text.subdued}>enter choose · esc close</text>}
+    />
+  </Show>}>
     <DialogSelect
       title="Use this computer for Dots tasks?"
       options={confirmOptions}

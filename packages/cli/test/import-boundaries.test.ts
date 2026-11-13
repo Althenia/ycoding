@@ -88,6 +88,17 @@ describe("CLI frontend import boundaries", () => {
       expect(graph).toContain("packages/cli/src/commands/handlers/decision/follow.ts")
       expect(graph).toContain("packages/cli/src/commands/handlers/decision/follow-state.ts")
       expect(graph).toContain("packages/cli/src/commands/handlers/dots/attach.ts")
+      expect(graph).toContain("packages/cli/src/commands/handlers/dots/detach.ts")
+      expect(graph).toContain("packages/cli/src/commands/handlers/dots/remove.ts")
+      expect(graph).toContain("packages/cli/src/commands/handlers/dots/request.ts")
+      expect(graph).toContain("packages/cli/src/commands/handlers/dots/threads.ts")
+      expect(graph).toContain("packages/cli/src/commands/handlers/dots/tasks.ts")
+      expect(graph).toContain("packages/cli/src/commands/handlers/dots/read.ts")
+      expect(graph).toContain("packages/cli/src/commands/handlers/dots/send.ts")
+      expect(graph).toContain("packages/cli/src/commands/handlers/dots/interrupt.ts")
+      expect(graph).toContain("packages/cli/src/commands/handlers/dots/resume.ts")
+      expect(graph).toContain("packages/cli/src/commands/handlers/dots/requests.ts")
+      expect(graph).toContain("packages/cli/src/commands/handlers/dots/respond.ts")
       expect(graph.some((file) => file.startsWith("packages/tui/src/"))).toBe(true)
       expect(graph.some((file) => file.startsWith("packages/server/src/"))).toBe(true)
       expect(graph).not.toContain("packages/cli/src/commands/commands.ts")
@@ -129,6 +140,17 @@ describe("CLI frontend import boundaries", () => {
             file !== "packages/cli/src/commands/handlers/decision/follow.ts" &&
             file !== "packages/cli/src/commands/handlers/decision/follow-state.ts" &&
             file !== "packages/cli/src/commands/handlers/dots/attach.ts" &&
+            file !== "packages/cli/src/commands/handlers/dots/detach.ts" &&
+            file !== "packages/cli/src/commands/handlers/dots/remove.ts" &&
+            file !== "packages/cli/src/commands/handlers/dots/request.ts" &&
+            file !== "packages/cli/src/commands/handlers/dots/threads.ts" &&
+            file !== "packages/cli/src/commands/handlers/dots/tasks.ts" &&
+            file !== "packages/cli/src/commands/handlers/dots/read.ts" &&
+            file !== "packages/cli/src/commands/handlers/dots/send.ts" &&
+            file !== "packages/cli/src/commands/handlers/dots/interrupt.ts" &&
+            file !== "packages/cli/src/commands/handlers/dots/resume.ts" &&
+            file !== "packages/cli/src/commands/handlers/dots/requests.ts" &&
+            file !== "packages/cli/src/commands/handlers/dots/respond.ts" &&
             file !== "packages/cli/src/commands/handlers/tui-serve.ts" &&
             file !== "packages/cli/src/commands/handlers/tui-shared.ts" &&
             file !== "packages/cli/src/commands/handlers/run.ts" &&

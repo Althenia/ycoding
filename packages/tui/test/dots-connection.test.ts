@@ -23,6 +23,7 @@ function fixture() {
   const reads: { result: ReturnType<typeof deferred<Dots.NativeStatus>>; signal: AbortSignal }[] = []
   const writes: { input: { enabled: boolean; expectedRevision: number }; result: ReturnType<typeof deferred<Dots.NativeStatus>> }[] = []
   const attaches: { input: Dots.ComputerAttach; result: ReturnType<typeof deferred<Dots.NativeStatus>> }[] = []
+  const detaches: { input: Dots.ComputerDetach; result: ReturnType<typeof deferred<Dots.NativeStatus>> }[] = []
   const errors: unknown[] = []
   let dispose!: () => void
   const state = createRoot((release) => {
@@ -44,10 +45,15 @@ function fixture() {
         attaches.push({ input, result })
         return result.promise
       },
+      detach: (input) => {
+        const result = deferred<Dots.NativeStatus>()
+        detaches.push({ input, result })
+        return result.promise
+      },
       error: (error) => errors.push(error),
     })
   })
-  return { state, reads, writes, attaches, errors, dispose, setConnected, setOwner }
+  return { state, reads, writes, attaches, detaches, errors, dispose, setConnected, setOwner }
 }
 
 const withComputer = (computer: Dots.NativeStatus["computer"], enabled = true, revision = 2): Dots.NativeStatus => ({ ...status(enabled, revision), computer })
@@ -343,5 +349,90 @@ describe("global Dots connection", () => {
     expect(view.errors).toHaveLength(0)
     await view.state.refresh()
     expect(view.reads).toHaveLength(1)
+  })
+})
+
+describe("computer detachment", () => {
+  test.each([
+    ["attached with access on", { state: "attached" as const }, true, true],
+    ["detached", { state: "detached" as const }, true, false],
+    ["unavailable", { state: "unavailable" as const }, true, false],
+    ["removed", { state: "removed" as const }, true, false],
+    ["unreported", undefined, true, false],
+    ["attached with access off", { state: "attached" as const }, false, false],
+  ])("offers detachment only when access is on and the computer is attached: %s", async (_name, computer, enabled, offered) => {
+    const view = await opened(computer, enabled)
+    try {
+      expect(view.state.canDetach()).toBe(offered)
+      view.state.requestDetach()
+      expect(view.state.confirmingDetach()).toBe(offered)
+      void view.state.detach()
+      expect(view.detaches).toHaveLength(offered ? 1 : 0)
+    } finally { view.dispose() }
+  })
+
+  test("detachment requires confirmation, cancelling sends nothing and attach confirmation stays separate", async () => {
+    const view = await opened({ state: "attached" })
+    try {
+      await view.state.detach()
+      expect(view.detaches).toHaveLength(0)
+      view.state.requestDetach()
+      expect(view.state.confirmingDetach()).toBe(true)
+      expect(view.state.confirmingAttach()).toBe(false)
+      view.state.cancelDetach()
+      expect(view.state.confirmingDetach()).toBe(false)
+      await view.state.detach()
+      expect(view.detaches).toHaveLength(0)
+    } finally { view.dispose() }
+  })
+
+  test("a confirmed detachment posts the displayed target once, serializes through settlement and refreshes", async () => {
+    const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+    const view = await opened({ state: "attached", target })
+    try {
+      view.state.requestDetach()
+      const detach = view.state.detach()
+      await view.state.detach()
+      await view.state.toggle()
+      expect(view.detaches.map((item) => item.input)).toEqual([{ expectedTarget: target }])
+      expect(view.writes).toHaveLength(0)
+      expect(view.state.pending()).toBe(true)
+      view.detaches[0].result.resolve(withComputer({ state: "detached", target }))
+      await flush()
+      view.reads[1].result.resolve(withComputer({ state: "detached", target }))
+      await detach
+      expect(view.state.status()?.computer).toEqual({ state: "detached", target })
+      expect(view.state.canDetach()).toBe(false)
+      expect(view.state.canAttach()).toBe(true)
+      expect(view.detaches).toHaveLength(1)
+    } finally { view.dispose() }
+  })
+
+  test("a failed detachment reports the error once without replaying and reconciles by reading", async () => {
+    const view = await opened({ state: "attached" })
+    try {
+      view.state.requestDetach()
+      const detach = view.state.detach()
+      view.detaches[0].result.reject(new Error("executor refused"))
+      await flush()
+      expect(view.errors).toHaveLength(1)
+      expect(view.state.detachFailure()).toContain("executor refused")
+      view.reads[1].result.resolve(withComputer({ state: "attached" }))
+      await detach
+      expect(view.detaches).toHaveLength(1)
+      view.state.requestDetach()
+      expect(view.state.detachFailure()).toBeUndefined()
+    } finally { view.dispose() }
+  })
+
+  test("a pending detach confirmation is dropped when the computer detaches elsewhere", async () => {
+    const view = await opened({ state: "attached" })
+    try {
+      view.state.requestDetach()
+      const read = view.state.refresh()
+      view.reads[1].result.resolve(withComputer({ state: "detached" }, true, 3))
+      await read
+      expect(view.state.confirmingDetach()).toBe(false)
+    } finally { view.dispose() }
   })
 })

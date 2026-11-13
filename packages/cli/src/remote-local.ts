@@ -193,6 +193,8 @@ export type LocalServer = {
   readonly dotsGet: () => Promise<Dots.NativeStatus>
   readonly dotsSet: (input: Dots.AccessSet) => Promise<Dots.NativeStatus>
   readonly dotsAttach: (input: Dots.ComputerAttach) => Promise<Dots.NativeStatus>
+  readonly dotsDetach: (input: Dots.ComputerDetach) => Promise<Dots.NativeStatus>
+  readonly dotsRemove: (input: Dots.ComputerRemove) => Promise<Dots.NativeStatus>
   readonly skill: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly skill: string; readonly resume?: boolean }) => Promise<void>
   readonly interrupt: (sessionID: string, location: LocalLocation) => Promise<void>
   readonly deleteSession: (sessionID: string, location: LocalLocation) => Promise<void>
@@ -441,6 +443,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     dotsGet: () => call(() => client.dots.get({ signal: AbortSignal.timeout(timeoutMs) })),
     dotsSet: (input) => call(() => client.dots.set(input, { signal: AbortSignal.timeout(timeoutMs) })),
     dotsAttach: (input) => call(() => client.dots.attach({ replaceOthers: input.replaceOthers, ...(input.expectedTarget === undefined ? {} : { expectedTarget: input.expectedTarget }) }, { signal: AbortSignal.timeout(timeoutMs) })),
+    dotsDetach: (input) => call(() => client.dots.detach(input.expectedTarget === undefined ? {} : { expectedTarget: input.expectedTarget }, { signal: AbortSignal.timeout(timeoutMs) })),
+    dotsRemove: (input) => call(() => client.dots.remove(input.expectedTarget === undefined ? {} : { expectedTarget: input.expectedTarget }, { signal: AbortSignal.timeout(timeoutMs) })),
     skill: (sessionID, location, input) => call(async () => {
       await client.session.skill({ sessionID, ...input }, request(location, timeoutMs))
     }),

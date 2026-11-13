@@ -27,6 +27,8 @@ test("every recordable remote request operation decodes as closed local telemetr
       "dots.get",
       "dots.set",
       "dots.attach",
+      "dots.detach",
+      "dots.remove",
     ]),
   )
   for (const operation of recordable) {

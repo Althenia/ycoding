@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
@@ -12,6 +12,7 @@ import {
   CcaRegistrationError,
   decodeCcaRegistrationResponse,
   loadCcaExperimentState,
+  markCcaExecutorRemoved,
   renameCcaExecutor,
   reconcileCcaExecutor,
   reregisterCcaExecutor,
@@ -698,6 +699,32 @@ describe("cca-executor-registration", () => {
       const scripted = scriptedFetch([renamed("ccarenv_b64_existing", "my-mac")])
       await reconcileCcaExecutor({ credential, state: { ...storedState, installationID: ownInstallation }, displayName: "my-mac", statePath, roots: ccaExecutorCapabilityRoots("/synthetic/home"), fetch: scripted.fetch })
       expect((scripted.posts[0]!.body as { installation_id: string }).installation_id).toBe(ownInstallation)
+    })
+  })
+
+  describe("markCcaExecutorRemoved", () => {
+    test("atomically replaces a completed enrollment with a removed record that keeps only identity and timestamps", async () => {
+      const { statePath } = await writeStored()
+      await markCcaExecutorRemoved(statePath, storedState.executorID)
+      const text = await readFile(statePath, "utf8")
+      expect(JSON.parse(text)).toEqual({
+        installationID: storedState.installationID, accountHash: storedState.accountHash, status: "removed",
+        createdAt: storedState.createdAt, updatedAt: expect.any(String),
+      })
+      expect((await stat(statePath)).mode & 0o777).toBe(0o600)
+      expect((await loadCcaExperimentState(statePath)).status).toBe("removed")
+      expect((await readdir(path.dirname(statePath))).filter((name) => name !== path.basename(statePath))).toEqual([])
+    })
+
+    test("refuses to change an enrollment that is not the completed one for the executor", async () => {
+      for (const stored of [{ ...storedState, executorID: "ccarenv_b64_other" }, { ...storedState, status: "uncertain" }, { ...storedState, status: "removed" }]) {
+        const statePath = path.join(await createTempDir(), "experiment.json")
+        const before = JSON.stringify(stored)
+        await writeFile(statePath, before, { mode: 0o600 })
+        expect(await markCcaExecutorRemoved(statePath, storedState.executorID).catch((error: unknown) => error)).toBeInstanceOf(Error)
+        expect(await readFile(statePath, "utf8")).toBe(before)
+      }
+      expect(await markCcaExecutorRemoved(path.join(await createTempDir(), "absent.json"), storedState.executorID).catch((error: unknown) => error)).toBeInstanceOf(Error)
     })
   })
 })

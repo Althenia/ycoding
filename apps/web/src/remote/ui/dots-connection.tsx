@@ -6,7 +6,7 @@ import { dotsClient } from "../dots"
 import { describeOutcome } from "../outcome"
 import { remoteKeys } from "../queries"
 import { createRemoteQuery } from "../query"
-import { attachConfirmationValid, dotsConnectionView } from "../view-model"
+import { attachConfirmationValid, detachConfirmationValid, dotsConnectionView } from "../view-model"
 import type { RemoteDotsComputerTarget } from "@ycoding-ai/remote"
 import "./dots-connection.css"
 
@@ -33,10 +33,14 @@ export function DotsConnection(props: { readonly returnFocus: HTMLElement; reado
     }
   })
   const [confirmingAttach, setConfirmingAttach] = createSignal(false)
+  const [confirmingDetach, setConfirmingDetach] = createSignal(false)
   let attachTarget: RemoteDotsComputerTarget | undefined
+  let detachTarget: RemoteDotsComputerTarget | undefined
   createEffect(() => {
     const result = query()
-    if (confirmingAttach() && !attachConfirmationValid({ status: result.data, online: scope() !== undefined, error: result.isError ? result.error.message : undefined, target: attachTarget })) setConfirmingAttach(false)
+    const current = { status: result.data, online: scope() !== undefined, error: result.isError ? result.error.message : undefined }
+    if (confirmingAttach() && !attachConfirmationValid({ ...current, target: attachTarget })) setConfirmingAttach(false)
+    if (confirmingDetach() && !detachConfirmationValid({ ...current, target: detachTarget })) setConfirmingDetach(false)
   })
   createEffect(() => {
     if (mutation()?.key !== JSON.stringify(key())) setMutation(undefined)
@@ -85,6 +89,10 @@ export function DotsConnection(props: { readonly returnFocus: HTMLElement; reado
     setConfirmingAttach(false)
     if (view().canAttach) run((client) => client.attach(attachTarget), "Dots computer")
   }
+  const detach = () => {
+    setConfirmingDetach(false)
+    if (view().canDetach) run((client) => client.detach(detachTarget), "Dots computer")
+  }
   return <Portal><Modal label="Dots connection" class="overlay--dialog overlay--dots" returnFocus={props.returnFocus} onDismiss={() => setVisible(false)} onClose={props.onClose}>
     <div class="stack dots-connection" aria-busy={view().refreshing || mutation()?.pending === true}>
       <p class="field__hint">Access covers every existing and future eligible Session on this backend. Disconnect closes the native connection without interrupting admitted work.</p>
@@ -97,6 +105,9 @@ export function DotsConnection(props: { readonly returnFocus: HTMLElement; reado
         <Fact label="Access" value={view().access} />
         <Fact label="Transport" value={view().transport} message={view().connectionMessage} />
         <Show when={view().executor}><Fact label="Executor" value={view().executor?.label} message={view().executor?.message} /></Show>
+        <Show when={view().executor?.readiness}><Fact label="Cloud readiness" value={view().executor?.readiness} /></Show>
+        <Show when={view().executor?.usableForTasks}><Fact label="Dots tasks" value={view().executor?.usableForTasks} /></Show>
+        <Show when={view().executor?.dotEnvironment}><Fact label="Dot environment" value={view().executor?.dotEnvironment} /></Show>
       </dl>
       <Show when={view().notice}><p class="field__hint" role={query().isError ? "alert" : "status"}>{view().notice}</p></Show>
       <Show when={mutation()?.message}><p class="field__hint" role="alert">{mutation()?.message}</p></Show>
@@ -111,6 +122,17 @@ export function DotsConnection(props: { readonly returnFocus: HTMLElement; reado
             <div class="dots-connection__actions">
               <button type="button" class="button button--primary" disabled={!view().canAttach} onClick={attach}>Use this computer</button>
               <button type="button" class="button button--secondary" onClick={() => setConfirmingAttach(false)}>Cancel</button>
+            </div>
+          </div>
+        </Show>
+      </Show>
+      <Show when={view().executor?.label === "Attached"}>
+        <Show when={confirmingDetach()} fallback={<div><button type="button" class="button button--secondary" disabled={!view().canDetach} onClick={() => { detachTarget = query().data?.computer?.target; setConfirmingDetach(true) }}>{view().detachAction}</button></div>}>
+          <div class="stack" role="group" aria-label="Confirm computer detachment">
+            <p class="field__hint">{view().detachConfirmation}</p>
+            <div class="dots-connection__actions">
+              <button type="button" class="button button--primary" disabled={!view().canDetach} onClick={detach}>Detach this computer</button>
+              <button type="button" class="button button--secondary" onClick={() => setConfirmingDetach(false)}>Cancel</button>
             </div>
           </div>
         </Show>

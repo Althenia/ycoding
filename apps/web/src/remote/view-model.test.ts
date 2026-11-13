@@ -27,6 +27,7 @@ import {
   modelEffortNotice,
   providerProfileRefreshVisible,
   attachConfirmationValid,
+  detachConfirmationValid,
   dotsConnectionView,
   shellOutputPaging,
   sessionProjectLabel,
@@ -84,7 +85,7 @@ describe("Dots connection display", () => {
   })
   test("missing, pending, offline and failed reads never invent current access or permit changes", () => {
     expect(dotsConnectionView({ ...input, status: undefined })).toMatchObject({ access: "Unreported", transport: "Unreported", profile: "Unreported", canChange: false })
-    for (const override of [{ online: false }, { loading: true }, { pending: true }, { error: "Read failed" }]) expect(dotsConnectionView({ ...input, ...override }).canChange).toBe(false)
+    for (const override of [{ online: false }, { loading: true }, { pending: true }, { error: "Read failed" }] as const) expect(dotsConnectionView({ ...input, ...override }).canChange).toBe(false)
     expect(dotsConnectionView({ ...input, pending: true }).notice).toBe("Changing Dots access…")
     expect(dotsConnectionView({ ...input, online: false }).notice).toContain("Reconnect")
     expect(dotsConnectionView({ ...input, error: "Read failed" }).notice).toContain("Refresh")
@@ -129,7 +130,7 @@ describe("Dots connection display", () => {
     expect(dotsConnectionView({ ...input, status: undefined }).executor).toBeUndefined()
   })
   test("offers attach only when detached, idle and online, and states the consequence", () => {
-    const view = (state: "attached" | "detached" | "unavailable", override: Partial<typeof input> & { error?: string } = {}, enabled = true) =>
+    const view = (state: "attached" | "detached" | "unavailable", override: { readonly online?: boolean; readonly loading?: boolean; readonly pending?: boolean; readonly error?: string } = {}, enabled = true) =>
       dotsConnectionView({ ...input, ...override, status: { ...status, access: { enabled, revision: 3 }, computer: { state } } })
     expect(view("detached")).toMatchObject({ canAttach: true, attachAction: "Use this computer for Dots tasks" })
     expect(view("detached").attachConfirmation).toContain("stay connected")
@@ -138,7 +139,7 @@ describe("Dots connection display", () => {
     expect(view("attached").canAttach).toBe(false)
     expect(view("unavailable").canAttach).toBe(false)
     expect(view("detached", {}, false).canAttach).toBe(false)
-    for (const override of [{ online: false }, { loading: true }, { pending: true }, { error: "Read failed" }]) expect(view("detached", override).canAttach).toBe(false)
+    for (const override of [{ online: false }, { loading: true }, { pending: true }, { error: "Read failed" }] as const) expect(view("detached", override).canAttach).toBe(false)
     expect(dotsConnectionView({ ...input, status: { ...status } }).canAttach).toBe(false)
     expect(dotsConnectionView({ ...input, status: undefined }).canAttach).toBe(false)
   })
@@ -863,5 +864,37 @@ describe("shell output paging", () => {
     expect(paging.canRequest).toBe(true)
     expect(paging.status.kind).toBe("stalled")
     expect(paging.status.kind === "stalled" ? paging.status.label : "").toContain("incomplete character")
+  })
+})
+
+describe("Dots computer detachment view", () => {
+  const input = { status: undefined, online: true, loading: false, refreshing: false, pending: false } as const
+  const status = (state: "attached" | "detached" | "unavailable" | "removed", enabled = true) =>
+    ({ access: { enabled, revision: 1 }, configuration: { ready: true }, connection: { state: "connected" }, computer: { state } }) as const
+  test("offers detach only when attached, idle and online, and states the consequence", () => {
+    const view = (state: "attached" | "detached" | "unavailable" | "removed", override: { readonly online?: boolean; readonly loading?: boolean; readonly pending?: boolean; readonly error?: string } = {}, enabled = true) =>
+      dotsConnectionView({ ...input, status: status(state, enabled), ...override })
+    expect(view("attached")).toMatchObject({ canDetach: true, detachAction: "Detach this computer from Dots tasks" })
+    expect(view("attached").detachConfirmation).toContain("stop running Dots tasks")
+    for (const state of ["detached", "unavailable", "removed"] as const) expect(view(state).canDetach).toBe(false)
+    expect(view("attached", {}, false).canDetach).toBe(false)
+    for (const override of [{ online: false }, { loading: true }, { pending: true }, { error: "Read failed" }] as const) expect(view("attached", override).canDetach).toBe(false)
+    expect(dotsConnectionView({ ...input, status: undefined }).canDetach).toBe(false)
+  })
+  test("a detach confirmation is valid only for the exact attached target", () => {
+    const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+    const attached = { ...status("attached"), computer: { state: "attached", target } } as const
+    expect(detachConfirmationValid({ status: attached, online: true, target })).toBe(true)
+    expect(detachConfirmationValid({ status: attached, online: true, target: { ...target, revision: "b".repeat(64) } })).toBe(false)
+    expect(detachConfirmationValid({ status: status("detached"), online: true })).toBe(false)
+    expect(detachConfirmationValid({ status: attached, online: false, target })).toBe(false)
+    expect(detachConfirmationValid({ status: attached, online: true, error: "Read failed", target })).toBe(false)
+  })
+  test("labels the removed state and shows readiness, task usability and the Dot environment only when reported", () => {
+    const view = (computer: NonNullable<Parameters<typeof dotsConnectionView>[0]["status"]>["computer"]) => dotsConnectionView({ ...input, status: { ...status("attached"), computer } })
+    expect(view({ state: "removed" }).executor).toEqual({ label: "Removed" })
+    expect(view({ state: "attached" }).executor).toEqual({ label: "Attached" })
+    expect(view({ state: "attached", readiness: "offline", usableForTasks: false, dotEnvironment: { status: "offline", capabilities: [{ type: "remote_desktop", status: "starting" }] } }).executor)
+      .toEqual({ label: "Attached", readiness: "Offline", usableForTasks: "Not usable", dotEnvironment: "offline · remote_desktop starting" })
   })
 })

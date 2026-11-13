@@ -47,9 +47,19 @@ export function dotsConnectionView(input: { readonly status?: RemoteDotsStatus; 
     connectionMessage: status?.connection.message,
     action: status?.access.enabled ? "Disconnect" : "Connect",
     canChange: input.online && !!status && !input.loading && !input.pending && !input.error && (status.access.enabled || status.configuration.ready),
-    executor: status?.access.enabled && status.computer ? { label: { attached: "Attached", detached: "Not attached", unavailable: "Unavailable" }[status.computer.state], ...(status.computer.message === undefined ? {} : { message: status.computer.message }), ...(status.computer.name === undefined ? {} : { name: status.computer.name }) } : undefined,
+    executor: status?.access.enabled && status.computer ? {
+      label: { attached: "Attached", detached: "Not attached", unavailable: "Unavailable", removed: "Removed" }[status.computer.state],
+      ...(status.computer.message === undefined ? {} : { message: status.computer.message }),
+      ...(status.computer.name === undefined ? {} : { name: status.computer.name }),
+      ...(status.computer.readiness === undefined ? {} : { readiness: { connected: "Connected", offline: "Offline", unknown: "Unknown" }[status.computer.readiness] }),
+      ...(status.computer.usableForTasks === undefined ? {} : { usableForTasks: status.computer.usableForTasks ? "Usable" : "Not usable" }),
+      ...(status.computer.dotEnvironment === undefined ? {} : { dotEnvironment: [status.computer.dotEnvironment.status, ...status.computer.dotEnvironment.capabilities.map((item) => `${item.type} ${item.status}`)].join(" · ") }),
+    } : undefined,
     canAttach: input.online && !input.loading && !input.pending && !input.error && status?.access.enabled === true && status.computer?.state === "detached",
+    canDetach: input.online && !input.loading && !input.pending && !input.error && status?.access.enabled === true && status.computer?.state === "attached",
     refreshing: input.refreshing,
+    detachAction: "Detach this computer from Dots tasks",
+    detachConfirmation: "This computer will stop running Dots tasks. Other computers stay connected. Continue?",
     attachAction: "Use this computer for Dots tasks",
     attachConfirmation: "Other computers stay connected. Choose which computer runs a Dots task in ChatGPT. Continue?",
     notice: !input.online ? "Reconnect to this machine to read or change Dots."
@@ -59,12 +69,20 @@ export function dotsConnectionView(input: { readonly status?: RemoteDotsStatus; 
   }
 }
 
-export function attachConfirmationValid(input: { readonly status?: RemoteDotsStatus; readonly online: boolean; readonly error?: string; readonly target?: RemoteDotsComputerTarget }) {
+function confirmationValid(state: "attached" | "detached", input: { readonly status?: RemoteDotsStatus; readonly online: boolean; readonly error?: string; readonly target?: RemoteDotsComputerTarget }) {
   const computer = input.status?.computer
   const current = computer?.target
   const same = current === input.target
     || (current !== undefined && input.target !== undefined && current.dotID === input.target.dotID && current.threadID === input.target.threadID && current.environmentID === input.target.environmentID && current.revision === input.target.revision)
-  return input.online && !input.error && input.status?.access.enabled === true && computer?.state === "detached" && same
+  return input.online && !input.error && input.status?.access.enabled === true && computer?.state === state && same
+}
+
+export function attachConfirmationValid(input: { readonly status?: RemoteDotsStatus; readonly online: boolean; readonly error?: string; readonly target?: RemoteDotsComputerTarget }) {
+  return confirmationValid("detached", input)
+}
+
+export function detachConfirmationValid(input: { readonly status?: RemoteDotsStatus; readonly online: boolean; readonly error?: string; readonly target?: RemoteDotsComputerTarget }) {
+  return confirmationValid("attached", input)
 }
 
 export function keepAwakeIndicator(awake: KeepAwakeState): { readonly label: string; readonly tone: "success" | "danger" | "attention"; readonly detail?: string } | undefined {

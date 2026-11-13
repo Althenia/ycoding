@@ -25,5 +25,10 @@ export function dotsClient(link: RemoteLink, scope: QueryScope) {
       if (outcome.status !== "ok") return outcome
       return { status: "ok" as const, value: read(outcome.value) }
     },
+    detach: async (expectedTarget?: RemoteDotsComputerTarget) => {
+      const outcome = await link.request(scope, "dots.detach", { input: expectedTarget === undefined ? {} : { expectedTarget }, timeoutMs: RemoteLimits.dotsAttachMs })
+      if (outcome.status !== "ok") return outcome
+      return { status: "ok" as const, value: read(outcome.value) }
+    },
   }
 }

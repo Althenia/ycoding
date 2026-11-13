@@ -2243,10 +2243,91 @@ export type Endpoint39_2Input = {
 export type Endpoint39_2Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.attach"]>>["data"]
 export type DotsAttachOperation<E = never> = (input: Endpoint39_2Input) => Effect.Effect<Endpoint39_2Output, E>
 
+type Endpoint39_3Request = Parameters<RawClient["server.dots"]["dots.detach"]>[0]
+export type Endpoint39_3Input = { readonly expectedTarget?: Endpoint39_3Request["payload"]["expectedTarget"] }
+export type Endpoint39_3Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.detach"]>>["data"]
+export type DotsDetachOperation<E = never> = (input?: Endpoint39_3Input) => Effect.Effect<Endpoint39_3Output, E>
+
+type Endpoint39_4Request = Parameters<RawClient["server.dots"]["dots.remove"]>[0]
+export type Endpoint39_4Input = { readonly expectedTarget?: Endpoint39_4Request["payload"]["expectedTarget"] }
+export type Endpoint39_4Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.remove"]>>["data"]
+export type DotsRemoveOperation<E = never> = (input?: Endpoint39_4Input) => Effect.Effect<Endpoint39_4Output, E>
+
+export type Endpoint39_5Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.threads"]>>["data"]
+export type DotsThreadsOperation<E = never> = () => Effect.Effect<Endpoint39_5Output, E>
+
+type Endpoint39_6Request = Parameters<RawClient["server.dots"]["dots.task.updates"]>[0]
+export type Endpoint39_6Input = {
+  readonly taskID: Endpoint39_6Request["params"]["taskID"]
+  readonly cursor?: Endpoint39_6Request["query"]["cursor"]
+  readonly limit?: Endpoint39_6Request["query"]["limit"]
+}
+export type Endpoint39_6Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.task.updates"]>>["data"]
+export type DotsTaskUpdatesOperation<E = never> = (input: Endpoint39_6Input) => Effect.Effect<Endpoint39_6Output, E>
+
+type Endpoint39_7Request = Parameters<RawClient["server.dots"]["dots.thread.read"]>[0]
+export type Endpoint39_7Input = {
+  readonly threadID: Endpoint39_7Request["params"]["threadID"]
+  readonly cursor?: Endpoint39_7Request["query"]["cursor"]
+  readonly limit?: Endpoint39_7Request["query"]["limit"]
+}
+export type Endpoint39_7Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.thread.read"]>>["data"]
+export type DotsThreadReadOperation<E = never> = (input: Endpoint39_7Input) => Effect.Effect<Endpoint39_7Output, E>
+
+type Endpoint39_8Request = Parameters<RawClient["server.dots"]["dots.thread.send"]>[0]
+export type Endpoint39_8Input = {
+  readonly threadID: Endpoint39_8Request["params"]["threadID"]
+  readonly text: Endpoint39_8Request["payload"]["text"]
+  readonly clientMessageID: Endpoint39_8Request["payload"]["clientMessageID"]
+  readonly mode: Endpoint39_8Request["payload"]["mode"]
+}
+export type Endpoint39_8Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.thread.send"]>>["data"]
+export type DotsThreadSendOperation<E = never> = (input: Endpoint39_8Input) => Effect.Effect<Endpoint39_8Output, E>
+
+type Endpoint39_9Request = Parameters<RawClient["server.dots"]["dots.thread.interrupt"]>[0]
+export type Endpoint39_9Input = {
+  readonly threadID: Endpoint39_9Request["params"]["threadID"]
+  readonly turnID: Endpoint39_9Request["payload"]["turnID"]
+}
+export type Endpoint39_9Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.thread.interrupt"]>>["data"]
+export type DotsThreadInterruptOperation<E = never> = (input: Endpoint39_9Input) => Effect.Effect<Endpoint39_9Output, E>
+
+export type Endpoint39_10Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.resume"]>>["data"]
+export type DotsResumeOperation<E = never> = () => Effect.Effect<Endpoint39_10Output, E>
+
+type Endpoint39_11Request = Parameters<RawClient["server.dots"]["dots.thread.requests"]>[0]
+export type Endpoint39_11Input = { readonly threadID: Endpoint39_11Request["params"]["threadID"] }
+export type Endpoint39_11Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.thread.requests"]>>["data"]
+export type DotsThreadRequestsOperation<E = never> = (
+  input: Endpoint39_11Input,
+) => Effect.Effect<Endpoint39_11Output, E>
+
+type Endpoint39_12Request = Parameters<RawClient["server.dots"]["dots.thread.respond"]>[0]
+export type Endpoint39_12Input = {
+  readonly threadID: Endpoint39_12Request["params"]["threadID"]
+  readonly requestID: Endpoint39_12Request["params"]["requestID"]
+  readonly decision?: Endpoint39_12Request["payload"]["decision"]
+  readonly answers?: Endpoint39_12Request["payload"]["answers"]
+}
+export type Endpoint39_12Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.thread.respond"]>>["data"]
+export type DotsThreadRespondOperation<E = never> = (input: Endpoint39_12Input) => Effect.Effect<Endpoint39_12Output, E>
+
 export interface DotsApi<E = never> {
   readonly get: DotsGetOperation<E>
   readonly set: DotsSetOperation<E>
   readonly attach: DotsAttachOperation<E>
+  readonly detach: DotsDetachOperation<E>
+  readonly remove: DotsRemoveOperation<E>
+  readonly threads: DotsThreadsOperation<E>
+  readonly task: { readonly updates: DotsTaskUpdatesOperation<E> }
+  readonly thread: {
+    readonly read: DotsThreadReadOperation<E>
+    readonly send: DotsThreadSendOperation<E>
+    readonly interrupt: DotsThreadInterruptOperation<E>
+    readonly requests: DotsThreadRequestsOperation<E>
+    readonly respond: DotsThreadRespondOperation<E>
+  }
+  readonly resume: DotsResumeOperation<E>
 }
 
 export type Endpoint40_0Output = EffectValue<ReturnType<RawClient["server.decision"]["decision.list"]>>["data"]

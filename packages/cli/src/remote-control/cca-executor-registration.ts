@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto"
-import { open, readFile, rm, writeFile } from "node:fs/promises"
+import { createHash, randomUUID } from "node:crypto"
+import { open, readFile, rename, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { setTimeout } from "node:timers/promises"
@@ -73,7 +73,7 @@ export type CcaRenameDeclined = {
 export type CcaExperimentState = {
   readonly installationID: string
   readonly accountHash: string
-  readonly status: "pending" | "completed" | "failed" | "uncertain"
+  readonly status: "pending" | "completed" | "failed" | "uncertain" | "removed"
   readonly createdAt: string
   readonly updatedAt: string
   readonly executorID?: string
@@ -312,6 +312,26 @@ export async function runCcaRegistration(input: RunCcaRegistrationInput): Promis
   return {
     result: decoded,
     state: completedState,
+  }
+}
+
+export async function markCcaExecutorRemoved(statePath: string, executorID: string): Promise<void> {
+  const current = await loadCcaExperimentState(statePath)
+  if (current.status !== "completed" || current.executorID !== executorID) throw new Error("The executor enrollment changed")
+  const removed: CcaExperimentState = {
+    installationID: current.installationID,
+    accountHash: current.accountHash,
+    status: "removed",
+    createdAt: current.createdAt,
+    updatedAt: new Date().toISOString(),
+  }
+  const temporary = `${statePath}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporary, JSON.stringify(removed, null, 2), { mode: 0o600 })
+    await rename(temporary, statePath)
+  } catch (error) {
+    await rm(temporary, { force: true })
+    throw error
   }
 }
 

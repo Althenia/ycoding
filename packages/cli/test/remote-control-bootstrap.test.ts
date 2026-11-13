@@ -5,12 +5,17 @@ import path from "node:path"
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
 import type { DotsAccess } from "@ycoding-ai/core/dots/access"
 import { remoteControlTransport, startNativeRemoteControl } from "../src/remote-control/bootstrap"
-import { unexpectedExecutorHost } from "./fixture/cca-scope"
+import { unavailableConversation, unexpectedExecutorHost } from "./fixture/cca-scope"
 
-const computer = { computer: async () => ({ state: "attached" as const }), attach: async () => ({ state: "attached" as const }) }
+const computer = {
+  computer: async () => ({ state: "attached" as const }),
+  attach: async () => ({ state: "attached" as const }),
+  detach: async () => ({ state: "detached" as const }),
+  remove: async () => ({ state: "removed" as const }),
+}
 
 test("status keeps the registered name separate from hostname", async () => {
-  const transport = remoteControlTransport(async () => ({ state: "on", serverName: "box.local", name: "Registered desk" }), computer)
+  const transport = remoteControlTransport(async () => ({ state: "on", serverName: "box.local", name: "Registered desk" }), computer, unavailableConversation)
   expect(await transport.status()).toEqual({ state: "connected", hostname: "box.local", name: "Registered desk" })
 })
 
@@ -26,14 +31,14 @@ test.each([
   const transport = remoteControlTransport(async () => ({
     state: input.state, serverName: "fixture.local", profile: "synthetic-private-profile", environmentID: "synthetic-private-environment", message: "synthetic-private-error",
     ...("problem" in input ? { problem: input.problem } : {}),
-  }), computer)
+  }), computer, unavailableConversation)
   expect(await transport.status()).toEqual({
     state: input.expected, hostname: "fixture.local", ...("problem" in input ? { problem: input.problem } : {}),
   })
 })
 
 test("status adapter bounds unexpected failures to a typed connection problem", async () => {
-  const transport = remoteControlTransport(async () => { throw Error("synthetic-private-error") }, computer)
+  const transport = remoteControlTransport(async () => { throw Error("synthetic-private-error") }, computer, unavailableConversation)
   expect(await transport.status()).toEqual({ state: "error", problem: "connection" })
 })
 
@@ -69,6 +74,8 @@ test.each([false, true])("bootstrap registers the host status, follows configura
   expect(await transport?.status()).toMatchObject({ state: "off", hostname: expect.any(String) })
   expect(await transport?.computer()).toEqual({ state: "unavailable", problem: "configuration" })
   expect(await transport?.attachComputer({ replaceOthers: false })).toEqual({ state: "unavailable", problem: "configuration" })
+  expect(await transport?.detachComputer({})).toEqual({ state: "unavailable", problem: "configuration" })
+  expect(await transport?.removeComputer({})).toEqual({ state: "unavailable", problem: "configuration" })
   await stop()
   expect(events).toEqual(["attach", "subscribe", "subscribe", "detach", "unsubscribe", "unsubscribe"])
   expect(transport).toBeUndefined()

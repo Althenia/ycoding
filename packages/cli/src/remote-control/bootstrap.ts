@@ -2,6 +2,7 @@ import path from "node:path"
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
 import type { DotsAccess } from "@ycoding-ai/core/dots/access"
 import { createCcaComputerControl, type CcaComputerControl } from "./cca-computer"
+import { createCcaDotConversation } from "./cca-dot-conversation"
 import { createCcaExecutorHost } from "./cca-executor-host"
 import { createRemoteControlHost, type RemoteControlStatus } from "./host"
 import { createRemoteControlStateStore } from "./state"
@@ -30,7 +31,8 @@ export async function startNativeRemoteControl(input: {
     onDiagnostic: input.onDiagnostic,
   })
   const computer = createCcaComputerControl({ native: input.native, statePath: executorStatePath, onDiagnostic: input.onDiagnostic })
-  const unregister = input.native.attachTransport(remoteControlTransport(host.status, computer))
+  const conversation = createCcaDotConversation({ native: input.native, durable: executor.durable })
+  const unregister = input.native.attachTransport(remoteControlTransport(host.status, computer, conversation))
   const stop = async () => {
     unregister()
     await Promise.all([host.stop(), executor.stop()])
@@ -45,10 +47,13 @@ export async function startNativeRemoteControl(input: {
   return stop
 }
 
-export function remoteControlTransport(status: () => Promise<RemoteControlStatus>, computer: CcaComputerControl): DotsAccess.Transport {
+export function remoteControlTransport(status: () => Promise<RemoteControlStatus>, computer: CcaComputerControl, conversation: DotsAccess.Conversation): DotsAccess.Transport {
   return {
+    conversation,
     computer: computer.computer,
     attachComputer: computer.attach,
+    detachComputer: computer.detach,
+    removeComputer: computer.remove,
     status: async () => {
       const current = await status().catch((): RemoteControlStatus => ({ state: "error", problem: "connection" }))
       return {

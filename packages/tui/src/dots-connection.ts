@@ -8,6 +8,7 @@ export function createDotsConnection(input: {
   get: (signal: AbortSignal) => Promise<Dots.NativeStatus>
   set: (input: { enabled: boolean; expectedRevision: number }) => Promise<Dots.NativeStatus>
   attach: (input: Dots.ComputerAttach) => Promise<Dots.NativeStatus>
+  detach: (input: Dots.ComputerDetach) => Promise<Dots.NativeStatus>
   error: (error: unknown) => void
 }) {
   const [opened, setOpened] = createSignal(false)
@@ -16,7 +17,9 @@ export function createDotsConnection(input: {
   const [pending, setPending] = createSignal(false)
   const [failure, setFailure] = createSignal<string>()
   const [attachFailure, setAttachFailure] = createSignal<string>()
+  const [detachFailure, setDetachFailure] = createSignal<string>()
   const [confirming, setConfirming] = createSignal(false)
+  const [confirmingDetach, setConfirmingDetach] = createSignal(false)
   let disposed = false
   let generation = 0
   let epoch = 0
@@ -26,8 +29,11 @@ export function createDotsConnection(input: {
   let reading: { controller: AbortController; promise: Promise<void> } | undefined
   let writing = false
   let attachTarget: Dots.ComputerTarget | undefined
+  let detachTarget: Dots.ComputerTarget | undefined
 
   const attachable = (value: Dots.NativeStatus | undefined) => !!value?.access.enabled && value.computer?.state === "detached"
+
+  const detachable = (value: Dots.NativeStatus | undefined) => !!value?.access.enabled && value.computer?.state === "attached"
 
   function invalidate() {
     generation++
@@ -43,6 +49,7 @@ export function createDotsConnection(input: {
     setFailure(undefined)
     setReady(true)
     if (!attachable(next)) setConfirming(false)
+    if (!detachable(next)) setConfirmingDetach(false)
   }
 
   function refresh(): Promise<void> {
@@ -72,6 +79,8 @@ export function createDotsConnection(input: {
     !!status() && (status()!.access.enabled || status()!.configuration.ready)
 
   const canAttach = () => opened() && input.connected() && !pending() && !failure() && attachable(status())
+
+  const canDetach = () => opened() && input.connected() && !pending() && !failure() && detachable(status())
 
   async function mutate(run: () => Promise<Dots.NativeStatus>, fail: (error: unknown) => void) {
     const scope = epoch
@@ -118,6 +127,20 @@ export function createDotsConnection(input: {
     await mutate(() => input.attach({ replaceOthers: false, ...(attachTarget === undefined ? {} : { expectedTarget: attachTarget }) }), (error) => setAttachFailure(errorMessage(error)))
   }
 
+  function requestDetach() {
+    if (disposed || writing || !canDetach()) return
+    setDetachFailure(undefined)
+    detachTarget = status()?.computer?.target
+    setConfirmingDetach(true)
+  }
+
+  async function detach() {
+    if (disposed || writing || !confirmingDetach() || !canDetach()) return
+    setConfirmingDetach(false)
+    setDetachFailure(undefined)
+    await mutate(() => input.detach(detachTarget === undefined ? {} : { expectedTarget: detachTarget }), (error) => setDetachFailure(errorMessage(error)))
+  }
+
   createEffect(on(
     () => [opened(), input.connected(), input.owner()] as const,
     ([open, nextConnected, nextOwner]) => {
@@ -127,8 +150,10 @@ export function createDotsConnection(input: {
         setStatus(undefined)
         setFailure(undefined)
         setAttachFailure(undefined)
+        setDetachFailure(undefined)
       }
       setConfirming(false)
+      setConfirmingDetach(false)
       owner = nextOwner
       connected = nextConnected
       invalidate()
@@ -144,9 +169,11 @@ export function createDotsConnection(input: {
   })
 
   return {
-    status, ready, pending, failure, attachFailure, canToggle, canAttach, refresh, toggle, requestAttach, attach,
+    status, ready, pending, failure, attachFailure, detachFailure, canToggle, canAttach, canDetach, refresh, toggle, requestAttach, attach, requestDetach, detach,
     confirmingAttach: () => confirming() && canAttach(),
     cancelAttach: () => setConfirming(false),
+    confirmingDetach: () => confirmingDetach() && canDetach(),
+    cancelDetach: () => setConfirmingDetach(false),
     connected: input.connected,
     open: () => { if (!disposed) setOpened(true) },
     close: () => setOpened(false),

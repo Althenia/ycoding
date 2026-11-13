@@ -870,6 +870,8 @@ describe("remote operations", () => {
       "dots.get",
       "dots.set",
       "dots.attach",
+      "dots.detach",
+      "dots.remove",
       "session.skill",
       "usage.providers",
       "usage.summary",

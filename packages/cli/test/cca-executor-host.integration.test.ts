@@ -14,7 +14,7 @@ import type { NativeDots } from "@ycoding-ai/core/dots/native"
 import { upstreamOs } from "@ycoding-ai/core/util/platform"
 import { createCcaExecutorHost } from "../src/remote-control/cca-executor-host"
 import { ccaExecutorCapabilityRoots } from "../src/remote-control/cca-executor-registration"
-import { unrecordedTranscript } from "./fixture/cca-scope"
+import { idleDurableConnector, unrecordedTranscript } from "./fixture/cca-scope"
 import {
   ccaCompatibleExecServerVersion,
   ccaExecServerPrependPathDir,
@@ -291,6 +291,7 @@ async function fixture(options: { readonly deny?: boolean; readonly ttlMs?: numb
   }
   const diagnostics: string[] = []
   const host = createCcaExecutorHost({
+    connectDurable: idleDurableConnector,
     native: {
       configuration: async () => configuration,
       credential: async (profile) => configuration.enabled

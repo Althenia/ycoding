@@ -44,6 +44,9 @@ declare module "ws" {
     on(type: "error", listener: (error: Error) => void): unknown
     on(type: "close", listener: () => void): unknown
     on(type: string, listener: (...args: unknown[]) => void): unknown
+    once(type: "listening", listener: () => void): unknown
+    once(type: string, listener: (...args: unknown[]) => void): unknown
+    readonly clients: Set<NodeWebSocket>
     address(): import("node:net").AddressInfo | string | null
     close(callback?: (error?: Error) => void): void
   }
@@ -56,6 +59,8 @@ declare module "ws" {
         readonly headers?: Record<string, string>
         readonly maxPayload?: number
         readonly closeTimeout?: number
+        readonly perMessageDeflate?: boolean
+        readonly handshakeTimeout?: number
       },
     ): NodeWebSocket
     new (
@@ -65,6 +70,8 @@ declare module "ws" {
         readonly headers?: Record<string, string>
         readonly maxPayload?: number
         readonly closeTimeout?: number
+        readonly perMessageDeflate?: boolean
+        readonly handshakeTimeout?: number
       },
     ): NodeWebSocket
   }
@@ -75,6 +82,11 @@ declare module "ws" {
       readonly host?: string
       readonly server?: import("node:http").Server
       readonly maxPayload?: number
+      readonly handleProtocols?: (protocols: Set<string>, request: import("node:http").IncomingMessage) => string | false
+      readonly verifyClient?: (
+        info: { readonly origin: string; readonly secure: boolean; readonly req: import("node:http").IncomingMessage },
+        callback: (result: boolean, code?: number, message?: string) => void,
+      ) => void
     }): NodeWebSocketServer
   }
 }

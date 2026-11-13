@@ -99,6 +99,8 @@ export const remoteOperations = [
   "dots.get",
   "dots.set",
   "dots.attach",
+  "dots.detach",
+  "dots.remove",
   "session.skill",
   "usage.providers",
   "usage.summary",
@@ -192,8 +194,18 @@ export type RemoteDotsStatus = {
   readonly access: { readonly enabled: boolean; readonly revision: number }
   readonly configuration: { readonly ready: boolean; readonly profile?: string; readonly message?: string }
   readonly connection: { readonly state: "unavailable" | "off" | "connecting" | "connected" | "error"; readonly hostname?: string; readonly name?: string; readonly message?: string }
-  readonly computer?: { readonly state: "attached" | "detached" | "unavailable"; readonly message?: string; readonly name?: string; readonly target?: RemoteDotsComputerTarget }
+  readonly computer?: {
+    readonly state: "attached" | "detached" | "unavailable" | "removed"
+    readonly message?: string
+    readonly name?: string
+    readonly target?: RemoteDotsComputerTarget
+    readonly readiness?: "connected" | "offline" | "unknown"
+    readonly usableForTasks?: boolean
+    readonly dotEnvironment?: RemoteDotsEnvironment
+  }
 }
+
+export type RemoteDotsEnvironment = { readonly status: string; readonly capabilities: readonly { readonly type: string; readonly status: string }[] }
 
 export function readDotsStatus(value: unknown): RemoteDotsStatus | undefined {
   if (!isRecord(value) || !isRecord(value.access) || !isRecord(value.configuration) || !isRecord(value.connection)) return undefined
@@ -221,8 +233,35 @@ function readDotsComputer(value: unknown): RemoteDotsStatus["computer"] | null {
   const target = value.target === undefined ? undefined : readDotsComputerTarget(value.target)
   if (target === null) return null
   const state = value.state
-  if (state !== "attached" && state !== "detached" && state !== "unavailable") return null
-  return { state, ...(value.message === undefined ? {} : { message: value.message }), ...(value.name === undefined ? {} : { name: value.name }), ...(target === undefined ? {} : { target }) }
+  if (state !== "attached" && state !== "detached" && state !== "unavailable" && state !== "removed") return null
+  const readiness = value.readiness
+  if (readiness !== undefined && readiness !== "connected" && readiness !== "offline" && readiness !== "unknown") return null
+  if (value.usableForTasks !== undefined && typeof value.usableForTasks !== "boolean") return null
+  const dotEnvironment = value.dotEnvironment === undefined ? undefined : readDotsEnvironment(value.dotEnvironment)
+  if (dotEnvironment === null) return null
+  return {
+    state,
+    ...(value.message === undefined ? {} : { message: value.message }),
+    ...(value.name === undefined ? {} : { name: value.name }),
+    ...(target === undefined ? {} : { target }),
+    ...(readiness === undefined ? {} : { readiness }),
+    ...(value.usableForTasks === undefined ? {} : { usableForTasks: value.usableForTasks }),
+    ...(dotEnvironment === undefined ? {} : { dotEnvironment }),
+  }
+}
+
+function readDotsEnvironment(value: unknown): RemoteDotsEnvironment | null {
+  if (!isRecord(value) || !dotsStatusIdentifier(value.status) || !Array.isArray(value.capabilities) || value.capabilities.length > 16) return null
+  const capabilities: { type: string; status: string }[] = []
+  for (const item of value.capabilities) {
+    if (!isRecord(item) || !dotsStatusIdentifier(item.type) || !dotsStatusIdentifier(item.status)) return null
+    capabilities.push({ type: item.type, status: item.status })
+  }
+  return { status: value.status, capabilities }
+}
+
+function dotsStatusIdentifier(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z][a-z0-9_-]{0,63}$/.test(value)
 }
 
 export function readDotsComputerTarget(value: unknown): RemoteDotsComputerTarget | null {
@@ -320,6 +359,8 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "dots.get": "read",
   "dots.set": "mutation",
   "dots.attach": "mutation",
+  "dots.detach": "mutation",
+  "dots.remove": "mutation",
   "session.skill": "mutation",
   "usage.providers": "read",
   "usage.summary": "read",
@@ -415,7 +456,7 @@ export const RemoteLimits = {
   dotsComputerObserveMs: 20_000,
   /** Deadline for one upstream Dot attachment request. */
   dotsConnectMs: 15_000,
-  /** Browser outcome budget for `dots.attach`, which observes, connects and observes again. */
+  /** Browser outcome budget for `dots.attach`, `dots.detach` and `dots.remove`, which observe, send one request and observe again. */
   dotsAttachMs: 90_000,
   maxClientMessageChars: 32_768,
   maxAttachmentChunkChars: 28_000,
@@ -891,7 +932,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
   if (operation === "usage.forecast" && (!isRecord(frame.input) ||
     (frame.input.localScope === "location") !== (frame.sessionID !== undefined)))
     return failRequest("invalid_message", "Forecast scope requires a backend-resolved Session Location or an unscoped backend")
-  if ((operation.startsWith("provider.auth.") || operation.startsWith("coordination.") || operation === "dots.get" || operation === "dots.set" || operation === "dots.attach" || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
+  if ((operation.startsWith("provider.auth.") || operation.startsWith("coordination.") || operation === "dots.get" || operation === "dots.set" || operation === "dots.attach" || operation === "dots.detach" || operation === "dots.remove" || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
     operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report" || operation === "usage.dashboard" ||
     operation === "incident.report" || operation === "incident.recent" ||
     operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set" ||
@@ -937,6 +978,8 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
     typeof input.enabled === "boolean" && typeof input.expectedRevision === "number" &&
     Number.isSafeInteger(input.expectedRevision) && input.expectedRevision >= 0
   if (operation === "dots.attach") return isRecord(input) && Object.keys(input).every((key) => key === "replaceOthers" || key === "expectedTarget") && typeof input.replaceOthers === "boolean" &&
+    (input.expectedTarget === undefined || readDotsComputerTarget(input.expectedTarget) !== null)
+  if (operation === "dots.detach" || operation === "dots.remove") return input === undefined || isRecord(input) && Object.keys(input).every((key) => key === "expectedTarget") &&
     (input.expectedTarget === undefined || readDotsComputerTarget(input.expectedTarget) !== null)
   if (operation === "session.delete") return input === undefined || isRecord(input) && Object.keys(input).length === 0
   if (operation.startsWith("coordination.")) return validCoordinationInput(operation, input)

@@ -107,7 +107,7 @@ test("operator API operation ids and example bodies match the current Protocol",
     "credential.update", "credential.activate", "credential.remove", "provider.integrations", "provider.refresh",
     "artifact.list", "artifact.get", "artifact.create", "artifact.update", "coordination.settings", "coordination.list", "coordination.get", "coordination.create", "coordination.update", "coordination.delete",
     "shell.remove", "pty.create", "pty.update", "pty.remove", "pty.control", "pty.connect.token", "pty.connect",
-    "dots.get", "dots.set", "dots.attach", "remote.get", "remote.set", "telemetry.list", "telemetry.consent.get", "telemetry.consent.set",
+    "dots.get", "dots.set", "dots.attach", "dots.detach", "dots.remove", "remote.get", "remote.set", "telemetry.list", "telemetry.consent.get", "telemetry.consent.set",
     "session.prediction", "session.promptGenerate", "session.compact", "session.compaction.list", "server.session.session.todo.list",
   ]) expect(mentioned.has(required)).toBe(true)
   for (const operation of mentioned) expect(operationIDs.has(operation)).toBe(true)

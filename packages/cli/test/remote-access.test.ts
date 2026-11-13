@@ -3,6 +3,9 @@ import type { RemoteDotsStatus, RemoteRequest } from "@ycoding-ai/remote"
 import { createLocalServer, LocalFailure, type LocalServer } from "../src/remote-local"
 import { createSessionRegistry, createSubscriptions, executeRemoteOperation } from "../src/remote-operations"
 
+const stubLocal = (handler: ProxyHandler<LocalServer>): LocalServer => new Proxy(Object.create(null), handler)
+const rawRequest = (request: object): RemoteRequest => JSON.parse(JSON.stringify(request))
+
 const status: RemoteDotsStatus = { access: { enabled: false, revision: 2 }, configuration: { ready: true, profile: "Synthetic" }, connection: { state: "off" } }
 
 test("remote attachment dispatch preserves the replace mode and target receipt", async () => {
@@ -82,4 +85,38 @@ test("global Dots local adapter sends no Session or Location and only revision-f
       { path: "/api/dots/computer", query: "", method: "POST", directory: null, workspace: null, body: { replaceOthers: true, expectedTarget: target } },
     ])
   } finally { await server.stop(true) }
+})
+
+test("remote detachment and removal dispatch preserve the optional target receipt and reject unknown fields", async () => {
+  const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+  const calls: unknown[][] = []
+  const local = stubLocal({ get: (_target, name) => async (...args: unknown[]) => { calls.push([name, ...args]); return status } })
+  const dispatch = (operation: string, input?: Record<string, unknown>, sessionID?: string) => executeRemoteOperation({ local, sessions: createSessionRegistry({ local }), subscriptions: createSubscriptions(), request: rawRequest({
+    type: "request", id: "req_detach", operation, sessionID, input,
+  }) })
+  expect(await dispatch("dots.detach")).toEqual([{ type: "response", id: "req_detach", ok: true, value: { data: status } }])
+  expect(await dispatch("dots.detach", { expectedTarget: target })).toMatchObject([{ ok: true }])
+  expect(await dispatch("dots.remove", {})).toMatchObject([{ ok: true }])
+  expect(await dispatch("dots.remove", { expectedTarget: target })).toMatchObject([{ ok: true }])
+  expect(calls).toEqual([["dotsDetach", {}], ["dotsDetach", { expectedTarget: target }], ["dotsRemove", {}], ["dotsRemove", { expectedTarget: target }]])
+  for (const operation of ["dots.detach", "dots.remove"]) {
+    for (const input of [{ replaceOthers: false }, { expectedTarget: { dotID: "dot-a" } }])
+      expect(await dispatch(operation, input)).toMatchObject([{ ok: false, error: { code: "invalid_message" } }])
+    expect(await dispatch(operation, {}, "ses_existing")).toMatchObject([{ ok: false, error: { code: "invalid_message" } }])
+  }
+  expect(calls).toHaveLength(4)
+  const failing = stubLocal({ get: () => async () => { throw new LocalFailure("transport", "Synthetic incomplete response") } })
+  for (const operation of ["dots.detach", "dots.remove"])
+    expect(await executeRemoteOperation({ local: failing, sessions: createSessionRegistry({ local: failing }), subscriptions: createSubscriptions(), request: rawRequest({ type: "request", id: "req_x", operation }) }))
+      .toMatchObject([{ ok: false, error: { code: "outcome_unknown" } }])
+})
+
+test("the browser relay does not expose the Dot conversation operations", async () => {
+  const calls: unknown[][] = []
+  const local = stubLocal({ get: (_target, name) => async (...args: unknown[]) => { calls.push([name, ...args]); return status } })
+  for (const operation of ["dots.threads", "dots.task.updates", "dots.thread.read", "dots.thread.send", "dots.thread.interrupt", "dots.resume", "dots.thread.requests", "dots.thread.respond"])
+    expect(await executeRemoteOperation({ local, sessions: createSessionRegistry({ local }), subscriptions: createSubscriptions(), request: rawRequest({
+      type: "request", id: "req_conversation", operation,
+    }) })).toMatchObject([{ ok: false, error: { code: "unknown_operation" } }])
+  expect(calls).toEqual([])
 })

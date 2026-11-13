@@ -15,6 +15,7 @@ import {
   reregisterCcaExecutor,
   runCcaRegistration,
   sameCcaCapabilityRoots,
+  type CcaCapabilityRoot,
   type CcaCredential,
   type CcaExperimentState,
 } from "./cca-executor-registration"
@@ -33,6 +34,7 @@ import {
   type CcaRegistrationResult,
 } from "./cca-executor-transport"
 import { acceptCcaNoiseHandshake, createCcaNoiseIdentity, type AcceptCcaNoiseHandshakeInput, type CcaNoiseIdentity } from "./cca-noise"
+import { isRecord, listCcaDurableThreads, startCcaDurableClient, type CcaDurableClient, type CcaDurableConnector } from "./cca-durable-host"
 import { awaitWebSocketOpen, waitForAbort, type CcaWebSocketConnector } from "./cca-proof-common"
 import type { CcaProofJournalRecordInput } from "./cca-proof-journal"
 import { answerCcaTaskWorkspace, type CcaTaskWorkspaceHost } from "./cca-task-workspace"
@@ -60,6 +62,11 @@ export const ccaExecutorHostDiagnostics = [
   "registration-rename-unconfirmed",
   "registration-update-failed",
   "cleanup-failed",
+  "durable-connected",
+  "durable-failed",
+  "durable-rejected",
+  "readiness-sent",
+  "readiness-failed",
 ] as const
 
 const maxChannelSummaryEntries = 64
@@ -98,6 +105,8 @@ export interface CcaExecutorHostDeps {
   readonly random?: () => number
   readonly onDiagnostic?: (message: string) => void
   readonly detachedSessionTtlMs?: number
+  readonly connectDurable?: CcaDurableConnector
+  readonly durableURL?: string
 }
 
 export const ccaReconnectInitialMs = 1_000
@@ -109,12 +118,116 @@ export function ccaReconnectDelay(backoffMs: number, random: () => number = Math
   return lower + Math.floor(random() * (backoffMs - lower + 1))
 }
 
+export const ccaReadinessRetryInitialMs = 5_000
+export const ccaReadinessRetryMaxMs = 60_000
+export const ccaReadinessConcurrency = 4
+export const ccaReadinessThreadSources = ["aeon", "aeon_child", "cloud_threads.create"] as const
+
+type ReadinessTarget = { readonly executorID: string; readonly roots: readonly CcaCapabilityRoot[] }
+
+function createCcaReadiness(input: {
+  readonly client: () => CcaDurableClient | undefined
+  readonly report: (category: CcaExecutorHostDiagnostic) => void
+  readonly wait: (ms: number, signal: AbortSignal) => Promise<void>
+  readonly signal: AbortSignal
+}) {
+  const sources = new Set<unknown>(ccaReadinessThreadSources)
+  let target: ReadinessTarget | undefined
+  let connected = false
+  let epoch = 0
+  let states = new Map<string, "pending" | "ready" | "error">()
+  let retryMs = ccaReadinessRetryInitialMs
+  let retry: AbortController | undefined
+  let chain = Promise.resolve()
+
+  function reset() {
+    epoch++
+    states = new Map()
+    retry?.abort()
+    retry = undefined
+    retryMs = ccaReadinessRetryInitialMs
+  }
+
+  function schedule(full: boolean) {
+    const started = epoch
+    chain = chain.then(() => pass(full, started)).catch(() => {})
+  }
+
+  function later(full: boolean) {
+    const controller = new AbortController()
+    retry = controller
+    const started = epoch
+    const ms = retryMs
+    retryMs = Math.min(retryMs * 2, ccaReadinessRetryMaxMs)
+    void input.wait(ms, AbortSignal.any([controller.signal, input.signal])).then(() => {
+      if (!controller.signal.aborted && !input.signal.aborted && started === epoch) schedule(full)
+    })
+  }
+
+  async function pass(full: boolean, started: number) {
+    const client = input.client()
+    const current = target
+    if (started !== epoch || !current || !connected || !client || input.signal.aborted) return
+    let candidates: string[]
+    if (full) {
+      const threads = await listCcaDurableThreads(client)
+      if (started !== epoch) return
+      if (threads === undefined) {
+        input.report("readiness-failed")
+        later(true)
+        return
+      }
+      candidates = threads.filter((thread) => sources.has(thread.threadSource) && Array.isArray(thread.environments) &&
+        thread.environments.some((environment: unknown) => isRecord(environment) && environment.environmentId === current.executorID))
+        .flatMap((thread) => typeof thread.id === "string" ? [thread.id] : [])
+        .filter((threadID) => states.get(threadID) !== "ready" && states.get(threadID) !== "pending")
+    } else candidates = [...states].filter(([, state]) => state === "error").map(([threadID]) => threadID)
+    const selectedCapabilityRoots = current.roots.map((root) => ({ id: root.id, location: { type: "environment", environmentId: current.executorID, path: root.path } }))
+    let sent = 0
+    let failed = 0
+    const queue = [...candidates]
+    const worker = async () => {
+      for (let threadID = queue.shift(); threadID !== undefined; threadID = queue.shift()) {
+        if (started !== epoch) return
+        states.set(threadID, "pending")
+        const reply = await client.request("thread/environmentReady", { threadId: threadID, environmentId: current.executorID, selectedCapabilityRoots })
+        if (started !== epoch) return
+        states.set(threadID, reply.kind === "result" ? "ready" : "error")
+        if (reply.kind === "result") sent++
+        else failed++
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(ccaReadinessConcurrency, candidates.length) }, worker))
+    if (started !== epoch) return
+    if (sent) input.report("readiness-sent")
+    if (failed) {
+      input.report("readiness-failed")
+      later(false)
+    } else retryMs = ccaReadinessRetryInitialMs
+  }
+
+  return {
+    executor(next: ReadinessTarget | undefined) {
+      reset()
+      target = next
+      if (next) schedule(true)
+    },
+    durable(isConnected: boolean) {
+      connected = isConnected
+      reset()
+      if (isConnected) schedule(true)
+    },
+    settled: () => chain,
+  }
+}
+
 type ServeRun = {
   identity: CcaNoiseIdentity | undefined
   registration: { readonly executorID: string; readonly result: CcaRegistrationResult } | undefined
   labelSynced: boolean
   reconciled: boolean
   readonly sessions: CcaSessionRegistry
+  readonly readiness: ReturnType<typeof createCcaReadiness>
 }
 
 class EnrollmentProblem extends Error {
@@ -165,6 +278,7 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
   let unsubscribe: (() => void) | undefined
   let selected: string | undefined
   let run: { readonly controller: AbortController; readonly done: Promise<void> } | undefined
+  let durable: CcaDurableClient | undefined
   let work = Promise.resolve()
 
   async function readEnrollment(): Promise<CcaExperimentState | undefined> {
@@ -200,7 +314,7 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
     const refreshFloraCredential = floraRefresher(configuration)
     const configuredName = await deps.native.name()
     let state = await readEnrollment()
-    if (state?.status === "failed") {
+    if (state?.status === "failed" || state?.status === "removed") {
       await rm(deps.statePath, { force: true })
       state = undefined
     }
@@ -510,8 +624,12 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
             const socket = await awaitWebSocketOpen(dial, url, headers, { signal: ended.signal, timeoutMs: ccaRendezvousConnectTimeoutMs })
             connectedAt = now()
             report("connected")
+            run.readiness.executor({ executorID, roots: enrolled.state.selectedCapabilityRoots ?? ccaExecutorCapabilityRoots(home, deps.dataDirectory) })
             const listen = socket.on ?? socket.addEventListener
-            listen?.call(socket, "close", end)
+            listen?.call(socket, "close", () => {
+              run.readiness.executor(undefined)
+              end()
+            })
             return socket
           },
           acceptHandshake: (input) => acceptHandshake({ ...input, identity }),
@@ -536,7 +654,7 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
       await waitForAbort(ended.signal)
       const connectedMs = now() - connectedAt
       const closed = await transport.close().then(() => true, () => false)
-      await Promise.allSettled([...bridges])
+      await Promise.allSettled(bridges)
       if (!closed) report("cleanup-failed")
       if (signal.aborted) return stopped
       report("connection-dropped")
@@ -546,13 +664,41 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
     }
   }
 
+  function durableCredential(configuration: EnabledConfiguration) {
+    return async (rejectedAccess?: string) => {
+      const next = await deps.native.credential(configuration.profile, rejectedAccess).catch(() => undefined)
+      if (
+        next === undefined ||
+        next.accountID !== configuration.accountID ||
+        next.credentialID !== configuration.credentialID ||
+        next.accountGeneration !== configuration.accountGeneration
+      )
+        return undefined
+      return { access: next.access, accountID: next.accountID }
+    }
+  }
+
   async function serve(configuration: EnabledConfiguration, signal: AbortSignal) {
+    let client: CcaDurableClient | undefined
+    const readiness = createCcaReadiness({ client: () => client, report, wait, signal })
+    client = startCcaDurableClient({
+      credential: durableCredential(configuration),
+      ...(deps.connectDurable === undefined ? {} : { connect: deps.connectDurable }),
+      ...(deps.durableURL === undefined ? {} : { url: deps.durableURL }),
+      wait,
+      random,
+      now,
+      onState: (connected) => readiness.durable(connected),
+      onDiagnostic: report,
+    })
+    durable = client
     const run: ServeRun = {
       identity: undefined,
       registration: undefined,
       labelSynced: false,
       reconciled: false,
       sessions: createCcaSessionRegistry(deps.detachedSessionTtlMs === undefined ? {} : { ttlMs: deps.detachedSessionTtlMs }),
+      readiness,
     }
     let backoff = ccaReconnectInitialMs
     try {
@@ -565,6 +711,10 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
         await wait(pause, signal)
       }
     } finally {
+      readiness.executor(undefined)
+      if (durable === client) durable = undefined
+      await client.close()
+      await readiness.settled()
       await run.sessions.shutdown()
     }
   }
@@ -594,6 +744,7 @@ export function createCcaExecutorHost(deps: CcaExecutorHostDeps) {
   }
 
   return {
+    durable: () => durable,
     start: async () => {
       await ensureYcodingOperatorSkill(deps.dataDirectory)
       unsubscribe ??= deps.native.subscribeConfiguration(() => void reconcile())

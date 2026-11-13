@@ -26,6 +26,7 @@ for (const mode of ["dark", "light"] as const) for (const width of [60, 100]) {
         get: async () => current,
         set: () => { writes++; return new Promise((resolve) => { finish = resolve }) },
         attach: async () => current,
+        detach: async () => current,
         error: (error) => { throw error },
       })
       return <DialogDotsConnection connection={connection} />
@@ -63,7 +64,10 @@ const base: Dots.NativeStatus = { access: { enabled: true, revision: 4 }, config
 async function renderComputerDialog(initial: Dots.NativeStatus, width = 100) {
   let current = initial
   const attaches: { replaceOthers: boolean }[] = []
+  const detaches: Dots.ComputerDetach[] = []
   const errors: unknown[] = []
+  let finishDetach!: (value: Dots.NativeStatus) => void
+  let failDetach!: (error: unknown) => void
   let finish!: (value: Dots.NativeStatus) => void
   let fail!: (error: unknown) => void
   let connection!: ReturnType<typeof createDotsConnection>
@@ -75,6 +79,10 @@ async function renderComputerDialog(initial: Dots.NativeStatus, width = 100) {
       attach: (input) => {
         attaches.push(input)
         return new Promise((resolve, reject) => { finish = resolve; fail = reject })
+      },
+      detach: (input) => {
+        detaches.push(input)
+        return new Promise((resolve, reject) => { finishDetach = resolve; failDetach = reject })
       },
       error: (error) => errors.push(error),
     })
@@ -89,7 +97,9 @@ async function renderComputerDialog(initial: Dots.NativeStatus, width = 100) {
   </Keymap.Provider></ConfigProvider></TestTuiContexts>, { width, height: 36 })
   app.renderer.start()
   return {
-    app, attaches, errors,
+    app, attaches, detaches, errors,
+    settleDetach: (value: Dots.NativeStatus) => { current = value; finishDetach(value) },
+    rejectDetach: (error: unknown) => failDetach(error),
     frame: () => app.captureCharFrame(),
     settle: (value: Dots.NativeStatus) => { current = value; finish(value) },
     reject: (error: unknown) => fail(error),
@@ -171,4 +181,29 @@ test("Dots dialog shows an attach failure and does not retry", async () => {
     expect(view.errors).toHaveLength(1)
     expect(view.frame()).toContain("Executor: Not attached")
   } finally { view.app.renderer.destroy() }
+})
+
+test("Dots dialog offers Detach only for an attached computer, confirms first, then detaches once", async () => {
+  const view = await renderComputerDialog({ ...base, computer: { state: "attached" } })
+  try {
+    await view.app.waitForFrame((frame) => frame.includes("Detach this computer from Dots tasks"))
+    view.app.mockInput.pressArrow("down")
+    view.app.mockInput.pressEnter()
+    await view.app.waitForFrame((frame) => frame.includes("stop running Dots tasks"))
+    expect(view.detaches).toEqual([])
+    view.app.mockInput.pressEnter()
+    await view.app.waitForFrame((frame) => frame.includes("Updating access"))
+    expect(view.detaches).toEqual([{}])
+    view.settleDetach({ ...base, computer: { state: "detached" } })
+    await view.app.waitForFrame((frame) => frame.includes("Executor: Not attached"))
+    expect(view.frame()).not.toContain("Detach this computer from Dots tasks")
+    expect(view.detaches).toHaveLength(1)
+  } finally { view.app.renderer.destroy() }
+  for (const computer of [{ state: "detached" }, { state: "unavailable" }] as const) {
+    const other = await renderComputerDialog({ ...base, computer })
+    try {
+      await other.app.waitForFrame((frame) => frame.includes("Executor:"))
+      expect(other.frame()).not.toContain("Detach this computer from Dots tasks")
+    } finally { other.app.renderer.destroy() }
+  }
 })

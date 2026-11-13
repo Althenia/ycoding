@@ -36,6 +36,7 @@ import { createRemoteControlHost } from "../src/remote-control/host"
 import { remoteControlTransport } from "../src/remote-control/bootstrap"
 import { connectRemoteControlSocket } from "../src/remote-control/socket"
 import { createRemoteControlStateStore } from "../src/remote-control/state"
+import { unavailableConversation } from "./fixture/cca-scope"
 
 type Message = {
   id?: string | number
@@ -150,7 +151,7 @@ it.live("local native WebSocket composition admits prompts, settles real Forms a
     fetchFn: async () => Response.json({ server_id: "synthetic-server", environment_id: "synthetic-environment", remote_control_token: "synthetic-token" }),
     connect: (_url, headers) => connectRemoteControlSocket(`ws://127.0.0.1:${server.port}`, headers),
   })
-  const unregister = native.attachTransport(remoteControlTransport(host.status, { computer: async () => ({ state: "unavailable", problem: "configuration" }), attach: async () => ({ state: "unavailable", problem: "configuration" }) }))
+  const unregister = native.attachTransport(remoteControlTransport(host.status, { computer: async () => ({ state: "unavailable", problem: "configuration" }), attach: async () => ({ state: "unavailable", problem: "configuration" }), detach: async () => ({ state: "unavailable", problem: "configuration" }), remove: async () => ({ state: "unavailable", problem: "configuration" }) }, unavailableConversation))
   yield* Effect.addFinalizer(() => Effect.promise(async () => { unregister(); await host.shutdown() }))
   yield* Effect.promise(() => host.start())
   let peer = yield* Effect.promise(() => bounded(connected.promise, "WebSocket connection"))

@@ -11,7 +11,7 @@ import { CcaPolicy } from "@ycoding-ai/core/cca/policy"
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
 import { createCcaExecutorHost } from "../src/remote-control/cca-executor-host"
 import { ccaExecServerPrependPathDir } from "../src/remote-control/cca-executor-transport"
-import { unexpectedExecutorHost, unrecordedTranscript } from "./fixture/cca-scope"
+import { idleDurableConnector, unexpectedExecutorHost, unrecordedTranscript } from "./fixture/cca-scope"
 import type { CcaNoisePublicKey, CcaNoiseTransport } from "../src/remote-control/cca-executor-transport"
 import {
   decodeRelayMessageFrame,
@@ -312,6 +312,7 @@ beforeAll(async () => {
     close: async () => {},
   }
   const host = createCcaExecutorHost({
+    connectDurable: idleDurableConnector,
     native: {
       configuration: async () => configuration,
       credential: async (profile) => ({ access, accountID, key: "credential-key-1", profile, credentialID: "credential-1", accountGeneration: 1 }),
