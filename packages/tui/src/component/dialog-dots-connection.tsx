@@ -2,7 +2,7 @@ import { createMemo, onCleanup, onMount, Show } from "solid-js"
 import { Keymap } from "../context/keymap"
 import { useClient } from "../context/client"
 import { useTheme } from "../context/theme"
-import { createDotsConnection } from "../dots-connection"
+import { createDotsConnection, dotsRequests } from "../dots-connection"
 import { DialogSelect } from "../ui/dialog-select"
 import { useDialog } from "../ui/dialog"
 import { useToast } from "../ui/toast"
@@ -14,10 +14,7 @@ export function DotsConnectionCommand() {
   const connection = createDotsConnection({
     owner: () => client.api,
     connected: () => client.connection.status() === "connected",
-    get: (signal) => client.api.dots.get({ signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) }),
-    set: (input) => client.api.dots.set(input, { signal: AbortSignal.timeout(5000) }),
-    attach: (input) => client.api.dots.attach(input, { signal: AbortSignal.timeout(5000) }),
-    detach: (input) => client.api.dots.detach(input, { signal: AbortSignal.timeout(5000) }),
+    ...dotsRequests(() => client.api),
     error: (error) => toast.error(error),
   })
   Keymap.createLayer(() => ({

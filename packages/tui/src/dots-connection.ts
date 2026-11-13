@@ -1,6 +1,19 @@
 import { createEffect, createSignal, on, onCleanup } from "solid-js"
+import type { YCodingClient } from "@ycoding-ai/client"
 import type { Dots } from "@ycoding-ai/schema/dots"
 import { errorMessage } from "./util/error"
+
+const dotsStatusMs = 30_000
+const dotsAttachMs = 90_000
+
+export function dotsRequests(api: () => Pick<YCodingClient, "dots">) {
+  return {
+    get: (signal: AbortSignal) => api().dots.get({ signal: AbortSignal.any([signal, AbortSignal.timeout(dotsStatusMs)]) }),
+    set: (input: { enabled: boolean; expectedRevision: number }) => api().dots.set(input, { signal: AbortSignal.timeout(dotsStatusMs) }),
+    attach: (input: Dots.ComputerAttach) => api().dots.attach(input, { signal: AbortSignal.timeout(dotsAttachMs) }),
+    detach: (input: Dots.ComputerDetach) => api().dots.detach(input, { signal: AbortSignal.timeout(dotsAttachMs) }),
+  }
+}
 
 export function createDotsConnection(input: {
   connected: () => boolean
@@ -57,7 +70,6 @@ export function createDotsConnection(input: {
     if (reading) return reading.promise
     const cycle = generation
     const controller = new AbortController()
-    setReady(false)
     async function load() {
       try {
         const next = await input.get(controller.signal)
@@ -65,6 +77,7 @@ export function createDotsConnection(input: {
         accept(next)
       } catch (error) {
         if (disposed || cycle !== generation) return
+        setReady(false)
         setFailure(errorMessage(error))
       } finally {
         if (reading?.controller === controller) reading = undefined

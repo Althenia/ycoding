@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { createRoot, createSignal } from "solid-js"
 import type { Dots } from "@ycoding-ai/schema/dots"
-import { createDotsConnection } from "../src/dots-connection"
+import type { YCodingClient } from "@ycoding-ai/client"
+import { createDotsConnection, dotsRequests } from "../src/dots-connection"
+import { errorMessage } from "../src/util/error"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -433,6 +435,61 @@ describe("computer detachment", () => {
       view.reads[1].result.resolve(withComputer({ state: "detached" }, true, 3))
       await read
       expect(view.state.confirmingDetach()).toBe(false)
+    } finally { view.dispose() }
+  })
+})
+
+describe("Dots request budgets and background refresh", () => {
+  const serverDelayMs = 5_500
+
+  function slowServer() {
+    const respond = <T>(value: T, signal: AbortSignal | undefined) => new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => resolve(value), serverDelayMs)
+      signal?.addEventListener("abort", () => {
+        clearTimeout(timer)
+        reject(signal.reason)
+      }, { once: true })
+    })
+    const dots = {
+      get: (options?: { signal?: AbortSignal }) => respond(withComputer({ state: "detached" }), options?.signal),
+      set: (input: { enabled: boolean; expectedRevision: number }, options?: { signal?: AbortSignal }) => respond(status(input.enabled, input.expectedRevision + 1), options?.signal),
+      attach: (_input: Dots.ComputerAttach, options?: { signal?: AbortSignal }) => respond(withComputer({ state: "attached" }), options?.signal),
+      detach: (_input?: Dots.ComputerDetach, options?: { signal?: AbortSignal }) => respond(withComputer({ state: "detached" }), options?.signal),
+    }
+    return { dots } as unknown as Pick<YCodingClient, "dots">
+  }
+
+  test("status, access, attach and detach requests wait for a server slower than five seconds", async () => {
+    const requests = dotsRequests(slowServer)
+    const settled = await Promise.allSettled([
+      requests.get(new AbortController().signal),
+      requests.set({ enabled: true, expectedRevision: 2 }),
+      requests.attach({ replaceOthers: false }),
+      requests.detach({}),
+    ])
+    expect(settled.map((item) => item.status === "fulfilled" ? "fulfilled" : errorMessage(item.reason))).toEqual(["fulfilled", "fulfilled", "fulfilled", "fulfilled"])
+  }, 15_000)
+
+  test("a background refresh keeps the current status actionable until it settles", async () => {
+    const target = { dotID: "dot-a", threadID: "thread-a", environmentID: "env-a", revision: "a".repeat(64) }
+    const view = await opened({ state: "detached", target })
+    try {
+      expect(view.state.ready()).toBe(true)
+      const poll = view.state.refresh()
+      expect(view.reads).toHaveLength(2)
+      expect(view.state.ready()).toBe(true)
+      expect(view.state.canToggle()).toBe(true)
+      expect(view.state.canAttach()).toBe(true)
+      view.reads[1].result.resolve(withComputer({ state: "attached", target }))
+      await poll
+      expect(view.state.ready()).toBe(true)
+      expect(view.state.status()?.computer?.state).toBe("attached")
+      const failed = view.state.refresh()
+      view.reads[2].result.reject(new Error("status read unavailable"))
+      await failed
+      expect(view.state.ready()).toBe(false)
+      expect(view.state.canToggle()).toBe(false)
+      expect(view.state.failure()).toContain("status read unavailable")
     } finally { view.dispose() }
   })
 })
