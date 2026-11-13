@@ -9,6 +9,7 @@ import { Git } from "../git"
 import { Global } from "../global"
 import { Location } from "../location"
 import { Permission } from "../permission"
+import { Project } from "../project"
 import { ProjectCopy } from "../project/copy"
 import { AbsolutePath } from "../schema"
 import { Hash } from "../util/hash"
@@ -40,13 +41,29 @@ export const Output = Schema.Union([
 const failed = (error: unknown) =>
   error instanceof ToolFailure ? error : new ToolFailure({ message: "Worktree operation failed", error })
 
-const discover = (git: Git.Interface, directory: AbsolutePath) =>
+const discover = (git: Git.Interface, directory: AbsolutePath, missing = "The current Location is not inside a Git repository") =>
   git.repo.discover(directory).pipe(
     Effect.mapError((error) => new ToolFailure({ message: "Unable to inspect the current Git repository", error })),
     Effect.flatMap((repository) =>
-      repository ? Effect.succeed(repository) : Effect.fail(new ToolFailure({ message: "The current Location is not inside a Git repository" })),
+      repository ? Effect.succeed(repository) : Effect.fail(new ToolFailure({ message: missing })),
     ),
   )
+
+const copyFailure = (name: string) => (error: ProjectCopy.Error) =>
+  new ToolFailure({
+    message:
+      error instanceof ProjectCopy.DestinationExistsError
+        ? `A worktree named ${name} already exists at ${error.directory}`
+        : error instanceof Git.WorktreeError && /branch .* already exists|already exists/i.test(error.message)
+          ? `A branch named ${name} already exists`
+          : error instanceof ProjectCopy.StrategyUnavailableError
+            ? `Git worktree strategy is unavailable: ${error.strategy}`
+            : error instanceof ProjectCopy.SourceDirectoryNotFoundError ||
+                error instanceof ProjectCopy.DirectoryUnavailableError
+              ? `The current project directory is unavailable: ${error.directory}`
+              : `Unable to create Git worktree: ${error.message}`,
+    error,
+  })
 
 export const creator = Effect.gen(function* () {
   const fs = yield* FSUtil.Service
@@ -54,12 +71,18 @@ export const creator = Effect.gen(function* () {
   const global = yield* Global.Service
   const location = yield* Location.Service
   const copies = yield* ProjectCopy.Service
+  const projects = yield* Project.Service
   const permission = yield* Permission.Service
   const guardrail = yield* SessionGuardrail.Service
-  return (worktreeName: string, context: Tool.Context) =>
+  return (worktreeName: string, context: Tool.Context, requested?: string) =>
     Effect.gen(function* () {
       const input = { action: "create" as const, name: worktreeName }
-      const repository = yield* discover(git, location.directory)
+      if (requested !== undefined && !path.isAbsolute(requested))
+        return yield* new ToolFailure({ message: "The repository must be an absolute directory path" })
+      const repository =
+        requested === undefined
+          ? yield* discover(git, location.directory)
+          : yield* discover(git, AbsolutePath.make(requested), `${requested} is not inside a Git repository`)
       const parent = yield* fs.resolve(
         path.join(global.data, "worktrees", `repo_${Hash.sha256(yield* fs.realPath(repository.commonDirectory))}`),
       )
@@ -89,37 +112,25 @@ export const creator = Effect.gen(function* () {
             (error) => new ToolFailure({ message: SessionGuardrail.reviewMessage(error) ?? "Session guardrail rejected worktree creation", error }),
           ),
         )
-      const result = yield* copies
-        .create({
-          projectID: location.project.id,
+      const directory = yield* Effect.gen(function* () {
+        const source =
+          requested === undefined
+            ? location.project
+            : yield* projects.recordOpened(repository.worktree).pipe(
+                Effect.andThen(projects.resolve(repository.worktree)),
+                Effect.map((resolved) => ({ id: resolved.id, directory: repository.worktree })),
+              )
+        const copy = yield* copies.create({
+          projectID: source.id,
           strategy: ProjectCopy.StrategyID.make("git_worktree"),
-          sourceDirectory: location.project.directory,
+          sourceDirectory: source.directory,
           directory: AbsolutePath.make(parent),
           name: input.name,
           branch: input.name,
         })
-        .pipe(
-          Effect.mapError(
-            (error) =>
-              new ToolFailure({
-                message:
-                  error instanceof ProjectCopy.DestinationExistsError
-                    ? `A worktree named ${input.name} already exists at ${error.directory}`
-                    : error instanceof Git.WorktreeError &&
-                        /branch .* already exists|already exists/i.test(error.message)
-                      ? `A branch named ${input.name} already exists`
-                      : error instanceof ProjectCopy.StrategyUnavailableError
-                        ? `Git worktree strategy is unavailable: ${error.strategy}`
-                        : error instanceof ProjectCopy.SourceDirectoryNotFoundError ||
-                            error instanceof ProjectCopy.DirectoryUnavailableError
-                          ? `The current project directory is unavailable: ${error.directory}`
-                          : `Unable to create Git worktree: ${error.message}`,
-                error,
-              }),
-          ),
-          Effect.ensuring(reservation.release),
-        )
-      return { directory: result.directory, branch: input.name }
+        return copy.directory
+      }).pipe(Effect.mapError(copyFailure(input.name)), Effect.ensuring(reservation.release))
+      return { directory, branch: input.name }
     }).pipe(Effect.mapError(failed))
 })
 

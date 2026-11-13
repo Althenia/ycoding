@@ -517,7 +517,7 @@ function shellSegmentTargets(resource: string, paths: Paths, includeReadOnly: bo
 
 export function shellFileTargets(command: string, paths: Paths): ReadonlyArray<string> {
   return [...new Set(shellSegmentTargets(command, paths, true).map((target) => target.path))]
-    .filter((target) => target !== resolveTarget(paths.workdir, paths.workdir, paths))
+    .filter((target) => target !== resolveTarget(paths.workdir, paths.workdir, paths) && !deviceOrTemporary(target, paths))
 }
 
 export function outsideTargets(action: string, resource: string, paths: Paths): ReadonlyArray<OutsideTarget> {
@@ -536,11 +536,15 @@ export function outsideTargets(action: string, resource: string, paths: Paths): 
 function isOutside(target: string, paths: Paths) {
   const relative = path.relative(paths.project, target)
   if (relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))) return false
-  if (target === "/dev" || target.startsWith("/dev/")) return false
-  return !isTemporary(target, paths.workdir, paths) && !paths.trustedPaths?.includes(target)
+  return !deviceOrTemporary(target, paths) && !paths.trustedPaths?.includes(target)
+}
+
+function deviceOrTemporary(target: string, paths: Paths) {
+  return target === "/dev" || target.startsWith("/dev/") || isTemporary(target, paths.workdir, paths)
 }
 
 const redirection = /^(?:\d*|&)(<<<|<<-?|<>|>>|>\||>&|<&|>|<)(.*)$/s
+const shellKeywords = new Set(["!", "if", "then", "else", "elif", "while", "until", "do"])
 const heredocConsumers = new Set(["cat", "tee", "git", "gh", "node", "bun", "deno", "python", "python3", "ruby", "perl"])
 const interpreters = new Set(["sh", "bash", "zsh", "node", "bun", "deno", "python", "python3", "ruby", "perl"])
 const gitMessageCommands = new Set(["commit", "tag", "merge", "stash", "notes"])
@@ -566,7 +570,7 @@ function shellOperands(tokens: ReadonlyArray<string>, heredocBodies: ReadonlyArr
     redirects.push(target)
   }
   const commandIndex = words.findIndex((token) => !["sudo", "command", "env", "nohup"].includes(path.basename(token)) &&
-    !token.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token))
+    !shellKeywords.has(token) && !token.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token))
   const args = commandArguments(path.basename(words[commandIndex] ?? ""), words.slice(commandIndex + 1), heredocBodies, includeReadTargets).flatMap((token) => {
     const stripped = token.replace(/^[^=]+=/, "")
     const value = /^@(?:\/|~\/|\.)/.test(stripped) ? stripped.slice(1) : stripped
@@ -933,7 +937,7 @@ const shellReaders = new Set([
   "cat", "head", "tail", "wc", "ls", "grep", "egrep", "fgrep", "rg", "cut", "tr", "nl",
   "basename", "dirname", "realpath", "readlink", "stat", "file", "du", "df", "pwd", "echo", "printf",
   "which", "type", "true", "false", "test", "diff", "cmp", "comm", "jq", "sed", "find", "sort", "uniq", "git",
-  "cd", "exit", "ps", "pgrep", "lsof",
+  "cd", "exit", "ps", "pgrep", "lsof", "ycoding", "gh",
 ])
 
 export function readOnlyShell(command: string) {
@@ -981,8 +985,28 @@ export function readOnlyShell(command: string) {
 
 const safeAssignment = /^(?:LC_ALL|LC_[A-Z]+|LANG|LANGUAGE|TZ)=[^\s]+$/
 
+const ycodingApiReadOptions = new Set(["-H", "--header", "--param", "--server"])
+
+function readOnlyYcodingApi(args: ReadonlyArray<string>) {
+  if (args[0] !== "api") return false
+  const positionals: string[] = []
+  for (let index = 1; index < args.length; index++) {
+    const argument = args[index]
+    if (ycodingApiReadOptions.has(argument)) {
+      if (args[index + 1] === undefined) return false
+      index++
+      continue
+    }
+    if (/^--(?:header|param|server)=/.test(argument)) continue
+    if (argument.startsWith("-")) return false
+    positionals.push(argument)
+  }
+  return positionals.length === 2 && positionals[0] === "GET"
+}
+
 function readOnlyInvocation(tokens: ReadonlyArray<string>) {
   let start = 0
+  while (start < tokens.length && shellKeywords.has(tokens[start])) start++
   while (start < tokens.length && safeAssignment.test(tokens[start])) start++
   if (tokens[start] === "command") {
     start++
@@ -1028,6 +1052,8 @@ function readOnlyInvocation(tokens: ReadonlyArray<string>) {
   }
   if (name === "file") return !args.some((arg) => /^-[^-]*C/.test(arg) || (arg.startsWith("--") && "--compile".startsWith(arg)))
   if (name === "jq") return !args.includes("--run-tests")
+  if (name === "ycoding") return readOnlyYcodingApi(args)
+  if (name === "gh") return args[0] === "run" && (args[1] === "view" || args[1] === "list")
   if (name !== "git") return true
   if (args.some((arg) => arg.length > 2 && arg.startsWith("--") &&
     ["--output", "--ext-diff", "--textconv", "--filters", "--open-files-in-pager", "--show-signature", "--help"]
@@ -1231,6 +1257,7 @@ function executable(tokens: ReadonlyArray<string>) {
     wrappers.some(
       (token) =>
         !["sudo", "command", "env", "nohup"].includes(path.basename(token)) &&
+        !shellKeywords.has(token) &&
         !token.startsWith("-") &&
         !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token),
     )

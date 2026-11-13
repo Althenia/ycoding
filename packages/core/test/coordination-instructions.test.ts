@@ -31,7 +31,7 @@ test("Master instructions require supervision, evidence review and reasoned esca
     "concrete outcome, actions and checks, exclusions, and a stop condition",
     "Verify reported evidence before accepting work",
   ]) expect(CoordinationInstructions.content).toContain(instruction)
-  once(CoordinationInstructions.content, "Escalate undecidable requests with the reason through member → owning subagent → Master → human; without an owning subagent, handle them at the Master.")
+  once(CoordinationInstructions.content, "Escalate such a request with the reason through member → owning subagent → Master → human; without an owning subagent, handle them at the Master.")
   for (const text of removed) expect([text, CoordinationInstructions.content.includes(text)]).toEqual([text, false])
 })
 
@@ -55,25 +55,31 @@ test("supervisors stay responsible for controlled Sessions until verified comple
   const entries = await Effect.runPromise(Instructions.read(CoordinationInstructions.make("supervisor")))
   expect(entries[0]?.value).toContain("You cannot assign, transfer or release ownership or create members.")
   once(Schema.decodeUnknownSync(Schema.String)(entries[0]?.value), [
-    "As a supervisor, resolve your members' routine issues and judgment calls yourself within your existing authority, including scope inside the assignment, ordering, check scheduling, retries, and routine requests through `answer`.",
+    "As a supervisor, resolve your members' routine issues and judgment calls yourself within your existing authority, including scope inside the assignment, ordering, check scheduling, retries, and member requests through `answer`.",
     "As a supervisor, take to the Master only a real blocker you cannot resolve within that authority or a coordination need across members, with evidence and a recommendation.",
     "Progress-only updates do not wake your parent: a settled turn's final text reaches your parent at its next turn without waking it; `subagent_report` `progress` wakes your parent when its text is new and carries only a verified result, a blocker that needs no human decision, or a coordination need, never waiting or routine status; `subagent_report` `question` asks your parent a decision and always wakes it.",
     "Use `escalate` only for a pending member request.",
   ].join(" "))
 })
 
-test("coordinators settle routine requests themselves in every autonomy mode and bring the human only safety items", () => {
+test("coordinators settle every member request through answer in every autonomy mode and reach the human only by escalation", () => {
   expect(CoordinationInstructions.content).not.toContain("Manual-mode")
   expect(CoordinationInstructions.content).not.toContain("decisions outside the user's recorded direction")
   for (const text of [
     "As Master, coordinate assignments, decide escalations, review integration evidence, and keep advancing independent work.",
     "As Master, resolve supervisor escalations and coordination across members yourself.",
-    "Settle routine questions, permissions and reviews, scheduling and blockers yourself, in every autonomy mode, from the user's recorded direction and existing evidence, choosing the simplest safe, reversible option; settle requests through `project answer`: approve, decline, or answer.",
-    "Only safety items reach the human: hard and custom-rule reviews; explicit-decision requests (external writes, destructive, irreversible or outside-repository mutations, credentials and secrets, purchases, sending communications, accepting legal terms, publication, deployment, CI/CD, production migrations, dependency installs or downloads, and scope expansion); requests that cross a permission ceiling; and denies, which stay denied.",
+    "Settle every member request yourself through `project answer` in every autonomy mode, Manual included, from the user's recorded direction and existing evidence, choosing the simplest safe, reversible option: routine, decline-only and every explicit-decision class, hard and custom-rule guardrail reviews, outside-repository reviews, permissions, and questions and forms.",
+    "`approve` allows once, `decline` rejects with your rationale as the member's feedback, and `answer` settles a question or form.",
+    "`inspect` reports the delegation class (routine, decline-only, explicit-decision:<reason>) as risk information for your decision; it never limits `answer`.",
+    "Deny rules and permission ceilings still hold: approving something a deny rule or the permission ceiling covers leaves it denied.",
+    "A guardrail review raised by an invalid guardrail configuration cannot be approved because its deny rules are unreadable: `answer` returns `escalated` with reason `configuration-invalid`, and a decline settles it.",
+    "Reach the human only by `escalate`, when you judge a request needs their decision or when `answer` refuses, errors or is uncertain and returns escalated with a reason.",
     "when a human answer or a cleared prerequisite arrives, continue the affected work from that event without waiting for a reminder.",
-    "Never override denies, permission ceilings, hard reviews, or human-only controls.",
+    "Never override denies or permission ceilings.",
     "Leave inactive-Project refusals, deferred review items, and human-only controls to their native gates; never route around them with other tools or message text.",
   ]) once(CoordinationInstructions.content, text)
+  for (const text of ["Only safety items reach the human", "Settle routine questions", "hard reviews, or human-only controls"])
+    expect([text, CoordinationInstructions.content.includes(text)]).toEqual([text, false])
 })
 
 test("the voice source is present only for a scoped Session", async () => {
@@ -97,7 +103,9 @@ test("controller guidance separates orchestration from member execution and nati
     ].join(" "))
     expect(entries[0]?.value).toContain("Verify assignments and completion evidence against the user's current direction.")
     expect(entries[0]?.value).toContain("Decide escalations only within recorded authority and the native decision policy.")
-    expect(entries[0]?.value).toContain("Only safety items reach the human: hard and custom-rule reviews;")
+    expect(entries[0]?.value).toContain("Settle every member request yourself through `project answer` in every autonomy mode, Manual included")
+    expect(entries[0]?.value).toContain("Deny rules and permission ceilings still hold")
+    expect(entries[0]?.value).not.toContain("Only safety items reach the human")
     expect(entries[0]?.value).not.toContain("keep authoring and reviewing on separate files")
   }
 })

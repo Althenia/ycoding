@@ -247,7 +247,6 @@ export function make(deps: Dependencies): Interface {
       return { ...base, outcome: "escalated" as const, settled: false, reason: "invalid-answer" }
     if (input.decision !== undefined && input.kind === "question")
       return { ...base, outcome: "escalated" as const, settled: false, reason: "invalid-decision" }
-    const decision = input.decision === undefined ? {} : { decision: input.decision }
     if (
       input.kind === "question" &&
       input.answer !== undefined &&
@@ -256,21 +255,13 @@ export function make(deps: Dependencies): Interface {
     )
       return { ...base, outcome: "escalated" as const, settled: false, reason: "low-confidence" }
     const source = { coordinatorSessionID: input.coordinatorSessionID, groupID: input.groupID, rationale }
-    const declining = input.decision === "decline"
+    const settles = (request: { readonly action: string; readonly resources: ReadonlyArray<string> }) =>
+      validate(input, request.action, request.resources).pipe(Effect.map((checked) => checked.ok))
 
     if (input.kind === "permission") {
       const snapshot = yield* deps.permission.snapshot(input.requestID as Permission.ID)
       if (snapshot === undefined || snapshot.request.sessionID !== input.targetSessionID || snapshot.fingerprint !== input.fingerprint)
         return stale
-      const explicit = coordinatorDecisionReason({
-        kind: input.kind,
-        action: snapshot.request.action,
-        resources: snapshot.request.resources,
-        metadata: snapshot.request.metadata,
-      })
-      if (explicit !== undefined) return { ...base, outcome: "escalated" as const, settled: false, reason: explicit }
-      if (!declining && !coordinatorRoutine({ kind: input.kind, action: snapshot.request.action, resources: snapshot.request.resources }))
-        return { ...base, outcome: "escalated" as const, settled: false, reason: "unknown-semantics" }
       const initial = yield* validate(input, snapshot.request.action, snapshot.request.resources)
       if (!initial.ok) return { ...base, outcome: "escalated" as const, settled: false, reason: initial.reason }
       const result = yield* deps.permission.reconsider({
@@ -279,16 +270,7 @@ export function make(deps: Dependencies): Interface {
         actor: "coordinator",
         source,
         decision: input.decision ?? "approve",
-        validate: (request) =>
-          validate(input, request.action, request.resources).pipe(
-            Effect.map(
-              (checked) =>
-                checked.ok &&
-                (declining || coordinatorRoutine({ kind: input.kind, action: request.action, resources: request.resources })) &&
-                coordinatorDecisionReason({ kind: input.kind, action: request.action, resources: request.resources, metadata: request.metadata }) ===
-                  undefined,
-            ),
-          ),
+        validate: settles,
       })
       return { ...base, ...result }
     }
@@ -298,18 +280,6 @@ export function make(deps: Dependencies): Interface {
         .requestSnapshot(input.targetSessionID, input.requestID as SessionGuardrail.RequestSnapshot["request"]["id"])
         .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)))
       if (snapshot === undefined || snapshot.fingerprint !== input.fingerprint) return stale
-      const explicit = coordinatorDecisionReason({
-        kind: input.kind,
-        action: snapshot.request.action,
-        resources: snapshot.request.resources,
-        metadata: snapshot.request.metadata,
-        hardReview: snapshot.request.hardReview,
-        ruleIDs: snapshot.request.ruleIDs,
-        standard: snapshot.request.standard,
-      })
-      if (explicit !== undefined) return { ...base, outcome: "escalated" as const, settled: false, reason: explicit }
-      if (!declining && !coordinatorRoutine({ kind: input.kind, action: snapshot.request.action, resources: snapshot.request.resources }))
-        return { ...base, outcome: "escalated" as const, settled: false, reason: "unknown-semantics" }
       const initial = yield* validate(input, snapshot.request.action, snapshot.request.resources)
       if (!initial.ok) return { ...base, outcome: "escalated" as const, settled: false, reason: initial.reason }
       const result = yield* deps.guardrail
@@ -319,24 +289,8 @@ export function make(deps: Dependencies): Interface {
           fingerprint: input.fingerprint,
           actor: "coordinator",
           source,
-          ...decision,
-          validate: (request) =>
-            validate(input, request.action, request.resources).pipe(
-              Effect.map(
-                (checked) =>
-                  checked.ok &&
-                  (declining || coordinatorRoutine({ kind: input.kind, action: request.action, resources: request.resources })) &&
-                  coordinatorDecisionReason({
-                    kind: input.kind,
-                    action: request.action,
-                    resources: request.resources,
-                    metadata: request.metadata,
-                    hardReview: request.hardReview,
-                    ruleIDs: request.ruleIDs,
-                    standard: request.standard,
-                  }) === undefined,
-              ),
-            ),
+          decision: input.decision ?? "approve",
+          validate: settles,
         })
         .pipe(
           Effect.catchTag("Session.NotFoundError", () =>
@@ -354,14 +308,6 @@ export function make(deps: Dependencies): Interface {
       snapshot.state.status !== "pending"
     )
       return stale
-    const formEvidence = {
-      requireExplicitDecision: snapshot.form.metadata?.requireExplicitDecision,
-      title: snapshot.form.title,
-      fields: snapshot.form.fields.map((field) => ("title" in field ? (field.title ?? field.key) : field.key)),
-      metadata: snapshot.form.metadata,
-    }
-    const explicit = coordinatorDecisionReason({ kind: input.kind, action: "question", resources: [], metadata: formEvidence })
-    if (explicit !== undefined) return { ...base, outcome: "escalated" as const, settled: false, reason: explicit }
     const initial = yield* validate(input, "question", [])
     if (!initial.ok) return { ...base, outcome: "escalated" as const, settled: false, reason: initial.reason }
     const result = yield* deps.form.reconsider({
@@ -371,24 +317,7 @@ export function make(deps: Dependencies): Interface {
       source,
       ...(input.answer === undefined ? {} : { answer: input.answer }),
       ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
-      validate: (form) =>
-        validate(input, "question", []).pipe(
-          Effect.map(
-            (checked) =>
-              checked.ok &&
-              coordinatorDecisionReason({
-                kind: input.kind,
-                action: "question",
-                resources: [],
-                metadata: {
-                  requireExplicitDecision: form.metadata?.requireExplicitDecision,
-                  title: form.title,
-                  fields: form.fields.map((field) => ("title" in field ? (field.title ?? field.key) : field.key)),
-                  metadata: form.metadata,
-                },
-              }) === undefined,
-          ),
-        ),
+      validate: () => settles({ action: "question", resources: [] }),
     })
     return { ...base, ...result }
   })

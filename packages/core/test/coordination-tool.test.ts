@@ -103,6 +103,8 @@ test("create names a managed worktree and optionally an owner, title, first prom
     { title: "" }, { title: " " }, { prompt: "" }, { prompt: "x".repeat(32001) }, { model: "fixture/model" }, { sessionID: "ses_member" }, { branch: "lane-1" }, { directory: "/tmp/lane" }])
     expect(() => decode({ ...input, ...invalid })).toThrow()
   expect(() => decode({ action: "create" })).toThrow()
+  expect(decode({ ...input, repository: "/work/other-repository" })).toMatchObject({ repository: "/work/other-repository" })
+  for (const repository of ["", "x".repeat(4097)]) expect(() => decode({ ...input, repository })).toThrow()
 })
 
 test("send accepts delivery, retry identity and optional model, but no selection or lease", () => {
@@ -141,13 +143,18 @@ test("the tool description names the supervision chain", () => {
     "Executor children inherit no controller authority.",
     "A member with a pending question, permission or review cannot receive input until the request settles, so the send is refused naming each pending request; settle it with answer, escalate it, or interrupt the member to withdraw it.",
     "The request stays open as the member's prompt: the user answers it in that member Session, and messages or answers relayed through the Master cannot settle it.",
-    "explicit-decision:<reason> (only the user decides it; escalate it)",
+    "its delegation class as risk information for your decision: routine, decline-only or explicit-decision:<reason>. The class never limits answer.",
     "delegates implementation to executors",
     "inspect:",
-    "decline-only (answer may only decline)",
-    "A deny rule still denies. Explicit-decision requests, every guardrail review, and uncertain cases are refused with a reason.",
+    "answer: settle any pending member question, form, permission or review yourself, in every autonomy mode, Manual included: routine, decline-only and every explicit-decision class, hard and custom-rule guardrail reviews, and outside-repository reviews.",
+    "approve (the default decision) allows once, decline rejects with your rationale as the member's feedback, and an answer settles a question or form.",
+    "A deny rule or the permission ceiling that covers the request still denies it, even when you approve.",
+    "A guardrail review raised by an invalid guardrail configuration cannot be approved because its deny rules are unreadable: answer returns escalated with reason configuration-invalid, and a decline settles it.",
+    "When answer refuses, errors or is uncertain it returns escalated with a reason; escalate that request.",
+    "escalate: pass a pending request up the chain with a reason when it needs the user's decision, or when answer returned escalated, errored or was uncertain.",
     "assign: Master only.",
     "create: Master only.",
+    "An optional repository (absolute directory path inside a Git repository) creates the worktree for that repository instead of the current Location's, so a Master outside any repository can create members; the managed parent, permission, guardrail, existing-name and branch rules are the worktree tool's, and a path outside any Git repository fails naming the path.",
     "release: Master only. The Master",
     "go only to the member's live recorded owner as Project notifications. Unowned routine events remain held for the next owner; material requests and failures reach the Master as Project escalations, never as member notifications.",
     "A member's completed notification is sent only when its turn settled with no background work left and the member has no pending input of any kind (steer, queue or compaction barrier).",
@@ -157,6 +164,8 @@ test("the tool description names the supervision chain", () => {
     "Waiting and starting owners keep notifications pending until they run.",
     "Cancelling, cancelled, failed and lost owners never receive member notifications.",
   ]) expect(CoordinationTool.description).toContain(text)
+  for (const text of ["only the user decides it", "answer may only decline", "every guardrail review, and uncertain cases are refused", "Escalate whatever answer refuses"])
+    expect([text, CoordinationTool.description.includes(text)]).toEqual([text, false])
 })
 
 test("effectiveDenies keeps repeated identical denies and keeps only the last of a deny, an allow and a deny", () => {
@@ -254,18 +263,18 @@ const plugins = makeLocationNode({
     yield* registerToolPlugin(WorktreeTool.Plugin)
     yield* registerToolPlugin(CoordinationTool.Plugin)
   })),
-  deps: [ToolRegistry.toolsNode, Location.node, Git.node, Global.node, ProjectCopy.node, Permission.node, SessionGuardrail.node, FSUtil.node, Agent.node, Config.node, CoordinationRuntime.node],
+  deps: [ToolRegistry.toolsNode, Location.node, Git.node, Global.node, Project.node, ProjectCopy.node, Permission.node, SessionGuardrail.node, FSUtil.node, Agent.node, Config.node, CoordinationRuntime.node],
 })
 const project = { id: Project.ID.make("project-tool-test"), directory: source }
 const model = Model.Ref.make({ providerID: Provider.ID.make("test"), id: Model.ID.make("model") })
-const integration = testEffect(AppNodeBuilder.build(
+const integrationAt = (active: Location.Interface) => testEffect(AppNodeBuilder.build(
   LayerNode.group([
     ToolRegistry.node, ToolRegistry.toolsNode, plugins, ProjectCopy.node, Database.node, EventRuntime.node, ProjectDirectories.node, Git.node, FSUtil.node,
     LayerNodePlatform.filesystem, LayerNodePlatform.path, SessionProjector.node, Session.node, SessionExecution.node, SessionOrchestration.node,
-    CoordinationService.node, CoordinationRuntime.node,
+    CoordinationService.node, CoordinationRuntime.node, Project.node,
   ]),
   [
-    [Location.node, Layer.succeed(Location.Service, Location.Service.of({ directory: source, project }))],
+    [Location.node, Layer.succeed(Location.Service, Location.Service.of(active))],
     [Global.node, Global.layerWith({ data })],
     [Permission.node, permission],
     [SessionGuardrail.node, guardrail],
@@ -277,6 +286,8 @@ const integration = testEffect(AppNodeBuilder.build(
     [CoordinationRuntime.node, runtimeNode],
   ],
 ))
+const integration = integrationAt({ directory: source, project })
+const detached = integrationAt({ directory: AbsolutePath.make(data), project: { id: Project.ID.make("project-tool-detached"), directory: AbsolutePath.make(data) } })
 
 const godAgents = AppNodeBuilder.build(LayerNode.group([Agent.node, EventRuntime.node, Location.node]), [
   [Location.node, Layer.succeed(Location.Service, Location.Service.of(location({ directory: source })))],
@@ -473,5 +484,44 @@ describe("project tool through the tool registry", () => {
       expect((yield* fixture.coordination.get(fixture.group.id)).memberSessionIDs).toEqual([])
       delete configured.capabilities
       expect(fixture.parsed(yield* fixture.call("create-ungated", "project", { action: "create", name: "lane-ungated", model }))).toMatchObject({ branch: "lane-ungated" })
+    }), 60_000)
+  detached.live("creates a member in a requested repository from a Master whose Location is not a Git repository", () =>
+    Effect.gen(function* () {
+      const fixture = yield* projectSetup
+      const omitted = yield* fixture.call("create-omitted", "project", { action: "create", name: "lane-omitted", model })
+      expect(omitted).toEqual({ type: "error", value: "The current Location is not inside a Git repository" })
+
+      const created = fixture.parsed(yield* fixture.call("create-requested", "project", { action: "create", name: "lane-requested", repository: source, model }))
+      expect(created).toMatchObject({ directory: path.join(fixture.managed, "lane-requested"), branch: "lane-requested" })
+      const found = yield* fixture.git.repo.discover(AbsolutePath.make(created.directory))
+      expect(found).toBeDefined()
+      if (found) expect(yield* fixture.git.history.branch(found)).toBe("lane-requested")
+      const member = yield* fixture.sessions.get(created.sessionID)
+      expect(member.location.directory).toBe(AbsolutePath.make(created.directory))
+      expect((yield* fixture.coordination.get(fixture.group.id)).memberSessionIDs).toEqual([created.sessionID])
+      expect(audit.permissions).toEqual([`worktree ${path.join(fixture.managed, "lane-requested")}`])
+      expect(audit.guardrails).toEqual([`file_mutation create_git_worktree ${path.join(fixture.managed, "lane-requested")}`])
+      const resolved = yield* (yield* Project.Service).resolve(source)
+      expect((yield* (yield* ProjectDirectories.Service).list(resolved.id)).map((item) => item.directory)).toContain(AbsolutePath.make(created.directory))
+
+      const before = yield* fixture.count()
+      const duplicate = yield* fixture.call("create-requested-duplicate", "project", { action: "create", name: "lane-requested", repository: source, model })
+      expect(duplicate).toEqual({ type: "error", value: "A worktree named lane-requested already exists" })
+      expect(yield* fixture.count()).toBe(before)
+    }), 60_000)
+
+  detached.live("a requested repository that is not a Git repository or not absolute fails naming the path before any side effect", () =>
+    Effect.gen(function* () {
+      const fixture = yield* projectSetup
+      const before = yield* fixture.count()
+      const missing = yield* fixture.call("create-not-repository", "project", { action: "create", name: "lane-nowhere", repository: data, model })
+      expect(missing).toEqual({ type: "error", value: `${data} is not inside a Git repository` })
+      const relative = yield* fixture.call("create-relative", "project", { action: "create", name: "lane-relative", repository: "relative/repository", model })
+      expect(relative).toEqual({ type: "error", value: "The repository must be an absolute directory path" })
+      expect(yield* fixture.exists("lane-nowhere")).toBe(false)
+      expect(yield* fixture.exists("lane-relative")).toBe(false)
+      expect(yield* fixture.count()).toBe(before)
+      expect(audit).toEqual({ permissions: [], guardrails: [] })
+      expect((yield* fixture.coordination.get(fixture.group.id)).memberSessionIDs).toEqual([])
     }), 60_000)
 })

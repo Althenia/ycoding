@@ -812,8 +812,6 @@ const layer = Layer.effect(
                   if (!(yield* input.validate(item.request)))
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
                   if (input.decision === "decline") {
-                    if (assertInput.requireExplicitDecision)
-                      return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:request" }
                     return yield* exclusive(
                       Effect.gen(function* () {
                         if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
@@ -858,8 +856,6 @@ const layer = Layer.effect(
 
                   const initial = yield* evaluateInput(assertInput)
                   if (initial.effect !== "ask") return yield* settleRules()
-                  if (assertInput.requireExplicitDecision)
-                    return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:request" }
                   if (input.decision === "approve")
                     return yield* exclusive(
                       Effect.gen(function* () {
@@ -867,8 +863,6 @@ const layer = Layer.effect(
                         if (!(yield* input.validate(item.request)))
                           return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
                         const current = yield* evaluateInput(assertInput)
-                        if (current.effect === "ask" && explicitRejected((yield* applicabilityOf(assertInput)).prior))
-                          return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-rejected" }
                         const allowed = current.effect !== "deny"
                         yield* publishAssessed(item.request, {
                           outcome: allowed ? "allow" : "deny",
@@ -888,6 +882,8 @@ const layer = Layer.effect(
                         }
                       }),
                     )
+                  if (assertInput.requireExplicitDecision)
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:request" }
                   const authorization = yield* autonomy.snapshot(assertInput.sessionID, { inherited: true }).pipe(
                     Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID: assertInput.sessionID })),
                   )

@@ -609,6 +609,79 @@ describe("SessionGuardrail ordinary review", () => {
   )
 })
 
+describe("SessionGuardrail coordinator approval", () => {
+  const coordinatorSource = { coordinatorSessionID: Session.ID.make("ses_guardrail_coordinator"), groupID: "cgrp_one", rationale: "Owner-approved within the assignment." }
+  const decide = (service: SessionGuardrail.Interface, request: Guardrail.Request, decision: "approve" | "decline" = "approve") =>
+    Effect.gen(function* () {
+      const snapshot = yield* service.requestSnapshot(parentID, request.id)
+      return yield* service.reconsider({
+        sessionID: parentID, requestID: request.id, fingerprint: snapshot!.fingerprint, actor: "coordinator",
+        source: coordinatorSource, decision, validate: () => Effect.succeed(true),
+      })
+    })
+
+  const owned = harness({
+    guardrails: "manual",
+    documents: new Map([
+      ["/global/guardrails/ask.md", markdown({ id: "custom-ask", decision: "ask", resource: "custom reviewed" })],
+      ["/global/guardrails/hard.md", markdown({ id: "custom-hard", decision: "hard_review", resource: "custom hard" })],
+    ]),
+  })
+  owned.it.effect("an owner approval under Manual guardrails allows standard, custom-rule and hard reviews once without a helper call", () =>
+    Effect.gen(function* () {
+      const service = yield* SessionGuardrail.Service
+      const cases = [
+        ["task-runner /outside/file", { ruleIDs: ["standard.review.outside-repo"], standard: true }],
+        ["custom reviewed", { ruleIDs: ["custom-ask"], standard: false }],
+        ["custom hard", { ruleIDs: ["custom-hard"], hardReview: true }],
+        ["rm -rf .", { hardReview: true, standard: true }],
+      ] as const
+      for (const [resource, expected] of cases) {
+        const pending = yield* waitForRequest(service, { ...semanticInput, resources: [resource] })
+        expect(pending.request, resource).toMatchObject(expected)
+        expect(yield* decide(service, pending.request), resource).toMatchObject({ outcome: "allowed", settled: true, via: "coordination" })
+        yield* (yield* Fiber.join(pending.fiber)).release
+        expect(yield* service.forSession(parentID)).toEqual([])
+      }
+      expect(owned.choices).toHaveLength(0)
+      expect(owned.decisions).toEqual(cases.map(() => expect.objectContaining({
+        reply: "once", actor: "coordinator", coordinatorSessionID: coordinatorSource.coordinatorSessionID, rationale: coordinatorSource.rationale,
+      })))
+    }),
+  )
+
+  const denied = harness({
+    guardrails: "manual",
+    documents: new Map([["/global/guardrails/ask.md", markdown({ id: "custom-ask", decision: "ask", resource: "custom reviewed" })]]),
+  })
+  denied.it.effect("an owner approval never allows a review a deny rule covers at settlement", () =>
+    Effect.gen(function* () {
+      const service = yield* SessionGuardrail.Service
+      const pending = yield* waitForRequest(service, { ...semanticInput, resources: ["custom reviewed"] })
+      denied.documents.set(path.normalize("/global/guardrails/ask.md"), markdown({ id: "custom-ask", decision: "deny", resource: "custom reviewed" }))
+      expect(yield* decide(service, pending.request)).toMatchObject({ outcome: "denied", settled: true, via: "guardrail-rules" })
+      expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
+      expect(yield* service.forSession(parentID)).toEqual([])
+    }),
+  )
+
+  const invalid = harness({
+    guardrails: "manual",
+    documents: new Map([["/global/guardrails/broken.md", "---\nid: broken\ndecision: nonsense\n---\n"]]),
+  })
+  invalid.it.effect("an owner approval leaves a review raised by invalid guardrail configuration pending, and a decline settles it", () =>
+    Effect.gen(function* () {
+      const service = yield* SessionGuardrail.Service
+      const pending = yield* waitForRequest(service, { ...semanticInput, resources: ["task-runner build"] })
+      expect(pending.request.ruleIDs).toEqual(["configuration.invalid"])
+      expect(yield* decide(service, pending.request)).toMatchObject({ outcome: "escalated", settled: false, reason: "configuration-invalid" })
+      expect(yield* service.forSession(parentID)).toHaveLength(1)
+      expect(yield* decide(service, pending.request, "decline")).toMatchObject({ outcome: "denied", settled: true, via: "coordination" })
+      expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
+    }),
+  )
+})
+
 const destructive = {
   sessionID: parentID,
   action: "shell",

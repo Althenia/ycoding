@@ -1244,8 +1244,10 @@ export const layer = Layer.effect(
                   Effect.gen(function* () {
                     const item = acquired.item!
                     const base = { requestID: input.requestID, fingerprint: input.fingerprint }
-                    if (item.request.hardReview === true || item.request.ruleIDs.includes("configuration.invalid"))
+                    if (input.decision === undefined && (item.request.hardReview === true || item.request.ruleIDs.includes("configuration.invalid")))
                       return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:hard-review" }
+                    if (input.decision === "approve" && item.request.ruleIDs.includes("configuration.invalid"))
+                      return { ...base, outcome: "escalated" as const, settled: false, reason: "configuration-invalid" }
                     if (!(yield* input.validate(item.request)))
                       return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
                     const evaluateInput: EvaluateInput = {
@@ -1262,10 +1264,6 @@ export const layer = Layer.effect(
                           if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
                           if (!(yield* input.validate(item.request)))
                             return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
-                          if ((yield* classify(evaluateInput)).evaluation.hardReview)
-                            return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:hard-review" }
-                          if ((yield* DecisionChoice.decisionMode(autonomy, rootSessionID, "guardrails")) === "manual")
-                            return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:manual-guardrails" }
                           removePendingUnlocked(input.requestID)
                           yield* events.publish(Guardrail.Event.Replied, {
                             rootSessionID,
@@ -1292,6 +1290,29 @@ export const layer = Layer.effect(
                           return { ...base, outcome: "denied" as const, settled: true, via: "coordination" as const }
                         }),
                       )
+                    const settleRulesUnlocked = (decision: "allow" | "deny", ruleIDs: ReadonlyArray<string>) =>
+                      Effect.gen(function* () {
+                        removePendingUnlocked(input.requestID)
+                        if (decision === "deny") {
+                          blocked.set(rootSessionID, (blocked.get(rootSessionID) ?? 0) + 1)
+                          advanceUnlocked(rootSessionID)
+                        }
+                        yield* events.publish(Guardrail.Event.Decided, {
+                          rootSessionID,
+                          sessionID: item.request.sessionID,
+                          action: item.request.action,
+                          ruleIDs: [...ruleIDs],
+                          decision,
+                        })
+                        if (decision === "allow") yield* Deferred.succeed(item.deferred, undefined)
+                        else yield* Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))
+                        return {
+                          ...base,
+                          outcome: decision === "allow" ? ("allowed" as const) : ("denied" as const),
+                          settled: true,
+                          via: "guardrail-rules" as const,
+                        }
+                      })
                     const settleRules = () =>
                       withRootLock(
                         rootSessionID,
@@ -1302,37 +1323,51 @@ export const layer = Layer.effect(
                           const current = (yield* classify(evaluateInput)).evaluation
                           if (current.decision === "ask" || current.decision === "hard_review")
                             return { ...base, outcome: "escalated" as const, settled: false, reason: "guardrail-ask" }
+                          return yield* settleRulesUnlocked(current.decision, current.ruleIDs)
+                        }),
+                      )
+                    const unchanged = (current: Evaluation) =>
+                      current.hardReview === (item.request.hardReview ?? false) &&
+                      current.standard === item.request.standard &&
+                      current.ruleIDs.join("\0") === item.request.ruleIDs.join("\0")
+                    const classification = yield* classify(evaluateInput)
+                    const result = classification.evaluation
+                    if (result.decision !== "ask") return yield* settleRules()
+                    if (!unchanged(result)) return { ...base, outcome: "stale" as const, settled: false }
+                    if (input.decision === "approve")
+                      return yield* withRootLock(
+                        rootSessionID,
+                        Effect.gen(function* () {
+                          if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
+                          if (!(yield* input.validate(item.request)))
+                            return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                          const current = (yield* classify(evaluateInput)).evaluation
+                          if (current.decision !== "ask" && current.decision !== "hard_review") return yield* settleRulesUnlocked(current.decision, current.ruleIDs)
+                          if (!unchanged(current)) return { ...base, outcome: "stale" as const, settled: false }
                           removePendingUnlocked(input.requestID)
-                          if (current.decision === "deny") {
-                            blocked.set(rootSessionID, (blocked.get(rootSessionID) ?? 0) + 1)
-                            advanceUnlocked(rootSessionID)
-                          }
                           yield* events.publish(Guardrail.Event.Decided, {
                             rootSessionID,
                             sessionID: item.request.sessionID,
                             action: item.request.action,
                             ruleIDs: [...current.ruleIDs],
-                            decision: current.decision,
+                            decision: "allow",
                           })
-                          if (current.decision === "allow") yield* Deferred.succeed(item.deferred, undefined)
-                          else yield* Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))
-                          return {
-                            ...base,
-                            outcome: current.decision === "allow" ? ("allowed" as const) : ("denied" as const),
-                            settled: true,
-                            via: "guardrail-rules" as const,
-                          }
+                          yield* events.publish(SessionEvent.GuardrailDecided, {
+                            sessionID: rootSessionID,
+                            reviewSessionID: item.request.sessionID,
+                            requestID: item.request.id,
+                            reply: "once",
+                            ruleIDs: [...item.request.ruleIDs],
+                            ...(item.source ? { source: item.source } : {}),
+                            actor: "coordinator",
+                            coordinatorSessionID: input.source.coordinatorSessionID,
+                            ...(input.source.groupID === undefined ? {} : { groupID: input.source.groupID }),
+                            rationale: input.source.rationale,
+                          })
+                          yield* Deferred.succeed(item.deferred, undefined)
+                          return { ...base, outcome: "allowed" as const, settled: true, via: "coordination" as const }
                         }),
                       )
-                    const classification = yield* classify(evaluateInput)
-                    const result = classification.evaluation
-                    if (result.decision !== "ask") return yield* settleRules()
-                    if (
-                      result.hardReview !== (item.request.hardReview ?? false) ||
-                      result.standard !== item.request.standard ||
-                      result.ruleIDs.join("\0") !== item.request.ruleIDs.join("\0")
-                    )
-                      return { ...base, outcome: "stale" as const, settled: false }
                     if (result.hardReview) return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:hard-review" }
                     if (!result.standard) return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:custom-review" }
 

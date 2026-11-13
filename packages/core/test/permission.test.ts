@@ -811,6 +811,23 @@ describe("Project coordinator execution boundary", () => {
         ])
     }))
 
+  it.effect("lets a Master-family Session run read-only inspection commands while mutating commands and edits stay denied", () =>
+    Effect.gen(function* () {
+      yield* project
+      const denial = (action: string) =>
+        `Permission denied: ${action}. This Session is a Project coordinator; member Sessions make Project changes.`
+      const reads = ["git log --oneline -3", "git status", "ycoding api GET /api/session", "gh run view 123", "gh run list", "ls -la | head"]
+      const writes = [
+        "git commit -m x", "ycoding api POST /api/x -d '{}'", "ycoding api GET /api/x -d '{}'", "ycoding api GET /api/x --standalone",
+        "ycoding api session.list", "gh run rerun 123", "gh api /repos/x/y", "rm -rf x",
+      ]
+      for (const sessionID of [master, masterChild]) {
+        expect(yield* Effect.forEach(reads, (resource) => outcome(sessionID, "shell", resource))).toEqual(reads.map(() => "allowed"))
+        expect(yield* Effect.forEach(writes, (resource) => outcome(sessionID, "shell", resource))).toEqual(writes.map(() => denial("shell")))
+        expect(yield* outcome(sessionID, "edit", "src/a.ts")).toBe(denial("edit"))
+      }
+    }))
+
   it.effect("leaves member Sessions and their descendants under their normal rules", () =>
     Effect.gen(function* () {
       yield* project

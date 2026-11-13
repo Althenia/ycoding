@@ -25,6 +25,7 @@ import { Session } from "@ycoding-ai/core/session"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
+import type { Tool } from "@ycoding-ai/core/tool/tool"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { WorktreeTool } from "@ycoding-ai/core/tool/worktree"
 import { testEffect } from "./lib/effect"
@@ -75,6 +76,7 @@ const plugin = makeLocationNode({
     Location.node,
     Git.node,
     Global.node,
+    Project.node,
     ProjectCopy.node,
     Permission.node,
     SessionGuardrail.node,
@@ -94,6 +96,11 @@ const buildLayer = (activeLocation: Location.Interface) =>
       ProjectDirectories.node,
       Git.node,
       FSUtil.node,
+      Global.node,
+      Location.node,
+      Project.node,
+      Permission.node,
+      SessionGuardrail.node,
       LayerNodePlatform.filesystem,
       LayerNodePlatform.path,
     ]),
@@ -214,6 +221,46 @@ describe("worktree tool", () => {
       state.deny = true
       expect((yield* call("denied", { action: "create", name: "feature-two" })).type).toBe("error")
       state.deny = false
+    }),
+  )
+  nonGitIt.effect("creates a worktree for a requested repository from a non-Git Location under the repository's managed parent", () =>
+    Effect.gen(function* () {
+      const create = yield* WorktreeTool.creator
+      const context: Tool.Context = { sessionID, agent: agentID, messageID, callID: "create-requested", progress: () => Effect.void }
+      const git = yield* Git.Service
+      const found = yield* git.repo.discover(source)
+      expect(found).toBeDefined()
+      if (!found) return
+      const parent = path.join(data, "worktrees", `repo_${Hash.sha256(yield* Effect.promise(() => fs.realpath(found.commonDirectory)))}`)
+      const permissions = state.permissions.length
+      const guardrails = state.guardrails
+
+      const omitted = yield* create("from-outside-omitted", context).pipe(Effect.flip)
+      expect(omitted.message).toBe("The current Location is not inside a Git repository")
+
+      const created = yield* create("from-outside", context, source)
+      expect(created).toEqual({ directory: AbsolutePath.make(path.join(parent, "from-outside")), branch: "from-outside" })
+      const member = yield* git.repo.discover(AbsolutePath.make(created.directory))
+      expect(member).toBeDefined()
+      if (member) expect(yield* git.history.branch(member)).toBe("from-outside")
+      expect(state.permissions.slice(permissions)).toEqual(["worktree"])
+      expect(state.guardrails - guardrails).toBe(1)
+      const resolved = yield* (yield* Project.Service).resolve(source)
+      expect((yield* (yield* ProjectDirectories.Service).list(resolved.id)).map((item) => item.directory)).toContain(
+        AbsolutePath.make(created.directory),
+      )
+
+      const duplicate = yield* create("from-outside", context, source).pipe(Effect.flip)
+      expect(duplicate.message).toBe("A worktree named from-outside already exists")
+      yield* Effect.promise(() => $`git branch from-outside-branch`.cwd(root.path).quiet())
+      const branch = yield* create("from-outside-branch", context, source).pipe(Effect.flip)
+      expect(branch.message).toContain("from-outside-branch")
+
+      const notRepository = yield* create("from-nowhere", context, AbsolutePath.make(nonGitRoot.path)).pipe(Effect.flip)
+      expect(notRepository.message).toBe(`${nonGitRoot.path} is not inside a Git repository`)
+      const relative = yield* create("from-relative", context, "relative/repository").pipe(Effect.flip)
+      expect(relative.message).toBe("The repository must be an absolute directory path")
+      expect(yield* Effect.promise(() => fs.stat(path.join(parent, "from-nowhere")).then(() => true, () => false))).toBe(false)
     }),
   )
 })

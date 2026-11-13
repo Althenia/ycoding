@@ -75,6 +75,7 @@ import { WebSearchTool } from "../tool/websearch"
 import { WellKnown } from "../wellknown"
 import { WriteTool } from "../tool/write"
 import { WorktreeTool } from "../tool/worktree"
+import { Project } from "../project"
 import { ProjectCopy } from "../project/copy"
 import { AgentPlugin } from "./agent"
 import { CommandPlugin } from "./command"
@@ -113,6 +114,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const permission = yield* Permission.Service
   const coordination = yield* CoordinationRuntime.Service
   const providerUsage = yield* ProviderUsageRuntime.Service
+  const project = yield* Project.Service
   const projectCopy = yield* ProjectCopy.Service
   const guardrail = yield* SessionGuardrail.Service
   const runtime = yield* PluginRuntime.Service
@@ -162,6 +164,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(Npm.Service, npm),
     Context.make(Permission.Service, permission),
     Context.make(ProviderUsageRuntime.Service, providerUsage),
+    Context.make(Project.Service, project),
     Context.make(ProjectCopy.Service, projectCopy),
     Context.make(SessionGuardrail.Service, guardrail),
     Context.make(PluginRuntime.Service, runtime),

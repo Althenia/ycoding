@@ -550,7 +550,8 @@ export const layer = Layer.effect(
                   const base = { requestID: input.id, fingerprint: input.fingerprint }
                   if (!(yield* input.validate(entry.form)))
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
-                  if (entry.form.metadata?.requireExplicitDecision === true)
+                  const explicitForm = entry.form.metadata?.requireExplicitDecision === true
+                  if (explicitForm && input.goal !== undefined)
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:request" }
                   if (
                     input.answer !== undefined &&
@@ -565,8 +566,8 @@ export const layer = Layer.effect(
                     .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
                   if (authorization === undefined) return { ...base, outcome: "stale" as const, settled: false }
                   const mode = yield* DecisionChoice.decisionMode(autonomy, sessionID, "answers")
-                  if (mode === "manual" && input.goal === undefined && input.answer === undefined)
-                    return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:manual-answers" }
+                  if ((mode === "manual" || explicitForm) && input.goal === undefined && input.answer === undefined)
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "answer-required" }
                   const fromGoal = input.goal !== undefined
                   if (fromGoal) {
                     if (input.answer !== undefined) {

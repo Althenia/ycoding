@@ -1227,11 +1227,11 @@ describe("ShellTool", () => {
 
   it.live("reports external command arguments as advisory warnings without enforcing approval", () =>
     Effect.acquireUseRelease(
-      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
-      ([active, outside]) => {
+      Effect.promise(() => tmpdir()),
+      (active) => {
         reset()
         denyAction = "external_directory"
-        const target = path.join(outside.path, "secret.txt")
+        const target = path.join(os.homedir(), "ycoding-shell-scan-outside", "secret.txt")
         return withSession(active.path, (registry) => settleTool(registry, call({ command: `cat ${target}` }))).pipe(
           Effect.andThen((settled) =>
             Effect.sync(() => {
@@ -1239,16 +1239,38 @@ describe("ShellTool", () => {
               expect(settled.output?.structured).not.toHaveProperty("warnings")
               expect(settled.output?.content[1]).toMatchObject({
                 type: "text",
-                text: expect.stringContaining("Warnings:"),
+                text: expect.stringContaining(
+                  `Command argument references external directory ${path.join(os.homedir(), "ycoding-shell-scan-outside", "*")}`,
+                ),
               })
             }),
           ),
         )
       },
-      ([active, outside]) =>
-        Effect.promise(() =>
-          Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
-        ),
+      (active) => Effect.promise(() => active[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  it.live("does not warn about API request paths, device paths, or temporary roots", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (active) => {
+        reset()
+        const command =
+          "true || ycoding api GET /api/session/x; true || gh api /repos/x/y; ls /tmp/ 2>/dev/null >/dev/null; true"
+        return withSession(active.path, (registry) => settleTool(registry, call({ command }))).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.output?.structured).toMatchObject({ exit: 0 })
+              expect(settled.output?.content[1]).toMatchObject({
+                type: "text",
+                text: expect.not.stringContaining("Warnings:"),
+              })
+            }),
+          ),
+        )
+      },
+      (active) => Effect.promise(() => active[Symbol.asyncDispose]().then(() => undefined)),
     ),
   )
 

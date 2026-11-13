@@ -958,6 +958,48 @@ describe("SessionGuardrailMatch", () => {
   })
 
   test.each([
+    "for s in ses_a ses_b; do ycoding api GET /api/session/$s | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"id\"])'; done",
+    "gh api /repos/x/y",
+    "for run in 1 2; do gh api /repos/x/y/actions/runs/$run --jq .status; done",
+  ])("API request path operands are not outside-repository targets: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "allow", hardReview: false, ruleIDs: [] })
+    expect(SessionGuardrailStandard.outsidePaths("shell", command, paths)).toEqual([])
+  })
+
+  test.each([
+    "cat /some/outside/file",
+    "git -C /outside/repo log",
+    "for f in a b; do cat /outside/notes.md; done",
+    "if test -f /outside/notes.md; then head -5 /outside/notes.md; fi",
+  ])("read-only commands reading outside the repository are not outside-repository mutations: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "allow", hardReview: false, ruleIDs: [] })
+    expect(SessionGuardrailStandard.outsidePaths("shell", command, paths)).toEqual([])
+  })
+
+  test.each([
+    ["for x in a; do rm -rf /; done", "standard.catastrophic.rm-root"],
+    ["if true; then rm -rf ~; fi", "standard.catastrophic.rm-user-home"],
+  ])("deletion deny rules fire inside loop and conditional bodies: %s", (command, id) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "deny", ruleIDs: [id] })
+  })
+
+  test("an in-repo deletion inside a loop body keeps its ordinary decision", () => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: ["for f in a b; do rm -f build/$f; done"], paths }))
+      .toMatchObject({ decision: "allow", hardReview: false, ruleIDs: [] })
+  })
+
+  test.each([
+    "for f in a b; do cp notes.md /outside/$f; done",
+    "if test -f notes.md; then cp notes.md /outside/copy.md; fi",
+  ])("loop and conditional bodies that write outside the repository stay reviewed: %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths }))
+      .toMatchObject({ decision: "ask", hardReview: false, ruleIDs: ["standard.review.outside-repo"] })
+  })
+
+  test.each([
     "ycoding api GET /api/session/outstanding > /outside/out.json",
     "ycoding api GET /api/session/outstanding; touch /outside/file",
     "curl --output /outside/file /api/session",

@@ -29,6 +29,7 @@ import { Integration } from "../integration"
 import { Location } from "../location"
 import { LocationMutation } from "../location-mutation"
 import { Git } from "../git"
+import { Project } from "../project"
 import { ProjectCopy } from "../project/copy"
 import { ModelsDev } from "../models-dev"
 import { Memory } from "../memory"
@@ -238,6 +239,7 @@ export const node = makeLocationNode({
     Integration.node,
     Location.node,
     LocationMutation.node,
+    Project.node,
     ProjectCopy.node,
     ModelsDev.node,
     Memory.node,
