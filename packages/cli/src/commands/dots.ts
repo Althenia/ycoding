@@ -79,7 +79,7 @@ export const DotsCommand = Spec.make("dots", {
         server,
         thread,
         text: Argument.string("text").pipe(Argument.withDescription("Message text")),
-        queue: Flag.boolean("queue").pipe(Flag.withDescription("Queue the message after the active turn instead of steering it"), Flag.withDefault(false)),
+        queue: Flag.boolean("queue").pipe(Flag.withDescription("Queue the message after the active turn instead of steering it; ChatGPT.app sends Dot messages without queueing, and when ChatGPT rejects a queued message the command prints the rejection reason"), Flag.withDefault(false)),
       },
     }),
     Spec.make("interrupt", {

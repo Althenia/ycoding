@@ -139,10 +139,13 @@ describe("CLI frontend import boundaries", () => {
             file !== "packages/cli/src/commands/handlers/decision/family.ts" &&
             file !== "packages/cli/src/commands/handlers/decision/follow.ts" &&
             file !== "packages/cli/src/commands/handlers/decision/follow-state.ts" &&
+            file !== "packages/cli/src/commands/handlers/decision/follow-delivery.ts" &&
+            file !== "packages/cli/src/commands/handlers/decision/decision-text.ts" &&
             file !== "packages/cli/src/commands/handlers/dots/attach.ts" &&
             file !== "packages/cli/src/commands/handlers/dots/detach.ts" &&
             file !== "packages/cli/src/commands/handlers/dots/remove.ts" &&
             file !== "packages/cli/src/commands/handlers/dots/request.ts" &&
+            file !== "packages/cli/src/commands/handlers/dots/rejection.ts" &&
             file !== "packages/cli/src/commands/handlers/dots/threads.ts" &&
             file !== "packages/cli/src/commands/handlers/dots/tasks.ts" &&
             file !== "packages/cli/src/commands/handlers/dots/read.ts" &&

@@ -139,7 +139,11 @@ test("Dot conversation HTTP requires authentication, validates exact inputs and 
     threads: () => Effect.sync(() => { calls.push(["threads"]); return { dotID: "dot-a", rootThreadID: "thr-root", threads: [{ threadID: "thr-root", kind: "root" as const }], tasks: [] } }),
     taskUpdates: (taskID, page) => Effect.sync(() => { calls.push(["taskUpdates", taskID, page]); return { taskID, updates: [] } }),
     readThread: (threadID, page) => Effect.sync(() => { calls.push(["readThread", threadID, page]); return { thread: { threadID, kind: "task" as const }, turns: [] } }),
-    sendMessage: (threadID, input) => Effect.sync(() => { calls.push(["sendMessage", threadID, input]); return { admission: "started" as const, turnID: "turn-1" } }),
+    sendMessage: (threadID, input) => Effect.gen(function* () {
+      calls.push(["sendMessage", threadID, input])
+      if (threadID === "thr-refused") return yield* new DotsAccess.Error({ code: "unavailable", message: "ChatGPT refused the request.", rejection: { code: -32602, message: "thread busy" } })
+      return { admission: "started" as const, turnID: "turn-1" }
+    }),
     interruptTurn: (threadID, input) => Effect.sync(() => { calls.push(["interruptTurn", threadID, input]); return { outcome: "interrupted" as const } }),
     resume: () => Effect.sync(() => { calls.push(["resume"]); return { outcome: "unconfirmed" as const, threadID: "thr-root", rootChanged: false } }),
     requests: (threadID) => Effect.sync(() => { calls.push(["requests", threadID]); return { threadID, requests: [] } }),
@@ -176,6 +180,10 @@ test("Dot conversation HTTP requires authentication, validates exact inputs and 
     expect(await (await request("POST", "/api/dots/thread/thr-a/requests/req-1", { answers: { q1: ["yes"] } })).json()).toEqual({ data: { outcome: "sent" } })
     expect((await request("POST", "/api/dots/thread/thr-a/requests/req-stale", { decision: "decline" })).status).toBe(409)
     expect((await request("POST", "/api/dots/thread/thr-a/requests/req-invalid", { decision: "accept", answers: { q1: ["yes"] } })).status).toBe(400)
+    const refused = await request("POST", "/api/dots/thread/thr-refused/message", message)
+    expect(refused.status).toBe(400)
+    expect(await refused.json()).toEqual({ _tag: "InvalidRequestError", message: "ChatGPT refused the request.", rejection: { code: -32602, message: "thread busy" } })
+    calls.pop()
     expect(calls).toEqual([
       ["threads"], ["taskUpdates", "task-a", { cursor: "c1", limit: 5 }], ["readThread", "thr-a", { limit: 10 }], ["sendMessage", "thr-a", message],
       ["interruptTurn", "thr-a", { turnID: "turn-1" }], ["resume"], ["requests", "thr-a"],

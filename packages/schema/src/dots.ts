@@ -566,6 +566,14 @@ export const SendResult = Schema.Struct({
   turnID: ConversationID.pipe(optional),
 }).annotate({ identifier: "Dots.SendResult" })
 
+export interface Rejection extends Schema.Schema.Type<typeof Rejection> {}
+export const Rejection = Schema.Struct({
+  code: Schema.Int.pipe(optional),
+  errorCode: ConversationLabel(128).pipe(optional),
+  errorType: ConversationLabel(128).pipe(optional),
+  message: ConversationLabel(1000).pipe(optional),
+}).annotate({ identifier: "Dots.Rejection" })
+
 export interface ThreadInterrupt extends Schema.Schema.Type<typeof ThreadInterrupt> {}
 export const ThreadInterrupt = Schema.Struct({ turnID: ConversationID })
   .annotate({ identifier: "Dots.ThreadInterrupt", parseOptions: { onExcessProperty: "error" } })

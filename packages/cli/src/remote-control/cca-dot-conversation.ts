@@ -5,7 +5,7 @@ import type { RemoteControlCredential } from "@ycoding-ai/core/remote-control/cr
 import { RemoteLimits } from "@ycoding-ai/remote"
 import type { Dots } from "@ycoding-ai/schema/dots"
 import { CcaComputerFailure, ccaPinnedCredential, ccaResolveDot, ccaRestGet, ccaRestSend } from "./cca-computer"
-import { ccaDurableAdmissionTimeoutMs, ccaDurableHistoryBaseURL, listCcaDurableThreads, type CcaDurableClient, type CcaDurableServerRequest } from "./cca-durable-host"
+import { ccaDurableAdmissionTimeoutMs, ccaDurableHistoryBaseURL, listCcaDurableThreads, type CcaDurableClient, type CcaDurableReply, type CcaDurableServerRequest } from "./cca-durable-host"
 import type { CcaFetch } from "./cca-executor-registration"
 
 export const ccaConversationDeadlineMs = 30_000
@@ -35,9 +35,11 @@ type Details = Pick<Dots.ConversationThread, "name" | "preview" | "status" | "up
 
 class Failure extends Error {
   readonly problem: Problem
-  constructor(problem: Problem) {
+  readonly rejection: DotsAccess.Rejection | undefined
+  constructor(problem: Problem, rejection?: DotsAccess.Rejection) {
     super(problem)
     this.problem = problem
+    this.rejection = rejection
   }
 }
 
@@ -68,6 +70,19 @@ const cursorOf = (value: unknown) => {
   return value
 }
 
+function rejected(reply: Extract<CcaDurableReply, { readonly kind: "error" }>) {
+  const errorCode = label(reply.errorCode, 128)
+  const errorType = label(reply.errorType, 128)
+  const message = label(reply.message, 1000)
+  const rejection = {
+    ...(reply.code !== undefined && Number.isSafeInteger(reply.code) ? { code: reply.code } : {}),
+    ...(errorCode === undefined ? {} : { errorCode }),
+    ...(errorType === undefined ? {} : { errorType }),
+    ...(message === undefined ? {} : { message }),
+  }
+  return new Failure("rejected", Object.keys(rejection).length ? rejection : undefined)
+}
+
 function problemOf(error: unknown): Problem {
   if (error instanceof Failure) return error.problem
   if (error instanceof CcaComputerFailure) {
@@ -81,7 +96,8 @@ async function run<T>(work: () => Promise<T>): Promise<Result<T>> {
   try {
     return { ok: true, value: await work() }
   } catch (error) {
-    return { ok: false, problem: problemOf(error) }
+    const rejection = error instanceof Failure ? error.rejection : undefined
+    return { ok: false, problem: problemOf(error), ...(rejection === undefined ? {} : { rejection }) }
   }
 }
 
@@ -294,7 +310,9 @@ export function createCcaDotConversation(deps: CcaDotConversationDeps): DotsAcce
   async function send(threadID: string, input: Dots.ThreadSend): Promise<Dots.SendResult> {
     await member(threadID, deadline())
     const durable = client()
-    durable.watch(threadID)
+    const subscription = await durable.watch(threadID)
+    if (subscription.kind === "error") throw rejected(subscription)
+    if (subscription.kind !== "result") throw new Failure("durable-unavailable")
     const reply = await durable.request("turn/addUserMessage", {
       threadId: threadID,
       input: [{ type: "text", text: input.text, text_elements: [] }],
@@ -303,7 +321,7 @@ export function createCcaDotConversation(deps: CcaDotConversationDeps): DotsAcce
       ...(input.mode === "queue" ? { mode: "queue" } : {}),
     }, ccaDurableAdmissionTimeoutMs)
     if (reply.kind === "not-sent") throw new Failure("durable-unavailable")
-    if (reply.kind === "error") throw new Failure("rejected")
+    if (reply.kind === "error") throw rejected(reply)
     if (reply.kind === "unknown") return { admission: "unknown" }
     const result = isRecord(reply.result) ? reply.result : {}
     const turnValue = isRecord(result.turn) ? result.turn.id : undefined
@@ -380,7 +398,7 @@ export function createCcaDotConversation(deps: CcaDotConversationDeps): DotsAcce
       if (!Array.isArray(history.data) || history.data.length > 50) throw new Failure("malformed")
       const turns = history.data.map(turn).reverse()
       const nextCursor = cursorOf(history.nextCursor)
-      deps.durable()?.watch(threadID)
+      void deps.durable()?.watch(threadID)
       return {
         thread: { threadID, kind: threadID === owner.rootThreadID ? "root" as const : "task" as const, ...details(thread) },
         turns,
@@ -414,7 +432,7 @@ export function createCcaDotConversation(deps: CcaDotConversationDeps): DotsAcce
     requests: (threadID) => run(async () => {
       await member(threadID, deadline())
       const durable = client()
-      durable.watch(threadID)
+      void durable.watch(threadID)
       return { threadID, requests: durable.pending(threadID).map(pendingRequest) }
     }),
     respond: (threadID, requestID, input) => run(async () => {

@@ -36,6 +36,7 @@ export type FollowReceipt = {
   groupID?: string
   ownerSessionID?: string
   removed?: true
+  snapshot?: true
   parentID?: string
   operation?: "session.subagent.answer"
   resolution?: "unknown" | "reply-observed" | "cancelled" | "timed_out" | "rejected"
@@ -89,6 +90,7 @@ export async function followFamily(client: FollowClient, options: {
   let scopeChanged = false
   const settling = new Set<string>()
   const ownership = new Map(state.ownership?.map((item) => [`${item.groupID}\0${item.sessionID}`, item]))
+  let ownershipSnapshot = state.ownership === undefined
   let failure: unknown
   let dirty = false
   let notify: (() => void) | undefined
@@ -240,6 +242,7 @@ export async function followFamily(client: FollowClient, options: {
     classify()
   }
   const refreshOwnership = async (groupID?: string) => {
+    const snapshot = ownershipSnapshot && groupID === undefined
     const groups = await read(() => client.coordination.list({ signal }))
     if (groups.length > 128) throw new FollowError("budget-exhausted")
     const eligible = new Set(groups.filter((group) => scope.has(group.masterSessionID)).map((group) => group.id))
@@ -260,7 +263,7 @@ export async function followFamily(client: FollowClient, options: {
         if (!followID(group.id) || !followID(member.sessionID) || ownerSessionID !== undefined && !followID(ownerSessionID) || !Number.isSafeInteger(detail.revision) || detail.revision < 0) throw new FollowError("invalid-native-data")
         const item = { groupID: group.id, sessionID: member.sessionID, revision: detail.revision, ...(ownerSessionID === undefined ? {} : { ownerSessionID }) }
         ownership.set(memberKey, item)
-        await send({ ...item, kind: "ownership", type: ownerSessionID === undefined ? "owner-released" : "owner-changed", resolution: "unknown" })
+        await send({ ...item, kind: "ownership", type: ownerSessionID === undefined ? "owner-released" : "owner-changed", resolution: "unknown", ...(snapshot ? { snapshot: true as const } : {}) })
       }
       for (const [memberKey, previous] of ownership) {
         if (previous.groupID !== group.id || previous.ownerSessionID === undefined || detail.members.some((member) => member.sessionID === previous.sessionID)) continue
@@ -269,6 +272,7 @@ export async function followFamily(client: FollowClient, options: {
         await send({ ...item, kind: "ownership", type: "owner-released", removed: true, resolution: "unknown" })
       }
     }
+    if (groupID === undefined) ownershipSnapshot = false
   }
   const material = async (entry: Entry, event: FollowEvent) => {
     if (!event.durable || event.durable.aggregateID !== entry.id || event.durable.seq <= (entry.after ?? -1)) return

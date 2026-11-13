@@ -358,6 +358,38 @@ test("owner reassignment and release emit only changed identities and survive re
   expect(f.saved.ownership).toEqual([{ groupID: "cgrp_project", sessionID: "ses_member", revision }])
 })
 
+test("a watch without an ownership checkpoint reports current owners as a snapshot and later changes as changes", async () => {
+  const f = fixture()
+  let owner: string | undefined = "ses_owner_one"
+  let revision = 4
+  f.client.coordination.list = async () => [{ id: "cgrp_project", masterSessionID: "ses_root" }]
+  f.client.coordination.get = async () => ({ id: "cgrp_project", revision, members: [
+    { sessionID: "ses_member_a", ...(owner === undefined ? {} : { owner: { sessionID: owner } }) }, { sessionID: "ses_member_b" },
+  ] })
+  const run = f.run()
+  try {
+    await f.wait((receipt) => receipt.kind === "ready")
+    expect(f.receipts.filter((receipt) => receipt.kind === "ownership")).toEqual([
+      { kind: "ownership", type: "owner-changed", groupID: "cgrp_project", sessionID: "ses_member_a", ownerSessionID: "ses_owner_one", revision: 4, resolution: "unknown", snapshot: true },
+      { kind: "ownership", type: "owner-released", groupID: "cgrp_project", sessionID: "ses_member_b", revision: 4, resolution: "unknown", snapshot: true },
+    ])
+    owner = "ses_owner_two"; revision = 5
+    f.global.push({ type: "coordination.updated", sourceEpoch: "epoch_one", data: { groupID: "cgrp_project", revision } })
+    expect(await f.wait((receipt) => receipt.ownerSessionID === "ses_owner_two")).toEqual(
+      { kind: "ownership", type: "owner-changed", groupID: "cgrp_project", sessionID: "ses_member_a", ownerSessionID: "ses_owner_two", revision: 5, resolution: "unknown" })
+  } finally { f.controller.abort(); await run }
+  owner = "ses_owner_three"; revision = 6
+  const resumed = fixture(f.saved)
+  resumed.client.coordination.list = f.client.coordination.list
+  resumed.client.coordination.get = f.client.coordination.get
+  const next = resumed.run()
+  try { await resumed.wait((receipt) => receipt.kind === "ready") }
+  finally { resumed.controller.abort(); await next }
+  expect(resumed.receipts.filter((receipt) => receipt.kind === "ownership")).toEqual([
+    { kind: "ownership", type: "owner-changed", groupID: "cgrp_project", sessionID: "ses_member_a", ownerSessionID: "ses_owner_three", revision: 6, resolution: "unknown" },
+  ])
+})
+
 for (const cause of ["deleted", "replaced-master"] as const) {
   for (const resumed of [false, true]) {
     test(`ownership ends when a Project is ${cause}, ${resumed ? "during a saved-state gap" : "on its live invalidation"}`, async () => {

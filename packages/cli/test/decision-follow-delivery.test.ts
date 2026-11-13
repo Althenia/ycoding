@@ -10,7 +10,7 @@ const authority = "Settle these only within existing authority: deny rules, perm
 const base = (): FollowState => ({ version: 1, rootSessionID: "ses_root", server, sourceEpoch: "epoch_one", cursors: [{ sessionID: "ses_root", after: 0 }],
   pending: [], seen: [], requestSeen: [], terminalSeen: [] })
 type Admission = { admission: "started" | "steered" | "duplicate" | "unknown"; turnID?: string }
-type Sent = { threadID: string; text: string; clientMessageID: string; mode: "send" | "queue" }
+type Sent = { threadID: string; text: string; clientMessageID: string; mode: string }
 
 const durable = (type: string, sessionID = "ses_child", seq = 5): FollowReceipt => ({ kind: "durable", sessionID, id: `evt_${sessionID}_${seq}`, seq, type, rootActive: false, activity: "idle" })
 const pending = (requestKind: string, id: string, sessionID = "ses_root", extra: Partial<FollowReceipt> = {}): FollowReceipt => ({ kind: "pending", requestKind, sessionID, id, ...extra })
@@ -26,7 +26,7 @@ async function until(predicate: () => boolean, label: string) {
   }
 }
 
-function harness(options: { state?: FollowState; targets?: string[]; statuses?: Record<string, string | undefined>; items?: DecisionItem[]; admissions?: (Admission | unknown)[]; listed?: string[] } = {}) {
+function harness(options: { state?: FollowState; targets?: string[]; statuses?: Record<string, string | undefined>; items?: DecisionItem[]; admissions?: (Admission | unknown)[]; listed?: string[]; root?: () => string | undefined } = {}) {
   const controller = new AbortController()
   const sends: Sent[] = []
   const records: Record<string, unknown>[] = []
@@ -41,7 +41,9 @@ function harness(options: { state?: FollowState; targets?: string[]; statuses?: 
     dots: {
       async threads() {
         calls.push("dots.threads")
-        return { threads: (options.listed ?? Object.keys(statuses)).map((threadID) => ({ threadID, ...(statuses[threadID] === undefined ? {} : { status: statuses[threadID] }) })) }
+        const rootThreadID = options.root?.()
+        return { ...(rootThreadID === undefined ? {} : { rootThreadID }),
+          threads: (options.listed ?? Object.keys(statuses)).map((threadID) => ({ threadID, ...(statuses[threadID] === undefined ? {} : { status: statuses[threadID] }) })) }
       },
       thread: { async send(input, requestOptions) {
         calls.push("dots.thread.send")
@@ -162,6 +164,33 @@ for (const [receipt, phrase] of [
   })
 }
 
+test("startup ownership is delivered as one current-state entry per Project after the watch is ready, and later changes as changes", async () => {
+  const h = harness()
+  const run = h.delivery.run()
+  try {
+    const snapshot = (groupID: string, sessionID: string, revision: number, ownerSessionID?: string): FollowReceipt => ({ kind: "ownership", type: ownerSessionID === undefined ? "owner-released" : "owner-changed",
+      groupID, sessionID, revision, ...(ownerSessionID === undefined ? {} : { ownerSessionID }), resolution: "unknown", snapshot: true })
+    await h.observe(snapshot("grp_one", "ses_a", 3, "ses_owner"))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(h.sends).toHaveLength(0)
+    await h.observe(snapshot("grp_one", "ses_b", 3), snapshot("grp_two", "ses_c", 7, "ses_lead"), { kind: "ready", sessionID: "ses_root", activity: "idle" })
+    await until(() => h.sends.length === 1, "snapshot send")
+    const text = h.sends[0].text
+    expect(text).toContain("2 events")
+    expect(text).toContain("1. Project grp_one ownership when this watch started (current state, not a change; revision 3): member ses_a is owned by ses_owner; member ses_b has no owner.")
+    expect(text).toContain("2. Project grp_two ownership when this watch started (current state, not a change; revision 7): member ses_c is owned by ses_lead.")
+    expect(text).toContain("Read: ycoding api coordination.get --param groupID=grp_one")
+    expect(text).not.toContain("owner-changed")
+    await h.observe({ kind: "ownership", type: "owner-changed", groupID: "grp_one", sessionID: "ses_b", ownerSessionID: "ses_owner", revision: 4, resolution: "unknown" })
+    await until(() => h.sends.length === 2, "change send")
+    expect(h.sends[1].text).toContain("Project grp_one: member ses_b is owned by ses_owner (owner-changed, revision 4).")
+    expect(h.records.find((record) => record.kind === "delivery")).toMatchObject({ events: [
+      { id: "grp_one", snapshot: true, revision: 3, members: [{ sessionID: "ses_a", ownerSessionID: "ses_owner" }, { sessionID: "ses_b" }] },
+      { id: "grp_two", snapshot: true, revision: 7, members: [{ sessionID: "ses_c", ownerSessionID: "ses_lead" }] },
+    ] })
+  } finally { await h.stop(run) }
+})
+
 test("noise receipts, unlisted durable types and request endings are never delivered", async () => {
   const h = harness()
   const run = h.delivery.run()
@@ -198,17 +227,49 @@ test("events observed during a send coalesce into one message per target on the 
   } finally { await h.stop(run) }
 })
 
-for (const [status, mode] of [["idle", "send"], ["not-loaded", "send"], ["error", "send"], ["active", "queue"], ["waiting-approval", "queue"], ["waiting-input", "queue"], [undefined, "queue"]] as const) {
-  test(`delivery to a ${status ?? "status-less"} thread uses ${mode}`, async () => {
+for (const status of ["idle", "not-loaded", "error", "active", "waiting-approval", "waiting-input", undefined] as const) {
+  test(`delivery to a ${status ?? "status-less"} thread sends without queueing and records send`, async () => {
     const h = harness({ statuses: { thr_root: status } })
     const run = h.delivery.run()
     try {
       await h.observe(durable("session.execution.failed"))
-      await until(() => h.sends.length === 1, "mode send")
-      expect(h.sends[0].mode).toBe(mode)
+      await until(() => h.records.some((record) => record.kind === "delivery"), "mode send")
+      expect(h.sends[0].mode).toBe("send")
+      expect(h.records.find((record) => record.kind === "delivery")).toMatchObject({ target: "thr_root", threadID: "thr_root", mode: "send", outcome: "delivered" })
     } finally { await h.stop(run) }
   })
 }
+
+test("delivery to dot resolves the Dot's current root at each pass and moves an in-flight batch to a rotated root with a new message ID", async () => {
+  let root: string | undefined = "thr_root_one"
+  const h = harness({ targets: ["dot"], statuses: { thr_root_one: undefined, thr_root_two: undefined }, root: () => root,
+    admissions: [{ admission: "unknown" }, { admission: "started" }, { admission: "started" }] })
+  const run = h.delivery.run()
+  try {
+    await h.observe(durable("session.execution.started", "ses_root", 1))
+    await until(() => h.records.some((record) => record.outcome === "unknown"), "unknown admission")
+    expect(h.sends[0]).toMatchObject({ threadID: "thr_root_one", mode: "send" })
+    expect(h.saved.delivery?.targets).toEqual([{ target: "dot", outbox: [], inflight: { threadID: "thr_root_one", clientMessageID: h.sends[0].clientMessageID, events: [expect.objectContaining({ seq: 1 })] } }])
+    root = "thr_root_two"
+    await until(() => h.records.some((record) => record.outcome === "delivered"), "rotated delivery")
+    expect(h.sends.at(-1)).toMatchObject({ threadID: "thr_root_two", mode: "send" })
+    expect(h.sends.at(-1)!.clientMessageID).not.toBe(h.sends[0].clientMessageID)
+    expect(h.sends.at(-1)!.text).toContain("execution started")
+    expect(h.records.find((record) => record.outcome === "delivered")).toMatchObject({ target: "dot", threadID: "thr_root_two", clientMessageID: h.sends.at(-1)!.clientMessageID })
+    await h.observe(durable("session.execution.succeeded", "ses_root", 2))
+    await until(() => h.sends.some((sent) => sent.text.includes("execution succeeded")), "later delivery")
+    expect(h.sends.at(-1)!.threadID).toBe("thr_root_two")
+    await until(() => h.saved.delivery?.targets[0]?.inflight === undefined && h.saved.delivery?.targets[0]?.outbox.length === 0, "drained")
+    expect(h.saved.delivery?.targets).toEqual([{ target: "dot", outbox: [] }])
+  } finally { await h.stop(run) }
+})
+
+test("delivery to dot refuses a Dot that reports no root conversation before sending anything", async () => {
+  const h = harness({ targets: ["dot"], root: () => undefined })
+  const error = await h.delivery.run().then(() => undefined, (failure: unknown) => failure)
+  expect(String((error as Error).message)).toContain("[delivery-target-unavailable]")
+  expect(h.sends).toHaveLength(0)
+})
 
 test("an unknown admission stays undelivered and is resent with the same message ID until confirmed", async () => {
   const h = harness({ admissions: [{ admission: "unknown" }, new ClientError("Transport"), { admission: "duplicate" }] })
@@ -222,7 +283,7 @@ test("an unknown admission stays undelivered and is resent with the same message
     const outcomes = h.records.filter((record) => record.kind === "delivery")
     expect(outcomes.map((record) => record.outcome)).toEqual(["unknown", "unknown", "delivered"])
     expect(outcomes[2]).toMatchObject({ kind: "delivery", threadID: "thr_root", clientMessageID: h.sends[0].clientMessageID, admission: "duplicate", mode: "send" })
-    expect(h.saved.delivery?.targets[0]).toEqual({ threadID: "thr_root", outbox: [] })
+    expect(h.saved.delivery?.targets[0]).toEqual({ target: "thr_root", outbox: [] })
   } finally { await h.stop(run) }
 })
 
@@ -317,7 +378,7 @@ test("delivery refuses a thread the Dot does not list before sending anything", 
 })
 
 test("follow state bound to delivery threads refuses a different thread set", () => {
-  const state = { ...base(), delivery: { announced: [], targets: [{ threadID: "thr_root", outbox: [] }] } }
+  const state = { ...base(), delivery: { announced: [], targets: [{ target: "thr_root", outbox: [] }] } }
   for (const targets of [["thr_other"], [], ["thr_root", "thr_other"]]) {
     expect(() => createFollowDelivery({} as DeliveryClient, { state, targets, signal: new AbortController().signal, save: async () => {}, emit: async () => {} }))
       .toThrow("[delivery-targets-changed]")

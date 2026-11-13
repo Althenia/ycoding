@@ -5824,6 +5824,9 @@ export type InvalidRequestError = {
   readonly message: string
   readonly kind?: string | undefined
   readonly field?: string | undefined
+  readonly rejection?:
+    | { readonly code?: number; readonly errorCode?: string; readonly errorType?: string; readonly message?: string }
+    | undefined
 }
 export const isInvalidRequestError = (value: unknown): value is InvalidRequestError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "InvalidRequestError"

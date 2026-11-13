@@ -60,11 +60,16 @@ test("operator watch instructions never treat a settled execution as finished wo
 test("operator watch instructions describe push delivery to the Dot thread without approval authority", async () => {
   const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
   for (const text of [
-    "ycoding decision watch <root-session-id> --family --follow --state <private-dir>/state.json --deliver <dot-thread-id>",
-    "wakes an idle thread and queues behind an active turn", "A pushed message approves nothing",
+    "ycoding decision watch <root-session-id> --family --follow --state <private-dir>/state.json --deliver dot",
+    "`dot` follows the Dot's current root conversation", "A pushed message approves nothing",
     "Without a running follow watch nothing is pushed",
   ]) expect(ycodingOperatorSkill).toContain(text)
   expect(ycodingOperatorSkill).not.toContain("cannot wake an idle Dots conversation")
+})
+
+test("operator instructions create a YCoding coordination thread with computer V selected", async () => {
+  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  expect(ycodingOperatorSkill).toContain("When creating a YCoding coordination thread, create it with computer V selected.")
 })
 
 test("operator Library instructions select only the private process channel and preserve its gates", async () => {

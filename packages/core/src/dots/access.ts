@@ -14,6 +14,7 @@ import { OpenAICodex } from "../plugin/provider/openai-codex"
 export class Error extends Schema.TaggedErrorClass<Error>()("DotsAccess.Error", {
   code: Schema.Literals(["unavailable", "invalid_input", "conflict"]),
   message: Schema.String,
+  rejection: Schema.optional(Dots.Rejection),
 }) {}
 
 export interface TransportStatus {
@@ -61,7 +62,9 @@ export type ConversationProblem =
   | "unsupported"
   | "invalid-answer"
 
-export type ConversationResult<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly problem: ConversationProblem }
+export type Rejection = Dots.Rejection
+
+export type ConversationResult<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly problem: ConversationProblem; readonly rejection?: Rejection }
 
 export interface Conversation {
   readonly threads: () => Promise<ConversationResult<Dots.ThreadList>>
@@ -146,6 +149,20 @@ const conversationGuidance = {
   unsupported: "This request type cannot be answered from YCoding.",
   "invalid-answer": "The answer does not match this request.",
 } satisfies Record<ConversationProblem, string>
+const rejectionLabel = (value: unknown, limit: number) => typeof value === "string" ? display(value, limit) : undefined
+const rejectionOf = (value: Rejection | undefined): Rejection | undefined => {
+  if (typeof value !== "object" || value === null) return undefined
+  const errorCode = rejectionLabel(value.errorCode, 128)
+  const errorType = rejectionLabel(value.errorType, 128)
+  const message = rejectionLabel(value.message, 1000)
+  const rejection = {
+    ...(value.code !== undefined && Number.isSafeInteger(value.code) ? { code: value.code } : {}),
+    ...(errorCode === undefined ? {} : { errorCode }),
+    ...(errorType === undefined ? {} : { errorType }),
+    ...(message === undefined ? {} : { message }),
+  }
+  return Object.keys(rejection).length ? rejection : undefined
+}
 const conversationErrorCode = (problem: ConversationProblem): Error["code"] =>
   problem === "stale" ? "conflict" : problem === "unsupported" || problem === "invalid-answer" ? "invalid_input" : "unavailable"
 const ConversationIdentity = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(256))
@@ -259,7 +276,8 @@ export function make(input: {
       Effect.catch(() => Effect.succeed<ConversationResult<unknown>>({ ok: false, problem: "connection" })))
     if (!result.ok) {
       const problem = Object.hasOwn(conversationGuidance, result.problem) ? result.problem : "connection"
-      return yield* new Error({ code: conversationErrorCode(problem), message: conversationGuidance[problem] })
+      const rejection = problem === "rejected" ? rejectionOf(result.rejection) : undefined
+      return yield* new Error({ code: conversationErrorCode(problem), message: conversationGuidance[problem], ...(rejection === undefined ? {} : { rejection }) })
     }
     return yield* Schema.decodeUnknownEffect(schema)(result.value).pipe(Effect.mapError(() =>
       new Error({ code: "unavailable", message: conversationGuidance.malformed })))

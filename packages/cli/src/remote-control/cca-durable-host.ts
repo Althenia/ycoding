@@ -51,7 +51,7 @@ export type CcaDurableCapturedMethod = (typeof ccaDurableCapturedRequestMethods)
 export type CcaDurableCredential = { readonly access: string; readonly accountID: string }
 export type CcaDurableReply =
   | { readonly kind: "result"; readonly result: unknown }
-  | { readonly kind: "error"; readonly code?: number; readonly message: string }
+  | { readonly kind: "error"; readonly code?: number; readonly message: string; readonly errorCode?: string; readonly errorType?: string }
   | { readonly kind: "not-sent" }
   | { readonly kind: "unknown" }
 export type CcaDurableServerRequest = {
@@ -77,7 +77,7 @@ export type CcaDurableConnector = (url: string, protocols: readonly string[], he
 export interface CcaDurableClient {
   readonly connected: () => boolean
   readonly request: (method: string, params: unknown, timeoutMs?: number) => Promise<CcaDurableReply>
-  readonly watch: (threadID: string) => void
+  readonly watch: (threadID: string) => Promise<CcaDurableReply>
   readonly pending: (threadID: string) => readonly CcaDurableServerRequest[]
   readonly answer: (threadID: string, requestID: string, result: unknown) => Promise<"sent" | "stale" | "unknown">
   readonly close: () => Promise<void>
@@ -99,7 +99,7 @@ type Connection = {
   initialized: boolean
   readonly calls: Map<string, (reply: CcaDurableReply) => void>
   readonly requests: Map<string, CcaDurableServerRequest>
-  readonly subscribed: Set<string>
+  readonly subscribed: Map<string, Promise<CcaDurableReply>>
 }
 type DialOutcome = "dropped" | "failed" | "unauthorized" | "closed"
 
@@ -192,11 +192,14 @@ export function startCcaDurableClient(deps: CcaDurableClientDeps): CcaDurableCli
   }
 
   function subscribe(connection: Connection, threadID: string) {
-    if (connection.subscribed.has(threadID)) return
-    connection.subscribed.add(threadID)
-    void send(connection, "thread/resume", { threadId: threadID, excludeTurns: true }, ccaDurableAdmissionTimeoutMs).then((reply) => {
-      if (reply.kind !== "result") connection.subscribed.delete(threadID)
+    const existing = connection.subscribed.get(threadID)
+    if (existing) return existing
+    const subscription: Promise<CcaDurableReply> = send(connection, "thread/resume", { threadId: threadID, excludeTurns: true }, ccaDurableAdmissionTimeoutMs).then((reply) => {
+      if (reply.kind !== "result" && connection.subscribed.get(threadID) === subscription) connection.subscribed.delete(threadID)
+      return reply
     })
+    connection.subscribed.set(threadID, subscription)
+    return subscription
   }
 
   function receive(connection: Connection, data: unknown) {
@@ -214,7 +217,14 @@ export function startCcaDurableClient(deps: CcaDurableClientDeps): CcaDurableCli
       if (!settle) return
       if ("error" in message) {
         const error = isRecord(message.error) ? message.error : {}
-        settle({ kind: "error", ...(typeof error.code === "number" ? { code: error.code } : {}), message: typeof error.message === "string" ? error.message.slice(0, 1000) : "" })
+        const data = isRecord(error.data) ? error.data : {}
+        settle({
+          kind: "error",
+          ...(typeof error.code === "number" ? { code: error.code } : {}),
+          message: typeof error.message === "string" ? error.message.slice(0, 1000) : "",
+          ...(typeof data.code === "string" ? { errorCode: data.code.slice(0, 128) } : {}),
+          ...(typeof data.errorType === "string" ? { errorType: data.errorType.slice(0, 128) } : {}),
+        })
         return
       }
       settle({ kind: "result", result: message.result })
@@ -252,7 +262,7 @@ export function startCcaDurableClient(deps: CcaDurableClientDeps): CcaDurableCli
         resolve("failed")
         return
       }
-      const connection: Connection = { socket, initialized: false, calls: new Map(), requests: new Map(), subscribed: new Set() }
+      const connection: Connection = { socket, initialized: false, calls: new Map(), requests: new Map(), subscribed: new Map() }
       let status: number | undefined
       let opened = false
       let settled = false
@@ -318,7 +328,7 @@ export function startCcaDurableClient(deps: CcaDurableClientDeps): CcaDurableCli
           connection.initialized = true
           reconnectMs = ccaDurableReconnectInitialMs
           deps.onDiagnostic?.("durable-connected")
-          for (const threadID of watched.keys()) subscribe(connection, threadID)
+          for (const threadID of watched.keys()) void subscribe(connection, threadID)
           deps.onState?.(true)
         })
       })
@@ -367,7 +377,7 @@ export function startCcaDurableClient(deps: CcaDurableClientDeps): CcaDurableCli
       watched.set(threadID, true)
       if (watched.size > watchedThreadLimit) watched.delete(watched.keys().next().value!)
       const connection = current
-      if (connection?.initialized) subscribe(connection, threadID)
+      return connection?.initialized ? subscribe(connection, threadID) : Promise.resolve({ kind: "not-sent" })
     },
     pending: (threadID) => [...(current?.requests.values() ?? [])].filter((request) => request.threadID === threadID),
     answer: (threadID, requestID, result) => {

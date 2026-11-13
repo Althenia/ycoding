@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { Dots } from "@ycoding-ai/schema/dots"
 import { Skill } from "@ycoding-ai/schema/skill"
 import { Session } from "@ycoding-ai/schema/session"
 
@@ -8,6 +9,7 @@ export class InvalidRequestError extends Schema.TaggedErrorClass<InvalidRequestE
     message: Schema.String,
     kind: Schema.optional(Schema.String),
     field: Schema.optional(Schema.String),
+    rejection: Schema.optional(Dots.Rejection),
   },
   { httpApiStatus: 400 },
 ) {}

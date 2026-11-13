@@ -442,3 +442,17 @@ it.live("Dot conversation results are decoded and transport problems become fixe
   expect(JSON.stringify(failure)).not.toContain("sk-secret")
   release()
 }))
+
+it.live("a refused Dot message keeps the upstream rejection code and a bounded control-free message", () => Effect.gen(function* () {
+  const f = yield* setup
+  yield* f.access.set({ enabled: true, expectedRevision: 0 })
+  const rejections: unknown[] = [{ code: -32602, message: "thread\u0007busy" }, { message: "z".repeat(1500) }, { code: 2.5, message: "\u0000" }]
+  const conversation = { ...unavailableConversation, send: async () => ({ ok: false as const, problem: "rejected" as const, rejection: rejections.shift() as DotsAccess.Rejection }) }
+  const release = f.access.attachTransport({ ...idleComputer, status: async () => ({ state: "connected" }), conversation })
+  const message = { text: "Continue", clientMessageID: "client-1", mode: "queue" as const }
+  const first = yield* Effect.flip(f.access.sendMessage("thr-root", message))
+  expect(first).toMatchObject({ code: "unavailable", message: "ChatGPT refused the request.", rejection: { code: -32602, message: "thread busy" } })
+  expect((yield* Effect.flip(f.access.sendMessage("thr-root", message))).rejection).toEqual({ message: "z".repeat(1000) })
+  expect((yield* Effect.flip(f.access.sendMessage("thr-root", message))).rejection).toBeUndefined()
+  release()
+}))

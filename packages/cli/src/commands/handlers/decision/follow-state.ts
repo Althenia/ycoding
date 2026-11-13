@@ -17,8 +17,8 @@ const followFailureMessages = {
   "output-failed": "Follow output failed; verify the output consumer before resuming selected state",
   "observer-failed": "Native decision follow failed; verify server availability and private state ownership",
   "delivery-failed": "Dot delivery failed; undelivered events stay in the follow state and resume on restart; verify Dots access and the --deliver threads",
-  "delivery-target-unavailable": "A --deliver thread is not listed by your Dot; run ycoding dots threads and select a listed thread",
-  "delivery-targets-changed": "Selected follow state delivers to other --deliver threads; repeat its exact threads or select a new state file",
+  "delivery-target-unavailable": "A --deliver thread is not listed by your Dot, or for dot your Dot reports no root conversation; run ycoding dots threads and select dot or a listed thread",
+  "delivery-targets-changed": "Selected follow state delivers to other --deliver targets; repeat its exact targets or select a new state file",
 } as const
 
 export class FollowError extends Error {
@@ -41,17 +41,20 @@ export type FollowState = {
   ownership?: { groupID: string; sessionID: string; ownerSessionID?: string; revision: number }[]
   delivery?: FollowDelivery
 }
+export type DeliveryMember = { sessionID: string; ownerSessionID?: string }
 export type DeliveryEvent = { sessionID: string; id: string; type?: string; seq?: number; requestKind?: string; parentID?: string; fingerprint?: string; revision?: number; escalated?: true
-  ownerSessionID?: string; removed?: true }
-export type DeliveryTarget = { threadID: string; outbox: DeliveryEvent[]; inflight?: { clientMessageID: string; events: DeliveryEvent[] } }
+  ownerSessionID?: string; removed?: true; snapshot?: true; members?: DeliveryMember[] }
+export type DeliveryTarget = { target: string; outbox: DeliveryEvent[]; inflight?: { threadID: string; clientMessageID: string; events: DeliveryEvent[] } }
 export type FollowDelivery = { announced: string[]; targets: DeliveryTarget[] }
 export const deliveryLifecycleTypes = ["session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "session.work.completed"]
 export const deliveryOwnershipTypes = ["owner-changed", "owner-released"]
+export const dotDeliveryTarget = "dot"
 export const deliveryTargetLimit = 8
 export const deliveryBatchLimit = 20
 export const deliveryThreadID = (value: unknown): value is string => typeof value === "string" && value.length <= 256 && /\S/.test(value) && !/[\u0000-\u001f\u007f]/.test(value)
 export const deliveryKey = (event: DeliveryEvent) => [event.type ?? "", event.requestKind ?? "", event.sessionID, event.id, event.seq ?? "", event.parentID ?? "",
-  event.fingerprint ?? "", event.revision ?? "", event.escalated ? "escalated" : "", event.ownerSessionID ?? "", event.removed ? "removed" : ""].join("\0")
+  event.fingerprint ?? "", event.revision ?? "", event.escalated ? "escalated" : "", event.ownerSessionID ?? "", event.removed ? "removed" : "",
+  event.snapshot ? JSON.stringify(event.members) : ""].join("\0")
 export const announcedKey = (event: DeliveryEvent) => `${event.escalated ? "project-escalation:" : ""}${event.requestKind}\0${event.sessionID}\0${event.id}`
 
 export const followStateBytes = 1024 * 1024
@@ -63,8 +66,16 @@ const keys = (value: Record<string, unknown>, allowed: string[]) => Object.keys(
 const sequence = (value: unknown) => value === undefined || typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 const sessionID = (value: unknown) => followID(value) && value.startsWith("ses")
 
+function validDeliveryMembers(members: unknown) {
+  return Array.isArray(members) && members.length >= 1 && members.length <= followLedgerLimit && new Set(members.map((member) => record(member) ? member.sessionID : undefined)).size === members.length &&
+    members.every((member) => record(member) && keys(member, ["sessionID", "ownerSessionID"]) && followID(member.sessionID) && (member.ownerSessionID === undefined || followID(member.ownerSessionID)))
+}
+
 function validDeliveryEvent(event: unknown) {
-  if (!record(event) || !keys(event, ["sessionID", "id", "type", "seq", "requestKind", "parentID", "fingerprint", "revision", "escalated", "ownerSessionID", "removed"]) || !followID(event.id)) return false
+  if (!record(event) || !keys(event, ["sessionID", "id", "type", "seq", "requestKind", "parentID", "fingerprint", "revision", "escalated", "ownerSessionID", "removed", "snapshot", "members"]) || !followID(event.id)) return false
+  if (event.snapshot !== undefined) return event.snapshot === true && sessionID(event.sessionID) && typeof event.revision === "number" && sequence(event.revision) && validDeliveryMembers(event.members) &&
+    [event.type, event.seq, event.requestKind, event.parentID, event.fingerprint, event.escalated, event.ownerSessionID, event.removed].every((field) => field === undefined)
+  if (event.members !== undefined) return false
   if (typeof event.type === "string" && deliveryOwnershipTypes.includes(event.type)) return followID(event.sessionID) && typeof event.revision === "number" && sequence(event.revision) &&
     (event.ownerSessionID === undefined || followID(event.ownerSessionID)) && (event.removed === undefined || event.removed === true) &&
     [event.seq, event.requestKind, event.parentID, event.fingerprint, event.escalated].every((field) => field === undefined)
@@ -84,14 +95,15 @@ function validateDelivery(value: unknown) {
     const kind = parts[0]?.startsWith("project-escalation:") ? parts[0].slice("project-escalation:".length) : parts[0]
     if (parts.length !== 3 || !requestKinds.includes(kind!) || !sessionID(parts[1]) || !followID(parts[2])) throw new Error("Invalid follow delivery announcement")
   }
-  const threads = new Set<string>()
+  const targets = new Set<string>()
   for (const target of value.targets) {
-    if (!record(target) || !keys(target, ["threadID", "outbox", "inflight"]) || !deliveryThreadID(target.threadID) || threads.has(target.threadID) ||
+    if (!record(target) || !keys(target, ["target", "outbox", "inflight"]) || !deliveryThreadID(target.target) || targets.has(target.target) ||
       !Array.isArray(target.outbox) || target.outbox.length > followLedgerLimit || !target.outbox.every(validDeliveryEvent)) throw new Error("Invalid follow delivery target")
-    threads.add(target.threadID)
+    targets.add(target.target)
     if (target.inflight === undefined) continue
     const inflight = target.inflight
-    if (!record(inflight) || !keys(inflight, ["clientMessageID", "events"]) || typeof inflight.clientMessageID !== "string" ||
+    if (!record(inflight) || !keys(inflight, ["threadID", "clientMessageID", "events"]) || !deliveryThreadID(inflight.threadID) ||
+      (target.target === dotDeliveryTarget ? inflight.threadID === dotDeliveryTarget : inflight.threadID !== target.target) || typeof inflight.clientMessageID !== "string" ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(inflight.clientMessageID) || !Array.isArray(inflight.events) ||
       inflight.events.length < 1 || inflight.events.length > deliveryBatchLimit || !inflight.events.every(validDeliveryEvent)) throw new Error("Invalid follow delivery batch")
   }

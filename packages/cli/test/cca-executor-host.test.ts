@@ -1210,6 +1210,18 @@ describe("CCA durable host requests", () => {
     expect(durable.messages.some((message) => message.id === "srv-2" || message.id === "srv-3")).toBe(false)
   })
 
+  test("watch resolves with the thread subscription reply once per connection and a refused subscription keeps its error code and type", async () => {
+    const { durable, instance } = await client((message) => message.method === "thread/resume" && message.params.threadId === "thr-refused"
+      ? { error: { code: -32003, message: "thread access denied", data: { code: "thread_not_found", errorType: "thread_archived" } } } as DurableReply : undefined)
+    expect(await instance.watch("thr-a")).toEqual({ kind: "result", result: {} })
+    expect(await instance.watch("thr-a")).toEqual({ kind: "result", result: {} })
+    expect(durable.of("thread/resume").filter((message) => message.params.threadId === "thr-a")).toHaveLength(1)
+    const refusal = { kind: "error" as const, code: -32003, message: "thread access denied", errorCode: "thread_not_found", errorType: "thread_archived" }
+    expect(await instance.watch("thr-refused")).toEqual(refusal)
+    expect(await instance.watch("thr-refused")).toEqual(refusal)
+    expect(durable.of("thread/resume").filter((message) => message.params.threadId === "thr-refused")).toHaveLength(2)
+  })
+
   test("a request resolved elsewhere or retired with its connection becomes stale and is never answered", async () => {
     const { durable, instance, states } = await client()
     instance.watch("thr-a")

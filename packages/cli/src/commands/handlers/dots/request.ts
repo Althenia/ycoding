@@ -3,6 +3,7 @@ import { Effect, Option, Schema } from "effect"
 import { Service } from "@ycoding-ai/client/effect/service"
 import { Dots } from "@ycoding-ai/schema/dots"
 import { ServerConnection } from "../../../services/server-connection"
+import { dotsFailureText, dotsRejection } from "./rejection"
 
 export async function ask(question: string) {
   if (!process.stdin.isTTY) return undefined
@@ -25,7 +26,10 @@ export const connectDotsApi = Effect.fn("cli.dots.connect")(function* (server: O
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
     const text = await response.text()
-    if (!response.ok) throw new Error(`Dots request failed (${response.status}): ${text}`)
+    if (!response.ok) {
+      const body: unknown = (() => { try { return JSON.parse(text) } catch { return undefined } })()
+      throw new Error(`Dots request failed (${response.status}): ${dotsRejection(body) === undefined ? text : dotsFailureText(body)}`)
+    }
     return (await Schema.decodeUnknownPromise(Schema.Struct({ data: schema }))(JSON.parse(text))).data
   }, catch: (error) => error instanceof Error ? error : new Error(String(error)) })
 })

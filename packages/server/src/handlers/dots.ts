@@ -5,7 +5,8 @@ import { ConflictError, InvalidRequestError } from "@ycoding-ai/protocol/errors"
 import { Api } from "../api"
 
 const conversationError = (error: DotsAccess.Error) => error.code === "conflict"
-  ? new ConflictError({ message: error.message, resource: "dots" }) : new InvalidRequestError({ message: error.message })
+  ? new ConflictError({ message: error.message, resource: "dots" })
+  : new InvalidRequestError({ message: error.message, ...(error.rejection === undefined ? {} : { rejection: error.rejection }) })
 const page = (query: { readonly cursor?: string; readonly limit?: number }) => ({
   ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
   ...(query.limit === undefined ? {} : { limit: query.limit }),

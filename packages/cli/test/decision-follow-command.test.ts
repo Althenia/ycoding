@@ -30,16 +30,16 @@ test("installed decision watch help advertises continuous follow, state and hear
   for (const value of ["--follow", "--state", "follow heartbeats", "IDs-only JSON", "--deliver", "Dot thread"]) expect(stdout).toContain(value)
 }, 30_000)
 
-test("installed follow delivers lifecycle and decision events to a Dot thread and records delivery in its state", async () => {
+type DeliveryRoutes = { threads?: () => object; message: (threadID: string, body: Record<string, unknown>) => Response; decisions?: () => object[] }
+
+async function deliveryFixture(routes: DeliveryRoutes, deliver: string[]) {
   const scratch = path.join(homedir(), ".local/share/ycoding/tasks")
   await mkdir(scratch, { recursive: true })
   const dir = await realpath(await mkdtemp(path.join(scratch, "decision-follow-deliver-")))
   const filename = path.join(dir, "state.json")
   const streams = new Map<string, ReadableStreamDefaultController<Uint8Array>>()
-  const sent: Record<string, unknown>[] = []
-  let asked = false
+  const sent: (Record<string, unknown> & { threadID: string })[] = []
   const frame = (value: object) => new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`)
-  const decide = ["ycoding", "api", "session.guardrail.request.reply", "--param", "sessionID=ses_root", "--param", "requestID=grq_synthetic", "--data", "{\"reply\":\"once\"}"]
   const server = Bun.serve({ port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url)
     const route = url.pathname
@@ -60,16 +60,18 @@ test("installed follow delivers lifecycle and decision events to a Dot thread an
     if (route === "/api/session/ses_root/subagent") return Response.json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
     if (route === "/api/coordination") return Response.json({ data: [] })
     if (route === "/api/session") return Response.json({ data: [], cursor: {} })
-    if (route === "/api/decision") return Response.json({ data: !asked ? [] : [{ kind: "guardrail", sessionID: "ses_root", sessionTitle: "Synthetic", directory: "/synthetic", id: "grq_synthetic", summary: "bash: synthetic", decide: [{ label: "once", argv: decide }] }] })
-    if (route === "/api/dots/threads") return Response.json({ data: { dotID: "dot_synthetic", rootThreadID: "thr_root", threads: [{ threadID: "thr_root", kind: "root", status: "idle" }], tasks: [] } })
-    if (route === "/api/dots/thread/thr_root/message" && request.method === "POST") {
-      sent.push(await request.json() as Record<string, unknown>)
-      return Response.json({ data: { admission: "started", turnID: "turn_synthetic" } })
+    if (route === "/api/decision") return Response.json({ data: routes.decisions?.() ?? [] })
+    if (route === "/api/dots/threads") return Response.json({ data: routes.threads?.() ?? { dotID: "dot_synthetic", rootThreadID: "thr_root", threads: [{ threadID: "thr_root", kind: "root", status: "idle" }], tasks: [] } })
+    const message = /^\/api\/dots\/thread\/([^/]+)\/message$/.exec(route)
+    if (message && request.method === "POST") {
+      const body = await request.json() as Record<string, unknown>
+      sent.push({ ...body, threadID: decodeURIComponent(message[1]!) })
+      return routes.message(decodeURIComponent(message[1]!), body)
     }
     return new Response("unexpected route", { status: 500 })
   } })
   const child = Bun.spawn([process.execPath, new URL("../src/tui.ts", import.meta.url).pathname, "decision", "watch", "ses_root", "--family", "--follow", "--state", filename,
-    "--deliver", "thr_root", "--server", server.url.toString()], { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+    ...deliver.flatMap((target) => ["--deliver", target]), "--server", server.url.toString()], { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
   const lines: Record<string, unknown>[] = []
   const reading = (async () => {
     let buffer = ""
@@ -86,14 +88,38 @@ test("installed follow delivers lifecycle and decision events to a Dot thread an
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
   }
+  const log = (value: object) => streams.get("/api/experimental/session/ses_root/log")!.enqueue(frame(value))
+  const event = (value: object) => streams.get("/api/event")!.enqueue(frame(value))
+  let finished: Promise<{ exit: number; stderr: string }> | undefined
+  const finish = () => finished ??= (async () => {
+    child.kill("SIGINT")
+    const exit = await child.exited
+    await reading
+    const stderr = await new Response(child.stderr).text()
+    server.stop(true)
+    return { exit, stderr }
+  })()
+  return { dir, filename, sent, lines, until, log, event, finish, child,
+    async state() { return JSON.parse(await readFile(filename, "utf8")) as Record<string, any> },
+    async cleanup() { await rm(dir, { recursive: true, force: true }) } }
+}
+
+test("installed follow delivers lifecycle and decision events to a Dot thread and records delivery in its state", async () => {
+  let asked = false
+  const decide = ["ycoding", "api", "session.guardrail.request.reply", "--param", "sessionID=ses_root", "--param", "requestID=grq_synthetic", "--data", "{\"reply\":\"once\"}"]
+  const f = await deliveryFixture({
+    decisions: () => !asked ? [] : [{ kind: "guardrail", sessionID: "ses_root", sessionTitle: "Synthetic", directory: "/synthetic", id: "grq_synthetic", summary: "bash: synthetic", decide: [{ label: "once", argv: decide }] }],
+    message: () => Response.json({ data: { admission: "started", turnID: "turn_synthetic" } }),
+  }, ["thr_root"])
+  const { sent, lines, until } = f
   try {
     await until(() => lines.some((value) => value.kind === "ready"), "ready")
-    streams.get("/api/experimental/session/ses_root/log")!.enqueue(frame({ type: "session.execution.succeeded", id: "evt_succeeded", sourceEpoch: "epoch_synthetic", durable: { aggregateID: "ses_root", seq: 1 }, data: { sessionID: "ses_root" } }))
+    f.log({ type: "session.execution.succeeded", id: "evt_succeeded", sourceEpoch: "epoch_synthetic", durable: { aggregateID: "ses_root", seq: 1 }, data: { sessionID: "ses_root" } })
     await until(() => sent.length === 1, "lifecycle message")
     asked = true
-    streams.get("/api/event")!.enqueue(frame({ type: "guardrail.asked", id: "evt_ask", sourceEpoch: "epoch_synthetic", data: { sessionID: "ses_root", id: "grq_synthetic", action: "NEVER-OUTPUT" } }))
+    f.event({ type: "guardrail.asked", id: "evt_ask", sourceEpoch: "epoch_synthetic", data: { sessionID: "ses_root", id: "grq_synthetic", action: "NEVER-OUTPUT" } })
     await until(() => sent.length === 2, "guardrail message")
-    expect(sent[0]).toMatchObject({ mode: "send", clientMessageID: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) })
+    expect(sent[0]).toMatchObject({ threadID: "thr_root", mode: "send", clientMessageID: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) })
     expect(String(sent[0]!.text)).toContain("Session ses_root execution succeeded (event evt_succeeded, seq 1).")
     expect(String(sent[1]!.text)).toContain("guardrail grq_synthetic pending in ses_root.")
     expect(String(sent[1]!.text)).toContain("once: ycoding api session.guardrail.request.reply --param sessionID=ses_root --param requestID=grq_synthetic --data '{\"reply\":\"once\"}'")
@@ -102,16 +128,54 @@ test("installed follow delivers lifecycle and decision events to a Dot thread an
     expect(lines.filter((value) => value.kind === "delivery").map((value) => [value.threadID, value.outcome, value.admission])).toEqual([["thr_root", "delivered", "started"], ["thr_root", "delivered", "started"]])
     expect(JSON.stringify(lines)).not.toContain("NEVER-OUTPUT")
   } finally {
-    child.kill("SIGINT")
-    await child.exited
-    await reading
-    expect(await new Response(child.stderr).text()).toBe("")
-    server.stop(true)
+    expect((await f.finish()).stderr).toBe("")
   }
   try {
-    const saved = JSON.parse(await readFile(filename, "utf8"))
-    expect(saved.delivery).toEqual({ announced: ["guardrail\0ses_root\0grq_synthetic"], targets: [{ threadID: "thr_root", outbox: [] }] })
-  } finally { await rm(dir, { recursive: true, force: true }) }
+    expect((await f.state()).delivery).toEqual({ announced: ["guardrail\0ses_root\0grq_synthetic"], targets: [{ target: "thr_root", outbox: [] }] })
+  } finally { await f.cleanup() }
+}, 30_000)
+
+test("installed follow delivers to dot at the Dot's current root, follows a root rotation and persists the dot target", async () => {
+  let root = "thr_root_one"
+  const f = await deliveryFixture({
+    threads: () => ({ dotID: "dot_synthetic", rootThreadID: root, threads: [{ threadID: root, kind: "root" }, { threadID: "thr_task", kind: "task", status: "active" }], tasks: [] }),
+    message: () => Response.json({ data: { admission: "started", turnID: "turn_synthetic" } }),
+  }, ["dot"])
+  try {
+    await f.until(() => f.lines.some((value) => value.kind === "ready"), "ready")
+    f.log({ type: "session.execution.started", id: "evt_started", sourceEpoch: "epoch_synthetic", durable: { aggregateID: "ses_root", seq: 1 }, data: { sessionID: "ses_root" } })
+    await f.until(() => f.lines.filter((value) => value.kind === "delivery").length === 1, "first delivery")
+    root = "thr_root_two"
+    f.log({ type: "session.execution.succeeded", id: "evt_succeeded", sourceEpoch: "epoch_synthetic", durable: { aggregateID: "ses_root", seq: 2 }, data: { sessionID: "ses_root" } })
+    await f.until(() => f.lines.filter((value) => value.kind === "delivery").length === 2, "rotated delivery")
+    expect(f.sent.map((value) => [value.threadID, value.mode])).toEqual([["thr_root_one", "send"], ["thr_root_two", "send"]])
+    expect(f.lines.filter((value) => value.kind === "delivery").map((value) => [value.target, value.threadID, value.mode, value.outcome])).toEqual([
+      ["dot", "thr_root_one", "send", "delivered"], ["dot", "thr_root_two", "send", "delivered"]])
+  } finally {
+    expect((await f.finish()).stderr).toBe("")
+  }
+  try {
+    expect((await f.state()).delivery).toEqual({ announced: [], targets: [{ target: "dot", outbox: [] }] })
+  } finally { await f.cleanup() }
+}, 30_000)
+
+test("installed follow names the upstream rejection code and message in the failed delivery record and its stderr line", async () => {
+  const f = await deliveryFixture({
+    message: () => Response.json({ _tag: "InvalidRequestError", message: "ChatGPT refused the request.", rejection: { code: -32602, message: "queue\u001b[2Jnot accepted" } }, { status: 400 }),
+  }, ["thr_root"])
+  try {
+    await f.until(() => f.lines.some((value) => value.kind === "ready"), "ready")
+    f.log({ type: "session.execution.started", id: "evt_started", sourceEpoch: "epoch_synthetic", durable: { aggregateID: "ses_root", seq: 1 }, data: { sessionID: "ses_root" } })
+    await f.child.exited
+    const { exit, stderr } = await f.finish()
+    expect(exit).toBe(1)
+    expect(f.lines.find((value) => value.kind === "delivery")).toMatchObject({ threadID: "thr_root", outcome: "failed", rejection: { code: -32602, message: "queue [2Jnot accepted" } })
+    expect(stderr).toBe("ycoding: [delivery-failed] Dot delivery failed; undelivered events stay in the follow state and resume on restart; verify Dots access and the --deliver threads; thr_root: ChatGPT refused the request. ChatGPT rejection code -32602: queue [2Jnot accepted\n")
+    expect((await f.state()).delivery.targets[0].inflight.events).toHaveLength(1)
+  } finally {
+    await f.finish()
+    await f.cleanup()
+  }
 }, 30_000)
 
 test("installed follow uses native read routes, streams categories after completion and releases storage on cancellation", async () => {

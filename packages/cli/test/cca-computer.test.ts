@@ -873,7 +873,7 @@ function fakeDurable(options: { readonly connected?: boolean; readonly replies?:
       if (method === "thread/list") return { kind: "result", result: { data: options.threads ?? [], nextCursor: null } }
       return options.replies?.[method]?.shift() ?? { kind: "result", result: {} }
     },
-    watch: (threadID) => { watched.push(threadID) },
+    watch: async (threadID) => { watched.push(threadID); return { kind: "result", result: {} } },
     pending: (threadID) => pending.filter((request) => request.threadID === threadID),
     answer: async (threadID, requestID, result) => {
       const index = pending.findIndex((request) => request.threadID === threadID && request.requestID === requestID)
@@ -1031,7 +1031,9 @@ describe("Dot conversation", () => {
     expect(sends[0].params).toEqual({
       threadId: taskThreadID, input: [{ type: "text", text: "Run tests", text_elements: [] }], clientUserMessageId: "client-1", messageThreadId: expect.stringMatching(/^[0-9a-f-]{36}$/),
     })
-    expect(sends[3].params).toMatchObject({ clientUserMessageId: "client-3", mode: "queue" })
+    expect(sends[3].params).toEqual({
+      threadId: taskThreadID, input: [{ type: "text", text: "Then summarize", text_elements: [] }], clientUserMessageId: "client-3", messageThreadId: expect.stringMatching(/^[0-9a-f-]{36}$/), mode: "queue",
+    })
     expect(new Set(sends.map((request) => request.params.messageThreadId)).size).toBe(4)
     expect(durable.watched).toEqual([taskThreadID, taskThreadID, taskThreadID, taskThreadID])
   })
@@ -1043,7 +1045,7 @@ describe("Dot conversation", () => {
     const message = { text: "Run tests", clientMessageID: "client-1", mode: "send" as const }
     expect(await conversation.send(taskThreadID, message)).toEqual({ ok: true, value: { admission: "unknown" } })
     expect(await conversation.send(taskThreadID, { ...message, clientMessageID: "client-2" })).toEqual({ ok: false, problem: "durable-unavailable" })
-    expect(await conversation.send(taskThreadID, { ...message, clientMessageID: "client-3" })).toEqual({ ok: false, problem: "rejected" })
+    expect(await conversation.send(taskThreadID, { ...message, clientMessageID: "client-3" })).toEqual({ ok: false, problem: "rejected", rejection: { code: -32600, message: "synthetic private refusal" } })
     expect(durable.requests.filter((request) => request.method === "turn/addUserMessage")).toHaveLength(3)
     const offline = fakeDurable({ connected: false })
     const disconnected = conversationFixture({ durable: offline.client, routes: membership() })
@@ -1064,6 +1066,46 @@ describe("Dot conversation", () => {
     release({ kind: "result", result: { turn: { id: "turn-1" }, admissionOutcome: "started" } })
     expect(await first).toEqual(await second)
     expect(slow.requests).toHaveLength(1)
+  })
+
+  test("a send awaits the thread subscription first; a refused subscription is a rejection with its reason and an unconfirmed one sends nothing", async () => {
+    const order: string[] = []
+    let release: (reply: CcaDurableReply) => void = () => {}
+    const base = fakeDurable()
+    const held: CcaDurableClient = { ...base.client,
+      watch: (threadID) => { order.push(`watch ${threadID}`); return new Promise<CcaDurableReply>((resolve) => { release = resolve }) },
+      request: (method, params, timeoutMs) => { order.push(method); return base.client.request(method, params, timeoutMs) } }
+    const message = { text: "Run tests", mode: "send" as const }
+    const sending = conversationFixture({ durable: held, routes: membership() }).conversation.send(taskThreadID, { ...message, clientMessageID: "client-1" })
+    while (!order.length) await new Promise((resolve) => setTimeout(resolve, 1))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(order).toEqual([`watch ${taskThreadID}`])
+    release({ kind: "result", result: {} })
+    expect(await sending).toEqual({ ok: true, value: { admission: "unknown" } })
+    expect(order).toEqual([`watch ${taskThreadID}`, "turn/addUserMessage"])
+    for (const [reply, expected] of [
+      [{ kind: "error", code: -32003, message: "thread access denied", errorType: "thread_archived", errorCode: "thread_not_found" }, { ok: false, problem: "rejected", rejection: { code: -32003, errorCode: "thread_not_found", errorType: "thread_archived", message: "thread access denied" } }],
+      [{ kind: "unknown" }, { ok: false, problem: "durable-unavailable" }],
+      [{ kind: "not-sent" }, { ok: false, problem: "durable-unavailable" }],
+    ] as const) {
+      const sent: string[] = []
+      const refused: CcaDurableClient = { ...base.client, watch: async () => reply, request: async (method) => { sent.push(method); return { kind: "result", result: {} } } }
+      expect(await conversationFixture({ durable: refused, routes: membership() }).conversation.send(taskThreadID, { ...message, clientMessageID: "client-2" })).toEqual(expected)
+      expect(sent).toEqual([])
+    }
+  })
+
+  test("a refused send keeps the durable error code and a bounded message without control characters", async () => {
+    const durable = fakeDurable({ replies: { "turn/addUserMessage": [
+      { kind: "error", code: -32602, message: "  thread\u0007busy\nretry\u009b later  " },
+      { kind: "error", message: "y".repeat(1500) },
+      { kind: "error", code: 1.5, message: " \u0000 " },
+    ] } })
+    const { conversation } = conversationFixture({ durable: durable.client, routes: membership(3) })
+    const message = { text: "Run tests", mode: "send" as const }
+    expect(await conversation.send(taskThreadID, { ...message, clientMessageID: "client-1" })).toEqual({ ok: false, problem: "rejected", rejection: { code: -32602, message: "thread busy retry  later" } })
+    expect(await conversation.send(taskThreadID, { ...message, clientMessageID: "client-2" })).toEqual({ ok: false, problem: "rejected", rejection: { message: "y".repeat(1000) } })
+    expect(await conversation.send(taskThreadID, { ...message, clientMessageID: "client-3" })).toEqual({ ok: false, problem: "rejected" })
   })
 
   test("interrupt treats a missing active turn as interrupted and other refusals as rejected", async () => {

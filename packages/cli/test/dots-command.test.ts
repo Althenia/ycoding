@@ -242,6 +242,19 @@ test("dots send reports an unknown admission once and fails without resending", 
   })
 }, 30000)
 
+test("dots send prints a refusal with the upstream rejection code and a control-free message", async () => {
+  const refusal = Response.json({ _tag: "InvalidRequestError", message: "ChatGPT refused the request.", rejection: { code: -32602, message: "thread\u001b[31mbusy" } }, { status: 400 })
+  await withConversation({ "POST /api/dots/thread/thr-a/message": refusal }, async (url, seen) => {
+    const result = await cli(["send", "thr-a", "Check the logs", "--server", url])
+    expect(result.exit).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr.split("\n")).toContain("ycoding: Dots request failed (400): ChatGPT refused the request. ChatGPT rejection code -32602: thread [31mbusy")
+    expect(result.stderr).not.toContain("_tag")
+    expect(result.stderr).not.toContain("\u001b")
+    expect(seen).toHaveLength(1)
+  })
+}, 30000)
+
 test("dots threads and read print the Dot threads, tasks and transcript", async () => {
   await withConversation({
     "GET /api/dots/threads": { dotID: "dot-a", rootThreadID: "thr-root", threads: [{ threadID: "thr-root", kind: "root", status: "idle", name: "Daily" }, { threadID: "thr-task", kind: "task" }],
