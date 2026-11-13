@@ -7,130 +7,14 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists the v0.11.8 release first with its notes", async () => {
+  test("lists the v0.11.0 release first with its notes", async () => {
     const entry = RELEASES[0]
-    expect(entry).toMatchObject({ version: "0.11.8", date: "2026-11-13", title: "Dots computer controls, Dot conversations and owner-settled Project requests", tags: ["Added", "Changed", "Fixed"] })
-    expect(entry?.changes).toHaveLength(12)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.8.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.8\n")
+    expect(entry).toMatchObject({ version: "0.11.0", date: "2026-11-13", title: "Projects, autonomy modes, native Dots and provider credential refresh", tags: ["Added", "Changed", "Fixed"] })
+    expect(entry?.changes).toHaveLength(191)
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.0.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.11.0\n")
     for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["`ycoding dots detach`", "`ycoding dots remove`", "`usableForTasks`", "`thread/environmentReady`", "`dots.thread.respond`", "never answers a ChatGPT request on its own", "hard, custom-rule and outside-repository guardrail reviews", "Deny rules and permission ceilings still hold", "reason `configuration-invalid`", "only by escalation", "optional `repository`", "`/dev/null`", "`gh run view`", "inside shell loop and conditional bodies", "64 KiB boundary"]) expect(text).toContain(fragment)
-    expect(text).not.toMatch(/roadmap|milestone|\/Users\//i)
-    expect(after("0.11.8")?.version).toBe("0.11.7")
-  })
-
-  test("retains the v0.11.7 release with its notes", async () => {
-    const entry = RELEASES[1]
-    expect(entry).toMatchObject({ version: "0.11.7", date: "2026-11-12", title: "Coordinator-only Projects, owner-settled requests and idle subagent wakes", tags: ["Changed", "Fixed"] })
-    expect(entry?.changes).toHaveLength(6)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.7.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.7\n")
-    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["no longer has the edit, write or patch tools", "in every autonomy mode, including Manual", "sending messages or email", "accepting terms, licenses or agreements", "piping it into a shell", "keeps Projects active", "reaches the parent at its next turn without waking it", "background MCP tool call"]) expect(text).toContain(fragment)
-    expect(text).not.toMatch(/roadmap|milestone|\/Users\//i)
-    expect(after("0.11.7")?.version).toBe("0.11.6")
-  })
-
-  test("retains the v0.11.6 release with its notes", async () => {
-    const entry = RELEASES[2]
-    expect(entry).toMatchObject({ version: "0.11.6", date: "2026-11-12", title: "Session switcher groups and Project coordination fixes", tags: ["Added", "Fixed"] })
-    expect(entry?.changes).toHaveLength(4)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.6.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.6\n")
-    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["Pinned, Waiting for action, Running and Recent", "Recent stays scoped to the active workspace project", "Project send", "Project inspect", "escalates a request to you"]) expect(text).toContain(fragment)
-    expect(text).not.toMatch(/roadmap|milestone|\/Users\//i)
-    expect(after("0.11.6")?.version).toBe("0.11.5")
-  })
-
-  test("retains the v0.11.5 release with its notes", async () => {
-    const entry = RELEASES[3]
-    expect(entry).toMatchObject({ version: "0.11.5", date: "2026-11-10", title: "Meeting context, goal answers, and reliable recovery", tags: ["Added", "Fixed"] })
-    expect(entry?.changes).toHaveLength(7)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.5.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.5\n")
-    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["even when a computer rename is pending", "instead of staying missing from the Dot's computers", "provider-measured output tokens", "sub-second generation windows", "at least three samples", "Google Meet", "consent", "OpenAI speech", "audio", "Catch up", "review", "never executed", "Whitespace-only", "silent reply", "Goal agent", "`SessionGoal.synthesize`", "`PROMPT_GOAL`", "`via: auto-answer`", "`via: goal`", "uncertain answers remain pending", "never read as a human reply"])
-      expect(text).toContain(fragment)
-    expect(text).not.toMatch(/installer|live-verified|roadmap|milestone|\/Users\//i)
-    expect(after("0.11.5")?.version).toBe("0.11.4")
-  })
-
-  test("retains the v0.11.4 release with its notes", async () => {
-    const entry = RELEASES[4]
-    expect(entry).toMatchObject({ version: "0.11.4", date: "2026-11-10", title: "Multiple Dots computers and provider credit balances", tags: ["Added", "Changed", "Fixed"] })
-    expect(entry?.changes).toHaveLength(5)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.4.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.4\n")
-    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["without disconnecting other computers", "next turn in ChatGPT", "`replaceOthers: false`", "`replaceOthers: true`", "never automatically retried", "best-effort USD balances", "OpenAI API credits", "managed Claude OAuth prepaid credits", "subscription quotas and recorded spend", "failed refresh keeps observed subscription quota"])
-      expect(text).toContain(fragment)
-    expect(text).not.toMatch(/installer|live-verified|roadmap|milestone|\/Users\//i)
-    expect(after("0.11.4")?.version).toBe("0.11.3")
-  })
-
-  test("retains the v0.11.3 release with its notes", async () => {
-    const entry = RELEASES[5]
-    expect(entry).toMatchObject({ version: "0.11.3", date: "2026-11-08", title: "Recovery from empty provider responses", tags: ["Fixed"] })
-    expect(entry?.changes).toHaveLength(4)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.3.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.3\n")
-    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["bounded text-only recovery request per input", "empty `stop` response stays a silent reply", "never rewritten to `stop`", "dim notice on standard error", "keeps exit status 130", "reports that error message instead of its partial text", "no longer retried with backoff"]) expect(text).toContain(fragment)
-    expect(text).not.toMatch(/roadmap|milestone|\/Users\/|step_incomplete|provider\.incomplete/i)
-    expect(RELEASES.filter((release) => release.version.startsWith("0.11.")).map((release) => release.version)).toEqual(["0.11.8", "0.11.7", "0.11.6", "0.11.5", "0.11.4", "0.11.3", "0.11.2", "0.11.1"])
-    expect(after("0.11.3")?.version).toBe("0.11.2")
-  })
-
-  test("retains the v0.11.2 release with its notes", async () => {
-    const entry = RELEASES[6]
-    expect(entry).toMatchObject({ version: "0.11.2", date: "2026-11-07", title: "Browser control and source-bound skill resources", tags: ["Added", "Changed"] })
-    expect(entry?.changes).toHaveLength(12)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.2.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.2\n")
-    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
-    expect(after("0.11.2")?.version).toBe("0.11.1")
-  })
-
-  test("keeps v0.11.2 browser compatibility and safety guidance explicit", async () => {
-    const entry = byVersion("0.11.2")
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.2.md", import.meta.url)).text()
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const source of [notes, text]) {
-      for (const fragment of ["Fill or clear", "approved same-origin frames", "continuous 500 ms", "successor tab", "permission, guardrail, credential and confirmation rules", "guidance describes", "concurrent typing", "sensitive values and messages", "before dispatch", "After upgrading the CLI, update or reload the bundled Chrome extension", "Bridge version 6 rejects version 5 peers", "installed extension has reloaded"])
-        expect(source).toContain(fragment)
-      expect(source).not.toMatch(/live-extension verified|historical Location cause|roadmap|milestone|\/Users\//i)
-    }
-  })
-
-  test("documents v0.11.2 loaded skill resources and reload lifecycle", async () => {
-    const entry = byVersion("0.11.2")
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.2.md", import.meta.url)).text()
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const source of [notes, text]) {
-      for (const fragment of ["exact SKILL.md source loaded for that activation", "catalog entry changes or disappears", "Only the requested resource is read", "no whole bundle is injected", "no other same-named source is searched", "Missing skill source provenance refuses", "complete compaction or switch agents", "current file content", "containment, read permissions and capability checks"])
-        expect(source).toContain(fragment)
-      expect(source).not.toMatch(/installed package restored|original.*Location.*resolved|performance gain|faster skill/i)
-    }
-  })
-
-  test("retains the v0.11.1 release and its notes", async () => {
-    const entry = RELEASES[7]
-    expect(entry).toMatchObject({ version: "0.11.1", date: "2026-11-07", title: "Projects, autonomy modes, native Dots and supervising owners", tags: ["Added", "Changed", "Fixed"] })
-    expect(entry?.changes).toHaveLength(132)
-    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.1.md", import.meta.url)).text()
-    expect(notes).toStartWith("# YCoding v0.11.1\n")
-    for (const change of entry?.changes ?? []) expect(notes).toContain(change.text)
-    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["--follow", "`supervising`", "credit count instead of dollars", "`chatgpt-connectors`", "omit tool definitions"]) expect(text).toContain(fragment)
-    expect(after("0.11.1")?.version).toBe("0.10.25")
-    for (const source of [notes, text]) expect(source).not.toMatch(/Release lineage|re-release|bf6a24f|v0\.11\.(?:0|[2-9]|1[01])\b/)
+    expect(after("0.11.0")?.version).toBe("0.10.25")
   })
 
   test("retains v0.10.25 guardrail history and Muse quota fixes", () => {
@@ -1754,15 +1638,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 50)).toEqual([
-      "0.11.8",
-      "0.11.7",
-      "0.11.6",
-      "0.11.5",
-      "0.11.4",
-      "0.11.3",
-      "0.11.2",
-      "0.11.1",
+    expect(versions.slice(0, 43)).toEqual([
+      "0.11.0",
       "0.10.25",
       "0.10.24",
       "0.10.23",
