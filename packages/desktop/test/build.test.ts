@@ -8,6 +8,8 @@ import { buildDesktop, fileDigest, fingerprint, freshOutput, parseArguments, typ
 
 type Payload = { manifest?: string; metadata?: string | null; archive?: "corrupt" | "missing" | "outside-root" | "parent-escape"; icon?: "missing" | "outer-only" }
 const hash = "synthetic1hash"
+const identity = "9dd524184b0db949ffac7f0ada0ae860ac7f5f85"
+const requirement = (sha1: string, name = "app.ycoding.desktop", anchor = "leaf") => `Executable=/synthetic/YCoding Desktop.app/Contents/MacOS/launcher\ndesignated => identifier "${name}" and certificate ${anchor} = H"${sha1}"\n`
 
 async function writeStableApp(contents: string, payload: Payload) {
   await fs.mkdir(path.join(contents, "MacOS"), { recursive: true })
@@ -40,6 +42,7 @@ async function fixture(payload: Payload = {}) {
   await fs.mkdir(desktop, { recursive: true })
   await fs.writeFile(path.join(root, "repo/bun.lock"), "synthetic-lock")
   const events: string[] = []
+  const envs: (Record<string, string> | undefined)[] = []
   const boundary: BuildBoundary = {
     assertSigning: async () => { events.push("signing") },
     assertToolchain: async () => { events.push("toolchain") },
@@ -49,19 +52,24 @@ async function fixture(payload: Payload = {}) {
       await fs.writeFile(path.join(desktop, "runtime/backend.json"), "synthetic-manifest")
       return { version: "1.2.3" }
     },
-    run: async (args) => {
+    codesign: async (args) => {
+      events.push(`codesign ${args.join(" ")}`)
+      return { status: 0, output: args[0] === "-d" ? requirement(identity) : "" }
+    },
+    run: async (args, env) => {
       events.push(args.join(" "))
+      envs.push(env)
       if (args.includes("build:frontend")) { await fs.mkdir(path.join(desktop, "dist")); return 0 }
       await writeStableApp(path.join(desktop, "build/stable-macos-arm64/YCoding Desktop.app/Contents"), payload)
       return 0
     },
   }
   const run = (overrides: Partial<BuildBoundary> = {}, argv = [`--outdir=${output}`]) => buildDesktop({ ...boundary, ...overrides }, { argv, desktop, bun: "/bun", arch: "arm64" })
-  return { root, desktop, output, events, run }
+  return { root, desktop, output, events, envs, run }
 }
 
 test("arguments require one fresh output and reject isolated smoke", () => {
-  expect(parseArguments(["--outdir=/tmp/result"])).toEqual({ outdir: "/tmp/result" })
+  expect(parseArguments(["--outdir=/tmp/result"])).toEqual({ outdir: "/tmp/result", signIdentity: undefined })
   for (const args of [[], ["--outdir="], ["--outdir=/x", "--other"], ["--outdir=/x", "--outdir=/y"]]) expect(() => parseArguments(args)).toThrow()
   expect(() => parseArguments(["--outdir=/x", "--smoke"])).toThrow("persist:default")
 })
@@ -219,5 +227,86 @@ test("the real iconset ships every required entry at its exact pixel size", asyn
     expect(bytes.subarray(1, 4).toString()).toBe("PNG")
     expect(bytes.readUInt32BE(16)).toBe(size)
     expect(bytes.readUInt32BE(20)).toBe(size)
+  }
+})
+
+const signedArgv = (output: string) => [`--outdir=${output}`, `--sign-identity=${identity}`]
+
+test("arguments accept an optional 40-hex signing identity in either order and reject malformed, empty or duplicate values", () => {
+  expect(parseArguments(["--outdir=/x", `--sign-identity=${identity}`])).toEqual({ outdir: "/x", signIdentity: identity })
+  expect(parseArguments([`--sign-identity=${identity}`, "--outdir=/x"])).toEqual({ outdir: "/x", signIdentity: identity })
+  expect(parseArguments(["--outdir=/x", `--sign-identity=${identity.toUpperCase()}`])).toEqual({ outdir: "/x", signIdentity: identity.toUpperCase() })
+  expect(parseArguments(["--outdir=/x"]).signIdentity).toBeUndefined()
+  for (const value of ["", "YCoding Code Signing", identity.slice(1), identity + "0", "z".repeat(40), ` ${identity}`, `${identity}\n`])
+    expect(() => parseArguments(["--outdir=/x", `--sign-identity=${value}`])).toThrow()
+  expect(() => parseArguments(["--outdir=/x", `--sign-identity=${identity}`, `--sign-identity=${identity}`])).toThrow()
+  expect(() => parseArguments([`--sign-identity=${identity}`])).toThrow()
+  expect(() => parseArguments(["--outdir=/x", `--sign-identity=${identity}`, "--outdir=/y"])).toThrow()
+})
+
+test("a signed build passes the identity only to the Electrobun build", async () => {
+  const f = await fixture()
+  try {
+    await f.run({}, signedArgv(f.output))
+    expect(f.envs).toEqual([undefined, { ELECTROBUN_DEVELOPER_ID: identity }])
+  } finally { await fs.rm(f.root, { recursive: true, force: true }) }
+})
+
+test("an unsigned build passes no environment to any command and never runs codesign", async () => {
+  const f = await fixture()
+  try {
+    const receipt = await f.run()
+    expect(f.envs).toEqual([undefined, undefined])
+    expect(f.events.some((event) => event.startsWith("codesign"))).toBe(false)
+    expect(receipt.signing).toBeNull()
+    expect(JSON.parse(await fs.readFile(path.join(f.output, "build-receipt.json"), "utf8")).signing).toBeNull()
+  } finally { await fs.rm(f.root, { recursive: true, force: true }) }
+})
+
+test("a signed build verifies and pins the designated requirement of the outer and extracted apps and records the identity", async () => {
+  const f = await fixture()
+  try {
+    const receipt = await f.run({}, signedArgv(f.output))
+    const outer = path.join(f.output, "YCoding Desktop.app")
+    const inner = path.join(f.output, "validation/YCoding Desktop.app")
+    expect(f.events.filter((event) => event.startsWith("codesign"))).toEqual([
+      `codesign --verify --deep --strict ${outer}`, `codesign -d -r- ${outer}`,
+      `codesign --verify --deep --strict ${inner}`, `codesign -d -r- ${inner}`,
+    ])
+    expect(receipt.signing).toEqual({ sha1: identity })
+    expect(JSON.parse(await fs.readFile(path.join(f.output, "build-receipt.json"), "utf8")).signing).toEqual({ sha1: identity })
+  } finally { await fs.rm(f.root, { recursive: true, force: true }) }
+})
+
+test("a signed build accepts an uppercase identity, a root anchor and the codesign lowercase hash", async () => {
+  const f = await fixture()
+  try {
+    const receipt = await f.run({ codesign: async (args) => ({ status: 0, output: args[0] === "-d" ? requirement(identity, "app.ycoding.desktop", "root") : "" }) }, [`--outdir=${f.output}`, `--sign-identity=${identity.toUpperCase()}`])
+    expect(receipt.signing).toEqual({ sha1: identity })
+    expect(f.envs[1]).toEqual({ ELECTROBUN_DEVELOPER_ID: identity.toUpperCase() })
+  } finally { await fs.rm(f.root, { recursive: true, force: true }) }
+})
+
+test("a failed signature check, wrong certificate, wrong identifier or missing requirement writes no receipt", async () => {
+  const other = "0".repeat(40)
+  const cases: [string, (args: readonly string[], index: number) => { status: number; output: string }][] = [
+    ["verification of the outer app", (args, index) => ({ status: index === 0 ? 1 : 0, output: args[0] === "-d" ? requirement(identity) : "" })],
+    ["verification of the extracted app", (args, index) => ({ status: index === 2 ? 1 : 0, output: args[0] === "-d" ? requirement(identity) : "" })],
+    ["a wrong certificate on the outer app", (args, index) => ({ status: 0, output: args[0] === "-d" ? requirement(index === 1 ? other : identity) : "" })],
+    ["a wrong certificate on the extracted app", (args, index) => ({ status: 0, output: args[0] === "-d" ? requirement(index === 3 ? other : identity) : "" })],
+    ["a wrong identifier", (args) => ({ status: 0, output: args[0] === "-d" ? requirement(identity, "app.example.other") : "" })],
+    ["a failed requirement read", (args) => ({ status: args[0] === "-d" ? 1 : 0, output: requirement(identity) })],
+    ["an ad hoc requirement", (args) => ({ status: 0, output: args[0] === "-d" ? 'designated => cdhash H"1593f00c9269224608bcfc16986b4c7b1b09a2d5"\n' : "" })],
+    ["an unanchored identifier", (args) => ({ status: 0, output: args[0] === "-d" ? 'designated => identifier "app.ycoding.desktop"\n' : "" })],
+    ["no requirement output", () => ({ status: 0, output: "" })],
+  ]
+  for (const [name, respond] of cases) {
+    const f = await fixture()
+    try {
+      let index = 0
+      await expect(f.run({ codesign: async (args) => respond(args, index++) }, signedArgv(f.output)), name).rejects.toThrow("signature")
+      expect(await fs.stat(path.join(f.output, "build-receipt.json")).then(() => true, () => false), name).toBe(false)
+      expect(await fs.stat(path.join(f.desktop, ".ycoding-desktop-build.lock")).then(() => true, () => false), name).toBe(false)
+    } finally { await fs.rm(f.root, { recursive: true, force: true }) }
   }
 })

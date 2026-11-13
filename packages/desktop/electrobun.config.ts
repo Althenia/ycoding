@@ -5,6 +5,6 @@ export default {
   build: {
     bun: { entrypoint: "src/bun/index.ts", format: "esm", minify: false, sourcemap: "external" },
     copy: { dist: "views/mainview", runtime: "runtime" },
-    mac: { codesign: false, createDmg: false, notarize: false, icons: "icon.iconset" },
+    mac: { codesign: process.env.ELECTROBUN_DEVELOPER_ID !== undefined, createDmg: false, notarize: false, icons: "icon.iconset" },
   },
 } satisfies ElectrobunConfig

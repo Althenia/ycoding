@@ -39,7 +39,7 @@ function desktopFilename(version: string) {
 }
 
 function desktopPayload(hash: string) {
-  return ["", "Contents/", "Contents/Frameworks/", "Contents/Info.plist", "Contents/MacOS/", "Contents/MacOS/launcher", "Contents/Resources/", "Contents/Resources/AppIcon.icns", "Contents/Resources/metadata.json", `Contents/Resources/${hash}.tar.zst`]
+  return ["", "Contents/", "Contents/Frameworks/", "Contents/Info.plist", "Contents/MacOS/", "Contents/MacOS/launcher", "Contents/Resources/", "Contents/Resources/AppIcon.icns", "Contents/Resources/metadata.json", `Contents/Resources/${hash}.tar.zst`, "Contents/_CodeSignature/", "Contents/_CodeSignature/CodeResources"]
     .map((entry) => `${desktopApplication}/${entry}`)
     .sort()
 }

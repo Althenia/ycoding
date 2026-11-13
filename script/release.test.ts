@@ -719,10 +719,8 @@ test("release workflow builds and archives the macOS desktop app from the locked
   expect(desktop).toContain(`${base}/electrobun-core-darwin-arm64.tar.gz`)
   expect(desktop).toContain('echo "1ef4a4b42a957d3349f491f7fbe53153d1d5f427bacbda340c8d7fadce6b58d9  electrobun-cli-darwin-arm64.tar.gz" | shasum -a 256 -c -')
   expect(desktop).toContain('echo "474c24f3af26eb5d59ce9fa90483fef2a35974fcdedebb8df969aebc4350e62f  electrobun-core-darwin-arm64.tar.gz" | shasum -a 256 -c -')
-  expect(desktop).not.toContain("secrets.")
-  expect(desktop).not.toContain("YCODING_MACOS_SIGNING")
   expect(desktop).not.toMatch(/^    env:/m)
-  const build = '/bin/sh packages/desktop/script/build.sh --outdir="$RUNNER_TEMP/desktop"'
+  const build = '/bin/sh packages/desktop/script/build.sh --outdir="$RUNNER_TEMP/desktop" --sign-identity=9dd524184b0db949ffac7f0ada0ae860ac7f5f85'
   const archive = 'bun script/release-archive.ts create-desktop "$RELEASE_VERSION" "$RUNNER_TEMP/desktop/YCoding Desktop.app" dist/release-archive/desktop-darwin-arm64'
   expect(desktop).toContain(build)
   expect(desktop).toContain(archive)
@@ -734,6 +732,59 @@ test("release workflow builds and archives the macOS desktop app from the locked
   const order = ["- name: Provision Electrobun native assets", build, "- name: Verify desktop backend version", archive, "- name: Upload desktop archive"].map((marker) => desktop.indexOf(marker))
   expect(order.every((index) => index >= 0)).toBe(true)
   expect(order).toEqual([...order].sort((a, b) => a - b))
+})
+
+const desktopStep = (name: string) => workflowJob(workflow, "build-desktop").split(`      - name: ${name}\n`)[1]?.split("\n      - name: ")[0] ?? ""
+
+test("release workflow signs the desktop app with the pinned self-signed identity, verifies it and always removes the keychain", () => {
+  const desktop = workflowJob(workflow, "build-desktop")
+  const importStep = desktopStep("Import macOS signing identity")
+  const build = desktopStep("Build desktop app")
+  const verify = desktopStep("Verify desktop signature")
+  const cleanup = desktopStep("Remove macOS signing keychain")
+  expect(desktop).not.toMatch(/^    env:/m)
+  expect(importStep).toContain("        env:\n          YCODING_MACOS_SIGNING_P12: ${{ secrets.YCODING_MACOS_SIGNING_P12 }}\n          YCODING_MACOS_SIGNING_PASSWORD: ${{ secrets.YCODING_MACOS_SIGNING_PASSWORD }}\n          YCODING_MACOS_SIGNING_IDENTITY: YCoding Code Signing\n          YCODING_MACOS_SIGNING_SHA1: 9dd524184b0db949ffac7f0ada0ae860ac7f5f85\n")
+  for (const command of [
+    'security create-keychain -p "$keychain_password" "$keychain"',
+    'security import "$RUNNER_TEMP/ycoding-signing.p12" -k "$keychain" -P "$YCODING_MACOS_SIGNING_PASSWORD" -T /usr/bin/codesign',
+    'security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"',
+    'security list-keychains -d user -s "$keychain" ${original[@]+"${original[@]}"}',
+    'echo "::add-mask::$keychain_password"',
+    'grep -F "$(printf \'%s\' "$YCODING_MACOS_SIGNING_SHA1" | tr a-f A-F) \\"$YCODING_MACOS_SIGNING_IDENTITY\\""',
+  ])
+    expect(importStep).toContain(command)
+  expect(importStep).not.toContain("|| true")
+  expect(importStep).not.toContain("login.keychain")
+  const outside = desktop.replace(importStep, "")
+  expect(outside).not.toContain("secrets.")
+  expect(outside).not.toContain("YCODING_MACOS_SIGNING_P12")
+  expect(outside).not.toContain("YCODING_MACOS_SIGNING_PASSWORD")
+  expect(build).toContain('/bin/sh packages/desktop/script/build.sh --outdir="$RUNNER_TEMP/desktop" --sign-identity=9dd524184b0db949ffac7f0ada0ae860ac7f5f85')
+  expect(build).not.toContain("env:")
+  expect(verify).toContain('codesign --verify --deep --strict "$RUNNER_TEMP/desktop/YCoding Desktop.app"')
+  expect(verify).toContain('codesign -d -r- "$RUNNER_TEMP/desktop/YCoding Desktop.app" 2>&1 | grep -Ex "designated => identifier \\"app\\.ycoding\\.desktop\\" and certificate (leaf|root) = H\\"9dd524184b0db949ffac7f0ada0ae860ac7f5f85\\""')
+  expect(cleanup).toContain("        if: always()\n")
+  for (const command of ['security list-keychains -d user -s "${original[@]}"', 'security delete-keychain "$keychain"', 'rm -f "$RUNNER_TEMP/ycoding-signing.p12"'])
+    expect(cleanup).toContain(command)
+  const order = ["- name: Provision Electrobun native assets", "- name: Import macOS signing identity", "- name: Build desktop app", "- name: Verify desktop signature", "- name: Upload desktop archive", "- name: Remove macOS signing keychain"].map((marker) => desktop.indexOf(marker))
+  expect(order.every((index) => index >= 0)).toBe(true)
+  expect(order).toEqual([...order].sort((a, b) => a - b))
+  expect(desktop.indexOf("bun script/release-archive.ts create-desktop")).toBeGreaterThan(desktop.indexOf("- name: Verify desktop signature"))
+})
+
+test.each([
+  ["a self-signed root requirement", 'identifier "app.ycoding.desktop" and certificate root = H"9dd524184b0db949ffac7f0ada0ae860ac7f5f85"', true],
+  ["a self-signed leaf requirement", 'identifier "app.ycoding.desktop" and certificate leaf = H"9dd524184b0db949ffac7f0ada0ae860ac7f5f85"', true],
+  ["an ad-hoc cdhash requirement", 'cdhash H"1593f00c9269224608bcfc16986b4c7b1b09a2d5"', false],
+  ["a different certificate", `identifier "app.ycoding.desktop" and certificate leaf = H"${"0".repeat(40)}"`, false],
+  ["a different identifier", 'identifier "app.ycoding.computer-use" and certificate leaf = H"9dd524184b0db949ffac7f0ada0ae860ac7f5f85"', false],
+  ["an unanchored identifier only", 'identifier "app.ycoding.desktop"', false],
+])("the desktop signature check accepts only the pinned certificate: %s", (_, requirement, accepted) => {
+  const check = desktopStep("Verify desktop signature").split("\n").find((line) => line.includes("codesign -d -r-"))?.trim()
+  expect(check).toBeDefined()
+  const command = check!.replace(/^codesign -d -r- "[^"]+" 2>&1/, 'printf "%s\\n" "designated => $REQUIREMENT"')
+  const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", command], { env: { ...process.env, REQUIREMENT: requirement }, stdout: "pipe", stderr: "pipe" })
+  expect(result.exitCode === 0, result.stderr.toString()).toBe(accepted)
 })
 
 test.each([

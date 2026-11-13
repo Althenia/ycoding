@@ -10,7 +10,7 @@ const extension = ["icons/ycoding-128.png", "icons/ycoding-16.png", "icons/ycodi
 const app = "YCoding Computer Use.app"
 const desktop = "YCoding Desktop.app"
 const desktopArchive = `YCoding-Desktop-v${version}-darwin-arm64.zip`
-const desktopEntries = ["", "Contents/", "Contents/Frameworks/", "Contents/Info.plist", "Contents/MacOS/", "Contents/MacOS/launcher", "Contents/Resources/", "Contents/Resources/AppIcon.icns", "Contents/Resources/metadata.json", "Contents/Resources/1z1pg577pmla1.tar.zst"].map((entry) => `${desktop}/${entry}`).sort()
+const desktopEntries = ["", "Contents/", "Contents/Frameworks/", "Contents/Info.plist", "Contents/MacOS/", "Contents/MacOS/launcher", "Contents/Resources/", "Contents/Resources/AppIcon.icns", "Contents/Resources/metadata.json", "Contents/Resources/1z1pg577pmla1.tar.zst", "Contents/_CodeSignature/", "Contents/_CodeSignature/CodeResources"].map((entry) => `${desktop}/${entry}`).sort()
 
 function execute(root: string, args: string[]) {
   return Bun.spawnSync([process.execPath, script, ...args], { cwd: root, stdout: "pipe", stderr: "pipe" })
@@ -41,6 +41,7 @@ async function desktopFixture(root: string) {
   await Bun.write(path.join(source, "Contents/Resources/AppIcon.icns"), "synthetic icon\n")
   await Bun.write(path.join(source, "Contents/Resources/metadata.json"), JSON.stringify({ identifier: "app.ycoding.desktop", name: "YCoding Desktop", channel: "stable", hash: "1z1pg577pmla1" }, null, 2))
   await Bun.write(path.join(source, "Contents/Resources/1z1pg577pmla1.tar.zst"), "synthetic payload\n")
+  await Bun.write(path.join(source, "Contents/_CodeSignature/CodeResources"), "synthetic signature\n")
   return source
 }
 
@@ -126,7 +127,7 @@ if (process.platform === "darwin") test("desktop archive create preserves the ap
   }
 })
 
-for (const invalid of ["nonexecutable launcher", "extra file", "missing icon", "payload hash mismatch", "wrong identifier", "renamed application"])
+for (const invalid of ["nonexecutable launcher", "extra file", "missing icon", "payload hash mismatch", "wrong identifier", "renamed application", "unsigned bundle"])
   test(`desktop archive create rejects ${invalid} before writing an archive`, async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-desktop-invalid-"))
     try {
@@ -136,6 +137,7 @@ for (const invalid of ["nonexecutable launcher", "extra file", "missing icon", "
       if (invalid === "missing icon") await fs.unlink(path.join(source, "Contents/Resources/AppIcon.icns"))
       if (invalid === "payload hash mismatch") await fs.rename(path.join(source, "Contents/Resources/1z1pg577pmla1.tar.zst"), path.join(source, "Contents/Resources/other.tar.zst"))
       if (invalid === "wrong identifier") await Bun.write(path.join(source, "Contents/Resources/metadata.json"), JSON.stringify({ identifier: "app.example.desktop", name: "YCoding Desktop", channel: "stable", hash: "1z1pg577pmla1" }))
+      if (invalid === "unsigned bundle") await fs.rm(path.join(source, "Contents/_CodeSignature"), { recursive: true })
       if (invalid === "renamed application") {
         await fs.rename(source, path.join(root, "desktop", "Other.app"))
         source = path.join(root, "desktop", "Other.app")
@@ -211,7 +213,7 @@ for (const target of [...targets, "desktop"])
     }
   })
 
-for (const invalid of ["wrong version", "extra file", "corrupt archive", "nonexecutable archive", "missing archive app", "extra archive entry", "oversized archive listing", "symlink archive entry", "linked archive", "nonempty output", "extra desktop entry", "nonexecutable desktop launcher", "desktop payload hash mismatch"])
+for (const invalid of ["wrong version", "extra file", "corrupt archive", "nonexecutable archive", "missing archive app", "extra archive entry", "oversized archive listing", "symlink archive entry", "linked archive", "nonempty output", "extra desktop entry", "nonexecutable desktop launcher", "desktop payload hash mismatch", "unsigned desktop bundle"])
   test(`native archive finalize rejects ${invalid} without a checksum manifest`, async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-native-received-"))
     try {
@@ -243,6 +245,7 @@ for (const invalid of ["wrong version", "extra file", "corrupt archive", "nonexe
       if (invalid.includes("desktop")) {
         const source = path.join(root, "desktop", desktop)
         if (invalid === "extra desktop entry") await Bun.write(path.join(source, "Contents/Resources/update.json"), "{}")
+        if (invalid === "unsigned desktop bundle") await fs.rm(path.join(source, "Contents/_CodeSignature"), { recursive: true })
         if (invalid === "nonexecutable desktop launcher") await fs.chmod(path.join(source, "Contents/MacOS/launcher"), 0o644)
         if (invalid === "desktop payload hash mismatch") await fs.rename(path.join(source, "Contents/Resources/1z1pg577pmla1.tar.zst"), path.join(source, "Contents/Resources/other.tar.zst"))
         await fs.unlink(path.join(input, desktopArchive))

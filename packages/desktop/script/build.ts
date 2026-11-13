@@ -34,7 +34,12 @@ async function main() {
     assertSigning: () => assertLocalArtifactSigning(),
     assertToolchain: () => assertToolchain(dependency, process.arch, path.join(desktop, "icon.iconset")),
     prepare: () => prepareBackend(),
-    run: (command) => Bun.spawn([...command], { cwd: desktop, stdout: "inherit", stderr: "inherit" }).exited,
+    run: (command, env) => Bun.spawn([...command], { cwd: desktop, env: env ? { ...process.env, ...env } : process.env, stdout: "inherit", stderr: "inherit" }).exited,
+    codesign: async (args) => {
+      const child = Bun.spawn(["/usr/bin/codesign", ...args], { stdout: "pipe", stderr: "pipe" })
+      const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+      return { status, output: `${stdout}${stderr}` }
+    },
   }
   console.log(JSON.stringify(await buildDesktop(boundary, { argv: process.argv.slice(2), desktop, bun: process.execPath, arch: process.arch })))
 }

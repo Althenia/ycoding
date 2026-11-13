@@ -444,13 +444,46 @@ jobs:
           mkdir -p "$sdk/dist-macos-arm64"
           tar -xzf electrobun-core-darwin-arm64.tar.gz -C "$sdk/dist-macos-arm64"
 
+      - name: Import macOS signing identity
+        env:
+          YCODING_MACOS_SIGNING_P12: ${{ secrets.YCODING_MACOS_SIGNING_P12 }}
+          YCODING_MACOS_SIGNING_PASSWORD: ${{ secrets.YCODING_MACOS_SIGNING_PASSWORD }}
+          YCODING_MACOS_SIGNING_IDENTITY: YCoding Code Signing
+          YCODING_MACOS_SIGNING_SHA1: 9dd524184b0db949ffac7f0ada0ae860ac7f5f85
+        run: |
+          set -euo pipefail
+          test -n "$YCODING_MACOS_SIGNING_P12" || { echo "Missing YCODING_MACOS_SIGNING_P12 Actions secret" >&2; exit 1; }
+          test -n "$YCODING_MACOS_SIGNING_PASSWORD" || { echo "Missing YCODING_MACOS_SIGNING_PASSWORD Actions secret" >&2; exit 1; }
+          keychain="$RUNNER_TEMP/ycoding-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$keychain_password"
+          printf '%s' "$YCODING_MACOS_SIGNING_P12" | base64 --decode > "$RUNNER_TEMP/ycoding-signing.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/ycoding-signing.p12" -k "$keychain" -P "$YCODING_MACOS_SIGNING_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/ycoding-signing.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//' > "$RUNNER_TEMP/ycoding-keychains.txt"
+          original=()
+          while IFS= read -r line; do original+=("$line"); done < "$RUNNER_TEMP/ycoding-keychains.txt"
+          security list-keychains -d user -s "$keychain" ${original[@]+"${original[@]}"}
+          security find-identity -p codesigning "$keychain" | grep -F "$(printf '%s' "$YCODING_MACOS_SIGNING_SHA1" | tr a-f A-F) \"$YCODING_MACOS_SIGNING_IDENTITY\"" >/dev/null \
+            || { echo "The signing bundle does not contain the pinned $YCODING_MACOS_SIGNING_IDENTITY certificate" >&2; exit 1; }
+
       - name: Build desktop app
-        run: /bin/sh packages/desktop/script/build.sh --outdir="$RUNNER_TEMP/desktop"
+        run: /bin/sh packages/desktop/script/build.sh --outdir="$RUNNER_TEMP/desktop" --sign-identity=9dd524184b0db949ffac7f0ada0ae860ac7f5f85
 
       - name: Verify desktop backend version
         run: |
           set -euo pipefail
           node -e 'const receipt = require(process.argv[1]); if (receipt.version !== process.env.YCODING_VERSION) process.exit(1)' "$RUNNER_TEMP/desktop/build-receipt.json"
+
+      - name: Verify desktop signature
+        run: |
+          set -euo pipefail
+          codesign --verify --deep --strict "$RUNNER_TEMP/desktop/YCoding Desktop.app"
+          codesign -d -r- "$RUNNER_TEMP/desktop/YCoding Desktop.app" 2>&1 | grep -Ex "designated => identifier \"app\.ycoding\.desktop\" and certificate (leaf|root) = H\"9dd524184b0db949ffac7f0ada0ae860ac7f5f85\"" >/dev/null
 
       - name: Create and validate desktop archive
         run: bun script/release-archive.ts create-desktop "$RELEASE_VERSION" "$RUNNER_TEMP/desktop/YCoding Desktop.app" dist/release-archive/desktop-darwin-arm64
@@ -463,6 +496,21 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
+
+      - name: Remove macOS signing keychain
+        if: always()
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/ycoding-signing.keychain-db"
+          saved="$RUNNER_TEMP/ycoding-keychains.txt"
+          rm -f "$RUNNER_TEMP/ycoding-signing.p12"
+          if [ -e "$saved" ]; then
+            original=()
+            while IFS= read -r line; do original+=("$line"); done < "$saved"
+            if [ "${#original[@]}" -gt 0 ]; then security list-keychains -d user -s "${original[@]}"; fi
+            rm -f "$saved"
+          fi
+          if [ -e "$keychain" ]; then security delete-keychain "$keychain"; fi
 
   release-tui:
     name: finalize and publish TUI release
