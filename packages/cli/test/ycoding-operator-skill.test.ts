@@ -234,3 +234,9 @@ test("Core's configured skill listing excludes the Dots-only data root", async (
   const awaitableSkillFile = await readFile(path.join(data, "dots", "skills", "ycoding-operator", "SKILL.md"), "utf8")
   expect(awaitableSkillFile).toContain("name: ycoding-operator")
 })
+
+test("operator instructions create project Sessions in the target project's path and never under the Master", async () => {
+  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  expect(ycodingOperatorSkill).toContain("Create a project work Session in the target project's own directory or worktree, never the Master's or the task's path.")
+  expect(ycodingOperatorSkill).toContain("Never create a project work Session under the Master Session; it is a standalone root Session.")
+})

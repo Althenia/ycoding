@@ -157,3 +157,10 @@ test("controller and executor guidance share one consolidated-verification pract
       expect(Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value)).not.toContain(stale)
   }
 })
+
+test("the Master creates each member in the target project's own path and never under itself", () => {
+  for (const instruction of [
+    "Create each member for the project it works in: pass that project's own directory as \`repository\` on \`project create\`, never the Master's or the task's path, so the member runs with that project's own worktree, repository, AGENTS.md, skills, commands and config.",
+    "Never create a project work Session under the Master Session as a child or descendant; member Sessions are standalone root Sessions, and only lightweight supervisor subagents live under the Master.",
+  ]) once(CoordinationInstructions.content, instruction)
+})
