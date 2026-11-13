@@ -19,6 +19,7 @@ export const DecisionCommand = Spec.make("decision", {
       family: Flag.boolean("family").pipe(Flag.withDescription("Watch root work and descendant execution and decisions"), Flag.withDefault(false)),
       follow: Flag.boolean("follow").pipe(Flag.withDescription("Continuously observe a family until cancelled; emit IDs-only JSON lines"), Flag.withDefault(false)),
       state: Flag.string("state").pipe(Flag.withDescription("Private follow state file; requires --family --follow"), Flag.optional),
+      deliver: Flag.string("deliver").pipe(Flag.withDescription("Push lifecycle and decision events to this Dot thread (repeatable, up to 8); requires --family --follow"), Flag.atMost(8)),
       checkpoint: Flag.string("checkpoint").pipe(Flag.withDescription("Resume a family watch from its checkpoint"), Flag.optional),
       timeout: Flag.integer("timeout").pipe(Flag.withDescription("Seconds before one-shot progress, or between follow heartbeats (1-3600)"), Flag.withDefault(watchTimeout)),
       json: Flag.boolean("json").pipe(Flag.withDefault(false)),

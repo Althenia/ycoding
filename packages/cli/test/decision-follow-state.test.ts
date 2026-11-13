@@ -20,6 +20,23 @@ for (const [name, change] of [
   ["ledger shape", { requestSeen: ["invalid"] }],
   ["ledger duplicates", { terminalSeen: ["form\0ses_root\0frm_synthetic", "form\0ses_root\0frm_synthetic"] }],
   ["ledger bound", { seen: Array.from({ length: followLedgerLimit + 1 }, (_, index) => `ses_root\0evt_synthetic\0${index}`) }],
+  ["delivery fields", { delivery: { announced: [], targets: [{ threadID: "thr_root", outbox: [], secret: "NEVER-STORE" }] } }],
+  ["delivery thread", { delivery: { announced: [], targets: [{ threadID: "", outbox: [] }] } }],
+  ["delivery thread control characters", { delivery: { announced: [], targets: [{ threadID: "thr\nroot", outbox: [] }] } }],
+  ["delivery duplicate thread", { delivery: { announced: [], targets: [{ threadID: "thr_root", outbox: [] }, { threadID: "thr_root", outbox: [] }] } }],
+  ["delivery target bound", { delivery: { announced: [], targets: Array.from({ length: 9 }, (_, index) => ({ threadID: `thr_${index}`, outbox: [] })) } }],
+  ["delivery missing targets", { delivery: { announced: [], targets: [] } }],
+  ["delivery event type", { delivery: { announced: [], targets: [{ threadID: "thr_root", outbox: [{ sessionID: "ses_root", id: "evt_one", type: "session.step.started", seq: 1 }] }] } }],
+  ["delivery event without sequence", { delivery: { announced: [], targets: [{ threadID: "thr_root", outbox: [{ sessionID: "ses_root", id: "evt_one", type: "session.execution.started" }] }] } }],
+  ["delivery event kind", { delivery: { announced: [], targets: [{ threadID: "thr_root", outbox: [{ sessionID: "ses_root", id: "per_one", requestKind: "secret" }] }] } }],
+  ["delivery ownership with sequence", { delivery: { announced: [], targets: [{ threadID: "thr_root", outbox: [{ sessionID: "ses_member", id: "grp_one", type: "owner-changed", revision: 1, seq: 1 }] }] } }],
+  ["delivery ownership without revision", { delivery: { announced: [], targets: [{ threadID: "thr_root", outbox: [{ sessionID: "ses_member", id: "grp_one", type: "owner-released" }] }] } }],
+  ["delivery owner on a lifecycle event", { delivery: { announced: [], targets: [{ threadID: "thr_root", outbox: [{ sessionID: "ses_root", id: "evt_one", type: "session.execution.started", seq: 1, ownerSessionID: "ses_owner" }] }] } }],
+  ["delivery event both kinds", { delivery: { announced: [], targets: [{ threadID: "thr_root", outbox: [{ sessionID: "ses_root", id: "per_one", requestKind: "permission", type: "session.execution.started", seq: 1 }] }] } }],
+  ["delivery message ID", { delivery: { announced: [], targets: [{ threadID: "thr_root", outbox: [], inflight: { clientMessageID: "random", events: [{ sessionID: "ses_root", id: "per_one", requestKind: "permission" }] } }] } }],
+  ["delivery empty batch", { delivery: { announced: [], targets: [{ threadID: "thr_root", outbox: [], inflight: { clientMessageID: "00000000-0000-8000-8000-000000000000", events: [] } }] } }],
+  ["delivery announced", { delivery: { announced: ["invalid"], targets: [{ threadID: "thr_root", outbox: [] }] } }],
+  ["delivery announced duplicates", { delivery: { announced: ["permission\0ses_root\0per_one", "permission\0ses_root\0per_one"], targets: [{ threadID: "thr_root", outbox: [] }] } }],
 ] as const) {
   test(`follow state rejects ${name}`, () => {
     expect(() => validateFollowState({ ...state(), ...change }, "ses_root", server)).toThrow()
@@ -73,6 +90,84 @@ test("follow storage rejects a symlinked parent without touching its target", as
     await symlink(real, path.join(dir, "alias"))
     await expect(openFollowState(path.join(dir, "alias", "state.json"), "ses_root", server)).rejects.toThrow(path.join(real, "state.json"))
     await expect(readFile(path.join(real, "state.json.lock"))).rejects.toThrow()
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+test("follow state accepts and restores a well-formed delivery ledger", () => {
+  const value = { ...state(), sourceEpoch: "epoch_one", cursors: [{ sessionID: "ses_root", after: 3 }], delivery: {
+    announced: ["guardrail\0ses_root\0grq_one", "project-escalation:permission\0ses_child\0per_one"],
+    targets: [
+      { threadID: "thr_root", outbox: [{ sessionID: "ses_child", id: "evt_child", type: "session.execution.succeeded", seq: 4 }],
+        inflight: { clientMessageID: "0123abcd-0000-8000-8000-0123456789ab", events: [{ sessionID: "ses_root", id: "grq_one", requestKind: "guardrail", fingerprint: "f".repeat(64) }] } },
+      { threadID: "task thread/1", outbox: [{ sessionID: "ses_child", id: "que_child", requestKind: "child-question", parentID: "ses_root", revision: 2 },
+        { sessionID: "ses_child", id: "per_one", requestKind: "permission", escalated: true as const },
+        { sessionID: "ses_member", id: "grp_one", type: "owner-changed", revision: 3, ownerSessionID: "ses_owner" },
+        { sessionID: "ses_member", id: "grp_one", type: "owner-released", revision: 4, removed: true as const }] },
+    ],
+  } }
+  expect(validateFollowState(structuredClone(value), "ses_root", server)).toEqual(value)
+})
+
+const parentRequirement = "its directory must be owned by the current user and not writable by group or others"
+
+test("a symlinked state directory names a canonical path that opens end to end", async () => {
+  const dir = await directory()
+  try {
+    const real = path.join(dir, "real")
+    await mkdir(real, { mode: 0o700 })
+    await symlink(real, path.join(dir, "alias"))
+    const canonical = path.join(real, "state.json")
+    await expect(openFollowState(path.join(dir, "alias", "state.json"), "ses_root", server)).rejects.toThrow(`use canonical --state ${JSON.stringify(canonical)}`)
+    const store = await openFollowState(canonical, "ses_root", server)
+    await store.save(store.state)
+    await store.close()
+    expect((await lstat(canonical)).isFile()).toBe(true)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+test("a symlinked state directory whose canonical directory is shared names no path and states the requirement", async () => {
+  const dir = await directory()
+  try {
+    const real = path.join(dir, "shared")
+    await mkdir(real)
+    await chmod(real, 0o1777)
+    await symlink(real, path.join(dir, "alias"))
+    const error = await openFollowState(path.join(dir, "alias", "state.json"), "ses_root", server).then(() => undefined, (failure: unknown) => failure as Error)
+    expect(error?.message).toStartWith("[state-invalid]")
+    expect(error?.message).toContain(parentRequirement)
+    expect(error?.message).toContain("omit --state to use the default private state location")
+    expect(error?.message).not.toContain("use canonical")
+    expect(error?.message).not.toContain(dir)
+    await expect(readFile(path.join(real, "state.json.lock"))).rejects.toThrow()
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+for (const mode of [0o777, 0o1777, 0o770, 0o722]) {
+  test(`a state directory with mode ${mode.toString(8)} is rejected with its requirement`, async () => {
+    const dir = await directory()
+    try {
+      const shared = path.join(dir, "shared")
+      await mkdir(shared)
+      await chmod(shared, mode)
+      const error = await openFollowState(path.join(shared, "state.json"), "ses_root", server).then(() => undefined, (failure: unknown) => failure as Error)
+      expect(error?.message).toStartWith("[state-invalid]")
+      expect(error?.message).toContain(parentRequirement)
+      expect(error?.message).not.toContain(dir)
+      await expect(readFile(path.join(shared, "state.json.lock"))).rejects.toThrow()
+    } finally { await rm(dir, { recursive: true, force: true }) }
+  })
+}
+
+test("a private state directory is accepted", async () => {
+  const dir = await directory()
+  try {
+    const owned = path.join(dir, "owned")
+    await mkdir(owned)
+    await chmod(owned, 0o700)
+    const store = await openFollowState(path.join(owned, "state.json"), "ses_root", server)
+    await store.save(store.state)
+    await store.close()
+    expect((await lstat(path.join(owned, "state.json"))).mode & 0o077).toBe(0)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 

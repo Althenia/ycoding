@@ -275,8 +275,8 @@ export function createCcaDotConversation(deps: CcaDotConversationDeps): DotsAcce
   async function catalog() {
     const client = deps.durable()
     if (!client?.connected()) return new Map<string, Details>()
-    const threads = await listCcaDurableThreads(client).catch(() => undefined)
-    return new Map((threads ?? []).flatMap((thread): [string, Details][] => typeof thread.id === "string" ? [[thread.id, details(thread)]] : []))
+    const listed = await listCcaDurableThreads(client).catch(() => undefined)
+    return new Map((listed?.kind === "listed" ? listed.threads : []).flatMap((thread): [string, Details][] => typeof thread.id === "string" ? [[thread.id, details(thread)]] : []))
   }
 
   async function member(threadID: string, signal: AbortSignal) {

@@ -64,6 +64,7 @@ export async function followFamily(client: FollowClient, options: {
   state: FollowState; signal: AbortSignal; heartbeatSeconds: number
   save(state: FollowState): Promise<void>
   emit(receipt: FollowReceipt): Promise<void>
+  companion?: Promise<void>
 }) {
   const state = structuredClone(options.state)
   let committed = structuredClone(state)
@@ -406,6 +407,7 @@ export async function followFamily(client: FollowClient, options: {
   }
   const aborted = () => wake()
   signal.addEventListener("abort", aborted, { once: true })
+  options.companion?.catch((error: unknown) => { failure ??= error; wake() })
   let heartbeatPending = false
   const heartbeat = setInterval(() => {
     if (!ready || heartbeatPending) return

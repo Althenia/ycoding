@@ -16,13 +16,17 @@ const followFailureMessages = {
   "root-required": "Follow requires a root Session",
   "output-failed": "Follow output failed; verify the output consumer before resuming selected state",
   "observer-failed": "Native decision follow failed; verify server availability and private state ownership",
+  "delivery-failed": "Dot delivery failed; undelivered events stay in the follow state and resume on restart; verify Dots access and the --deliver threads",
+  "delivery-target-unavailable": "A --deliver thread is not listed by your Dot; run ycoding dots threads and select a listed thread",
+  "delivery-targets-changed": "Selected follow state delivers to other --deliver threads; repeat its exact threads or select a new state file",
 } as const
 
 export class FollowError extends Error {
-  constructor(readonly code: keyof typeof followFailureMessages, canonicalPath?: string) {
-    super(`[${code}] ${followFailureMessages[code]}${canonicalPath === undefined ? "" : `; use canonical --state ${JSON.stringify(canonicalPath)}`}`)
+  constructor(readonly code: keyof typeof followFailureMessages, detail?: string) {
+    super(`[${code}] ${followFailureMessages[code]}${detail === undefined ? "" : `; ${detail}`}`)
   }
 }
+const privateParentRequirement = "its directory must be owned by the current user and not writable by group or others; omit --state to use the default private state location, or select a file in a directory created with mkdir -m 700"
 export const followRequestKey = (request: FollowRequest) => `${request.kind}\0${request.sessionID}\0${request.id}${request.fingerprint === undefined && request.revision === undefined ? "" : `\0${request.fingerprint ?? ""}\0${request.revision ?? ""}`}`
 export type FollowState = {
   version: 1
@@ -35,7 +39,20 @@ export type FollowState = {
   requestSeen: string[]
   terminalSeen: string[]
   ownership?: { groupID: string; sessionID: string; ownerSessionID?: string; revision: number }[]
+  delivery?: FollowDelivery
 }
+export type DeliveryEvent = { sessionID: string; id: string; type?: string; seq?: number; requestKind?: string; parentID?: string; fingerprint?: string; revision?: number; escalated?: true
+  ownerSessionID?: string; removed?: true }
+export type DeliveryTarget = { threadID: string; outbox: DeliveryEvent[]; inflight?: { clientMessageID: string; events: DeliveryEvent[] } }
+export type FollowDelivery = { announced: string[]; targets: DeliveryTarget[] }
+export const deliveryLifecycleTypes = ["session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "session.work.completed"]
+export const deliveryOwnershipTypes = ["owner-changed", "owner-released"]
+export const deliveryTargetLimit = 8
+export const deliveryBatchLimit = 20
+export const deliveryThreadID = (value: unknown): value is string => typeof value === "string" && value.length <= 256 && /\S/.test(value) && !/[\u0000-\u001f\u007f]/.test(value)
+export const deliveryKey = (event: DeliveryEvent) => [event.type ?? "", event.requestKind ?? "", event.sessionID, event.id, event.seq ?? "", event.parentID ?? "",
+  event.fingerprint ?? "", event.revision ?? "", event.escalated ? "escalated" : "", event.ownerSessionID ?? "", event.removed ? "removed" : ""].join("\0")
+export const announcedKey = (event: DeliveryEvent) => `${event.escalated ? "project-escalation:" : ""}${event.requestKind}\0${event.sessionID}\0${event.id}`
 
 export const followStateBytes = 1024 * 1024
 export const followLedgerLimit = 8192
@@ -44,9 +61,44 @@ export const requestKinds = ["permission", "guardrail", "question", "form", "rev
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)
 const keys = (value: Record<string, unknown>, allowed: string[]) => Object.keys(value).every((key) => allowed.includes(key))
 const sequence = (value: unknown) => value === undefined || typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+const sessionID = (value: unknown) => followID(value) && value.startsWith("ses")
+
+function validDeliveryEvent(event: unknown) {
+  if (!record(event) || !keys(event, ["sessionID", "id", "type", "seq", "requestKind", "parentID", "fingerprint", "revision", "escalated", "ownerSessionID", "removed"]) || !followID(event.id)) return false
+  if (typeof event.type === "string" && deliveryOwnershipTypes.includes(event.type)) return followID(event.sessionID) && typeof event.revision === "number" && sequence(event.revision) &&
+    (event.ownerSessionID === undefined || followID(event.ownerSessionID)) && (event.removed === undefined || event.removed === true) &&
+    [event.seq, event.requestKind, event.parentID, event.fingerprint, event.escalated].every((field) => field === undefined)
+  if (!sessionID(event.sessionID) || event.ownerSessionID !== undefined || event.removed !== undefined) return false
+  if (event.type !== undefined) return typeof event.type === "string" && deliveryLifecycleTypes.includes(event.type) && event.seq !== undefined && sequence(event.seq) &&
+    [event.requestKind, event.parentID, event.fingerprint, event.revision, event.escalated].every((field) => field === undefined)
+  return typeof event.requestKind === "string" && requestKinds.includes(event.requestKind) && event.seq === undefined && sequence(event.revision) &&
+    (event.parentID === undefined || sessionID(event.parentID)) && (event.escalated === undefined || event.escalated === true) &&
+    (event.fingerprint === undefined || typeof event.fingerprint === "string" && /^[a-f0-9]{64}$/.test(event.fingerprint))
+}
+
+function validateDelivery(value: unknown) {
+  if (!record(value) || !keys(value, ["announced", "targets"]) || !Array.isArray(value.announced) || value.announced.length > followLedgerLimit ||
+    new Set(value.announced).size !== value.announced.length || !Array.isArray(value.targets) || value.targets.length < 1 || value.targets.length > deliveryTargetLimit) throw new Error("Invalid follow delivery")
+  for (const key of value.announced) {
+    const parts = typeof key === "string" ? key.split("\0") : []
+    const kind = parts[0]?.startsWith("project-escalation:") ? parts[0].slice("project-escalation:".length) : parts[0]
+    if (parts.length !== 3 || !requestKinds.includes(kind!) || !sessionID(parts[1]) || !followID(parts[2])) throw new Error("Invalid follow delivery announcement")
+  }
+  const threads = new Set<string>()
+  for (const target of value.targets) {
+    if (!record(target) || !keys(target, ["threadID", "outbox", "inflight"]) || !deliveryThreadID(target.threadID) || threads.has(target.threadID) ||
+      !Array.isArray(target.outbox) || target.outbox.length > followLedgerLimit || !target.outbox.every(validDeliveryEvent)) throw new Error("Invalid follow delivery target")
+    threads.add(target.threadID)
+    if (target.inflight === undefined) continue
+    const inflight = target.inflight
+    if (!record(inflight) || !keys(inflight, ["clientMessageID", "events"]) || typeof inflight.clientMessageID !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(inflight.clientMessageID) || !Array.isArray(inflight.events) ||
+      inflight.events.length < 1 || inflight.events.length > deliveryBatchLimit || !inflight.events.every(validDeliveryEvent)) throw new Error("Invalid follow delivery batch")
+  }
+}
 
 export function validateFollowState(value: unknown, root: string, server: string): FollowState {
-  if (!record(value) || !keys(value, ["version", "rootSessionID", "server", "sourceEpoch", "cursors", "pending", "seen", "requestSeen", "terminalSeen", "ownership"]) ||
+  if (!record(value) || !keys(value, ["version", "rootSessionID", "server", "sourceEpoch", "cursors", "pending", "seen", "requestSeen", "terminalSeen", "ownership", "delivery"]) ||
     value.version !== 1 || value.rootSessionID !== root || !followID(root) || value.server !== server || !/^[a-f0-9]{64}$/.test(server) ||
     value.sourceEpoch !== undefined && !followID(value.sourceEpoch)) throw new Error("Invalid follow state identity")
   if (!Array.isArray(value.cursors) || value.cursors.length > 64) throw new Error("Invalid follow cursors")
@@ -94,7 +146,20 @@ export function validateFollowState(value: unknown, root: string, server: string
       members.add(key)
     }
   }
+  if (value.delivery !== undefined) validateDelivery(value.delivery)
   return value as FollowState
+}
+
+const privateDirectory = (stat: { uid: number; mode: number }) => process.getuid === undefined || stat.uid === process.getuid() && (stat.mode & 0o022) === 0
+
+async function acceptableParent(directory: string) {
+  try {
+    const stat = await lstat(directory)
+    return stat.isDirectory() && privateDirectory(stat)
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return true
+    throw error
+  }
 }
 
 export async function openFollowState(filename: string, root: string, server: string) {
@@ -104,8 +169,11 @@ export async function openFollowState(filename: string, root: string, server: st
   for (;;) {
     try {
       const canonical = await realpath(ancestor)
-      if ((await lstat(ancestor)).isSymbolicLink() || canonical !== ancestor)
-        throw new FollowError("state-invalid", path.join(canonical, path.relative(ancestor, target)))
+      if ((await lstat(ancestor)).isSymbolicLink() || canonical !== ancestor) {
+        const replacement = path.join(canonical, path.relative(ancestor, target))
+        throw new FollowError("state-invalid", await acceptableParent(path.dirname(replacement))
+          ? `use canonical --state ${JSON.stringify(replacement)}` : privateParentRequirement)
+      }
       break
     } catch (error) {
       if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error
@@ -117,7 +185,7 @@ export async function openFollowState(filename: string, root: string, server: st
   await mkdir(parent, { recursive: true, mode: 0o700 })
   if (await realpath(parent) !== parent) throw new FollowError("state-conflict")
   const parentStat = await lstat(parent)
-  if (process.getuid !== undefined && (parentStat.uid !== process.getuid() || (parentStat.mode & 0o022) !== 0)) throw new FollowError("state-invalid")
+  if (!privateDirectory(parentStat)) throw new FollowError("state-invalid", privateParentRequirement)
   const lockPath = `${target}.lock`
   const lock = await open(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600).catch((error: unknown) => {
     throw new FollowError(error instanceof Error && "code" in error && error.code === "EEXIST" ? "state-lock-held" : "state-io-failed")

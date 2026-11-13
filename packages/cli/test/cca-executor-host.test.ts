@@ -121,6 +121,7 @@ async function fixture(options: {
   const waits: number[] = []
   const diagnostics: string[] = []
   const durableDials: { readonly url: string; readonly protocols: readonly string[]; readonly headers: Record<string, string> }[] = []
+  const held: (() => void)[] = []
   let clock = 0
   const fetchFn = async (url: string, init?: RequestInit) => {
     const entry = { url, headers: { ...(init?.headers as Record<string, string>) }, body: JSON.parse(String(init?.body)) }
@@ -190,9 +191,14 @@ async function fixture(options: {
       record(message)
     },
     ...(options.realWait ? {} : {
-      wait: async (ms: number) => {
+      wait: (ms: number, signal: AbortSignal) => {
         waits.push(ms)
         record("wait")
+        if (ms !== readinessRescanMs) return Promise.resolve()
+        return new Promise<void>((resolve) => {
+          held.push(resolve)
+          signal.addEventListener("abort", () => resolve(), { once: true })
+        })
       },
     }),
   }
@@ -209,8 +215,11 @@ async function fixture(options: {
       for (const listener of [...listeners]) listener()
     },
     advance: (ms: number) => { clock += ms },
+    rescan: () => { for (const resolve of held.splice(0)) resolve() },
   }
 }
+
+const readinessRescanMs = 30_000
 
 const completed = (overrides: Record<string, unknown> = {}) => ({
   installationID: "synthetic-proof-installation",
@@ -1023,7 +1032,8 @@ describe("CCA durable host client and executor readiness", () => {
     })
     const harness = await fixture({ configuration: enabled(), stored: completed(), durableURL: durable.url })
     await harness.create().start()
-    await harness.until("CCA executor readiness-sent")
+    await harness.until("CCA executor readiness-sent sent=2")
+    expect(harness.diagnostics).toContain("CCA executor readiness-scan listed=5 matched=2 pending=2 pages=2")
     expect(durable.of("thread/list").map((message) => message.params)).toEqual([
       { cursor: null, limit: 100, archived: false, useStateDbOnly: true },
       { cursor: "page-2", limit: 100, archived: false, useStateDbOnly: true },
@@ -1038,24 +1048,78 @@ describe("CCA durable host client and executor readiness", () => {
     }
   })
 
-  test("a failed readiness report is retried alone after 5 s and a clean pass sends nothing again", async () => {
+  test("a rejected readiness report names its stage, reply and message class, and the retry lists again and re-sends only that thread", async () => {
     let failures = 1
     const durable = await durableServer({
       reply: (message) => {
         if (message.method === "thread/list") return { result: { data: [durableThread("thr-a", "aeon", executorID), durableThread("thr-b", "aeon_child", executorID)], nextCursor: null } }
-        if (message.method === "thread/environmentReady" && message.params.threadId === "thr-a" && failures-- > 0) return { error: { code: -32000, message: "synthetic private failure" } }
+        if (message.method === "thread/environmentReady" && message.params.threadId === "thr-a" && failures-- > 0)
+          return { error: { code: -32602, message: `Invalid params: environment ${executorID} is not attached to thread 6af71b9d-ef6c-8191-b555-fe544f25600c` } }
         return undefined
       },
     })
     const harness = await fixture({ configuration: enabled(), stored: completed(), durableURL: durable.url })
     await harness.create().start()
-    await harness.until("CCA executor readiness-failed")
-    await harness.until("CCA executor readiness-sent", 2)
-    expect(harness.waits).toContain(5_000)
-    expect(durable.of("thread/list")).toHaveLength(1)
-    expect(durable.of("thread/environmentReady").map((message) => message.params.threadId)).toEqual(expect.arrayContaining(["thr-a", "thr-b"]))
+    await harness.until("CCA executor readiness-failed stage=ready failed=1 sent=1 reply=error code=-32602 message=invalid-params-environment-is-not-attached-to-thread")
+    await durable.until(() => harness.waits.includes(readinessRescanMs))
+    expect(harness.diagnostics.filter((message) => message.startsWith("CCA executor readiness-"))).toEqual([
+      "CCA executor readiness-scan listed=2 matched=2 pending=2 pages=1",
+      "CCA executor readiness-sent sent=1",
+      "CCA executor readiness-failed stage=ready failed=1 sent=1 reply=error code=-32602 message=invalid-params-environment-is-not-attached-to-thread",
+      "CCA executor readiness-scan listed=2 matched=2 pending=1 pages=1",
+      "CCA executor readiness-sent sent=1",
+    ])
+    expect(harness.waits.filter((ms) => ms === 5_000)).toHaveLength(1)
+    expect(durable.of("thread/list")).toHaveLength(2)
     expect(durable.of("thread/environmentReady").slice(2).map((message) => message.params.threadId)).toEqual(["thr-a"])
-    for (const message of harness.diagnostics) expect(message).not.toContain("synthetic private failure")
+  })
+
+  test("a thread created while both connections stay up is discovered by the next 30 s rescan, and an unchanged rescan sends and logs nothing", async () => {
+    const threads: Record<string, unknown>[] = [durableThread("thr-a", "aeon", executorID)]
+    const durable = await durableServer({
+      reply: (message) => message.method === "thread/list" ? { result: { data: [...threads], nextCursor: null } } : undefined,
+    })
+    const harness = await fixture({ configuration: enabled(), stored: completed(), durableURL: durable.url })
+    await harness.create().start()
+    await durable.until(() => harness.waits.filter((ms) => ms === readinessRescanMs).length === 1)
+    threads.unshift(durableThread("thr-new", "aeon_child", executorID), { id: "thr-coordination", threadSource: "aeon_child", environments: [] })
+    harness.rescan()
+    await durable.until(() => harness.waits.filter((ms) => ms === readinessRescanMs).length === 2)
+    harness.rescan()
+    await durable.until(() => harness.waits.filter((ms) => ms === readinessRescanMs).length === 3)
+    expect(durable.of("thread/list")).toHaveLength(3)
+    expect(durable.of("thread/environmentReady").map((message) => message.params.threadId)).toEqual(["thr-a", "thr-new"])
+    expect(harness.diagnostics.filter((message) => message.startsWith("CCA executor readiness-"))).toEqual([
+      "CCA executor readiness-scan listed=1 matched=1 pending=1 pages=1",
+      "CCA executor readiness-sent sent=1",
+      "CCA executor readiness-scan listed=3 matched=2 pending=1 pages=1",
+      "CCA executor readiness-sent sent=1",
+    ])
+  })
+
+  test("a failed listing names its reply and page count without upstream identifiers, backs off, and recovers on a later full pass", async () => {
+    let pass = 0
+    const durable = await durableServer({
+      reply: (message) => {
+        if (message.method !== "thread/list") return undefined
+        if (message.params.cursor === null) pass++
+        if (message.params.cursor === null) return { result: { data: [durableThread("thr-a", "aeon", executorID)], nextCursor: "page-2" } }
+        if (pass === 1) return { error: { code: -32603, message: `Internal error: thread 6af71b9d-ef6c-8191-b555-fe544f25600c has secretTokenValueThatIsVeryLong123 attached` } }
+        if (pass === 2) return { result: { data: [], nextCursor: "page-2" } }
+        return { result: { data: [], nextCursor: null } }
+      },
+    })
+    const harness = await fixture({ configuration: enabled(), stored: completed(), durableURL: durable.url })
+    await harness.create().start()
+    await harness.until("CCA executor readiness-sent sent=1")
+    expect(harness.diagnostics.filter((message) => message.startsWith("CCA executor readiness-"))).toEqual([
+      "CCA executor readiness-failed stage=list reply=error code=-32603 message=internal-error-thread-has-attached pages=1",
+      "CCA executor readiness-failed stage=list reply=cursor-repeated pages=2",
+      "CCA executor readiness-scan listed=1 matched=1 pending=1 pages=2",
+      "CCA executor readiness-sent sent=1",
+    ])
+    expect(harness.waits.filter((ms) => ms === 5_000 || ms === 10_000)).toEqual([5_000, 10_000])
+    expect(durable.of("thread/list").map((message) => message.params.cursor)).toEqual([null, "page-2", null, "page-2", null, "page-2"])
   })
 
   test("readiness is sent again in full after the executor reconnects and after the durable connection reconnects", async () => {
@@ -1064,12 +1128,12 @@ describe("CCA durable host client and executor readiness", () => {
     })
     const harness = await fixture({ configuration: enabled(), stored: completed(), durableURL: durable.url })
     await harness.create().start()
-    await harness.until("CCA executor readiness-sent")
+    await harness.until("CCA executor readiness-sent sent=1")
     harness.sockets[0].drop()
-    await harness.until("CCA executor readiness-sent", 2)
+    await harness.until("CCA executor readiness-sent sent=1", 2)
     expect(durable.of("thread/list")).toHaveLength(2)
     durable.sockets[0].close()
-    await harness.until("CCA executor readiness-sent", 3)
+    await harness.until("CCA executor readiness-sent sent=1", 3)
     expect(durable.of("thread/list")).toHaveLength(3)
     expect(durable.of("thread/environmentReady").map((message) => message.params.threadId)).toEqual(["thr-a", "thr-a", "thr-a"])
   })
@@ -1096,7 +1160,8 @@ describe("CCA durable host client and executor readiness", () => {
     const harness = await fixture({ configuration: enabled(), stored: completed(), durableURL: durable.url })
     await harness.create().start()
     await harness.until("CCA executor durable-connected")
-    const allowed = new RegExp(`^CCA executor (${ccaExecutorHostDiagnostics.join("|")})( status=[1-5]\\d\\d)?$`)
+    const allowed = new RegExp(`^CCA executor (${ccaExecutorHostDiagnostics.join("|")})( status=[1-5]\\d\\d)?( [a-z]+=-?[a-z0-9-]+)*$`)
+    await harness.until("CCA executor readiness-scan listed=0 matched=0 pending=0 pages=1")
     expect(harness.diagnostics).toContain("CCA executor durable-failed")
     for (const message of harness.diagnostics) {
       expect(allowed.test(message)).toBe(true)

@@ -16,8 +16,10 @@ import { DecisionCommand, shellCommand, watchTimeout } from "../../decision"
 import { Runtime } from "../../../framework/runtime"
 import { ServerConnection } from "../../../services/server-connection"
 import { createFamilyWatch, decodeCheckpoint, discoverFamily, FamilyCheckpointError, type FamilyChange } from "./family"
-import { followFamily } from "./follow"
-import { FollowError, followID, openFollowState } from "./follow-state"
+import { decisionText, line } from "./decision-text"
+import { followFamily, type FollowReceipt } from "./follow"
+import { createFollowDelivery, type DeliveryReceipt } from "./follow-delivery"
+import { deliveryThreadID, FollowError, followID, openFollowState } from "./follow-state"
 
 type Client = ReturnType<typeof YCoding.make>
 type LogEvent = Exclude<SessionLogOutput, { type: "log.synced" }>
@@ -109,7 +111,6 @@ const exitCodes = { settled: 0, family: 0, decision: 2, timeout: 3 } as const
 class InputBeforeCursor extends Error {}
 
 const iso = (millis: number) => new Date(millis).toISOString()
-const line = (value: string) => value.replaceAll(/[\u0000-\u001f\u007f]/g, " ")
 const block = (value: string) => value.replaceAll(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ")
 
 function bounded(value: string, limit: number) {
@@ -142,15 +143,6 @@ export function resumeCommand(options: Options, after: number | undefined, withI
     ...(options.checkpoint === undefined ? [] : ["--checkpoint", options.checkpoint]),
     ...(options.server === undefined ? [] : ["--server", options.server]), ...(options.standalone ? ["--standalone"] : []),
     ...(options.timeout === watchTimeout ? [] : ["--timeout", String(options.timeout)]), ...(options.json ? ["--json"] : [])]
-}
-
-function decisionText(item: DecisionItem) {
-  const lines = [`${item.kind} ${item.id} in "${line(item.sessionTitle)}" (${item.sessionID}): ${line(item.summary)}`]
-  for (const choice of item.decide) {
-    lines.push(`  ${line(choice.label)}${choice.template ? " [template]" : ""}: ${shellCommand(choice.argv)}`)
-    if (choice.hint) lines.push(`    ${line(choice.hint)}`)
-  }
-  return lines.join("\n")
 }
 
 export function selectDecisions(items: readonly DecisionItem[], json: boolean) {
@@ -719,6 +711,8 @@ export default Runtime.handler(DecisionCommand.commands.watch, Effect.fn("cli.de
   }
   if (input.follow && !input.family) return yield* Effect.fail(new Error("--follow requires --family"))
   if (Option.isSome(input.state) && !input.follow) return yield* Effect.fail(new Error("--state requires --follow"))
+  if (input.deliver.length > 0 && !input.follow) return yield* Effect.fail(new Error("--deliver requires --follow"))
+  if (!input.deliver.every(deliveryThreadID)) return yield* Effect.fail(new Error("--deliver requires a Dot thread ID"))
   if (input.follow && (options.input !== undefined || options.after !== undefined || options.checkpoint !== undefined))
     return yield* Effect.fail(new Error("--follow cannot use --input, --after or --checkpoint"))
   if (!options.sessionID.trim()) return yield* Effect.fail(new Error("A Session ID is required"))
@@ -744,12 +738,22 @@ export default Runtime.handler(DecisionCommand.commands.watch, Effect.fn("cli.de
       const task = (async () => {
         const store = await openFollowState(filename, options.sessionID, server)
         try {
-          await followFamily(client, { state: store.state, signal: controller.signal, heartbeatSeconds: options.timeout, save: store.save,
-            emit: (receipt) => new Promise<void>((resolve, reject) => {
-              try {
-                process.stdout.write(`${JSON.stringify(receipt)}\n`, (error) => error ? reject(new FollowError("output-failed")) : resolve())
-              } catch { reject(new FollowError("output-failed")) }
-            }) })
+          const write = (record: FollowReceipt | DeliveryReceipt) => new Promise<void>((resolve, reject) => {
+            try {
+              process.stdout.write(`${JSON.stringify(record)}\n`, (error) => error ? reject(new FollowError("output-failed")) : resolve())
+            } catch { reject(new FollowError("output-failed")) }
+          })
+          const stopping = new AbortController()
+          const delivery = input.deliver.length > 0 || store.state.delivery !== undefined ? createFollowDelivery(client, { state: store.state, targets: input.deliver,
+            signal: AbortSignal.any([controller.signal, stopping.signal]), save: store.save, emit: write }) : undefined
+          const companion = delivery?.run()
+          try {
+            await followFamily(client, { state: delivery?.state ?? store.state, signal: controller.signal, heartbeatSeconds: options.timeout,
+              save: delivery?.save ?? store.save, emit: delivery?.emit ?? write, ...(companion === undefined ? {} : { companion }) })
+          } finally {
+            stopping.abort()
+            await companion
+          }
         } finally { await store.close() }
       })()
       task.then(() => resume(Effect.void), (error: unknown) => resume(Effect.fail(failure(error))))

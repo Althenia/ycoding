@@ -9,6 +9,8 @@ for (const [args, expected] of [
   [["--follow"], "--follow requires --family"],
   [["--state", "synthetic-state.json"], "--state requires --follow"],
   [["--family", "--follow", "--input", "msg_synthetic"], "--follow cannot use --input, --after or --checkpoint"],
+  [["--deliver", "thr_root"], "--deliver requires --follow"],
+  [["--family", "--follow", "--deliver", " "], "--deliver requires a Dot thread ID"],
 ] as const) {
   test(`installed decision watch validates ${args.join(" ")} before connecting`, async () => {
     const child = Bun.spawn([process.execPath, new URL("../src/tui.ts", import.meta.url).pathname,
@@ -25,7 +27,91 @@ test("installed decision watch help advertises continuous follow, state and hear
   const child = Bun.spawn([process.execPath, new URL("../src/tui.ts", import.meta.url).pathname, "decision", "watch", "--help"], { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
   const [stdout, exit] = await Promise.all([new Response(child.stdout).text(), child.exited])
   expect(exit).toBe(0)
-  for (const value of ["--follow", "--state", "follow heartbeats", "IDs-only JSON"]) expect(stdout).toContain(value)
+  for (const value of ["--follow", "--state", "follow heartbeats", "IDs-only JSON", "--deliver", "Dot thread"]) expect(stdout).toContain(value)
+}, 30_000)
+
+test("installed follow delivers lifecycle and decision events to a Dot thread and records delivery in its state", async () => {
+  const scratch = path.join(homedir(), ".local/share/ycoding/tasks")
+  await mkdir(scratch, { recursive: true })
+  const dir = await realpath(await mkdtemp(path.join(scratch, "decision-follow-deliver-")))
+  const filename = path.join(dir, "state.json")
+  const streams = new Map<string, ReadableStreamDefaultController<Uint8Array>>()
+  const sent: Record<string, unknown>[] = []
+  let asked = false
+  const frame = (value: object) => new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`)
+  const decide = ["ycoding", "api", "session.guardrail.request.reply", "--param", "sessionID=ses_root", "--param", "requestID=grq_synthetic", "--data", "{\"reply\":\"once\"}"]
+  const server = Bun.serve({ port: 0, idleTimeout: 0, async fetch(request) {
+    const url = new URL(request.url)
+    const route = url.pathname
+    if (route === "/api/health") return Response.json({ healthy: true, version: InstallationVersion, pid: process.pid })
+    if (route === "/api/event" || route === "/api/experimental/session/ses_root/log") {
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+        streams.set(route, controller)
+        controller.enqueue(frame(route === "/api/event"
+          ? { type: "server.connected", id: "evt_connected", sourceEpoch: "epoch_synthetic", data: {} }
+          : { type: "log.synced", sourceEpoch: "epoch_synthetic", aggregateID: "ses_root" }))
+        request.signal.addEventListener("abort", () => streams.delete(route), { once: true })
+      }, cancel() { streams.delete(route) } }), { headers: { "content-type": "text/event-stream" } })
+    }
+    if (route === "/api/session/ses_root") return Response.json({ data: { id: "ses_root", title: "Synthetic" } })
+    if (route === "/api/session/ses_root/snapshot") return Response.json({ sourceEpoch: "epoch_synthetic", session: { id: "ses_root" }, messages: [], watermark: { type: "log.synced", aggregateID: "ses_root" } })
+    if (route === "/api/session/active") return Response.json({ data: {} })
+    if (route === "/api/session/outstanding") return Response.json({ data: [], running: [], failed: [], lost: [] })
+    if (route === "/api/session/ses_root/subagent") return Response.json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
+    if (route === "/api/coordination") return Response.json({ data: [] })
+    if (route === "/api/session") return Response.json({ data: [], cursor: {} })
+    if (route === "/api/decision") return Response.json({ data: !asked ? [] : [{ kind: "guardrail", sessionID: "ses_root", sessionTitle: "Synthetic", directory: "/synthetic", id: "grq_synthetic", summary: "bash: synthetic", decide: [{ label: "once", argv: decide }] }] })
+    if (route === "/api/dots/threads") return Response.json({ data: { dotID: "dot_synthetic", rootThreadID: "thr_root", threads: [{ threadID: "thr_root", kind: "root", status: "idle" }], tasks: [] } })
+    if (route === "/api/dots/thread/thr_root/message" && request.method === "POST") {
+      sent.push(await request.json() as Record<string, unknown>)
+      return Response.json({ data: { admission: "started", turnID: "turn_synthetic" } })
+    }
+    return new Response("unexpected route", { status: 500 })
+  } })
+  const child = Bun.spawn([process.execPath, new URL("../src/tui.ts", import.meta.url).pathname, "decision", "watch", "ses_root", "--family", "--follow", "--state", filename,
+    "--deliver", "thr_root", "--server", server.url.toString()], { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+  const lines: Record<string, unknown>[] = []
+  const reading = (async () => {
+    let buffer = ""
+    for await (const bytes of child.stdout) {
+      buffer += new TextDecoder().decode(bytes)
+      const rows = buffer.split("\n")
+      buffer = rows.pop()!
+      for (const row of rows) lines.push(JSON.parse(row) as Record<string, unknown>)
+    }
+  })()
+  const until = async (predicate: () => boolean, label: string) => {
+    for (const started = Date.now(); !predicate();) {
+      if (Date.now() - started > 8000) throw new Error(`Missing installed delivery ${label}`)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
+  try {
+    await until(() => lines.some((value) => value.kind === "ready"), "ready")
+    streams.get("/api/experimental/session/ses_root/log")!.enqueue(frame({ type: "session.execution.succeeded", id: "evt_succeeded", sourceEpoch: "epoch_synthetic", durable: { aggregateID: "ses_root", seq: 1 }, data: { sessionID: "ses_root" } }))
+    await until(() => sent.length === 1, "lifecycle message")
+    asked = true
+    streams.get("/api/event")!.enqueue(frame({ type: "guardrail.asked", id: "evt_ask", sourceEpoch: "epoch_synthetic", data: { sessionID: "ses_root", id: "grq_synthetic", action: "NEVER-OUTPUT" } }))
+    await until(() => sent.length === 2, "guardrail message")
+    expect(sent[0]).toMatchObject({ mode: "send", clientMessageID: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) })
+    expect(String(sent[0]!.text)).toContain("Session ses_root execution succeeded (event evt_succeeded, seq 1).")
+    expect(String(sent[1]!.text)).toContain("guardrail grq_synthetic pending in ses_root.")
+    expect(String(sent[1]!.text)).toContain("once: ycoding api session.guardrail.request.reply --param sessionID=ses_root --param requestID=grq_synthetic --data '{\"reply\":\"once\"}'")
+    expect(String(sent[1]!.text)).not.toContain("NEVER-OUTPUT")
+    await until(() => lines.filter((value) => value.kind === "delivery").length === 2, "delivery records")
+    expect(lines.filter((value) => value.kind === "delivery").map((value) => [value.threadID, value.outcome, value.admission])).toEqual([["thr_root", "delivered", "started"], ["thr_root", "delivered", "started"]])
+    expect(JSON.stringify(lines)).not.toContain("NEVER-OUTPUT")
+  } finally {
+    child.kill("SIGINT")
+    await child.exited
+    await reading
+    expect(await new Response(child.stderr).text()).toBe("")
+    server.stop(true)
+  }
+  try {
+    const saved = JSON.parse(await readFile(filename, "utf8"))
+    expect(saved.delivery).toEqual({ announced: ["guardrail\0ses_root\0grq_synthetic"], targets: [{ threadID: "thr_root", outbox: [] }] })
+  } finally { await rm(dir, { recursive: true, force: true }) }
 }, 30_000)
 
 test("installed follow uses native read routes, streams categories after completion and releases storage on cancellation", async () => {

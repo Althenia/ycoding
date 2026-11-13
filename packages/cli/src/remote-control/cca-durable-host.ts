@@ -130,21 +130,31 @@ export function ccaDurableInitializeParams() {
   }
 }
 
-export async function listCcaDurableThreads(client: Pick<CcaDurableClient, "request">): Promise<Record<string, unknown>[] | undefined> {
+export type CcaDurableThreadList =
+  | { readonly kind: "listed"; readonly threads: Record<string, unknown>[]; readonly pages: number }
+  | {
+    readonly kind: "failed"
+    readonly pages: number
+    readonly reply: Exclude<CcaDurableReply, { readonly kind: "result" }> | { readonly kind: "malformed" | "cursor-repeated" | "page-limit" }
+  }
+
+export async function listCcaDurableThreads(client: Pick<CcaDurableClient, "request">): Promise<CcaDurableThreadList> {
   const threads: Record<string, unknown>[] = []
   const cursors = new Set<string>()
   let cursor: string | null = null
   for (let page = 0; page < threadListMaxPages; page++) {
     const reply = await client.request("thread/list", { cursor, limit: threadListPageLimit, archived: false, useStateDbOnly: true })
-    if (reply.kind !== "result" || !isRecord(reply.result) || !Array.isArray(reply.result.data)) return undefined
+    if (reply.kind !== "result") return { kind: "failed", pages: page, reply }
+    if (!isRecord(reply.result) || !Array.isArray(reply.result.data)) return { kind: "failed", pages: page, reply: { kind: "malformed" } }
     for (const item of reply.result.data) if (isRecord(item) && typeof item.id === "string" && item.id) threads.push(item)
     const next = reply.result.nextCursor
-    if (next === null || next === undefined) return threads
-    if (typeof next !== "string" || !next || cursors.has(next)) return undefined
+    if (next === null || next === undefined) return { kind: "listed", threads, pages: page + 1 }
+    if (typeof next !== "string" || !next) return { kind: "failed", pages: page + 1, reply: { kind: "malformed" } }
+    if (cursors.has(next)) return { kind: "failed", pages: page + 1, reply: { kind: "cursor-repeated" } }
     cursors.add(next)
     cursor = next
   }
-  return undefined
+  return { kind: "failed", pages: threadListMaxPages, reply: { kind: "page-limit" } }
 }
 
 export function startCcaDurableClient(deps: CcaDurableClientDeps): CcaDurableClient {

@@ -34,7 +34,14 @@ import {
   type CcaRegistrationResult,
 } from "./cca-executor-transport"
 import { acceptCcaNoiseHandshake, createCcaNoiseIdentity, type AcceptCcaNoiseHandshakeInput, type CcaNoiseIdentity } from "./cca-noise"
-import { isRecord, listCcaDurableThreads, startCcaDurableClient, type CcaDurableClient, type CcaDurableConnector } from "./cca-durable-host"
+import {
+  isRecord,
+  listCcaDurableThreads,
+  startCcaDurableClient,
+  type CcaDurableClient,
+  type CcaDurableConnector,
+  type CcaDurableThreadList,
+} from "./cca-durable-host"
 import { awaitWebSocketOpen, waitForAbort, type CcaWebSocketConnector } from "./cca-proof-common"
 import type { CcaProofJournalRecordInput } from "./cca-proof-journal"
 import { answerCcaTaskWorkspace, type CcaTaskWorkspaceHost } from "./cca-task-workspace"
@@ -65,6 +72,7 @@ export const ccaExecutorHostDiagnostics = [
   "durable-connected",
   "durable-failed",
   "durable-rejected",
+  "readiness-scan",
   "readiness-sent",
   "readiness-failed",
 ] as const
@@ -120,14 +128,28 @@ export function ccaReconnectDelay(backoffMs: number, random: () => number = Math
 
 export const ccaReadinessRetryInitialMs = 5_000
 export const ccaReadinessRetryMaxMs = 60_000
+export const ccaReadinessRescanMs = 30_000
 export const ccaReadinessConcurrency = 4
 export const ccaReadinessThreadSources = ["aeon", "aeon_child", "cloud_threads.create"] as const
 
 type ReadinessTarget = { readonly executorID: string; readonly roots: readonly CcaCapabilityRoot[] }
+type ReadinessFailure = Extract<CcaDurableThreadList, { readonly kind: "failed" }>["reply"]
+
+function readinessMessageClass(message: string) {
+  const words = message.toLowerCase().split(/\s+/)
+    .filter((token) => token.length <= 24 && !/\d/.test(token))
+    .flatMap((token) => token.match(/[a-z]+/g) ?? [])
+  return words.slice(0, 8).join("-").slice(0, 64) || "none"
+}
+
+function readinessReplyDetail(reply: ReadinessFailure) {
+  if (reply.kind !== "error") return `reply=${reply.kind}`
+  return `reply=error${Number.isInteger(reply.code) ? ` code=${reply.code}` : ""} message=${readinessMessageClass(reply.message)}`
+}
 
 function createCcaReadiness(input: {
   readonly client: () => CcaDurableClient | undefined
-  readonly report: (category: CcaExecutorHostDiagnostic) => void
+  readonly report: (category: CcaExecutorHostDiagnostic, detail: string) => void
   readonly wait: (ms: number, signal: AbortSignal) => Promise<void>
   readonly signal: AbortSignal
 }) {
@@ -138,6 +160,7 @@ function createCcaReadiness(input: {
   let states = new Map<string, "pending" | "ready" | "error">()
   let retryMs = ccaReadinessRetryInitialMs
   let retry: AbortController | undefined
+  let scanned: string | undefined
   let chain = Promise.resolve()
 
   function reset() {
@@ -146,45 +169,50 @@ function createCcaReadiness(input: {
     retry?.abort()
     retry = undefined
     retryMs = ccaReadinessRetryInitialMs
+    scanned = undefined
   }
 
-  function schedule(full: boolean) {
+  function schedule() {
     const started = epoch
-    chain = chain.then(() => pass(full, started)).catch(() => {})
+    chain = chain.then(() => pass(started)).catch(() => {})
   }
 
-  function later(full: boolean) {
+  function later(ms: number) {
     const controller = new AbortController()
     retry = controller
     const started = epoch
-    const ms = retryMs
-    retryMs = Math.min(retryMs * 2, ccaReadinessRetryMaxMs)
     void input.wait(ms, AbortSignal.any([controller.signal, input.signal])).then(() => {
-      if (!controller.signal.aborted && !input.signal.aborted && started === epoch) schedule(full)
+      if (!controller.signal.aborted && !input.signal.aborted && started === epoch) schedule()
     })
   }
 
-  async function pass(full: boolean, started: number) {
+  function backoff() {
+    const ms = retryMs
+    retryMs = Math.min(retryMs * 2, ccaReadinessRetryMaxMs)
+    later(ms)
+  }
+
+  async function pass(started: number) {
     const client = input.client()
     const current = target
     if (started !== epoch || !current || !connected || !client || input.signal.aborted) return
-    let candidates: string[]
-    if (full) {
-      const threads = await listCcaDurableThreads(client)
-      if (started !== epoch) return
-      if (threads === undefined) {
-        input.report("readiness-failed")
-        later(true)
-        return
-      }
-      candidates = threads.filter((thread) => sources.has(thread.threadSource) && Array.isArray(thread.environments) &&
-        thread.environments.some((environment: unknown) => isRecord(environment) && environment.environmentId === current.executorID))
-        .flatMap((thread) => typeof thread.id === "string" ? [thread.id] : [])
-        .filter((threadID) => states.get(threadID) !== "ready" && states.get(threadID) !== "pending")
-    } else candidates = [...states].filter(([, state]) => state === "error").map(([threadID]) => threadID)
+    const listed = await listCcaDurableThreads(client)
+    if (started !== epoch) return
+    if (listed.kind === "failed") {
+      input.report("readiness-failed", `stage=list ${readinessReplyDetail(listed.reply)} pages=${listed.pages}`)
+      backoff()
+      return
+    }
+    const matched = [...new Set(listed.threads.filter((thread) => sources.has(thread.threadSource) && Array.isArray(thread.environments) &&
+      thread.environments.some((environment: unknown) => isRecord(environment) && environment.environmentId === current.executorID))
+      .flatMap((thread) => typeof thread.id === "string" ? [thread.id] : []))]
+    const candidates = matched.filter((threadID) => states.get(threadID) !== "ready" && states.get(threadID) !== "pending")
+    const scan = `listed=${listed.threads.length} matched=${matched.length}`
+    if (candidates.length || scan !== scanned) input.report("readiness-scan", `${scan} pending=${candidates.length} pages=${listed.pages}`)
+    scanned = scan
     const selectedCapabilityRoots = current.roots.map((root) => ({ id: root.id, location: { type: "environment", environmentId: current.executorID, path: root.path } }))
     let sent = 0
-    let failed = 0
+    const failures: ReadinessFailure[] = []
     const queue = [...candidates]
     const worker = async () => {
       for (let threadID = queue.shift(); threadID !== undefined; threadID = queue.shift()) {
@@ -194,28 +222,32 @@ function createCcaReadiness(input: {
         if (started !== epoch) return
         states.set(threadID, reply.kind === "result" ? "ready" : "error")
         if (reply.kind === "result") sent++
-        else failed++
+        else failures.push(reply)
       }
     }
     await Promise.all(Array.from({ length: Math.min(ccaReadinessConcurrency, candidates.length) }, worker))
     if (started !== epoch) return
-    if (sent) input.report("readiness-sent")
-    if (failed) {
-      input.report("readiness-failed")
-      later(false)
-    } else retryMs = ccaReadinessRetryInitialMs
+    if (sent) input.report("readiness-sent", `sent=${sent}`)
+    const [failure] = failures
+    if (failure) {
+      input.report("readiness-failed", `stage=ready failed=${failures.length} sent=${sent} ${readinessReplyDetail(failure)}`)
+      backoff()
+      return
+    }
+    retryMs = ccaReadinessRetryInitialMs
+    later(ccaReadinessRescanMs)
   }
 
   return {
     executor(next: ReadinessTarget | undefined) {
       reset()
       target = next
-      if (next) schedule(true)
+      if (next) schedule()
     },
     durable(isConnected: boolean) {
       connected = isConnected
       reset()
-      if (isConnected) schedule(true)
+      if (isConnected) schedule()
     },
     settled: () => chain,
   }
