@@ -8,7 +8,7 @@ import type { DesktopRPCSchema } from "../src/rpc"
 import { runDesktopWorker } from "../src/worker"
 import { DESKTOP_NAVIGATION_RULES, shouldAllowDesktopNavigation, forwardDesktopEvent, startDesktopConnection, createDesktopRPC } from "../src/rpc"
 import { BackendController } from "../src/backend-controller"
-import type { DesktopAPI } from "../src/contract"
+import type { DesktopAPI, Preferences, Selection } from "../src/contract"
 
 test("the native window rule plan denies remote and foreign views", () => {
   expect(DESKTOP_NAVIGATION_RULES).toEqual(["^*", "views://mainview/*"])
@@ -259,7 +259,7 @@ test("the expanded DesktopAPI crosses RPC and bridge without changing arguments"
     await bridge.pickDirectory({ startingFolder: "/synthetic/repo" })
     await bridge.openExternalUrl({ url: "https://example.test/connect" })
     expect(calls).toEqual([...expected, ["pickDirectory", { startingFolder: "/synthetic/repo" }], ["openExternalUrl", { url: "https://example.test/connect" }]])
-    expect(Object.keys(bridge).sort()).toEqual([...Object.keys(handlers), "onState", "onEvent", "onResync"].sort())
+    expect(Object.keys(bridge).sort()).toEqual([...Object.keys(handlers), "onState", "onEvent", "onResync", "onMenuAction"].sort())
   } finally { if (original === undefined) Reflect.deleteProperty(globalThis, "window"); else Reflect.set(globalThis, "window", original) }
 })
 
@@ -340,4 +340,273 @@ test("desktop state accepts a response after the default RPC deadline", async ()
     if (original === undefined) Reflect.deleteProperty(globalThis, "window")
     else Reflect.set(globalThis, "window", original)
   }
+})
+
+test("buildDesktopApplicationMenu defines macOS App, File, Edit, View, and Window menus without action conflicts on responder roles", () => {
+  type MenuItem = { label?: string; role?: string; action?: string; accelerator?: string; type?: string; submenu?: MenuItem[] }
+  const buildMenu = (rpcModule as unknown as { buildDesktopApplicationMenu: (appName: string) => MenuItem[] }).buildDesktopApplicationMenu
+  const menus = buildMenu("YCoding Desktop")
+  const byLabel = (label: string) => menus.find((menu) => menu.label === label)
+
+  const appMenu = byLabel("YCoding Desktop")
+  expect(appMenu).toBeDefined()
+  const appItems = appMenu?.submenu ?? []
+  expect(appItems).toEqual(expect.arrayContaining([
+    expect.objectContaining({ role: "about" }),
+    expect.objectContaining({ action: "check-for-updates", label: "Check for Updates…" }),
+    expect.objectContaining({ action: "open-settings", label: "Settings…", accelerator: "CmdOrCtrl+," }),
+    expect.objectContaining({ role: "hide" }),
+    expect.objectContaining({ role: "hideOthers" }),
+    expect.objectContaining({ role: "showAll" }),
+    expect.objectContaining({ role: "quit" }),
+  ]))
+
+  const fileMenu = byLabel("File")
+  expect(fileMenu).toBeDefined()
+  expect(fileMenu?.submenu ?? []).toEqual(expect.arrayContaining([
+    expect.objectContaining({ action: "new-chat", label: "New Chat", accelerator: "CmdOrCtrl+N" }),
+    expect.objectContaining({ role: "close" }),
+  ]))
+
+  const editMenu = byLabel("Edit")
+  expect(editMenu).toBeDefined()
+  const editItems = editMenu?.submenu ?? []
+  for (const role of ["undo", "redo", "cut", "copy", "paste", "pasteAndMatchStyle", "delete", "selectAll"]) {
+    const match = editItems.find((item) => item.role === role)
+    expect(match).toBeDefined()
+    expect(match).not.toHaveProperty("action")
+  }
+  for (const menu of menus) {
+    for (const item of menu.submenu ?? []) {
+      if (item.role !== undefined) expect(item).not.toHaveProperty("action")
+    }
+  }
+
+  const viewMenu = byLabel("View")
+  expect(viewMenu).toBeDefined()
+  expect(viewMenu?.submenu ?? []).toEqual(expect.arrayContaining([
+    expect.objectContaining({ role: "toggleFullScreen" }),
+  ]))
+
+  const windowMenu = byLabel("Window")
+  expect(windowMenu).toBeDefined()
+  expect(windowMenu?.submenu ?? []).toEqual(expect.arrayContaining([
+    expect.objectContaining({ role: "minimize" }),
+    expect.objectContaining({ role: "zoom" }),
+    expect.objectContaining({ role: "bringAllToFront" }),
+  ]))
+})
+
+test("menuActionFromEvent extracts supported desktop menu actions across Electrobun event shapes and ignores unknown actions", () => {
+  const parse = (rpcModule as unknown as {
+    menuActionFromEvent: (event: unknown) => "check-for-updates" | "open-settings" | "new-chat" | undefined
+  }).menuActionFromEvent
+  expect(parse({ data: { action: "open-settings" } })).toBe("open-settings")
+  expect(parse({ action: "check-for-updates" })).toBe("check-for-updates")
+  expect(parse({ data: { action: "new-chat" } })).toBe("new-chat")
+  expect(parse({ data: { action: "|EB|menuData_1|new-chat" } })).toBe("new-chat")
+  expect(parse({ action: "|EB|menuData_2|open-settings" })).toBe("open-settings")
+  expect(parse({ data: { action: "unknown-action" } })).toBeUndefined()
+  expect(parse({ data: { action: "|EB|menuData_3|quit" } })).toBeUndefined()
+  expect(parse({})).toBeUndefined()
+  expect(parse(null)).toBeUndefined()
+})
+
+test("the native entry registers ApplicationMenu and forwards application-menu-clicked actions to the webview", async () => {
+  const entry = await fs.readFile(path.join(import.meta.dir, "../src/bun/index.ts"), "utf8")
+  expect(entry).toMatch(/ApplicationMenu\.setApplicationMenu\(\s*buildDesktopApplicationMenu\(/)
+  expect(entry).toMatch(/ApplicationMenu\.on\(\s*["']application-menu-clicked["']/)
+  expect(entry).toMatch(/rpc\.send\.menuAction\(/)
+})
+
+test("clipboard, update, and menuAction operations round-trip across RPC and createDesktopBridge with payload validation", async () => {
+  const clipboardSnapshot = { text: "copied snippet", imageBase64: "aGVsbG8=", formats: ["text", "image"] }
+  const updateSnapshot = {
+    currentVersion: "0.11.1",
+    latestVersion: "0.11.2",
+    updateAvailable: true,
+    releaseUrl: "https://github.com/Althenia/ycoding/releases/tag/v0.11.2",
+    publishedAt: "2026-11-14T10:00:00Z",
+    releaseNotes: "Release notes for 0.11.2",
+    canInstall: true,
+  }
+  const installSnapshot = { installedVersion: "0.11.2", relaunching: true }
+  const written: string[] = []
+  const updateCalls: unknown[][] = []
+  const controller = new Proxy({}, {
+    get: (_target, key) => (...args: unknown[]) => {
+      if (key === "readClipboard") return Promise.resolve(clipboardSnapshot)
+      if (key === "writeClipboard") {
+        const first = args[0] as string | { text: string }
+        written.push(typeof first === "string" ? first : first.text)
+        return Promise.resolve({ written: true })
+      }
+      if (key === "checkForUpdates") {
+        updateCalls.push(["checkForUpdates"])
+        return Promise.resolve(updateSnapshot)
+      }
+      if (key === "installUpdate") {
+        const first = args[0] as string | { version?: string } | undefined
+        updateCalls.push(["installUpdate", typeof first === "string" ? first : first?.version])
+        return Promise.resolve(installSnapshot)
+      }
+      return Promise.resolve(undefined)
+    },
+  }) as BackendController
+
+  const handlers = createDesktopRPC(
+    controller,
+    { path: "/synthetic/preferences", read: async () => ({}), save: async () => {}, validate: () => ({ mode: "own" as const }) },
+    {
+      readClipboard: async () => clipboardSnapshot,
+      writeClipboard: async (text) => {
+        written.push(text)
+      },
+      checkForUpdates: async () => {
+        updateCalls.push(["checkForUpdates"])
+        return updateSnapshot
+      },
+      installUpdate: async ({ version }) => {
+        updateCalls.push(["installUpdate", version])
+        return installSnapshot
+      },
+    },
+  )
+
+  expect(await handlers.readClipboard()).toEqual(clipboardSnapshot)
+  await handlers.writeClipboard({ text: "copied snippet" })
+  expect(written).toEqual(["copied snippet"])
+
+  for (const invalid of [null, {}, { text: 123 }, { text: "x".repeat(10 * 1024 * 1024 + 1) }]) {
+    let caught: unknown
+    try {
+      await (handlers.writeClipboard as (input: unknown) => Promise<void>)(invalid)
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(Error)
+    expect((caught as Error).message).not.toBe("Native desktop request failed.")
+  }
+  expect(written).toEqual(["copied snippet"])
+
+  expect(await handlers.checkForUpdates()).toEqual(updateSnapshot)
+  await handlers.installUpdate({ version: "0.11.2" })
+  expect(updateCalls).toEqual([["checkForUpdates"], ["installUpdate", "0.11.2"]])
+
+  const original = Reflect.get(globalThis, "window")
+  Reflect.set(globalThis, "window", {})
+  try {
+    const bridgeModule = await import("../src/bridge")
+    const bridgeCalls: unknown[][] = []
+    let receive: (packet: unknown) => void = () => {}
+    bridgeModule.desktopRPC.setTransport({
+      registerHandler: (handler) => { receive = handler },
+      send: (packet: { id: number; method: string; params?: unknown }) => {
+        bridgeCalls.push([packet.method, ...(packet.params === undefined ? [] : [packet.params])])
+        const payload = packet.method === "readClipboard"
+          ? clipboardSnapshot
+          : packet.method === "checkForUpdates"
+            ? updateSnapshot
+            : { ok: true }
+        queueMicrotask(() => receive({ type: "response", id: packet.id, success: true, payload }))
+      },
+    })
+    const bridge = bridgeModule.createDesktopBridge(bridgeModule.desktopRPC, () => undefined) as unknown as {
+      readClipboard: () => Promise<typeof clipboardSnapshot>
+      writeClipboard: (input: { text: string }) => Promise<unknown>
+      checkForUpdates: () => Promise<typeof updateSnapshot>
+      installUpdate: (input: { version: string }) => Promise<unknown>
+      onMenuAction: (listener: (action: "check-for-updates" | "open-settings" | "new-chat") => void) => () => void
+    }
+    expect(await bridge.readClipboard()).toEqual(clipboardSnapshot)
+    await bridge.writeClipboard({ text: "bridge text" })
+    expect(await bridge.checkForUpdates()).toEqual(updateSnapshot)
+    await bridge.installUpdate({ version: "0.11.2" })
+    expect(bridgeCalls).toEqual([
+      ["readClipboard"],
+      ["writeClipboard", { text: "bridge text" }],
+      ["checkForUpdates"],
+      ["installUpdate", { version: "0.11.2" }],
+    ])
+
+    const receivedActions: string[] = []
+    const unsubscribe = bridge.onMenuAction((action) => { receivedActions.push(action) })
+    receive({ type: "message", id: "menuAction", payload: "new-chat" })
+    receive({ type: "message", id: "menuAction", payload: "open-settings" })
+    unsubscribe()
+    receive({ type: "message", id: "menuAction", payload: "check-for-updates" })
+    expect(receivedActions).toEqual(["new-chat", "open-settings"])
+  } finally {
+    if (original === undefined) Reflect.deleteProperty(globalThis, "window")
+    else Reflect.set(globalThis, "window", original)
+  }
+})
+
+test("startDesktopConnection retries with bounded backoff, stops immediately on abort, and skips corrupt preferences", async () => {
+  type RetryOptions = { readonly delaysMs?: readonly number[]; readonly signal?: AbortSignal }
+  const startWithOptions = startDesktopConnection as unknown as (
+    preferences: Preferences,
+    connect: (selection: Selection) => Promise<unknown>,
+    log?: (line: string) => void,
+    options?: RetryOptions,
+  ) => unknown
+
+  let attempts = 0
+  const selections: unknown[] = []
+  const lines: string[] = []
+  const run = startWithOptions(
+    { selection: { mode: "shared" } },
+    async (selection) => {
+      selections.push(selection)
+      attempts++
+      if (attempts < 3) throw new Error(`transient startup failure ${attempts}`)
+      return { generation: 1, status: "connected" }
+    },
+    (line) => { lines.push(line) },
+    { delaysMs: [5, 10] },
+  )
+  if (run instanceof Promise) await run
+  else await Bun.sleep(45)
+  expect(attempts).toBe(3)
+  expect(selections).toEqual([{ mode: "shared" }, { mode: "shared" }, { mode: "shared" }])
+  expect(lines).toHaveLength(2)
+  expect(lines[0]).toContain("transient startup failure 1")
+  expect(lines[1]).toContain("transient startup failure 2")
+
+  const preAborted = new AbortController()
+  preAborted.abort()
+  let preAbortedCalls = 0
+  startWithOptions(
+    { selection: { mode: "shared" } },
+    async () => { preAbortedCalls++ },
+    undefined,
+    { delaysMs: [5, 10], signal: preAborted.signal },
+  )
+  await Bun.sleep(20)
+  expect(preAbortedCalls).toBe(0)
+
+  const midAbort = new AbortController()
+  let abortedCalls = 0
+  startWithOptions(
+    { selection: { mode: "shared" } },
+    async () => {
+      abortedCalls++
+      midAbort.abort()
+      throw new Error("aborted startup failure")
+    },
+    undefined,
+    { delaysMs: [5, 10], signal: midAbort.signal },
+  )
+  await Bun.sleep(35)
+  expect(abortedCalls).toBe(1)
+
+  let corruptCalls = 0
+  startWithOptions(
+    { error: "invalid preferences", selection: { mode: "own" } },
+    async () => { corruptCalls++ },
+    undefined,
+    { delaysMs: [5, 10] },
+  )
+  await Bun.sleep(25)
+  expect(corruptCalls).toBe(0)
 })

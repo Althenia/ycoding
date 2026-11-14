@@ -807,3 +807,29 @@ export function turnEditPlacements(messages: readonly { readonly id: string; rea
   })
   return placements
 }
+
+export function insertTextAtSelection(current: string, start: number, end: number, inserted: string): { readonly text: string; readonly caret: number } {
+  const clampedStart = Math.max(0, Math.min(start, current.length))
+  const clampedEnd = Math.max(clampedStart, Math.min(end, current.length))
+  return { text: current.slice(0, clampedStart) + inserted + current.slice(clampedEnd), caret: clampedStart + inserted.length }
+}
+
+const editableInputTypes = ["", "text", "search", "url", "email", "password", "tel", "number"]
+
+export function isEditableKeyboardTarget(target: unknown): boolean {
+  if (!target || typeof target !== "object") return false
+  if ((target as { isContentEditable?: unknown }).isContentEditable === true) return true
+  const tag = typeof (target as { tagName?: unknown }).tagName === "string" ? (target as { tagName: string }).tagName.toUpperCase() : ""
+  if (tag === "TEXTAREA") return true
+  if (tag !== "INPUT") return false
+  const type = typeof (target as { type?: unknown }).type === "string" ? (target as { type: string }).type.toLowerCase() : "text"
+  return editableInputTypes.includes(type)
+}
+
+export function isStandardEditShortcut(event: { readonly key: string; readonly metaKey: boolean; readonly ctrlKey: boolean; readonly altKey: boolean; readonly shiftKey: boolean }): boolean {
+  if (event.altKey || (!event.metaKey && !event.ctrlKey)) return false
+  const key = event.key.toLowerCase()
+  if (!event.shiftKey && (key === "v" || key === "c" || key === "x" || key === "a" || key === "z")) return true
+  if (event.shiftKey && key === "z") return true
+  return !event.shiftKey && event.ctrlKey && !event.metaKey && key === "y"
+}

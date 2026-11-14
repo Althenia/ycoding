@@ -1058,3 +1058,72 @@ test("a connection error that is not a desktop error reaches the log with secret
   expect(logs.join("\n")).toContain("socket hang up token=[REDACTED]")
   expect(logs.join("\n")).not.toContain("abc123")
 })
+
+test("a loopback shared endpoint reconnects through desktop-host to a restarted local service", async () => {
+  const resources = await syntheticBundle()
+  const firstStreamEnds = Promise.withResolvers<void>()
+  const recovered = Promise.withResolvers<ConnectionState>()
+  using restarted = peer([], () => 202)
+  using original = peer([], () => 101, undefined, firstStreamEnds.promise)
+  const hosts: string[] = []
+  const controller = new BackendController(resources, {
+    env,
+    launch: (command) => {
+      if (command[1] === "--version") return launch(command)
+      hosts.push(command[command.indexOf("--server") + 1] ?? "")
+      const url = hosts.length === 1 ? original.url.href : restarted.url.href
+      return ["/bin/echo", JSON.stringify({ type: "desktop.endpoint", version: "synthetic", endpoint: { url } })]
+    },
+    onState: (state) => { if (state.status === "connected" && state.backendPID === 202) recovered.resolve(state) },
+  })
+  try {
+    const initial = await controller.connect({ mode: "shared", server: original.url.href })
+    expect(initial.backendPID).toBe(101)
+    firstStreamEnds.resolve()
+    expect((await recovered.promise).backendPID).toBe(202)
+    expect(hosts).toEqual([original.url.href, original.url.href])
+  } finally {
+    firstStreamEnds.resolve()
+    await controller.disconnect()
+    await fs.rm(resources, { recursive: true, force: true })
+  }
+}, 30_000)
+
+test("a remote shared endpoint reconnects directly to its configured origin without relaunching desktop-host", async () => {
+  const resources = await syntheticBundle()
+  const remote = "http://remote.example.test/"
+  const firstStreamEnds = Promise.withResolvers<void>()
+  const recovered = Promise.withResolvers<void>()
+  const routes: string[] = []
+  const origins: string[] = []
+  using target = peer(routes, () => 303, undefined, firstStreamEnds.promise)
+  let hosts = 0
+  let initialRevision = 0
+  const controller = new BackendController(resources, {
+    env,
+    launch: (command) => {
+      if (command[1] !== "--version") hosts++
+      return launch(command)
+    },
+    fetch: Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      origins.push(url.origin)
+      return globalThis.fetch(new Request(new URL(url.pathname + url.search, target.url), request))
+    }, { preconnect: () => {} }),
+    onState: (state) => { if (initialRevision && state.status === "connected" && state.revision !== initialRevision) recovered.resolve() },
+  })
+  try {
+    initialRevision = revision(await controller.connect({ mode: "shared", server: remote }))
+    firstStreamEnds.resolve()
+    await recovered.promise
+    expect(hosts).toBe(1)
+    expect(routes.filter((route) => route === "GET /api/event")).toHaveLength(2)
+    expect(new Set(origins)).toEqual(new Set(["http://remote.example.test"]))
+    expect(controller.state().backendPID).toBe(303)
+  } finally {
+    firstStreamEnds.resolve()
+    await controller.disconnect()
+    await fs.rm(resources, { recursive: true, force: true })
+  }
+}, 30_000)

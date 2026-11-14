@@ -14,6 +14,8 @@ type Options = {
   readonly reconnect?: (signal: AbortSignal) => Promise<Endpoint>
 }
 
+const RECONNECT_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000]
+
 export async function connectNative(endpoint: Endpoint, options: Options) {
   const lifetime = new AbortController()
   const abort = () => lifetime.abort(options.signal.reason)
@@ -23,6 +25,8 @@ export async function connectNative(endpoint: Endpoint, options: Options) {
   let current: Health | undefined
   const ready = Promise.withResolvers<void>()
   let established = false
+  const delays = RECONNECT_DELAYS_MS
+  let attempt = 0
   const task = (async () => {
     while (!lifetime.signal.aborted) {
       const request = new AbortController()
@@ -46,6 +50,7 @@ export async function connectNative(endpoint: Endpoint, options: Options) {
         clearTimeout(timer)
         if (lifetime.signal.aborted) break
         established = true
+        attempt = 0
         api = next
         current = health
         await options.onEvent?.(first.value)
@@ -70,7 +75,7 @@ export async function connectNative(endpoint: Endpoint, options: Options) {
       }
       if (!lifetime.signal.aborted) await new Promise<void>((resolve) => {
         const done = () => { clearTimeout(timer); lifetime.signal.removeEventListener("abort", done); resolve() }
-        timer = setTimeout(done, 1_000)
+        timer = setTimeout(done, delays[Math.min(attempt++, delays.length - 1)])
         lifetime.signal.addEventListener("abort", done, { once: true })
       })
     }

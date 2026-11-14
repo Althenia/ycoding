@@ -78,3 +78,8 @@ button[data-level="danger"] { --rl-ring-stroke:var(--yc-danger); }
 html[data-animations="off"] .rl-indeterminate > span, html[data-animations="off"] .transcript-compaction__indeterminate, html[data-animations="off"] .rl-skeleton__bar::after { animation:none; transform:none; }
 html[data-animations="off"] .rl-indeterminate > span, html[data-animations="off"] .transcript-compaction__indeterminate { inline-size:100%; opacity:.5; }
 html[data-animations="off"] .rl-ring-value { transition:none; }
+.rl-ledger .rl-pane-tabs-row { gap: 0; padding: 0 var(--yc-space-3); border-block-end: 1px solid var(--yc-border); }
+.rl-ledger .rl-pane-tabs { gap: var(--yc-space-1); }
+.rl-ledger .rl-pane-tab { min-block-size: 36px; padding: 0; border-color: transparent; border-radius: 0; background: transparent; color: var(--yc-text-muted); transition: box-shadow var(--yc-dur-quick) var(--yc-ease-standard), color var(--yc-dur-quick) var(--yc-ease-standard); }
+.rl-ledger .rl-pane-tab[data-active="true"] { border-color: transparent; background: transparent; box-shadow: inset 0 -2px 0 var(--yc-green-strong); color: var(--yc-text); font-weight: var(--yc-weight-semibold); }
+.rl-ledger .rl-pane-tabs .rl-pane-tab > button[role="tab"] { min-block-size: 36px; color: inherit; font-size: var(--yc-size-xs); }

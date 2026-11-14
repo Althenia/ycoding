@@ -1,12 +1,13 @@
 import type { YCodingEvent } from "@ycoding-ai/client"
 import path from "node:path"
-import type { ConnectionState, DesktopAPI } from "./contract"
+import type { ApplicationMenuItemConfig } from "electrobun/bun"
+import type { ClipboardContent, ConnectionState, DesktopAPI, DesktopMenuAction, UpdateCheckResult, UpdateInstallResult } from "./contract"
 import type { BackendController } from "./backend-controller"
 import type { readPreferences, savePreferences, validateSelection } from "./preferences"
 import type { Preferences, Selection } from "./contract"
-import { DesktopError, utf8Length } from "./contract"
+import { DesktopError, utf8Length, validateClipboardWrite, validateInstallUpdateInput } from "./contract"
 
-type RequestName = Exclude<keyof DesktopAPI, "onState" | "onEvent" | "onResync">
+type RequestName = Exclude<keyof DesktopAPI, "onState" | "onEvent" | "onResync" | "onMenuAction">
 type Requests = {
   [K in RequestName]: {
     params: Parameters<DesktopAPI[K]>[0]
@@ -16,7 +17,7 @@ type Requests = {
 
 export type DesktopRPCSchema = {
   bun: { requests: Requests; messages: Record<never, never> }
-  webview: { requests: Record<never, never>; messages: { state: ConnectionState; event: YCodingEvent; resync: null } }
+  webview: { requests: Record<never, never>; messages: { state: ConnectionState; event: YCodingEvent; resync: null; menuAction: DesktopMenuAction } }
 }
 
 export const DESKTOP_RPC_MAX_REQUEST_TIME = 60_000
@@ -35,9 +36,101 @@ export function forwardDesktopEvent<T>(value: T, send: { event: (value: T) => vo
   else send.event(value)
 }
 
-export function startDesktopConnection(preferences: Preferences, connect: (selection: Selection) => Promise<unknown>, log: (line: string) => void = console.error) {
-  if (preferences.error !== undefined) return
-  void connect(preferences.selection ?? { mode: "shared" }).catch((error: unknown) => { log(`Desktop backend startup failed: ${error instanceof Error ? error.message : "unknown error"}`) })
+const STARTUP_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000] as const
+const MENU_ACTIONS: readonly DesktopMenuAction[] = ["check-for-updates", "open-settings", "new-chat"]
+
+export function buildDesktopApplicationMenu(appName = "YCoding Desktop"): ApplicationMenuItemConfig[] {
+  return [
+    {
+      label: appName,
+      submenu: [
+        { role: "about" },
+        { type: "divider" },
+        { label: "Check for Updates…", action: "check-for-updates" },
+        { label: "Settings…", action: "open-settings", accelerator: "CmdOrCtrl+," },
+        { type: "divider" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "showAll" },
+        { type: "divider" },
+        { role: "quit" },
+      ],
+    },
+    {
+      label: "File",
+      submenu: [
+        { label: "New Chat", action: "new-chat", accelerator: "CmdOrCtrl+N" },
+        { type: "divider" },
+        { role: "close" },
+      ],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "divider" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "pasteAndMatchStyle" },
+        { role: "delete" },
+        { role: "selectAll" },
+      ],
+    },
+    { label: "View", submenu: [{ role: "toggleFullScreen" }] },
+    {
+      label: "Window",
+      submenu: [
+        { role: "minimize" },
+        { role: "zoom" },
+        { type: "divider" },
+        { role: "bringAllToFront" },
+      ],
+    },
+  ]
+}
+
+export function menuActionFromEvent(event: unknown): DesktopMenuAction | undefined {
+  const source = event as { readonly data?: { readonly action?: unknown }; readonly action?: unknown } | null | undefined
+  const raw = source?.data?.action ?? source?.action
+  if (typeof raw !== "string") return undefined
+  const action = raw.startsWith("|EB|") ? raw.split("|").at(-1) : raw
+  return MENU_ACTIONS.find((candidate) => candidate === action)
+}
+
+export function startDesktopConnection(
+  preferences: Preferences,
+  connect: (selection: Selection) => Promise<unknown>,
+  log: (line: string) => void = console.error,
+  options?: { readonly delaysMs?: readonly number[]; readonly signal?: AbortSignal },
+): Promise<void> {
+  const signal = options?.signal
+  if (preferences.error !== undefined || signal?.aborted) return Promise.resolve()
+  const selection = preferences.selection ?? { mode: "shared" as const }
+  const delays = options?.delaysMs ?? STARTUP_RETRY_DELAYS_MS
+  const attempt = async () => { await connect(selection) }
+  const wait = (delayMs: number) => new Promise<void>((resolve) => {
+    const finish = () => { clearTimeout(timer); signal?.removeEventListener("abort", finish); resolve() }
+    const timer = setTimeout(finish, delayMs)
+    signal?.addEventListener("abort", finish, { once: true })
+  })
+  const run = async (first: Promise<void>) => {
+    for (let index = 0; ; index++) {
+      try {
+        await (index === 0 ? first : attempt())
+        return
+      } catch (error) {
+        if (signal?.aborted) return
+        log(`Desktop backend startup failed: ${error instanceof Error ? error.message : "unknown error"}`)
+        const delayMs = delays[index]
+        if (delayMs === undefined) return
+        await wait(delayMs)
+        if (signal?.aborted) return
+      }
+    }
+  }
+  return run(attempt())
 }
 
 export function externalURL(input: unknown) {
@@ -53,7 +146,12 @@ export function createDesktopRPC(controller: BackendController, preferences: {
   save: typeof savePreferences
   validate: typeof validateSelection
   path: string
-}, host: { readonly pickDirectory?: (startingFolder?: string) => Promise<string | null>; readonly openExternal?: (url: string) => boolean | Promise<boolean> } = {}) {
+}, host: { readonly pickDirectory?: (startingFolder?: string) => Promise<string | null>; readonly openExternal?: (url: string) => boolean | Promise<boolean>
+  readonly readClipboard?: () => ClipboardContent | Promise<ClipboardContent>
+  readonly writeClipboard?: (text: string) => void | Promise<void>
+  readonly checkForUpdates?: () => Promise<UpdateCheckResult>
+  readonly installUpdate?: (input: { readonly version?: string }) => Promise<UpdateInstallResult>
+} = {}) {
   let notice: string | undefined
   let starting = false
   let generation = 0
@@ -74,6 +172,24 @@ export function createDesktopRPC(controller: BackendController, preferences: {
       const url = externalURL(input)
       if (!host.openExternal) throw new DesktopError("External browser launch is unavailable in headless worker mode.")
       return { opened: Boolean(await host.openExternal(url)) }
+    },
+    readClipboard: async () => {
+      if (!host.readClipboard) throw new DesktopError("Clipboard access is unavailable.")
+      return host.readClipboard()
+    },
+    writeClipboard: async (input: Parameters<DesktopAPI["writeClipboard"]>[0]) => {
+      const valid = validateClipboardWrite(input)
+      if (!host.writeClipboard) throw new DesktopError("Clipboard access is unavailable.")
+      await host.writeClipboard(valid.text)
+    },
+    checkForUpdates: async () => {
+      if (!host.checkForUpdates) throw new DesktopError("Updates are unavailable in this runtime.")
+      return host.checkForUpdates()
+    },
+    installUpdate: async (input?: Parameters<DesktopAPI["installUpdate"]>[0]) => {
+      const valid = validateInstallUpdateInput(input)
+      if (!host.installUpdate) throw new DesktopError("Updates are unavailable in this runtime.")
+      return host.installUpdate(valid)
     },
     integrations: (input?: Parameters<DesktopAPI["integrations"]>[0]) => controller.integrations(input),
     manageIntegration: (input: Parameters<DesktopAPI["manageIntegration"]>[0]) => controller.manageIntegration(input),

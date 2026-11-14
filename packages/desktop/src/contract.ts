@@ -188,7 +188,52 @@ export type SystemManageInput = SystemInput & { readonly revision: number } & (
   | { readonly kind: "plugin-activate" | "plugin-deactivate"; readonly id: string }
   | { readonly kind: "plugin-add"; readonly spec: string }
   | { readonly kind: "remote-set"; readonly enabled: boolean })
+export type DesktopMenuAction = "check-for-updates" | "open-settings" | "new-chat"
+export type ClipboardContent = {
+  readonly text: string | null
+  readonly imageBase64?: string | null
+  readonly formats: readonly string[]
+}
+export type UpdateCheckResult = {
+  readonly currentVersion: string
+  readonly latestVersion: string
+  readonly updateAvailable: boolean
+  readonly releaseUrl: string
+  readonly publishedAt: string
+  readonly releaseNotes: string
+  readonly canInstall: boolean
+  readonly cannotInstallReason?: string
+}
+export type UpdateInstallResult = {
+  readonly installedVersion: string
+  readonly relaunching: boolean
+}
+
+const CLIPBOARD_TEXT_LIMIT = 10 * 1024 * 1024
+const UPDATE_VERSION_LIMIT = 128
+
+export function validateClipboardWrite(value: unknown): { readonly text: string } {
+  if (typeof value !== "object" || value === null || Object.keys(value).some((key) => key !== "text") || !("text" in value) || typeof value.text !== "string" || value.text.length > CLIPBOARD_TEXT_LIMIT || utf8Length(value.text) > CLIPBOARD_TEXT_LIMIT)
+    throw new DesktopError("Clipboard text must be a string up to 10 MiB.")
+  return { text: value.text }
+}
+
+export function validateInstallUpdateInput(value: unknown): { readonly version?: string } {
+  const invalid = () => new DesktopError("Choose a valid update version.")
+  if (value === undefined) return {}
+  if (typeof value !== "object" || value === null || Object.keys(value).some((key) => key !== "version")) throw invalid()
+  const version = "version" in value ? value.version : undefined
+  if (version === undefined) return {}
+  if (typeof version !== "string" || !version.trim() || version.length > UPDATE_VERSION_LIMIT || version.includes("\0")) throw invalid()
+  return { version }
+}
+
 export type DesktopAPI = {
+  readonly readClipboard: () => Promise<ClipboardContent>
+  readonly writeClipboard: (input: { readonly text: string }) => Promise<void>
+  readonly checkForUpdates: () => Promise<UpdateCheckResult>
+  readonly installUpdate: (input?: { readonly version?: string }) => Promise<UpdateInstallResult>
+  readonly onMenuAction: (listen: (action: DesktopMenuAction) => void) => () => void
   readonly browseDirectory: (input?: BrowseDirectoryInput) => Promise<DirectoryListing>
   readonly openDirectory: (input: { readonly directory: string }) => Promise<OpenedDirectory>
   readonly createDirectory: (input: { readonly parentDirectory: string; readonly name: string }) => Promise<OpenedDirectory>

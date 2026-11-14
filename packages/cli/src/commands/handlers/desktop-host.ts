@@ -31,7 +31,8 @@ export default Runtime.handler(DesktopHostCommand, (input) => Effect.scoped(Effe
       standalone: input.mode === "own",
       privateServer: { command: [input.backend, "serve"], detached: false },
       managedCommand: [input.backend, "serve", "--service"],
-      mismatch: "error",
+      mismatch: "ignore",
+      allowLoopbackFallback: true,
       diagnostics: "sanitized",
     })
     if (input.mode === "own" && "pid" in connection.endpoint && typeof connection.endpoint.pid === "number" && connection.exited)

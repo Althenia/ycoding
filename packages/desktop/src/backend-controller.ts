@@ -31,6 +31,8 @@ type Options = {
 }
 
 const direct: Launch = (command) => command
+const loopbackHosts = new Set(["127.0.0.1", "localhost", "[::1]", "::1"])
+const isLoopbackSelection = (server: string) => URL.canParse(server) && loopbackHosts.has(new URL(server).hostname)
 const unsent = "The backend connection changed before the answer was sent. Refresh requests and answer again."
 const unswitched = "The backend connection changed before the model was switched. Refresh models and choose again."
 const stopFirst = "Stop the running chat before switching models."
@@ -469,7 +471,7 @@ export class BackendController {
             attempt.revision = ++this.revision
             this.publish({ generation: attempt.generation, mode: selection.mode, status: "connected", revision: attempt.revision, version: status.health.version, backendPID: status.health.pid })
           },
-          reconnect: selection.mode === "shared" && !selection.server ? async (signal) => {
+          reconnect: selection.mode === "shared" && (!selection.server || isLoopbackSelection(selection.server)) ? async (signal) => {
             await attempt.control?.close()
             signal.throwIfAborted()
             attempt.control = openControl(binary, selection, this.options.env, signal, launch, this.options.cwd, this.options.log)

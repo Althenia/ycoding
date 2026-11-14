@@ -857,3 +857,70 @@ test("USD amounts group thousands and always show two decimals", () => {
   expect(formatUsd(Number.POSITIVE_INFINITY)).toBe("$0.00")
   expect(formatQuotaWindow({ label: "Budget", used: 12345.5, limit: 31544.36, unit: "usd" }).detail).toBe("$12,345.50 / $31,544.36")
 })
+
+test("insertTextAtSelection inserts at caret, replaces selected ranges and clamps out-of-bounds indices", async () => {
+  const { insertTextAtSelection } = await import("../src/form-rules")
+  expect(insertTextAtSelection("", 0, 0, "hello")).toEqual({ text: "hello", caret: 5 })
+  expect(insertTextAtSelection("", 0, 0, "")).toEqual({ text: "", caret: 0 })
+  expect(insertTextAtSelection("world", 0, 0, "hello ")).toEqual({ text: "hello world", caret: 6 })
+  expect(insertTextAtSelection("helo", 2, 2, "l")).toEqual({ text: "hello", caret: 3 })
+  expect(insertTextAtSelection("hello", 5, 5, "\nworld")).toEqual({ text: "hello\nworld", caret: 11 })
+  expect(insertTextAtSelection("hello old world", 6, 9, "new")).toEqual({ text: "hello new world", caret: 9 })
+  expect(insertTextAtSelection("hello world", 5, 11, "")).toEqual({ text: "hello", caret: 5 })
+  expect(insertTextAtSelection("abc", -5, -1, "X")).toEqual({ text: "Xabc", caret: 1 })
+  expect(insertTextAtSelection("abcdef", -4, 2, "XY")).toEqual({ text: "XYcdef", caret: 2 })
+  expect(insertTextAtSelection("abc", 50, 80, "!")).toEqual({ text: "abc!", caret: 4 })
+  expect(insertTextAtSelection("abcdef", 3, 99, "Z")).toEqual({ text: "abcZ", caret: 4 })
+})
+
+test("isEditableKeyboardTarget distinguishes editable text controls and contentEditable nodes from buttons and containers", async () => {
+  const { isEditableKeyboardTarget } = await import("../src/form-rules")
+  expect(isEditableKeyboardTarget({ tagName: "TEXTAREA", isContentEditable: false })).toBe(true)
+  for (const type of ["text", "search", "url", "email", "password"]) {
+    expect(isEditableKeyboardTarget({ tagName: "INPUT", type, isContentEditable: false })).toBe(true)
+  }
+  expect(isEditableKeyboardTarget({ tagName: "INPUT", isContentEditable: false })).toBe(true)
+  expect(isEditableKeyboardTarget({ tagName: "DIV", isContentEditable: true })).toBe(true)
+  for (const type of ["button", "checkbox", "radio", "submit"]) {
+    expect(isEditableKeyboardTarget({ tagName: "INPUT", type, isContentEditable: false })).toBe(false)
+  }
+  expect(isEditableKeyboardTarget({ tagName: "BUTTON", isContentEditable: false })).toBe(false)
+  expect(isEditableKeyboardTarget({ tagName: "DIV", isContentEditable: false })).toBe(false)
+  expect(isEditableKeyboardTarget(null)).toBe(false)
+  expect(isEditableKeyboardTarget(undefined)).toBe(false)
+})
+
+test("isStandardEditShortcut allows clipboard, selection and undo-redo chords while rejecting app shortcuts and Alt chords", async () => {
+  const { isStandardEditShortcut } = await import("../src/form-rules")
+  const chord = (key: string, extra: Partial<{ metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }> = {}) => ({
+    key,
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    ...extra,
+  })
+  for (const key of ["v", "c", "x", "a", "z", "V", "C", "X", "A", "Z"]) {
+    expect(isStandardEditShortcut(chord(key, { metaKey: true }))).toBe(true)
+    expect(isStandardEditShortcut(chord(key, { ctrlKey: true }))).toBe(true)
+  }
+  for (const key of ["z", "Z"]) {
+    expect(isStandardEditShortcut(chord(key, { metaKey: true, shiftKey: true }))).toBe(true)
+    expect(isStandardEditShortcut(chord(key, { ctrlKey: true, shiftKey: true }))).toBe(true)
+  }
+  expect(isStandardEditShortcut(chord("y", { ctrlKey: true }))).toBe(true)
+  expect(isStandardEditShortcut(chord("Y", { ctrlKey: true }))).toBe(true)
+  expect(isStandardEditShortcut(chord("k", { metaKey: true }))).toBe(false)
+  expect(isStandardEditShortcut(chord("k", { ctrlKey: true }))).toBe(false)
+  expect(isStandardEditShortcut(chord("n", { metaKey: true }))).toBe(false)
+  expect(isStandardEditShortcut(chord("n", { ctrlKey: true }))).toBe(false)
+  expect(isStandardEditShortcut(chord("p", { ctrlKey: true }))).toBe(false)
+  expect(isStandardEditShortcut(chord("c", { metaKey: true, shiftKey: true }))).toBe(false)
+  expect(isStandardEditShortcut(chord("a", { ctrlKey: true, shiftKey: true }))).toBe(false)
+  for (const key of ["v", "Enter", "Backspace", "ArrowLeft"]) {
+    expect(isStandardEditShortcut(chord(key))).toBe(false)
+  }
+  expect(isStandardEditShortcut(chord("v", { metaKey: true, altKey: true }))).toBe(false)
+  expect(isStandardEditShortcut(chord("c", { ctrlKey: true, altKey: true }))).toBe(false)
+  expect(isStandardEditShortcut(chord("z", { metaKey: true, shiftKey: true, altKey: true }))).toBe(false)
+})

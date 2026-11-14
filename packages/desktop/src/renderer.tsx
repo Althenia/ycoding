@@ -1,16 +1,16 @@
 import { createRootRoute, createRoute, createRouter, createHashHistory, Link, Outlet, RouterProvider, useLocation, useNavigate } from "@tanstack/solid-router"
 import { QueryClient, QueryObserver } from "@tanstack/solid-query"
 import type { YCodingEvent } from "@ycoding-ai/client"
-import { createEffect, createMemo, createSignal, For, Index, onCleanup, onMount, Show, type JSX } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Index, on, onCleanup, onMount, Show, type JSX } from "solid-js"
 import { render } from "solid-js/web"
 import type { ConnectionState, FormAnswer, FormRequest, Messages, PendingRequests, PermissionRequest, ComposerCatalog, PromptAgent, PromptFile, RequestReply, SessionItem, ModelSelection, ShellOutput, UsageRange, RevertInput, SetAutonomyInput, SettingsMutationInput, ProjectMutationInput, WorkspaceMutationInput, PinRequest } from "./contract"
 import { desktop as api } from "./bridge"
-import type { DesktopAPI, DesktopSource, IntegrationMutationInput, IntegrationAttempt, McpMutationInput, SessionManageInput, SystemManageInput, DisplayValue } from "./contract"
+import type { DesktopAPI, DesktopSource, IntegrationMutationInput, IntegrationAttempt, McpMutationInput, SessionManageInput, SystemManageInput, DisplayValue, Selection, UpdateCheckResult } from "./contract"
 import { schemeStylesheet } from "../../../apps/web/src/theme/schemes"
 import { Icon as WebIcon, type IconName as WebIconName } from "../../../apps/web/src/ui/icon"
 import { Markdown } from "../../../apps/web/src/remote/ui/markdown"
 import { WORKSPACE_DESTINATIONS, SharedWorkspaceFrame, SharedCompanionSurface, SharedConversationHeader, SharedMessageTurn, SharedComposerSurface, SharedContextRingButton, SharedContextBreakdownPanel, SharedTurnHead, SharedRadioGroup, SharedToolDisclosure, SharedReasoningDisclosure, SharedCompactionDivider, SharedEditedFilesCard, SharedActivitySurface, SharedChangesSurface, SharedPageSurface, SharedProjectsSurface, SharedSessionsSurface, SharedWorkspacesSurface, SharedUsageSurface, SharedSettingsSurface, SharedLoadingSkeleton } from "../../../apps/web/src/remote/ui/shared-workspace"
-import { DESKTOP_THEMES, isDesktopThemeID, resolveDesktopTheme, DESKTOP_BUILT_IN_SLASH_COMMANDS, desktopSlashCommand, validateFolderSegment, formatSessionExportMarkdown, parsePromptStashes, pushPromptStash, formatQuotaProviders, formatCount, formatCompactCount, formatDurationMs, formatUsd, type DesktopThemeID, activeFields, appendPage, buildAnswer, chooseModel, chooseProfile, choiceFor, choiceProblem, composerTrigger, initialValues, insertCompletion, invalidIndexes, mentionPayload, modelLabel, pagedItems, pagingFor, problemOf, profileLabel, railGroups, restoresFocus, sameSelection, samePaging, searchTerm, selectionFor, slashAction, valueFor, variantsFor, visibleModels, withValue, workspaceBase, classifyDesktopSynthetic, visibleDesktopMessages, turnEditPlacements, groupAssistantParts, toolDisplaySummary, effortStopsFor, effortStopIndex, effortStopFraction, type Activity, type Field, type FocusAt, type MentionPick, type ModelChoice, type SlashAction, type Paging, type Value } from "./form-rules"
+import { DESKTOP_THEMES, isDesktopThemeID, resolveDesktopTheme, DESKTOP_BUILT_IN_SLASH_COMMANDS, desktopSlashCommand, validateFolderSegment, formatSessionExportMarkdown, parsePromptStashes, pushPromptStash, formatQuotaProviders, formatCount, formatCompactCount, formatDurationMs, formatUsd, type DesktopThemeID, activeFields, appendPage, buildAnswer, chooseModel, chooseProfile, choiceFor, choiceProblem, composerTrigger, initialValues, insertCompletion, invalidIndexes, mentionPayload, modelLabel, pagedItems, pagingFor, problemOf, profileLabel, railGroups, restoresFocus, sameSelection, samePaging, searchTerm, selectionFor, slashAction, valueFor, variantsFor, visibleModels, withValue, workspaceBase, classifyDesktopSynthetic, visibleDesktopMessages, turnEditPlacements, groupAssistantParts, toolDisplaySummary, effortStopsFor, effortStopIndex, effortStopFraction, insertTextAtSelection, isEditableKeyboardTarget, isStandardEditShortcut, type Activity, type Field, type FocusAt, type MentionPick, type ModelChoice, type SlashAction, type Paging, type Value } from "./form-rules"
 import { JumpControls, PromptRail, followState, jumpBehavior, navigationTargets, pillClearance, promptTicks, promptsInView, sameSet, type PromptTick } from "../../../apps/web/src/remote/ui/transcript-rail"
 import "../../../apps/web/src/styles/tokens.css"
 import "../../../apps/web/src/styles/workspace-shell.css"
@@ -24,7 +24,15 @@ type PaletteAction = { readonly id: string; readonly group: "Session" | "Model &
 const queries = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 5_000 } } })
 const noActivity: Activity = { busy: new Set(), waiting: new Map() }
 const [connection, setConnection] = createSignal<ConnectionState>({ generation: 0, status: "idle" })
-const connectionOwnership = () => `${connection().status === "reconnecting" ? "Reconnecting" : "Connected"} · ${connection().mode === "own" ? "Private backend" : "Shared backend"}`
+const connectionStatusLabel = () => connection().status === "connected" ? "Connected" : connection().status === "reconnecting" ? "Reconnecting" : connection().status === "error" ? "Backend error" : "Connecting"
+const connectionOwnership = () => `${connectionStatusLabel()} · ${connection().mode === "own" ? "Private backend" : "Shared backend"}`
+const [preferencesError, setPreferencesError] = createSignal<string>()
+const [savedSelection, setSavedSelection] = createSignal<Selection>({ mode: "shared" })
+const [savedSharedEndpoint, setSavedSharedEndpoint] = createSignal("")
+const [updateTriggerTick, setUpdateTriggerTick] = createSignal(0)
+const [reconnectingBackend, setReconnectingBackend] = createSignal(false)
+const [backendActionError, setBackendActionError] = createSignal<string>()
+let handledUpdateTick = 0
 const [lastSessionID, setLastSessionID] = createSignal<string>()
 const [activity, setActivity] = createSignal(noActivity)
 const [paletteOpen, setPaletteOpen] = createSignal(false)
@@ -54,7 +62,6 @@ const unconfirmed = new Set<string>()
 const drafts = new Map<string, string>()
 const pendings = new Map<string, { promptID: string; text: string; files?: PromptFile[]; agents?: PromptAgent[] }>()
 const scope = () => [connection().generation, connection().revision ?? 0] as const
-const live = () => connection().status === "connected" || connection().status === "reconnecting"
 const reading = () => connection().status === "connected"
 const failure = (cause: unknown, fallback: string) => cause instanceof Error ? cause.message : typeof cause === "string" ? cause : fallback
 const sessionsQuery = (search = "") => ({ queryKey: ["sessions", ...scope(), search] as const, queryFn: () => api.sessions(search ? { search } : {}), enabled: reading() })
@@ -64,8 +71,32 @@ const costLabel = (cost: number | undefined) => cost === undefined ? "Cost unkno
 const [railCollapsed, setRailCollapsed] = createSignal(false)
 const [companionOpen, setCompanionOpen] = createSignal(false)
 const [companionTab, setCompanionTab] = createSignal<"Activity" | "Changes" | "Context">("Context")
-const [manualSetup, setManualSetup] = createSignal(false)
-const switchBackend = () => { setManualSetup(true); void api.disconnect() }
+const connectBackend = async (selection: Selection) => {
+  setBackendActionError(undefined)
+  setReconnectingBackend(true)
+  try {
+    await api.connect(selection)
+    setSavedSelection(selection)
+    if (selection.mode === "shared") setSavedSharedEndpoint(selection.server ?? "")
+    setPreferencesError(undefined)
+  } catch (cause) { setBackendActionError(failure(cause, "The backend could not connect.")) }
+  finally { setReconnectingBackend(false) }
+}
+const retryBackendConnection = () => connectBackend(savedSelection())
+async function copyTextToClipboard(text: string) {
+  try { if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return } } catch {}
+  await api.writeClipboard({ text })
+}
+function pastedFilesOf(data: DataTransfer | null): PromptFile[] {
+  if (!data) return []
+  const found = new Map<string, PromptFile>()
+  const add = (path: string | undefined, name: string) => { if (path && path.startsWith("/") && !found.has(`file://${path}`)) found.set(`file://${path}`, { uri: `file://${path}`, name: name || (path.split("/").at(-1) ?? path) }) }
+  const nativePath = (file: File) => (file as File & { path?: string }).path
+  for (const file of Array.from(data.files ?? [])) add(nativePath(file), file.name)
+  for (const item of Array.from(data.items ?? [])) { const file = item.kind === "file" ? item.getAsFile() : null; if (file) add(nativePath(file), file.name) }
+  for (const line of (data.getData("text/uri-list") ?? "").split(/\r?\n/)) if (line.startsWith("file://")) found.set(line, { uri: line, name: line.split("/").at(-1) || line })
+  return [...found.values()]
+}
 const autonomyChoices = ["", "manual", "auto", "yolo"] as const
 const decisionModes = [{ value: "manual", label: "Manual" }, { value: "auto", label: "Auto" }, { value: "yolo", label: "YOLO" }] as const
 const cycleTheme = () => { const index = DESKTOP_THEMES.findIndex((theme) => theme.id === themePreference()); applyThemePreference(DESKTOP_THEMES[(index + 1) % DESKTOP_THEMES.length]!.id) }
@@ -182,10 +213,6 @@ export const surfaceNotices = {
   changes: (items: readonly { additions: number; deletions: number }[]) => `${items.length} files · +${items.reduce((sum, item) => sum + item.additions, 0)} / -${items.reduce((sum, item) => sum + item.deletions, 0)}`,
 }
 
-function typing(target: EventTarget | null) {
-  return target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
-}
-
 function focusHeading(heading: HTMLElement) {
   queueMicrotask(() => heading.focus({ preventScroll: true }))
 }
@@ -208,10 +235,7 @@ function resetDrafts() {
 function App() {
   const location = useLocation()
   const navigate = useNavigate()
-  createEffect(() => {
-    const path = location().pathname
-    if (live() ? path === "/" : path !== "/") void navigate({ to: live() ? "/sessions" : "/" })
-  })
+  createEffect(() => { if (location().pathname === "/") void navigate({ to: "/sessions" }) })
   onMount(() => {
     const theme = window.matchMedia("(prefers-color-scheme: dark)")
     try { const saved = localStorage.getItem("ycoding.desktop.theme"); if (isDesktopThemeID(saved)) setThemePreference(saved) } catch { setDesktopNotice("The saved theme could not be read.") }
@@ -221,13 +245,16 @@ function App() {
       if (state.generation < connection().generation) return
       if (state.generation !== connection().generation) resetDrafts()
       if (state.generation !== connection().generation || state.revision !== connection().revision) { queries.clear(); setActivity(noActivity); setLastSessionID(undefined) }
-      if (state.status !== "connected" && state.status !== "reconnecting") { setPaletteOpen(false); setRailOpen(false) }
       setConnection(state)
     }
     let observed = false
     const states = api.onState((state) => { observed = true; apply(state) })
     void Promise.all([api.state(), api.preferences()]).then(([state, preferences]) => {
       if (!observed) apply(state)
+      setSavedSelection(preferences.selection ?? { mode: "shared" })
+      setSavedSharedEndpoint(preferences.sharedEndpoint ?? "")
+      setPreferencesError(preferences.error)
+      if (preferences.error) return
       if (connection().status === "idle") {
         const generation = connection().generation
         void api.connect(preferences.selection ?? { mode: "shared" }).catch((cause: unknown) => {
@@ -246,24 +273,31 @@ function App() {
       if (sessionID && (requestEvents.test(type) || type === "session.idle")) refresh(["requests", ...scope(), sessionID])
     })
     const resync = api.onResync(() => { setActivity(noActivity); void queries.invalidateQueries(undefined, { cancelRefetch: false }) })
+    const menu = typeof api.onMenuAction === "function" ? api.onMenuAction((action) => {
+      if (action === "new-chat") void navigate({ to: "/chat" })
+      else if (action === "open-settings") void navigate({ to: "/settings" })
+      else if (action === "check-for-updates") { setUpdateTriggerTick((tick) => tick + 1); void navigate({ to: "/settings" }) }
+    }) : () => {}
     const shortcut = (event: KeyboardEvent) => {
-      if (!live() || event.altKey || event.isComposing) return
+      if (isStandardEditShortcut(event)) return
+      if (event.altKey || event.isComposing) return
       const key = event.key.toLowerCase()
       const command = (event.metaKey || event.ctrlKey) && !event.shiftKey
       if (key === "k" && command) { event.preventDefault(); setPaletteOpen((open) => !open); return }
-      if (key === "p" && event.ctrlKey && !event.metaKey && !event.shiftKey && !typing(event.target)) { event.preventDefault(); setPaletteOpen(true); return }
+      if (key === "p" && event.ctrlKey && !event.metaKey && !event.shiftKey && !isEditableKeyboardTarget(event.target)) { event.preventDefault(); setPaletteOpen(true); return }
       if (paletteOpen()) return
       if (key === "n" && command) { event.preventDefault(); void navigate({ to: "/chat" }); return }
+      if (key === "," && command) { event.preventDefault(); void navigate({ to: "/settings" }); return }
       if (key === "escape" && railOpen()) setRailOpen(false)
     }
     window.addEventListener("keydown", shortcut)
-    onCleanup(() => { theme.removeEventListener("change", paintTheme); window.removeEventListener("keydown", shortcut); states(); events(); resync(); queries.clear() })
+    onCleanup(() => { theme.removeEventListener("change", paintTheme); window.removeEventListener("keydown", shortcut); states(); events(); resync(); menu(); queries.clear() })
   })
-  return <div class="desktop rl" classList={{ "desktop--workspace": live() }}>
+  return <div class="desktop rl rl-ledger desktop--workspace">
     <style id="desktop-schemes">{schemeStylesheet()}</style>
     <Outlet />
     <Show when={desktopNotice()}>{(notice) => <p role="status" class="desktop__notice">{notice()}<button type="button" class="rl-btn" onClick={() => setDesktopNotice(undefined)}>Dismiss</button></p>}</Show>
-    <Show when={live() && paletteOpen()}><Palette /></Show><ConfirmDialog />
+    <Show when={paletteOpen()}><Palette /></Show><ConfirmDialog />
     <Show when={folderDialog()} keyed>{(options) => <FolderExplorerDialog options={options} />}</Show>
     <Show when={utilityDialog()} keyed>{(options) => <UtilityDialog options={options} />}</Show>
     <Show when={stashDialog()} keyed>{(options) => <StashDialog options={options} />}</Show>
@@ -561,7 +595,8 @@ function Palette() {
     { id: "toggle-animations", group: "Customize", label: animationsEnabled() ? "Animations: Turn off" : "Animations: Turn on", detail: "Motion in this window", icon: "sparkles", keywords: "motion animation reduced customize", run: () => applyAnimationsPreference(!animationsEnabled()) },
     { id: "toggle-rail", group: "Customize", label: "Toggle navigation rail", detail: railCollapsed() ? "Expand the rail" : "Collapse the rail", icon: "panel-left", keywords: "sidebar collapse expand navigation customize", run: () => setRailCollapsed(!railCollapsed()) },
     { id: "toggle-companion", group: "Customize", label: "Toggle Session companion", detail: companionOpen() ? "Close the companion" : "Open the companion", icon: "team", keywords: "companion activity changes context customize", run: () => setCompanionOpen(!companionOpen()) },
-    { id: "switch-backend", group: "Customize", label: "Switch backend", detail: connection().mode === "own" ? "Stops the private backend" : "Leaves the shared backend running", icon: "devices", keywords: "disconnect connection mode customize", run: switchBackend },
+    { id: "machine-backend", group: "Settings", label: "Switch backend", detail: "Machine & Backend", icon: "devices", keywords: "switch backend machine server endpoint connection mode reconnect", run: () => void navigate({ to: "/settings" }) },
+    { id: "check-for-updates", group: "System", label: "Check for updates", detail: "Check GitHub releases for a newer YCoding Desktop build", icon: "refresh", keywords: "update upgrade version release self-update", run: () => { setUpdateTriggerTick((tick) => tick + 1); void navigate({ to: "/settings" }) } },
   ]
   const sections = createMemo(() => {
     const needle = query().trim().toLowerCase()
@@ -602,32 +637,6 @@ function Palette() {
     <Show when={!flat().length}><p role="status" class="palette__empty">No matching commands or Sessions.</p></Show>
     <p class="desktop__muted palette__hint">Searches the most recent Sessions only; use the rail search for older ones. Arrow keys move, Enter selects, Escape closes.</p>
   </dialog>
-}
-
-function Connection() {
-  const [mode, setMode] = createSignal<"own" | "shared">("shared")
-  const [server, setServer] = createSignal("")
-  const [error, setError] = createSignal<string>()
-  const [notice, setNotice] = createSignal<string>()
-  const busy = () => connection().status === "connecting"
-  onMount(() => { void api.preferences().then((preferences) => {
-    if (preferences.selection) setMode(preferences.selection.mode)
-    setServer(preferences.sharedEndpoint ?? "")
-    setNotice(preferences.error)
-  }).catch(() => setNotice("Backend preferences could not be read.")) })
-  const start = async () => {
-    setError(undefined)
-    setManualSetup(false)
-    try { await api.connect(mode() === "own" ? { mode: "own" } : { mode: "shared", server: server() }) }
-    catch (cause) { setError(failure(cause, "The backend could not connect. Retry.")) }
-  }
-  return <main class="rl-setup"><section class="rl-setup-card" aria-labelledby="connection-title"><Brand wordmark /><h2 id="connection-title">Connecting to your workspace</h2><p class="rl-setup-sub">YCoding checks the server before opening your Sessions.</p>
-    <Show when={(connection().status === "idle" && !manualSetup()) || busy()}><p role="status">Checking the managed background server…</p></Show>
-    <Show when={notice()}><p role="status">{notice()}</p></Show>
-    <Show when={error() ?? connection().error}>{(message) => <div role="alert" class="rl-notice" data-tone="bad">{message()}</div>}</Show>
-    <Show when={connection().status === "error" && connection().mode === "own"}><p role="status">The private backend is not running. Start it again to continue; unsent drafts are kept.</p></Show>
-    <Show when={connection().status === "error" || error() || manualSetup()}><button type="button" class="rl-btn" data-tone="go" onClick={() => void start()}>{manualSetup() ? "Connect" : "Retry"}</button><details open={manualSetup()}><summary>Connection details</summary><div class="desktop__field"><span>Server mode</span><DesktopSelect label="Server mode" value={mode()} options={[{ value: "shared", label: "Shared background server" }, { value: "own", label: "Private backend" }]} onChange={(value) => setMode(value as "own" | "shared")} /></div><Show when={mode() === "shared"}><label class="desktop__field">Shared endpoint<input type="url" value={server()} onInput={(event) => setServer(event.currentTarget.value)} placeholder="http://127.0.0.1:port" /></label><p class="desktop__muted">Leave empty to discover or start the managed local service. Do not include credentials.</p></Show></details></Show>
-  </section></main>
 }
 
 function Workspace() {
@@ -737,14 +746,18 @@ function Workspace() {
       <Show when={pinNote()}>{(result) => <p role={result().failed ? "alert" : "status"} class={result().failed ? "desktop__error" : "desktop__muted"}>{result().text}</p>}</Show>
       <p class="desktop__muted">Running and Needs action come from live events seen since this window connected. Earlier status is unavailable, so a Session can be running or waiting without appearing there.</p></div></div></>}
       railNavigation={<div class="rl-nav-items"><For each={desktopDestinations(location().pathname)}>{(item) => <Link class="rl-nav-item" to={item.route} aria-label={item.label} title={item.label} aria-current={item.current ? "page" : undefined}><Icon name={item.id === "projects" ? "team" : item.id === "sessions" ? "sessions" : item.id === "workspaces" ? "folder" : item.id === "usage" ? "usage" : "settings"} /><span>{item.label}</span></Link>}</For></div>}
-      machineName={<><Icon name="devices" /> This Mac</>}
-      machineMeta={<div class="workspace__backend rl-nav-machine">
-        <p class="desktop__metadata" title={`Native API ${connection().version ?? "unknown"}`}>{connection().status === "connected" ? "Connected" : "Reconnecting"} · {connection().mode === "own" ? "Private backend" : "Shared backend"}</p>
-        <Show when={connection().notice}>{(notice) => <p role="status">{notice()}</p>}</Show>
-        <p class="desktop__muted">{connection().mode === "own" ? "Switching backend stops this private backend." : "Switching backend leaves the shared backend running."}</p>
-        <button type="button" onClick={switchBackend}>Switch backend</button>
-      </div>}
-      workspaceClass="rl-content" mainClass="workspace__main rl-main" mainRef={(element) => { main = element }}><Outlet /></SharedWorkspaceFrame>
+      workspaceClass="rl-content" mainClass="workspace__main rl-main" mainRef={(element) => { main = element }}>
+      <Show when={connection().status === "error" ? (connection().error ?? "The backend could not connect.") : preferencesError()}>{(message) =>
+        <div role="alert" class="rl-connection-banner">
+          <span class="rl-connection-banner__text"><Icon name="shield" /><span>{message()}</span><Show when={connection().status === "error" && connection().mode === "own"}><span>The private backend is not running. Start it again to continue; unsent drafts are kept.</span></Show></span>
+          <span class="rl-connection-banner__actions">
+            <button type="button" class="rl-btn" data-tone="go" disabled={reconnectingBackend()} onClick={() => void retryBackendConnection()}>Retry</button>
+            <button type="button" class="rl-btn" onClick={() => void navigate({ to: "/settings" })}>Open Settings</button>
+          </span>
+        </div>
+      }</Show>
+      <Outlet />
+    </SharedWorkspaceFrame>
   </div></div>
 }
 
@@ -793,7 +806,7 @@ const localSlash = [...DESKTOP_BUILT_IN_SLASH_COMMANDS.flatMap((command) => [{ n
 type Suggestion = { readonly id: string; readonly icon: DesktopIconName; readonly label: string; readonly description?: string; readonly insert: string; readonly keepOpen?: boolean; readonly pick?: MentionPick }
 
 let fieldIDs = 0
-function ComposerField(props: { label: string; value: string; locked: boolean; source: string | { directory?: string } | undefined; directory: string; localCommands: readonly { readonly name: string; readonly description: string }[]; picks: readonly MentionPick[]; onPicks: (picks: MentionPick[]) => void; onInput: (value: string) => void; onSubmit: () => void }) {
+function ComposerField(props: { label: string; value: string; locked: boolean; onAttachFiles?: (added: readonly PromptFile[]) => void; source: string | { directory?: string } | undefined; directory: string; localCommands: readonly { readonly name: string; readonly description: string }[]; picks: readonly MentionPick[]; onPicks: (picks: MentionPick[]) => void; onInput: (value: string) => void; onSubmit: () => void }) {
   const listID = `composer-suggestions-${++fieldIDs}`
   const [caret, setCaret] = createSignal(0)
   const [wanted, setWanted] = createSignal(false)
@@ -861,13 +874,38 @@ function ComposerField(props: { label: string; value: string; locked: boolean; s
     queueMicrotask(() => { area?.focus(); area?.setSelectionRange(next.caret, next.caret) })
   }
   const at = (event: { currentTarget: HTMLTextAreaElement }) => setCaret(event.currentTarget.selectionStart ?? props.value.length)
-  return <div class="composer-field"><label class="desktop__field"><span class="desktop__sr">{props.label}</span><textarea ref={area} rows={1} value={props.value} readOnly={props.locked} role="combobox" aria-expanded={open()} aria-controls={open() ? listID : undefined} aria-activedescendant={open() && items()[active()] ? `${listID}-${active()}` : undefined} aria-autocomplete="list" aria-describedby="message-hint" placeholder="Message YCoding" onInput={(event) => { props.onInput(event.currentTarget.value); at(event) }} onKeyUp={at} onClick={at}
+  const insertPasted = (pasted: string, start: number, end: number) => {
+    const next = insertTextAtSelection(props.value, start, end, pasted)
+    props.onInput(next.text)
+    setCaret(next.caret)
+    queueMicrotask(() => { area?.focus(); area?.setSelectionRange(next.caret, next.caret) })
+  }
+  const paste = (event: ClipboardEvent & { currentTarget: HTMLTextAreaElement }) => {
+    if (props.locked) { event.preventDefault(); return }
+    const data = event.clipboardData
+    const attached = pastedFilesOf(data)
+    if (attached.length) props.onAttachFiles?.(attached)
+    const pasted = data?.getData("text/plain") ?? ""
+    const target = event.currentTarget
+    if (pasted.length > 0) { event.preventDefault(); insertPasted(pasted, target.selectionStart ?? caret(), target.selectionEnd ?? caret()); return }
+    if (attached.length) { event.preventDefault(); return }
+    event.preventDefault()
+    void (async () => {
+      if (typeof api.readClipboard !== "function") return
+      try {
+        const snapshot = await api.readClipboard()
+        if (snapshot.text) { const start = area?.selectionStart ?? caret(); insertPasted(snapshot.text, start, area?.selectionEnd ?? start) }
+      } catch {}
+    })()
+  }
+  return <div class="composer-field"><label class="desktop__field"><span class="desktop__sr">{props.label}</span><textarea ref={area} rows={1} value={props.value} readOnly={props.locked} role="combobox" aria-expanded={open()} aria-controls={open() ? listID : undefined} aria-activedescendant={open() && items()[active()] ? `${listID}-${active()}` : undefined} aria-autocomplete="list" aria-describedby="message-hint" placeholder="Message YCoding" onInput={(event) => { props.onInput(event.currentTarget.value); at(event) }} onKeyUp={at} onClick={at} onPaste={paste}
     onKeyDown={(event) => {
+      if (isStandardEditShortcut(event)) return
       if (open() && items().length && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); setActive((index) => (index + (event.key === "ArrowDown" ? 1 : items().length - 1)) % items().length); return }
       if (open() && items()[active()] && (event.key === "Enter" || event.key === "Tab") && !event.isComposing) { event.preventDefault(); choose(items()[active()]); return }
       if (event.key === "Enter" && open() && !event.isComposing) { event.preventDefault(); setDismissed(token()); return }
       if (event.key === "Escape" && open()) { event.preventDefault(); setDismissed(token()); return }
-      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); props.onSubmit() }
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing && !props.locked) { event.preventDefault(); props.onSubmit() }
     }} />
     <span id="message-hint" class="desktop__sr">Enter sends. Shift+Enter adds a line. {mac ? "⌘K" : "Ctrl K"} opens commands. Slash, dollar and at-sign open suggestions.</span></label>
     <Show when={open()}><div class="composer-suggestions" role="listbox" id={listID} aria-label="Composer suggestions"><For each={items()}>{(item, index) => <div id={`${listID}-${index()}`} role="option" class="composer-suggestion" aria-selected={index() === active()} onPointerMove={() => setActive(index())} onPointerDown={(event) => { event.preventDefault(); choose(item) }}><Icon name={item.icon} /><span class="composer-suggestion__label">{item.label}</span><Show when={item.description}>{(text) => <span class="composer-suggestion__desc">{text()}</span>}</Show></div>}</For><Show when={status()}>{(text) => <p class="composer-suggestions__status" role="status">{text()}</p>}</Show></div></Show></div>
@@ -1052,7 +1090,7 @@ function NewChat() {
   }
   return <section class="conversation" data-new-chat aria-labelledby="new-chat-title"><SharedConversationHeader class="rl-top" actions={<div class="rl-top-actions"><SharedContextRingButton class="rl-context-ring" ariaLabel="Open Session context" expanded={companionOpen() && companionTab() === "Context"} label={<><strong>Unknown</strong><small>—</small></>} onClick={() => { setCompanionTab("Context"); setCompanionOpen(true) }} /><ThemeToggle /><button type="button" class="rl-icon rl-companion-toggle" aria-label={companionOpen() ? "Close Session companion" : "Open Session companion"} aria-expanded={companionOpen()} onClick={() => setCompanionOpen(!companionOpen())}><Icon name="team" /></button><button type="button" class="rl-icon desktop__palette" aria-label={`Commands ${mac ? "⌘K" : "Ctrl K"}`} aria-keyshortcuts={mac ? "Meta+K" : "Control+K"} onClick={() => setPaletteOpen(true)}><Icon name="more" /></button></div>}><button type="button" class="desktop__rail-toggle rl-mobile-menu" aria-label="Open navigation" aria-expanded={railOpen()} aria-controls="session-rail" onClick={() => setRailOpen(true)}><Icon name="menu" /></button><span class="rl-mobile-brand"><Brand /></span><div class="rl-ident"><h1 id="new-chat-title" class="rl-title" tabindex="-1" ref={focusHeading}>New chat</h1><p class="rl-presence" data-tone="idle"><span class="rl-presence-dot" aria-hidden="true" /><span>This Mac · {newDirectory() || "No workspace selected"} · {connectionOwnership()}</span></p></div></SharedConversationHeader><div class="rl-scroll"><div class="rl-col rl-thread"><div class="rl-intro"><Brand /><p class="rl-eyebrow">A LITTLE CONTEXT. A CLEAR NEXT STEP.</p><p class="rl-intro-title">Start with a conversation.</p>
     <p class="desktop__muted">No Project or filesystem Workspace is required. Start standalone, or explicitly add a workspace for context.</p><Show when={!available().length}><div class="desktop__actions"><button type="button" class="rl-btn" disabled={!!newPending() || busy()} onClick={() => pickFolder("directory")}><Icon name="folder" />Open folder…</button><button type="button" class="rl-btn" disabled={!!newPending() || busy()} onClick={() => pickFolder("create-directory")}><Icon name="folder-plus" />New folder…</button></div></Show><div class="rl-menu-anchor" onKeyDown={(event) => { if (event.key === "Escape") { setWorkspaceMenuOpen(false); event.currentTarget.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')?.focus() } else if (event.key === "ArrowDown" || event.key === "ArrowUp") { const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]; if (items.length) { event.preventDefault(); const index = items.indexOf(document.activeElement as HTMLButtonElement); items[(index + (event.key === "ArrowDown" ? 1 : items.length - 1) + items.length) % items.length]?.focus() } } }}><button type="button" class="rl-btn" aria-haspopup="menu" aria-expanded={workspaceMenuOpen()} disabled={!!newPending()} onClick={() => setWorkspaceMenuOpen(!workspaceMenuOpen())}><Icon name="folder" />{newDirectory().trim() ? `Context · ${selectedWorkspaceName()}` : "Context · No workspace"}</button><Show when={workspaceMenuOpen()}><div class="rl-owned-menu" role="menu"><button type="button" role="menuitem" onClick={() => pickFolder("directory")}><Icon name="folder" />Open folder…</button><button type="button" role="menuitem" onClick={() => pickFolder("create-directory")}><Icon name="folder-plus" />New folder…</button><button type="button" role="menuitem" onClick={() => setDirectory("")}><span><strong>Standalone · no filesystem context</strong><small>Start without a repository</small></span></button><For each={available()}>{(item) => <button type="button" role="menuitem" onClick={() => setDirectory(item.directory)}><span><strong>{item.name && item.name !== item.directory ? item.name : workspaceBase(item.directory)}</strong><small>{item.directory}</small></span></button>}</For><button type="button" role="menuitem" class="rl-textlink" onClick={workspaces.refetch} disabled={workspaces.result().isFetching || !reading()}>Refresh repositories</button></div></Show></div><p class="rl-prototype-note">{newDirectory().trim() ? `Selected workspace · ${selectedWorkspaceName() === newDirectory() ? newDirectory() : `${selectedWorkspaceName()} (${newDirectory()})`}.` : "No filesystem workspace is selected unless you choose one. Server-default placement applies until you pick a repository."}</p></div></div></div>
-    <div class="rl-dock"><div class="rl-col"><SharedComposerSurface formClass="composer" busy={busy()} onSubmit={(event) => { event.preventDefault(); void start() }} field={<div class="rl-capsule"><AttachButton directory={newDirectory() || undefined} files={files()} onChange={setFiles} locked={!!newPending() || busy()} /><ComposerField label="First message" value={newPending()?.text ?? newText()} locked={!!newPending()} source={newDirectory().trim() ? { directory: newDirectory().trim() } : undefined} directory={newDirectory().trim()} localCommands={newSlash} picks={newPicks()} onPicks={setNewPicks} onInput={setNewText} onSubmit={() => void start()} /><button type="submit" class="rl-send desktop__primary" aria-label={busy() ? "Starting the chat" : newPending() ? "Retry starting the chat" : "Send prompt"} disabled={busy() || !reading() || !ready()}><Icon name="arrow-up" /></button></div>} /><div class="composer-bar"><Show when={data()} fallback={<button type="button" class="composer-chip" disabled><Icon name="cpu" /><span>{picked()?.id ?? "Model"}</span></button>}><ModelPopover chipLabel={selected()?.name ?? picked()?.id ?? data()?.default?.id ?? "Choose a model"} effortLabel={choice().variant || undefined} busy={!!newPending() || !reading()} models={list()} choice={choice()} openTick={newModelTick()} onPick={setChosen} onRefresh={catalog.refetch} refreshing={catalog.result().isFetching}><Show when={choiceProblem(list(), choice())}>{(problem) => <p role="status" class="desktop__muted">{problem()}</p>}</Show></ModelPopover></Show><div class="rl-menu-anchor rl-autonomy" onFocusOut={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setAutonomyMenuOpen(false) }} onKeyDown={(event) => { if (event.key === "Escape" && autonomyMenuOpen()) { setAutonomyMenuOpen(false); event.currentTarget.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')?.focus() } else if (event.key === "ArrowDown" || event.key === "ArrowUp") { const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')]; if (items.length) { event.preventDefault(); const index = items.indexOf(document.activeElement as HTMLButtonElement); items[(index + (event.key === "ArrowDown" ? 1 : items.length - 1) + items.length) % items.length]?.focus() } } }}><button type="button" class="composer-chip" aria-haspopup="menu" aria-expanded={autonomyMenuOpen()} disabled={!!newPending() || typeof api.setAutonomy !== "function"} onClick={(event) => { const anchor = event.currentTarget.parentElement; const opening = !autonomyMenuOpen(); setAutonomyMenuOpen(opening); if (opening) queueMicrotask(() => anchor?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus()) }}><Icon name="shield" /><span>{stagedAutonomyLabels[newAutonomy()]}</span><Icon name="chevron-down" /></button><Show when={autonomyMenuOpen()}><div class="rl-owned-menu" role="menu" aria-label="Staged autonomy"><For each={autonomyChoices}>{(mode) => <button type="button" role="menuitemradio" aria-checked={newAutonomy() === mode} onClick={(event) => { const trigger = event.currentTarget.closest(".rl-autonomy")?.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]'); setNewAutonomy(mode); setAutonomyMenuOpen(false); trigger?.focus() }}><span>{stagedAutonomyLabels[mode]}</span></button>}</For></div></Show></div><span class="composer-bar__spacer" /><Show when={catalog.result().isError}><span role="alert" class="desktop__error composer-bar__note">{failure(catalog.result().error, "Model catalog could not be read. Refresh models to retry.")}</span></Show></div><Show when={newUnconfirmed()}><p role="status">The previous attempt was not confirmed before the connection changed. Check Sessions before sending again.</p></Show>
+    <div class="rl-dock"><div class="rl-col"><SharedComposerSurface formClass="composer" busy={busy()} onSubmit={(event) => { event.preventDefault(); void start() }} field={<div class="rl-capsule"><AttachButton directory={newDirectory() || undefined} files={files()} onChange={setFiles} locked={!!newPending() || busy()} /><ComposerField label="First message" value={newPending()?.text ?? newText()} locked={!!newPending()} source={newDirectory().trim() ? { directory: newDirectory().trim() } : undefined} directory={newDirectory().trim()} localCommands={newSlash} picks={newPicks()} onPicks={setNewPicks} onInput={setNewText} onSubmit={() => void start()} onAttachFiles={(added) => setFiles((current) => promptFilesFor(current, added))} /><button type="submit" class="rl-send desktop__primary" aria-label={busy() ? "Starting the chat" : newPending() ? "Retry starting the chat" : "Send prompt"} disabled={busy() || !reading() || !ready()}><Icon name="arrow-up" /></button></div>} /><div class="composer-bar"><Show when={data()} fallback={<button type="button" class="composer-chip" disabled><Icon name="cpu" /><span>{picked()?.id ?? "Model"}</span></button>}><ModelPopover chipLabel={selected()?.name ?? picked()?.id ?? data()?.default?.id ?? "Choose a model"} effortLabel={choice().variant || undefined} busy={!!newPending() || !reading()} models={list()} choice={choice()} openTick={newModelTick()} onPick={setChosen} onRefresh={catalog.refetch} refreshing={catalog.result().isFetching}><Show when={choiceProblem(list(), choice())}>{(problem) => <p role="status" class="desktop__muted">{problem()}</p>}</Show></ModelPopover></Show><div class="rl-menu-anchor rl-autonomy" onFocusOut={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setAutonomyMenuOpen(false) }} onKeyDown={(event) => { if (event.key === "Escape" && autonomyMenuOpen()) { setAutonomyMenuOpen(false); event.currentTarget.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')?.focus() } else if (event.key === "ArrowDown" || event.key === "ArrowUp") { const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')]; if (items.length) { event.preventDefault(); const index = items.indexOf(document.activeElement as HTMLButtonElement); items[(index + (event.key === "ArrowDown" ? 1 : items.length - 1) + items.length) % items.length]?.focus() } } }}><button type="button" class="composer-chip" aria-haspopup="menu" aria-expanded={autonomyMenuOpen()} disabled={!!newPending() || typeof api.setAutonomy !== "function"} onClick={(event) => { const anchor = event.currentTarget.parentElement; const opening = !autonomyMenuOpen(); setAutonomyMenuOpen(opening); if (opening) queueMicrotask(() => anchor?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus()) }}><Icon name="shield" /><span>{stagedAutonomyLabels[newAutonomy()]}</span><Icon name="chevron-down" /></button><Show when={autonomyMenuOpen()}><div class="rl-owned-menu" role="menu" aria-label="Staged autonomy"><For each={autonomyChoices}>{(mode) => <button type="button" role="menuitemradio" aria-checked={newAutonomy() === mode} onClick={(event) => { const trigger = event.currentTarget.closest(".rl-autonomy")?.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]'); setNewAutonomy(mode); setAutonomyMenuOpen(false); trigger?.focus() }}><span>{stagedAutonomyLabels[mode]}</span></button>}</For></div></Show></div><span class="composer-bar__spacer" /><Show when={catalog.result().isError}><span role="alert" class="desktop__error composer-bar__note">{failure(catalog.result().error, "Model catalog could not be read. Refresh models to retry.")}</span></Show></div><Show when={newUnconfirmed()}><p role="status">The previous attempt was not confirmed before the connection changed. Check Sessions before sending again.</p></Show>
       <div class="desktop__feedback">
         <Show when={workspaces.result().isPending && reading()}><SharedLoadingSkeleton kind="list" label="Loading previously opened repositories…" /></Show>
         <Show when={workspaces.result().isError}><p role="alert" class="desktop__error">Previously opened repositories could not be read. Refresh to retry.</p></Show>
@@ -1558,7 +1596,7 @@ function Conversation(props: { sessionID: string }) {
   const policyButtons = () => <><button type="button" title={autonomy()?.goal?.text} onClick={openPolicy}>{policyLabels().goal}</button><button type="button" title={autonomy() ? `${autonomy()!.effective.permissions}/${autonomy()!.effective.guardrails}/${autonomy()!.effective.answers}` : undefined} onClick={openPolicy}>{policyLabels().autonomy}</button></>
   const [selectedTurn, setSelectedTurn] = createSignal<string>()
   const [linkNote, setLinkNote] = createSignal<string>()
-  const copyTranscriptLink = (event: MouseEvent) => { const anchor = (event.target as Element | null)?.closest?.("a[href]"); if (!(anchor instanceof HTMLAnchorElement)) return; event.preventDefault(); const href = anchor.href; if (navigator.clipboard) void navigator.clipboard.writeText(href).then(() => setLinkNote("Copied link"), () => setLinkNote("Link could not be copied")); else setLinkNote("Link could not be copied") }
+  const copyTranscriptLink = (event: MouseEvent) => { const anchor = (event.target as Element | null)?.closest?.("a[href]"); if (!(anchor instanceof HTMLAnchorElement)) return; event.preventDefault(); const href = anchor.href; void copyTextToClipboard(href).then(() => setLinkNote("Copied link"), () => setLinkNote("Link could not be copied")) }
   const [fullChangesOpen, setFullChangesOpen] = createSignal(false)
   const [stagedRevert, setStagedRevert] = createSignal<StagedRevert>()
   const activeRevert = () => activeRevertOf(session(), stagedRevert())
@@ -1798,8 +1836,8 @@ function Conversation(props: { sessionID: string }) {
       case "find": setFindOpen(true); setFindQuery(action.args); queueMicrotask(() => document.querySelector<HTMLInputElement>(".conversation__find input")?.focus()); return true
       case "timeline": setSessionDialog("timeline"); return true
       case "stash": setStashDialog({ text, update, directory: session()?.location.directory }); return true
-      case "copy": { const response = latestAssistantText(messages.result().data ?? []); if (!response) { setSlashNote("No assistant response is available to copy."); return true } await navigator.clipboard.writeText(response); setSlashNote("Copied latest assistant response."); return true }
-      case "export": await navigator.clipboard.writeText(formatSessionExportMarkdown({ title: session()?.title ?? "Session", sessionID: props.sessionID, directory: session()?.location.directory ?? "", updatedAt: session()?.time.updated, messages: messages.result().data ?? [] })); setSlashNote("Transcript exported as Markdown to the clipboard."); return true
+      case "copy": { const response = latestAssistantText(messages.result().data ?? []); if (!response) { setSlashNote("No assistant response is available to copy."); return true } await copyTextToClipboard(response); setSlashNote("Copied latest assistant response."); return true }
+      case "export": await copyTextToClipboard(formatSessionExportMarkdown({ title: session()?.title ?? "Session", sessionID: props.sessionID, directory: session()?.location.directory ?? "", updatedAt: session()?.time.updated, messages: messages.result().data ?? [] })); setSlashNote("Transcript exported as Markdown to the clipboard."); return true
       case "autonomous": {
         const mode = action.args
         if (mode === "manual" || mode === "auto" || mode === "yolo") await setPolicy({ permissions: mode, guardrails: mode, answers: mode }, `Change autonomy decisions to ${mode}/${mode}/${mode}?`)
@@ -1922,19 +1960,19 @@ function Conversation(props: { sessionID: string }) {
       <Show when={requests.result().data && !pendingRequests()}><p role="status">Refreshing requests after a connection change…</p></Show>
       <Show when={pendingRequests()}>{(data) => <Requests data={data()} updatedAt={requests.result().dataUpdatedAt} refetch={requests.refetch} />}</Show>
     </div></div></div>
-    <div class="rl-dock"><div class="rl-col"><div class="conversation__jump-slot" ref={jumpSlot}><JumpControls clearance={clearance()} onTop={targets().top ? jumpToTop : undefined} onBottom={targets().bottom ? jumpToLatest : undefined} /></div><SharedComposerSurface formClass="composer" busy={sending()} onSubmit={(event) => { event.preventDefault(); void send() }} field={<div class="rl-capsule"><AttachButton directory={session()?.location.directory} files={files()} onChange={setFiles} locked={!!pending() || sending()} /><ComposerField label="Message" value={pending()?.text ?? text()} locked={!!pending()} source={props.sessionID} directory={session()?.location.directory ?? ""} localCommands={localSlash} picks={picks()} onPicks={setPicks} onInput={update} onSubmit={() => void send()} /><button type="submit" class="rl-send desktop__primary" aria-label={sending() ? "Sending" : pending() ? "Retry sending" : "Send prompt"} disabled={sending() || !reading() || unsure() || revertBusy() || revertUncertain() || (!pending() && !text().trim())}><Icon name="arrow-up" /></button><Show when={running()}><button type="button" class="rl-stop" aria-label="Stop" disabled={stopping() || !reading()} onClick={() => void stop()}><Icon name="stop" /></button></Show></div>} feedback={<>
+    <div class="rl-dock"><div class="rl-col"><div class="conversation__jump-slot" ref={jumpSlot}><JumpControls clearance={clearance()} onTop={targets().top ? jumpToTop : undefined} onBottom={targets().bottom ? jumpToLatest : undefined} /></div><SharedComposerSurface formClass="composer" busy={sending()} onSubmit={(event) => { event.preventDefault(); void send() }} field={<div class="rl-capsule"><AttachButton directory={session()?.location.directory} files={files()} onChange={setFiles} locked={!!pending() || sending()} /><ComposerField label="Message" value={pending()?.text ?? text()} locked={!!pending()} source={props.sessionID} directory={session()?.location.directory ?? ""} localCommands={localSlash} picks={picks()} onPicks={setPicks} onInput={update} onSubmit={() => void send()} onAttachFiles={(added) => setFiles((current) => promptFilesFor(current, added))} /><button type="submit" class="rl-send desktop__primary" aria-label={sending() ? "Sending" : pending() ? "Retry sending" : "Send prompt"} disabled={sending() || !reading() || unsure() || revertBusy() || revertUncertain() || (!pending() && !text().trim())}><Icon name="arrow-up" /></button><Show when={running()}><button type="button" class="rl-stop" aria-label="Stop" disabled={stopping() || !reading()} onClick={() => void stop()}><Icon name="stop" /></button></Show></div>} feedback={<>
       <div class="desktop__feedback"><Show when={error()}>{(message) => <p role="alert" class="desktop__error">{message()}</p>}</Show><Show when={sending()}><p role="status">Sending…</p></Show><Show when={slashNote()}>{(note) => <p role="status">{note()}</p>}</Show><Show when={revertUncertain()}><p role="status">Review the Session and staged revert before continuing.</p></Show><Show when={!reading()}><p role="status">Reconnecting. Sending resumes when the backend is connected.</p></Show></div>
       <div class="desktop__actions">
         <Show when={unsure() && !sending()}><button type="button" onClick={() => { update(pending()?.text ?? text()); hold(undefined); promptGuard.reset(); unconfirmed.delete(props.sessionID); setUnsure(false); setRevertUncertain(false); setError(undefined); sessionRead.refetch() }}>I reviewed the Session</button></Show><Show when={pending() && !sending() && !unsure()}><button type="button" onClick={() => { update(pending()?.text ?? ""); hold(undefined); setError(undefined) }}>Edit as a new message</button></Show>
         <Show when={stopNote()}>{(note) => <span role="status" class="desktop__muted">{note()}</span>}</Show></div></>} />
     <div class="composer-anchor"><Show when={session()}>{(item) => <ModelPicker sessionID={props.sessionID} model={item().model} running={running()} agent={item().agent} sessionUsage={usage(item())} autonomyLabel={policyLabels().autonomy} onAutonomy={() => policyOpen() ? setPolicyOpen(false) : openPolicy()} openTick={modelTick()} />}</Show><Show when={policyOpen()}><section class="desktop-popover rl-policy-panel" aria-label="Goal and autonomy"><div class="rl-pane-section-heading"><strong>Goal and autonomy</strong><button type="button" class="rl-btn" onClick={() => setPolicyOpen(false)}>Close</button></div><Show when={!autonomy()}><p role="status">Goal and autonomy are unavailable until the Session state is read.</p><Show when={autonomyRead.result().isError}><button type="button" class="rl-btn" onClick={autonomyRead.refetch}>Refresh</button></Show></Show><Show when={autonomy()}><p class="model-popover__label">Permissions</p><SharedRadioGroup label="Permissions" options={decisionModes} value={permissions()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setPermissions(value as "manual" | "auto" | "yolo")} /><p class="model-popover__label">Guardrails</p><SharedRadioGroup label="Guardrails" options={decisionModes} value={guardrails()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setGuardrails(value as "manual" | "auto" | "yolo")} /><p class="model-popover__label">Answers</p><SharedRadioGroup label="Answers" options={decisionModes} value={answers()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setAnswers(value as "manual" | "auto" | "yolo")} /><div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} onClick={() => void setPolicy({ permissions: permissions(), guardrails: guardrails(), answers: answers() }, `Change autonomy decisions to ${permissions()}/${guardrails()}/${answers()}?`)}>Apply autonomy</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} onClick={() => void setPolicy({ sleep: !autonomy()?.effective.asleep }, autonomy()?.effective.asleep ? "Wake autonomy decisions?" : "Put autonomy decisions to sleep?")}>{autonomy()?.effective.asleep ? "Wake" : "Sleep"}</button></div><label class="desktop__field">Goal<textarea value={policyGoal()} disabled={policyBusy() || policyUncertain()} onInput={(event) => setPolicyGoal(event.currentTarget.value)} /></label><div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || !policyGoal().trim()} onClick={() => void setPolicy({ goal: policyGoal().trim() }, "Replace the Session goal with this text?")}>Set goal</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || (!autonomy()?.goal || autonomy()?.goal?.status === "stopped")} onClick={() => void setPolicy({ goal: null }, "Stop the Session goal? Its text will be retained.")}>Stop goal</button></div></Show><Show when={policyError()}>{(error) => <p role="alert">{error()}</p>}</Show></section></Show></div><div class="rl-whisper">{running() ? "Working" : "Ready"}</div></div></div>
-    <Show when={companionOpen()}><aside class="rl-companion" data-full={fullChangesOpen() && companionTab() === "Changes" ? "true" : undefined}><SharedCompanionSurface policyActions={policyButtons()} onCloseTab={() => setCompanionOpen(false)} onAddTab={() => setCompanionTab(companionTab() === "Activity" ? "Changes" : companionTab() === "Changes" ? "Context" : "Activity")} active={companionTab().toLowerCase() as "activity" | "changes" | "context"} onSelect={(tab) => setCompanionTab(tab === "activity" ? "Activity" : tab === "changes" ? "Changes" : "Context")} headerActions={<button type="button" class="rl-icon" aria-label="Close companion" onClick={() => setCompanionOpen(false)}><Icon name="close" /></button>} onRefresh={() => { if (reading()) { activityRead.refetch(); sessions.refetch(); messages.refetch(); requests.refetch() } }} activityContent={<div class="rl-pane-body"><Show when={activityRead.result().isPending}><p role="status">Loading activity…</p></Show><Show when={activityRead.result().isError}><p role="alert">{failure(activityRead.result().error, "Activity could not be read. Refresh to retry.")}</p></Show><Show when={activityView()}>{(data) => <SharedActivitySurface shells={data().shells} onSelectShell={selectShell} shellOutput={shellOutput()} subagentNext={data().subagentNext} loadingMoreSubagents={activityMoreBusy()} onLoadMoreSubagents={() => void loadMoreSubagents()} subagents={data().subagents.map((task) => ({ sessionID: task.sessionID, agent: task.agent, description: task.description, state: task.state, model: task.model.id, progressText: task.progress?.text, questionText: task.question?.text, onOpen: () => void navigate({ to: "/sessions/$sessionID", params: { sessionID: task.sessionID } }) }))} childSessions={children().map((entry) => ({ id: entry.row.id, title: entry.row.title, status: entry.status, onOpen: () => void navigate({ to: "/sessions/$sessionID", params: { sessionID: entry.row.id } }) }))} notices={[...surfaceNotices.activity(data()), ...(activityMoreError() ? [activityMoreError()!] : [])]} changesSummary={changeData()?.items.length ? { additions: changeData()!.items.reduce((sum, file) => sum + file.additions, 0), deletions: changeData()!.items.reduce((sum, file) => sum + file.deletions, 0), onOpenChanges: () => openChanges() } : undefined} capabilityNote="Only loaded Sessions and live status since connection are shown." />}</Show><Show when={sessions.result().isError}><p role="alert">Child Sessions could not be read. Refresh to retry.</p></Show></div>} changesContent={<div class="rl-pane-body"><Show when={changes.result().isPending}><p role="status">Loading changes…</p></Show><Show when={changes.result().isError}><p role="alert">{failure(changes.result().error, "Changes could not be read. Refresh to retry.")}</p><button type="button" class="rl-btn" onClick={changes.refetch} disabled={!reading()}>Refresh</button></Show><Show when={changeData()}>{(data) => <SharedChangesSurface files={data().items} turnsNotice={data().turnsNotice} onOpenFullChanges={() => setFullChangesOpen((value) => !value)} fullChangesLabel={fullChangesOpen() ? "Compact changes view" : "Open full changes page"} turns={data().turns?.map((turn) => ({ ...turn, label: `${turn.type} · ${turn.id}` }))} selectedTurnID={selectedTurn()} onSelectTurn={(id) => { if (!activeRevert() && !revertUncertain()) setSelectedTurn(id) }} revert={revert()} selectedPath={selectedFile()} onSelectFile={setSelectedFile} onRefresh={changes.refetch} refreshing={changes.result().isFetching || !reading()} scopeTruth="Captured changes belong to this Session. Turn filters show only loaded captured inputs." />}</Show></div>} contextContent={<div class="rl-pane-body"><Show when={messages.result().isPending}><p role="status">Loading context…</p></Show><Show when={messages.result().isError}><p role="alert">Context could not be read. Refresh to retry.</p><button type="button" class="rl-btn" onClick={messages.refetch} disabled={!reading()}>Refresh</button></Show><Show when={!messages.result().isPending && !messages.result().isError}><Context messages={messages.result().data ?? []} model={session()?.model} /></Show></div>} /></aside></Show>
+    <Show when={companionOpen()}><aside class="rl-companion" data-full={fullChangesOpen() && companionTab() === "Changes" ? "true" : undefined}><SharedCompanionSurface policyActions={policyButtons()} active={companionTab().toLowerCase() as "activity" | "changes" | "context"} onSelect={(tab) => setCompanionTab(tab === "activity" ? "Activity" : tab === "changes" ? "Changes" : "Context")} headerActions={<button type="button" class="rl-icon" aria-label="Close companion" onClick={() => setCompanionOpen(false)}><Icon name="close" /></button>} onRefresh={() => { if (reading()) { activityRead.refetch(); sessions.refetch(); messages.refetch(); requests.refetch() } }} activityContent={<div class="rl-pane-body"><Show when={activityRead.result().isPending}><p role="status">Loading activity…</p></Show><Show when={activityRead.result().isError}><p role="alert">{failure(activityRead.result().error, "Activity could not be read. Refresh to retry.")}</p></Show><Show when={activityView()}>{(data) => <SharedActivitySurface shells={data().shells} onSelectShell={selectShell} shellOutput={shellOutput()} subagentNext={data().subagentNext} loadingMoreSubagents={activityMoreBusy()} onLoadMoreSubagents={() => void loadMoreSubagents()} subagents={data().subagents.map((task) => ({ sessionID: task.sessionID, agent: task.agent, description: task.description, state: task.state, model: task.model.id, progressText: task.progress?.text, questionText: task.question?.text, onOpen: () => void navigate({ to: "/sessions/$sessionID", params: { sessionID: task.sessionID } }) }))} childSessions={children().map((entry) => ({ id: entry.row.id, title: entry.row.title, status: entry.status, onOpen: () => void navigate({ to: "/sessions/$sessionID", params: { sessionID: entry.row.id } }) }))} notices={[...surfaceNotices.activity(data()), ...(activityMoreError() ? [activityMoreError()!] : [])]} changesSummary={changeData()?.items.length ? { additions: changeData()!.items.reduce((sum, file) => sum + file.additions, 0), deletions: changeData()!.items.reduce((sum, file) => sum + file.deletions, 0), onOpenChanges: () => openChanges() } : undefined} capabilityNote="Only loaded Sessions and live status since connection are shown." />}</Show><Show when={sessions.result().isError}><p role="alert">Child Sessions could not be read. Refresh to retry.</p></Show></div>} changesContent={<div class="rl-pane-body"><Show when={changes.result().isPending}><p role="status">Loading changes…</p></Show><Show when={changes.result().isError}><p role="alert">{failure(changes.result().error, "Changes could not be read. Refresh to retry.")}</p><button type="button" class="rl-btn" onClick={changes.refetch} disabled={!reading()}>Refresh</button></Show><Show when={changeData()}>{(data) => <SharedChangesSurface files={data().items} turnsNotice={data().turnsNotice} onOpenFullChanges={() => setFullChangesOpen((value) => !value)} fullChangesLabel={fullChangesOpen() ? "Compact changes view" : "Open full changes page"} turns={data().turns?.map((turn) => ({ ...turn, label: `${turn.type} · ${turn.id}` }))} selectedTurnID={selectedTurn()} onSelectTurn={(id) => { if (!activeRevert() && !revertUncertain()) setSelectedTurn(id) }} revert={revert()} selectedPath={selectedFile()} onSelectFile={setSelectedFile} onRefresh={changes.refetch} refreshing={changes.result().isFetching || !reading()} scopeTruth="Captured changes belong to this Session. Turn filters show only loaded captured inputs." />}</Show></div>} contextContent={<div class="rl-pane-body"><Show when={messages.result().isPending}><p role="status">Loading context…</p></Show><Show when={messages.result().isError}><p role="alert">Context could not be read. Refresh to retry.</p><button type="button" class="rl-btn" onClick={messages.refetch} disabled={!reading()}>Refresh</button></Show><Show when={!messages.result().isPending && !messages.result().isError}><Context messages={messages.result().data ?? []} model={session()?.model} /></Show></div>} /></aside></Show>
   </section>
 }
 
 const root = createRootRoute({ component: App })
-const connectionRoute = createRoute({ getParentRoute: () => root, path: "/", component: Connection })
 const workspaceRoute = createRoute({ getParentRoute: () => root, id: "_workspace", component: Workspace })
+const indexRoute = createRoute({ getParentRoute: () => workspaceRoute, path: "/", component: () => null })
 const newChatRoute = createRoute({ getParentRoute: () => workspaceRoute, path: "/chat", component: NewChat })
 function Destination(props: { name: "Projects" | "Sessions" | "Workspaces" | "Usage" | "Settings" }) {
   const navigate = useNavigate()
@@ -2045,10 +2083,76 @@ function Destination(props: { name: "Projects" | "Sessions" | "Workspaces" | "Us
     <Show when={name === "Usage"}><Show when={usageData()} fallback={<Show when={usageRead.result().isError} fallback={<SharedLoadingSkeleton kind="page" label="Loading usage…" />}><p role="alert" class="desktop__error">Usage could not be read.</p><button type="button" class="rl-btn" onClick={usageRead.refetch}>Refresh</button></Show>}>
       {(data) => <SharedUsageSurface phase="ready" statusText="Updated · retained analytics, not a bill" ranges={rangeOptions} range={range()} rangeLabel={rangeOptions.find((item) => item.value === range())?.label ?? range()} requests={formatCount(data().report.total.logical)} inputTokens={formatCompactCount(data().report.total.tokens.input)} outputTokens={formatCompactCount(data().report.total.tokens.output)} estimatedCost={costLabel(data().report.total.cost)} detailLine={`Cache read ${formatCompactCount(data().report.total.tokens.cache.read)} · Cache write ${formatCompactCount(data().report.total.tokens.cache.write)} · Helpers ${formatCount(data().report.total.helpers)} · Fallbacks ${formatCount(data().report.total.fallback)}`} refreshing={usageRead.result().isFetching} quotas={formatQuotaProviders(data().quotas ?? [], Date.now())} models={data().report.rows.map((row) => ({ name: row.model ? `${row.model.providerID} / ${row.model.id}` : row.label, detail: `${formatCount(row.logical)} ${row.logical === 1 ? "request" : "requests"} · ${formatCompactCount(row.tokens.input)} in · ${formatCompactCount(row.tokens.output)} out${row.tokens.cache.read > 0 ? ` · ${formatCompactCount(row.tokens.cache.read)} cache` : ""}`, value: costLabel(row.cost) }))} modelsNote={data().quotasNotice ?? surfaceNotices.usage(data())} onRange={(value) => { if (value === "today" || value === "7d" || value === "30d" || value === "all") setRange(value) }} onRefresh={usageRead.refetch} />}
     </Show></Show>
-    <Show when={name === "Settings"}><Show when={settingsData()} fallback={<Show when={settingsRead.result().isError} fallback={<SharedLoadingSkeleton kind="page" label="Loading settings…" />}><p role="alert" class="desktop__error">Settings could not be read.</p><button type="button" class="rl-btn" onClick={settingsRead.refetch}>Refresh</button></Show>}>
-      {(data) => <div class="rl-settings-grid"><div class="relay-settings st-stack"><section class="st-section" aria-label="Color palette"><header class="st-section-head"><h3><Icon name="sparkles" />Color palette</h3></header><label class="rl-field"><span>Color scheme</span><DesktopSelect label="Color scheme" value={themePreference()} options={DESKTOP_THEMES.map((theme) => ({ value: theme.id, label: theme.label, description: theme.description }))} onChange={(value) => { if (isDesktopThemeID(value)) applyThemePreference(value) }} /></label></section></div><SharedSettingsSurface theme={themePreference() === "system" ? "system" : resolveDesktopTheme(themePreference(), false).theme} onThemeChange={applyThemePreference} notificationsOpen={notificationsOpen()} savedPermissionsOpen={permissionsOpen()} closeAppOpen={closeOpen()} animations={animationsEnabled()} keepAwakeStatus={data().keepAwake.state === "unsupported" || data().keepAwake.state === "error" ? "unsupported" : "supported"} keepAwakeChecked={data().keepAwake.state === "on"} keepAwakeDisabled={actionBusy() || actionUncertain() || (data().keepAwake.state === "unsupported" || data().keepAwake.state === "error")} keepAwakeDetail={data().keepAwake.message ?? data().keepAwake.state} telemetryConsent={data().telemetryConsent.consent ? data().telemetryConsent.consent!.enabled ? "enabled" : "disabled" : "undecided"} telemetryNote={data().telemetryNotice ?? (data().telemetryConsent.consent ? `Decided ${new Date(data().telemetryConsent.consent!.decidedAt).toLocaleString()}` : "Not decided yet")} telemetryBusy={actionBusy() || actionUncertain()} latencySamples={data().telemetrySamples.map((entry) => ({ label: entry.sample.kind, detail: Number.isNaN(Date.parse(entry.sample.at)) ? entry.sample.at : new Date(entry.sample.at).toLocaleString(), value: "durationMs" in entry.sample ? formatDurationMs(entry.sample.durationMs) : "Reported" }))} onToggleAnimations={applyAnimationsPreference} onToggleKeepAwake={(enabled) => performSettings({ kind: "keep-awake", revision: data().revision, enabled }, `${enabled ? "Enable" : "Disable"} keep awake?`)} onDecideTelemetry={(enabled) => performSettings({ kind: "telemetry-consent", revision: data().revision, enabled, noticeVersion: 1 }, `${enabled ? "Share" : "Do not share"} latency diagnostics?`)} onToggleNotifications={() => setNotificationsOpen(!notificationsOpen())} onToggleSavedPermissions={() => setPermissionsOpen(!permissionsOpen())} onToggleCloseApp={() => setCloseOpen(!closeOpen())} notificationsContent={notificationsOpen() ? <div class="st-stack"><p class="st-muted">Attention is reported in the terminal; notification center is a web feature.</p><For each={[...activity().waiting.entries()]} fallback={<p class="st-muted">No pending attention is reported.</p>}>{([id, requests]) => <p class="st-muted">{id} · {requests.size} pending requests</p>}</For></div> : undefined} savedPermissionsContent={permissionsOpen() ? <div class="st-stack"><Show when={data().savedPermissions.length} fallback={<p class="st-muted">No saved permissions.</p>}><ul class="st-rows"><For each={data().savedPermissions}>{(rule) => <li class="st-row"><span class="st-row-main"><span>{rule.action} · {rule.resource}</span></span><button type="button" class="rl-btn" disabled={actionBusy() || actionUncertain()} onClick={() => performSettings({ kind: "remove-saved-permission", revision: data().revision, id: rule.id }, `Remove the saved permission for ${rule.action} on ${rule.resource}?`)}>Remove</button></li>}</For></ul></Show></div> : undefined} closeAppContent={closeOpen() ? <div class="st-stack"><p class="st-muted">{connection().mode === "own" ? "Closing this window stops its private backend." : "Closing this window leaves the shared backend running."}</p><p class="st-muted">{connection().mode ?? "Unknown mode"} · {connection().status} · PID {connection().backendPID ?? "unknown"}</p><button type="button" class="rl-btn" onClick={() => void confirmInPage("Switch backend? The private backend will stop if one is running.").then((accepted) => { if (accepted) switchBackend() })}>Switch backend</button></div> : undefined} /></div>}
-    </Show></Show>
+    <Show when={name === "Settings"}><div class="rl-settings-grid"><div class="relay-settings st-stack"><MachineBackendSection /><UpdatesSection triggerTick={updateTriggerTick()} /><section class="st-section" aria-label="Color palette"><header class="st-section-head"><h3><Icon name="sparkles" />Color palette</h3></header><label class="rl-field"><span>Color scheme</span><DesktopSelect label="Color scheme" value={themePreference()} options={DESKTOP_THEMES.map((theme) => ({ value: theme.id, label: theme.label, description: theme.description }))} onChange={(value) => { if (isDesktopThemeID(value)) applyThemePreference(value) }} /></label></section></div><Show when={settingsData()} fallback={<Show when={settingsRead.result().isError} fallback={<SharedLoadingSkeleton kind="page" label="Loading settings…" />}><section class="st-section"><p role="alert" class="desktop__error">Settings could not be read.</p><button type="button" class="rl-btn" onClick={settingsRead.refetch}>Refresh</button></section></Show>}>
+      {(data) => <SharedSettingsSurface theme={themePreference() === "system" ? "system" : resolveDesktopTheme(themePreference(), false).theme} onThemeChange={applyThemePreference} notificationsOpen={notificationsOpen()} savedPermissionsOpen={permissionsOpen()} closeAppOpen={closeOpen()} animations={animationsEnabled()} keepAwakeStatus={data().keepAwake.state === "unsupported" || data().keepAwake.state === "error" ? "unsupported" : "supported"} keepAwakeChecked={data().keepAwake.state === "on"} keepAwakeDisabled={actionBusy() || actionUncertain() || (data().keepAwake.state === "unsupported" || data().keepAwake.state === "error")} keepAwakeDetail={data().keepAwake.message ?? data().keepAwake.state} telemetryConsent={data().telemetryConsent.consent ? data().telemetryConsent.consent!.enabled ? "enabled" : "disabled" : "undecided"} telemetryNote={data().telemetryNotice ?? (data().telemetryConsent.consent ? `Decided ${new Date(data().telemetryConsent.consent!.decidedAt).toLocaleString()}` : "Not decided yet")} telemetryBusy={actionBusy() || actionUncertain()} latencySamples={data().telemetrySamples.map((entry) => ({ label: entry.sample.kind, detail: Number.isNaN(Date.parse(entry.sample.at)) ? entry.sample.at : new Date(entry.sample.at).toLocaleString(), value: "durationMs" in entry.sample ? formatDurationMs(entry.sample.durationMs) : "Reported" }))} onToggleAnimations={applyAnimationsPreference} onToggleKeepAwake={(enabled) => performSettings({ kind: "keep-awake", revision: data().revision, enabled }, `${enabled ? "Enable" : "Disable"} keep awake?`)} onDecideTelemetry={(enabled) => performSettings({ kind: "telemetry-consent", revision: data().revision, enabled, noticeVersion: 1 }, `${enabled ? "Share" : "Do not share"} latency diagnostics?`)} onToggleNotifications={() => setNotificationsOpen(!notificationsOpen())} onToggleSavedPermissions={() => setPermissionsOpen(!permissionsOpen())} onToggleCloseApp={() => setCloseOpen(!closeOpen())} notificationsContent={notificationsOpen() ? <div class="st-stack"><p class="st-muted">Attention is reported in the terminal; notification center is a web feature.</p><For each={[...activity().waiting.entries()]} fallback={<p class="st-muted">No pending attention is reported.</p>}>{([id, requests]) => <p class="st-muted">{id} · {requests.size} pending requests</p>}</For></div> : undefined} savedPermissionsContent={permissionsOpen() ? <div class="st-stack"><Show when={data().savedPermissions.length} fallback={<p class="st-muted">No saved permissions.</p>}><ul class="st-rows"><For each={data().savedPermissions}>{(rule) => <li class="st-row"><span class="st-row-main"><span>{rule.action} · {rule.resource}</span></span><button type="button" class="rl-btn" disabled={actionBusy() || actionUncertain()} onClick={() => performSettings({ kind: "remove-saved-permission", revision: data().revision, id: rule.id }, `Remove the saved permission for ${rule.action} on ${rule.resource}?`)}>Remove</button></li>}</For></ul></Show></div> : undefined} closeAppContent={closeOpen() ? <div class="st-stack"><p class="st-muted">{connection().mode === "own" ? "Closing this window stops its private backend." : "Closing this window leaves the shared backend running."}</p><p class="st-muted">{connection().mode ?? "Unknown mode"} · {connection().status} · PID {connection().backendPID ?? "unknown"}</p><button type="button" class="rl-btn" onClick={() => { const section = document.querySelector<HTMLElement>('[aria-label="Machine & Backend"]'); section?.scrollIntoView({ block: "start" }); section?.querySelector<HTMLElement>("button")?.focus() }}>Open Machine & Backend</button></div> : undefined} />}</Show></div></Show>
   </SharedPageSurface>
+}
+
+function MachineBackendSection() {
+  const [backendMode, setBackendMode] = createSignal<"own" | "shared">(savedSelection().mode)
+  const [sharedServer, setSharedServer] = createSignal(savedSharedEndpoint())
+  createEffect(() => { setBackendMode(savedSelection().mode); setSharedServer(savedSharedEndpoint()) })
+  const applyBackendSelection = () => {
+    const server = sharedServer().trim()
+    return connectBackend(backendMode() === "own" ? { mode: "own" } : server ? { mode: "shared", server } : { mode: "shared" })
+  }
+  const closeOwnership = () => (connection().mode ?? backendMode()) === "own" ? "Private backend stops when this window closes." : "Shared background server keeps running when this window closes."
+  return <section class="st-section st-machine" aria-label="Machine & Backend">
+    <header class="st-section-head"><h3><Icon name="devices" />Machine & Backend</h3><span class="rl-badge" data-status={connection().status}>{connection().status}</span></header>
+    <dl class="rl-meta">
+      <dt>Machine</dt><dd>This Mac</dd>
+      <dt>Connection</dt><dd>{connectionOwnership()}</dd>
+      <dt>Version</dt><dd>{connection().version ? `v${connection().version}` : "Not connected"}{connection().backendPID ? ` · PID ${connection().backendPID}` : ""}</dd>
+    </dl>
+    <p class="st-muted">{closeOwnership()}</p>
+    <label class="rl-field"><span>Server mode</span><DesktopSelect label="Server mode" value={backendMode()} disabled={reconnectingBackend()} options={[{ value: "shared", label: "Shared background server" }, { value: "own", label: "Private backend" }]} onChange={(value) => setBackendMode(value === "own" ? "own" : "shared")} /></label>
+    <Show when={backendMode() === "shared"}><label class="rl-field"><span>Shared endpoint</span><input type="url" value={sharedServer()} disabled={reconnectingBackend()} onInput={(event) => setSharedServer(event.currentTarget.value)} placeholder="http://127.0.0.1:port" /><small>Leave empty to automatically use or start the local ycoding server. Do not include credentials.</small></label></Show>
+    <div class="desktop__actions"><button type="button" class="rl-btn" data-tone="go" disabled={reconnectingBackend()} onClick={() => void applyBackendSelection()}>{reconnectingBackend() ? "Connecting…" : "Apply & Reconnect"}</button></div>
+    <Show when={backendActionError() ?? connection().error}>{(message) => <p role="alert" class="desktop__error">{message()}</p>}</Show>
+    <Show when={connection().notice}>{(notice) => <p role="status">{notice()}</p>}</Show>
+  </section>
+}
+
+function UpdatesSection(props: { triggerTick: number }) {
+  const [updateInfo, setUpdateInfo] = createSignal<UpdateCheckResult>()
+  const [updateBusy, setUpdateBusy] = createSignal<"checking" | "installing">()
+  const [updateError, setUpdateError] = createSignal<string>()
+  const [installNote, setInstallNote] = createSignal<string>()
+  const runCheckForUpdates = async () => {
+    if (updateBusy()) return
+    setUpdateBusy("checking"); setUpdateError(undefined); setInstallNote(undefined)
+    try { setUpdateInfo(await api.checkForUpdates()) }
+    catch (cause) { setUpdateError(failure(cause, "Updates could not be checked.")) }
+    finally { setUpdateBusy(undefined) }
+  }
+  const runInstallUpdate = async (info: UpdateCheckResult) => {
+    if (updateBusy()) return
+    setUpdateBusy("installing"); setUpdateError(undefined); setInstallNote(undefined)
+    try { const result = await api.installUpdate({ version: info.latestVersion }); setInstallNote(result.relaunching ? `Installed v${result.installedVersion}. Relaunching…` : `Installed v${result.installedVersion}. Restart to finish.`) }
+    catch (cause) { setUpdateError(failure(cause, "The update could not be installed.")) }
+    finally { setUpdateBusy(undefined) }
+  }
+  createEffect(on(() => props.triggerTick, (tick) => { if (tick > handledUpdateTick) { handledUpdateTick = tick; void runCheckForUpdates() } }))
+  const status = () => { const info = updateInfo(); return !info ? "Not checked yet" : info.updateAvailable ? `Update available: v${info.latestVersion}` : "Up to date" }
+  const notes = () => { const text = updateInfo()?.releaseNotes.trim() ?? ""; return text.length > 600 ? `${text.slice(0, 600)}…` : text }
+  return <section class="st-section st-updates" aria-label="Updates">
+    <header class="st-section-head"><h3><Icon name="refresh" />Updates</h3></header>
+    <dl class="rl-meta"><dt>Current version</dt><dd>{updateInfo()?.currentVersion ?? connection().version ?? "Bundled"}</dd><dt>Status</dt><dd>{status()}</dd></dl>
+    <Show when={updateInfo()}>{(info) => <>
+      <Show when={!info().canInstall && info().cannotInstallReason}>{(reason) => <p class="st-muted">{reason()}</p>}</Show>
+      <Show when={notes()}>{(text) => <pre class="rl-output"><code>{text()}</code></pre>}</Show>
+    </>}</Show>
+    <div class="desktop__actions">
+      <button type="button" class="rl-btn" disabled={!!updateBusy()} onClick={() => void runCheckForUpdates()}>Check for updates</button>
+      <Show when={updateInfo()}>{(info) => <>
+        <Show when={info().releaseUrl}><button type="button" class="rl-btn" onClick={() => void api.openExternalUrl({ url: info().releaseUrl }).catch((cause: unknown) => setUpdateError(failure(cause, "The release page could not be opened.")))}>Release notes</button></Show>
+        <Show when={info().updateAvailable && info().canInstall}><button type="button" class="rl-btn" data-tone="go" disabled={!!updateBusy()} onClick={() => void runInstallUpdate(info())}>Update & Relaunch</button></Show>
+      </>}</Show>
+    </div>
+    <Show when={updateBusy()}>{(busy) => <p role="status">{busy() === "checking" ? "Checking…" : "Installing update…"}</p>}</Show>
+    <Show when={installNote()}>{(note) => <p role="status">{note()}</p>}</Show>
+    <Show when={updateError()}>{(message) => <p role="alert" class="desktop__error">{message()}</p>}</Show>
+  </section>
 }
 
 const projectsRoute = createRoute({ getParentRoute: () => workspaceRoute, path: "/projects", component: () => <Destination name="Projects" /> })
@@ -2064,7 +2168,7 @@ if (typeof document !== "undefined") {
   const syncDocumentVisibility = () => { if (document.hidden) document.documentElement.dataset.hidden = "true"; else delete document.documentElement.dataset.hidden }
   syncDocumentVisibility()
   document.addEventListener("visibilitychange", syncDocumentVisibility)
-  const router = createRouter({ routeTree: root.addChildren([connectionRoute, workspaceRoute.addChildren([newChatRoute, projectsRoute, listRoute, workspacesRoute, usageRoute, settingsRoute, conversationRoute])]), history: createHashHistory() })
+  const router = createRouter({ routeTree: root.addChildren([workspaceRoute.addChildren([indexRoute, newChatRoute, projectsRoute, listRoute, workspacesRoute, usageRoute, settingsRoute, conversationRoute])]), history: createHashHistory() })
   const element = document.getElementById("app")
   if (!element) throw new Error("Missing desktop application root")
   render(() => <RouterProvider router={router} />, element)

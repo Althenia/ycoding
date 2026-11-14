@@ -1,6 +1,6 @@
 import { Electroview } from "electrobun/view"
 import type { YCodingEvent } from "@ycoding-ai/client"
-import type { ConnectionState, DesktopAPI } from "./contract"
+import type { ConnectionState, DesktopAPI, DesktopMenuAction } from "./contract"
 import { DESKTOP_RPC_MAX_REQUEST_TIME, type DesktopRPCSchema } from "./rpc"
 
 declare global {
@@ -10,10 +10,12 @@ declare global {
 const states = new Set<(state: ConnectionState) => void>()
 const events = new Set<(event: YCodingEvent) => void>()
 const resyncs = new Set<() => void>()
+const menuActions = new Set<(action: DesktopMenuAction) => void>()
 const rpc = Electroview.defineRPC<DesktopRPCSchema>({ maxRequestTime: DESKTOP_RPC_MAX_REQUEST_TIME, handlers: { messages: {
   state: (value) => { for (const callback of states) callback(value) },
   event: (value) => { for (const callback of events) callback(value) },
   resync: () => { for (const callback of resyncs) callback() },
+  menuAction: (action) => { for (const callback of menuActions) callback(action) },
 } } })
 export const desktopRPC = rpc
 if (window.__electrobunWebviewId) new Electroview({ rpc })
@@ -22,6 +24,10 @@ type DesktopTransport = typeof rpc
 
 export function createDesktopBridge(rpc: DesktopTransport, api: () => DesktopAPI | undefined): DesktopAPI {
 return {
+  readClipboard: () => api()?.readClipboard() ?? rpc.request.readClipboard(),
+  writeClipboard: (input) => api()?.writeClipboard(input) ?? rpc.request.writeClipboard(input),
+  checkForUpdates: () => api()?.checkForUpdates() ?? rpc.request.checkForUpdates(),
+  installUpdate: (input) => api()?.installUpdate(input) ?? rpc.request.installUpdate(input),
   browseDirectory: (input) => api()?.browseDirectory(input) ?? rpc.request.browseDirectory(input),
   openDirectory: (input) => api()?.openDirectory(input) ?? rpc.request.openDirectory(input),
   createDirectory: (input) => api()?.createDirectory(input) ?? rpc.request.createDirectory(input),
@@ -71,11 +77,16 @@ return {
   onState: (callback) => api()?.onState(callback) ?? (states.add(callback), () => { states.delete(callback) }),
   onEvent: (callback) => api()?.onEvent(callback) ?? (events.add(callback), () => { events.delete(callback) }),
   onResync: (callback) => api()?.onResync(callback) ?? (resyncs.add(callback), () => { resyncs.delete(callback) }),
+  onMenuAction: (callback) => api()?.onMenuAction(callback) ?? (menuActions.add(callback), () => { menuActions.delete(callback) }),
 }
 }
 
 const implementation = createDesktopBridge(rpc, api)
 export const desktop: DesktopAPI = {
+  readClipboard: implementation.readClipboard,
+  writeClipboard: implementation.writeClipboard,
+  checkForUpdates: implementation.checkForUpdates,
+  installUpdate: implementation.installUpdate,
   browseDirectory: implementation.browseDirectory,
   openDirectory: implementation.openDirectory,
   createDirectory: implementation.createDirectory,
@@ -125,4 +136,5 @@ export const desktop: DesktopAPI = {
   onState: implementation.onState,
   onEvent: implementation.onEvent,
   onResync: implementation.onResync,
+  onMenuAction: implementation.onMenuAction,
 }

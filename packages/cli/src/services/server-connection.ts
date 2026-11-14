@@ -15,6 +15,7 @@ export type Args = {
   readonly privateServer?: Parameters<typeof Standalone.start>[0]
   readonly managed?: "discover"
   readonly managedCommand?: EnsureOptions["command"]
+  readonly allowLoopbackFallback?: boolean
 }
 
 export type Resolved = {
@@ -43,43 +44,68 @@ export const resolve = Effect.fn("cli.server-connection.resolve")(function* (arg
     }
     const endpoint = { url: args.server, auth } satisfies Endpoint
     const client = YCoding.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
+    const fallback = args.allowLoopbackFallback === true && args.managedCommand !== undefined && isLoopbackOrigin(args.server)
     const health = yield* Effect.tryPromise({
       try: () => client.health.get({ signal: AbortSignal.timeout(5_000) }),
       catch: (cause) => connectError(endpoint, cause),
-    })
+    }).pipe(Effect.catchIf((error) => fallback && unavailable(error.cause), () => Effect.succeed(undefined)))
+    if (health === undefined) {
+      process.stderr.write(
+        args.diagnostics === "sanitized"
+          ? "Warning: [shared-endpoint-fallback] Loopback shared server is unavailable; using the local managed service.\n"
+          : `Warning: Server at ${new URL(args.server).origin} is unavailable; using the local managed service.\n`,
+      )
+      return yield* resolveLocal(args)
+    }
     if (health.version !== InstallationVersion)
       process.stderr.write(
         args.diagnostics === "sanitized"
           ? "Warning: [server-version-mismatch] Native server version differs from this client; continuing without replacement.\n"
           : `Warning: Server at ${endpoint.url} has version ${health.version}; this client is ${InstallationVersion}. Continuing anyway.\n`,
       )
-    return { endpoint } satisfies Resolved
+    return { endpoint } as Resolved
   }
   if (args.standalone) {
     const server = yield* Standalone.owned(args.privateServer)
-    return { endpoint: server.endpoint, exited: server.exited } satisfies Resolved
+    return { endpoint: server.endpoint, exited: server.exited } as Resolved
   }
   if (args.managed === "discover") {
     const options = yield* ServiceConfig.discoveryOptions()
     const endpoint = yield* Service.discover(options)
-    if (endpoint !== undefined) return { endpoint } satisfies Resolved
+    if (endpoint !== undefined) return { endpoint } as Resolved
     const existing = yield* Service.discover({ ...options, version: undefined })
     return yield* Effect.fail(new Error(existing === undefined
       ? "No compatible managed server is running"
       : "Managed server version does not match the bundled desktop client"))
   }
+  return yield* resolveLocal(args)
+})
 
+const resolveLocal = Effect.fnUntraced(function* (args: Args) {
   const configured = yield* ServiceConfig.options()
   const options = { ...configured, ...(args.managedCommand ? { command: args.managedCommand } : {}) }
+  const mismatch = args.mismatch ?? "replace"
   if (args.managedCommand) {
-    const endpoint = yield* Service.discover(options)
-    if (endpoint !== undefined) return { endpoint } satisfies Resolved
+    const endpoint = yield* Service.discover(mismatch === "ignore" ? { ...options, version: undefined } : options)
+    if (endpoint !== undefined) return { endpoint } as Resolved
   }
   return {
-    endpoint: yield* resolveManaged({ ...options, onStart: args.onStart }, args.mismatch ?? "replace"),
+    endpoint: yield* resolveManaged({ ...options, onStart: args.onStart }, mismatch),
     service: managedService(options),
-  } satisfies Resolved
+  } as Resolved
 })
+
+const loopbackHosts = new Set(["127.0.0.1", "localhost", "[::1]", "::1"])
+
+export function isLoopbackOrigin(rawUrl: string) {
+  if (!URL.canParse(rawUrl)) return false
+  const url = new URL(rawUrl)
+  return (url.protocol === "http:" || url.protocol === "https:") && loopbackHosts.has(url.hostname)
+}
+
+function unavailable(cause: unknown) {
+  return isUnauthorizedError(cause) || (cause instanceof ClientError && cause.reason === "Transport")
+}
 
 export function managedService(options: EnsureOptions) {
   const reconnectOptions = { ...options, version: undefined }
