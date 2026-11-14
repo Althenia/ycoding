@@ -22,7 +22,7 @@ import { isBackgroundSession } from "../util/session"
 
 const REFRESH_EVENTS = new RegExp(
   `^(${[
-    String.raw`session\.(created|deleted|renamed|archived|unarchived|moved|status)`,
+    String.raw`session\.(created|deleted|renamed|archived|unarchived|moved|pinned|unpinned|status)`,
     String.raw`session\.(task\.updated|execution\.|shell\.|review\.)`,
     String.raw`permission\.`,
     String.raw`guardrail\.`,
@@ -31,6 +31,7 @@ const REFRESH_EVENTS = new RegExp(
     String.raw`shell\.(created|exited|deleted)`,
   ].join("|")})`,
 )
+const ROOT_REFRESH_EVENTS = /^session\.(created|deleted|renamed|archived|unarchived|moved|pinned|unpinned)$/
 
 export function DialogSessionList(
   props: {
@@ -61,12 +62,18 @@ export function DialogSessionList(
   let disposed = false
   let refreshing = false
   let refreshDirty = false
+  let refreshRoots = false
+  let refreshSessions: Set<string> | undefined = new Set()
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined
   let refreshGeneration = 0
+  let candidateRoots = new Set<string>()
+  const runningGutter = () => <Spinner />
 
-  async function decisionRoot(sessionID: string) {
+  async function decisionRoot(sessionID: string, stale: () => boolean) {
     let current: string | undefined = sessionID
     const seen = new Set<string>()
     while (current && !seen.has(current) && seen.size < 16) {
+      if (stale()) return undefined
       seen.add(current)
       const info: SessionInfo | undefined =
         data.session.get(current) ?? (await client.api.session.get({ sessionID: current }).catch(() => undefined))
@@ -78,21 +85,24 @@ export function DialogSessionList(
     return undefined
   }
 
-  async function decisionRoots(decisions: Awaited<ReturnType<typeof client.api.decision.list>>) {
-    const roots = await Promise.all(decisions.map((item) => decisionRoot(item.sessionID)))
+  async function decisionRoots(
+    decisions: Awaited<ReturnType<typeof client.api.decision.list>>,
+    stale: () => boolean,
+  ) {
+    const roots = await Promise.all(decisions.map((item) => decisionRoot(item.sessionID, stale)))
     return new Set(roots.filter((root): root is string => root !== undefined))
   }
 
-  async function loadGlobal(generation: number) {
+  async function loadGlobal(generation: number, discoverRoots: boolean, sessionIDs?: ReadonlySet<string>) {
     const stale = () => disposed || generation !== refreshGeneration
-    await data.session.syncRoots(activeProject()?.id).catch(() => undefined)
+    if (discoverRoots) await data.session.syncRoots(activeProject()?.id).catch(() => undefined)
     if (stale()) return
     const [decisions, outstanding] = await Promise.allSettled([
       client.api.decision.list(),
       client.api.session.outstanding(),
     ])
     if (stale()) return
-    const waiting = decisions.status === "fulfilled" ? await decisionRoots(decisions.value) : global().waiting
+    const waiting = decisions.status === "fulfilled" ? await decisionRoots(decisions.value, stale) : global().waiting
     if (stale()) return
     const running = outstanding.status === "fulfilled" ? new Set(outstanding.value.running ?? []) : global().running
     const candidates = outstanding.status === "fulfilled" ? (outstanding.value.data ?? []) : []
@@ -109,42 +119,84 @@ export function DialogSessionList(
       const session = data.session.get(sessionID)
       return session !== undefined && !session.parentID && !isBackgroundSession(session)
     })
-    await Promise.all(roots.map((sessionID) => data.session.subagent.sync(sessionID).catch(() => undefined)))
+    const affected =
+      sessionIDs === undefined
+        ? undefined
+        : new Set(
+            [...sessionIDs].map((sessionID) => {
+              const root = data.session.get(data.session.root(sessionID))
+              return root && !root.parentID ? root.id : undefined
+            }),
+          )
+    await Promise.all(
+      roots
+        .filter(
+          (sessionID) =>
+            discoverRoots ||
+            affected === undefined ||
+            affected.has(undefined) ||
+            affected.has(sessionID) ||
+            !candidateRoots.has(sessionID) ||
+            !data.session.subagent.page(sessionID),
+        )
+        .map((sessionID) => data.session.subagent.sync(sessionID).catch(() => undefined)),
+    )
     if (stale()) return
-    setGlobal({ waiting, running })
+    if (outstanding.status === "fulfilled") candidateRoots = new Set(roots)
+    setGlobal((current) =>
+      current.waiting.size === waiting.size &&
+      [...waiting].every((sessionID) => current.waiting.has(sessionID)) &&
+      current.running.size === running.size &&
+      [...running].every((sessionID) => current.running.has(sessionID))
+        ? current
+        : { waiting, running },
+    )
   }
 
-  async function refreshGlobal() {
-    if (refreshing) {
-      refreshDirty = true
-      return
-    }
-    refreshing = true
+  function refreshGlobal(discoverRoots = false, sessionIDs?: ReadonlySet<string>) {
+    if (disposed) return
     refreshDirty = true
-    try {
-      while (refreshDirty) {
-        refreshDirty = false
-        await loadGlobal(++refreshGeneration)
-        if (disposed) break
-      }
-    } finally {
-      refreshing = false
-    }
+    refreshRoots ||= discoverRoots
+    if (sessionIDs === undefined) refreshSessions = undefined
+    else sessionIDs.forEach((sessionID) => refreshSessions?.add(sessionID))
+    if (refreshing || refreshTimer !== undefined) return
+    refreshTimer = setTimeout(() => {
+      refreshTimer = undefined
+      if (disposed) return
+      const roots = refreshRoots
+      const sessions = refreshSessions
+      refreshDirty = false
+      refreshRoots = false
+      refreshSessions = new Set()
+      refreshing = true
+      void loadGlobal(refreshGeneration, roots, sessions).finally(() => {
+        refreshing = false
+        if (refreshDirty) refreshGlobal(refreshRoots, refreshSessions)
+      })
+    }, 0)
   }
 
   onCleanup(() => {
     disposed = true
+    refreshGeneration++
+    if (refreshTimer !== undefined) clearTimeout(refreshTimer)
     releaseRetained?.()
   })
   onCleanup(
     event.subscribe((item) => {
-      if (REFRESH_EVENTS.test(item.type)) void refreshGlobal()
+      if (!REFRESH_EVENTS.test(item.type)) return
+      const sessionID =
+        "sessionID" in item.data && typeof item.data.sessionID === "string" ? item.data.sessionID : undefined
+      refreshGlobal(ROOT_REFRESH_EVENTS.test(item.type), sessionID === undefined ? undefined : new Set([sessionID]))
     }),
   )
   createEffect(
     on(
       () => activeProject()?.id,
-      () => void refreshGlobal(),
+      () => {
+        refreshGeneration++
+        refreshGlobal(true)
+      },
       { defer: true },
     ),
   )
@@ -277,7 +329,7 @@ export function DialogSessionList(
         gutter: isWaiting(session)
           ? undefined
           : isRunning(session)
-            ? () => <Spinner />
+            ? runningGutter
             : slot === undefined
               ? undefined
               : () => <text fg={theme.hue.accent[mode() === "light" ? 800 : 200]}>{slot}</text>,
@@ -312,7 +364,7 @@ export function DialogSessionList(
 
   onMount(() => {
     dialog.setSize("large")
-    void refreshGlobal()
+    refreshGlobal(true)
   })
 
   function archive(sessionID: string) {

@@ -2,7 +2,7 @@ import { InputRenderable, RGBA, ScrollBoxRenderable, TextAttributes } from "@ope
 import { Keymap, type KeymapCommand } from "../context/keymap"
 import { useTheme } from "../context/theme"
 import { entries, filter, flatMap, groupBy, pipe } from "remeda"
-import { batch, createEffect, createMemo, createSignal, For, Show, type JSX, on, onCleanup } from "solid-js"
+import { batch, createEffect, createMemo, createSignal, For, Index, Show, type JSX, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useTerminalDimensions } from "@opentui/solid"
 import fuzzysort from "fuzzysort"
@@ -648,27 +648,27 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
             height={props.layout === "command-palette" ? paletteViewportHeight() : undefined}
             maxHeight={props.layout === "command-palette" ? paletteViewportHeight() : height()}
           >
-            <For each={grouped()}>
-              {([category, options], index) => (
+            <Index each={grouped()}>
+              {(group, index) => (
                 <>
-                  <Show when={category}>
-                    <box paddingTop={index() > 0 ? 1 : 0} paddingBottom={1} paddingLeft={3}>
+                  <Show when={group()[0]}>
+                    <box paddingTop={index > 0 ? 1 : 0} paddingBottom={1} paddingLeft={3}>
                       <Show
-                        when={options[0]?.categoryView}
+                        when={group()[1][0]?.categoryView}
                         fallback={
                           <text fg={theme.text.feedback.info.default} attributes={TextAttributes.BOLD}>
-                            {category}
+                            {group()[0]}
                           </text>
                         }
                       >
-                        {options[0]?.categoryView}
+                        {group()[1][0]?.categoryView}
                       </Show>
                     </box>
                   </Show>
-                  <For each={options}>
+                  <Index each={group()[1]}>
                     {(option) => {
-                      const active = createMemo(() => !props.locked && isDeepEqual(option.value, selected()?.value))
-                      const current = createMemo(() => isDeepEqual(option.value, props.current))
+                      const active = createMemo(() => !props.locked && isDeepEqual(option().value, selected()?.value))
+                      const current = createMemo(() => isDeepEqual(option().value, props.current))
                       return (
                         <box
                           flexDirection="column"
@@ -680,19 +680,19 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                           }}
                           onMouseUp={() => {
                             if (props.locked) return
-                            option.onSelect?.(dialog)
-                            props.onSelect?.(option)
+                            option().onSelect?.(dialog)
+                            props.onSelect?.(option())
                           }}
                           onMouseOver={() => {
                             if (props.locked) return
                             if (store.input !== "mouse") return
-                            const index = flat().findIndex((x) => isDeepEqual(x.value, option.value))
+                            const index = flat().findIndex((x) => isDeepEqual(x.value, option().value))
                             if (index === -1) return
                             moveTo(index)
                           }}
                           onMouseDown={() => {
                             if (props.locked) return
-                            const index = flat().findIndex((x) => isDeepEqual(x.value, option.value))
+                            const index = flat().findIndex((x) => isDeepEqual(x.value, option().value))
                             if (index === -1) return
                             moveTo(index)
                           }}
@@ -706,7 +706,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                                 active()
                                   ? actionFocused()
                                     ? theme.background.surface.overlay
-                                    : (option.bg ?? theme.background.action.primary.focused)
+                                    : (option().bg ?? theme.background.action.primary.focused)
                                   : RGBA.fromInts(0, 0, 0, 0)
                               }
                             >
@@ -716,36 +716,36 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                                 paddingLeft={3}
                                 paddingRight={DIALOG_INSET_RIGHT}
                               >
-                                <Show when={!current() && option.margin}>
+                                <Show when={!current() && option().margin}>
                                   <box position="absolute" left={3} flexShrink={0}>
-                                    {option.margin}
+                                    {option().margin}
                                   </box>
                                 </Show>
                                 <Option
-                                  title={option.title}
-                                  titleView={option.titleView}
-                                  footer={flatten() ? (option.category ?? option.footer) : option.footer}
-                                  titleWidth={option.titleWidth}
-                                  truncateTitle={option.truncateTitle}
-                                  description={option.description !== category ? option.description : undefined}
+                                  title={option().title}
+                                  titleView={option().titleView}
+                                  footer={flatten() ? (option().category ?? option().footer) : option().footer}
+                                  titleWidth={option().titleWidth}
+                                  truncateTitle={option().truncateTitle}
+                                  description={option().description !== group()[0] ? option().description : undefined}
                                   active={active()}
-                                  fg={option.fg}
+                                  fg={option().fg}
                                   current={current()}
                                   muted={actionFocused()}
-                                  gutter={option.gutter}
-                                  state={option.state}
+                                  gutter={option().gutter}
+                                  state={option().state}
                                 />
                               </box>
                             </box>
                           </box>
-                          <For each={option.details}>
+                          <For each={option().details}>
                             {(detail) => (
                               <box paddingLeft={6} paddingRight={4}>
                                 <text
-                                  fg={option.detailsColor ?? theme.text.subdued}
-                                  wrapMode={option.detailsWrap ? "word" : "none"}
+                                  fg={option().detailsColor ?? theme.text.subdued}
+                                  wrapMode={option().detailsWrap ? "word" : "none"}
                                 >
-                                  {option.detailsWrap
+                                  {option().detailsWrap
                                     ? detail
                                     : Locale.truncateMiddle(detail, Math.max(1, Math.min(76, dimensions().width - 12)))}
                                 </text>
@@ -755,10 +755,10 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                         </box>
                       )
                     }}
-                  </For>
+                  </Index>
                 </>
               )}
-            </For>
+            </Index>
           </scrollbox>
         </Show>
       </box>
@@ -801,6 +801,7 @@ function Option(props: {
   onMouseOver?: () => void
 }) {
   const { theme } = useTheme().contextual("elevated")
+  const gutter = createMemo(() => props.gutter)
   const stateGlyph = createMemo(() => (props.state ? getGlyph(props.state) : undefined))
   const text = createMemo(() => {
     if (props.active && !props.muted) return props.fg ?? theme.text.action.primary.focused
@@ -820,14 +821,14 @@ function Option(props: {
           when={props.state}
           fallback={
             <Show
-              when={props.gutter}
+              when={gutter()}
               fallback={
                 <Show when={props.current}>
                   <text fg={text()}>●</text>
                 </Show>
               }
             >
-              {props.gutter?.()}
+              {gutter()?.()}
             </Show>
           }
         >
