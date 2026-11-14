@@ -352,8 +352,39 @@ describe("remote-control app-server mapping", () => {
     expect(JSON.stringify(account)).not.toContain("account-id-value")
     const auth = await rpc(server, "getAuthStatus")
     expect(auth.result.authMethod).toBe("chatgpt")
-    expect((await rpc(server, "config/read")).result.config).toEqual({})
-    expect((await rpc(server, "model/list")).result.data[0].id).toBe("model-1")
+    expect((await rpc(server, "config/read")).result.config).toEqual({
+      model_provider: "ycoding",
+      model_providers: { ycoding: { name: "YCoding" } },
+    })
+    expect((await rpc(server, "model/list")).result.data).toEqual([
+      {
+        id: "openai/model-1",
+        model: "openai/model-1",
+        displayName: "model-1 (openai)",
+        hidden: false,
+        isDefault: false,
+        supportedReasoningEfforts: [],
+        defaultReasoningEffort: null,
+        providerId: "openai",
+      },
+    ])
+    const bare = createRemoteControlAppServer({
+      ...appInput,
+      backend: { ...fake.backend, models: async () => [{ id: "model-1" }] },
+      codexHome: "/h",
+    })
+    await initialized(bare)
+    expect((await rpc(bare, "model/list")).result.data).toEqual([
+      {
+        id: "model-1",
+        model: "model-1",
+        displayName: "model-1",
+        hidden: false,
+        isDefault: false,
+        supportedReasoningEfforts: [],
+        defaultReasoningEffort: null,
+      },
+    ])
     expect((await rpc(server, "skills/list")).result.data[0].id).toBe("skill-1")
   })
 

@@ -1,14 +1,31 @@
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
+import type { Model } from "@ycoding-ai/schema/model"
 import type { RemoteControlBackend } from "./app-server"
 
 export function createRemoteControlBackend(input: { readonly channel: NativeDots.Channel; readonly profile: string }): RemoteControlBackend {
   const channel = input.channel
+  const selectModel = channel.selectModel
+  const defaultModel = channel.defaultModel
+  const setDefaultModel = channel.setDefaultModel
   return {
-    createThread: ({ location, title, inputID }) => channel.createRoot({ inputID, directory: location.directory, ...(title === undefined ? {} : { title }) }),
+    createThread: ({ location, title, inputID, model }) =>
+      channel.createRoot({
+        inputID,
+        directory: location.directory,
+        ...(title === undefined ? {} : { title }),
+        ...(model === undefined ? {} : { model }),
+      }),
     getThread: channel.getRoot,
     listThreads: channel.listRoots,
     readThread: channel.readRoot,
-    prompt: (rootID, prompt) => channel.prompt({ rootID, inputID: prompt.inputID, text: prompt.text, delivery: prompt.delivery }),
+    prompt: (rootID, prompt) =>
+      channel.prompt({
+        rootID,
+        inputID: prompt.inputID,
+        text: prompt.text,
+        delivery: prompt.delivery,
+        ...(prompt.model === undefined ? {} : { model: prompt.model }),
+      }),
     interrupt: channel.interrupt,
     models: channel.models,
     skills: channel.skills,
@@ -22,5 +39,8 @@ export function createRemoteControlBackend(input: { readonly channel: NativeDots
     deleteThread: async (rootID) => { await channel.removeRoot(rootID) },
     subscribeEscalations: channel.subscribeEscalations,
     retire: channel.retire,
+    ...(selectModel === undefined ? {} : { selectModel: (rootID: string, model: Model.Ref) => selectModel({ rootID, model }) }),
+    ...(defaultModel === undefined ? {} : { defaultModel: () => defaultModel() }),
+    ...(setDefaultModel === undefined ? {} : { setDefaultModel: (model: Model.Ref) => setDefaultModel(model) }),
   }
 }

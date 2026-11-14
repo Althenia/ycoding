@@ -1,14 +1,14 @@
 export * as NativeDots from "./native"
 
-import { Cause, Effect, Schema } from "effect"
+import { Cause, DateTime, Effect, Exit, Option, Schema } from "effect"
 import { existsSync, statSync } from "node:fs"
-import os from "node:os"
 import path from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import { eq } from "drizzle-orm"
 import { EventManifest } from "@ycoding-ai/schema/event-manifest"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
-import type { Model } from "@ycoding-ai/schema/model"
+import { Model } from "@ycoding-ai/schema/model"
+import { Money } from "@ycoding-ai/schema/money"
 import { Form } from "../form"
 import { Session } from "../session"
 import { SessionEvent } from "../session/event"
@@ -38,6 +38,7 @@ import { Global } from "../global"
 import { KV } from "../kv"
 import { EventRuntime } from "../event"
 import { EventSequenceTable } from "../event/sql"
+import { Location } from "../location"
 import { LocationServiceMap } from "../location-service-map"
 import { Project } from "../project"
 import { Catalog } from "../catalog"
@@ -87,19 +88,32 @@ export interface RootSnapshot {
   readonly snapshotError?: true
 }
 
+export interface ChannelModel {
+  readonly id: string
+  readonly providerID: string
+  readonly name?: string
+  readonly profile?: string
+  readonly active?: boolean
+  readonly variants?: readonly string[]
+  readonly isDefault?: boolean
+}
+
 export interface Channel {
-  readonly models: () => Promise<readonly { readonly id: string; readonly providerID: string; readonly name?: string }[]>
+  readonly models: () => Promise<readonly ChannelModel[]>
   readonly skills: () => Promise<readonly { readonly id: string; readonly name?: string }[]>
   readonly listRoots: () => Promise<RootSnapshot[]>
   readonly getRoot: (rootID: string) => Promise<RootSnapshot | undefined>
   readonly readRoot: (rootID: string) => Promise<RootSnapshot & { readonly messages: SessionMessage.Info[] }>
-  readonly createRoot: (input: { readonly inputID: string; readonly directory: string; readonly title?: string }) => Promise<RootSnapshot>
+  readonly createRoot: (input: { readonly inputID: string; readonly directory: string; readonly title?: string; readonly model?: Model.Ref }) => Promise<RootSnapshot>
   readonly renameRoot: (input: { readonly rootID: string; readonly title: string }) => Promise<void>
   readonly archiveRoot: (rootID: string) => Promise<void>
   readonly unarchiveRoot: (rootID: string) => Promise<RootSnapshot>
   readonly removeRoot: (rootID: string) => Promise<void>
   readonly subscribeEscalations: (listener: (rootID: string) => void) => Promise<() => void>
-  readonly prompt: (input: { readonly rootID: string; readonly inputID: string; readonly text: string; readonly delivery: "steer" | "queue" }) => Promise<{ readonly messageID: string }>
+  readonly selectModel?: (input: { readonly rootID: string; readonly model: Model.Ref }) => Promise<RootSnapshot>
+  readonly defaultModel?: () => Promise<Model.Ref | undefined>
+  readonly setDefaultModel?: (model: Model.Ref) => Promise<Model.Ref>
+  readonly prompt: (input: { readonly rootID: string; readonly inputID: string; readonly text: string; readonly delivery: "steer" | "queue"; readonly model?: Model.Ref }) => Promise<{ readonly messageID: string }>
   readonly interrupt: (rootID: string) => Promise<void>
   readonly pending: (rootID: string) => Promise<NativeRequest[]>
   readonly settle: (handle: Candidate, answers: Answers) => Promise<void>
@@ -170,6 +184,57 @@ export class Error extends Schema.TaggedErrorClass<Error>()("NativeDots.Error", 
 const unavailable = () => new Error({ code: "unavailable", message: "Native Session access is unavailable" })
 const invalid = () => new Error({ code: "invalid_input", message: "The native request does not match its pending operation" })
 const unknownProject = () => new Error({ code: "not_found", message: "The project is not in the catalog" })
+const defaultModelKey = "dots.native.default-model"
+const normalizeModelRef = (ref: Model.Ref): Model.Ref => Model.Ref.make({
+  providerID: ref.providerID,
+  id: ref.id,
+  ...(ref.profile !== undefined && ref.profile.length > 0 ? { profile: ref.profile } : {}),
+  ...(ref.variant !== undefined && ref.variant.length > 0 ? { variant: ref.variant } : {}),
+})
+const decodeModelRef = (value: unknown): Model.Ref | undefined => {
+  const input =
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? {
+          ...("providerID" in value ? { providerID: value.providerID } : {}),
+          ...("id" in value ? { id: value.id } : {}),
+          ...("profile" in value && value.profile !== undefined ? { profile: value.profile } : {}),
+          ...("variant" in value && value.variant !== undefined ? { variant: value.variant } : {}),
+        }
+      : value
+  const decoded = Schema.decodeUnknownOption(Model.Ref)(input)
+  if (Option.isNone(decoded)) return undefined
+  const ref = decoded.value
+  if (!ref.providerID.trim() || !ref.id.trim()) return undefined
+  if (ref.profile !== undefined && !ref.profile.trim()) return undefined
+  if (ref.variant !== undefined && !ref.variant.trim()) return undefined
+  return normalizeModelRef(ref)
+}
+const toNativeError = (error: unknown): Error => {
+  if (Schema.is(Error)(error)) return error
+  if (typeof error === "object" && error !== null && "_tag" in error) {
+    if (error._tag === "SessionRunnerModel.VariantUnavailableError")
+      return new Error({ code: "invalid_input", message: error instanceof globalThis.Error ? error.message : "The selected model variant is unavailable" })
+    if (
+      error._tag === "SessionRunnerModel.ProfileUnavailableError" ||
+      error._tag === "SessionRunnerModel.ModelUnavailableError" ||
+      error._tag === "SessionRunnerModel.ModelNotSelectedError" ||
+      error._tag === "SessionRunnerModel.UnsupportedPackageError" ||
+      error._tag === "SessionRunnerModel.ReconnectRequiredError" ||
+      error._tag === "Integration.Authorization" ||
+      error._tag === "Session.CompactionConflictError"
+    )
+      return new Error({ code: "unavailable", message: error instanceof globalThis.Error ? error.message : "The selected model is unavailable" })
+  }
+  return unavailable()
+}
+const isBlockedOutcome = (value: unknown) =>
+  typeof value === "object" && value !== null && "status" in value && value.status === "blocked"
+const sameModelRef = (left: Model.Ref | undefined, right: Model.Ref) =>
+  left !== undefined &&
+  left.providerID === right.providerID &&
+  left.id === right.id &&
+  left.profile === right.profile &&
+  left.variant === right.variant
 const identity = (value: Configuration) => value.enabled
   ? [value.profile, value.credentialID, value.accountID, value.accountGeneration, value.accessRevision] : [false]
 const nonempty = (value: string) => value.trim().length > 0 && value.length <= 256
@@ -210,8 +275,10 @@ export interface Options {
   readonly decisions: (session: Session.Info) => Effect.Effect<NativeDecisions.Interface, unknown>
   readonly authorization: (session: Session.Info) => Effect.Effect<{ readonly permission: Permission.Interface; readonly guardrail: SessionGuardrail.Interface }, unknown>
   readonly selectedModel: (session: Session.Info) => Effect.Effect<Model.Ref | undefined, unknown>
-  readonly models: (session: Session.Info) => Effect.Effect<readonly { readonly id: string; readonly providerID: string; readonly name?: string }[], unknown>
+  readonly models: (session: Session.Info) => Effect.Effect<readonly ChannelModel[], unknown>
   readonly skills: (session: Session.Info) => Effect.Effect<readonly { readonly id: string; readonly name?: string }[], unknown>
+  readonly switchModel?: (input: { readonly sessionID: Session.ID; readonly model: Model.Ref }) => Effect.Effect<unknown, unknown>
+  readonly validateModel?: (input: { readonly model: Model.Ref; readonly directory?: AbsolutePath }) => Effect.Effect<Model.Ref, unknown>
 }
 
 export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
@@ -693,6 +760,28 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
               context.sources.push(source(state, "catalog"))
               contexts.set(key, context)
             }
+            if (contexts.size === 0) {
+              if (!(yield* valid())) return yield* unavailable()
+              const now = Date.now()
+              const homeSession = Session.Info.make({
+                id: Session.ID.create(),
+                projectID: Project.ID.global,
+                scope: "bound",
+                title: "Catalog",
+                location: Location.Ref.make({ directory: AbsolutePath.make(path.resolve(options.home)) }),
+                cost: Money.USD.zero,
+                tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                time: { created: DateTime.makeUnsafe(now), updated: DateTime.makeUnsafe(now) },
+              })
+              const items = yield* read(homeSession)
+              if (!(yield* valid())) return yield* unavailable()
+              return yield* options.db.db.transaction(() => Effect.gen(function* () {
+                yield* requireLive()
+                const result = new Map<string, A>()
+                for (const item of items) if (!result.has(keyOf(item))) result.set(keyOf(item), item)
+                return [...result.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([, item]) => item)
+              })).pipe(Effect.orDie)
+            }
             const contributions: { readonly sources: Form.NativeReplySource[]; readonly items: readonly A[] }[] = []
             for (const context of contexts.values()) {
               const allowed = yield* Effect.forEach(context.sources, (item) => validate(item))
@@ -715,7 +804,7 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
           })
           const channel: Channel = {
             retire: () => { open = false; observers.delete(observe); escalations.clear(); for (const lifetime of roots.values()) retireRoot(lifetime); requests.clear() },
-            models: () => Effect.runPromise(catalog(options.models, (model) => JSON.stringify([model.providerID, model.id]))),
+            models: () => Effect.runPromise(catalog(options.models, (model) => JSON.stringify([model.providerID, model.id, model.profile ?? null]))),
             skills: () => Effect.runPromise(catalog(options.skills, (skill) => skill.id)),
             listRoots: () => Effect.runPromise(Effect.gen(function* () {
               yield* requireLive()
@@ -757,10 +846,20 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
             createRoot: (input) => Effect.runPromise(Effect.gen(function* () {
               yield* requireLive()
               if (!nonempty(input.inputID)) return yield* invalid()
+              let model: Model.Ref | undefined
+              if (input.model !== undefined) {
+                model = decodeModelRef(input.model)
+                if (!model) return yield* invalid()
+              }
               const directory = yield* openedDirectory(input.directory)
+              if (model !== undefined && options.validateModel)
+                model = yield* options.validateModel({ model, directory }).pipe(Effect.mapError(toNativeError))
               const session = yield* options.sessions.create({
                 id: Session.ID.make(`ses_native_${Hash.json([pins.credentialID, pins.accountGeneration, input.inputID])}`),
-                location: { directory }, ...(input.title === undefined ? {} : { title: input.title }), native: { validate: valid },
+                location: { directory },
+                ...(input.title === undefined ? {} : { title: input.title }),
+                ...(model === undefined ? {} : { model }),
+                native: { validate: valid },
               })
               const state = yield* root(session.id)
               const value = yield* snapshot(session, state)
@@ -827,10 +926,87 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
               }
               return stop
             })),
+            selectModel: (input) => Effect.runPromise(Effect.gen(function* () {
+              const model = decodeModelRef(input.model)
+              if (!model) return yield* invalid()
+              const state = yield* root(input.rootID)
+              if (!(yield* validate(source(state, "model")))) return yield* unavailable()
+              if (!options.switchModel) return yield* unavailable()
+              const outcome = yield* options.switchModel({ sessionID: state.rootSessionID, model }).pipe(Effect.mapError(toNativeError))
+              if (isBlockedOutcome(outcome))
+                return yield* new Error({ code: "unavailable", message: "The selected model cannot fit the current session context" })
+              const session = yield* options.sessions.get(state.rootSessionID).pipe(Effect.mapError(toNativeError))
+              const value = yield* snapshot(session, state)
+              if (!(yield* validate(source(state, "model")))) return yield* unavailable()
+              return value
+            })),
+            defaultModel: () => Effect.runPromise(Effect.gen(function* () {
+              yield* requireLive()
+              const stored = yield* options.kv.get(defaultModelKey)
+              const decoded = Schema.decodeUnknownOption(Model.Ref)(stored)
+              if (Option.isNone(decoded)) return undefined
+              return decodeModelRef(decoded.value)
+            })),
+            setDefaultModel: (input) => Effect.runPromise(Effect.gen(function* () {
+              yield* requireLive()
+              const decoded = decodeModelRef(input)
+              if (!decoded) return yield* invalid()
+              let selected = decoded
+              if (options.validateModel) {
+                const directories: AbsolutePath[] = []
+                const seen = new Set<string>()
+                for (const session of (yield* options.sessions.list({ parentID: null })).data) {
+                  const state = yield* root(session.id).pipe(Effect.catch(() => Effect.succeed(undefined)))
+                  if (!state || seen.has(session.location.directory)) continue
+                  seen.add(session.location.directory)
+                  directories.push(session.location.directory)
+                }
+                const candidates = directories.length > 0 ? directories : [AbsolutePath.make(path.resolve(options.home))]
+                let resolved: Model.Ref | undefined
+                let firstError: Error | undefined
+                for (const directory of candidates) {
+                  const exit = yield* options.validateModel({ model: decoded, directory }).pipe(Effect.mapError(toNativeError), Effect.exit)
+                  if (Exit.isSuccess(exit)) {
+                    resolved = exit.value
+                    break
+                  }
+                  if (Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.failCause(exit.cause)
+                  firstError ??= toNativeError(Cause.squash(exit.cause))
+                }
+                if (!resolved) return yield* (firstError ?? unavailable())
+                selected = resolved
+              }
+              const normalized = {
+                providerID: selected.providerID,
+                id: selected.id,
+                ...(selected.profile ? { profile: selected.profile } : {}),
+                ...(selected.variant ? { variant: selected.variant } : {}),
+              }
+              yield* requireLive()
+              yield* options.kv.set(defaultModelKey, normalized)
+              return Model.Ref.make(normalized)
+            })),
             prompt: (input) => Effect.runPromise(Effect.gen(function* () {
               const state = yield* root(input.rootID)
               if (!nonempty(input.inputID) || !input.text.trim() || (input.delivery !== "queue" && input.delivery !== "steer")) return yield* invalid()
+              let model: Model.Ref | undefined
+              if (input.model !== undefined) {
+                model = decodeModelRef(input.model)
+                if (!model) return yield* invalid()
+              }
               const provenance = source(state, input.inputID)
+              if (model !== undefined) {
+                const session = yield* options.sessions.get(state.rootSessionID)
+                const current = yield* options.selectedModel(session)
+                if (!sameModelRef(current, model)) {
+                  if (!(yield* validate(provenance))) return yield* unavailable()
+                  if (!options.switchModel) return yield* unavailable()
+                  const outcome = yield* options.switchModel({ sessionID: state.rootSessionID, model }).pipe(Effect.mapError(toNativeError))
+                  if (isBlockedOutcome(outcome))
+                    return yield* new Error({ code: "unavailable", message: "The selected model cannot fit the current session context" })
+                  if (!(yield* validate(provenance))) return yield* unavailable()
+                }
+              }
               const pending = yield* options.sessions.prompt({
                 id: SessionMessage.ID.make(`msg_native_${Hash.json([state.rootSessionID, pins.credentialID, pins.accountGeneration, input.inputID])}`),
                 sessionID: state.rootSessionID, text: input.text, delivery: input.delivery,
@@ -1012,15 +1188,104 @@ export const live = Effect.gen(function* () {
   const locations = yield* LocationServiceMap.Service
   const reviews = yield* SessionReview.Service
   const orchestration = yield* SessionOrchestration.Service
+  const validateModel: NonNullable<Options["validateModel"]> = (input) => Effect.gen(function* () {
+    const decoded = decodeModelRef(input.model)
+    if (!decoded) return yield* invalid()
+    const directory = input.directory ?? AbsolutePath.make(path.resolve(global.home))
+    const location = Location.Ref.make({ directory })
+    const matchingCredentials = (integrationID: Integration.ID) =>
+      credentials.list(integrationID).pipe(Effect.map((items) => items.filter((item) => item.label === decoded.profile)))
+    return yield* Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const runnerModels = yield* SessionRunnerModel.Service
+      const provider = yield* catalog.provider.get(decoded.providerID)
+      if (!provider) return yield* new Error({ code: "unavailable", message: `Provider unavailable: ${decoded.providerID}` })
+      const available = yield* catalog.model.available()
+      const listed = available.find((item) => item.providerID === decoded.providerID && item.id === decoded.id)
+      if (!listed) return yield* new Error({ code: "unavailable", message: `Model unavailable: ${decoded.providerID}/${decoded.id}` })
+      const integrationID = provider.integrationID ?? Integration.ID.make(decoded.providerID)
+      if (decoded.profile !== undefined) {
+        const matching = yield* matchingCredentials(integrationID)
+        if (matching.length > 1)
+          return yield* new Error({ code: "invalid_input", message: `Ambiguous profile for ${decoded.providerID}: ${decoded.profile}` })
+        if (matching.length === 0)
+          return yield* new Error({ code: "unavailable", message: `Profile unavailable for ${decoded.providerID}: ${decoded.profile}` })
+        const profileEntry = listed.profiles?.find((item) => item.name === decoded.profile)
+        if (!profileEntry)
+          return yield* new Error({ code: "unavailable", message: `Profile unavailable for ${decoded.providerID}/${decoded.id}: ${decoded.profile}` })
+        const profiled = yield* catalog.model.get(decoded.providerID, decoded.id, decoded.profile)
+        if (!profiled || !profiled.enabled)
+          return yield* new Error({ code: "unavailable", message: `Model unavailable for ${decoded.providerID}/${decoded.id} (${decoded.profile})` })
+        if (decoded.variant !== undefined && (!profiled.variants.some((v) => v.id === decoded.variant) || (profileEntry.variants !== undefined && !profileEntry.variants.includes(decoded.variant))))
+          return yield* new Error({ code: "invalid_input", message: `Variant unavailable for ${decoded.providerID}/${decoded.id}: ${decoded.variant}` })
+      } else if (decoded.variant !== undefined && !listed.variants.some((v) => v.id === decoded.variant)) {
+        return yield* new Error({ code: "invalid_input", message: `Variant unavailable for ${decoded.providerID}/${decoded.id}: ${decoded.variant}` })
+      }
+      const now = Date.now()
+      const resolved = yield* runnerModels.resolve(
+        Session.Info.make({
+          id: Session.ID.create(),
+          projectID: Project.ID.global,
+          scope: "bound",
+          title: "Validation",
+          model: decoded,
+          location,
+          cost: Money.USD.zero,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: DateTime.makeUnsafe(now), updated: DateTime.makeUnsafe(now) },
+        }),
+        { rebind: true, refresh: false },
+      ).pipe(Effect.mapError(toNativeError))
+      return normalizeModelRef(resolved.ref)
+    }).pipe(Effect.provide(locations.get(location, [LocationServiceMap.full])))
+  })
   return yield* make({ access, config, credentials, db, kv, reviews, store, sessions, events, execution, projects,
     library: (scope, session) => AccountConnectors.Service.use((connectors) => connectors.libraryFactory(scope)).pipe(
       Effect.provide(locations.get(session.location, [AccountConnectors.node]))),
-    home: os.homedir(), data: global.data, projectRoot: (directory) => Project.root(fsutil, directory),
+    home: global.home, data: global.data, projectRoot: (directory) => Project.root(fsutil, directory),
     selectedModel: (session) => Catalog.Service.use((catalog) => SessionRunnerModel.selection(session, catalog.model)).pipe(
       Effect.map((selection) => selection?.ref), Effect.provide(locations.get(session.location, [LocationServiceMap.full]))),
-    models: (session) => Catalog.Service.use((catalog) => catalog.model.available()).pipe(
-      Effect.map((models) => models.map((model) => ({ id: model.id, providerID: model.providerID, name: model.name }))),
-      Effect.provide(locations.get(session.location, [LocationServiceMap.full]))),
+    validateModel,
+    switchModel: ({ sessionID, model }) => Effect.gen(function* () {
+      const session = yield* sessions.get(sessionID).pipe(Effect.mapError(toNativeError))
+      const validated = yield* validateModel({ model, directory: session.location.directory })
+      return yield* sessions.switchModel({ sessionID, model: validated }).pipe(Effect.mapError(toNativeError))
+    }),
+    models: (session) => Catalog.Service.use((catalog) => Effect.gen(function* () {
+      const [available, defaultSelection] = yield* Effect.all([
+        catalog.model.available(),
+        catalog.model.defaultSelection(),
+      ])
+      return available.flatMap((model): ChannelModel[] => {
+        const matchesModel = defaultSelection?.providerID === model.providerID && defaultSelection?.id === model.id
+        if (model.profiles && model.profiles.length > 0) {
+          return model.profiles.map((profile) => {
+            const isDefault = matchesModel && (
+              defaultSelection?.profile !== undefined
+                ? defaultSelection.profile === profile.name
+                : profile.active
+            )
+            return {
+              id: model.id,
+              providerID: model.providerID,
+              name: model.name,
+              profile: profile.name,
+              active: profile.active,
+              variants: profile.variants ?? model.variants.map((variant) => variant.id),
+              ...(isDefault ? { isDefault: true } : {}),
+            }
+          })
+        }
+        const isDefault = matchesModel && defaultSelection?.profile === undefined
+        return [{
+          id: model.id,
+          providerID: model.providerID,
+          name: model.name,
+          variants: model.variants.map((variant) => variant.id),
+          ...(isDefault ? { isDefault: true } : {}),
+        }]
+      })
+    })).pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full]))),
     skills: (session) => Skill.Service.use((skills) => skills.list()).pipe(
       Effect.map((skills) => skills.map((skill) => ({ id: skill.id, name: skill.name }))),
       Effect.provide(locations.get(session.location, [LocationServiceMap.full]))),

@@ -124,9 +124,9 @@ test.each([
   await f.initialize()
   const result = (await f.rpc("thread/resume", { threadId: root.id, excludeTurns: true })).result
   expect(result.thread.status).toEqual(status)
-  expect(result.thread.model).toBe("synthetic-model")
+  expect(result.thread.model).toBe("non-openai/synthetic-model")
   expect(result.thread.modelProvider).toBe("non-openai")
-  expect(result.model).toBe("synthetic-model")
+  expect(result.model).toBe("non-openai/synthetic-model")
   expect(result.modelProvider).toBe("non-openai")
   f.server.retire()
 })
@@ -161,17 +161,29 @@ test.each([
   f.server.retire()
 })
 
-const nativeOverrides = {
-  model: "synthetic-model", modelProvider: "non-openai", approvalPolicy: "on-request", approvalsReviewer: "user",
-  sandbox: { type: "dangerFullAccess" }, sandboxPolicy: { type: "dangerFullAccess" }, config: {},
+const unsupportedOverrides = {
+  approvalPolicy: "on-request", approvalsReviewer: "user",
+  sandbox: { type: "dangerFullAccess" }, sandboxPolicy: { type: "dangerFullAccess" }, config: { approval_policy: "never" },
 }
 
-test.each(Object.entries(nativeOverrides))("native override %s is rejected before any Channel effect", async (field, value) => {
+test.each(Object.entries(unsupportedOverrides))("native override %s is rejected before any Channel effect", async (field, value) => {
   const f = fixture()
   f.setSnapshot({ selectedModel: Schema.decodeUnknownSync(Session.Info.fields.model)({ id: "synthetic-model", providerID: "non-openai" }) })
   await f.initialize()
-  for (const method of ["thread/start", "thread/resume", "thread/read", "thread/list", "thread/name/set", "thread/archive", "thread/unarchive", "thread/delete", "turn/start", "turn/steer", "turn/interrupt"]) {
+  for (const method of ["thread/start", "thread/resume", "thread/settings/update", "thread/read", "thread/list", "thread/name/set", "thread/archive", "thread/unarchive", "thread/delete", "turn/start", "turn/steer", "turn/interrupt"]) {
     const reply = await f.rpc(method, { threadId: root.id, name: "Renamed", cwd: "/recorded", input: [{ type: "text", text: "task" }], [field]: value })
+    expect(reply.error?.code).toBe(-32602)
+    expect(f.calls).toEqual([])
+    expect(f.sent).toEqual([])
+  }
+  f.server.retire()
+})
+
+test.each(["model", "modelProvider"] as const)("non-selection method still rejects %s before any Channel effect", async (field) => {
+  const f = fixture()
+  await f.initialize()
+  for (const method of ["thread/read", "thread/list", "thread/name/set", "thread/archive", "thread/unarchive", "thread/delete", "turn/interrupt"]) {
+    const reply = await f.rpc(method, { threadId: root.id, name: "Renamed", cwd: "/recorded", [field]: field === "model" ? "non-openai/synthetic-model" : "non-openai" })
     expect(reply.error?.code).toBe(-32602)
     expect(f.calls).toEqual([])
     expect(f.sent).toEqual([])
@@ -184,18 +196,76 @@ test("native null overrides preserve YCoding model selection and successful star
   f.replace([])
   f.setSnapshot({ selectedModel: Schema.decodeUnknownSync(Session.Info.fields.model)({ id: "chosen-model", providerID: "non-openai" }) })
   await f.initialize()
-  const overrides = Object.fromEntries(Object.keys(nativeOverrides).map((field) => [field, null]))
+  const overrides = Object.fromEntries([...Object.keys(unsupportedOverrides), "model", "modelProvider"].map((field) => [field, null]))
   for (const method of ["thread/start", "thread/resume", "turn/start", "turn/steer"]) {
     const reply = await f.rpc(method, { threadId: root.id, cwd: method === "thread/resume" ? null : "/recorded", excludeTurns: true, input: [{ type: "text", text: "task" }], ...overrides })
     expect(reply.error).toBeUndefined()
     if (method.startsWith("thread/")) {
-      expect(reply.result.model).toBe("chosen-model")
+      expect(reply.result.model).toBe("non-openai/chosen-model")
       expect(reply.result.modelProvider).toBe("non-openai")
     }
   }
   expect(f.created).toHaveLength(1)
   expect(f.prompted).toHaveLength(2)
   f.server.retire()
+})
+
+test("native model selection flows through thread/start, thread/settings/update, and turn/start", async () => {
+  const selectedCalls: Array<{ rootID: string; model: unknown }> = []
+  let activeModel = Schema.decodeUnknownSync(Session.Info.fields.model)({ id: "initial-model", providerID: "non-openai" })
+  const created: unknown[] = []
+  const prompted: unknown[] = []
+  const snapshot = (): NativeDots.RootSnapshot => ({ session: root, selectedModel: activeModel, active: false, waiting: [] })
+  const channel: NativeDots.Channel = {
+    listRoots: async () => [snapshot()],
+    getRoot: async (id) => (id === root.id ? snapshot() : undefined),
+    readRoot: async (id) => { if (id !== root.id) throw Error("Unavailable"); return { ...snapshot(), messages: [] } },
+    createRoot: async (input) => {
+      created.push(input)
+      if (input.model) activeModel = input.model
+      return snapshot()
+    },
+    selectModel: async ({ rootID, model }) => {
+      selectedCalls.push({ rootID, model })
+      activeModel = model
+      return snapshot()
+    },
+    prompt: async (input) => { prompted.push(input); return { messageID: "message" } },
+    interrupt: async () => {},
+    pending: async () => [],
+    settle: async () => {},
+    subscribe: async () => () => {},
+    retire: () => {},
+    models: async () => [
+      { id: "chosen-model", providerID: "non-openai", variants: ["medium", "high"] },
+      { id: "updated-model", providerID: "non-openai", variants: ["low", "high"] },
+    ],
+    skills: async () => [],
+    renameRoot: async () => {},
+    archiveRoot: async () => {},
+    unarchiveRoot: async () => snapshot(),
+    removeRoot: async () => {},
+    subscribeEscalations: async () => () => {},
+  }
+  const server = createRemoteControlAppServer({ backend: createRemoteControlBackend({ channel, profile: "profile" }), codexHome: "/synthetic", requestScope: "client:stream", send: () => {} })
+  const rpc = async (method: string, params: unknown = {}, id = 1) => JSON.parse((await server.handle(JSON.stringify({ id, method, params })))!)
+  await rpc("initialize", { clientInfo: { name: "fixture" } })
+  await server.handle(JSON.stringify({ method: "initialized" }))
+
+  const started = await rpc("thread/start", { cwd: "/recorded", model: "non-openai/chosen-model", effort: "high" }, 2)
+  expect(started.error).toBeUndefined()
+  expect(started.result.model).toBe("non-openai/chosen-model")
+  expect(started.result.reasoningEffort).toBe("high")
+  expect(created).toEqual([{ inputID: JSON.stringify(["client:stream", "thread/start", 2]), directory: "/recorded", model: { providerID: "non-openai", id: "chosen-model", variant: "high" } }])
+
+  const updated = await rpc("thread/settings/update", { threadId: root.id, model: "non-openai/updated-model", reasoningEffort: "low" }, 3)
+  expect(updated.error).toBeUndefined()
+  expect(selectedCalls).toEqual([{ rootID: root.id, model: { providerID: "non-openai", id: "updated-model", variant: "low" } }])
+
+  const turned = await rpc("turn/start", { threadId: root.id, model: "non-openai/chosen-model", effort: "medium", input: [{ type: "text", text: "go" }] }, 4)
+  expect(turned.error).toBeUndefined()
+  expect(prompted).toEqual([{ rootID: root.id, inputID: JSON.stringify(["client:stream", "turn/start", 4]), text: "go", delivery: "steer", model: { providerID: "non-openai", id: "chosen-model", variant: "medium" } }])
+  server.retire()
 })
 
 test.each(["thread/resume", "turn/start", "turn/steer", "turn/interrupt"])("native %s rejects a changed cwd before watch or mutation", async (method) => {

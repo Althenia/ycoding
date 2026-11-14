@@ -43,6 +43,7 @@ type Message = {
   method?: string
   params?: { threadId?: string; turnId?: string; itemId?: string; requestId?: string; startedAtMs?: number; completedAtMs?: number; questions?: { id: string; header: string }[] }
   result?: {
+    config?: Record<string, unknown>
     data?: { id: string }[]
     turn?: { id: string }
     thread?: {
@@ -179,11 +180,22 @@ it.live("local native WebSocket composition admits prompts, settles real Forms a
   yield* Effect.promise(async () => {
     expect((await rpc("initialize", { clientInfo: { name: "synthetic-flow" } })).error).toBeUndefined()
     send({ method: "initialized" })
+    expect((await rpc("config/read")).result).toEqual({
+      config: {
+        model_provider: "ycoding",
+        model_providers: { ycoding: { name: "YCoding" } },
+      },
+    })
     expect((await rpc("thread/list")).result?.data?.map((item) => item.id).toSorted()).toEqual([root.id, other.id].toSorted())
     expect((await rpc("thread/read", { threadId: child.id })).error).toBeDefined()
     const read = await rpc("thread/read", { threadId: root.id })
     expect(read.error).toBeUndefined()
-    expect(read.result?.thread).toMatchObject({ id: root.id, sessionId: root.id, projectId: root.projectID, historyMode: "legacy", model: root.model?.id ?? "unknown", modelProvider: root.model?.providerID ?? "unknown", status: { type: "idle" } })
+    const wireModel = root.model
+      ? `${root.model.profile !== undefined ? `${root.model.profile}#` : ""}${root.model.providerID}/${root.model.id}`
+      : "unknown"
+    expect(read.result?.thread).toMatchObject({ id: root.id, sessionId: root.id, projectId: root.projectID, historyMode: "legacy", model: wireModel, modelProvider: root.model?.providerID ?? "unknown", status: { type: "idle" } })
+    const rejected = await rpc("turn/start", { threadId: root.id, approvalPolicy: "on-request", input: [{ type: "text", text: "blocked" }] })
+    expect(rejected.error).toMatchObject({ code: -32602 })
   })
   expect((yield* access.status()).connection).toMatchObject({ state: "connected", hostname: expect.any(String) })
   expect(subscriptions).toBe(baselineSubscriptions + 1)
