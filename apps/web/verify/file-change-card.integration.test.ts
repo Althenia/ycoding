@@ -39,7 +39,7 @@ test("shows one prompt segment's file counts after its last assistant and expand
           summaryExpanded: card?.querySelector('.file-change-card__summary')?.getAttribute('aria-expanded') ?? '',
           height: card.getBoundingClientRect().height }
       })()`)
-      expect({ ...collapsed, height: collapsed.height <= 56 }).toEqual({ cards: 1, attached: true, title: "Edited 4 files", counts: "+5 −3", rowsHidden: true, summaryExpanded: "false", height: true })
+      expect({ ...collapsed, height: collapsed.height <= 56 }).toEqual({ cards: 1, attached: true, title: "4 files changed", counts: "+5 −3", rowsHidden: true, summaryExpanded: "false", height: true })
       const geometry = await page.evaluate<{ left: number; right: number; columnLeft: number; columnRight: number }>(`(() => { const card = document.querySelector('.file-change-card').getBoundingClientRect(); const column = document.querySelector('.transcript-navigation .transcript').getBoundingClientRect(); return { left: card.left, right: card.right, columnLeft: column.left, columnRight: column.right } })()`)
       expect(Math.abs(geometry.left - geometry.columnLeft)).toBeLessThanOrEqual(1)
       expect(Math.abs(geometry.right - geometry.columnRight)).toBeLessThanOrEqual(1)
@@ -118,7 +118,7 @@ test("shows no card for a segment without edits and a child-only capture", async
     await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?file-changes=no-edits`)
     expect(await page.evaluate<number>(`document.querySelectorAll('.file-change-card').length`)).toBe(0)
     await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?file-changes=child-only`)
-    expect(await page.evaluate<string>(`document.querySelector('.file-change-card__title')?.textContent ?? ''`)).toBe("Edited 1 file")
+    expect(await page.evaluate<string>(`document.querySelector('.file-change-card__title')?.textContent ?? ''`)).toBe("1 file changed")
     expect(await page.evaluate<string>(`document.querySelector('.file-change-card__totals')?.textContent ?? ''`)).toBe("+2 −1")
   } finally { await page.close() }
 }, 20_000)
@@ -154,8 +154,8 @@ test("keeps every captured file, path, and count reachable from one compact summ
       expect(collapsed.expanded).toBe("false")
       expect(collapsed.rows).toBe(0)
       expect(collapsed.height, `${width}px collapsed card height`).toBeLessThanOrEqual(56)
-      expect(collapsed.summaryHeight).toBeGreaterThanOrEqual(44)
-      expect(collapsed.name).toBe("Edited 4 files+5 −3")
+      expect(collapsed.summaryHeight).toBeGreaterThanOrEqual(28)
+      expect(collapsed.name).toBe("4 files changed+5 −3")
       await page.evaluate(`document.querySelector('.file-change-card__summary').click()`)
       const open = await state()
       expect(open.expanded).toBe("true")

@@ -5,3 +5,7 @@ export function composerDockCollapsed(collapsed: boolean, event: ComposerDockEve
   if (event === "new-session" || event === "pending-request" || event === "palette-draft") return false
   return collapsed
 }
+
+export function composerReserve(rowEnd: number, mainBottom: number) {
+  return Math.max(0, Math.ceil(mainBottom - rowEnd))
+}

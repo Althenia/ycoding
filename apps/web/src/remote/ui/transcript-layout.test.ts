@@ -6,7 +6,7 @@ test("assistant transcript prose fills the column and user bubbles keep their ca
   const capped = sheet.rules.filter((rule) => rule.header.includes("transcript-md") && Object.values(rule.declarations).some((value) => value.includes("--yc-measure")))
   expect(capped).toEqual([])
   const user = declarationsWhere(sheet, (rule) => rule.header === ".transcript-message--user" && rule.conditions.length === 0)
-  expect(user["max-inline-size"]).toBe("min(82%,48ch)")
+  expect(user["max-inline-size"]).toBe("min(560px,88%)")
   expect(user["justify-self"]).toBe("end")
   expect(declarationsWhere(sheet, (rule) => rule.header.includes(".transcript-message--user") && rule.conditions.some((condition) => condition.includes("max-width:767px")))["max-inline-size"]).toBe("90%")
   const receipt = declarationsWhere(sheet, (rule) => rule.header === ".transcript-message__receipt")
@@ -16,23 +16,29 @@ test("assistant transcript prose fills the column and user bubbles keep their ca
 
 const rulesFor = (sheet: ReturnType<typeof parseStylesheet>, header: string) => declarationsWhere(sheet, (rule) => rule.header === header && rule.conditions.length === 0)
 
-test("a user prompt is a borderless green-soft capsule with a small end-bottom corner that stays right aligned", async () => {
+test("a user prompt is a hairline green-soft capsule with a small end-bottom corner that stays right aligned and holds its file chips", async () => {
   const sheet = parseStylesheet("transcript.css", await Bun.file(new URL("./transcript.css", import.meta.url)).text())
   const bubble = rulesFor(sheet, ".transcript-message__bubble")
-  expect(bubble.border).toBe("0")
+  expect(bubble.border).toBe("1px solid color-mix(in srgb, var(--yc-green-strong) 25%, transparent)")
   expect(bubble["border-inline-end"]).toBeUndefined()
   expect(bubble["border-radius"]).toBe("var(--yc-radius-xl) var(--yc-radius-xl) var(--yc-radius-sm) var(--yc-radius-xl)")
   expect(bubble.background).toBe("var(--yc-green-soft)")
   expect(bubble.color).toBe("var(--yc-text)")
   expect(bubble.padding).toBe("var(--yc-space-3) var(--yc-space-4)")
+  expect(rulesFor(sheet, ".transcript-file")).toMatchObject({ "border-radius": "var(--yc-radius-sm)", font: "var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono)" })
+  const conversation = await Bun.file(new URL("./conversation.tsx", import.meta.url)).text()
+  expect(conversation).not.toContain("attachments={<For each={fileKeys()}>")
+  expect(conversation).not.toMatch(/\stitle=/)
   expect(rulesFor(sheet, ".transcript-message--user")["justify-self"]).toBe("end")
   expect(rulesFor(sheet, ".transcript-message__receipt").background).toBe("var(--yc-bg)")
 })
 
-test("turn heads use a mono type step with a fixed mark, no ordinal, and annotations stay inline in the one column", async () => {
+test("turn heads use a mono type step with a fixed sunken mark badge and a medium agent name, no ordinal, and annotations stay inline in the one column", async () => {
   const sheet = parseStylesheet("transcript.css", await Bun.file(new URL("./transcript.css", import.meta.url)).text())
   expect(rulesFor(sheet, ".transcript-message__head").font).toBe("var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono)")
-  expect(rulesFor(sheet, ".transcript-message__mark")["inline-size"]).toBe("16px")
+  expect(rulesFor(sheet, ".transcript-message__mark")).toMatchObject({ "inline-size": "20px", "block-size": "20px", "border-radius": "4px", background: "var(--yc-surface-sunken)" })
+  expect(rulesFor(sheet, ".transcript-message__speaker")).toMatchObject({ color: "var(--yc-text)", font: "var(--yc-weight-medium) var(--yc-size-sm)/var(--yc-leading-2xs) var(--yc-font-sans)" })
+  expect(rulesFor(sheet, ".transcript-message__head ~ .transcript-message__agent")).toMatchObject({ position: "absolute", "clip-path": "inset(50%)" })
   expect(sheet.rules.some((rule) => /__ordinal|__role/.test(rule.header))).toBe(false)
   const nav = parseStylesheet("transcript-nav.css", await Bun.file(new URL("./transcript-nav.css", import.meta.url)).text())
   expect(nav.rules.some((rule) => rule.header.includes("data-entry"))).toBe(false)
@@ -42,9 +48,11 @@ test("turn heads use a mono type step with a fixed mark, no ordinal, and annotat
   }
 })
 
-test("tool, reasoning, notice, observation and system annotations are borderless tonal planes and no part keeps a block rule", async () => {
+test("tool and reasoning rows sit flat on the canvas until opened, notices stay borderless tonal planes, and no part keeps a block rule", async () => {
   const sheet = parseStylesheet("transcript.css", await Bun.file(new URL("./transcript.css", import.meta.url)).text())
-  for (const header of [".transcript-reasoning, .transcript-tool", ".transcript-notice", ".transcript-message__observation", ".transcript-message__system"]) {
+  expect(rulesFor(sheet, ".transcript-reasoning, .transcript-tool")).toMatchObject({ border: "0", background: "transparent", "padding-inline": "0" })
+  expect(rulesFor(sheet, '.transcript-reasoning[data-open], .transcript-tool:has(> .transcript-tool__header [aria-expanded="true"])')).toMatchObject({ border: "1px solid var(--yc-border)", "padding-inline": "var(--yc-space-3)" })
+  for (const header of [".transcript-notice", ".transcript-message__observation", ".transcript-message__system"]) {
     const plane = rulesFor(sheet, header)
     expect(plane.border).toBe("0")
     expect(plane.background).toBe("var(--yc-surface)")
@@ -57,6 +65,15 @@ test("tool, reasoning, notice, observation and system annotations are borderless
   }
   const card = parseStylesheet("file-change-card.css", await Bun.file(new URL("./file-change-card.css", import.meta.url)).text())
   expect(rulesFor(card, ".file-change-card")).toMatchObject({ border: "0", background: "var(--yc-surface)", "border-radius": "var(--yc-radius-lg)" })
+  expect(rulesFor(card, ".file-change-card.file-change-card--transcript")).toMatchObject({ border: "0", "border-radius": "0", background: "transparent", font: "var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono)" })
+  expect(rulesFor(card, ".file-change-card.file-change-card--transcript > .file-change-card__summary")).toMatchObject({ padding: "var(--yc-space-1) 0" })
+  const opened = rulesFor(card, ".file-change-card.file-change-card--transcript[data-open]")
+  expect(opened).toMatchObject({ outline: "1px solid var(--yc-border)", "outline-offset": "-1px", "border-radius": "var(--yc-radius-lg)" })
+  expect(opened.border).toBeUndefined()
+  const nav = parseStylesheet("transcript-nav.css", await Bun.file(new URL("./transcript-nav.css", import.meta.url)).text())
+  expect(rulesFor(nav, ".transcript-navigation__rail")["inline-size"]).toBe("28px")
+  expect(rulesFor(nav, ".transcript-navigation__tick")).toMatchObject({ "inline-size": "24px", "block-size": "24px" })
+  expect(rulesFor(nav, ".transcript-navigation__tick-mark")).toMatchObject({ "inline-size": "8px", "block-size": "2px" })
 })
 
 test("the todo panel and subagent bar are borderless tonal planes", async () => {
@@ -90,4 +107,13 @@ test("the transcript adds no cursor, container query or screen-reader utility an
   for (const selector of [".transcript-message__head", ".transcript-message__mark", ".transcript-message__bubble"]) {
     expect(sheet.rules.filter((rule) => rule.header === selector && Object.keys(rule.declarations).some((property) => property.startsWith("transition") || property.startsWith("animation")))).toEqual([])
   }
+})
+
+test("markdown links and inline code, the agent label and notice marks use neutral ink, never green", async () => {
+  const sheet = parseStylesheet("transcript.css", await Bun.file(new URL("./transcript.css", import.meta.url)).text())
+  expect(rulesFor(sheet, ".transcript-md a").color).toBe("var(--yc-text)")
+  expect(rulesFor(sheet, ".transcript-md :not(pre)>code")).toMatchObject({ background: "var(--yc-surface-sunken)", color: "var(--yc-text)" })
+  expect(rulesFor(sheet, ".transcript-message__agent").color).toBe("var(--yc-text)")
+  expect(rulesFor(sheet, ".transcript-notice__mark").color).toBe("var(--yc-text-muted)")
+  expect(rulesFor(sheet, ".transcript-md :is(th,td)").border).toBe("0")
 })

@@ -12,7 +12,6 @@ import {
   prioritizePanelSessions,
   sessionChips,
   sessionNeedsAttention,
-  sessionPanelSummary,
   sessionCompanionSummary,
   remoteSurfaceComposition,
   summarizeSession,
@@ -42,13 +41,6 @@ const view = (patch: Partial<SessionView> = {}): SessionView => ({
   ...patch,
 })
 
-test("session panel summarizes shown waiting, running and pinned sessions", () => {
-  const rows = [session({ attention: true, running: true, pinnedAt: 1 }), session({ id: "ses_b", running: true }), session({ id: "ses_c" })]
-  expect(sessionPanelSummary(rows, undefined)).toBe("1 waiting · 1 running · 1 pinned")
-  expect(sessionPanelSummary([session()], view({ requests: [{ kind: "permission", id: "per_1", action: "shell", resources: ["bun test *"], askedAt: 0 }] }))).toBe("1 waiting · 0 running · 0 pinned")
-  expect(sessionPanelSummary([], undefined)).toBe("0 waiting · 0 running · 0 pinned")
-})
-
 test("session navigation prioritizes needs action, running, pinned, then remaining sessions stably", () => {
   const rows = [session({ id: "idle" }), session({ id: "pinned", pinnedAt: 2 }), session({ id: "running", running: true, pinnedAt: 3 }), session({ id: "waiting", attention: true, running: true }), session({ id: "idle2" })]
   expect(prioritizePanelSessions(rows, undefined).map((item) => item.id)).toEqual(["waiting", "running", "pinned", "idle", "idle2"])
@@ -59,7 +51,7 @@ test("session navigation prioritizes needs action, running, pinned, then remaini
 test("Session companion reports only current measured context, effective autonomy and active goal", () => {
   const model = { providerID: "openai", id: "model" }
   const current = view({ model, contextWindow: { model, used: 24_000, limit: 128_000 }, autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal: { text: "Ship", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 5 } } })
-  expect(sessionCompanionSummary(current)).toMatchObject({ contextLabel: "19% used · 81% left", contextTokens: "24K / 128K tokens", contextUsed: "24K", contextCapacity: "128K", contextFraction: 24_000 / 128_000, autonomyLabel: "Autonomous Manual", goalText: "Ship", goalIteration: 2 })
+  expect(sessionCompanionSummary(current)).toMatchObject({ contextLabel: "19% used", contextTokens: "24K / 128K tokens", contextUsed: "24K", contextCapacity: "128K", contextFraction: 24_000 / 128_000, autonomyLabel: "Autonomous Manual", goalText: "Ship", goalIteration: 2 })
   expect(sessionCompanionSummary(undefined)).toBeUndefined()
   expect(sessionCompanionSummary(view())?.contextLabel).toBeUndefined()
   expect(sessionCompanionSummary(view())?.contextUsed).toBeUndefined()
@@ -457,18 +449,26 @@ describe("tonal sidebar and phone navigation", () => {
   test("uses a borderless sidebar and a soft active destination pill", async () => {
     const css = await readStylesheet("remote.css")
     expect(declared(css, ".workspace__rail").background).toBe("var(--yc-surface)")
-    expect(declared(css, ".workspace__rail")["border-inline-end"]).toBe("0")
+    expect(declared(css, ".workspace__rail")["border-inline-end"]).toBe("1px solid var(--yc-border)")
     expect(declared(css, ".workspace__rail-body > .pane")["border-block-start"]).toBeUndefined()
-    expect(declared(css, ".workspace__rail-footer")["border-block-start"]).toBeUndefined()
     const active = declared(css, ".remote-nav__link--active")
     expect(active["box-shadow"]).toBe("none")
-    expect(active.background).toBe("var(--yc-green-soft)")
+    expect(active.background).toBe("var(--yc-surface-sunken)")
     expect(active.color).toBe("var(--yc-text)")
-    expect(active["font-weight"]).toBe("var(--yc-weight-semibold)")
-    expect(declared(css, ".remote-nav__link--active > svg").color).toBe("var(--yc-green-strong)")
+    expect(active["font-weight"]).toBe("var(--yc-weight-medium)")
+    expect(declared(css, ".remote-nav__link--active > svg").color).toBe("var(--yc-signal)")
+    const settings = declared(css, ".remote-nav__link--settings.remote-nav__link--active")
+    expect(settings).toMatchObject({ background: "var(--yc-green-soft)", color: "var(--yc-green-strong)", "font-weight": "var(--yc-weight-semibold)" })
+    expect(declared(css, ".remote-nav__link--settings.remote-nav__link--active > svg").color).toBe("var(--yc-green-strong)")
     expect(declared(css, ".remote-nav__link")["min-block-size"]).toBe("var(--yc-hit-min)")
+    expect(declarationsWhere(css, (rule) => rule.header === ".remote-nav__link" && rule.conditions.length > 0)["min-block-size"]).toBeUndefined()
     expect(declared(css, ".remote-nav__link")["min-inline-size"]).toBe("var(--yc-hit-min)")
-    expect(declared(css, ".remote-nav__link")["border-radius"]).toBe("var(--yc-radius-pill)")
+    expect(declared(css, ".remote-nav__link")["border-radius"]).toBe("var(--yc-radius-sm)")
+    expect(declared(css, ".workspace__rail-navigation")["border-block-start"]).toBe("1px solid var(--yc-border)")
+    const source = await shell()
+    const nav = source.slice(source.indexOf("function PrimaryNav"), source.indexOf("function ResumeSession"))
+    expect(nav).toContain("remote-nav__link--${item.id}")
+    expect(nav).not.toContain("title=")
   })
 
   test("keeps three labeled phone targets with the label under the icon and a heavier active label", async () => {
@@ -535,16 +535,25 @@ describe("tonal sidebar and phone navigation", () => {
 
 describe("tonal status strips", () => {
   test("presents connection, notice and consent strips without rules or inline bars", async () => {
-    const css = await readStylesheet("remote.css")
-    for (const selector of [".app .status-strip", ".app .notice-strip", ".telemetry-consent"]) {
-      const strip = declared(css, selector)
+    const [css, shared] = await Promise.all([readStylesheet("remote.css"), readStylesheet("base.css")])
+    for (const strip of [declared(css, ".app .status-strip"), declared(css, ".telemetry-consent"), declared(shared, ".notice-strip")]) {
       expect(strip["border-radius"]).toBe("var(--yc-radius-lg)")
       expect(strip["border-inline-start"]).toBeUndefined()
       expect(strip["border-block-end"]).toBeUndefined()
     }
     expect(declared(css, ".app .status-strip--attention").background).toBe("var(--yc-yellow-soft)")
     expect(declared(css, ".app .status-strip--offline").background).toBe("var(--yc-danger-soft)")
-    expect(declared(css, ".app .notice-strip--warning").background).toBe("var(--yc-yellow-soft)")
+    expect(declared(shared, ".notice-strip").background).toBe("var(--yc-surface)")
+    expect(declared(shared, ".notice-strip--warning").background).toBe("var(--yc-yellow-soft)")
+  })
+
+  test("leaves notice and empty planes to the shared stylesheet without re-adding a boundary", async () => {
+    const css = await readStylesheet("remote.css")
+    const local = css.rules.filter((rule) => rule.header.split(",").some((part) => /\.(notice-strip|empty)(?![\w-])/.test(part)))
+    for (const rule of local) {
+      const boundary = Object.keys(rule.declarations).filter((property) => /^(border|background|box-shadow)/.test(property))
+      expect({ header: rule.header, boundary }).toEqual({ header: rule.header, boundary: [] })
+    }
   })
 
   test("keeps the strip text and actions", async () => {
@@ -596,7 +605,7 @@ describe("open Sessions rows", () => {
     expect(declared(css, ".sessions-table__row")["border-block-end"]).toBeUndefined()
     expect(declared(css, ".sessions-table__row")["border-radius"]).toBe("var(--yc-radius-lg)")
     expect(declared(css, ".session-row--active").background).toBe("var(--yc-green-soft)")
-    expect(declared(css, ".session-row--active")["border-radius"]).toBe("var(--yc-radius-lg)")
+    expect(declared(css, ".session-row--active")["border-radius"]).toBe("var(--yc-radius-sm)")
   })
 
   test("keeps windowed rows keyed and measured so they grow with their content", async () => {
@@ -616,6 +625,76 @@ describe("open Sessions rows", () => {
     const active = declared(css, ".session-filters__option--active")
     expect(active["border-block-end-color"]).toBeUndefined()
     expect(active.background).toBe("var(--yc-green-soft)")
+  })
+})
+
+describe("Ledger rail, conversation header and companion wiring", () => {
+  test("renders flat single-line rail rows without pins or a meta line while the Sessions table keeps pins", async () => {
+    const source = await shell()
+    const row = source.slice(source.indexOf("function SessionRow("), source.indexOf("function SessionSummaryRow("))
+    expect(row).not.toContain("SessionPin")
+    expect(row).not.toContain("session-row__meta")
+    expect(row).toContain('<span class="session-row__state" aria-hidden="true">Waiting</span>')
+    const summary = source.slice(source.indexOf("function SessionSummaryRow("), source.indexOf("function DeviceEmptyState("))
+    expect(summary).toContain("<SessionPin session={props.session} disabled={props.readOnly} />")
+    const rail = source.slice(source.indexOf("function SessionRailList("), source.indexOf("function SessionTableRows("))
+    expect(rail).toContain("estimate: () => 36")
+    expect(rail).toContain("groupRailSessions(props.sessions)")
+    const css = await readStylesheet("remote.css")
+    expect(declared(css, ".session-row")).toMatchObject({ "block-size": "var(--yc-control-h-dense)", "min-block-size": "var(--yc-control-h-dense)", border: "1px solid transparent", "border-radius": "var(--yc-radius-sm)" })
+    expect(declared(css, ".session-row--active")).toMatchObject({ color: "var(--yc-green-strong)", "border-color": "color-mix(in srgb, var(--yc-green-strong) 28%, transparent)" })
+    expect(declared(css, ".session-row__state").color).toBe("var(--yc-yellow-strong)")
+    expect(declared(css, ".session-row__signal-mark")).toMatchObject({ "inline-size": "6px", "block-size": "6px", background: "var(--yc-text-subtle)" })
+  })
+
+  test("drops the rail workspace block, summary line, loaded-count footer and machine footer", async () => {
+    const source = await shell()
+    const panel = source.slice(source.indexOf("function SessionPanel("), source.indexOf("function SessionRailList("))
+    for (const removed of ["pane__head--sessions", "session-panel__workspace", "session-panel__summary", "loaded from", "visually-hidden\">Filter sessions"]) expect(panel).not.toContain(removed)
+    expect(panel).toContain('aria-label="Search sessions"')
+    expect(panel).toContain('placeholder="Search sessions"')
+    expect(panel).toContain('<span class="session-filters__count">')
+    expect(source).not.toContain("machineName=")
+    expect(source).not.toContain("machineAction=")
+    expect(source).toContain('class="workspace__new-chat"')
+    expect(source).not.toContain('title="YCoding home"><BrandMark compact /></Link>')
+    const css = await readStylesheet("remote.css")
+    expect(declared(css, ".workspace__rail-head")).toMatchObject({ display: "flex", "align-items": "center", "justify-content": "space-between", "block-size": "52px", "padding-inline": "var(--yc-space-3)" })
+    expect(declared(css, ".workspace__new-chat")).toMatchObject({ "min-block-size": "28px", "padding-inline": "10px", "border-radius": "var(--yc-radius-pill)", border: "1px solid var(--yc-border-strong)", background: "transparent" })
+    expect(declared(css, ".session-search .input")).toMatchObject({ "block-size": "var(--yc-space-8)", background: "var(--yc-bg)", border: "1px solid var(--yc-border)", "border-radius": "var(--yc-radius-md)" })
+    expect(declared(css, ".session-panel .session-filters")["flex-wrap"]).toBe("nowrap")
+    expect(declared(css, ".session-panel .session-filters__option--active")).toMatchObject({ background: "var(--yc-surface-sunken)", color: "var(--yc-text)", "border-color": "var(--yc-border-strong)" })
+    expect(css.rules.some((rule) => rule.header.includes("workspace__rail-footer"))).toBe(false)
+  })
+
+  test("titles the conversation on one baseline without native tooltips and shows the view switch only in Office", async () => {
+    const source = await shell()
+    const header = source.slice(source.indexOf("<SharedConversationHeader"), source.indexOf("</SharedConversationHeader>"))
+    expect(header.match(/\btitle=/g)).toEqual(["title="])
+    expect(header).toContain("title={<strong>{activeSession()?.title ?? noSessionTitle}</strong>}")
+    expect(header).not.toContain("subtitleTitle")
+    expect(header).not.toContain("• ")
+    expect(source.match(/<PresentationSwitch /g)).toEqual(["<PresentationSwitch "])
+    expect(header).toContain('<Show when={!phoneLayout() && office.presentation() === "office"}><PresentationSwitch ')
+    expect(source).toContain('<Link to="/remote/sessions" class="conversation-back button button--ghost button--icon" ariaLabel="Back to Sessions"><Icon name="arrow-left" /></Link>')
+    const css = await readStylesheet("remote.css")
+    expect(declared(css, ".workspace__topbar")["min-block-size"]).toBe("56px")
+    expect(declared(css, ".workspace__topbar .conversation-back").display).toBe("none")
+    expect(declarationsWhere(css, (rule) => rule.header === ".workspace__topbar .conversation-back" && rule.conditions.includes("@media (max-width: 767px), (max-height: 599px) and (pointer: coarse)")).display).toBe("inline-flex")
+    expect(declared(css, ".conversation-breadcrumb__project").font).toBe("var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono)")
+  })
+
+  test("wires Usage, Compact and transcript messages into the context panel instead of separate buttons", async () => {
+    const source = await shell()
+    const companion = source.slice(source.indexOf("const teamContent = () =>"), source.indexOf("const teamPanel = () =>"))
+    expect(companion).toContain("onCompact={() => void remote.store.compactSession()}")
+    expect(companion).toContain("if (deviceID) openUsage(deviceID); else void navigate({ to: \"/remote/usage\" })")
+    expect(companion).toContain("transcriptContextMessages(state().view!.messages)")
+    expect(companion).toContain("stepDiagnostics={contextWindow()?.stepDiagnostics}")
+    expect(companion).not.toContain("contextActions=")
+    expect(companion).toContain('class="companion__close" aria-label="Close Session companion"')
+    const css = await readStylesheet("remote.css")
+    expect(declared(css, ".team-control__panel")["border-inline-start"]).toBe("1px solid var(--yc-border)")
   })
 })
 
@@ -642,10 +721,15 @@ describe("W83 flat request forms", () => {
     expect(declared(css, ".question__option:first-of-type")["border-start-start-radius"]).toBeUndefined()
     expect(declared(css, ".question__option:last-of-type")["border-end-end-radius"]).toBeUndefined()
     const checked = declared(css, ".question__option:has(input:checked)")
-    expect(checked.background).toBe("var(--yc-green-soft)")
+    expect(checked.background).toBeUndefined()
     expect(checked["box-shadow"]).toBeUndefined()
     expect(checked["border-inline-start-color"]).toBeUndefined()
-    expect(checked["font-weight"]).toBe("var(--yc-weight-semibold)")
+    expect(checked.color).toBe("var(--yc-text)")
+    for (const selector of ['.question__option input[type="radio"]', '.question__option input[type="checkbox"]']) {
+      expect(declared(css, selector)).toMatchObject({ appearance: "none", "-webkit-appearance": "none" })
+    }
+    expect(declared(css, ".question")["--question-indicator"]).toBe("16px")
+    expect(declared(css, "form .request__actions .button--secondary")).toMatchObject({ background: "transparent", "border-color": "transparent" })
   })
 
   test("separates questions with whitespace and keeps the field boundary and 44px target", async () => {
@@ -671,10 +755,33 @@ describe("W83 flat request forms", () => {
   })
 })
 
+describe("Ledger accents and floating request cards", () => {
+  test("raises pending request cards as one bounded layer with an open answer row", async () => {
+    const css = await readStylesheet("remote.css")
+    expect(declared(css, ".request")).toMatchObject({
+      border: "var(--yc-border-width) solid var(--yc-border)",
+      "border-radius": "var(--yc-radius-lg)",
+      background: "var(--yc-surface-raised)",
+      "box-shadow": "var(--yc-shadow-sm)",
+    })
+    expect(declared(css, ".request__actions").background).toBeUndefined()
+    expect(declared(css, ".request__badge")).toMatchObject({ border: "0", background: "var(--yc-surface-raised)" })
+  })
+
+  test("keeps companion header pills neutral and prose strips and filters in the sans face", async () => {
+    const css = await readStylesheet("remote.css")
+    expect(declared(css, ".companion__pill")).toMatchObject({ background: "var(--yc-surface-sunken)", color: "var(--yc-text-muted)", "min-block-size": "var(--yc-space-6)", border: "0" })
+    expect(declared(css, ".companion__close")).toMatchObject({ "inline-size": "28px", "block-size": "28px", background: "transparent" })
+    expect(declared(css, ".app .status-strip")["font-family"]).toBe("var(--yc-font-sans)")
+    expect(declared(css, ".session-filters__option")["font-family"]).toBe("var(--yc-font-sans)")
+    for (const selector of [".settings__head > svg", ".telemetry-consent > svg"]) expect(declared(css, selector).color).toBe("var(--yc-text-muted)")
+  })
+})
+
 describe("tonal Sessions status labels", () => {
   test("shows status words inside soft pills without changing shared chip behavior", async () => {
     const css = await readStylesheet("remote.css")
-    for (const selector of [".sessions-table__status .chip", ".session-row__status .chip"]) {
+    for (const selector of [".sessions-table__status .chip"]) {
       const chip = declared(css, selector)
       expect(chip.border).toBe("0")
       expect(chip["border-radius"]).toBe("var(--yc-radius-pill)")

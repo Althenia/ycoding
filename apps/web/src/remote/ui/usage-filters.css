@@ -22,9 +22,9 @@
 .usage-filter-controls__range [role="alert"] { flex-basis: 100%; }
 
 .usage-filter-bar { display: flex; align-items: center; gap: var(--yc-space-3); min-width: 0; margin-block: var(--yc-space-3) var(--yc-space-4); }
-.usage-filter-bar__summary { flex: 1 1 auto; min-width: 0; margin: 0; color: var(--yc-text-muted); font: var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); overflow-wrap: anywhere; }
+.usage-filter-bar__summary { flex: 1 1 auto; min-width: 0; margin: 0; color: var(--yc-text-muted); font: var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono); overflow-wrap: anywhere; }
 .usage-filter-bar__trigger { flex: none; }
-.usage-filter-bar__count { display: inline-grid; min-inline-size: var(--yc-space-5); padding-inline: var(--yc-space-1); place-items: center; border-radius: var(--yc-radius-pill); background: var(--yc-green-soft); color: var(--yc-green-strong); font: var(--yc-size-2xs)/var(--yc-leading-xs) var(--yc-font-mono); }
+.usage-filter-bar__count { display: inline-grid; min-inline-size: var(--yc-space-5); padding-inline: var(--yc-space-1); place-items: center; border-radius: var(--yc-radius-pill); background: var(--yc-surface-sunken); color: var(--yc-text); font: var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono); }
 
 .overlay--usage-filters .overlay__body { padding: 0; }
 .usage-filter-sheet { display: flex; flex-direction: column; min-width: 0; }
@@ -39,7 +39,7 @@
   border: var(--yc-border-width) solid var(--yc-border-strong); border-radius: var(--yc-radius-md); background: var(--yc-surface-raised); color: var(--yc-text); font: inherit; font-size: var(--yc-size-xs); white-space: nowrap;
 }
 .usage-filter-sheet__range > svg { flex: none; visibility: hidden; }
-.usage-filter-sheet__range[aria-pressed="true"] { border-color: var(--yc-green-strong); background: var(--yc-green-soft); color: var(--yc-green-strong); font-weight: var(--yc-weight-semibold); }
+.usage-filter-sheet__range[aria-pressed="true"] { background: var(--yc-green-soft); color: var(--yc-text); font-weight: var(--yc-weight-semibold); }
 .usage-filter-sheet__range[aria-pressed="true"] > svg { visibility: visible; }
 .usage-filter-sheet__error { color: var(--yc-danger); }
 .usage-filter-sheet__actions {

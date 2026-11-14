@@ -26,7 +26,8 @@
 .dots-connection__facts dd {
   margin: 0;
   font-family: var(--yc-font-mono);
-  font-size: var(--yc-size-xs);
+  font-size: var(--yc-size-2xs);
+  line-height: var(--yc-leading-2xs);
 }
 
 @media (max-width: 479px) {

@@ -1,4 +1,4 @@
-import { contextWindowDisplay, modelLabel, type ModelRefView, type SessionView } from "../projection"
+import { contextWindowDisplay, modelLabel, type ModelRefView, type RemoteMessageView, type SessionView } from "../projection"
 import { autonomySummary } from "../autonomy"
 import type { SessionInfoView } from "../store"
 import type { RemoteTransportStatus } from "../transport"
@@ -6,6 +6,7 @@ import {
   connectionBanner,
   lostResultLabel,
   sessionActivityGroup,
+  sessionProjectLabel,
   sessionStateChips,
   summarizeConnection,
   type ConnectionTone,
@@ -100,13 +101,6 @@ export function sessionNeedsAttention(session: SessionInfoView, view: SessionVie
   return view !== undefined && view.id === session.id && view.requests.length > 0
 }
 
-export function sessionPanelSummary(sessions: readonly SessionInfoView[], view: SessionView | undefined): string {
-  const waiting = sessions.filter((session) => sessionNeedsAttention(session, view)).length
-  const running = sessions.filter((session) => session.running === true && !sessionNeedsAttention(session, view)).length
-  const pinned = sessions.filter((session) => session.pinnedAt !== undefined).length
-  return `${waiting} waiting · ${running} running · ${pinned} pinned`
-}
-
 export function prioritizePanelSessions(sessions: readonly SessionInfoView[], view: SessionView | undefined): readonly SessionInfoView[] {
   const priority = (session: SessionInfoView) => sessionNeedsAttention(session, view) ? 0 : session.running === true ? 1 : session.pinnedAt !== undefined ? 2 : 3
   return [...sessions].sort((left, right) => priority(left) - priority(right))
@@ -118,10 +112,66 @@ export function sessionCompanionSummary(view: SessionView | undefined, sessionMo
   const autonomy = view.autonomy
   const goal = autonomy?.goal?.status === "active" ? autonomy.goal : undefined
   return {
-    ...(context ? { contextLabel: `${context.usedPercent}% used · ${context.leftPercent}% left`, contextTokens: context.tokens, contextUsed: context.usedTokens, contextCapacity: context.capacityTokens, contextFraction: context.fraction } : {}),
+    ...(context ? { contextLabel: `${context.usedPercent}% used`, contextTokens: context.tokens, contextUsed: context.usedTokens, contextCapacity: context.capacityTokens, contextFraction: context.fraction } : {}),
     ...(autonomy ? { autonomyLabel: autonomySummary(autonomy.effective ?? autonomy).label } : {}),
     ...(goal ? { goalText: goal.text, goalIteration: goal.iteration } : {}),
   }
+}
+
+export type SessionRowSignal = { readonly kind: "running" | "waiting" | "failed" | "idle"; readonly label?: string }
+
+export function sessionRowSignal(session: SessionInfoView, view: SessionView | undefined): SessionRowSignal {
+  if (awaitsApproval(view, session.id)) return { kind: "waiting", label: "Waiting for approval" }
+  if (sessionNeedsAttention(session, view)) return { kind: "waiting", label: "Waiting for you" }
+  if (session.running === true || (view?.id === session.id && view.status === "running")) return { kind: "running", label: "Running" }
+  if (session.failed === true) return { kind: "failed", label: "Failed" }
+  return { kind: "idle" }
+}
+
+export type SessionFilter = "all" | "waiting" | "running" | "idle"
+
+export const sessionFilters: readonly SessionFilter[] = ["all", "waiting", "running", "idle"]
+
+export function sessionFilterCounts(sessions: readonly SessionInfoView[], view: SessionView | undefined, active: SessionFilter): Partial<Record<SessionFilter, number>> {
+  if (active !== "all") return { [active]: sessions.length }
+  const waiting = sessions.filter((session) => sessionNeedsAttention(session, view)).length
+  const running = sessions.filter((session) => !sessionNeedsAttention(session, view) && session.running === true).length
+  return { all: sessions.length, waiting, running, idle: sessions.length - waiting - running }
+}
+
+export function groupRailSessions(sessions: readonly SessionInfoView[]): readonly { readonly label: string; readonly sessions: readonly SessionInfoView[] }[] {
+  const groups = new Map<string, SessionInfoView[]>()
+  for (const session of sessions) {
+    const label = sessionProjectLabel(session)
+    groups.set(label, [...groups.get(label) ?? [], session])
+  }
+  return [...groups].map(([label, members]) => ({ label, sessions: members }))
+}
+
+export function transcriptContextMessages(messages: readonly RemoteMessageView[]): readonly { readonly id: string; readonly role: string; readonly summary: string }[] {
+  const excerpt = (text: string) => {
+    const line = text.replace(/\s+/g, " ").trim()
+    return line.length === 0 ? "No text" : line.length > 96 ? `${line.slice(0, 95)}…` : line
+  }
+  return messages.flatMap((message) => message.kind === "user" ? [{ id: message.id, role: "User", summary: excerpt(message.text) }]
+    : message.kind === "assistant" ? [{ id: message.id, role: message.agent ?? "Assistant", summary: excerpt(message.parts.flatMap((part) => part.kind === "text" ? [part.text] : []).join(" ")) }]
+    : [])
+}
+
+export type PresenceEntry<T> = { readonly key: string; readonly item: T; readonly open: boolean }
+
+export function reconcilePresence<T>(entries: readonly PresenceEntry<T>[], items: readonly T[], keyOf: (item: T) => string): readonly PresenceEntry<T>[] {
+  const current = new Map(items.map((item) => [keyOf(item), item]))
+  const kept = entries.map((entry) => {
+    const item = current.get(entry.key)
+    return item === undefined ? { ...entry, open: false } : { key: entry.key, item, open: true }
+  })
+  const known = new Set(entries.map((entry) => entry.key))
+  return [...kept, ...items.filter((item) => !known.has(keyOf(item))).map((item) => ({ key: keyOf(item), item, open: true }))]
+}
+
+export function settlePresence<T>(entries: readonly PresenceEntry<T>[], key: string): readonly PresenceEntry<T>[] {
+  return entries.filter((entry) => entry.open || entry.key !== key)
 }
 
 /**
@@ -139,8 +189,6 @@ export function sessionChips(session: SessionInfoView, view: SessionView | undef
   if (sessionNeedsAttention(session, view)) return [{ label: "Waiting for you", tone: "attention" }, ...chips]
   return chips
 }
-
-export type SessionFilter = "all" | "waiting" | "running" | "idle"
 
 export function filterSessions(
   sessions: readonly SessionInfoView[],

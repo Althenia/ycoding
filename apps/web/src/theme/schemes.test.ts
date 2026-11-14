@@ -52,6 +52,17 @@ describe("scheme palettes", () => {
     for (const value of Object.values(tokens)) expect(value).toMatch(/^(#[0-9a-f]{6}|rgba\(\d+, \d+, \d+, [0-9.]+\))$/)
   })
 
+  test("maps the live-state signal from the palette blue, darkened in light modes and lightened in dark modes", () => {
+    const signals = Object.fromEntries(palettes.map(({ scheme, mode, palette }) => [`${scheme}/${mode}`, schemeTokens(palette, mode)["--yc-signal"]]))
+    expect(signals).toEqual({
+      "onedark/light": "#2d54a9",
+      "onedark/dark": "#90c7f4",
+      "onedark-pro/dark": "#90c7f4",
+      "high-contrast/light": "#002d70",
+      "high-contrast/dark": "#a8d6ff",
+    })
+  })
+
   test("every palette sets the same tokens except the optional terminal plate", () => {
     const sets = palettes.map(({ palette, mode }) => Object.keys(schemeTokens(palette, mode)).filter((name) => !name.startsWith("--yc-terminal-")))
     for (const set of sets) expect(set).toEqual(sets[0]!)

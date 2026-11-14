@@ -102,7 +102,8 @@ test("quota refresh keeps a content-sized target and a reduced-motion busy indic
   expect(rule(".usage-refresh")).not.toContain("width: 100%")
   expect(css).toContain(".usage-refresh[aria-busy=\"true\"] svg")
   expect(css).toContain("animation: usage-refresh-spin var(--yc-dur-slow) linear infinite")
-  expect(css).toContain(".usage-refresh[aria-busy=\"true\"] { border-color: var(--yc-green-strong); background: var(--yc-green-soft); }")
+  expect(css).toContain(".usage-refresh[aria-busy=\"true\"] { border-color: var(--yc-signal); }")
+  expect(css).toContain("color: var(--yc-signal); animation: usage-refresh-spin")
   expect(css).toContain(".usage-refresh[aria-busy=\"true\"] svg { animation: none; }")
 })
 
@@ -222,8 +223,23 @@ test("Usage record rows keep a titled grid with mono metadata and open hover pla
   expect(rule(".usage-page th, .usage-page td")).not.toContain("border")
   expect(rule(".usage-consumption__row")).not.toContain("border-top")
   expect(rule(".usage-consumption__row")).toContain("border-radius: var(--yc-radius-md)")
-  expect(rule(".usage-consumption__row:hover")).toContain("background: var(--yc-surface)")
+  expect(css).toMatch(/@media \(hover: hover\) \{ \.usage-consumption__row:hover \{[^}]*background: var\(--yc-surface\)/)
   expect(css).toMatch(/\.usage-mobile-row \{[^}]*border-radius: var\(--yc-radius-md\)/)
   expect(css).not.toMatch(/\.usage-mobile-row \{[^}]*border-top/)
   expect(css).not.toMatch(/border-(?:top|bottom|block-start|block-end): 1px/)
+})
+
+test("data values, meters, bars and status marks use neutral ink; green is limited to the selected-choice plane", async () => {
+  const speed = await Bun.file(new URL("./usage-speed.css", import.meta.url)).text()
+  const incidents = await Bun.file(new URL("./model-incidents.css", import.meta.url)).text()
+  const filters = await Bun.file(new URL("./usage-filters.css", import.meta.url)).text()
+  for (const sheet of [css, speed, incidents, filters]) expect(sheet).not.toMatch(/(?:^|[;{\s])(?:color|fill|stroke|border-color):\s*var\(--yc-green-strong\)/m)
+  expect(rule(".usage-chart__bar--today")).toContain("fill: var(--yc-text)")
+  expect(rule(".usage-table__cost")).toContain("color: var(--yc-text)")
+  expect(rule(".usage-status")).toContain("background: var(--yc-text-muted)")
+  expect(rule(".usage-pace")).not.toContain("var(--yc-green")
+  expect(rule(".usage-meter > span")).toContain("background: var(--yc-text-muted)")
+  for (const block of [rule(".usage-toggle button[aria-pressed=\"true\"]"), incidents.match(/\.incidents__range button\[aria-pressed="true"\] \{[^}]*\}/)?.[0] ?? ""]) {
+    expect(block).toContain("color: var(--yc-text)")
+  }
 })

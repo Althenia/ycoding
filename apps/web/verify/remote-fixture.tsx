@@ -59,6 +59,9 @@ let devices: readonly RemoteDeviceInfo[] = [
 
 const accountParams = new URLSearchParams(window.location.search)
 const projectCards = accountParams.get("projectCards") === "1"
+const ledger = accountParams.get("ledger") === "1"
+const ledgerTyping = accountParams.get("typing") !== "0"
+const ledgerDirectory = "/Users/alex/ycoding"
 let telemetryConsentEnabled = accountParams.get("telemetryConsent") !== "undecided"
 const requestLatencyMs = Number(accountParams.get("latency") ?? 0)
 const fixtureGrades = [
@@ -112,6 +115,7 @@ const emptyBackend = remoteScenarioData?.emptyBackend ?? accountParams.get("sess
 const fixtureTheme = accountParams.get("theme") ?? remoteScenarioData?.theme
 if (fixtureTheme !== undefined) localStorage.setItem("ycoding.theme", fixtureTheme)
 if (remoteScenarioData !== undefined) devices = remoteScenarioData.devices
+if (ledger) devices = [{ id: "dev_studio", name: "This Mac", createdAt: 1, lastSeenAt: Date.now(), status: "active", online: true as const }]
 const machineName = accountParams.get("machineName")
 if (machineName !== null) devices = devices.map((device, index) => index === 0 ? { ...device, name: machineName } : device)
 const machineAlias = accountParams.get("machineAlias")
@@ -199,7 +203,18 @@ const defaultSessions: readonly WireSession[] = [
   ...(accountParams.get("team") === "two" ? [{ id: "ses_second", title: "Child: inspect source", parentID: sessionID, time: { created: ago(20), updated: ago(2) } }] : []),
   ...(accountParams.get("team") === "two" ? [{ id: "ses_btw", title: "Side question", parentID: sessionID, agent: "btw", time: { created: ago(19), updated: ago(2) } }] : []),
 ]
-let sessions: readonly WireSession[] = [...(remoteScenarioData?.sessions ?? defaultSessions), ...(accountParams.get("masterInput") === "1" ? [{ id: "ses_master", title: "Release master", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(50), updated: ago(1) } }] : []), ...(accountParams.has("carouselFamily") ? [{
+const ledgerModel = { providerID: "anthropic", id: "claude-opus-5-5", variant: "high" }
+const ledgerSession = (id: string, title: string, minutes: number, running = false): WireSession => ({ id, title, projectID: "prj_ledger", location: { directory: ledgerDirectory }, agent: "build", model: ledgerModel, time: { created: ago(minutes + 60), updated: ago(minutes), active: ago(minutes) }, running })
+const ledgerSessions: readonly WireSession[] = [
+  ledgerSession(sessionID, "Web transcript polish", 1, ledgerTyping),
+  ledgerSession("ses_ledger_waiting", "Desktop local candidate", 4),
+  ledgerSession("ses_ledger_failed", "Relay rate-limit fix", 9),
+  ledgerSession("ses_ledger_usage", "Usage quota forecast", 12, true),
+  ledgerSession("ses_ledger_awake", "Keep-awake setup", 55),
+  ledgerSession("ses_ledger_settings", "Settings machine row", 130),
+  ledgerSession("ses_ledger_changelog", "Changelog November", 1_500),
+]
+let sessions: readonly WireSession[] = [...(ledger ? ledgerSessions : remoteScenarioData?.sessions ?? defaultSessions), ...(accountParams.get("masterInput") === "1" ? [{ id: "ses_master", title: "Release master", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(50), updated: ago(1) } }] : []), ...(accountParams.has("carouselFamily") ? [{
   id: "ses_postgres_child", title: "Inspect Postgres indexes", parentID: "ses_postgres", projectID: "project-auth",
   location: { directory: "/workspace/db-pruner" }, time: { created: ago(15), updated: ago(2) }, running: true,
 }] : [])]
@@ -208,8 +223,8 @@ const inventoryPageRows = Math.min(400, Math.max(0, Number(accountParams.get("pa
 const sessionListDelayMs = Number(accountParams.get("sessionListDelay") ?? 0)
 let statusRunning = new Set(inventoryCount > 0 ? ["ses_inventory_14000"] : sessions.filter((session) => session.running).map((session) =>
   "parentID" in session && typeof session.parentID === "string" ? session.parentID : session.id))
-let statusAttention = remoteScenarioData?.attention === undefined ? undefined : new Set(remoteScenarioData.attention)
-let statusFailed = new Set<string>()
+let statusAttention = ledger ? new Set(["ses_ledger_waiting"]) : remoteScenarioData?.attention === undefined ? undefined : new Set(remoteScenarioData.attention)
+let statusFailed = new Set<string>(ledger ? ["ses_ledger_failed"] : [])
 let statusLost = new Set<string>()
 
 const longOutput = Array.from({ length: 60 }, (_, index) => `line ${index + 1}: bun test test/remote-sync.test.ts --filter case-${index}`).join("\n")
@@ -452,8 +467,63 @@ const guardrail = {
   standard: true,
   hardReview: true,
 }
-const permissions = remoteScenarioData?.permissions ?? [permission]
-const guardrails = remoteScenarioData?.guardrails ?? [guardrail]
+const requestMode = accountParams.get("requests")
+const permissions = ledger ? (requestMode === "form" ? [permission] : []) : requestMode === "form" ? [] : remoteScenarioData?.permissions ?? [permission]
+const guardrails = requestMode === "form" || ledger ? [] : remoteScenarioData?.guardrails ?? [guardrail]
+let pendingInputs: readonly unknown[] = accountParams.get("queued") === "1" || ledger && accountParams.get("queued") !== "0"
+  ? [{ id: "msg_queued", sessionID, type: "user", delivery: "queue", timeCreated: Date.now(), data: { text: ledger ? "Also check the light theme at 1800px." : "After that, also run the remote integration suite and report anything flaky." } }]
+  : []
+const imageDigests = ["a", "b", "c"].map((letter) => `${letter}${"0".repeat(63)}`)
+if (accountParams.get("images") === "1") messages = [...messages,
+  { id: "msg_images", type: "user", text: "Compare [Image 1] with [Image 2] and keep the spacing from the second one.", files: imageDigests.slice(0, 2).map((digest, index) => ({ name: `layout-${index + 1}.png`, mime: "image/png", content: { type: "managed", digest, bytes: 2_048 } })), time: { created: ago(1), consumed: ago(1) } },
+  { id: "msg_image_only", type: "user", text: "[Image 1]", files: [{ name: "screenshot.png", mime: "image/png", content: { type: "managed", digest: imageDigests[2], bytes: 2_048 } }, { name: "notes.txt", mime: "text/plain", content: { type: "managed", digest: "d".repeat(64), bytes: 512 } }], time: { created: ago(1), consumed: ago(1) } },
+]
+
+const ledgerTool = (index: number, name: string, input: Record<string, unknown>) => ({
+  type: "tool", id: `call_ledger_${index}`, name, executed: true,
+  state: { status: "completed", input, content: [{ type: "text", text: "ok" }], time: { created: ago(22) + index * 14_000, ran: ago(22) + index * 14_000, completed: ago(22) + index * 14_000 + 9_000 } },
+  time: { created: ago(22) + index * 14_000, ran: ago(22) + index * 14_000, completed: ago(22) + index * 14_000 + 9_000 },
+})
+const ledgerSteps: readonly (readonly [string, Record<string, unknown>])[] = [
+  ["read", { path: "apps/web/src/remote/ui/context-panel.tsx" }], ["grep", { pattern: "companion__context" }], ["read", { path: "apps/web/src/remote/ui/context-panel.css" }],
+  ["read", { path: "apps/web/src/remote/ui/shared-workspace.tsx" }], ["edit", { path: "apps/web/src/remote/ui/context-panel.css" }], ["edit", { path: "apps/web/src/remote/ui/context-panel.tsx" }],
+  ["edit", { path: "apps/web/src/remote/ui/shared-workspace.tsx" }], ["shell", { command: "bun test src/remote/ui/context-panel.test.ts" }], ["shell", { command: "bun run typecheck" }],
+]
+if (ledger) messages = [
+  { id: "msg_ledger_user", type: "user", text: "The Context header wraps and the token columns don't line up. Screenshots attached.", files: [
+    ...imageDigests.slice(0, 2).map((digest, index) => ({ name: `context-header-${index + 1}.png`, mime: "image/png", content: { type: "managed", digest, bytes: 2_048 } })),
+    { name: "context-panel.log", mime: "text/plain", content: { type: "managed", digest: "d".repeat(64), bytes: 4_300 } },
+  ], time: { created: ago(24), consumed: ago(24) } },
+  {
+    id: "msg_ledger_assistant", type: "assistant", agent: "build", model: { id: "claude-opus-5-5", providerID: "anthropic", variant: "high" },
+    content: [
+      ...ledgerSteps.map(([name, input], index) => ledgerTool(index, name, input)),
+      { type: "text", text: "The number and its capacity sit in separate flex rows, so the capacity wraps at 400px. I moved both into one baseline-aligned row and set the token and percent columns to tabular numerals." },
+      { type: "text", text: "Light theme still needs a check at 1800px." },
+    ],
+    tokens: { input: 4_212, output: 1_086, reasoning: 2_340, cache: { read: 172_678, write: 2_084 } },
+    diagnostics: { contextLimit: 500_000, contextBreakdown: { system: 14_820, tools: 22_310, user: 9_640, assistant: 41_200, reasoning: 38_900, toolCalls: 51_730, other: 3_800 } },
+    time: { created: ago(22), completed: ago(20) },
+  },
+]
+
+async function fixtureImage(digest: string) {
+  const canvas = new OffscreenCanvas(640, 400)
+  const context = canvas.getContext("2d")!
+  const hue = { a: 150, b: 210, c: 30 }[digest[0] as "a" | "b" | "c"] ?? 0
+  const gradient = context.createLinearGradient(0, 0, 640, 400)
+  gradient.addColorStop(0, `hsl(${hue} 55% 42%)`)
+  gradient.addColorStop(1, `hsl(${hue + 40} 60% 70%)`)
+  context.fillStyle = gradient
+  context.fillRect(0, 0, 640, 400)
+  context.fillStyle = "rgb(255 255 255 / .85)"
+  context.fillRect(48, 48, 300, 36)
+  context.fillRect(48, 112, 220, 24)
+  const bytes = new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer())
+  let binary = ""
+  for (let offset = 0; offset < bytes.length; offset += 8_192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8_192))
+  return Response.json({ mime: "image/png", bytes: bytes.length, data: btoa(binary) })
+}
 const form = {
   id: "frm_fixture",
   sessionID,
@@ -463,9 +533,13 @@ const form = {
     {
       key: "q0",
       type: "string",
-      title: "Scope",
-      description: "Which sessions should the workspace reload after reconnect?",
-      options: [
+      title: ledger ? "Layout" : "Scope",
+      description: ledger ? "Which layout should the Context header use?" : "Which sessions should the workspace reload after reconnect?",
+      options: ledger ? [
+        { value: "Number and capacity on one baseline (Recommended)", label: "Number and capacity on one baseline (Recommended)" },
+        { value: "Stack the capacity under the number", label: "Stack the capacity under the number" },
+        { value: "Keep the current layout", label: "Keep the current layout" },
+      ] : [
         { value: "Active only", label: "Active only", description: "Reload just the session you are watching" },
         { value: "All advertised", label: "All advertised", description: "Reload every session in the advertisement" },
       ],
@@ -521,6 +595,7 @@ const catalog = {
     { id: "reviewer", name: "reviewer", description: "Reviews a diff and reports findings", mode: "subagent", hidden: false },
     { id: "btw", name: "btw", description: "Side question", mode: "subagent", hidden: false },
     { id: "compaction", name: "compaction", mode: "primary", hidden: true },
+    ...(ledger ? [{ id: "build", name: "build", description: "Builds and edits code", mode: "primary", hidden: false }] : []),
   ],
   models: [
     { providerID: "openai", providerName: "OpenAI", id: model.id, name: "Gpt 6", variants: ["low", "medium", "high"] },
@@ -726,6 +801,7 @@ function createFixtureStore(): Fixture {
   let coordinationGroups: FixtureGroup[] = coordinationMode === "empty" ? [] : [
     { id: "cgrp_release", name: "Release train", active: true, revision: 3, created: ago(60), updated: ago(2), settings: { concurrency: 2 }, masterSessionID: "ses_lead", memberSessionIDs: ["ses_docs", "ses_tests", "ses_api", "ses_audit"] },
     { id: "cgrp_docs", name: "Docs sweep", active: false, pausedReason: "interrupted", revision: 1, created: ago(30), updated: ago(30), settings: { concurrency: null }, masterSessionID: "ses_spare", memberSessionIDs: [] },
+    ...(ledger ? [{ id: "cgrp_ledger", name: "Ledger workspace", active: true, revision: 1, created: ago(90), updated: ago(3), settings: { concurrency: 2 }, masterSessionID: "ses_ledger_settings", memberSessionIDs: ["ses_ledger_awake", "ses_ledger_changelog"] }] : []),
   ]
   const participant = (id: string) => {
     const session = createdSessions.get(id) ?? sessions.find((entry) => entry.id === id)
@@ -789,8 +865,8 @@ function createFixtureStore(): Fixture {
   Object.assign(window, { coordinationBump: (groupID: string) => { const group = coordinationGroups.find((entry) => entry.id === groupID); if (group) group.revision += 1 } })
   const readMode = (value: unknown, fallback: AutonomyMode) => readAutonomyMode(value) ?? fallback
   let currentModes: AutonomyModes = {
-    permissions: readMode(remoteScenarioData?.autonomy.permissions, remoteScenarioData === undefined ? "auto" : "manual"),
-    guardrails: readMode(remoteScenarioData?.autonomy.guardrails, remoteScenarioData === undefined ? "auto" : "manual"),
+    permissions: readMode(remoteScenarioData?.autonomy.permissions, remoteScenarioData === undefined && !ledger ? "auto" : "manual"),
+    guardrails: readMode(remoteScenarioData?.autonomy.guardrails, remoteScenarioData === undefined && !ledger ? "auto" : "manual"),
     answers: readMode(remoteScenarioData?.autonomy.answers, readMode(accountParams.get("answers"), "manual")),
   }
   let sleep: Readonly<Record<string, never>> | undefined = accountParams.get("asleep") === "1" ? {} : undefined
@@ -830,7 +906,11 @@ function createFixtureStore(): Fixture {
   const autonomyExtras = () => sleep === undefined ? {} : { sleep }
   const autonomyResponse = (data: Record<string, unknown>, modes: AutonomyModes = currentModes): RemoteRequestOutcome => ({ status: "ok", value: { data: { ...data, ...modes, effective: { ...modes, inherited: {}, asleep: sleep !== undefined, guardrailsEnabled: accountParams.get("guardrails") !== "off" } } } })
   const operationCounts = new Map<string, number>()
-  const workspaces = [
+  const workspaces = ledger ? [
+    { id: "workspace_fixture", projectID: "prj_ledger", directory: ledgerDirectory, name: "ycoding" },
+    { id: "workspace_relay", projectID: "prj_relay", directory: "/Users/alex/relay-agent", name: "relay-agent" },
+    { id: "workspace_docs", projectID: "prj_docs", directory: "/Users/alex/docs-site", name: "docs-site" },
+  ] : [
     { id: "workspace_fixture", projectID: "prj_remote", directory: "/workspace/ycoding", name: "YCoding" },
     { id: "workspace_other", projectID: "prj_other", directory: "/workspace/other", name: "Other repository" },
   ]
@@ -959,6 +1039,11 @@ function createFixtureStore(): Fixture {
       return { status: "ok", value: { accepted: samples.length } }
     }
     if (responseProbe && operation === "session.capturedChanges.list") return { status: "ok", value: { data: structuredClone(responseCaptured) } }
+    if (ledger && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [
+      { path: "apps/web/src/remote/ui/context-panel.css", additions: 31, deletions: 12 },
+      { path: "apps/web/src/remote/ui/context-panel.tsx", additions: 12, deletions: 5 },
+      { path: "apps/web/src/remote/ui/shared-workspace.tsx", additions: 5, deletions: 2 },
+    ].map((file) => ({ placementMessageID: "msg_ledger_assistant", ...file, status: "modified", files: [{ ...file, status: "modified", diff: `@@ -1 +1,2 @@\n-.companion__context-total { display: block }\n+.companion__context-total { display: flex; align-items: baseline }` }] })) } }
     if (acceptedPreview && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [{ placementMessageID: "msg_assistant", path: "src/remote/store.ts", additions: 2, deletions: 1, status: "modified", files: [{ path: "src/remote/store.ts", diff: "@@ -1 +1,2 @@\n-const old = 1\n+const next = 2\n+export { next }", additions: 2, deletions: 1, status: "modified" }] }] } }
     if (transcriptProbe && operation === "session.todo.list") return { status: "ok", value: { data: [{ content: "Verify stable transcript", status: "in_progress", priority: "high" }] } }
     if (transcriptProbe && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [{ placementMessageID: "probe_reply_4", path: "src/probe.ts", additions: 1, deletions: 1, status: "modified", files: [{ path: "src/probe.ts", diff: `@@ -1 +1 @@\n-before\n+${probeCaptured}`, additions: 1, deletions: 1, status: "modified" }] }] } }
@@ -1099,7 +1184,7 @@ function createFixtureStore(): Fixture {
       }
       return { status: "ok", value: { data: [...createdSessions.values(), ...(emptyBackend ? [] : sessions)]
         .filter((session) => input?.workspace === undefined || groupOf(session).id === input.workspace)
-        .filter((session) => input?.parentID !== null || (session as { readonly parentID?: string }).parentID === undefined)
+        .filter((session) => input?.parentID !== null || Reflect.get(session, "parentID") === undefined)
         .filter((session) => {
           const waiting = (statusAttention?.has(session.id) ?? (session.id === sessionID && unreplied(permissions).length + unreplied(guardrails).length > 0)) && !statusFailed.has(session.id) && !statusLost.has(session.id)
           return input?.status === "waiting" ? waiting : input?.status === "running" ? statusRunning.has(session.id) && !waiting
@@ -1203,7 +1288,7 @@ function createFixtureStore(): Fixture {
       if (createdSessions.has(targetSessionID)) return autonomyResponse({ mode: "normal" }, { permissions: "manual", guardrails: "manual", answers: "manual" })
       return autonomyResponse(remoteScenarioData?.autonomy ?? {
             mode: "normal",
-            ...(accountParams.get("goal") === "none" ? {} : { goal: { text: "Ship the remote workspace", status: "active", iteration: 3, noProgress: 0, maxNoProgress: 5 } }),
+            ...(accountParams.get("goal") === "none" ? {} : { goal: { text: ledger ? "Ship the Ledger workspace" : "Ship the remote workspace", status: "active", iteration: 3, noProgress: 0, maxNoProgress: 5 } }),
             ...autonomyExtras(),
           })
     }
@@ -1216,6 +1301,7 @@ function createFixtureStore(): Fixture {
         { sessionID, requestID: "grq_legacy", created: ago(29), reply: "reject", choice: "reject", confidence: 0.71 },
       ] : [],
     } } }
+    if (ledger && requestMode !== "form" && operation === "session.form.list") return { status: "ok", value: [] }
     if (operation === "session.form.list" && readingDecision && targetSessionID === sessionID) return { status: "ok", value: [readingForm] }
     if (operation === "session.form.list") return {
       status: "ok",
@@ -1296,10 +1382,12 @@ function createFixtureStore(): Fixture {
       })
     }
     if (operation === "session.goal.stop") return autonomyResponse({ mode: "normal" })
+    if (operation === "session.pending.list" && pendingInputs.length > 0) return { status: "ok", value: { data: pendingInputs } }
     return { status: "ok", value: null }
   }
 
   const emitEvent = (sessionID: string, event: unknown) => handlers?.onEvents?.(sessionID, [event])
+  Object.assign(window, { remoteEmit: (event: unknown) => emitEvent(sessionID, event), remoteSetPendingInputs: (rows: readonly unknown[]) => { pendingInputs = rows; return store.reloadMessages() } })
 
   const laptopSession = { id: "ses_laptop", title: "Laptop release check", projectID: "prj_laptop", location: { directory: "/workspace/laptop" }, agent: "god", model, time: { created: ago(20), updated: ago(2) } }
   const laptopGroup = { id: "workspace_laptop", projectID: "prj_laptop", directory: "/workspace/laptop", name: "Laptop repository" }
@@ -1380,6 +1468,10 @@ function createFixtureStore(): Fixture {
 
   const store = createRemoteStore({
     http: syntheticHttp,
+    ...((accountParams.get("images") === "1" || ledger) ? { fetch: async (input: string) => {
+      const digest = input.split("/attachments/")[1] ?? ""
+      return imageDigests.includes(digest) ? fixtureImage(digest) : new Response(null, { status: 404 })
+    } } : {}),
     ...(accountParams.has("latencyUploadMs") ? { latencyUploadIntervalMs: Number(accountParams.get("latencyUploadMs")) } : {}),
     ...(transcriptProbe || responseProbe ? { now: () => Date.now() + probeClock, schedule: (callback: () => void, ms: number) => {
       const timer = setTimeout(callback, ms >= 1_000 ? 1 : ms)

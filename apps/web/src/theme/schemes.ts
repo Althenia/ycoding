@@ -154,6 +154,7 @@ export function schemeTokens(palette: Palette, mode: SchemeMode): Readonly<Recor
   const dark = mode === "dark"
   const ink = palette.base05
   const accent = dark ? mixColors(palette.base0B, "#ffffff", 0.1) : mixColors(palette.base0B, "#000000", 0.3)
+  const signal = mixColors(palette.base0D, dark ? "#ffffff" : "#000000", 0.3)
   const warning = dark ? palette.base0A : mixColors(palette.base0A, "#000000", 0.25)
   return {
     "--yc-green": palette.base0B,
@@ -167,6 +168,7 @@ export function schemeTokens(palette: Palette, mode: SchemeMode): Readonly<Recor
     "--yc-danger": dark ? mixColors(palette.base08, "#ffffff", 0.26) : palette.base08,
     "--yc-danger-soft": withAlpha(palette.base08, dark ? 0.14 : 0.1),
     "--yc-focus": accent,
+    "--yc-signal": signal,
     "--yc-bg": palette.base00,
     "--yc-surface": mixColors(palette.base00, palette.base01, dark ? 0.3 : 0.5),
     "--yc-surface-sunken": dark ? (palette.base10 ?? mixColors(palette.base00, "#000000", 0.16)) : palette.base01,

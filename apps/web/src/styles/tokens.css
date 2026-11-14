@@ -52,7 +52,6 @@
 :root {
   color-scheme: light;
 
-  /* brand — the green accent stays the only accent */
   --yc-green: #27d17f;
   --yc-green-strong: #0a7b47;
   --yc-green-soft: rgba(39, 209, 127, 0.12);
@@ -64,6 +63,22 @@
   --yc-danger: #c53a3a;
   --yc-danger-soft: rgba(197, 58, 58, 0.1);
   --yc-focus: #0b8b50;
+  --yc-signal: #1962c0;
+  --yc-scrim: rgba(11, 15, 20, 0.45);
+
+  --yc-effort: #554b72;
+  --yc-effort-none: #425466;
+  --yc-effort-minimal: #265c8c;
+  --yc-effort-low: #136673;
+  --yc-effort-medium: #0a7b47;
+  --yc-effort-high: #955711;
+  --yc-effort-xhigh: #88439c;
+  --yc-effort-max: #9d375b;
+  --yc-context-system: #3f6587;
+  --yc-context-tools: #0f6f6b;
+  --yc-context-assistant: #865700;
+  --yc-context-reasoning: #8a3aae;
+  --yc-context-tool-calls: #a5441a;
 
   /* surfaces */
   --yc-bg: #ffffff;
@@ -176,7 +191,8 @@
   --yc-bottom-nav-h: 56px;
   --yc-content-max: 1200px;
   --yc-content-max-wide: 1600px;
-  --yc-rail-w: 216px;
+  --yc-rail-w: 256px;
+  --yc-companion-w: 448px;
   --yc-docs-nav-w: 248px;
   --yc-docs-toc-w: 200px;
   --yc-device-max: 180px;
@@ -190,6 +206,9 @@
   --yc-ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --yc-ease-entrance: cubic-bezier(0, 0, 0.2, 1);
   --yc-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --yc-motion-spatial-dur: var(--yc-dur-base);
+  --yc-motion-effect-dur: var(--yc-dur-quick);
+  --yc-motion-ease: var(--yc-ease-standard);
 
   /* stacking */
   --yc-z-header: 30;
@@ -204,7 +223,7 @@
 
   --yc-green: #27d17f;
   --yc-green-strong: #4ee29b;
-  --yc-green-soft: rgba(39, 209, 127, 0.16);
+  --yc-green-soft: rgba(78, 226, 155, 0.12);
   /* The bright green stays the primary surface; the label is dark because white on
      it reaches only 1.65:1. */
   --yc-primary-bg: #4ee29b;
@@ -214,6 +233,21 @@
   --yc-danger: #ef6f6f;
   --yc-danger-soft: rgba(239, 111, 111, 0.14);
   --yc-focus: #4ee29b;
+  --yc-signal: #79b8ff;
+
+  --yc-effort: #d2aedf;
+  --yc-effort-none: #a9bacb;
+  --yc-effort-minimal: #91c1f0;
+  --yc-effort-low: #73d1dc;
+  --yc-effort-medium: #5fe3a1;
+  --yc-effort-high: #e4be7b;
+  --yc-effort-xhigh: #c6a1e0;
+  --yc-effort-max: #e2a2b9;
+  --yc-context-system: #8fb3d9;
+  --yc-context-tools: #5fd0c6;
+  --yc-context-assistant: #f7d37c;
+  --yc-context-reasoning: #d7a6f2;
+  --yc-context-tool-calls: #f7a77a;
 
   --yc-bg: #0b1115;
   --yc-surface: #11181d;
@@ -268,5 +302,12 @@
 @media (pointer: coarse) {
   :root {
     --yc-control-h-dense: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --yc-motion-spatial-dur: 0s;
+    --yc-motion-effect-dur: var(--yc-dur-instant);
   }
 }

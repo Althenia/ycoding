@@ -1,5 +1,6 @@
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, createUniqueId, onCleanup, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
+import { Collapsible } from "../../ui/collapsible"
 import { remoteDotsPeerLabel } from "@ycoding-ai/remote"
 import { catalogKey, modelDisplayLabel } from "../catalog"
 import { useRemote } from "../context"
@@ -23,7 +24,7 @@ import {
   type ShellOutputView,
   type ToolContentBlock,
 } from "../projection"
-import { capturedChangesVisible, latestPromptProcessing, promptReceipt, shellOutputPaging } from "../view-model"
+import { capturedChangesVisible, familyTaskActivity, latestPromptProcessing, promptReceipt, reasoningSummary, shellOutputPaging, transcriptActivity, userMessageDisplay } from "../view-model"
 import { parentAnswer, questionAnswerState, questionHistory } from "../question-history"
 import { FormAssessment } from "./form-request"
 import { FormRequest } from "./form-request"
@@ -54,8 +55,17 @@ function SyntheticNotice(props: { readonly notice: NonNullable<ReturnType<typeof
   if (notice.kind === "completion") return <p class={`transcript-notice transcript-notice--${notice.status}`}><strong>{notice.label} {notice.status}</strong><Show when={notice.description}> · {notice.description}</Show></p>
   const heading = <><span class="transcript-notice__mark" aria-hidden="true">◦</span><strong>Subagent · {notice.label}</strong><span class="transcript-notice__status">{notice.status}</span></>
   return <Show when={notice.excerpt} fallback={<p class={`transcript-notice transcript-notice--${notice.status}`}>{heading}</p>}>
-    {(excerpt) => <details class={`transcript-notice transcript-notice--${notice.status}`}><summary aria-label={`Subagent ${notice.label} ${notice.status}`}>{heading}<Icon name="chevron-right" size={16} /></summary><p class="transcript-notice__excerpt">{excerpt()}</p></details>}
+    {(excerpt) => <SubagentNotice class={`transcript-notice transcript-notice--${notice.status}`} label={`Subagent ${notice.label} ${notice.status}`} heading={heading} excerpt={excerpt()} />}
   </Show>
+}
+
+function SubagentNotice(props: { readonly class: string; readonly label: string; readonly heading: JSX.Element; readonly excerpt: string }): JSX.Element {
+  const [open, setOpen] = createSignal(false)
+  const id = createUniqueId()
+  return <div class={props.class} data-open={open() ? "" : undefined}>
+    <button type="button" class="transcript-notice__toggle" aria-label={props.label} aria-expanded={open()} aria-controls={id} onClick={() => setOpen(!open())}>{props.heading}<Icon name="chevron-right" size={16} /></button>
+    <Collapsible open={open()} id={id}><p class="transcript-notice__excerpt">{props.excerpt}</p></Collapsible>
+  </div>
 }
 
 /**
@@ -162,10 +172,7 @@ function ShellOutputSection(props: {
 function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
   const [touched, setTouched] = createSignal(false)
   const [manual, setManual] = createSignal(false)
-  const [rendered, setRendered] = createSignal(false)
-  const [closing, setClosing] = createSignal(false)
-  let closeTimer: ReturnType<typeof setTimeout> | undefined
-  onCleanup(() => clearTimeout(closeTimer))
+  const bodyID = createUniqueId()
   const output = createMemo(() => {
     let remaining = 4_000
     const content = props.part().content.flatMap((block): readonly ToolContentBlock[] => {
@@ -200,32 +207,20 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
           type="button"
           class="transcript-tool__toggle"
           aria-expanded={expanded()}
+          aria-controls={bodyID}
           onClick={() => {
-            const next = !expanded()
-            setManual(next)
+            setManual(!expanded())
             setTouched(true)
-            clearTimeout(closeTimer)
-            if (next) {
-              setRendered(true)
-              setClosing(false)
-              return
-            }
-            if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
-              setRendered(false)
-              return
-            }
-            setClosing(true)
-            closeTimer = setTimeout(() => setRendered(false), 220)
           }}
         >
           <span class="transcript-tool__tag" aria-label={toolTone(props.part()) === "success" ? "Completed" : toolTone(props.part()) === "error" ? "Failed" : toolTone(props.part()) === "attention" ? "Needs attention" : "Running"}>{toolTone(props.part()) === "success" ? "✓" : toolTone(props.part()) === "attention" ? "Ⅱ" : toolTone(props.part()) === "error" ? "!" : <DotTrail />}</span>
-          <span class="transcript-tool__name" title={toolSummary(props.part())}>{toolSummary(props.part())}</span>
+          <span class="transcript-tool__name">{toolSummary(props.part())}</span>
           <span class="transcript-tool__status">{statusLabel()}{duration() ? ` · ${duration()}` : ""}</span>
           <Icon name={expanded() ? "chevron-down" : "chevron-right"} size={16} />
         </button>
       </header>
-      <Show when={rendered()}>
-        <div class="transcript-tool__body" classList={{ "transcript-tool__body--closing": closing() }} aria-hidden={closing()} inert={closing()}>
+      <Collapsible open={expanded()} id={bodyID} class="transcript-tool__body">
+        <div class="transcript-tool__content">
         <Show when={props.part().input !== undefined || props.part().inputText !== undefined}>
           <pre class="output" tabindex="0">
             <code>{props.part().inputText ?? JSON.stringify(props.part().input, null, 2)}</code>
@@ -261,7 +256,7 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
           {(id) => <ShellOutputSection shellID={id()} output={props.part().shellOutput} fetch={props.part().shellOutputFetch} status={typeof props.part().structured?.status === "string" ? props.part().structured!.status as string : undefined} />}
         </Show>
         </div>
-      </Show>
+      </Collapsible>
       <Show when={props.part().error}><p class="transcript-tool__error" role="status"><span aria-hidden="true">↳ </span>{props.part().error}</p></Show>
     </article>
   )
@@ -338,46 +333,16 @@ function PartView(props: { readonly parts: () => readonly AssistantPart[] }): JS
 
 function ReasoningPart(props: { readonly text: () => string; readonly parts: () => readonly AssistantPart[] }): JSX.Element {
   const [open, setOpen] = createSignal(false)
-  const [rendered, setRendered] = createSignal(false)
-  const [closing, setClosing] = createSignal(false)
-  let details: HTMLDetailsElement | undefined
-  let closeTimer: ReturnType<typeof setTimeout> | undefined
-  onCleanup(() => clearTimeout(closeTimer))
-  const toggle = (event: MouseEvent) => {
-    event.preventDefault()
-    clearTimeout(closeTimer)
-    if (!open()) {
-      if (details) details.open = true
-      setRendered(true)
-      setClosing(false)
-      setOpen(true)
-      return
-    }
-    setOpen(false)
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      if (details) details.open = false
-      setRendered(false)
-      return
-    }
-    setClosing(true)
-    closeTimer = setTimeout(() => {
-      if (details) details.open = false
-      setRendered(false)
-    }, 220)
-  }
-  const duration = () => {
+  const bodyID = createUniqueId()
+  const summary = () => {
     const items = props.parts().filter((item) => item.kind === "reasoning")
-    const first = items[0]
-    const last = items.findLast((item) => item.text.trim())
-    return first?.started !== undefined && last?.completed !== undefined ? ` · ${formatPartDuration(last.completed - first.started)}` : ""
+    return reasoningSummary({ started: items[0]?.started, completed: items.findLast((item) => item.text.trim())?.completed, open: open() })
   }
   return (
-    <details class="transcript-reasoning" ref={details}>
-      <summary aria-expanded={open()} onClick={toggle}><span class="transcript-reasoning__tag" aria-label={duration() ? "Completed" : "Thinking"}>{duration() ? "✓" : <DotTrail />}</span><span>Thought{duration()}</span><span class="transcript-reasoning__hint">{open() ? "Hide" : "Show"} details</span></summary>
-      <Show when={rendered()}>
-        <div class="transcript-reasoning__body" classList={{ "transcript-reasoning__body--closing": closing() }} aria-hidden={closing()} inert={closing()}><Markdown text={props.text()} /></div>
-      </Show>
-    </details>
+    <div class="transcript-reasoning" data-open={open() ? "" : undefined}>
+      <button type="button" class="transcript-reasoning__toggle" aria-expanded={open()} aria-controls={bodyID} onClick={() => setOpen(!open())}><span class="transcript-reasoning__tag">{summary().done ? <span aria-hidden="true">✓</span> : <DotTrail />}</span><span>{summary().label}</span><span class="transcript-reasoning__hint">{summary().hint}</span></button>
+      <Collapsible open={open()} id={bodyID} class="transcript-reasoning__body"><div class="transcript-reasoning__content"><Markdown text={props.text()} /></div></Collapsible>
+    </div>
   )
 }
 
@@ -406,11 +371,17 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
   const syntheticNotice = () => classifySyntheticNotice(props.message())
   const peer = () => { const message = props.message(); return message.kind === "synthetic" ? remoteDotsPeerLabel(message.metadata) : undefined }
   const guardrail = () => { const message = props.message(); return message.kind === "system" ? message.guardrail : undefined }
-  const attachments = () => { const message = props.message(); return message.kind === "user" ? message.attachments ?? [] : [] }
+  const display = createMemo(() => { const message = props.message(); return message.kind === "user" ? userMessageDisplay(message) : userMessageDisplay({ text: "" }) })
   const sendMutation = () => remote.state().mutations.find((mutation) => (mutation.kind === "prompt" || mutation.kind === "command") && mutation.id === props.message().id && mutation.sessionID === remote.state().activeSessionID)
   const promptMutation = () => sendMutation()?.state !== "sending" ? sendMutation() : undefined
   const receipt = () => promptReceipt(userState(props.message()), userDelivery(props.message()), sendMutation(), latestPromptProcessing(selectedView()?.status, selectedView()?.messages ?? [], props.message().id))
-  const attachmentKeys = () => attachments().map(attachmentKey)
+  const turnDetail = () => {
+    const message = assistantOf(props.message())
+    if (!message) return ""
+    return [message.model ? modelDisplayLabel(message.model, models()) : undefined, message.model?.variant, message.completed === undefined ? undefined : formatPartDuration(message.completed - (message.created ?? message.completed))].filter(Boolean).join(" · ")
+  }
+  const imageKeys = () => display().images.map(attachmentKey)
+  const fileKeys = () => display().files.map(attachmentKey)
   const oversized = () => { const message = props.message(); return message.kind === "oversized" ? message : undefined }
   const fallbackText = () => {
     const message = props.message()
@@ -418,14 +389,21 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
   }
   return (
     <Show when={kind() !== "notice"} fallback={<p class="notice">{noticeText(props.message())}</p>}>
-      <SharedMessageTurn kind={kind()} text={userText(props.message()).trim() !== "" ? userText(props.message()) : undefined} attachments={<For each={attachmentKeys()}>{(key) => {
-            const attachment = () => attachments()[Number(key.slice(0, key.indexOf(":")))]!
-            const size = () => attachment().bytes < 1_024 ? `${attachment().bytes} B` : `${(attachment().bytes / 1_024).toFixed(1)} KB`
-            return ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(attachment().mime)
-              ? <UserImage name={attachment().name} mime={attachment().mime} digest={attachment().digest} deviceID={remote.state().activeDeviceID ?? ""} sessionID={remote.state().activeSessionID ?? ""} />
-              : <span class="transcript-file">{attachment().name} · {size()}</span>
-          }}</For>} receiptLabel={receipt().label} receipt={<><Show when={receipt().mark === "✓"} fallback={<span aria-hidden="true">{receipt().mark}</span>}><Icon name="check" size={14} /></Show>{receipt().text}</>} sendError={<Show when={promptMutation()}>{(mutation) => <div class="transcript-message__send-error" role={mutation().state === "failed" ? "alert" : "status"}>
-            <span>{mutation().state === "unknown" ? "Outcome unknown" : "Send failed"}: {mutation().detail}</span><button type="button" class="button button--secondary button--small" onClick={() => void remote.store.retryMutation(mutation().id)}>Retry send</button></div>}</Show>} head={<Show when={props.head !== false}><TurnHead><span class="transcript-message__footer">{agent()}<Show when={assistantOf(props.message())?.model}>{(model) => <> · {modelDisplayLabel(model(), models())}<Show when={model().variant}> · {model().variant}</Show></>}</Show><Show when={assistantOf(props.message())?.completed}>{(end) => <> · {formatPartDuration(end() - (assistantOf(props.message())?.created ?? end()))}</>}</Show></span></TurnHead></Show>} agent={assistantOf(props.message())?.parts.some((part) => part.kind === "text" && part.text.trim() !== "") ? agent() : undefined} body={<AssistantParts parts={() => assistantOf(props.message())?.parts ?? []} />} error={<Show when={!props.continued && assistantOf(props.message())?.error}><p class="transcript-message__error" role="status">{assistantOf(props.message())?.error}</p></Show>} fileChanges={<Show when={!props.continued && showFileChanges()}><FileChangeCard files={fileChanges} /></Show>} shellHeader={<><Icon name="terminal" size={16} /><code>{shellOf(props.message())?.command ?? ""}</code><span class="shell__status">{shellStatus(props.message())}</span></>} shellOutput={<ShellOutputSection shellID={shellOf(props.message())?.shellID ?? ""} output={shellOf(props.message())?.output} fetch={shellOf(props.message())?.outputFetch} status={shellOf(props.message())?.status} />} content={<>
+      <SharedMessageTurn kind={kind()} text={display().text !== "" || display().images.length > 0 || display().files.length > 0 ? <>
+            <Show when={display().text !== ""}><span class="transcript-message__bubble-text">{display().text}</span></Show>
+            <Show when={display().images.length > 0}><span class="transcript-message__images" aria-label={`${display().images.length} attached image${display().images.length === 1 ? "" : "s"}`} role="group">
+              <For each={imageKeys()}>{(key) => {
+                const image = () => display().images[Number(key.slice(0, key.indexOf(":")))]!
+                return <UserImage name={image().name} mime={image().mime} digest={image().digest} deviceID={remote.state().activeDeviceID ?? ""} sessionID={remote.state().activeSessionID ?? ""} />
+              }}</For>
+            </span></Show>
+            <For each={fileKeys()}>{(key) => {
+              const file = () => display().files[Number(key.slice(0, key.indexOf(":")))]!
+              const size = () => file().bytes < 1_024 ? `${file().bytes} B` : `${(file().bytes / 1_024).toFixed(1)} KB`
+              return <span class="transcript-file"><Icon name="paperclip" size={14} />{file().name} · {size()}</span>
+            }}</For>
+          </> : undefined} receiptLabel={receipt().label} receipt={<span class="transcript-message__receipt-content" data-delivery-state={receipt().text === "Queued" ? "queued" : undefined}><Show when={receipt().mark === "✓"} fallback={<span aria-hidden="true">{receipt().mark}</span>}><Icon name="check" size={14} /></Show>{receipt().text}</span>} sendError={<Show when={promptMutation()}>{(mutation) => <div class="transcript-message__send-error" role={mutation().state === "failed" ? "alert" : "status"}>
+            <span>{mutation().state === "unknown" ? "Outcome unknown" : "Send failed"}: {mutation().detail}</span><button type="button" class="button button--secondary button--small" onClick={() => void remote.store.retryMutation(mutation().id)}>Retry send</button></div>}</Show>} head={<Show when={props.head !== false}><TurnHead><span class="transcript-message__speaker">{agent()}</span><span class="transcript-message__footer">{turnDetail()}</span></TurnHead></Show>} agent={assistantOf(props.message())?.parts.some((part) => part.kind === "text" && part.text.trim() !== "") ? agent() : undefined} body={<AssistantParts parts={() => assistantOf(props.message())?.parts ?? []} />} error={<Show when={!props.continued && assistantOf(props.message())?.error}><p class="transcript-message__error" role="status">{assistantOf(props.message())?.error}</p></Show>} fileChanges={<Show when={!props.continued && showFileChanges()}><FileChangeCard files={fileChanges} /></Show>} shellHeader={<><Icon name="terminal" size={16} /><code>{shellOf(props.message())?.command ?? ""}</code><span class="shell__status">{shellStatus(props.message())}</span></>} shellOutput={<ShellOutputSection shellID={shellOf(props.message())?.shellID ?? ""} output={shellOf(props.message())?.output} fetch={shellOf(props.message())?.outputFetch} status={shellOf(props.message())?.status} />} content={<>
         <Show when={(kind() === "system" || kind() === "synthetic") && !peer()}>
           <Show when={guardrail()} fallback={
           <Show when={parentAnswer(props.message())} fallback={<Show when={syntheticNotice()} fallback={<Show when={observation()} fallback={<p class="transcript-message__system">{fallbackText()}</p>}>{(summary) => <details class="transcript-message__observation"><summary>{summary()}</summary><pre tabindex="0">{systemText(props.message())}</pre></details>}</Show>}>
@@ -560,7 +538,6 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
   )
 }
 
-const userText = (message: RemoteMessageView) => (message.kind === "user" ? message.text : "")
 const userDelivery = (message: RemoteMessageView) => (message.kind === "user" ? message.delivery : undefined)
 const userState = (message: RemoteMessageView) => (message.kind === "user" ? message.state : undefined)
 const assistantOf = (message: RemoteMessageView): AssistantMessageView | undefined => (message.kind === "assistant" ? message : undefined)
@@ -617,3 +594,29 @@ const isHardReview = (request: PendingRequestView) => request.kind === "guardrai
 const formOf = (request: PendingRequestView) => (request.kind === "form" ? request.form : undefined)
 const partText = (part: AssistantPart) => (part.kind === "text" || part.kind === "reasoning" ? part.text : "")
 const toolOf = (part: AssistantPart): ToolPartView | undefined => (part.kind === "tool" ? part : undefined)
+
+export function TranscriptActivityRow(): JSX.Element {
+  const remote = useRemote()
+  const activity = createMemo(() => {
+    const state = remote.state()
+    const view = state.view
+    if (!view || view.id !== state.activeSessionID) return undefined
+    const family = familyTaskActivity(state.team?.tasks ?? [])
+    const running = family.running || (state.sessionStatus?.running.has(view.id) ?? state.selectedSessionInfo?.running ?? false)
+    return transcriptActivity({
+      status: running && view.status === "idle" ? "running" : view.status,
+      connection: state.connection.kind,
+      transport: state.transport.kind,
+      messages: view.messages,
+      requests: view.requests.length,
+      sending: state.mutations.some((mutation) => (mutation.kind === "prompt" || mutation.kind === "command") && mutation.sessionID === view.id && mutation.state === "sending"),
+      lastError: view.lastError?.message,
+    })
+  }, undefined, { equals: (previous, next) => previous?.kind === next?.kind && (previous?.kind !== "status" || next?.kind === "status" && previous.tone === next.tone && previous.label === next.label) })
+  return <div class="transcript-activity" role="status">
+    <Show when={activity()} keyed>{(current) => current.kind === "typing"
+      ? <span class="transcript-activity__typing motion-enter" role="img" aria-label="YCoding is working"><span /><span /><span /></span>
+      : <p class={`transcript-activity__status transcript-activity__status--${current.tone} motion-enter`}><Icon name={current.label.startsWith("Reconnecting") ? "refresh" : "alert"} size={16} /><span>{current.label}</span></p>}
+    </Show>
+  </div>
+}

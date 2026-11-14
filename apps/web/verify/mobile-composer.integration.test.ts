@@ -118,29 +118,29 @@ for (const [width, height] of [[320, 700], [390, 844], [820, 1180]] as const) fo
       await wait(page, `document.querySelector('.workspace__main .composer__row') !== null && document.querySelector('.workspace__main .session-status__goal-trigger') !== null`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove()`)
       await settle(page)
-      const shell = await page.evaluate<{ overflow: boolean; composerInside: boolean; draft: number; transcript: number; targets: string[]; identityVisible: boolean | null; identityLine: boolean | null; slotText: string; slotFits: boolean; slotOffIdentityLine: boolean | null; goalAbsent: boolean }>(`(() => {
+      const shell = await page.evaluate<{ overflow: boolean; composerInside: boolean; draft: number; transcript: number; targets: string[]; identityVisible: boolean | null; identityLine: boolean | null; activityText: string; activityFits: boolean; activityOutsideComposer: boolean; goalAbsent: boolean }>(`(() => {
         const composer = document.querySelector('.workspace__main .composer').getBoundingClientRect(), draft = document.querySelector('.workspace__main textarea').getBoundingClientRect(), transcript = document.querySelector('.workspace__scroll').getBoundingClientRect()
         const small = [...document.querySelectorAll('.workspace__main .composer button')].filter(item => item.getClientRects().length > 0).filter(item => ${width < 768 ? "item.getBoundingClientRect().height < 44" : "false"}).map(item => item.outerHTML.slice(0,300))
-        const main = document.querySelector('.workspace__main'), label = main.querySelector('.composer__mobile-label'), slot = main.querySelector('.session-status__slot'), slotLabel = slot.querySelector('.session-status__label'), preview = main.querySelector('.session-status__active-goal')
+        const main = document.querySelector('.workspace__main'), label = main.querySelector('.composer__mobile-label'), slot = document.querySelector('.workspace__scroll .transcript-activity'), slotLabel = slot.querySelector('.transcript-activity__status span'), preview = main.querySelector('.session-status__active-goal')
         const prefixVisible = () => { if (!label) return null; const text = label.firstChild, parts = label.textContent.split(' · '), range = document.createRange(); range.setStart(text, 0); range.setEnd(text, parts[0].length + 3 + parts[1].length); return range.getBoundingClientRect().right <= label.getBoundingClientRect().right + 0.5 }
         const identity = main.querySelector('.composer__mobile-trigger')
         const slotRange = document.createRange(); slotRange.selectNodeContents(slotLabel)
-        return { overflow: document.documentElement.scrollWidth > innerWidth, composerInside: composer.left >= 0 && composer.right <= innerWidth && composer.bottom <= innerHeight + 1, draft: draft.height, transcript: transcript.height, targets: small, identityVisible: prefixVisible(), identityLine: identity ? Math.abs(identity.getBoundingClientRect().top - main.querySelector('.session-status__autonomous-trigger').getBoundingClientRect().top) <= 1 : null, slotText: slotLabel.textContent.trim(), slotFits: getComputedStyle(slotLabel).position !== 'absolute' && slotLabel.scrollWidth <= slotLabel.clientWidth + 1 && slot.scrollWidth <= slot.clientWidth + 1 && slotRange.getBoundingClientRect().right <= slot.getBoundingClientRect().right, slotOffIdentityLine: identity ? slot.getBoundingClientRect().bottom <= identity.getBoundingClientRect().top + 1 : null, goalAbsent: !preview }
+        return { overflow: document.documentElement.scrollWidth > innerWidth, composerInside: composer.left >= 0 && composer.right <= innerWidth && composer.bottom <= innerHeight + 1, draft: draft.height, transcript: transcript.height, targets: small, identityVisible: prefixVisible(), identityLine: identity ? Math.abs(identity.getBoundingClientRect().top - main.querySelector('.session-status__autonomous-trigger').getBoundingClientRect().top) <= 1 : null, activityText: slotLabel.textContent.trim(), activityFits: getComputedStyle(slotLabel).position !== 'absolute' && slotLabel.scrollWidth <= slotLabel.clientWidth + 1 && slot.scrollWidth <= slot.clientWidth + 1 && slotRange.getBoundingClientRect().right <= slot.getBoundingClientRect().right, activityOutsideComposer: !main.querySelector('.composer').contains(slot), goalAbsent: !preview }
       })()`)
       expect(shell.overflow).toBe(false)
       expect(shell.composerInside).toBe(true)
       expect(shell.draft).toBeGreaterThanOrEqual(44)
       expect(shell.transcript).toBeGreaterThanOrEqual(height * 0.3)
       expect(shell.targets).toEqual([])
-      expect(shell.slotText).toBe("Waiting for your decision")
-      expect(shell.slotFits).toBe(true)
+      expect(shell.activityText).toBe("Waiting for your decision")
+      expect(shell.activityFits).toBe(true)
+      expect(shell.activityOutsideComposer).toBe(true)
       if (width < 768) {
         expect(shell.identityVisible).toBe(true)
         expect(shell.identityLine).toBe(true)
-        expect(shell.slotOffIdentityLine).toBe(true)
       }
       expect(shell.goalAbsent).toBe(true)
-      expect(await page.evaluate<string[]>(`(() => { const root=document.querySelector('.workspace__main .composer'), controls=[...root.querySelectorAll('button')].filter(e=>e.getClientRects().length && e.getBoundingClientRect().width>0), text=root.querySelector('.composer__attachment-disclosure'), range=document.createRange(); range.selectNodeContents(text); const disclosure=range.getBoundingClientRect(), hit=(a,b)=>a.left<b.right && b.left<a.right && a.top<b.bottom && b.top<a.bottom, name=e=>(e.getAttribute('aria-label')||e.textContent)+' '+JSON.stringify(e.getBoundingClientRect().toJSON()); return controls.flatMap((e,i)=>[...controls.slice(i+1).filter(other=>hit(e.getBoundingClientRect(),other.getBoundingClientRect())).map(other=>name(e)+' / '+name(other)),...(hit(e.getBoundingClientRect(),disclosure)?[name(e)+' / disclosure']:[])]) })()`)).toEqual([])
+      expect(await page.evaluate<string[]>(`(() => { const root=document.querySelector('.workspace__main .composer'), controls=[...root.querySelectorAll('button')].filter(e=>e.getClientRects().length && e.getBoundingClientRect().width>0), hit=(a,b)=>a.left<b.right && b.left<a.right && a.top<b.bottom && b.top<a.bottom, name=e=>(e.getAttribute('aria-label')||e.textContent)+' '+JSON.stringify(e.getBoundingClientRect().toJSON()); return controls.flatMap((e,i)=>controls.slice(i+1).filter(other=>hit(e.getBoundingClientRect(),other.getBoundingClientRect())).map(other=>name(e)+' / '+name(other))) })()`)).toEqual([])
       await capture(page, `mobile-shell-${width}-${theme}`)
       await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
       await wait(page, `document.querySelector('#session-companion-panel .session-status__active-goal') !== null`)

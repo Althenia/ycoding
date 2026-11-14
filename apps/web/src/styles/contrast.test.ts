@@ -299,6 +299,34 @@ describe("high-contrast scheme AAA contrast", () => {
   }
 })
 
+describe("signal accent contrast", () => {
+  const SURFACES = ["--yc-bg", "--yc-surface", "--yc-surface-raised", "--yc-surface-sunken"] as const
+  const SOFT_FILLS = ["--yc-green-soft", "--yc-yellow-soft", "--yc-danger-soft"] as const
+  const NON_TEXT_MARK = 3
+
+  for (const theme of THEME_NAMES) {
+    const floor = HIGH_CONTRAST_NAMES.includes(theme) ? AAA_NORMAL_TEXT : AA_NORMAL_TEXT
+    test(`${theme} signal reaches ${floor}:1 as text on every page surface and soft fill, and 3:1 as a mark`, async () => {
+      const { themes } = await stylesheets()
+      const tokens = themeOf(themes, theme)
+      const signal = required(tokens, "--yc-signal")
+      const backgrounds = SURFACES.flatMap((surface) => [
+        { pair: surface, background: required(tokens, surface) },
+        ...SOFT_FILLS.map((soft) => ({ pair: `${soft} over ${surface}`, background: composite(required(tokens, soft), required(tokens, surface)) })),
+      ])
+      const failures = backgrounds
+        .map(({ pair, background }) => ({ pair, ratio: contrastRatio(signal, background) }))
+        .filter((result) => result.ratio < floor || result.ratio < NON_TEXT_MARK)
+      expect(failures).toEqual([])
+    })
+  }
+
+  test("declares the signal in both theme blocks so dark never inherits the light blue", async () => {
+    const { overrides } = await stylesheets()
+    expect(overrides["--yc-signal"]).toBeDefined()
+  })
+})
+
 function themeOf(themes: Record<string, Declarations>, name: string): Declarations {
   const tokens = themes[name]
   if (tokens === undefined) throw new Error(`undefined theme ${name}`)

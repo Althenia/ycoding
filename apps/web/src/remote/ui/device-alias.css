@@ -25,7 +25,7 @@
   background: var(--yc-green-soft);
 }
 
-.machine-row__item:not([aria-current="true"]):is(:hover, :focus-within) { background: var(--yc-surface); }
+@media (hover: hover) { .machine-row__item:not([aria-current="true"]):is(:hover, :focus-within) { background: var(--yc-surface); } }
 
 .machine-row__item[data-editing] .machine-row__identity {
   grid-column: 1 / -1;
@@ -40,7 +40,9 @@
   align-items: center;
   gap: var(--yc-space-2);
   color: var(--yc-text-muted);
+  font-family: var(--yc-font-mono);
   font-size: var(--yc-size-2xs);
+  line-height: var(--yc-leading-2xs);
 }
 
 .machine-row__identity {
@@ -54,8 +56,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--yc-font-mono);
-  font-size: var(--yc-size-xs);
+  font-size: var(--yc-size-sm);
+  line-height: var(--yc-leading-sm);
   font-weight: var(--yc-weight-semibold);
 }
 

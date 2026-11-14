@@ -12,7 +12,7 @@
 .usage-statistics-details, .usage-quota-forecast {
   min-width: 0;
   color: var(--yc-text-muted);
-  font: var(--yc-size-xs) / var(--yc-leading-xs) var(--yc-font-mono);
+  font: var(--yc-size-2xs) / var(--yc-leading-2xs) var(--yc-font-mono);
   overflow-wrap: anywhere;
 }
 .usage-page th .usage-statistics-details { max-inline-size: var(--yc-measure-narrow); white-space: normal; }
@@ -26,7 +26,7 @@
   min-block-size: var(--yc-hit-min);
   justify-content: flex-start;
   color: var(--yc-text-muted);
-  font: var(--yc-size-xs) / var(--yc-leading-xs) var(--yc-font-mono);
+  font: var(--yc-size-2xs) / var(--yc-leading-2xs) var(--yc-font-mono);
   text-align: start;
   white-space: normal;
 }
@@ -39,7 +39,7 @@
   gap: var(--yc-space-3);
   min-width: 0;
   color: var(--yc-text-muted);
-  font: var(--yc-size-xs) / var(--yc-leading-xs) var(--yc-font-mono);
+  font: var(--yc-size-2xs) / var(--yc-leading-2xs) var(--yc-font-mono);
   overflow-wrap: anywhere;
 }
 .usage-details-content section + section { margin-top: var(--yc-space-2); }

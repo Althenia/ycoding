@@ -77,7 +77,8 @@ export const contextBreakdownCategories = [
   ["other", "Other"],
 ] as const
 
-type ContextWindowView = { readonly model: ModelRefView; readonly used: number; readonly limit: number; readonly breakdown?: ContextBreakdownView }
+export type StepDiagnosticsView = { readonly uncachedInput: number; readonly output: number; readonly reasoning: number; readonly cacheRead: number; readonly cacheWrite: number; readonly hitRatio?: number }
+type ContextWindowView = { readonly model: ModelRefView; readonly used: number; readonly limit: number; readonly breakdown?: ContextBreakdownView; readonly stepDiagnostics?: StepDiagnosticsView }
 
 const positiveInteger = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined
 
@@ -135,12 +136,19 @@ function readContextWindow(model: unknown, used: unknown, limit: unknown, breakd
 
 function readAssistantContext(value: unknown): ContextWindowView | undefined {
   if (!isRecord(value) || !isRecord(value.tokens) || !isRecord(value.tokens.cache)) return undefined
-  const counts = [value.tokens.input, value.tokens.output, value.tokens.reasoning,
-    value.tokens.cache.read, value.tokens.cache.write]
-  if (!counts.every((count): count is number => typeof count === "number" && Number.isSafeInteger(count) && count >= 0)) return undefined
-  return readContextWindow(value.model, counts.reduce((sum, count) => sum + count, 0),
+  const isCount = (count: unknown): count is number => typeof count === "number" && Number.isSafeInteger(count) && count >= 0
+  const uncachedInput = value.tokens.input
+  const output = value.tokens.output
+  const reasoning = value.tokens.reasoning
+  const cacheRead = value.tokens.cache.read
+  const cacheWrite = value.tokens.cache.write
+  if (!isCount(uncachedInput) || !isCount(output) || !isCount(reasoning) || !isCount(cacheRead) || !isCount(cacheWrite)) return undefined
+  const window = readContextWindow(value.model, uncachedInput + output + reasoning + cacheRead + cacheWrite,
     isRecord(value.diagnostics) ? value.diagnostics.contextLimit : undefined,
     isRecord(value.diagnostics) ? value.diagnostics.contextBreakdown : undefined)
+  if (!window) return undefined
+  const promptTokens = uncachedInput + cacheRead + cacheWrite
+  return { ...window, stepDiagnostics: { uncachedInput, output, reasoning, cacheRead, cacheWrite, ...(promptTokens > 0 ? { hitRatio: cacheRead / promptTokens } : {}) } }
 }
 
 const sameModel = (left: ModelRefView | undefined, right: ModelRefView | undefined) =>

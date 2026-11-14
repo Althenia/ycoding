@@ -218,10 +218,7 @@ kbd {
     min-width: var(--yc-space-8);
   }
 
-  ::-webkit-scrollbar-thumb:hover {
-    border-width: calc(var(--yc-space-1) / 2);
-    background-color: var(--yc-text-muted);
-  }
+  @media (hover: hover) { ::-webkit-scrollbar-thumb:hover { border-width: calc(var(--yc-space-1) / 2); background-color: var(--yc-text-muted); } }
 
   ::-webkit-scrollbar-thumb:active {
     border-width: calc(var(--yc-space-1) / 2);
@@ -296,10 +293,6 @@ kbd {
 
 .section {
   padding-block: var(--yc-space-12);
-}
-
-.section + .section {
-  border-block-start: var(--yc-border-width) solid var(--yc-border);
 }
 
 #main:focus {
@@ -468,11 +461,7 @@ kbd {
   color: var(--yc-text-subtle);
 }
 
-.input:hover,
-.select:hover,
-.textarea:hover {
-  border-color: var(--yc-text-subtle);
-}
+@media (hover: hover) { .input:hover, .select:hover, .textarea:hover { border-color: var(--yc-text-subtle); } }
 
 .input:focus-visible,
 .select:focus-visible,
@@ -507,9 +496,7 @@ kbd {
   font-size: var(--yc-size-sm);
 }
 
-.check:hover {
-  background: var(--yc-surface-sunken);
-}
+@media (hover: hover) { .check:hover { background: var(--yc-surface-sunken); } }
 
 .check:has(input:focus-visible) {
   border-color: var(--yc-focus);
@@ -592,7 +579,7 @@ kbd {
   inline-size: 20px;
   block-size: 20px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--yc-surface-raised);
   transition: translate var(--yc-dur-quick) var(--yc-ease-standard);
 }
 
@@ -602,6 +589,7 @@ kbd {
 
 .switch input:checked::after {
   translate: 16px 0;
+  background: var(--yc-primary-fg);
 }
 
 /* --- surfaces ----------------------------------------------------------- */
@@ -656,7 +644,6 @@ kbd {
   display: grid;
   gap: var(--yc-space-2);
   padding: var(--yc-space-6);
-  border: var(--yc-border-width) dashed var(--yc-border-strong);
   border-radius: var(--yc-radius-lg);
   background: var(--yc-surface);
   max-inline-size: var(--yc-measure-narrow);
@@ -734,7 +721,6 @@ kbd {
   gap: var(--yc-space-3);
   padding: 0 var(--yc-space-3);
   min-block-size: var(--yc-control-h);
-  border-block-end: var(--yc-border-width) solid rgba(255, 255, 255, 0.08);
 }
 
 /* Labels are often file paths, so they keep their literal case. */
@@ -748,10 +734,7 @@ kbd {
   --button-fg: var(--yc-terminal-dim);
 }
 
-.code-block__copy:hover {
-  --button-fg: var(--yc-terminal-fg);
-  background: rgba(255, 255, 255, 0.06);
-}
+@media (hover: hover) { .code-block__copy:hover { --button-fg: var(--yc-terminal-fg); background: color-mix(in srgb, var(--yc-terminal-fg) 6%, transparent); } }
 
 .code-block pre {
   margin: 0;
@@ -856,10 +839,7 @@ kbd {
     background-color var(--yc-dur-quick) var(--yc-ease-standard);
 }
 
-.nav__link:hover {
-  color: var(--yc-text);
-  background: var(--yc-surface);
-}
+@media (hover: hover) { .nav__link:hover { color: var(--yc-text); background: var(--yc-surface); } }
 
 .nav__link--active {
   color: var(--yc-green-strong);
@@ -947,7 +927,6 @@ kbd {
   padding: var(--yc-space-2) var(--yc-space-4);
   background: var(--yc-yellow-soft);
   color: var(--yc-yellow-strong);
-  border-block-end: var(--yc-border-width) solid var(--yc-yellow);
   font-size: var(--yc-size-sm);
   font-weight: var(--yc-weight-semibold);
   text-align: center;
@@ -960,8 +939,8 @@ kbd {
   align-items: flex-start;
   gap: var(--yc-space-3);
   padding: var(--yc-space-3) var(--yc-space-4);
+  border-radius: var(--yc-radius-lg);
   background: var(--yc-surface);
-  border-block-end: var(--yc-border-width) solid var(--yc-border);
   font-size: var(--yc-size-xs);
 }
 
@@ -991,21 +970,21 @@ kbd {
   }
 
   .enter-1 {
-    animation-delay: 90ms;
+    animation-delay: var(--yc-dur-instant);
   }
 
   .enter-2 {
-    animation-delay: 180ms;
+    animation-delay: calc(var(--yc-dur-instant) * 2);
   }
 
   .enter-3 {
-    animation-delay: 270ms;
+    animation-delay: calc(var(--yc-dur-instant) * 3);
   }
 
   /* The live marker pulses; the streaming label always carries the state as text. */
   .status-dot--pending,
   .status-dot--online {
-    animation: yc-pulse 2.4s var(--yc-ease-standard) infinite;
+    animation: yc-pulse calc(var(--yc-dur-slow) * 7.5) var(--yc-ease-standard) infinite;
   }
 
   .session-row--active {
@@ -1057,15 +1036,49 @@ kbd {
   transition: none !important;
 }
 
+.collapsible {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows var(--yc-motion-spatial-dur) var(--yc-motion-ease), opacity var(--yc-motion-effect-dur) var(--yc-motion-ease);
+}
+
+.collapsible[data-open] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.collapsible__inner {
+  min-block-size: 0;
+  overflow: clip;
+  overflow-clip-margin: var(--yc-space-1);
+}
+
+.motion-enter {
+  animation: yc-motion-fade var(--yc-motion-effect-dur) var(--yc-motion-ease) both, yc-motion-rise var(--yc-motion-spatial-dur) var(--yc-motion-ease) both;
+}
+
+@keyframes yc-motion-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes yc-motion-rise {
+  from {
+    translate: 0 var(--yc-space-2);
+  }
+}
+
 /* Reduced motion removes movement without changing a single track.
    The equivalent is declared on the universal selector, which is the lowest
    specificity rule in the cascade, so each declaration is `!important`: a class
    rule's `transition: …` shorthand would otherwise win and a visible button, input,
    select, textarea, or switch would keep its 140ms duration. */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *:not(.collapsible, .motion-enter),
+  *:not(.collapsible, .motion-enter)::before,
+  *:not(.collapsible, .motion-enter)::after {
     animation-name: none !important;
     animation-duration: 0s !important;
     transition-duration: 0s !important;

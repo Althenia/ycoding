@@ -223,6 +223,10 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
       visibility.maybeExecute()
     })
     let observing = false
+    const onReserve = () => {
+      if (following() && !jumping) pin()
+      visibility.maybeExecute()
+    }
     const stop = () => {
       if (!observing) return
       observing = false
@@ -234,6 +238,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
       root.removeEventListener("touchmove", onTouchMove)
       root.removeEventListener("pointerdown", onUserScroll)
       root.removeEventListener("keydown", onUserScroll)
+      window.removeEventListener("ycoding:composer-reserve", onReserve)
       visibility.cancel()
       settle.cancel()
     }
@@ -249,6 +254,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
       root.addEventListener("touchmove", onTouchMove, { passive: true })
       root.addEventListener("pointerdown", onUserScroll, { passive: true })
       root.addEventListener("keydown", onUserScroll)
+      window.addEventListener("ycoding:composer-reserve", onReserve)
       setFollowing(props.position === undefined)
       jumping = false
       jumpingTop = false
@@ -301,7 +307,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
         const decision = () => { const current = item(); return current.kind === "decision" ? current.decision : undefined }
         const continued = () => { const current = item(); return current.kind === "message" && current.continued }
         const first = () => { const current = message(); return current !== undefined && current.id === id }
-        return <li class="transcript-navigation__item" data-message-id={id} data-index={row.index()} data-settled={settled ? "" : undefined} data-prompt-id={message()?.kind === "user" ? id : undefined} tabindex={message()?.kind === "user" ? -1 : undefined} style={{ "inset-block-start": `${row.top()}px` }}
+        return <li class="transcript-navigation__item" classList={{ "motion-enter": !settled && message()?.kind !== "compaction" }} data-message-id={id} data-index={row.index()} data-settled={settled ? "" : undefined} data-prompt-id={message()?.kind === "user" ? id : undefined} tabindex={message()?.kind === "user" ? -1 : undefined} style={{ "inset-block-start": `${row.top()}px` }}
           onFocusOut={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) virtual.release(id) }}
           ref={(element) => {
             row.measure(element)

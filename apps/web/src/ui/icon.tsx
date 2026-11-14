@@ -18,6 +18,7 @@ export type IconName =
   | "check-all"
   | "chevron-right"
   | "chevron-down"
+  | "chevron-up"
   | "chat"
   | "sessions"
   | "settings"
@@ -65,6 +66,9 @@ export type IconName =
   | "help"
   | "bookmark"
   | "list"
+  | "paperclip"
+  | "hand"
+  | "arrow-up-right"
 
 const paths: Record<IconName, readonly string[]> = {
   terminal: ["M4 7l4 5-4 5", "M12 17h8"],
@@ -84,6 +88,7 @@ const paths: Record<IconName, readonly string[]> = {
   "check-all": ["M2 11.75l4.5 4.5L15 7.25", "M11 15.75l1 1L22 7.25"],
   "chevron-right": ["M9 6l6 6-6 6"],
   "chevron-down": ["M6 9l6 6 6-6"],
+  "chevron-up": ["M6 15l6-6 6 6"],
   chat: ["M4 4.5h16v11H9l-5 4z"],
   sessions: ["M4 7h16", "M4 12h16", "M4 17h10"],
   settings: ["M3.75 7h10", "M17.75 7h2", "M3.75 12h4", "M11.75 12h8", "M3.75 17h12", "M19.75 17h.5", "M15.75 5v4", "M9.75 10v4", "M17.75 15v4"],
@@ -131,6 +136,9 @@ const paths: Record<IconName, readonly string[]> = {
   help: ["M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z", "M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5v.7", "M12 17h.01"],
   bookmark: ["M6 3h12v18l-6-4-6 4z"],
   list: ["M9 6h11", "M9 12h11", "M9 18h11", "M4 6h.01", "M4 12h.01", "M4 18h.01"],
+  paperclip: ["M20 11.5l-7.8 7.8a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"],
+  hand: ["M8 12V6a1.5 1.5 0 0 1 3 0v5", "M11 11V4.5a1.5 1.5 0 0 1 3 0V11", "M14 11V6a1.5 1.5 0 0 1 3 0v8a7 7 0 0 1-7 7h-.5a6 6 0 0 1-5-2.7L3 14.5a1.5 1.5 0 0 1 2.4-1.7L8 15.5"],
+  "arrow-up-right": ["M7 17L17 7", "M7 7h10v10"],
 }
 
 export function Icon(props: { readonly name: IconName; readonly size?: number; readonly class?: string }): JSX.Element {

@@ -2,6 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, 
 import { Portal } from "solid-js/web"
 import { createDebouncer, createThrottler } from "@tanstack/solid-pacer"
 import { Icon } from "../../ui/icon"
+import { Collapsible } from "../../ui/collapsible"
 import { Modal } from "../../ui/modal"
 import { watchVisualViewport } from "../../ui/visual-viewport"
 import { catalogKey, type CatalogTarget, type CatalogView, type FileOption } from "../catalog"
@@ -10,14 +11,15 @@ import { defaultComposerModel, readPreferredModel, readRecentModels, rememberRec
 import { contextWindowDisplay, generationSpeedDisplay } from "../projection"
 import { nextMessagePrediction, acceptNextMessagePrediction } from "../view-model"
 import type { ModelRefView } from "../projection"
-import { applyMention, autocompleteBound, effortLabel, modelSelection, modelSelectionKey, modelSpeeds, needsCatalogRead, optionsForTrigger, promptGenerateModes, queuedDraftDelivery, queuedPromptIndicator, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, type MentionPart, type PromptGenerateMode } from "./composer-logic"
+import { applyMention, autocompleteBound, effortLabel, modelSelection, orderedVariants, variantsForModel, modelSelectionKey, modelSpeeds, needsCatalogRead, optionsForTrigger, promptGenerateModes, queuedDraftDelivery, queuedPromptIndicator, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, type MentionPart, type PromptGenerateMode } from "./composer-logic"
 import { ComposerPicker } from "./composer-picker"
 import { containTab, createSheetFrame } from "./composer-sheet"
 import { attachmentCapacitySummary, attachmentLimit, encodeAttachment, type ComposerAttachment } from "./composer-attachment"
 import { ModelControl, ReasoningEffort } from "./model-control"
 import { requestAutonomousDialog } from "./autonomous-dialog"
 import { ComposerStatus } from "./status-bar"
-import { composerDockCollapsed, type ComposerDockEvent } from "./composer-dock"
+import { composerDockCollapsed, composerReserve, type ComposerDockEvent } from "./composer-dock"
+import { TranscriptActivityRow } from "./conversation"
 import { SharedComposerSurface } from "./shared-workspace"
 import "./composer.css"
 
@@ -82,6 +84,7 @@ export function MiniComposer(props: {
   const [contextPinned, setContextPinned] = createSignal(false)
   const [contextLeaving, setContextLeaving] = createSignal(false)
   const [dockCollapsed, setDockCollapsed] = createSignal(readComposerDockCollapsed())
+  const [effortOpen, setEffortOpen] = createSignal(false)
   const [promptGenerate, setPromptGenerate] = createSignal<{ readonly intent: string; readonly returnFocus: HTMLElement }>()
   let input: HTMLTextAreaElement | undefined
   let dockToggle: HTMLButtonElement | undefined
@@ -121,7 +124,6 @@ export function MiniComposer(props: {
     return remote.state().queuedPromptDrafts?.[target.sessionID]
   }
   const collapsed = () => dockCollapsed() && sessionTarget()
-  const metadataMount = () => !collapsed() ? props.metadataMount : undefined
   const predictionView = () => props.target && "sessionID" in props.target && remote.state().view?.id === props.target.sessionID ? remote.state().view : undefined
   const predictionSource = () => predictionView()?.messages.findLast(message => message.kind === "assistant")?.id
   const dismissedSource = () => remote.state().dismissedPredictions.find((item) => item.scope === modelKey())?.source
@@ -226,6 +228,8 @@ export function MiniComposer(props: {
   const modelPending = () => !modelChoice().blocked && current() !== undefined && selectedModel() !== undefined && model() !== undefined &&
     (forcedModelSwitches()[modelKey() ?? ""] !== undefined || !sameModel(selectedModel(), currentModel()))
   const diagnosticsModel = () => modelPending() ? selectedModel() : current()?.model ?? selectedModel()
+  const effortOption = () => catalog()?.models.find((item) => item.providerID === selectedModel()?.providerID && item.id === selectedModel()?.id)
+  const effortChip = () => selectedModel()?.variant === undefined ? (orderedVariants(variantsForModel(effortOption(), selectedModel()?.profile), effortOption()).length ? "Default" : "Model settings") : effortLabel(selectedModel()!.variant!, effortOption())
   const mobileLabel = () => `${primaryAgents().find((item) => item.id === selectedAgent())?.name ?? selectedAgent() ?? "Default agent"} · ${modelSpeeds(catalog()?.models ?? [], selectedModel())?.base.name ?? selectedModel()?.id ?? "Model"}${selectedModel()?.variant ? ` · ${effortLabel(selectedModel()!.variant!, catalog()?.models.find((item) => item.providerID === selectedModel()?.providerID && item.id === selectedModel()?.id))}` : ""}${selectedModel()?.profile ? ` · profile ${selectedModel()?.profile}` : ""}`
   const contextLabel = () => {
     const value = contextWindow()
@@ -336,6 +340,40 @@ export function MiniComposer(props: {
     const releaseViewport = watchVisualViewport(follow)
     media.addEventListener("change", follow)
     onCleanup(() => { media.removeEventListener("change", follow); releaseViewport() })
+  })
+  onMount(() => {
+    const resident = inputWrap?.closest<HTMLElement>(".composer-resident")
+    const main = resident?.parentElement
+    if (!resident || !main?.classList.contains("workspace__main")) return
+    let reserve = -1
+    const measure = () => {
+      const children = [...main.children]
+      const scroll = children.findIndex((child) => child.classList.contains("workspace__scroll"))
+      const tops = children.slice(scroll + 1).filter((child) => child.getClientRects().length > 0).map((child) => child.getBoundingClientRect().top)
+      const next = scroll < 0 || resident.getClientRects().length === 0 || resident.classList.contains("route-panel--idle") || tops.length === 0 ? 0 : composerReserve(Math.min(...tops), main.getBoundingClientRect().bottom)
+      if (next === reserve) return
+      reserve = next
+      main.style.setProperty("--yc-composer-reserve", `${next}px`)
+      window.dispatchEvent(new CustomEvent("ycoding:composer-reserve"))
+    }
+    const resize = new ResizeObserver(measure)
+    const observeRows = () => {
+      resize.disconnect()
+      resize.observe(main)
+      for (const child of main.children) resize.observe(child)
+      measure()
+    }
+    const rows = new MutationObserver(observeRows)
+    rows.observe(main, { childList: true })
+    const idle = new MutationObserver(measure)
+    idle.observe(resident, { attributes: true, attributeFilter: ["class"] })
+    observeRows()
+    onCleanup(() => {
+      resize.disconnect()
+      rows.disconnect()
+      idle.disconnect()
+      main.style.removeProperty("--yc-composer-reserve")
+    })
   })
   onMount(() => {
     const expand = () => setDock("palette-draft")
@@ -532,21 +570,21 @@ export function MiniComposer(props: {
           <div class="composer__selection-options"><ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} /><ModelControl models={catalog()?.models ?? []} selected={selectedModel()} selectionKey={modelKey()} recent={recentModels()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} /></div>
         </section>
     </Portal></Show>
-    <SharedComposerSurface classList={{ "composer--collapsed": collapsed(), "composer--phone-summary": props.phoneSummary === true, "composer--metadata-in-transcript": metadataMount() !== undefined }} collapsed={collapsed()} dragging={dragging()} onSubmit={(event) => event.preventDefault()} onDragOver={(event) => { if (event.dataTransfer?.types.includes("Files")) { event.preventDefault(); setDragging(true) } }} onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false) }} onDrop={(event) => { setDragging(false); if (!event.dataTransfer?.files.length) return; event.preventDefault(); void addFiles(Array.from(event.dataTransfer.files)) }} fieldRef={(element) => { inputWrap = element }} field={<>
-        <input ref={fileInput} class="composer__file-input" type="file" multiple aria-label="Choose files" onChange={(event) => { void addFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = "" }} /><button type="button" class="composer__attach" aria-label="Attach files" aria-description="Attaches files chosen in this browser (up to 20 MiB per file, 40 MiB total). Host filesystem paths are not read by the browser." title="Attach files chosen in this browser; host filesystem paths are not read." disabled={props.disabled || reading() > 0} onClick={() => fileInput?.click()}><Icon name="plus" /></button>
+    <Show when={props.metadataMount}>{(mount) => <Portal mount={mount()}><TranscriptActivityRow /></Portal>}</Show>
+    <SharedComposerSurface classList={{ "composer--collapsed": collapsed(), "composer--phone-summary": props.phoneSummary === true, "composer--metadata-in-transcript": props.metadataMount !== undefined }} collapsed={collapsed()} dragging={dragging()} onSubmit={(event) => event.preventDefault()} onDragOver={(event) => { if (event.dataTransfer?.types.includes("Files")) { event.preventDefault(); setDragging(true) } }} onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false) }} onDrop={(event) => { setDragging(false); if (!event.dataTransfer?.files.length) return; event.preventDefault(); void addFiles(Array.from(event.dataTransfer.files)) }} fieldRef={(element) => { inputWrap = element }} field={<>
+        <input ref={fileInput} class="composer__file-input" type="file" multiple aria-label="Choose files" onChange={(event) => { void addFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = "" }} />
         <textarea ref={input} class="composer__input" rows={1} aria-label="Message your agent" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={suggesting()} aria-controls={suggesting() ? "composer-autocomplete" : undefined} aria-activedescendant={options().length ? `composer-option-${active()}` : undefined}
-          placeholder={prediction()?.text ?? "Message YCoding"} disabled={props.disabled} value={props.text}
+          placeholder={prediction()?.text ?? "Ask YCoding…"} disabled={props.disabled} value={props.text}
           onInput={(event) => edit(event.currentTarget.value, event.currentTarget.selectionStart)}
           onPaste={(event) => { const files = Array.from(event.clipboardData?.files ?? []); if (!files.length) return; event.preventDefault(); void addFiles(files) }}
           onClick={(event) => setCursor(event.currentTarget.selectionStart)}
           onKeyUp={(event) => { if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) setCursor(event.currentTarget.selectionStart) }} onKeyDown={keyDown} />
-        <button type="button" class="mini-composer__send" aria-label={props.allowEmpty ? "New chat" : "Send prompt"} disabled={props.disabled || props.sendDisabled || reading() > 0 || (!props.allowEmpty && !props.text.trim() && !attachments().length)} onClick={() => void send()}><Icon name="send" /></button>
         <Show when={queuedPromptIndicator(props.text, queuedDraft())}>{(label) => <p class="composer__queue-indicator" role="status">{label()}</p>}</Show>
         <Show when={suggesting()}><div class="mini-composer__suggestions" style={{ "--composer-suggest-max": bound() === undefined ? undefined : `${bound()}px` }}>
           <div class="mini-composer__suggestions-head"><strong>Suggestions</strong><button type="button" aria-label="Close suggestions" onPointerDown={(event) => event.preventDefault()} onClick={() => dismissSuggestions()}><Icon name="close" size={16} />Close</button></div>
           <div ref={autocomplete} class="mini-composer__autocomplete" id="composer-autocomplete" role="listbox" aria-label="Suggestions" style={{ "--composer-name-width": `${Math.min(20, Math.max(9, ...options().map((item) => item.label.length)))}ch` }}>
             <For each={options()}>{(option, index) => <button id={`composer-option-${index()}`} type="button" role="option" aria-selected={index() === active()} classList={{ "mini-composer__option--active": index() === active(), "mini-composer__option--label-only": !option.description }} onPointerDown={(event) => event.preventDefault()} onClick={() => select(index())}>
-              <span>{option.label}</span><Show when={option.description}><small title={option.description}>{option.description}</small></Show>
+              <span>{option.label}</span><Show when={option.description}><small>{option.description}</small></Show>
             </button>}</For>
           </div>
           <Show when={fileSearching()}><p class="mini-composer__suggestions-status" role="status">Searching project files…</p></Show>
@@ -554,29 +592,33 @@ export function MiniComposer(props: {
           <Show when={fileError()}><p class="mini-composer__suggestions-status" role="status">{fileError()}</p><button type="button" class="mini-composer__suggestions-retry" aria-label="Retry file search" onPointerDown={(event) => event.preventDefault()} onClick={retryFiles}>Retry</button></Show>
         </div></Show>
       </>} feedback={<>
-      <p class="composer__attachment-disclosure">Device files only · browser cannot read host paths</p>
-      <Show when={attachments().length}><div class="composer__attachments" aria-label="Attachments"><For each={attachments()}>{(item) => <div class="composer__attachment"><Show when={item.mime.startsWith("image/")}><img src={item.uri} alt="" /></Show><span class="composer__attachment-name" title={item.name}>{item.name}</span><span class="composer__attachment-size">{item.size < 1024 ? `${item.size} B` : `${(item.size / 1024).toFixed(1)} KiB`}</span><button type="button" aria-label={`Remove ${item.name}`} onClick={() => { setAttachments((items) => items.filter((entry) => entry.id !== item.id)); setAttachmentError(undefined) }}><Icon name="close" /></button></div>}</For><span class="composer__attachments-summary">{attachmentCapacitySummary(attachments())}</span></div></Show>
+      <p class="composer__attachment-disclosure visually-hidden">Device files only · browser cannot read host paths</p>
+      <Show when={attachments().length}><div class="composer__attachments" aria-label="Attachments"><For each={attachments()}>{(item) => <div class="composer__attachment"><Show when={item.mime.startsWith("image/")}><img src={item.uri} alt="" /></Show><span class="composer__attachment-name">{item.name}</span><span class="composer__attachment-size">{item.size < 1024 ? `${item.size} B` : `${(item.size / 1024).toFixed(1)} KiB`}</span><button type="button" aria-label={`Remove ${item.name}`} onClick={() => { setAttachments((items) => items.filter((entry) => entry.id !== item.id)); setAttachmentError(undefined) }}><Icon name="close" /></button></div>}</For><span class="composer__attachments-summary">{attachmentCapacitySummary(attachments())}</span></div></Show>
       <Show when={attachmentError()}><p class="composer__attachment-error" role="alert">{attachmentError()}</p></Show>
       <Show when={catalog()?.status === "error" || catalog()?.status === "unsupported"}>
         <div class="composer__catalog-status" role="status"><p class="field__hint">{catalog()?.status === "unsupported" ? "Update YCoding on the connected machine to load agents and models." : catalog()?.message ?? "The agent and model catalog could not be loaded."}</p><button type="button" class="button button--secondary button--small" aria-label="Retry agent and model catalog" disabled={props.disabled} onClick={() => { if (props.target) void remote.store.loadCatalog(props.target, { refresh: true }) }}>Retry catalog</button></div>
       </Show>
       <Show when={modelChoice().warning}>{(warning) => <p class="field__hint composer__model-warning" role="status">{warning()}</p>}</Show>
       <Show when={upload()}>{(value) => <div class="composer__upload" role="status"><span>Uploading {value().name} · {value().percent}%</span><progress aria-label={`Uploading ${value().name}`} value={value().percent} max="100" /><button type="button" onClick={() => remote.store.cancelUpload()}>Cancel upload</button></div>}</Show>
+      <Collapsible open={effortOpen() && !collapsed()} id={`${modelKey() ?? "landing"}-effort`.replace(/[^A-Za-z0-9_-]/g, "-")} class="composer__effort-panel"><ReasoningEffort models={catalog()?.models ?? []} selected={selectedModel()} disabled={props.disabled || catalog()?.status !== "ready"} onChange={chooseModel} /></Collapsible>
       </>} controls={<>
         <div class="composer__control-set" aria-hidden={collapsed()} inert={collapsed()}>
-        <Show when={contextWindow()}><div class="composer__context"><button ref={contextTrigger} type="button" class="composer__context-trigger" aria-label={contextAccessible()} aria-controls="session-companion-panel" aria-expanded={props.companionContextOpen === true} onMouseEnter={() => { if (window.matchMedia("(hover: hover)").matches) showContext() }} onMouseLeave={queueContextClose} onFocus={showContext} onBlur={() => { if (!contextPinned()) queueContextClose() }} onClick={() => { closeContext(); props.onOpenContext?.() }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeContext() } }}>{ring()}</button><Show when={contextOpen()}><div class="composer__context-popover" classList={{ "composer__context-popover--leaving": contextLeaving() }} role="tooltip" aria-hidden={contextLeaving()} inert={contextLeaving()} onMouseEnter={contextClose.cancel} onMouseLeave={queueContextClose} onAnimationEnd={finishContext} onAnimationCancel={finishContext}><strong>Context window</strong><span>{contextLabel()}</span><span>{contextWindow()?.tokens}</span></div></Show></div></Show>
-        <ModelControl models={catalog()?.models ?? []} selected={selectedModel()} selectionKey={modelKey()} recent={recentModels()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} />
+        <button type="button" class="composer__attach" aria-label="Attach files" aria-description="Attaches files chosen in this browser (up to 20 MiB per file, 40 MiB total). Host filesystem paths are not read by the browser." disabled={props.disabled || reading() > 0} onClick={() => fileInput?.click()}><Icon name="paperclip" size={16} /></button>
         <ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} />
+        <ModelControl models={catalog()?.models ?? []} selected={selectedModel()} selectionKey={modelKey()} recent={recentModels()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} />
+        <button type="button" class="composer__effort" aria-label={`Reasoning effort: ${effortChip()}`} aria-expanded={effortOpen()} aria-controls={`${modelKey() ?? "landing"}-effort`.replace(/[^A-Za-z0-9_-]/g, "-")} onClick={() => setEffortOpen(!effortOpen())}><span class="composer__effort-name">effort</span><span>{effortChip()}</span></button>
+        <Show when={contextWindow()}><div class="composer__context"><button ref={contextTrigger} type="button" class="composer__context-trigger" aria-label={contextAccessible()} aria-controls="session-companion-panel" aria-expanded={props.companionContextOpen === true} onMouseEnter={() => { if (window.matchMedia("(hover: hover)").matches) showContext() }} onMouseLeave={queueContextClose} onFocus={showContext} onBlur={() => { if (!contextPinned()) queueContextClose() }} onClick={() => { closeContext(); props.onOpenContext?.() }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeContext() } }}>{ring()}</button><Show when={contextOpen()}><div class="composer__context-popover" classList={{ "composer__context-popover--leaving": contextLeaving() }} role="tooltip" aria-hidden={contextLeaving()} inert={contextLeaving()} onMouseEnter={contextClose.cancel} onMouseLeave={queueContextClose} onAnimationEnd={finishContext} onAnimationCancel={finishContext}><strong>Context window</strong><span>{contextLabel()}</span><span>{contextWindow()?.tokens}</span></div></Show></div></Show>
         </div>
-        <Show when={props.showStatus && !collapsed()}><div class="composer__summary"><Show when={props.phoneSummary && phone()}><button ref={mobileTrigger} type="button" class="composer__mobile-trigger" classList={{ "composer__mobile-trigger--pending": agentPending() || modelPending() }} aria-label={`Agent and model: ${mobileLabel()}${contextWindow() ? `; ${contextAccessible()}` : ""}${speed() ? `; generation speed ${speed()!.label}; ${speed()!.description}` : ""}`} aria-description={agentPending() || modelPending() ? "applies with your next send" : undefined} aria-haspopup="dialog" aria-expanded={mobileOpen()} disabled={props.disabled || catalog()?.status !== "ready"} onClick={() => setMobileOpen(true)}><Show when={contextWindow()}><span class="composer__mobile-context-ring" aria-hidden="true">{ring()}</span></Show><span class="composer__mobile-label" title={mobileLabel()}>{mobileLabel()}</span><Show when={speed()}>{(value) => <span class="composer__mobile-speed" title={value().description}>{value().label}</span>}</Show><Icon name="chevron-down" /></button></Show><ComposerStatus metadataMount={metadataMount()} /></div></Show>
+        <Show when={props.showStatus && !collapsed()}><div class="composer__summary"><Show when={props.phoneSummary && phone()}><button ref={mobileTrigger} type="button" class="composer__mobile-trigger" classList={{ "composer__mobile-trigger--pending": agentPending() || modelPending() }} aria-label={`Agent and model: ${mobileLabel()}${contextWindow() ? `; ${contextAccessible()}` : ""}${speed() ? `; generation speed ${speed()!.label}; ${speed()!.description}` : ""}`} aria-description={agentPending() || modelPending() ? "applies with your next send" : undefined} aria-haspopup="dialog" aria-expanded={mobileOpen()} disabled={props.disabled || catalog()?.status !== "ready"} onClick={() => setMobileOpen(true)}><Show when={contextWindow()}><span class="composer__mobile-context-ring" aria-hidden="true">{ring()}</span></Show><span class="composer__mobile-label">{mobileLabel()}</span><Show when={speed()}>{(value) => <span class="composer__mobile-speed">{value().label}</span>}</Show><Icon name="chevron-down" /></button></Show><ComposerStatus /></div></Show>
         <div class="composer__control-set" aria-hidden={collapsed()} inert={collapsed()}>
-        <Show when={speed()}>{(value) => <span class="composer__speed" title={value().description} aria-label={`Generation speed ${value().label}: ${value().description}`}>{value().label}<Show when={value().trend}><span class="composer__speed-trend" aria-hidden="true"> {value().trend}</span></Show></span>}</Show>
+        <Show when={speed()}>{(value) => <span class="composer__speed" aria-label={`Generation speed ${value().label}: ${value().description}`}>{value().label}<Show when={value().trend}><span class="composer__speed-trend" aria-hidden="true"> {value().trend}</span></Show></span>}</Show>
         <span class="composer__spacer" />
-        <div class="composer__actions"><Show when={!props.allowEmpty}><button type="button" class="composer__delivery-toggle" aria-label={delivery() === "steer" ? "Steer mode; switch to Queue" : "Queue mode; switch to Steer"} title={delivery() === "steer" ? "Steer: switch to Queue" : "Queue: switch to Steer"} aria-pressed={delivery() === "queue"} onClick={() => setDelivery(delivery() === "steer" ? "queue" : "steer")}><Icon name={delivery()} /></button></Show>
+        <div class="composer__actions"><Show when={!props.allowEmpty}><button type="button" class="composer__delivery-toggle" aria-label={delivery() === "steer" ? "Steer mode; switch to Queue" : "Queue mode; switch to Steer"} aria-pressed={delivery() === "queue"} onClick={() => setDelivery(delivery() === "steer" ? "queue" : "steer")}><Icon name={delivery()} /></button></Show>
           <Show when={props.running && props.onInterrupt}><button type="button" class="mini-composer__interrupt" aria-label="Interrupt the running step" onClick={props.onInterrupt}><Icon name="stop" /></button></Show>
+          <button type="button" class="mini-composer__send" aria-label={props.allowEmpty ? "New chat" : "Send prompt"} disabled={props.disabled || props.sendDisabled || reading() > 0 || (!props.allowEmpty && !props.text.trim() && !attachments().length)} onClick={() => void send()}><Icon name="arrow-up" /></button>
           </div>
         </div>
-      </>} effort={<Show when={!collapsed()}><ReasoningEffort models={catalog()?.models ?? []} selected={selectedModel()} disabled={props.disabled || catalog()?.status !== "ready"} onChange={chooseModel} /></Show>} status={<Show when={sessionTarget()}><div class="composer__dock" aria-label="Composer dock">
+      </>} status={<Show when={sessionTarget()}><div class="composer__dock" aria-label="Composer dock">
       <span class="composer__prediction-slot"><Show when={prediction() && !collapsed()}><button type="button" class="button button--ghost composer__use-prediction" onClick={usePrediction}>Use suggestion</button></Show></span>
       <Show when={collapsed() && props.showStatus}><ComposerStatus /></Show>
       <button ref={dockToggle} type="button" class="button button--ghost composer__dock-toggle" aria-label={collapsed() ? "Show composer" : "Hide composer"} aria-expanded={!collapsed()} onClick={() => {

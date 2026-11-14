@@ -21,7 +21,8 @@ test("workspace selection distinguishes directories sharing one project and unsu
   expect(html).toContain('<h3 class="ws-title">/two</h3>')
   expect(html.match(/aria-selected="true"/g)?.length).toBe(1)
   const settings = renderToString(() => createComponent(SharedSettingsSurface, { animations: true, keepAwakeChecked: false, keepAwakeDetail: "Unavailable", keepAwakeStatus: "unsupported", telemetryConsent: "undecided", telemetryNote: "Unknown", onToggleAnimations: () => {}, onToggleKeepAwake: () => {}, onDecideTelemetry: () => {}, onToggleNotifications: () => {}, onToggleSavedPermissions: () => {}, onToggleCloseApp: () => {} }))
-  expect(settings).toContain('data-status="unsupported">Unsupported</span><span>Keep awake')
+  expect(settings).toContain('id="st-keep-awake-state" data-part="st-keep-awake-state">Keep awake is unsupported on this machine.</p>')
+  for (const debug of ["rl-capability", "rl-sim", "rl-badge", "desktop local", "Unavailable"]) expect(settings).not.toContain(debug)
 })
 
 test("destination surfaces render supplied data, states and actions", () => {
@@ -48,9 +49,10 @@ test("destination surfaces render supplied data, states and actions", () => {
   expect(sessions).not.toContain("📌")
   expect(sessions).toContain("M16 3l5 5-4 1-4 4-1 4-5-5 4-1 4-4z")
   const workspaces = renderToString(() => createComponent(SharedWorkspacesSurface, { workspaces: [{ projectID: "w", name: "Workspace", directory: "/work", sessions: 1, topLevelSummary: "1", childSummary: "0", copies: [] }], selectedID: "w:/work", onSelect: () => {} }))
-  for (const text of ["Projects and workspace inventory", "Workspace", "/work", "0 copies"]) expect(workspaces).toContain(text)
   const usage = renderToString(() => createComponent(SharedUsageSurface, { phase: "ready", statusText: "Updated", ranges: [{ value: "today", label: "Today" }], range: "today", rangeLabel: "Today", requests: "2", inputTokens: "10", outputTokens: "5", estimatedCost: "$1", onRange: () => {}, onRefresh: () => {} }))
   for (const text of ["Ready", "Requests · Today", "10", "$1", "Provider quota windows"]) expect(usage).toContain(text)
+  for (const text of ["Workspace", "/work", "0 copies"]) expect(workspaces).toContain(text)
+  for (const surface of [projects, workspaces, usage]) for (const debug of ["rl-capability", "Supported", "desktop local"]) expect(surface).not.toContain(debug)
   const settings = renderToString(() => createComponent(SharedSettingsSurface, { animations: true, keepAwakeChecked: false, keepAwakeDetail: "Off", telemetryConsent: "undecided", telemetryNote: "Not decided", onToggleAnimations: () => {}, onToggleKeepAwake: () => {}, onDecideTelemetry: () => {}, onToggleNotifications: () => {}, onToggleSavedPermissions: () => {}, onToggleCloseApp: () => {} }))
   for (const text of ["Appearance", "Keep awake", "Latency diagnostics", "Notifications", "Permissions", "Close app"]) expect(settings).toContain(text)
   const tabs = renderToString(() => createComponent(SharedCompanionTabs, { active: "activity", onSelect: () => {}, onCloseTab: () => {} }))
@@ -68,7 +70,7 @@ test("destination states distinguish empty, preparing, disabled and settled cont
   expect(settings).toContain('class="rl-switch-track"')
   expect(settings).toContain('aria-label="Share latency diagnostics" aria-checked="true"')
   const css = await Bun.file(new URL("../../styles/workspace-shell.css", import.meta.url)).text()
-  for (const text of ["justify-content:flex-start", "overflow-x:auto", 'data-active="true"', "min-height:28px"]) expect(css).toContain(text)
+  for (const text of ["justify-content:flex-start", "overflow-x:auto", "overflow-y:hidden", 'data-active="true"', "min-height:28px", ".rl-pane-tabs .rl-pane-tab > button:focus-visible { outline:2px solid var(--yc-focus); outline-offset:-2px; box-shadow:none; }"]) expect(css).toContain(text)
 })
 
 test("compact chips, edited actions and companion controls expose requested presentation", () => {
@@ -76,7 +78,8 @@ test("compact chips, edited actions and companion controls expose requested pres
   for (const value of ['class="transcript-tools__button rl-chip"', "Worked for 19s · 1 tool", "bash bun test"]) expect(tool).toContain(value)
   const file = { path: "a.ts", patch: "", additions: 3, deletions: 2 }
   const card = renderToString(() => createComponent(SharedEditedFilesCard, { files: [file], onViewChanges: () => {}, onUndo: () => {}, undoLabel: "Undo selection", footerNote: "Note" }))
-  for (const value of ["Edited files", "1 file", "+3", "-2", "Undo selection", "Note"]) expect(card).toContain(value)
+  for (const value of ['<span class="rl-edited-title">1 file changed</span>', '<span class="ws-add">+3</span>', '<span class="ws-del">−2</span>', "Undo selection", "Note"]) expect(card).toContain(value)
+  expect(card).toContain('data-panel="true"')
   const companion = renderToString(() => createComponent(SharedCompanionSurface, { active: "activity", onSelect: () => {}, policyActions: "Goal", onCloseTab: () => {}, onAddTab: () => {}, activityContent: "Activity", changesContent: "Changes" }))
   for (const value of ["rl-companion-head", "rl-pane-policy", "Goal", "Close Activity tab", "Add companion tab"]) expect(companion).toContain(value)
   const changes = renderToString(() => createComponent(SharedChangesSurface, { files: [], turnsNotice: "Limited history", onOpenFullChanges: () => {}, fullChangesLabel: "Full view" }))
@@ -97,7 +100,10 @@ test("shared adapters render turn-scoped diffs, staged revert and compact detail
   expect(activity).toContain('class="rl-activity-row__body"')
   expect(activity).toContain("Load older subagents")
   const context = renderToString(() => createComponent(SharedContextBreakdownPanel, { used: "24K", capacity: "128K", remaining: 104000, label: "19% used", modelLabel: "model", providerLabel: "provider" }))
-  for (const text of ['class="companion__context-eyebrow rl-pane-kicker"', 'class="rl-context-total"', 'class="rl-draft-estimate"', "104,000 remaining", "Provider: provider"]) expect(context).toContain(text)
+  for (const text of ['class="companion__context-eyebrow rl-pane-kicker"', 'class="rl-context-total"', '<p class="rl-context-summary">104,000 remaining · 19% used</p>', '<p class="rl-context-meta">Provider: provider · Model: model</p>']) expect(context).toContain(text)
+  expect(context).not.toContain("rl-draft-estimate")
+  const draft = renderToString(() => createComponent(SharedContextBreakdownPanel, { used: "24K", draftTokens: 1200 }))
+  expect(draft).toContain('<p class="rl-draft-estimate">Draft estimate · 1,200 tokens</p>')
 })
 
 test("shared surfaces expose supplied labels, shell ownership, file totals and empty states", () => {
@@ -122,7 +128,7 @@ test("rich shared presentation renders supplied tool and file data", () => {
   expect(reasoning).toContain("Thought · 2s")
   expect(reasoning).toContain('aria-expanded="false"')
   const card = renderToString(() => createComponent(SharedEditedFilesCard, { defaultOpen: true, files: [{ path: "src/a.ts", patch: "", additions: 2, deletions: 1 }], onViewChanges: () => {} }))
-  for (const text of ["Edited files", "1 file", "+2", "-1", "src/a.ts", "View changes"]) expect(card).toContain(text)
+  for (const text of ["1 file changed", "+2", "−1", "src/a.ts", "View changes"]) expect(card).toContain(text)
 })
 
 test("rich companion renders activity, unified diff numbers, and cache diagnostics", () => {
@@ -131,7 +137,8 @@ test("rich companion renders activity, unified diff numbers, and cache diagnosti
   const changes = renderToString(() => createComponent(SharedChangesSurface, { files: [{ path: "src/a.ts", patch: "@@ -3,2 +3,2 @@\n unchanged\n-old\n+new", additions: 1, deletions: 1 }] }))
   for (const text of ["Unified diff for src/a.ts", 'data-kind="hunk"', 'data-kind="context"', 'data-kind="removed"', 'data-kind="added"', "unchanged", "old", "new"]) expect(changes).toContain(text)
   const context = renderToString(() => createComponent(SharedContextBreakdownPanel, { providerLabel: "Example", stepDiagnostics: { uncachedInput: 12, output: 4, reasoning: 2, cacheRead: 8, cacheWrite: 1 }, contextMessages: [{ id: "m", role: "user", summary: "Question" }], onOpenUsage: () => {} }))
-  for (const text of ["Provider: Example", "Step &amp; Prompt Cache Diagnostics", "12", "Open Usage", "Active context messages"]) expect(context).toContain(text)
+  for (const text of ["Provider: Example", "<h3>Step &amp; prompt cache diagnostics</h3>", "<dt>Uncached input</dt><dd>12</dd>", "Open Usage · cumulative spend", "Retained transcript messages"]) expect(context).toContain(text)
+  expect(context).not.toContain("Active context messages")
 })
 
 test("shared presentation stays independent of remote state and is consumed by the web", async () => {
@@ -161,10 +168,16 @@ test("context ring and companion tabs expose labels, selection and panel relatio
 
 test("context breakdown renders measured totals, remaining tokens and seven categories", () => {
   const html = renderToString(() => createComponent(SharedContextBreakdownPanel, { used: "24K", capacity: "128K", label: "19% used", remaining: 104000, modelLabel: "sample · model", breakdown: { system: 1, tools: 1, user: 1, assistant: 1, reasoning: 1, toolCalls: 1, other: 1 } }))
-  for (const text of ["ACTIVE WINDOW", "Session context", "24K", "128K", "19% used", "104,000", "sample · model", "Tool calls", "14.3%"]) expect(html).toContain(text)
+  for (const text of ['<p class="companion__context-eyebrow rl-pane-kicker">Active window</p>', '<p class="rl-context-total"><strong class="companion__context-total">24K</strong><span class="companion__context-capacity">/ 128K tokens</span></p>', "104,000 remaining · 19% used", "Model: sample · model", "Tool calls", "Estimated input breakdown by category, separate from provider-reported window tokens and cumulative spend."]) expect(html).toContain(text)
+  for (const text of ["ACTIVE WINDOW", "<h2", "title="]) expect(html).not.toContain(text)
   expect(html.match(/class="companion__context-row"/g)?.length).toBe(7)
+  expect(html.match(/class="companion__context-bar-segment"[^>]*aria-hidden="true"/g)?.length).toBe(7)
+  expect(html).toContain('<dt><span class="companion__context-swatch" data-category="toolCalls" aria-hidden="true"></span>Tool calls</dt><dd class="companion__context-count">1</dd><dd class="companion__context-percent">14.3%</dd>')
+  const rows = html.slice(html.indexOf('class="companion__context-breakdown"'))
+  expect(rows).not.toContain("tokens")
   const absent = renderToString(() => createComponent(SharedContextBreakdownPanel, {}))
-  expect(absent).toContain("Context window usage is not reported")
+  expect(absent).toContain('<p class="rl-context-empty">Context window usage is not reported for the selected model.</p>')
+  for (const text of ["rl-context-total", "companion__context-breakdown", "Estimated input breakdown"]) expect(absent).not.toContain(text)
 })
 
 test("turn, composer and effort primitives render their supplied content", () => {
@@ -179,12 +192,16 @@ test("turn, composer and effort primitives render their supplied content", () =>
 
 test("workspace frame and companion render owned landmarks and sections", () => {
   const companion = renderToString(() => createComponent(SharedCompanionSurface, { active: "activity", onSelect: () => {}, headerActions: "Policy", activityContent: "Shell output", changesContent: "Changes" }))
-  expect(companion).toContain("SESSION COMPANION")
+  expect(companion).toContain('<span class="rl-pane-kicker">Session companion</span>')
+  expect(companion).not.toContain("SESSION COMPANION")
   expect(companion).toContain('id="companion-activity"')
   expect(companion).toContain('id="companion-context"')
   expect(companion).toContain("Shell output")
   const frame = renderToString(() => createComponent(SharedWorkspaceFrame, { railHeader: "Brand", newChat: "New chat", railBody: "Sessions", railNavigation: "Navigation", machineName: "Machine", children: "Chat" }))
-  for (const text of ['id="session-rail"', 'class="workspace__rail-body"', 'class="workspace__rail-footer"', 'id="remote-main"', "Machine", "Chat"]) expect(frame).toContain(text)
+  for (const text of ['id="session-rail"', '<div class="workspace__rail-head">BrandNew chat</div>', 'class="workspace__rail-body"', 'class="workspace__rail-footer"', 'id="remote-main"', "Machine", "Chat"]) expect(frame).toContain(text)
+  expect(frame.match(/class="workspace__rail-navigation"/g)?.length).toBe(1)
+  const bare = renderToString(() => createComponent(SharedWorkspaceFrame, { railHeader: "Brand", newChat: "New chat", railBody: "Sessions", railNavigation: "Navigation", children: "Chat" }))
+  expect(bare).not.toContain("workspace__rail-footer")
   expect(WORKSPACE_DESTINATIONS.map((entry) => entry.id)).toEqual(["projects", "sessions", "workspaces", "usage", "settings"])
   expect(WORKSPACE_DESTINATIONS.map((entry) => entry.route)).toEqual(["/remote/projects", "/remote/sessions", "/remote/workspaces", "/remote/usage", "/remote/settings"])
   expect(WORKSPACE_DESTINATIONS.map((entry) => entry.desktopRoute)).toEqual(["/projects", "/sessions", "/workspaces", "/usage", "/settings"])
@@ -326,7 +343,8 @@ test("expanded disclosures render Markdown cards and every disclosure control us
   const companion = renderToString(() => createComponent(SharedCompanionSurface, { active: "activity", onSelect: () => {}, onCloseTab: () => {}, onAddTab: () => {}, activityContent: "Activity", changesContent: "Changes" }))
   expect(companion).not.toContain(">×<")
   expect(companion).not.toContain(">+<")
-  expect(companion.match(/role="tab"[^>]*><svg/g)?.length).toBe(3)
+  expect(companion).not.toMatch(/role="tab"[^>]*><svg/)
+  for (const tab of ["Activity", "Changes", "Context"]) expect(companion).toMatch(new RegExp(`role="tab"[^>]*>${tab}</button>`))
   expect(companion).toMatch(/class="rl-icon rl-pane-tab-add"[^>]*><svg/)
   const page = renderToString(() => createComponent(SharedPageSurface, { title: "Usage", onBack: () => {}, children: "Body" }))
   expect(page).toMatch(/data-action-id="page-back"[^>]*><svg class="rl-ico rl-ico--back"[\s\S]*?<path d="M19 12H5"/)
@@ -353,7 +371,10 @@ test("settings offer an icon-led theme choice and expanded sections render as ca
   for (const content of ["Notification list", "Rules", "Quit details"]) expect(themed).toContain(`<div class="st-disclosure-card">${content}</div>`)
   expect(themed).toMatch(/data-action-id="st-open-notifications" aria-expanded="true"/)
   expect(themed.match(/<h3><svg/g)?.length).toBe(6)
-  for (const action of ["st-open-notifications", "st-saved-permissions", "st-open-quit"]) expect(themed).toMatch(new RegExp(`data-action-id="${action}"[^>]*><svg`))
+  for (const [action, label] of [["st-open-notifications", "Open notifications"], ["st-saved-permissions", "Review saved rules"], ["st-open-quit", "Close app"]]) expect(themed).toMatch(new RegExp(`data-action-id="${action}"[^>]*>${label}</button>`))
+  expect(themed).toContain('class="relay-settings st-stack st-ledger-settings"')
+  const order = ["st-appearance", "st-keep-awake", "st-notify", "st-permissions", "st-close", "st-telemetry"].map((part) => themed.indexOf(`data-part="${part}"`))
+  expect(order).toEqual([...order].sort((a, b) => a - b))
   const plain = renderToString(() => createComponent(SharedSettingsSurface, base))
   expect(plain).not.toContain('aria-label="Theme"')
   expect(plain).not.toContain("st-disclosure-card")
@@ -365,6 +386,9 @@ test("destination surfaces carry icon slots and accept a custom concurrency cont
   expect(sessions).toMatch(/class="rl-option-name"><span aria-hidden="true"><svg[^>]*><path d="M4 4.5h16v11H9l-5 4z"/)
   const workspaces = renderToString(() => createComponent(SharedWorkspacesSurface, { workspaces: [{ projectID: "w", name: "work", directory: "/work", sessions: 1, topLevelSummary: "1", childSummary: "0", copies: [] }], selectedID: "w:/work", onSelect: () => {}, onRefreshCopies: () => {}, onOpenCreateCopy: () => {}, onStartChat: () => {}, onForgetWorkspace: () => {} }))
   expect(workspaces).toMatch(/class="ws-location" data-part="ws-projects-location"><svg/)
+  expect(workspaces).toMatch(/class="ws-location" data-part="ws-projects-location"><svg[\s\S]*?<\/svg><span class="ws-location__label">No Session is open\.<\/span><\/div>/)
+  const located = renderToString(() => createComponent(SharedWorkspacesSurface, { workspaces: [], currentSession: { title: "Polish", directory: "/work", workspace: "work" }, onSelect: () => {} }))
+  expect(located).toMatch(/<\/svg><span class="ws-location__label">This Session <strong>Polish<\/strong><\/span><p>Location <code>\/work<\/code> · workspace work<\/p><\/div>/)
   expect(workspaces).toMatch(/class="rl-option"[^>]*><span class="rl-option-text"><span class="rl-option-name"><span aria-hidden="true"><svg/)
   for (const label of ["Refresh", "New copy", "Start chat"]) expect(workspaces).toMatch(new RegExp(`<svg[^>]*>(?:(?!</svg>)[\\s\\S])*</svg> ${label}</button>`))
   const project = { id: "p", name: "Project", active: true, statusText: "Ready", revision: 3, masterTitle: "Master", master: { sessionID: "s", title: "Master", state: "Running" }, members: [], concurrency: "2", openNote: "Opens master" }
@@ -515,11 +539,12 @@ test("a new-folder project browses for a folder and submits the directory, title
 })
 
 test("every TUI-parity icon renders a 24 by 24 stroked SVG", () => {
-  const names = ["plug", "server", "git-fork", "git-branch", "undo", "redo", "archive", "download", "globe", "folder-plus", "help", "bookmark", "list"] as IconName[]
+  const names = ["plug", "server", "git-fork", "git-branch", "undo", "redo", "archive", "download", "globe", "folder-plus", "help", "bookmark", "list", "paperclip", "hand", "alert", "arrow-up-right", "sparkles", "monitor", "devices", "bell", "shield"] as IconName[]
   for (const name of names) {
     const html = renderToString(() => createComponent(Icon, { name }))
     expect(html).toMatch(/^<svg[^>]*viewBox="0 0 24 24"[^>]*stroke-width="1\.6"[^>]*stroke-linecap="round"[^>]*stroke-linejoin="round"[^>]*><path d="M[^"]+"/)
   }
+  expect(renderToString(() => createComponent(Icon, { name: "arrow-up-right" }))).toContain('<path d="M7 17L17 7"></path><path d="M7 7h10v10"></path>')
 })
 
 test("radio options flag icons with data-has-icon without changing the class", () => {
@@ -636,4 +661,84 @@ test("quota rows share a two-row grid so every bar spans the card regardless of 
   expect(block(".st-quota-value")).toContain("grid-area:value")
   expect(block(".st-quota-value")).toContain("white-space:nowrap")
   expect(block(".st-quota-row > :is(.rl-progress, .st-track-empty)")).toContain("grid-area:bar")
+})
+
+test("the context panel ends in full-width usage and retained-message rows and keeps optional controls", () => {
+  const messages = [{ id: "a", role: "user", summary: "Question" }, { id: "b", role: "assistant", summary: "Answer" }]
+  const compacted: string[] = []
+  const html = renderToString(() => createComponent(SharedContextBreakdownPanel, { used: "182,400", capacity: "500K", remaining: 317600, label: "36% used", fraction: 0.25, stepDiagnostics: { uncachedInput: 4212, output: 1086, reasoning: 2340, cacheRead: 176104, cacheWrite: 2084, hitRatio: 0.965, latestInvalidation: "Tools changed" }, onOpenUsage: () => {}, usageActionLabel: "Usage details", onCompact: () => compacted.push("compact"), compactDisabled: true, contextMessages: messages, staleReason: "Context may differ after a model change." }))
+  expect(html).toContain("317,600 remaining · 36% used")
+  expect(html).toMatch(/<div class="rl-context-progress" role="progressbar" aria-label="Context window used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="25" data-level="ok"><span style="width:25%"><\/span><\/div>/)
+  expect(html).toContain('<p class="rl-context-stale">Context may differ after a model change.</p>')
+  for (const text of ["<dt>Cache read</dt><dd>176,104</dd>", '<dt>Hit ratio</dt><dd class="rl-context-hit">96.5%</dd>', "<dt>Latest invalidation</dt><dd>Tools changed</dd>"]) expect(html).toContain(text)
+  expect(html).toMatch(/<button type="button" class="rl-btn rl-context-compact" disabled[^>]*>Compact context<\/button>/)
+  const footer = html.slice(html.indexOf('class="companion__context-footer"'))
+  expect(footer).toMatch(/^class="companion__context-footer"><button type="button" class="rl-context-footer-row rl-context-usage"><span>Usage details<\/span><svg[^>]*><path d="M7 17L17 7"><\/path><path d="M7 7h10v10"><\/path><\/svg><\/button><details class="rl-context-messages"><summary class="rl-context-footer-row"><span>Retained transcript messages<\/span><span class="rl-context-messages__count">2<\/span><span class="rl-context-messages__chev" aria-hidden="true"><svg/)
+  expect(footer).toContain('<ol class="rl-context-message-list"><li><strong>user</strong> · Question</li><li><strong>assistant</strong> · Answer</li></ol></details>')
+  const bare = renderToString(() => createComponent(SharedContextBreakdownPanel, { used: "1K" }))
+  for (const text of ["companion__context-footer", "rl-context-progress", "rl-context-compact", "rl-context-cache"]) expect(bare).not.toContain(text)
+  const usageOnly = renderToString(() => createComponent(SharedContextBreakdownPanel, { onOpenUsage: () => {} }))
+  expect(usageOnly).toContain("<span>Open Usage · cumulative spend</span>")
+  expect(usageOnly).not.toContain("rl-context-messages")
+})
+
+test("collapsed transcript disclosures and edited files stay one quiet row until expanded", async () => {
+  const files = [{ path: "a.ts", patch: "", additions: 40, deletions: 10 }, { path: "b.ts", patch: "", additions: 8, deletions: 9 }]
+  const closed = renderToString(() => createComponent(SharedEditedFilesCard, { files }))
+  expect(closed).toMatch(/<button type="button" class="rl-edited-disclosure" aria-expanded="false"><svg[^>]*width="14"[\s\S]*?<\/svg><span class="rl-edited-title">2 files changed<\/span><span class="rl-diff-total"><span class="ws-add">\+48<\/span><span class="ws-del">−19<\/span><\/span>/)
+  for (const text of ["data-panel", "data-open", "rl-edited-files"]) expect(closed).not.toContain(text)
+  expect(renderToString(() => createComponent(SharedEditedFilesCard, { files, title: "Edited files" }))).toContain('<span class="rl-edited-title">Edited files</span>')
+  const opened = renderToString(() => createComponent(SharedEditedFilesCard, { files, defaultOpen: true }))
+  expect(opened).toContain('data-open="true" data-panel="true"')
+  expect(opened).toContain('class="rl-edited-files"')
+  const css = await Bun.file(new URL("../../styles/workspace-shell.css", import.meta.url)).text()
+  for (const text of [
+    ".rl-edited-card.file-change-card:not([data-panel]) { padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }",
+    ".transcript-tools__button.rl-chip { display:inline-flex;",
+    ".transcript-reasoning.rl-reason-disclosure > summary { display:inline-flex;",
+    "#companion-context .rl-context-panel .rl-context-total { display:flex; flex-wrap:nowrap; align-items:baseline; gap:var(--yc-space-2);",
+    "#companion-context .rl-context-panel .companion__context-bar { display:flex; gap:1px; block-size:8px;",
+    "grid-template-columns:minmax(0, 1fr) auto auto",
+    ".rl-context-panel .rl-context-footer-row { display:flex; align-items:center; gap:var(--yc-space-2); inline-size:100%; min-block-size:44px;",
+    ".relay-settings.st-stack.st-ledger-settings { display:grid; gap:var(--yc-space-8); inline-size:100%; max-inline-size:760px;",
+    ".relay-settings.st-stack.st-ledger-settings .st-section { display:grid; gap:var(--yc-space-3); min-inline-size:0; padding:0; border:0; border-radius:0; background:transparent;",
+  ]) expect(css).toContain(text)
+  for (const disclosure of [".transcript-tools__button.rl-chip {", ".transcript-reasoning.rl-reason-disclosure > summary {", ".rl-edited-card .rl-edited-summary .rl-edited-disclosure {"]) {
+    const rule = css.slice(css.indexOf(disclosure), css.indexOf("}", css.indexOf(disclosure)))
+    for (const value of ["border:0", "background:transparent", "var(--yc-size-2xs)", "var(--yc-font-mono)"]) expect(rule).toContain(value)
+  }
+  expect(css).not.toContain("rl-page-mark")
+  for (const text of [
+    ".rl-edited-card.file-change-card:not([data-panel]) .rl-edited-actions .rl-btn { min-block-size:24px; padding-inline:var(--yc-space-2); border-color:transparent; background:transparent;",
+    ".rl-edited-card.file-change-card:not([data-panel]) .rl-edited-actions .rl-btn:hover { background:var(--yc-surface-sunken); }",
+    ".rl-companion-head .rl-pane-policy button { display:inline-flex; align-items:center; white-space:nowrap; }",
+    ".rl-context-panel .rl-btn { display:inline-flex; align-items:center; justify-content:center; justify-self:start; gap:var(--yc-space-2); min-block-size:30px; padding-inline:var(--yc-space-3); border:1px solid var(--yc-border-strong); border-radius:var(--yc-radius-pill); background:transparent;",
+    "@media (pointer: coarse) { .rl-context-panel .rl-btn { min-block-size:var(--yc-hit-min); } }",
+    "#companion-context .rl-context-panel .companion__context-eyebrow { color:var(--yc-text-muted); font-family:var(--yc-font-mono);",
+    ".rl-page .ws-host .ws-location > svg { display:block; grid-row:1; grid-column:1; align-self:center; }",
+    ".rl-page .rl-workspace-search .rl-input-icon input[type=\"search\"] { min-block-size:28px; }",
+  ]) expect(css).toContain(text)
+  expect(css).not.toContain(".rl-mark")
+})
+
+test("pages, sessions and settings render the open Ledger without debug badges or native tooltips", () => {
+  const page = renderToString(() => createComponent(SharedPageSurface, { title: "Settings", sub: "This Mac", icon: "Icon", actions: "Action", children: "Body" }))
+  expect(page).not.toContain("rl-page-mark")
+  expect(page).not.toContain(">Icon<")
+  expect(page).toMatch(/<div class="rl-page-title"><h1[^>]*>Settings<\/h1><p>This Mac<\/p><\/div><div class="rl-page-actions">Action<\/div>/)
+  const sessions = renderToString(() => createComponent(SharedSessionsSurface, { search: "", filters: [{ value: "all", label: "All", count: 1 }], filter: "all", pinning: false, items: [{ id: "s", title: "Session", hint: "Workspace", meta: "Ready", pinned: true }], totalLoaded: 1, pinnedCount: 1, onNewSession: () => {}, onSearch: () => {}, onFilter: () => {}, onTogglePinMode: () => {}, onTogglePin: () => {}, onSelect: () => {} }))
+  expect(sessions).not.toContain('data-tone="go"')
+  expect(sessions).not.toContain("title=")
+  expect(sessions).toMatch(/<div class="ws-bar ws-chips">[\s\S]*?<button type="button" class="rl-btn ws-new-session" data-action-id="ws-list-new"><svg[\s\S]*?<\/svg> New Session<\/button><\/div>/)
+  expect(sessions).toContain('aria-label="Unpin Session"')
+  const base = { animations: true, keepAwakeChecked: false, keepAwakeDetail: "Off", telemetryConsent: "enabled" as const, telemetryNote: "Sharing", onToggleAnimations: () => {}, onToggleKeepAwake: () => {}, onDecideTelemetry: () => {}, onToggleNotifications: () => {}, onToggleSavedPermissions: () => {}, onToggleCloseApp: () => {} }
+  const unified = renderToString(() => createComponent(SharedSettingsSurface, { ...base, leadingSections: "Machine and updates", colorSchemeControl: "Scheme select", theme: "dark", onThemeChange: () => {}, hideKeepAwakeSection: true }))
+  expect(unified.indexOf("Machine and updates")).toBeLessThan(unified.indexOf('data-part="st-appearance"'))
+  expect(unified).toContain('<div class="rl-switch-row" data-part="st-color-scheme"><span class="rl-switch-text"><span>Color scheme</span></span>Scheme select</div>')
+  expect(unified).not.toContain('aria-label="Theme"')
+  expect(unified).not.toContain('data-part="st-keep-awake"')
+  for (const text of ["Notifications", "Review saved rules", "Close app", "Latency diagnostics"]) expect(unified).toContain(text)
+  const standard = renderToString(() => createComponent(SharedSettingsSurface, { ...base, keepAwakeStatus: "partial" }))
+  expect(standard).toContain('data-part="st-keep-awake-state">Off</p>')
+  for (const debug of ["rl-capability", "rl-sim", "rl-badge", "title=", "ycoding keep-awake setup"]) expect(standard).not.toContain(debug)
 })

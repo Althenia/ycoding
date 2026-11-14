@@ -9,7 +9,7 @@
 }
 
 .overlay::backdrop {
-  background: rgba(11, 15, 20, 0.45);
+  background: var(--yc-scrim);
 }
 
 .overlay[open] {
@@ -33,7 +33,7 @@
   position: fixed;
   inset: 0;
   z-index: 0;
-  background: rgba(11, 15, 20, 0.45);
+  background: var(--yc-scrim);
 }
 
 .overlay[data-closing] .overlay__surface {

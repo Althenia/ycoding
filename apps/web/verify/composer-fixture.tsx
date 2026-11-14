@@ -4,7 +4,7 @@ import { useStore } from "@tanstack/solid-store"
 import { RemoteProvider } from "../src/remote/context"
 import { Composer } from "../src/remote/ui/composer"
 import { SessionStatusDetails } from "../src/remote/ui/status-bar"
-import { MessageRow } from "../src/remote/ui/conversation"
+import { MessageRow, TranscriptActivityRow } from "../src/remote/ui/conversation"
 import { NewSessionComposer } from "../src/remote/ui/new-session"
 import { ToastLayer } from "../src/remote/ui/notifications"
 import { catalogKey, type CatalogView } from "../src/remote/catalog"
@@ -184,7 +184,7 @@ function Fixture() {
       <Composer sessionID={current().activeSessionID} running={running()} canSend={predictionEnabled()} />
       <aside id="session-companion-panel" aria-label="Session companion"><SessionStatusDetails /></aside>
       <ToastLayer sessionID="ses_fixture" onOpenSession={() => {}} />
-      <div class="transcript" aria-label="Fixture transcript"><For each={current().view?.messages ?? []}>{(message) => <MessageRow message={() => message} />}</For></div>
+      <div class="transcript" aria-label="Fixture transcript"><For each={current().view?.messages ?? []}>{(message) => <MessageRow message={() => message} />}</For><TranscriptActivityRow /></div>
       <NewSessionComposer onCreated={setCreated} />
       <Show when={created()}><output>Created {created()}</output></Show>
     </main>

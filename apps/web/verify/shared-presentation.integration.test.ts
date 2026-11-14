@@ -67,7 +67,7 @@ test("shared disclosures, companion and file callbacks respond to interaction", 
     expect(await page.evaluate<string>(`document.body.dataset.result`)).not.toBe("commit")
     await page.evaluate(`[...document.querySelectorAll('.rl-revert button')].find(button => button.textContent === 'Confirm revert').click()`)
     expect(await page.evaluate<string>(`document.body.dataset.result`)).toBe("commit")
-    await page.evaluate(`document.querySelector('.rl-context-messages').click()`)
+    await page.evaluate(`(document.querySelector('.rl-context-messages summary') ?? document.querySelector('.rl-context-messages')).click()`)
     expect(await page.evaluate<string>(`document.querySelector('.rl-context-message-list').textContent`)).toContain("user · question")
     await page.evaluate(`document.querySelector('#callback .file-change-card__view').click()`)
     expect(await page.evaluate<string>(`document.body.dataset.result`)).toBe("callback:a.ts")

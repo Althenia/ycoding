@@ -12,7 +12,6 @@
 .autonomous__arrow { min-block-size:var(--yc-control-h-dense); inline-size:var(--yc-control-h-dense); }
 .autonomous__value { min-inline-size:6ch; text-align:center; font-weight:var(--yc-weight-medium); font-variant-numeric:tabular-nums; }
 .autonomous__value[data-mode="yolo"] { color:var(--yc-yellow-strong); }
-.autonomous__value[data-mode="auto"] { color:var(--yc-green-strong); }
 .autonomous__all { display:flex; flex-wrap:wrap; gap:var(--yc-space-2); }
 .autonomous__all-button { flex:1 1 auto; justify-content:center; gap:var(--yc-space-2); }
 .autonomous__key { color:var(--yc-text-muted); font-size:var(--yc-size-2xs); font-variant-numeric:tabular-nums; }

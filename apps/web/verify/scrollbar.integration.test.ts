@@ -48,7 +48,7 @@ test("a background Session refresh preserves the sidebar scroll range, rows, and
           const state = window.providerAuthState()
           return { height: root.clientHeight, scrollHeight: root.scrollHeight, top: root.scrollTop, width: list.clientWidth,
             listHeight: list.getBoundingClientRect().height, rows: state.sessions.map(row => row.id), workspace: state.selectedWorkspaceID,
-            heading: root.querySelector('.session-panel__workspace').textContent, footer: [...root.querySelectorAll('.panel__note')].map(note => note.textContent),
+            heading: (root.querySelector('.session-panel__workspace, .session-panel__group-head')?.textContent ?? ''), footer: [...root.querySelectorAll('.panel__note')].map(note => note.textContent),
             active: state.activeSessionID, focused: document.activeElement === window.sidebarRows[1], retained: window.sidebarRows.every(row => row.isConnected) }
         }
       })()`)

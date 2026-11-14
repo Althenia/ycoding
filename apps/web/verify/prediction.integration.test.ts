@@ -76,7 +76,7 @@ test.each(["typing", "Escape"])("%s before prediction arrival survives another S
       await page.evaluate(`(() => { const field=document.querySelector('.mini-composer__mount .composer__input'); field.value='Other draft'; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
       await page.evaluate(`window.composerPredictionSession('ses_fixture'); window.composerPredictionReply('msg_late')`)
       await page.evaluate(`window.composerPredictionEvent('Run the late tests', 'msg_late')`)
-      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .composer__input').placeholder`)).toBe("Message YCoding")
+      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .composer__input').placeholder`)).toBe("Ask YCoding…")
       expect(await page.evaluate<boolean>(`document.querySelector('.composer__use-prediction') === null`)).toBe(true)
       await page.evaluate(`window.composerPredictionEvent('Run the repeated tests', 'msg_late')`)
       expect(await page.evaluate<boolean>(`document.querySelector('.composer__use-prediction') === null`)).toBe(true)

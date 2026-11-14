@@ -125,21 +125,19 @@ describe("remote navigation", () => {
     }
   }, 120_000)
 
-  test("marks the Conversation presentation, Session navigation, and Session row while a decision is waiting", async () => {
+  test("marks Session navigation and the Session row while a decision is waiting and keeps Conversation inert behind Office", async () => {
     const page = await requireBrowser().openPage()
     try {
       for (const theme of themes) {
         for (const [width, height] of viewports) {
           await page.setViewport(width, height)
           await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=${theme}`)
-          await until(page, `document.getElementById("pending-requests") !== null && document.querySelector(".presentation-switch") ${width < 768 ? "===" : "!=="} null`)
+          await until(page, `document.getElementById("pending-requests") !== null && document.querySelector(".presentation-switch") === null`)
           if (width < 768) {
             await page.evaluate(`document.querySelector('.app-header__menu').click()`)
             await until(page, `document.querySelector('.overlay--sessions-sheet[open] .session-row--active') !== null`)
           }
           const report = await page.evaluate<{
-            readonly tab: string | null
-            readonly tabDot: boolean
             readonly bar: boolean
             readonly navDot: boolean
             readonly bottomDot: boolean
@@ -149,18 +147,14 @@ describe("remote navigation", () => {
           }>(`(() => {
             const visible = (element) => element instanceof HTMLElement && getComputedStyle(element).display !== "none" && element.getBoundingClientRect().width > 0
             return {
-              tab: document.querySelector(".presentation-switch .filters__option--attention")?.getAttribute("aria-label") ?? null,
-              tabDot: visible(document.querySelector(".presentation-switch .filters__option--attention .attention-dot")),
-              bar: (() => { const bar = document.querySelector('.workspace__topbar'); const team = document.querySelector('.app-header [aria-label="Open Team"]'); return Boolean(team) && bar?.querySelector('[aria-label="Open Team"]') == null && (innerWidth < 768 ? bar?.parentElement === document.querySelector('.workspace__main') && bar.querySelector('.presentation-switch') === null && bar.querySelector('.conversation-breadcrumb') !== null : bar?.parentElement === document.querySelector('.workspace__main') && bar.querySelector('.presentation-switch') !== null) })(),
+              bar: (() => { const bar = document.querySelector('.workspace__topbar'); const team = document.querySelector('.app-header [aria-label="Open Team"]'); return Boolean(team) && bar?.querySelector('[aria-label="Open Team"]') == null && bar?.parentElement === document.querySelector('.workspace__main') && bar.querySelector('.presentation-switch') === null && bar.querySelector('.conversation-breadcrumb') !== null })(),
               navDot: visible(document.querySelector('.remote-nav a[href="/remote/sessions"] .attention-dot')),
               bottomDot: visible(document.querySelector('.bottom-nav a[href="/remote/sessions"] .attention-dot')),
-              rowDot: document.querySelector(".session-row--active .session-row__attention") !== null,
+              rowDot: document.querySelector('.session-row--active .session-row__signal[data-signal="waiting"]') !== null,
               rows: [...document.querySelectorAll(".session-row__name")].map((name) => name.textContent.trim()),
               overflow: document.documentElement.scrollWidth > innerWidth,
             }
           })()`)
-          expect(report.tab).toBe(width < 768 ? null : "Conversation, waiting for your decision")
-          expect(report.tabDot).toBe(width >= 768)
           expect(report.bar).toBe(true)
           expect(report.navDot || report.bottomDot).toBe(true)
           expect(report.rowDot).toBe(true)
@@ -172,11 +166,11 @@ describe("remote navigation", () => {
       }
 
       await page.setViewport(1440, 900)
-      await page.evaluate(`[...document.querySelectorAll(".presentation-switch .filters__option")].find((option) => option.textContent.trim().startsWith("Office")).click()`)
-      await until(page, `document.querySelector(".presentation-switch .filters__option--active")?.textContent.trim().startsWith("Office")`)
-      expect(await page.evaluate<boolean>(`(() => { const conversation=document.querySelector('.remote-conversation-view'); const composer=document.querySelector('.composer-resident'); return conversation?.inert === true && conversation?.getAttribute('aria-hidden') === 'true' && conversation.classList.contains('route-panel--exiting') && composer !== null && getComputedStyle(composer).display === 'none' })()`)).toBe(true)
-      await page.evaluate(`[...document.querySelectorAll(".presentation-switch .filters__option")].find((option) => option.textContent.trim().startsWith("Conversation")).click()`)
-      await until(page, `document.querySelector(".composer") !== null`)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=dark&presentation=office`)
+      await until(page, `document.querySelector('.remote-conversation-view')?.inert === true`)
+      expect(await page.evaluate<boolean>(`(() => { const conversation=document.querySelector('.remote-conversation-view'); const composer=document.querySelector('.composer-resident'); return conversation?.getAttribute('aria-hidden') === 'true' && composer !== null && getComputedStyle(composer).display === 'none' })()`)).toBe(true)
+      await page.evaluate(`document.querySelector('[aria-label="Back to conversation"]').click()`)
+      await until(page, `document.querySelector('.remote-conversation-view')?.inert === false && getComputedStyle(document.querySelector('.composer-resident')).display !== 'none'`)
     } finally {
       await page.close()
     }
@@ -303,7 +297,7 @@ describe("remote navigation", () => {
       for (const [width, height] of [[1440, 900], [390, 844]] as const) {
         await page.setViewport(width, height)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=dark`)
-        await until(page, width < 768 ? `typeof window.remoteStatus === "function" && document.querySelector(".composer") !== null` : `document.querySelector(".session-row--active .live-dot") !== null || document.querySelector(".live-dot") !== null`)
+        await until(page, width < 768 ? `typeof window.remoteStatus === "function" && document.querySelector(".composer") !== null` : `document.querySelector('.session-row__signal[data-signal="running"], .session-row__signal[data-signal="waiting"]') !== null`)
         expect(await page.evaluate<boolean>(`document.querySelector(".yc-notification-center__badge") === null`)).toBe(true)
         await page.evaluate(`window.remoteStatus([], ["ses_archived"])`)
         await until(page, `document.querySelector(".yc-notification-center__badge") !== null`)
@@ -458,14 +452,14 @@ describe("remote navigation", () => {
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}&team=two`)
         await until(page, `document.querySelector('[aria-label="Open Team"]') !== null && document.querySelector('.conversation-pane') !== null`)
         const entrance = await page.evaluate<{ readonly duration: string; readonly frames: readonly number[] }>(`new Promise(resolve => { document.querySelector('[aria-label="Open Team"]').click(); queueMicrotask(() => { const panel=document.querySelector('.team-control__panel'); const duration=panel ? getComputedStyle(panel).transitionDuration : ''; const frames=[]; const sample=() => { frames.push(Number(getComputedStyle(panel).opacity)); if(frames.length===5) resolve({duration,frames}); else requestAnimationFrame(sample) }; requestAnimationFrame(sample) }) })`)
-        expect(entrance.duration.split(",").every((duration) => duration.trim() === (reduced ? "0s" : "0.22s"))).toBe(true)
+        expect(motionDurations(entrance.duration, reduced)).toBe(true)
         if (reduced) expect(entrance.frames.every((opacity) => opacity === 1)).toBe(true)
         else expect(new Set(entrance.frames).size).toBeGreaterThan(1)
         await until(page, `document.querySelector('.team-control__panel [aria-label="Close Session companion"]') !== null`)
         await page.evaluate(`document.querySelector('.team-control__panel [aria-label="Close Session companion"]').click()`)
         const exit = await page.evaluate<{ readonly inert: boolean; readonly hidden: boolean; readonly focused: boolean; readonly duration: string; readonly contentVisibility: string }>(`(() => { const layer=document.querySelector('.team-control--exiting'); return {inert:layer?.inert === true, hidden:layer?.getAttribute('aria-hidden') === 'true', focused:document.activeElement === document.querySelector('[aria-label="Open Team"]'), duration:layer ? getComputedStyle(layer).transitionDuration : '', contentVisibility:layer ? getComputedStyle(layer).contentVisibility : ''} })()`)
         expect(exit.inert && exit.hidden && exit.focused).toBe(true)
-        expect(exit.duration.split(",").every((duration) => duration.trim() === (reduced ? "0s" : "0.22s"))).toBe(true)
+        expect(motionDurations(exit.duration, reduced)).toBe(true)
         expect(exit.contentVisibility).toBe(reduced ? "hidden" : "visible")
         await until(page, `document.querySelector('.team-control--exiting') === null`)
       }
@@ -657,6 +651,11 @@ describe("remote navigation", () => {
 
 async function capture(page: { screenshot(): Promise<string> }, name: string) {
   await Bun.write(`${captures}${name}.png`, Buffer.from(await page.screenshot(), "base64"))
+}
+
+function motionDurations(computed: string, reduced: boolean) {
+  const milliseconds = computed.split(",").map((duration) => Math.round(Number.parseFloat(duration) * 1000))
+  return reduced ? milliseconds.every((duration) => duration <= 150) : milliseconds.length === 2 && milliseconds[0] === 140 && milliseconds[1] === 220
 }
 
 async function until(page: { evaluate<T>(expression: string): Promise<T> }, expression: string) {

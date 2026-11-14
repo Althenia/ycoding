@@ -11,10 +11,10 @@ export function FileChangeCard(props: { readonly files: () => readonly CapturedF
   const filesID = createUniqueId()
   const totals = createMemo(() => summarizeFileChanges(props.files()))
   return (
-    <section class="file-change-card" aria-label="Captured file changes">
+    <section class="file-change-card" classList={{ "file-change-card--transcript": !props.inCompanion }} data-open={open() ? "true" : undefined} aria-label="Captured file changes">
       <button type="button" class="file-change-card__summary" aria-expanded={open()} aria-controls={filesID} onClick={() => setOpen(!open())}>
         <span class="file-change-card__icon" aria-hidden="true"><Icon name="file" size={16} /></span>
-        <strong class="file-change-card__title">Edited {totals().files} {totals().files === 1 ? "file" : "files"}</strong>
+        <strong class="file-change-card__title">{totals().files} {totals().files === 1 ? "file" : "files"} changed</strong>
         <span class="file-change-card__totals" aria-label={`${totals().additions} additions, ${totals().deletions} deletions`}>
           <span class="file-change-card__added">+{totals().additions}</span>{" "}<span class="file-change-card__removed">−{totals().deletions}</span>
         </span>

@@ -17,6 +17,7 @@ const GROUP_TO_PROPERTY = {
   layers: (name: string) => `--yc-z-${name}`,
   "motion.duration": (name: string) => `--yc-dur-${name}`,
   "motion.easing": (name: string) => `--yc-ease-${name}`,
+  "motion.semantic": (name: string) => `--yc-motion-${name}`,
 } as const
 
 function isMapping(value: unknown): value is Record<string, unknown> {
@@ -102,6 +103,20 @@ describe("DESIGN.md scheme drift", () => {
     const stale = document.replace("\n  onedark-light:\n", "\n  solarized-dark:\n")
     expect(schemeDrift(stale)).toContain("solarized-dark: stale scheme")
     expect(schemeDrift(stale)).toContain("onedark-light: undocumented scheme")
+  })
+})
+
+describe("DESIGN.md motion reduced-motion mapping", () => {
+  test("documents the reduced-motion values the stylesheet declares", async () => {
+    const frontMatter = (await Bun.file(new URL("../../DESIGN.md", import.meta.url)).text()).match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? ""
+    const parsed: unknown = Bun.YAML.parse(frontMatter)
+    const motion = isMapping(parsed) && isMapping(parsed.motion) ? parsed.motion : {}
+    const documented = isMapping(motion.reduced)
+      ? Object.fromEntries(Object.entries(motion.reduced).map(([name, value]) => [`--yc-motion-${name}`, String(value)]))
+      : {}
+    const sheet = parseStylesheet("tokens.css", await Bun.file(new URL("./tokens.css", import.meta.url)).text())
+    const actual = declarationsWhere(sheet, (rule) => rule.header === ":root" && rule.conditions.includes("@media (prefers-reduced-motion: reduce)"))
+    expect(documented).toEqual(actual)
   })
 })
 

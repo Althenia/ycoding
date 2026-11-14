@@ -44,7 +44,6 @@ test("below 768px mode, sleep and review chips and the active goal take full-wid
   expect(metadataRule(".session-status__modes")).toMatchObject({ flex: "1 1 auto", order: "2" })
   expect(metadataRule(".session-status__active-goal")).toMatchObject({ flex: "1 1 100%", order: "3", "max-inline-size": "none" })
   expect(metadataRule(".session-status__mode")["min-block-size"]).toBe("28px")
-  expect(metadataRule(".session-status__slot--empty")).toMatchObject({ display: "none" })
 })
 
 test("the phone Goal control opens a focus-contained sheet while wider widths keep the anchored popover", () => {
@@ -63,8 +62,8 @@ test("the Goal control reports expanded while either its popover or its phone sh
   expect(source).toContain("aria-expanded={goalControlExpanded(")
 })
 
-test("from tablet width the status group owns a full-width secondary line below the identity and action line", () => {
-  expect(baseRule(".composer__controls .session-status")).toMatchObject({ flex: "1 1 100%", order: "1" })
+test("the status group sits inline in the composer chip row", () => {
+  expect(baseRule(".composer__controls .session-status")).toMatchObject({ flex: "0 1 auto", order: "0", "padding-block-start": "0" })
   expect(baseRule(".session-status")).toMatchObject({ flex: "0 1 auto", "min-inline-size": "0" })
   expect(baseRule(".composer__controls .session-status__active-goal")).toMatchObject({ flex: "1 1 16ch", "max-inline-size": "48ch" })
   expect(sheet.rules.some((rule) => rule.header.includes(".composer__dock .session-status"))).toBe(false)
@@ -73,34 +72,28 @@ test("from tablet width the status group owns a full-width secondary line below 
 test("the phone Goal control keeps one width whether or not it shows an iteration count", () => {
   expect(phoneRule(".session-status__goal-trigger")["min-inline-size"]).toBe("4rem")
   expect(baseRule(".session-status__autonomous-trigger,.session-status__goal-trigger")["padding-inline"]).toBe("var(--yc-space-2)")
-  expect(baseRule(".session-status__slot")["padding-inline"]).toBe("var(--yc-space-2)")
 })
 
-test("from tablet width the transient status slot follows the metadata so the second line starts at the control edge", () => {
-  const slot = declarationsWhere(sheet, (rule) => rule.header === ".composer__controls .session-status__slot" && rule.conditions.includes("@media (min-width: 768px)"))
-  expect(slot.order).toBe("2")
-})
-
-test("below 768px the transient status leaves the identity line and shows its full words", () => {
-  expect(metadataRule(".session-status__slot")).toMatchObject({ order: "1", flex: "0 1 auto", "max-inline-size": "100%" })
-  expect(metadataRule(".session-status__label")).toMatchObject({ position: "static", "clip-path": "none" })
-  expect(metadataRule(".session-status__mobile")).toMatchObject({ display: "none" })
-})
-
-test("below 768px an in-flight goal keeps the operational status visible and its colors", () => {
-  expect(metadataRule(".session-status__goal-setting")).toMatchObject({ display: "none" })
-  expect(metadataRule(".session-status__slot--setting .session-status__label")).toMatchObject({ visibility: "visible" })
-  expect(sheet.rules.some((rule) => rule.conditions.includes(phone) && rule.header.includes("session-status__slot--setting") && rule.declarations.display === "none")).toBe(false)
+test("the status group carries no transient status slot and an in-flight goal shows its progress inside the Goal control", () => {
+  expect(source).not.toMatch(/session-status__slot|goal-setting/)
+  expect(sheet.rules.some((rule) => /session-status__slot|goal-setting/.test(rule.header))).toBe(false)
+  expect(baseRule('.session-status__goal-trigger[aria-busy="true"] > :not(.session-status__goal-progress)')).toMatchObject({ visibility: "hidden" })
+  expect(baseRule(".session-status__goal-progress")).toMatchObject({ position: "absolute", inset: "0" })
 })
 
 test("metadata relocated into the conversation retains full wrapping words without another scroller", () => {
-  expect(baseRule(".session-status--metadata :is(.session-status__slot,.session-status__label,.session-status__mode,.session-status__mode-full,.session-status__active-goal)")).toMatchObject({ "min-inline-size":"0", overflow:"visible", "overflow-wrap":"anywhere", "white-space":"normal" })
+  expect(baseRule(".session-status--metadata :is(.session-status__mode,.session-status__mode-full,.session-status__active-goal)")).toMatchObject({ "min-inline-size":"0", overflow:"visible", "overflow-wrap":"anywhere", "white-space":"normal" })
   expect(baseRule(".session-status--metadata .session-status__active-goal")).toMatchObject({ flex:"1 1 100%", "max-inline-size":"none" })
 })
 
-test("the Autonomous and Goal controls are pills and the status slot is a pill without an inline-start bar or inner rule", () => {
+test("the Autonomous and Goal controls are pills without an inline-start bar or inner rule", () => {
   expect(baseRule(".session-status__autonomous-trigger,.session-status__goal-trigger")).toMatchObject({ border: "0", "border-radius": "var(--yc-radius-pill)" })
-  expect(baseRule(".session-status__slot")).toMatchObject({ border: "0", "border-radius": "var(--yc-radius-pill)" })
   expect(sheet.rules.some((rule) => Object.keys(rule.declarations).some((property) => property === "border-inline-start" || property === "border-inline-start-color"))).toBe(false)
   expect(baseRule(".composer__controls .session-status")["border-block-start"]).toBeUndefined()
+})
+
+test("the Autonomous control is a neutral tonal pill and an active or setting Goal reads as live signal", () => {
+  expect(baseRule(".session-status__autonomous-trigger,.session-status__goal-trigger")).toMatchObject({ background: "var(--yc-surface-sunken)", color: "var(--yc-text)" })
+  expect(baseRule(".session-status__goal-trigger--active")).toMatchObject({ background: "var(--yc-surface-sunken)", color: "var(--yc-signal)" })
+  expect(baseRule(":is(.session-status__goal-popover,.session-status__goal-sheet) button")).toBeDefined()
 })

@@ -55,8 +55,17 @@ describe("icon-led Settings sections", () => {
     expect(section).toContain('<Icon name={sectionIcons[props.category]} size={18} />')
     expect(section).toContain("<h2 id={props.id}>{props.title}</h2>")
     expect(section).toContain("aria-labelledby={props.id}")
+    expect(section).toContain('<Show when={props.hint}><p class="settings__hint">{props.hint}</p></Show>')
     expect(section.indexOf("<Icon")).toBeLessThan(section.indexOf("<h2"))
     expect(tsx).not.toContain("settings__ordinal")
+  })
+
+  test("uses the Ledger section icons for Machine, Appearance, Notifications, Permissions and App", async () => {
+    const tsx = await read("settings.tsx")
+    const icons = tsx.slice(tsx.indexOf("const sectionIcons = {"), tsx.indexOf("} as const satisfies"))
+    for (const [category, icon] of [["Machine", "monitor"], ["Appearance", "sparkles"], ["Notifications", "bell"], ["Permissions", "shield"], ["App", "monitor"]]) expect(icons).toContain(`${category}: "${icon}"`)
+    expect(tsx).toContain('<Section id="permission-settings" category="Permissions" title="Permissions" hint="Rules you saved with Always allow.">')
+    expect(tsx).toContain('hint="Notification settings for this browser."')
   })
 
   test("keeps every Settings section in order without counters or accordions", async () => {
@@ -99,5 +108,45 @@ describe("open Settings surfaces", () => {
     const active = declared(css, ".appearance-segments .filters__option--active")
     expect(active["border-block-end-color"]).toBeUndefined()
     expect(active.background).toBe("var(--yc-green-soft)")
+  })
+})
+
+describe("Ledger Settings composition", () => {
+  test("renders Machine, Keep awake, Appearance, Notifications, Permissions and App first in document order", async () => {
+    const shell = await Bun.file(new URL("./shell.tsx", import.meta.url)).text()
+    const page = shell.slice(shell.indexOf("function SettingsPage"))
+    const positions = ["<MachineSettings />", "<AppearanceSettings />", "<NotificationSettings />", "<PermissionSettings />", "<AppSettings />", "<LatencySettings />", "<AccountSettings />", "<DeviceSettings />", "<OfficeSettings office={props.office} />", "<ExternalNotificationSettings />"].map((element) => page.indexOf(element))
+    expect(positions.every((position, index) => position > -1 && (index === 0 || position > positions[index - 1]!))).toBe(true)
+    expect(await read("settings.css")).not.toMatch(/(^|[\s;{])order\s*:/m)
+  })
+
+  test("names the selected machine with its connection status and keeps its label for assistive technology", async () => {
+    const tsx = await read("settings.tsx")
+    expect(tsx).toContain('id="machine-selected-name"')
+    expect(tsx).toContain('<span class="machine-selected__status" data-tone={connection().tone}>{connection().label}<Show when={connection().tone === "online"}><Icon name="check" size={14} /></Show></span>')
+    expect(tsx).toContain('<span class="visually-hidden" id="machine-selected-label">Selected machine</span>')
+    const css = await read("settings.css")
+    expect(rule(css, ".machine-selected__name")).toContain("font: var(--yc-weight-medium) var(--yc-size-md)/var(--yc-leading-md) var(--yc-font-sans)")
+    expect(rule(css, ".machine-selected__status")).toContain("var(--yc-font-mono)")
+  })
+
+  test("drops the page subtitle and keeps Settings rows free of rules", async () => {
+    const [css, shell] = await Promise.all([read("settings.css"), Bun.file(new URL("./shell.tsx", import.meta.url)).text()])
+    const page = shell.slice(shell.indexOf("function SettingsPage"))
+    expect(page).not.toContain("page-head__support")
+    expect(rule(css, ".app--settings .page-head__title")).toContain("font-size: var(--yc-size-2xl)")
+    expect(css).not.toMatch(/border-block-(start|end)/)
+  })
+
+  test("keeps rows within 520px, a flat outlined Keep awake switch and a compact Review saved rules pill", async () => {
+    const [css, tsx] = await Promise.all([read("settings.css"), read("settings.tsx")])
+    expect(css).toContain(".settings .list,\n.settings .settings__disclosure,\n.settings [aria-labelledby=\"keep-awake-settings\"] .defs__row {\n  max-inline-size: 520px;")
+    const toggle = rule(css, ".machine-awake .switch input")
+    expect(toggle).toContain("border: 1px solid var(--yc-border-strong)")
+    expect(toggle).toContain("background: transparent")
+    expect(rule(css, ".machine-awake .switch")).toContain("flex-direction: row-reverse")
+    expect(tsx).toContain('<input type="checkbox" role="switch" aria-labelledby="machine-awake-label"')
+    expect(rule(css, ".settings__pill")).toContain("border-radius: var(--yc-radius-pill)")
+    expect(tsx).toContain('aria-expanded={open()} aria-controls="permission-settings-rules"')
   })
 })

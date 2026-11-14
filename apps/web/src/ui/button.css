@@ -23,9 +23,7 @@
     translate var(--yc-dur-quick) var(--yc-ease-standard);
 }
 
-.button:hover {
-  background: color-mix(in srgb, var(--button-bg) 92%, var(--yc-text) 8%);
-}
+@media (hover: hover) { .button:hover { background: color-mix(in srgb, var(--button-bg) 92%, var(--yc-text) 8%); } }
 
 .button:active {
   translate: 0 1px;
@@ -46,10 +44,7 @@
   color: var(--yc-primary-fg);
 }
 
-.button--primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--yc-primary-bg) 92%, var(--yc-text) 8%);
-  color: var(--yc-primary-fg);
-}
+@media (hover: hover) { .button--primary:hover:not(:disabled) { background: color-mix(in srgb, var(--yc-primary-bg) 92%, var(--yc-text) 8%); color: var(--yc-primary-fg); } }
 
 .button--secondary {
   --button-bg: var(--yc-surface-raised);
@@ -63,10 +58,7 @@
   --button-border: transparent;
 }
 
-.button--ghost:hover {
-  --button-fg: var(--yc-text);
-  background: var(--yc-surface-sunken);
-}
+@media (hover: hover) { .button--ghost:hover { --button-fg: var(--yc-text); background: var(--yc-surface-sunken); } }
 
 .button--danger {
   --button-bg: var(--yc-surface-raised);

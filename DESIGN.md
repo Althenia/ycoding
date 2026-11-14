@@ -25,6 +25,7 @@ YCoding is a terminal-first coding agent. Its TUI is the behavioral reference; t
 - Keep physical control geometry stable and adapt composition at content breakpoints; reserve async geometry to preserve reading position (`apps/web/src/styles/tokens.css`, `apps/web/verify/loading.integration.test.ts`).
 - Favor a calm, legible work surface: use status color for meaning, text for recovery, and motion for continuity (`apps/web/src/styles/base.css`, `apps/web/src/remote/ui/loading.css`).
 - Spatial Canvas: build hierarchy from typography, open whitespace and single-level tonal planes on the web. Reserve visible boundaries for fields, the composer capsule, floating layers and pending requests, focus, and hard-review danger states (`apps/web/DESIGN.md` W80–W94).
+- Ledger workspace: Web and Desktop share Stitch Direction A — Ledger: a 256px rail of flat single-line Session rows, a single-baseline conversation header, open transcript prose, one rounded composer card, a `Session companion` and an open single-column Settings (`apps/web/DESIGN.md` Ledger direction).
 
 ## Rules
 

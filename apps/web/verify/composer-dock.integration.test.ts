@@ -62,13 +62,14 @@ for (const viewport of [{ width: 390, height: 844, inset: 424 }, { width: 390, h
       try {
         await page.setViewport(viewport.width, viewport.height)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440`)
-        await wait(page, `document.querySelector('.composer-resident .reasoning-effort input') !== null`)
+        await wait(page, `document.querySelector('.composer-resident .composer__effort') !== null`)
         await page.evaluate(`(() => {
           document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove();
           const fixture=document.querySelector('.fixture'); fixture.style.height='100dvh'; fixture.style.minHeight='0'; fixture.style.overflow='hidden';
           localStorage.removeItem('ycoding.remote.composer-collapsed');
           const toggle=document.querySelector('.composer-resident .composer__dock-toggle'); if(toggle.getAttribute('aria-expanded') === 'false') toggle.click();
         })()`)
+        if (!(["attachment", "upload", "catalog-error"] as readonly string[]).includes(state)) await openEffort(page)
         if (state === "attachment") {
           await page.evaluate(`(() => { const input=document.querySelector('.composer-resident input[type=file]'); const transfer=new DataTransfer(); for(const name of ['very-long-attachment-filename-for-keyboard-layout-check.txt', 'second-note.txt']) transfer.items.add(new File(['Keyboard attachment'], name, { type:'text/plain' })); input.files=transfer.files; input.dispatchEvent(new Event('change', { bubbles:true })); })()`)
           await wait(page, `document.querySelectorAll('.composer-resident .composer__attachment').length === 2`)
@@ -82,7 +83,7 @@ for (const viewport of [{ width: 390, height: 844, inset: 424 }, { width: 390, h
           Object.defineProperty(window, 'visualViewport', { configurable:true, value:stub }); window.dispatchEvent(new Event('resize'));
         })()`)
         if (state === "jump") {
-          const reader = await page.evaluate<{ x: number; y: number }>(`(() => { const rect=document.querySelector('.workspace__scroll').getBoundingClientRect(); return { x:rect.left+rect.width/2, y:rect.top+rect.height/2 }; })()`)
+          const reader = await page.evaluate<{ x: number; y: number }>(`(() => { const rect=document.querySelector('.workspace__scroll').getBoundingClientRect(); return { x:rect.left+3, y:rect.top+rect.height/2 }; })()`)
           await page.wheel(reader.x, reader.y, 0, -600)
           await wait(page, `document.querySelector('.conversation-jump-slot .transcript-navigation__controls--visible [aria-label="Jump to latest"]') !== null`)
         }
@@ -144,6 +145,11 @@ test("closed-keyboard attachment chips truncate long filenames within phone view
   }
 }, 15_000)
 
+async function openEffort(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>) {
+  await page.evaluate(`(() => { const chip=document.querySelector('.composer-resident .composer__effort'); if (chip.getAttribute('aria-expanded') === 'false') chip.click() })()`)
+  await wait(page, `(() => { const panel=document.querySelector('.composer-resident .composer__effort-panel'), content=document.querySelector('.composer-resident .reasoning-effort'); return content !== null && panel.getBoundingClientRect().height >= content.getBoundingClientRect().height - 1 && getComputedStyle(panel).opacity === '1' })()`)
+}
+
 type AttachmentBounds = { left: number; right: number; width: number; height: number; scrollWidth: number; clientWidth: number }
 
 test("queued status spans the keyboard-open draft row on phones", async () => {
@@ -152,7 +158,7 @@ test("queued status spans the keyboard-open draft row on phones", async () => {
     try {
       await page.setViewport(viewport.width, viewport.height)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440`)
-      await wait(page, `document.querySelector('.composer-resident .reasoning-effort input') !== null`)
+      await wait(page, `document.querySelector('.composer-resident .composer__effort') !== null`)
       await page.evaluate(`(() => {
         document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove();
         const fixture=document.querySelector('.fixture'); fixture.style.height='100dvh'; fixture.style.minHeight='0'; fixture.style.overflow='hidden';

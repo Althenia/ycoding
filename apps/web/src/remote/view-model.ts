@@ -14,7 +14,7 @@ import type { ProviderAuthState } from "./provider-auth"
 import type { RemoteRequestOutcome, RemoteTransportStatus } from "./transport"
 import { describeOutcome } from "./outcome"
 import type { PendingMutation } from "./store"
-import type { FormAnswerView, FormFieldView, FormView, SessionView, ShellOutputFetch, ShellOutputView } from "./projection"
+import { formatPartDuration, transcriptPartVisible, type FormAnswerView, type FormFieldView, type FormView, type MessageAttachment, type RemoteMessageView, type SessionView, type ShellOutputFetch, type ShellOutputView } from "./projection"
 
 export type FormDraft = Readonly<Record<string, FormAnswerView[string] | undefined>>
 
@@ -871,4 +871,57 @@ export function devicePickerNote(devices: DeviceAvailabilityContext["devices"]):
 export function cachedSessionsView(connection: RemoteConnectionState, sessionCount: number): { readonly note: string } | undefined {
   if (connection.kind !== "offline" || sessionCount === 0) return undefined
   return { note: `Last session list from ${connection.deviceName}. Sessions are read-only until it reconnects.` }
+}
+
+export type TranscriptActivity = { readonly kind: "typing" } | { readonly kind: "status"; readonly tone: "attention" | "danger"; readonly label: string }
+
+export function transcriptActivity(input: {
+  readonly status: SessionView["status"] | undefined
+  readonly connection: RemoteConnectionState["kind"]
+  readonly transport: RemoteTransportStatus["kind"]
+  readonly messages: readonly RemoteMessageView[]
+  readonly requests: number
+  readonly sending: boolean
+  readonly lastError?: string
+}): TranscriptActivity | undefined {
+  const turn = input.messages.filter((message) => message.kind === "user" || message.kind === "assistant")
+  const last = turn.at(-1)
+  const accepted = input.sending || last?.kind === "user" && last.state !== "consumed"
+  if (input.status !== "running" && !accepted) {
+    if (input.status !== "failed") return undefined
+    const reply = last?.kind === "assistant" ? last : undefined
+    if (reply?.error) return undefined
+    return { kind: "status", tone: "danger", label: input.lastError ? `Provider error · ${input.lastError}` : "Provider error" }
+  }
+  if (input.connection === "offline" || input.connection === "error" || input.transport === "closed")
+    return { kind: "status", tone: "attention", label: "Disconnected · Sending resumes when the machine is connected." }
+  if (input.connection !== "connected" || input.transport !== "open")
+    return { kind: "status", tone: "attention", label: "Reconnecting · Sending resumes when the machine is connected." }
+  if (input.requests > 0) return { kind: "status", tone: "attention", label: "Waiting for your decision" }
+  if (last?.kind !== "assistant") return { kind: "typing" }
+  const visible = last.parts.filter(transcriptPartVisible)
+  const live = visible.some((part) => part.kind === "reasoning" && part.completed === undefined || part.kind === "tool" && (part.status === "running" || part.status === "streaming"))
+  const streaming = last.completed === undefined && visible.at(-1)?.kind === "text"
+  return live || streaming ? undefined : { kind: "typing" }
+}
+
+const inlineImageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
+
+export function userMessageDisplay(message: { readonly text: string; readonly attachments?: readonly MessageAttachment[] }) {
+  const attachments = message.attachments ?? []
+  const images = attachments.filter((attachment) => inlineImageMimes.has(attachment.mime))
+  const files = attachments.filter((attachment) => !inlineImageMimes.has(attachment.mime))
+  const text = images.length === 0 ? message.text : message.text.replace(/([ \t]*)\[Image (\d+)\]([ \t]*)/g, (match: string, _before: string, index: string, _after: string, offset: number, whole: string) => {
+    const position = Number(index)
+    if (position < 1 || position > images.length) return match
+    const start = offset === 0 || whole[offset - 1] === "\n"
+    const end = offset + match.length === whole.length || whole[offset + match.length] === "\n"
+    return start || end ? "" : " "
+  })
+  return { text: text.trim() === "" ? "" : text, images, files }
+}
+
+export function reasoningSummary(input: { readonly started?: number; readonly completed?: number; readonly open: boolean }) {
+  const done = input.started !== undefined && input.completed !== undefined
+  return { label: done ? `Thought · ${formatPartDuration(input.completed - input.started)}` : "Thinking", hint: input.open ? "Hide details" : "Show details", done }
 }

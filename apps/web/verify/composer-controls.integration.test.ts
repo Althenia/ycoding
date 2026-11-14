@@ -22,12 +22,17 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
-test("composer input capsule uses the approved 26px radius", async () => {
+test("composer is one 20px card whose draft field has no inner outline and whose border shows draft focus", async () => {
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
     await wait(page, `document.querySelector('.mini-composer__mount .mini-composer__input-wrap') !== null`)
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.mini-composer__mount .mini-composer__input-wrap')).borderRadius`)).toBe("26px")
+    const read = () => page.evaluate<{ card: string; field: string; fieldBorder: string; border: string; visibleDisclosure: boolean }>(`(() => { const mount=document.querySelector('.mini-composer__mount'), row=getComputedStyle(mount.querySelector('.composer__row')), wrap=getComputedStyle(mount.querySelector('.mini-composer__input-wrap')), disclosure=mount.querySelector('.composer__attachment-disclosure').getBoundingClientRect(); return { card:row.borderTopLeftRadius, field:wrap.borderTopLeftRadius, fieldBorder:wrap.borderTopWidth, border:row.borderTopColor, visibleDisclosure:disclosure.width>1 && disclosure.height>1 } })()`)
+    const rest = await read()
+    expect(rest).toMatchObject({ card: "20px", field: "0px", fieldBorder: "0px", visibleDisclosure: false })
+    await page.evaluate(`document.querySelector('.mini-composer__mount .composer__input').focus()`)
+    const focused = await read()
+    expect(focused.border).not.toBe(rest.border)
   } finally { await page.close() }
 })
 
@@ -82,7 +87,7 @@ for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["l
       const baseline = await page.evaluate<{ row: number; controls: number; mobile: number }>(`(() => { const mount=document.querySelector('.mini-composer__mount'); return { row:mount.querySelector('.composer__row').getBoundingClientRect().height, controls:mount.querySelector('.composer__controls').getBoundingClientRect().height, mobile:mount.querySelector('.composer__mobile-trigger')?.getBoundingClientRect().height ?? 0 }; })()`)
       await page.evaluate(`window.composerSetDiagnostics('known')`)
       await wait(page, `document.querySelector('.mini-composer__mount .composer__speed')?.textContent?.includes('6,000 tok/s') === true`)
-      const layout = await page.evaluate<{ row: number; controls: number; mobile: number; speed: string; ring: boolean; ringBeforeModel: boolean; inFooter: boolean; mobileRing: boolean; tapHeight: number; overflow: boolean }>(`(() => { const mount=document.querySelector('.mini-composer__mount'), ring=mount.querySelector('.composer__context-trigger'), mobile=mount.querySelector('.composer__mobile-trigger'), model=mount.querySelector('.model-control__trigger'), speed=mount.querySelector('.composer__speed'), controls=mount.querySelector('.composer__controls'); return { row:mount.querySelector('.composer__row').getBoundingClientRect().height, controls:controls.getBoundingClientRect().height, mobile:mount.querySelector('.composer__mobile-trigger')?.getBoundingClientRect().height ?? 0, speed:speed?.textContent ?? '', ring:!!ring, ringBeforeModel:!!ring && !!model && ring.getBoundingClientRect().right<=model.getBoundingClientRect().left+1, inFooter:!!speed && controls.contains(speed) && speed.getBoundingClientRect().right<=controls.getBoundingClientRect().right+1, mobileRing:!!mobile?.querySelector('.composer__mobile-context-ring'), tapHeight:mobile?.getBoundingClientRect().height ?? 0, overflow:document.documentElement.scrollWidth>innerWidth }; })()`)
+      const layout = await page.evaluate<{ row: number; controls: number; mobile: number; speed: string; ring: boolean; ringAfterModel: boolean; inFooter: boolean; mobileRing: boolean; tapHeight: number; overflow: boolean }>(`(() => { const mount=document.querySelector('.mini-composer__mount'), ring=mount.querySelector('.composer__context-trigger'), mobile=mount.querySelector('.composer__mobile-trigger'), model=mount.querySelector('.model-control__trigger'), speed=mount.querySelector('.composer__speed'), controls=mount.querySelector('.composer__controls'); return { row:mount.querySelector('.composer__row').getBoundingClientRect().height, controls:controls.getBoundingClientRect().height, mobile:mount.querySelector('.composer__mobile-trigger')?.getBoundingClientRect().height ?? 0, speed:speed?.textContent ?? '', ring:!!ring, ringAfterModel:!!ring && !!model && ring.getBoundingClientRect().left>=model.getBoundingClientRect().right-1, inFooter:!!speed && controls.contains(speed) && speed.getBoundingClientRect().right<=controls.getBoundingClientRect().right+1, mobileRing:!!mobile?.querySelector('.composer__mobile-context-ring'), tapHeight:mobile?.getBoundingClientRect().height ?? 0, overflow:document.documentElement.scrollWidth>innerWidth }; })()`)
       expect(layout.speed).toContain("6,000 tok/s")
       expect(layout.row).toBe(baseline.row)
       expect(layout.controls).toBe(baseline.controls)
@@ -105,7 +110,7 @@ for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["l
         expect(sheet.nestedButton).toBe(false)
       } else {
         expect(layout.ring).toBe(true)
-        expect(layout.ringBeforeModel).toBe(true)
+        expect(layout.ringAfterModel).toBe(true)
         expect(layout.inFooter).toBe(true)
         expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .composer__speed-trend')?.textContent ?? ''`)).toContain("▄█")
         await page.evaluate(`document.querySelector('.composer__context-trigger')?.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))`)
@@ -167,23 +172,27 @@ test("Session composer dock collapses accessibly, persists, releases transcript 
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440`)
     await wait(page, `document.querySelector('.composer__dock-toggle') !== null`)
     await page.evaluate(`if (document.querySelector('.composer__dock-toggle').getAttribute('aria-expanded') !== 'true') document.querySelector('.composer__dock-toggle').click()`)
-    const before = await page.evaluate<{ height: number; scroll: number }>(`(() => ({ height:document.querySelector('.workspace__scroll').getBoundingClientRect().height, scroll:document.querySelector('.workspace__scroll').scrollHeight }))()`)
+    const reserve = `parseFloat(getComputedStyle(document.querySelector('.workspace__main')).getPropertyValue('--yc-composer-reserve')) || 0`
+    const before = await page.evaluate<{ height: number; scroll: number; reserve: number; composer: number }>(`(() => ({ height:document.querySelector('.workspace__scroll').getBoundingClientRect().height, scroll:document.querySelector('.workspace__scroll').scrollHeight, reserve:${reserve}, composer:document.querySelector('.composer').getBoundingClientRect().height }))()`)
     expect(await page.evaluate<number>(`document.querySelector('.composer__dock-toggle').tabIndex`)).toBe(0)
     await page.evaluate(`document.querySelector('.composer__input').focus(); document.querySelector('.composer__dock-toggle').click()`)
     await wait(page, `document.querySelector('.composer--collapsed') !== null`)
     // The dock's grid-row transition runs for --yc-dur-base; measure the settled geometry.
     await wait(page, `document.querySelector('.composer__body').getBoundingClientRect().height === 0`)
     expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.composer__dock-toggle')`)).toBe(true)
-    const collapsed = await page.evaluate<{ height: number; scroll: number; toggle: number; status: boolean; hidden: boolean; inert: boolean; handle: number; overflow: boolean }>(`(() => { const dock=document.querySelector('.composer'), body=dock.querySelector('.composer__body'), toggle=dock.querySelector('.composer__dock-toggle'), handle=dock.querySelector('.composer__dock'), slot=dock.querySelector('.composer__dock .session-status__slot'); return { height:document.querySelector('.workspace__scroll').getBoundingClientRect().height, scroll:document.querySelector('.workspace__scroll').scrollHeight, toggle:toggle.getBoundingClientRect().height, status:!!slot, hidden:body.getAttribute('aria-hidden')==='true', inert:body.inert, handle:handle.getBoundingClientRect().height, overflow:document.documentElement.scrollWidth>innerWidth }; })()`)
+    const collapsed = await page.evaluate<{ height: number; scroll: number; reserve: number; composer: number; toggle: number; status: boolean; hidden: boolean; inert: boolean; handle: number; overflow: boolean }>(`(() => { const dock=document.querySelector('.composer'), body=dock.querySelector('.composer__body'), toggle=dock.querySelector('.composer__dock-toggle'), handle=dock.querySelector('.composer__dock'), slot=dock.querySelector('.composer__dock .session-status__announce[role="status"]'); return { height:document.querySelector('.workspace__scroll').getBoundingClientRect().height, scroll:document.querySelector('.workspace__scroll').scrollHeight, reserve:${reserve}, composer:dock.getBoundingClientRect().height, toggle:toggle.getBoundingClientRect().height, status:!!slot, hidden:body.getAttribute('aria-hidden')==='true', inert:body.inert, handle:handle.getBoundingClientRect().height, overflow:document.documentElement.scrollWidth>innerWidth }; })()`)
     expect(collapsed.toggle).toBeGreaterThanOrEqual(44)
     expect(collapsed.status).toBe(true)
     expect(collapsed.hidden).toBe(true)
     expect(collapsed.inert).toBe(true)
     expect(collapsed.handle).toBeLessThanOrEqual(52)
-    expect(collapsed.height).toBeGreaterThan(before.height)
+    expect(before.reserve).toBeGreaterThan(0)
+    expect(collapsed.reserve).toBeLessThanOrEqual(before.reserve)
+    expect(collapsed.composer).toBeLessThan(before.composer)
+    expect(collapsed.height).toBeGreaterThanOrEqual(before.height)
     // Content height does not change on collapse: the scroller grows into the freed dock space, so
     // its scrollHeight is at least the previous scrollable extent and never below its own height.
-    expect(collapsed.scroll).toBeGreaterThanOrEqual(Math.max(before.scroll, collapsed.height))
+    expect(collapsed.scroll - collapsed.reserve).toBeGreaterThanOrEqual(Math.max(before.scroll - before.reserve, collapsed.height - collapsed.reserve) - 1)
     expect(collapsed.overflow).toBe(false)
     await page.pressEscape()
     expect(await page.evaluate<boolean>(`document.querySelector('.composer--collapsed') !== null`)).toBe(true)
@@ -245,9 +254,9 @@ for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["l
       expect(await page.evaluate<string>(`document.querySelector('#session-companion-panel .session-status__active-goal')?.textContent?.trim()`)).toBe("Goal active · Finish task")
       await page.evaluate(`window.composerSetGoalStatus(null); window.composerSetGoalPending(true)`)
       expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .session-status__announce[role="status"]')?.textContent?.trim()`)).toBe("Setting goal…")
-      expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(width === 390 ? ".session-status__goal-trigger .session-status__goal-progress .transcript-dot-trail" : ".session-status__goal-setting .transcript-dot-trail")}) !== null && document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-busy') === 'true'`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(".session-status__goal-trigger .session-status__goal-progress .transcript-dot-trail")}) !== null && document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-busy') === 'true'`)).toBe(true)
       await page.evaluate(`window.composerSetGoalPending(false)`)
-      expect(await page.evaluate<boolean>(`document.querySelector('.session-status__goal-setting') === null`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('.session-status__goal-progress') === null && document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-busy') === null`)).toBe(true)
       expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .session-status__announce[role="status"]')?.textContent ?? 'missing'`)).toBe("")
       await page.evaluate(`window.composerSetPending('queue'); window.composerSetMutation('sending')`)
       expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.textContent?.trim()`)).toContain("Sending")
@@ -271,52 +280,47 @@ for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["l
   }, 30_000)
 }
 
-test("retry status yields to progress and terminal state at phone and desktop widths", async () => {
+const activityState = `(() => { const row = document.querySelector('.transcript .transcript-activity'); const typing = row?.querySelector('.transcript-activity__typing'); return typing ? 'typing:' + typing.getAttribute('aria-label') : row ? row.textContent.trim() : 'missing' })()`
+
+test("transcript activity yields to progress and terminal state at phone and desktop widths and never enters the composer", async () => {
   for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width!, height!)
       await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetRetryPhase('countdown')`)
-      expect(await page.evaluate<string>(`document.querySelector('.session-status__label')?.textContent?.trim()`)).toMatch(/1 failed · retry 2 · in [1-5]s/)
-      await page.evaluate(`window.composerSetRetryPhase('retrying')`)
-      await wait(page, `document.querySelector('.session-status__label')?.textContent?.trim() === 'retrying · attempt 2'`)
-      expect(await page.evaluate<string>(`document.querySelector('.session-status__label')?.textContent?.trim()`)).toBe("retrying · attempt 2")
-      for (const [phase, expected] of [["progress", "Running"], ["next", "Running"], ["idle", ""], ["failed", "provider error"]] as const) {
+      for (const [phase, expected] of [["countdown", "typing:YCoding is working"], ["retrying", "typing:YCoding is working"], ["progress", ""], ["next", "typing:YCoding is working"], ["idle", ""], ["failed", "Provider error"]] as const) {
         await page.evaluate(`window.composerSetRetryPhase(${JSON.stringify(phase)})`)
-        await wait(page, phase === "idle" ? `document.querySelector('.session-status__slot')?.classList.contains('session-status__slot--empty') === true`
-          : `document.querySelector('.session-status__label')?.textContent?.includes(${JSON.stringify(expected)}) === true`)
-        expect(await page.evaluate<string>(`document.querySelector('.session-status__label')?.textContent?.trim() ?? ''`)).toContain(expected)
+        const matches = phase === "failed" ? `${activityState}.startsWith(${JSON.stringify(expected)})` : `${activityState} === ${JSON.stringify(expected)}`
+        await wait(page, matches)
+        expect(await page.evaluate<boolean>(matches)).toBe(true)
+        expect(await page.evaluate<number>(`document.querySelectorAll('.mini-composer__mount .session-status__slot, .mini-composer__mount .composer [role="status"]:not(.session-status__announce)').length`)).toBe(0)
         expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
       }
     } finally { await page.close() }
   }
 }, 30_000)
 
-test("phone tool-running status shows its full words inside its pill and footer, off the identity line", async () => {
-  for (const theme of ["light", "dark"]) {
+test("phone tool-running and waiting states keep the composer summary on the identity line and put status in the transcript", async () => {
+  for (const theme of ["light", "dark"]) for (const [status, expected] of [["tool", ""], ["waiting", "Waiting for your decision"]] as const) {
     const page = await browser!.openPage()
     try {
       await page.setViewport(390, 844)
       await page.setCoarsePointer(true)
       await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
-      await wait(page, `document.querySelector('.mini-composer__mount .session-status__slot') !== null`)
-      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetStatus('tool')`)
+      await wait(page, `document.querySelector('.mini-composer__mount .composer__mobile-trigger') !== null`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetStatus(${JSON.stringify(status)})`)
       await settled(page)
-      const bounds = await page.evaluate<{ visible: boolean; text: string; fits: boolean; inside: boolean; footerInside: boolean; belowIdentity: boolean }>(`(() => { const slot=document.querySelector('.mini-composer__mount .session-status__slot'), label=slot.querySelector('.session-status__label'), identity=document.querySelector('.mini-composer__mount .composer__mobile-trigger'), row=document.querySelector('.mini-composer__mount .composer__row'), sr=slot.getBoundingClientRect(), range=document.createRange(), rr=row.getBoundingClientRect(); range.selectNodeContents(label); return { visible:sr.width > 0 && sr.height >= 28, text:label.textContent, fits:getComputedStyle(label).position !== 'absolute' && label.scrollWidth <= label.clientWidth + 1 && slot.scrollWidth <= slot.clientWidth + 1, inside:range.getBoundingClientRect().right <= sr.right, footerInside:sr.right <= rr.right + 1, belowIdentity:sr.top >= identity.getBoundingClientRect().bottom - 1 }; })()`)
-      expect(bounds.visible).toBe(true)
-      expect(bounds.text).toBe("tool running")
-      expect(bounds.fits).toBe(true)
-      expect(bounds.inside).toBe(true)
-      expect(bounds.footerInside).toBe(true)
-      expect(bounds.belowIdentity).toBe(true)
+      const bounds = await page.evaluate<{ slots: number; composerStatuses: number; summaryLine: boolean; inside: boolean; activityOutside: boolean }>(`(() => { const mount=document.querySelector('.mini-composer__mount'), identity=mount.querySelector('.composer__mobile-trigger').getBoundingClientRect(), auto=mount.querySelector('.session-status__autonomous-trigger').getBoundingClientRect(), goal=mount.querySelector('.session-status__goal-trigger').getBoundingClientRect(), row=mount.querySelector('.composer__row').getBoundingClientRect(), activity=document.querySelector('.transcript .transcript-activity'); return { slots:mount.querySelectorAll('.session-status__slot').length, composerStatuses:mount.querySelectorAll('.composer [role="status"]:not(.session-status__announce)').length, summaryLine:Math.abs(identity.top-auto.top)<=1 && Math.abs(identity.top-goal.top)<=1, inside:goal.right<=row.right+1 && identity.left>=row.left-1, activityOutside:!!activity && !mount.contains(activity) }})()`)
+      expect(bounds).toEqual({ slots: 0, composerStatuses: 0, summaryLine: true, inside: true, activityOutside: true })
+      expect(await page.evaluate<string>(activityState)).toBe(expected)
       await Bun.write(join(captures, `composer-tool-390-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
     } finally { await page.close() }
   }
 }, 30_000)
 
-test("phone status shows the Session state, never the autonomy level shown beside it", async () => {
-  for (const [status, expected] of [["tool-auto", "tool running"], ["family-auto", "Running"]] as const) {
+test("phone activity shows the Session state in the transcript, never the autonomy level shown beside it", async () => {
+  for (const [status, expected] of [["tool-auto", ""], ["family-auto", "typing:YCoding is working"]] as const) {
     const page = await browser!.openPage()
     try {
       await page.setViewport(390, 844)
@@ -324,10 +328,10 @@ test("phone status shows the Session state, never the autonomy level shown besid
       await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
       await wait(page, `document.querySelector('.mini-composer__mount .session-status__autonomous-trigger') !== null`)
       await page.evaluate(`window.composerSetStatus(${JSON.stringify(status)})`)
-      await wait(page, `document.querySelector('.mini-composer__mount .session-status__mobile') !== null`)
-      const shown = await page.evaluate<{ mobile: string; trigger: string }>(`(() => ({ mobile: document.querySelector('.mini-composer__mount .session-status__mobile')?.textContent ?? '', trigger: document.querySelector('.mini-composer__mount .session-status__autonomous-trigger .session-status__autonomous-full')?.textContent ?? '' }))()`)
+      await wait(page, `${activityState} === ${JSON.stringify(expected)}`)
+      const shown = await page.evaluate<{ composerText: string; trigger: string }>(`(() => ({ composerText: document.querySelector('.mini-composer__mount .composer__summary')?.textContent ?? '', trigger: document.querySelector('.mini-composer__mount .session-status__autonomous-trigger .session-status__autonomous-full')?.textContent ?? '' }))()`)
       expect(shown.trigger).toBe("Autonomous")
-      expect(shown.mobile).toBe(expected)
+      expect(shown.composerText).not.toMatch(/tool running|Running|working/i)
     } finally { await page.close() }
   }
 }, 30_000)
@@ -342,7 +346,7 @@ for (const [width, height] of [[360, 780], [390, 844], [430, 932], [820, 1180]])
       await wait(page, `document.querySelector('.mini-composer__mount .composer__row') !== null`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetStatus('tool')`)
       await Bun.sleep(600)
-      const layout = await page.evaluate<{ present: boolean; label: string; pillVisible: boolean; summaryLine: boolean; summaryAboveDraft: boolean; actionsAlongsideDraft: boolean; inside: boolean; ellipsis: boolean; overflow: boolean }>(`(() => { const mount=document.querySelector('.mini-composer__mount'), button=mount.querySelector('.composer__summary .composer__mobile-trigger'), auto=mount.querySelector('.session-status__autonomous-trigger'), goal=mount.querySelector('.session-status__goal-trigger'), controls=mount.querySelector('.composer__controls'), card=mount.querySelector('.composer__row').getBoundingClientRect(), input=mount.querySelector('textarea').getBoundingClientRect(), attach=mount.querySelector('.composer__attach').getBoundingClientRect(), delivery=mount.querySelector('.composer__delivery-toggle').getBoundingClientRect(), send=mount.querySelector('.mini-composer__send').getBoundingClientRect(), summary=[button,auto,goal].map(item=>item?.getBoundingClientRect()); const present=!!button; return { present, label:button?.textContent ?? '', pillVisible:[...controls.querySelectorAll('.mini-picker,.model-control')].some(item=>getComputedStyle(item).display!=='none'), summaryLine:present && summary.every(rect=>rect && Math.abs(rect.top-summary[0].top)<=1), summaryAboveDraft:present && summary.every(rect=>rect.bottom<=input.top+1), actionsAlongsideDraft:attach.top>=input.top && attach.bottom<=input.bottom && send.top>=input.top && send.bottom<=input.bottom && delivery.top>=input.bottom, inside:present && summary[0].left>=card.left && summary[2].right<=card.right, ellipsis:present && getComputedStyle(button.querySelector('.composer__mobile-label')).textOverflow==='ellipsis', overflow:document.documentElement.scrollWidth>innerWidth } })()`)
+      const layout = await page.evaluate<{ present: boolean; label: string; pillVisible: boolean; summaryLine: boolean; summaryAboveDraft: boolean; actionsBelowDraft: boolean; inside: boolean; ellipsis: boolean; overflow: boolean }>(`(() => { const mount=document.querySelector('.mini-composer__mount'), button=mount.querySelector('.composer__summary .composer__mobile-trigger'), auto=mount.querySelector('.session-status__autonomous-trigger'), goal=mount.querySelector('.session-status__goal-trigger'), controls=mount.querySelector('.composer__controls'), card=mount.querySelector('.composer__row').getBoundingClientRect(), input=mount.querySelector('textarea').getBoundingClientRect(), attach=mount.querySelector('.composer__attach').getBoundingClientRect(), delivery=mount.querySelector('.composer__delivery-toggle').getBoundingClientRect(), send=mount.querySelector('.mini-composer__send').getBoundingClientRect(), summary=[button,auto,goal].map(item=>item?.getBoundingClientRect()); const present=!!button; return { present, label:button?.textContent ?? '', pillVisible:[...controls.querySelectorAll('.mini-picker,.model-control')].some(item=>getComputedStyle(item).display!=='none'), summaryLine:present && summary.every(rect=>rect && Math.abs(rect.top-summary[0].top)<=1), summaryAboveDraft:present && summary.every(rect=>rect.bottom<=input.top+1), actionsBelowDraft:[attach,delivery,send].every(rect=>rect.top>=input.bottom-1 && Math.abs(rect.top-attach.top)<=1), inside:present && summary[0].left>=card.left && summary[2].right<=card.right, ellipsis:present && getComputedStyle(button.querySelector('.composer__mobile-label')).textOverflow==='ellipsis', overflow:document.documentElement.scrollWidth>innerWidth } })()`)
       if (width! <= 430) {
         expect(layout.present).toBe(true)
         expect(layout.label).toContain("GSD")
@@ -351,7 +355,7 @@ for (const [width, height] of [[360, 780], [390, 844], [430, 932], [820, 1180]])
         expect(layout.pillVisible).toBe(false)
         expect(layout.summaryLine).toBe(true)
         expect(layout.summaryAboveDraft).toBe(true)
-        expect(layout.actionsAlongsideDraft).toBe(true)
+        expect(layout.actionsBelowDraft).toBe(true)
         expect(layout.inside).toBe(true)
         expect(layout.ellipsis).toBe(true)
       } else {
@@ -376,7 +380,7 @@ for (const [width, height] of [[360, 780], [390, 844], [430, 932], [820, 1180]])
   }, 90_000)
 }
 
-test("status stays inside a fixed-height composer and pending picks survive unrelated updates", async () => {
+test("status stays out of a fixed-height composer and pending picks survive unrelated updates", async () => {
   const page = await browser!.openPage()
   try {
     await page.setViewport(390, 620)
@@ -391,12 +395,12 @@ test("status stays inside a fixed-height composer and pending picks survive unre
     await page.pressKey("Home", "Home", 36)
     await page.evaluate(`document.querySelector('button[aria-label="Close model picker"]')?.click()`)
     const idle = await page.evaluate<number>(`document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect().height`)
-    expect(idle).toBeLessThanOrEqual(160)
+    expect(idle).toBeLessThanOrEqual(200)
     for (const status of ["running", "waiting", "goal", "goal-auto", "auto", "idle"]) {
       await page.evaluate(`window.composerSetStatus(${JSON.stringify(status)})`)
       const height = await page.evaluate<number>(`document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect().height`)
       if (status === "idle") expect(height).toBe(idle)
-      else expect(height).toBeLessThanOrEqual(idle + 64)
+      else expect(height).toBeLessThanOrEqual(idle + 1)
       expect(height).toBeGreaterThanOrEqual(idle)
       expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount button[aria-label="Agent"]')?.textContent`)).toContain("architect")
       expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.textContent`)).toContain("Low")
@@ -597,7 +601,7 @@ for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["l
         const off = await measure()
         expect(off.name).toBe("Goal off")
         expect(await page.evaluate<boolean>(`document.querySelector('#session-companion-panel .session-status__active-goal') === null`)).toBe(true)
-        expect(off.background).not.toBe(off.autonomousBackground)
+        expect(off.background).toBe(off.autonomousBackground)
         expect(off.color).not.toBe(active.color)
         expect(off.count).toBe(false)
         expect(off.asymmetry).toBeLessThanOrEqual(1)
@@ -1102,14 +1106,14 @@ test("composer states and effort surface retain layout at four sizes in both the
       const idle = await page.evaluate<number>(`document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect().height`)
       for (const state of ["idle", "running", "waiting", "goal"]) {
       await page.evaluate(`window.composerSetStatus(${JSON.stringify(state)})`)
-      if (state === "waiting") expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .session-status__slot')?.classList.contains('session-status__slot--attention')`)).toBe(true)
+      if (state === "waiting") expect(await page.evaluate<boolean>(`document.querySelector('.transcript .transcript-activity__status--attention') !== null`)).toBe(true)
       const rowHeight = await page.evaluate<number>(`document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect().height`)
       if (state !== "idle" && width! < 768) expect(rowHeight).toBeGreaterThanOrEqual(idle)
       else expect(rowHeight).toBe(idle)
       if (state !== "idle" && width! < 768) expect(rowHeight).toBeLessThanOrEqual(idle + 64)
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`)).toBe(true)
-      expect(await page.evaluate<boolean>(`(() => { const row = document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect(); return [...document.querySelectorAll('.mini-composer__mount .composer__controls button, .mini-composer__mount .session-status__slot')].filter(item => item.getBoundingClientRect().width > 0 && getComputedStyle(item).visibility !== 'hidden').every(item => { const rect = item.getBoundingClientRect(); return rect.left >= row.left - 1 && rect.right <= row.right + 1 }) })()`)).toBe(true)
-      const overlaps = await page.evaluate<string[]>(`(() => { const controls = [...document.querySelectorAll('.mini-composer__mount .composer__controls button, .mini-composer__mount .session-status__slot')].filter(item => item.getBoundingClientRect().width > 0 && getComputedStyle(item).visibility !== 'hidden'); return controls.flatMap((a, index) => controls.slice(index + 1).flatMap(b => { const x = a.getBoundingClientRect(), y = b.getBoundingClientRect(); return x.right <= y.left || y.right <= x.left || x.bottom <= y.top || y.bottom <= x.top ? [] : [a.className + ' / ' + b.className] })) })()`)
+      expect(await page.evaluate<boolean>(`(() => { const row = document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect(); return [...document.querySelectorAll('.mini-composer__mount .composer__controls button')].filter(item => item.getBoundingClientRect().width > 0 && getComputedStyle(item).visibility !== 'hidden').every(item => { const rect = item.getBoundingClientRect(); return rect.left >= row.left - 1 && rect.right <= row.right + 1 }) })()`)).toBe(true)
+      const overlaps = await page.evaluate<string[]>(`(() => { const controls = [...document.querySelectorAll('.mini-composer__mount .composer__controls button')].filter(item => item.getBoundingClientRect().width > 0 && getComputedStyle(item).visibility !== 'hidden'); return controls.flatMap((a, index) => controls.slice(index + 1).flatMap(b => { const x = a.getBoundingClientRect(), y = b.getBoundingClientRect(); return x.right <= y.left || y.right <= x.left || x.bottom <= y.top || y.bottom <= x.top ? [] : [a.className + ' / ' + b.className] })) })()`)
       expect(overlaps).toEqual([])
       await Bun.sleep(240)
       await Bun.write(join(captures, `composer-${state}-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
@@ -1368,7 +1372,7 @@ for (const [width, height] of [[390, 844], [1440, 900]]) for (const reduced of [
       await wait(page, `document.querySelector('${mount} textarea') !== null && document.querySelector('${mount} .session-status__goal-trigger') !== null`)
       await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
       const geometry = () => page.evaluate<readonly (readonly number[] | null)[]>(`${JSON.stringify(stable)}.map(selector => { const element = document.querySelector('${mount} ' + selector); if (!element) return null; const box = element.getBoundingClientRect(); return [box.x, box.y, box.width, box.height].map(value => Math.round(value * 10) / 10) })`)
-      const chipSelector = width === 390 ? `${mount} .session-status__goal-trigger .session-status__goal-progress` : ".conversation-metadata .session-status__goal-setting"
+      const chipSelector = `${mount} .session-status__goal-trigger .session-status__goal-progress`
       const modeBoxes = `[...document.querySelectorAll('#session-companion-panel .session-status__mode')].map(chip => { const box = chip.getBoundingClientRect(), span = chip.querySelector('.session-status__mode-full'), range = document.createRange(); range.selectNodeContents(span); const text = range.getBoundingClientRect(); return { mode: chip.dataset.mode, readable: text.width > 0 && box.width >= 20 && text.left >= box.left - 0.5 && text.right <= box.right + 0.5 } })`
       const inspectModes = async () => {
         await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
@@ -1386,14 +1390,14 @@ for (const [width, height] of [[390, 844], [1440, 900]]) for (const reduced of [
       await type(page, `${mount} textarea`, "/goal ship it safely")
       await page.evaluate(send)
       await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.goal.set')`)
-      await wait(page, `document.querySelector('.conversation-metadata .session-status__goal-setting') !== null`)
+      await wait(page, `document.querySelector('${mount} .session-status__goal-trigger .session-status__goal-progress') !== null`)
 
       expect(await inspectModes()).toEqual([{ mode: "permissions", readable: true }, { mode: "guardrails", readable: true }])
       const indicatorBounds = await page.evaluate<{ insideComposer: boolean; insideGoalTrigger: boolean; overlaps: string[] }>(`(() => { const chip = document.querySelector('${chipSelector}'), composer = document.querySelector('${mount} .composer'), goal = document.querySelector('${mount} .session-status__goal-trigger'), chipBox = chip.getBoundingClientRect(), composerBox = composer.getBoundingClientRect(), goalBox = goal.getBoundingClientRect(), controls = ['.composer__attach', '.composer__delivery-toggle', '.mini-composer__send', '.session-status__autonomous-trigger', '.session-status__goal-trigger']; return { insideComposer: chipBox.left >= composerBox.left && chipBox.right <= composerBox.right && chipBox.top >= composerBox.top && chipBox.bottom <= composerBox.bottom, insideGoalTrigger: goal.contains(chip) && chipBox.left >= goalBox.left && chipBox.right <= goalBox.right && chipBox.top >= goalBox.top && chipBox.bottom <= goalBox.bottom, overlaps: controls.filter(selector => { const control = document.querySelector('${mount} ' + selector); if (control.contains(chip)) return false; const box = control.getBoundingClientRect(); return chipBox.left < box.right && chipBox.right > box.left && chipBox.top < box.bottom && chipBox.bottom > box.top }) } })()`)
-      expect(indicatorBounds).toEqual({ insideComposer: width === 390, insideGoalTrigger: width === 390, overlaps: [] })
+      expect(indicatorBounds).toEqual({ insideComposer: true, insideGoalTrigger: true, overlaps: [] })
 
       const pending = await page.evaluate<{ enabled: boolean; draft: string; busy: string | null; name: string | null; chip: string; chipHidden: string | null; dots: number; announced: string; dotAnimation: string; chipAnimation: string }>(`(() => { const chip = document.querySelector('${chipSelector}'), trigger = document.querySelector('${mount} .session-status__goal-trigger'), field = document.querySelector('${mount} textarea'); return { enabled: !field.disabled, draft: field.value, busy: trigger.getAttribute('aria-busy'), name: trigger.getAttribute('aria-label'), chip: chip.innerText.trim(), chipHidden: chip.getAttribute('aria-hidden'), dots: chip.querySelectorAll('.transcript-dot-trail').length, announced: document.querySelector('${mount} .session-status__announce[role="status"]')?.textContent?.trim() ?? '', dotAnimation: chip.querySelector('.transcript-dot-trail span') ? getComputedStyle(chip.querySelector('.transcript-dot-trail span')).animationName : 'missing', chipAnimation: getComputedStyle(chip).animationName } })()`)
-      expect(pending).toMatchObject({ enabled: true, draft: "", busy: "true", name: "Setting goal", chip: width === 390 ? "Goal…" : "Setting goal…", chipHidden: "true", dots: 1, announced: "Setting goal…" })
+      expect(pending).toMatchObject({ enabled: true, draft: "", busy: "true", name: "Setting goal", chip: "Goal…", chipHidden: "true", dots: 1, announced: "Setting goal…" })
       expect(pending.dotAnimation === "none").toBe(reduced)
       expect(pending.chipAnimation === "none").toBe(reduced)
       expect(await geometry()).toEqual(idle)
@@ -1422,7 +1426,7 @@ for (const [width, height] of [[390, 844], [1440, 900]]) for (const reduced of [
       await page.pressEscape()
 
       await page.evaluate(`window.remoteReleaseGoal('ok')`)
-      await wait(page, `document.querySelector('.conversation-metadata .session-status__goal-setting') === null`)
+      await wait(page, `document.querySelector('${mount} .session-status__goal-trigger .session-status__goal-progress') === null`)
       await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
       await wait(page, `document.querySelector('#session-companion-panel .session-status__active-goal') !== null`)
       const settled = await page.evaluate<{ busy: string | null; name: string | null; announced: string; goal: string }>(`(() => { const trigger = document.querySelector('${mount} .session-status__goal-trigger'); return { busy: trigger.getAttribute('aria-busy'), name: trigger.getAttribute('aria-label'), announced: document.querySelector('${mount} .session-status__announce[role="status"]')?.textContent?.trim() ?? 'missing', goal: document.querySelector('#session-companion-panel .session-status__active-goal')?.textContent?.trim() ?? '' } })()`)
@@ -1440,12 +1444,12 @@ test("a failed or uncertain composer goal returns to the empty draft with its ou
       await wait(page, `document.querySelector('${mount} textarea') !== null`)
       await type(page, `${mount} textarea`, "/goal ship it safely")
       await page.evaluate(`document.querySelector('${mount} button[aria-label="Send prompt"]')?.click()`)
-      await wait(page, `document.querySelector('.conversation-metadata .session-status__goal-setting') !== null`)
+      await wait(page, `document.querySelector('${mount} .session-status__goal-trigger .session-status__goal-progress') !== null`)
       await page.evaluate(`window.remoteReleaseGoal(${JSON.stringify(result)})`)
       await wait(page, `document.querySelector('.mutation-toast--${toast}') !== null`)
       expect(await page.evaluate<string>(`document.querySelector('.mutation-toast')?.textContent ?? ''`)).toContain("Set goal")
       expect(await page.evaluate<string>(`document.querySelector('${mount} textarea').value`)).toBe("/goal ship it safely")
-      expect(await page.evaluate<boolean>(`document.querySelector('.conversation-metadata .session-status__goal-setting') === null && document.querySelector('${mount} .session-status__goal-trigger').getAttribute('aria-busy') === null`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('${mount} .session-status__goal-progress') === null && document.querySelector('${mount} .session-status__goal-trigger').getAttribute('aria-busy') === null`)).toBe(true)
       expect(await page.evaluate<number>(`window.remoteMutationReport().filter(item => item.operation === 'session.goal.set').length`)).toBe(1)
     } finally { await page.close() }
   }

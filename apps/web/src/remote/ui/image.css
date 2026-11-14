@@ -1,4 +1,4 @@
-.transcript-image { display:block; min-inline-size:0; max-inline-size:100%; padding:0; border:1px solid var(--yc-border); border-radius:var(--yc-radius-lg); background:var(--yc-surface-raised); overflow:hidden; }
+.transcript-image { display:block; min-inline-size:0; max-inline-size:100%; padding:0; border:0; border-radius:var(--yc-radius-lg); background:var(--yc-surface-sunken); overflow:hidden; }
 .transcript-attachment { min-inline-size:0; max-inline-size:100%; }
 .transcript-image img { display:block; max-inline-size:min(100%,480px); max-block-size:360px; object-fit:contain; }
 .transcript-image__unavailable { display:flex; align-items:center; flex-wrap:wrap; gap:var(--yc-space-2); color:var(--yc-text-muted); font-size:var(--yc-size-xs); }

@@ -218,26 +218,27 @@ describe("transcript rendering", () => {
         await page.setViewport(width!, height!)
         await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?images=1&theme=${theme}`)
         for (let i = 0; i < 60 && !await page.evaluate<boolean>(`['msg_image', 'msg_image_only'].every((id) => document.querySelector('[data-message-id="' + id + '"] .transcript-image img')?.complete) && Boolean(document.querySelector('[data-message-id="msg_image"] .transcript-image__unavailable'))`); i++) await Bun.sleep(25)
-        const layout = await page.evaluate<{ readonly thumbnails: readonly { readonly width: number; readonly ratio: number; readonly painted: boolean; readonly inside: boolean }[]; readonly unavailableWidth: number; readonly emptyBubbles: number; readonly textBubbles: number }>(`(() => {
+        const layout = await page.evaluate<{ readonly thumbnails: readonly { readonly width: number; readonly ratio: number; readonly painted: boolean; readonly inside: boolean; readonly insideBubble: boolean }[]; readonly unavailableWidth: number; readonly imageOnlyTexts: number; readonly imageOnlyBubbles: number; readonly textBubbles: number }>(`(() => {
           const thumbnails = ['msg_image', 'msg_image_only'].map((id) => {
             const message = document.querySelector('[data-message-id="' + id + '"]').getBoundingClientRect()
             const frame = document.querySelector('[data-message-id="' + id + '"] .transcript-attachment .transcript-image').getBoundingClientRect()
             const image = document.querySelector('[data-message-id="' + id + '"] .transcript-image img').getBoundingClientRect()
-            return { width: Math.round(frame.width), ratio: Math.round(frame.width / frame.height * 100) / 100, painted: image.width > 100 && image.height > 50,
+            const bubble = document.querySelector('[data-message-id="' + id + '"] .transcript-message__bubble').getBoundingClientRect()
+            return { width: Math.round(frame.width), ratio: Math.round(frame.width / frame.height * 100) / 100, painted: image.width >= 80 && image.height >= 50, insideBubble: frame.left >= bubble.left - 1 && frame.right <= bubble.right + 1,
               inside: frame.left >= message.left - 1 && frame.right <= message.right + 1 && frame.right <= innerWidth }
           })
           return { thumbnails, unavailableWidth: Math.round(document.querySelector('[data-message-id="msg_image"] .transcript-image__unavailable').getBoundingClientRect().width),
-            emptyBubbles: document.querySelectorAll('[data-message-id="msg_image_only"] .transcript-message__bubble').length,
+            imageOnlyTexts: document.querySelectorAll('[data-message-id="msg_image_only"] .transcript-message__bubble-text').length,
+            imageOnlyBubbles: document.querySelectorAll('[data-message-id="msg_image_only"] .transcript-message__bubble').length,
             textBubbles: document.querySelectorAll('[data-message-id="msg_image"] .transcript-message__bubble').length }
         })()`)
         for (const thumbnail of layout.thumbnails) {
-          expect(thumbnail.width).toBeGreaterThanOrEqual(240)
-          expect(thumbnail.width).toBeLessThanOrEqual(480)
-          expect(thumbnail.ratio).toBeCloseTo(16 / 9, 1)
-          expect(thumbnail).toMatchObject({ painted: true, inside: true })
+          expect(thumbnail.width).toBe(80)
+          expect(thumbnail.ratio).toBeCloseTo(10 / 7, 1)
+          expect(thumbnail).toMatchObject({ painted: true, inside: true, insideBubble: true })
         }
         expect(layout.unavailableWidth).toBeGreaterThanOrEqual(160)
-        expect({ emptyBubbles: layout.emptyBubbles, textBubbles: layout.textBubbles }).toEqual({ emptyBubbles: 0, textBubbles: 1 })
+        expect({ imageOnlyTexts: layout.imageOnlyTexts, imageOnlyBubbles: layout.imageOnlyBubbles, textBubbles: layout.textBubbles }).toEqual({ imageOnlyTexts: 0, imageOnlyBubbles: 1, textBubbles: 1 })
       }
     } finally { await page.close() }
   })
@@ -416,7 +417,7 @@ describe("transcript rendering", () => {
       const geometry = await page.evaluate<{ readonly railLeft: number; readonly railWidth: number; readonly tickWidth: number; readonly transcriptRight: number; readonly previewRight: number; readonly viewport: number }>(`(() => { const rail = document.querySelector('.transcript-navigation__rail').getBoundingClientRect(); const tick = document.querySelector('.transcript-navigation__tick').getBoundingClientRect(); const transcript = document.querySelector('.transcript-navigation').getBoundingClientRect(); const preview = document.querySelector('.transcript-navigation__tooltip').getBoundingClientRect(); return { railLeft: rail.left, railWidth: rail.width, tickWidth: tick.width, transcriptRight: transcript.right, previewRight: preview.right, viewport: innerWidth } })()`)
       expect(geometry.railLeft).toBeGreaterThanOrEqual(geometry.transcriptRight)
       expect(geometry.railWidth).toBeLessThanOrEqual(30)
-      expect(geometry.tickWidth).toBeLessThanOrEqual(22)
+      expect(geometry.tickWidth).toBe(24)
       expect(geometry.previewRight).toBeLessThanOrEqual(geometry.viewport)
       expect(geometry.previewRight).toBeLessThanOrEqual(geometry.transcriptRight)
       expect(await page.evaluate<boolean>(`document.querySelector('.transcript-navigation__controls [aria-label="Jump to top"]') !== null && document.querySelector('.transcript-navigation__rail [aria-label^="Jump to"]') === null`)).toBe(true)

@@ -1,11 +1,11 @@
 .loading-placeholder { min-inline-size:0; color:var(--yc-text-muted); }
-.loading-placeholder__shape { display:grid; align-content:center; gap:var(--yc-space-2); min-inline-size:0; min-block-size:64px; padding:var(--yc-space-3) var(--yc-space-4); border:var(--yc-border-width) solid var(--yc-border); border-radius:var(--yc-radius-md); background:var(--yc-surface-raised); }
-.loading-placeholder__bar { display:block; inline-size:72%; block-size:10px; border-radius:var(--yc-radius-pill); background:linear-gradient(100deg,var(--yc-surface-sunken) 30%,var(--yc-border) 50%,var(--yc-surface-sunken) 70%); background-size:200% 100%; animation:yc-loading-sweep 1.8s linear infinite; }
+.loading-placeholder__shape { display:grid; align-content:center; gap:var(--yc-space-2); min-inline-size:0; min-block-size:64px; padding:var(--yc-space-3) var(--yc-space-4); border:0; border-radius:var(--yc-radius-lg); background:var(--yc-surface); }
+.loading-placeholder__bar { display:block; inline-size:72%; block-size:10px; border-radius:var(--yc-radius-pill); background:linear-gradient(100deg,var(--yc-border) 30%,var(--yc-surface-sunken) 50%,var(--yc-border) 70%); background-size:200% 100%; animation:yc-loading-sweep 1.8s linear infinite; }
 .loading-placeholder__bar:nth-child(2) { inline-size:48%; }
 .loading-placeholder__bar:nth-child(3) { inline-size:30%; }
-.loading-placeholder--session .loading-placeholder__shape { min-block-size:64px; border-radius:0; border-inline:0; border-block-start:0; }
+.loading-placeholder--session .loading-placeholder__shape { min-block-size:64px; background:transparent; }
 .loading-placeholder--conversation .loading-placeholder__shape { min-block-size:160px; }
-.loading-placeholder--history .loading-placeholder__shape { min-block-size:44px; padding:var(--yc-space-2) var(--yc-space-3); border-style:dashed; }
+.loading-placeholder--history .loading-placeholder__shape { min-block-size:44px; padding:var(--yc-space-2) var(--yc-space-3); }
 .loading-placeholder--history .loading-placeholder__bar { inline-size:36%; margin-inline:auto; }
 .loading-placeholder--history .loading-placeholder__bar:not(:first-child) { display:none; }
 .transcript-navigation__history-loading { position:absolute; z-index:2; inset-inline:0; inset-block-start:0; pointer-events:none; }

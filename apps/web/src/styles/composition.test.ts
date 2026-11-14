@@ -27,7 +27,7 @@ describe("responsive contract", () => {
       "border-radius": "var(--yc-radius-pill)",
       "border-block-end": "0",
     })
-    expect(base(sheet, ".nav__link:hover").background).toBe("var(--yc-surface)")
+    expect(hover(sheet, ".nav__link:hover").background).toBe("var(--yc-surface)")
     expect(base(sheet, ".nav__link--active")).toMatchObject({
       background: "var(--yc-green-soft)",
       color: "var(--yc-green-strong)",
@@ -84,7 +84,7 @@ describe("responsive contract", () => {
     expect(base(docs, ".inline-code").border).toBeUndefined()
     expect(base(docs, ".docs-nav__link")["border-radius"]).toBe("var(--yc-radius-pill)")
     expect(base(docs, ".card-grid > .card").background).toBe("var(--yc-surface)")
-    expect(base(docs, ".card-grid > .card:hover").background).toBe("var(--yc-surface-sunken)")
+    expect(hover(docs, ".card-grid > .card:hover").background).toBe("var(--yc-surface-sunken)")
   })
 
   test("makes the public header translucent at 92% with opaque fallbacks", async () => {
@@ -116,7 +116,7 @@ describe("responsive contract", () => {
             continue
           }
           for (const feature of condition.replace(/^@media\s+/, "").split(" and ")) {
-            if (feature.startsWith("(pointer:") || feature.startsWith("(prefers-") || feature.startsWith("(forced-colors:")) continue
+            if (feature.startsWith("(pointer:") || feature.startsWith("(hover:") || feature.startsWith("(prefers-") || feature.startsWith("(forced-colors:")) continue
             const width = feature.match(/^\((min|max)-width: (\d+)px\)$/)
             expect({ name, condition, unrecognized: width === null ? feature : undefined }).toEqual({
               name,
@@ -202,7 +202,7 @@ describe("responsive contract", () => {
     expect(columnSteps(remote, ".defs__row")).toEqual([{ min: 1024, tracks: 2 }])
   })
 
-  test("widens the Sessions, Usage, Settings, and Session detail columns at 1600 while assistant prose fills the column", async () => {
+  test("widens the Sessions and Usage columns at 1600, keeps Settings a fixed open column, and lets assistant prose fill the column", async () => {
     const remote = await readStylesheet("remote.css")
     const listed = (selector: string, min?: number) =>
       declarationsWhere(remote, (rule) =>
@@ -216,9 +216,11 @@ describe("responsive contract", () => {
       expect(listed(`.app--${screen} .workspace__scroll > .route-panel`, 1600)["max-inline-size"]).toBe("var(--yc-content-max-wide)")
     }
     for (const block of [".app--settings .page-head", ".app--settings .pane"]) {
-      expect(listed(block)["inline-size"]).toBe("min(100%, var(--yc-content-max))")
-      expect(listed(block, 1600)["inline-size"]).toBe("min(100%, var(--yc-content-max-wide))")
+      expect(listed(block)["inline-size"]).toBe("min(100%, 760px)")
+      expect(listed(block)["margin-inline"]).toBe("auto")
+      expect(listed(block, 1600)).toEqual({})
     }
+    expect(listed(".app--settings .workspace__scroll", 1024).padding).toBe("var(--yc-space-12) var(--yc-space-16)")
     expect(listed(".app")["--remote-column"]).toBe("720px")
     expect(listed(".app--conversation.app--selected")["--remote-column"]).toBeUndefined()
     expect(listed(".app--conversation.app--selected", 1600)).toEqual({})
@@ -343,12 +345,12 @@ describe("responsive contract", () => {
     }
     expect(base(remote, ".remote-nav__link")["font-family"]).toBe("var(--yc-font-sans)")
     expect(base(remote, ".app .pane__title")["text-transform"]).toBe("uppercase")
-    expect(base(remote, ".session-row--active")).toMatchObject({ background: "var(--yc-green-soft)", "border-radius": "var(--yc-radius-lg)" })
+    expect(base(remote, ".session-row--active")).toMatchObject({ background: "var(--yc-green-soft)", "border-radius": "var(--yc-radius-sm)" })
   })
 })
 
 describe("motion contract", () => {
-  test("collapses animation and transition in one reduced-motion equivalent", async () => {
+  test("collapses animation and transition in one reduced-motion equivalent that exempts the token-governed primitives", async () => {
     const reduceBlocks = (
       await Promise.all(
         SURFACE_FILES.map(async (name) => {
@@ -359,15 +361,53 @@ describe("motion contract", () => {
         }),
       )
     ).flat()
-    expect(reduceBlocks.map((entry) => entry.file)).toEqual(["base.css"])
+    const stateAlternatives = reduceBlocks.filter((entry) => entry.file !== "base.css")
+    for (const { file, rule } of stateAlternatives) {
+      const motion = Object.keys(rule.declarations).filter((property) => /^(animation|transition)/.test(property))
+      expect({ file, header: rule.header, motion }).toEqual({ file, header: rule.header, motion: [] })
+    }
+    expect(reduceBlocks.filter((entry) => entry.file === "base.css").map((entry) => entry.file)).toEqual(["base.css"])
     // The equivalent is declared on the universal selector, so it is the *lowest*
     // specificity rule in the cascade; without `!important` a class rule's
     // `transition: …` shorthand wins and a visible control keeps its duration.
-    expect(reduceBlocks[0]!.rule.declarations).toEqual({
+    expect(reduceBlocks.find((entry) => entry.file === "base.css")!.rule.declarations).toEqual({
       "animation-name": "none !important",
       "animation-duration": "0s !important",
       "transition-duration": "0s !important",
     })
+    const exempt = ":not(.collapsible, .motion-enter)"
+    expect(reduceBlocks.find((entry) => entry.file === "base.css")!.rule.header.replace(/\s+/g, " ")).toBe(`*${exempt}, *${exempt}::before, *${exempt}::after`)
+  })
+
+  test("builds the shared disclosure and entrance primitives from the motion tokens only", async () => {
+    const base = await readStylesheet("base.css")
+    expect(declarationsWhere(base, (rule) => rule.header === ".collapsible")).toEqual({
+      display: "grid",
+      "grid-template-rows": "0fr",
+      opacity: "0",
+      transition:
+        "grid-template-rows var(--yc-motion-spatial-dur) var(--yc-motion-ease), opacity var(--yc-motion-effect-dur) var(--yc-motion-ease)",
+    })
+    expect(declarationsWhere(base, (rule) => rule.header === ".collapsible[data-open]")).toEqual({
+      "grid-template-rows": "1fr",
+      opacity: "1",
+    })
+    const inner = declarationsWhere(base, (rule) => rule.header === ".collapsible__inner")
+    expect(inner).toMatchObject({ "min-block-size": "0", overflow: "clip" })
+    expect(inner["overflow-clip-margin"]).toBeDefined()
+    const enter = declarationsWhere(base, (rule) => rule.header === ".motion-enter")
+    expect(enter["animation"]).toBe(
+      "yc-motion-fade var(--yc-motion-effect-dur) var(--yc-motion-ease) both, yc-motion-rise var(--yc-motion-spatial-dur) var(--yc-motion-ease) both",
+    )
+    const rise = base.rules.find((rule) => rule.header === "from" && rule.conditions.includes("@keyframes yc-motion-rise"))
+    expect(rise?.declarations).toEqual({ translate: "0 var(--yc-space-2)" })
+    const fade = base.rules.find((rule) => rule.header === "from" && rule.conditions.includes("@keyframes yc-motion-fade"))
+    expect(fade?.declarations).toEqual({ opacity: "0" })
+    const consumers = base.rules.filter((rule) => rule.header === ".collapsible" || rule.header === ".motion-enter")
+    for (const rule of consumers) {
+      expect({ header: rule.header, conditions: rule.conditions }).toEqual({ header: rule.header, conditions: [] })
+      expect(Object.values(rule.declarations).join(" ")).not.toMatch(/\d+m?s\b(?!\))/)
+    }
   })
 
   test("runs the content entrance only with the JS motion gate and accepted preference", async () => {
@@ -416,6 +456,8 @@ describe("motion contract", () => {
             rule.declarations["opacity"] === "0" &&
             !rule.conditions.some((condition) => overlayFades.includes(condition)) &&
             !rule.conditions.includes("@keyframes yc-enter") &&
+            rule.header !== ".collapsible" &&
+            !rule.conditions.includes("@keyframes yc-motion-fade") &&
             !rule.header.includes(':root[data-motion="on"]') &&
             rule.header !== ".docs-toc__list::before",
         )
@@ -501,6 +543,10 @@ function base(sheet: Stylesheet, selector: string) {
   return declarationsWhere(sheet, (rule) => rule.header === selector && rule.conditions.length === 0)
 }
 
+function hover(sheet: Stylesheet, selector: string) {
+  return declarationsWhere(sheet, (rule) => rule.header === selector && rule.conditions.length === 1 && rule.conditions[0] === "@media (hover: hover)")
+}
+
 function stepped(sheet: Stylesheet, selector: string, min: number) {
   return declarationsWhere(
     sheet,
@@ -545,7 +591,7 @@ describe("modal primitive stylesheet ownership", () => {
     const modal = await readStylesheet("../ui/modal.css")
     const base = (selector: string) => declarationsWhere(modal, (rule) => rule.header === selector && rule.conditions.length === 0)
     expect(base(".overlay")).toMatchObject({ border: "0", padding: "0", background: "transparent" })
-    expect(base(".overlay::backdrop").background).toBe("rgba(11, 15, 20, 0.45)")
+    expect(base(".overlay::backdrop").background).toBe("var(--yc-scrim)")
     expect(base(".overlay__surface")).toMatchObject({ position: "fixed", background: "var(--yc-surface-raised)" })
     expect(base(".overlay--sheet .overlay__surface")).toMatchObject({ "inset-inline": "0", "inset-block-end": "0", "inline-size": "100%" })
     for (const part of [".overlay__head", ".overlay__title", ".overlay__close", ".overlay__body"]) expect(Object.keys(base(part)).length).toBeGreaterThan(0)

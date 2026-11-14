@@ -872,7 +872,7 @@ async function selectSessionWorkspace(page: Awaited<ReturnType<NonNullable<typeo
     await selectSessionWorkspace(page, directory, expected)
     await page.evaluate(`[...document.querySelectorAll('.sessions-table__select')].find(button => button.textContent.includes(${JSON.stringify(expected)}))?.click()`)
     for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .session-row')?.textContent?.includes(${JSON.stringify(expected)}) ?? false`); attempt += 1) await Bun.sleep(50)
-    expect(await page.evaluate<string>(`document.querySelector('.workspace__rail .session-panel__workspace h3')?.textContent?.trim() ?? ''`)).toBe(directory)
+    expect(await page.evaluate<string>(`(document.querySelector('.workspace__rail .session-panel__workspace h3, .workspace__rail .session-panel__group-name')?.textContent?.trim() ?? '')`)).toBe(directory)
     expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail .workspace-select') === null`)).toBe(true)
     return
   }

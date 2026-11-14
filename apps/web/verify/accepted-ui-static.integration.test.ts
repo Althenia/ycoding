@@ -219,7 +219,7 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
       const context = width < 768 ? ".composer__selection-sheet .composer__context-summary" : ".composer__context-popover"
       expect(await h.page.evaluate<string>(`document.querySelector('${context}').textContent`)).toContain("19% used · 81% left")
       await h.page.pressEscape()
-      await h.wait(`document.querySelector('.file-change-card__summary')?.textContent.includes('Edited 1 file')`)
+      await h.wait(`document.querySelector('.file-change-card__summary')?.textContent.includes('1 file changed')`)
       await h.page.evaluate(`document.querySelector('.file-change-card__summary').click()`)
       await h.wait(`document.querySelector('.file-change-card__file-toggle')?.textContent.includes('app.ts')`)
       await h.page.evaluate(`document.querySelector('.file-change-card__file-toggle').click()`)

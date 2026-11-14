@@ -70,7 +70,7 @@ describe("command palette stylesheet", () => {
     const { sheet, source } = await readPalette()
     for (const rule of sheet.rules) {
       for (const condition of rule.conditions) {
-        if (condition === PHONE_LAYOUT_QUERY) continue
+        if (condition === PHONE_LAYOUT_QUERY || condition === "@media (hover: hover)") continue
         const width = condition.match(/^@media \((min|max)-width: (\d+)px\)$/)
         expect({ condition, parsed: width !== null }).toEqual({ condition, parsed: true })
         const value = width![1] === "min" ? Number(width![2]) : Number(width![2]) + 1

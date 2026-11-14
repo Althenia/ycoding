@@ -3,10 +3,10 @@
 .todo-panel--closing { max-block-size:0; padding-block-end:0; opacity:0; pointer-events:none; }
 .todo-panel__inner { inline-size:min(100%,var(--remote-column)); margin-inline:auto; border:0; border-radius:var(--yc-radius-lg); background:var(--yc-surface); color:var(--yc-text); overflow:hidden; }
 .todo-panel__toggle { display:flex; align-items:center; gap:var(--yc-space-2); inline-size:100%; min-block-size:40px; padding:var(--yc-space-2) var(--yc-space-3); border:0; background:transparent; color:inherit; text-align:start; font:var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-sans); }
-.todo-panel__toggle:hover { border-radius:var(--yc-radius-lg); background:var(--yc-surface-sunken); }
+@media (hover: hover) { .todo-panel__toggle:hover { border-radius:var(--yc-radius-lg); background:var(--yc-surface-sunken); } }
 .todo-panel__toggle:focus-visible { outline:2px solid var(--yc-focus); outline-offset:-2px; }
 .todo-panel__heading { flex:none; font-weight:var(--yc-weight-semibold); }
-.todo-panel__progress { flex:none; color:var(--yc-green-strong); font-family:var(--yc-font-mono); }
+.todo-panel__progress { flex:none; color:var(--yc-text); font-family:var(--yc-font-mono); }
 .todo-panel__active { min-inline-size:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--yc-text-muted); }
 .todo-panel__chevron { display:grid; place-items:center; margin-inline-start:auto; transition:transform var(--yc-dur-quick) var(--yc-ease-standard); }
 .todo-panel__chevron svg { display:block; }
@@ -18,8 +18,8 @@
 .todo-panel__item { display:flex; align-items:baseline; gap:var(--yc-space-2); padding:var(--yc-space-1) 0; font:var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-sans); overflow-wrap:anywhere; }
 .todo-panel__marker { flex:none; inline-size:16px; color:var(--yc-text-muted); }
 .todo-panel__item--completed { color:var(--yc-text-muted); }
-.todo-panel__item--completed .todo-panel__marker,.todo-panel__item--in_progress,.todo-panel__item--in_progress .todo-panel__marker { color:var(--yc-green-strong); }
-.todo-panel__item--in_progress { font-weight:var(--yc-weight-semibold); }
+.todo-panel__item--in_progress { color:var(--yc-text); font-weight:var(--yc-weight-semibold); }
+.todo-panel__item--in_progress .todo-panel__marker { color:var(--yc-signal); }
 .todo-panel__item--cancelled { color:var(--yc-text-muted); }
 .todo-panel__item--cancelled .todo-panel__text { text-decoration:line-through; }
 @media (pointer:coarse) { .todo-panel__toggle { min-block-size:44px; } }

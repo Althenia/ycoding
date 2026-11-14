@@ -200,6 +200,13 @@ test("standalone scope survives created events and snapshots", () => {
   expect(readSnapshot({ session: { id: "ses_a", scope: "standalone", projectID: "prj_a", title: "A", location: { directory: "/work" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 } }, messages: [] })).toMatchObject({ sessionID: "ses_a", scope: "standalone" })
 })
 
+test("step diagnostics omit the hit ratio when no prompt tokens were reported", () => {
+  const model = { providerID: "openai", id: "model-a" }
+  const started = apply(createSessionView("ses_a"), "session.step.started", { assistantMessageID: "msg_a", model })
+  const ended = apply(started, "session.step.ended", { assistantMessageID: "msg_a", tokens: { input: 0, output: 5, reasoning: 0, cache: { read: 0, write: 0 } }, contextLimit: 100 })
+  expect(ended.contextWindow?.stepDiagnostics).toEqual({ uncachedInput: 0, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0 })
+})
+
 test("durable step outcomes project reported context and preserve it when counts are unavailable", () => {
   const model = { providerID: "openai", id: "model-a" }
   const breakdown = { system: 3, tools: 4, user: 2, assistant: 5, reasoning: 1, toolCalls: 5, other: 0 }
@@ -207,17 +214,17 @@ test("durable step outcomes project reported context and preserve it when counts
   for (const type of ["session.step.ended", "session.step.failed"]) {
     const started = apply(createSessionView("ses_a"), "session.step.started", { assistantMessageID: "msg_a", model })
     const completed = apply(started, type, { assistantMessageID: "msg_a", tokens, contextLimit: 100, contextBreakdown: breakdown })
-    expect(completed.contextWindow).toEqual({ model, used: 20, limit: 100, breakdown })
+    expect(completed.contextWindow).toEqual({ model, used: 20, limit: 100, breakdown, stepDiagnostics: { uncachedInput: 15, output: 3, reasoning: 1, cacheRead: 1, cacheWrite: 0, hitRatio: 1 / 16 } })
     const noCounts = apply(completed, type, { assistantMessageID: "msg_a" })
     expect(noCounts.contextWindow).toEqual(completed.contextWindow)
     const zero = apply(completed, type, { assistantMessageID: "msg_a", tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, contextLimit: 100 })
     expect(zero.contextWindow).toEqual(completed.contextWindow)
     const next = apply(completed, "session.step.ended", { assistantMessageID: "msg_a", tokens, contextLimit: 200 })
-    expect(next.contextWindow).toEqual({ model, used: 20, limit: 200 })
+    expect(next.contextWindow).toEqual({ model, used: 20, limit: 200, stepDiagnostics: { uncachedInput: 15, output: 3, reasoning: 1, cacheRead: 1, cacheWrite: 0, hitRatio: 1 / 16 } })
   }
   const selected = apply(createSessionView("ses_a"), "session.model.selected", { model })
   const fallback = apply(selected, "session.step.ended", { assistantMessageID: "msg_b", tokens, contextLimit: 100, contextBreakdown: breakdown })
-  expect(fallback.contextWindow).toEqual({ model, used: 20, limit: 100, breakdown })
+  expect(fallback.contextWindow).toEqual({ model, used: 20, limit: 100, breakdown, stepDiagnostics: { uncachedInput: 15, output: 3, reasoning: 1, cacheRead: 1, cacheWrite: 0, hitRatio: 1 / 16 } })
 })
 
 test("tracks live execution and part timings for the transcript and status bar", () => {
@@ -296,7 +303,7 @@ test("projects the per-category context breakdown from snapshot and live diagnos
   const snapshot = readSnapshot({ session: { model: selected }, messages: [{ id: "msg_current", type: "assistant", agent: "build", model: selected,
     content: [], tokens: { input: 60_000, output: 10_000, reasoning: 2_000, cache: { read: 2_000, write: 0 } },
     diagnostics: { contextLimit: 258_000, contextBreakdown: breakdown }, time: { created: 3, completed: 4 } }] })
-  expect(snapshot?.contextWindow).toEqual({ model: selected, used: 74_000, limit: 258_000, breakdown })
+  expect(snapshot?.contextWindow).toEqual({ model: selected, used: 74_000, limit: 258_000, breakdown, stepDiagnostics: { uncachedInput: 60_000, output: 10_000, reasoning: 2_000, cacheRead: 2_000, cacheWrite: 0, hitRatio: 2_000 / 62_000 } })
 
   const diagnostics = (contextBreakdown: unknown) => ({
     model: selected, context: { total: 74_000, limit: 258_000 }, contextBreakdown,
@@ -986,7 +993,7 @@ describe("snapshot readers", () => {
     const snapshot = readSnapshot({ session: { model: selected }, messages: [assistant],
       generationSpeed: { latest: sample, recent: [sample] } })
     expect(snapshot?.generationSpeed).toEqual({ latest: sample, recent: [sample] })
-    expect(snapshot?.contextWindow).toEqual({ model: selected, used: 74_000, limit: 258_000 })
+    expect(snapshot?.contextWindow).toEqual({ model: selected, used: 74_000, limit: 258_000, stepDiagnostics: { uncachedInput: 60_000, output: 10_000, reasoning: 2_000, cacheRead: 2_000, cacheWrite: 0, hitRatio: 2_000 / 62_000 } })
     expect(generationSpeedDisplay({ ...createSessionView("ses_a"), generationSpeed: snapshot?.generationSpeed }, selected))
       .toMatchObject({ label: "6,000 tok/s" })
     expect(contextWindowDisplay({ ...createSessionView("ses_a"), contextWindow: snapshot?.contextWindow }, selected))

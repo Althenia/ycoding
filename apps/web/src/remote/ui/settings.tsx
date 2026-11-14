@@ -25,6 +25,7 @@ import {
   accountSectionView,
   deviceAvailabilityView,
   enrollmentInstructions,
+  summarizeConnection,
   type EnrollmentInstructions,
 } from "../view-model"
 import {
@@ -65,6 +66,10 @@ export function MachineSettings(): JSX.Element {
     devices: state().devices.map((device) => ({ ...device, name: remote.deviceName(device) })), activeDeviceID: state().activeDeviceID, sessionCount: state().sessions.length,
     unreachable: state().connection.kind === "offline",
   })
+  const selectedMachineName = () => {
+    const device = state().devices.find((entry) => entry.id === state().activeDeviceID)
+    return device === undefined ? summarizeConnection(state().connection).label : remote.deviceName(device)
+  }
   const note = () => {
     const revoked = state().devices.filter((device) => device.status === "revoked").length
     const anyOnline = state().devices.some((device) => device.status === "active" && device.online)
@@ -103,7 +108,15 @@ export function MachineSettings(): JSX.Element {
     }
     stopEditing(item)
   }
-  return <><Section id="machine-settings" category="Machine" title="Machine" hint="Choose an online machine to access its Sessions.">
+  const connection = () => summarizeConnection(state().connection)
+  return <><Section id="machine-settings" category="Machine" title="Machine">
+    <span class="visually-hidden" id="machine-selected-label">Selected machine</span>
+    <div class="machine-selected">
+      <Icon name="devices" size={16} class="machine-selected__icon" />
+      <span id="machine-selected-name" class="machine-selected__name" aria-labelledby="machine-selected-label">{selectedMachineName()}</span>
+      <span class="machine-selected__status" data-tone={connection().tone}>{connection().label}<Show when={connection().tone === "online"}><Icon name="check" size={14} /></Show></span>
+    </div>
+    <p class="settings__hint machine-selected__hint">Choose an online machine to access its Sessions.</p>
     <Show when={machineIDs().length > 0} fallback={<p class="machine-row__empty field__hint" role="status">{availability().placeholder}</p>}>
       <ul class="machine-row" role="list" aria-label="Machines">
         <For each={machineIDs()}>
@@ -154,11 +167,11 @@ export function MachineSettings(): JSX.Element {
     <Show when={note() !== ""}><p class="machine-row__note field__hint" role="status">{note()}</p></Show>
     <p id="machine-row-scope" class="machine-row__scope field__hint">Names are shared across your account's browsers.</p>
   </Section><Section id="keep-awake-settings" category="Machine" title="Keep awake" hint="Keep the connected machine awake while Sessions run.">
-    <div class="defs__row" aria-busy={awake().busy}>
+    <div class="defs__row machine-awake" aria-busy={awake().busy}>
       <span class="defs__key" id="machine-awake-label">Keep machine awake</span>
       <span class="defs__value">
         <label class="switch">
-          <input type="checkbox" aria-labelledby="machine-awake-label" aria-describedby="machine-awake-status machine-awake-caveat"
+          <input type="checkbox" role="switch" aria-labelledby="machine-awake-label" aria-describedby="machine-awake-status machine-awake-caveat"
             checked={awake().checked} disabled={awake().disabled}
             onChange={(event) => {
               setKeepAwake.mutate(event.currentTarget.checked)
@@ -193,7 +206,7 @@ export function ExternalNotificationSettings(): JSX.Element {
 }
 
 export function AppSettings(): JSX.Element {
-  return <Section id="app-settings" category="App" title="App" hint="Install the remote workspace for a separate app window.">
+  return <Section id="app-settings" category="App" title="App" hint="Review what closing this browser means for the enrolled machine.">
     <div class="defs__row">
       <span class="defs__key">Mode</span>
       <span class="defs__value" role="status">{pwaInstall.isInstalled() ? "Installed app" : "Browser"}</span>
@@ -210,7 +223,16 @@ export function AppSettings(): JSX.Element {
 }
 
 export function PermissionSettings(): JSX.Element {
-  return <Section id="permission-settings" category="App" title="Permissions" hint="Saved permissions are managed in YCoding on the enrolled machine."><p class="field__hint">Session requests are answered in the conversation.</p></Section>
+  const [open, setOpen] = createSignal(false)
+  return <Section id="permission-settings" category="Permissions" title="Permissions" hint="Rules you saved with Always allow.">
+    <div class="settings__actions settings__actions--compact">
+      <button type="button" class="settings__pill" aria-expanded={open()} aria-controls="permission-settings-rules" onClick={() => setOpen(!open())}>Review saved rules</button>
+    </div>
+    <div id="permission-settings-rules" class="settings__disclosure" hidden={!open()}>
+      <p>Saved permissions are managed in YCoding on the enrolled machine.</p>
+      <p class="field__hint">Session requests are answered in the conversation.</p>
+    </div>
+  </Section>
 }
 
 export function LatencySettings(): JSX.Element {
@@ -338,9 +360,10 @@ const sectionIcons = {
   Machine: "monitor",
   Account: "user",
   Devices: "devices",
-  App: "package",
+  App: "monitor",
+  Permissions: "shield",
   Diagnostics: "zap",
-  Appearance: "sun",
+  Appearance: "sparkles",
   Office: "office",
   Notifications: "bell",
 } as const satisfies Record<string, IconName>
@@ -349,7 +372,7 @@ function Section(props: {
   readonly id: string
   readonly category: keyof typeof sectionIcons
   readonly title: string
-  readonly hint: string
+  readonly hint?: string
   readonly children: JSX.Element
 }): JSX.Element {
   return (
@@ -358,7 +381,7 @@ function Section(props: {
         <p class="settings__category">{props.category}</p>
         <Icon name={sectionIcons[props.category]} size={18} />
         <h2 id={props.id}>{props.title}</h2>
-        <p class="settings__hint">{props.hint}</p>
+        <Show when={props.hint}><p class="settings__hint">{props.hint}</p></Show>
       </div>
       {props.children}
     </section>
@@ -876,8 +899,9 @@ export function NotificationSettings(): JSX.Element {
       id="notification-settings"
       category="Notifications"
       title="Notifications"
-      hint="Categories control in-app notices and System alerts. With Push to this device on, each System switch also decides which alerts reach this device while YCoding is closed. If its subscription is missing, use Re-enable to restore alerts. Reopening a session never replays a past alert."
+      hint="Notification settings for this browser."
     >
+      <p class="field__hint">Categories control in-app notices and System alerts. With Push to this device on, each System switch also decides which alerts reach this device while YCoding is closed. If its subscription is missing, use Re-enable to restore alerts. Reopening a session never replays a past alert.</p>
       <div class="table-scroll">
         <table class="notification-table" aria-labelledby="notification-settings">
           <thead>

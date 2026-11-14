@@ -28,14 +28,15 @@ afterAll(async () => {
 })
 
 describe("quiet workspace", () => {
-  test("UI correction: pinned waiting and running Sessions keep activity priority", async () => {
+  test("UI correction: waiting, running and pinned Sessions keep activity priority inside workspace groups", async () => {
     const page = await requireBrowser().openPage()
     try {
       await page.setViewport(1440, 900)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1&priorityPins=1`)
-      await until(page, `document.querySelector('.workspace__rail [data-session-id="ses_idle_pinned"]') !== null && document.querySelector('.workspace__rail .session-panel__summary')?.textContent === '1 waiting · 1 running · 3 pinned shown'`)
-      const groups = (panel: string) => `(() => { let group=''; return [...document.querySelectorAll('${panel} .session-list__row')].map(row => { if (row.classList.contains('session-list__group')) { group=row.childNodes[0].textContent.trim(); return group } const session=row.querySelector('[data-session-id]'); return session ? group + ':' + session.dataset.sessionId : '' }).filter(Boolean) })()`
-      const expected = ["Needs action", "Needs action:ses_fixture", "Running", "Running:ses_running", "Pinned", "Pinned:ses_idle_pinned", "Recent", "Recent:ses_archived"]
+      await until(page, `document.querySelector('.workspace__rail [data-session-id="ses_idle_pinned"]') !== null && document.querySelector('.workspace__rail .session-filters button')?.getAttribute('aria-label') === 'All 4'`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.workspace__rail .session-panel__summary, .workspace__rail .session-panel__workspace, .workspace__rail .pane__head--sessions').length`)).toBe(0)
+      const groups = (panel: string) => `(() => { let group=''; return [...document.querySelectorAll('${panel} .session-list__row')].map(row => { if (row.classList.contains('session-list__group')) { group=row.textContent.trim(); return group } const session=row.querySelector('[data-session-id]'); return session ? group + ':' + session.dataset.sessionId : '' }).filter(Boolean) })()`
+      const expected = ["ycoding", "ycoding:ses_fixture", "ycoding:ses_running", "ycoding:ses_idle_pinned", "Not reported", "Not reported:ses_archived"]
       expect(await page.evaluate<string[]>(groups('.workspace__rail'))).toEqual(expected)
       await page.evaluate(`window.remoteOfflineInventory()`)
       await until(page, `document.querySelector('.workspace__rail .panel__note')?.textContent?.includes('Last session list')`)
@@ -56,8 +57,8 @@ describe("quiet workspace", () => {
     try {
       await page.setViewport(1440, 900)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1`)
-      await until(page, `document.querySelector('.workspace__rail input[placeholder="Search Sessions…"]') !== null`)
-      expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail input[placeholder="Search Sessions…"]').closest('label').querySelector('kbd') === null`)).toBe(true)
+      await until(page, `document.querySelector('.workspace__rail input[aria-label="Search sessions"]') !== null`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail input[aria-label="Search sessions"]').closest('label').querySelector('kbd') === null`)).toBe(true)
       for (const collapsed of [false, true]) {
         if (collapsed) { await page.evaluate(`document.querySelector('[aria-label="Hide workspace sidebar"]').click()`); await until(page, `document.querySelector('.app--rail-collapsed') !== null`) }
         for (const modifier of ["ctrlKey", "metaKey"]) {
@@ -69,7 +70,7 @@ describe("quiet workspace", () => {
         }
       }
       await page.evaluate(`document.querySelector('[aria-label="Show workspace sidebar"]').click()`)
-      await until(page, `document.querySelector('.workspace__rail').getBoundingClientRect().width === 216`)
+      await until(page, `document.querySelector('.workspace__rail').getBoundingClientRect().width === 256`)
     } finally { await page.close() }
   }, 30_000)
 
@@ -80,15 +81,19 @@ describe("quiet workspace", () => {
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1&theme=dark`)
       await until(page, `document.querySelector('.companion-context-trigger') !== null`)
       await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
-      await until(page, `document.querySelector('#companion-context:not([hidden]) h2') !== null`)
-      const typography = await page.evaluate<{ total: { fontSize: string; lineHeight: string; fontWeight: string; color: string; fontFamily: string }; capacity: { fontSize: string; lineHeight: string; fontWeight: string; color: string; fontFamily: string }; heading: { fontSize: string; lineHeight: string; fontWeight: string; color: string; fontFamily: string }; eyebrow: { fontSize: string; lineHeight: string; fontWeight: string; color: string; fontFamily: string }; primary: string; muted: string; mono: string; sans: string; totalText: string; capacityText: string; caption: string; count: number; rows: number }>(`(() => { const context=document.querySelector('#companion-context'), style = selector => { const s=getComputedStyle(context.querySelector(selector)); return { fontSize:s.fontSize,lineHeight:s.lineHeight,fontWeight:s.fontWeight,color:s.color,fontFamily:s.fontFamily.replaceAll('"','') } }; const primary=getComputedStyle(context).color, muted=getComputedStyle(context.querySelector('.companion__context-eyebrow')).color, mono=getComputedStyle(context).getPropertyValue('--yc-font-mono').trim().replaceAll('"',''), sans=getComputedStyle(context).getPropertyValue('--yc-font-sans').trim().replaceAll('"',''); return { total:style('.companion__context-total'), capacity:style('.companion__context-capacity'), heading:style('h2'), eyebrow:style('.companion__context-eyebrow'), primary, muted, mono, sans, totalText:context.querySelector('.companion__context-total').textContent, capacityText:context.querySelector('.companion__context-capacity').textContent, caption:context.querySelector('.companion__context-total').parentElement.nextElementSibling.textContent, count:context.querySelectorAll('.companion__context-bar-segment').length, rows:context.querySelectorAll('.companion__context-swatch').length } })()`)
-      expect(typography.total).toEqual({ fontSize: "36px", lineHeight: "40px", fontWeight: "500", color: typography.primary, fontFamily: typography.mono })
-      expect(typography.capacity).toEqual({ fontSize: "13px", lineHeight: "20px", fontWeight: "400", color: typography.muted, fontFamily: typography.mono })
-      expect(typography.heading).toEqual({ fontSize: "18px", lineHeight: "24px", fontWeight: "700", color: typography.primary, fontFamily: typography.sans })
-      expect(typography.eyebrow).toEqual({ fontSize: "11px", lineHeight: "16px", fontWeight: "600", color: typography.muted, fontFamily: typography.mono })
+      await until(page, `document.querySelector('#companion-context:not([hidden]) .companion__context-total') !== null`)
+      const typography = await page.evaluate<{ total: { fontSize: string; fontWeight: string; color: string; fontFamily: string }; capacity: { fontSize: string; fontWeight: string; color: string; fontFamily: string }; eyebrow: { fontFamily: string; textTransform: string }; primary: string; mono: string; sans: string; totalText: string; capacityText: string; eyebrowText: string; summaryText: string; summaryFont: string; oneRow: boolean; count: number; rows: number }>(`(() => { const context=document.querySelector('#companion-context'), style = selector => { const s=getComputedStyle(context.querySelector(selector)); return { fontSize:s.fontSize,fontWeight:s.fontWeight,color:s.color,fontFamily:s.fontFamily.replaceAll('"','') } }, total=context.querySelector('.companion__context-total').getBoundingClientRect(), capacity=context.querySelector('.companion__context-capacity').getBoundingClientRect(); return { total:style('.companion__context-total'), capacity:style('.companion__context-capacity'), eyebrow:{ fontFamily:getComputedStyle(context.querySelector('.companion__context-eyebrow')).fontFamily.replaceAll('"',''), textTransform:getComputedStyle(context.querySelector('.companion__context-eyebrow')).textTransform }, primary:getComputedStyle(context).color, mono:getComputedStyle(context).getPropertyValue('--yc-font-mono').trim().replaceAll('"',''), sans:getComputedStyle(context).getPropertyValue('--yc-font-sans').trim().replaceAll('"',''), totalText:context.querySelector('.companion__context-total').textContent, capacityText:context.querySelector('.companion__context-capacity').textContent, eyebrowText:context.querySelector('.companion__context-eyebrow').textContent, summaryText:context.querySelector('.rl-context-summary').textContent, summaryFont:getComputedStyle(context.querySelector('.rl-context-summary')).fontFamily.replaceAll('"',''), oneRow: capacity.left >= total.right && capacity.top < total.bottom, count:context.querySelectorAll('.companion__context-bar-segment').length, rows:context.querySelectorAll('.companion__context-swatch').length } })()`)
+      expect(typography.total).toEqual({ fontSize: "28px", fontWeight: "700", color: typography.primary, fontFamily: typography.mono })
+      expect(typography.capacity.fontSize).toBe("14px")
+      expect(typography.capacity.fontFamily).toBe(typography.mono)
+      expect(typography.capacity.color).not.toBe(typography.primary)
+      expect(typography.eyebrow).toEqual({ fontFamily: typography.mono, textTransform: "none" })
+      expect(typography.eyebrowText).toBe("Active window")
       expect(typography.totalText).toBe("24K")
-      expect(typography.capacityText).toBe("/ 128K tokens · 104,000 remaining")
-      expect(await page.evaluate<string>(`document.querySelector('#companion-context .rl-context-total b').textContent`)).toBe("19% used · 81% left")
+      expect(typography.capacityText).toBe("/ 128K tokens")
+      expect(typography.summaryText).toBe("104,000 remaining · 19% used")
+      expect(typography.summaryFont).toBe(typography.sans)
+      expect(typography.oneRow).toBe(true)
       expect([typography.count, typography.rows]).toEqual([7, 7])
       await page.setViewport(390, 844)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1&theme=dark`)
@@ -116,7 +121,7 @@ describe("quiet workspace", () => {
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1`)
       await until(page, `document.querySelector('.composer-resident:not([inert]) .mini-composer__send') !== null`)
       expect(await page.evaluate<string>(`document.querySelector('.composer-resident:not([inert]) .mini-composer__send').getAttribute('aria-label')`)).toBe("Send prompt")
-      await page.evaluate(`document.querySelector('.workspace__rail .new-session__trigger').click()`)
+      await page.evaluate(`document.querySelector('.workspace__rail .workspace__new-chat').click()`)
       await until(page, `document.querySelector('.new-session-composer:not([inert]) .mini-composer__send') !== null`)
       expect(await page.evaluate<string>(`document.querySelector('.new-session-composer:not([inert]) .mini-composer__send').getAttribute('aria-label')`)).toBe("New chat")
     } finally { await page.close() }
@@ -152,11 +157,11 @@ describe("quiet workspace", () => {
       await page.setViewport(1440, 1000)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1`)
       await until(page, `document.querySelector('.workspace__rail [data-session-id="ses_running"]') !== null`)
-      const layout = await page.evaluate<{ filters: boolean; spacing: boolean; pins: boolean; rows: boolean; running: boolean }>(`(() => { const rail = document.querySelector('.workspace__rail'), root = rail.querySelector('.workspace__rail-body'), chips = [...rail.querySelectorAll('.session-filters__option')], box = e => e.getBoundingClientRect(), text = e => { const range = document.createRange(); range.selectNodeContents(e); return range.getBoundingClientRect() }, hit = (a,b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom, rows = [...rail.querySelectorAll('.session-row-wrap')], running = box(rail.querySelector('[data-session-id="ses_running"] .session-row__name')), viewport = box(root); return { filters: chips.every((e,i) => chips.slice(i+1).every(other => !hit(box(e),box(other))) && e.scrollWidth <= e.clientWidth), spacing: chips.slice(1).every((e,i) => text(e).left - text(chips[i]).right >= 4), pins: rows.every(row => !hit(box(row.querySelector('.session-row__name')),box(row.querySelector('.session-pin__button')))), rows: rows.every(row => box(row.querySelector('.session-row')).width >= box(rail).width - 40), running: running.top >= viewport.top && running.bottom <= viewport.bottom } })()`)
-      expect(layout).toEqual({ filters: true, spacing: true, pins: true, rows: true, running: true })
-      await page.evaluate(`document.querySelector('.workspace__rail .new-session__trigger').click()`)
+      const layout = await page.evaluate<{ filters: boolean; spacing: boolean; pins: boolean; rows: boolean; heights: boolean; running: boolean }>(`(() => { const rail = document.querySelector('.workspace__rail'), root = rail.querySelector('.workspace__rail-body'), chips = [...rail.querySelectorAll('.session-filters__option')], box = e => e.getBoundingClientRect(), text = e => { const range = document.createRange(); range.selectNodeContents(e); return range.getBoundingClientRect() }, hit = (a,b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom, rows = [...rail.querySelectorAll('.session-row')], running = box(rail.querySelector('[data-session-id="ses_running"] .session-row__name')), viewport = box(root); return { filters: chips.every((e,i) => chips.slice(i+1).every(other => !hit(box(e),box(other))) && e.scrollWidth <= e.clientWidth), spacing: chips.slice(1).every((e,i) => text(e).left - text(chips[i]).right >= 4), pins: rail.querySelectorAll('.session-pin__button').length === 0, rows: rows.every(row => box(row).width >= box(rail).width - 40), heights: rows.every(row => box(row).height === 36), running: running.top >= viewport.top && running.bottom <= viewport.bottom } })()`)
+      expect(layout).toEqual({ filters: true, spacing: true, pins: true, rows: true, heights: true, running: true })
+      await page.evaluate(`document.querySelector('.workspace__rail .workspace__new-chat').click()`)
       await until(page, `document.querySelector('.workspace__rail .resume-session') !== null || location.pathname === '/remote'`)
-      expect(await page.evaluate<boolean>(`(() => { const rail=document.querySelector('.workspace__rail'), bounds=rail.querySelector('.workspace__rail-body').getBoundingClientRect(), row=rail.querySelector('[data-session-id="ses_running"] .session-row__name').getBoundingClientRect(), heading=[...rail.querySelectorAll('.session-list__group')].find(e=>e.textContent.trim().startsWith('Running')).getBoundingClientRect(); return [row,heading].every(r=>r.top>=bounds.top-1 && r.bottom<=bounds.bottom+1) })()`)).toBe(true)
+      expect(await page.evaluate<boolean>(`(() => { const rail=document.querySelector('.workspace__rail'), bounds=rail.querySelector('.workspace__rail-body').getBoundingClientRect(), row=rail.querySelector('[data-session-id="ses_running"] .session-row__name').getBoundingClientRect(), heading=[...rail.querySelectorAll('.session-list__group')].find(e=>e.textContent.trim() === 'ycoding').getBoundingClientRect(); return [row,heading].every(r=>r.top>=bounds.top-1 && r.bottom<=bounds.bottom+1) })()`)).toBe(true)
     } finally { await page.close() }
   }, 30_000)
 
@@ -168,20 +173,19 @@ describe("quiet workspace", () => {
       await until(page, `document.querySelector('.companion-context-trigger') !== null`)
       const closedHeight = await page.evaluate<number>(`document.querySelector('.workspace__heading').getBoundingClientRect().height`)
       await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
-      await until(page, `document.querySelector('#companion-context:not([hidden]) h2') !== null`)
-      const layout = await page.evaluate<{ titleHit: boolean; bodyStyled: boolean }>(`(() => { const title = document.querySelector('.conversation-breadcrumb h1'), r = title.getBoundingClientRect(), hit = document.elementFromPoint(r.left + Math.min(70,r.width-2),r.top+r.height/2), body = document.querySelector('#companion-context p'); return { titleHit: title.contains(hit), bodyStyled: parseFloat(getComputedStyle(body).fontSize) < 16 } })()`)
+      await until(page, `document.querySelector('#companion-context:not([hidden]) .companion__context-total') !== null`)
+      const layout = await page.evaluate<{ titleHit: boolean; bodyStyled: boolean }>(`(() => { const title = document.querySelector('.conversation-breadcrumb h1'), r = title.getBoundingClientRect(), hit = document.elementFromPoint(r.left + Math.min(70,r.width-2),r.top+r.height/2), body = document.querySelector('#companion-context .rl-context-summary'); return { titleHit: title.contains(hit), bodyStyled: parseFloat(getComputedStyle(body).fontSize) < 16 } })()`)
       expect(layout).toEqual({ titleHit: true, bodyStyled: true })
-      expect(await page.evaluate<string>(`document.querySelector('.companion__context-eyebrow')?.textContent`)).toBe("ACTIVE WINDOW")
+      expect(await page.evaluate<string>(`document.querySelector('.companion__context-eyebrow')?.textContent`)).toBe("Active window")
       expect(await page.evaluate<number>(`document.querySelectorAll('.companion__context-bar .companion__context-bar-segment').length`)).toBe(7)
       expect(await page.evaluate<number>(`document.querySelectorAll('.companion__context-breakdown .companion__context-swatch').length`)).toBe(7)
       expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.companion__context-row dt')].map((element) => element.textContent.trim())`)).toEqual(["System", "Tools", "User", "Assistant", "Reasoning", "Tool calls", "Other"])
       expect(await page.evaluate<boolean>(`(() => { const segments = [...document.querySelectorAll('.companion__context-bar-segment')]; return segments.map((segment) => Number.parseFloat(getComputedStyle(segment).flexGrow)).join(',') === '3200,4800,2400,4600,3000,5200,800' })()`)).toBe(true)
-      const breakdown = await page.evaluate<string>(`document.querySelector('#companion-context .companion__context-breakdown')?.innerText ?? ''`)
-      expect(breakdown).toContain("System")
-      expect(breakdown).toContain("3,200 tokens · 13.3%")
-      expect(breakdown).toContain("Tool calls")
-      expect(breakdown).toContain("5,200 tokens · 21.7%")
-      expect(await page.evaluate<string>(`document.querySelector('#companion-context')?.innerText ?? ''`)).toContain("Estimated input breakdown by category (request estimate, separate from provider-reported window tokens and cumulative spend)")
+      const breakdown = await page.evaluate<string[][]>(`[...document.querySelectorAll('#companion-context .companion__context-row')].map((row) => [...row.querySelectorAll('dd')].map((value) => value.textContent.trim()))`)
+      expect(breakdown[0]).toEqual(["3,200", "13.3%"])
+      expect(breakdown[5]).toEqual(["5,200", "21.7%"])
+      expect(await page.evaluate<boolean>(`(() => { const rows = [...document.querySelectorAll('#companion-context .companion__context-row')]; return [0, 1].every((column) => new Set(rows.map((row) => Math.round(row.querySelectorAll('dd')[column].getBoundingClientRect().right))).size === 1) })()`)).toBe(true)
+      expect(await page.evaluate<string>(`document.querySelector('#companion-context')?.innerText ?? ''`)).toContain("Estimated input breakdown by category, separate from provider-reported window tokens and cumulative spend.")
       expect(await page.evaluate<number>(`document.querySelector('.workspace__heading').getBoundingClientRect().height`)).toBeLessThanOrEqual(closedHeight + 8)
     } finally { await page.close() }
   }, 30_000)
@@ -283,7 +287,7 @@ describe("quiet workspace", () => {
       await until(page, `document.querySelector('.mini-composer__input-wrap') !== null`)
       await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
       await until(page, `document.querySelector('#session-companion-panel') !== null`)
-      const result = await page.evaluate<{ inside: boolean; title: number }>(`(() => { const box = document.querySelector('.mini-composer__input-wrap').getBoundingClientRect(), controls = [...document.querySelectorAll('.mini-composer__input-wrap .composer__attach, .mini-composer__input-wrap .mini-composer__send')]; return { inside: controls.length === 2 && controls.every(e => { const r = e.getBoundingClientRect(); return r.left >= box.left && r.right <= box.right && r.top >= box.top && r.bottom <= box.bottom }), title: document.querySelector('.conversation-breadcrumb h1').getBoundingClientRect().width } })()`)
+      const result = await page.evaluate<{ inside: boolean; title: number }>(`(() => { const box = document.querySelector('.composer').getBoundingClientRect(), controls = [...document.querySelectorAll('.composer .composer__attach, .composer .mini-composer__send')]; return { inside: controls.length === 2 && controls.every(e => { const r = e.getBoundingClientRect(); return r.left >= box.left && r.right <= box.right && r.top >= box.top && r.bottom <= box.bottom }), title: document.querySelector('.conversation-breadcrumb h1').getBoundingClientRect().width } })()`)
       expect(result.inside).toBe(true)
       expect(result.title).toBeGreaterThanOrEqual(140)
     } finally { await page.close() }
@@ -332,8 +336,9 @@ describe("quiet workspace", () => {
       await page.setViewport(1440, 900)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1`)
       await until(page, `document.querySelector('.workspace__rail') !== null`)
-      expect(await page.evaluate<number>(`document.querySelector('.workspace__rail').getBoundingClientRect().width`)).toBe(216)
-      expect((await page.evaluate<string>(`document.querySelector('.workspace__rail').innerText`)).toLowerCase()).toContain('needs action')
+      expect(await page.evaluate<number>(`document.querySelector('.workspace__rail').getBoundingClientRect().width`)).toBe(256)
+      expect(await page.evaluate<string>(`document.querySelector('.workspace__rail .session-list__group').textContent.trim()`)).toBe('ycoding')
+      expect((await page.evaluate<string>(`document.querySelector('.workspace__rail').innerText`)).toLowerCase()).not.toContain('needs action')
       await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
       await until(page, `document.querySelector('#session-companion-panel') !== null`)
       expect(await page.evaluate<string>(`document.querySelector('#session-companion-panel').innerText`)).toContain('Activity')
@@ -354,7 +359,7 @@ describe("quiet workspace", () => {
       await page.evaluate(`document.querySelector('[role="tab"][aria-selected="true"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))`)
       expect(await page.evaluate<string>(`document.querySelector('[role="tab"][aria-selected="true"]').textContent.trim()`)).toBe("Changes")
       expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('[role="tab"][aria-selected="true"]')`)).toBe(true)
-      if (width === 1440) expect(await page.evaluate<number>(`document.querySelector('#session-companion-panel').getBoundingClientRect().width`)).toBe(520)
+      if (width === 1440) expect(await page.evaluate<number>(`document.querySelector('#session-companion-panel').getBoundingClientRect().width`)).toBe(448)
       await page.pressEscape()
       await until(page, `document.querySelector('[aria-label="Open Team"]').getAttribute('aria-expanded') === 'false'`)
       await until(page, `document.activeElement === document.querySelector('[aria-label="Open Team"]')`)
@@ -425,27 +430,27 @@ describe("quiet workspace", () => {
     } finally { await page.close() }
   }, 30_000)
 
-  test("Session navigation pins and unpins without selecting another Session", async () => {
+  test("rail rows carry no pin while the Sessions table pins and unpins without opening a Session", async () => {
     const page = await requireBrowser().openPage()
     try {
       await page.setViewport(1440, 900)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1`)
-      await until(page, `document.querySelector('.workspace__rail button[aria-label="Pin Verify provider auth fallback"]') !== null`)
-      await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Pin Verify provider auth fallback"]').click()`)
-      await until(page, `document.querySelector('.workspace__rail button[aria-label="Unpin Verify provider auth fallback"][aria-pressed="true"]') !== null`)
-      expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('session_id')`)).toBe("ses_fixture")
-      await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Unpin Verify provider auth fallback"]').click()`)
-      await until(page, `document.querySelector('.workspace__rail button[aria-label="Pin Verify provider auth fallback"][aria-pressed="false"]') !== null`)
+      await until(page, `document.querySelector('.workspace__rail [data-session-id="ses_running"]') !== null`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.workspace__rail .session-pin__button').length`)).toBe(0)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&acceptedPreview=1`)
+      await until(page, `document.querySelector('.sessions-table button[aria-label="Pin Verify provider auth fallback"]') !== null`)
+      await page.evaluate(`document.querySelector('.sessions-table button[aria-label="Pin Verify provider auth fallback"]').click()`)
+      await until(page, `document.querySelector('.sessions-table button[aria-label="Unpin Verify provider auth fallback"][aria-pressed="true"]') !== null`)
+      expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote/sessions")
+      await page.evaluate(`document.querySelector('.sessions-table button[aria-label="Unpin Verify provider auth fallback"]').click()`)
+      await until(page, `document.querySelector('.sessions-table button[aria-label="Pin Verify provider auth fallback"][aria-pressed="false"]') !== null`)
       expect(await page.evaluate<string[]>(`window.requestLog.filter(item => item.operation === 'session.pin' || item.operation === 'session.unpin').map(item => item.operation)`)).toEqual(["session.pin", "session.unpin"])
       await page.setViewport(390, 844)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1`)
       await until(page, `document.querySelector('[aria-label="Open sessions"]') !== null`)
       await page.evaluate(`document.querySelector('[aria-label="Open sessions"]').click()`)
-      await until(page, `document.querySelector('.overlay--sessions-sheet button[aria-label="Pin Verify provider auth fallback"]') !== null`)
-      await page.evaluate(`document.querySelector('.overlay--sessions-sheet button[aria-label="Pin Verify provider auth fallback"]').click()`)
-      await until(page, `document.querySelector('.overlay--sessions-sheet button[aria-label="Unpin Verify provider auth fallback"][aria-pressed="true"]') !== null`)
-      await page.evaluate(`document.querySelector('.overlay--sessions-sheet button[aria-label="Unpin Verify provider auth fallback"]').click()`)
-      await until(page, `document.querySelector('.overlay--sessions-sheet button[aria-label="Pin Verify provider auth fallback"][aria-pressed="false"]') !== null`)
-      expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('session_id')`)).toBe("ses_fixture")
+      await until(page, `document.querySelector('.overlay--sessions-sheet [data-session-id="ses_running"]') !== null`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.overlay--sessions-sheet .session-pin__button').length`)).toBe(0)
     } finally { await page.close() }
   }, 30_000)
 
@@ -469,8 +474,8 @@ describe("quiet workspace", () => {
       await until(page, `document.querySelector('.remote-nav') !== null`)
       for (const [label, path] of [["Projects", "/remote/projects"], ["Sessions", "/remote/sessions"], ["Workspaces", "/remote/workspaces"], ["Usage", "/remote/usage"], ["Settings", "/remote/settings"]] as const) {
         const previous = await page.evaluate<string>(`location.pathname`)
-        await page.evaluate(`document.querySelector('.remote-nav a[title=${JSON.stringify(label)}]').click()`)
-        await until(page, `location.pathname === ${JSON.stringify(path)} && document.querySelector('.remote-nav a[title=${JSON.stringify(label)}]')?.getAttribute('aria-current') === 'page'`)
+        await page.evaluate(`document.querySelector('.remote-nav a.remote-nav__link--${label.toLowerCase()}').click()`)
+        await until(page, `location.pathname === ${JSON.stringify(path)} && document.querySelector('.remote-nav a.remote-nav__link--${label.toLowerCase()}')?.getAttribute('aria-current') === 'page'`)
         expect(await page.evaluate<number>(`document.querySelectorAll('.remote-nav [aria-current="page"]').length`)).toBe(1)
         if (label === "Workspaces") {
           await until(page, `document.querySelector('.workspaces-page')?.innerText.includes('Other repository')`)
@@ -478,14 +483,14 @@ describe("quiet workspace", () => {
         }
         await page.evaluate(`history.back()`)
         const previousLabel = previous === "/remote/session" ? "Sessions" : previous.split("/").at(-1)!.replace(/^./, (first) => first.toUpperCase())
-        await until(page, `location.pathname === ${JSON.stringify(previous)} && document.querySelector('.remote-nav a[title=${JSON.stringify(previousLabel)}]')?.getAttribute('aria-current') === 'page'`)
+        await until(page, `location.pathname === ${JSON.stringify(previous)} && document.querySelector('.remote-nav a.remote-nav__link--${previousLabel.toLowerCase()}')?.getAttribute('aria-current') === 'page'`)
         await page.evaluate(`history.forward()`)
-        await until(page, `location.pathname === ${JSON.stringify(path)} && document.querySelector('.remote-nav a[title=${JSON.stringify(label)}]')?.getAttribute('aria-current') === 'page'`)
+        await until(page, `location.pathname === ${JSON.stringify(path)} && document.querySelector('.remote-nav a.remote-nav__link--${label.toLowerCase()}')?.getAttribute('aria-current') === 'page'`)
       }
       await page.evaluate(`history.back()`)
-      await until(page, `location.pathname === '/remote/usage' && document.querySelector('.remote-nav a[title="Usage"]')?.getAttribute('aria-current') === 'page'`)
+      await until(page, `location.pathname === '/remote/usage' && document.querySelector('.remote-nav a.remote-nav__link--usage')?.getAttribute('aria-current') === 'page'`)
       await page.evaluate(`history.forward()`)
-      await until(page, `location.pathname === '/remote/settings' && document.querySelector('.remote-nav a[title="Settings"]')?.getAttribute('aria-current') === 'page'`)
+      await until(page, `location.pathname === '/remote/settings' && document.querySelector('.remote-nav a.remote-nav__link--settings')?.getAttribute('aria-current') === 'page'`)
       expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote/settings")
     } finally { await page.close() }
   }, 30_000)
@@ -524,7 +529,11 @@ describe("quiet workspace", () => {
       await until(page, `document.querySelector('.companion__header') !== null`)
       await page.evaluate(`document.querySelector('.companion__tabs [aria-controls="companion-context"]').click()`)
       const summary = await page.evaluate<string>(`document.querySelector('#companion-context').innerText`)
-      expect(summary).toContain("19% used · 81% left")
+      expect(summary).toContain("104,000 remaining · 19% used")
+      expect(summary).toContain("Open Usage · cumulative spend")
+      expect(summary).toContain("Compact context")
+      expect(summary).toContain("Loaded transcript messages")
+      expect(await page.evaluate<number>(`document.querySelectorAll('#companion-context .companion__context-actions').length`)).toBe(0)
       expect(await page.evaluate<string>(`document.querySelector('.companion__header').innerText`)).toContain("Autonomous")
       expect(await page.evaluate<string>(`document.querySelector('.companion__header').innerText`)).toContain("Goal · Active")
       expect(await page.evaluate<boolean>(`document.querySelector('.team-view__session-summary') === null`)).toBe(true)
@@ -542,14 +551,14 @@ describe("quiet workspace", () => {
         await until(page, `document.querySelector('.composer-resident textarea') !== null`)
         if (width < 768) await page.evaluate(`document.querySelector('[aria-label="Open sessions"]').click()`)
         const panel = width < 768 ? ".overlay--sessions-sheet" : ".workspace__rail"
-        await until(page, `document.querySelector('${panel} .session-panel__summary')?.textContent === '1 waiting · 1 running · 1 pinned shown'`)
-        await until(page, `document.querySelector('${panel} .session-list')?.innerText.includes('Waiting for approval')`)
-        expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('${panel} .session-pin__button')).cursor`)).toBe("pointer")
-        expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${panel} .session-filters button')].map(button => button.textContent.trim())`)).toEqual(["All", "Waiting", "Running", "Idle"])
+        await until(page, `document.querySelector('${panel} .session-filters button')?.getAttribute('aria-label') === 'All 3'`)
+        await until(page, `document.querySelector('${panel} .session-row__state')?.textContent === 'Waiting'`)
+        expect(await page.evaluate<number>(`document.querySelectorAll('${panel} .session-pin__button, ${panel} .session-row__meta, ${panel} .session-panel__summary').length`)).toBe(0)
+        expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${panel} .session-filters button')].map(button => button.getAttribute('aria-label'))`)).toEqual(["All 3", "Waiting 1", "Running 1", "Idle 1"])
         expect(await page.evaluate<number>(`new Set([...document.querySelectorAll('${panel} .session-filters button')].map(button => Math.round(button.getBoundingClientRect().top))).size`)).toBe(1)
-        expect(await page.evaluate<string>(`document.querySelector('${panel} .session-panel__summary').textContent`)).toBe("1 waiting · 1 running · 1 pinned shown")
-        expect(await page.evaluate<string>(`document.querySelector('${panel} .session-list').textContent`)).toContain("Pinned")
-        expect(await page.evaluate<string>(`document.querySelector('${panel} .session-list').innerText`)).toContain("Waiting for approval")
+        expect(await page.evaluate<boolean>(`(() => { const strip = document.querySelector('${panel} .session-filters'), box = strip.getBoundingClientRect(); return [...strip.children].every((button) => button.getBoundingClientRect().right <= box.right + 0.5) })()`)).toBe(true)
+        expect(await page.evaluate<string>(`document.querySelector('${panel} .session-list__group').textContent.trim()`)).toBe("ycoding")
+        expect(await page.evaluate<string>(`document.querySelector('${panel} .session-list').textContent`)).toContain("Waiting for approval")
         await page.evaluate(`document.querySelector('${panel} .session-filters button:nth-child(2)').click()`)
         await until(page, `document.querySelector('${panel} .session-filters button:nth-child(2)')?.getAttribute('aria-pressed') === 'true'`)
         await page.evaluate(`document.querySelector('${panel} .session-filters button:first-child').click()`)
@@ -585,7 +594,7 @@ describe("quiet workspace", () => {
           await until(page, `document.querySelector('.file-change-card__summary').getBoundingClientRect().top >= document.querySelector('.workspace__topbar:not([inert])').getBoundingClientRect().bottom`)
           await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'), card = document.querySelector('.file-change-card'); root.scrollTop += card.getBoundingClientRect().top - root.getBoundingClientRect().top - 12 })()`)
           await until(page, `document.querySelector('.transcript-navigation__controls').style.marginBlockEnd === '0px'`)
-          expect(await page.evaluate(`(() => { const deny = document.querySelector('.request--permission .button--danger'), before = deny.getBoundingClientRect(), scroll = document.querySelector('.workspace__scroll').getBoundingClientRect(), controls = document.querySelector('.transcript-navigation__controls'), navBefore = controls.getBoundingClientRect(); const visibleClear = Math.min(before.bottom, scroll.bottom) <= navBefore.top || before.right <= navBefore.left; deny.focus(); const rect = deny.getBoundingClientRect(), nav = controls.getBoundingClientRect(); const hit = [[0.1, 0.5], [0.5, 0.5], [0.9, 0.5]].every(([x, y]) => document.elementFromPoint(rect.left + rect.width * x, rect.top + rect.height * y) === deny); return { visibleClear, clear: rect.bottom <= nav.top || rect.right <= nav.left, hit, focus: document.activeElement === deny, deny: rect.toJSON(), nav: nav.toJSON() } })()`)).toMatchObject({ visibleClear: true, clear: true, hit: true, focus: true })
+          expect(await page.evaluate(`(() => { const deny = document.querySelector('.request--permission .button--danger'), before = deny.getBoundingClientRect(), scroll = document.querySelector('.workspace__scroll').getBoundingClientRect(), controls = document.querySelector('.transcript-navigation__controls'), navBefore = controls.getBoundingClientRect(); const reserve = parseFloat(getComputedStyle(document.querySelector('.workspace__main')).getPropertyValue('--yc-composer-reserve')) || 0, visibleBottom = scroll.bottom - reserve; const visibleClear = before.top >= visibleBottom || before.bottom <= navBefore.top || before.right <= navBefore.left; deny.focus(); const rect = deny.getBoundingClientRect(), nav = controls.getBoundingClientRect(); const hit = [[0.1, 0.5], [0.5, 0.5], [0.9, 0.5]].every(([x, y]) => document.elementFromPoint(rect.left + rect.width * x, rect.top + rect.height * y) === deny); return { visibleClear, clear: rect.bottom <= nav.top || rect.right <= nav.left, hit, focus: document.activeElement === deny, deny: rect.toJSON(), nav: nav.toJSON() } })()`)).toMatchObject({ visibleClear: true, clear: true, hit: true, focus: true })
           if (directory) await Bun.write(join(directory, `accepted-ui-scrolled-${width}-${theme}-${crypto.randomUUID()}.png`), Buffer.from(await page.screenshot(), "base64"))
         }
       } finally { await page.close() }
@@ -596,8 +605,9 @@ describe("quiet workspace", () => {
     try {
       await page.setViewport(1440, 900)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?account=pending&noSelection=1`)
-      await until(page, `document.querySelector('.workspace__rail-footer strong') !== null`)
-      expect(await page.evaluate<string>(`document.querySelector('.workspace__rail-footer strong').textContent`)).toBe("Checking account")
+      await until(page, `document.querySelector('.status-strip__body') !== null`)
+      expect(await page.evaluate<string>(`document.querySelector('.status-strip__body').textContent`)).toContain("Checking account")
+      expect(await page.evaluate<number>(`document.querySelectorAll('.workspace__rail-footer').length`)).toBe(0)
     } finally { await page.close() }
   })
 
@@ -630,8 +640,8 @@ describe("quiet workspace", () => {
         await until(page, `document.querySelector('.composer-resident textarea') !== null`)
         await page.evaluate(`document.querySelector('.fixture__banner')?.remove();document.querySelector('.fixture__controls')?.remove();document.querySelector('.workspace__scroll').scrollTop=1000000`)
         const layout = await page.evaluate<{ pinned: boolean; visible: boolean; reading: number; composerVisible: boolean }>(`(() => {
-          const back=document.querySelector('.conversation-back'), header=document.querySelector('.workspace__topbar'), scroll=document.querySelector('.workspace__scroll'), field=document.querySelector('.composer-resident textarea');
-          const b=back.getBoundingClientRect(),f=field.getBoundingClientRect();return {pinned:header?.contains(back) ?? false,visible:b.top>=0&&b.bottom<=innerHeight&&b.width>=44&&b.height>=44,reading:scroll.clientHeight,composerVisible:f.top>=0&&f.bottom<=document.querySelector('.bottom-nav').getBoundingClientRect().top||innerWidth>=768&&f.bottom<=innerHeight}
+          const back=document.querySelector('.conversation-back'), title=document.querySelector('.workspace__topbar h1'), header=document.querySelector('.workspace__topbar'), scroll=document.querySelector('.workspace__scroll'), field=document.querySelector('.composer-resident textarea');
+          const b=back.getBoundingClientRect(),t=title.getBoundingClientRect(),f=field.getBoundingClientRect();return {pinned:(header?.contains(back) && header.contains(title)) ?? false,visible:t.top>=0&&t.bottom<=innerHeight&&(innerWidth>=768 ? getComputedStyle(back).display==='none' : b.top>=0&&b.bottom<=innerHeight&&b.width>=44&&b.height>=44),reading:scroll.clientHeight,composerVisible:f.top>=0&&f.bottom<=document.querySelector('.bottom-nav').getBoundingClientRect().top||innerWidth>=768&&f.bottom<=innerHeight}
         })()`)
         expect(layout.pinned).toBe(true)
         expect(layout.visible).toBe(true)
@@ -658,16 +668,16 @@ describe("quiet workspace", () => {
               rail: document.querySelector('.workspace__rail')?.getBoundingClientRect().width ?? 0,
               headerLinks: document.querySelectorAll('.app-header .remote-nav a').length,
               overflow: document.documentElement.scrollWidth > innerWidth,
-              minHeight: innerWidth < 768 ? 44 : parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense')),
-              undersized: links.filter(link => { const box=link.getBoundingClientRect();return box.width < 44 || box.height < (innerWidth < 768 ? 44 : parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense'))) }).length,
+              minHeight: innerWidth < 768 ? 44 : parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-space-8')),
+              undersized: links.filter(link => { const box=link.getBoundingClientRect();return box.width < 44 || box.height < (innerWidth < 768 ? 44 : parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-space-8'))) }).length,
             }
           })()`)
           expect(state.links).toEqual(width < 768 ? ["/remote/sessions", "/remote/usage", "/remote/settings"] : ["/remote/projects", "/remote/sessions", "/remote/workspaces", "/remote/usage", "/remote/settings"])
           expect(state.current).toBe(view === "usage" ? "Usage" : view === "settings" ? "Settings" : "Sessions")
-          expect(state.rail).toBe(width < 768 ? 0 : 216)
+          expect(state.rail).toBe(width < 768 ? 0 : 256)
           expect(state.headerLinks).toBe(0)
           expect(state.overflow).toBe(false)
-          expect(state.minHeight).toBeGreaterThanOrEqual(36)
+          expect(state.minHeight).toBeGreaterThanOrEqual(32)
           expect(state.undersized).toBe(0)
         }
       }
@@ -711,13 +721,12 @@ describe("quiet workspace", () => {
         const rail=document.querySelector('.workspace__rail');const body=rail.querySelector('.workspace__rail-body');
         return {width:rail.getBoundingClientRect().width,links:rail.querySelectorAll('.remote-nav a').length,focus:document.activeElement?.getAttribute('aria-label') ?? '',picker:document.querySelector('.sessions-page__workspace-select').getBoundingClientRect().height>0,bodyHidden:body.inert && body.getClientRects().length===0}
       })()`)).toEqual({ width: 60, links: 5, focus: "Show workspace sidebar", picker: true, bodyHidden: true })
-      expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.workspace__rail .remote-nav a')].every(link => { const box=link.getBoundingClientRect();return box.width>=44&&box.height>=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense')) })`)).toBe(true)
-      expect(await page.evaluate<boolean>(`parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-control-h-dense')) >= 36`)).toBe(true)
+      expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.workspace__rail .remote-nav a')].every(link => { const box=link.getBoundingClientRect();return box.width>=44&&box.height>=32 })`)).toBe(true)
       await page.evaluate(`document.querySelector('.workspace__rail .remote-nav a[href="/remote/settings"]').click()`)
       await until(page, `document.querySelector('.app--settings') !== null`)
-      expect(await page.evaluate<boolean>(`['.workspace-resume','.workspace-new-session button'].every(selector => {const element=document.querySelector('.workspace__rail '+selector),box=element.getBoundingClientRect();return box.width>=44&&box.height>=44&&box.right<=60})`)).toBe(true)
+      expect(await page.evaluate<boolean>(`['.workspace-resume','.workspace__new-chat'].every(selector => {const element=document.querySelector('.workspace__rail '+selector),box=element.getBoundingClientRect();return box.width>=44&&box.height>=44&&box.right<=60})`)).toBe(true)
       await page.evaluate(`document.querySelector('.workspace__rail button[aria-label="Show workspace sidebar"]').click()`)
-      await until(page, `document.querySelector('.workspace__rail').getBoundingClientRect().width === 216`)
+      await until(page, `document.querySelector('.workspace__rail').getBoundingClientRect().width === 256`)
       expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label') ?? ''`)).toBe("Hide workspace sidebar")
     } finally { await page.close() }
   }, 30_000)

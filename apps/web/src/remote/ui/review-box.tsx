@@ -1,4 +1,4 @@
-import { For, Show, createMemo, type JSX } from "solid-js"
+import { For, Show, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { useRemote } from "../context"
 import type { FormAnswerView, ReviewItemView, ReviewReason } from "../projection"
@@ -9,6 +9,7 @@ import { TeamAnswerForm } from "./subagent-bar"
 import { DecisionProvenance } from "./decision-grades"
 import { escalationText } from "../decision-grades"
 import { ProjectEscalationNote } from "./project-escalation"
+import { PresenceList } from "./presence-list"
 
 export function ReviewBox(props: { readonly onOpenSession: (sessionID: string) => void }): JSX.Element {
   const remote = useRemote()
@@ -16,15 +17,14 @@ export function ReviewBox(props: { readonly onOpenSession: (sessionID: string) =
     const view = remote.state().view
     return view !== undefined && view.id === remote.state().activeSessionID ? view.review?.items ?? [] : []
   }
-  const ids = createMemo(() => items().map((item) => item.itemID))
   const failed = () => remote.state().view?.review?.status === "error"
-  return <Show when={ids().length > 0 || failed()}>
+  return <PresenceList items={items().length > 0 || failed() ? ["review"] : []} keyOf={(key) => key}>{() =>
     <section class="requests review-box" aria-labelledby="review-box-title">
-      <h2 id="review-box-title" class="review-box__title">Review<Show when={ids().length > 0}> · {ids().length} waiting</Show></h2>
+      <h2 id="review-box-title" class="review-box__title">Review<Show when={items().length > 0}> · {items().length} waiting</Show></h2>
       <Show when={failed()}><p class="request__note" role="alert">Review items could not be loaded. <button type="button" class="button button--secondary button--small" onClick={() => void remote.store.reloadReview()}>Retry</button></p></Show>
-      <For each={ids()}>{(id) => <Show when={items().find((item) => item.itemID === id)}>{(item) => <ReviewItemCard item={item} onOpenSession={props.onOpenSession} />}</Show>}</For>
+      <PresenceList items={items()} keyOf={(item) => item.itemID}>{(item) => <ReviewItemCard item={item} onOpenSession={props.onOpenSession} />}</PresenceList>
     </section>
-  </Show>
+  }</PresenceList>
 }
 
 function ReviewItemCard(props: { readonly item: () => ReviewItemView; readonly onOpenSession: (sessionID: string) => void }): JSX.Element {

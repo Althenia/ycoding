@@ -4,9 +4,8 @@ import { Icon } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
 import { useRemote } from "../context"
 import { autonomyCategories, autonomyLabels, autonomyModeLabel, autonomySummary, type AutonomyModes } from "../autonomy"
-import { reviewItemsInScope, sessionExecutionLabel, sessionStatusTimed } from "../projection"
+import { reviewItemsInScope } from "../projection"
 import { createRemoteQuery } from "../query"
-import { familyTaskActivity } from "../view-model"
 import { AutonomousDialog, autonomousDialogRequests } from "./autonomous-dialog"
 import { DotTrail } from "./dot-trail"
 import "./status-bar.css"
@@ -43,9 +42,8 @@ export function SessionStatusDetails() {
   </div>
 }
 
-export function ComposerStatus(props: { readonly metadataMount?: HTMLElement }) {
+export function ComposerStatus() {
   const remote = useRemote()
-  const [now, setNow] = createSignal(Date.now())
   const [open, setOpen] = createSignal<"goal">()
   const [autonomousOpen, setAutonomousOpen] = createSignal(false)
   const [phone, setPhone] = createSignal(false)
@@ -58,33 +56,11 @@ export function ComposerStatus(props: { readonly metadataMount?: HTMLElement }) 
   let popover: HTMLDivElement | undefined
   let closeGoalSheet: (() => void) | undefined
   const view = () => remote.state().view
-  const family = () => familyTaskActivity(remote.state().team?.tasks ?? [])
-  const current = () => {
-    const selected = view()
-    if (!selected) return undefined
-    const running = family().running || (remote.state().sessionStatus?.running.has(selected.id) ?? remote.state().selectedSessionInfo?.running ?? false)
-    return running && selected.status === "idle" ? { ...selected, status: "running" as const } : selected
-  }
-  const waiting = () => family().waiting
-  const timed = () => current() !== undefined && sessionStatusTimed(current()!, waiting())
-  createEffect(() => {
-    if (!timed()) return
-    const timer = setInterval(() => setNow(Date.now()), 100)
-    onCleanup(() => clearInterval(timer))
-  })
-  const label = () => {
-    const execution = current() ? sessionExecutionLabel(current()!, now(), waiting()) : "ready"
-    return execution === "ready" && family().supervising ? "supervising" : execution
-  }
-  const stateText = () => label().replace(/\? awaiting input/i, "Waiting for your decision").replace(/cooking/i, "Running")
-  const elapsed = () => current()?.executionStarted === undefined ? "" : `${Math.floor(Math.max(0, now() - current()!.executionStarted!) / 60_000)}:${String(Math.floor(Math.max(0, now() - current()!.executionStarted!) / 1000) % 60).padStart(2, "0")}`
-  const visible = () => current()?.status === "running" || current()?.status === "failed" || review() > 0 || waiting() > 0 || family().supervising
   const goal = () => view()?.autonomy?.goal
   const goalActive = () => goal()?.status === "active"
   const goalSetting = () => remote.state().mutations.some((mutation) => mutation.sessionID === view()?.id && mutation.operation === "session.goal.set" && mutation.state === "sending")
   const modes = () => view()?.autonomy?.effective ?? view()?.autonomy
   const summary = () => autonomySummary(modes()!)
-  const review = () => { const selected = view(); return selected === undefined ? 0 : reviewItemsInScope(selected).length }
   const close = (focus = false) => {
     if (!open() || leaving()) return
     const trigger = goalTrigger
@@ -153,12 +129,7 @@ export function ComposerStatus(props: { readonly metadataMount?: HTMLElement }) 
     })
   })
   const goalPanel = () => <Show when={goal()?.status === "active"} fallback={<form onSubmit={(event) => { event.preventDefault(); if (!draft().trim()) return; void remote.store.setGoal(draft().trim()).then((accepted) => { if (!accepted) return; setDraft(""); dismissGoal() }) }}><label for="session-status-goal">Goal</label><input id="session-status-goal" type="text" aria-label="Goal" placeholder="Describe the objective" autofocus value={draft()} onInput={(event) => setDraft(event.currentTarget.value)} /><button type="submit" disabled={!draft().trim() || goalSetting()}>Set goal</button></form>}><p>{goal()?.text}</p><span>{goal()?.status} · iteration {goal()?.iteration} · no progress {goal()?.noProgress}/{goal()?.maxNoProgress}</span><button type="button" onClick={() => { dismissGoal(); void remote.store.stopGoal() }}>Stop goal</button></Show>
-  const StatusSlot = () => <span class="session-status__slot" role="status" classList={{ "session-status__slot--empty": !visible(), "session-status__slot--attention": /awaiting input|failed|provider error/i.test(label()), "session-status__slot--setting": goalSetting() }}>
-      <Show when={goalSetting()}><span class="session-status__goal-setting" aria-hidden="true"><DotTrail /><span class="session-status__goal-setting-label">Setting goal…</span><span class="session-status__goal-setting-compact">Setting…</span></span></Show>
-      <Show when={visible()}><Show when={timed()}><DotTrail /></Show><span class="session-status__label">{stateText()}</span><span class="session-status__mobile" aria-hidden="true">{elapsed() || (/awaiting input/i.test(label()) ? "Wait" : stateText().split(" · ")[0])}</span></Show>
-    </span>
   return <div class="session-status" role="group" aria-label="Session status and autonomy">
-    <Show when={!props.metadataMount}><StatusSlot /></Show>
     <Show when={view()?.autonomy}>
     <button ref={autonomousTrigger} type="button" class="session-status__autonomous-trigger" aria-label={`Autonomous: ${autonomyLabels(modes()!).join(", ")}`} title={`Autonomous: ${autonomyLabels(modes()!).join(", ")}`} aria-haspopup="dialog" aria-expanded={autonomousOpen()} onClick={() => setAutonomousOpen(true)}><span class="session-status__autonomous-icon"><Icon name="shield" size={16} /></span><span class="session-status__autonomous-full">{summary().label}</span><span class="session-status__autonomous-word">{autonomyPhoneWord(modes()!)}</span></button>
     <button ref={goalTrigger} type="button" class="session-status__goal-trigger" classList={{ "session-status__goal-trigger--active": goalActive() || goalSetting() }} aria-label={goalSetting() ? "Setting goal" : goalActive() ? "Goal active" : "Goal off"} aria-busy={goalSetting() ? "true" : undefined} aria-haspopup="dialog" aria-expanded={goalControlExpanded({ popover: open() === "goal", leaving: leaving(), sheet: goalSheet() })} onClick={toggle}><span class="session-status__goal-label">Goal</span><Show when={goalActive()}>{" "}<span class="session-status__goal-count" aria-hidden="true">{goal()?.iteration}</span></Show><Show when={goalSetting()}><span class="session-status__goal-progress" aria-hidden="true"><span>Goal…</span><DotTrail /></span></Show></button>
@@ -168,7 +139,6 @@ export function ComposerStatus(props: { readonly metadataMount?: HTMLElement }) 
     <Show when={goalSheet()}><Modal class="overlay--confirm" label="Goal" returnFocus={goalTrigger!} onClose={() => setGoalSheet(false)} requestClose={(handoff) => { closeGoalSheet = handoff }}><div class="session-status__goal-sheet">{goalPanel()}</div></Modal></Show>
     <Show when={autonomousOpen()}><AutonomousDialog returnFocus={autonomousTrigger!} onClose={() => setAutonomousOpen(false)} /></Show>
     </Show>
-    <Show when={props.metadataMount}>{(mount) => <Show when={visible() || goalSetting()}><Portal mount={mount()}><div class="session-status session-status--metadata" role="group" aria-label="Session status"><StatusSlot /></div></Portal></Show>}</Show>
     <span class="visually-hidden session-status__announce" role="status">{goalSetting() ? "Setting goal…" : ""}</span>
   </div>
 }

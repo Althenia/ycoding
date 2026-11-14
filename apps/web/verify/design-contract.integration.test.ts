@@ -211,7 +211,7 @@ describe("web design contract inventory", () => {
     await page.close()
   }, 30_000)
 
-  test("widens the Sessions, Usage and Settings column from 1600 while Session detail fills its container up to the 120ch measure", async () => {
+  test("widens the Sessions and Usage columns from 1600, keeps Settings a fixed 760px column, while Session detail is a centered 720px reading column", async () => {
     const page = await requireBrowser().openPage()
     const widths = { 1599: 1200, 1600: 1600, 1920: 1600, 2000: 1600, 2560: 1600 } as const
     for (const [width, expected] of Object.entries(widths).map(([key, value]) => [Number(key), value] as const)) {
@@ -253,17 +253,18 @@ describe("web design contract inventory", () => {
         expect(geometry.centered, `${view} ${width}`).toBe(true)
         expect(geometry.gutter, `${view} ${width}`).toBe(width >= 1600 ? 48 : 40)
         if (view === "chat") {
-          // Session detail fills its container minus the 48px (--yc-space-12) end reserve, up to the 120ch wide measure.
           expect(geometry.reserve, `${view} ${width}`).toBe(48)
+          expect(geometry.centered, `${view} ${width}`).toBe(true)
           expect(geometry.container, `${view} ${width}`).toBeGreaterThanOrEqual(geometry.available - 1)
-          const column = Math.min(geometry.container - geometry.reserve, geometry.wide)
+          const column = Math.min(720, geometry.container - geometry.reserve)
           expect(geometry.width, `${view} ${width}`).toBeLessThanOrEqual(column + 1)
           expect(geometry.width, `${view} ${width}`).toBeGreaterThanOrEqual(column - 1)
           continue
         }
         // The column is the declared cap, or the scroll area's content box when that is narrower.
-        expect(geometry.width, `${view} ${width}`).toBeLessThanOrEqual(expected)
-        expect(geometry.width, `${view} ${width}`).toBeGreaterThanOrEqual(Math.min(expected, geometry.available) - 1)
+        const cap = view === "settings" ? 760 : expected
+        expect(geometry.width, `${view} ${width}`).toBeLessThanOrEqual(cap)
+        expect(geometry.width, `${view} ${width}`).toBeGreaterThanOrEqual(Math.min(cap, geometry.available) - 1)
       }
     }
     await page.close()
