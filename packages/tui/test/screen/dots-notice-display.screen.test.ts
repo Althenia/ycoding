@@ -193,7 +193,7 @@ const states: { context: Dots.CoordinationContext; summary: string }[] = [
   { context: enabled, summary: "Dots coordination · enabled" },
   {
     context: { state: "disabled", generation: 2, reason: "no_task" },
-    summary: "Dots coordination · disabled · no active Dots task",
+    summary: "Dots coordination · disabled · no active Dot thread",
   },
   {
     context: { state: "disabled", generation: 3, reason: "capability_disabled" },
@@ -201,7 +201,7 @@ const states: { context: Dots.CoordinationContext; summary: string }[] = [
   },
   {
     context: { state: "disabled", generation: 4, reason: "task_settled" },
-    summary: "Dots coordination · disabled · Dots task settled",
+    summary: "Dots coordination · disabled · Dot thread settled",
   },
   {
     context: { state: "disabled", generation: 5, reason: "unavailable" },
@@ -272,7 +272,7 @@ test("prose and plugin metadata cannot impersonate a trusted Dots state notice; 
     120,
     (frame) => {
       for (const text of [prose, plugin, "Unrelated service notice remains visible."]) expect(frame).toContain(text)
-      expect(frame).not.toContain("no active Dots task")
+      expect(frame).not.toContain("no active Dot thread")
     },
   )
 }, 30_000)

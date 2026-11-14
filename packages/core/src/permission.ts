@@ -867,6 +867,8 @@ export const make = <E>(config: { readonly entries: () => Effect.Effect<Readonly
 
                   const initial = yield* evaluateInput(assertInput)
                   if (initial.effect !== "ask") return yield* settleRules()
+                  if (assertInput.requireExplicitDecision)
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:request" }
                   if (input.decision === "approve")
                     return yield* exclusive(
                       Effect.gen(function* () {
@@ -893,8 +895,6 @@ export const make = <E>(config: { readonly entries: () => Effect.Effect<Readonly
                         }
                       }),
                     )
-                  if (assertInput.requireExplicitDecision)
-                    return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:request" }
                   const authorization = yield* autonomy.snapshot(assertInput.sessionID, { inherited: true }).pipe(
                     Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID: assertInput.sessionID })),
                   )

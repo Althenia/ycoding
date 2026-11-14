@@ -52,10 +52,10 @@ test("Master instructions require supervision, evidence review and reasoned esca
   for (const text of removed) expect([text, CoordinationInstructions.content.includes(text)]).toEqual([text, false])
 })
 
-test("the Master decomposes work into owner-supervised member Sessions with their own worktrees", () => {
+test("the Master decomposes work into owner-supervised members in the chosen canonical Project", () => {
   for (const instruction of [
     "As Master, decompose the user's work into independent scopes without waiting to be asked, launch an owner subagent for each",
-    "use `create` to start a member Session in its own managed worktree under you or an owner subagent you launched",
+    "use `create` with the chosen existing Project's `projectID` to start a member Session in its canonical directory",
     "for supervisor-owned Sessions, route everything through their recorded supervisor rather than relaying their routine events, and handle only their escalations and integration",
     "keep advancing independent work",
   ]) expect(CoordinationInstructions.content).toContain(instruction)
@@ -79,16 +79,18 @@ test("supervisors stay responsible for controlled Sessions until verified comple
   ].join(" "))
 })
 
-test("coordinators settle every member request through answer in every autonomy mode and reach the human only by escalation", () => {
+test("coordinators settle authorized requests and preserve mandatory human gates in every autonomy mode", () => {
   expect(CoordinationInstructions.content).not.toContain("Manual-mode")
   expect(CoordinationInstructions.content).not.toContain("decisions outside the user's recorded direction")
   for (const text of [
     "As Master, coordinate assignments, decide escalations, review integration evidence, and keep advancing independent work.",
     "As Master, resolve supervisor escalations and coordination across members yourself.",
-    "Settle every member request yourself through `project answer` in every autonomy mode, Manual included, from the user's recorded direction and existing evidence, choosing the simplest safe, reversible option: routine, decline-only and every explicit-decision class, hard and custom-rule guardrail reviews, outside-repository reviews, permissions, and questions and forms.",
+    "Settle routine member requests through `project answer` within recorded authority in every autonomy mode, Manual included.",
+    "Safety and platform human gates, requests marked `requireExplicitDecision: true`, and hard or custom-rule guardrail approvals require an explicit human decision through their native controls.",
+    "Decline an unsafe request when the native control permits it; never approve or answer a mandatory human gate.",
     "`approve` allows once, `decline` rejects with your rationale as the member's feedback, and `answer` settles a question or form.",
     "A request raised by a member's subagent or deeper descendant is that member's request: it appears with `requestSessionID`, and you `inspect`, `answer` or `escalate` it with the member's `sessionID`.",
-    "`inspect` reports the delegation class (routine, decline-only, explicit-decision:<reason>) as risk information for your decision; it never limits `answer`.",
+    "`inspect` reports the delegation class (routine, decline-only, explicit-decision:<reason>); inspect the native gate and recorded authority before deciding.",
     "Deny rules and permission ceilings still hold: approving something a deny rule or the permission ceiling covers leaves it denied.",
     "A guardrail review raised by an invalid guardrail configuration cannot be approved because its deny rules are unreadable: `answer` returns `escalated` with reason `configuration-invalid`, and a decline settles it.",
     "Reach the human only by `escalate`, when you judge a request needs their decision or when `answer` refuses, errors or is uncertain and returns escalated with a reason.",
@@ -96,7 +98,7 @@ test("coordinators settle every member request through answer in every autonomy 
     "Never override denies or permission ceilings.",
     "Leave inactive-Project refusals, deferred review items, and human-only controls to their native gates; never route around them with other tools or message text.",
   ]) once(CoordinationInstructions.content, text)
-  for (const text of ["Only safety items reach the human", "Settle routine questions", "hard reviews, or human-only controls"])
+  for (const text of ["Only safety items reach the human", "Settle every member request yourself", "it never limits `answer`", "routine, decline-only and every explicit-decision class"])
     expect([text, CoordinationInstructions.content.includes(text)]).toEqual([text, false])
 })
 
@@ -121,7 +123,8 @@ test("controller guidance separates orchestration from member execution and nati
     ].join(" "))
     expect(entries[0]?.value).toContain("Verify assignments and completion evidence against the user's current direction.")
     expect(entries[0]?.value).toContain("Decide escalations only within recorded authority and the native decision policy.")
-    expect(entries[0]?.value).toContain("Settle every member request yourself through `project answer` in every autonomy mode, Manual included")
+    expect(entries[0]?.value).toContain("Settle routine member requests through `project answer` within recorded authority in every autonomy mode, Manual included.")
+    expect(entries[0]?.value).toContain("never approve or answer a mandatory human gate")
     expect(entries[0]?.value).toContain("Deny rules and permission ceilings still hold")
     expect(entries[0]?.value).not.toContain("Only safety items reach the human")
     expect(entries[0]?.value).not.toContain("keep authoring and reviewing on separate files")
@@ -175,9 +178,20 @@ test("controller and executor guidance share one consolidated-verification pract
   }
 })
 
-test("the Master creates each member in the target project's own path and never under itself", () => {
+test("the Master uses the existing canonical Project and creates a worktree only when explicitly requested", () => {
   for (const instruction of [
-    "Create each member for the project it works in: pass that project's own directory as \`repository\` on \`project create\`, never the Master's or the task's path, so the member runs with that project's own worktree, repository, AGENTS.md, skills, commands and config.",
+    "Select the existing Project for the work, then pass its `projectID` to `project create`; use that Project's canonical directory, AGENTS.md, skills, commands and config.",
+    "Create a managed worktree with `repository` and `name` only when the user explicitly requests a worktree.",
     "Never create a project work Session under the Master Session as a child or descendant; member Sessions are standalone root Sessions, and only lightweight supervisor subagents live under the Master.",
+  ]) once(CoordinationInstructions.content, instruction)
+  expect(CoordinationInstructions.content).not.toContain("start a member Session in its own managed worktree")
+})
+
+test("controller recovery reconciles uncertain work once without polling or replay loops", () => {
+  for (const instruction of [
+    "Detect stuck, hung or looping work from reported state and evidence; reconcile current state before one bounded recovery attempt through existing native controls.",
+    "If recovery fails or its outcome is uncertain, report the blocker with evidence and continue independent authorized work; never poll, repeatedly wake, or replay an uncertain action.",
+    "Release only settled ownership after verification; use existing non-destructive controls and never delete Session or Project history as cleanup.",
+    "Reconcile an uncertain action before repeating it: re-read state with `list` or `inspect` and never replay a create, send, or decision whose outcome is unknown.",
   ]) once(CoordinationInstructions.content, instruction)
 })

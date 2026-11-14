@@ -560,7 +560,7 @@ export const make = <E>(config: { readonly entries: () => Effect.Effect<Readonly
                   if (!(yield* input.validate(entry.form)))
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
                   const explicitForm = entry.form.metadata?.requireExplicitDecision === true
-                  if (explicitForm && input.goal !== undefined)
+                  if (explicitForm)
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:request" }
                   if (
                     input.answer !== undefined &&

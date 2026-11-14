@@ -53,6 +53,10 @@ Maintained built-in agent Markdown frontmatter is the source for each built-in's
 
 Active coordination roles add the `ycoding/coordination-voice` instruction source for master Sessions. It specifies the owner's first-person instruction channel, assignment-based agent and reasoning selection, and a receipt reason for every dispatch. Exact agent IDs and model variants must be available in the target Location. Decision claims require recorded instructions or current delegation. Originating Session identity is audit metadata, not a sender persona. Native control settlement remains separate from message text.
 
+The Master selects the existing repository Project and passes its `projectID` to `project create`, placing the root member at that Project's canonical directory with its own AGENTS.md, skills, commands and configuration. A managed worktree requires an explicit worktree choice through `name` and optional `repository`. Master and supervisor guidance delegates edits and checks to members, retains ownership until authorized release or transfer, and requires reconciliation before one bounded recovery attempt. Settled ownership is released without deleting Session or Project history. Native human gates, hard/custom approvals and requests marked `requireExplicitDecision` cannot be answered by prompt text or coordinator authority.
+
+The scoped `project` tool exposes `list`, `inspect`, `send`, `answer`, `escalate`, `interrupt`, `assign`, `release`, `create` and `model`. The Master and recorded owner use `model` to read the member's saved selection and replace its complete reference with an exact `expectedModel` comparison, including profile and variant presence. This control is separate from `send.model`, which overrides only the input's execution. See [Project coordination](../specs/coordination.md) for creation receipts, ownership and native control contracts.
+
 There is no generic `.ycoding/tool` loader. Custom tools must be provided by a plugin or MCP server.
 
 ## Built-in workspace memory

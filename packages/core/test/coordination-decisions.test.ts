@@ -39,6 +39,7 @@ function harness(
     settledPermissionRequest?: Record<string, unknown>
     settledGuardrailRequest?: Record<string, unknown>
     formMetadata?: Record<string, unknown>
+    nativeRejection?: string
   } = {},
 ) {
   const calls: string[] = []
@@ -97,6 +98,7 @@ function harness(
           calls.push("permission")
           if (input.decision === "decline") declines.push("permission")
           const valid = yield* input.validate((overrides.settledPermissionRequest ?? permissionRequest) as never)
+          if (valid && overrides.nativeRejection) return { outcome: "escalated" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: false, reason: overrides.nativeRejection }
           return valid
             ? { outcome: "allowed" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: true, via: "yolo" as const }
             : { outcome: "escalated" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: false, reason: "delegation-invalid" }
@@ -113,6 +115,7 @@ function harness(
           reviewDecisions.push(input.decision)
           if (input.decision === "decline") declines.push("review")
           const valid = yield* input.validate((overrides.settledGuardrailRequest ?? guardrailRequest) as never)
+          if (valid && overrides.nativeRejection) return { outcome: "escalated" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: false, reason: overrides.nativeRejection }
           return valid
             ? { outcome: "denied" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: true, via: "yolo" as const }
             : { outcome: "escalated" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: false, reason: "delegation-invalid" }
@@ -126,6 +129,7 @@ function harness(
         Effect.gen(function* () {
           calls.push("form")
           const valid = yield* input.validate(form as never)
+          if (valid && overrides.nativeRejection) return { outcome: "escalated" as const, requestID: input.id, fingerprint: input.fingerprint, settled: false, reason: overrides.nativeRejection }
           return valid
             ? {
                 outcome: "allowed" as const,
@@ -334,7 +338,7 @@ describe("CoordinationDecisions.evaluate", () => {
     expect(narrowed.calls).toEqual([])
   })
 
-  test("central revocation escalates; every delegation class settles through native reconsideration under a permissive global policy", async () => {
+  test("central revocation escalates; authorized requests reach native reconsideration regardless of risk classification", async () => {
     const permissive = (() =>
       Effect.succeed({ enabled: true, categories: ["permission", "review", "question"] as const })) as never
     const roles = {
@@ -415,7 +419,7 @@ describe("CoordinationDecisions.evaluate", () => {
     })
   })
 
-  test("any shell command, an edit of a mail module, every guardrail review class and a legal question are owner-settled", async () => {
+  test("authorized work and review classes forward the owner decision to the native boundary", async () => {
     const permissive = (() =>
       Effect.succeed({ enabled: true, categories: ["permission", "review", "question"] as const })) as never
     const roles = {
@@ -453,12 +457,25 @@ describe("CoordinationDecisions.evaluate", () => {
 const escalateWith = (decisions: ReturnType<typeof harness>["decisions"], input: Record<string, unknown>) =>
   Effect.runPromise(decisions.escalate({ groupID, coordinatorSessionID, targetSessionID, reason: "Needs the owner's call.", ...input } as never))
 
-test("a coordinator answer to a Form settles through native Form reconsideration whatever its explicit-decision flag", async () => {
+test("coordinator answers forward to native Form reconsideration without interpreting metadata as authority", async () => {
   for (const flag of [true, false, "true", undefined]) {
     const fixture = harness({ formMetadata: { ...(flag === undefined ? {} : { requireExplicitDecision: flag }), note: "requireExplicitDecision: true", fields: ["requireExplicitDecision"] } })
     const result = await evaluate(fixture.decisions, { kind: "question", requestID: "frm_one", fingerprint: "fp_frm", answer: { choice: "safe" }, confidence: 0.95 })
     expect(result).toMatchObject({ outcome: "allowed", settled: true })
     expect(fixture.calls).toEqual(["form"])
+  }
+})
+
+test("coordinator evaluation preserves native human-gate refusals", async () => {
+  for (const [kind, requestID, fingerprint, reason, call] of [
+    ["permission", "per_one", "fp_per", "explicit-decision:request", "permission"],
+    ["review", "grq_one", "fp_grq", "explicit-decision:hard-review", "guardrail"],
+    ["review", "grq_one", "fp_grq", "explicit-decision:custom-review", "guardrail"],
+    ["question", "frm_one", "fp_frm", "explicit-decision:request", "form"],
+  ] as const) {
+    const fixture = harness({ nativeRejection: reason })
+    expect(await evaluate(fixture.decisions, { kind, requestID, fingerprint, ...(kind === "question" ? { answer: { choice: "safe" } } : { decision: "approve" }) })).toMatchObject({ outcome: "escalated", settled: false, reason })
+    expect(fixture.calls).toEqual([call])
   }
 })
 

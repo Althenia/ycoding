@@ -98,7 +98,7 @@ describe("Project members take the Master's autonomy modes on joining", () => {
       const group = yield* fixture.coordination.create({ name: "Docs", masterSessionID: fixture.master.id, memberSessionIDs: [] })
       yield* fixture.autonomy.set({ sessionID: fixture.master.id, ...masterModes })
       const runtime = yield* makeRuntime
-      const created = yield* runtime.create(fixture.master.id, { agentPermissions: [], name: "lane-member" }, yield* worktree)
+      const created = yield* runtime.create(fixture.master.id, { id: Session.ID.create(), agentPermissions: [], name: "lane-member" }, yield* worktree)
       expect((yield* fixture.coordination.get(group.id)).memberSessionIDs).toContain(created.sessionID)
       expect(yield* modesOf(created.sessionID)).toEqual({ ...masterModes, inherited: {} })
     }), 30_000)

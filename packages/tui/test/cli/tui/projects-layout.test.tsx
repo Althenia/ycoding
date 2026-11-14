@@ -202,7 +202,7 @@ for (const [name, projects, error] of [
       const frame = app.captureCharFrame()
       expect(frame).toContain(name === "loading" ? "Loading projects…" : name === "empty" ? "No projects" : "Offline")
       expect(frame).toContain("[n] + New project")
-      expect(frame).toContain("? keys")
+      expect(frame).not.toContain("? keys")
       if (error) expect(frame).toContain("[r] Retry")
     } finally {
       app.renderer.destroy()
@@ -222,12 +222,14 @@ test("Projects list shows master preview, meter and opens the master", async () 
     app.renderer.destroy()
   }
 })
-test("narrow list omits preview and question mark opens contextual keys", async () => {
+test("narrow Projects list exposes delete directly without a question mark overlay", async () => {
   const { app } = await mount({ projects: [release], width: 80 })
   try {
     expect(app.captureCharFrame()).not.toContain("preview")
+    expect(app.captureCharFrame()).toContain("D delete")
+    expect(app.captureCharFrame()).not.toContain("? keys")
     await key(app, "?")
-    expect(app.captureCharFrame()).toContain("Project keys")
+    expect(app.captureCharFrame()).not.toContain("Project keys")
   } finally {
     app.renderer.destroy()
   }
@@ -306,6 +308,9 @@ test("members pin and protect MASTER; open a member and show contextual hints", 
     expect(frame.indexOf("Lead")).toBeLessThan(frame.indexOf("Docs worker"))
     expect(frame).toContain("(x) Remove")
     expect(frame).toContain("master: change it in Settings")
+    expect(frame).not.toContain("? keys")
+    await key(app, "?")
+    expect(app.captureCharFrame()).not.toContain("Member keys")
     await key(app, "x")
     expect(calls).toEqual([])
     await key(app, "DOWN")

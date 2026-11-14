@@ -118,7 +118,8 @@ for (const width of [60, 100]) {
       const view = await renderComputerDialog({ ...base, computer }, width)
       try {
         await view.app.waitForFrame((frame) => frame.includes(label))
-        expect(view.frame().includes("Use this computer for Dots tasks")).toBe(computer.state === "detached")
+        expect(view.frame().includes("Use this computer for Dot threads")).toBe(computer.state === "detached")
+        expect(view.frame()).not.toContain("Dots tasks")
         if (computer.state === "unavailable") expect(view.frame()).toContain("Executor is not running")
       } finally { view.app.renderer.destroy() }
     }
@@ -126,7 +127,7 @@ for (const width of [60, 100]) {
     try {
       await off.app.waitForFrame((frame) => frame.includes("Access: Off"))
       expect(off.frame()).not.toContain("Executor:")
-      expect(off.frame()).not.toContain("Use this computer for Dots tasks")
+      expect(off.frame()).not.toContain("Use this computer for Dot threads")
     } finally { off.app.renderer.destroy() }
   })
 }
@@ -134,7 +135,7 @@ for (const width of [60, 100]) {
 test("Dots dialog confirms before attaching, then attaches once and refreshes", async () => {
   const view = await renderComputerDialog({ ...base, computer: { state: "detached" } })
   try {
-    await view.app.waitForFrame((frame) => frame.includes("Use this computer for Dots tasks"))
+    await view.app.waitForFrame((frame) => frame.includes("Use this computer for Dot threads"))
     view.app.mockInput.pressArrow("down")
     view.app.mockInput.pressEnter()
     await view.app.waitForFrame((frame) => frame.includes("stay connected"))
@@ -146,7 +147,7 @@ test("Dots dialog confirms before attaching, then attaches once and refreshes", 
     expect(view.attaches).toHaveLength(1)
     view.settle({ ...base, computer: { state: "attached" } })
     await view.app.waitForFrame((frame) => frame.includes("Executor: Attached"))
-    expect(view.frame()).not.toContain("Use this computer for Dots tasks")
+    expect(view.frame()).not.toContain("Use this computer for Dot threads")
     expect(view.attaches).toHaveLength(1)
   } finally { view.app.renderer.destroy() }
 })
@@ -154,14 +155,14 @@ test("Dots dialog confirms before attaching, then attaches once and refreshes", 
 test("Dots dialog cancel leaves the computer detached without a request", async () => {
   const view = await renderComputerDialog({ ...base, computer: { state: "detached" } })
   try {
-    await view.app.waitForFrame((frame) => frame.includes("Use this computer for Dots tasks"))
+    await view.app.waitForFrame((frame) => frame.includes("Use this computer for Dot threads"))
     view.app.mockInput.pressArrow("down")
     view.app.mockInput.pressEnter()
     await view.app.waitForFrame((frame) => frame.includes("stay connected"))
     view.app.mockInput.pressArrow("down")
     view.app.mockInput.pressEnter()
-    await view.app.waitForFrame((frame) => frame.includes("Use this computer for Dots tasks") && !frame.includes("stay connected"))
-    expect(view.frame()).toContain("Use this computer for Dots tasks")
+    await view.app.waitForFrame((frame) => frame.includes("Use this computer for Dot threads") && !frame.includes("stay connected"))
+    expect(view.frame()).toContain("Use this computer for Dot threads")
     expect(view.attaches).toEqual([])
   } finally { view.app.renderer.destroy() }
 })
@@ -169,7 +170,7 @@ test("Dots dialog cancel leaves the computer detached without a request", async 
 test("Dots dialog shows an attach failure and does not retry", async () => {
   const view = await renderComputerDialog({ ...base, computer: { state: "detached" } })
   try {
-    await view.app.waitForFrame((frame) => frame.includes("Use this computer for Dots tasks"))
+    await view.app.waitForFrame((frame) => frame.includes("Use this computer for Dot threads"))
     view.app.mockInput.pressArrow("down")
     view.app.mockInput.pressEnter()
     await view.app.waitForFrame((frame) => frame.includes("stay connected"))
@@ -186,24 +187,24 @@ test("Dots dialog shows an attach failure and does not retry", async () => {
 test("Dots dialog offers Detach only for an attached computer, confirms first, then detaches once", async () => {
   const view = await renderComputerDialog({ ...base, computer: { state: "attached" } })
   try {
-    await view.app.waitForFrame((frame) => frame.includes("Detach this computer from Dots tasks"))
+    await view.app.waitForFrame((frame) => frame.includes("Detach this computer from Dot threads"))
     view.app.mockInput.pressArrow("down")
     view.app.mockInput.pressEnter()
-    await view.app.waitForFrame((frame) => frame.includes("stop running Dots tasks"))
+    await view.app.waitForFrame((frame) => frame.includes("stop running Dot threads"))
     expect(view.detaches).toEqual([])
     view.app.mockInput.pressEnter()
     await view.app.waitForFrame((frame) => frame.includes("Updating access"))
     expect(view.detaches).toEqual([{}])
     view.settleDetach({ ...base, computer: { state: "detached" } })
     await view.app.waitForFrame((frame) => frame.includes("Executor: Not attached"))
-    expect(view.frame()).not.toContain("Detach this computer from Dots tasks")
+    expect(view.frame()).not.toContain("Detach this computer from Dot threads")
     expect(view.detaches).toHaveLength(1)
   } finally { view.app.renderer.destroy() }
   for (const computer of [{ state: "detached" }, { state: "unavailable" }] as const) {
     const other = await renderComputerDialog({ ...base, computer })
     try {
       await other.app.waitForFrame((frame) => frame.includes("Executor:"))
-      expect(other.frame()).not.toContain("Detach this computer from Dots tasks")
+      expect(other.frame()).not.toContain("Detach this computer from Dot threads")
     } finally { other.app.renderer.destroy() }
   }
 })

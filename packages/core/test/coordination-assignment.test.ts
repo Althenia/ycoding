@@ -386,10 +386,10 @@ describe("post-approval: project member creation", () => {
       const trees = yield* worktrees
       const database = yield* Database.Service
       yield* database.db.update(SessionTable).set({ permission: ceiling }).where(eq(SessionTable.id, fixture.master.id)).run().pipe(Effect.orDie)
-      const plain = yield* fixture.runtime.create(fixture.master.id, { agentPermissions: agentRules, name: "lane-plain" }, trees.create())
-      const delegated = yield* fixture.runtime.create(fixture.master.id, { agentPermissions: agentRules, name: "lane-owned", ownerSessionID: fixture.first.id, title: "Owned lane" }, trees.create())
-      const mastered = yield* fixture.runtime.create(fixture.master.id, { agentPermissions: agentRules, name: "lane-master", ownerSessionID: fixture.master.id }, trees.create())
-      expect(plain).toEqual({ sessionID: plain.sessionID, directory: AbsolutePath.make(path.join(trees.root, "lane-plain")), branch: "lane-plain" })
+      const plain = yield* fixture.runtime.create(fixture.master.id, { id: Session.ID.create(), agentPermissions: agentRules, name: "lane-plain" }, trees.create())
+      const delegated = yield* fixture.runtime.create(fixture.master.id, { id: Session.ID.create(), agentPermissions: agentRules, name: "lane-owned", ownerSessionID: fixture.first.id, title: "Owned lane" }, trees.create())
+      const mastered = yield* fixture.runtime.create(fixture.master.id, { id: Session.ID.create(), agentPermissions: agentRules, name: "lane-master", ownerSessionID: fixture.master.id }, trees.create())
+      expect(plain).toEqual({ sessionID: plain.sessionID, directory: AbsolutePath.make(path.join(trees.root, "lane-plain")), location: { directory: AbsolutePath.make(path.join(trees.root, "lane-plain")) }, model: null, enrollment: { groupID: fixture.group.id, member: true }, branch: "lane-plain" })
       expect(delegated).toMatchObject({ directory: path.join(trees.root, "lane-owned"), branch: "lane-owned", owner: ownedBy({ id: fixture.first.id, title: fixture.first.title }) })
       expect(mastered.owner).toEqual(ownedBy(fixture.master))
       expect(new Set([plain.directory, delegated.directory, mastered.directory]).size).toBe(3)
@@ -412,7 +412,7 @@ describe("post-approval: project member creation", () => {
       const trees = yield* worktrees
       const seen: Array<{ readonly type: string; readonly data: unknown }> = []
       const unsubscribe = yield* fixture.events.listen((event) => Effect.sync(() => { seen.push({ type: event.type, data: event.data }) }))
-      const result = yield* fixture.runtime.create(fixture.master.id, { agentPermissions: [], name: "lane-prompt", ownerSessionID: fixture.first.id, prompt: "Implement the lane" }, trees.create())
+      const result = yield* fixture.runtime.create(fixture.master.id, { id: Session.ID.create(), agentPermissions: [], name: "lane-prompt", ownerSessionID: fixture.first.id, prompt: "Implement the lane" }, trees.create())
       yield* unsubscribe
       const member = result.sessionID
       const owned = seen.findIndex((event) => event.type === Coordination.Event.OwnerChanged.type && (event.data as { sessionID: string }).sessionID === member)
@@ -435,17 +435,17 @@ describe("post-approval: project member creation", () => {
       const before = yield* sessionCount
       const members = (yield* fixture.coordination.get(fixture.group.id)).memberSessionIDs
       for (const caller of [fixture.first.id, fixture.plainChild.id, fixture.alpha.id, fixture.memberSubagent.id, fixture.outsider.id])
-        yield* refused(fixture.runtime.create(caller, { agentPermissions: [], name: "lane-refused" }, trees.create()))
+        yield* refused(fixture.runtime.create(caller, { id: Session.ID.create(), agentPermissions: [], name: "lane-refused" }, trees.create()))
       for (const owner of [fixture.plainChild.id, fixture.alpha.id, fixture.memberSubagent.id, fixture.outsiderSubagent.id, cancelled.id])
-        yield* refused(fixture.runtime.create(fixture.master.id, { agentPermissions: [], name: "lane-refused", ownerSessionID: owner }, trees.create()))
-      yield* refused(fixture.runtime.create(fixture.master.id, { agentPermissions: [], name: "lane-refused", model: unavailable }, trees.create()))
+        yield* refused(fixture.runtime.create(fixture.master.id, { id: Session.ID.create(), agentPermissions: [], name: "lane-refused", ownerSessionID: owner }, trees.create()))
+      yield* refused(fixture.runtime.create(fixture.master.id, { id: Session.ID.create(), agentPermissions: [], name: "lane-refused", model: unavailable }, trees.create()))
       yield* fixture.coordination.pause(fixture.group.id)
-      expect(yield* fixture.runtime.create(fixture.master.id, { agentPermissions: [], name: "lane-refused", prompt: "Start" }, trees.create()).pipe(Effect.flip, Effect.map((error) => error.message)))
+      expect(yield* fixture.runtime.create(fixture.master.id, { id: Session.ID.create(), agentPermissions: [], name: "lane-refused", prompt: "Start" }, trees.create()).pipe(Effect.flip, Effect.map((error) => error.message)))
         .toBe(CoordinationRuntime.inactiveMessage)
       expect(trees.calls).toEqual([])
       expect(yield* sessionCount).toBe(before)
       expect((yield* fixture.coordination.get(fixture.group.id)).memberSessionIDs).toEqual(members)
-      const quiet = yield* fixture.runtime.create(fixture.master.id, { agentPermissions: [], name: "lane-quiet" }, trees.create())
+      const quiet = yield* fixture.runtime.create(fixture.master.id, { id: Session.ID.create(), agentPermissions: [], name: "lane-quiet" }, trees.create())
       expect(quiet.prompt).toBeUndefined()
       expect(trees.calls).toEqual(["lane-quiet"])
     }), 30_000)
@@ -454,7 +454,7 @@ describe("post-approval: project member creation", () => {
     Effect.gen(function* () {
       const fixture = yield* setup
       const before = yield* sessionCount
-      const failure = yield* fixture.runtime.create(fixture.master.id, { agentPermissions: [], name: "lane-taken" }, () => Effect.fail(new CoordinationRuntime.RefusedError({ message: "A worktree named lane-taken already exists" })))
+      const failure = yield* fixture.runtime.create(fixture.master.id, { id: Session.ID.create(), agentPermissions: [], name: "lane-taken" }, () => Effect.fail(new CoordinationRuntime.RefusedError({ message: "A worktree named lane-taken already exists" })))
         .pipe(Effect.flip)
       expect(failure.message).toBe("A worktree named lane-taken already exists")
       expect(yield* sessionCount).toBe(before)
@@ -465,11 +465,12 @@ describe("post-approval: project member creation", () => {
       const fixture = yield* setup
       const trees = yield* worktrees
       const before = yield* sessionCount
-      const failure = yield* fixture.runtime.create(fixture.master.id, { agentPermissions: [], name: "lane-partial", ownerSessionID: fixture.first.id },
-        trees.create(staleOwner(fixture, fixture.first.id, stale[1]))).pipe(Effect.flip)
+      const failure = yield* fixture.runtime.create(fixture.master.id, { id: Session.ID.create(), agentPermissions: [], name: "lane-partial", ownerSessionID: fixture.first.id },
+        trees.create(staleOwner(fixture, fixture.first.id, stale[1])))
       const directory = path.join(trees.root, "lane-partial")
-      expect(failure.message).toContain(directory)
-      expect(failure.message).toContain("lane-partial")
+      expect(failure.enrollment.member).toBe(false)
+      expect(failure.enrollment.error).toContain(directory)
+      expect(failure.enrollment.error).toContain("lane-partial")
       expect((yield* Effect.promise(() => fs.stat(directory))).isDirectory()).toBe(true)
       expect(yield* sessionCount).toBe(before + 1)
       expect((yield* fixture.coordination.get(fixture.group.id)).memberSessionIDs).toEqual(fixture.group.memberSessionIDs)
@@ -481,7 +482,7 @@ describe("post-approval: project member creation", () => {
       const trees = yield* worktrees
       yield* fixture.coordination.update(fixture.group.id, { revision: fixture.group.revision, settings: { concurrency: 1 } })
       running.add(fixture.beta.id)
-      const result = yield* fixture.runtime.create(fixture.master.id, { agentPermissions: [], name: "lane-busy", prompt: "Start" }, trees.create())
+      const result = yield* fixture.runtime.create(fixture.master.id, { id: Session.ID.create(), agentPermissions: [], name: "lane-busy", prompt: "Start" }, trees.create())
       expect(result.prompt).toEqual({ refused: "Project concurrency limit 1 reached" })
       expect((yield* fixture.coordination.get(fixture.group.id)).memberSessionIDs).toContain(result.sessionID)
     }), 30_000)

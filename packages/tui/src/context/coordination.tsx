@@ -191,14 +191,17 @@ function createCoordination() {
     })
     return created.id
   }
-  const createForProject = async (key: string, input: string, title?: string) => {
-    const directory = absoluteDirectory(input, paths.home)
+  const createForProject = async (key: string, input: string, title?: string, master = false) => {
+    const selectedDirectory = absoluteDirectory(input, paths.home)
     const prior = creations.get(key)
     if (prior?.sessionID) return prior.sessionID
     if (prior)
       throw new ProjectCreationError(
         "Session creation outcome unknown. Check Sessions before choosing an existing Session; creation will not be repeated.",
       )
+    const directory = master
+      ? absoluteDirectory((await client.api.location.get({ location: { directory: selectedDirectory } })).project.directory, paths.home)
+      : selectedDirectory
     const pending: { sessionID?: string; submitted?: boolean } = {}
     creations.set(key, pending)
     try {
@@ -232,7 +235,7 @@ function createCoordination() {
         const masterSessionID =
           "sessionID" in input.master
             ? input.master.sessionID
-            : await createForProject(key, input.master.directory, input.master.title ?? input.name)
+            : await createForProject(key, input.master.directory, input.master.title ?? input.name, true)
         const attempt = creations.get(key) ?? { sessionID: masterSessionID, submitted: false }
         creations.set(key, attempt)
         try {

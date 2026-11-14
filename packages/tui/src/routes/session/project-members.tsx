@@ -6,7 +6,6 @@ import { Keymap } from "../../context/keymap"
 import { useTheme } from "../../context/theme"
 import { useTuiPaths } from "../../context/runtime"
 import { DialogConfirm } from "../../ui/dialog-confirm"
-import { DialogAlert } from "../../ui/dialog-alert"
 import { useDialog } from "../../ui/dialog"
 import { getGlyph } from "../../ui/glyph"
 import { SplitBorder } from "../../ui/border"
@@ -325,17 +324,6 @@ export function ProjectMembers(props: {
     contentWidth: () => inner() - 1,
     busy,
   })
-  const help = () =>
-    dialog.replace(() => (
-      <DialogAlert
-        title="Member keys"
-        message={
-          mode() === "members"
-            ? "↑↓ member · o/enter open · a add · n new session\nx remove · D delete · s settings · esc chat"
-            : "↑↓ field · enter pick / edit · ←→ recent directory\nc create · esc cancel"
-        }
-      />
-    ))
   const back = () => (mode() === "members" ? props.onBack() : setMode("members"))
   const open = () => {
     if (current()) props.onOpen(current().sessionID)
@@ -345,7 +333,7 @@ export function ProjectMembers(props: {
       ? "enter save · esc cancel"
       : mode() !== "members"
         ? "↑↓ field · enter pick / edit · c create · esc cancel"
-        : `↑↓ member · o/enter open · a add · n new session${canRemove() ? " · x remove · D delete" : ""} · s settings · ? keys · esc chat`
+        : `↑↓ member · o/enter open · a add · n new session${canRemove() ? " · x remove · D delete" : ""} · s settings · esc chat`
   Keymap.createLayer(() => ({
     mode: props.keymapMode,
     enabled: props.focused && !form.editing(),
@@ -411,7 +399,6 @@ export function ProjectMembers(props: {
           back()
         },
       },
-      { bind: "?", title: "Member keys", run: help },
     ],
   }))
   return (

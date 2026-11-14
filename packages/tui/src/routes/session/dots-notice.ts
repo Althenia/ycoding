@@ -5,8 +5,8 @@ import { Schema } from "effect"
 const decodeCoordination = Schema.decodeUnknownOption(Dots.CoordinationContext)
 const reasons = {
   capability_disabled: "Dots capability disabled",
-  no_task: "no active Dots task",
-  task_settled: "Dots task settled",
+  no_task: "no active Dot thread",
+  task_settled: "Dot thread settled",
   unavailable: "coordination unavailable",
   tool_unavailable: "dots_report unavailable",
 }

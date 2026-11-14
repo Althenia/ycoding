@@ -396,7 +396,7 @@ const operating = [
   "Require batched corrections, reruns of only failed or invalidated checks, and reuse of valid evidence for unchanged sources, contracts and environment, including at integration and merge.",
   "A missing prior measurement is not a reason to wait: run within the agreed bounded limit and record actual usage afterward",
   "Report progress by delivery milestones, not by mixed administrative counts",
-  "As Master, use `create` to start a member Session in its own managed worktree under you or an owner subagent you launched",
+  "As Master, use `create` with the chosen existing Project's `projectID` to start a member Session in its canonical directory",
   "`assign` to give an existing member Session to an owner subagent you launched",
   "only the Master uses `release` after verification or transfers ownership with `assign`",
   "Supervisors cannot release themselves",
@@ -405,6 +405,8 @@ const operating = [
   "Idle, failure, or a settled turn never ends ownership",
 ]
 const gates = [
+  "Safety and platform human gates, requests marked `requireExplicitDecision: true`, and hard or custom-rule guardrail approvals require an explicit human decision through their native controls.",
+  "Decline an unsafe request when the native control permits it; never approve or answer a mandatory human gate.",
   "Never override denies or permission ceilings.",
   "Deny rules and permission ceilings still hold: approving something a deny rule or the permission ceiling covers leaves it denied.",
   "Leave inactive-Project refusals, deferred review items, and human-only controls to their native gates",
@@ -517,7 +519,8 @@ describe("Master hierarchy prompt assembly", () => {
       expect(system).not.toContain("Main")
       expect(system).toContain("Do not execute a member's task, take over its tools, or control its subagents.")
       expect(system).toContain("Verify assignments and completion evidence against the user's current direction.")
-      expect(system).toContain("Settle every member request yourself through `project answer` in every autonomy mode, Manual included")
+      expect(system).toContain("Settle routine member requests through `project answer` within recorded authority in every autonomy mode, Manual included.")
+      expect(system).not.toContain("Settle every member request yourself")
       expect(system).toContain("Deny rules and permission ceilings still hold")
       expect(system).not.toContain("Only safety items reach the human")
       expect(system).not.toContain("Manual-mode")
@@ -560,6 +563,28 @@ describe("Master hierarchy prompt assembly", () => {
       const released = JSON.stringify(yield* requestFor(supervisor, "After release"))
       expect(released).toContain("The Project coordination role above no longer applies to this Session. Disregard it.")
       expect(released).toContain("Project role: Master's subagent. You make no Project changes")
+    }),
+  )
+
+  it.effect("Master and supervisor prompts preserve canonical placement and bounded recovery without history deletion", () =>
+    Effect.gen(function* () {
+      const { coordination, group } = yield* setupProject
+      const supervisor = Session.ID.make("ses_coord_recovery_supervisor")
+      yield* insertSession(supervisor, otherSessionID)
+      yield* coordination.setOwner(group.id, { sessionID, ownerSessionID: supervisor })
+      for (const id of [otherSessionID, supervisor]) {
+        const system = systemText(yield* requestFor(id, "Review member state"))
+        for (const text of [
+          "Select the existing Project for the work, then pass its `projectID` to `project create`; use that Project's canonical directory, AGENTS.md, skills, commands and config.",
+          "Create a managed worktree with `repository` and `name` only when the user explicitly requests a worktree.",
+          "Detect stuck, hung or looping work from reported state and evidence; reconcile current state before one bounded recovery attempt through existing native controls.",
+          "If recovery fails or its outcome is uncertain, report the blocker with evidence and continue independent authorized work; never poll, repeatedly wake, or replay an uncertain action.",
+          "Release only settled ownership after verification; use existing non-destructive controls and never delete Session or Project history as cleanup.",
+          ...gates,
+        ]) expect(system).toContain(text)
+        expect(system).not.toContain("start a member Session in its own managed worktree")
+        expect(system).not.toContain("it never limits `answer`")
+      }
     }),
   )
 })

@@ -7,7 +7,6 @@ import { useRoute, useRouteData } from "../../context/route"
 import { useTheme } from "../../context/theme"
 import { useConfig } from "../../config"
 import { DialogConfirm } from "../../ui/dialog-confirm"
-import { DialogAlert } from "../../ui/dialog-alert"
 import { useDialog } from "../../ui/dialog"
 import { errorMessage } from "../../util/error"
 import {
@@ -453,19 +452,6 @@ export function ProjectsScreenContent(props: {
     setMemberEntry(entry)
     setView("members")
   }
-  const help = () =>
-    dialog.replace(() => (
-      <DialogAlert
-        title="Project keys"
-        message={
-          view() === "list"
-            ? "↑↓ project · enter open master chat · a add session · m members\nn new project · D delete project · r refresh · ? keys · esc back"
-            : view() === "new"
-              ? "↑↓ field · ←→ master source · enter pick / edit\nc create · esc cancel"
-              : "↑↓ field · enter edit · ←→ change choice\nspace toggle · tab section · esc back"
-        }
-      />
-    ))
   Keymap.createLayer(() => ({
     enabled: !form.editing() && view() !== "members" && !(view() === "settings" && section() === 1),
     commands: [
@@ -536,7 +522,6 @@ export function ProjectsScreenContent(props: {
         },
       },
       { bind: "escape", title: "Back", run: back },
-      { bind: "?", title: "Project keys", run: help },
     ],
   }))
   Keymap.createLayer(() => ({
@@ -567,12 +552,12 @@ export function ProjectsScreenContent(props: {
         ? "enter next field · esc cancel"
         : `editing ${form.cursor()?.label} · enter save · esc cancel`
       : view() === "list"
-        ? "↑↓ project · enter open · a add session · m members · n new · ? keys · esc back"
+        ? "↑↓ project · enter open · D delete · a add · m members · n new · esc back"
         : view() === "members"
           ? "↑↓ member · enter/o open · a add · n new session · esc back"
           : view() === "new"
             ? "↑↓ field · ←→ master source · enter pick / edit · c create · esc cancel"
-            : "↑↓ field · enter edit · ←→ change choice · space toggle · tab section · ? keys · esc back"
+            : "↑↓ field · enter edit · ←→ change choice · space toggle · tab section · esc back"
   function List() {
     return (
       <Panel title={`PROJECTS ${props.projects()?.length ?? 0}`} active={view() === "list"} flexGrow={1}>
@@ -645,7 +630,7 @@ export function ProjectsScreenContent(props: {
           </box>
         </scrollbox>
         <Show when={view() === "list" && project() && cursor() < (props.projects()?.length ?? 0)}>
-          <box flexDirection="column">
+          <box flexDirection="column" flexShrink={0}>
             <box flexDirection="row" gap={2}>
               <text selectable={false} fg={infoInk(theme)} onMouseUp={() => openMembers("add")}>
                 [a] Add session

@@ -1435,6 +1435,8 @@ export const layer = Layer.effect(
                     const result = classification.evaluation
                     if (result.decision !== "ask") return yield* settleRules()
                     if (!unchanged(result)) return { ...base, outcome: "stale" as const, settled: false }
+                    if (result.hardReview) return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:hard-review" }
+                    if (!result.standard) return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:custom-review" }
                     if (input.decision === "approve")
                       return yield* withRootLock(
                         rootSessionID,
@@ -1445,6 +1447,8 @@ export const layer = Layer.effect(
                           const current = (yield* classify(evaluateInput)).evaluation
                           if (current.decision !== "ask" && current.decision !== "hard_review") return yield* settleRulesUnlocked(current.decision, current.ruleIDs)
                           if (!unchanged(current)) return { ...base, outcome: "stale" as const, settled: false }
+                          if (current.hardReview) return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:hard-review" }
+                          if (!current.standard) return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:custom-review" }
                           removePendingUnlocked(input.requestID)
                           yield* events.publish(Guardrail.Event.Decided, {
                             rootSessionID,
@@ -1469,9 +1473,6 @@ export const layer = Layer.effect(
                           return { ...base, outcome: "allowed" as const, settled: true, via: "coordination" as const }
                         }),
                       )
-                    if (result.hardReview) return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:hard-review" }
-                    if (!result.standard) return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:custom-review" }
-
                     const authorization = yield* autonomy
                       .snapshot(rootSessionID, { inherited: true })
                       .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))

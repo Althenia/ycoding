@@ -223,7 +223,7 @@ describe("native coordinator Form reconsideration", () => {
       })
     })
 
-  it.effect("Manual answers settle a coordinator's explicit answer, including on an explicit-decision Form, and require one to settle", () =>
+  it.effect("Manual answers accept ordinary coordinator answers and preserve explicit human Form gates", () =>
     Effect.gen(function* () {
       yield* setup
       const autonomy = yield* SessionAutonomy.Service
@@ -250,14 +250,16 @@ describe("native coordinator Form reconsideration", () => {
       expect(yield* service.state(recommended.id)).toEqual({ status: "answered", answer: { branch: "safe" } })
       const explicit = { ...recommended, id: Form.ID.create("frm_coord_manual_explicit"), metadata: { requireExplicitDecision: true } } satisfies Form.CreateInput
       yield* service.create(explicit)
-      expect(yield* reconsiderForm(explicit.id)).toMatchObject({ outcome: "escalated", settled: false, reason: "answer-required" })
-      expect(yield* reconsiderForm(explicit.id, { branch: "safe" })).toMatchObject({ outcome: "allowed", settled: true, via: "coordination" })
+      expect(yield* reconsiderForm(explicit.id)).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:request" })
+      expect(yield* reconsiderForm(explicit.id, { branch: "safe" })).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:request" })
+      expect(yield* service.state(explicit.id)).toEqual({ status: "pending" })
+      yield* service.reply({ id: explicit.id, answer: { branch: "safe" } })
       expect(yield* service.state(explicit.id)).toEqual({ status: "answered", answer: { branch: "safe" } })
       expect((yield* autonomy.snapshot(sessionID)).state.answers).toBe("manual")
     }),
   )
 
-  for (const mode of ["auto", "yolo"] as const) it.effect(`${mode} answers settle a coordinator answer to a canonical explicit-decision Form and refuse it without an answer`, () =>
+  for (const mode of ["auto", "yolo"] as const) it.effect(`${mode} answers preserve explicit human Form gates without trusting textual lookalikes`, () =>
     Effect.gen(function* () {
       yield* setup
       const autonomy = yield* SessionAutonomy.Service
@@ -271,8 +273,12 @@ describe("native coordinator Form reconsideration", () => {
         } satisfies Form.CreateInput
         yield* service.create(explicit)
         if (flag === true) {
-          expect(yield* reconsiderForm(explicit.id)).toMatchObject({ outcome: "escalated", settled: false, reason: "answer-required" })
+          expect(yield* reconsiderForm(explicit.id)).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:request" })
+          expect(yield* reconsiderForm(explicit.id, { branch: "safe" })).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:request" })
           expect(yield* service.state(explicit.id)).toEqual({ status: "pending" })
+          yield* service.reply({ id: explicit.id, answer: { branch: "safe" } })
+          expect(yield* service.state(explicit.id)).toEqual({ status: "answered", answer: { branch: "safe" } })
+          continue
         }
         expect(yield* reconsiderForm(explicit.id, { branch: "safe" })).toMatchObject({ outcome: "allowed", settled: true })
         expect(yield* service.state(explicit.id)).toEqual({ status: "answered", answer: { branch: "safe" } })
@@ -385,7 +391,7 @@ const matchConfirmed = Schema.decodeUnknownSync(Decision.Output)({
   },
 })
 
-function nativeHarness(scores: ReadonlyArray<Record<string, number>>) {
+function nativeHarness(scores: ReadonlyArray<Record<string, number>>, customReview = false) {
   const choices: Decision.Input[] = []
   const filesystem = Layer.effect(
     FSUtil.Service,
@@ -393,8 +399,8 @@ function nativeHarness(scores: ReadonlyArray<Record<string, number>>) {
       const fs = yield* FSUtil.Service
       return FSUtil.Service.of({
         ...fs,
-        scan: () => Effect.succeed([] as string[]),
-        readFileStringSafe: () => Effect.succeed(undefined),
+        scan: (_pattern, options) => Effect.succeed(customReview && options?.cwd === "/global/guardrails" ? ["/global/guardrails/review.md"] : []),
+        readFileStringSafe: (file) => Effect.succeed(customReview && file === "/global/guardrails/review.md" ? "---\nid: custom-review\ndecision: ask\nactions: [file_mutation]\nresources: [\"*\"]\nreason: Human review required\npriority: 0\n---\n" : undefined),
       })
     }),
   ).pipe(Layer.provide(FSUtil.layer), Layer.provide(NodeFileSystem.layer))
@@ -1388,7 +1394,6 @@ describe("native owner settlement of every delegation class through Coordination
       const asks = [
         { action: "shell", resources: ["git push origin main"] },
         { action: "external_directory", resources: ["/outside/report/*"] },
-        { action: "read", resources: ["src/notes.txt"], requireExplicitDecision: true as const },
         { action: "mcp_database_update", resources: ["src/a"] },
       ]
       for (const ask of asks) {
@@ -1399,6 +1404,32 @@ describe("native owner settlement of every delegation class through Coordination
       }
       expect(permissions.choices).toHaveLength(0)
       expect(captured.permissionReplied.map((event) => event.reply)).toEqual(asks.map(() => "once"))
+    }),
+  )
+
+  const explicitPermission = nativeHarness([{ allow: 0.99 }])
+  explicitPermission.it.effect("explicit human permission gates reject owner approval in every mode and retain native human settlement", () =>
+    Effect.gen(function* () {
+      yield* nativeSetup
+      const decisions = yield* ownerDecisions()
+      const service = yield* Permission.Service
+      const autonomy = yield* SessionAutonomy.Service
+      const captured = yield* captureNativeEvents()
+      for (const mode of ["manual", "auto", "yolo"] as const) {
+        yield* autonomy.set({ sessionID: nativeSessionID, permissions: mode })
+        const pending = yield* pendingPermission({ action: "read", resources: ["src/notes.txt"], requireExplicitDecision: true })
+        const before = captured.permissionReplied.length
+        expect(yield* approve(decisions, "permission", pending.request.id, pending.fingerprint)).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:request" })
+        expect(yield* service.reconsider({ requestID: pending.request.id, fingerprint: pending.fingerprint, actor: "coordinator", source: driverSource, decision: "approve", validate: () => Effect.succeed(true) })).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:request" })
+        expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
+        expect(captured.permissionReplied).toHaveLength(before)
+        yield* service.reply({ requestID: pending.request.id, reply: "once" })
+        expect(Exit.isSuccess(yield* Fiber.join(pending.running))).toBe(true)
+        expect(yield* service.forSession(nativeSessionID)).toEqual([])
+        expect((yield* autonomy.snapshot(nativeSessionID)).state.permissions).toBe(mode)
+      }
+      expect(explicitPermission.choices).toHaveLength(0)
+      expect(captured.assessed.filter((event) => event.via === "coordination")).toEqual([])
     }),
   )
 
@@ -1425,7 +1456,7 @@ describe("native owner settlement of every delegation class through Coordination
   )
 
   const reviews = nativeHarness([{ allow: 0.99 }])
-  reviews.it.effect("an owner approval under Manual guardrails allows an outside-repository review and a hard review once without a helper call", () =>
+  reviews.it.effect("an owner approval allows an ordinary outside-repository review but preserves a hard human gate", () =>
     Effect.gen(function* () {
       yield* nativeSetup
       const decisions = yield* ownerDecisions()
@@ -1438,6 +1469,18 @@ describe("native owner settlement of every delegation class through Coordination
       ] as const) {
         const pending = yield* pendingReview(action, resources, metadata)
         expect(pending.request).toMatchObject(expected)
+        if (pending.request.hardReview) {
+          const before = captured.guardrailDecided.length
+          expect(yield* approve(decisions, "review", pending.request.id, pending.fingerprint)).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:hard-review" })
+          expect(yield* service.reconsider({ sessionID: nativeSessionID, requestID: pending.request.id, fingerprint: pending.fingerprint, actor: "coordinator", source: driverSource, decision: "approve", validate: () => Effect.succeed(true) })).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:hard-review" })
+          expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
+          expect(captured.guardrailDecided).toHaveLength(before)
+          yield* service.reply({ sessionID: nativeSessionID, requestID: pending.request.id, reply: "once" })
+          const exit = yield* Fiber.join(pending.running)
+          expect(Exit.isSuccess(exit)).toBe(true)
+          if (Exit.isSuccess(exit)) yield* exit.value.release
+          continue
+        }
         expect(yield* approve(decisions, "review", pending.request.id, pending.fingerprint), action).toMatchObject({ outcome: "allowed", settled: true, via: "coordination" })
         const exit = yield* Fiber.join(pending.running)
         expect(Exit.isSuccess(exit)).toBe(true)
@@ -1445,9 +1488,41 @@ describe("native owner settlement of every delegation class through Coordination
         expect(yield* service.forSession(nativeSessionID)).toEqual([])
       }
       expect(reviews.choices).toHaveLength(choicesBefore)
-      expect(captured.guardrailDecided).toEqual([0, 1].map(() => expect.objectContaining({
+      expect(captured.guardrailDecided).toEqual([expect.objectContaining({
         reply: "once", actor: "coordinator", coordinatorSessionID: driverSource.coordinatorSessionID, rationale: "Owner-approved within the assignment.",
-      })))
+      })])
+    }),
+  )
+
+  const custom = nativeHarness([{ allow: 0.99 }], true)
+  custom.it.effect("custom reviews reject owner approval at the native boundary while allowing decline or a human reply", () =>
+    Effect.gen(function* () {
+      yield* nativeSetup
+      const decisions = yield* ownerDecisions()
+      const service = yield* SessionGuardrail.Service
+      const captured = yield* captureNativeEvents()
+      for (const reply of ["decline", "human"] as const) {
+        const pending = yield* pendingReview("file_mutation", ["src/notes.txt"], { operation: "write" })
+        expect(pending.request).toMatchObject({ standard: false, ruleIDs: ["custom-review"] })
+        expect(pending.request.hardReview ?? false).toBe(false)
+        const before = captured.guardrailDecided.length
+        expect(yield* approve(decisions, "review", pending.request.id, pending.fingerprint)).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:custom-review" })
+        expect(yield* service.reconsider({ sessionID: nativeSessionID, requestID: pending.request.id, fingerprint: pending.fingerprint, actor: "coordinator", source: driverSource, decision: "approve", validate: () => Effect.succeed(true) })).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:custom-review" })
+        expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
+        expect(captured.guardrailDecided).toHaveLength(before)
+        if (reply === "decline") {
+          expect(yield* decisions.evaluate({ groupID: Coordination.GroupID.make("cgrp_one"), coordinatorSessionID: driverSource.coordinatorSessionID, targetSessionID: nativeSessionID, kind: "review", requestID: pending.request.id, fingerprint: pending.fingerprint, rationale: "Do not perform this action.", decision: "decline" })).toMatchObject({ outcome: "denied", settled: true })
+          expect(Exit.isFailure(yield* Fiber.join(pending.running))).toBe(true)
+          expect(yield* service.forSession(nativeSessionID)).toEqual([])
+          continue
+        }
+        yield* service.reply({ sessionID: nativeSessionID, requestID: pending.request.id, reply: "once" })
+        const exit = yield* Fiber.join(pending.running)
+        expect(Exit.isSuccess(exit)).toBe(true)
+        if (Exit.isSuccess(exit)) yield* exit.value.release
+        expect(yield* service.forSession(nativeSessionID)).toEqual([])
+      }
+      expect(custom.choices).toHaveLength(0)
     }),
   )
 

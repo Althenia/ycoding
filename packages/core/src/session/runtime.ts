@@ -402,7 +402,7 @@ export interface Interface {
   >
   readonly selectModelAtBoundary: (input: {
     sessionID: SessionSchema.ID
-    expectedModel: CatalogModel.Ref
+    expectedModel: CatalogModel.Ref | null
     model: CatalogModel.Ref
     connectionIdentityDigest: string
     targetBinding?: SessionEvent.ProfileBinding
@@ -2642,7 +2642,7 @@ const layer = Layer.effect(
       }),
       selectModelAtBoundary: Effect.fn("Session.selectModelAtBoundary")(function* (input) {
         const session = yield* result.get(input.sessionID)
-        if (!sameModel(session.model, input.expectedModel)) return { status: "conflict" } as const
+        if (input.expectedModel === null ? session.model !== undefined : !sameModel(session.model, input.expectedModel)) return { status: "conflict" } as const
         if (input.model.profile !== undefined && (!input.targetBinding || input.targetBinding.providerID !== input.model.providerID || input.targetBinding.profile !== input.model.profile))
           return yield* new SessionRunnerModel.ProfileUnavailableError({ providerID: input.model.providerID, profile: input.model.profile })
         const models = yield* SessionRunnerModel.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
@@ -2661,7 +2661,7 @@ const layer = Layer.effect(
           if (!(yield* input.guard)) return false
           const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, session.id)).get().pipe(Effect.orDie)
           return row !== undefined && row.time_archived === null && row.directory === session.location.directory &&
-            (row.workspace_id ?? undefined) === session.location.workspaceID && sameModel(row.model ?? undefined, input.expectedModel) &&
+            (row.workspace_id ?? undefined) === session.location.workspaceID && (input.expectedModel === null ? row.model === null : sameModel(row.model ?? undefined, input.expectedModel)) &&
             JSON.stringify(row.profile_binding ?? undefined) === JSON.stringify(input.expectedBinding ?? undefined)
         })
         if (sameModel(session.model, input.model) && input.model.profile === undefined && !input.expectedBinding)

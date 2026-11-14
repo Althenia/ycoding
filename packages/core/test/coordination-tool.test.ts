@@ -5,7 +5,9 @@ import path from "node:path"
 import { Effect, Layer, Schema } from "effect"
 import { eq } from "drizzle-orm"
 import { Model } from "@ycoding-ai/schema/model"
+import { Coordination } from "@ycoding-ai/schema/coordination"
 import { Provider } from "@ycoding-ai/schema/provider"
+import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { Agent } from "../src/agent"
 import { AgentPlugin } from "../src/plugin/agent"
 import { Config } from "../src/config"
@@ -62,12 +64,13 @@ const valid = {
   assign: { action: "assign", sessionID: "ses_member", ownerSessionID: "ses_owner" },
   release: { action: "release", sessionID: "ses_member", reason: "completed" },
   create: { action: "create", name: "lane-one" },
+  model: { action: "model", sessionID: "ses_member" },
 } as const
 
-test("project exposes only list, inspect, send, answer, escalate, interrupt, assign, release and create without caller or group overrides", () => {
+test("project exposes only list, inspect, send, answer, escalate, interrupt, assign, release, create and model without caller or group overrides", () => {
   expect(CoordinationTool.name).toBe("project")
   for (const payload of Object.values(valid)) expect(decode(payload)).toEqual(payload as never)
-  expect(Object.keys(valid)).toEqual(["list", "inspect", "send", "answer", "escalate", "interrupt", "assign", "release", "create"])
+  expect(Object.keys(valid)).toEqual(["list", "inspect", "send", "answer", "escalate", "interrupt", "assign", "release", "create", "model"])
   const complete = { sessionID: "ses_member", requestID: "per_one", ownerSessionID: "ses_owner", reason: "completed", text: "Inspect", kind: "permission", fingerprint: "fp", rationale: "In scope" }
   for (const action of ["update", "delete", "get", "arm", "stop", "complete", "claim", "dispatch", "receipts", "wait", "cancelWait", "capacity", "decide", "transfer", "unassign"])
     expect(() => decode({ action, ...complete })).toThrow()
@@ -143,10 +146,10 @@ test("the tool description names the supervision chain", () => {
     "Executor children inherit no controller authority.",
     "A member with a pending question, permission or review cannot receive input until the request settles, so the send is refused naming each pending request; settle it with answer, escalate it, or interrupt the member to withdraw it.",
     "The request stays open as the member's prompt: the user answers it in that member Session, and messages or answers relayed through the Master cannot settle it.",
-    "its delegation class as risk information for your decision: routine, decline-only or explicit-decision:<reason>. The class never limits answer.",
+    "its delegation class as risk information for your decision: routine, decline-only or explicit-decision:<reason>.",
     "delegates implementation to executors",
     "inspect:",
-    "answer: settle any pending member question, form, permission or review yourself, in every autonomy mode, Manual included: routine, decline-only and every explicit-decision class, hard and custom-rule guardrail reviews, and outside-repository reviews.",
+    "Hard and custom-rule reviews require a human approval",
     "approve (the default decision) allows once, decline rejects with your rationale as the member's feedback, and an answer settles a question or form.",
     "A deny rule or the permission ceiling that covers the request still denies it, even when you approve.",
     "A guardrail review raised by an invalid guardrail configuration cannot be approved because its deny rules are unreadable: answer returns escalated with reason configuration-invalid, and a decline settles it.",
@@ -167,7 +170,7 @@ test("the tool description names the supervision chain", () => {
     "A request from a member's descendant stays open in its requesting Session, returned as requestSessionID, and the reasons attach to that Session's prompt.",
     "Questions, forms, permission asks and guardrail reviews raised by a member's descendant Sessions are member events whose notifications carry requestSessionID.",
   ]) expect(CoordinationTool.description).toContain(text)
-  for (const text of ["only the user decides it", "answer may only decline", "every guardrail review, and uncertain cases are refused", "Escalate whatever answer refuses"])
+  for (const text of ["only the user decides it", "answer may only decline", "every guardrail review, and uncertain cases are refused", "Escalate whatever answer refuses", "every explicit-decision class, hard and custom-rule guardrail reviews", "The class never limits answer."])
     expect([text, CoordinationTool.description.includes(text)]).toEqual([text, false])
 })
 
@@ -237,9 +240,9 @@ const config = Layer.mock(Config.Service, {
 })
 const runtimeNode = makeGlobalNode({
   service: CoordinationRuntime.Service,
-  layer: Layer.effect(CoordinationRuntime.Service, Effect.gen(function* () {
+  layer: Layer.unwrap(Effect.gen(function* () {
     const database = yield* Database.Service
-    return CoordinationRuntime.Service.of(CoordinationRuntime.make({
+    return Layer.mock(CoordinationRuntime.Service, CoordinationRuntime.make({
       db: database.db,
       events: yield* EventRuntime.Service,
       coordination: yield* CoordinationService.Service,
@@ -270,7 +273,7 @@ const plugins = makeLocationNode({
 })
 const project = { id: Project.ID.make("project-tool-test"), directory: source }
 const model = Model.Ref.make({ providerID: Provider.ID.make("test"), id: Model.ID.make("model") })
-const integrationAt = (active: Location.Interface) => testEffect(AppNodeBuilder.build(
+const integrationAt = (active: Location.Interface, replacement = runtimeNode) => testEffect(AppNodeBuilder.build(
   LayerNode.group([
     ToolRegistry.node, ToolRegistry.toolsNode, plugins, ProjectCopy.node, Database.node, EventRuntime.node, ProjectDirectories.node, Git.node, FSUtil.node,
     LayerNodePlatform.filesystem, LayerNodePlatform.path, SessionProjector.node, Session.node, SessionExecution.node, SessionOrchestration.node,
@@ -286,11 +289,96 @@ const integrationAt = (active: Location.Interface) => testEffect(AppNodeBuilder.
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
     [Image.node, imagePassthrough],
     [SessionExecution.node, SessionExecution.noopLayer],
-    [CoordinationRuntime.node, runtimeNode],
+    [CoordinationRuntime.node, replacement],
   ],
 ))
 const integration = integrationAt({ directory: source, project })
 const detached = integrationAt({ directory: AbsolutePath.make(data), project: { id: Project.ID.make("project-tool-detached"), directory: AbsolutePath.make(data) } })
+
+const boundaryCalls: Array<{ method: string; caller: SessionSchema.ID; input?: unknown; worktree?: boolean }> = []
+const boundaryState: { conflict: boolean; savedModel: Model.Ref | null; enrollmentError?: string } = { conflict: false, savedModel: model }
+const boundaryMember = {
+  sessionID: SessionSchema.ID.make("ses_boundary_member"),
+  title: "Boundary member",
+  location: { directory: source },
+  state: "idle" as const,
+  model,
+}
+const boundaryGroup = Coordination.GroupID.make("cgrp_boundary")
+const boundaryRuntime = {
+  roster: (caller: SessionSchema.ID) => Effect.sync(() => {
+    boundaryCalls.push({ method: "roster", caller })
+    return { project: { id: boundaryGroup, name: "Boundary", active: true, concurrency: null }, members: [] }
+  }),
+  inspect: (caller: SessionSchema.ID, input: { sessionID: SessionSchema.ID; requestID: string }) => Effect.sync(() => {
+    boundaryCalls.push({ method: "inspect", caller, input })
+    return { kind: "permission" as const, requestID: input.requestID, fingerprint: "fp_boundary", action: "read", resources: [], delegation: "routine" as const }
+  }),
+  send: (caller: SessionSchema.ID, input: CoordinationRuntime.SendInput) => Effect.sync(() => {
+    boundaryCalls.push({ method: "send", caller, input })
+    return { sessionID: input.sessionID, messageID: input.messageID ?? SessionMessage.ID.make("msg_boundary"), state: "idle" as const, reconciled: false }
+  }),
+  answer: (caller: SessionSchema.ID, input: CoordinationRuntime.AnswerInput) => Effect.sync(() => {
+    boundaryCalls.push({ method: "answer", caller, input })
+    return { outcome: "denied" as const, kind: input.kind, requestID: input.requestID, fingerprint: input.fingerprint, actor: "coordinator" as const, settled: true }
+  }),
+  escalate: (caller: SessionSchema.ID, input: CoordinationRuntime.EscalateInput) => Effect.sync(() => {
+    boundaryCalls.push({ method: "escalate", caller, input })
+    return { sessionID: input.sessionID, requestID: input.requestID, delivered: false, decision: {
+      outcome: "escalated" as const, kind: input.kind, requestID: input.requestID, fingerprint: input.fingerprint, actor: "coordinator" as const, settled: false as const,
+    } }
+  }),
+  interrupt: (caller: SessionSchema.ID, input: { sessionID: SessionSchema.ID }) => Effect.sync(() => {
+    boundaryCalls.push({ method: "interrupt", caller, input })
+    return { sessionID: input.sessionID, state: "idle" as const }
+  }),
+  assign: (caller: SessionSchema.ID, input: CoordinationRuntime.AssignInput) => Effect.sync(() => {
+    boundaryCalls.push({ method: "assign", caller, input })
+    return { sessionID: input.sessionID, owner: { sessionID: input.ownerSessionID, title: "Owner" } }
+  }),
+  release: (caller: SessionSchema.ID, input: CoordinationRuntime.ReleaseInput) => Effect.sync(() => {
+    boundaryCalls.push({ method: "release", caller, input })
+    return { sessionID: input.sessionID }
+  }),
+  member: (caller: SessionSchema.ID, input: { sessionID: SessionSchema.ID }) => Effect.sync(() => {
+    boundaryCalls.push({ method: "member", caller, input })
+    return { ...boundaryMember, sessionID: input.sessionID, model: boundaryState.savedModel }
+  }),
+  setModel: (caller: SessionSchema.ID, input: { sessionID: SessionSchema.ID; expectedModel: Model.Ref | null; model: Model.Ref }) => Effect.gen(function* () {
+    boundaryCalls.push({ method: "setModel", caller, input })
+    if (boundaryState.conflict) return yield* new CoordinationRuntime.RefusedError({ message: "The member or expected model changed before selection; read the member and retry" })
+    return { ...boundaryMember, sessionID: input.sessionID, model: input.model }
+  }),
+  create: <E>(caller: SessionSchema.ID, input: {
+    id?: SessionSchema.ID; projectID?: Project.ID; name?: string; ownerSessionID?: SessionSchema.ID; prompt?: string; model?: Model.Ref; agentPermissions: Permission.Ruleset
+  }, worktree?: (name: string) => Effect.Effect<CoordinationRuntime.Worktree, E>) => Effect.sync(() => {
+    boundaryCalls.push({ method: "create", caller, input, worktree: worktree !== undefined })
+    return {
+      sessionID: input.id ?? boundaryMember.sessionID,
+      location: { directory: source }, directory: source,
+      enrollment: { groupID: boundaryGroup, member: boundaryState.enrollmentError === undefined, ...(boundaryState.enrollmentError === undefined ? {} : { error: boundaryState.enrollmentError }) },
+      model: input.model ?? null,
+      ...(input.name === undefined ? {} : { branch: input.name }),
+      ...(input.ownerSessionID === undefined ? {} : { owner: { sessionID: input.ownerSessionID, title: "Owner" } }),
+      ...(input.prompt === undefined ? {} : { prompt: { refused: "Project is inactive" } }),
+    }
+  }),
+}
+const boundaryRuntimeNode = makeGlobalNode({
+  service: CoordinationRuntime.Service,
+  layer: Layer.mock(CoordinationRuntime.Service, boundaryRuntime),
+  deps: [],
+})
+const boundary = integrationAt({ directory: source, project }, boundaryRuntimeNode)
+
+const boundarySetup = Effect.gen(function* () {
+  const fixture = yield* projectSetup
+  boundaryCalls.length = 0
+  boundaryState.conflict = false
+  boundaryState.savedModel = model
+  delete boundaryState.enrollmentError
+  return fixture
+})
 
 const godAgents = AppNodeBuilder.build(LayerNode.group([Agent.node, EventRuntime.node, Location.node]), [
   [Location.node, Layer.succeed(Location.Service, Location.Service.of(location({ directory: source })))],
@@ -343,6 +431,127 @@ describe("project tool through the tool registry", () => {
     await repository[Symbol.asyncDispose]()
     await fs.rm(data, { recursive: true, force: true })
   })
+
+  boundary.live("registry preserves caller and native payloads for all existing project controls", () =>
+    Effect.gen(function* () {
+      const fixture = yield* boundarySetup
+      const inputs = [
+        { action: "list" },
+        { action: "inspect", sessionID: boundaryMember.sessionID, requestID: "per_boundary" },
+        { action: "send", sessionID: boundaryMember.sessionID, text: "Inspect", delivery: "steer", messageID: "msg_retry", model: { ...model, profile: "work", variant: "high" } },
+        { action: "answer", sessionID: boundaryMember.sessionID, requestID: "per_boundary", kind: "permission", fingerprint: "fp_boundary", rationale: "Outside scope", confidence: 1, decision: "decline" },
+        { action: "escalate", sessionID: boundaryMember.sessionID, requestID: "per_boundary", kind: "permission", fingerprint: "fp_boundary", reason: "Needs a human decision" },
+        { action: "interrupt", sessionID: boundaryMember.sessionID },
+        { action: "assign", sessionID: boundaryMember.sessionID, ownerSessionID: "ses_owner" },
+        { action: "release", sessionID: boundaryMember.sessionID, reason: "released" },
+      ]
+      for (const input of inputs) {
+        const result = yield* fixture.call(`boundary-${input.action}`, "project", input)
+        expect(result.type).toBe("text")
+      }
+      expect(boundaryCalls.map((call) => call.method)).toEqual(["roster", "inspect", "send", "answer", "escalate", "interrupt", "assign", "release"])
+      for (const call of boundaryCalls) expect(call.caller).toBe(fixture.master.id)
+      for (const input of inputs.slice(1)) {
+        const call = boundaryCalls.find((item) => item.method === input.action)
+        expect(call?.input).toMatchObject(Object.fromEntries(Object.entries(input).filter(([key]) => key !== "action")))
+      }
+    }), 60_000)
+
+  boundary.live("registry model read and exact CAS write preserve the saved selection and location receipt", () =>
+    Effect.gen(function* () {
+      const fixture = yield* boundarySetup
+      const read = yield* fixture.call("boundary-model-read", "project", { action: "model", sessionID: boundaryMember.sessionID })
+      expect(read).toEqual({ type: "text", value: JSON.stringify({ action: "model", ...boundaryMember }) })
+      const expectedModel = { ...model, profile: "previous", variant: "high" }
+      const replacement = model
+      const written = yield* fixture.call("boundary-model-write", "project", { action: "model", sessionID: boundaryMember.sessionID, expectedModel, model: replacement })
+      expect(written).toEqual({ type: "text", value: JSON.stringify({ action: "model", ...boundaryMember, model: replacement }) })
+      expect(boundaryCalls).toEqual([
+        { method: "member", caller: fixture.master.id, input: { sessionID: boundaryMember.sessionID } },
+        { method: "setModel", caller: fixture.master.id, input: { sessionID: boundaryMember.sessionID, expectedModel, model: replacement } },
+      ])
+      expect(boundaryCalls.some((call) => ["send", "interrupt"].includes(call.method))).toBe(false)
+    }), 60_000)
+
+  boundary.live("registry exposes an absent saved model and preserves an exact profiled replacement", () =>
+    Effect.gen(function* () {
+      const fixture = yield* boundarySetup
+      boundaryState.savedModel = null
+      const read = yield* fixture.call("boundary-model-unset", "project", { action: "model", sessionID: boundaryMember.sessionID })
+      expect(read).toEqual({ type: "text", value: JSON.stringify({ action: "model", ...boundaryMember, model: null }) })
+      const replacement = { ...model, variant: "high", profile: "work" }
+      const written = yield* fixture.call("boundary-model-profile", "project", { action: "model", sessionID: boundaryMember.sessionID, expectedModel: null, model: replacement })
+      expect(written).toEqual({ type: "text", value: JSON.stringify({ action: "model", ...boundaryMember, model: replacement }) })
+      expect(boundaryCalls).toEqual([
+        { method: "member", caller: fixture.master.id, input: { sessionID: boundaryMember.sessionID } },
+        { method: "setModel", caller: fixture.master.id, input: { sessionID: boundaryMember.sessionID, expectedModel: null, model: replacement } },
+      ])
+    }), 60_000)
+
+  boundary.live("registry forwards null model CAS and reports stale selection without retry or interruption", () =>
+    Effect.gen(function* () {
+      const fixture = yield* boundarySetup
+      boundaryState.conflict = true
+      const input = { action: "model", sessionID: boundaryMember.sessionID, expectedModel: null, model }
+      const result = yield* fixture.call("boundary-model-stale", "project", input)
+      expect(result).toEqual({ type: "error", value: "The member or expected model changed before selection; read the member and retry" })
+      expect(boundaryCalls).toEqual([{ method: "setModel", caller: fixture.master.id, input: { sessionID: boundaryMember.sessionID, expectedModel: null, model } }])
+    }), 60_000)
+
+  boundary.live("registry root creation returns enrollment and saved model without requiring worktree capability", () =>
+    Effect.gen(function* () {
+      const fixture = yield* boundarySetup
+      configured.capabilities = new ConfigCapabilities.Info({ tools: { deny: ["worktree"] } })
+      masterAgent.permissions = [{ action: "edit", resource: "*", effect: "deny" }]
+      const input = { action: "create", projectID: project.id, title: "Root member", ownerSessionID: "ses_owner", prompt: "Inspect", model: { ...model, profile: "work" } }
+      const result = yield* fixture.call("boundary-root-create", "project", input)
+      expect(result.type).toBe("text")
+      const output = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)))(result.value)
+      expect(output).toMatchObject({ action: "create", location: { directory: source }, directory: source, enrollment: { groupID: boundaryGroup, member: true }, model: input.model, owner: { sessionID: input.ownerSessionID }, prompt: { refused: "Project is inactive" } })
+      expect(output).not.toHaveProperty("branch")
+      expect(boundaryCalls).toHaveLength(1)
+      expect(boundaryCalls[0]).toMatchObject({ method: "create", caller: fixture.master.id, worktree: false, input: { projectID: project.id, title: input.title, prompt: input.prompt, ownerSessionID: input.ownerSessionID, model: input.model, agentPermissions: masterAgent.permissions } })
+      expect(masterAgent.resolved).toEqual([toolIdentity.agent])
+      expect(audit).toEqual({ permissions: [], guardrails: [] })
+    }), 60_000)
+
+  boundary.live("registry root creation derives a stable session identity from the native invocation", () =>
+    Effect.gen(function* () {
+      const fixture = yield* boundarySetup
+      const input = { action: "create", projectID: project.id }
+      for (const callID of ["boundary-root-retry", "boundary-root-retry", "boundary-root-other"])
+        expect((yield* fixture.call(callID, "project", input)).type).toBe("text")
+      const identities = boundaryCalls.map((call) => Schema.decodeUnknownSync(Schema.Struct({ id: SessionSchema.ID }))(call.input).id)
+      expect(identities[0]).toBe(identities[1])
+      expect(identities[0]).not.toBe(identities[2])
+      expect(boundaryCalls.every((call) => call.caller === fixture.master.id && call.worktree === false)).toBe(true)
+    }), 60_000)
+
+  boundary.live("registry worktree creation retains its explicit destination and branch receipt", () =>
+    Effect.gen(function* () {
+      const fixture = yield* boundarySetup
+      const input = { action: "create", name: "boundary-worktree", repository: source, model }
+      const result = yield* fixture.call("boundary-worktree-create", "project", input)
+      expect(result.type).toBe("text")
+      const output = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)))(result.value)
+      expect(output).toMatchObject({ action: "create", branch: input.name, location: { directory: source }, directory: source, enrollment: { groupID: boundaryGroup, member: true }, model })
+      expect(boundaryCalls).toHaveLength(1)
+      expect(boundaryCalls[0]).toMatchObject({ method: "create", caller: fixture.master.id, worktree: true, input: { name: input.name, model } })
+    }), 60_000)
+
+  boundary.live("registry preserves a created root receipt when enrollment reports a partial failure", () =>
+    Effect.gen(function* () {
+      const fixture = yield* boundarySetup
+      boundaryState.enrollmentError = "Membership limit reached"
+      const result = yield* fixture.call("boundary-root-partial", "project", { action: "create", projectID: project.id })
+      expect(result.type).toBe("text")
+      const output = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)))(result.value)
+      expect(output).toMatchObject({ action: "create", location: { directory: source }, directory: source, enrollment: { groupID: boundaryGroup, member: false, error: "Membership limit reached" }, model: null })
+      expect(output).not.toHaveProperty("branch")
+      expect(Schema.is(SessionSchema.ID)(output.sessionID)).toBe(true)
+      expect(boundaryCalls).toHaveLength(1)
+      expect(boundaryCalls[0]?.method).toBe("create")
+    }), 60_000)
 
   integration.live("a Master escalation to the user names the member Session where the user answers and states that messages cannot settle it", () =>
     Effect.gen(function* () {

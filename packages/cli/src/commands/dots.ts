@@ -58,14 +58,14 @@ export const DotsCommand = Spec.make("dots", {
       },
     }),
     Spec.make("threads", {
-      description: "List your Dot's threads and tasks",
+      description: "List your Dot's threads",
       params: { server },
     }),
     Spec.make("tasks", {
-      description: "List your Dot's tasks, or one task's updates",
+      description: "List your Dot's threads, or one thread's updates",
       params: {
         server,
-        task: Argument.string("task").pipe(Argument.withDescription("Task ID whose updates to read"), Argument.optional),
+        task: Argument.string("task").pipe(Argument.withDescription("Thread ID whose updates to read"), Argument.optional),
         ...page,
       },
     }),
@@ -114,10 +114,10 @@ export const DotsCommand = Spec.make("dots", {
 })
 
 export const dotsAttachWarning =
-  "This keeps your other computers connected. Choose which computer runs a Dots task in ChatGPT."
+  "This keeps your other computers connected. Choose which computer runs a Dot thread in ChatGPT."
 
 export const dotsDetachWarning =
-  "This computer stops running Dots tasks. Your other computers stay connected."
+  "This computer stops running Dot threads. Your other computers stay connected."
 
 export const dotsRemoveWarning =
   "This deletes this computer from your ChatGPT account and turns Dots access off. Turning access on again enrolls it as a new computer."
@@ -142,7 +142,7 @@ export function dotsThreadLine(thread: Dots.ConversationThread) {
 }
 
 export function dotsTaskLine(task: Dots.Task) {
-  return [`Task ${task.taskID} ${task.status}`, oneLine(task.title), task.latestUpdate === undefined ? undefined : oneLine(task.latestUpdate)]
+  return [`Thread ${task.taskID} ${task.status}`, oneLine(task.title), task.latestUpdate === undefined ? undefined : oneLine(task.latestUpdate)]
     .filter((part) => part !== undefined && part !== "").join(" · ")
 }
 

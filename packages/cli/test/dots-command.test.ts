@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { dotsAttachConfirmed } from "../src/commands/dots"
+import { dotsAttachConfirmed, dotsAttachWarning, dotsDetachWarning, dotsTaskLine } from "../src/commands/dots"
 
 const status = (computer: Record<string, unknown> | undefined) => ({
   data: {
@@ -44,6 +44,30 @@ test("dots attach explains non-replacing attachment in help without starting a s
 test("dots attach confirms only explicit yes answers", () => {
   for (const answer of ["y", "Y", "yes", " YES "]) expect(dotsAttachConfirmed(answer)).toBe(true)
   for (const answer of [undefined, "", "n", "no", "yess", "sure"]) expect(dotsAttachConfirmed(answer)).toBe(false)
+})
+
+test("Dot thread labels preserve task IDs and attachment scope", () => {
+  expect(dotsTaskLine({
+    taskID: "task-fixture",
+    title: "Ship release",
+    status: "active",
+    createdAt: "2026-11-01T00:00:00Z",
+    updatedAt: "2026-11-02T00:00:00Z",
+  })).toBe("Thread task-fixture active · Ship release")
+  expect(dotsAttachWarning).toBe(
+    "This keeps your other computers connected. Choose which computer runs a Dot thread in ChatGPT.",
+  )
+  expect(dotsDetachWarning).toBe("This computer stops running Dot threads. Your other computers stay connected.")
+})
+
+test("dots tasks command keeps its identifier while help describes Dot threads", async () => {
+  const result = await cli(["tasks", "--help"])
+  expect(result.exit).toBe(0)
+  expect(result.stderr).toBe("")
+  expect(result.stdout).toContain("tasks")
+  expect(result.stdout).toContain("List your Dot's threads, or one thread's updates")
+  expect(result.stdout).toContain("Thread ID whose updates to read")
+  expect(result.stdout).not.toContain("Dot's tasks")
 })
 
 test("dots attach displays the observed name and forwards its exact target receipt", async () => {
@@ -255,7 +279,7 @@ test("dots send prints a refusal with the upstream rejection code and a control-
   })
 }, 30000)
 
-test("dots threads and read print the Dot threads, tasks and transcript", async () => {
+test("dots threads and read print Dot thread labels with unchanged task and transcript IDs", async () => {
   await withConversation({
     "GET /api/dots/threads": { dotID: "dot-a", rootThreadID: "thr-root", threads: [{ threadID: "thr-root", kind: "root", status: "idle", name: "Daily" }, { threadID: "thr-task", kind: "task" }],
       tasks: [{ taskID: "task-1", title: "Ship release", status: "active", createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-02T00:00:00Z" }] },
@@ -266,7 +290,7 @@ test("dots threads and read print the Dot threads, tasks and transcript", async 
   }, async (url) => {
     const threads = await cli(["threads", "--server", url])
     expect(threads.exit).toBe(0)
-    expect(threads.stdout).toBe("Dot: dot-a\nThread thr-root root · idle · Daily\nThread thr-task task\nTask task-1 active · Ship release\n")
+    expect(threads.stdout).toBe("Dot: dot-a\nThread thr-root root · idle · Daily\nThread thr-task task\nThread task-1 active · Ship release\n")
     const read = await cli(["read", "thr-task", "--limit", "5", "--server", url])
     expect(read.exit).toBe(0)
     expect(read.stdout).toBe([

@@ -18,16 +18,24 @@ import {
   scratchID,
 } from "./fixture/coordination-backend"
 import { ProjectCreationError } from "../src/util/coordination"
-import { createApi, createEventStream, createFetch } from "./fixture/tui-client"
+import { createApi, createEventStream, createFetch, json, type FetchHandler } from "./fixture/tui-client"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
 async function mount(
   server: ReturnType<typeof backend>,
-  options: { config?: Parameters<typeof createTuiResolvedConfig>[0] } = {},
+  options: { config?: Parameters<typeof createTuiResolvedConfig>[0]; respond?: FetchHandler } = {},
 ) {
   const events = createEventStream()
-  const fetch = createFetch(server.route, events)
+  const fetch = createFetch(async (url, request) => {
+    const response = await options.respond?.(url, request)
+    if (response) return response
+    if (url.pathname === "/api/location") {
+      const directory = url.searchParams.get("location[directory]") ?? "/tmp/ycoding"
+      return json({ directory, project: { id: "proj_test", directory } })
+    }
+    return server.route(url, request)
+  }, events)
   let coordination!: ReturnType<typeof useCoordination>
   function Probe() {
     coordination = useCoordination()
@@ -199,6 +207,52 @@ test("creating with a new master creates the Session in the directory, titles it
       ["POST", "/api/session", { location: { directory: "/home/dev/Workspace/infra" }, title: "Infra move" }],
       ["POST", "/api/coordination", { name: "Infra move", masterSessionID: masterID, memberSessionIDs: [] }],
     ])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("Project Master creation resolves the selected directory to its canonical Project root without redirecting members", async () => {
+  const server = backend()
+  const selected = "/home/dev/copies/feature/packages/api"
+  const canonical = "/home/dev/projects/api"
+  const { app, coordination } = await mount(server, {
+    respond: (url) => url.pathname === "/api/location"
+      ? json({ directory: selected, project: { id: "proj_api", directory: canonical } })
+      : undefined,
+  })
+  try {
+    const masterID = await coordination().service.create({ name: "Canonical project", master: { directory: selected } })
+    const memberID = await coordination().service.newMember(groupID, selected, "Explicit worktree member")
+    expect(server.state.sessions[masterID]?.directory).toBe(canonical)
+    expect(server.state.sessions[memberID]?.directory).toBe(selected)
+    expect(server.state.writes.filter((write) => write.path === "/api/session").map((write) => write.body)).toEqual([
+      { location: { directory: canonical }, title: "Canonical project" },
+      { location: { directory: selected }, title: "Explicit worktree member" },
+    ])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("Project Master location failure creates nothing and permits a corrected retry", async () => {
+  const server = backend()
+  let unavailable = true
+  const { app, coordination } = await mount(server, {
+    respond: (url) => url.pathname === "/api/location"
+      ? unavailable
+        ? json({ _tag: "InvalidRequestError", message: "Selected directory unavailable" }, { status: 400 })
+        : json({ directory: "/home/dev/copies/api", project: { id: "proj_api", directory: "/home/dev/projects/api" } })
+      : undefined,
+  })
+  try {
+    const input = { name: "Canonical project", master: { directory: "/home/dev/copies/api" } }
+    await expect(coordination().service.create(input)).rejects.toThrow()
+    expect(server.state.writes).toEqual([])
+    unavailable = false
+    const masterID = await coordination().service.create(input)
+    expect(server.state.sessions[masterID]?.directory).toBe("/home/dev/projects/api")
+    expect(server.state.created).toBe(1)
   } finally {
     app.renderer.destroy()
   }

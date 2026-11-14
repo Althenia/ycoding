@@ -5,6 +5,8 @@ import { Form } from "@ycoding-ai/schema/form"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import type { Model } from "@ycoding-ai/schema/model"
 import { Permission } from "@ycoding-ai/schema/permission"
+import path from "node:path"
+import fs from "node:fs/promises"
 import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm"
 import { Cause, Context, Effect, Layer, Schema, Stream } from "effect"
 import { CoordinationDecisionRuntime } from "../coordination/decisions"
@@ -13,6 +15,11 @@ import { CoordinationMemberTable } from "../coordination/sql"
 import { Database } from "../database/database"
 import { makeGlobalNode, type Node } from "../effect/app-node"
 import { Job } from "../job"
+import { KVTable } from "../kv/sql"
+import { Project } from "../project"
+import { ProjectTable } from "../project/sql"
+import { CoordinationModel } from "./coordination-model"
+import { SessionStepBoundary } from "./step-boundary"
 import { SessionCompletion } from "./completion"
 import { DecisionChoice } from "../decision-choice"
 import { CoordinationEscalation } from "./coordination-escalation"
@@ -95,14 +102,14 @@ export interface OwnershipResult {
   readonly owner?: { readonly sessionID: SessionSchema.ID; readonly title: string }
 }
 
-export interface CreateInput {
+export type CreateInput = {
+  readonly id: SessionSchema.ID
   readonly agentPermissions: Permission.Ruleset
-  readonly name: string
   readonly ownerSessionID?: SessionSchema.ID
   readonly title?: string
   readonly prompt?: string
   readonly model?: Model.Ref
-}
+} & ({ readonly projectID: Project.ID; readonly name?: never } | { readonly name: string; readonly projectID?: never })
 
 export interface Worktree {
   readonly directory: AbsolutePath
@@ -112,7 +119,10 @@ export interface Worktree {
 export interface CreateResult {
   readonly sessionID: SessionSchema.ID
   readonly directory: AbsolutePath
-  readonly branch: string
+  readonly location: SessionSchema.Info["location"]
+  readonly model: Model.Ref | null
+  readonly enrollment: { readonly groupID: Coordination.GroupID; readonly member: boolean; readonly error?: string }
+  readonly branch?: string
   readonly owner?: { readonly sessionID: SessionSchema.ID; readonly title: string }
   readonly prompt?: SendResult | { readonly refused: string }
 }
@@ -171,6 +181,8 @@ const ownerEndingChanges: ReadonlySet<string> = new Set(["cancelled", "failed", 
 export type RecoverError = Session.ScopeUnavailableError | SessionOrchestration.ServiceUnavailableError | EventRuntime.TaskOwnerUnavailableError
 
 export interface Interface {
+  readonly member: (caller: SessionSchema.ID, input: { readonly sessionID: SessionSchema.ID }) => Effect.Effect<MemberResult, RefusedError>
+  readonly setModel: (caller: SessionSchema.ID, input: ModelInput) => Effect.Effect<MemberResult, RefusedError>
   readonly get: (groupID: Coordination.GroupID) => Effect.Effect<Coordination.Info, CoordinationService.NotFoundError>
   readonly summaries: () => Effect.Effect<ReadonlyArray<Coordination.GroupSummary>>
   readonly roster: (caller: SessionSchema.ID) => Effect.Effect<Roster, RefusedError>
@@ -181,11 +193,25 @@ export interface Interface {
   readonly escalate: (caller: SessionSchema.ID, input: EscalateInput) => Effect.Effect<EscalateResult, RefusedError | Session.ScopeUnavailableError | SessionOrchestration.ServiceUnavailableError>
   readonly assign: (caller: SessionSchema.ID, input: AssignInput) => Effect.Effect<OwnershipResult, RefusedError | EventRuntime.TaskOwnerUnavailableError>
   readonly release: (caller: SessionSchema.ID, input: ReleaseInput) => Effect.Effect<OwnershipResult, RefusedError>
-  readonly create: <E>(
+  readonly create: <E = never>(
     caller: SessionSchema.ID,
     input: CreateInput,
-    worktree: (name: string) => Effect.Effect<Worktree, E>,
+    worktree?: (name: string) => Effect.Effect<Worktree, E>,
   ) => Effect.Effect<CreateResult, RefusedError | E | Session.ScopeUnavailableError | EventRuntime.TaskOwnerUnavailableError>
+}
+
+export interface MemberResult {
+  readonly sessionID: SessionSchema.ID
+  readonly location: SessionSchema.Info["location"]
+  readonly model: Model.Ref | null
+  readonly state: Coordination.MemberState
+  readonly owner?: OwnershipResult["owner"]
+}
+
+export interface ModelInput {
+  readonly sessionID: SessionSchema.ID
+  readonly expectedModel: Model.Ref | null
+  readonly model: Model.Ref
 }
 
 export interface Options {
@@ -209,6 +235,7 @@ const executionTypes = [
 const failedType = versionedType(SessionEvent.Execution.Failed.type, SessionEvent.Execution.Failed.durable.version)
 
 const refuse = (message: string) => new RefusedError({ message })
+const CreationPlacement = Schema.Struct({ digest: Schema.String, directory: AbsolutePath, branch: Schema.optional(Schema.String) })
 
 export const authorizeMember = Effect.fn("CoordinationRuntime.authorizeMember")(function* (
   coordination: Pick<CoordinationService.Interface, "accessOf" | "scopeOf">,
@@ -232,10 +259,11 @@ export const authorizeMember = Effect.fn("CoordinationRuntime.authorizeMember")(
 
 const clip = (text: string) => (text.length > maxExcerpt ? `${text.slice(0, maxExcerpt - 1)}…` : text)
 
-export function make(options: Options): Interface & { readonly handle: (event: HandledEvent) => Effect.Effect<void>; readonly recover: () => Effect.Effect<void, RecoverError> } {
+export function make(options: Options): Omit<Interface, "setModel"> & { readonly handle: (event: HandledEvent) => Effect.Effect<void>; readonly recover: () => Effect.Effect<void, RecoverError> } {
   const { db, events, coordination, decisions, execution, sessions, orchestration, jobs } = options
   const senders = new Map<SessionSchema.ID, SessionSchema.ID>()
   const sendLock = KeyedMutex.makeUnsafe<Coordination.GroupID>()
+  const createLock = KeyedMutex.makeUnsafe<SessionSchema.ID>()
 
   const underOwnership = <A, E, R>(caller: SessionSchema.ID, effect: Effect.Effect<A, E, R>) =>
     Effect.gen(function* () {
@@ -302,7 +330,7 @@ export function make(options: Options): Interface & { readonly handle: (event: H
   })
 
   const create: Interface["create"] = (caller, input, worktree) =>
-    Effect.gen(function* () {
+    createLock.withLock(input.id)(Effect.gen(function* () {
       const scope = yield* underOwnership(caller, Effect.gen(function* () {
         const current = yield* scopeFor(caller)
         if (caller !== current.masterSessionID) return yield* refuse("Only the Project's Master creates member Sessions")
@@ -313,38 +341,77 @@ export function make(options: Options): Interface & { readonly handle: (event: H
       if (input.model !== undefined) yield* options.validateModel(caller, input.model)
       if (input.prompt !== undefined && !scope.active) return yield* refuse(inactiveMessage)
       const master = yield* sessions.get(caller).pipe(Effect.mapError(() => refuse(`Session ${caller} does not exist`)))
-      const created = yield* worktree(input.name)
+      const recorded = yield* sessions.get(input.id).pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)))
+      const key = `project.member.create:${input.id}`
+      const digest = Hash.json({ caller, groupID: scope.groupID, input })
+      const saved = (yield* db.select({ value: KVTable.value }).from(KVTable).where(eq(KVTable.key, key)).get().pipe(Effect.orDie))?.value
+      const placement = saved === undefined ? undefined : yield* Schema.decodeUnknownEffect(CreationPlacement)(saved).pipe(Effect.mapError(() => refuse(`Creation receipt for Session ${input.id} is invalid`)))
+      if (placement !== undefined && placement.digest !== digest) return yield* refuse(`Session ${input.id} creation identity was already used with different input`)
+      const selected = input.projectID === undefined ? undefined : yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, input.projectID)).get().pipe(Effect.orDie)
+      if (input.projectID !== undefined && selected === undefined) return yield* refuse(`Project ${input.projectID} does not exist`)
+      const canonical = selected === undefined ? undefined : AbsolutePath.make(selected.worktree)
+      if (canonical !== undefined && placement !== undefined && canonical !== placement.directory)
+        return yield* refuse(`Project ${input.projectID} canonical Location changed after creation was recorded`)
+      if (canonical !== undefined) {
+        const exists = yield* Effect.tryPromise({ try: () => fs.stat(canonical), catch: () => refuse(`Project directory ${canonical} is unavailable`) })
+        if (!exists.isDirectory()) return yield* refuse(`Project directory ${canonical} is not a directory`)
+      }
+      if (recorded !== undefined && (recorded.parentID !== undefined || recorded.location.workspaceID !== undefined ||
+        (canonical !== undefined && recorded.location.directory !== canonical) || (placement !== undefined && recorded.location.directory !== placement.directory)))
+        return yield* refuse(`Session ${input.id} already exists at a different Location`)
+      if (recorded !== undefined && canonical === undefined && placement === undefined)
+        return yield* refuse(`Session ${input.id} has no matching worktree creation receipt`)
+      const created = canonical !== undefined
+        ? { directory: canonical }
+        : placement !== undefined
+          ? { directory: placement.directory, branch: placement.branch }
+          : worktree !== undefined && input.name !== undefined
+            ? yield* worktree(input.name)
+            : yield* refuse("Explicit worktree creation requires a worktree provider")
+      if (placement === undefined) yield* db.insert(KVTable).values({ key, value: { digest, directory: created.directory, ...("branch" in created && created.branch !== undefined ? { branch: created.branch } : {}) } })
+        .onConflictDoNothing().run().pipe(Effect.orDie)
       const partial = (message: string, sessionID?: SessionSchema.ID) =>
-        refuse(`Created worktree ${created.directory} on branch ${created.branch}${sessionID === undefined ? "" : ` and Session ${sessionID}`}, but ${message}; nothing was removed`)
-      const member = yield* sessions.create({
+        refuse(`Created ${"branch" in created ? `worktree ${created.directory} on branch ${created.branch}` : `Session at ${created.directory}`}${sessionID === undefined ? "" : ` and Session ${sessionID}`}, but ${message}; nothing was removed`)
+      const member = recorded ?? (yield* sessions.create({
+        id: input.id,
         location: { directory: created.directory },
-        title: input.title ?? input.name,
+        title: input.title ?? input.name ?? selected?.name ?? path.basename(created.directory),
         permissionCeiling: SessionPermissionCeiling.inherit(master.permissionCeiling, input.agentPermissions),
         ...(input.model === undefined ? {} : { model: input.model }),
-      }).pipe(Effect.mapError((error) => partial(`creating its Session failed: ${error.message}`)))
-      yield* coordination.withOwnership(scope.groupID, Effect.gen(function* () {
+      }).pipe(Effect.catch(error => sessions.get(input.id).pipe(
+        Effect.mapError(() => partial(`creating its Session failed: ${error.message}`, input.id)),
+        Effect.flatMap(session => session.parentID === undefined && session.location.directory === created.directory
+          ? Effect.succeed(session)
+          : Effect.fail(partial("its Session identity has conflicting placement", input.id))),
+      ))))
+      const enrollment = yield* coordination.withOwnership(scope.groupID, Effect.gen(function* () {
         const access = yield* coordination.accessOf(caller)
         if (access?.role !== "master" || access.scope.groupID !== scope.groupID)
           return yield* partial(`Session ${caller} is no longer this Project's Master`, member.id)
         const problem = input.ownerSessionID === undefined ? undefined : yield* ownerProblem(access.scope, input.ownerSessionID)
         if (problem !== undefined) return yield* partial(problem, member.id)
-        yield* coordination.addMember(scope.groupID, { sessionID: member.id, ...(input.ownerSessionID === undefined ? {} : { ownerSessionID: input.ownerSessionID }) })
+        if (!access.scope.memberSessionIDs.includes(member.id)) yield* coordination.addMember(scope.groupID, { sessionID: member.id, ...(input.ownerSessionID === undefined ? {} : { ownerSessionID: input.ownerSessionID }) })
           .pipe(Effect.mapError((error) => partial(`adding it to the Project failed: ${error.message}`, member.id)))
         if (input.ownerSessionID !== undefined) yield* SessionTask.superviseAttached(db, events, input.ownerSessionID)
-      }))
-      const prompt = input.prompt === undefined
+        return { groupID: scope.groupID, member: true } as CreateResult["enrollment"]
+      })).pipe(Effect.catchTag("Coordination.RefusedError", error => Effect.succeed({ groupID: scope.groupID, member: false, error: error.message })))
+      const prompt = input.prompt === undefined || !enrollment.member
         ? undefined
-        : yield* underOwnership(caller, send(caller, { sessionID: member.id, text: input.prompt })).pipe(
+        : yield* underOwnership(caller, send(caller, { sessionID: member.id, text: input.prompt, messageID: SessionMessage.ID.make(`msg_project_create_${input.id}`) })).pipe(
           Effect.catchTag("Coordination.RefusedError", (error) => Effect.succeed({ refused: error.message })),
         )
+      const confirmed = yield* sessions.get(member.id).pipe(Effect.mapError(() => partial("its Session could not be read back", member.id)))
       return {
         sessionID: member.id,
-        directory: created.directory,
-        branch: created.branch,
+        directory: confirmed.location.directory,
+        location: confirmed.location,
+        model: confirmed.model ?? null,
+        enrollment,
+        ...("branch" in created ? { branch: created.branch } : {}),
         ...ownership(yield* ownerOf(scope.groupID, member.id)),
         ...(prompt === undefined ? {} : { prompt }),
       } satisfies CreateResult
-    }).pipe(Effect.withSpan("CoordinationRuntime.create"))
+    })).pipe(Effect.withSpan("CoordinationRuntime.create"))
 
   const summarize = (member: SessionSchema.ID, item: CoordinationDecisions.PendingSnapshot): Coordination.PendingRequest => {
     const origin = requestOrigin(member, item)
@@ -427,6 +494,13 @@ export function make(options: Options): Interface & { readonly handle: (event: H
 
   const stateOf = (scope: CoordinationService.Scope, sessionID: SessionSchema.ID) =>
     sessions.outstanding().pipe(Effect.flatMap(({ running }) => participant(scope, sessionID, running)), Effect.map((value) => value.state))
+
+  const member: Interface["member"] = (caller, input) => underOwnership(caller, Effect.gen(function* () {
+    const scope = yield* memberScope(caller, input.sessionID)
+    const session = yield* sessions.get(input.sessionID).pipe(Effect.mapError(() => refuse(`Session ${input.sessionID} does not exist`)))
+    return { sessionID: session.id, location: session.location, model: session.model ?? null,
+      state: yield* stateOf(scope, session.id), ...ownership(yield* ownerOf(scope.groupID, session.id)) }
+  }))
 
   const get: Interface["get"] = Effect.fn("CoordinationRuntime.get")(function* (groupID) {
     const group = yield* coordination.get(groupID)
@@ -952,6 +1026,7 @@ export function make(options: Options): Interface & { readonly handle: (event: H
     assign: (caller, input) => underOwnership(caller, assign(caller, input)),
     release: (caller, input) => underOwnership(caller, release(caller, input)),
     create,
+    member,
     handle: (event) =>
       Effect.gen(function* () {
         if (event.type === Coordination.Event.Changed.type || event.type === Coordination.Event.Deleted.type)
@@ -1036,6 +1111,7 @@ const layer: Layer.Layer<
   | SessionStore.Service
   | LocationServiceMap.Service
   | Job.Service
+  | SessionStepBoundary.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -1048,6 +1124,7 @@ const layer: Layer.Layer<
     const orchestration = yield* SessionOrchestration.Service
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap.Service
+    const boundary = yield* SessionStepBoundary.Service
     const validateModel = Effect.fn("CoordinationRuntime.validateModel")(function* (sessionID: SessionSchema.ID, model: Model.Ref) {
       const session = yield* store.get(sessionID)
       if (session === undefined) return yield* refuse(`Session ${sessionID} does not exist`)
@@ -1065,6 +1142,38 @@ const layer: Layer.Layer<
     })
     const jobs = yield* Job.Service
     const runtime = make({ db: database.db, events, coordination, decisions, execution, sessions, orchestration, validateModel, jobs })
+    const setModel: Interface["setModel"] = (caller, input) => boundary.withSelection(input.sessionID,
+      execution.withTransition(input.sessionID, Effect.gen(function* () {
+        const switchable = Effect.gen(function* () {
+          const scope = yield* authorizeMember(coordination, caller, input.sessionID)
+          const source = yield* sessions.get(caller)
+          const session = yield* sessions.get(input.sessionID)
+          if (source.time.archived !== undefined || session.time.archived !== undefined) return yield* refuse("Archived Sessions cannot change a member model")
+          if (yield* CoordinationModel.override(database.db, session.id)) return yield* refuse("The member has an active coordination model override")
+          const task = yield* database.db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, session.id)).get().pipe(Effect.orDie)
+          if (task !== undefined) return yield* refuse("A managed child cannot be a Project member")
+          return { scope, session }
+        })
+        const { session } = yield* switchable
+        const binding = (yield* database.db.select({ value: SessionTable.profile_binding }).from(SessionTable).where(eq(SessionTable.id, session.id)).get().pipe(Effect.orDie))?.value
+        const models = yield* SessionRunnerModel.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
+        const resolved = yield* models.resolve({ ...session, model: input.model }, { rebind: true, refresh: false })
+        return yield* boundary.atBoundary(session.id, Effect.gen(function* () {
+          const current = yield* switchable
+          yield* coordination.withOwnership(current.scope.groupID, Effect.gen(function* () {
+            yield* switchable
+            const selected = yield* sessions.selectModelAtBoundary({ sessionID: session.id, expectedModel: input.expectedModel,
+              model: input.model, connectionIdentityDigest: resolved.connectionIdentityDigest,
+              targetBinding: resolved.profileBinding, expectedBinding: binding,
+              guard: switchable.pipe(Effect.as(true), Effect.catch(() => Effect.succeed(false))),
+            })
+            if (selected.status === "conflict") return yield* refuse("The member or expected model changed before selection; read the member and retry")
+            if (selected.status === "blocked") return yield* refuse(`Target model is blocked: ${selected.reason}`)
+            return undefined
+          }))
+          return yield* runtime.member(caller, input)
+        }))
+      }))).pipe(Effect.mapError(error => refuse(error.message)))
     yield* events.subscribe(handledEvents).pipe(Stream.runForEach(runtime.handle), Effect.forkScoped({ startImmediately: true }))
     yield* runtime.recover().pipe(
       Effect.catchTags({
@@ -1073,12 +1182,12 @@ const layer: Layer.Layer<
         "EventRuntime.TaskOwnerUnavailable": (error) => Effect.logError("Coordination recovery has no managed task owner", { error }),
       }),
     )
-    return Service.of(runtime)
+    return Service.of({ ...runtime, setModel })
   }),
 )
 
 export const node: Node.GlobalNode<Service> = makeGlobalNode({
   service: Service,
   layer,
-  deps: [CoordinationService.node, CoordinationDecisionRuntime.node, Database.node, EventRuntime.node, SessionExecution.node, Session.node, SessionOrchestration.node, SessionStore.node, LocationServiceMap.node, Job.node],
+  deps: [CoordinationService.node, CoordinationDecisionRuntime.node, Database.node, EventRuntime.node, SessionExecution.node, Session.node, SessionOrchestration.node, SessionStore.node, LocationServiceMap.node, Job.node, SessionStepBoundary.node],
 })

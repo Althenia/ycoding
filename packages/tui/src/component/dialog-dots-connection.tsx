@@ -55,7 +55,7 @@ export function DialogDotsConnection(props: { connection: ReturnType<typeof crea
         ...(computer?.name ? [`Executor name: ${computer.name}`] : []),
         ...(computer ? [`Executor: ${computerLabels[computer.state]}`] : []),
         ...(computer?.readiness ? [`Cloud readiness: ${readinessLabels[computer.readiness]}`] : []),
-        ...(computer?.usableForTasks === undefined ? [] : [`Usable for Dots tasks: ${computer.usableForTasks ? "Yes" : "No"}`]),
+        ...(computer?.usableForTasks === undefined ? [] : [`Usable for Dot threads: ${computer.usableForTasks ? "Yes" : "No"}`]),
         ...(computer?.dotEnvironment ? [`Dot environment: ${[computer.dotEnvironment.status, ...computer.dotEnvironment.capabilities.map((item) => `${item.type} ${item.status}`)].join(" · ")}`] : []),
         ...(computer?.message ? [computer.message] : []),
         `Connection: ${reported ? reported[0].toUpperCase() + reported.slice(1) : "Unreported"}${status && !connection.ready() && !connection.pending() ? " (last reported)" : ""}`,
@@ -69,11 +69,11 @@ export function DialogDotsConnection(props: { connection: ReturnType<typeof crea
       detailsWrap: true,
     }, ...(connection.canAttach() ? [{
       value: "attach",
-      title: "Use this computer for Dots tasks",
+      title: "Use this computer for Dot threads",
       description: "Asks to confirm first",
     }] : []), ...(connection.canDetach() ? [{
       value: "detach",
-      title: "Detach this computer from Dots tasks",
+      title: "Detach this computer from Dot threads",
       description: "Asks to confirm first",
     }] : [])]
   })
@@ -81,7 +81,7 @@ export function DialogDotsConnection(props: { connection: ReturnType<typeof crea
     {
       value: "attach-confirm",
       title: "Use this computer",
-      details: ["Other computers stay connected. Choose which computer runs a Dots task in ChatGPT."],
+      details: ["Other computers stay connected. Choose which computer runs a Dot thread in ChatGPT."],
       detailsWrap: true,
     },
     { value: "attach-cancel", title: "Cancel" },
@@ -90,7 +90,7 @@ export function DialogDotsConnection(props: { connection: ReturnType<typeof crea
     {
       value: "detach-confirm",
       title: "Detach this computer",
-      details: ["This computer will stop running Dots tasks. Other computers stay connected."],
+      details: ["This computer will stop running Dot threads. Other computers stay connected."],
       detailsWrap: true,
     },
     { value: "detach-cancel", title: "Cancel" },
@@ -112,7 +112,7 @@ export function DialogDotsConnection(props: { connection: ReturnType<typeof crea
   />
   return <Show when={connection.confirmingAttach()} fallback={<Show when={connection.confirmingDetach()} fallback={main()}>
     <DialogSelect
-      title="Detach this computer from Dots tasks?"
+      title="Detach this computer from Dot threads?"
       options={detachOptions}
       renderFilter={false}
       skipFilter
@@ -121,7 +121,7 @@ export function DialogDotsConnection(props: { connection: ReturnType<typeof crea
     />
   </Show>}>
     <DialogSelect
-      title="Use this computer for Dots tasks?"
+      title="Use this computer for Dot threads?"
       options={confirmOptions}
       renderFilter={false}
       skipFilter
