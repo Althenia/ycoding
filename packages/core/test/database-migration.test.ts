@@ -87,6 +87,7 @@ const currentMigrations = [
   { id: "20261028041559_prepared-usage" },
   { id: "20261028131454_usage-telemetry" },
   { id: "20261030011808_session-origin" },
+  { id: "20261103050046_session-scope" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",
@@ -243,8 +244,14 @@ function normalizeTableSql(sql: string) {
     value.slice(bodyStart + 1, bodyEnd),
   )
     .map(normalizeSqlWhitespace)
+    .flatMap(hoistInlineCheck)
     .toSorted()
     .join(", ")})${suffix ? ` ${suffix}` : ""}`
+}
+
+function hoistInlineCheck(definition: string) {
+  const inline = /^(`[^`]+` .+?) (CONSTRAINT `[^`]+` CHECK) ?(\(.+\))$/.exec(definition)
+  return inline ? [inline[1], `${inline[2]}${inline[3]}`] : [definition]
 }
 
 function splitTableDefinitions(value: string) {

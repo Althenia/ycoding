@@ -68,6 +68,12 @@ export function terminal(exit: Exit.Exit<void, SessionRunner.RunError | ScopeUna
   return { type: "failed" as const, error: toSessionError(failure) }
 }
 
+const validateTaskOwner = (candidate: ShellLedger.Process) => Effect.gen(function* () {
+  yield* EventRuntime.requireTaskOwner.pipe(Effect.provideService(EventRuntime.TaskOwner, candidate))
+  if (candidate.pid !== process.pid)
+    return yield* new EventRuntime.TaskOwnerUnavailableError({ message: "Managed task owner is not the current process" })
+})
+
 /** Process-local execution: drains run in this process, routed through the Session's Location graph. */
 export const layer = Layer.effect(
   Service,
@@ -81,9 +87,7 @@ export const layer = Layer.effect(
     const jobs = yield* Job.Service
     let owner: ShellLedger.Process | undefined
     const bindTaskOwner = (candidate: ShellLedger.Process) => Effect.gen(function* () {
-      yield* EventRuntime.requireTaskOwner.pipe(Effect.provideService(EventRuntime.TaskOwner, candidate))
-      if (candidate.pid !== process.pid)
-        return yield* new EventRuntime.TaskOwnerUnavailableError({ message: "Managed task owner is not the current process" })
+      yield* validateTaskOwner(candidate)
       if (owner && (owner.pid !== candidate.pid || owner.started !== candidate.started || owner.pgid !== candidate.pgid))
         return yield* new EventRuntime.TaskOwnerUnavailableError({ message: "Managed task owner changed during execution" })
       owner = candidate
@@ -456,7 +460,7 @@ export const node = makeGlobalNode({
 export const noopLayer = Layer.succeed(
   Service,
   Service.of({
-    prepareTask: () => Effect.fail(new ScopeUnavailableError({ operation: "managed task owner" })),
+    prepareTask: (candidate) => validateTaskOwner(candidate).pipe(Effect.mapError(() => new ScopeUnavailableError({ operation: "managed task owner" }))),
     active: Effect.succeed(new Set()),
     resume: () => Effect.void,
     wake: () => Effect.void,
