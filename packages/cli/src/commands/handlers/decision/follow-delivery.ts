@@ -17,6 +17,7 @@ export type DeliveryClient = {
   decision: { list(options: ReadOptions): Promise<readonly DecisionItem[]> }
   dots: {
     threads(options: ReadOptions): Promise<Listing>
+    resume(options: ReadOptions): Promise<unknown>
     thread: { send(input: { threadID: string; text: string; clientMessageID: string; mode: "send" }, options: ReadOptions): Promise<{ admission: Admission; turnID?: string }> }
   }
 }
@@ -99,14 +100,16 @@ export function createFollowDelivery(client: DeliveryClient, options: {
   const root = options.state.rootSessionID
   const requested = [...new Set(options.targets)].toSorted()
   const existing = options.state.delivery
-  if (requested.length === 0 || existing !== undefined && JSON.stringify(existing.targets.map((target) => target.target).toSorted()) !== JSON.stringify(requested))
+  if (requested.length === 0 || existing?.targets.some((target) => !requested.includes(target.target) && (target.inflight !== undefined || target.outbox.length > 0)))
     throw new FollowError("delivery-targets-changed")
   const signal = options.signal
-  const targets: DeliveryTarget[] = structuredClone(existing?.targets ?? requested.map((target) => ({ target, outbox: [] })))
+  const targets: DeliveryTarget[] = structuredClone(existing?.targets.filter((target) => requested.includes(target.target)) ?? [])
+  for (const target of requested) if (!targets.some((saved) => saved.target === target)) targets.push({ target, outbox: [] })
   const announced = new Map((existing?.announced ?? []).map((key) => [key, 0]))
   const unsaved = new Set<DeliveryEvent>()
   let generation = 0
   let started = false
+  let resumedMissingRoot = false
   let last = options.state
   let chain = Promise.resolve()
   let notify: (() => void) | undefined
@@ -187,6 +190,16 @@ export function createFollowDelivery(client: DeliveryClient, options: {
           const rejection = dotsRejection(error)
           const reason = dotsFailureText(error)
           await record(target, batch, "failed", rejection === undefined ? {} : { rejection })
+          if (target.target === dotDeliveryTarget && !resumedMissingRoot && rejection?.message?.includes("thread not found")) {
+            resumedMissingRoot = true
+            try {
+              await client.dots.resume({ signal })
+              const listing = await client.dots.threads({ signal })
+              if (listing.rootThreadID !== undefined && listing.rootThreadID !== batch.threadID) return "retry"
+            } catch (resumeError) {
+              if (ownedFollowAbort(resumeError, signal)) throw resumeError
+            }
+          }
           throw new FollowError("delivery-failed", reason === undefined ? undefined : `${batch.threadID}: ${reason}`)
         }
         admission = "unknown"
@@ -197,6 +210,7 @@ export function createFollowDelivery(client: DeliveryClient, options: {
         continue
       }
       await record(target, batch, "delivered", { admission })
+      if (target.target === dotDeliveryTarget) resumedMissingRoot = false
       target.inflight = undefined
       await persist()
     }

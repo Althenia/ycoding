@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import type { DotsAccess } from "@ycoding-ai/core/dots/access"
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
 import type { RemoteControlCredential } from "@ycoding-ai/core/remote-control/credential"
+import { Schema } from "effect"
 import { RemoteLimits } from "@ycoding-ai/remote"
 import type { Dots } from "@ycoding-ai/schema/dots"
 import { CcaComputerFailure, ccaPinnedCredential, ccaResolveDot, ccaRestGet, ccaRestSend } from "./cca-computer"
@@ -20,6 +21,7 @@ const identifierPattern = /^[a-z][a-z0-9_-]{0,63}$/
 const itemTypePattern = /^[A-Za-z][A-Za-z0-9_]{0,63}$/
 const turnStatuses = ["inProgress", "completed", "interrupted", "failed"] as const
 const decisions = new Set(["accept", "acceptForSession", "decline", "cancel"])
+const decodeJson = Schema.decodeUnknownPromise(Schema.fromJsonString(Schema.Unknown))
 
 export interface CcaDotConversationDeps {
   readonly native: Pick<NativeDots.Host, "configuration" | "credential">
@@ -307,8 +309,62 @@ export function createCcaDotConversation(deps: CcaDotConversationDeps): DotsAcce
     return current
   }
 
+  async function postMessaging(owner: Context, path: string, signal: AbortSignal, body?: unknown): Promise<{ readonly body: unknown } | undefined> {
+    const response = await ccaRestSend(fetchFn, "POST", path, {}, owner.credential, signal, undefined, {}, body).catch(() => undefined)
+    if (response === undefined) return undefined
+    if (response.status === 401) {
+      await response.body?.cancel().catch(() => {})
+      throw new Failure("authentication")
+    }
+    if (response.status === 408 || response.status === 429 || response.status >= 500) {
+      await response.body?.cancel().catch(() => {})
+      return undefined
+    }
+    const content = await response.text().catch(() => undefined)
+    const parsed = content === undefined ? undefined : await decodeJson(content).catch(() => undefined)
+    if (response.ok) return { body: parsed }
+    const detail = isRecord(parsed) ? parsed.detail : undefined
+    throw rejected({
+      kind: "error", code: response.status,
+      ...(isRecord(detail) && typeof detail.code === "string" ? { errorCode: detail.code } : {}),
+      message: typeof detail === "string" ? detail : isRecord(detail) && typeof detail.message === "string" ? detail.message : content ?? "",
+    })
+  }
+
+  async function room(owner: Context, profile: Record<string, unknown>, signal: AbortSignal) {
+    if (profile.scope === "shared") {
+      const direct = await postMessaging(owner, `/messaging/dots/${encodeURIComponent(owner.dotID)}/dm`, signal)
+      return direct === undefined ? undefined : id(fields(direct.body).id)
+    }
+    if (profile.messaging_room_id !== undefined && profile.messaging_room_id !== null) return id(profile.messaging_room_id)
+    const created = await postMessaging(owner, `/tbo/${encodeURIComponent(owner.dotID)}/messaging-room`, signal)
+    if (created === undefined) return undefined
+    const body = fields(created.body)
+    if (body.id !== owner.dotID) throw new Failure("malformed")
+    return id(body.messaging_room_id)
+  }
+
+  async function sendRoom(owner: Context, input: Dots.ThreadSend, signal: AbortSignal): Promise<Dots.SendResult> {
+    const profile = await ccaRestGet(fetchFn, `/tbo/${encodeURIComponent(owner.dotID)}`, {}, owner.credential, signal)
+    const roomID = await room(owner, profile, signal)
+    if (roomID === undefined) return { admission: "unknown" }
+    if (profile.is_paused === true) {
+      const resumed = await resumeRuntime(owner)
+      if (resumed.outcome !== "resumed" || resumed.threadID !== owner.rootThreadID) return { admission: "unknown" }
+    }
+    const sent = await postMessaging(owner, `/messaging/rooms/${encodeURIComponent(roomID)}/messages`, signal, {
+      content: { text: input.text },
+      request_id: input.clientMessageID,
+      idempotency_token: input.clientMessageID,
+      timezone_offset_min: new Date().getTimezoneOffset(),
+    })
+    return { admission: sent !== undefined && isRecord(sent.body) && typeof sent.body.id === "string" ? "started" : "unknown" }
+  }
+
   async function send(threadID: string, input: Dots.ThreadSend): Promise<Dots.SendResult> {
-    await member(threadID, deadline())
+    const signal = deadline()
+    const owner = await member(threadID, signal)
+    if (threadID === owner.rootThreadID) return sendRoom(owner, input, signal)
     const durable = client()
     const subscription = await durable.watch(threadID)
     if (subscription.kind === "error") throw rejected(subscription)
@@ -330,8 +386,7 @@ export function createCcaDotConversation(deps: CcaDotConversationDeps): DotsAcce
     return { admission, ...(turnID === undefined ? {} : { turnID }) }
   }
 
-  async function resume(): Promise<Dots.ResumeResult> {
-    const owner = await context(deadline())
+  async function resumeRuntime(owner: Context): Promise<Dots.ResumeResult> {
     const response = await ccaRestSend(fetchFn, "POST", `/tbo/${encodeURIComponent(owner.dotID)}/runtime/resume`, {}, owner.credential, AbortSignal.timeout(RemoteLimits.dotsConnectMs)).catch(() => undefined)
     if (response === undefined) return { outcome: "unknown" }
     if (response.status === 401 || response.status === 403) {
@@ -424,7 +479,7 @@ export function createCcaDotConversation(deps: CcaDotConversationDeps): DotsAcce
     }),
     resume: () => {
       if (resuming) return resuming
-      const attempt = run(resume)
+      const attempt = run(async () => resumeRuntime(await context(deadline())))
       resuming = attempt
       void attempt.finally(() => { if (resuming === attempt) resuming = undefined })
       return attempt

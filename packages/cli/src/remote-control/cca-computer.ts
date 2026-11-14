@@ -100,7 +100,7 @@ function identity(value: unknown) {
   return value
 }
 
-export function ccaRestSend(fetchFn: CcaFetch, method: "GET" | "POST" | "DELETE", path: string, query: Record<string, string | undefined>, resolved: RemoteControlCredential.Resolved, signal: AbortSignal, base = ccaComputerBaseURL, headers: Record<string, string> = {}) {
+export function ccaRestSend(fetchFn: CcaFetch, method: "GET" | "POST" | "DELETE", path: string, query: Record<string, string | undefined>, resolved: RemoteControlCredential.Resolved, signal: AbortSignal, base = ccaComputerBaseURL, headers: Record<string, string> = {}, body?: unknown) {
   const search = new URLSearchParams()
   for (const [name, value] of Object.entries(query)) if (value !== undefined) search.set(name, value)
   const suffix = search.size ? `?${search}` : ""
@@ -109,6 +109,7 @@ export function ccaRestSend(fetchFn: CcaFetch, method: "GET" | "POST" | "DELETE"
     headers: { ...buildCcaHeaders({ access: resolved.access, accountID: resolved.accountID }), ...headers },
     redirect: "error",
     signal,
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
 }
 

@@ -24,6 +24,23 @@ const removed = [
 ]
 const once = (value: string, text: string) => expect([text, value.split(text).length]).toEqual([text, 2])
 
+test("member assignments and executor guidance require five disjoint parallel subagent lanes", async () => {
+  once(CoordinationInstructions.content, "When assigning substantive multi-part work to members, require five subagents in parallel across disjoint file and check lanes, one writer per file, and at most one heavy build or typecheck at a time.")
+  const executor = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("executor"))))[0]?.value)
+  once(executor, "For your own substantive multi-part work, run five subagents in parallel across disjoint file and check lanes, keep one writer per file, and run at most one heavy build or typecheck at a time.")
+})
+
+test("Master, supervisor and executor instructions honor explicit main-agent versus subagent model and profile splits", async () => {
+  const split = "Honor explicit main-agent versus subagent provider, model, variant, and profile splits: keep the main Session on its designated model and profile, switch active direct children and launch subagents on their designated subagent model and profile, and substitute no other profile."
+  for (const role of ["master", "supervisor", "executor"] as const) {
+    const value = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value)
+    once(value, split)
+    expect(value).toContain("five subagents in parallel across disjoint file and check lanes")
+  }
+  const subagent = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("executor", true))))[0]?.value)
+  expect(subagent).not.toContain("provider, model, variant, and profile splits")
+})
+
 test("Master instructions require supervision, evidence review and reasoned escalation", () => {
   for (const instruction of [
     "Coordinate and supervise only",

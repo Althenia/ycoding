@@ -18,7 +18,7 @@ const followFailureMessages = {
   "observer-failed": "Native decision follow failed; verify server availability and private state ownership",
   "delivery-failed": "Dot delivery failed; undelivered events stay in the follow state and resume on restart; verify Dots access and the --deliver threads",
   "delivery-target-unavailable": "A --deliver thread is not listed by your Dot, or for dot your Dot reports no root conversation; run ycoding dots threads and select dot or a listed thread",
-  "delivery-targets-changed": "Selected follow state delivers to other --deliver targets; repeat its exact targets or select a new state file",
+  "delivery-targets-changed": "Delivery requires at least one --deliver target; retain targets with undelivered events until they are delivered",
 } as const
 
 export class FollowError extends Error {

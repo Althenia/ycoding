@@ -61,10 +61,31 @@ test("operator watch instructions describe push delivery to the Dot thread witho
   const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
   for (const text of [
     "ycoding decision watch <root-session-id> --family --follow --state <private-dir>/state.json --deliver dot",
-    "`dot` follows the Dot's current root conversation", "A pushed message approves nothing",
+    "`dot` resolves to the Dot's current root thread on every delivery pass", "A pushed message approves nothing",
     "Without a running follow watch nothing is pushed",
   ]) expect(ycodingOperatorSkill).toContain(text)
   expect(ycodingOperatorSkill).not.toContain("cannot wake an idle Dots conversation")
+})
+
+test("operator guidance specifies parallel member lanes and durable two-target watch delivery", async () => {
+  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  for (const text of [
+    "When prompting member or agent Sessions for substantive multi-part work, require five subagents in parallel across disjoint file and check lanes, one writer per file, and at most one heavy build or typecheck at a time.",
+    "--deliver dot --deliver <task-thread-id>",
+    "`dot` resolves to the Dot's current root thread on every delivery pass",
+    "Re-running with the same `--state` and added `--deliver` targets keeps pending deliveries of existing targets and starts new targets with only new events",
+    "removing a target that still has undelivered events is refused",
+  ]) expect(ycodingOperatorSkill.split(text)).toHaveLength(2)
+})
+
+test("operator guidance honors explicit main-agent versus subagent provider, model, variant and profile splits", async () => {
+  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  const rule = "Honor explicit main-agent versus subagent provider, model, variant and profile splits: keep the main Session on its designated model and profile, switch active children and launch subagents on their designated subagent model and profile, and never substitute another profile."
+  expect(ycodingOperatorSkill.split(rule)).toHaveLength(2)
+  const delegation = ycodingOperatorSkill.indexOf("require five subagents in parallel")
+  expect(delegation).toBeGreaterThan(-1)
+  expect(ycodingOperatorSkill.indexOf(rule)).toBeGreaterThan(delegation)
+  expect(ycodingOperatorSkill.indexOf(rule)).toBeLessThan(ycodingOperatorSkill.indexOf("Launch requires an actual parent assistant-message ID"))
 })
 
 test("operator instructions create a YCoding coordination thread with computer V selected", async () => {
