@@ -1,5 +1,13 @@
 .overlay--provider-connect .overlay__body {
-  padding: var(--yc-space-4);
+  padding: var(--yc-space-5);
+}
+
+.overlay--provider-connect .overlay__body > .stack {
+  gap: var(--yc-space-4);
+}
+
+.overlay--provider-connect .field {
+  gap: var(--yc-space-2);
 }
 
 .overlay--provider-connect .field__hint {
@@ -30,6 +38,7 @@
   align-items: center;
   gap: var(--yc-space-2) var(--yc-space-3);
   overflow-wrap: anywhere;
+  padding-block: var(--yc-space-3);
 }
 
 .provider-profile__name {
@@ -56,4 +65,15 @@
   flex-wrap: wrap;
   gap: var(--yc-space-2);
   margin-inline-start: auto;
+}
+
+@media (max-width: 767px) {
+  .overlay--provider-connect .overlay__body {
+    padding: var(--yc-space-4);
+  }
+
+  .provider-profile__actions {
+    inline-size: 100%;
+    margin-inline-start: 0;
+  }
 }

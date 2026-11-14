@@ -35,7 +35,7 @@
 .composer__context-bar-fill { display:block; block-size:100%; border-radius:inherit; background:var(--yc-text); }
 .composer__selection-options :is(.mini-picker__trigger,.model-control__trigger) { justify-content:space-between; inline-size:100%; max-inline-size:none; min-block-size:var(--yc-hit-min); }
 .composer { position: relative; display:flex; flex-direction:column; border:0; background:transparent; padding:var(--yc-space-3) var(--yc-gutter) max(var(--yc-space-3), env(safe-area-inset-bottom)); }
-.composer.composer--metadata-in-transcript { padding-block:var(--yc-space-1) max(var(--yc-space-1), env(safe-area-inset-bottom)); }
+.composer.composer--metadata-in-transcript { padding-block:var(--yc-space-1) max(var(--yc-space-4), env(safe-area-inset-bottom)); }
 .composer__dock-toggle { min-inline-size:var(--yc-hit-min); min-block-size:var(--yc-hit-min); }
 .composer__dock-toggle svg { inline-size:16px; block-size:16px; }
 .composer__dock-toggle[aria-expanded="false"] svg { transform:rotate(180deg); }
@@ -54,7 +54,7 @@
 .composer--collapsed .session-status > :is(.session-status__autonomous-trigger, .session-status__goal-trigger) { display:none; }
 .composer__row { position: relative; display:flex; flex-direction:column; }
 .mini-composer__input-wrap { position: relative; min-inline-size: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
-.composer__input, .composer__input:focus-visible { display: block; inline-size: 100%; min-block-size: 44px; max-block-size: 40vh; field-sizing: content; resize: none; padding: var(--yc-space-2) var(--yc-space-2); border: 0; border-radius: var(--yc-radius-lg); outline: 0; background: transparent; color: var(--yc-text); box-shadow: none; font: var(--yc-size-sm)/var(--yc-leading-sm) var(--yc-font-sans); }
+.composer__input, .composer__input:focus-visible { display: block; inline-size: 100%; min-block-size: 44px; max-block-size: min(40vh, var(--yc-composer-input-max, 40vh)); field-sizing: content; resize: none; padding: var(--yc-space-2) var(--yc-space-2); border: 0; border-radius: var(--yc-radius-lg); outline: 0; background: transparent; color: var(--yc-text); box-shadow: none; font: var(--yc-size-sm)/var(--yc-leading-sm) var(--yc-font-sans); }
 .composer__input::placeholder { color: var(--yc-text-subtle); }
 .composer__controls { padding:var(--yc-space-1) 0 0; }
 .mini-composer__send:disabled { opacity: .45; }
@@ -332,4 +332,13 @@
 @media (min-width: 1024px) and (pointer: fine) {
   .composer:not(.composer--collapsed) .composer__prediction-slot:not(:has(.composer__use-prediction)) { display:none; }
   .composer:not(.composer--collapsed) .composer__dock-toggle:not(:focus-visible), .app--conversation.app--selected .workspace__main > .composer-resident:not(.route-panel--idle) .composer:not(.composer--collapsed) .composer__dock-toggle:not(:focus-visible) { position:absolute; inset-block-start:0; inset-inline-end:0; z-index:3; inline-size:24px; block-size:24px; min-inline-size:24px; min-block-size:24px; opacity:0; margin:0; padding:0; border:0; overflow:hidden; white-space:nowrap; }
+}
+@media (min-width: 1280px) and (pointer: fine) {
+  .app--team-open .composer { padding-inline:var(--yc-space-1); }
+  .app--team-open .composer .composer__row { padding-inline:var(--yc-space-1); }
+  .app--team-open .composer .composer__controls { flex-wrap:nowrap; gap:calc(var(--yc-space-1) / 2); }
+  .app--team-open .composer__controls .mini-picker { flex:none; }
+  .app--team-open .composer__controls .model-control { flex:1 1 40px; min-inline-size:40px; }
+  .app--team-open .composer__controls .model-control__trigger { inline-size:100%; min-inline-size:0; }
+  .app--team-open .composer__controls :is(.session-status__autonomous-trigger,.session-status__goal-trigger) { padding-inline:calc(var(--yc-space-1) / 2); }
 }

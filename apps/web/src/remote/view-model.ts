@@ -754,6 +754,7 @@ export type SessionAvailabilityView = {
   /** What the signed-in owner can reach on this machine. */
   readonly note?: string
   readonly loading: boolean
+  readonly retryable?: boolean
 }
 
 /** Distinguishes an in-progress list read from a connected machine that returned no Sessions. */
@@ -761,21 +762,24 @@ export function sessionAvailabilityView(
   connection: RemoteConnectionState,
   sessionCount: number,
   listStatus: "idle" | "loading" | "ready" | "error" = "ready",
+  context: { readonly filtered?: boolean; readonly inventoryFailed?: boolean } = {},
 ): SessionAvailabilityView | undefined {
   if (sessionCount > 0) return undefined
-  if (connection.kind === "loading" || connection.kind === "connecting" || listStatus === "idle" || listStatus === "loading") {
+  const status = context.inventoryFailed ? "error" : listStatus
+  if (connection.kind === "loading" || connection.kind === "connecting" || status === "idle" || status === "loading") {
     return {
       title: "Loading sessions",
       body: "Connecting to the selected machine and loading its sessions.",
       loading: true,
     }
   }
-  if (listStatus === "error") return {
+  if (status === "error") return {
     title: "Session list unavailable",
     body: connection.kind === "error" ? connection.message : "The selected machine could not answer the Session list.",
     loading: false,
+    retryable: true,
   }
-  if (connection.kind === "connected" && listStatus === "ready") {
+  if (connection.kind === "connected" && status === "ready" && !context.filtered) {
     return {
       title: "No sessions",
       body: "Start YCoding in your project folder on this machine.",

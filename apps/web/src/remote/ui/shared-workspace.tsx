@@ -5,7 +5,7 @@ import { Icon, type IconName } from "../../ui/icon"
 import { Markdown } from "./markdown"
 import "../../styles/workspace-shell.css"
 
-type CompanionTab = "activity" | "changes" | "context"
+type CompanionTab = "activity" | "running" | "changes" | "context"
 const tabs: readonly CompanionTab[] = ["activity", "changes", "context"]
 const allTurnsValue = "all-session-changes"
 const tabLabel = (tab: CompanionTab) => `${tab[0]!.toUpperCase()}${tab.slice(1)}`
@@ -81,13 +81,14 @@ export function SharedContextRingButton(props: { readonly fraction?: number; rea
   </button>
 }
 
-export function SharedCompanionTabs(props: { readonly active: CompanionTab; readonly class?: string; readonly idPrefix?: string; readonly onSelect: (tab: CompanionTab) => void; readonly onCloseTab?: (id: CompanionTab) => void; readonly onAddTab?: () => void }): JSX.Element {
+export function SharedCompanionTabs(props: { readonly active: CompanionTab; readonly class?: string; readonly idPrefix?: string; readonly running?: boolean; readonly onSelect: (tab: CompanionTab) => void; readonly onCloseTab?: (id: CompanionTab) => void; readonly onAddTab?: () => void }): JSX.Element {
+  const available = () => props.running ? ["activity", "running", "changes", "context"] as const : tabs
   return <div class={props.class ? `rl-pane-tabs ${props.class}` : "rl-pane-tabs"} role="tablist" aria-label="Session companion">
-    <For each={tabs}>{(tab, index) => <div class="rl-pane-tab" data-active={props.active === tab ? "true" : undefined}><button type="button" role="tab" aria-selected={props.active === tab} aria-controls={`${props.idPrefix ?? "companion"}-${tab}`} tabindex={props.active === tab ? 0 : -1} onClick={() => props.onSelect(tab)} onKeyDown={(event) => {
-      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : event.key === "ArrowRight" ? (index() + 1) % tabs.length : event.key === "ArrowLeft" ? (index() + tabs.length - 1) % tabs.length : undefined
+    <For each={available()}>{(tab, index) => <div class="rl-pane-tab" data-active={props.active === tab ? "true" : undefined}><button type="button" role="tab" aria-selected={props.active === tab} aria-controls={`${props.idPrefix ?? "companion"}-${tab}`} tabindex={props.active === tab ? 0 : -1} onClick={() => props.onSelect(tab)} onKeyDown={(event) => {
+      const next = event.key === "Home" ? 0 : event.key === "End" ? available().length - 1 : event.key === "ArrowRight" ? (index() + 1) % available().length : event.key === "ArrowLeft" ? (index() + available().length - 1) % available().length : undefined
       if (next === undefined) return
       event.preventDefault()
-      props.onSelect(tabs[next]!)
+      props.onSelect(available()[next]!)
       event.currentTarget.closest('[role="tablist"]')?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
     }}>{tabLabel(tab)}</button><Show when={props.onCloseTab}><button type="button" class="rl-pane-tab-close" aria-label={`Close ${tabLabel(tab)} tab`} onClick={(event) => { event.stopPropagation(); props.onCloseTab?.(tab) }}><Icon name="close" size={14} /></button></Show></div>}</For>
   </div>
@@ -146,10 +147,10 @@ export function SharedWorkspaceFrame(props: { readonly railClass?: string; reado
   </aside>{props.topHeader}{props.connectionStrip}<div class={props.workspaceClass ?? "workspace"}><main id={props.mainID ?? "remote-main"} tabindex="-1" class={props.mainClass ?? "workspace__main"} ref={props.mainRef}>{props.children}</main>{props.workspaceAside}</div>{props.companion}</>
 }
 
-export function SharedCompanionSurface(props: { readonly active: CompanionTab; readonly onSelect: (tab: CompanionTab) => void; readonly headerActions?: JSX.Element; readonly policyActions?: JSX.Element; readonly onCloseTab?: (id: CompanionTab) => void; readonly onAddTab?: () => void; readonly beforeTabs?: JSX.Element; readonly activitySubtitle?: JSX.Element; readonly onRefresh?: () => void; readonly activityContent: JSX.Element; readonly changesContent: JSX.Element; readonly contextContent?: JSX.Element; readonly contextActions?: JSX.Element }): JSX.Element {
-  return <section class="companion" aria-label="Session companion"><header class="companion__header rl-companion-head"><span class="rl-pane-kicker">Session companion</span><div class="rl-pane-policy">{props.policyActions}{props.headerActions}</div></header>{props.beforeTabs}<div class="rl-pane-tabs-row"><SharedCompanionTabs class="companion__tabs" active={props.active} onSelect={props.onSelect} onCloseTab={props.onCloseTab} /><Show when={props.onAddTab}><button type="button" class="rl-icon rl-pane-tab-add" aria-label="Add companion tab" onClick={() => props.onAddTab?.()}><Icon name="plus" size={16} /></button></Show></div>
+export function SharedCompanionSurface(props: { readonly active: CompanionTab; readonly onSelect: (tab: CompanionTab) => void; readonly headerActions?: JSX.Element; readonly policyActions?: JSX.Element; readonly onCloseTab?: (id: CompanionTab) => void; readonly onAddTab?: () => void; readonly beforeTabs?: JSX.Element; readonly activitySubtitle?: JSX.Element; readonly onRefresh?: () => void; readonly activityContent: JSX.Element; readonly runningContent?: JSX.Element; readonly changesContent: JSX.Element; readonly contextContent?: JSX.Element; readonly contextActions?: JSX.Element }): JSX.Element {
+  return <section class="companion" aria-label="Session companion"><header class="companion__header rl-companion-head"><span class="rl-pane-kicker">Session companion</span><div class="rl-pane-policy">{props.policyActions}{props.headerActions}</div></header>{props.beforeTabs}<div class="rl-pane-tabs-row"><SharedCompanionTabs class="companion__tabs" active={props.active} running={props.runningContent !== undefined} onSelect={props.onSelect} onCloseTab={props.onCloseTab} /><Show when={props.onAddTab}><button type="button" class="rl-icon rl-pane-tab-add" aria-label="Add companion tab" onClick={() => props.onAddTab?.()}><Icon name="plus" size={16} /></button></Show></div>
     <div id="companion-activity" class="motion-enter" role="tabpanel" hidden={props.active !== "activity"}><div class="companion__activity-heading"><div><h2>Activity</h2><p>{props.activitySubtitle}</p></div><Show when={props.onRefresh}><button type="button" class="button button--secondary button--small" onClick={props.onRefresh}><Icon name="refresh" size={16} /><span>Refresh</span></button></Show></div>{props.activityContent}</div>
-    <div id="companion-changes" class="motion-enter" role="tabpanel" hidden={props.active !== "changes"}>{props.changesContent}</div><div id="companion-context" class="motion-enter" role="tabpanel" hidden={props.active !== "context"}>{props.contextContent ?? <SharedContextBreakdownPanel />}{props.contextActions}</div>
+    <Show when={props.runningContent !== undefined}><div id="companion-running" class="motion-enter" role="tabpanel" aria-label="Running" hidden={props.active !== "running"}>{props.runningContent}</div></Show><div id="companion-changes" class="motion-enter" role="tabpanel" hidden={props.active !== "changes"}>{props.changesContent}</div><div id="companion-context" class="motion-enter" role="tabpanel" hidden={props.active !== "context"}>{props.contextContent ?? <SharedContextBreakdownPanel />}{props.contextActions}</div>
   </section>
 }
 

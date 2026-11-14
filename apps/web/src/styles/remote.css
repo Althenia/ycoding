@@ -1485,6 +1485,12 @@ form .request__actions .button--secondary {
   }
   .app--conversation.app--selected .workspace__scroll > .remote-conversation-view { inline-size: 100%; margin-inline: 0; }
 }
+@media (min-width: 1280px) and (pointer: fine) {
+  .app--conversation.app--selected.app--team-open .workspace__scroll > *,
+  .app--conversation.app--selected.app--team-open .workspace__scroll > .remote-conversation-view > *,
+  .app--conversation.app--selected.app--team-open .composer > *,
+  .app--conversation.app--selected.app--team-open .todo-panel__inner { inline-size: min(100%, var(--remote-column)); }
+}
 
 /* The page already sits inside the workspace gutter; a second pane inset would
    indent it past every other screen's edge. */

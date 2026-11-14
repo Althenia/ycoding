@@ -1,10 +1,29 @@
 import { expect, test } from "bun:test"
 import { accountedTask } from "../../../test/usage-fixture"
-import { appendTeamShellOutput, canAnswerSubagent, canCancelSubagent, canContinueRecovery, isDeferredQuestion, taskStateLabel, teamShellCommand, shellOwnerLabel, teamActiveCount, teamActivityLabel, formatCacheHit, formatElapsed, isManagedSubagent, pinAction, shellRows, siblingTargets, taskRows, usageSlots, TEAM_SHELL_OUTPUT_TAIL_LIMIT, type TeamSubagent } from "./team-model"
+import { appendTeamShellOutput, canAnswerSubagent, canCancelSubagent, canContinueRecovery, isDeferredQuestion, taskStateLabel, teamShellCommand, shellOwnerLabel, teamActiveCount, teamActivityLabel, runningExecution, formatCacheHit, formatElapsed, isManagedSubagent, pinAction, shellRows, siblingTargets, taskRows, usageSlots, TEAM_SHELL_OUTPUT_TAIL_LIMIT, type TeamSubagent } from "./team-model"
 
 const task = (id: string, state: TeamSubagent["state"], updatedAt: number): TeamSubagent => ({
   sessionID: id, parentID: "ses_root", agent: "omoikane", description: `Review ${id}`, state, revision: 1,
   updatedAt, startedAt: 1_000, modelLabel: "openai/gpt-6-sol#high",
+})
+
+test("running execution separates live tasks and shells from waiting and completed history", () => {
+  const runningTask: TeamSubagent = task("ses_live", "running", 1)
+  const shell = { id: "sh_live", ownerID: "ses_root", command: "fixture", status: "running" as const, startedAt: 1 }
+  const data = { status: "ready" as const, shellStatus: "ready" as const, tasks: [runningTask, task("ses_wait", "waiting", 2), task("ses_done", "completed", 3)], shells: [shell, { ...shell, id: "sh_done", status: "exited" as const }] }
+  expect(runningExecution(data)).toEqual({ tasks: [runningTask], shells: [shell], taskNotice: undefined, shellNotice: undefined })
+  expect(runningExecution({ ...data, tasks: [task("ses_live", "cancelled", 4)], shells: [{ ...shell, status: "killed" }] })).toEqual({ tasks: [], shells: [], taskNotice: undefined, shellNotice: undefined })
+  expect(runningExecution({ ...data, status: "loading", shellStatus: "error", next: "more", shellTruncated: true })).toMatchObject({ taskNotice: "Subagents are loading.", shellNotice: "Running shells are unavailable." })
+  expect(runningExecution({ ...data, next: "more", shellTruncated: true })).toMatchObject({ taskNotice: "More subagents may be available.", shellNotice: "More shells may be available." })
+  for (const state of ["starting", "waiting", "supervising", "cancelling", "completed", "cancelled", "failed", "lost"] as const) {
+    expect(runningExecution({ ...data, tasks: [task("ses_live", state, 4)] }).tasks).toEqual([])
+  }
+  for (const status of ["exited", "timeout", "memory-limit", "killed"] as const) {
+    expect(runningExecution({ ...data, shells: [{ ...shell, status }] }).shells).toEqual([])
+  }
+  expect(runningExecution({ ...data, status: "loading", shellStatus: "loading" }).tasks).toEqual([runningTask])
+  expect(runningExecution({ ...data, status: "loading", shellStatus: "loading" }).shells).toEqual([shell])
+  expect(runningExecution({ ...data, tasks: [], shells: [] })).toEqual({ tasks: [], shells: [], taskNotice: undefined, shellNotice: undefined })
 })
 
 test("only managed child Sessions hide the composer; BTW and roots keep it", () => {

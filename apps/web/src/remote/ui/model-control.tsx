@@ -165,7 +165,7 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
     })
   })
   return <div class="model-control">
-    <button ref={trigger} type="button" class="model-control__trigger" classList={{ "mini-picker__trigger--pending": props.pending }} aria-label="Model" aria-description={props.pending ? "applies with your next send" : undefined} aria-expanded={open()} aria-haspopup="dialog" disabled={props.disabled} onClick={() => { if (open()) close(); else { setListing(false); setOpen(true) } }}>
+    <button ref={trigger} type="button" class="model-control__trigger" classList={{ "mini-picker__trigger--pending": props.pending }} aria-label="Model" aria-description={`${displayOption()?.name ?? props.selected?.id ?? "Model"}${props.pending ? "; applies with your next send" : ""}`} aria-expanded={open()} aria-haspopup="dialog" disabled={props.disabled} onClick={() => { if (open()) close(); else { setListing(false); setOpen(true) } }}>
       <span class="model-control__name">{displayOption()?.name ?? props.selected?.id ?? "Model"}</span><Show when={selected()?.profile}><span class="model-control__effort">{selected()?.profile}</span></Show><Show when={stops().length}><span class="model-control__effort">{effort()}</span></Show><Icon name="chevron-down" />
     </button>
     <Show when={open()}><Portal>

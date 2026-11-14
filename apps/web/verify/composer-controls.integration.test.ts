@@ -22,6 +22,25 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
+test("companion-open desktop keeps composer controls on one row", async () => {
+  for (const width of [1280, 1440]) for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?ledger=1&view=chat&theme=${theme}`)
+      await wait(page, `document.querySelector('.companion-context-trigger') && document.querySelector('.composer__controls .session-status__goal-trigger')`)
+      await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
+      await wait(page, `document.querySelector('#companion-context:not([hidden])') !== null`)
+      const result = await page.evaluate<{ row: boolean; contained: boolean; separate: boolean; description: string; model: string; geometry: unknown }>(`(() => { const controls=document.querySelector('.composer__controls'), selectors=['.composer__attach','.mini-picker__trigger','.model-control__trigger','.composer__effort','.composer__context-trigger','.session-status__autonomous-trigger','.session-status__goal-trigger','.composer__delivery-toggle','.mini-composer__interrupt','.mini-composer__send'], elements=selectors.map(selector=>controls.querySelector(selector)), rects=elements.map(element=>element.getBoundingClientRect()), bounds=controls.getBoundingClientRect(), model=controls.querySelector('.model-control__trigger'); return { row:Math.max(...rects.map(rect=>rect.top)) < Math.min(...rects.map(rect=>rect.bottom)), contained:rects.every(rect=>rect.width>=24 && rect.height>=24 && rect.left>=bounds.left-1 && rect.right<=bounds.right+1), separate:rects.every((rect,index)=>rects.slice(index+1).every(other=>rect.right<=other.left+1 || other.right<=rect.left+1)), description:model.getAttribute('aria-description') ?? '', model:model.querySelector('.model-control__name').textContent.trim(), geometry:{bounds:[bounds.left,bounds.right],rects:rects.map(rect=>[rect.left,rect.right])} }; })()`)
+      expect(result.row).toBe(true)
+      expect(result).toMatchObject({ contained: true })
+      expect(result.separate).toBe(true)
+      expect(result.model.length).toBeGreaterThan(0)
+      expect(result.description).toContain(result.model)
+    } finally { await page.close() }
+  }
+}, 60_000)
+
 test("composer is one 20px card whose draft field has no inner outline and whose border shows draft focus", async () => {
   const page = await browser!.openPage()
   try {

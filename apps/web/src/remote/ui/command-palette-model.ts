@@ -3,6 +3,16 @@ import { themePreferenceLabel, type ThemePreference } from "../../theme/theme"
 import { autonomyLabels, type AutonomyModes } from "../autonomy"
 import { submission } from "./composer-logic"
 import type { RemoteView } from "./shell-model"
+import type { ModelOption } from "../catalog"
+import type { ModelRefView } from "../projection"
+
+export type PaletteModelBinding = {
+  readonly key: string
+  readonly selected: () => ModelRefView | undefined
+  readonly recent: () => readonly ModelRefView[]
+  readonly rememberedVariant: (model: ModelOption, profile?: string) => string | undefined
+  readonly choose: (model: ModelRefView) => void
+}
 
 export const paletteGroups = ["Session", "Commands", "Skills", "Navigation", "Settings", "Account"] as const
 

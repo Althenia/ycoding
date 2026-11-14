@@ -66,6 +66,16 @@ describe("command palette stylesheet", () => {
     expect(inCondition(sheet, ".app .app-header__end > button.app-header__palette", "@media (max-width: 479px)").display).toBe("inline-flex")
   })
 
+  test("palette, provider profiles and workspace identity group content without decorative rules", async () => {
+    const { sheet } = await readPalette()
+    const provider = parseStylesheet("provider-connect.css", await Bun.file(new URL("../remote/ui/provider-connect.css", import.meta.url)).text())
+    const workspace = await readStylesheet("workspace-shell.css")
+    for (const [source, selector] of [[sheet, ".command-palette__model-head"], [provider, ".provider-profile"], [workspace, ".app .rl-page .ws-host .ws-location"]] as const) {
+      const declarations = declarationsWhere(source, rule => rule.header === selector)
+      expect({ selector, boundaries: Object.keys(declarations).filter(property => property === "border" || property.startsWith("border-block")) }).toEqual({ selector, boundaries: [] })
+    }
+  })
+
   test("only declared breakpoints, and colors come from tokens", async () => {
     const { sheet, source } = await readPalette()
     for (const rule of sheet.rules) {

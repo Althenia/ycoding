@@ -341,6 +341,7 @@ export type RemoteStore = {
   readonly createSideChat: () => Promise<{ readonly status: "ok"; readonly sessionID: string } | { readonly status: "failed" | "unknown"; readonly message: string }>
   readonly forkSession: (messageID?: string) => Promise<{ readonly status: "ok"; readonly sessionID: string } | { readonly status: "failed" | "unknown"; readonly message: string }>
   readonly selectWorkspace: (workspaceID: string) => void
+  readonly refreshSessions: () => void
   readonly searchSessions: (query: string, filter?: "all" | "waiting" | "running" | "idle") => void
   readonly nextSessionsPage: () => Promise<void>
   readonly previousSessionsPage: () => Promise<void>
@@ -3600,6 +3601,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       sessionPages = []
       setState({ selectedWorkspaceID: workspaceID, sessions: [], advertised: [], sessionListStatus: "loading", sessionListNotice: undefined, sessionRowsStale: false, sessionHasNext: false, sessionHasPrevious: false })
       void loadSessions(sessionsToken)
+    },
+    refreshSessions: () => {
+      if (transport !== undefined && container.state.transport.kind === "open") applySessionsFrame(transport)
     },
     searchSessions: (query, filter = container.state.sessionFilter) => {
       if (container.state.transport.kind !== "open" || container.state.connection.kind === "offline") return

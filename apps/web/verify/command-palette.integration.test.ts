@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test"
 import { launchBrowser } from "./cdp"
 
 const port = 4747
+const fixtureOrigin = process.env.YCODING_WEB_FIXTURE_ORIGIN ?? `http://127.0.0.1:${port}`
 const browserPath = process.env.YCODING_WEB_CHROME
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
 let server: ReturnType<typeof Bun.spawn> | undefined
@@ -9,7 +10,7 @@ let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
 type Page = Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>
 
 beforeAll(async () => {
-  server = Bun.spawn(["bun", "run", "dev", "--", "--host", "127.0.0.1", "--port", `${port}`, "--strictPort"], { cwd: import.meta.dir.replace(/\/verify$/, ""), env: { ...process.env, YCODING_WEB_VERIFY: "1" }, stdout: "ignore", stderr: "ignore" })
+  if (!process.env.YCODING_WEB_FIXTURE_ORIGIN) server = Bun.spawn(["bun", "run", "dev", "--", "--host", "127.0.0.1", "--port", `${port}`, "--strictPort"], { cwd: import.meta.dir.replace(/\/verify$/, ""), env: { ...process.env, YCODING_WEB_VERIFY: "1" }, stdout: "ignore", stderr: "ignore" })
   for (let index = 0; index < 60 && !(await ready()); index++) await Bun.sleep(100)
   if (!(await ready())) throw new Error("Vite did not start")
   browser = await launchBrowser(browserPath, 1440, 900)
@@ -28,7 +29,7 @@ async function openChat(viewport: "desktop" | "phone") {
     await page.setViewport(390, 844)
     await page.setCoarsePointer(true)
   }
-  await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
+  await page.navigate(`${fixtureOrigin}/verify/remote.html?view=chat`)
   await wait(page, `document.querySelector('.composer-resident:not([inert]) .composer__input') !== null`)
   return page
 }
@@ -181,7 +182,7 @@ test("on a phone the palette is a full-viewport sheet with touch-sized rows and 
 }, 60_000)
 
 for (const viewport of ["desktop", "phone"] as const) {
-  test(`palette model selection opens the existing ${viewport} composer controls without sending or losing the draft`, async () => {
+  test(`palette model selection opens its own ${viewport} view without sending or losing the draft`, async () => {
     const page = await openChat(viewport)
     try {
       await wait(page, `!document.querySelector('.composer-resident .model-control__trigger').disabled`)
@@ -190,10 +191,22 @@ for (const viewport of ["desktop", "phone"] as const) {
       await search(page, "/models")
       expect(await page.evaluate<string[]>(rows)).toContain("Select provider and model…")
       await page.pressKey("Enter", "Enter", 13)
-      await wait(page, paletteClosed)
-      await wait(page, viewport === "desktop" ? `document.querySelector('[role=dialog][aria-label="Model settings"]') !== null` : `document.querySelector('.composer__selection-sheet') !== null`)
+      await wait(page, `document.querySelector('dialog.overlay--command-palette [aria-label="Search models"]') !== null`)
+      await wait(page, `document.querySelectorAll('#command-palette-models [role=option]:not([disabled])').length === 5`)
+      await page.evaluate(`[...document.querySelectorAll('#command-palette-models [role=option]')].find(el => el.querySelector('.command-palette__title').textContent === 'GPT-6 Luna').click()`)
+      await wait(page, `document.activeElement?.id === 'command-palette-input'`)
+      expect(await page.evaluate<string>(`document.querySelector('.composer-resident .model-control__trigger').textContent`)).toContain("GPT-6 Luna")
+      await search(page, "/models")
+      await page.pressKey("Enter", "Enter", 13)
+      await wait(page, `document.querySelector('dialog.overlay--command-palette [aria-label="Search models"]') !== null`)
+      expect(await page.evaluate<boolean>(`document.querySelector('[role=dialog][aria-label="Model settings"], .composer__selection-sheet') === null`)).toBe(true)
       expect(await page.evaluate<string>(`document.querySelector('.composer-resident .composer__input').value`)).toBe("Keep this draft")
       expect(await page.evaluate<boolean>(`window.remoteMutationReport().some((item) => ['session.switchModel','session.prompt','session.command'].includes(item.operation))`)).toBe(false)
+      await page.pressKey("Escape", "Escape", 27)
+      await wait(page, `document.activeElement?.id === 'command-palette-input'`)
+      expect(await page.evaluate<boolean>(paletteOpen)).toBe(true)
+      await page.pressKey("Escape", "Escape", 27)
+      await wait(page, paletteClosed)
     } finally { await page.close() }
   }, 60_000)
 }
@@ -208,7 +221,7 @@ test("the landing palette selects the landing model without creating a Session",
     await search(page, "/models")
     expect(await page.evaluate<string[]>(rows)).toContain("Select provider and model…")
     await page.pressKey("Enter", "Enter", 13)
-    await wait(page, `document.querySelector('.new-session-composer .model-control__trigger[aria-expanded=true]') !== null`)
+    await wait(page, `document.querySelector('dialog.overlay--command-palette [aria-label="Search models"]') !== null`)
     expect(await page.evaluate<boolean>(`document.querySelector('.composer-resident .model-control__trigger[aria-expanded=true]') !== null`)).toBe(false)
     expect(await page.evaluate<boolean>(`window.requestLog.some((item) => item.operation === 'session.create')`)).toBe(false)
   } finally { await page.close() }
@@ -235,4 +248,4 @@ async function wait(page: Page, expression: string) {
   }
   throw new Error(`Timed out: ${expression}; ${await page.evaluate<string>(`JSON.stringify({ url: location.href, dialog: document.querySelector('dialog')?.outerHTML?.slice(0, 600), active: document.activeElement?.outerHTML?.slice(0, 200) })`)}`)
 }
-async function ready() { return fetch(`http://127.0.0.1:${port}/verify/remote.html`).then((response) => response.ok, () => false) }
+async function ready() { return fetch(`${fixtureOrigin}/verify/remote.html`).then((response) => response.ok, () => false) }

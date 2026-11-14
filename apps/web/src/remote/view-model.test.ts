@@ -769,6 +769,13 @@ describe("deviceAvailabilityView", () => {
 })
 
 describe("sessionAvailabilityView", () => {
+  test("keeps failed empty inventory retryable and filtered no-match distinct from an empty backend", () => {
+    const connection = { kind: "connected", deviceName: "Studio Mac" } as const
+    expect(sessionAvailabilityView(connection, 0, "ready", { inventoryFailed: true })).toMatchObject({ title: "Session list unavailable", loading: false, retryable: true })
+    expect(sessionAvailabilityView(connection, 0, "ready", { filtered: true })).toBeUndefined()
+    expect(sessionAvailabilityView(connection, 0, "loading", { filtered: true })?.title).toBe("Loading sessions")
+    expect(sessionAvailabilityView(connection, 1, "ready", { inventoryFailed: true, filtered: true })).toBeUndefined()
+  })
   test("keeps a connected empty-looking inventory pending until its first page settles", () => {
     expect(sessionAvailabilityView({ kind: "connected", deviceName: "Studio Mac" }, 0, "loading")?.title).toBe("Loading sessions")
     expect(sessionAvailabilityView({ kind: "error", message: "Session list failed" }, 0, "error")?.title).toBe("Session list unavailable")

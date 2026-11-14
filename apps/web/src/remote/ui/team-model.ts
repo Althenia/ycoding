@@ -116,6 +116,15 @@ export function teamActivityLabel(data: Pick<TeamPanelData, "status" | "activeTo
   return `${data.shellTruncated || data.activeTotal === undefined && data.next !== undefined ? "At least " : ""}${count} active`
 }
 
+export function runningExecution(data: Pick<TeamPanelData, "status" | "tasks" | "shellStatus" | "shells" | "next" | "shellTruncated">) {
+  return {
+    tasks: data.tasks.filter((task) => task.state === "running"),
+    shells: data.shells.filter((shell) => shell.status === "running"),
+    taskNotice: data.status === "loading" ? "Subagents are loading." : data.status !== "ready" ? "Running subagents are unavailable." : data.next ? "More subagents may be available." : undefined,
+    shellNotice: data.shellStatus === "loading" ? "Shells are loading." : data.shellStatus !== "ready" ? "Running shells are unavailable." : data.shellTruncated ? "More shells may be available." : undefined,
+  }
+}
+
 export function isActiveSubagent(state: TeamSubagent["state"]): boolean {
   return canCancelSubagent(state) || state === "cancelling"
 }

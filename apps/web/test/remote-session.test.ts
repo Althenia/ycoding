@@ -44,6 +44,7 @@ async function harness(options: {
   guardrailRequests?: readonly unknown[]
   forms?: readonly unknown[]
   now?: () => number
+  monotonicNow?: () => number
   paceLongTimers?: boolean
   requestTimeoutMs?: number
   latencyUploadIntervalMs?: number
@@ -87,6 +88,7 @@ async function harness(options: {
     schedule,
     batchMs: 20,
     now: options.now ?? (() => 1_000),
+    ...(options.monotonicNow === undefined ? {} : { monotonicNow: options.monotonicNow }),
     createMessageID: () => "msg_local_1",
     ...(options.latencyUploadIntervalMs === undefined ? {} : { latencyUploadIntervalMs: options.latencyUploadIntervalMs }),
   })
@@ -602,6 +604,51 @@ describe("remote store integration", () => {
       await test.runUntil(() => test.store.state().carouselStatus === "ready")
       expect(test.store.state().carouselSessions).toEqual([])
     } finally { release(); await test.stop() }
+  })
+
+  test("refreshes failed empty Session inventory without replacing its connection or selected draft", async () => {
+    let mode: "failed" | "empty" | "populated" = "failed"
+    let now = 1_000
+    const test = await harness({ monotonicNow: () => now, handler: (request) => {
+      if (request.operation === "workspace.list") return { ok: true, value: { data: [] } }
+      if (request.operation !== "session.list") return "default"
+      if (mode === "failed") return { ok: false, code: "internal_error", message: "Synthetic Session inventory failed" }
+      return { ok: true, value: { data: mode === "populated" && request.input?.status === "idle" ? [{ id: "ses_a", title: "Recovered Session", time: { created: 1, updated: 2 } }] : [] } }
+    } })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessionListStatus === "ready")
+      test.relay.pushSessions([])
+      await test.runUntil(() => test.store.state().carouselStatus === "error")
+      expect(test.store.state().connection.kind).toBe("connected")
+      expect(test.store.state().sessionGroups).toEqual([])
+      expect(test.store.state().sessions).toEqual([])
+      await test.store.selectSession("ses_a")
+      test.store.setDraft("ses_a", "Keep this synthetic draft")
+      const generation = test.store.state().generation
+      const deviceID = test.store.state().activeDeviceID
+      const requestsBefore = test.relay.requests.length
+      mode = "empty"
+      now += 6_000
+      test.store.refreshSessions()
+      test.store.refreshSessions()
+      await test.runUntil(() => test.store.state().carouselStatus === "ready")
+      expect(test.store.state().carouselSessions).toEqual([])
+      mode = "populated"
+      now += 6_000
+      test.store.refreshSessions()
+      await test.runUntil(() => test.store.state().carouselSessions?.some((session) => session.title === "Recovered Session") === true)
+      expect(test.store.state().generation).toBe(generation)
+      expect(test.store.state().activeDeviceID).toBe(deviceID)
+      expect(test.store.state().activeSessionID).toBe("ses_a")
+      expect(test.store.state().drafts.ses_a).toBe("Keep this synthetic draft")
+      expect(test.relay.requests.slice(requestsBefore).every((request) => !/^(session\.(create|prompt|command|switchModel|interrupt))$/.test(request.operation))).toBe(true)
+      test.store.disconnect()
+      const disconnectedRequests = test.relay.requests.length
+      test.store.refreshSessions()
+      await test.flush()
+      expect(test.relay.requests.length).toBe(disconnectedRequests)
+    } finally { await test.stop() }
   })
 
   test("keeps resident Sessions stable through a delayed filter until the keyed result settles", async () => {

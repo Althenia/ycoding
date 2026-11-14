@@ -3,7 +3,7 @@ import { Icon, type IconName } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
 import { TeamAnswerForm } from "./subagent-bar"
 import { LoadingPlaceholder } from "./loading"
-import { appendTeamShellOutput, canAnswerSubagent, canCancelSubagent, canContinueRecovery, formatElapsed, isActiveSubagent, pinAction, isDeferredQuestion, shellOwnerLabel, taskStateLabel, teamActivityLabel, teamShellCommand, shellRows, taskRows, usageSlots, type TeamActionOutcome, type TeamPanelData, type TeamShellOutput, type TeamSubagent } from "./team-model"
+import { appendTeamShellOutput, canAnswerSubagent, canCancelSubagent, canContinueRecovery, formatElapsed, isActiveSubagent, pinAction, isDeferredQuestion, shellOwnerLabel, taskStateLabel, teamActivityLabel, teamShellCommand, shellRows, taskRows, usageSlots, runningExecution, type TeamActionOutcome, type TeamPanelData, type TeamShellOutput, type TeamSubagent } from "./team-model"
 import "./team-view.css"
 
 type Tab = "subagents" | "shell" | "side-chats"
@@ -40,6 +40,28 @@ function TaskUsage(props: { readonly task: () => TeamSubagent; readonly loading:
 
 export function TeamHeading(props: { readonly data: () => TeamPanelData }): JSX.Element {
   return <div class="team-view__heading"><h2>Team</h2><span>{teamActivityLabel(props.data())}</span></div>
+}
+
+export function RunningExecution(props: { readonly data: () => TeamPanelData; readonly onOpen: (id: string) => void }): JSX.Element {
+  const running = createMemo(() => runningExecution(props.data()))
+  const taskIDs = createMemo(() => running().tasks.map((task) => task.sessionID))
+  const shellIDs = createMemo(() => running().shells.map((shell) => shell.id))
+  const task = (id: string) => running().tasks.find((task) => task.sessionID === id)!
+  const shell = (id: string) => running().shells.find((shell) => shell.id === id)!
+  return <div class="team-view">
+    <section aria-label="Running subagents"><h3>Running subagents</h3>
+      <Show when={running().taskNotice}>{(notice) => <p role="status">{notice()}</p>}</Show>
+      <Show when={running().tasks.length > 0} fallback={<Show when={!running().taskNotice}><p>No running subagents.</p></Show>}>
+        <ul class="team-view__list"><For each={taskIDs()}>{(id) => <li class="team-view__task" data-session-id={id}><div class="team-view__row"><strong class="team-view__title">{task(id).agent ?? "Agent unreported"} · {task(id).description}</strong><button type="button" class="team-view__button" aria-label={`Open ${task(id).description}`} onClick={() => props.onOpen(id)}>Open</button></div><p class="team-view__meta">{task(id).modelLabel}</p></li>}</For></ul>
+      </Show>
+    </section>
+    <section aria-label="Running shells"><h3>Running shells</h3>
+      <Show when={running().shellNotice}>{(notice) => <p role="status">{notice()}</p>}</Show>
+      <Show when={running().shells.length > 0} fallback={<Show when={!running().shellNotice}><p>No running shells.</p></Show>}>
+        <ul class="team-view__list"><For each={shellIDs()}>{(id) => <li class="team-view__shell" data-shell-id={id}><strong class="team-view__title team-view__title--code">{shell(id).command}</strong><p class="team-view__meta">{shellOwnerLabel(shell(id), props.data())}</p></li>}</For></ul>
+      </Show>
+    </section>
+  </div>
 }
 
 export function TeamView(props: {

@@ -123,6 +123,29 @@
   color: var(--yc-text-muted);
 }
 
+.command-palette--models {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.command-palette__model-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yc-space-3);
+  padding: var(--yc-space-2) var(--yc-space-4);
+  font-size: var(--yc-size-sm);
+}
+
+.command-palette__model {
+  inline-size: 100%;
+  text-align: start;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--yc-space-1);
+  background: transparent;
+  color: var(--yc-text);
+}
+
 @media (min-width: 768px) {
   .overlay--command-palette .overlay__surface {
     inline-size: min(640px, calc(100vw - 2 * var(--yc-gutter)));

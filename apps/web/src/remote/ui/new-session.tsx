@@ -8,13 +8,14 @@ import { BrandMark } from "../../ui/site"
 import { Icon } from "../../ui/icon"
 import { Link } from "../../ui/link"
 import { LoadingPlaceholder } from "./loading"
+import type { PaletteModelBinding } from "./command-palette-model"
 
 export function NewSessionButton(props: { readonly disabled: boolean; readonly onClick: () => void; readonly labeled?: boolean; readonly newChat?: boolean; readonly workspace?: string }): JSX.Element {
   const label = () => props.workspace ? `New chat in ${props.workspace}` : "New chat"
   return <button type="button" class={`button button--primary button--small new-session__trigger${props.labeled ? " new-session__trigger--labeled" : ""}`} aria-label={label()} title={label()} disabled={props.disabled} onClick={() => props.onClick()}><Icon name="plus" size={18} /><Show when={props.labeled}><span>{label()}</span><Show when={props.newChat}><kbd>⌘ N</kbd></Show></Show></button>
 }
 
-export function NewSessionComposer(props: { readonly workspaceID?: string; readonly onCreated: (sessionID: string) => void; readonly onWorkspaceChange?: (workspaceID: string | undefined) => void }): JSX.Element {
+export function NewSessionComposer(props: { readonly workspaceID?: string; readonly onCreated: (sessionID: string) => void; readonly onWorkspaceChange?: (workspaceID: string | undefined) => void; readonly registerPaletteModel?: (binding: PaletteModelBinding) => () => void }): JSX.Element {
   const remote = useRemote()
   const [workspaceID, setWorkspaceID] = createSignal("")
   const [text, setText] = createSignal("")
@@ -82,6 +83,6 @@ export function NewSessionComposer(props: { readonly workspaceID?: string; reado
       <button class="button button--primary" type="button" disabled={!connected()} onClick={() => void retry()}>Retry</button>
       <button class="button button--secondary" type="button" onClick={() => remote.store.dismissSessionCreation()}>{creation()?.status === "unknown" ? "Dismiss" : "Choose another repository"}</button>
     </div></Show>
-    <MiniComposer target={workspace() ? { workspaceID: workspaceID() } : undefined} text={text()} onText={setText} disabled={!!creation()} sendDisabled={disabled()} allowEmpty onSubmit={create} />
+    <MiniComposer registerPaletteModel={props.registerPaletteModel} target={workspace() ? { workspaceID: workspaceID() } : undefined} text={text()} onText={setText} disabled={!!creation()} sendDisabled={disabled()} allowEmpty onSubmit={create} />
   </section>
 }

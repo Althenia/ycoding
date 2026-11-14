@@ -58,6 +58,11 @@ let devices: readonly RemoteDeviceInfo[] = [
 ]
 
 const accountParams = new URLSearchParams(window.location.search)
+const paletteAcceptance = accountParams.get("paletteAcceptance") === "1"
+const acceptanceReadModes = new Map<string, "held" | "failed" | "unknown">()
+const acceptanceReadWaiters = new Map<string, (() => void)[]>()
+if (paletteAcceptance && accountParams.get("acceptanceWorkspace") === "held") acceptanceReadModes.set("workspace.list", "held")
+if (paletteAcceptance && accountParams.get("acceptanceSession") === "held") acceptanceReadModes.set("session.list", "held")
 const projectCards = accountParams.get("projectCards") === "1"
 const ledger = accountParams.get("ledger") === "1"
 const ledgerTyping = accountParams.get("typing") !== "0"
@@ -219,6 +224,7 @@ let sessions: readonly WireSession[] = [...(ledger ? ledgerSessions : remoteScen
   location: { directory: "/workspace/db-pruner" }, time: { created: ago(15), updated: ago(2) }, running: true,
 }] : [])]
 const inventoryCount = Math.min(15_000, Math.max(0, Number(accountParams.get("inventoryCount") ?? 0) || 0))
+if (paletteAcceptance && accountParams.get("acceptanceLongTitles") === "1") sessions = sessions.map((session, index) => ({ ...session, title: `Synthetic Session ${index + 1}: ${"long-unbroken-title-".repeat(24)}` }))
 const inventoryPageRows = Math.min(400, Math.max(0, Number(accountParams.get("pageRows") ?? 0) || 0))
 const sessionListDelayMs = Number(accountParams.get("sessionListDelay") ?? 0)
 let statusRunning = new Set(inventoryCount > 0 ? ["ses_inventory_14000"] : sessions.filter((session) => session.running).map((session) =>
@@ -999,6 +1005,14 @@ function createFixtureStore(): Fixture {
     input?: Readonly<Record<string, unknown>>,
     targetSessionID = sessionID,
   ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+    if (paletteAcceptance && ["provider.auth.list", "workspace.list", "session.list"].includes(operation)) {
+      const mode = acceptanceReadModes.get(operation)
+      if (mode === "held") return new Promise<void>((resolve) => {
+        acceptanceReadWaiters.set(operation, [...(acceptanceReadWaiters.get(operation) ?? []), resolve])
+      }).then(() => outcome(operation, input, targetSessionID))
+      if (mode === "failed") return { status: "failed", error: { code: "internal_error", message: "Synthetic acceptance read failed" } }
+      if (mode === "unknown") return { status: "unknown", error: { code: "outcome_unknown", message: "Synthetic acceptance read unconfirmed" } }
+    }
     if (operation.startsWith("provider.auth.")) return providerAuth.request(operation, input)
     if (inventoryHeld && (operation === "session.list" || operation === "workspace.list" && input?.sessionsOnly === true))
       return new Promise<void>((resolve) => inventoryWaiters.push(resolve)).then(() => outcome(operation, input, targetSessionID))
@@ -1184,6 +1198,7 @@ function createFixtureStore(): Fixture {
       }
       return { status: "ok", value: { data: [...createdSessions.values(), ...(emptyBackend ? [] : sessions)]
         .filter((session) => input?.workspace === undefined || groupOf(session).id === input.workspace)
+        .filter((session) => !paletteAcceptance || typeof input?.search !== "string" || `${session.title} ${session.id}`.toLowerCase().includes(input.search.toLowerCase()))
         .filter((session) => input?.parentID !== null || Reflect.get(session, "parentID") === undefined)
         .filter((session) => {
           const waiting = (statusAttention?.has(session.id) ?? (session.id === sessionID && unreplied(permissions).length + unreplied(guardrails).length > 0)) && !statusFailed.has(session.id) && !statusLost.has(session.id)
@@ -1668,6 +1683,21 @@ if (accountParams.get("grades") === "1") messages = [...messages, {
 }]
 
 const fixture = createFixtureStore()
+if (paletteAcceptance) Object.assign(window, { remoteAcceptance: {
+  read: (operation: "provider.auth.list" | "workspace.list" | "session.list", mode: "held" | "failed" | "unknown" | "ready") => {
+    if (mode === "ready") {
+      acceptanceReadModes.delete(operation)
+      acceptanceReadWaiters.get(operation)?.forEach((release) => release())
+      acceptanceReadWaiters.delete(operation)
+    } else acceptanceReadModes.set(operation, mode)
+  },
+  scope: (kind: "session" | "device" | "generation") => fixture.store.container.setState((state) => ({
+    ...state,
+    ...(kind === "session" ? { activeSessionID: "ses_child", selectedSessionInfo: state.selectedSessionInfo ? { ...state.selectedSessionInfo, id: "ses_child", title: "Child: fix flaky suite" } : undefined, view: state.view ? { ...state.view, id: "ses_child" } : undefined } : {}),
+    ...(kind === "device" ? { activeDeviceID: "dev_laptop" } : {}),
+    ...(kind === "generation" ? { generation: state.generation + 1 } : {}),
+  })),
+} })
 Object.assign(window, { remoteComposerState: (mode: "prediction" | "upload" | "catalog-error" | "fallback" | "queued") => fixture.store.container.setState((state) => ({
   ...state,
   ...(mode === "queued" ? { drafts: { ...state.drafts, [sessionID]: "Follow up after current step" }, queuedPromptDrafts: { ...state.queuedPromptDrafts, [sessionID]: "Follow up after current step" } } : {}),

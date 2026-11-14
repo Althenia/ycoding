@@ -279,6 +279,46 @@ test("reading the last message above pending decisions does not enable virtual-l
   } finally { await page.close() }
 }, 60_000)
 
+test("a phone snapshot retains its reader and a growing draft leaves the latest request actions visible", async () => {
+  const page = await browser.openPage()
+  try {
+    await page.setMobileViewport(390, 844)
+    await page.setCoarsePointer(true)
+    await page.setReducedMotion(true)
+    await page.navigate(`${origin}/verify/remote.html?view=chat&ledger=1&typing=0&paletteAcceptance=1&acceptanceLongTitles=1`)
+    await wait(page, `typeof window.responseSnapshot==='function'&&!!document.querySelector('.composer__input')`)
+    await page.evaluate(`(async () => {
+      document.querySelector('.fixture__banner')?.remove();document.querySelector('.fixture__controls')?.remove();Object.assign(document.querySelector('.fixture').style,{height:'100dvh',minHeight:'0',overflow:'hidden'});
+      const model=window.providerAuthState().selectedSessionInfo.model;
+      window.phoneMessages=Array.from({length:40},(_,index)=>index%2===0
+        ? {id:'phone-user-'+index,type:'user',text:'Synthetic prompt '+index+': explain this bounded example.',time:{created:100+index,consumed:100+index}}
+        : {id:'phone-assistant-'+index,type:'assistant',agent:'build',model,content:[{type:'text',text:'Synthetic answer '+index+'. '+'Readable example content. '.repeat(18)}],time:{created:100+index,completed:101+index}});
+      await window.responseSnapshot(window.phoneMessages,[],false);
+    })()`)
+    await frames(page, 12)
+    const point = await page.evaluate<{ x: number; y: number }>(`(() => {const host=document.querySelector('.workspace__scroll').getBoundingClientRect(),card=document.querySelector('.composer__row').getBoundingClientRect();return {x:(host.left+host.right)/2,y:host.top+(card.top-host.top)/2}})()`)
+    await page.wheel(point.x, point.y, 0, -420)
+    await frames(page, 12)
+    const farther = await page.evaluate<number>(`(() => {const card=document.querySelector('.composer__row').getBoundingClientRect(),row=[...document.querySelectorAll('[data-message-id]')].find(row=>{const rect=row.getBoundingClientRect();return rect.top<card.bottom&&rect.bottom>card.top});if(!row)throw Error('No row behind the card');return Math.ceil(card.bottom-row.getBoundingClientRect().top+24)})()`)
+    await page.wheel(point.x, point.y, 0, -farther)
+    await frames(page, 12)
+    await page.evaluate(anchor)
+    await page.evaluate(`window.responseSnapshot(window.phoneMessages,[],false)`)
+    await frames(page, 12)
+    expect(await page.evaluate<number>(`Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop)`)).toBeLessThanOrEqual(1)
+    await page.evaluate(`(() => {const field=document.querySelector('.composer__input');const value=Array.from({length:12},(_,i)=>'Synthetic line '+i+': λ 漢字 👩🏽‍💻').join(String.fromCharCode(10));field.focus({preventScroll:true});Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,value);field.dispatchEvent(new Event('input',{bubbles:true}));field.setSelectionRange(value.length,value.length)})()`)
+    await frames(page, 12)
+    await page.evaluate(`window.remoteReadingTail('decisions')`)
+    await frames(page, 12)
+    const grown = await page.evaluate<{ x: number; y: number; distance: number }>(`(() => {const host=document.querySelector('.workspace__scroll'),bounds=host.getBoundingClientRect(),card=document.querySelector('.composer__row').getBoundingClientRect();return {x:(bounds.left+bounds.right)/2,y:bounds.top+(card.top-bounds.top)/2,distance:host.scrollHeight}})()`)
+    await page.wheel(grown.x, grown.y, 0, grown.distance)
+    await frames(page, 12)
+    const actions = await page.evaluate<{ visible: boolean; hit: boolean }[]>(`(() => {const host=document.querySelector('.workspace__scroll').getBoundingClientRect(),card=document.querySelector('.composer__row').getBoundingClientRect();return [...document.querySelectorAll('.remote-conversation-view:not(.route-panel--idle) .request__actions button')].map(button=>{const rect=button.getBoundingClientRect(),top=document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2);return {visible:rect.top>=host.top-1&&rect.bottom<=card.top+1,hit:top===button||button.contains(top)}})})()`)
+    expect(actions.length).toBeGreaterThan(0)
+    expect(actions.every((action) => action.visible && action.hit)).toBe(true)
+  } finally { await page.close() }
+}, 90_000)
+
 test("Conversation opens the new-session landing while selected Session and landing drafts remain resident", async () => {
   const page = await browser.openPage()
   try {

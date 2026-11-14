@@ -735,24 +735,34 @@ test("the design document records the rules the interface implements", async () 
   expect(design).toContain("## Bridge gaps")
 })
 
-test("the model picker uses the catalog revision, stops while running and reports every result", async () => {
+test("the model picker guards busy model changes and stages effort without bridge mutations", async () => {
   const [source, style] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
   expect(source).toContain("api.models(props.sessionID)")
   expect(source).toContain("found.revision === connection().revision")
   expect(source).toContain("api.switchModel({ sessionID: props.sessionID, revision: found.revision, model })")
   expect(source).toContain("const blocked = () => props.running || data()?.running === true")
-  expect(source).toContain("Stop the running chat before switching models.")
+  expect(source).toContain("Model and profile changes require an idle chat. Effort can be staged locally.")
+  expect(source).toContain("Effort staged locally; not applied to the Session or queued prompts.")
   expect(source).toContain("catalog.refetch(); refresh([\"sessions\"])")
   expect(source).toContain('failure(catalog.result().error, "Models could not be read. Refresh to retry.")')
   expect(source).toContain("catalog.result().isError ? undefined : catalog.result().data")
   expect(source).toContain("visibleModels(data()?.models ?? [], data()?.current)")
   expect(source).toContain("<Show when={blocked()}>")
-  expect(source.match(/Stop the running chat before switching models\./g)?.length).toBe(1)
+  expect(source).toContain('busy={switching() || !reading()} modelBusy={blocked() || switching() || !reading()}')
+  expect(source.match(/disabled=\{props.modelBusy \?\? props.busy\}/g)?.length).toBe(2)
+  const stage = source.slice(source.indexOf("  const pickChoice = (next: ModelChoice)"), source.indexOf("  const switchTo = async (next: ModelChoice)"))
+  expect(stage).toContain("next.model !== choice().model || next.profile !== choice().profile || !selectionFor(list(), next)")
+  expect(stage).toContain("setPendingChoice(next)")
+  expect(stage).not.toMatch(/api\.|setTimeout|refresh\(/)
+  expect(source).toContain("void props.sessionID; void connection().generation;")
+  expect(source).toContain("JSON.stringify([connection().revision, data()?.current, data()?.models])")
+  expect(source).toContain("void selectionIdentity(); setPendingChoice(undefined)")
+  expect(source).toContain("if (sameSelection(model, found.current)) { setPendingChoice(undefined); return }")
   expect(source).toContain("Refresh models")
   expect(source).toContain("<ModelPicker sessionID={props.sessionID} model={item().model} running={running()} agent={item().agent} sessionUsage={usage(item())} autonomyLabel={policyLabels().autonomy}")
   expect(source).not.toContain("Changing it is not available in the desktop app")
   expect(source).toContain("model-popover__option")
-  expect(source).toContain("onPick={(next) => void switchTo(next)}")
+  expect(source).toContain("onPick={pickChoice}")
 })
 
 test("a form submits unless locked, reveals every error and keeps focus after a lock clears", async () => {
@@ -883,7 +893,7 @@ test("the model popover reasoning effort is an animated slider and icons are the
   expect(styles).toContain(".model-slider__thumb")
   expect(styles).toContain("--composer-effort-gradient")
   expect(styles).toContain('.palette[data-query-empty="true"]')
-  expect(styles).toContain("min-block-size: min(26rem, 62dvh)")
+  expect(styles).toContain('.palette[data-query-empty="true"] { min-block-size: 0; }')
   expect(styles).toContain("max-block-size: min(44rem, 82dvh)")
   expect(styles).not.toContain(".rl-page .rl-page-head > .rl-icon .rl-ico { transform: rotate(180deg); }")
   expect(styles).toContain("font: 400 var(--yc-size-sm)/var(--yc-leading-sm) var(--yc-font-sans)")
@@ -1110,7 +1120,66 @@ test("the desktop conversation ticks only user turns and reuses the shared rail 
   expect(source).not.toContain(">Jump to latest<")
   const style = await read("src/style.css")
   expect(style).toMatch(/\.conversation__jump-slot \{[^}]*position: relative;[^}]*block-size: 0;/)
+  expect(source).toContain('querySelectorAll<HTMLElement>(".request :is(button, input, textarea, select)")')
+  expect(source).toContain('getComputedStyle(element).visibility === "visible"')
+  expect(source).toContain(".filter((rect) => rect.width > 0 && rect.height > 0)")
   expect(style).not.toMatch(/\.conversation__jump \{/)
+})
+
+test("the companion title stays on one line beside its actions", async () => {
+  const style = await read("src/style.css")
+  expect(style).toMatch(/\.rl-companion \.companion__header \{[^}]*padding-inline: 8px;/)
+  expect(style).toMatch(/\.rl-companion \.companion__header \{[^}]*gap: 4px;/)
+  expect(style).toMatch(/\.rl-companion \.companion__header > \.rl-pane-kicker \{[^}]*white-space: nowrap;/)
+  expect(style).toMatch(/\.rl-companion \.companion__header \.rl-pane-policy \{[^}]*flex: none;/)
+  expect(style).toMatch(/\.rl-companion \.companion__header \.rl-pane-policy \{[^}]*gap: 4px;/)
+})
+
+test("the selected conversation floats its composer over reserved scroll space and grows the draft", async () => {
+  const source = await read("src/renderer.tsx")
+  const style = await read("src/style.css")
+  expect(style).toContain(".conversation:not([data-new-chat]) > .rl-dock { position: absolute;")
+  expect(style).toContain("scroll-padding-block-end: var(--yc-composer-reserve, 0px)")
+  expect(source).toContain('scroller.style.setProperty("--yc-composer-reserve", `${dock.getBoundingClientRect().height}px`)')
+  expect(source).toContain("scroller.scrollTop = following() ? scroller.scrollHeight : top")
+  expect(source).toContain("Math.min(168, Math.max(44, area.scrollHeight))")
+  expect(source).toContain("dockObserver.disconnect()")
+})
+
+test("Projects exposes pending reads before its directory result settles", async () => {
+  const source = await read("src/renderer.tsx")
+  expect(source.includes('<SharedLoadingSkeleton kind="page" label="Loading projects…" />')).toBe(true)
+})
+
+test("the navigation drawer breakpoint does not cover the 701px desktop rail", async () => {
+  const style = await read("src/style.css")
+  expect(style.includes("@media (max-width: 48rem)")).toBe(false)
+  expect(style).toMatch(/@media \(max-width: 700px\) \{[^}]*\.desktop__rail-toggle, \.workspace__back/)
+})
+
+test("selected workspace details stay available in a narrow directory column", async () => {
+  const style = await read("src/style.css")
+  expect(style.includes(".ws-workspaces:not([data-detail]) .ws-workspaces-detail")).toBe(false)
+})
+
+test("running work excludes waiting and completed rows and reconciles lifecycle events", async () => {
+  const source = await read("src/renderer.tsx")
+  expect(source).toContain('subagents.filter((task) => task.state === "running")')
+  expect(source).toContain('shells.filter((shell) => shell.status === "running")')
+  expect(source).toContain('type === "session.task.updated" || type.startsWith("session.shell.") || type.startsWith("shell.")')
+  expect(source).toContain('refresh(["activity", ...scope()])')
+  expect(source).toContain("More subagents and their shells may be running beyond these loaded results.")
+  expect(source).toContain('runningContent={<RunningActivity')
+})
+
+test("model settings separate grouped recent choices and provider connection methods", async () => {
+  const source = await read("src/renderer.tsx")
+  expect(source).toContain('aria-label={listing() ? "Choose model" : "Model and reasoning effort"}')
+  expect(source).toContain("orderedModelOptions(props.models, recent()")
+  expect(source).toContain("rememberRecentModel(undefined, model)")
+  expect(source).toContain('recent ? "Recent" : model.providerID')
+  expect(source).toContain('item.id === providerID()')
+  expect(source).toContain("Choose a provider to view connection methods.")
 })
 
 test("the Edited files card belongs to the turn that captured the edit, never to the Session aggregate", async () => {

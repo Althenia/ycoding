@@ -207,6 +207,14 @@ test("workspace frame and companion render owned landmarks and sections", () => 
   expect(WORKSPACE_DESTINATIONS.map((entry) => entry.desktopRoute)).toEqual(["/projects", "/sessions", "/workspaces", "/usage", "/settings"])
 })
 
+test("companion exposes Running separately from Activity when supplied", () => {
+  const html = renderToString(() => createComponent(SharedCompanionSurface, { active: "running", onSelect: () => {}, activityContent: "Activity history", runningContent: "Live execution", changesContent: "Changes" }))
+  expect(html).toContain('aria-controls="companion-running"')
+  expect(html).toContain('id="companion-running"')
+  expect(html).toContain("Live execution")
+  expect(html).toContain("Activity history")
+})
+
 test("shared conversation and composer compositions render their semantic containers", () => {
   const header = renderToString(() => createComponent(SharedConversationHeader, { title: "Session", subtitle: "Machine · Workspace", actions: "Actions" }))
   expect(header).toContain('class="workspace__topbar"')

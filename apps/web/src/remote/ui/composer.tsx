@@ -21,6 +21,7 @@ import { ComposerStatus } from "./status-bar"
 import { composerDockCollapsed, composerReserve, type ComposerDockEvent } from "./composer-dock"
 import { TranscriptActivityRow } from "./conversation"
 import { SharedComposerSurface } from "./shared-workspace"
+import type { PaletteModelBinding } from "./command-palette-model"
 import "./composer.css"
 
 const composerDockStorageKey = "ycoding.remote.composer-collapsed"
@@ -46,6 +47,7 @@ export function MiniComposer(props: {
   readonly metadataMount?: HTMLElement
   readonly companionContextOpen?: boolean
   readonly onOpenContext?: () => void
+  readonly registerPaletteModel?: (binding: PaletteModelBinding) => () => void
 }): JSX.Element {
   const remote = useRemote()
   const [drafts, setDrafts] = createSignal<Record<string, { readonly agent?: string; readonly attachments: readonly ComposerAttachment[]; readonly parts: readonly MentionPart[] }>>({})
@@ -216,6 +218,22 @@ export function MiniComposer(props: {
     const view = remote.state().view
     return sessionID && remote.state().activeSessionID === sessionID && view?.id === sessionID ? view : undefined
   }
+  createEffect(() => {
+    const key = modelKey()
+    if (!key || catalog()?.status !== "ready" || !props.registerPaletteModel) return
+    const release = props.registerPaletteModel({
+      key,
+      selected: selectedModel,
+      recent: recentModels,
+      rememberedVariant,
+      choose: (chosen) => {
+        if (key !== modelKey() || catalog()?.status !== "ready" || props.disabled || remote.state().transport.kind !== "open" || remote.state().connection.kind !== "connected") return
+        const selection = modelSelection(catalog()!.models, chosen)
+        if (!selection.blocked && selection.model) chooseModel(selection.model)
+      },
+    })
+    onCleanup(release)
+  })
   const setDock = (event: ComposerDockEvent) => {
     const next = composerDockCollapsed(dockCollapsed(), event)
     setDockCollapsed(next)
@@ -350,6 +368,13 @@ export function MiniComposer(props: {
       const children = [...main.children]
       const scroll = children.findIndex((child) => child.classList.contains("workspace__scroll"))
       const tops = children.slice(scroll + 1).filter((child) => child.getClientRects().length > 0).map((child) => child.getBoundingClientRect().top)
+      if (input && scroll >= 0 && tops.length > 0 && input.getClientRects().length > 0 && window.matchMedia("(max-width: 767px)").matches) {
+        const viewport = window.visualViewport?.height ?? window.innerHeight
+        const readingHeight = Math.min(...tops) - children[scroll]!.getBoundingClientRect().top
+        const minimum = Number.parseFloat(getComputedStyle(input).minHeight)
+        const limit = Math.max(minimum, Math.floor(input.getBoundingClientRect().height + readingHeight - viewport * 0.3))
+        main.style.setProperty("--yc-composer-input-max", `${limit}px`)
+      } else main.style.removeProperty("--yc-composer-input-max")
       const next = scroll < 0 || resident.getClientRects().length === 0 || resident.classList.contains("route-panel--idle") || tops.length === 0 ? 0 : composerReserve(Math.min(...tops), main.getBoundingClientRect().bottom)
       if (next === reserve) return
       reserve = next
@@ -373,6 +398,7 @@ export function MiniComposer(props: {
       rows.disconnect()
       idle.disconnect()
       main.style.removeProperty("--yc-composer-reserve")
+      main.style.removeProperty("--yc-composer-input-max")
     })
   })
   onMount(() => {
@@ -682,7 +708,7 @@ function SuggestDialog(props: {
   </Modal>
 }
 
-export function Composer(props: { readonly sessionID?: string; readonly running: boolean; readonly canSend: boolean; readonly sendDisabled?: boolean; readonly metadataMount?: HTMLElement; readonly companionContextOpen?: boolean; readonly onOpenContext?: () => void }): JSX.Element {
+export function Composer(props: { readonly sessionID?: string; readonly running: boolean; readonly canSend: boolean; readonly sendDisabled?: boolean; readonly metadataMount?: HTMLElement; readonly companionContextOpen?: boolean; readonly onOpenContext?: () => void; readonly registerPaletteModel?: (binding: PaletteModelBinding) => () => void }): JSX.Element {
   const remote = useRemote()
   const [suggestion, setSuggestion] = createSignal<{ readonly hint?: string; readonly returnFocus: HTMLElement }>()
   let composerMount: HTMLDivElement | undefined
@@ -700,7 +726,7 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
     return true
   }
   return <div class="mini-composer__mount" ref={composerMount}>
-    <MiniComposer phoneSummary metadataMount={props.metadataMount} companionContextOpen={props.companionContextOpen} onOpenContext={props.onOpenContext} target={props.sessionID ? { sessionID: props.sessionID } : undefined} text={text()} onText={(value) => { if (props.sessionID) remote.store.setDraft(props.sessionID, value) }} disabled={!props.canSend || !props.sessionID} sendDisabled={props.sendDisabled} running={props.running} showStatus onInterrupt={() => void remote.store.interrupt()} onSubmit={async (value) => {
+    <MiniComposer phoneSummary registerPaletteModel={props.registerPaletteModel} metadataMount={props.metadataMount} companionContextOpen={props.companionContextOpen} onOpenContext={props.onOpenContext} target={props.sessionID ? { sessionID: props.sessionID } : undefined} text={text()} onText={(value) => { if (props.sessionID) remote.store.setDraft(props.sessionID, value) }} disabled={!props.canSend || !props.sessionID} sendDisabled={props.sendDisabled} running={props.running} showStatus onInterrupt={() => void remote.store.interrupt()} onSubmit={async (value) => {
       const sessionID = props.sessionID
       const draft = text()
       if (!sessionID) return false

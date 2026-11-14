@@ -4,7 +4,8 @@ import { Icon } from "../../ui/icon"
 import { visualViewportFrame, watchVisualViewport } from "../../ui/visual-viewport"
 import { Modal } from "../../ui/modal"
 import { useTheme } from "../../theme/theme-store"
-import { catalogKey, type CatalogTarget } from "../catalog"
+import { catalogKey, type CatalogTarget, type ModelOption } from "../catalog"
+import type { ModelRefView } from "../projection"
 import { useRemote } from "../context"
 import { workspaceLabels } from "../view-model"
 import {
@@ -14,7 +15,9 @@ import {
   type PaletteAction,
   type PaletteContext,
   type PaletteIntent,
+  type PaletteModelBinding,
 } from "./command-palette-model"
+import { modelSelectionKey, modelSpeeds, orderedModelOptions, profileForModel, switchModelSpeed, variantsForModel } from "./composer-logic"
 import { requestAutonomousDialog } from "./autonomous-dialog"
 import { noticeCenterView } from "./notifications"
 import { connectionStripView, type RemoteView } from "./shell-model"
@@ -28,7 +31,6 @@ export type PaletteHandlers = {
   readonly openSession: (sessionID: string) => void
   readonly openTeam: () => void
   readonly draft: (text: string) => void
-  readonly selectModel: () => void
   readonly connectProvider: (target: CatalogTarget, returnFocus: HTMLElement) => void
   readonly dotsConnection: (returnFocus: HTMLElement) => void
 }
@@ -47,6 +49,7 @@ export function CommandPalette(props: {
   readonly managedChild: boolean
   readonly hasTeam: boolean
   readonly workspaceID?: string
+  readonly modelBinding?: PaletteModelBinding
   readonly handlers: PaletteHandlers
 }): JSX.Element {
   const remote = useRemote()
@@ -54,9 +57,30 @@ export function CommandPalette(props: {
   const [open, setOpen] = createSignal(false)
   const [closing, setClosing] = createSignal(false)
   const [generation, setGeneration] = createSignal(1)
+  const [modelView, setModelView] = createSignal(false)
+  const [modelScope, setModelScope] = createSignal<string>()
   let trigger: HTMLButtonElement | undefined
   let opener: HTMLElement | undefined
   let requestClose: (() => void) | undefined
+
+  onMount(() => {
+    const root = document.documentElement
+    const release = watchVisualViewport((viewport) => {
+      const frame = visualViewportFrame(viewport)
+      if (!frame) {
+        root.style.removeProperty("--command-palette-top")
+        root.style.removeProperty("--command-palette-height")
+        return
+      }
+      root.style.setProperty("--command-palette-top", `${frame.top}px`)
+      root.style.setProperty("--command-palette-height", `${frame.height}px`)
+    })
+    onCleanup(() => {
+      release()
+      root.style.removeProperty("--command-palette-top")
+      root.style.removeProperty("--command-palette-height")
+    })
+  })
 
   const target = (): CatalogTarget | undefined => props.view === "/remote"
     ? props.workspaceID === undefined ? undefined : { workspaceID: props.workspaceID }
@@ -117,6 +141,7 @@ export function CommandPalette(props: {
     opener = active instanceof HTMLElement && active !== document.body && active.isConnected ? active : trigger
     if (closing()) setGeneration((current) => current + 1)
     setOpen(true)
+    setModelView(false)
     setClosing(false)
   }
 
@@ -167,7 +192,7 @@ export function CommandPalette(props: {
       case "theme": theme.setPreference(intent.preference); return
       case "scheme": theme.setScheme(intent.scheme); return
       case "readNotifications": void remote.store.readAllNotifications(); return
-      case "model": props.handlers.selectModel(); return
+      case "model": setModelScope(modelSelectionKey(target(), remote.state().activeDeviceID, remote.state().generation)); setModelView(true); return
       case "connectProvider": {
         const current = target()
         if (current && trigger) props.handlers.connectProvider(current, trigger)
@@ -208,13 +233,48 @@ export function CommandPalette(props: {
             onDismiss={() => { setClosing(true); setOpen(false) }}
             onClose={() => { if (generation() === current) setClosing(false) }}
           >
-            <PaletteBody view={props.view} actions={actions()} onRun={(action) => { requestClose?.(); run(action.intent) }} />
+            <Show when={modelView()} fallback={<PaletteBody view={props.view} actions={actions()} onRun={(action) => { if (action.intent.type !== "model") requestClose?.(); run(action.intent) }} />}>
+              <PaletteModels models={target() ? remote.state().catalogs[catalogKey(target()!)]?.models ?? [] : []} binding={modelScope() === modelSelectionKey(target(), remote.state().activeDeviceID, remote.state().generation) ? props.modelBinding : undefined} scopeKey={modelScope()} onBack={() => setModelView(false)} />
+            </Show>
           </Modal>
           </Portal>
         )}</Show>
       </Show>
     </>
   )
+}
+
+function PaletteModels(props: { readonly models: readonly ModelOption[]; readonly binding?: PaletteModelBinding; readonly scopeKey?: string; readonly onBack: () => void }): JSX.Element {
+  const [query, setQuery] = createSignal("")
+  const [active, setActive] = createSignal(0)
+  const binding = () => props.binding?.key === props.scopeKey ? props.binding : undefined
+  const models = createMemo(() => orderedModelOptions(props.models, binding()?.recent() ?? [], binding()?.selected()).filter((item) => `${item.name} ${item.id} ${item.providerName ?? item.providerID}`.toLowerCase().includes(query().trim().toLowerCase())))
+  const recentCount = () => models().filter((item) => item.recentSelection !== undefined).length
+  let input: HTMLInputElement | undefined
+  onMount(() => input?.focus())
+  const choose = (item: ModelOption & { readonly recentSelection?: ModelRefView }) => {
+    const owner = binding()
+    if (!owner) return
+    const current = owner.selected()
+    const profile = item.recentSelection === undefined ? profileForModel(props.models, current, item) : item.recentSelection.profile
+    const variants = variantsForModel(item, profile)
+    const remembered = owner.rememberedVariant(item, profile)
+    const currentVariant = current?.providerID === item.providerID && current.id === item.id && current.profile === profile ? current.variant : undefined
+    const variant = remembered !== undefined && variants.includes(remembered) ? remembered : currentVariant !== undefined && variants.includes(currentVariant) ? currentVariant : undefined
+    const chosen = { providerID: item.providerID, id: item.id, ...(profile === undefined ? {} : { profile }), ...(variant === undefined ? {} : { variant }) }
+    const speed = modelSpeeds(props.models, current)?.active
+    owner.choose(speed && speed !== "standard" ? switchModelSpeed(props.models, chosen, speed) ?? chosen : chosen)
+    props.onBack()
+  }
+  return <div class="command-palette command-palette--models" onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); props.onBack() } }}>
+    <div class="command-palette__model-head"><button type="button" class="button button--ghost" onClick={props.onBack}>Back to actions</button><strong>Choose model</strong></div>
+    <label class="command-palette__search"><Icon name="search" size={16} /><input ref={input} class="command-palette__input" type="search" role="combobox" aria-label="Search models" aria-expanded="true" aria-controls="command-palette-models" aria-activedescendant={models().length ? `palette-model-${active()}` : undefined} placeholder="Search models…" value={query()} onInput={(event) => { setQuery(event.currentTarget.value); setActive(0) }} onKeyDown={(event) => {
+      const next = event.key === "Home" ? 0 : event.key === "End" ? models().length - 1 : event.key === "ArrowDown" ? Math.min(active() + 1, models().length - 1) : event.key === "ArrowUp" ? Math.max(active() - 1, 0) : undefined
+      if (next !== undefined) { event.preventDefault(); setActive(Math.max(0, next)); document.getElementById(`palette-model-${next}`)?.scrollIntoView({ block: "nearest" }); return }
+      if (event.key === "Enter" && !event.isComposing && models()[active()]) { event.preventDefault(); choose(models()[active()]!) }
+    }} /></label>
+    <div id="command-palette-models" class="command-palette__list" role="listbox" aria-label="Models"><For each={models()} fallback={<p class="command-palette__empty">No matching models.</p>}>{(item, index) => <><Show when={index() === 0 || index() === recentCount() || index() > recentCount() && models()[index() - 1]?.providerID !== item.providerID}><div class="command-palette__heading">{item.recentSelection ? "Recent" : item.providerName ?? item.providerID}</div></Show><button id={`palette-model-${index()}`} type="button" role="option" aria-selected={index() === active()} class="command-palette__option command-palette__model" data-active={index() === active() ? "" : undefined} disabled={!binding()} onPointerMove={() => setActive(index())} onClick={() => choose(item)}><span class="command-palette__title">{item.name}</span><span class="command-palette__description">{item.recentSelection ? `${item.providerName ?? item.providerID} · ` : ""}{item.id}{item.recentSelection?.profile ? ` · Profile ${item.recentSelection.profile}` : ""}</span></button></>}</For></div>
+  </div>
 }
 
 function PaletteBody(props: {
@@ -234,6 +294,8 @@ function PaletteBody(props: {
   let previousActions = props.actions
   let scrollAnchor: { readonly id: string; readonly top: number } | undefined
   let list: HTMLDivElement | undefined
+  let input: HTMLInputElement | undefined
+  onMount(() => input?.focus())
 
   const rememberScrollAnchor = () => {
     if (!list) return
@@ -246,26 +308,6 @@ function PaletteBody(props: {
 
   createEffect(() => {
     if (!flat().some((action) => action.id === activeID())) setActiveID(flat()[0]?.id)
-  })
-
-  onMount(() => {
-    const root = document.documentElement
-    const sync = (viewport: { readonly offsetTop: number; readonly height: number } | null) => {
-      const frame = visualViewportFrame(viewport)
-      if (!frame) {
-        root.style.removeProperty("--command-palette-top")
-        root.style.removeProperty("--command-palette-height")
-        return
-      }
-      root.style.setProperty("--command-palette-top", `${frame.top}px`)
-      root.style.setProperty("--command-palette-height", `${frame.height}px`)
-    }
-    const release = watchVisualViewport(sync)
-    onCleanup(() => {
-      release()
-      root.style.removeProperty("--command-palette-top")
-      root.style.removeProperty("--command-palette-height")
-    })
   })
 
   createEffect(() => {
@@ -302,6 +344,7 @@ function PaletteBody(props: {
         <span class="visually-hidden">Search actions</span>
         <Icon name="search" size={16} />
         <input
+          ref={input}
           id="command-palette-input"
           class="command-palette__input"
           type="text"

@@ -106,6 +106,7 @@ test("in a selected conversation the composer floats over the transcript, which 
   expect(base(`${floating} .composer`).background).toBeUndefined()
   expect(base(`${floating} .composer:not(.composer--collapsed) .composer__dock-toggle`)).toMatchObject({ "border-radius": "var(--yc-radius-pill)", background: "var(--yc-surface-raised)" })
   expect(source).toContain("--yc-composer-reserve")
+  expect(base(".composer.composer--metadata-in-transcript")["padding-block"]).toBe("var(--yc-space-1) max(var(--yc-space-4), env(safe-area-inset-bottom))")
 })
 
 const landscape = "@media (max-height: 599px) and (pointer: coarse) and (orientation: landscape)"
@@ -140,9 +141,11 @@ test("the agent and model summary lives inside the phone card and is hidden from
   expect(composer.rules.some((rule) => rule.header.includes("composer__mobile-identity"))).toBe(false)
 })
 
-test("tablet and desktop controls wrap rather than clip", () => {
+test("controls wrap except beside a desktop companion, where the model can shrink", () => {
   expect(base(".composer .composer__controls")["flex-wrap"]).toBe("wrap")
-  expect(composer.rules.some((rule) => rule.declarations["flex-wrap"] === "nowrap" && rule.header.includes("composer__controls"))).toBe(false)
+  const companion = (header: string) => declarationsWhere(composer, (rule) => rule.header === header && rule.conditions.includes("@media (min-width: 1280px) and (pointer: fine)"))
+  expect(companion(".app--team-open .composer .composer__controls")["flex-wrap"]).toBe("nowrap")
+  expect(companion(".app--team-open .composer__controls .model-control")).toMatchObject({ flex: "1 1 40px", "min-inline-size": "40px" })
 })
 
 test("below 768px the card puts the summary on its own wrapping line above the draft, with attach and the end-aligned primary actions on one line below it", () => {

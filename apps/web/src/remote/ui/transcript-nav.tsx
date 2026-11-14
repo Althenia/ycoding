@@ -46,7 +46,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   let selecting = false
   let touchY: number | undefined
   let contentUpdate = false
-  let loadingOlder = false
+  const [loadingOlder, setLoadingOlder] = createSignal(false)
   let sessionID: string | undefined
   let pendingFocus: string | undefined
   let mounted = false
@@ -92,7 +92,13 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     setScrollTop(scrollRoot.scrollTop)
     visibility.maybeExecute()
   }
-  const historyHeader = createMemo(() => `${checkpoint()}:${remote.state().history?.status}:${remote.state().history?.before}`)
+  const historyHeader = createMemo(() => {
+    if (checkpoint()) return "none"
+    const history = remote.state().history
+    if (history?.status === "loading" && (loadingOlder() || props.messages().length === 0)) return "loading"
+    if (history?.status === "error") return "error"
+    return !history?.before && props.messages().length > 0 ? "beginning" : "none"
+  })
   const virtual = createRowVirtualizer({
     list: () => list,
     scroller: () => scrollRoot ??= wrapper?.closest<HTMLElement>(".workspace__scroll") ?? undefined,
@@ -133,9 +139,9 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     if (scrollRoot && scrollRoot.scrollTop < 120 && remote.state().history?.status === "idle") void loadOlder()
   }, { wait: 100, leading: false })
   const loadOlder = async () => {
-    if (!active() || loadingOlder || checkpoint() || remote.state().history?.status === "loading" || !remote.state().history?.before) return
-    loadingOlder = true
-    try { await remote.store.loadOlderMessages() } finally { loadingOlder = false }
+    if (!active() || loadingOlder() || checkpoint() || remote.state().history?.status === "loading" || !remote.state().history?.before) return
+    setLoadingOlder(true)
+    try { await remote.store.loadOlderMessages() } finally { setLoadingOlder(false) }
   }
   const onScroll = () => {
     if (!active() || !scrollRoot || virtual.writing()) return
@@ -295,9 +301,9 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
 
   return <div class="transcript-navigation" classList={{ "transcript-navigation--empty": rows().length === 0 }} ref={wrapper}>
     <PromptRail prompts={ticks()} visible={visible()} onSelect={selectPrompt} />
-    <Show when={!checkpoint() && remote.state().history?.status === "loading"}><div class="transcript-navigation__history-loading"><LoadingPlaceholder kind="history" label="Loading older messages…" /></div></Show>
-    <Show when={!checkpoint() && remote.state().history?.status === "idle" && !remote.state().history?.before}><p class="transcript-navigation__beginning">Beginning of conversation</p></Show>
-    <Show when={!checkpoint() && remote.state().history?.status === "error"}><p class="transcript-navigation__history-error" role="alert">{remote.state().history?.error} <button type="button" onClick={() => void loadOlder()}>Retry older history</button></p></Show>
+    <Show when={historyHeader() === "loading"}><div class="transcript-navigation__history-loading"><LoadingPlaceholder kind="history" label="Loading older messages…" /></div></Show>
+    <Show when={historyHeader() === "beginning"}><p class="transcript-navigation__beginning">Beginning of conversation</p></Show>
+    <Show when={historyHeader() === "error"}><p class="transcript-navigation__history-error" role="alert">{remote.state().history?.error} <button type="button" onClick={() => void loadOlder()}>Retry older history</button></p></Show>
     <ol class="transcript" ref={list} style={{ "block-size": `${virtual.virtualizer.getTotalSize()}px` }}>
       <For each={virtual.rendered()}>{(id) => {
         const row = virtual.row(id)
