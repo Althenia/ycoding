@@ -513,9 +513,11 @@ describe("AntigravityPlugin", () => {
         "gemini-4-argon-low": { displayName: "Gemini 4 Argon (Low)", thinkingLevel: 1 },
         "gemini-4-argon-medium": { displayName: "Gemini 4 Argon (Medium)", thinkingLevel: 2, thinkingBudget: -1 },
         "gemini-4-argon-high": { displayName: "Gemini 4 Argon (High)", thinkingLevel: 3 },
+        "gemini-4-argon-xhigh": { displayName: "Gemini 4 Argon (XHigh)", thinkingLevel: 3 },
         "gemini-3.8-flash-low": { displayName: "Gemini 3.8 Flash (Low)", thinkingBudget: 1000 },
         "gemini-3.8-flash-medium": { displayName: "Gemini 3.8 Flash (Medium)", thinkingBudget: 4000 },
         "gemini-3.8-flash-high": { displayName: "Gemini 3.8 Flash (High)", thinkingBudget: -1 },
+        "claude-opus-4-6-max": { displayName: "Claude Opus 4.6 (Max)", thinkingLevel: 3 },
         "claude-sonnet-5-5-low": { displayName: "Claude Sonnet 5.5 (Low)", thinkingLevel: 1 },
         "claude-sonnet-5-5-max": { displayName: "Claude Sonnet 5.5 (Max)", thinkingLevel: 3 },
         "gemini-3.1-pro-high": { displayName: "Gemini 3.1 Pro (High)", thinkingLevel: 3 },
@@ -533,9 +535,10 @@ describe("AntigravityPlugin", () => {
         "project-1",
       )
       expect(models.map((model) => String(model.id))).toEqual([
+        "claude-opus-4-6-max",
         "claude-sonnet-5-5",
         "gemini-2.5-pro",
-        "gemini-3.1-pro-high",
+        "gemini-3.1-pro",
         "gemini-3.8-flash",
         "gemini-4-argon",
       ])
@@ -543,10 +546,14 @@ describe("AntigravityPlugin", () => {
       expect(argon.name).toBe("Gemini 4 Argon")
       expect(String(argon.modelID)).toBe("gemini-4-argon-medium")
       expect(argon.settings).toEqual({ thinkingConfig: { includeThoughts: true, thinkingLevel: "medium" } })
-      expect(argon.variants?.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
+      expect(argon.variants?.map((variant) => String(variant.id))).toEqual(["low", "medium", "high", "xhigh"])
       expect(argon.variants?.find((variant) => variant.id === "high")?.settings).toEqual({
         thinkingConfig: { includeThoughts: true, thinkingLevel: "high" },
         antigravityModelID: "gemini-4-argon-high",
+      })
+      expect(argon.variants?.find((variant) => variant.id === "xhigh")?.settings).toEqual({
+        thinkingConfig: { includeThoughts: true, thinkingLevel: "high" },
+        antigravityModelID: "gemini-4-argon-xhigh",
       })
       expect(argon.variants?.find((variant) => variant.id === "low")?.settings).toEqual({
         thinkingConfig: { includeThoughts: true, thinkingLevel: "low" },
@@ -573,13 +580,78 @@ describe("AntigravityPlugin", () => {
         thinkingConfig: { includeThoughts: true, thinkingLevel: "high" },
         antigravityModelID: "claude-sonnet-5-5-max",
       })
-      const single = models.find((model) => model.id === "gemini-3.1-pro-high")!
-      expect(single.name).toBe("Gemini 3.1 Pro (High)")
-      expect(single.variants).toEqual([])
+      const opus = models.find((model) => model.id === "claude-opus-4-6-max")!
+      expect(opus.name).toBe("Claude Opus 4.6 (Max)")
+      expect(opus.variants).toEqual([])
+      expect(opus.settings).toEqual({ thinkingConfig: { includeThoughts: true, thinkingLevel: "high" } })
+      const single = models.find((model) => model.id === "gemini-3.1-pro")!
+      expect(single.name).toBe("Gemini 3.1 Pro")
+      expect(String(single.modelID)).toBe("gemini-3.1-pro-high")
+      expect(single.variants?.map((variant) => String(variant.id))).toEqual(["high"])
+      expect(single.variants?.find((variant) => variant.id === "high")?.settings).toEqual({
+        thinkingConfig: { includeThoughts: true, thinkingLevel: "high" },
+        antigravityModelID: "gemini-3.1-pro-high",
+      })
       expect(single.settings).toEqual({ thinkingConfig: { includeThoughts: true, thinkingLevel: "high" } })
       const pro = models.find((model) => model.id === "gemini-2.5-pro")!
       expect(pro.variants).toEqual([])
       expect(pro.settings).toEqual({ thinkingConfig: { includeThoughts: true, thinkingBudget: 1024 } })
+    }),
+  )
+
+  it.effect("pivots Gemini parenthesized suffixes into variants and sorts known efforts first", () =>
+    Effect.gen(function* () {
+      const models = yield* discoverAntigravityModels(
+        http(() =>
+          Response.json({
+            models: {
+              "gemini-4-hydrogen-preview": {
+                displayName: "Gemini 4 Hydrogen (Preview)",
+                supportsThinking: true,
+                thinkingBudget: 2048,
+              },
+              "gemini-4-hydrogen-low": {
+                displayName: "Gemini 4 Hydrogen (Low)",
+                supportsThinking: true,
+                thinkingLevel: 1,
+              },
+              "gemini-4-hydrogen-alpha-test": {
+                displayName: "Gemini 4 Hydrogen (Alpha Test)",
+                supportsThinking: true,
+                thinkingBudget: 512,
+              },
+              "gemini-3-pro": {
+                displayName: "Gemini 3 Pro (Thinking)",
+                supportsThinking: true,
+                thinkingBudget: 4096,
+              },
+            },
+          }),
+        ),
+        "google-access",
+        "project-1",
+      )
+      expect(models.map((model) => String(model.id))).toEqual(["gemini-3-pro", "gemini-4-hydrogen"])
+      const pro = models.find((model) => model.id === "gemini-3-pro")!
+      expect(pro.name).toBe("Gemini 3 Pro")
+      expect(String(pro.modelID)).toBe("gemini-3-pro")
+      expect(pro.variants?.map((variant) => String(variant.id))).toEqual(["thinking"])
+      expect(pro.variants?.[0]?.settings).toEqual({
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 4096 },
+        antigravityModelID: "gemini-3-pro",
+      })
+      const hydrogen = models.find((model) => model.id === "gemini-4-hydrogen")!
+      expect(hydrogen.name).toBe("Gemini 4 Hydrogen")
+      expect(String(hydrogen.modelID)).toBe("gemini-4-hydrogen-low")
+      expect(hydrogen.variants?.map((variant) => String(variant.id))).toEqual(["low", "alpha-test", "preview"])
+      expect(hydrogen.variants?.find((variant) => variant.id === "preview")?.settings).toEqual({
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 },
+        antigravityModelID: "gemini-4-hydrogen-preview",
+      })
+      expect(hydrogen.variants?.find((variant) => variant.id === "alpha-test")?.settings).toEqual({
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 512 },
+        antigravityModelID: "gemini-4-hydrogen-alpha-test",
+      })
     }),
   )
 

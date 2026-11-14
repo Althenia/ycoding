@@ -92,10 +92,13 @@ const ModelEntry = Schema.Struct({
 const decodeEntry = Schema.decodeUnknownOption(ModelEntry)
 const decodeBody = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
 const gatewayModelSettingsKey = "antigravityModelID"
-const efforts = ["minimal", "low", "medium", "high", "max"] as const
-type Effort = (typeof efforts)[number]
+const efforts = ["minimal", "low", "medium", "high", "xhigh", "max"] as const
 type ModelRow = { id: string; entry: typeof ModelEntry.Type }
-type EffortRow = ModelRow & { effort: Effort; name: string }
+type EffortRow = ModelRow & { effort: string; name: string }
+
+function isGeminiModel(row: ModelRow) {
+  return /^gemini-/i.test(row.id) || /^gemini\b/i.test(row.entry.displayName ?? "")
+}
 
 function thinkingSettings(entry: typeof ModelEntry.Type) {
   if (entry.supportsThinking !== true) return undefined
@@ -122,17 +125,37 @@ function thinkingSettings(entry: typeof ModelEntry.Type) {
 }
 
 function effortRow(row: ModelRow): (EffortRow & { base: string }) | undefined {
-  const match = /-(minimal|low|medium|high|max)$/.exec(row.id)
+  const match = /-(minimal|low|medium|high|xhigh|max)$/.exec(row.id)
   const effort = efforts.find((item) => item === match?.[1])
-  if (!match || !effort) return undefined
-  const displayName = row.entry.displayName
-  if (displayName !== undefined) {
-    const name = /^(.*)\s\((Minimal|Low|Medium|High|Max)\)$/.exec(displayName)
-    if (!name || name[2].toLowerCase() !== effort) return undefined
-    return { ...row, effort, name: name[1], base: row.id.slice(0, -match[0].length) }
+  if (match && effort) {
+    const displayName = row.entry.displayName
+    if (displayName === undefined) {
+      const base = row.id.slice(0, -match[0].length)
+      return { ...row, effort, name: base, base }
+    }
+    const name = /^(.*)\s\((Minimal|Low|Medium|High|XHigh|Max)\)$/.exec(displayName)
+    if (name && name[2].toLowerCase() === effort)
+      return { ...row, effort, name: name[1], base: row.id.slice(0, -match[0].length) }
   }
-  const base = row.id.slice(0, -match[0].length)
-  return { ...row, effort, name: base, base }
+  if (isGeminiModel(row) && row.entry.displayName !== undefined) {
+    const suffix = /^(.*)\s+\(([^()]+)\)$/.exec(row.entry.displayName)
+    if (suffix) {
+      const name = suffix[1].trim()
+      const variant = suffix[2]
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+      if (name && variant) {
+        const base =
+          row.id.endsWith(`-${variant}`) && row.id.length > variant.length + 1
+            ? row.id.slice(0, -(variant.length + 1))
+            : row.id
+        return { ...row, effort: variant, name, base }
+      }
+    }
+  }
+  return undefined
 }
 
 function catalogModel(id: string, row: ModelRow, extra: Partial<CatalogModel.Info> = {}) {
@@ -332,14 +355,23 @@ export const discoverAntigravityModels = Effect.fn("Antigravity.discoverModels")
     .flatMap(([base, group]) => {
       if (group.efforts.length === 0 && group.base) return [catalogModel(base, group.base)]
       const [first] = group.efforts
-      if (group.base === undefined && group.efforts.length === 1 && first) return [catalogModel(first.id, first)]
-      const preferred = (["medium", "high", "low", "max", "minimal"] as const).flatMap(
+      if (group.base === undefined && group.efforts.length === 1 && first && !isGeminiModel(first))
+        return [catalogModel(first.id, first)]
+      const preferred = (["medium", "high", "low", "xhigh", "max", "minimal"] as const).flatMap(
         (effort) => group.efforts.find((row) => row.effort === effort) ?? [],
       )[0]
       const pick = group.base ?? preferred ?? first
       if (!pick) return []
+      const effortOrder = (value: string) => efforts.indexOf(value as (typeof efforts)[number])
       const variants = group.efforts
-        .toSorted((left, right) => efforts.indexOf(left.effort) - efforts.indexOf(right.effort))
+        .toSorted((left, right) => {
+          const li = effortOrder(left.effort)
+          const ri = effortOrder(right.effort)
+          if (li !== -1 && ri !== -1) return li - ri
+          if (li !== -1) return -1
+          if (ri !== -1) return 1
+          return left.effort.localeCompare(right.effort)
+        })
         .map((row) => ({
           id: CatalogModel.VariantID.make(row.effort),
           settings: { ...thinkingSettings(row.entry), [gatewayModelSettingsKey]: row.id },
