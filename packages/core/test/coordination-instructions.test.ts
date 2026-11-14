@@ -24,10 +24,16 @@ const removed = [
 ]
 const once = (value: string, text: string) => expect([text, value.split(text).length]).toEqual([text, 2])
 
-test("member assignments and executor guidance require five disjoint parallel subagent lanes", async () => {
-  once(CoordinationInstructions.content, "When assigning substantive multi-part work to members, require five subagents in parallel across disjoint file and check lanes, one writer per file, and at most one heavy build or typecheck at a time.")
+test("member assignments and executor guidance scale disjoint subagent lanes to the work", async () => {
   const executor = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("executor"))))[0]?.value)
-  once(executor, "For your own substantive multi-part work, run five subagents in parallel across disjoint file and check lanes, keep one writer per file, and run at most one heavy build or typecheck at a time.")
+  for (const value of [CoordinationInstructions.content, executor]) {
+    once(value, "Scale executor subagent fanout from 0..5 across genuinely disjoint file and check lanes")
+    once(value, "Keep small or coupled work in one Session")
+    expect(value).toContain("one writer per file")
+    expect(value).not.toContain("require five subagents")
+    expect(value).not.toContain("run five subagents")
+  }
+  expect(CoordinationInstructions.content).toContain("within bounded memory")
 })
 
 test("Master, supervisor and executor instructions honor explicit main-agent versus subagent model and profile splits", async () => {
@@ -35,10 +41,32 @@ test("Master, supervisor and executor instructions honor explicit main-agent ver
   for (const role of ["master", "supervisor", "executor"] as const) {
     const value = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value)
     once(value, split)
-    expect(value).toContain("five subagents in parallel across disjoint file and check lanes")
+    expect(value).toContain("Scale executor subagent fanout from 0..5 across genuinely disjoint file and check lanes")
   }
   const subagent = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("executor", true))))[0]?.value)
   expect(subagent).not.toContain("provider, model, variant, and profile splits")
+})
+
+test("coordination and executor policies keep evidence in messages and bound verification work", async () => {
+  const executor = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("executor"))))[0]?.value)
+  for (const value of [CoordinationInstructions.content, executor]) {
+    for (const text of [
+      "evidence directly as command + exit code + pass/fail counts + commit or diff stat.",
+      "Never create REPORT.md, HANDOFF.md, RECEIPT.md, RECEIPT.json, owner-handoff.md or SHA-256 manifest artifacts unless the user explicitly requests a file artifact.",
+      "Never follow up solely to request a report file or restate receipts.",
+      "Reject unrequested synthetic viewport/theme combinatoric matrices.",
+      "Serialize heavy builds, Cargo workspace compiles and browser suites one at a time",
+      "allow fast single-package typechecks concurrently",
+      "within bounded memory",
+      "new specifications, public-contract changes or ambiguous acceptance criteria",
+      "keep routine fixes, refactors and UI polish proportional to the affected behavior.",
+      "consolidated selected checks → single commit → linear rebase onto the latest target head → ff-only merge → safe non-force worktree removal, without intermediate handoff approvals.",
+      "git diff --name-only",
+      "automatically rebase disjoint target advances without target-hash questions, and escalate overlapping file conflicts or failing checks.",
+      "These instructions authorize no integration action by themselves",
+    ]) expect(value).toContain(text)
+    expect(value).not.toMatch(/\bgarm\b/i)
+  }
 })
 
 test("Master instructions require supervision, evidence review and reasoned escalation", () => {
@@ -52,13 +80,18 @@ test("Master instructions require supervision, evidence review and reasoned esca
   for (const text of removed) expect([text, CoordinationInstructions.content.includes(text)]).toEqual([text, false])
 })
 
-test("the Master decomposes work into owner-supervised members in the chosen canonical Project", () => {
+test("the Master owns members directly by default and adds a supervisor only for sustained parallel work", () => {
   for (const instruction of [
-    "As Master, decompose the user's work into independent scopes without waiting to be asked, launch an owner subagent for each",
+    "As Master, decompose the user's work into independent scopes without waiting to be asked",
+    "Default to direct Master → member ownership",
+    "launch a supervisor subagent only when coordinating more than three long-running parallel members",
+    "The Project hierarchy is Master → recorded owner → executor",
+    "Directly manage Sessions owned by the Master",
     "use `create` with the chosen existing Project's `projectID` to start a member Session in its canonical directory",
     "for supervisor-owned Sessions, route everything through their recorded supervisor rather than relaying their routine events, and handle only their escalations and integration",
     "keep advancing independent work",
   ]) expect(CoordinationInstructions.content).toContain(instruction)
+  expect(CoordinationInstructions.content).not.toContain("launch an owner subagent for each")
   expect(CoordinationInstructions.content).not.toContain("Main")
 })
 

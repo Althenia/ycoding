@@ -304,12 +304,16 @@ describe("Agent", () => {
         validation: ["Avoid overengineering", "requirements and contracts", "boundary regression", "Never run full-repository, full-workspace, or entire-package test suites", "no mutation probes unless requested"],
         recovery: ["denial, unavailability and invalid input", "never replay an uncertain mutation", "Keep prompts cache-stable", "Meta Llama thought content as reasoning"],
         records: ["three or more steps", "in_progress", "cancelled", "repository-relative path", "complete, verified change", "code, tests, docs and release notes"],
+        acceptance: ["formal acceptance design for new specifications, public-contract changes or ambiguous acceptance criteria", "skip that extra process for routine bug fixes, refactors and UI polish", "Reject unrequested synthetic viewport/theme combinatoric matrices"],
+        checks: ["Serialize heavy builds, Cargo workspace compiles and browser suites one at a time across agents", "allow fast single-package typechecks concurrently under memory_limit_mb within bounded memory"],
+        reporting: ["directly in turn messages as command + exit code + pass/fail counts + commit or diff stat", "distinguish unrun checks from passing results", "Never create SHA-256 file-manifest ledgers or multi-file receipt/handoff artifacts", "REPORT.md, HANDOFF.md, RECEIPT.md, RECEIPT.json, owner-handoff.md or SHA-256 manifest files unless the user explicitly requests a file artifact", "Never send follow-up turns solely to request a report file or restate receipts"],
       }
       for (const id of ["zeus", "GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein"]) {
         const item = yield* agent.get(Agent.ID.make(id))
         for (const obligation of Object.values(obligations).flat()) expect(item?.system).toContain(obligation)
         for (const practice of workPractice) expect(item?.system?.split(practice)).toHaveLength(2)
         expect(item?.system).not.toMatch(/piecemeal churn|redundant reruns/)
+        expect(item?.system).not.toMatch(/\bgarm\b/i)
       }
     }),
   )
@@ -460,14 +464,14 @@ describe("Agent", () => {
         "do not retry deferred actions", "normal choices and attribution",
         "/autonomous", "Only the user creates, replaces or resumes a goal",
         "get, report, complete, stop or clear", "Never change objective text",
-        "notifications", "do not poll", "one typecheck or build at a time",
+        "notifications", "do not poll", "Serialize heavy builds, Cargo workspace compiles and browser suites one at a time",
         "git worktree remove <path>", "never --force",
         "bounded judgments", "not approval, a user answer or completion evidence",
       ]
       for (const id of ["GSD", "architech", "god", "yangi"]) {
         const item = yield* agent.get(Agent.ID.make(id))
         for (const obligation of native) expect(item?.system).toContain(obligation)
-        expect(item?.system).not.toMatch(/Implement directly|Do the work yourself|keep tightly coupled edits.*own hands/)
+        expect(item?.system).not.toContain("You orchestrate; you do not execute")
       }
       const helpers = {
         compaction: ["TOON", "conversation_memory", "in_progress", "pending", "blocked", "accepted", "rejected", "superseded", "active skills", "empty collections", "not a conversation reply"],
@@ -514,10 +518,26 @@ describe("Agent", () => {
         const item = yield* agent.get(Agent.ID.make(id))
         expect(item?.system).toContain("Control only this Session's direct subagents; never another Session's children.")
         expect(item?.system).toContain("Project ownership is separate from parent-child ownership")
+        expect(item?.system).toContain("Keep Project ownership directly Master -> member by default")
+        expect(item?.system).toContain("launch a supervisor subagent only for more than three long-running parallel members, within supported modes and permissions")
       }
       const child = yield* agent.get(Agent.ID.make("zeus"))
       expect(child?.system).toContain("Escalate unresolved decisions to your parent with evidence and a recommendation; never treat its reply as native approval.")
       expect(child?.system).toContain("Do not spawn child agents")
+      expect(child?.system).toContain("coordinate heavy-check serialization and bounded concurrent fast single-package typechecks with the parent")
+      expect(child?.system).toContain("directly in your turn, without report files or follow-up receipt turns")
+      for (const id of ["occam", "omoikane", "wittgenstein", "zeus"]) {
+        const item = yield* agent.get(Agent.ID.make(id))
+        for (const rule of [
+          "Only for explicitly assigned and authorized local integration",
+          "compare intermediate target changes against lane files with git diff --name-only",
+          "automatically rebase linearly onto the latest target head when files are disjoint",
+          "escalate overlapping file conflicts or failing checks to the parent",
+          "consolidated checks -> single commit -> linear rebase onto the latest target head -> ff-only merge -> safe non-force worktree removal",
+          "in one continuous pass without intermediate handoff approvals",
+          "Preserve parent ownership and native permission and approval boundaries; this prose grants no integration authority",
+        ]) expect(item?.system).toContain(rule)
+      }
     }),
   )
 
@@ -541,6 +561,15 @@ describe("Agent", () => {
           "Verify exact selectors, availability, tools/context, permissions and data-use compatibility",
           "Record route, effort, reason and checks before dispatch",
           "never substitute silently or expand spending authority",
+          "Scale executor subagent fanout from zero to five across genuinely disjoint file/check lanes",
+          "keep small or coupled work in one Session, with one writer per file",
+          "never implement an active child's task, take over its Session, tools or files",
+          "compare intermediate target changes against lane files with git diff --name-only",
+          "automatically rebase linearly onto the latest target head when files are disjoint, without target-hash questions",
+          "Escalate only overlapping file conflicts or failing checks, preserving native approval gates",
+          "consolidated checks -> single commit -> linear rebase onto the latest target head -> ff-only merge -> safe non-force worktree removal",
+          "in one continuous pass without intermediate handoff approvals",
+          "This policy grants no integration authority by itself; preserve existing permission, ownership and approval boundaries",
         ]) expect(item?.system).toContain(rule)
         for (const practice of workPractice) expect(item?.system).toContain(practice)
         expect(item?.system?.split("task fit, correctness, risk control, tool reliability, speed and cost")).toHaveLength(2)

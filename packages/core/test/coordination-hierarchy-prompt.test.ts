@@ -376,12 +376,19 @@ const hierarchy = [
   "The Project hierarchy is Master → recorded owner → executor",
   "As Master, coordinate assignments, decide escalations, review integration evidence, and keep advancing independent work",
   "As Master, decompose the user's work into independent scopes without waiting to be asked",
+  "Default to direct Master → member ownership",
+  "launch a supervisor subagent only when coordinating more than three long-running parallel members",
   "As a supervisor, stay responsible for every Session you control until its work is verified complete",
   "keep supervising after each turn settles",
   "As a supervisor, resolve your members' routine issues and judgment calls yourself within your existing authority",
   "Never send a member a message only to acknowledge a report or notification",
 ]
 const unimplemented = ["owner_session_id", "enforce"]
+const sharedExecution = [
+  "Scale executor subagent fanout from 0..5 across genuinely disjoint file and check lanes",
+  "Keep small or coupled work in one Session",
+  "within bounded memory",
+]
 const operating = [
   "Accept a member's work as complete only from verified evidence, not from a settled turn or a status claim",
   "Start the highest-priority ready work as soon as its inputs are final and its resource is free",
@@ -467,6 +474,7 @@ describe("Master hierarchy prompt assembly", () => {
       yield* setupProject
       const system = systemText(yield* requestFor(otherSessionID, "Coordinate the team"))
       for (const text of operating) expect(system).toContain(text)
+      for (const text of sharedExecution) expect(system).toContain(text)
       for (const text of gates) expect(system).toContain(text)
     }),
   )
@@ -485,6 +493,10 @@ describe("Master hierarchy prompt assembly", () => {
       for (const text of operating) {
         expect(ordinary).not.toContain(text)
         expect(child).not.toContain(text)
+      }
+      for (const text of sharedExecution) {
+        expect(ordinary).not.toContain(text)
+        expect(child).toContain(text)
       }
     }),
   )
@@ -515,6 +527,8 @@ describe("Master hierarchy prompt assembly", () => {
       yield* setupProject
       const system = systemText(yield* requestFor(otherSessionID, "Coordinate the team"))
       expect(system).toContain("Directly manage Sessions owned by the Master")
+      expect(system).not.toContain("launch an owner subagent for each")
+      expect(system).not.toContain("require five subagents")
       expect(system).toContain("for supervisor-owned Sessions, route everything through their recorded supervisor rather than relaying their routine events, and handle only their escalations and integration")
       expect(system).not.toContain("Main")
       expect(system).toContain("Do not execute a member's task, take over its tools, or control its subagents.")
