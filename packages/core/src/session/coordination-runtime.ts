@@ -193,6 +193,7 @@ export interface Interface {
   readonly escalate: (caller: SessionSchema.ID, input: EscalateInput) => Effect.Effect<EscalateResult, RefusedError | Session.ScopeUnavailableError | SessionOrchestration.ServiceUnavailableError>
   readonly assign: (caller: SessionSchema.ID, input: AssignInput) => Effect.Effect<OwnershipResult, RefusedError | EventRuntime.TaskOwnerUnavailableError>
   readonly release: (caller: SessionSchema.ID, input: ReleaseInput) => Effect.Effect<OwnershipResult, RefusedError>
+  readonly remove: (caller: SessionSchema.ID, input: { readonly sessionID: SessionSchema.ID }) => Effect.Effect<{ readonly sessionID: SessionSchema.ID; readonly removed: true }, RefusedError | EventRuntime.TaskOwnerUnavailableError>
   readonly create: <E = never>(
     caller: SessionSchema.ID,
     input: CreateInput,
@@ -217,7 +218,7 @@ export interface ModelInput {
 export interface Options {
   readonly db: Database.Interface["db"]
   readonly events: EventRuntime.Interface
-  readonly coordination: Pick<CoordinationService.Interface, "get" | "list" | "scopeOf" | "memberOf" | "accessOf" | "withOwnership" | "activate" | "pause" | "setOwner" | "addMember">
+  readonly coordination: Pick<CoordinationService.Interface, "get" | "list" | "scopeOf" | "memberOf" | "accessOf" | "withOwnership" | "activate" | "pause" | "setOwner" | "addMember" | "removeMember">
   readonly decisions: Pick<CoordinationDecisions.Interface, "pending" | "evaluate" | "escalate">
   readonly execution: Pick<SessionExecution.Interface, "active" | "wake" | "interrupt">
   readonly sessions: Pick<Session.Interface, "create" | "get" | "outstanding">
@@ -615,6 +616,18 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
     const scope = yield* memberScope(caller, input.sessionID)
     yield* execution.interrupt(input.sessionID)
     return { sessionID: input.sessionID, state: yield* stateOf(scope, input.sessionID) }
+  })
+
+  const remove: Interface["remove"] = Effect.fn("CoordinationRuntime.remove")(function* (caller, input) {
+    const access = yield* coordination.accessOf(caller)
+    if (access?.role !== "master") return yield* refuse("Only the Project's Master removes member Sessions")
+    const scope = access.scope
+    if (!scope.memberSessionIDs.includes(input.sessionID)) return yield* refuse(`Session ${input.sessionID} is not a member of this Project`)
+    if ((yield* execution.active).has(input.sessionID) || (yield* workRemains(input.sessionID)) || (yield* familyPending(scope, caller, input.sessionID)).length > 0)
+      return yield* refuse(`Session ${input.sessionID} has active work or pending requests; wait for it to settle or interrupt it before removing it from the Project`)
+    yield* coordination.removeMember(scope.groupID, { sessionID: input.sessionID }).pipe(Effect.mapError((error) => refuse(error.message)))
+    yield* SessionTask.completeUnownedSupervisors(db, events)
+    return { sessionID: input.sessionID, removed: true as const }
   })
 
   const excerptOf = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
@@ -1025,6 +1038,7 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
     inspect: (caller, input) => underOwnership(caller, inspect(caller, input)),
     assign: (caller, input) => underOwnership(caller, assign(caller, input)),
     release: (caller, input) => underOwnership(caller, release(caller, input)),
+    remove: (caller, input) => underOwnership(caller, remove(caller, input)),
     create,
     member,
     handle: (event) =>

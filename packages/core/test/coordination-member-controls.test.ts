@@ -1,7 +1,9 @@
 import { describe, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer } from "effect"
-import { eq } from "drizzle-orm"
+import { and, asc, eq } from "drizzle-orm"
 import { LLMClient } from "@ycoding-ai/ai"
+import { Coordination } from "@ycoding-ai/schema/coordination"
+import { Permission } from "@ycoding-ai/schema/permission"
 import { Agent } from "../src/agent"
 import { AppNodeBuilder } from "../src/effect/app-node-builder"
 import { LayerNode } from "../src/effect/layer-node"
@@ -9,8 +11,10 @@ import { LayerNodePlatform } from "../src/effect/app-node-platform"
 import { Catalog } from "../src/catalog"
 import { Credential } from "../src/credential"
 import { CoordinationService } from "../src/coordination/index"
+import { CoordinationMemberTable } from "../src/coordination/sql"
 import { Database } from "../src/database/database"
-import { EventRuntime } from "../src/event"
+import { EventRuntime, versionedType } from "../src/event"
+import { EventTable } from "../src/event/sql"
 import { Integration } from "../src/integration"
 import { Location } from "../src/location"
 import { LocationServiceMap } from "../src/location-service-map"
@@ -21,6 +25,7 @@ import { ProjectTable } from "../src/project/sql"
 import { Provider } from "../src/provider"
 import { AbsolutePath } from "../src/schema"
 import { Session } from "../src/session"
+import { CoordinationDecisions } from "../src/session/coordination-decisions"
 import { CoordinationModel } from "../src/session/coordination-model"
 import { CoordinationRuntime } from "../src/session/coordination-runtime"
 import { SessionEvent } from "../src/session/event"
@@ -28,7 +33,7 @@ import { SessionExecution } from "../src/session/execution"
 import { SessionMessage } from "../src/session/message"
 import { SessionOrchestration } from "../src/session/orchestration"
 import { SessionStepBoundary } from "../src/session/step-boundary"
-import { SessionTable } from "../src/session/sql"
+import { SessionTable, SessionTaskTable } from "../src/session/sql"
 import { fixtureModels } from "./lib/models"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
@@ -120,6 +125,70 @@ const unchangedExecution = () => {
   expect(woken).toEqual([])
   expect(interrupted).toEqual([])
 }
+
+type Fixture = Effect.Success<ReturnType<typeof fixture>>
+
+const changedEvents = (f: Fixture) => f.db.select().from(EventTable)
+  .where(and(eq(EventTable.aggregate_id, f.group.id), eq(EventTable.type, versionedType(Coordination.Event.Changed.type, Coordination.Event.Changed.durable.version))))
+  .orderBy(asc(EventTable.seq)).all().pipe(Effect.orDie)
+const memberRow = (f: Fixture, sessionID: Session.ID) => f.db.select().from(CoordinationMemberTable)
+  .where(and(eq(CoordinationMemberTable.group_id, f.group.id), eq(CoordinationMemberTable.session_id, sessionID))).get().pipe(Effect.orDie)
+const sessionRow = (f: Fixture, sessionID: Session.ID) => f.db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+const taskState = (f: Fixture, sessionID: Session.ID) => f.db.select({ state: SessionTaskTable.state }).from(SessionTaskTable)
+  .where(eq(SessionTaskTable.session_id, sessionID)).get().pipe(Effect.orDie, Effect.map(row => row?.state))
+
+const membership = Effect.fn(function* (f: Fixture) {
+  const group = yield* f.coordination.get(f.group.id)
+  const rows = yield* f.db.select().from(CoordinationMemberTable).where(eq(CoordinationMemberTable.group_id, f.group.id))
+    .orderBy(asc(CoordinationMemberTable.session_id)).all().pipe(Effect.orDie)
+  return { revision: group.revision, updated: group.time.updated, members: group.memberSessionIDs, rows, changes: (yield* changedEvents(f)).length }
+})
+
+const masterOnly = "Only the Project's Master removes member Sessions"
+const busy = (sessionID: Session.ID) => `Session ${sessionID} has active work or pending requests; wait for it to settle or interrupt it before removing it from the Project`
+
+const refusedWithoutDetach = Effect.fn(function* (f: Fixture, removal: Effect.Effect<unknown, unknown>, message?: string) {
+  const before = yield* membership(f)
+  const error = yield* Effect.flip(removal)
+  expect(error).toBeInstanceOf(CoordinationRuntime.RefusedError)
+  if (message !== undefined) expect(error).toMatchObject({ message })
+  expect(yield* membership(f)).toEqual(before)
+})
+
+const queueInput = (f: Fixture, sessionID: Session.ID) => f.events.publish(SessionEvent.InputAdmitted, {
+  sessionID, inputID: SessionMessage.ID.create(),
+  input: { type: "user", delivery: "queue", data: { text: "Queued work", metadata: { inputOrigin: "direct" } } },
+})
+
+const launchUnder = Effect.fn(function* (f: Fixture, parentID: Session.ID) {
+  const child = yield* f.sessions.create({ parentID, title: "Background worker", model: old })
+  yield* f.events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: {
+    type: "launched", parentID, parentAssistantMessageID: SessionMessage.ID.create(), toolCallID: `worker-${child.id}`,
+    inputID: SessionMessage.ID.create(), description: "Background worker", agent: Agent.ID.make("build"), model: old,
+    promptDigest: "synthetic-worker", background: true, delivery: "steer",
+  } })
+  yield* f.events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
+  return child
+})
+
+const withPending = Effect.fn(function* (f: Fixture, requests: ReadonlyArray<CoordinationDecisions.PendingSnapshot>) {
+  return CoordinationRuntime.make({
+    db: f.db, events: f.events, coordination: f.coordination, sessions: f.sessions,
+    execution: yield* SessionExecution.Service, orchestration: yield* SessionOrchestration.Service,
+    decisions: {
+      pending: input => Effect.succeed(requests.filter(item => item.kind === "permission" &&
+        [input.targetSessionID, ...(input.descendantSessionIDs ?? [])].includes(item.request.sessionID))),
+      evaluate: () => Effect.die("Unexpected decision evaluation"),
+      escalate: () => Effect.die("Unexpected escalation"),
+    },
+    validateModel: () => Effect.void,
+    jobs: { list: () => Effect.succeed([]), outstandingSessions: () => Effect.succeed(new Set<Session.ID>()) },
+  })
+})
+
+const permissionRequest = (id: string, sessionID: Session.ID): CoordinationDecisions.PendingSnapshot => ({
+  kind: "permission", request: { id: Permission.ID.make(id), sessionID, action: "edit", resources: ["src/a.ts"] }, fingerprint: `fp_${id}`,
+})
 
 describe("canonical project member creation", () => {
   it.effect("creates a root at the selected canonical directory and returns its saved selection", () => Effect.gen(function* () {
@@ -333,4 +402,196 @@ describe("persistent project member selection", () => {
     expect((yield* f.sessions.get(managed.id)).model).toEqual(old)
     unchangedExecution()
   }))
+})
+
+describe("project member detach", () => {
+  it.effect("detaches settled idle, completed and failed members, returning a removal receipt and leaving each Session and its history intact", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const completed = yield* f.sessions.create({ location: f.location, title: "Completed member", model: old })
+    const failed = yield* f.sessions.create({ location: f.location, title: "Failed member", model: old })
+    yield* f.coordination.addMember(f.group.id, { sessionID: completed.id })
+    yield* f.coordination.addMember(f.group.id, { sessionID: failed.id })
+    yield* f.events.publish(SessionEvent.Execution.Succeeded, { sessionID: completed.id })
+    yield* f.events.publish(SessionEvent.Execution.Failed, { sessionID: failed.id, error: { type: "provider.error", message: "Synthetic failure" } })
+    const detached = [f.peer.id, completed.id, failed.id]
+    const states = (yield* f.runtime.get(f.group.id)).members
+    expect(detached.map(id => states.find(member => member.sessionID === id)?.state)).toEqual(["idle", "idle", "failed"])
+    for (const sessionID of detached) {
+      const before = yield* f.coordination.get(f.group.id)
+      const session = yield* sessionRow(f, sessionID)
+      const history = yield* f.events.sequences([sessionID])
+      const changes = (yield* changedEvents(f)).length
+      expect(yield* f.runtime.remove(f.master.id, { sessionID })).toEqual({ sessionID, removed: true })
+      const after = yield* f.coordination.get(f.group.id)
+      expect(Number(after.revision)).toBe(Number(before.revision) + 1)
+      expect(after.time.updated).toBeGreaterThanOrEqual(before.time.updated)
+      expect(after.memberSessionIDs).toEqual(before.memberSessionIDs.filter(id => id !== sessionID))
+      const recorded = yield* changedEvents(f)
+      expect(recorded).toHaveLength(changes + 1)
+      expect(recorded.at(-1)?.data).toMatchObject({ groupID: f.group.id, revision: after.revision, memberSessionIDs: after.memberSessionIDs })
+      expect(yield* f.coordination.memberOf(sessionID)).toBeUndefined()
+      expect(yield* memberRow(f, sessionID)).toBeUndefined()
+      expect(yield* sessionRow(f, sessionID)).toEqual(session)
+      expect(yield* f.events.sequences([sessionID])).toEqual(history)
+      expect((yield* f.sessions.get(sessionID)).time.archived).toBeUndefined()
+    }
+    expect(yield* memberRow(f, f.member.id)).toMatchObject({ owner_session_id: f.owner.id })
+    expect(woken.filter(id => detached.includes(id))).toEqual([])
+    expect(interrupted).toEqual([])
+  }))
+
+  it.effect("completes a settled supervisor only after its last owned member is detached", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    yield* f.coordination.setOwner(f.group.id, { sessionID: f.peer.id, ownerSessionID: f.owner.id })
+    const orchestration = yield* SessionOrchestration.Service
+    yield* orchestration.settle(f.owner.id, { type: "completed" })
+    expect(yield* taskState(f, f.owner.id)).toBe("supervising")
+    expect(yield* f.runtime.remove(f.master.id, { sessionID: f.member.id })).toEqual({ sessionID: f.member.id, removed: true })
+    expect(yield* taskState(f, f.owner.id)).toBe("supervising")
+    expect(yield* memberRow(f, f.peer.id)).toMatchObject({ owner_session_id: f.owner.id })
+    expect(yield* f.runtime.remove(f.master.id, { sessionID: f.peer.id })).toEqual({ sessionID: f.peer.id, removed: true })
+    expect(yield* taskState(f, f.owner.id)).toBe("completed")
+    expect((yield* f.coordination.get(f.group.id)).memberSessionIDs).toEqual([])
+    expect(interrupted).toEqual([])
+  }))
+
+  it.effect("lets only the Project's Master detach a current member", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const executor = yield* f.sessions.create({ parentID: f.owner.id, title: "Owner executor", model: old })
+    for (const caller of [f.owner.id, executor.id, f.peer.id, f.member.id, f.outsider.id])
+      yield* refusedWithoutDetach(f, f.runtime.remove(caller, { sessionID: f.member.id }), masterOnly)
+    for (const sessionID of [f.outsider.id, f.master.id, f.owner.id])
+      yield* refusedWithoutDetach(f, f.runtime.remove(f.master.id, { sessionID }))
+    expect(yield* f.runtime.remove(f.master.id, { sessionID: f.member.id })).toEqual({ sessionID: f.member.id, removed: true })
+    yield* refusedWithoutDetach(f, f.runtime.remove(f.master.id, { sessionID: f.member.id }))
+    unchangedExecution()
+  }))
+
+  it.effect("refuses a running, queued or background-working member without detaching it", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    running.add(f.peer.id)
+    yield* refusedWithoutDetach(f, f.runtime.remove(f.master.id, { sessionID: f.peer.id }), busy(f.peer.id))
+    running.delete(f.peer.id)
+    const queued = yield* f.sessions.create({ location: f.location, title: "Queued member", model: old })
+    yield* f.coordination.addMember(f.group.id, { sessionID: queued.id })
+    yield* queueInput(f, queued.id)
+    expect(yield* f.sessions.pending(queued.id)).toHaveLength(1)
+    yield* refusedWithoutDetach(f, f.runtime.remove(f.master.id, { sessionID: queued.id }), busy(queued.id))
+    const delegating = yield* f.sessions.create({ location: f.location, title: "Member with a background task", model: old })
+    yield* f.coordination.addMember(f.group.id, { sessionID: delegating.id })
+    yield* launchUnder(f, delegating.id)
+    yield* refusedWithoutDetach(f, f.runtime.remove(f.master.id, { sessionID: delegating.id }), busy(delegating.id))
+    const parent = yield* f.sessions.create({ location: f.location, title: "Member with a running descendant", model: old })
+    yield* f.coordination.addMember(f.group.id, { sessionID: parent.id })
+    const descendant = yield* f.sessions.create({ parentID: parent.id, title: "Running descendant", model: old })
+    running.add(descendant.id)
+    yield* refusedWithoutDetach(f, f.runtime.remove(f.master.id, { sessionID: parent.id }), busy(parent.id))
+    running.delete(descendant.id)
+    expect(yield* f.runtime.remove(f.master.id, { sessionID: f.peer.id })).toEqual({ sessionID: f.peer.id, removed: true })
+    unchangedExecution()
+  }))
+
+  it.effect("refuses a member while its own or a deep descendant's request is pending, then detaches it once the request settles", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const child = yield* f.sessions.create({ parentID: f.peer.id, title: "Member child", model: old })
+    const grandchild = yield* f.sessions.create({ parentID: child.id, title: "Member grandchild", model: old })
+    const unrelated = permissionRequest("per_unrelated", f.outsider.id)
+    const requests = [unrelated]
+    const runtime = yield* withPending(f, requests)
+    for (const request of [permissionRequest("per_member", f.peer.id), permissionRequest("per_grandchild", grandchild.id)]) {
+      requests.push(request)
+      yield* refusedWithoutDetach(f, runtime.remove(f.master.id, { sessionID: f.peer.id }), busy(f.peer.id))
+      requests.splice(1)
+    }
+    expect(requests).toEqual([unrelated])
+    expect(yield* runtime.remove(f.master.id, { sessionID: f.peer.id })).toEqual({ sessionID: f.peer.id, removed: true })
+    expect((yield* f.coordination.get(f.group.id)).memberSessionIDs).toEqual([f.member.id])
+    unchangedExecution()
+  }))
+
+  it.effect("rechecks member work after waiting for the Project ownership fence", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const entered = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    const attempted = yield* Deferred.make<void>()
+    const holder = yield* f.coordination.withOwnership(f.group.id, Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))).pipe(Effect.forkChild)
+    yield* Deferred.await(entered)
+    const removal = yield* Deferred.succeed(attempted, undefined).pipe(Effect.andThen(Effect.flip(f.runtime.remove(f.master.id, { sessionID: f.peer.id }))), Effect.forkChild)
+    yield* Deferred.await(attempted)
+    yield* queueInput(f, f.peer.id)
+    yield* Deferred.succeed(release, undefined)
+    yield* Fiber.join(holder)
+    expect(yield* Fiber.join(removal)).toMatchObject({ message: busy(f.peer.id) })
+    expect((yield* f.coordination.get(f.group.id)).memberSessionIDs).toContain(f.peer.id)
+    expect(yield* memberRow(f, f.peer.id)).toBeDefined()
+    unchangedExecution()
+  }).pipe(Effect.timeout("10 seconds")))
+})
+
+describe("project member removal ownership fence", () => {
+  it.effect("direct service removal waits behind another holder and then removes the member", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const before = yield* membership(f)
+    const entered = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    const attempted = yield* Deferred.make<void>()
+    const holder = yield* f.coordination.withOwnership(f.group.id, Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))).pipe(Effect.forkChild)
+    yield* Deferred.await(entered)
+    const removal = yield* Deferred.succeed(attempted, undefined).pipe(Effect.andThen(f.coordination.removeMember(f.group.id, { sessionID: f.peer.id })), Effect.forkChild)
+    yield* Deferred.await(attempted)
+    yield* Effect.yieldNow
+    expect(yield* membership(f)).toEqual(before)
+    yield* Deferred.succeed(release, undefined)
+    yield* Fiber.join(holder)
+    expect((yield* Fiber.join(removal)).memberSessionIDs).toEqual([f.member.id])
+    expect(yield* memberRow(f, f.peer.id)).toBeUndefined()
+    unchangedExecution()
+  }).pipe(Effect.timeout("10 seconds")))
+
+  it.effect("a holder removes members through the service on the same fiber without waiting on its own fence", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const changes = (yield* changedEvents(f)).length
+    const group = yield* f.coordination.withOwnership(f.group.id, f.coordination.removeMember(f.group.id, { sessionID: f.peer.id }).pipe(
+      Effect.andThen(f.coordination.withOwnership(f.group.id, f.coordination.removeMember(f.group.id, { sessionID: f.member.id }))),
+    ))
+    expect(group.memberSessionIDs).toEqual([])
+    expect(yield* changedEvents(f)).toHaveLength(changes + 2)
+    unchangedExecution()
+  }).pipe(Effect.timeout("10 seconds")))
+
+  it.effect("a fiber forked inside the fence waits for a later holder after the fenced region ends", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const before = yield* membership(f)
+    const go = yield* Deferred.make<void>()
+    const attempted = yield* Deferred.make<void>()
+    const leaked = yield* f.coordination.withOwnership(f.group.id, Deferred.await(go).pipe(
+      Effect.andThen(Deferred.succeed(attempted, undefined)),
+      Effect.andThen(f.coordination.removeMember(f.group.id, { sessionID: f.peer.id })),
+      Effect.forkDetach,
+    ))
+    const entered = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    const holder = yield* f.coordination.withOwnership(f.group.id, Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))).pipe(Effect.forkChild)
+    yield* Deferred.await(entered)
+    yield* Deferred.succeed(go, undefined)
+    yield* Deferred.await(attempted)
+    yield* Effect.yieldNow
+    expect(yield* membership(f)).toEqual(before)
+    yield* Deferred.succeed(release, undefined)
+    yield* Fiber.join(holder)
+    expect((yield* Fiber.join(leaked)).memberSessionIDs).toEqual([f.member.id])
+    unchangedExecution()
+  }).pipe(Effect.timeout("10 seconds")))
+
+  it.effect("an interrupted holder releases the fence so the next removal proceeds", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const entered = yield* Deferred.make<void>()
+    const holder = yield* f.coordination.withOwnership(f.group.id, Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never))).pipe(Effect.forkChild)
+    yield* Deferred.await(entered)
+    yield* Fiber.interrupt(holder)
+    expect((yield* f.coordination.removeMember(f.group.id, { sessionID: f.peer.id })).memberSessionIDs).toEqual([f.member.id])
+    expect(yield* f.runtime.remove(f.master.id, { sessionID: f.member.id })).toEqual({ sessionID: f.member.id, removed: true })
+    expect((yield* f.coordination.get(f.group.id)).memberSessionIDs).toEqual([])
+    unchangedExecution()
+  }).pipe(Effect.timeout("10 seconds")))
 })

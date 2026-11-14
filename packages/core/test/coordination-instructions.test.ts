@@ -195,3 +195,33 @@ test("controller recovery reconciles uncertain work once without polling or repl
     "Reconcile an uncertain action before repeating it: re-read state with `list` or `inspect` and never replay a create, send, or decision whose outcome is unknown.",
   ]) once(CoordinationInstructions.content, instruction)
 })
+
+test("the Master removes settled completed members while keeping histories and refusing unfinished work", async () => {
+  const content = CoordinationInstructions.content
+  for (const text of [
+    "Only the Master removes a Project member",
+    "supervisors cannot remove members",
+    "preserves its Session and Project histories",
+    "A completed child or `task_complete` is not whole delivery completion",
+    "Keep `release` as parking ownership while the member stays on the roster",
+    "Refuse removal while the member has unfinished work or any request is pending anywhere in its family",
+  ]) once(content, text)
+  const supervisor = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("supervisor"))))[0]?.value)
+  expect(supervisor).toContain("supervisors cannot remove members")
+  const executor = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("executor"))))[0]?.value)
+  expect(executor).not.toContain("removes a Project member")
+})
+
+test("the Master role line directs removal of settled members and the supervisor line does not", async () => {
+  const read = async (role: "master" | "supervisor") =>
+    Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value)
+  const prefix = (value: string) => value.slice(0, value.indexOf("Coordinate and supervise only"))
+  const master = prefix(await read("master"))
+  expect(master).toContain("Project role: Master.")
+  expect(master).toContain("remove")
+  expect(master).toContain("verified-complete")
+  expect(master).toContain("integrated or finished")
+  expect(master).toContain("ending recorded ownership")
+  expect(master).toContain("preserving Session and Project histories")
+  expect(prefix(await read("supervisor"))).not.toContain("remove")
+})

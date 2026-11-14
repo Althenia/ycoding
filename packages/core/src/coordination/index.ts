@@ -68,6 +68,10 @@ export interface Interface {
     groupID: Coordination.GroupID,
     input: { readonly sessionID: Session.ID; readonly ownerSessionID?: Session.ID },
   ) => Effect.Effect<Group, NotFoundError | IneligibleSessionError>
+  readonly removeMember: (
+    groupID: Coordination.GroupID,
+    input: { readonly sessionID: Session.ID },
+  ) => Effect.Effect<Group, NotFoundError>
   readonly activate: (groupID: Coordination.GroupID) => Effect.Effect<void>
   readonly pause: (groupID: Coordination.GroupID) => Effect.Effect<void>
 }
@@ -105,6 +109,7 @@ export const layer = Layer.effect(
     const events = yield* EventRuntime.Service
     const lock = KeyedMutex.makeUnsafe<string>()
     const ownershipLock = KeyedMutex.makeUnsafe<Coordination.GroupID>()
+    const ownershipOwners = new Map<Coordination.GroupID, number>()
     const kv = yield* KV.Service
     const autonomy = yield* SessionAutonomy.Service
     const pauseKey = (groupID: Coordination.GroupID) => `coordination.paused.${groupID}`
@@ -255,7 +260,17 @@ export const layer = Layer.effect(
     })
 
     const service: Interface = {
-      withOwnership: (groupID, effect) => ownershipLock.withLock(groupID)(effect),
+      withOwnership: (groupID, effect) =>
+        Effect.withFiber((fiber) =>
+          ownershipOwners.get(groupID) === fiber.id
+            ? effect
+            : ownershipLock.withLock(groupID)(
+                Effect.sync(() => ownershipOwners.set(groupID, fiber.id)).pipe(
+                  Effect.andThen(effect),
+                  Effect.ensuring(Effect.sync(() => ownershipOwners.delete(groupID))),
+                ),
+              ),
+        ),
       create: Effect.fn("Coordination.create")((value) =>
         lock.withLock("projects")(
           Effect.gen(function* () {
@@ -507,6 +522,36 @@ export const layer = Layer.effect(
         ),
       ),
 
+      removeMember: Effect.fn("Coordination.removeMember")((groupID, input) =>
+        lock.withLock("projects")(
+          Effect.gen(function* () {
+            const current = yield* row(groupID)
+            const previousMemberIDs = yield* memberIDs(groupID)
+            if (!previousMemberIDs.includes(input.sessionID))
+              return yield* new NotFoundError({ message: `Session ${input.sessionID} is not a member of this Project` })
+            const memberSessionIDs = previousMemberIDs.filter((id) => id !== input.sessionID)
+            const at = yield* now
+            const revision = Coordination.Revision.make(current.revision + 1)
+            yield* events.publish(
+              Coordination.Event.Changed,
+              { groupID, revision, name: current.name, masterSessionID: current.master_session_id, memberSessionIDs, settings: settingsOf(current) },
+              {
+                commit: () =>
+                  Effect.gen(function* () {
+                    yield* db.update(CoordinationGroupTable).set({ revision, time_updated: at })
+                      .where(eq(CoordinationGroupTable.id, groupID)).run().pipe(Effect.orDie)
+                    yield* db.delete(CoordinationMemberTable)
+                      .where(and(eq(CoordinationMemberTable.group_id, groupID), eq(CoordinationMemberTable.session_id, input.sessionID)))
+                      .run().pipe(Effect.orDie)
+                  }),
+              },
+            )
+            yield* updated(groupID, revision)
+            return yield* groupOf(yield* row(groupID))
+          }),
+        ),
+      ),
+
       activate: (groupID) =>
         active.has(groupID)
           ? Effect.void
@@ -537,6 +582,7 @@ export const layer = Layer.effect(
       ...service,
       update: (groupID, input) => service.withOwnership(groupID, service.update(groupID, input)),
       delete: (groupID) => service.withOwnership(groupID, service.delete(groupID)),
+      removeMember: (groupID, input) => service.withOwnership(groupID, service.removeMember(groupID, input)),
     })
   }),
 )

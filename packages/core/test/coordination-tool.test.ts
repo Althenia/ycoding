@@ -63,20 +63,27 @@ const valid = {
   interrupt: { action: "interrupt", sessionID: "ses_member" },
   assign: { action: "assign", sessionID: "ses_member", ownerSessionID: "ses_owner" },
   release: { action: "release", sessionID: "ses_member", reason: "completed" },
+  remove: { action: "remove", sessionID: "ses_member" },
   create: { action: "create", name: "lane-one" },
   model: { action: "model", sessionID: "ses_member" },
 } as const
 
-test("project exposes only list, inspect, send, answer, escalate, interrupt, assign, release, create and model without caller or group overrides", () => {
+test("project exposes only list, inspect, send, answer, escalate, interrupt, assign, release, remove, create and model without caller or group overrides", () => {
   expect(CoordinationTool.name).toBe("project")
   for (const payload of Object.values(valid)) expect(decode(payload)).toEqual(payload as never)
-  expect(Object.keys(valid)).toEqual(["list", "inspect", "send", "answer", "escalate", "interrupt", "assign", "release", "create", "model"])
+  expect(Object.keys(valid)).toEqual(["list", "inspect", "send", "answer", "escalate", "interrupt", "assign", "release", "remove", "create", "model"])
   const complete = { sessionID: "ses_member", requestID: "per_one", ownerSessionID: "ses_owner", reason: "completed", text: "Inspect", kind: "permission", fingerprint: "fp", rationale: "In scope" }
   for (const action of ["update", "delete", "get", "arm", "stop", "complete", "claim", "dispatch", "receipts", "wait", "cancelWait", "capacity", "decide", "transfer", "unassign"])
     expect(() => decode({ action, ...complete })).toThrow()
   for (const payload of Object.values(valid))
     for (const extra of [{ groupID: "cgrp_other" }, { caller: "ses_other" }, { actor: { kind: "human" } }, { coordinatorSessionID: "ses_other" }, { metadata: {} }])
       expect(() => decode({ ...payload, ...extra })).toThrow()
+})
+
+test("remove names one member Session and nothing else", () => {
+  for (const invalid of [{ sessionID: "msg_member" }, { sessionID: "" }, { reason: "released" }, { ownerSessionID: "ses_owner" }, { groupID: "cgrp_other" }, { caller: "ses_other" }])
+    expect(() => decode({ ...valid.remove, ...invalid })).toThrow()
+  expect(() => decode({ action: "remove" })).toThrow()
 })
 
 test("inspect reads one pending request by native identity and nothing else", () => {
@@ -159,6 +166,7 @@ test("the tool description names the supervision chain", () => {
     "create: Master only.",
     "An optional repository (absolute directory path inside a Git repository) creates the worktree for that repository instead of the current Location's, so a Master outside any repository can create members; the managed parent, permission, guardrail, existing-name and branch rules are the worktree tool's, and a path outside any Git repository fails naming the path.",
     "release: Master only. The Master",
+    "remove: Master only. Detach a settled, verified-complete member whose delivery is integrated or finished: this ends its recorded ownership and its Project membership. It never deletes the Session and preserves the Session and Project histories; release only parks ownership and keeps the member attached.",
     "go only to the member's live recorded owner as Project notifications. Unowned routine events remain held for the next owner; material requests and failures reach the Master as Project escalations, never as member notifications.",
     "A member's completed notification is sent only when its turn settled with no background work left and the member has no pending input of any kind (steer, queue or compaction barrier).",
     "under your session's permission ceiling plus your agent's effective deny rules (agent denies not covered by a later non-deny agent rule with the same action or \"*\" and the same resource or \"*\") with title",
@@ -340,6 +348,10 @@ const boundaryRuntime = {
     boundaryCalls.push({ method: "release", caller, input })
     return { sessionID: input.sessionID }
   }),
+  remove: (caller: SessionSchema.ID, input: { sessionID: SessionSchema.ID }) => Effect.sync(() => {
+    boundaryCalls.push({ method: "remove", caller, input })
+    return { sessionID: input.sessionID, removed: true as const }
+  }),
   member: (caller: SessionSchema.ID, input: { sessionID: SessionSchema.ID }) => Effect.sync(() => {
     boundaryCalls.push({ method: "member", caller, input })
     return { ...boundaryMember, sessionID: input.sessionID, model: boundaryState.savedModel }
@@ -444,13 +456,16 @@ describe("project tool through the tool registry", () => {
         { action: "interrupt", sessionID: boundaryMember.sessionID },
         { action: "assign", sessionID: boundaryMember.sessionID, ownerSessionID: "ses_owner" },
         { action: "release", sessionID: boundaryMember.sessionID, reason: "released" },
+        { action: "remove", sessionID: boundaryMember.sessionID },
       ]
       for (const input of inputs) {
         const result = yield* fixture.call(`boundary-${input.action}`, "project", input)
         expect(result.type).toBe("text")
+        if (input.action === "remove") expect(result).toEqual({ type: "text", value: JSON.stringify({ action: "remove", sessionID: boundaryMember.sessionID, removed: true }) })
       }
-      expect(boundaryCalls.map((call) => call.method)).toEqual(["roster", "inspect", "send", "answer", "escalate", "interrupt", "assign", "release"])
+      expect(boundaryCalls.map((call) => call.method)).toEqual(["roster", "inspect", "send", "answer", "escalate", "interrupt", "assign", "release", "remove"])
       for (const call of boundaryCalls) expect(call.caller).toBe(fixture.master.id)
+      expect(boundaryCalls.find((call) => call.method === "remove")?.input).toEqual({ sessionID: boundaryMember.sessionID })
       for (const input of inputs.slice(1)) {
         const call = boundaryCalls.find((item) => item.method === input.action)
         expect(call?.input).toMatchObject(Object.fromEntries(Object.entries(input).filter(([key]) => key !== "action")))

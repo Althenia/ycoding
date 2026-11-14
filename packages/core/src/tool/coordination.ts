@@ -66,6 +66,7 @@ export const Input = Schema.Union([
   Schema.Struct({ action: Schema.Literal("interrupt"), ...target }),
   Schema.Struct({ action: Schema.Literal("assign"), ...target, ownerSessionID: Session.ID }),
   Schema.Struct({ action: Schema.Literal("release"), ...target, reason: Coordination.ReleaseReason }),
+  Schema.Struct({ action: Schema.Literal("remove"), ...target }),
   Schema.Struct({
     action: Schema.Literal("create"),
     name: WorktreeTool.Name,
@@ -98,6 +99,7 @@ export const description = [
   "interrupt: stop a member's running turn.",
   "assign: Master only. Give a member Session to a live subagent the Master launched (not cancelling, cancelled, failed, lost or archived); that supervisor owns it until released, and reassigning transfers it. Idle, a failed turn, or a settled turn never ends ownership.",
   "release: Master only. The Master ends ownership, with reason completed (work verified complete) or released. Removing the member from the Project or deleting the owner also ends it.",
+  "remove: Master only. Detach a settled, verified-complete member whose delivery is integrated or finished: this ends its recorded ownership and its Project membership. It never deletes the Session and preserves the Session and Project histories; release only parks ownership and keeps the member attached.",
   "create: Master only. Create a managed worktree named name on branch name under the same permission, guardrail and existing-name rules as the worktree tool, start a root member Session there under your session's permission ceiling plus your agent's effective deny rules (agent denies not covered by a later non-deny agent rule with the same action or \"*\" and the same resource or \"*\") with title (default name) and optional model, and add it to the Project; the member takes your effective permissions, guardrails and answers modes when it joins. An optional repository (absolute directory path inside a Git repository) creates the worktree for that repository instead of the current Location's, so a Master outside any repository can create members; the managed parent, permission, guardrail, existing-name and branch rules are the worktree tool's, and a path outside any Git repository fails naming the path. ownerSessionID is yourself or a live subagent you launched; omit it to leave routine state held and material items escalated to the Master. An optional prompt is sent as its first message after it joins; a refused prompt is returned without undoing the member. A failure after the worktree exists names the worktree and branch; nothing is removed.",
   "create with projectID: create a root member at an existing repository Project's canonical directory without creating a worktree. projectID is a repository Project ID, not the coordination group's ID; do not combine it with name or repository. The same Master, owner, permission ceiling, model validation and enrollment rules apply. Its title defaults to the repository Project's name or canonical-directory basename. Both routes return the actual location, directory, saved model (null when unset) and enrollment receipt; branch is present only for a worktree. An enrollment failure preserves the created Session and reports enrollment.member false with its error. Retrying the same native invocation retains its creation identity.",
   "model: read a member's saved model with sessionID. To replace it, supply both model and expectedModel, using the exact saved reference from the read, or null when unset. References contain providerID, id, optional profile and optional variant; omitted profile or variant clears that field rather than inheriting it. The native runtime validates the target and compares the expected selection at its safe boundary without interrupting or waking a turn; a conflict requires a fresh read, not a blind retry. This persistent selection is separate from send's per-turn override and returns the member's actual location, state and saved model.",
@@ -150,6 +152,8 @@ export const Plugin = {
           return { action: "assign" as const, ...(yield* runtime.assign(caller, { sessionID: input.sessionID, ownerSessionID: input.ownerSessionID })) }
         if (input.action === "release")
           return { action: "release" as const, ...(yield* runtime.release(caller, { sessionID: input.sessionID, reason: input.reason })) }
+        if (input.action === "remove")
+          return { action: "remove" as const, ...(yield* runtime.remove(caller, { sessionID: input.sessionID })) }
         if (input.action === "model")
           return { action: "model" as const, ...("model" in input
             ? yield* runtime.setModel(caller, { sessionID: input.sessionID, expectedModel: input.expectedModel, model: input.model })
