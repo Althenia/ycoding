@@ -627,26 +627,34 @@ describe("SessionGuardrail coordinator approval", () => {
       ["/global/guardrails/hard.md", markdown({ id: "custom-hard", decision: "hard_review", resource: "custom hard" })],
     ]),
   })
-  owned.it.effect("an owner approval under Manual guardrails allows standard, custom-rule and hard reviews once without a helper call", () =>
+  owned.it.effect("an owner approval under Manual guardrails allows a standard review once and leaves custom-rule and hard reviews pending until declined", () =>
     Effect.gen(function* () {
       const service = yield* SessionGuardrail.Service
+      const standard = yield* waitForRequest(service, { ...semanticInput, resources: ["task-runner /outside/file"] })
+      expect(standard.request).toMatchObject({ ruleIDs: ["standard.review.outside-repo"], standard: true })
+      expect(yield* decide(service, standard.request)).toMatchObject({ outcome: "allowed", settled: true, via: "coordination" })
+      yield* (yield* Fiber.join(standard.fiber)).release
+      expect(yield* service.forSession(parentID)).toEqual([])
       const cases = [
-        ["task-runner /outside/file", { ruleIDs: ["standard.review.outside-repo"], standard: true }],
-        ["custom reviewed", { ruleIDs: ["custom-ask"], standard: false }],
-        ["custom hard", { ruleIDs: ["custom-hard"], hardReview: true }],
-        ["rm -rf .", { hardReview: true, standard: true }],
+        ["custom reviewed", { ruleIDs: ["custom-ask"], standard: false }, "explicit-decision:custom-review"],
+        ["custom hard", { ruleIDs: ["custom-hard"], hardReview: true }, "explicit-decision:hard-review"],
+        ["rm -rf .", { hardReview: true, standard: true }, "explicit-decision:hard-review"],
       ] as const
-      for (const [resource, expected] of cases) {
+      for (const [resource, expected, reason] of cases) {
         const pending = yield* waitForRequest(service, { ...semanticInput, resources: [resource] })
         expect(pending.request, resource).toMatchObject(expected)
-        expect(yield* decide(service, pending.request), resource).toMatchObject({ outcome: "allowed", settled: true, via: "coordination" })
-        yield* (yield* Fiber.join(pending.fiber)).release
-        expect(yield* service.forSession(parentID)).toEqual([])
+        expect(yield* decide(service, pending.request), resource).toMatchObject({ outcome: "escalated", settled: false, reason })
+        expect(yield* service.forSession(parentID), resource).toHaveLength(1)
+        expect(yield* decide(service, pending.request, "decline"), resource).toMatchObject({ outcome: "denied", settled: true, via: "coordination" })
+        expect(Exit.isFailure(yield* Fiber.await(pending.fiber)), resource).toBe(true)
+        expect(yield* service.forSession(parentID), resource).toEqual([])
       }
       expect(owned.choices).toHaveLength(0)
-      expect(owned.decisions).toEqual(cases.map(() => expect.objectContaining({
-        reply: "once", actor: "coordinator", coordinatorSessionID: coordinatorSource.coordinatorSessionID, rationale: coordinatorSource.rationale,
-      })))
+      const attribution = { actor: "coordinator", coordinatorSessionID: coordinatorSource.coordinatorSessionID, rationale: coordinatorSource.rationale }
+      expect(owned.decisions).toEqual([
+        expect.objectContaining({ reply: "once", ...attribution }),
+        ...cases.map(() => expect.objectContaining({ reply: "reject", ...attribution })),
+      ])
     }),
   )
 
