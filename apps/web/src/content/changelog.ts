@@ -22,6 +22,28 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.2",
+    date: "2026-11-14",
+    title: "Desktop self-update, ledger workspace and Dot root messaging",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "The desktop app updates itself. `Check for updates` and `Update & Relaunch` are in `Settings` → `Updates`, in the command palette, and under `YCoding Desktop` → `Check for Updates…` in the macOS menu bar. Before it replaces the `.app` bundle, the app verifies the HTTPS GitHub release metadata, the SHA-256 checksum against `ycoding-<version>-checksums.txt`, the bundle identifier `app.ycoding.desktop`, and the pinned YCoding Code Signing certificate. If the swap fails, the previous bundle is restored." },
+      { tag: "Added", text: "The desktop app has a macOS application menu with `YCoding Desktop`, `File`, `Edit`, `View` and `Window` menus. `Edit` uses the native responder roles `Undo`, `Redo`, `Cut`, `Copy`, `Paste`, `Paste and Match Style`, `Delete` and `Select All`." },
+      { tag: "Added", text: "The desktop composer falls back to a native clipboard call for pasted text and files. `/copy` and `/export` write to the clipboard through the same call." },
+      { tag: "Changed", text: "The desktop app opens the workspace right away. The `Connecting to your workspace` screen is gone: the workspace shows loading skeletons while it connects, and only a failed connection shows an inline alert with `Retry` and `Open Settings`." },
+      { tag: "Changed", text: "`Selected machine` and `Switch backend` moved out of the left session rail into `Settings` → `Machine & Backend`, which shows `This Mac`, the connection state, ownership, the backend version, the backend mode, the shared endpoint and `Apply & Reconnect`. The rail now ends with the `Projects`, `Sessions`, `Workspaces`, `Usage` and `Settings` destinations." },
+      { tag: "Changed", text: "The desktop rail, conversation header, stream, composer capsule, companion pane and two-column `Settings` grid use a flat ledger workspace layout: one `--yc-surface` rail and companion on either side of the `--yc-bg` conversation, divided by 1px hairlines, with underline companion tabs and tabular token figures in the `Context` tab." },
+      { tag: "Changed", text: "`ycoding decision watch <root> --family --follow` reconciles delivery targets when it resumes a `--state` file. Existing `--deliver` targets keep their in-flight batch and outbox, and newly added `--deliver` targets start with an empty outbox for new events only. Removing a target that has an in-flight batch or undelivered events, or passing no `--deliver` target, fails with `[delivery-targets-changed]`. When a `dot` delivery fails with `thread not found`, the watch resumes the Dot runtime once and retries if `rootThreadID` rotated." },
+      { tag: "Changed", text: "Project coordination instructions for Masters, supervisors and executors, and the YCoding operator skill for Dots, direct substantive multi-part work to run five subagents in parallel across disjoint file and check lanes, with one writer per file and at most one heavy build or typecheck at a time. They also keep the main Session on its designated model and profile while active direct children and launched subagents switch to their designated subagent model and profile, without substituting another profile." },
+      { tag: "Fixed", text: "Copy, paste, cut, select all, undo and redo work in the desktop composer under macOS `WKWebView`. `Enter` sends and `Shift+Enter` inserts a newline." },
+      { tag: "Fixed", text: "The desktop app attaches to the local `ycoding` background service, or starts it with `serve --service` when it is not running, and ignores a version mismatch in shared mode." },
+      { tag: "Fixed", text: "When a saved loopback `sharedEndpoint` (`127.0.0.1` or `localhost`) is unreachable or answers `401 Unauthorized`, the desktop app falls back to the local managed service. Startup and reconnect retries back off within a bounded delay." },
+      { tag: "Fixed", text: "Sending to a Dot's current root conversation with `ycoding dots send` or `decision watch --deliver dot` posts through the Dot's messaging room, with the idempotent `clientMessageID`. It uses the Dot's personal `messaging_room_id`, creates a missing personal room or opens a shared Dot direct message, and resumes a paused Dot runtime first. It no longer opens a durable thread subscription, which ChatGPT rejected with `-32600` (`thread not found`)." },
+      { tag: "Fixed", text: "Antigravity model discovery recognizes `xhigh` alongside `minimal`, `low`, `medium`, `high` and `max`. Trailing parenthesized suffixes on Antigravity Gemini display names become selectable variants of the base model, even when only one entry is advertised. Standard effort variants are ordered before custom variants, and when no variant is selected `medium`, `high`, `low`, `xhigh`, `max`, `minimal` are preferred in that order." },
+      { tag: "Fixed", text: "Sending to an auto-archived Dot task thread with `ycoding dots send` or `decision watch --deliver <task-thread-id>` unarchives the thread once with `thread/unarchive`, forces a fresh `thread/resume` subscription and sends `turn/addUserMessage` with the same `clientMessageID`, instead of failing with `-32600` (`thread_archived`). `thread/archived` notifications evict cached subscriptions. The YCoding operator skill for Dots documents root messaging-room delivery and automatic task-thread unarchiving." },
+    ],
+  },
+  {
     version: "0.11.1",
     date: "2026-11-14",
     title: "Signed desktop app, Dot event delivery and Project member paths",
