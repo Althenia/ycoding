@@ -77,7 +77,7 @@ export type CcaDurableConnector = (url: string, protocols: readonly string[], he
 export interface CcaDurableClient {
   readonly connected: () => boolean
   readonly request: (method: string, params: unknown, timeoutMs?: number) => Promise<CcaDurableReply>
-  readonly watch: (threadID: string) => Promise<CcaDurableReply>
+  readonly watch: (threadID: string, options?: { readonly force?: boolean }) => Promise<CcaDurableReply>
   readonly pending: (threadID: string) => readonly CcaDurableServerRequest[]
   readonly answer: (threadID: string, requestID: string, result: unknown) => Promise<"sent" | "stale" | "unknown">
   readonly close: () => Promise<void>
@@ -232,6 +232,10 @@ export function startCcaDurableClient(deps: CcaDurableClientDeps): CcaDurableCli
     }
     const params = isRecord(message.params) ? message.params : undefined
     if (id === undefined) {
+      if (message.method === "thread/archived" && typeof params?.threadId === "string") {
+        connection.subscribed.delete(params.threadId)
+        return
+      }
       if (message.method !== "serverRequest/resolved" || !params) return
       const requestID = typeof params.requestId === "string" || typeof params.requestId === "number" ? String(params.requestId) : undefined
       if (requestID !== undefined) connection.requests.delete(requestID)
@@ -372,12 +376,14 @@ export function startCcaDurableClient(deps: CcaDurableClientDeps): CcaDurableCli
       if (!connection?.initialized) return Promise.resolve({ kind: "not-sent" })
       return send(connection, method, params, timeoutMs)
     },
-    watch: (threadID) => {
+    watch: (threadID, options) => {
       watched.delete(threadID)
       watched.set(threadID, true)
       if (watched.size > watchedThreadLimit) watched.delete(watched.keys().next().value!)
       const connection = current
-      return connection?.initialized ? subscribe(connection, threadID) : Promise.resolve({ kind: "not-sent" })
+      if (!connection?.initialized) return Promise.resolve({ kind: "not-sent" })
+      if (options?.force) connection.subscribed.delete(threadID)
+      return subscribe(connection, threadID)
     },
     pending: (threadID) => [...(current?.requests.values() ?? [])].filter((request) => request.threadID === threadID),
     answer: (threadID, requestID, result) => {

@@ -75,6 +75,7 @@ test("operator guidance specifies parallel member lanes and durable two-target w
     "`dot` resolves to the Dot's current root thread on every delivery pass",
     "Re-running with the same `--state` and added `--deliver` targets keeps pending deliveries of existing targets and starts new targets with only new events",
     "removing a target that still has undelivered events is refused",
+    "`dot` sends through the Dot's messaging room, while an auto-archived task thread is unarchived automatically before sending.",
   ]) expect(ycodingOperatorSkill.split(text)).toHaveLength(2)
 })
 

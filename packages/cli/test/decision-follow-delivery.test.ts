@@ -562,3 +562,25 @@ test("a retired dot root resumes without sending, losing or duplicating the task
     await until(() => h.saved.delivery?.targets.every((target) => target.inflight === undefined && target.outbox.length === 0) === true, "drained state after rotation")
   } finally { await h.stop(run) }
 })
+
+test("a restart drains a delivered target's backlog in batches of 20 and a preserved in-flight batch before its own backlog", async () => {
+  const events = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => ({ sessionID: "ses_root", id: `evt_${prefix}_${index}`, type: "session.execution.started", seq: index + 1 }))
+  const inflight = events("held", 5)
+  const state: FollowState = { ...base(), ownership: [{ groupID: "cgrp_project", sessionID: "ses_member", ownerSessionID: "ses_owner", revision: 28 }],
+    delivery: { announced: [], targets: [
+      { target: "dot", outbox: events("dot", 32) },
+      { target: "thr_task", outbox: events("task", 27), inflight: { threadID: "thr_task", clientMessageID: "00000000-0000-8000-8000-0000000000aa", events: inflight } },
+    ] } }
+  const h = harness({ state, targets: ["dot", "thr_task"], root: () => "thr_root", statuses: { thr_root: "idle", thr_task: "idle" } })
+  const run = h.delivery.run()
+  try {
+    await until(() => h.saved.delivery?.targets.every((target) => target.inflight === undefined && target.outbox.length === 0) === true, "both backlogs drained")
+    const count = (text: string) => Number(/^YCoding decision watch: (\d+) events? /.exec(text)![1])
+    expect(h.sends.filter((sent) => sent.threadID === "thr_root").map((sent) => count(sent.text))).toEqual([20, 12])
+    const task = h.sends.filter((sent) => sent.threadID === "thr_task")
+    expect(task.map((sent) => count(sent.text))).toEqual([5, 20, 7])
+    expect(task[0]!.clientMessageID).toBe("00000000-0000-8000-8000-0000000000aa")
+    expect(new Set(h.sends.map((sent) => sent.clientMessageID)).size).toBe(5)
+    for (const sent of h.sends) expect(sent.text).not.toContain("ownership when this watch started")
+  } finally { await h.stop(run) }
+})

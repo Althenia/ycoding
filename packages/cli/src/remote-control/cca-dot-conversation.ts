@@ -85,6 +85,19 @@ function rejected(reply: Extract<CcaDurableReply, { readonly kind: "error" }>) {
   return new Failure("rejected", Object.keys(rejection).length ? rejection : undefined)
 }
 
+const isArchived = (reply: Extract<CcaDurableReply, { readonly kind: "error" }>) => reply.errorType === "thread_archived" || /is archived\b/i.test(reply.message)
+
+async function unarchiveAndWatch(durable: CcaDurableClient, threadID: string): Promise<"ok" | "unknown"> {
+  const unarchived = await durable.request("thread/unarchive", { threadId: threadID }, ccaDurableAdmissionTimeoutMs)
+  if (unarchived.kind === "not-sent") throw new Failure("durable-unavailable")
+  if (unarchived.kind === "unknown") return "unknown"
+  if (unarchived.kind === "error") throw rejected(unarchived)
+  const resumed = await durable.watch(threadID, { force: true })
+  if (resumed.kind === "error") throw rejected(resumed)
+  if (resumed.kind !== "result") throw new Failure("durable-unavailable")
+  return "ok"
+}
+
 function problemOf(error: unknown): Problem {
   if (error instanceof Failure) return error.problem
   if (error instanceof CcaComputerFailure) {
@@ -367,15 +380,24 @@ export function createCcaDotConversation(deps: CcaDotConversationDeps): DotsAcce
     if (threadID === owner.rootThreadID) return sendRoom(owner, input, signal)
     const durable = client()
     const subscription = await durable.watch(threadID)
-    if (subscription.kind === "error") throw rejected(subscription)
-    if (subscription.kind !== "result") throw new Failure("durable-unavailable")
-    const reply = await durable.request("turn/addUserMessage", {
+    let unarchivedOnce = false
+    if (subscription.kind === "error") {
+      if (!isArchived(subscription)) throw rejected(subscription)
+      unarchivedOnce = true
+      if ((await unarchiveAndWatch(durable, threadID)) === "unknown") return { admission: "unknown" }
+    } else if (subscription.kind !== "result") throw new Failure("durable-unavailable")
+    const params = {
       threadId: threadID,
       input: [{ type: "text", text: input.text, text_elements: [] }],
       clientUserMessageId: input.clientMessageID,
       messageThreadId: randomUUID(),
       ...(input.mode === "queue" ? { mode: "queue" } : {}),
-    }, ccaDurableAdmissionTimeoutMs)
+    }
+    let reply = await durable.request("turn/addUserMessage", params, ccaDurableAdmissionTimeoutMs)
+    if (reply.kind === "error" && !unarchivedOnce && isArchived(reply)) {
+      if ((await unarchiveAndWatch(durable, threadID)) === "unknown") return { admission: "unknown" }
+      reply = await durable.request("turn/addUserMessage", params, ccaDurableAdmissionTimeoutMs)
+    }
     if (reply.kind === "not-sent") throw new Failure("durable-unavailable")
     if (reply.kind === "error") throw rejected(reply)
     if (reply.kind === "unknown") return { admission: "unknown" }

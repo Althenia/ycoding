@@ -49,6 +49,7 @@ function fixture(options: {
   } satisfies Record<string, readonly CcaDurableReply[]>).map(([key, values]) => [key, [...values]]))
   const rest: { readonly method: string; readonly url: string; readonly headers: Headers; readonly body: unknown }[] = []
   const requests: { readonly method: string; readonly params: unknown; readonly timeoutMs?: number }[] = []
+  const watches: { readonly threadID: string; readonly force?: boolean }[] = []
   const durable: CcaDurableClient = {
     connected: () => options.connected ?? true,
     request: async (method, params, timeoutMs) => {
@@ -57,7 +58,10 @@ function fixture(options: {
       if (reply === undefined) throw new Error(`Unexpected durable request: ${method}`)
       return reply
     },
-    watch: (threadID) => durable.request("thread/resume", { threadId: threadID, excludeTurns: true }, ccaDurableAdmissionTimeoutMs),
+    watch: (threadID: string, watchOptions?: { readonly force?: boolean }) => {
+      watches.push({ threadID, ...(watchOptions?.force === undefined ? {} : { force: watchOptions.force }) })
+      return durable.request("thread/resume", { threadId: threadID, excludeTurns: true }, ccaDurableAdmissionTimeoutMs)
+    },
     pending: () => [],
     answer: async () => "stale",
     close: async () => {},
@@ -76,7 +80,7 @@ function fixture(options: {
       return response
     },
   })
-  return { conversation, rest, requests }
+  return { conversation, rest, requests, watches }
 }
 
 test.each(["send", "queue"] as const)("sends the listed root through its room with exact JSON fields in %s mode without durable access", async (mode) => {
@@ -304,4 +308,83 @@ test("keeps an explicit retired root listed as a task on the durable route witho
   })
   expect(harness.requests).toEqual([{ method: "thread/resume", params: { threadId: retiredRootThreadID, excludeTurns: true }, timeoutMs: ccaDurableAdmissionTimeoutMs }])
   expect(harness.rest.some((request) => request.url === `${base}/tbo/${dotID}` || request.method === "POST")).toBe(false)
+})
+
+const archivedMessage = `session ${taskThreadID} is archived. Run \`codex unarchive ${taskThreadID}\` to unarchive it first.`
+const archivedReply = { kind: "error", code: -32600, errorType: "thread_archived", message: archivedMessage } satisfies CcaDurableReply
+const startedReply = { kind: "result", result: { admissionOutcome: "started", turn: { id: "synthetic-turn-0002" } } } satisfies CcaDurableReply
+const resumeRequest = { method: "thread/resume", params: { threadId: taskThreadID, excludeTurns: true }, timeoutMs: ccaDurableAdmissionTimeoutMs }
+const unarchiveRequest = { method: "thread/unarchive", params: { threadId: taskThreadID }, timeoutMs: ccaDurableAdmissionTimeoutMs }
+const sendParams = {
+  threadId: taskThreadID, input: [{ type: "text", text: message.text, text_elements: [] }], clientUserMessageId: message.clientMessageID,
+  messageThreadId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+}
+const addRequest = { method: "turn/addUserMessage", params: sendParams, timeoutMs: ccaDurableAdmissionTimeoutMs }
+
+test.each([
+  ["a thread_archived error type", archivedReply],
+  ["only an archived message", { kind: "error", code: -32600, message: archivedMessage } satisfies CcaDurableReply],
+] as const)("unarchives and force-rewatches a task thread whose watch fails with %s before sending", async (_name, archived) => {
+  const harness = fixture({ durableReplies: {
+    "thread/resume": [archived, { kind: "result", result: {} }],
+    "thread/unarchive": [{ kind: "result", result: {} }],
+    "turn/addUserMessage": [startedReply],
+  } })
+  expect(await harness.conversation.send(taskThreadID, message)).toEqual({ ok: true, value: { admission: "started", turnID: "synthetic-turn-0002" } })
+  expect(harness.requests).toEqual([resumeRequest, unarchiveRequest, resumeRequest, addRequest])
+  expect(harness.watches).toEqual([{ threadID: taskThreadID }, { threadID: taskThreadID, force: true }])
+})
+
+test("unarchives, force-rewatches, and retries the same message once when a watched task thread was archived before sending", async () => {
+  const harness = fixture({ durableReplies: {
+    "thread/resume": [{ kind: "result", result: {} }, { kind: "result", result: {} }],
+    "thread/unarchive": [{ kind: "result", result: {} }],
+    "turn/addUserMessage": [archivedReply, startedReply],
+  } })
+  expect(await harness.conversation.send(taskThreadID, message)).toEqual({ ok: true, value: { admission: "started", turnID: "synthetic-turn-0002" } })
+  expect(harness.requests).toEqual([resumeRequest, addRequest, unarchiveRequest, resumeRequest, addRequest])
+  expect(harness.requests[4].params).toEqual(harness.requests[1].params)
+  expect(harness.watches).toEqual([{ threadID: taskThreadID }, { threadID: taskThreadID, force: true }])
+})
+
+test("rejects without another unarchive when the retried message still reports an archived thread", async () => {
+  const harness = fixture({ durableReplies: {
+    "thread/resume": [{ kind: "result", result: {} }, { kind: "result", result: {} }],
+    "thread/unarchive": [{ kind: "result", result: {} }],
+    "turn/addUserMessage": [archivedReply, archivedReply],
+  } })
+  expect(await harness.conversation.send(taskThreadID, message)).toEqual({
+    ok: false, problem: "rejected", rejection: { code: -32600, errorType: "thread_archived", message: archivedMessage },
+  })
+  expect(harness.requests).toEqual([resumeRequest, addRequest, unarchiveRequest, resumeRequest, addRequest])
+})
+
+test("does not retry the message again when the unarchive path already ran before sending", async () => {
+  const harness = fixture({ durableReplies: {
+    "thread/resume": [archivedReply, { kind: "result", result: {} }],
+    "thread/unarchive": [{ kind: "result", result: {} }],
+    "turn/addUserMessage": [archivedReply],
+  } })
+  expect(await harness.conversation.send(taskThreadID, message)).toEqual({
+    ok: false, problem: "rejected", rejection: { code: -32600, errorType: "thread_archived", message: archivedMessage },
+  })
+  expect(harness.requests).toEqual([resumeRequest, unarchiveRequest, resumeRequest, addRequest])
+})
+
+test.each([
+  ["an unknown outcome", { kind: "unknown" }, { ok: true, value: { admission: "unknown" } }],
+  ["a not-sent outcome", { kind: "not-sent" }, { ok: false, problem: "durable-unavailable" }],
+  ["an error", { kind: "error", code: -32603, message: "Synthetic unarchive failure" }, { ok: false, problem: "rejected", rejection: { code: -32603, message: "Synthetic unarchive failure" } }],
+] as const)("stops without sending when thread/unarchive returns %s", async (_name, unarchived, result) => {
+  const harness = fixture({ durableReplies: { "thread/resume": [archivedReply], "thread/unarchive": [unarchived] } })
+  expect(await harness.conversation.send(taskThreadID, message)).toEqual(result)
+  expect(harness.requests).toEqual([resumeRequest, unarchiveRequest])
+})
+
+test("rejects a task thread whose watch reports thread not found without unarchiving", async () => {
+  const harness = fixture()
+  expect(await harness.conversation.send(taskThreadID, message)).toEqual({
+    ok: false, problem: "rejected", rejection: { code: -32600, message: "Some requested entity was not found: thread not found" },
+  })
+  expect(harness.requests).toEqual([resumeRequest])
 })
