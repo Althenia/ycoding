@@ -22,6 +22,27 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.5",
+    date: "2026-11-15",
+    title: "Desktop Session controls and resilient runtime recovery",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Desktop adds active-question answers, retained prompt history, complete prompt stashes, compact large pastes, configurable shortcuts, native attention, Project member controls and shared diff presentation preferences." },
+      { tag: "Added", text: "Desktop's interactive terminal inspector renders ANSI/VT output with scrollback, selection copy, keyboard input and paste. Inspection starts read-only; control and input require the current PTY generation, writer fence and synchronized replay." },
+      { tag: "Added", text: "Desktop can include workspace IDE selections from MCP or Zed with a prompt. `/editor` uses `VISUAL` or `EDITOR` with a private draft and an owned-dialog fallback. `/restart` confirms before restarting the window's private backend or its registered local shared service and refuses changed or unconfirmed service identities." },
+      { tag: "Added", text: "Runtime memory telemetry records process memory scalars and loaded Location/service counts initially and every 60 seconds. The initial sample, new RSS highs and changes of at least 64 MiB from the last Info sample are Info; other samples are Debug. Location boot, actual disposal and successful first search initialization also record scalar memory and timing." },
+      { tag: "Changed", text: "Chrome installation uses the unpacked extension with identity `emlogajckgpjjigcbcbfbpbeencgghfb`. Local CRX3 signing and placement are removed; `install:local` installs the unpacked folder and removes a stale destination CRX. Enable Developer mode and use Load unpacked in `chrome://extensions`; placing files does not load them into Chrome." },
+      { tag: "Changed", text: "Decision-watch Dot delivery focuses on pending decisions, failures, unrecovered root interruptions and deduplicated reconciliation of completion evidence or proceedable idle work. Routine execution and ownership observations remain follow receipts rather than Dot messages. Attached Project activity participates in reconciliation, and oversized volatile wake streams recover without consuming the unhealthy-connection budget after a successful connection." },
+      { tag: "Changed", text: "Web keeps delivery controls together and aligns the composer with the conversation column. A transient transcript-tail activity row names Thinking, Writing, Sending or the running tool; queued inputs alone do not show execution. Unsupported quota sources have no card, while supported authorization and fetch errors remain visible." },
+      { tag: "Fixed", text: "Storage-only Session and Project reads validate access and recorded placement without constructing the full Location service graph. Todo reads acquire only their service; operational routes, Location-dependent pricing and effective autonomy retain their required service boundaries." },
+      { tag: "Fixed", text: "File search initializes its picker or find index only on first use and shares that initialization across callers without letting one caller's cancellation poison later searches. Forgetting a directory, removing a project copy or pruning a missing directory retires exact matching cached Locations without rebuilding them or closing active leases early." },
+      { tag: "Fixed", text: "Provider error classification recognizes wrapped socket failures and retryable transport errors without changing the Session retry schedule. Fetch and SSE diagnostics use the existing Debug logger, strip native fetch verbose output and redact URL paths, query data, header values and arbitrary error text while preserving response bytes, cancellation and original failures." },
+      { tag: "Fixed", text: "Desktop preserves transcript, disclosure and rail identity during streaming and older-history insertion, reserves changing metadata and action geometry, and coalesces layout measurements. New content follows only while the reader remains attached to the transcript tail." },
+      { tag: "Fixed", text: "Event feeds omit volatile SSE frames above the 16 MiB UTF-8 budget instead of disconnecting every subscriber. Client limits apply to individual frames rather than coalesced network reads. TUI reconnects preserve resident transcript, branch and autonomy displays while fencing submission and obsolete reads until synchronization completes." },
+      { tag: "Fixed", text: "TUI, web and Desktop consistently hide internal transcript envelopes while retaining user and assistant prose, decision controls and their dedicated Project and subagent presentations." },
+    ],
+  },
+  {
     version: "0.11.4",
     date: "2026-11-15",
     title: "Bounded Session reads, decision watching and Chrome control",
