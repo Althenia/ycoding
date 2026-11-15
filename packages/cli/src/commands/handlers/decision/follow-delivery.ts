@@ -61,7 +61,11 @@ function messageID(root: string, threadID: string, events: readonly DeliveryEven
 }
 
 function eventText(event: DeliveryEvent, items: readonly DecisionItem[]) {
-  if (event.type === "watch.reconciliation") return `Session ${event.sessionID}: ${event.reason}; ${event.evidence}.\n   Inspect/resume: ${shellCommand(["ycoding", "decision", "watch", event.sessionID, "--family"])}`
+  if (event.type === "watch.reconciliation") return [
+    `Session ${event.sessionID}: ${event.reason}`,
+    `   ${event.evidence?.replaceAll(/; (?=(?:State|Work|Counts|Action|Read tasks|Read members):)/g, "\n   ")}`,
+    `   Inspect/resume: ${shellCommand(["ycoding", "decision", "watch", event.sessionID, "--family"])}`,
+  ].join("\n")
   if (event.snapshot) return [
     `Project ${event.id} ownership when this watch started (current state, not a change; revision ${event.revision}): ${(event.members ?? []).map((member) =>
       `member ${member.sessionID} ${member.ownerSessionID === undefined ? "has no owner" : `is owned by ${member.ownerSessionID}`}`).join("; ")}.`,
