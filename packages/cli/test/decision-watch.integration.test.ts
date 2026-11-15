@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { homedir } from "node:os"
 import { deltaChunk, finishChunk, toolCallChunk } from "../../ai/test/lib/openai-chunks"
-import { createSession, password, providerConfig, startProviderStandIn, startServer, type IsolatedServer } from "./remote-harness"
+import { auth, createSession, password, providerConfig, startProviderStandIn, startServer, type IsolatedServer } from "./remote-harness"
+import { YCoding } from "@ycoding-ai/client/promise"
+import { followFamily, type FollowReceipt } from "../src/commands/handlers/decision/follow"
+import { createFollowDelivery } from "../src/commands/handlers/decision/follow-delivery"
+import { validateFollowState, type FollowState } from "../src/commands/handlers/decision/follow-state"
 
 const cleanups: Array<() => Promise<unknown>> = []
 afterEach(async () => {
@@ -12,6 +16,60 @@ afterEach(async () => {
 
 const json = { "content-type": "application/json" }
 const home = `${process.env.YCODING_TEST_XDG_ROOT}/home`
+
+test("follow delivery reconciles an idle Project only after its standalone member settles, retaining silent cursor progress", async () => {
+  const directory = await mkdtemp(join(homedir(), ".local/share/ycoding/tasks/decision-watch-project-"))
+  cleanups.push(() => rm(directory, { recursive: true, force: true }))
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const server = await startServer(directory, { provider: { text: "Member delivered.", reply: async () => {
+    entered.resolve(); await release.promise
+    return [deltaChunk({ role: "assistant", content: "Member delivered." }), finishChunk("stop")]
+  } } })
+  cleanups.push(async () => { release.resolve(); await server.close() })
+  const model = { providerID: server.provider!.providerID, id: server.provider!.modelID }
+  const opened = await server.request(`/api/location?location[directory]=${encodeURIComponent(directory)}`)
+  expect(opened.status).toBe(200)
+  for (const id of ["ses_project_watch", "ses_project_member"]) await createSession(server, id, directory, model)
+  const group = await server.request("/api/coordination", { method: "POST", headers: json,
+    body: JSON.stringify({ name: "Synthetic follow Project", masterSessionID: "ses_project_watch", memberSessionIDs: ["ses_project_member"] }) })
+  expect(group.status, await group.clone().text()).toBe(200)
+  const todos = await server.request("/api/session/ses_project_watch/todo", { method: "PUT", headers: json,
+    body: JSON.stringify({ todos: [{ content: "Integrate member result", status: "pending", priority: "high" }] }) })
+  expect(todos.status).toBe(200)
+  await prompt(server, "ses_project_member", "msg_project_member")
+  await entered.promise
+  const client = YCoding.make({ baseUrl: server.base, headers: { authorization: auth, "x-ycoding-directory": directory } })
+  const controller = new AbortController()
+  const receipts: FollowReceipt[] = []
+  const sends: { text: string }[] = []
+  let saved: FollowState = { version: 1, rootSessionID: "ses_project_watch", server: "a".repeat(64), cursors: [], pending: [], seen: [], requestSeen: [], terminalSeen: [] }
+  const ready = Promise.withResolvers<void>()
+  const delivery = createFollowDelivery({ decision: client.decision, dots: {
+    threads: async () => ({ threads: [{ threadID: "thr_synthetic" }] }), resume: async () => {}, thread: { send: async (input) => { sends.push(input); return { admission: "started" } } },
+  } }, { state: saved, targets: ["thr_synthetic"], signal: controller.signal, ready: ready.promise,
+    save: async (value) => { saved = validateFollowState(structuredClone(value), saved.rootSessionID, saved.server) },
+    emit: async (value) => { if (value.kind !== "delivery") receipts.push(value) } })
+  const delivering = delivery.run()
+  const following = followFamily(client, { state: delivery.state, signal: controller.signal, heartbeatSeconds: 0.05,
+    emit: (value) => delivery.emit(value), save: (value) => delivery.save(value), companion: delivering, onReady: () => ready.resolve() })
+  try {
+    await until(async () => receipts.filter((r) => r.kind === "heartbeat").length >= 2 ? true : undefined, "follow did not become ready")
+    expect(sends).toEqual([])
+    expect(saved.ownership?.map((member) => member.sessionID)).toContain("ses_project_member")
+    release.resolve()
+    await until(async () => sends.length ? true : undefined, "idle Project was not delivered")
+    expect(sends).toHaveLength(1)
+    expect(sends[0]!.text).toContain("unfinished-idle")
+    expect(sends[0]!.text).toContain("open root todos: 1; next pending: Integrate member result")
+    expect(sends[0]!.text).toContain("ses_project_member")
+    expect(sends[0]!.text).not.toContain("Settle these only within existing authority")
+    const count = receipts.filter((r) => r.kind === "heartbeat").length
+    await until(async () => receipts.filter((r) => r.kind === "heartbeat").length >= count + 3 ? true : undefined, "follow heartbeats stopped")
+    expect(sends).toHaveLength(1)
+    expect(saved.cursors.find((cursor) => cursor.sessionID === "ses_project_watch")).toBeDefined()
+  } finally { controller.abort(); release.resolve(); await Promise.all([following, delivering]) }
+}, 120_000)
 
 test("source CLI follow observes isolated descendant execution and resumes its durable cursor", async () => {
   const scratch = join(homedir(), ".local/share/ycoding/tasks/session-activity-owners-20261106/watch-activity")

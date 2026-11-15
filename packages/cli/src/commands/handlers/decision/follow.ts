@@ -15,15 +15,16 @@ export type FollowClient = {
   session: {
     get(input: { sessionID: string }, options: ReadOptions): Promise<{ id: string; parentID?: string }>
     active(options: ReadOptions): Promise<Record<string, unknown>>
-    outstanding(input: undefined, options: ReadOptions): Promise<{ data: readonly string[]; running: readonly string[]; lost: readonly string[] }>
+    outstanding(input: { failures?: boolean } | undefined, options: ReadOptions): Promise<{ data: readonly string[]; running: readonly string[]; lost: readonly string[]; failed?: readonly string[] }>
+    todo?: { list(input: { sessionID: string }, options: ReadOptions): Promise<readonly { content: string; status: string }[]> }
     subagent: { list(input: { parentID: string; limit: number; cursor?: string }, options: ReadOptions): Promise<{ data: readonly { sessionID: string; parentID?: string; state: string; revision: number; question?: { id: string; deferred?: boolean } }[]; cursor: { next?: string | null } }> }
-    list(input: { parentID: string; limit: number; cursor?: string }, options: ReadOptions): Promise<{ data: readonly { id: string; parentID?: string }[]; cursor: { next?: string | null } }>
-    snapshot(input: { sessionID: string; limit: number }, options: ReadOptions): Promise<{ sourceEpoch: string; watermark: { seq?: number } }>
+    list(input: { parentID: string; limit: number; cursor?: string }, options: ReadOptions): Promise<{ data: readonly { id: string; parentID?: string; agent?: string }[]; cursor: { next?: string | null } }>
+    snapshot(input: { sessionID: string; limit: number }, options: ReadOptions): Promise<{ sourceEpoch: string; watermark: { seq?: number }; session?: { agent?: string } }>
     log(input: { sessionID: string; after?: number; follow: boolean }, options: ReadOptions): AsyncIterable<FollowEvent>
   }
 }
 export type FollowReceipt = {
-  kind: "ready" | "pending" | "request-observed" | "reply-observed" | "request-ended-observed" | "no-longer-pending" | "durable" | "heartbeat" | "closed" | "activity" | "gap" | "ownership" | "project-escalation"
+  kind: "ready" | "pending" | "request-observed" | "reply-observed" | "request-ended-observed" | "no-longer-pending" | "durable" | "heartbeat" | "closed" | "activity" | "gap" | "ownership" | "project-escalation" | "reconciliation" | "interruption"
   sessionID: string
   id?: string
   requestKind?: string
@@ -39,6 +40,10 @@ export type FollowReceipt = {
   snapshot?: true
   parentID?: string
   operation?: "session.subagent.answer"
+  reason?: string
+  evidence?: string
+  compaction?: true
+  unrecovered?: true
   resolution?: "unknown" | "reply-observed" | "cancelled" | "timed_out" | "rejected"
 }
 type Entry = { id: string; epoch: string; after?: number; baselineAfter?: number; controller: AbortController; task?: Promise<void>; live: boolean; restart: boolean; failures: number; backoff: number; synced: boolean; sync: { promise: Promise<void>; resolve(value: void): void; reject(reason?: unknown): void } }
@@ -95,6 +100,17 @@ export async function followFamily(client: FollowClient, options: {
   let scopeChanged = false
   const settling = new Set<string>()
   const ownership = new Map(state.ownership?.map((item) => [`${item.groupID}\0${item.sessionID}`, item]))
+  const compactions = new Set<string>()
+  let lost: string[] = []
+  let failedSessions: string[] = []
+  let progressing = false
+  let completion: number | undefined
+  let superseded = -1
+  let activityRevision = state.reconciliation?.activity ?? 0
+  let interrupted: { id: string; seq: number } | undefined
+  let rootLifecycleSeq = -1
+  let rootHistoryRead = false
+  const reconciliation = { ...state.reconciliation }
   let ownershipSnapshot = state.ownership === undefined
   let failure: unknown
   let dirty = false
@@ -106,8 +122,8 @@ export async function followFamily(client: FollowClient, options: {
   let globalBackoff = 0
   let reviewDirty = false
   const classify = () => {
-    activity = pending.size > 0 || [...taskStates.values()].includes("waiting") ? "needs-decision"
-      : rootActive ? "running" : [...taskStates.values()].includes("supervising") ? "supervising"
+    activity = rootActive ? "running" : pending.size > 0 || [...taskStates.values()].includes("waiting") ? "needs-decision"
+      : [...taskStates.values()].includes("supervising") ? "supervising"
       : activityOutstanding ? "outstanding" : "idle"
   }
   const wake = () => { dirty = true; notify?.(); notify = undefined }
@@ -115,11 +131,13 @@ export async function followFamily(client: FollowClient, options: {
     if (queued >= maxReaders + 3) throw new FollowError("budget-exhausted", `output admission exceeds ${maxReaders + 3}; verify the output consumer before resuming retained state`)
     queued++
     const sourceEpoch = epoch
+    const reconciliationCheckpoint = { ...reconciliation }
     const baselines = [...entries.values()].map(({ id, baselineAfter }) => ({ sessionID: id, ...(baselineAfter === undefined ? {} : { after: baselineAfter }) }))
     output = output.then(async () => {
       if (!delivered) await options.emit(receipt)
       const checkpoint = structuredClone(committed)
       checkpoint.sourceEpoch = sourceEpoch
+      checkpoint.reconciliation = reconciliationCheckpoint
       const cursors = new Map(checkpoint.cursors.map((cursor) => [cursor.sessionID, cursor]))
       for (const cursor of baselines) if (!cursors.has(cursor.sessionID)) cursors.set(cursor.sessionID, cursor)
       if (cursors.size > followLedgerLimit) throw new FollowError("budget-exhausted", `retained cursors exceed ${followLedgerLimit}; retain state and use a runtime with a larger supported recovery budget`)
@@ -207,6 +225,7 @@ export async function followFamily(client: FollowClient, options: {
           if (!followID(child.id) || !child.id.startsWith("ses")) throw new FollowError("invalid-native-data")
           if (found.size >= followLedgerLimit) throw new FollowError("budget-exhausted", `family identities exceed ${followLedgerLimit}; retain state and use a runtime with a larger supported recovery budget`)
           found.add(child.id)
+          if (child.agent === "compaction") compactions.add(child.id)
           queue.push(child.id)
         }
         cursor = page.cursor.next ?? undefined
@@ -217,16 +236,19 @@ export async function followFamily(client: FollowClient, options: {
     return found
   }
   const refreshActivity = async (tasks = false) => {
-    const work = await read(() => client.session.outstanding(undefined, { signal }))
-    rootActive = work.running.some((id) => scope.has(id))
-    activityOutstanding = work.data.some((id) => scope.has(id))
-    needed = new Set([...work.data, ...work.running, ...work.lost].filter((id) => scope.has(id)))
+    const work = await read(() => client.session.outstanding({ failures: true }, { signal }))
+    const family = new Set([...scope, ...[...ownership.values()].map((item) => item.sessionID)])
+    rootActive = work.running.some((id) => family.has(id))
+    activityOutstanding = work.data.some((id) => family.has(id))
+    lost = work.lost.filter((id) => family.has(id)).toSorted()
+    failedSessions = (work.failed ?? []).filter((id) => family.has(id) && !compactions.has(id)).toSorted()
+    needed = new Set([...work.data, ...work.running, ...work.lost].filter((id) => family.has(id)))
     if (tasks) {
       scopeChanged = false
       const states = new Map<string, string>()
       const questions = new Map<string, FollowRequest>()
       let pages = 0
-      for (const parentID of scope) {
+      for (const parentID of family) {
         let cursor: string | undefined
         const visited = new Set<string>()
         do {
@@ -234,7 +256,7 @@ export async function followFamily(client: FollowClient, options: {
           const page = await read(() => client.session.subagent.list({ parentID, limit: 10, ...(cursor === undefined ? {} : { cursor }) }, { signal }))
           for (const task of page.data) {
             if (!followID(task.sessionID) || task.parentID !== undefined && task.parentID !== parentID) throw new FollowError("invalid-native-data")
-            if (!scope.has(task.sessionID)) { scopeChanged = true; continue }
+            if (!family.has(task.sessionID) && scope.has(parentID)) { scopeChanged = true; continue }
             states.set(task.sessionID, task.state)
             if (task.state !== "waiting" || !task.question || task.question.deferred === true) continue
             if (!followID(task.question.id) || !Number.isSafeInteger(task.revision) || task.revision < 0) throw new FollowError("invalid-native-data")
@@ -248,7 +270,50 @@ export async function followFamily(client: FollowClient, options: {
       taskStates = states
       childQuestions = questions
     }
+    const active = rootActive || [...taskStates.values()].some((value) => ["starting", "running", "cancelling"].includes(value))
+    if (active && !progressing) activityRevision++
+    reconciliation.activity = activityRevision
+    progressing = active
+    rootActive = active
     classify()
+  }
+  const summarize = async () => {
+    if (interrupted && !progressing && !activityOutstanding) {
+      const key = createHash("sha256").update(JSON.stringify(interrupted)).digest("hex")
+      if (reconciliation.interruption !== key) {
+        reconciliation.interruption = key
+        await send({ kind: "interruption", sessionID: root, type: "session.execution.interrupted", ...interrupted, unrecovered: true, rootActive: false, activity })
+      }
+    }
+    const recovery = createHash("sha256").update(JSON.stringify([lost, failedSessions])).digest("hex")
+    if ((lost.length || failedSessions.length) && reconciliation.recovery !== recovery) {
+      reconciliation.recovery = recovery
+      await send({ kind: "reconciliation", sessionID: root, id: `watch_${recovery}`, reason: "recovery-needed", evidence: [
+        ...(lost.length ? [`lost: ${lost.join(", ")}`] : []), ...(failedSessions.length ? [`failed: ${failedSessions.join(", ")}`] : []),
+        ...(progressing ? ["other work is progressing; do not interrupt it"] : [])].join("; ").slice(0, 2000) })
+    }
+    if (!lost.length && !failedSessions.length) delete reconciliation.recovery
+    if (progressing || rootActive) return
+    const todos = client.session.todo === undefined ? [] : await read(() => client.session.todo!.list({ sessionID: root }, { signal }))
+    const open = todos.filter((item) => !["completed", "cancelled"].includes(item.status))
+    const next = open.find((item) => item.status === "in_progress") ?? open[0]
+    const failed = [...new Set([...failedSessions, ...[...taskStates].filter(([, value]) => ["failed", "lost"].includes(value)).map(([id]) => id)])].toSorted()
+    const requests = [...pending.values()].map((item) => `${item.kind} ${item.id} sessionID=${item.sessionID}`).toSorted()
+    const current = completion !== undefined && completion > superseded
+    const reason = lost.length || failed.length ? "recovery-needed" : requests.length ? "open-questions" : current ? "completed" : "unfinished-idle"
+    const members = [...ownership.values()].map((item) => `${item.sessionID}${item.ownerSessionID ? ` owner=${item.ownerSessionID}` : ""}`).toSorted()
+    const evidence = [reason === "completed" ? `task complete; work.completed seq=${completion}` : reason === "open-questions" ? `open questions / pending approvals: ${requests.join(", ")}` :
+      `no current work.completed receipt; open root todos: ${open.length}${next ? `; next ${next.status}: ${next.content}` : ""}`,
+      ...(requests.length && reason !== "open-questions" ? [`pending: ${requests.join(", ")}`] : []),
+      ...(failed.length ? [`failed/lost tasks: ${failed.join(", ")}`] : []), ...(lost.length ? [`lost: ${lost.join(", ")}`] : []),
+      ...(members.length ? [`idle Project members: ${members.join(", ")}`] : []),
+      ...(!current && activityOutstanding ? ["outstanding work with zero active workers"] : [])].join("; ").replaceAll(/[\u0000-\u001f\u007f]/g, " ").slice(0, 2000)
+    const watermark = [...entries.values()].map((entry) => [entry.id, entry.after]).sort(([a], [b]) => String(a).localeCompare(String(b)))
+    const idle = createHash("sha256").update(JSON.stringify([watermark, reason, evidence, activityRevision])).digest("hex")
+    if (reconciliation.idle === idle) return
+    reconciliation.idle = idle
+    if (lost.length || failedSessions.length) return
+    await send({ kind: "reconciliation", sessionID: root, id: `watch_${idle}`, reason, evidence })
   }
   const refreshOwnership = async (groupID?: string) => {
     const snapshot = ownershipSnapshot && groupID === undefined
@@ -283,6 +348,15 @@ export async function followFamily(client: FollowClient, options: {
     }
     if (groupID === undefined) ownershipSnapshot = false
   }
+  const observeRoot = (event: FollowEvent) => {
+    if (event.durable?.aggregateID !== root) return
+    if (!followID(event.id) || !Number.isSafeInteger(event.durable.seq) || event.durable.seq < 0) throw new FollowError("invalid-native-data")
+    if (event.type === "session.work.completed") completion = Math.max(completion ?? -1, event.durable.seq)
+    if (/^session\.(execution\.started|input\.(admitted|promoted|consumed))$/.test(event.type)) superseded = Math.max(superseded, event.durable.seq)
+    if (!event.type.startsWith("session.execution.") || event.durable.seq <= rootLifecycleSeq) return
+    rootLifecycleSeq = event.durable.seq
+    interrupted = event.type === "session.execution.interrupted" ? { id: event.id, seq: event.durable.seq } : undefined
+  }
   const material = async (entry: Entry, event: FollowEvent) => {
     if (!event.durable || event.durable.aggregateID !== entry.id || event.durable.seq <= (entry.after ?? -1)) return
     if (!followID(event.id) || !Number.isSafeInteger(event.durable.seq) || event.durable.seq < 0) throw new FollowError("invalid-native-data")
@@ -299,16 +373,22 @@ export async function followFamily(client: FollowClient, options: {
         }
       }
     }
-    if (event.type === "session.execution.started") { settling.delete(entry.id); rootActive = true; activity = pending.size > 0 ? "needs-decision" : "running" }
+    observeRoot(event)
+    if (event.type === "session.execution.started") { activityRevision++; progressing = true; settling.delete(entry.id); rootActive = true; activity = "running" }
+    reconciliation.activity = activityRevision
     if (/^session\.execution\.(succeeded|failed|interrupted)$/.test(event.type)) settling.add(entry.id)
+    if (/^session\.execution\.(failed|interrupted)$/.test(event.type)) await refreshActivity()
     if (/^session\.(task\.updated|shell\.)/.test(event.type)) await refreshActivity(event.type === "session.task.updated")
-    await send({ kind: "durable", sessionID: entry.id, id: event.id, seq: event.durable.seq, type: event.type, rootActive, activity }, seen.has(`${entry.id}\0${event.id}\0${event.durable.seq}`))
-    if (/^session\.(review\.|task\.updated)/.test(event.type)) { reviewDirty = true; wake() }
+    await send({ kind: "durable", sessionID: entry.id, id: event.id, seq: event.durable.seq, type: event.type, rootActive, activity,
+      ...(compactions.has(entry.id) ? { compaction: true as const } : {}) }, seen.has(`${entry.id}\0${event.id}\0${event.durable.seq}`))
+    if (event.type === "session.work.completed" || /^session\.(execution\.(succeeded|failed|interrupted)|shell\.|task\.updated)/.test(event.type)) { reviewDirty = true; wake() }
+    if (event.type.startsWith("session.review.")) { reviewDirty = true; wake() }
   }
   const pump = async (entry: Entry) => {
     const reading = AbortSignal.any([signal, entry.controller.signal])
     try {
-      for await (const event of client.session.log({ sessionID: entry.id, after: entry.after, follow: entry.live }, { signal: reading })) {
+      const hydrate = entry.id === root && !rootHistoryRead
+      for await (const event of client.session.log({ sessionID: entry.id, after: hydrate ? undefined : entry.after, follow: entry.live }, { signal: reading })) {
         if (reading.aborted || entries.get(entry.id) !== entry) return
         if (event.sourceEpoch !== entry.epoch) continue
         if (event.type === "log.synced") {
@@ -317,12 +397,14 @@ export async function followFamily(client: FollowClient, options: {
             if (!Number.isSafeInteger(event.seq) || event.seq < (entry.after ?? 0)) throw new FollowError("invalid-native-data")
             entry.after = event.seq
           }
+          if (hydrate) rootHistoryRead = true
           entry.failures = 0
           entry.synced = true
           entry.sync.resolve(undefined)
           if (!entry.live) return
           continue
         }
+        if (hydrate) observeRoot(event)
         if (!event.durable || event.durable.aggregateID !== entry.id || event.durable.seq <= (entry.after ?? -1)) continue
         if (!followID(event.id) || !Number.isSafeInteger(event.durable.seq) || event.durable.seq < 0) throw new FollowError("invalid-native-data")
         if (entry.synced && event.durable.seq > (entry.after ?? 0) + 1) {
@@ -367,6 +449,7 @@ export async function followFamily(client: FollowClient, options: {
       if (entry && !reset && !entry.restart) continue
       if (entry) await stop(entry)
       const projection = await read(() => client.session.snapshot({ sessionID: id, limit: 1 }, { signal }))
+      if (projection.session?.agent === "compaction") compactions.add(id)
       if (!followID(projection.sourceEpoch)) throw new FollowError("invalid-native-data")
       if (epoch !== undefined && projection.sourceEpoch !== epoch) throw new FollowError("epoch-mismatch")
       epoch = projection.sourceEpoch
@@ -385,7 +468,7 @@ export async function followFamily(client: FollowClient, options: {
     const next = new Map<string, FollowRequest>()
     const deferredChildren = new Set<string>()
     for (const item of await read(() => client.decision.list({ signal }))) {
-      if (!scope.has(item.sessionID)) continue
+      if (!scope.has(item.sessionID) && ![...ownership.values()].some((member) => member.sessionID === item.sessionID)) continue
       if (!requestKinds.includes(item.kind) || !followID(item.id)) throw new FollowError("invalid-native-data")
       const request = identity(item)
       if (item.kind === "review" && record(record(item).options).type === "subagent_question") deferredChildren.add(item.sessionID)
@@ -447,8 +530,9 @@ export async function followFamily(client: FollowClient, options: {
   const heartbeat = setInterval(() => {
     if (!ready || heartbeatPending) return
     heartbeatPending = true
-    const recover = settling.size > 0 ? refreshActivity().then(() => settling.clear()) : Promise.resolve()
-    recover.then(() => send({ kind: "heartbeat", sessionID: root, rootActive, activity })).catch((error: unknown) => { failure = error; wake() }).finally(() => { heartbeatPending = false })
+    reviewDirty = true
+    wake()
+    send({ kind: "heartbeat", sessionID: root, rootActive, activity }).catch((error: unknown) => { failure = error; wake() }).finally(() => { heartbeatPending = false })
   }, options.heartbeatSeconds * 1000)
   try {
     const target = await read(() => client.session.get({ sessionID: root }, { signal }))
@@ -461,13 +545,17 @@ export async function followFamily(client: FollowClient, options: {
       const stream = new AbortController()
       const reading = AbortSignal.any([signal, stream.signal])
       let iterator: AsyncIterator<FollowEvent> | undefined
+      let volatileError: unknown
+      let connected = false
+      let oversizedDrop = false
       try {
-      iterator = client.event.subscribe({ signal: reading })[Symbol.asyncIterator]()
+      try { iterator = client.event.subscribe({ signal: reading })[Symbol.asyncIterator]() }
+      catch (error) { volatileError = error; throw error }
       const current = iterator
-      const readNext = () => current.next().then((result) => ({ result, error: undefined }), (error: unknown) => ({ result: undefined, error }))
+      const readNext = () => current.next().then((result) => ({ result, error: undefined }), (error: unknown) => { volatileError = error; return { result: undefined, error } })
       let next: ReturnType<typeof readNext> | undefined
       try {
-        const first = await iterator.next()
+        const first = await iterator.next().catch((error: unknown) => { volatileError = error; throw error })
         if (signal.aborted) break
         if (first.done) {
           if (++globalFailures >= 10) throw new FollowError("budget-exhausted")
@@ -483,9 +571,13 @@ export async function followFamily(client: FollowClient, options: {
         await reconcile(reconnect)
         if (signal.aborted) break
         await refreshOwnership()
+        if ([...ownership.values()].some((member) => !scope.has(member.sessionID))) await reconcile(false, undefined, true)
+        await refreshActivity()
         if (first.value.sourceEpoch !== undefined && first.value.sourceEpoch !== epoch) throw new FollowError("epoch-mismatch")
+        connected = true
         await send({ kind: "ready", sessionID: root, rootActive, activity })
         options.onReady?.()
+        await summarize()
         next = readNext()
         while (!signal.aborted) {
           if (failure !== undefined) throw failure
@@ -494,6 +586,9 @@ export async function followFamily(client: FollowClient, options: {
             const pendingOnly = reviewDirty && ![...entries.values()].some((entry) => entry.restart)
             reviewDirty = false
             await reconcile(false, undefined, pendingOnly)
+            await refreshOwnership()
+            await refreshActivity()
+            await summarize()
             continue
           }
           const changed = new Promise<{ kind: "dirty" }>((resolve) => { notify = () => resolve({ kind: "dirty" }) })
@@ -511,10 +606,13 @@ export async function followFamily(client: FollowClient, options: {
             const before = `${rootActive}:${activity}`
             await refreshActivity()
             if (`${rootActive}:${activity}` !== before) await send({ kind: "activity", sessionID: root, rootActive, activity })
+            await summarize()
             continue
           }
           if (event.type === "coordination.updated" && followID(data.groupID)) {
             await refreshOwnership(data.groupID)
+            await refreshActivity(true)
+            await summarize()
             continue
           }
           if (event.type === "coordination.request.escalated" && (scope.has(String(data.rootSessionID)) || scope.has(String(data.sessionID)))) {
@@ -528,7 +626,20 @@ export async function followFamily(client: FollowClient, options: {
           }
           const form = event.type === "form.created" ? record(data.form) : undefined
           const id = form ? form.sessionID : data.sessionID
-          if (!(typeof id === "string" && scope.has(id)) && !(event.type === "session.created" && typeof data.parentID === "string" && scope.has(data.parentID))) continue
+          if (typeof id === "string" && !scope.has(id) && [...ownership.values()].some((member) => member.sessionID === id) &&
+            /^session\.(status|execution\.(started|succeeded|failed|interrupted))$/.test(event.type)) {
+            await refreshActivity(true)
+            if (event.type === "session.execution.started" || event.type === "session.status" && ["busy", "retry"].includes(String(record(data.status).type))) {
+              if (!progressing) activityRevision++
+              reconciliation.activity = activityRevision
+              progressing = true
+              rootActive = true
+              activity = "running"
+            }
+            await summarize()
+            continue
+          }
+          if (!(typeof id === "string" && (scope.has(id) || [...ownership.values()].some((member) => member.sessionID === id))) && !(event.type === "session.created" && typeof data.parentID === "string" && scope.has(data.parentID))) continue
           const [requestKind, phase] = event.type.split(".")
           let usable = false
           if (event.type === "session.deleted" && typeof id === "string" && id !== root) {
@@ -583,6 +694,7 @@ export async function followFamily(client: FollowClient, options: {
               settling.delete(id); await reconcile(false, undefined, true); await send({ kind: "activity", sessionID: root, rootActive, activity }); usable = true
             } else if (["busy", "retry"].includes(String(status.type))) { await reconcile(false, undefined, true); rootActive = true; activity = pending.size > 0 ? "needs-decision" : "running"; usable = true }
           }
+          if (usable) await summarize()
           if (usable && event.sourceEpoch === epoch) globalFailures = 0
         }
       } finally {
@@ -595,11 +707,13 @@ export async function followFamily(client: FollowClient, options: {
         }
       }
       } catch (error) {
-        if (ownedFollowAbort(error, signal) || !transport(error) || failure !== undefined) throw error
+        const oversizedWake = error === volatileError && error instanceof ClientError && error.reason === "SseEventTooLarge"
+        if (ownedFollowAbort(error, signal) || !transport(error) && !oversizedWake || failure !== undefined) throw error
+        oversizedDrop = oversizedWake && connected
       } finally { stream.abort() }
       if (signal.aborted) break
-      if (++globalFailures >= 10) throw new FollowError("budget-exhausted")
-      globalBackoff++
+      if (!oversizedDrop && ++globalFailures >= 10) throw new FollowError("budget-exhausted")
+      globalBackoff = oversizedDrop ? Math.min(globalBackoff + 1, 4) : globalBackoff + 1
       reconnect = true
     }
     graceful = true

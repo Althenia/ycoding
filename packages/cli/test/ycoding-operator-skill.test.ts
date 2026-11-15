@@ -96,6 +96,20 @@ test("operator instructions create a YCoding coordination thread with computer V
   expect(ycodingOperatorSkill).toContain("When creating a YCoding coordination thread, create it with computer V selected.")
 })
 
+test("operator reconciles proceedable idle work and defers only exact human gates without empty nudges", async () => {
+  const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
+  for (const text of [
+    "open root todos", "attached Project members and their recorded owners", "progressing children/shells", "latest receipts/messages",
+    "Never interrupt progressing work, duplicate active execution or invent wake mechanisms",
+    'Never send content-free "continue" or "status" nudges',
+    "next specific concrete authorized action", "exact target, evidence and expected deliverable",
+    "Whether the user is present or unavailable", "Defer only genuinely user-dependent steps",
+    "keep the pending request open or in the review box", "exact pending question/review ID, decide command and resume condition",
+    "Never treat silence as approval", "Continue independent authorized work",
+    "completed (task complete), open-questions, recovery-needed and unfinished-idle", "not an exhaustive model",
+  ]) expect(ycodingOperatorSkill).toContain(text)
+})
+
 test("operator Library instructions select only the private process channel and preserve its gates", async () => {
   const { ycodingOperatorSkill } = await import("../src/remote-control/ycoding-operator-skill")
   for (const text of [

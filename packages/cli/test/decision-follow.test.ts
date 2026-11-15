@@ -870,7 +870,7 @@ for (const kind of ["ready", "request-observed", "reply-observed", "durable", "h
     const f = fixture()
     let before = initial()
     const run = f.run({ heartbeatSeconds: 1, emit: async (receipt) => {
-      if (receipt.kind === kind) throw new Error("synthetic output failure")
+      if (receipt.kind === kind) { before = structuredClone(f.saved); throw new Error("synthetic output failure") }
       await f.emit(receipt)
     } })
     run.catch(() => undefined)
@@ -880,11 +880,6 @@ for (const kind of ["ready", "request-observed", "reply-observed", "durable", "h
         f.setPending([{ kind: "permission", sessionID: "ses_root", id: "per_synthetic" }])
         f.global.push({ type: "permission.asked", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", id: "per_synthetic" } })
         await f.wait((receipt) => receipt.kind === "request-observed")
-      }
-      before = { ...initial(), sourceEpoch: "epoch_one", cursors: [{ sessionID: "ses_root" }] }
-      if (kind === "reply-observed") {
-        before.pending = [{ kind: "permission", sessionID: "ses_root", id: "per_synthetic" }]
-        before.requestSeen = ["permission\0ses_root\0per_synthetic"]
       }
       if (kind === "request-observed") f.global.push({ type: "permission.asked", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", id: "per_synthetic" } })
       if (kind === "reply-observed") f.global.push({ type: "permission.replied", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", requestID: "per_synthetic" } })
@@ -1048,13 +1043,72 @@ for (const source of ["global", "log", "snapshot", "pending"] as const) {
   }, 30_000)
 }
 
-for (const reason of ["UnexpectedStatus", "MalformedResponse", "UnsupportedContentType", "SseEventTooLarge"] as const) {
+for (const reason of ["UnexpectedStatus", "MalformedResponse", "UnsupportedContentType"] as const) {
   test(`follow recovery never retries native ${reason} failures`, async () => {
     const f = fixture()
     f.faults.global = 1
     f.faults.error = new ClientError(reason)
     await expect(f.run()).rejects.toThrow(reason)
     expect(f.reads.global).toBe(1)
+  })
+}
+
+test("follow recovers an oversized volatile event at subscription without losing pending decisions", async () => {
+  const f = fixture()
+  f.faults.global = 1
+  f.faults.error = new ClientError("SseEventTooLarge")
+  f.setPending([{ kind: "review", sessionID: "ses_root", id: "rvw_retained" }])
+  await f.run({ emit: async (receipt) => { await f.emit(receipt); if (receipt.kind === "ready") f.controller.abort() } })
+  expect(f.reads.global).toBe(2)
+  expect(f.saved.pending.map((request) => request.id)).toEqual(["rvw_retained"])
+  expect(f.streams.every((stream) => stream.active === 0)).toBe(true)
+})
+
+test("follow reconciles missed durable events and decisions after an oversized volatile event drops the stream", async () => {
+  const f = fixture()
+  const run = f.run()
+  run.catch(() => undefined)
+  try {
+    await f.wait((receipt) => receipt.kind === "ready")
+    f.global.fail(new ClientError("SseEventTooLarge"))
+    f.append("ses_root", 1, "session.execution.failed")
+    f.setPending([{ kind: "permission", sessionID: "ses_root", id: "per_after_drop" }])
+    await f.wait((receipt) => receipt.id === "per_after_drop")
+    await f.wait((receipt) => receipt.kind === "ready" && f.reads.global === 2)
+    expect(f.saved.cursors).toEqual([{ sessionID: "ses_root", after: 1 }])
+    expect(f.receipts.filter((receipt) => receipt.kind === "durable" && receipt.seq === 1)).toHaveLength(1)
+  } finally { f.controller.abort(); await run }
+})
+
+test("follow survives twelve oversized wake drops after successful reconciliation without usable events", async () => {
+  const f = fixture()
+  await f.run({ emit: async (receipt) => {
+    await f.emit(receipt)
+    if (receipt.kind !== "ready") return
+    if (f.reads.global <= 12) f.global.fail(new ClientError("SseEventTooLarge"))
+    else f.controller.abort()
+  } })
+  expect(f.reads.global).toBe(13)
+  expect(f.receipts.filter((receipt) => receipt.kind === "ready")).toHaveLength(13)
+  expect(f.saved.cursors).toEqual([{ sessionID: "ses_root" }])
+  expect(f.streams.every((stream) => stream.active === 0)).toBe(true)
+}, 30_000)
+
+test("follow bounds oversized wake drops before the native connected frame", async () => {
+  const f = fixture()
+  f.faults.global = 10
+  f.faults.error = new ClientError("SseEventTooLarge")
+  await expect(f.run()).rejects.toThrow(/budget-exhausted/)
+  expect(f.reads.global).toBe(10)
+  expect(f.receipts).toEqual([])
+}, 30_000)
+
+for (const source of ["log", "snapshot", "pending"] as const) {
+  test(`follow does not retry oversized authoritative ${source} reads`, async () => {
+    const f = fixture()
+    f.faults[source] = 1
+    f.faults.error = new ClientError("SseEventTooLarge")
+    await expect(f.run()).rejects.toThrow("SseEventTooLarge")
   })
 }
 
@@ -1093,7 +1147,7 @@ test("follow recovery preserves ahead delivered IDs until gap-tolerant acknowled
   expect(f.saved.cursors).toEqual([{ sessionID: "ses_root", after: 15 }])
 })
 
-test("follow recovery healthy material events and heartbeat never poll native state", async () => {
+test("follow recovery reconciles idle activity without rediscovering family or reopening healthy logs", async () => {
   const f = fixture()
   f.append("ses_root", 1, "session.created")
   const run = f.run({ heartbeatSeconds: 1 })
@@ -1108,7 +1162,8 @@ test("follow recovery healthy material events and heartbeat never poll native st
     f.append("ses_root", 2, "session.execution.succeeded")
     await f.wait((receipt) => receipt.kind === "durable")
     await f.wait((receipt) => receipt.kind === "heartbeat")
-    expect(f.reads).toEqual(baseline)
+    expect(f.reads).toMatchObject({ active: baseline.active, global: baseline.global, list: baseline.list, log: baseline.log, snapshot: baseline.snapshot })
+    expect(f.reads.pending).toBeGreaterThan(baseline.pending)
   } finally { f.controller.abort(); await run }
 })
 

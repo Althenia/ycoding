@@ -40,10 +40,11 @@ export type FollowState = {
   terminalSeen: string[]
   ownership?: { groupID: string; sessionID: string; ownerSessionID?: string; revision: number }[]
   delivery?: FollowDelivery
+  reconciliation?: { idle?: string; recovery?: string; interruption?: string; activity?: number }
 }
 export type DeliveryMember = { sessionID: string; ownerSessionID?: string }
 export type DeliveryEvent = { sessionID: string; id: string; type?: string; seq?: number; requestKind?: string; parentID?: string; fingerprint?: string; revision?: number; escalated?: true
-  ownerSessionID?: string; removed?: true; snapshot?: true; members?: DeliveryMember[] }
+  ownerSessionID?: string; removed?: true; snapshot?: true; members?: DeliveryMember[]; reason?: string; evidence?: string }
 export type DeliveryTarget = { target: string; outbox: DeliveryEvent[]; inflight?: { threadID: string; clientMessageID: string; events: DeliveryEvent[] } }
 export type FollowDelivery = { announced: string[]; targets: DeliveryTarget[] }
 export const deliveryLifecycleTypes = ["session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "session.work.completed"]
@@ -54,7 +55,7 @@ export const deliveryBatchLimit = 20
 export const deliveryThreadID = (value: unknown): value is string => typeof value === "string" && value.length <= 256 && /\S/.test(value) && !/[\u0000-\u001f\u007f]/.test(value)
 export const deliveryKey = (event: DeliveryEvent) => [event.type ?? "", event.requestKind ?? "", event.sessionID, event.id, event.seq ?? "", event.parentID ?? "",
   event.fingerprint ?? "", event.revision ?? "", event.escalated ? "escalated" : "", event.ownerSessionID ?? "", event.removed ? "removed" : "",
-  event.snapshot ? JSON.stringify(event.members) : ""].join("\0")
+  event.snapshot ? JSON.stringify(event.members) : "", event.reason ?? "", event.evidence ?? ""].join("\0")
 export const announcedKey = (event: DeliveryEvent) => `${event.escalated ? "project-escalation:" : ""}${event.requestKind}\0${event.sessionID}\0${event.id}`
 
 export const followStateBytes = 1024 * 1024
@@ -75,7 +76,11 @@ function validDeliveryMembers(members: unknown) {
 }
 
 function validDeliveryEvent(event: unknown) {
-  if (!record(event) || !keys(event, ["sessionID", "id", "type", "seq", "requestKind", "parentID", "fingerprint", "revision", "escalated", "ownerSessionID", "removed", "snapshot", "members"]) || !followID(event.id)) return false
+  if (!record(event) || !keys(event, ["sessionID", "id", "type", "seq", "requestKind", "parentID", "fingerprint", "revision", "escalated", "ownerSessionID", "removed", "snapshot", "members", "reason", "evidence"]) || !followID(event.id)) return false
+  if (event.type === "watch.reconciliation") return sessionID(event.sessionID) && typeof event.reason === "string" && /^[a-z][a-z-]{0,63}$/.test(event.reason) &&
+    typeof event.evidence === "string" && event.evidence.length <= 2000 && !/[\u0000-\u001f\u007f]/.test(event.evidence) &&
+    [event.seq, event.requestKind, event.parentID, event.fingerprint, event.revision, event.escalated, event.ownerSessionID, event.removed, event.snapshot, event.members].every((field) => field === undefined)
+  if (event.reason !== undefined || event.evidence !== undefined) return false
   if (event.snapshot !== undefined) return event.snapshot === true && sessionID(event.sessionID) && typeof event.revision === "number" && sequence(event.revision) && validDeliveryMembers(event.members) &&
     [event.type, event.seq, event.requestKind, event.parentID, event.fingerprint, event.escalated, event.ownerSessionID, event.removed].every((field) => field === undefined)
   if (event.members !== undefined) return false
@@ -113,7 +118,7 @@ function validateDelivery(value: unknown) {
 }
 
 export function validateFollowState(value: unknown, root: string, server: string): FollowState {
-  if (!record(value) || !keys(value, ["version", "rootSessionID", "server", "sourceEpoch", "cursors", "pending", "seen", "requestSeen", "terminalSeen", "ownership", "delivery"]) ||
+  if (!record(value) || !keys(value, ["version", "rootSessionID", "server", "sourceEpoch", "cursors", "pending", "seen", "requestSeen", "terminalSeen", "ownership", "delivery", "reconciliation"]) ||
     value.version !== 1 || value.rootSessionID !== root || !followID(root) || typeof value.server !== "string" || !/^[a-f0-9]{64}$/.test(value.server) || !/^[a-f0-9]{64}$/.test(server) ||
     value.sourceEpoch !== undefined && !followID(value.sourceEpoch)) throw new Error("Invalid follow state identity")
   if (value.server !== server) throw new FollowError("state-invalid", "selected native endpoint does not match the saved server identity; retain the state and select its original endpoint")
@@ -163,6 +168,8 @@ export function validateFollowState(value: unknown, root: string, server: string
     }
   }
   if (value.delivery !== undefined) validateDelivery(value.delivery)
+  if (value.reconciliation !== undefined && (!record(value.reconciliation) || !keys(value.reconciliation, ["idle", "recovery", "interruption", "activity"]) ||
+    Object.entries(value.reconciliation).some(([name, key]) => name === "activity" ? !sequence(key) : typeof key !== "string" || !/^[a-f0-9]{64}$/.test(key)))) throw new Error("Invalid follow reconciliation")
   return value as FollowState
 }
 

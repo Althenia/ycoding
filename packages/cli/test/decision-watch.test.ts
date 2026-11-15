@@ -6,6 +6,8 @@ import { OpenApi } from "effect/unstable/httpapi"
 import { resolveOperation } from "../src/commands/handlers/api"
 import { YCoding } from "@ycoding-ai/client/promise"
 import { watchSession } from "../src/commands/handlers/decision/watch"
+import { followFamily, type FollowReceipt } from "../src/commands/handlers/decision/follow"
+import { validateFollowState, type FollowState } from "../src/commands/handlers/decision/follow-state"
 
 type LogType = Exclude<SessionLogOutput["type"], "log.synced">
 type LogEvent = Exclude<SessionLogOutput, { type: "log.synced" }>
@@ -86,10 +88,11 @@ type Scenario = {
   readonly watermark?: number
   readonly stall?: string
   readonly active?: string[]
-  readonly outstanding?: { readonly data?: string[]; readonly running?: string[]; readonly lost?: string[] }
+  readonly outstanding?: { readonly data?: string[]; readonly running?: string[]; readonly lost?: string[]; readonly failed?: string[] }
   readonly todos?: Record<string, Todo[]>
   readonly pending?: Record<string, number>
   readonly tasks?: Record<string, Task[]>
+  readonly members?: { sessionID: string; owner?: { sessionID: string } }[]
   readonly onSubscribe?: (control: Control) => void
   readonly onLog?: (logs: Map<string, LogEvent[]>, count: number) => void
   readonly onFollow?: (sessionID: string, control: Control) => void
@@ -149,7 +152,7 @@ function stub(scenario: Scenario) {
     if (path === "/api/session/active")
       return Response.json({ data: Object.fromEntries((scenario.active ?? []).map((id) => [id, { type: "running" }])) })
     if (path === "/api/session/outstanding")
-      return Response.json({ data: scenario.outstanding?.data ?? [], running: scenario.outstanding?.running ?? [], failed: [], lost: scenario.outstanding?.lost ?? [] })
+      return Response.json({ data: scenario.outstanding?.data ?? [], running: scenario.outstanding?.running ?? [], failed: scenario.outstanding?.failed ?? [], lost: scenario.outstanding?.lost ?? [] })
     const nested = /^\/api\/session\/([^/]+)\/(todo|pending|subagent)$/.exec(path)
     if (nested) {
       const id = decodeURIComponent(nested[1])
@@ -219,6 +222,8 @@ function stub(scenario: Scenario) {
       return new Response(stream, { headers: { "content-type": "text/event-stream" } })
     }
     if (path === "/api/decision") return Response.json({ data: decisions })
+    if (path === "/api/coordination") return Response.json({ data: scenario.members ? [{ id: "cgrp_watch", masterSessionID: "ses_target" }] : [] })
+    if (path === "/api/coordination/cgrp_watch") return Response.json({ data: { id: "cgrp_watch", revision: 1, members: scenario.members ?? [] } })
     return new Response("not found", { status: 404 })
   } })
   servers.push(server)
@@ -232,6 +237,124 @@ function stub(scenario: Scenario) {
 }
 
 type SignalAtRead = { readonly signal: NodeJS.Signals; readonly path: string }
+
+test("follow reconciliation waits for attached Project members, then reports proceedable unfinished idle once", async () => {
+  const running = ["ses_member"]
+  const server = stub({ members: [{ sessionID: "ses_member", owner: { sessionID: "ses_owner" } }],
+    outstanding: { running }, todos: { ses_target: [todo("Integrate verified member delivery", "pending")] } })
+  const controller = new AbortController()
+  const receipts: FollowReceipt[] = []
+  const state: FollowState = { version: 1, rootSessionID: "ses_target", server: "a".repeat(64), cursors: [], pending: [], seen: [], requestSeen: [], terminalSeen: [] }
+  const run = followFamily(YCoding.make({ baseUrl: server.url }), { state, signal: controller.signal, heartbeatSeconds: 0.02,
+    save: async (value) => { validateFollowState(value, state.rootSessionID, state.server) }, emit: async (value) => { receipts.push(value) } })
+  const wait = async (predicate: () => boolean) => {
+    for (let n = 0; !predicate(); n++) { if (n > 300) throw new Error(JSON.stringify(receipts)); await Bun.sleep(5) }
+  }
+  try {
+    await wait(() => receipts.filter((r) => r.kind === "heartbeat").length >= 2)
+    expect(receipts.filter((r) => r.kind === "reconciliation")).toEqual([])
+    running.splice(0)
+    await wait(() => receipts.some((r) => r.kind === "reconciliation"))
+    const idle = receipts.filter((r) => r.kind === "reconciliation")
+    expect(idle).toHaveLength(1)
+    expect(idle[0]).toMatchObject({ reason: "unfinished-idle" })
+    expect(idle[0]?.evidence).toContain("open root todos: 1; next pending: Integrate verified member delivery")
+    expect(idle[0]?.evidence).toContain("ses_member")
+    const before = receipts.filter((r) => r.kind === "heartbeat").length
+    await wait(() => receipts.filter((r) => r.kind === "heartbeat").length >= before + 3)
+    expect(receipts.filter((r) => r.kind === "reconciliation")).toHaveLength(1)
+  } finally { controller.abort(); await run }
+})
+
+for (const mode of ["completed", "open-questions", "recovery-needed", "failed", "superseded"] as const) {
+  test(`follow reconciliation classifies ${mode} from retained evidence`, async () => {
+    const server = stub({ log: { ses_target: mode === "completed" ? [receipt(1, "msg_input", "msg_assistant")] : mode === "superseded" ? [receipt(1, "msg_input", "msg_assistant"), started(2)] : [] },
+      decisions: mode === "open-questions" ? [decision("review", "ses_target", "rvw_wait")] : [],
+      members: [{ sessionID: "ses_member" }], outstanding: { lost: mode === "recovery-needed" ? ["ses_member", "ses_target"] : [], failed: mode === "failed" ? ["ses_member"] : [] } })
+    const controller = new AbortController()
+    const receipts: FollowReceipt[] = []
+    const state: FollowState = { version: 1, rootSessionID: "ses_target", server: "a".repeat(64), cursors: [], pending: [], seen: [], requestSeen: [], terminalSeen: [] }
+    const run = followFamily(YCoding.make({ baseUrl: server.url }), { state, signal: controller.signal, heartbeatSeconds: 0.02, save: async () => {}, emit: async (value) => { receipts.push(value) } })
+    try {
+      for (let n = 0; receipts.filter((r) => r.kind === "heartbeat").length < 3; n++) { if (n > 300) throw new Error(JSON.stringify(receipts)); await Bun.sleep(5) }
+      const summaries = receipts.filter((r) => r.kind === "reconciliation")
+      expect(summaries).toHaveLength(1)
+      expect(summaries[0]).toMatchObject({ reason: mode === "superseded" ? "unfinished-idle" : mode === "failed" ? "recovery-needed" : mode })
+      if (mode === "open-questions") expect(summaries[0]?.evidence).toContain("review rvw_wait sessionID=ses_target")
+      if (mode === "recovery-needed") expect(summaries[0]?.evidence).toContain("lost: ses_member")
+      if (mode === "failed") expect(summaries[0]?.evidence).toContain("failed: ses_member")
+    } finally { controller.abort(); await run }
+  })
+}
+
+test("follow reconciliation persists idle dedup across reconnect/reload and reports a new settled activity", async () => {
+  const running: string[] = []
+  const server = stub({ outstanding: { running } })
+  let state: FollowState = { version: 1, rootSessionID: "ses_target", server: "a".repeat(64), cursors: [], pending: [], seen: [], requestSeen: [], terminalSeen: [] }
+  const receipts: FollowReceipt[] = []
+  const wait = async (predicate: () => boolean) => {
+    for (let n = 0; !predicate(); n++) { if (n > 300) throw new Error(JSON.stringify(receipts)); await Bun.sleep(5) }
+  }
+  const start = () => {
+    const controller = new AbortController()
+    const run = followFamily(YCoding.make({ baseUrl: server.url }), { state: structuredClone(state), signal: controller.signal, heartbeatSeconds: 0.02,
+      save: async (value) => { state = validateFollowState(structuredClone(value), state.rootSessionID, state.server) }, emit: async (value) => { receipts.push(value) } })
+    return { controller, run }
+  }
+  const first = start()
+  try { await wait(() => receipts.filter((r) => r.kind === "heartbeat").length >= 2) }
+  finally { first.controller.abort(); await first.run }
+  expect(receipts.filter((r) => r.kind === "reconciliation")).toHaveLength(1)
+  const second = start()
+  try {
+    await wait(() => receipts.filter((r) => r.kind === "heartbeat").length >= 5)
+    expect(receipts.filter((r) => r.kind === "reconciliation")).toHaveLength(1)
+    running.push("ses_target")
+    await wait(() => receipts.some((r) => r.kind === "heartbeat" && r.rootActive === true))
+    running.splice(0)
+    await wait(() => receipts.filter((r) => r.kind === "reconciliation").length === 2)
+  } finally { second.controller.abort(); await second.run }
+})
+
+test("follow survives an unrelated oversized volatile SSE frame and reconciles native cursors and decisions", async () => {
+  const server = stub({})
+  const controller = new AbortController()
+  const receipts: FollowReceipt[] = []
+  let saved: FollowState = { version: 1, rootSessionID: "ses_target", server: "a".repeat(64), cursors: [], pending: [], seen: [], requestSeen: [], terminalSeen: [] }
+  const run = followFamily(YCoding.make({ baseUrl: server.url }), { state: saved, signal: controller.signal, heartbeatSeconds: 3600,
+    save: async (value) => { saved = structuredClone(value) }, emit: async (value) => { receipts.push(value) } })
+  const wait = async (predicate: () => boolean) => {
+    for (let n = 0; !predicate(); n++) { if (n > 600) throw new Error(JSON.stringify(receipts)); await Bun.sleep(5) }
+  }
+  run.catch(() => undefined)
+  try {
+    await wait(() => receipts.some((r) => r.kind === "ready"))
+    server.control.push({ type: "permission.asked", id: "evt_unrelated_large", created: base,
+      data: { sessionID: "ses_other", id: "per_unrelated", action: "synthetic", resources: ["x".repeat(17 * 1024 * 1024)] } })
+    server.control.decisions([decision("review", "ses_target", "rvw_after_large")])
+    server.control.append("ses_target", started(1), succeeded(2))
+    await wait(() => receipts.filter((r) => r.kind === "ready").length >= 2)
+    expect(saved.cursors).toEqual([{ sessionID: "ses_target", after: 2 }])
+    expect(saved.pending.map((r) => r.id)).toEqual(["rvw_after_large"])
+    expect(receipts.filter((r) => r.kind === "durable" && r.seq === 2)).toHaveLength(1)
+    expect(server.control.subscriptions).toBe(2)
+  } finally { controller.abort(); await run }
+}, 30_000)
+
+for (const recovered of [false, true]) {
+  test(`follow reports only an unrecovered root interruption (${recovered ? "restarted" : "stopped"})`, async () => {
+    const interrupted = logEvent("session.execution.interrupted", 1, { sessionID: "ses_target", reason: "user" })
+    const server = stub({ log: { ses_target: recovered ? [interrupted, started(2), succeeded(3)] : [interrupted] } })
+    const controller = new AbortController()
+    const receipts: FollowReceipt[] = []
+    const state: FollowState = { version: 1, rootSessionID: "ses_target", server: "a".repeat(64), cursors: [], pending: [], seen: [], requestSeen: [], terminalSeen: [] }
+    const run = followFamily(YCoding.make({ baseUrl: server.url }), { state, signal: controller.signal, heartbeatSeconds: 0.02, save: async () => {}, emit: async (value) => { receipts.push(value) } })
+    try {
+      for (let n = 0; receipts.filter((r) => r.kind === "heartbeat").length < 3; n++) { if (n > 300) throw new Error(JSON.stringify(receipts)); await Bun.sleep(5) }
+      expect(receipts.filter((r) => r.kind === "interruption")).toHaveLength(recovered ? 0 : 1)
+    } finally { controller.abort(); await run }
+  })
+}
 
 async function watch(scenario: Scenario, args: string[], options: { entry?: "tui" | "index"; signalAfterSubscribe?: NodeJS.Signals; signalAtRead?: SignalAtRead } = {}) {
   const server = stub(scenario)

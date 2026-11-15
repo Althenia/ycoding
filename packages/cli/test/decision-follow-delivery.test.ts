@@ -1,18 +1,21 @@
 import { expect, test } from "bun:test"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import type { DecisionItem } from "@ycoding-ai/client/promise"
 import { ClientError } from "@ycoding-ai/client/promise"
 import { createFollowDelivery, type DeliveryClient } from "../src/commands/handlers/decision/follow-delivery"
 import type { FollowReceipt } from "../src/commands/handlers/decision/follow"
-import { FollowError, validateFollowState, type FollowState } from "../src/commands/handlers/decision/follow-state"
+import { FollowError, openFollowState, validateFollowState, type FollowState } from "../src/commands/handlers/decision/follow-state"
 
 const server = "a".repeat(64)
-const authority = "Settle these only within existing authority: deny rules, permission ceilings, and hard or custom-rule guardrail reviews require the user's explicit approval. Act on the user's behalf only when the user authorized it in this chat; otherwise ask the user. This message approves nothing, and YCoding answered no decision by sending it."
+const authority = "Settle these only within existing authority"
 const base = (): FollowState => ({ version: 1, rootSessionID: "ses_root", server, sourceEpoch: "epoch_one", cursors: [{ sessionID: "ses_root", after: 0 }],
   pending: [], seen: [], requestSeen: [], terminalSeen: [] })
 type Admission = { admission: "started" | "steered" | "duplicate" | "unknown"; turnID?: string }
 type Sent = { threadID: string; text: string; clientMessageID: string; mode: string }
 
-const durable = (type: string, sessionID = "ses_child", seq = 5): FollowReceipt => ({ kind: "durable", sessionID, id: `evt_${sessionID}_${seq}`, seq, type, rootActive: false, activity: "idle" })
+const durable = (type: string, sessionID = "ses_child", seq = 5): FollowReceipt => ({ kind: "durable", sessionID, id: `evt_${sessionID}_${seq}`, seq, type, rootActive: false, activity: "idle", ...(type === "session.execution.interrupted" ? { unrecovered: true } : {}) })
 const pending = (requestKind: string, id: string, sessionID = "ses_root", extra: Partial<FollowReceipt> = {}): FollowReceipt => ({ kind: "pending", requestKind, sessionID, id, ...extra })
 const item = (kind: DecisionItem["kind"], id: string, operation: string, key: string): DecisionItem => ({
   kind, sessionID: "ses_root", sessionTitle: "Synthetic title", directory: "/synthetic", id, summary: `synthetic ${kind} summary`,
@@ -72,24 +75,21 @@ function harness(options: { state?: FollowState; targets?: string[]; statuses?: 
 }
 
 for (const [type, phrase] of [
-  ["session.execution.started", "execution started"],
-  ["session.execution.succeeded", "execution succeeded"],
   ["session.execution.failed", "execution failed"],
   ["session.execution.interrupted", "execution interrupted"],
-  ["session.work.completed", "accepted a work-completion receipt"],
 ] as const) {
   test(`delivery pushes the ${type} lifecycle event with its read command`, async () => {
     const h = harness()
     const run = h.delivery.run()
     try {
-      await h.observe(durable(type))
+      await h.observe(durable(type, "ses_root"))
       await until(() => h.sends.length === 1, "lifecycle send")
       const [sent] = h.sends
       expect(sent).toMatchObject({ threadID: "thr_root", mode: "send" })
-      expect(sent!.text).toContain(`Session ses_child ${phrase} (event evt_ses_child_5, seq 5).`)
-      expect(sent!.text).toContain("Read: ycoding api session.log --param sessionID=ses_child --param after=4 --param follow=false")
-      expect(sent!.text).toContain("Read: ycoding api session.snapshot --param sessionID=ses_child --param limit=50")
-      expect(sent!.text).toContain(authority)
+      expect(sent!.text).toContain(`Session ses_root ${phrase} (event evt_ses_root_5, seq 5).`)
+      expect(sent!.text).toContain("ycoding api session.snapshot --param sessionID=ses_root --param limit=50")
+      expect(sent!.text).not.toContain("session.log")
+      expect(sent!.text).not.toContain(authority)
     } finally { await h.stop(run) }
   })
 }
@@ -110,8 +110,8 @@ for (const [kind, id, operation, key] of [
       const text = h.sends[0].text
       expect(text).toContain(`${kind} ${id} pending in ses_root.`)
       expect(text).toContain(`once: ycoding api ${operation} --param sessionID=ses_root --param ${key}=${id} --data '{"reply":"once"}'`)
-      expect(text).toContain("Read: ycoding decision list --json")
-      expect(text).toContain(authority)
+      expect(text).not.toContain("Read: ycoding decision list --json")
+      expect(text).not.toContain(authority)
       expect(h.calls.every((call) => ["dots.threads", "decision.list", "dots.thread.send"].includes(call))).toBe(true)
     } finally { await h.stop(run) }
   })
@@ -141,55 +141,91 @@ test("a request no longer listed when sent keeps its IDs and points to the decis
   } finally { await h.stop(run) }
 })
 
-for (const [receipt, phrase] of [
-  [{ kind: "ownership", type: "owner-changed", groupID: "grp_one", sessionID: "ses_member", ownerSessionID: "ses_owner", revision: 3, resolution: "unknown" },
-    "Project grp_one: member ses_member is owned by ses_owner (owner-changed, revision 3)."],
-  [{ kind: "ownership", type: "owner-released", groupID: "grp_one", sessionID: "ses_member", revision: 4, resolution: "unknown" },
-    "Project grp_one: member ses_member has no owner (owner-released, revision 4)."],
-  [{ kind: "ownership", type: "owner-released", groupID: "grp_one", sessionID: "ses_member", revision: 5, removed: true, resolution: "unknown" },
-    "Project grp_one: member ses_member has no owner; its ownership record was removed (owner-released, revision 5)."],
-] as const) {
-  test(`delivery pushes a ${receipt.type}${"removed" in receipt ? " removal" : ""} ownership event with its read commands`, async () => {
+test("routine lifecycle and ownership observations never enter the outbox", async () => {
+  const h = harness()
+  for (const sessionID of ["ses_root", "ses_child", "ses_supervisor", "ses_compaction"]) {
+    await h.observe(durable("session.execution.started", sessionID), durable("session.execution.succeeded", sessionID), durable("session.work.completed", sessionID))
+  }
+  for (const snapshot of [true, undefined] as const) await h.observe({ kind: "ownership", type: "owner-changed", groupID: "grp_one", sessionID: "ses_member", ownerSessionID: "ses_owner", revision: 3, snapshot })
+  await h.observe({ kind: "ownership", type: "owner-released", groupID: "grp_one", sessionID: "ses_member", revision: 4 })
+  expect(h.records).toHaveLength(15)
+  expect(h.saved.delivery?.targets[0]?.outbox).toEqual([])
+})
+
+test("compaction failures and recovered or descendant interruptions stay observation-only", async () => {
+  const h = harness()
+  await h.observe({ ...durable("session.execution.failed", "ses_compaction"), compaction: true },
+    durable("session.execution.interrupted", "ses_child"),
+    { ...durable("session.execution.interrupted", "ses_root"), unrecovered: undefined },
+    { ...durable("session.execution.interrupted", "ses_root"), rootActive: true })
+  expect(h.records).toHaveLength(4)
+  expect(h.saved.delivery?.targets[0]?.outbox).toEqual([])
+})
+
+test("Project escalations deliver once with exact decision identity and no authority paragraph", async () => {
+  const h = harness({ items: [item("review", "rvw_escalated", "session.review.decide", "itemID")] })
+  const run = h.delivery.run()
+  try {
+    const request: FollowReceipt = { ...pending("review", "rvw_escalated"), kind: "project-escalation", type: "coordination.request.escalated" }
+    await h.observe(request, request)
+    await until(() => h.records.some((record) => record.outcome === "delivered"), "escalated decision")
+    expect(h.sends).toHaveLength(1)
+    expect(h.sends[0]!.text).toContain("review rvw_escalated pending in ses_root, escalated")
+    expect(h.sends[0]!.text).toContain("session.review.decide --param sessionID=ses_root --param itemID=rvw_escalated")
+    expect(h.sends[0]!.text).not.toContain(authority)
+  } finally { await h.stop(run) }
+})
+
+for (const reason of ["completed", "open-questions", "recovery-needed", "unfinished-idle"]) {
+  test(`compact ${reason} summary survives reload and drains with one inspect command`, async () => {
     const h = harness()
-    const run = h.delivery.run()
+    await h.observe({ kind: "reconciliation", sessionID: "ses_root", id: "watch_synthetic", reason,
+      evidence: reason === "open-questions" ? "review rvw_pending sessionID=ses_root" : "synthetic retained evidence" })
+    const reloaded = harness({ state: validateFollowState(JSON.parse(JSON.stringify(h.saved)), "ses_root", server) })
+    const run = reloaded.delivery.run()
     try {
-      await h.observe(receipt)
-      await until(() => h.sends.length === 1, "ownership send")
-      const text = h.sends[0].text
-      expect(text).toContain(phrase)
-      expect(text).toContain("Read: ycoding api coordination.get --param groupID=grp_one")
-      expect(text).toContain("Read: ycoding api session.get --param sessionID=ses_member")
-      expect(text).toContain(authority)
-      expect(h.saved.delivery?.targets[0]?.outbox).toEqual([])
-    } finally { await h.stop(run) }
+      await until(() => reloaded.records.some((record) => record.outcome === "delivered"), "retained summary")
+      const text = reloaded.sends[0]!.text
+      expect(text.split("\n")).toHaveLength(3)
+      expect(text).toContain(`Session ses_root: ${reason};`)
+      expect(text).toContain("ycoding decision watch ses_root --family")
+      expect(text).not.toContain(authority)
+    } finally { await reloaded.stop(run) }
   })
 }
 
-test("startup ownership is delivered as one current-state entry per Project after the watch is ready, and later changes as changes", async () => {
-  const h = harness()
+test("v1 reload preserves 68 cursors, request ledgers, ownership and legacy inflight identity on the sole target", async () => {
+  const state = base()
+  const target = "6af84c7d-0e3c-8191-a340-caaf8e789001"
+  const clientMessageID = "00000000-0000-8000-8000-000000000001"
+  state.cursors.push(...Array.from({ length: 67 }, (_, i) => ({ sessionID: `ses_retained_${i}`, after: i })))
+  state.pending = [{ kind: "review", sessionID: "ses_root", id: "rvw_pending" }]
+  state.requestSeen = ["review\0ses_root\0rvw_pending"]
+  state.seen = [["ses_root", "evt_awaiting_ack", "1"].join("\0")]
+  state.terminalSeen = ["question\0ses_root\0que_done"]
+  state.ownership = [{ groupID: "cgrp_retained", sessionID: "ses_member", ownerSessionID: "ses_owner", revision: 3 }]
+  state.delivery = { announced: ["review\0ses_root\0rvw_pending"], targets: [{ target,
+    outbox: [{ sessionID: "ses_root", id: "evt_success", type: "session.execution.succeeded", seq: 2 }],
+    inflight: { threadID: target, clientMessageID, events: [{ sessionID: "ses_root", id: "evt_start", type: "session.execution.started", seq: 1 }] } }] }
+  const directory = await mkdtemp(join(homedir(), ".local/share/ycoding/tasks/decision-watch-v1-"))
+  const filename = join(directory, "state.json")
+  await writeFile(filename, JSON.stringify(state), { mode: 0o600 })
+  const store = await openFollowState(filename, "ses_root", server)
+  const h = harness({ state: store.state, targets: [target], listed: [target], admissions: [{ admission: "duplicate" }] })
   const run = h.delivery.run()
   try {
-    const snapshot = (groupID: string, sessionID: string, revision: number, ownerSessionID?: string): FollowReceipt => ({ kind: "ownership", type: ownerSessionID === undefined ? "owner-released" : "owner-changed",
-      groupID, sessionID, revision, ...(ownerSessionID === undefined ? {} : { ownerSessionID }), resolution: "unknown", snapshot: true })
-    await h.observe(snapshot("grp_one", "ses_a", 3, "ses_owner"))
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(h.sends).toHaveLength(0)
-    await h.observe(snapshot("grp_one", "ses_b", 3), snapshot("grp_two", "ses_c", 7, "ses_lead"), { kind: "ready", sessionID: "ses_root", activity: "idle" })
-    await until(() => h.sends.length === 1, "snapshot send")
-    const text = h.sends[0].text
-    expect(text).toContain("2 events")
-    expect(text).toContain("1. Project grp_one ownership when this watch started (current state, not a change; revision 3): member ses_a is owned by ses_owner; member ses_b has no owner.")
-    expect(text).toContain("2. Project grp_two ownership when this watch started (current state, not a change; revision 7): member ses_c is owned by ses_lead.")
-    expect(text).toContain("Read: ycoding api coordination.get --param groupID=grp_one")
-    expect(text).not.toContain("owner-changed")
-    await h.observe({ kind: "ownership", type: "owner-changed", groupID: "grp_one", sessionID: "ses_b", ownerSessionID: "ses_owner", revision: 4, resolution: "unknown" })
-    await until(() => h.sends.length === 2, "change send")
-    expect(h.sends[1].text).toContain("Project grp_one: member ses_b is owned by ses_owner (owner-changed, revision 4).")
-    expect(h.records.find((record) => record.kind === "delivery")).toMatchObject({ events: [
-      { id: "grp_one", snapshot: true, revision: 3, members: [{ sessionID: "ses_a", ownerSessionID: "ses_owner" }, { sessionID: "ses_b" }] },
-      { id: "grp_two", snapshot: true, revision: 7, members: [{ sessionID: "ses_c", ownerSessionID: "ses_lead" }] },
-    ] })
-  } finally { await h.stop(run) }
+    await until(() => h.saved.delivery?.targets[0]?.inflight === undefined && h.saved.delivery?.targets[0]?.outbox.length === 0, "legacy drain")
+    expect(h.sends).toHaveLength(2)
+    expect(h.sends[0]!.clientMessageID).toBe(clientMessageID)
+    for (const key of ["cursors", "pending", "seen", "requestSeen", "terminalSeen", "ownership", "sourceEpoch"] as const) expect(h.saved[key]).toEqual(state[key])
+    expect(h.saved.delivery?.announced).toEqual(state.delivery.announced)
+    await store.save(h.saved)
+  } finally { await h.stop(run); await store.close() }
+  try {
+    const reloaded = await openFollowState(filename, "ses_root", server)
+    try { expect(reloaded.state.delivery?.targets).toEqual([{ target, outbox: [] }]) }
+    finally { await reloaded.close() }
+  } finally { await rm(directory, { recursive: true, force: true }) }
 })
 
 test("noise receipts, unlisted durable types and request endings are never delivered", async () => {
@@ -202,11 +238,11 @@ test("noise receipts, unlisted durable types and request endings are never deliv
       durable("session.step.started", "ses_root", 1), { kind: "reply-observed", requestKind: "guardrail", sessionID: "ses_root", id: "grq_old", resolution: "reply-observed" },
       { kind: "closed", sessionID: "ses_root" },
     )
-    await h.observe(durable("session.execution.started", "ses_root", 2))
+    await h.observe(durable("session.execution.failed", "ses_root", 2))
     await until(() => h.sends.length === 1, "single send")
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(h.sends).toHaveLength(1)
-    expect(h.sends[0].text).toContain("1 event")
+    expect(h.sends[0].text).toContain("1. ")
     expect(h.sends[0].text).not.toContain("grq_old")
   } finally { await h.stop(run) }
 })
@@ -216,14 +252,14 @@ test("events observed during a send coalesce into one message per target on the 
   h.hold()
   const run = h.delivery.run()
   try {
-    await h.observe(durable("session.execution.started", "ses_root", 1))
+    await h.observe(durable("session.execution.failed", "ses_root", 1))
     await until(() => h.sends.length === 1, "first send")
-    await h.observe(durable("session.execution.succeeded", "ses_root", 2), durable("session.work.completed", "ses_root", 3), pending("permission", "per_two"))
+    await h.observe(durable("session.execution.failed", "ses_root", 2), pending("question", "que_three"), pending("permission", "per_two"))
     h.release()
     await until(() => h.sends.length === 4, "coalesced sends")
-    const second = h.sends.filter((sent) => sent.text.includes("3 events"))
+    const second = h.sends.filter((sent) => sent.text.includes("3. "))
     expect(second.map((sent) => sent.threadID).toSorted()).toEqual(["thr_root", "thr_task"])
-    for (const sent of second) for (const value of ["execution succeeded", "work-completion", "permission per_two"]) expect(sent.text).toContain(value)
+    for (const sent of second) for (const value of ["execution failed", "question que_three", "permission per_two"]) expect(sent.text).toContain(value)
     expect(h.saved.delivery?.targets.every((target) => target.outbox.length === 0 && target.inflight === undefined)).toBe(true)
   } finally { await h.stop(run) }
 })
@@ -247,7 +283,7 @@ test("delivery to dot resolves the Dot's current root at each pass and moves an 
     admissions: [{ admission: "unknown" }, { admission: "started" }, { admission: "started" }] })
   const run = h.delivery.run()
   try {
-    await h.observe(durable("session.execution.started", "ses_root", 1))
+    await h.observe(durable("session.execution.failed", "ses_root", 1))
     await until(() => h.records.some((record) => record.outcome === "unknown"), "unknown admission")
     expect(h.sends[0]).toMatchObject({ threadID: "thr_root_one", mode: "send" })
     expect(h.saved.delivery?.targets).toEqual([{ target: "dot", outbox: [], inflight: { threadID: "thr_root_one", clientMessageID: h.sends[0].clientMessageID, events: [expect.objectContaining({ seq: 1 })] } }])
@@ -255,10 +291,10 @@ test("delivery to dot resolves the Dot's current root at each pass and moves an 
     await until(() => h.records.some((record) => record.outcome === "delivered"), "rotated delivery")
     expect(h.sends.at(-1)).toMatchObject({ threadID: "thr_root_two", mode: "send" })
     expect(h.sends.at(-1)!.clientMessageID).not.toBe(h.sends[0].clientMessageID)
-    expect(h.sends.at(-1)!.text).toContain("execution started")
+    expect(h.sends.at(-1)!.text).toContain("execution failed")
     expect(h.records.find((record) => record.outcome === "delivered")).toMatchObject({ target: "dot", threadID: "thr_root_two", clientMessageID: h.sends.at(-1)!.clientMessageID })
-    await h.observe(durable("session.execution.succeeded", "ses_root", 2))
-    await until(() => h.sends.some((sent) => sent.text.includes("execution succeeded")), "later delivery")
+    await h.observe(durable("session.execution.failed", "ses_root", 2))
+    await until(() => h.sends.some((sent) => sent.text.includes("execution failed")), "later delivery")
     expect(h.sends.at(-1)!.threadID).toBe("thr_root_two")
     await until(() => h.saved.delivery?.targets[0]?.inflight === undefined && h.saved.delivery?.targets[0]?.outbox.length === 0, "drained")
     expect(h.saved.delivery?.targets).toEqual([{ target: "dot", outbox: [] }])
@@ -291,7 +327,7 @@ test("an unknown admission stays undelivered and is resent with the same message
 test("a rejected send fails the delivery visibly and keeps the batch for a restart", async () => {
   const h = harness({ admissions: [{ message: "NEVER-OUTPUT upstream body" }] })
   const run = h.delivery.run()
-  await h.observe(durable("session.execution.interrupted"))
+  await h.observe(durable("session.execution.interrupted", "ses_root"))
   const error = await run.then(() => undefined, (failure: unknown) => failure)
   expect(error).toBeInstanceOf(FollowError)
   expect(String((error as Error).message)).toContain("[delivery-failed]")
@@ -311,9 +347,9 @@ test("a restart delivers persisted undelivered events and never redelivers deliv
   const first = harness()
   first.hold()
   const run = first.delivery.run()
-  await first.observe(durable("session.execution.started", "ses_root", 1))
+  await first.observe(durable("session.execution.failed", "ses_root", 1))
   await until(() => first.sends.length === 1, "held send")
-  await first.observe(durable("session.execution.succeeded", "ses_root", 2))
+  await first.observe(durable("session.execution.failed", "ses_root", 2))
   first.controller.abort()
   first.release()
   await run
@@ -325,8 +361,8 @@ test("a restart delivers persisted undelivered events and never redelivers deliv
   try {
     await until(() => second.sends.length === 2, "restart deliveries")
     expect(second.sends[0].clientMessageID).toBe(first.sends[0].clientMessageID)
-    expect(second.sends[0].text).toContain("execution started")
-    expect(second.sends[1].text).toContain("execution succeeded")
+    expect(second.sends[0].text).toContain("execution failed")
+    expect(second.sends[1].text).toContain("execution failed")
     expect(second.sends[1].text).not.toContain("execution started")
     await until(() => second.saved.delivery?.targets[0]?.outbox.length === 0, "restart drained")
   } finally { await second.stop(resumed) }
@@ -347,7 +383,7 @@ test("68 retained cursors and a sole synthetic outbox survive interrupted delive
   first.hold()
   const run = first.delivery.run()
   await until(() => first.sends.length === 1, "retained outbox admission")
-  await first.observe(durable("session.execution.started", "ses_compaction_34", 2), durable("session.execution.succeeded", "ses_compaction_34", 3))
+  await first.observe(durable("session.execution.failed", "ses_compaction_34", 2), durable("session.execution.failed", "ses_compaction_34", 3))
   first.controller.abort()
   first.release()
   await run
@@ -388,7 +424,7 @@ test("an emitted receipt is not delivered until the follow state that records it
   const h = harness()
   const run = h.delivery.run()
   try {
-    await h.delivery.emit(durable("session.execution.started"))
+    await h.delivery.emit(durable("session.execution.failed"))
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(h.sends).toHaveLength(0)
     await h.delivery.save(structuredClone(h.delivery.state))
@@ -401,7 +437,7 @@ test("a request that ends before delivery is dropped and a repeated observation 
   h.hold()
   const run = h.delivery.run()
   try {
-    await h.observe(durable("session.execution.started", "ses_root", 1))
+    await h.observe(durable("session.execution.failed", "ses_root", 1))
     await until(() => h.sends.length === 1, "held send")
     await h.observe(pending("question", "que_gone"),
       { kind: "request-ended-observed", requestKind: "question", sessionID: "ses_root", id: "que_gone", resolution: "cancelled" },
@@ -411,7 +447,7 @@ test("a request that ends before delivery is dropped and a repeated observation 
     await until(() => h.sends.length === 2, "second send")
     expect(h.sends[1].text).not.toContain("que_gone")
     expect(h.sends[1].text.split("grq_twice pending").length - 1).toBe(1)
-    await h.observe(pending("guardrail", "grq_twice", "ses_root", { fingerprint: "e".repeat(64) }), durable("session.execution.succeeded", "ses_root", 2))
+    await h.observe(pending("guardrail", "grq_twice", "ses_root", { fingerprint: "e".repeat(64) }), durable("session.execution.failed", "ses_root", 2))
     await until(() => h.sends.length === 3, "third send")
     expect(h.sends[2].text).not.toContain("grq_twice")
   } finally { await h.stop(run) }
@@ -452,7 +488,7 @@ for (const newRoot of ["thr_old", "thr_new"]) {
   test(`restart after a rejected dot send recovers on ${newRoot}`, async () => {
     const first = harness({ targets: ["dot"], root: () => "thr_old", admissions: [new Error("thread not found")] })
     const failed = first.delivery.run()
-    await first.observe(durable("session.execution.started", "ses_root", 1))
+    await first.observe(durable("session.execution.failed", "ses_root", 1))
     expect(await failed.then(() => undefined, (error: unknown) => error)).toBeInstanceOf(FollowError)
     expect(first.records.at(-1)).toMatchObject({ outcome: "failed", threadID: "thr_old" })
     const oldID = first.saved.delivery!.targets[0]!.inflight!.clientMessageID
@@ -483,12 +519,12 @@ test("adding a task target while recovering dot sends old events only to dot and
     expect(h.sends).toHaveLength(1)
     expect(h.sends[0]).toMatchObject({ threadID: "thr_new" })
     expect(h.sends[0]!.clientMessageID).not.toBe(state.delivery.targets[0]!.inflight.clientMessageID)
-    await h.observe(durable("session.execution.succeeded", "ses_root", 2))
+    await h.observe(durable("session.execution.failed", "ses_root", 2))
     await until(() => h.records.filter((record) => record.outcome === "delivered").length === 3, "later deliveries")
     expect(h.sends).toHaveLength(3)
     expect(h.sends.slice(1).map((sent) => sent.threadID).toSorted()).toEqual(["thr_new", "thr_task"])
     for (const sent of h.sends.slice(1)) {
-      expect(sent.text).toContain("execution succeeded")
+      expect(sent.text).toContain("execution failed")
       expect(sent.text).not.toContain("execution started")
     }
   } finally { await h.stop(run) }
@@ -563,12 +599,12 @@ for (const current of [retiredRoot, rotatedRoot]) {
       else expect(h.sends[0]!.clientMessageID).not.toBe(savedMessageID)
       expect(h.sends[0]!.text).toContain(`Project ${liveGroup} ownership when this watch started (current state, not a change; revision 28)`)
       expect(h.saved.delivery?.targets).toEqual([{ target: "dot", outbox: [] }, { target: taskThread, outbox: [] }])
-      await h.observe(durable("session.execution.succeeded", "ses_task_847e601a7773d3394212597e", 5362))
+      await h.observe(durable("session.execution.failed", "ses_task_847e601a7773d3394212597e", 5362))
       await until(() => h.records.filter((record) => record.outcome === "delivered").length === 3, "post-restart deliveries")
       expect(h.sends).toHaveLength(3)
       expect(h.sends.slice(1).map((sent) => sent.threadID).toSorted()).toEqual([current, taskThread].toSorted())
       for (const sent of h.sends.slice(1)) {
-        expect(sent.text).toContain("Session ses_task_847e601a7773d3394212597e execution succeeded (event evt_ses_task_847e601a7773d3394212597e_5362, seq 5362).")
+        expect(sent.text).toContain("Session ses_task_847e601a7773d3394212597e execution failed (event evt_ses_task_847e601a7773d3394212597e_5362, seq 5362).")
         expect(sent.text).not.toContain(liveGroup)
       }
       expect(h.saved.delivery?.targets).toEqual([{ target: "dot", outbox: [] }, { target: taskThread, outbox: [] }])
@@ -583,7 +619,7 @@ test("a retired dot root resumes without sending, losing or duplicating the task
   const h = harness({ state: liveState(), targets: ["dot", taskThread], root: () => root, listed: [taskThread],
     resume: async () => { formedTask ??= structuredClone(h.saved.delivery?.targets[1]); root = roots.shift()! },
     admissions: [notFound, { admission: "started" }, { admission: "started" }, { admission: "started" }, notFound] })
-  await h.observe(durable("session.execution.started", "ses_task_847e601a7773d3394212597e", 5362))
+  await h.observe(durable("session.execution.failed", "ses_task_847e601a7773d3394212597e", 5362))
   const run = h.delivery.run()
   try {
     await until(() => h.records.filter((record) => record.outcome === "delivered").length === 3, "recovered deliveries")
@@ -595,13 +631,13 @@ test("a retired dot root resumes without sending, losing or duplicating the task
     expect(formedTask).toMatchObject({ target: taskThread, outbox: [], inflight: { threadID: taskThread } })
     expect(h.sends[2]!.clientMessageID).toBe((formedTask as { inflight: { clientMessageID: string } }).inflight.clientMessageID)
     for (const sent of h.sends.slice(2)) {
-      expect(sent.text).toContain("execution started (event evt_ses_task_847e601a7773d3394212597e_5362, seq 5362)")
+      expect(sent.text).toContain("execution failed (event evt_ses_task_847e601a7773d3394212597e_5362, seq 5362)")
       expect(sent.text).not.toContain(liveGroup)
     }
     expect(h.records.filter((record) => record.kind === "delivery").map((record) => [record.outcome, record.threadID]))
       .toEqual([["failed", retiredRoot], ["delivered", rotatedRoot], ["delivered", taskThread], ["delivered", rotatedRoot]])
     await until(() => h.saved.delivery?.targets.every((target) => target.inflight === undefined && target.outbox.length === 0) === true, "drained state")
-    await h.observe(durable("session.execution.succeeded", "ses_task_847e601a7773d3394212597e", 5363))
+    await h.observe(durable("session.execution.failed", "ses_task_847e601a7773d3394212597e", 5363))
     await until(() => h.records.filter((record) => record.outcome === "delivered").length === 5, "deliveries after a second rotation")
     expect(h.calls.filter((call) => call === "dots.resume")).toHaveLength(2)
     expect(h.sends.slice(4).map((sent) => sent.threadID)).toEqual([rotatedRoot, "6af7c000-0000-8191-8000-000000000002", taskThread])
@@ -621,7 +657,7 @@ test("a restart drains a delivered target's backlog in batches of 20 and a prese
   const run = h.delivery.run()
   try {
     await until(() => h.saved.delivery?.targets.every((target) => target.inflight === undefined && target.outbox.length === 0) === true, "both backlogs drained")
-    const count = (text: string) => Number(/^YCoding decision watch: (\d+) events? /.exec(text)![1])
+    const count = (text: string) => [...text.matchAll(/^\d+\. /gm)].length
     expect(h.sends.filter((sent) => sent.threadID === "thr_root").map((sent) => count(sent.text))).toEqual([20, 12])
     const task = h.sends.filter((sent) => sent.threadID === "thr_task")
     expect(task.map((sent) => count(sent.text))).toEqual([5, 20, 7])
