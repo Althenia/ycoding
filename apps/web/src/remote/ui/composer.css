@@ -163,7 +163,9 @@
 @media (pointer:coarse) and (min-width:480px) { .composer__context-trigger { inline-size:44px; block-size:44px; } }
 .composer__spacer { flex:1 1 auto; min-inline-size:0; }
 @media (min-width: 768px) { .composer__spacer { flex:1 1 0; min-inline-size:0; } .composer__actions { margin-inline-start:auto; } }
-.composer__actions { display:flex; align-items:center; flex:none; gap:var(--yc-space-1); margin-inline-start:auto; }
+.composer__context-controls { display:flex; flex-wrap:wrap; align-items:center; gap:var(--yc-space-1); flex:1 1 24rem; min-inline-size:0; }
+.composer--collapsed .composer__actions { display:none; }
+.composer__actions { display:flex; flex-wrap:nowrap; align-items:center; flex:none; gap:var(--yc-space-1); margin-inline-start:auto; }
 .composer__controls button { flex-shrink:0; }
 .composer__controls :is(button,.mini-picker__trigger,.model-control__trigger) { font:var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); }
 @media (min-width: 768px) {
@@ -336,9 +338,13 @@
 @media (min-width: 1280px) and (pointer: fine) {
   .app--team-open .composer { padding-inline:var(--yc-space-1); }
   .app--team-open .composer .composer__row { padding-inline:var(--yc-space-1); }
-  .app--team-open .composer .composer__controls { flex-wrap:nowrap; gap:calc(var(--yc-space-1) / 2); }
+  .app--team-open .composer .composer__controls { flex-wrap:wrap; gap:calc(var(--yc-space-1) / 2); }
   .app--team-open .composer__controls .mini-picker { flex:none; }
   .app--team-open .composer__controls .model-control { flex:1 1 40px; min-inline-size:40px; }
   .app--team-open .composer__controls .model-control__trigger { inline-size:100%; min-inline-size:0; }
   .app--team-open .composer__controls :is(.session-status__autonomous-trigger,.session-status__goal-trigger) { padding-inline:calc(var(--yc-space-1) / 2); }
+}
+.app--conversation.app--selected .composer { padding-inline:var(--yc-gutter); }
+@media (max-width:767px) {
+  .composer--phone-summary .composer__context-controls { display:contents; }
 }

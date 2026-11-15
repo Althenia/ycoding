@@ -84,16 +84,16 @@ test("quota cards include snapshots with windows, an error message, or any unaut
     snapshot("unsupported", "unsupported", window), snapshot("unauthorized", "unauthorized", window),
     snapshot("unauthorized-message", "unauthorized", [], "Reconnect this provider"), snapshot("unauthorized-empty", "unauthorized", []),
     snapshot("available-empty", "available", []), snapshot("stale-empty", "stale", []), snapshot("error-empty", "error", []),
-  ]).map((item) => item.providerID)).toEqual(["connected", "stale", "failed", "unauthorized", "unauthorized-message", "unauthorized-empty"])
+  ]).map((item) => item.providerID)).toEqual(["connected", "stale", "failed", "unauthorized", "unauthorized-message", "unauthorized-empty", "available-empty", "stale-empty", "error-empty"])
   expect(visibleProviders([snapshot("unsupported", "unsupported", [])])).toEqual([])
 })
 
-test("a response-observed snapshot with no quota sample yet stays visible as a pending card, without unhiding genuine unsupported providers", () => {
+test("typed unsupported snapshots stay hidden even when response-observed, while reported windows remain visible", () => {
   const pending: UsageProvider = {
     providerID: "muse", label: "Muse (Meta)", status: "unsupported", source: "response_stream", stability: "observed",
     updatedAt: 1, windows: [], message: "Quota is reported after the next Muse response",
   }
-  expect(visibleProviders([pending]).map((item) => item.providerID)).toEqual(["muse"])
+  expect(visibleProviders([pending])).toEqual([])
   expect(visibleProviders([{ ...pending, source: "provider_api" }])).toEqual([])
   expect(visibleProviders([{ ...pending, stability: "stable" }])).toEqual([])
   expect(visibleProviders([{ ...pending, message: undefined }])).toEqual([])

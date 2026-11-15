@@ -1,3 +1,4 @@
+import { isInternalTranscriptEnvelope } from "@ycoding-ai/client/transcript-visibility"
 import type {
   GuardrailGrade,
   GuardrailRequestListOutput,
@@ -214,6 +215,7 @@ export function createSessionRows(sessionID: Accessor<string>) {
         if (draft.some((row) => row.type === "message" && row.messageID === messageID)) return
         const pending = isPending(messageID)
         const message = data.session.message.get(sessionID(), messageID)
+        if (message && isInternalTranscriptEnvelope(message)) return
         const index =
           message?.type === "compaction" && pending
             ? queuedStart(draft)
@@ -430,7 +432,7 @@ export function reduceSessionRows(
   }
   const transcript = messages.filter(
     (message) =>
-      !(message.type === "synthetic" && message.metadata?.decisionInputID !== undefined) &&
+      !isInternalTranscriptEnvelope(message) &&
       !isCompactionCheckpoint(message),
   )
   const isInput = (message: SessionMessageInfo) => inputs.has(message.id)

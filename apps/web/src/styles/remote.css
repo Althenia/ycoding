@@ -1481,7 +1481,7 @@ form .request__actions .button--secondary {
   .app--conversation.app--selected .workspace__scroll > .remote-conversation-view > *,
   .app--conversation.app--selected .composer > *,
   .app--conversation.app--selected .todo-panel__inner {
-    inline-size: min(calc(100% - var(--yc-space-12)), var(--remote-column));
+    inline-size: min(100%, var(--remote-column));
   }
   .app--conversation.app--selected .workspace__scroll > .remote-conversation-view { inline-size: 100%; margin-inline: 0; }
 }

@@ -8,6 +8,7 @@
  */
 
 import type { CreateEnrollmentResponse, ProviderAuthInfo, RemoteDotsComputerTarget, RemoteDotsStatus } from "@ycoding-ai/remote"
+import { toolDisplayName } from "../../../../packages/client/src/tool-display"
 import { autonomySummary, autonomyTone, type AutonomyMode } from "./autonomy"
 import type { KeepAwakeState } from "./keep-awake"
 import type { ProviderAuthState } from "./provider-auth"
@@ -877,7 +878,7 @@ export function cachedSessionsView(connection: RemoteConnectionState, sessionCou
   return { note: `Last session list from ${connection.deviceName}. Sessions are read-only until it reconnects.` }
 }
 
-export type TranscriptActivity = { readonly kind: "typing" } | { readonly kind: "status"; readonly tone: "attention" | "danger"; readonly label: string }
+export type TranscriptActivity = { readonly kind: "typing"; readonly label: string } | { readonly kind: "status"; readonly tone: "attention" | "danger"; readonly label: string }
 
 export function transcriptActivity(input: {
   readonly status: SessionView["status"] | undefined
@@ -889,8 +890,8 @@ export function transcriptActivity(input: {
   readonly lastError?: string
 }): TranscriptActivity | undefined {
   const turn = input.messages.filter((message) => message.kind === "user" || message.kind === "assistant")
-  const last = turn.at(-1)
-  const accepted = input.sending || last?.kind === "user" && last.state !== "consumed"
+  const last = turn.findLast((message) => message.kind !== "user" || message.state !== "pending")
+  const accepted = input.sending
   if (input.status !== "running" && !accepted) {
     if (input.status !== "failed") return undefined
     const reply = last?.kind === "assistant" ? last : undefined
@@ -902,11 +903,11 @@ export function transcriptActivity(input: {
   if (input.connection !== "connected" || input.transport !== "open")
     return { kind: "status", tone: "attention", label: "Reconnecting · Sending resumes when the machine is connected." }
   if (input.requests > 0) return { kind: "status", tone: "attention", label: "Waiting for your decision" }
-  if (last?.kind !== "assistant") return { kind: "typing" }
+  if (last?.kind !== "assistant" || last.completed !== undefined) return { kind: "typing", label: input.sending ? "Sending" : "Thinking" }
   const visible = last.parts.filter(transcriptPartVisible)
-  const live = visible.some((part) => part.kind === "reasoning" && part.completed === undefined || part.kind === "tool" && (part.status === "running" || part.status === "streaming"))
-  const streaming = last.completed === undefined && visible.at(-1)?.kind === "text"
-  return live || streaming ? undefined : { kind: "typing" }
+  const tool = visible.findLast((part) => part.kind === "tool" && (part.status === "running" || part.status === "streaming"))
+  if (tool?.kind === "tool") return { kind: "typing", label: `Running ${toolDisplayName(tool.name)}` }
+  return { kind: "typing", label: visible.at(-1)?.kind === "text" ? "Writing" : "Thinking" }
 }
 
 const inlineImageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])

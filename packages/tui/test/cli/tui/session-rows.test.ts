@@ -4,6 +4,19 @@ import { messageBoundaryIDs, reduceSessionRows } from "../../../src/routes/sessi
 
 const chat: SessionMessageInfo = { type: "user", id: "chat", text: "Chat", time: { created: 0 } }
 
+test("internal context consumes no transcript rows while user quotations and visible notices remain", () => {
+  const text = "## Guardrail decision history\nFamily root: ses_example\n[]"
+  const messages: SessionMessageInfo[] = [
+    chat,
+    { type: "system", id: "internal", text, time: { created: 1 } },
+    { type: "system", id: "state", text: "State", metadata: { contextSource: "session-state" }, time: { created: 2 } },
+    { type: "synthetic", id: "team", text: "Team", description: "TeamView update", metadata: { contextSource: "team-view" }, time: { created: 3 } },
+    { type: "user", id: "quoted", text, time: { created: 4 } },
+    { type: "synthetic", id: "visible", text: "Internal body", description: "Visible notice", time: { created: 5 } },
+  ]
+  expect(reduceSessionRows(messages)).toEqual(["chat", "quoted", "visible"].map((messageID) => ({ type: "message", messageID })))
+})
+
 test.each(["root", "child"])(
   "places only %s rejections chronologically, omits automatic approvals, and keeps family pending at the tail",
   (sessionID) => {

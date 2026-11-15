@@ -1,4 +1,6 @@
 import { utf8Length, type FormRequest, type Messages, type SessionFileChanges, type ModelOption, type ModelProfileOption, type ModelSelection, type SessionItem, type Sessions, type PromptFile, type PromptAgent } from "./contract"
+import { isInternalTranscriptEnvelope } from "@ycoding-ai/client/transcript-visibility"
+export { isInternalTranscriptEnvelope } from "@ycoding-ai/client/transcript-visibility"
 
 export type Field = FormRequest["fields"][number]
 export type Value = string | boolean | string[]
@@ -330,14 +332,6 @@ export function desktopPartVisible(part: AssistantContentPart): boolean {
   if (part.type === "text" || part.type === "reasoning") return Boolean(part.text.trim())
   if (part.name === "goal") return false
   return !(part.name === "skill" && part.state.status === "completed" && isRecord(part.state.structured) && Reflect.get(part.state.structured, "alreadyActive") === true)
-}
-
-export function isInternalTranscriptEnvelope(message: Messages[number]): boolean {
-  if (message.type !== "system" && message.type !== "synthetic") return false
-  const metadata = message.metadata
-  if (metadata?.contextSource === "session-state" || metadata?.contextSource === "team-view" || metadata?.compactionCheckpoint !== undefined || metadata?.decisionInputID !== undefined) return true
-  const trimmed = message.text.trimStart()
-  return message.text.startsWith("Authoritative current Session state (JSON):") || message.text.startsWith("Internal orchestration context (JSON).") || trimmed.startsWith("<system-update>") || trimmed.startsWith("<conversation-checkpoint>") || message.text.startsWith("Instructions from: ")
 }
 
 const memberEvents = ["started", "progress", "completed", "failed", "interrupted", "question", "permission", "review", "escalated"]

@@ -21,6 +21,7 @@ import { useCoordinationOptional } from "../../context/coordination"
 import { useProjectClock } from "./project-members"
 import { escapeTerminalText } from "../../util/terminal-text"
 import { dotsPeerAttribution } from "@ycoding-ai/client/dots-peer"
+import { isInternalTranscriptEnvelope } from "@ycoding-ai/client/transcript-visibility"
 import { Dots } from "@ycoding-ai/schema/dots"
 import { projectNoticeLabel, projectNotification } from "../../util/coordination"
 import { createStore } from "solid-js/store"
@@ -2912,7 +2913,7 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
       <Match when={advisory()}>{null}</Match>
       <Match when={true}>
         {/* Session-state and TeamView notices stay in the message store but never render. */}
-        <Show when={contextSource() !== "session-state" && contextSource() !== "team-view"}>
+        <Show when={!isInternalTranscriptEnvelope(props.message)}>
           <Show when={notice()} fallback={<RawNoticeMarkdown content={text()} />}>
             {(summary) => <SummaryNoticeMessage summary={summary()} wrap={dotsNotice() !== undefined} />}
           </Show>

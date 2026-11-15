@@ -1,5 +1,6 @@
 import { For, Show, createComputed, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Portal } from "solid-js/web"
+import { TranscriptActivityRow } from "./conversation"
 import { createDebouncer, createThrottler } from "@tanstack/solid-pacer"
 import { useRemote } from "../context"
 import { hasCompactionCheckpoint, type RemoteMessageView } from "../projection"
@@ -325,6 +326,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
           }}><Show when={decision()}>{(value) => <GuardrailDecisionRows decisions={[value()]} />}</Show><Show when={message()}><MessageRow message={() => message()!} continued={continued()} head={first()} /></Show></li>
       }}</For>
     </ol>
+    <TranscriptActivityRow />
     <Show when={jumpSlot()}>{(slot) => <Portal mount={slot()}><JumpControls hidden={!active()} clearance={clearance()} onTop={targets().top ? jumpToTop : undefined} onBottom={targets().bottom ? jumpToBottom : undefined} /></Portal>}</Show>
   </div>
 }

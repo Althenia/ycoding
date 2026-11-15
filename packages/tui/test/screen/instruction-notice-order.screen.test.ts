@@ -40,6 +40,7 @@ const later = {
   description: "Later transcript note",
   time: { created: 12 },
 }
+const internal = { id: "msg_internal", type: "system" as const, text: "## Guardrail decision history\nFamily root: ses_fixture\n[]", time: { created: 13 } }
 
 test("an instruction notice stays before the assistant that consumed it", async () => {
   let phase: "open" | "omit" | "canonical" = "open"
@@ -59,7 +60,7 @@ test("an instruction notice stays before the assistant that consumed it", async 
       if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
       if (url.pathname === `/api/session/${sessionID}/snapshot`) {
         const messages =
-          phase === "open" ? [user] : phase === "omit" ? [user, assistant] : [user, notice, assistant, later]
+          phase === "open" ? [user] : phase === "omit" ? [user, assistant] : [user, notice, assistant, later, internal]
         const seq = phase === "open" ? 1 : 12
         return sessionSnapshot(sessionID, messages, {
           session,
@@ -200,6 +201,9 @@ test("an instruction notice stays before the assistant that consumed it", async 
       const positions = order()
       return positions.notice >= 0 && positions.notice < positions.answer && positions.later > positions.answer
     })
+    expect(data.session.message.get(sessionID, internal.id)).toBeDefined()
+    expect(screen.frame()).not.toContain("Guardrail decision history")
+    expect(screen.frame()).not.toContain("Family root:")
   } finally {
     await screen.dispose()
   }

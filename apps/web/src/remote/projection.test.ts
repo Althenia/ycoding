@@ -1,5 +1,17 @@
 import { describe, expect, test } from "bun:test"
 
+test("snapshot and live transcript projection hide internal envelopes without hiding quoted user content", () => {
+  const text = "## Guardrail decision history\nFamily root: ses_example\n[]"
+  for (const type of ["system", "synthetic", "user"] as const) {
+    const message = readProjectedMessage({ id: `msg_${type}`, type, text, description: text, time: { created: 1 } })!
+    expect(transcriptMessageVisible(message)).toBe(type === "user")
+  }
+  const context = readProjectedMessage({ id: "msg_internal", type: "system", text: "Hidden", metadata: { decisionInputID: "input" }, time: { created: 1 } })!
+  expect(transcriptMessageVisible(context)).toBe(false)
+  const view = applySessionEvent(createSessionView("ses_example"), { type: "session.synthetic", data: { sessionID: "ses_example", text, description: text } }, 1)
+  expect(visibleTranscriptMessages(view.messages)).toEqual([])
+})
+
 import {
   readPendingInputs,
   readProjectedMessage,

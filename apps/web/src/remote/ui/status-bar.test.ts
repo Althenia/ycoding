@@ -9,6 +9,13 @@ const phoneRule = (header: string) => declarationsWhere(sheet, (rule) => rule.he
 const metadataRule = (header: string) => phoneRule(`:is(.composer__summary, .session-status--metadata) ${header}`)
 const baseRule = (header: string) => declarationsWhere(sheet, (rule) => rule.header === header && rule.conditions.length === 0)
 
+test("the composer has no bottom-left Working status or portalled activity replacement", async () => {
+  const composer = await Bun.file(new URL("./composer.tsx", import.meta.url)).text()
+  expect(composer).not.toContain("TranscriptActivityRow")
+  expect(source).not.toContain(">Working<")
+  expect(composer).not.toContain(">Working<")
+})
+
 test("the phone autonomy word is the shared effective mode word, or Mixed when categories differ", () => {
   expect(autonomyPhoneWord({ permissions: "manual", guardrails: "manual", answers: "manual" })).toBe("Manual")
   expect(autonomyPhoneWord({ permissions: "yolo", guardrails: "yolo", answers: "yolo" })).toBe("YOLO")

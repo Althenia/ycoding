@@ -8,27 +8,27 @@ const text = (value: string): AssistantPart => ({ kind: "text", ordinal: 0, text
 const base = { status: "running" as const, connection: "connected" as const, transport: "open" as const, requests: 0, sending: false }
 
 describe("transcript activity", () => {
-  test("a turn that started shows the typing indicator until output appears", () => {
-    expect(transcriptActivity({ ...base, messages: [prompt("consumed")] })).toEqual({ kind: "typing" })
+  test("a running Session names its current activity", () => {
+    expect(transcriptActivity({ ...base, messages: [prompt("consumed")] })).toEqual({ kind: "typing", label: "Thinking" })
   })
   test("an accepted message shows typing before the Session reports running", () => {
-    expect(transcriptActivity({ ...base, status: "idle", messages: [reply([text("Done")], { completed: 3 }), prompt("pending", "steer")] })).toEqual({ kind: "typing" })
-    expect(transcriptActivity({ ...base, status: "idle", sending: true, messages: [reply([text("Done")], { completed: 3 })] })).toEqual({ kind: "typing" })
+    expect(transcriptActivity({ ...base, status: "idle", messages: [reply([text("Done")], { completed: 3 }), prompt("pending", "steer")] })).toBeUndefined()
+    expect(transcriptActivity({ ...base, status: "idle", sending: true, messages: [reply([text("Done")], { completed: 3 })] })).toEqual({ kind: "typing", label: "Sending" })
   })
   test("a message queued behind a running turn shows typing below it", () => {
-    expect(transcriptActivity({ ...base, messages: [prompt("consumed"), reply([text("Streaming answer")]), prompt("pending", "queue")] })).toEqual({ kind: "typing" })
+    expect(transcriptActivity({ ...base, messages: [prompt("consumed"), reply([text("Streaming answer")]), prompt("pending", "queue")] })).toEqual({ kind: "typing", label: "Writing" })
   })
-  test("the first visible streamed text removes the indicator", () => {
-    expect(transcriptActivity({ ...base, messages: [prompt("consumed"), reply([text("")])] })).toEqual({ kind: "typing" })
-    expect(transcriptActivity({ ...base, messages: [prompt("consumed"), reply([text("First words")])] })).toBeUndefined()
+  test("the first visible streamed text changes the activity to Writing", () => {
+    expect(transcriptActivity({ ...base, messages: [prompt("consumed"), reply([text("")])] })).toEqual({ kind: "typing", label: "Thinking" })
+    expect(transcriptActivity({ ...base, messages: [prompt("consumed"), reply([text("First words")])] })).toEqual({ kind: "typing", label: "Writing" })
   })
-  test("a live reasoning or tool row is never duplicated by the indicator", () => {
-    expect(transcriptActivity({ ...base, messages: [prompt("consumed"), reply([{ kind: "reasoning", ordinal: 0, text: "Planning", started: 1 }])] })).toBeUndefined()
+  test("live reasoning and tools report concise activity without copying their content", () => {
+    expect(transcriptActivity({ ...base, messages: [prompt("consumed"), reply([{ kind: "reasoning", ordinal: 0, text: "Planning", started: 1 }])] })).toEqual({ kind: "typing", label: "Thinking" })
     for (const status of ["running", "streaming"] as const)
-      expect(transcriptActivity({ ...base, messages: [prompt("consumed"), reply([{ kind: "tool", callID: "call_1", name: "shell", status, content: [] }])] })).toBeUndefined()
+      expect(transcriptActivity({ ...base, messages: [prompt("consumed"), reply([{ kind: "tool", callID: "call_1", name: "shell", status, content: [] }])] })).toEqual({ kind: "typing", label: "Running Shell" })
   })
   test("between steps of a running turn the indicator returns", () => {
-    expect(transcriptActivity({ ...base, messages: [prompt("consumed"), reply([text("Reading"), { kind: "tool", callID: "call_1", name: "read", status: "completed", content: [] }])] })).toEqual({ kind: "typing" })
+    expect(transcriptActivity({ ...base, messages: [prompt("consumed"), reply([text("Reading"), { kind: "tool", callID: "call_1", name: "read", status: "completed", content: [] }])] })).toEqual({ kind: "typing", label: "Thinking" })
   })
   test("a finished turn and an idle Session show nothing", () => {
     expect(transcriptActivity({ ...base, status: "idle", messages: [prompt("consumed"), reply([text("Done")], { completed: 3 })] })).toBeUndefined()

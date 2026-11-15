@@ -612,11 +612,10 @@ export function TranscriptActivityRow(): JSX.Element {
       sending: state.mutations.some((mutation) => (mutation.kind === "prompt" || mutation.kind === "command") && mutation.sessionID === view.id && mutation.state === "sending"),
       lastError: view.lastError?.message,
     })
-  }, undefined, { equals: (previous, next) => previous?.kind === next?.kind && (previous?.kind !== "status" || next?.kind === "status" && previous.tone === next.tone && previous.label === next.label) })
-  return <div class="transcript-activity" role="status">
-    <Show when={activity()} keyed>{(current) => current.kind === "typing"
-      ? <span class="transcript-activity__typing motion-enter" role="img" aria-label="YCoding is working"><span /><span /><span /></span>
-      : <p class={`transcript-activity__status transcript-activity__status--${current.tone} motion-enter`}><Icon name={current.label.startsWith("Reconnecting") ? "refresh" : "alert"} size={16} /><span>{current.label}</span></p>}
-    </Show>
-  </div>
+  }, undefined, { equals: (previous, next) => previous?.kind === next?.kind && previous?.label === next?.label && (previous?.kind !== "status" || next?.kind === "status" && previous.tone === next.tone) })
+  return <Show when={activity()} keyed>{(current) => <div class="transcript-activity" role="status" aria-live="polite" aria-atomic="true">
+    {current.kind === "typing"
+      ? <span class="transcript-activity__live"><span class="transcript-activity__typing" aria-hidden="true"><span /><span /><span /></span><span>{current.label}</span></span>
+      : <p class={`transcript-activity__status transcript-activity__status--${current.tone}`}><Icon name={current.label.startsWith("Reconnecting") ? "refresh" : "alert"} size={16} /><span>{current.label}</span></p>}
+  </div>}</Show>
 }

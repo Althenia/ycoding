@@ -9,6 +9,7 @@
 import { ToolInvocation } from "../../../../packages/schema/src/tool-invocation"
 import type { Form } from "../../../../packages/schema/src/form"
 import { escapeDisplayText, toolDisplayName } from "../../../../packages/client/src/tool-display"
+import { isInternalTranscriptEnvelope } from "../../../../packages/client/src/transcript-visibility"
 import { RemoteLimits, isSessionID, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
 import { autonomyCategories, autonomyLabels, readAutonomyMode, type AutonomyCategory, type AutonomyModes, type EffectiveAutonomyView } from "./autonomy"
 import { parseUnifiedPatch } from "./file-change-diff"
@@ -289,7 +290,7 @@ export type RemoteMessageView =
       readonly error?: string
       readonly retry?: { readonly attempt: number; readonly at: number; readonly code: string }
     }
-  | { readonly kind: "system"; readonly id: string; readonly text: string; readonly source?: string; readonly created: number; readonly guardrail?: DecisionProvenanceView }
+  | { readonly kind: "system"; readonly id: string; readonly text: string; readonly source?: string; readonly metadata?: Readonly<Record<string, unknown>>; readonly created: number; readonly guardrail?: DecisionProvenanceView }
   | {
       readonly kind: "synthetic"
       readonly id: string
@@ -611,7 +612,7 @@ export function transcriptPartVisible(part: AssistantPart): boolean {
 }
 
 export function transcriptMessageVisible(message: RemoteMessageView): boolean {
-  if ((message.kind === "system" || message.kind === "synthetic") && (message.source === "session-state" || message.source === "team-view")) return false
+  if ((message.kind === "system" || message.kind === "synthetic") && isInternalTranscriptEnvelope({ type: message.kind, text: message.text, metadata: { ...message.metadata, ...(message.source ? { contextSource: message.source } : {}) } })) return false
   if (isCheckpointSummary(message)) return false
   if (message.kind === "synthetic") return Boolean(message.description?.trim())
   if (message.kind === "compaction") return message.status === "running" || message.status === "completed" || message.status === "failed" && (message.failureCode === "cancelled" || message.failureCode === "superseded" || message.jobID === undefined && message.failureCode === "aborted")
@@ -1957,7 +1958,7 @@ export function readProjectedMessage(value: unknown): RemoteMessageView | undefi
   }
   if (type === "system") {
     const metadata = recordField(value.metadata)
-    return { kind: "system", id, text: stringField(value.text) ?? "", ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}), created }
+    return { kind: "system", id, text: stringField(value.text) ?? "", ...(metadata ? { metadata } : {}), ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}), created }
   }
   if (type === "synthetic") {
     const description = stringField(value.description)

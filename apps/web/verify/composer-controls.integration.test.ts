@@ -299,16 +299,16 @@ for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["l
   }, 30_000)
 }
 
-const activityState = `(() => { const row = document.querySelector('.transcript .transcript-activity'); const typing = row?.querySelector('.transcript-activity__typing'); return typing ? 'typing:' + typing.getAttribute('aria-label') : row ? row.textContent.trim() : 'missing' })()`
+const activityState = `(() => document.querySelector('.transcript-activity')?.textContent.trim() ?? '')()`
 
-test("transcript activity yields to progress and terminal state at phone and desktop widths and never enters the composer", async () => {
+test("transcript activity names progress and disappears at idle without entering the composer", async () => {
   for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width!, height!)
       await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetRetryPhase('countdown')`)
-      for (const [phase, expected] of [["countdown", "typing:YCoding is working"], ["retrying", "typing:YCoding is working"], ["progress", ""], ["next", "typing:YCoding is working"], ["idle", ""], ["failed", "Provider error"]] as const) {
+      for (const [phase, expected] of [["countdown", "Thinking"], ["retrying", "Thinking"], ["progress", "Writing"], ["next", "Thinking"], ["idle", ""], ["failed", "Provider error"]] as const) {
         await page.evaluate(`window.composerSetRetryPhase(${JSON.stringify(phase)})`)
         const matches = phase === "failed" ? `${activityState}.startsWith(${JSON.stringify(expected)})` : `${activityState} === ${JSON.stringify(expected)}`
         await wait(page, matches)
@@ -321,7 +321,7 @@ test("transcript activity yields to progress and terminal state at phone and des
 }, 30_000)
 
 test("phone tool-running and waiting states keep the composer summary on the identity line and put status in the transcript", async () => {
-  for (const theme of ["light", "dark"]) for (const [status, expected] of [["tool", ""], ["waiting", "Waiting for your decision"]] as const) {
+  for (const theme of ["light", "dark"]) for (const [status, expected] of [["tool", "Running Shell"], ["waiting", "Waiting for your decision"]] as const) {
     const page = await browser!.openPage()
     try {
       await page.setViewport(390, 844)
@@ -339,7 +339,7 @@ test("phone tool-running and waiting states keep the composer summary on the ide
 }, 30_000)
 
 test("phone activity shows the Session state in the transcript, never the autonomy level shown beside it", async () => {
-  for (const [status, expected] of [["tool-auto", ""], ["family-auto", "typing:YCoding is working"]] as const) {
+  for (const [status, expected] of [["tool-auto", "Running Shell"], ["family-auto", "Thinking"]] as const) {
     const page = await browser!.openPage()
     try {
       await page.setViewport(390, 844)

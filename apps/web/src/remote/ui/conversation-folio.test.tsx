@@ -5,14 +5,14 @@ import { RemoteProvider } from "../context"
 import { createRemoteHttp } from "../http"
 import { createSessionView, type PendingRequestView, type RemoteMessageView } from "../projection"
 import { createRemoteStore } from "../store"
-import { MessageRow, RequestCard } from "./conversation"
+import { MessageRow, RequestCard, TranscriptActivityRow } from "./conversation"
 
-function render(view: () => JSX.Element): string {
+function render(view: () => JSX.Element, running = false): string {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
   Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { search: "" } } })
   const store = createRemoteStore({ http: createRemoteHttp(), createTransport: () => { throw new Error("Transcript rendering must not connect") } })
   try {
-    store.container.setState((current) => ({ ...current, activeSessionID: "ses_a", view: createSessionView("ses_a") }))
+    store.container.setState((current) => ({ ...current, activeSessionID: "ses_a", view: { ...createSessionView("ses_a"), status: running ? "running" : "idle" }, connection: { kind: "connected", deviceName: "Fixture" }, transport: { kind: "open" } }))
     return renderToString(() => <RemoteProvider createStore={() => ({ ...store, load: async () => {} })}>{view()}</RemoteProvider>)
   } finally {
     store.dispose()
@@ -24,6 +24,14 @@ function render(view: () => JSX.Element): string {
 const user: RemoteMessageView = { kind: "user", id: "msg_user", text: "Review the change", state: "consumed", delivery: "queue", created: 1 }
 const assistant: RemoteMessageView = { kind: "assistant", id: "msg_agent", created: 2, completed: 5, agent: "build", parts: [{ kind: "text", ordinal: 0, text: "Done" }] }
 const labels = (html: string) => [...html.matchAll(/aria-label="([^"]*)"/g)].map((match) => match[1])
+
+test("transient activity renders a polite three-dot live state and no markup at idle", () => {
+  const active = render(() => <TranscriptActivityRow />, true)
+  expect(active).toContain('class="transcript-activity" role="status" aria-live="polite" aria-atomic="true"')
+  expect(active).toContain("Thinking")
+  expect(active).toContain('class="transcript-activity__typing" aria-hidden="true"><span></span><span></span><span></span>')
+  expect(render(() => <TranscriptActivityRow />)).not.toContain("transcript-activity")
+})
 
 test("an assistant turn opens with a mark and one metadata line and never a section ordinal", () => {
   const html = render(() => <MessageRow message={() => assistant} />)

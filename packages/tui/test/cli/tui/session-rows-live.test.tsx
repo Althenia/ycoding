@@ -105,7 +105,7 @@ test("projects live context observations once as resident chronological messages
       durable: { aggregateID: sessionID, seq: 2, version: 1 },
       data: { sessionID, source: "team-view", text: "TeamView current tasks" },
     })
-    await wait(() => mounted.rows.some((row) => row.type === "message" && row.messageID === "msg_context_team"))
+    await wait(() => mounted.data.session.message.get(sessionID, "msg_context_team") !== undefined)
     expect(mounted.data.session.message.get(sessionID, "msg_context_state")).toMatchObject({
       type: "system", text: "Current Session state", metadata: { contextSource: "session-state" },
     })
@@ -114,7 +114,7 @@ test("projects live context observations once as resident chronological messages
       metadata: { contextSource: "team-view" },
     })
     expect(mounted.rows.filter((row) => row.type === "message").map((row) => row.messageID))
-      .toEqual(["msg_context_state", "msg_context_team"])
+      .toEqual([])
   } finally {
     mounted.destroy()
   }

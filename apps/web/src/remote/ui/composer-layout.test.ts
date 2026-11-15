@@ -6,6 +6,11 @@ const base = (header: string) => declarationsWhere(composer, (rule) => rule.head
 const wide = (header: string) => declarationsWhere(composer, (rule) => rule.header === header && rule.conditions.includes("@media (min-width: 768px)"))
 const fine = (header: string) => declarationsWhere(composer, (rule) => rule.header === header && rule.conditions.includes("@media (min-width: 768px) and (pointer: fine)"))
 
+test("context and action clusters wrap as units rather than orphaning Stop", () => {
+  expect(base(".composer__context-controls")).toMatchObject({ display: "flex", "flex-wrap": "wrap", "min-inline-size": "0" })
+  expect(base(".composer__actions")).toMatchObject({ display: "flex", "flex-wrap": "nowrap", "margin-inline-start": "auto" })
+})
+
 test("explicit motion off stops reasoning sparkles", () => {
   expect(base(':root[data-motion="off"] .model-control__sparkles, :root[data-motion="off"] .model-control__sparkles i').animation).toBe("none")
 })
@@ -141,10 +146,10 @@ test("the agent and model summary lives inside the phone card and is hidden from
   expect(composer.rules.some((rule) => rule.header.includes("composer__mobile-identity"))).toBe(false)
 })
 
-test("controls wrap except beside a desktop companion, where the model can shrink", () => {
+test("controls wrap beside a desktop companion while the model can shrink", () => {
   expect(base(".composer .composer__controls")["flex-wrap"]).toBe("wrap")
   const companion = (header: string) => declarationsWhere(composer, (rule) => rule.header === header && rule.conditions.includes("@media (min-width: 1280px) and (pointer: fine)"))
-  expect(companion(".app--team-open .composer .composer__controls")["flex-wrap"]).toBe("nowrap")
+  expect(companion(".app--team-open .composer .composer__controls")["flex-wrap"]).toBe("wrap")
   expect(companion(".app--team-open .composer__controls .model-control")).toMatchObject({ flex: "1 1 40px", "min-inline-size": "40px" })
 })
 

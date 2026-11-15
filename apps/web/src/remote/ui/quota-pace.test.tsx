@@ -1,6 +1,19 @@
 import { expect, test } from "bun:test"
 import { renderToString } from "solid-js/web"
 import { QuotaForecastStatus } from "./usage-cost"
+import { visibleProviders, type UsageProvider } from "./usage-model"
+
+test("quota cards select supported configured snapshots independently of names and profile labels", () => {
+  const base: UsageProvider = { providerID: "synthetic", label: "Same name", profile: "Same profile", status: "available", source: "provider_api", stability: "stable", updatedAt: 1, windows: [] }
+  const snapshots: readonly UsageProvider[] = [
+    { ...base, status: "unsupported" },
+    base,
+    { ...base, status: "unauthorized" },
+    { ...base, status: "error", message: "HTTP 429" },
+    { ...base, status: "error", message: "Fetch failed" },
+  ]
+  expect(visibleProviders(snapshots)).toEqual(snapshots.slice(1))
+})
 
 const forecast = { state: "estimated" as const, evidence: "medium" as const, unit: "percent", updatedAt: 600_000, ratePerHour: 12 }
 
