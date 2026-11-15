@@ -20,6 +20,7 @@ import {
   tabID,
 } from "./protocol.js"
 import { markerScript, timing, tokens } from "./indicator.js"
+import { createGroupMarkers } from "./group-marker.js"
 
 const PROTOCOL_VERSION = "1.3"
 const STORAGE_KEY = "browserPairing"
@@ -228,6 +229,25 @@ const chromeTabs = new Map()
 const groups = new Map()
 const deniedTabs = new Set()
 const navigatedAway = new Map()
+const groupMarkers = createGroupMarkers(chrome)
+
+async function stopGroupControl(ids) {
+  for (const [groupID, members] of groups) if (members.some((id) => ids.includes(id))) groups.delete(groupID)
+  for (const id of ids) {
+    const tab = tabs.get(chromeTabs.get(id))
+    if (tab) await revokeTab(tab, "access_revoked")
+  }
+}
+
+async function validateGroupControl() {
+  await stopGroupControl(await groupMarkers.validate())
+}
+
+chrome.tabGroups.onUpdated.addListener(validateGroupControl)
+chrome.tabGroups.onRemoved.addListener(validateGroupControl)
+chrome.tabGroups.onMoved.addListener(validateGroupControl)
+chrome.tabs.onMoved.addListener(validateGroupControl)
+chrome.tabs.onDetached.addListener(validateGroupControl)
 
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   handlePopup(message).then(respond, async (error) =>
@@ -268,6 +288,7 @@ chrome.tabs.onActivated.addListener(({ tabId: activeTabID, windowId }) => {
 })
 
 chrome.tabs.onAttached.addListener((chromeTabID, info) => {
+  void validateGroupControl()
   const tab = tabs.get(chromeTabs.get(chromeTabID))
   if (!tab) return
   tab.windowID = info.newWindowId
@@ -279,6 +300,7 @@ chrome.tabs.onCreated.addListener((tab) => {
 })
 
 chrome.tabs.onUpdated.addListener((chromeTabID, change, info) => {
+  void validateGroupControl()
   if (!pairing?.enabled) return
   const current = tabs.get(chromeTabs.get(chromeTabID))
   if (current && info.windowId !== undefined) current.windowID = info.windowId
@@ -286,23 +308,27 @@ chrome.tabs.onUpdated.addListener((chromeTabID, change, info) => {
     void revokeTab(current, "navigated").then(() => registerProfileTab(info))
     return
   }
-  if (current?.profile && change.url) {
-    current.url = change.url
-    current.documentGeneration++
-    current.revision = 0
-    current.refs.clear()
+  if (current?.profile && (change.url || change.groupId !== undefined)) {
+    if (change.url) {
+      current.url = change.url
+      current.documentGeneration++
+      current.revision = 0
+      current.refs.clear()
+    }
     send({
       type: "updated",
       tabID: current.id,
       title: info.title ?? "",
       url: current.url,
       documentGeneration: current.documentGeneration,
+      ...(info.groupId >= 0 ? { groupID: info.groupId } : {}),
     })
   }
   if (!current) registerProfileTab(info)
 })
 
 chrome.tabs.onRemoved.addListener((chromeTabID) => {
+  void validateGroupControl()
   deniedTabs.delete(chromeTabID)
   navigatedAway.delete(chromeTabID)
   void persistDeniedTabs()
@@ -310,12 +336,13 @@ chrome.tabs.onRemoved.addListener((chromeTabID) => {
   if (tab) void revokeTab(tab, "closed")
 })
 
-chrome.debugger.onDetach.addListener((source, reason) => {
+chrome.debugger.onDetach.addListener(async (source, reason) => {
   if (source.tabId === undefined) return
   const id = chromeTabs.get(source.tabId)
   if (!id) return
   const tab = tabs.get(id)
   if (tab?.profile && !tab.attached) return
+  await stopGroupControl(await groupMarkers.release(source.tabId))
   if (tab && !tab.owned) {
     deniedTabs.add(tab.chromeTabID)
     void persistDeniedTabs()
@@ -416,6 +443,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
         title: info.title ?? "",
         url: tab.url,
         documentGeneration: tab.documentGeneration,
+        ...(info.groupId >= 0 ? { groupID: info.groupId } : {}),
       })
     },
     () => {},
@@ -640,6 +668,7 @@ function registerProfileTab(info) {
     documentGeneration: 1,
     active: !!info.active,
     ...(replaces ? { replaces } : {}),
+    ...(info.groupId >= 0 ? { groupID: info.groupId } : {}),
   })
 }
 
@@ -664,6 +693,7 @@ function persistDeniedTabs() {
 
 async function revokeTab(tab, reason) {
   if (!tab || tabs.get(tab.id) !== tab) return
+  await stopGroupControl(await groupMarkers.release(tab.chromeTabID))
   chromeTabs.delete(tab.chromeTabID)
   tabs.delete(tab.id)
   clearBadge(tab.chromeTabID)
@@ -718,6 +748,18 @@ async function receive(raw, current = socket) {
     }
     requestedPause = message.action === "pause"
     return
+  }
+  if (message.type === "observe" || message.type === "action") {
+    if (typeof message.controlSessionID !== "string" || !Array.isArray(message.controlTabIDs)) {
+      fail(message, "Tab control grants are missing")
+      return
+    }
+    const granted = message.controlTabIDs.map((id) => tabs.get(id)).filter((tab) => tab?.profile)
+    for (const tab of tabs.values()) {
+      if (tab.controlOwner === message.controlSessionID) tab.controlOwner = undefined
+    }
+    for (const tab of granted) tab.controlOwner = message.controlSessionID
+    await stopGroupControl(await groupMarkers.setGrants(message.controlSessionID, granted.map((tab) => tab.chromeTabID)))
   }
   if (message.type === "observe") await observe(message)
   if (message.type === "action") await act(message)
@@ -1052,6 +1094,36 @@ async function closeTab(message) {
   }
 }
 
+async function controlGroup(message) {
+  let dispatched = false
+  try {
+    requireConnection()
+    const ids = message.action.tabIDs
+    if (!pairing?.enabled || requestedPause || !Array.isArray(ids) || ids.length < 1 || ids.length > MAX_SHARED_TABS ||
+      new Set(ids).size !== ids.length || !ids.includes(message.tabID)) throw new Error("Invalid group control grant")
+    const selected = ids.map((id) => tabs.get(id))
+    if (selected.some((tab) => !tab?.profile || tab.controlOwner !== message.controlSessionID))
+      throw new Error("Every group member needs the same Session control grant")
+    const info = await Promise.all(selected.map((tab) => chrome.tabs.get(tab.chromeTabID)))
+    const groupID = info[0].groupId ?? -1
+    const members = groupID === -1 ? [info[0]] : await chrome.tabs.query({ groupId: groupID })
+    if (members.length !== info.length || members.some((member) => !info.some((tab) => tab.id === member.id)) ||
+      info.some((tab, index) => tab.active || tab.pinned || (tab.groupId ?? -1) !== groupID || tab.windowId !== info[0].windowId ||
+        !isAllowedPage(selected[index], tab.url) || !message.allowedOrigins.includes(new URL(tab.url).origin)))
+      throw new Error("Group membership or grant changed; only inactive unpinned members may be granted")
+    dispatched = true
+    await groupMarkers.ensure(info[0].id, message.controlSessionID, true, info.map((tab) => tab.id))
+    await controlTabs(selected)
+    const anchor = tabs.get(message.tabID)
+    send({ type: "result", callID: message.callID, tabID: anchor.id, generation,
+      documentGeneration: anchor.documentGeneration, observationRevision: anchor.revision,
+      status: "completed", title: (await tabInfo(anchor)).title ?? "", url: anchor.url,
+      groupID: (await chrome.tabs.get(anchor.chromeTabID)).groupId })
+  } catch (error) {
+    fail(message, safeError(error), dispatched)
+  }
+}
+
 async function groupTabs(message) {
   let dispatched = false
   try {
@@ -1073,7 +1145,7 @@ async function groupTabs(message) {
     const selected = request.tabIDs.map((id) => tabs.get(id))
     if (selected.some((tab) => !tab?.profile)) throw new Error("Only granted profile tabs can be grouped")
     const info = await Promise.all(selected.map((tab) => chrome.tabs.get(tab.chromeTabID)))
-    if (info.some((tab) => tab.active || tab.groupId !== -1 || tab.windowId !== info[0].windowId))
+    if (info.some((tab) => tab.active || tab.pinned || tab.windowId !== info[0].windowId))
       throw new Error("Only inactive ungrouped tabs in one window can be grouped")
     if (
       selected.some(
@@ -1085,7 +1157,13 @@ async function groupTabs(message) {
       !pairing?.enabled
     )
       throw new Error("Profile tab grant changed")
-    await controlTabs(selected)
+    await groupMarkers.prepareGroup(selected.map((tab) => tab.chromeTabID))
+    await controlTabs(selected, false)
+    for (const tab of selected) {
+      const current = await chrome.tabs.get(tab.chromeTabID)
+      if (current.active || current.pinned || current.groupId !== -1)
+        throw new Error("The tab changed before grouping")
+    }
     dispatched = true
     const groupID = await chrome.tabs.group({ tabIds: info.map((tab) => tab.id) })
     groups.set(
@@ -1093,6 +1171,7 @@ async function groupTabs(message) {
       selected.map((tab) => tab.chromeTabID),
     )
     await chrome.tabGroups.update(groupID, { title: request.title })
+    await groupMarkers.ensure(selected[0].chromeTabID, message.controlSessionID, true, selected.map((tab) => tab.chromeTabID))
     const anchor = tabs.get(message.tabID)
     send({
       type: "result",
@@ -1137,7 +1216,8 @@ async function ungroupTabs(message) {
       ids.some((id) => !tabs.get(chromeTabs.get(id))?.profile)
     )
       throw new Error("Group tabs changed or are controlled by the user")
-    await controlTabs(ids.map((id) => tabs.get(chromeTabs.get(id))))
+    await controlTabs(ids.map((id) => tabs.get(chromeTabs.get(id))), false)
+    await groupMarkers.prepareUngroup(ids)
     dispatched = true
     await chrome.tabs.ungroup(ids)
     groups.delete(request.groupID)
@@ -1411,6 +1491,7 @@ async function act(message) {
       return fail(message, "The shared tab observation is stale")
     if (message.action.type === "group") return groupTabs(message)
     if (message.action.type === "ungroup") return ungroupTabs(message)
+    if (message.action.type === "group_control") return controlGroup(message)
     if (!ACTION_TYPES.has(message.action.type)) throw new Error("Unsupported browser action")
     fresh = tab.profile && !tab.attached ? tab : undefined
     if (message.action.type === "dialog" && message.action.accept !== undefined && tab.dialog) {
@@ -2366,17 +2447,18 @@ async function clearMarker(tab) {
   forgetDocument(tab)
 }
 
-async function ensureControlled(tab) {
+async function ensureControlled(tab, nativeMarker = true) {
   const info = await chrome.tabs.get(tab.chromeTabID)
   if (info.pinned) throw new Error("Pinned tabs cannot show the YCoding control marker; unpin the tab first")
+  if (nativeMarker && tab.profile) await groupMarkers.ensure(tab.chromeTabID, tab.controlOwner)
   await attachProfile(tab)
   if (!(await mark(tab))) throw new Error(MARKER_FAILED)
 }
 
-async function controlTabs(list) {
+async function controlTabs(list, nativeMarker = true) {
   const fresh = list.filter((tab) => tab.profile && !tab.attached)
   try {
-    for (const tab of list) await ensureControlled(tab)
+    for (const tab of list) await ensureControlled(tab, nativeMarker)
   } catch (error) {
     await Promise.all(fresh.filter((tab) => tabs.get(tab.id) === tab).map(releaseControl))
     throw error
@@ -2384,6 +2466,7 @@ async function controlTabs(list) {
 }
 
 async function releaseControl(tab) {
+  await stopGroupControl(await groupMarkers.release(tab.chromeTabID))
   await clearMarker(tab)
   tab.attached = false
   await chrome.debugger.detach({ tabId: tab.chromeTabID }).catch(() => {})
@@ -2418,7 +2501,8 @@ function syncRefreshTimer() {
 }
 
 function refreshMarkers() {
-  return Promise.all([...tabs.values()].filter((tab) => tab.marked && tab.attached).map((tab) => mark(tab)))
+  return validateGroupControl().then(() =>
+    Promise.all([...tabs.values()].filter((tab) => tab.marked && tab.attached).map((tab) => mark(tab))))
 }
 
 async function assertPageCaptureSafe(tab) {
@@ -2644,6 +2728,7 @@ function paused(message, tab) {
 async function stop(disconnected) {
   clearInterval(heartbeatTimer)
   const attached = [...tabs.values()]
+  for (const tab of attached) await groupMarkers.release(tab.chromeTabID)
   tabs.clear()
   chromeTabs.clear()
   syncRefreshTimer()

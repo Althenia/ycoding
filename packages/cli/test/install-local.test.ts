@@ -97,6 +97,20 @@ test("leaves the previous install untouched when the build is incomplete", async
   }
 })
 
+test("rejects an invalid signed Chrome package before replacing an install", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-install-crx-"))
+  try {
+    const destination = path.join(root, "bin")
+    await installLocalBuild({ source: await build(root, "first", "linux"), destination, platform: "linux" })
+    const source = await build(root, "second", "linux")
+    await writeFile(path.join(source, "ycoding-chrome-extension.crx"), "invalid signed package")
+    await expect(installLocalBuild({ source, destination, platform: "linux" })).rejects.toThrow("Chrome package")
+    expect(await readFile(path.join(destination, "ycoding"), "utf8")).toBe("binary-first")
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test.skipIf(process.platform !== "darwin")("installs the signed computer helper app beside the executable on macOS", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-install-local-"))
   try {

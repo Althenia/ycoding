@@ -537,7 +537,74 @@ describe("Chrome bridge service worker", () => {
     }
   })
 
-  test("groups only inactive paired tabs and reverses only extension-created groups", async () => {
+  test("green group marker refuses a missing member grant before attaching or changing the group", async () => {
+    harness.reset()
+    harness.page.profileTabs = [
+      { id: 18, active: false, groupId: 7, index: 0, windowId: 1, url: "https://example.test/first", title: "First" },
+      { id: 19, active: false, groupId: 7, index: 1, windowId: 1, url: "https://example.test/second", title: "Second" },
+    ]
+    await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "g".repeat(32) })
+    const socket = harness.FakeWebSocket.instance
+    try {
+      const shared = socket.outgoing.filter((message) => message.type === "shared")
+      await socket.receive({ type: "observe", callID: "missing-group-grant", tabID: shared[0].tabID,
+        generation: "bridge-1", controlSessionID: "ses_group", controlTabIDs: [shared[0].tabID] })
+      expect(socket.outgoing.find((message) => message.callID === "missing-group-grant")).toMatchObject({ type: "error", dispatched: false })
+      await socket.receive({ type: "action", callID: "incomplete-group-grant", tabID: shared[0].tabID,
+        generation: "bridge-1", documentGeneration: 1, observationRevision: 0,
+        allowedOrigins: ["https://example.test"], controlSessionID: "ses_group", controlTabIDs: [shared[0].tabID],
+        action: { type: "group_control", tabIDs: [shared[0].tabID] } })
+      expect(socket.outgoing.find((message) => message.callID === "incomplete-group-grant")).toMatchObject({ type: "error", dispatched: false })
+      expect(harness.attached).toEqual([])
+      expect(harness.groupUpdates).toEqual([])
+      expect(harness.grouped).toEqual([])
+    } finally {
+      await socket.receive({ type: "control", action: "stop" })
+    }
+  })
+
+  for (const finish of ["release", "appearance change", "native Cancel"]) test(`green group control grants every inactive member and ends on ${finish}`, async () => {
+    harness.reset()
+    harness.page.profileTabs = [
+      { id: 18, active: false, groupId: 7, index: 0, windowId: 1, url: "https://example.test/first", title: "First" },
+      { id: 19, active: false, groupId: 7, index: 1, windowId: 1, url: "https://example.test/second", title: "Second" },
+    ]
+    harness.groupState.set(7, { id: 7, color: "blue", title: "Personal", collapsed: true, windowId: 1 })
+    await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "g".repeat(32) })
+    const socket = harness.FakeWebSocket.instance
+    try {
+      const shared = socket.outgoing.filter((message) => message.type === "shared")
+      expect(shared.map((tab) => tab.groupID)).toEqual([7, 7])
+      await socket.receive({ type: "action", callID: "grant-group", tabID: shared[0].tabID, generation: "bridge-1",
+        documentGeneration: 1, observationRevision: 0, allowedOrigins: ["https://example.test"],
+        action: { type: "group_control", tabIDs: shared.map((tab) => tab.tabID) } })
+      expect(socket.outgoing.find((message) => message.callID === "grant-group")).toMatchObject({ type: "result", status: "completed", groupID: 7 })
+      expect(harness.attached).toEqual([{ tabId: 18 }, { tabId: 19 }])
+      expect(harness.groupState.get(7)).toMatchObject({ color: "green", title: "Personal", collapsed: true })
+      if (finish === "release") {
+        await socket.receive({ type: "relinquish", callID: "release-group", tabID: shared[0].tabID, generation: "bridge-1" })
+        expect(harness.groupState.get(7)).toMatchObject({ color: "blue", title: "Personal", collapsed: true })
+      } else if (finish === "native Cancel") {
+        await harness.debuggerDetach.emit({ tabId: 18 }, "canceled_by_user")
+        expect(harness.groupState.get(7)).toMatchObject({ color: "blue", title: "Personal", collapsed: true })
+      } else {
+        harness.groupState.get(7).title = "User changed this"
+        await harness.groupUpdated.emit(harness.groupState.get(7))
+        await socket.receive({ type: "observe", callID: "after-user-change", tabID: shared[0].tabID, generation: "bridge-1" })
+        expect(socket.outgoing.find((message) => message.callID === "after-user-change")).toMatchObject({ type: "error" })
+        expect(harness.groupState.get(7)).toMatchObject({ color: "green", title: "User changed this", collapsed: true })
+      }
+      expect(harness.grouped).toEqual([])
+      expect(harness.ungrouped).toEqual([])
+      if (finish !== "native Cancel") expect(harness.detached).toContainEqual({ tabId: 18 })
+      expect(harness.detached).toContainEqual({ tabId: 19 })
+      expect(socket.outgoing).toContainEqual({ type: "revoked", tabID: shared[1].tabID, reason: "access_revoked" })
+    } finally {
+      await socket.receive({ type: "control", action: "stop" })
+    }
+  })
+
+  test("groups only inactive paired tabs and refuses reuse after membership changes", async () => {
     harness.reset()
     harness.page.profileTabs = [
       { id: 17, active: true, groupId: -1, windowId: 1, url: "https://example.test/form", title: "Active" },
@@ -569,7 +636,8 @@ describe("Chrome bridge service worker", () => {
         action: { type: "group", tabIDs: [profile[1].tabID, profile[2].tabID], title: "Task" },
       })
       expect(harness.grouped).toEqual([{ tabIds: [18, 19] }])
-      expect(harness.groupUpdates).toEqual([{ groupId: 7, updateProperties: { title: "Task" } }])
+      expect(harness.groupUpdates).toEqual([{ groupId: 7, updateProperties: { title: "Task" } },
+        { groupId: 7, updateProperties: { color: "green" } }])
       expect(socket.outgoing.find((message) => message.callID === "profile-group")).toMatchObject({
         type: "result",
         groupID: 7,
@@ -603,12 +671,38 @@ describe("Chrome bridge service worker", () => {
         callID: "revert-group",
         action: { type: "ungroup", tabIDs: [profile[1].tabID, profile[2].tabID], groupID: 7 },
       })
+      expect(harness.ungrouped).toEqual([])
+      expect(socket.outgoing.find((message) => message.callID === "revert-group")).toMatchObject({ type: "error" })
+      expect(harness.removed).toEqual([])
+    } finally {
+      await socket.receive({ type: "control", action: "stop" })
+    }
+  })
+  test("ungroups an unchanged extension-created green group without closing its tabs", async () => {
+    harness.reset()
+    harness.page.profileTabs = [
+      { id: 18, active: false, groupId: -1, windowId: 1, url: "https://example.test/first", title: "First" },
+      { id: 19, active: false, groupId: -1, windowId: 1, url: "https://example.test/second", title: "Second" },
+    ]
+    await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "g".repeat(32) })
+    const socket = harness.FakeWebSocket.instance
+    try {
+      const shared = socket.outgoing.filter((message) => message.type === "shared")
+      const base = { type: "action", tabID: shared[0].tabID, generation: "bridge-1", documentGeneration: 1,
+        observationRevision: 0, allowedOrigins: ["https://example.test"] }
+      const tabIDs = shared.map((tab) => tab.tabID)
+      await socket.receive({ ...base, callID: "create-green-group", action: { type: "group", tabIDs, title: "Task" } })
+      const result = socket.outgoing.find((message) => message.callID === "create-green-group")
+      expect(result).toMatchObject({ type: "result", status: "completed" })
+      await socket.receive({ ...base, callID: "ungroup-green", action: { type: "ungroup", tabIDs, groupID: result.groupID } })
+      expect(socket.outgoing.find((message) => message.callID === "ungroup-green")).toMatchObject({ type: "result", status: "completed" })
       expect(harness.ungrouped).toEqual([[18, 19]])
       expect(harness.removed).toEqual([])
     } finally {
       await socket.receive({ type: "control", action: "stop" })
     }
   })
+
   test("opens only a new background tab and closes it without touching a personal tab", async () => {
     harness.reset()
     await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "g".repeat(32) })
@@ -3483,6 +3577,10 @@ function createHarness() {
   const tabUpdated = listeners()
   const tabRemoved = listeners()
   const tabAttached = listeners()
+  const groupUpdated = listeners()
+  const groupRemoved = listeners()
+  const groupState = new Map()
+  const groupMembership = new Map()
   const debuggerEvents = listeners()
   const debuggerDetach = listeners()
   const commands = []
@@ -3590,6 +3688,9 @@ function createHarness() {
     }
 
     async receive(message) {
+      if ((message.type === "observe" || message.type === "action") && message.controlSessionID === undefined) {
+        message = { ...message, controlSessionID: "ses_fixture", controlTabIDs: message.action?.tabIDs ?? [message.tabID] }
+      }
       await this.emit("message", { data: JSON.stringify(message) })
     }
 
@@ -3642,6 +3743,8 @@ function createHarness() {
     grouped,
     groupUpdates,
     ungrouped,
+    groupState,
+    groupUpdated,
     badges,
     debuggerDetach,
     tabCreated,
@@ -3674,6 +3777,8 @@ function createHarness() {
       },
       alarms: alarms.api,
       tabs: {
+        onMoved: listeners(),
+        onDetached: listeners(),
         onActivated: tabActivations,
         onCreated: tabCreated,
         onUpdated: tabUpdated,
@@ -3688,20 +3793,25 @@ function createHarness() {
           removed.push(id)
         },
         query: async (options = {}) => {
-          const results = page.profileTabs ?? [{ id: 17, active: page.active, windowId: 1, title: "Example" }]
+          const results = (page.profileTabs ?? [{ id: 17, active: page.active, windowId: 1, title: "Example" }])
+            .map((tab) => ({ ...tab, groupId: tab.groupId ?? groupMembership.get(tab.id) ?? -1 }))
           return options.groupId === undefined ? results : results.filter((tab) => tab.groupId === options.groupId)
         },
         group: async (options) => {
           timeline.push(["group"])
           grouped.push(options)
-          for (const tab of page.profileTabs ?? []) if (options.tabIds.includes(tab.id)) tab.groupId = 7
-          return 7
+          const groupID = Math.max(6, ...groupState.keys()) + 1
+          groupState.set(groupID, { id: groupID, color: "grey", title: "", collapsed: false, windowId: 1 })
+          for (const id of options.tabIds) groupMembership.set(id, groupID)
+          for (const tab of page.profileTabs ?? []) if (options.tabIds.includes(tab.id)) tab.groupId = groupID
+          return groupID
         },
         ungroup: async (ids) => {
           ungrouped.push(ids)
+          for (const id of ids) groupMembership.delete(id)
           for (const tab of page.profileTabs ?? []) if (ids.includes(tab.id)) tab.groupId = -1
         },
-        get: async (id) =>
+        get: async (id) => ({ ...(
           id === 24
             ? { id, active: page.ownedActive }
             : (page.profileTabs?.find((tab) => tab.id === id) ?? {
@@ -3710,11 +3820,16 @@ function createHarness() {
                 windowId: 1,
                 title: "Example",
                 url: "https://example.test/form",
-              }),
+              })), groupId: page.profileTabs?.find((tab) => tab.id === id)?.groupId ?? groupMembership.get(id) ?? -1 }),
       },
       tabGroups: {
+        onMoved: listeners(),
+        onUpdated: groupUpdated,
+        onRemoved: groupRemoved,
+        get: async (id) => ({ ...(groupState.get(id) ?? { id, color: "grey", title: "", collapsed: false, windowId: 1 }) }),
         update: async (groupId, updateProperties) => {
           groupUpdates.push({ groupId, updateProperties })
+          groupState.set(groupId, { ...(groupState.get(groupId) ?? { id: groupId, color: "grey", title: "", collapsed: false, windowId: 1 }), ...updateProperties })
         },
       },
       permissions: {
@@ -3952,6 +4067,8 @@ function createHarness() {
       grouped.length = 0
       groupUpdates.length = 0
       ungrouped.length = 0
+      groupState.clear()
+      groupMembership.clear()
       badges.length = 0
       page.profileTabs = undefined
       page.active = true

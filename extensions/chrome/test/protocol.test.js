@@ -1,12 +1,17 @@
 import { describe, expect, test } from "bun:test"
+import { createPublicKey } from "node:crypto"
 import { MAX_SHARED_TABS, VERSION, connectURL, reconnectDelay, safePage, validateServerURL } from "../protocol.js"
 
 describe("Chrome bridge protocol", () => {
   test("declares a public key that fixes the extension ID wherever it is loaded from", async () => {
     const manifest = await Bun.file(new URL("../manifest.json", import.meta.url)).json()
-    const digest = new Bun.CryptoHasher("sha256").update(Buffer.from(manifest.key, "base64")).digest("hex")
+    const key = Buffer.from(manifest.key, "base64")
+    const publicKey = createPublicKey({ key, format: "der", type: "spki" })
+    expect(publicKey.asymmetricKeyType).toBe("rsa")
+    expect(publicKey.export({ format: "der", type: "spki" }).equals(key)).toBe(true)
+    const digest = new Bun.CryptoHasher("sha256").update(key).digest("hex")
     const id = digest.slice(0, 32).replace(/[0-9a-f]/g, (digit) => String.fromCharCode(97 + Number.parseInt(digit, 16)))
-    expect(id).toBe("emlogajckgpjjigcbcbfbpbeencgghfb")
+    expect(id).toBe("pplfpnheaokgnhbgjnoboepjlmdnkeda")
   })
 
   test("identifies YCoding in Chrome and ships toolbar and popup icons at the declared sizes", async () => {

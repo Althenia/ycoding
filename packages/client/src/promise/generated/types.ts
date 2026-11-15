@@ -2819,6 +2819,7 @@ export type BrowserTab = {
   uncertainCallID?: string
   mode?: "owned" | "profile"
   lease?: "self" | "other"
+  groupID?: number
   deliverable?: boolean
 }
 
@@ -11018,6 +11019,7 @@ export type BrowserActionInput = {
         }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "group_control"; readonly tabIDs: ReadonlyArray<string> }
       | { readonly type: "back" }
       | { readonly type: "forward" }
       | { readonly type: "reload" }
@@ -11081,6 +11083,7 @@ export type BrowserActionInput = {
         }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "group_control"; readonly tabIDs: ReadonlyArray<string> }
       | { readonly type: "back" }
       | { readonly type: "forward" }
       | { readonly type: "reload" }
@@ -11144,6 +11147,7 @@ export type BrowserActionInput = {
         }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "group_control"; readonly tabIDs: ReadonlyArray<string> }
       | { readonly type: "back" }
       | { readonly type: "forward" }
       | { readonly type: "reload" }
@@ -11207,6 +11211,7 @@ export type BrowserActionInput = {
         }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "group_control"; readonly tabIDs: ReadonlyArray<string> }
       | { readonly type: "back" }
       | { readonly type: "forward" }
       | { readonly type: "reload" }
@@ -11270,6 +11275,7 @@ export type BrowserActionInput = {
         }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "group_control"; readonly tabIDs: ReadonlyArray<string> }
       | { readonly type: "back" }
       | { readonly type: "forward" }
       | { readonly type: "reload" }
@@ -11333,6 +11339,7 @@ export type BrowserActionInput = {
         }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "group_control"; readonly tabIDs: ReadonlyArray<string> }
       | { readonly type: "back" }
       | { readonly type: "forward" }
       | { readonly type: "reload" }
@@ -11473,6 +11480,7 @@ export type IsolatedBrowserActionInput = {
         }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "group_control"; readonly tabIDs: ReadonlyArray<string> }
       | { readonly type: "back" }
       | { readonly type: "forward" }
       | { readonly type: "reload" }
@@ -11537,6 +11545,7 @@ export type IsolatedBrowserActionInput = {
         }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "group_control"; readonly tabIDs: ReadonlyArray<string> }
       | { readonly type: "back" }
       | { readonly type: "forward" }
       | { readonly type: "reload" }
@@ -11601,6 +11610,7 @@ export type IsolatedBrowserActionInput = {
         }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "group_control"; readonly tabIDs: ReadonlyArray<string> }
       | { readonly type: "back" }
       | { readonly type: "forward" }
       | { readonly type: "reload" }
@@ -11665,6 +11675,7 @@ export type IsolatedBrowserActionInput = {
         }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "group_control"; readonly tabIDs: ReadonlyArray<string> }
       | { readonly type: "back" }
       | { readonly type: "forward" }
       | { readonly type: "reload" }
@@ -11729,6 +11740,7 @@ export type IsolatedBrowserActionInput = {
         }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "group_control"; readonly tabIDs: ReadonlyArray<string> }
       | { readonly type: "back" }
       | { readonly type: "forward" }
       | { readonly type: "reload" }
@@ -11793,6 +11805,7 @@ export type IsolatedBrowserActionInput = {
         }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "group_control"; readonly tabIDs: ReadonlyArray<string> }
       | { readonly type: "back" }
       | { readonly type: "forward" }
       | { readonly type: "reload" }
@@ -11857,6 +11870,7 @@ export type IsolatedBrowserActionInput = {
         }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "group_control"; readonly tabIDs: ReadonlyArray<string> }
       | { readonly type: "back" }
       | { readonly type: "forward" }
       | { readonly type: "reload" }

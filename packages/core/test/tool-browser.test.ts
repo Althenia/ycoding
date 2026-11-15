@@ -340,7 +340,7 @@ describe("BrowserTool", () => {
       }
     }),
   )
-  it.effect("requires group control, both sites, and hard mutation review before profile grouping", () =>
+  for (const type of ["group", "group_control"] as const) it.effect(`requires ${type} permission, both sites, and mutation evaluation`, () =>
     Effect.gen(function* () {
       sequence.length = 0
       requests.length = 0
@@ -349,8 +349,8 @@ describe("BrowserTool", () => {
         call: { type: "tool-call", id: "profile-group", name: "browser",
           input: { operation: "action", mode: "profile", tabID: profileTab.id, generation: 1,
             documentGeneration: 1, observationRevision: 1,
-            action: { type: "group", tabIDs: [profileTab.id, anotherProfileTab.id], title: "Task" } } } })
-      expect(requests.some((entry) => entry.action === "browser_control" && entry.resources[0] === "group")).toBe(true)
+            action: { type, tabIDs: [profileTab.id, anotherProfileTab.id], ...(type === "group" ? { title: "Task" } : {}) } } } })
+      expect(requests.some((entry) => entry.action === "browser_control" && entry.resources[0] === type)).toBe(true)
       expect(requests.find((entry) => entry.action === "browser_read" && entry.resources.length === 2)?.resources)
         .toEqual(["https://example.test/form", "https://other.test/page"])
       expect(sequence).toContain("guardrail:browser_profile_mutation:https://example.test/form")
@@ -362,7 +362,7 @@ describe("BrowserTool", () => {
       ? Effect.fail(new Permission.CorrectedError({ feedback: "Profile site denied" }))
       : Effect.sync(() => sequence.push(`permission:${input.action}:${input.resources[0]}`)),
   }))
-  profileSiteDenied.effect("does not group when one granted member site is denied", () =>
+  for (const type of ["group", "group_control"] as const) profileSiteDenied.effect(`does not ${type} when one granted member site is denied`, () =>
     Effect.gen(function* () {
       sequence.length = 0
       const registry = yield* ToolRegistry.Service
@@ -370,7 +370,7 @@ describe("BrowserTool", () => {
         call: { type: "tool-call", id: "denied-profile-group", name: "browser",
           input: { operation: "action", mode: "profile", tabID: profileTab.id, generation: 1,
             documentGeneration: 1, observationRevision: 1,
-            action: { type: "group", tabIDs: [profileTab.id, anotherProfileTab.id], title: "Task" } } } })
+            action: { type, tabIDs: [profileTab.id, anotherProfileTab.id], ...(type === "group" ? { title: "Task" } : {}) } } } })
       expect(result).toMatchObject({ type: "error" })
       expect(sequence).not.toContain("action:denied-profile-group")
     }),
@@ -410,6 +410,8 @@ describe("BrowserTool", () => {
           action: { type: "scroll", deltaY: 10 } },
         { operation: "action", tabID: profileTab.id, generation: 1, documentGeneration: 1, observationRevision: 1,
           action: { type: "group", tabIDs: [profileTab.id, heldTab.id], title: "Task" } },
+        { operation: "action", tabID: profileTab.id, generation: 1, documentGeneration: 1, observationRevision: 1,
+          action: { type: "group_control", tabIDs: [profileTab.id, heldTab.id] } },
       ]
       for (const [index, input] of attempts.entries()) {
         const result = yield* executeTool(registry, { sessionID, ...toolIdentity,

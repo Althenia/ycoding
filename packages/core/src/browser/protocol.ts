@@ -29,6 +29,7 @@ const Shared = Schema.Struct({
   url: Schema.String,
   documentGeneration: Browser.DocumentGeneration,
   active: Schema.Boolean,
+  groupID: Browser.Tab.fields.groupID,
   replaces: Browser.TabID.pipe(Schema.optional),
 })
 export const RevokedReason = Schema.Literals(["closed", "navigated", "detached", "access_revoked", "replaced"])
@@ -53,6 +54,7 @@ const Updated = Schema.Struct({
   title: Schema.String,
   url: Schema.String,
   documentGeneration: Browser.DocumentGeneration,
+  groupID: Browser.Tab.fields.groupID,
 })
 const Observation = Schema.Struct({
   type: Schema.Literal("observation"),
@@ -227,6 +229,8 @@ export type ServerMessage =
       readonly tabID: Browser.TabID
       readonly generation: number
       readonly frameOrigins: ReadonlyArray<string>
+      readonly controlSessionID: string
+      readonly controlTabIDs: ReadonlyArray<Browser.TabID>
     }
   | {
       readonly type: "action"
@@ -238,6 +242,8 @@ export type ServerMessage =
       readonly allowedOrigins: ReadonlyArray<string>
       readonly frameOrigins: ReadonlyArray<string>
       readonly action: Browser.Action
+      readonly controlSessionID: string
+      readonly controlTabIDs: ReadonlyArray<Browser.TabID>
     }
   | {
       readonly type: "history"

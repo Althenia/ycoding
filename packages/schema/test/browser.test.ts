@@ -71,6 +71,9 @@ describe("Browser selected-tab contract", () => {
   })
 
   test("bounds profile tab grouping and accepts Chrome group zero", () => {
+    expect(Schema.is(Browser.Tab)({ ...tab, groupID: 0 })).toBe(true)
+    expect(Schema.is(Browser.Tab)({ ...tab, groupID: -1 })).toBe(false)
+    expect(Schema.encodeSync(Browser.Tab)({ ...Schema.decodeUnknownSync(Browser.Tab)(tab), groupID: undefined })).not.toHaveProperty("groupID")
     const base = { sessionID: tab.sessionID, tabID: tab.id, generation: 1,
       documentGeneration: 2, observationRevision: 3, callID: "group" }
     expect(Schema.is(Browser.ActionInput)({ ...base, action: { type: "group",
@@ -79,6 +82,9 @@ describe("Browser selected-tab contract", () => {
       tabIDs: Array(9).fill(tab.id), title: "Task" } })).toBe(false)
     expect(Schema.is(Browser.ActionInput)({ ...base, action: { type: "ungroup",
       tabIDs: [tab.id], groupID: 0 } })).toBe(true)
+    expect(Schema.is(Browser.ActionInput)({ ...base, action: { type: "group_control", tabIDs: [tab.id] } })).toBe(true)
+    expect(Schema.is(Browser.ActionInput)({ ...base, action: { type: "group_control", tabIDs: [] } })).toBe(false)
+    expect(Schema.is(Browser.ActionInput)({ ...base, action: { type: "group_control", tabIDs: Array(9).fill(tab.id) } })).toBe(false)
   })
 
   test("bounds observations, typed text, and explicit captures", () => {

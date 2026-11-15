@@ -80,6 +80,7 @@ export const Tab = Schema.Struct({
   uncertainCallID: CallID.pipe(optional),
   mode: Schema.Literals(["owned", "profile"]).pipe(optional),
   lease: Schema.Literals(["self", "other"]).pipe(optional),
+  groupID: NonNegativeInt.pipe(optional),
   deliverable: Schema.Boolean.pipe(optional),
 }).annotate({ identifier: "Browser.Tab" })
 export interface Tab extends Schema.Schema.Type<typeof Tab> {}
@@ -193,6 +194,10 @@ export const Ungroup = Schema.Struct({
   tabIDs: Schema.Array(TabID).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
   groupID: NonNegativeInt,
 })
+export const GroupControl = Schema.Struct({
+  type: Schema.Literal("group_control"),
+  tabIDs: Schema.Array(TabID).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
+})
 export const Back = Schema.Struct({ type: Schema.Literal("back") })
 export const Forward = Schema.Struct({ type: Schema.Literal("forward") })
 export const Reload = Schema.Struct({ type: Schema.Literal("reload") })
@@ -303,7 +308,7 @@ export const WebMcpInvoke = Schema.Struct({
   arguments: Schema.Json.pipe(optional),
 })
 export const Action = Schema.Union([
-  Navigate, Click, Type, Fill, Select, Check, Hover, Scroll, Capture, Group, Ungroup, Back, Forward, Reload, Key, Wait,
+  Navigate, Click, Type, Fill, Select, Check, Hover, Scroll, Capture, Group, Ungroup, GroupControl, Back, Forward, Reload, Key, Wait,
   ClipboardRead, ClipboardWrite, Upload, Download, Logs, Export, WebMcpList, WebMcpInvoke, Dialog,
 ])
 export type Action = typeof Action.Type

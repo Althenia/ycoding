@@ -1166,7 +1166,7 @@ describe("paired Chrome peripherals", () => {
 })
 
 describe("paired profile tab leases", () => {
-  const sharedTab = (connected: Connected, tabID: typeof Browser.TabID.Type) =>
+  const sharedTab = (connected: Connected, tabID: typeof Browser.TabID.Type, groupID?: number) =>
     connected.attachment.receive({
       type: "shared",
       mode: "profile",
@@ -1175,6 +1175,7 @@ describe("paired profile tab leases", () => {
       url: "https://example.test/page",
       documentGeneration: 1,
       active: false,
+      ...(groupID === undefined ? {} : { groupID }),
     })
 
   const observed = (
@@ -1189,7 +1190,8 @@ describe("paired profile tab leases", () => {
       const observing = yield* browser
         .observe({ sessionID: viewer, tabID, generation: connected.generation, callID })
         .pipe(Effect.forkScoped)
-      expect(yield* Queue.take(outbox)).toMatchObject({ type: "observe", tabID })
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "observe", tabID, controlSessionID: viewer,
+        controlTabIDs: expect.arrayContaining([tabID]) })
       yield* connected.attachment.receive({
         type: "observation",
         callID,
@@ -1254,30 +1256,35 @@ describe("paired profile tab leases", () => {
     }))
   })
 
-  test("group and ungroup claim every member atomically or none", async () => {
+  for (const type of ["group", "group_control"] as const) test(`${type} claims every member atomically or none`, async () => {
     await run(Effect.gen(function* () {
       const { browser, outbox, connected } = yield* setup
       const first = Browser.TabID.make("btab_group_first")
       const second = Browser.TabID.make("btab_group_second")
-      yield* sharedTab(connected, first)
-      yield* sharedTab(connected, second)
+      yield* sharedTab(connected, first, 7)
+      yield* sharedTab(connected, second, 7)
+      expect((yield* browser.list(sessionID)).map((tab) => tab.groupID)).toEqual([7, 7])
       yield* observed(browser, outbox, connected, otherSessionID, second, "foreign-holder")
       yield* observed(browser, outbox, connected, sessionID, first, "group-anchor")
       const refused = yield* browser.action({ sessionID, tabID: first, generation: connected.generation,
         documentGeneration: 1, observationRevision: 1, callID: "group-foreign-member",
-        action: { type: "group", tabIDs: [first, second], title: "Task" } }).pipe(Effect.flip)
+        action: { type, tabIDs: [first, second], title: "Task" } }).pipe(Effect.flip)
       expect(refused._tag).toBe("Browser.OwnershipError")
       expect(yield* Queue.size(outbox)).toBe(0)
       yield* released(browser, outbox, connected, otherSessionID, second, "release-second")
       const grouping = yield* browser.action({ sessionID, tabID: first, generation: connected.generation,
         documentGeneration: 1, observationRevision: 1, callID: "group-both",
-        action: { type: "group", tabIDs: [first, second], title: "Task" } }).pipe(Effect.forkScoped)
-      expect(yield* Queue.take(outbox)).toMatchObject({ type: "action", callID: "group-both" })
+        action: { type, tabIDs: [first, second], title: "Task" } }).pipe(Effect.forkScoped)
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "action", callID: "group-both",
+        controlSessionID: sessionID, controlTabIDs: [first, second] })
       expect((yield* browser.list(otherSessionID)).map((tab) => [tab.id, tab.lease])).toEqual([[first, "other"], [second, "other"]])
       yield* connected.attachment.receive({ type: "result", tabID: first, callID: "group-both",
         generation: connected.generation, documentGeneration: 1, observationRevision: 1, status: "completed",
         title: "Fixture", url: "https://example.test/page", groupID: 7 })
       expect(yield* Fiber.join(grouping)).toMatchObject({ status: "completed", groupID: 7 })
+      yield* connected.attachment.receive({ type: "updated", tabID: first, documentGeneration: 1,
+        title: "Fixture", url: "https://example.test/page" })
+      expect((yield* browser.list(sessionID)).map((tab) => tab.groupID)).toEqual([undefined, 7])
     }))
   })
 

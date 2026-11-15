@@ -59,6 +59,7 @@ const ActionObject = Schema.Union([
   Schema.Struct({ ...Browser.Schema.Scroll.fields, deltaY: integer(Browser.Schema.Scroll.fields.deltaY) }),
   Browser.Schema.Capture,
   Browser.Schema.Group,
+  Browser.Schema.GroupControl,
   Schema.Struct({ ...Browser.Schema.Ungroup.fields, groupID: integer(Browser.Schema.Ungroup.fields.groupID) }),
   Browser.Schema.Back,
   Browser.Schema.Forward,
@@ -507,7 +508,7 @@ export const Plugin = {
                 }
                 const identityInput = { sessionID: context.sessionID, tabID: input.tabID, generation: input.generation,
                   documentGeneration: input.documentGeneration, observationRevision: input.observationRevision, action: input.action }
-                if (input.action.type === "group" || input.action.type === "ungroup") {
+                if (input.action.type === "group" || input.action.type === "ungroup" || input.action.type === "group_control") {
                   if (!profileMode) return yield* new ToolFailure({ message: "Tab groups require profile mode" })
                   const groupAction = input.action
                   const members = (yield* browser.list(context.sessionID))

@@ -187,6 +187,11 @@ type Trust = {
   readonly serverID: string
   readonly sessionID: Browser.Tab["sessionID"]
 }
+type DispatchMessage = {
+  [K in BrowserProtocol.ServerMessage["type"]]: Omit<Extract<BrowserProtocol.ServerMessage, { type: K }>,
+    "controlSessionID" | "controlTabIDs">
+}[BrowserProtocol.ServerMessage["type"]]
+
 type PendingBase = {
   readonly callID: string
   readonly tabID: Browser.TabID
@@ -507,7 +512,7 @@ export const layer = (options: Options = {}) =>
       const dispatch = Effect.fn("Browser.dispatch")(function* (
         current: Connection,
         pending: Pending,
-        message: BrowserProtocol.ServerMessage,
+        message: DispatchMessage,
         claim: ReadonlyArray<MutableTab> = [],
       ) {
         if (claim.some((tab) => heldByOther(tab, pending.sessionID)))
@@ -522,7 +527,12 @@ export const layer = (options: Options = {}) =>
           for (const tab of claimed) if (tab.leaseSessionID === pending.sessionID) delete tab.leaseSessionID
         }
         current.pending = pending
-        if (!current.transport.send(message)) {
+        const outgoing = message.type === "observe" || message.type === "action"
+          ? { ...message, controlSessionID: pending.sessionID,
+              controlTabIDs: [...current.tabs.values()].filter((tab) =>
+                tab.mode === "profile" && tab.leaseSessionID === pending.sessionID).map((tab) => tab.id) }
+          : message
+        if (!current.transport.send(outgoing)) {
           current.pending = undefined
           unclaim()
           return yield* new UnavailableError({ message: "Chrome extension bridge output queue is full" })
@@ -847,7 +857,7 @@ export const layer = (options: Options = {}) =>
 
       const action = Effect.fn("Browser.action")(function* (input: ActionInput) {
         const { current, tab } = yield* requireTab(input.sessionID, input.tabID)
-        if (input.action.type === "group" || input.action.type === "ungroup") {
+        if (input.action.type === "group" || input.action.type === "ungroup" || input.action.type === "group_control") {
           if (!current.profileGranted || tab.mode !== "profile" || !input.action.tabIDs.includes(tab.id) ||
               new Set(input.action.tabIDs).size !== input.action.tabIDs.length ||
               input.action.tabIDs.some((id) => current.tabs.get(id)?.mode !== "profile"))
@@ -896,7 +906,7 @@ export const layer = (options: Options = {}) =>
           catch: () => new FenceError({ message: "Only credential-free HTTP and HTTPS navigation is supported" }),
         })
         const allowedOrigins = [...new Set([tab.page.origin, ...(destination ? [destination.origin] : []),
-          ...((input.action.type === "group" || input.action.type === "ungroup")
+          ...((input.action.type === "group" || input.action.type === "ungroup" || input.action.type === "group_control")
             ? input.action.tabIDs.map((id) => current.tabs.get(id)!.page.origin) : [])])]
         if (tab.mode === "owned") tab.allowedOrigins = new Set(allowedOrigins)
         const actionRef = "ref" in resolvedAction ? resolvedAction.ref : undefined
@@ -931,7 +941,7 @@ export const layer = (options: Options = {}) =>
             frameOrigins,
             action: resolvedAction,
           },
-          input.action.type === "group" || input.action.type === "ungroup"
+          input.action.type === "group" || input.action.type === "ungroup" || input.action.type === "group_control"
             ? input.action.tabIDs.flatMap((id) => current.tabs.get(id) ?? [])
             : [tab],
         )
@@ -1117,6 +1127,7 @@ export const layer = (options: Options = {}) =>
               documentGeneration: message.documentGeneration,
               observationRevision: 0,
               mode: "profile",
+              ...(message.groupID === undefined ? {} : { groupID: message.groupID }),
               ...(current.paused ? { pauseReason: "requested" as const } : {}),
               elements: new Map(),
             })
@@ -1200,6 +1211,7 @@ export const layer = (options: Options = {}) =>
             tab.page = page
             tab.pageIdentity = Hash.sha256(message.url)
             tab.documentGeneration = message.documentGeneration
+            tab.groupID = message.groupID
             tab.observationRevision = 0
             tab.elements.clear()
             return

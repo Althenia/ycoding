@@ -6,6 +6,7 @@ import path from "node:path"
 import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
 import { BUN_BINARY } from "../src/binary"
 import { COMPUTER_HELPER_APPLICATION, verifyPackagedComputerHelper } from "./computer-use"
+import { chromeCrxFile, hasSignedChromeExtension, verifyChromeExtensionPackage } from "./chrome-crx"
 
 export async function installLocalBuild(input: {
   source: string
@@ -15,8 +16,11 @@ export async function installLocalBuild(input: {
 }) {
   if (input.platform === "win32") throw new Error("install:local supports macOS and Linux")
   if (input.preserveComputerHelper && input.platform !== "darwin") throw new Error("Preserving the computer helper requires macOS")
+  const signedChrome = await hasSignedChromeExtension(input.source)
+  if (!signedChrome && await exists(path.join(input.destination, chromeCrxFile)))
+    throw new Error("Signed Chrome package required to replace an existing signed package")
   if (input.preserveComputerHelper) await verifyPackagedComputerHelper(input.destination, input.platform)
-  const items = [BUN_BINARY, ...(input.platform === "darwin" && !input.preserveComputerHelper ? [COMPUTER_HELPER_APPLICATION] : []), BrowserExtension.directory]
+  const items = [BUN_BINARY, ...(input.platform === "darwin" && !input.preserveComputerHelper ? [COMPUTER_HELPER_APPLICATION] : []), BrowserExtension.directory, ...(signedChrome ? [chromeCrxFile] : [])]
   await Promise.all(items.map((item) => requireBuilt(path.join(input.source, item))))
   const suffix = `.install-${process.pid}-${Date.now()}`
   const staged = items.map((item) => ({
@@ -29,6 +33,10 @@ export async function installLocalBuild(input: {
   await mkdir(input.destination, { recursive: true })
   try {
     for (const item of staged) await cp(item.source, item.candidate, { recursive: true, verbatimSymlinks: true })
+    if (signedChrome && !(await verifyChromeExtensionPackage(
+      path.join(input.destination, `.${chromeCrxFile}${suffix}`),
+      path.join(input.destination, `.${BrowserExtension.directory}${suffix}`),
+    ))) throw new Error("Missing staged signed Chrome package")
     if (input.platform === "darwin" && !input.preserveComputerHelper) verifySignature(path.join(input.destination, `.${COMPUTER_HELPER_APPLICATION}${suffix}`))
     for (const item of staged) {
       if (await exists(item.target)) await rename(item.target, item.backup)

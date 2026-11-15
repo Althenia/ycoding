@@ -36,7 +36,7 @@ The Chrome extension marks every tab YCoding is controlling so the person using 
 - Show control where the user already looks: the tab strip first, then the toolbar. The tab strip carries the real YCoding logo as the favicon; the badge carries a word (`extensions/chrome/indicator.js`).
 - Carry no private text. The marker is a static logo image; typed text, Session titles, Session IDs, and URLs never enter the page DOM (`extensions/chrome/indicator.js`).
 - Refuse control rather than hide it. When the marker cannot be shown and confirmed on a tab, the extension rejects the operation before dispatch (`extensions/chrome/test/service-worker.test.js`).
-- Own an expiry. The page removes the marker itself when the extension stops refreshing it, because no command can run after a native Cancel, a crash, or an extension reload.
+- Keep marker lifetimes explicit. The favicon expires in the page. Native group appearance is restored only while current-process ownership remains provable; crash leftovers are not cleaned up after restart.
 
 ## Rules
 
@@ -51,6 +51,8 @@ The Chrome extension marks every tab YCoding is controlling so the person using 
 | X10 | approved | The popup MUST use 320px intrinsic width, 12px outer/card padding, a 24px canonical mark, a 15px heading and 13px body text. Controls MUST be at least 34px (44px for coarse pointers); secondary help MUST remain keyboard accessible, with pairing authority visible before Connect. | `extensions/chrome/test/popup.test.js`, `packages/server/test-integration/browser-owned-chrome.test.ts` |
 | X11 | approved | The tab marker MUST be the mint pixel-Y path of `assets/brand/ycoding-mark.svg` (fill `agent-mark`) on a dark rounded tile, installed as the tab favicon through an inline SVG data URL, and MUST NOT add an archive entry, fetch an asset, or use an emoji or a text glyph. | `extensions/chrome/test/indicator.test.js`, `packages/cli/test/chrome-extension-packaging.test.ts` |
 | X7 | approved | Documented `colors` MUST equal `extensions/chrome/indicator.js`, with `popup-body` and `popup-mono` equal to the `--font-sans` and `--font-mono` values in `popup.css`, and documented values MUST NOT be missing from or extra to them. | `extensions/chrome/test/design-md.test.js` |
+| X12 | approved | A native group control marker MUST use Chrome's `green` group color only when every member is granted to the same Session. Existing groups require an explicit all-member group-control grant. Establishing or restoring group appearance MUST NOT move tabs or operate on active or pinned members. An active ungrouped tab retains favicon-only control. | `extensions/chrome/test/group-marker.test.js`, `extensions/chrome/test/fixtures/service-worker.case.js` |
+| X13 | approved | Membership, grant, position, or appearance changes MUST stop group control without overwriting user changes. Normal release MUST restore saved appearance, or ungroup a marker-created singleton, only with unchanged ownership. Native appearance restoration is best effort; a crash may leave a green group. Restart MUST NOT reconstruct cleanup authority from color, title, or persisted metadata. | `extensions/chrome/test/group-marker.test.js` |
 
 ## Colors
 
@@ -69,6 +71,7 @@ Use the popup width, padding and control-height tokens for the popup and its car
 - **Tab marker**: the YCoding logo installed as the tab favicon (inline SVG data URL: mint pixel-Y on a dark rounded tile), replacing the page's favicon links while controlled and restoring them on cleanup or expiry. The page title is never altered.
 - **Agent mark**: the mint pixel-Y from `assets/brand/ycoding-mark.svg`, drawn in `agent-mark` on the favicon tile.
 - **Toolbar badge**: the text `ON` on `badge-on` for each tab with an attached debugger.
+- **Native group marker**: Chrome's named `green` color, retaining the group's title and collapsed state. Chrome owns the palette and native rendering; the favicon and debugger infobar retain non-color control cues.
 - **Popup help**: native details, collapsed by default, with a 34px summary (44px for coarse pointers), muted text, owned plus/minus marker, pointer cursor and the control focus ring. Keep pairing scope and review requirements visible before Connect; place secondary debugger guidance in help. Use border/surface scrollbar roles, no overflow anchoring, focus-colored caret and text selection, and no tap highlight.
 
 ## Accessibility
@@ -88,7 +91,7 @@ Read `../../DESIGN.md` and this file before changing any extension appearance. C
 - Do keep the green badge unless a rule here changes.
 - Do fail closed when the marker cannot be shown.
 - Don't draw a cursor, label, ripple, or any other element in the controlled page.
-- Don't add tab groups or native window focus changes to signal control; the favicon swap in X11 is the one approved favicon change.
+- Don't focus windows or move tabs to establish control. Change native group appearance only within X12 and X13; retain the favicon marker in X11.
 - Don't replace the tab favicon logo with an emoji, a text glyph, or a fetched or packaged image.
 
 ## Exceptions

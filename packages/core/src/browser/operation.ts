@@ -25,7 +25,7 @@ const STATE_FIELDS = ["checked", "pressed", "expanded", "selected", "value", "se
 
 export function classify(action: Browser.Action): Classification {
   if (action.type === "navigate") return { permission: "browser_navigate", mutation: true, target: "none" }
-  if (action.type === "group" || action.type === "ungroup")
+  if (action.type === "group" || action.type === "ungroup" || action.type === "group_control")
     return { permission: "browser_control", mutation: true, target: "none" }
   if (action.type === "dialog")
     return { permission: action.accept === undefined ? "browser_read" : "browser_interact", mutation: true, target: "none" }
