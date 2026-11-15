@@ -4,12 +4,19 @@ import { createHash } from "node:crypto"
 import { homedir } from "node:os"
 import path from "node:path"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import type { FollowState } from "../src/commands/handlers/decision/follow-state"
 
 for (const [args, expected] of [
   [["--follow"], "--follow requires --family"],
   [["--state", "synthetic-state.json"], "--state requires --follow"],
   [["--family", "--follow", "--input", "msg_synthetic"], "--follow cannot use --input, --after or --checkpoint"],
   [["--deliver", "thr_root"], "--deliver requires --follow"],
+  [["--max-readers", "2"], "--max-readers and --max-pages require --follow"],
+  [["--max-pages", "2"], "--max-readers and --max-pages require --follow"],
+  [["--family", "--follow", "--max-readers", "0"], "--max-readers must be between 1 and 64"],
+  [["--family", "--follow", "--max-readers", "65"], "--max-readers must be between 1 and 64"],
+  [["--family", "--follow", "--max-pages", "0"], "--max-pages must be between 1 and 32768"],
+  [["--family", "--follow", "--max-pages", "32769"], "--max-pages must be between 1 and 32768"],
   [["--family", "--follow", "--deliver", " "], "--deliver requires a Dot thread ID"],
 ] as const) {
   test(`installed decision watch validates ${args.join(" ")} before connecting`, async () => {
@@ -27,10 +34,11 @@ test("installed decision watch help advertises continuous follow, state and hear
   const child = Bun.spawn([process.execPath, new URL("../src/tui.ts", import.meta.url).pathname, "decision", "watch", "--help"], { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
   const [stdout, exit] = await Promise.all([new Response(child.stdout).text(), child.exited])
   expect(exit).toBe(0)
-  for (const value of ["--follow", "--state", "follow heartbeats", "IDs-only JSON", "--deliver", "Dot thread"]) expect(stdout).toContain(value)
+  for (const value of ["--follow", "--state", "follow heartbeats", "IDs-only JSON", "--deliver", "Dot thread", "--max-readers", "--max-pages", "retained replay"]) expect(stdout).toContain(value)
 }, 30_000)
 
-type DeliveryRoutes = { threads?: () => object; message: (threadID: string, body: Record<string, unknown>) => Response; decisions?: () => object[] }
+type DeliveryRoutes = { threads?: () => object; message: (threadID: string, body: Record<string, unknown>) => Response; decisions?: () => object[];
+  family?: { id: string; parentID: string; agent?: string }[]; state?: (server: string) => FollowState; flags?: string[] }
 
 async function deliveryFixture(routes: DeliveryRoutes, deliver: string[]) {
   const scratch = path.join(homedir(), ".local/share/ycoding/tasks")
@@ -44,22 +52,29 @@ async function deliveryFixture(routes: DeliveryRoutes, deliver: string[]) {
     const url = new URL(request.url)
     const route = url.pathname
     if (route === "/api/health") return Response.json({ healthy: true, version: InstallationVersion, pid: process.pid })
-    if (route === "/api/event" || route === "/api/experimental/session/ses_root/log") {
+    const logged = /^\/api\/experimental\/session\/([^/]+)\/log$/.exec(route)?.[1]
+    if (route === "/api/event" || logged !== undefined) {
       return new Response(new ReadableStream<Uint8Array>({ start(controller) {
         streams.set(route, controller)
         controller.enqueue(frame(route === "/api/event"
           ? { type: "server.connected", id: "evt_connected", sourceEpoch: "epoch_synthetic", data: {} }
-          : { type: "log.synced", sourceEpoch: "epoch_synthetic", aggregateID: "ses_root" }))
+          : { type: "log.synced", sourceEpoch: "epoch_synthetic", aggregateID: logged, ...(routes.state && logged === "ses_root" ? { seq: 24860 } : {}) }))
+        if (logged !== undefined && url.searchParams.get("follow") === "false") { controller.close(); streams.delete(route); return }
         request.signal.addEventListener("abort", () => streams.delete(route), { once: true })
       }, cancel() { streams.delete(route) } }), { headers: { "content-type": "text/event-stream" } })
     }
     if (route === "/api/session/ses_root") return Response.json({ data: { id: "ses_root", title: "Synthetic" } })
-    if (route === "/api/session/ses_root/snapshot") return Response.json({ sourceEpoch: "epoch_synthetic", session: { id: "ses_root" }, messages: [], watermark: { type: "log.synced", aggregateID: "ses_root" } })
+    const snapshot = /^\/api\/session\/([^/]+)\/snapshot$/.exec(route)?.[1]
+    if (snapshot !== undefined) return Response.json({ sourceEpoch: "epoch_synthetic", session: { id: snapshot }, messages: [], watermark: { type: "log.synced", aggregateID: snapshot, ...(routes.state && snapshot === "ses_root" ? { seq: 24860 } : {}) } })
     if (route === "/api/session/active") return Response.json({ data: {} })
     if (route === "/api/session/outstanding") return Response.json({ data: [], running: [], failed: [], lost: [] })
-    if (route === "/api/session/ses_root/subagent") return Response.json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
+    if (/^\/api\/session\/[^/]+\/subagent$/.test(route)) return Response.json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: { next: routes.family && !url.searchParams.has("cursor") ? "tail" : undefined } })
     if (route === "/api/coordination") return Response.json({ data: [] })
-    if (route === "/api/session") return Response.json({ data: [], cursor: {} })
+    if (route === "/api/session") {
+      const children = routes.family?.filter((child) => child.parentID === url.searchParams.get("parentID")) ?? []
+      const offset = Number(url.searchParams.get("cursor") ?? 0)
+      return Response.json({ data: children.slice(offset, offset + 8), cursor: { next: routes.family && offset <= children.length ? String(offset + 8) : undefined } })
+    }
     if (route === "/api/decision") return Response.json({ data: routes.decisions?.() ?? [] })
     if (route === "/api/dots/threads") return Response.json({ data: routes.threads?.() ?? { dotID: "dot_synthetic", rootThreadID: "thr_root", threads: [{ threadID: "thr_root", kind: "root", status: "idle" }], tasks: [] } })
     const message = /^\/api\/dots\/thread\/([^/]+)\/message$/.exec(route)
@@ -70,7 +85,8 @@ async function deliveryFixture(routes: DeliveryRoutes, deliver: string[]) {
     }
     return new Response("unexpected route", { status: 500 })
   } })
-  const child = Bun.spawn([process.execPath, new URL("../src/tui.ts", import.meta.url).pathname, "decision", "watch", "ses_root", "--family", "--follow", "--state", filename,
+  if (routes.state) await writeFile(filename, JSON.stringify(routes.state(createHash("sha256").update(server.url.toString()).digest("hex"))) + "\n", { mode: 0o600 })
+  const child = Bun.spawn([process.execPath, new URL("../src/tui.ts", import.meta.url).pathname, "decision", "watch", "ses_root", "--family", "--follow", "--state", filename, ...(routes.flags ?? []),
     ...deliver.flatMap((target) => ["--deliver", target]), "--server", server.url.toString()], { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
   const lines: Record<string, unknown>[] = []
   const reading = (async () => {
@@ -102,6 +118,44 @@ async function deliveryFixture(routes: DeliveryRoutes, deliver: string[]) {
   return { dir, filename, sent, lines, until, log, event, finish, child,
     async state() { return JSON.parse(await readFile(filename, "utf8")) as Record<string, any> },
     async cleanup() { await rm(dir, { recursive: true, force: true }) } }
+}
+
+for (const exhausted of [false, true]) {
+  test(`source CLI ${exhausted ? "retains state on configured page exhaustion" : "resumes a complete paginated 68-Session family and sole pending delivery"}`, async () => {
+    const family = [...Array.from({ length: 32 }, (_, index) => ({ id: `ses_child_${index}`, parentID: "ses_root" })),
+      ...Array.from({ length: 35 }, (_, index) => ({ id: `ses_compaction_${index}`, parentID: "ses_child_31", agent: "compaction" }))]
+    const state = (server: string): FollowState => ({ version: 1, rootSessionID: "ses_root", server, sourceEpoch: "epoch_synthetic", cursors: [{ sessionID: "ses_root", after: 24860 }],
+      pending: [], seen: [], requestSeen: [], terminalSeen: [], delivery: { announced: [], targets: [{ target: "thr_synthetic_only", outbox: [{ sessionID: "ses_root", id: "evt_retained", seq: 24860, type: "session.execution.interrupted" }] }] } })
+    const f = await deliveryFixture({ family, state, flags: ["--max-readers", "2", "--max-pages", exhausted ? "1" : "512"],
+      threads: () => ({ threads: [{ threadID: "thr_synthetic_only", status: "idle" }], tasks: [] }),
+      message: () => Response.json({ data: { admission: "duplicate" } }),
+    }, ["thr_synthetic_only"])
+    try {
+      if (exhausted) {
+        await f.child.exited
+        const result = await f.finish()
+        expect(result.exit).toBe(1)
+        expect(result.stderr).toContain("discovery exceeds --max-pages 1")
+        expect(f.lines).toEqual([])
+        expect(f.sent).toEqual([])
+        const saved = await f.state()
+        expect(saved).toEqual(state(saved.server))
+      } else {
+        await f.until(() => f.lines.some((value) => value.kind === "delivery"), "retained delivery acknowledgement")
+        expect(f.lines.findIndex((value) => value.kind === "ready")).toBeLessThan(f.lines.findIndex((value) => value.kind === "delivery"))
+        expect(f.lines.find((value) => value.kind === "ready")).toMatchObject({ rootActive: false, activity: "idle" })
+        expect(f.sent).toHaveLength(1)
+        expect(f.sent[0]!.threadID).toBe("thr_synthetic_only")
+        expect(f.lines.find((value) => value.kind === "delivery")).toMatchObject({ outcome: "delivered", admission: "duplicate" })
+        expect((await f.finish()).stderr).toBe("")
+        const saved = await f.state()
+        expect(saved.cursors).toHaveLength(68)
+        expect(saved.cursors.find((cursor: { sessionID: string }) => cursor.sessionID === "ses_root")).toEqual({ sessionID: "ses_root", after: 24860 })
+        expect(saved.delivery.targets).toEqual([{ target: "thr_synthetic_only", outbox: [] }])
+        await expect(readFile(`${f.filename}.lock`)).rejects.toThrow()
+      }
+    } finally { await f.finish(); await f.cleanup() }
+  }, 30_000)
 }
 
 test("installed follow delivers lifecycle and decision events to a Dot thread and records delivery in its state", async () => {

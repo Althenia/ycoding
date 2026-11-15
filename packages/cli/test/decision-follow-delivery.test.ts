@@ -26,7 +26,7 @@ async function until(predicate: () => boolean, label: string) {
   }
 }
 
-function harness(options: { state?: FollowState; targets?: string[]; statuses?: Record<string, string | undefined>; items?: DecisionItem[]; admissions?: (Admission | unknown)[]; listed?: string[]; root?: () => string | undefined; resume?: () => Promise<void> } = {}) {
+function harness(options: { state?: FollowState; targets?: string[]; statuses?: Record<string, string | undefined>; items?: DecisionItem[]; admissions?: (Admission | unknown)[]; listed?: string[]; root?: () => string | undefined; resume?: () => Promise<void>; ready?: Promise<void> } = {}) {
   const controller = new AbortController()
   const sends: Sent[] = []
   const records: Record<string, unknown>[] = []
@@ -57,7 +57,7 @@ function harness(options: { state?: FollowState; targets?: string[]; statuses?: 
       } },
     },
   }
-  const delivery = createFollowDelivery(client, { state: saved, targets: options.targets ?? ["thr_root"], signal: controller.signal,
+  const delivery = createFollowDelivery(client, { state: saved, targets: options.targets ?? ["thr_root"], signal: controller.signal, ready: options.ready ?? Promise.resolve(),
     save: async (value) => { saved = validateFollowState(structuredClone(value), saved.rootSessionID, server) },
     emit: async (record) => { records.push(record as Record<string, unknown>) } })
   const checkpoint = structuredClone(delivery.state)
@@ -336,6 +336,52 @@ test("a restart delivers persisted undelivered events and never redelivers deliv
   await new Promise((resolve) => setTimeout(resolve, 50))
   await third.stop(idle)
   expect(third.sends).toHaveLength(0)
+})
+
+test("68 retained cursors and a sole synthetic outbox survive interrupted delivery and duplicate acknowledgement in order", async () => {
+  const state = base()
+  state.cursors = [{ sessionID: "ses_root", after: 24860 }, ...Array.from({ length: 67 }, (_, index) => ({ sessionID: `ses_compaction_${index}`, after: 1 }))]
+  state.delivery = { announced: [], targets: [{ target: "thr_synthetic_only", outbox: [{ sessionID: "ses_root", id: "evt_retained", type: "session.execution.interrupted", seq: 24860 }] }] }
+  const config = { targets: ["thr_synthetic_only"], statuses: { thr_synthetic_only: "idle" } }
+  const first = harness({ ...config, state })
+  first.hold()
+  const run = first.delivery.run()
+  await until(() => first.sends.length === 1, "retained outbox admission")
+  await first.observe(durable("session.execution.started", "ses_compaction_34", 2), durable("session.execution.succeeded", "ses_compaction_34", 3))
+  first.controller.abort()
+  first.release()
+  await run
+  expect(first.saved.cursors).toEqual(state.cursors)
+  expect(first.saved.delivery?.targets).toHaveLength(1)
+  expect(first.saved.delivery?.targets[0]?.inflight?.events).toEqual(state.delivery.targets[0]!.outbox)
+  expect(first.saved.delivery?.targets[0]?.outbox.map((event) => event.seq)).toEqual([2, 3])
+  const second = harness({ ...config, state: first.saved, admissions: [{ admission: "duplicate" }, { admission: "started" }] })
+  const next = second.delivery.run()
+  try {
+    await until(() => second.saved.delivery?.targets[0]?.inflight === undefined && second.saved.delivery?.targets[0]?.outbox.length === 0, "confirmed drain")
+    expect(second.sends.map((sent) => sent.threadID)).toEqual(["thr_synthetic_only", "thr_synthetic_only"])
+    expect(second.sends[0]!.clientMessageID).toBe(first.sends[0]!.clientMessageID)
+    expect(second.records.filter((record) => record.kind === "delivery").flatMap((record) => record.events as object[])).toMatchObject([{ seq: 24860 }, { seq: 2 }, { seq: 3 }])
+    expect(second.saved.cursors).toEqual(state.cursors)
+  } finally { await second.stop(next) }
+  const third = harness({ ...config, state: second.saved })
+  const final = third.delivery.run()
+  await until(() => third.calls.includes("dots.threads"), "restarted target validation")
+  await third.stop(final)
+  expect(third.sends).toEqual([])
+})
+
+test("a retained outbox waits for complete observation readiness and stays untouched when startup is cancelled", async () => {
+  const state = base()
+  state.delivery = { announced: [], targets: [{ target: "thr_root", outbox: [{ sessionID: "ses_root", id: "evt_retained", type: "session.execution.interrupted", seq: 1 }] }] }
+  const ready = Promise.withResolvers<void>()
+  const h = harness({ state, ready: ready.promise })
+  const run = h.delivery.run()
+  await until(() => h.calls.includes("dots.threads"), "target validation")
+  await h.stop(run)
+  expect(h.sends).toEqual([])
+  expect(h.saved).toEqual(state)
+  ready.resolve()
 })
 
 test("an emitted receipt is not delivered until the follow state that records it is saved", async () => {

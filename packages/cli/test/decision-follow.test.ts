@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test"
 import { ClientError, YCoding } from "@ycoding-ai/client/promise"
+import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
+import { SessionEvent } from "@ycoding-ai/schema/session-event"
+import { Schema } from "effect"
+import { EventFeed } from "../../server/src/event-feed"
 import { followFamily, type FollowClient, type FollowEvent, type FollowReceipt } from "../src/commands/handlers/decision/follow"
 import { type FollowState, type FollowRequest, validateFollowState } from "../src/commands/handlers/decision/follow-state"
 
@@ -102,17 +106,268 @@ function fixture(state = initial()) {
     const event = { id: `evt_${sessionID}_${seq}`, sourceEpoch: epoch, type, durable: { aggregateID: sessionID, seq }, data: { sessionID, secret: "NEVER-OUTPUT" } }
     history.set(sessionID, [...(history.get(sessionID) ?? []), event])
     logs.get(sessionID)?.push(event)
+    global?.push(event)
     return event
   }
   return { client, controller, children, history, receipts, logs, append, wait, emit, reads, faults, get global() { return global! }, streams,
     setWork(value: typeof work) { work = value }, setTasks(value: typeof tasks) { tasks = value },
     setPending(value: FollowRequest[]) { pending = value }, setEpoch(value: string) { epoch = value }, failRead() { failRead = true }, failLog() { failLog = true }, failGlobal() { failGlobal = true },
     get saved() { return saved },
-    run(overrides: { emit?: (receipt: FollowReceipt) => Promise<void>; save?: (value: FollowState) => Promise<void>; heartbeatSeconds?: number } = {}) {
+    run(overrides: { emit?: (receipt: FollowReceipt) => Promise<void>; save?: (value: FollowState) => Promise<void>; heartbeatSeconds?: number; maxReaders?: number; maxPages?: number } = {}) {
       return followFamily(client, { state, signal: controller.signal, heartbeatSeconds: overrides.heartbeatSeconds ?? 3600,
+        maxReaders: overrides.maxReaders, maxPages: overrides.maxPages,
         save: async (value) => { await overrides.save?.(value); saved = structuredClone(validateFollowState(value, state.rootSessionID, state.server)) }, emit: overrides.emit ?? emit })
     } }
 }
+
+for (const resumed of [false, true]) {
+  test(`complete paginated 68-Session family includes 35 compaction descendants on ${resumed ? "resume" : "fresh follow"}`, async () => {
+    const state = initial()
+    if (resumed) {
+      state.sourceEpoch = "epoch_one"
+      state.cursors = [{ sessionID: "ses_root", after: 24860 }]
+      state.delivery = { announced: [], targets: [{ target: "thr_synthetic_only", outbox: [{ sessionID: "ses_root", id: "evt_retained", type: "session.execution.interrupted", seq: 24860 }] }] }
+    }
+    const f = fixture(state)
+    const descendants = [
+      ...Array.from({ length: 32 }, (_, index) => ({ id: `ses_child_${index}`, parentID: "ses_root" })),
+      ...Array.from({ length: 35 }, (_, index) => ({ id: `ses_compaction_${index}`, parentID: index === 0 ? "ses_child_31" : `ses_compaction_${index - 1}`, agent: "compaction" })),
+    ]
+    let discoveryPages = 0
+    let taskPages = 0
+    f.client.session.list = async ({ parentID, cursor }) => {
+      discoveryPages++
+      const children = descendants.filter((child) => child.parentID === parentID)
+      const offset = cursor === undefined ? 0 : Number(cursor)
+      return { data: children.slice(offset, offset + 8), cursor: { next: offset <= children.length ? String(offset + 8) : undefined } }
+    }
+    f.client.session.subagent.list = async ({ parentID, cursor }) => {
+      taskPages++
+      return { data: [], cursor: { next: cursor === undefined ? `tail_${parentID}` : undefined } }
+    }
+    f.append("ses_root", 24860, "session.execution.interrupted")
+    for (const child of descendants) f.append(child.id, 1, "session.work.completed")
+    const run = f.run()
+    run.catch(() => undefined)
+    try {
+      expect(await f.wait((receipt) => receipt.kind === "ready")).toMatchObject({ rootActive: false, activity: "idle" })
+      await f.global.idle()
+      expect(discoveryPages).toBeGreaterThan(128)
+      expect(taskPages).toBe(136)
+      expect(f.saved.cursors.map((cursor) => cursor.sessionID).toSorted()).toEqual(["ses_root", ...descendants.map((child) => child.id)].toSorted())
+      expect(f.saved.cursors.find((cursor) => cursor.sessionID === "ses_root")?.after).toBe(24860)
+      expect(f.saved.delivery).toEqual(state.delivery)
+      expect(f.receipts.filter((receipt) => receipt.kind === "durable")).toHaveLength(resumed ? 67 : 0)
+      f.append("ses_compaction_34", 2, "session.execution.started")
+      await f.wait((receipt) => receipt.sessionID === "ses_compaction_34" && receipt.seq === 2)
+    } finally { f.controller.abort(); await run }
+    expect(f.streams.every((stream) => stream.active === 0)).toBe(true)
+  })
+}
+
+test("changing live membership retires idle readers, retains recovery state and re-enters after restart without replaying acknowledgements", async () => {
+  const state = initial()
+  state.sourceEpoch = "epoch_one"
+  state.cursors = [{ sessionID: "ses_root", after: 24860 }, { sessionID: "ses_child", after: 1 }]
+  state.delivery = { announced: [], targets: [{ target: "thr_synthetic_only", outbox: [{ sessionID: "ses_child", id: "evt_retained", type: "session.execution.interrupted", seq: 1 }] }] }
+  const f = fixture(state)
+  f.children.push("ses_child", ...Array.from({ length: 66 }, (_, index) => `ses_other_${index}`))
+  f.append("ses_root", 24860, "session.execution.interrupted")
+  f.append("ses_child", 1, "session.execution.interrupted")
+  const run = f.run()
+  run.catch(() => undefined)
+  try {
+    await f.wait((receipt) => receipt.kind === "ready")
+    await f.global.idle()
+    expect(f.logs.get("ses_child")?.active ?? 0).toBe(0)
+    expect(f.saved.cursors).toContainEqual({ sessionID: "ses_child", after: 1 })
+    f.setPending([{ kind: "permission", sessionID: "ses_child", id: "per_retired" }, { kind: "permission", sessionID: "ses_other_0", id: "per_retained" }])
+    f.global.push({ type: "permission.asked", sourceEpoch: "epoch_one", data: { sessionID: "ses_child", id: "per_retired" } })
+    await f.wait((receipt) => receipt.id === "per_retired")
+    f.global.push({ type: "permission.asked", sourceEpoch: "epoch_one", data: { sessionID: "ses_other_0", id: "per_retained" } })
+    await f.wait((receipt) => receipt.id === "per_retained")
+    expect(f.saved.delivery).toEqual(state.delivery)
+    f.setWork({ data: ["ses_child"], running: ["ses_child"], lost: [] })
+    const event = f.append("ses_child", 2, "session.execution.started")
+    f.global.push(event)
+    await f.wait((receipt) => receipt.sessionID === "ses_child" && receipt.seq === 2)
+    f.global.push({ type: "session.status", sourceEpoch: "epoch_one", data: { sessionID: "ses_child", status: { type: "idle" } } })
+    await f.wait((receipt) => receipt.kind === "activity")
+    await f.global.idle()
+    expect(f.logs.get("ses_child")?.active).toBe(1)
+    f.setPending([{ kind: "permission", sessionID: "ses_other_0", id: "per_retained" }])
+    f.setWork({ data: [], running: [], lost: [] })
+    f.global.push({ type: "permission.replied", sourceEpoch: "epoch_one", data: { sessionID: "ses_child", requestID: "per_retired" } })
+    await f.wait((receipt) => receipt.kind === "reply-observed")
+    f.global.push({ type: "session.status", sourceEpoch: "epoch_one", data: { sessionID: "ses_child", status: { type: "idle" } } })
+    await f.wait((receipt) => receipt.kind === "activity" && receipt.rootActive === false)
+    expect(f.logs.get("ses_child")?.active ?? 0).toBe(0)
+    expect(f.saved.cursors).toContainEqual({ sessionID: "ses_child", after: 2 })
+  } finally { f.controller.abort(); await run }
+  const again = fixture(f.saved)
+  again.children.push(...f.children)
+  again.append("ses_root", 24860, "session.execution.interrupted")
+  again.append("ses_child", 2, "session.execution.started")
+  again.append("ses_child", 3, "session.execution.succeeded")
+  again.setPending([{ kind: "permission", sessionID: "ses_other_0", id: "per_retained" }])
+  const next = again.run()
+  try {
+    await again.wait((receipt) => receipt.kind === "ready")
+    await again.global.idle()
+    expect(again.receipts.filter((receipt) => receipt.kind === "durable").map((receipt) => receipt.seq)).toEqual([3])
+    expect(again.saved.cursors).toContainEqual({ sessionID: "ses_child", after: 3 })
+    expect(again.saved.cursors).toContainEqual({ sessionID: "ses_root", after: 24860 })
+    expect(again.saved.delivery).toEqual(state.delivery)
+    expect(again.saved.pending).toContainEqual({ kind: "permission", sessionID: "ses_other_0", id: "per_retained" })
+  } finally { again.controller.abort(); await next }
+})
+
+test("a member absent during recovery keeps its cursor and resumes from the latest acknowledgement on re-entry", async () => {
+  const f = fixture()
+  f.children.push("ses_child", ...Array.from({ length: 66 }, (_, index) => `ses_other_${index}`))
+  const run = f.run()
+  try {
+    await f.wait((receipt) => receipt.kind === "ready")
+    f.append("ses_child", 1, "session.work.completed")
+    await f.wait((receipt) => receipt.sessionID === "ses_child" && receipt.seq === 1)
+    f.children.splice(f.children.indexOf("ses_child"), 1)
+    f.global.end()
+    await f.wait((receipt) => receipt.kind === "ready" && f.receipts.filter((item) => item.kind === "ready").length === 2)
+    await f.global.idle()
+    expect(f.saved.cursors).toContainEqual({ sessionID: "ses_child", after: 1 })
+    f.append("ses_child", 2, "session.execution.interrupted")
+    f.children.push("ses_child")
+    f.global.push({ type: "session.created", sourceEpoch: "epoch_one", data: { sessionID: "ses_child", parentID: "ses_root" } })
+    await f.wait((receipt) => receipt.sessionID === "ses_child" && receipt.seq === 2)
+    f.global.push({ type: "session.status", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", status: { type: "idle" } } })
+    await f.wait((receipt) => receipt.kind === "activity")
+    expect(f.receipts.filter((receipt) => receipt.sessionID === "ses_child" && receipt.kind === "durable").map((receipt) => receipt.seq)).toEqual([1, 2])
+    expect(f.saved.cursors).toContainEqual({ sessionID: "ses_child", after: 2 })
+  } finally { f.controller.abort(); await run }
+})
+
+for (const status of ["busy", "retry"]) {
+  test(`${status} status re-evaluates live membership for an idle retired child`, async () => {
+    const f = fixture()
+    f.children.push("ses_child")
+    const run = f.run()
+    try {
+      await f.wait((receipt) => receipt.kind === "ready")
+      expect(f.logs.get("ses_child")?.active ?? 0).toBe(0)
+      f.setWork({ data: ["ses_child"], running: ["ses_child"], lost: [] })
+      f.global.push({ type: "session.status", sourceEpoch: "epoch_one", data: { sessionID: "ses_child", status: { type: status } } })
+      f.global.push({ type: "permission.asked", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", id: "per_barrier" } })
+      await f.wait((receipt) => receipt.id === "per_barrier")
+      expect(f.logs.get("ses_child")?.active).toBe(1)
+    } finally { f.controller.abort(); await run }
+  })
+}
+
+test("68 running members remain covered with two live readers and one finite replay at a time", async () => {
+  const f = fixture()
+  f.children.push(...Array.from({ length: 67 }, (_, index) => `ses_child_${index}`))
+  const members = ["ses_root", ...f.children]
+  f.setWork({ data: members, running: members, lost: [] })
+  const log = f.client.session.log
+  let readers = 0
+  let peak = 0
+  f.client.session.log = async function* (input, options) {
+    readers++
+    peak = Math.max(peak, readers)
+    try { yield* log(input, options) } finally { readers-- }
+  }
+  const run = f.run({ maxReaders: 2 })
+  try {
+    await f.wait((receipt) => receipt.kind === "ready")
+    for (const member of members) f.append(member, 1, "session.execution.started")
+    await f.wait((receipt) => receipt.sessionID === "ses_child_66" && receipt.seq === 1)
+    f.global.push({ type: "session.status", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", status: { type: "idle" } } })
+    await f.wait((receipt) => receipt.kind === "activity")
+    expect(f.receipts.filter((receipt) => receipt.kind === "durable")).toHaveLength(68)
+    expect(f.saved.cursors.every((cursor) => cursor.after === 1)).toBe(true)
+    expect(f.logs.get("ses_child_66")?.active ?? 0).toBe(0)
+    expect(readers).toBe(2)
+    expect(peak).toBeLessThanOrEqual(3)
+  } finally { f.controller.abort(); await run }
+  expect(readers).toBe(0)
+})
+
+test("production global SSE encoding and generated client retain the durable envelope that recovers a retired reader", async () => {
+  const f = fixture()
+  f.children.push("ses_child")
+  let frames!: ReadableStreamDefaultController<Uint8Array>
+  const encoder = new TextEncoder()
+  const sourceEpoch = ServiceStatus.Epoch.make("epoch_one")
+  const native = YCoding.make({ baseUrl: "http://native.synthetic", fetch: (async (_input: string | URL | Request, init?: RequestInit) => {
+    return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      frames = controller
+      controller.enqueue(encoder.encode(EventFeed.frame(sourceEpoch, { id: SessionEvent.Execution.Started.fields.id.make("evt_connected"), type: "server.connected", data: {} })))
+      init?.signal?.addEventListener("abort", () => controller.close(), { once: true })
+    } }), { headers: { "content-type": "text/event-stream" } })
+  }) as typeof fetch })
+  f.client.event = native.event
+  const run = f.run()
+  try {
+    await f.wait((receipt) => receipt.kind === "ready")
+    expect(f.logs.get("ses_child")?.active ?? 0).toBe(0)
+    const retained = f.append("ses_child", 1, "session.execution.started")
+    const event = Schema.decodeUnknownSync(SessionEvent.Execution.Started)({ ...retained, created: 0, durable: { ...retained.durable, version: 1 } })
+    frames.enqueue(encoder.encode(EventFeed.frame(sourceEpoch, event)))
+    await f.wait((receipt) => receipt.sessionID === "ses_child" && receipt.seq === 1)
+  } finally { f.controller.abort(); await run }
+  expect(f.saved.cursors).toContainEqual({ sessionID: "ses_child", after: 1 })
+  expect(f.receipts.filter((receipt) => receipt.kind === "durable")).toMatchObject([{ sessionID: "ses_child", seq: 1, type: "session.execution.started" }])
+})
+
+test("a deleted idle member retires without reading its unavailable log or deleting its saved cursor", async () => {
+  const f = fixture()
+  f.children.push("ses_child")
+  const run = f.run()
+  try {
+    await f.wait((receipt) => receipt.kind === "ready")
+    f.append("ses_child", 1, "session.work.completed")
+    await f.wait((receipt) => receipt.sessionID === "ses_child" && receipt.seq === 1)
+    f.children.splice(0)
+    const log = f.client.session.log
+    f.client.session.log = (input, options) => {
+      if (input.sessionID === "ses_child") throw new Error("deleted Session log is unavailable")
+      return log(input, options)
+    }
+    f.global.push({ type: "session.deleted", sourceEpoch: "epoch_one", durable: { aggregateID: "ses_child", seq: 2 }, data: { sessionID: "ses_child" } })
+    f.global.push({ type: "session.status", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", status: { type: "idle" } } })
+    await f.wait((receipt) => receipt.kind === "activity")
+    expect(f.saved.cursors).toContainEqual({ sessionID: "ses_child", after: 1 })
+    expect(f.receipts.filter((receipt) => receipt.kind === "durable").map((receipt) => receipt.seq)).toEqual([1])
+  } finally { f.controller.abort(); await run }
+})
+
+for (const source of ["discovery", "task reconciliation"] as const) {
+  test(`configured ${source} page exhaustion retains cursor and sole synthetic outbox without readiness`, async () => {
+    const state = initial()
+    state.sourceEpoch = "epoch_one"
+    state.cursors = [{ sessionID: "ses_root", after: 24860 }]
+    state.delivery = { announced: [], targets: [{ target: "thr_synthetic_only", outbox: [{ sessionID: "ses_root", id: "evt_retained", type: "session.execution.interrupted", seq: 24860 }] }] }
+    const f = fixture(state)
+    f.append("ses_root", 24860, "session.execution.interrupted")
+    if (source === "discovery") f.client.session.list = async () => ({ data: [], cursor: { next: "tail" } })
+    if (source === "task reconciliation") f.client.session.subagent.list = async () => ({ data: [], cursor: { next: "tail" } })
+    await expect(f.run({ maxPages: 1 })).rejects.toThrow(`${source} exceeds --max-pages 1`)
+    expect(f.saved).toEqual(state)
+    expect(f.receipts).toEqual([])
+    expect(f.streams.every((stream) => stream.active === 0)).toBe(true)
+  })
+}
+
+test("retained cursor capacity fails before output without evicting departed members", async () => {
+  const state = initial()
+  state.sourceEpoch = "epoch_one"
+  state.cursors = [{ sessionID: "ses_root", after: 24860 }, ...Array.from({ length: 8191 }, (_, index) => ({ sessionID: `ses_departed_${index}`, after: 1 }))]
+  const f = fixture(state)
+  f.children.push("ses_new")
+  await expect(f.run()).rejects.toThrow("retained cursors exceed 8192")
+  expect(f.saved).toEqual(state)
+  expect(f.receipts).toEqual([])
+})
 
 for (const running of [["ses_child"], ["ses_root"], ["ses_grandchild"]]) {
   test(`root settlement retains aggregate running activity from ${running[0]}`, async () => {
@@ -461,7 +716,7 @@ test("follow discovers a dynamic child and replays its short-lived terminal exac
     const event = f.append("ses_child", 1, "session.execution.interrupted")
     f.global.push({ type: "session.created", sourceEpoch: "epoch_one", data: { sessionID: "ses_child", parentID: "ses_root" } })
     await f.wait((receipt) => receipt.kind === "durable" && receipt.sessionID === "ses_child")
-    f.logs.get("ses_child")!.push(event)
+    f.global.push(event)
     f.append("ses_root", 1, "session.step.ended")
     await f.wait((receipt) => receipt.kind === "durable" && receipt.sessionID === "ses_root")
     expect(f.receipts.filter((receipt) => receipt.sessionID === "ses_child")).toHaveLength(1)
@@ -838,16 +1093,16 @@ test("follow recovery preserves ahead delivered IDs until gap-tolerant acknowled
   expect(f.saved.cursors).toEqual([{ sessionID: "ses_root", after: 15 }])
 })
 
-test("follow recovery healthy events and heartbeat never poll native state", async () => {
+test("follow recovery healthy material events and heartbeat never poll native state", async () => {
   const f = fixture()
   f.append("ses_root", 1, "session.created")
   const run = f.run({ heartbeatSeconds: 1 })
   try {
     await f.wait((receipt) => receipt.kind === "ready")
-    const baseline = { ...f.reads }
     f.global.push({ type: "session.status", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", status: { type: "busy" } } })
     f.global.push({ type: "permission.asked", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", id: "per_live" } })
     await f.wait((receipt) => receipt.kind === "request-observed")
+    const baseline = { ...f.reads }
     f.global.push({ type: "permission.replied", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", requestID: "per_live" } })
     await f.wait((receipt) => receipt.kind === "reply-observed")
     f.append("ses_root", 2, "session.execution.succeeded")
@@ -908,7 +1163,8 @@ test("follow recovery cancellation bounds admitted output to one item per owned 
   state.sourceEpoch = "epoch_one"
   state.cursors = [{ sessionID: "ses_root" }]
   const f = fixture(state)
-  for (let index = 1; index < 64; index++) f.children.push(`ses_child_${index}`)
+  for (let index = 1; index < 68; index++) f.children.push(`ses_child_${index}`)
+  f.setWork({ data: ["ses_root", ...f.children], running: ["ses_root", ...f.children], lost: [] })
   for (const sessionID of ["ses_root", ...f.children]) {
     f.append(sessionID, 2, "session.execution.started")
     f.append(sessionID, 5, "session.work.completed")
@@ -917,13 +1173,13 @@ test("follow recovery cancellation bounds admitted output to one item per owned 
   let entered!: () => void
   const gate = new Promise<void>((resolve) => { release = resolve })
   const first = new Promise<void>((resolve) => { entered = resolve })
-  const run = f.run({ emit: async (receipt) => { if (receipt.kind === "durable") { entered(); await gate }; await f.emit(receipt) } })
+  const run = f.run({ maxReaders: 2, emit: async (receipt) => { if (receipt.kind === "durable") { entered(); await gate }; await f.emit(receipt) } })
   await first
   f.controller.abort()
   release()
   await run
   const delivered = f.receipts.filter((receipt) => receipt.kind === "durable")
-  expect(delivered.length).toBeLessThanOrEqual(64)
+  expect(delivered.length).toBeLessThanOrEqual(3)
   expect(delivered.every((receipt) => receipt.seq === 2)).toBe(true)
   expect(f.saved.cursors.every((cursor) => cursor.after === undefined || cursor.after === 2)).toBe(true)
   expect(f.streams.every((stream) => stream.active === 0)).toBe(true)

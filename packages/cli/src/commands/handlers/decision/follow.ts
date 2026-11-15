@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { FollowError, followID, followLedgerLimit, followRequestKey, requestKinds, type FollowRequest, type FollowState } from "./follow-state"
+import { FollowError, followID, followDefaultReaders, followReaderLimit, followPageLimit, followLedgerLimit, followRequestKey, requestKinds, type FollowRequest, type FollowState } from "./follow-state"
 import { ClientError } from "@ycoding-ai/client/promise"
 
 export type FollowEvent = { type: string; id?: string; created?: number; sourceEpoch?: string; aggregateID?: string; seq?: number;
@@ -41,7 +41,7 @@ export type FollowReceipt = {
   operation?: "session.subagent.answer"
   resolution?: "unknown" | "reply-observed" | "cancelled" | "timed_out" | "rejected"
 }
-type Entry = { id: string; epoch: string; after?: number; baselineAfter?: number; controller: AbortController; task?: Promise<void>; restart: boolean; failures: number; backoff: number; synced: boolean; sync: { promise: Promise<void>; resolve(value: void): void; reject(reason?: unknown): void } }
+type Entry = { id: string; epoch: string; after?: number; baselineAfter?: number; controller: AbortController; task?: Promise<void>; live: boolean; restart: boolean; failures: number; backoff: number; synced: boolean; sync: { promise: Promise<void>; resolve(value: void): void; reject(reason?: unknown): void } }
 const transport = (error: unknown) => error instanceof ClientError && error.reason === "Transport"
 const record = (value: unknown): Record<string, unknown> => typeof value === "object" && value !== null ? value as Record<string, unknown> : {}
 const identity = (item: FollowRequest): FollowRequest => {
@@ -63,17 +63,21 @@ export function ownedFollowAbort(error: unknown, signal: AbortSignal): boolean {
 
 export async function followFamily(client: FollowClient, options: {
   state: FollowState; signal: AbortSignal; heartbeatSeconds: number
+  maxReaders?: number; maxPages?: number
   save(state: FollowState): Promise<void>
   emit(receipt: FollowReceipt): Promise<void>
   companion?: Promise<void>
+  onReady?(): void
 }) {
+  const maxReaders = options.maxReaders ?? followDefaultReaders
+  const maxPages = options.maxPages ?? followPageLimit
+  if (!Number.isSafeInteger(maxReaders) || maxReaders < 1 || maxReaders > followReaderLimit || !Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > followPageLimit) throw new FollowError("invalid-native-data")
   const state = structuredClone(options.state)
   let committed = structuredClone(state)
   const local = new AbortController()
   const signal = AbortSignal.any([options.signal, local.signal])
   const root = state.rootSessionID
   const entries = new Map<string, Entry>()
-  const saved = new Map(state.cursors.map((cursor) => [cursor.sessionID, cursor.after]))
   const seen = new Set(state.seen)
   const requestSeen = new Set(state.requestSeen)
   const terminalSeen = new Set(state.terminalSeen)
@@ -85,6 +89,7 @@ export async function followFamily(client: FollowClient, options: {
   let rootActive: boolean | undefined
   let activity: FollowReceipt["activity"]
   let activityOutstanding = false
+  let needed = new Set<string>()
   let taskStates = new Map<string, string>()
   let childQuestions = new Map<string, FollowRequest>()
   let scopeChanged = false
@@ -107,7 +112,7 @@ export async function followFamily(client: FollowClient, options: {
   }
   const wake = () => { dirty = true; notify?.(); notify = undefined }
   const send = (receipt: FollowReceipt, delivered = false) => {
-    if (queued >= 66) throw new FollowError("budget-exhausted")
+    if (queued >= maxReaders + 3) throw new FollowError("budget-exhausted", `output admission exceeds ${maxReaders + 3}; verify the output consumer before resuming retained state`)
     queued++
     const sourceEpoch = epoch
     const baselines = [...entries.values()].map(({ id, baselineAfter }) => ({ sessionID: id, ...(baselineAfter === undefined ? {} : { after: baselineAfter }) }))
@@ -115,7 +120,10 @@ export async function followFamily(client: FollowClient, options: {
       if (!delivered) await options.emit(receipt)
       const checkpoint = structuredClone(committed)
       checkpoint.sourceEpoch = sourceEpoch
-      checkpoint.cursors = baselines.map((cursor) => checkpoint.cursors.find((saved) => saved.sessionID === cursor.sessionID) ?? cursor)
+      const cursors = new Map(checkpoint.cursors.map((cursor) => [cursor.sessionID, cursor]))
+      for (const cursor of baselines) if (!cursors.has(cursor.sessionID)) cursors.set(cursor.sessionID, cursor)
+      if (cursors.size > followLedgerLimit) throw new FollowError("budget-exhausted", `retained cursors exceed ${followLedgerLimit}; retain state and use a runtime with a larger supported recovery budget`)
+      checkpoint.cursors = [...cursors.values()]
       const append = (ledger: string[], value: string) => {
         if (ledger.includes(value)) return
         if (ledger.length >= followLedgerLimit) throw new FollowError("budget-exhausted")
@@ -192,12 +200,12 @@ export async function followFamily(client: FollowClient, options: {
       let cursor: string | undefined
       const visited = new Set<string>()
       do {
-        if (++pages > 128) throw new FollowError("budget-exhausted")
+        if (++pages > maxPages) throw new FollowError("budget-exhausted", `discovery exceeds --max-pages ${maxPages}; retain state and increase --max-pages up to ${followPageLimit} before resuming`)
         const page = await read(() => client.session.list({ parentID, limit: 200, ...(cursor === undefined ? {} : { cursor }) }, { signal }))
         for (const child of page.data) {
           if (child.parentID !== parentID || found.has(child.id)) continue
           if (!followID(child.id) || !child.id.startsWith("ses")) throw new FollowError("invalid-native-data")
-          if (found.size >= 64) throw new FollowError("budget-exhausted")
+          if (found.size >= followLedgerLimit) throw new FollowError("budget-exhausted", `family identities exceed ${followLedgerLimit}; retain state and use a runtime with a larger supported recovery budget`)
           found.add(child.id)
           queue.push(child.id)
         }
@@ -212,6 +220,7 @@ export async function followFamily(client: FollowClient, options: {
     const work = await read(() => client.session.outstanding(undefined, { signal }))
     rootActive = work.running.some((id) => scope.has(id))
     activityOutstanding = work.data.some((id) => scope.has(id))
+    needed = new Set([...work.data, ...work.running, ...work.lost].filter((id) => scope.has(id)))
     if (tasks) {
       scopeChanged = false
       const states = new Map<string, string>()
@@ -221,7 +230,7 @@ export async function followFamily(client: FollowClient, options: {
         let cursor: string | undefined
         const visited = new Set<string>()
         do {
-          if (++pages > 128) throw new FollowError("budget-exhausted")
+          if (++pages > maxPages) throw new FollowError("budget-exhausted", `task reconciliation exceeds --max-pages ${maxPages}; retain state and increase --max-pages up to ${followPageLimit} before resuming`)
           const page = await read(() => client.session.subagent.list({ parentID, limit: 10, ...(cursor === undefined ? {} : { cursor }) }, { signal }))
           for (const task of page.data) {
             if (!followID(task.sessionID) || task.parentID !== undefined && task.parentID !== parentID) throw new FollowError("invalid-native-data")
@@ -299,7 +308,7 @@ export async function followFamily(client: FollowClient, options: {
   const pump = async (entry: Entry) => {
     const reading = AbortSignal.any([signal, entry.controller.signal])
     try {
-      for await (const event of client.session.log({ sessionID: entry.id, after: entry.after, follow: true }, { signal: reading })) {
+      for await (const event of client.session.log({ sessionID: entry.id, after: entry.after, follow: entry.live }, { signal: reading })) {
         if (reading.aborted || entries.get(entry.id) !== entry) return
         if (event.sourceEpoch !== entry.epoch) continue
         if (event.type === "log.synced") {
@@ -311,6 +320,7 @@ export async function followFamily(client: FollowClient, options: {
           entry.failures = 0
           entry.synced = true
           entry.sync.resolve(undefined)
+          if (!entry.live) return
           continue
         }
         if (!event.durable || event.durable.aggregateID !== entry.id || event.durable.seq <= (entry.after ?? -1)) continue
@@ -330,7 +340,7 @@ export async function followFamily(client: FollowClient, options: {
         }
         await material(entry, event)
       }
-      if (reading.aborted) return
+      if (reading.aborted || !entry.live && entry.synced) return
     } catch (error) {
       if (ownedFollowAbort(error, reading)) return
       if (!transport(error) || reading.aborted || failure !== undefined) throw error
@@ -347,11 +357,12 @@ export async function followFamily(client: FollowClient, options: {
       scope = await discover()
       await read(() => client.session.active({ signal }))
     }
-    if (scope.size > 64) throw new FollowError("budget-exhausted")
+    if (scope.size > followLedgerLimit) throw new FollowError("budget-exhausted", `family identities exceed ${followLedgerLimit}; retain state and use a runtime with a larger supported recovery budget`)
+    if (new Set([...committed.cursors.map((cursor) => cursor.sessionID), ...scope]).size > followLedgerLimit) throw new FollowError("budget-exhausted", `retained cursors exceed ${followLedgerLimit}; retain state and use a runtime with a larger supported recovery budget`)
     for (const [id, entry] of entries) if (!scope.has(id)) { entries.delete(id); await stop(entry) }
     if (reset) for (const entry of entries.values()) await stop(entry)
     const starting: Entry[] = []
-    for (const id of pendingOnly ? [] : scope) {
+    for (const id of scope) {
       let entry = entries.get(id)
       if (entry && !reset && !entry.restart) continue
       if (entry) await stop(entry)
@@ -359,13 +370,13 @@ export async function followFamily(client: FollowClient, options: {
       if (!followID(projection.sourceEpoch)) throw new FollowError("invalid-native-data")
       if (epoch !== undefined && projection.sourceEpoch !== epoch) throw new FollowError("epoch-mismatch")
       epoch = projection.sourceEpoch
-      const after = entry ? entry.after : saved.has(id) ? saved.get(id) : baseline ? undefined : projection.watermark.seq
+      const cursor = committed.cursors.find((cursor) => cursor.sessionID === id)
+      const after = entry ? entry.after : cursor ? cursor.after : baseline ? undefined : projection.watermark.seq
       if (after !== undefined && (projection.watermark.seq === undefined || after > projection.watermark.seq)) throw new FollowError("cursor-ahead")
       if (entry?.restart) await delay(entry.backoff)
-      entry = { id, epoch, after, baselineAfter: committed.cursors.find((cursor) => cursor.sessionID === id)?.after ?? after, controller: new AbortController(), restart: false, failures: entry?.failures ?? 0, backoff: entry?.backoff ?? 0, synced: false, sync: Promise.withResolvers<void>() }
+      entry = { id, epoch, after, baselineAfter: cursor?.after ?? after, controller: new AbortController(), live: false, restart: false, failures: entry?.failures ?? 0, backoff: entry?.backoff ?? 0, synced: false, sync: Promise.withResolvers<void>() }
       starting.push(entry)
     }
-    baseline = true
     await refreshActivity(true)
     if (scopeChanged) {
       if (discoveries >= 2) throw new FollowError("invalid-native-data")
@@ -389,17 +400,37 @@ export async function followFamily(client: FollowClient, options: {
       ...(request.kind === "child-question" ? { operation: "session.subagent.answer" as const } : {}) })
     pending.clear()
     for (const [id, request] of next) pending.set(id, request)
+    const requested = new Set([...pending.values()].map((request) => request.sessionID))
+    const live = new Set([root, ...[...scope].filter((id) => id !== root && (needed.has(id) || requested.has(id) || ["starting", "running", "waiting", "cancelling", "supervising"].includes(taskStates.get(id) ?? "")))].slice(0, maxReaders))
+    for (const id of scope) {
+      const candidate = starting.find((entry) => entry.id === id)
+      if (candidate) { candidate.live = live.has(id); continue }
+      const entry = entries.get(id)!
+      if (entry.live === live.has(id)) continue
+      await stop(entry)
+      starting.push({ ...entry, controller: new AbortController(), live: live.has(id), task: undefined, synced: false, sync: Promise.withResolvers<void>() })
+    }
+    baseline = true
     classify()
     if (!pendingOnly) settling.clear()
     for (const entry of starting) entries.set(entry.id, entry)
     for (const receipt of receipts) await send(receipt)
-    for (const entry of starting) {
+    const launch = (entry: Entry) => {
       entry.task = pump(entry).catch((error: unknown) => { failure = error; wake() }).finally(() => {
         if (!entry.synced) entry.sync.reject(failure ?? (signal.aborted ? signal.reason : new ClientError("Transport")))
       })
     }
-    await Promise.all(starting.map((entry) => entry.sync.promise))
-    ready = true
+    const syncing = starting.filter((entry) => entry.live).map(async (entry) => { launch(entry); await entry.sync.promise })
+    await Promise.all([...syncing, (async () => {
+      for (const entry of starting.filter((entry) => !entry.live)) {
+        if (signal.aborted || failure !== undefined) break
+        launch(entry)
+        await entry.sync.promise
+        await entry.task
+      }
+    })()])
+    if (failure !== undefined) throw failure
+    ready = !signal.aborted
   }
   const pause = async (ms: number) => {
     if (signal.aborted) return
@@ -450,9 +481,11 @@ export async function followFamily(client: FollowClient, options: {
           epoch = first.value.sourceEpoch
         }
         await reconcile(reconnect)
+        if (signal.aborted) break
         await refreshOwnership()
         if (first.value.sourceEpoch !== undefined && first.value.sourceEpoch !== epoch) throw new FollowError("epoch-mismatch")
         await send({ kind: "ready", sessionID: root, rootActive, activity })
+        options.onReady?.()
         next = readNext()
         while (!signal.aborted) {
           if (failure !== undefined) throw failure
@@ -498,6 +531,25 @@ export async function followFamily(client: FollowClient, options: {
           if (!(typeof id === "string" && scope.has(id)) && !(event.type === "session.created" && typeof data.parentID === "string" && scope.has(data.parentID))) continue
           const [requestKind, phase] = event.type.split(".")
           let usable = false
+          if (event.type === "session.deleted" && typeof id === "string" && id !== root) {
+            scope.delete(id)
+            const entry = entries.get(id)
+            if (entry) { entries.delete(id); await stop(entry) }
+            await reconcile(false, undefined, true)
+            continue
+          }
+          const retired = typeof id === "string" ? entries.get(id) : undefined
+          if (retired && !retired.live && event.durable?.aggregateID === retired.id && event.durable.seq > (retired.after ?? -1)) {
+            retired.synced = false
+            retired.sync = Promise.withResolvers<void>()
+            retired.task = pump(retired).catch((error: unknown) => { failure = error; wake() }).finally(() => {
+              if (!retired.synced) retired.sync.reject(failure ?? (signal.aborted ? signal.reason : new ClientError("Transport")))
+            })
+            await retired.sync.promise
+            await retired.task
+            if (failure !== undefined) throw failure
+            usable = true
+          }
           if (["form", "question", "guardrail", "permission"].includes(requestKind!) && typeof id === "string") {
             const asked = phase === "asked" || event.type === "form.created"
             const terminal = ["replied", "cancelled", "timed_out", "rejected"].includes(phase!)
@@ -528,8 +580,8 @@ export async function followFamily(client: FollowClient, options: {
           if (event.type === "session.status" && typeof id === "string") {
             const status = record(data.status)
             if (status.type === "idle" || ["busy", "retry"].includes(String(status.type)) && settling.has(id)) {
-              settling.delete(id); await refreshActivity(); await send({ kind: "activity", sessionID: root, rootActive, activity }); usable = true
-            } else if (["busy", "retry"].includes(String(status.type))) { rootActive = true; activity = pending.size > 0 ? "needs-decision" : "running"; usable = true }
+              settling.delete(id); await reconcile(false, undefined, true); await send({ kind: "activity", sessionID: root, rootActive, activity }); usable = true
+            } else if (["busy", "retry"].includes(String(status.type))) { await reconcile(false, undefined, true); rootActive = true; activity = pending.size > 0 ? "needs-decision" : "running"; usable = true }
           }
           if (usable && event.sourceEpoch === epoch) globalFailures = 0
         }

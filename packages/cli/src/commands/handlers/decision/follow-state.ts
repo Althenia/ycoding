@@ -59,6 +59,9 @@ export const announcedKey = (event: DeliveryEvent) => `${event.escalated ? "proj
 
 export const followStateBytes = 1024 * 1024
 export const followLedgerLimit = 8192
+export const followReaderLimit = 64
+export const followDefaultReaders = 16
+export const followPageLimit = 4 * followLedgerLimit
 export const followID = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,255}$/.test(value)
 export const requestKinds = ["permission", "guardrail", "question", "form", "review", "child-question"]
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)
@@ -113,7 +116,7 @@ export function validateFollowState(value: unknown, root: string, server: string
   if (!record(value) || !keys(value, ["version", "rootSessionID", "server", "sourceEpoch", "cursors", "pending", "seen", "requestSeen", "terminalSeen", "ownership", "delivery"]) ||
     value.version !== 1 || value.rootSessionID !== root || !followID(root) || value.server !== server || !/^[a-f0-9]{64}$/.test(server) ||
     value.sourceEpoch !== undefined && !followID(value.sourceEpoch)) throw new Error("Invalid follow state identity")
-  if (!Array.isArray(value.cursors) || value.cursors.length > 64) throw new Error("Invalid follow cursors")
+  if (!Array.isArray(value.cursors) || value.cursors.length > followLedgerLimit) throw new Error("Invalid follow cursors")
   const ids = new Set<string>()
   for (const cursor of value.cursors) {
     if (!record(cursor) || !keys(cursor, ["sessionID", "after"]) || !followID(cursor.sessionID) || !cursor.sessionID.startsWith("ses") ||

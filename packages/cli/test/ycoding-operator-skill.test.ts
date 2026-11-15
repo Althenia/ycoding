@@ -9,6 +9,8 @@ import { OpenApi } from "effect/unstable/httpapi"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigSkillPlugin } from "@ycoding-ai/core/config/plugin/skill"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
+import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Global } from "@ycoding-ai/core/global"
 import { Location } from "@ycoding-ai/core/location"
 import { MCP } from "@ycoding-ai/core/mcp/index"
@@ -221,7 +223,7 @@ test("Core's configured skill listing excludes the Dots-only data root", async (
   const config = Layer.succeed(Config.Service, Config.Service.of({
     diagnostics: () => Effect.succeed([]), reload: () => Effect.void, entries: () => Effect.succeed(entries),
   }))
-  const services = AppNodeBuilder.build(Skill.node, [
+  const services = AppNodeBuilder.build(LayerNode.group([Skill.node, EventRuntime.node]), [
     [Config.node, config], [MCP.node, emptyMcpLayer],
     [SkillDiscovery.node, Layer.succeed(SkillDiscovery.Service, SkillDiscovery.Service.of({ pull: () => Effect.die("unexpected network skill") }))],
   ])

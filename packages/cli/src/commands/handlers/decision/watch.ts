@@ -19,7 +19,7 @@ import { createFamilyWatch, decodeCheckpoint, discoverFamily, FamilyCheckpointEr
 import { decisionText, line } from "./decision-text"
 import { followFamily, type FollowReceipt } from "./follow"
 import { createFollowDelivery, type DeliveryReceipt } from "./follow-delivery"
-import { deliveryThreadID, FollowError, followID, openFollowState } from "./follow-state"
+import { deliveryThreadID, FollowError, followID, followDefaultReaders, followReaderLimit, followPageLimit, openFollowState } from "./follow-state"
 
 type Client = ReturnType<typeof YCoding.make>
 type LogEvent = Exclude<SessionLogOutput, { type: "log.synced" }>
@@ -711,6 +711,11 @@ export default Runtime.handler(DecisionCommand.commands.watch, Effect.fn("cli.de
   }
   if (input.follow && !input.family) return yield* Effect.fail(new Error("--follow requires --family"))
   if (Option.isSome(input.state) && !input.follow) return yield* Effect.fail(new Error("--state requires --follow"))
+  if ((Option.isSome(input.maxReaders) || Option.isSome(input.maxPages)) && !input.follow) return yield* Effect.fail(new Error("--max-readers and --max-pages require --follow"))
+  const maxReaders = Option.getOrElse(input.maxReaders, () => followDefaultReaders)
+  const maxPages = Option.getOrElse(input.maxPages, () => followPageLimit)
+  if (!Number.isSafeInteger(maxReaders) || maxReaders < 1 || maxReaders > followReaderLimit) return yield* Effect.fail(new Error(`--max-readers must be between 1 and ${followReaderLimit}`))
+  if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > followPageLimit) return yield* Effect.fail(new Error(`--max-pages must be between 1 and ${followPageLimit}`))
   if (input.deliver.length > 0 && !input.follow) return yield* Effect.fail(new Error("--deliver requires --follow"))
   if (!input.deliver.every(deliveryThreadID)) return yield* Effect.fail(new Error("--deliver requires a Dot thread ID"))
   if (input.follow && (options.input !== undefined || options.after !== undefined || options.checkpoint !== undefined))
@@ -744,14 +749,16 @@ export default Runtime.handler(DecisionCommand.commands.watch, Effect.fn("cli.de
             } catch { reject(new FollowError("output-failed")) }
           })
           const stopping = new AbortController()
+          const ready = Promise.withResolvers<void>()
           const delivery = input.deliver.length > 0 || store.state.delivery !== undefined ? createFollowDelivery(client, { state: store.state, targets: input.deliver,
-            signal: AbortSignal.any([controller.signal, stopping.signal]), save: store.save, emit: write }) : undefined
+            signal: AbortSignal.any([controller.signal, stopping.signal]), ready: ready.promise, save: store.save, emit: write }) : undefined
           const companion = delivery?.run()
           try {
-            await followFamily(client, { state: delivery?.state ?? store.state, signal: controller.signal, heartbeatSeconds: options.timeout,
-              save: delivery?.save ?? store.save, emit: delivery?.emit ?? write, ...(companion === undefined ? {} : { companion }) })
+            await followFamily(client, { state: delivery?.state ?? store.state, signal: controller.signal, heartbeatSeconds: options.timeout, maxReaders, maxPages,
+              save: delivery?.save ?? store.save, emit: delivery?.emit ?? write, onReady: () => ready.resolve(), ...(companion === undefined ? {} : { companion }) })
           } finally {
             stopping.abort()
+            ready.resolve()
             await companion
           }
         } finally { await store.close() }

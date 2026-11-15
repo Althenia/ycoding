@@ -94,6 +94,7 @@ function eventText(event: DeliveryEvent, items: readonly DecisionItem[]) {
 
 export function createFollowDelivery(client: DeliveryClient, options: {
   state: FollowState; targets: readonly string[]; signal: AbortSignal
+  ready: Promise<void>
   save(state: FollowState): Promise<void>
   emit(record: FollowReceipt | DeliveryReceipt): Promise<void>
 }) {
@@ -284,6 +285,12 @@ export function createFollowDelivery(client: DeliveryClient, options: {
           if (signal.aborted) return
         }
         let failures = 0
+        await new Promise<void>((resolve, reject) => {
+          const done = () => { signal.removeEventListener("abort", done); resolve() }
+          options.ready.then(done, (error: unknown) => { signal.removeEventListener("abort", done); reject(error) })
+          if (signal.aborted) done()
+          else signal.addEventListener("abort", done, { once: true })
+        })
         while (!signal.aborted) {
           if (!targets.some((target) => target.inflight !== undefined || ready(target).length > 0)) {
             await new Promise<void>((resolve) => {

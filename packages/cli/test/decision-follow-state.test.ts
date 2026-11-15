@@ -14,6 +14,7 @@ for (const [name, change] of [
   ["epoch", { sourceEpoch: "private/path" }],
   ["missing root cursor", { sourceEpoch: "epoch_one", cursors: [] }],
   ["missing epoch", { cursors: [{ sessionID: "ses_root", after: 1 }] }],
+  ["cursor bound", { sourceEpoch: "epoch_one", cursors: [{ sessionID: "ses_root" }, ...Array.from({ length: followLedgerLimit }, (_, index) => ({ sessionID: `ses_child_${index}` }))] }],
   ["negative cursor", { cursors: [{ sessionID: "ses_root", after: -1 }] }],
   ["duplicate cursor", { cursors: [{ sessionID: "ses_root" }, { sessionID: "ses_root" }] }],
   ["pending fields", { pending: [{ kind: "permission", sessionID: "ses_root", id: "per_synthetic", summary: "secret" }] }],
@@ -53,6 +54,23 @@ async function directory() {
   await mkdir(root, { recursive: true })
   return realpath(await mkdtemp(path.join(root, "decision-follow-test-")))
 }
+
+test("follow state restores 68 cursors with a retained root cursor and one synthetic outbox under a single writer", async () => {
+  const dir = await directory()
+  const filename = path.join(dir, "state.json")
+  const value: FollowState = { ...state(), sourceEpoch: "epoch_one", cursors: [{ sessionID: "ses_root", after: 24860 },
+    ...Array.from({ length: 67 }, (_, index) => ({ sessionID: `ses_child_${index}`, after: index }))],
+    delivery: { announced: [], targets: [{ target: "thr_synthetic_only", outbox: [{ sessionID: "ses_root", id: "evt_retained", type: "session.execution.interrupted", seq: 24860 }] }] } }
+  try {
+    const first = await openFollowState(filename, "ses_root", server)
+    try {
+      await first.save(value)
+      await expect(openFollowState(filename, "ses_root", server)).rejects.toThrow(/state-lock-held/)
+    } finally { await first.close() }
+    const second = await openFollowState(filename, "ses_root", server)
+    try { expect(second.state).toEqual(value) } finally { await second.close() }
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
 
 test("follow state is private, atomic, restorable and has one owned writer", async () => {
   const dir = await directory()
