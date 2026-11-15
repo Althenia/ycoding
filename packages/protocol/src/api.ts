@@ -34,7 +34,7 @@ import { IntegrationGroup } from "./groups/integration.js"
 import { McpGroup } from "./groups/mcp.js"
 import { ConfigGroup } from "./groups/config.js"
 import { CredentialGroup } from "./groups/credential.js"
-import { ProjectGroup } from "./groups/project.js"
+import { makeProjectGroup } from "./groups/project.js"
 import { ProjectCopyGroup } from "./groups/project-copy.js"
 import { VcsGroup } from "./groups/vcs.js"
 import { ProjectArtifactGroup } from "./groups/project-artifact.js"
@@ -55,7 +55,6 @@ type LocationGroups<LocationId extends HttpApiMiddleware.AnyId> =
   | HttpApiGroup.AddMiddleware<typeof McpGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof ConfigGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof CredentialGroup, LocationId>
-  | HttpApiGroup.AddMiddleware<typeof ProjectGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof FileSystemGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof CommandGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof SkillGroup, LocationId>
@@ -102,6 +101,7 @@ type MixedMiddlewareGroups<
   | ReturnType<typeof makePermissionGroup<LocationId, LocationService, PermissionLocationId, PermissionLocationService>>
   | ReturnType<typeof makeQuestionGroup<LocationId, LocationService, SessionLocationId, SessionLocationService>>
   | ReturnType<typeof makeIncidentGroup<LocationId, LocationService>>
+  | ReturnType<typeof makeProjectGroup<LocationId, LocationService>>
 
 type ApiGroups<
   LocationId extends HttpApiMiddleware.AnyId,
@@ -217,7 +217,7 @@ const makeApiFromGroup = <
     .add(IntegrationGroup.middleware(locationMiddleware))
     .add(McpGroup.middleware(locationMiddleware))
     .add(CredentialGroup.middleware(locationMiddleware))
-    .add(ProjectGroup.middleware(locationMiddleware))
+    .add(makeProjectGroup(locationMiddleware))
     .add(makeFormGroup(locationMiddleware, formLocationMiddleware))
     .add(makePermissionGroup(locationMiddleware, permissionLocationMiddleware))
     .add(FileSystemGroup.middleware(locationMiddleware))

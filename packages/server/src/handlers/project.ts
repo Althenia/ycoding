@@ -1,11 +1,14 @@
 import { Location } from "@ycoding-ai/core/location"
+import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectInventory } from "@ycoding-ai/core/project/inventory"
 import { InvalidCursorError } from "@ycoding-ai/protocol/errors"
 import { ProjectInventoryCursor } from "@ycoding-ai/protocol/groups/project"
 import { Effect } from "effect"
+import { HttpServerRequest } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
+import { requestRef } from "../location"
 
 export const ProjectHandler = HttpApiBuilder.group(Api, "server.project", (handlers) =>
   handlers
@@ -27,9 +30,12 @@ export const ProjectHandler = HttpApiBuilder.group(Api, "server.project", (handl
       }),
     )
     .handle("project.current", () =>
-      Location.Service.use((location) =>
-        Effect.succeed({ id: location.project.id, directory: location.project.directory }),
-      ),
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        const locations = yield* LocationServiceMap.Service
+        const location = yield* Location.Service.pipe(Effect.provide(locations.get(requestRef(request), [Location.node])))
+        return { id: location.project.id, directory: location.project.directory }
+      }),
     )
     .handle("project.directories", (ctx) =>
       Project.Service.use((project) => project.directories({ projectID: ctx.params.projectID })),

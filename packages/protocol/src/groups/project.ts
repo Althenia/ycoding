@@ -1,7 +1,7 @@
 import { Project } from "@ycoding-ai/schema/project"
 import { AbsolutePath, PositiveInt, statics } from "@ycoding-ai/schema/schema"
-import { Effect, Encoding, Result, Schema } from "effect"
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
+import { Context, Effect, Encoding, Result, Schema } from "effect"
+import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { InvalidCursorError } from "../errors.js"
 import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
@@ -125,3 +125,7 @@ export const ProjectGroup = HttpApiGroup.make("server.project")
       description: "Location-scoped project routes.",
     }),
   )
+
+export const makeProjectGroup = <LocationId extends HttpApiMiddleware.AnyId, LocationService>(
+  locationMiddleware: Context.Key<LocationId, LocationService>,
+) => ProjectGroup.add(ProjectGroup.endpoints["project.forget"].middleware(locationMiddleware))

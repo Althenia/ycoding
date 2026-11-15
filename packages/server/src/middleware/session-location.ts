@@ -22,6 +22,18 @@ export class SessionLocationMiddleware extends HttpApiMiddleware.Service<
 
 const decodeSessionID = Schema.decodeUnknownEffect(Session.ID)
 
+const storageReads = new Set([
+  "/api/session/:sessionID",
+  "/api/session/:sessionID/snapshot",
+  "/api/session/:sessionID/compaction",
+  "/api/session/:sessionID/diagnostics",
+  "/api/session/:sessionID/attachment/:digest",
+  "/api/session/:sessionID/context",
+  "/api/session/:sessionID/file-change",
+  "/api/session/:sessionID/message/:messageID",
+  "/api/experimental/session/:sessionID/log",
+])
+
 export const sessionLocationID = (params: Readonly<Record<string, string | undefined>>) =>
   params.sessionID ?? params.parentID
 
@@ -70,24 +82,14 @@ export const sessionLocationLayer = Layer.effect(
         if (directories.some((value) => value !== null && value !== row.directory) || workspaces.some((value) => value !== null && value !== row.workspaceID))
           return yield* new InvalidRequestError({ message: "Session location does not match the recorded placement" })
         const ref = Location.Ref.make({ directory: AbsolutePath.make(row.directory), workspaceID: row.workspaceID ? Workspace.ID.make(row.workspaceID) : undefined })
-        if (row.scope === "standalone") {
-          if (request.method !== "GET" || url.pathname !== `/api/session/${sessionID}`)
-            return yield* new InvalidRequestError({ message: "Standalone Session operation is unavailable" })
+        if (row.scope === "standalone" && (request.method !== "GET" || url.pathname !== `/api/session/${sessionID}`))
+          return yield* new InvalidRequestError({ message: "Standalone Session operation is unavailable" })
+        if (row.scope === "standalone" || (request.method === "GET" && storageReads.has(route.route.path))) {
           const context = Context.make(Location.Service, Location.Service.of({ ...ref, project: { id: row.projectID, directory: ref.directory } }))
           return yield* Effect.provide(effect, Context.makeUnsafe<LocationServices>(context.mapUnsafe))
         }
 
-        return yield* effect.pipe(
-          Effect.provide(
-            locations.get(
-              Location.Ref.make({
-                directory: AbsolutePath.make(row.directory),
-                workspaceID: row.workspaceID ? Workspace.ID.make(row.workspaceID) : undefined,
-              }),
-              [LocationServiceMap.full],
-            ),
-          ),
-        )
+        return yield* effect.pipe(Effect.provide(locations.get(ref, [LocationServiceMap.full])))
       }),
     )
   }),
