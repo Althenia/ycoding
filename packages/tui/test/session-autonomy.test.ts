@@ -358,7 +358,7 @@ test("keeps the goal dialog retry identity for a failed submission", async () =>
   expect(changed.payload).toEqual({ goal: "Finish migration" })
 })
 
-test("exposes autonomy only for the connected active session", async () => {
+test("exposes resident autonomy only for its owning session", async () => {
   const util = await import("../src/util/session-autonomy")
   const currentSessionAutonomy = Reflect.get(util, "currentSessionAutonomy")
   expect(typeof currentSessionAutonomy).toBe("function")
@@ -367,8 +367,7 @@ test("exposes autonomy only for the connected active session", async () => {
   const goal = autonomyView({ goal: activeGoal() })
   const response = { sessionID: "ses_old", state: goal }
 
-  expect(currentSessionAutonomy("ses_new", true, response)).toBeUndefined()
-  expect(currentSessionAutonomy("ses_old", false, response)).toBeUndefined()
-  expect(currentSessionAutonomy("ses_old", true, undefined)).toBeUndefined()
-  expect(currentSessionAutonomy("ses_old", true, response)).toEqual(goal)
+  expect(currentSessionAutonomy("ses_new", response)).toBeUndefined()
+  expect(currentSessionAutonomy("ses_old", undefined)).toBeUndefined()
+  expect(currentSessionAutonomy("ses_old", response)).toEqual(goal)
 })

@@ -821,7 +821,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           if (!residentIDs.has(id)) mutations.delete(id)
         })
       }
-      setStore("session", "message", sessionID, resident)
+      setStore("session", "message", sessionID, reconcile(resident, { key: "id", merge: true }))
       const residentIDs = new Set(resident.map((message) => message.id))
       messageMutationSeq.get(sessionID)?.forEach((_, id) => {
         if (!residentIDs.has(id)) messageMutationSeq.get(sessionID)?.delete(id)

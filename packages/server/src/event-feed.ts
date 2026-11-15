@@ -5,8 +5,10 @@ import { isYCodingEvent, YCodingEvent } from "@ycoding-ai/protocol/groups/event"
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 import { Cause, Context, Effect, Layer, Queue, Schema, Scope, Stream } from "effect"
 import { ProcessIdentity } from "./process-identity"
+import { Buffer } from "node:buffer"
 
 export const SubscriberCapacity = 4_096
+const maxSseEventBytes = 16 * 1024 * 1024
 
 export class SubscriberOverflowError extends Schema.TaggedErrorClass<SubscriberOverflowError>()(
   "EventFeed.SubscriberOverflow",
@@ -68,6 +70,16 @@ export const make = Effect.fn("EventFeed.make")(function* (
       ),
     )
     if (encoded === undefined) return
+    const bytes = Buffer.byteLength(encoded, "utf8")
+    if (bytes > maxSseEventBytes) {
+      yield* Effect.logWarning("Skipped oversized volatile event", {
+        eventID: event.id,
+        eventType: event.type,
+        bytes,
+        limit: maxSseEventBytes,
+      })
+      return
+    }
     for (const subscriber of subscribers) {
       if (Queue.offerUnsafe(subscriber, encoded)) continue
       subscribers.delete(subscriber)

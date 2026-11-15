@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Agent } from "@ycoding-ai/core/agent"
+import { make as makeClient } from "../../client/src/promise/generated/client"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { YCodingEvent } from "@ycoding-ai/protocol/groups/event"
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
@@ -38,7 +39,110 @@ function makeSource() {
   }
 }
 
+function clientForFrames(frames: readonly string[]) {
+  return makeClient({
+    baseUrl: "http://fixture.invalid",
+    fetch: Object.assign(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              for (const frame of frames) controller.enqueue(new TextEncoder().encode(frame))
+              controller.close()
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      { preconnect() {} },
+    ),
+  })
+}
+
 describe("EventFeed", () => {
+  test("the consumer bounds oversized complete and incomplete UTF-8 frames", async () => {
+    const payload = { ...event("oversized"), metadata: { output: "界".repeat(6 * 1024 * 1024) } }
+    const oversized = EventFeed.frame(sourceEpoch, payload)
+    for (const frame of [oversized, oversized.slice(0, -2)]) {
+      const client = clientForFrames([frame])
+      const failure = await Array.fromAsync(client.event.subscribe()).then(() => undefined, (error: unknown) => error)
+      expect(failure).toMatchObject({ reason: "SseEventTooLarge" })
+    }
+  })
+
+  it.effect("delivers coalesced legal frames without treating the transport chunk as one event", () =>
+    Effect.gen(function* () {
+      const source = makeSource()
+      const feed = yield* EventFeed.make(sourceEpoch, source.observe)
+      const stream = yield* feed.subscribe
+      const first = { ...event("one"), metadata: { output: "" } }
+      const available = 16 * 1024 * 1024 - new TextEncoder().encode(EventFeed.frame(sourceEpoch, first)).byteLength
+      first.metadata.output = "界".repeat(Math.floor(available / 3)) + "x".repeat(available % 3)
+      expect(new TextEncoder().encode(EventFeed.frame(sourceEpoch, first)).byteLength).toBe(16 * 1024 * 1024)
+      yield* source.publish(first)
+      yield* source.publish({ ...event("two"), metadata: { output: "x".repeat(9 * 1024 * 1024) } })
+      const frames = Array.from(yield* stream.pipe(Stream.take(2), Stream.runCollect))
+      const ids = yield* Effect.promise(async () => {
+        const client = clientForFrames([frames.join("")])
+        const ids: string[] = []
+        for await (const event of client.event.subscribe()) ids.push(event.id)
+        return ids
+      })
+      expect(ids).toEqual(["evt_one", "evt_two"])
+    }),
+  )
+
+  for (const character of ["x", "界"]) {
+    it.effect(`keeps subscribers connected after an oversized ${character === "x" ? "ASCII" : "UTF-8"} frame`, () =>
+      Effect.gen(function* () {
+        const source = makeSource()
+        const feed = yield* EventFeed.make(sourceEpoch, source.observe)
+        const first = yield* feed.subscribe
+        const second = yield* feed.subscribe
+        const oversized = {
+          ...event("large"),
+          type: "session.tool.invocation-settled",
+          durable: { aggregateID: "ses_source", seq: EventRuntime.Seq.make(2), version: EventRuntime.Version.make(1) },
+          data: {
+            sessionID: "ses_source",
+            assistantMessageID: "msg_source",
+            callID: "call_source",
+            invocation: {
+              id: "call_nested",
+              index: 0,
+              name: "shell",
+              tool: "shell",
+              status: "completed",
+              structured: { output: character.repeat((character === "x" ? 17 : 6) * 1024 * 1024) },
+            },
+          },
+        }
+        expect(new TextEncoder().encode(EventFeed.frame(sourceEpoch, oversized)).byteLength).toBeGreaterThan(
+          16 * 1024 * 1024,
+        )
+        const small = (id: string, seq: number) => ({
+          ...oversized,
+          id: EventRuntime.ID.make(`evt_${id}`),
+          durable: { ...oversized.durable, seq: EventRuntime.Seq.make(seq) },
+          data: { ...oversized.data, invocation: { ...oversized.data.invocation, structured: { output: id } } },
+        })
+        yield* source.publish(small("before", 1))
+        yield* source.publish(oversized)
+        yield* source.publish(small("after", 3))
+        for (const stream of [first, second]) {
+          const frames = Array.from(yield* stream.pipe(Stream.take(2), Stream.runCollect))
+          const received = yield* Effect.promise(async () => {
+            const client = clientForFrames(frames)
+            const received = []
+            for await (const event of client.event.subscribe())
+              received.push({ id: event.id, seq: "durable" in event ? event.durable.seq : undefined })
+            return received
+          })
+          expect(received).toEqual([{ id: "evt_before", seq: 1 }, { id: "evt_after", seq: 3 }])
+        }
+      }),
+    )
+  }
+
   test("preserves the public SSE frame encoding", () => {
     const payload = event("wire")
     expect(EventFeed.frame(sourceEpoch, payload)).toBe(

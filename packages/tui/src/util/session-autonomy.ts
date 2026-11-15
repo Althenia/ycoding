@@ -203,10 +203,9 @@ export function createSessionAutonomyRefreshGuard() {
 
 export function currentSessionAutonomy(
   sessionID: string,
-  connected: boolean,
   response: SessionAutonomyResponse | undefined,
 ): SessionAutonomyView | undefined {
-  if (!connected || response?.sessionID !== sessionID) return undefined
+  if (response?.sessionID !== sessionID) return undefined
   return response.state
 }
 

@@ -6,6 +6,87 @@ import type { useData } from "../../src/context/data"
 import { useEditorContext } from "../../src/context/editor"
 import { useRoute } from "../../src/context/route"
 import { useToast } from "../../src/ui/toast"
+import { activeGoal, autonomyView } from "../fixture/autonomy"
+
+test("retains resident Session chrome and transcript identity while reconnect refresh is pending", async () => {
+  const fixture = sessionHistoryFixture(2)
+  fixture.release()
+  const refresh = Promise.withResolvers<void>()
+  const refreshing = Promise.withResolvers<void>()
+  let snapshots = 0
+  let recovering = false
+  let data!: ReturnType<typeof useData>
+  const screen = await renderScreen({
+    width: 120,
+    height: 36,
+    args: { sessionID: fixture.sessionID },
+    settle: "Synthetic response 1",
+    sessionReady: true,
+    config: { session: { sidebar: "hide" } },
+    data: (value) => {
+      data = value
+    },
+    route: async (url, request) => {
+      if (url.pathname === `/api/session/${fixture.sessionID}/snapshot` && snapshots++ > 0) {
+        refreshing.resolve()
+        await refresh.promise
+      }
+      if (url.pathname === "/api/vcs/branch" && recovering) await refresh.promise
+      if (url.pathname.endsWith("/autonomy")) {
+        if (recovering) await refresh.promise
+        return json({ data: autonomyView({ goal: activeGoal() }) })
+      }
+      return fixture.route(url, request)
+    },
+  })
+  try {
+    await screen.waitForEventStream()
+    const deadline = Date.now() + 5000
+    while (!screen.frame().includes("P Manual") && Date.now() < deadline) {
+      await screen.renderOnce()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    expect(screen.frame()).toContain("P Manual")
+    const transcript = screen.scrollbox()
+    const messages = data.session.message.list(fixture.sessionID)
+    const resident = messages?.[1]
+    const part = resident?.type === "assistant" ? resident.content[0] : undefined
+    await screen.input.typeText("retained reconnect draft")
+    recovering = true
+    screen.events.disconnect()
+    const reconnectDeadline = Date.now() + 5000
+    while (!screen.frame().includes("Reconnecting") && Date.now() < reconnectDeadline) {
+      await screen.renderOnce()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    expect(screen.frame()).toContain("Reconnecting")
+    expect(screen.frame()).toContain("workspace · main")
+    expect(screen.frame()).toContain("P Manual")
+    expect(screen.frame()).toContain("Synthetic response 1")
+    await refreshing.promise
+    await screen.waitForEventStream()
+    await screen.renderOnce()
+    expect(screen.frame()).not.toContain("Loading session")
+    expect(screen.frame()).toContain("workspace · main")
+    expect(screen.frame()).toContain("P Manual")
+    expect(screen.frame()).not.toContain("unknown")
+    expect(screen.frame()).toContain("Synthetic response 1")
+    expect(screen.frame()).toContain("retained reconnect draft")
+    expect(screen.scrollbox()).toBe(transcript)
+    screen.input.pressKey("RETURN")
+    expect(fixture.requests.filter((request) => request.startsWith("POST"))).toEqual([])
+    refresh.resolve()
+    await data.session.message.sync(fixture.sessionID)
+    await screen.renderOnce()
+    expect(data.session.message.list(fixture.sessionID)?.[1]).toBe(resident)
+    expect(resident?.type === "assistant" ? resident.content[0] : undefined).toBe(part)
+    expect(screen.scrollbox()).toBe(transcript)
+    expect(screen.frame()).not.toContain("Loading session")
+  } finally {
+    refresh.resolve()
+    await screen.dispose()
+  }
+}, 30000)
 
 test("keeps Session chrome and composer mounted before sync and across disconnect", async () => {
   const fixture = sessionHistoryFixture(2)

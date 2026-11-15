@@ -547,7 +547,6 @@ export function make(options: ClientOptions) {
             throw new ClientError("Transport", { cause })
           }
           buffer += decoder.decode(next.value, { stream: !next.done })
-          if (buffer.length > maxSseEventBytes) throw new ClientError("SseEventTooLarge")
           const trailingCarriageReturn = !next.done && buffer.endsWith("\r")
           if (trailingCarriageReturn) buffer = buffer.slice(0, -1)
           buffer = buffer.replaceAll("\r\n", "\n").replaceAll("\r", "\n")
@@ -556,6 +555,8 @@ export function make(options: ClientOptions) {
           let boundary = buffer.indexOf("\n\n")
           while (boundary >= 0) {
             const block = buffer.slice(0, boundary)
+            if (new TextEncoder().encode(block).byteLength + 2 > maxSseEventBytes)
+              throw new ClientError("SseEventTooLarge")
             buffer = buffer.slice(boundary + 2)
             const data = block
               .split("\n")
@@ -570,6 +571,7 @@ export function make(options: ClientOptions) {
             }
             boundary = buffer.indexOf("\n\n")
           }
+          if (new TextEncoder().encode(buffer).byteLength > maxSseEventBytes) throw new ClientError("SseEventTooLarge")
           if (next.done) return
         }
       } finally {

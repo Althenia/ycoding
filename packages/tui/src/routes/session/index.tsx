@@ -436,30 +436,37 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     setCurrentSkillIDs(new Set<string>())
   }))
   const [sessionMessagesSynced, setSessionMessagesSynced] = createSignal(false)
-  createEffect(() => {
-    const sid = route.sessionID
-    const status = client.connection.status()
-    if (status !== "connected") {
-      setSessionMessagesSynced(false)
-      return
-    }
-    setSessionMessagesSynced(false)
-    let active = true
-    onCleanup(() => {
-      active = false
-    })
-    void data.session.message.sync(sid)
-      .then(() => {
-        if (active && route.sessionID === sid && client.connection.status() === "connected") setSessionMessagesSynced(true)
+  const [sessionMessagesRefreshing, setSessionMessagesRefreshing] = createSignal(true)
+  const sessionScope = createMemo(() =>
+    JSON.stringify([route.sessionID, location()?.directory, location()?.workspaceID]),
+  )
+  createEffect(
+    on([sessionScope, () => client.connection.status()], ([scope, status], previous) => {
+      const sid = route.sessionID
+      if (scope !== previous?.[0]) setSessionMessagesSynced(false)
+      setSessionMessagesRefreshing(true)
+      if (status !== "connected") return
+      let active = true
+      onCleanup(() => {
+        active = false
       })
-      .catch(() => undefined)
-  })
+      void data.session.message
+        .sync(sid)
+        .then(() => {
+          if (!active || sessionScope() !== scope || client.connection.status() !== "connected") return
+          setSessionMessagesSynced(true)
+          setSessionMessagesRefreshing(false)
+        })
+        .catch(() => undefined)
+    }),
+  )
   const sessionReady = createMemo(() => {
     const s = data.session.get(route.sessionID)
     if (!s) return false
     const msgs = data.session.message.list(route.sessionID)
     if (msgs === undefined) return false
     if (!sessionMessagesSynced()) return false
+    if (sessionMessagesRefreshing()) return false
     const history = data.session.message.history(route.sessionID)
     if (history?.status === "error" && history.sourceEpoch === undefined) return false
     const locReady = !!data.location.info(s.location)
@@ -477,27 +484,33 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     if (status === "connecting") return "Connecting…"
     const history = data.session.message.history(route.sessionID)
     if (history?.status === "error" && history.failedRead !== "older") return "History unavailable"
-    return sessionReady() ? undefined : "Loading session…"
+    return sessionMessagesSynced() ? undefined : "Loading session…"
   })
   const [branch, setBranch] = createSignal<string>()
   createEffect(
-    on([location, () => client.connection.status()], ([target, status]) => {
-      setBranch()
-      if (!target || status !== "connected") return
-      void client.api.vcs
-        .branch({ location: target })
-        .then((response) => {
-          if (location() !== target) return
-          setBranch(response.data.current)
+    on(
+      [() => JSON.stringify([location()?.directory, location()?.workspaceID]), () => client.connection.status()],
+      ([scope, status], previous) => {
+        const target = location()
+        if (scope !== previous?.[0]) setBranch()
+        if (!target || status !== "connected") return
+        let active = true
+        onCleanup(() => {
+          active = false
         })
-        .catch(() => undefined)
-    }),
+        void client.api.vcs
+          .branch({ location: target })
+          .then((response) => {
+            if (!active) return
+            setBranch(response.data.current)
+          })
+          .catch(() => undefined)
+      },
+    ),
   )
   const [autonomyResponse, setAutonomyResponse] = createSignal<SessionAutonomyResponse>()
   const autonomyRefresh = createSessionAutonomyRefreshGuard()
-  const autonomy = createMemo(() =>
-    currentSessionAutonomy(route.sessionID, client.connection.status() === "connected", autonomyResponse()),
-  )
+  const autonomy = createMemo(() => currentSessionAutonomy(route.sessionID, autonomyResponse()))
   const acceptAutonomy = (sessionID: string, state: SessionAutonomyView) => {
     if (route.sessionID !== sessionID || client.connection.status() !== "connected") return false
     setAutonomyResponse({ sessionID, state })
@@ -533,16 +546,14 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         if (!autonomyRefresh.accepts(request)) return
         acceptAutonomy(sessionID, state)
       })
-      .catch(() => {
-        if (!autonomyRefresh.accepts(request) || route.sessionID !== sessionID || client.connection.status() !== "connected") return
-        setAutonomyResponse(undefined)
-      })
+      .catch(() => undefined)
   }
   createEffect(
-    on([() => route.sessionID, () => client.connection.status()], ([sessionID, status]) => {
-      setAutonomyResponse(undefined)
+    on([sessionScope, () => client.connection.status()], ([scope, status], previous) => {
+      autonomyRefresh.invalidate()
+      if (scope !== previous?.[0]) setAutonomyResponse(undefined)
       if (status !== "connected") return
-      refreshAutonomy(sessionID)
+      refreshAutonomy(route.sessionID)
     }),
   )
   // Goal iteration, no-progress count, and status advance on the server when a turn settles, and no
