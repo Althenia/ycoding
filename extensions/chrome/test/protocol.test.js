@@ -11,7 +11,7 @@ describe("Chrome bridge protocol", () => {
     expect(publicKey.export({ format: "der", type: "spki" }).equals(key)).toBe(true)
     const digest = new Bun.CryptoHasher("sha256").update(key).digest("hex")
     const id = digest.slice(0, 32).replace(/[0-9a-f]/g, (digit) => String.fromCharCode(97 + Number.parseInt(digit, 16)))
-    expect(id).toBe("pplfpnheaokgnhbgjnoboepjlmdnkeda")
+    expect(id).toBe("emlogajckgpjjigcbcbfbpbeencgghfb")
   })
 
   test("identifies YCoding in Chrome and ships toolbar and popup icons at the declared sizes", async () => {

@@ -5,9 +5,7 @@ import { cp, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/p
 import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { generateKeyPairSync } from "node:crypto"
 import { chromeExtensionSource, copyChromeExtension } from "../script/chrome-extension"
-import { chromeCrxFile, hasSignedChromeExtension, signChromeExtension } from "../script/chrome-crx"
 import { releasedExtensionFiles, releasedUpdaterAcceptsLinuxArchive } from "./fixtures/v0.7.15-updater"
 
 async function packaged<T>(use: (bin: string, extension: string) => Promise<T>) {
@@ -46,21 +44,6 @@ test("copies the Chrome extension runtime files beside a built executable", asyn
 
 test("packages an archive that the released v0.7.15 updater accepts", async () => {
   await packaged(async (bin) => {
-    await releasedUpdaterAcceptsLinuxArchive(await archive(bin))
-  })
-})
-
-test("keeps a signed CRX sibling outside the frozen updater archive", async () => {
-  await packaged(async (bin, extension) => {
-    const pair = generateKeyPairSync("rsa", { modulusLength: 2048 })
-    const manifest = JSON.parse(await readFile(path.join(extension, "manifest.json"), "utf8"))
-    manifest.key = pair.publicKey.export({ type: "spki", format: "der" }).toString("base64")
-    await writeFile(path.join(extension, "manifest.json"), JSON.stringify(manifest))
-    await signChromeExtension(bin, Buffer.from(pair.privateKey.export({ type: "pkcs8", format: "pem" })))
-    expect(await hasSignedChromeExtension(bin)).toBe(true)
-    expect(await Bun.file(path.join(bin, chromeCrxFile)).exists()).toBe(true)
-    const files = (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: extension }))).sort()
-    expect(files).toEqual(releasedExtensionFiles)
     await releasedUpdaterAcceptsLinuxArchive(await archive(bin))
   })
 })

@@ -97,15 +97,31 @@ test("leaves the previous install untouched when the build is incomplete", async
   }
 })
 
-test("rejects an invalid signed Chrome package before replacing an install", async () => {
+test("removes a stale CRX while installing only the executable and unpacked extension", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-install-crx-"))
   try {
     const destination = path.join(root, "bin")
     await installLocalBuild({ source: await build(root, "first", "linux"), destination, platform: "linux" })
     const source = await build(root, "second", "linux")
-    await writeFile(path.join(source, "ycoding-chrome-extension.crx"), "invalid signed package")
-    await expect(installLocalBuild({ source, destination, platform: "linux" })).rejects.toThrow("Chrome package")
-    expect(await readFile(path.join(destination, "ycoding"), "utf8")).toBe("binary-first")
+    await writeFile(path.join(destination, "ycoding-chrome-extension.crx"), "stale package")
+    const installed = await installLocalBuild({ source, destination, platform: "linux" })
+    expect(installed).toEqual([path.join(destination, "ycoding"), path.join(destination, BrowserExtension.directory)])
+    expect((await readdir(destination)).sort()).toEqual(["ycoding", BrowserExtension.directory].sort())
+    expect(await readFile(path.join(destination, "ycoding"), "utf8")).toBe("binary-second")
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("ignores a CRX in the source build when installing the unpacked extension", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-install-unpacked-"))
+  try {
+    const destination = path.join(root, "bin")
+    const source = await build(root, "next", "linux")
+    await writeFile(path.join(source, "ycoding-chrome-extension.crx"), "unused package")
+    await installLocalBuild({ source, destination, platform: "linux" })
+    expect((await readdir(destination)).sort()).toEqual(["ycoding", BrowserExtension.directory].sort())
+    expect(await readFile(path.join(source, "ycoding-chrome-extension.crx"), "utf8")).toBe("unused package")
   } finally {
     await rm(root, { recursive: true, force: true })
   }
