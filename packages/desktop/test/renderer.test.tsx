@@ -67,7 +67,7 @@ test("folder exploration reaches every folder-entry path and creates only valida
 })
 
 test("composer routes every built-in command and alias before backend commands", async () => {
-  const { composerSlash } = await import("../src/renderer")
+  const { composerSlash } = await import("../src/form-rules")
   const { DESKTOP_BUILT_IN_SLASH_COMMANDS } = await import("../src/form-rules")
   expect(DESKTOP_BUILT_IN_SLASH_COMMANDS.length).toBeGreaterThanOrEqual(39)
   for (const command of DESKTOP_BUILT_IN_SLASH_COMMANDS) {
@@ -105,7 +105,8 @@ test("request attention counts canonical review item identities alongside other 
   expect(pendingRequestIDs({ permissions: [{ id: "permission_synthetic" }], forms: [{ id: "form_synthetic" }], guardrails: [{ id: "guardrail_synthetic" }], reviews: [{ itemID: "review_synthetic" }] })).toEqual(["permission_synthetic", "form_synthetic", "guardrail_synthetic", "review_synthetic"])
   const source = await read("src/renderer.tsx")
   for (const text of ["<GuardrailCard", "<ReviewCard", 'kind: "guardrail", sessionID: props.data.sessionID', 'kind: "review", sessionID: props.data.sessionID', "itemID: item.itemID, decision", 'props.onReply("once")', 'props.onReply("reject")', 'kind: "recovery", choice: "continue"', 'kind: "recovery", choice: "stop"', "payload().questions", "Complete the required fields before sending."]) expect(source).toContain(text)
-  expect(source.match(/api\.reply\(/g)).toHaveLength(1)
+  expect(source.match(/api\.reply\(/g)).toHaveLength(2)
+  expect(source).toContain('recoveryGuard.run({ kind: "review", sessionID, revision, itemID, decision: { kind: "recovery", choice: "continue" } }')
   expect(source).toContain("const known = new Set(data ? pendingRequestIDs(data) : [])")
   expect(source).toContain("<Show when={unanswerable()}>")
 })
@@ -119,22 +120,22 @@ test("workspace attachments preserve mentioned file ranges and remove duplicate 
   expect(promptFilesFor([], [])).toEqual([])
 })
 
-test("artifact controls preserve revision, version and digest expectations", async () => {
-  const { artifactMutationOf } = await import("../src/renderer")
-  const artifact = { scope: "project", kind: "skill", id: "synthetic-skill", revision: 3, currentVersionID: "version_synthetic", currentDigest: "a".repeat(64), name: "Synthetic skill" }
-  expect(artifactMutationOf(artifact)).toEqual({ scope: "project", kind: "skill", id: "synthetic-skill", expectedRevision: 3, expectedVersionID: "version_synthetic", expectedDigest: "a".repeat(64) })
-  for (const missing of ["currentVersionID", "currentDigest", "revision", "id"]) expect(artifactMutationOf({ ...artifact, [missing]: undefined })).toBeUndefined()
-  expect(artifactMutationOf({ ...artifact, kind: "unknown" })).toBeUndefined()
+test("artifact references retain their source and identity before authoritative detail reads", async () => {
+  const { artifactReferenceOf } = await import("../src/renderer")
+  const artifact = { scope: "project", kind: "skill", id: "synthetic-skill", name: "Synthetic skill" }
+  expect(artifactReferenceOf(artifact, "ses_synthetic")).toEqual({ scope: "project", kind: "skill", id: "synthetic-skill", source: "ses_synthetic" })
+  expect(artifactReferenceOf(artifact)).toEqual({ scope: "project", kind: "skill", id: "synthetic-skill" })
+  for (const missing of ["scope", "kind", "id"]) expect(artifactReferenceOf({ ...artifact, [missing]: undefined })).toBeUndefined()
+  expect(artifactReferenceOf({ ...artifact, kind: "unknown" })).toBeUndefined()
+  expect(artifactReferenceOf({ ...artifact, scope: "trash" })).toBeUndefined()
 })
 
-test("copy and find use visible assistant prose rather than reasoning or internal envelopes", async () => {
-  const { latestAssistantText, transcriptText } = await import("../src/renderer")
+test("find uses visible assistant prose and transcript copy and export use canonical full-history reads", async () => {
+  const { transcriptText } = await import("../src/renderer")
   const assistant = { id: "msg_synthetic", type: "assistant" as const, agent: "default", model: { id: "synthetic", providerID: "synthetic" }, time: { created: 1, completed: 2 }, content: [{ id: "part_reason", type: "reasoning" as const, text: "Private reasoning", time: { created: 1 } }, { id: "part_text", type: "text" as const, text: "Visible response", time: { created: 1 } }] }
   expect(transcriptText(assistant)).toBe("Visible response")
-  expect(latestAssistantText([assistant])).toBe("Visible response")
-  expect(latestAssistantText([])).toBeUndefined()
   const source = await read("src/renderer.tsx")
-  for (const text of ["formatSessionExportMarkdown({", "parsePromptStashes(localStorage.getItem(key))", "pushPromptStash(", 'class="conversation__find"', "matching turns", 'case "variants"', 'case "undo"', 'case "redo"', 'case "timeline"', 'case "stash"', 'kind: "kill-shell"', 'kind: "cancel-subagent"', 'defaultOpen={thinkingExpanded()}', "result.value.item.id"]) expect(source).toContain(text)
+  for (const text of ["api.exportSession(", "api.saveExportSession(", "parsePromptStashes(localStorage.getItem(key))", "pushPromptStash(", 'class="conversation__find"', "matching turns", 'case "variants"', 'case "undo"', 'case "redo"', 'case "timeline"', 'case "stash"', 'kind: "kill-shell"', 'kind: "cancel-subagent"', 'defaultOpen={thinkingExpanded()}', "result.value.item.id"]) expect(source).toContain(text)
 })
 
 const jsxRuntime = () => ({ jsxDEV: (type: unknown, props: unknown) => ({ type, props }), jsx: (type: unknown, props: unknown) => ({ type, props }), jsxs: (type: unknown, props: unknown) => ({ type, props }), Fragment: () => null })
@@ -186,6 +187,7 @@ test("revert requires confirmation before restoring files and committing history
 
 test("desktop adapters scope paged reads and use range totals", async () => {
   const source = await read("src/renderer.tsx")
+  expect(source).toContain('<Show when={projectError()}>{(error) => <p role="alert" class="desktop__error">{error()}</p>}</Show>')
   expect(source).toContain('api.usage({ range: range() })')
   expect(source).toContain('data().report.total.logical')
   expect(source).toContain('cursor: current.subagentNext, revision: current.revision')
@@ -410,7 +412,7 @@ test("startup connects automatically and presents recovery without a backend cho
 test("new chats send standalone or with an explicitly selected repository", async () => {
   const source = await read("src/renderer.tsx")
   expect(source).toContain('!newDirectory() || available().some((item) => item.directory === newDirectory())')
-  expect(source).toContain('draft.directory ? { directory: draft.directory, sessionID: draft.sessionID } : { sessionID: draft.sessionID }')
+  expect(source).toContain('api.createSession({ sessionID: draft.sessionID, ...(draft.directory ? { directory: draft.directory } : {}), ...(draft.agent ? { agent: draft.agent } : {}) })')
   expect(source).toContain('No Project or filesystem Workspace is required.')
   expect(source).toContain('locked={!!newPending()}')
 })
@@ -435,7 +437,6 @@ test("the rail takes its groups from the pure railGroups and sends search, curso
   expect(source).not.toMatch(/\.data\?\.data|data\.data/)
   expect(source).toContain("api.session({ sessionID: props.sessionID })")
   expect(source).toContain("data.revision === connection().revision && data.item.id === props.sessionID")
-  expect(source).toContain('refresh(["session", ...scope(), sessionID])')
   expect(source).toContain('refresh(["session", ...scope(), props.sessionID])')
   expect(source).toContain("Refresh Session")
   expect(source).not.toContain("sessions.result().data?.items.find")
@@ -475,7 +476,7 @@ test("pending requests are answered only with explicit choices, guarded by Sessi
   expect(source).toContain('kind: "permission", sessionID: props.data.sessionID, revision: props.data.revision')
   expect(source).toContain('kind: "form", sessionID: props.data.sessionID, revision: props.data.revision')
   expect(source).toContain('kind: "form-cancel", sessionID: props.data.sessionID, revision: props.data.revision')
-  expect(source.match(/api\.reply\(/g)?.length).toBe(1)
+  expect(source.match(/api\.reply\(/g)?.length).toBe(2)
   expect(source).toContain("props.updatedAt <= (held().get(id)?.at ?? -1)")
   expect(source).toContain("<Show when={props.request.save?.length}><button")
   expect(source).toContain("The request is still pending. Review your answer and try again.")
@@ -543,7 +544,7 @@ test("sending keeps the prompt identity and locks unconfirmed drafts", async () 
   expect(source).toContain("promptID: `msg_${crypto.randomUUID()}`")
   expect(source).toContain("sessionID: `ses_${crypto.randomUUID()}`")
   expect(source).toContain("readOnly={props.locked}")
-  expect(source).toContain('disabled={sending() || !reading() || unsure() || revertBusy() || revertUncertain() || (!pending() && !text().trim())}')
+  expect(source).toContain('disabled={sending() || !reading() || unsure() || revertBusy() || revertUncertain() || !!stagedModel() && running() || (!pending() && !text().trim())}')
   expect(source).toContain("pendings.set(props.sessionID, value)")
 })
 
@@ -557,8 +558,10 @@ test("results from a previous connection generation are ignored and unconfirmed 
   expect(source).toContain("unconfirmed.add(sessionID)")
   expect(source).toContain("Review the transcript and staged revert before continuing.")
   expect(source).toContain("The private backend is not running. Start it again to continue; unsent drafts are kept.")
-  expect(source).toContain('queryKey: ["messages", ...scope(), props.sessionID]')
-  expect(source).toContain("api.onResync(")
+  expect(source).toContain('const historyKey = () => ["messages", ...scope(), props.sessionID] as const')
+  expect(source).toContain('queryKey: historyKey()')
+  expect(source).toContain("createEventRefresh({ queries, source: api, scope")
+  expect(await read("src/event-refresh.ts")).toContain("input.source.onResync(")
 })
 
 test("unknown message types are labelled and the transcript is not a live region", async () => {
@@ -567,8 +570,8 @@ test("unknown message types are labelled and the transcript is not a live region
   expect(source).not.toContain('role="log"')
   expect(source).not.toContain('aria-live="polite"')
   expect(source).toContain("finished a response.")
-  expect(source).toContain('aria-keyshortcuts="Meta+N Control+N"')
-  expect(source).toContain('shortcut: mac ? "⌘N" : "Ctrl N"')
+  expect(source).toContain('aria-keyshortcuts={keyboardAria("new")}')
+  expect(source).toContain('shortcut: keyboardHint("new")')
 })
 
 test("the transcript keeps the reader's position and row identity", async () => {
@@ -581,13 +584,15 @@ test("the transcript keeps the reader's position and row identity", async () => 
 
 test("the command palette is a labelled modal combobox with keyboard navigation and focus return", async () => {
   const source = await read("src/renderer.tsx")
+  const keyboard = await read("src/keyboard.ts")
   expect(source).toContain("dialog?.showModal()")
   expect(source).toContain('role="combobox"')
   expect(source).toContain('role="listbox"')
   expect(source).toContain("aria-activedescendant")
   for (const key of ["ArrowDown", "ArrowUp", "Home", "End", "Enter"]) expect(source).toContain(`"${key}"`)
-  expect(source).toContain('key === "k" && command')
-  expect(source).toContain('key === "p" && event.ctrlKey && !event.metaKey')
+  expect(source).toContain("desktopShortcut(event,")
+  expect(keyboard).toContain('action: "palette", label: "Commands", key: "K"')
+  expect(keyboard).toContain('action: "palette", binding: { key: "P", modifier: "control" }, context: "page"')
   expect(source).toContain("opener.focus()")
   expect(source).toContain("Searches the most recent Sessions only")
 })
@@ -643,7 +648,7 @@ test("rail destinations, palette navigation, header ownership and settings discl
   expect(source).toContain("theme.id !== themePreference()")
   expect(styles).toContain('.conversation[data-new-chat] > :not(.rl-companion) { margin-inline-end: var(--rl-companion); }')
   expect(source).not.toContain("window.confirm")
-  expect(source).toContain('refresh(["fileChanges", ...scope(), sessionID])')
+  expect(await read("src/event-refresh.ts")).toContain('refresh(["fileChanges", ...input.scope(), sessionID])')
   expect(styles).toContain(".rl-page .ws-split > *, .rl-page .ws-workspaces-list, .rl-page .ws-workspaces-detail { min-width: 0; }")
   expect(styles).toContain(".rl-page .rl-option-text { justify-items: stretch; text-align: start; }")
   expect(styles).not.toContain(".rl-page .rl-option-text { justify-items: start;")
@@ -671,7 +676,7 @@ test("the narrow layout turns the rail into a drawer and coarse pointers get ful
   const [source, styles] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
   expect(source).toContain('aria-expanded={railOpen()}')
   expect(source).toContain("Back to chat")
-  expect(styles).toMatch(/@media \(max-width: 48rem\)[\s\S]*\.workspace__rail\[data-open\] \{ display: grid; \}/)
+  expect(styles).toMatch(/@media \(max-width: 700px\)[\s\S]*\.workspace__rail\[data-open\] \{ display: grid; \}/)
   expect(styles).toMatch(/@media \(pointer: coarse\)[\s\S]*\.workspace__session[\s\S]*min-block-size: var\(--yc-hit-min\)/)
   expect(styles).toMatch(/@media \(pointer: coarse\) \{ \.companion__tabs\.rl-pane-tabs \.rl-pane-tab > button, \.rl-companion \.rl-icon, [^}]*min-height: var\(--yc-hit-min\); min-width: var\(--yc-hit-min\)/)
   expect(source).toContain('const opener = visible(".rl-companion-toggle") ?? visible(".rl-context-ring")')
@@ -694,7 +699,7 @@ test("conversation header truncates on phone and companion grid reserves the scr
 
 test("composer and header expose workspace file attachments and staged autonomy", async () => {
   const [source, styles, contract] = await Promise.all([read("src/renderer.tsx"), read("src/style.css"), read("src/contract.ts")])
-  expect(contract).toContain("export type Prompt = { readonly sessionID: string; readonly promptID: string; readonly text: string; readonly files?: readonly PromptFile[]; readonly agents?: readonly PromptAgent[] }")
+  expect(contract).toContain("readonly files?: readonly PromptFile[]; readonly agents?: readonly PromptAgent[]")
   expect(source.match(/<AttachButton directory=/g)?.length).toBe(2)
   expect(source).toContain('aria-label="Attach files" disabled={props.locked || !props.onChange || !reading()}')
   expect(source).toContain('title: "Attach workspace file", mode: "file"')
@@ -705,7 +710,8 @@ test("composer and header expose workspace file attachments and staged autonomy"
   expect(source).not.toContain("<span>Companion</span>")
   expect(source).not.toContain("Commands <kbd>")
   expect(source.match(/class="rl-icon rl-companion-toggle" aria-label=\{companionOpen\(\) \? "Close Session companion" : "Open Session companion"\}/g)?.length).toBe(2)
-  expect(source.match(/class="rl-icon desktop__palette" aria-label=\{`Commands \$\{mac \? "⌘K" : "Ctrl K"\}`\}/g)?.length).toBe(2)
+  expect(source.match(/<CommandMenuButton \/>/g)?.length).toBe(2)
+  expect(source).toContain('aria-keyshortcuts={keyboardAria("palette")}')
   expect(source).not.toContain("Staged autonomy <select")
   expect(source).toContain('role="menuitemradio" aria-checked={newAutonomy() === mode}')
   expect(source).toContain('const trigger = event.currentTarget.closest(".rl-autonomy")?.querySelector<HTMLButtonElement>(\'button[aria-haspopup="menu"]\'); setNewAutonomy(mode); setAutonomyMenuOpen(false); trigger?.focus()')
@@ -736,7 +742,7 @@ test("the design document records the rules the interface implements", async () 
 })
 
 test("the model picker guards busy model changes and stages effort without bridge mutations", async () => {
-  const [source, style] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
+  const source = await read("src/renderer.tsx")
   expect(source).toContain("api.models(props.sessionID)")
   expect(source).toContain("found.revision === connection().revision")
   expect(source).toContain("api.switchModel({ sessionID: props.sessionID, revision: found.revision, model })")
@@ -842,8 +848,8 @@ test("composer autocomplete is wired to the catalog bridge with honest states", 
   expect(source).toContain("api.composerCatalog")
   expect(source).toContain("api.findFiles")
   expect(source).toContain("composerTrigger(")
-  expect(source).toContain("mentionPayload(")
-  expect(source).toContain("slashAction(")
+  expect(source).toContain("expandPastedPrompt(")
+  expect(source).toContain("composerSlash(")
   expect(source).toContain("Suggestions unavailable")
   expect(source).toContain("No matches")
   expect(source).toContain("api.command")
@@ -855,7 +861,7 @@ test("composer autocomplete is wired to the catalog bridge with honest states", 
 
 test("transcript renders Markdown through the visibility filter with structured synthetic cards", async () => {
   const [source, styles] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
-  expect(source).toContain("visibleDesktopMessages(messages.result().data ?? [])")
+  expect(source).toContain("visibleDesktopMessages(history()?.messages ?? [])")
   expect(source).toContain("groupAssistantParts(message().content)")
   expect(source).toContain("classifyDesktopSynthetic(props.message)")
   expect(source).toContain('from "../../../apps/web/src/remote/ui/markdown"')
@@ -952,7 +958,7 @@ test("desktop usage quotas, hidden-window transitions, model popover layout, sea
   expect(styles).toContain(".model-popover > :not(.model-popover__list) { flex: none; }")
   expect(styles).toMatch(/\.model-popover__list \{[^}]*flex: 1 1 auto; min-block-size: 7rem; max-block-size: 12\.5rem; overflow-y: auto;/)
   expect(styles).toContain(".rl-page .rl-field .rl-input-icon input, .rl-page .rl-input-icon input, .rl-input-icon input {")
-  expect(source).toContain('class="rl-new-chat" aria-label="New chat" aria-keyshortcuts="Meta+N Control+N"')
+  expect(source).toContain('class="rl-new-chat" aria-label="New chat" aria-keyshortcuts={keyboardAria("new")}')
   expect(source).not.toContain("rl-nav-attention")
   expect(source).toContain('<Link class="rl-nav-item" to={item.route} aria-label={item.label} data-destination={item.id}')
   expect(source).toContain('placeholder="Search sessions"')
@@ -1166,8 +1172,9 @@ test("running work excludes waiting and completed rows and reconciles lifecycle 
   const source = await read("src/renderer.tsx")
   expect(source).toContain('subagents.filter((task) => task.state === "running")')
   expect(source).toContain('shells.filter((shell) => shell.status === "running")')
-  expect(source).toContain('type === "session.task.updated" || type.startsWith("session.shell.") || type.startsWith("shell.")')
-  expect(source).toContain('refresh(["activity", ...scope()])')
+  const events = await read("src/event-refresh.ts")
+  expect(events).toContain('type === "session.task.updated" || type.startsWith("session.shell.") || type.startsWith("shell.")')
+  expect(events).toContain('refresh(["activity", ...input.scope()])')
   expect(source).toContain("More subagents and their shells may be running beyond these loaded results.")
   expect(source).toContain('runningContent={<RunningActivity')
 })
@@ -1225,7 +1232,7 @@ test("composer handles clipboard files, WKWebView text paste fallback, copy and 
   expect(source).toContain("api.readClipboard(")
   expect(source).toContain("insertTextAtSelection(")
   expect(source).toContain("preventDefault()")
-  expect(source).toContain("navigator.clipboard")
+  expect(source).not.toContain("navigator.clipboard")
   expect(source).toMatch(/api\.writeClipboard\(\{\s*text\b/)
   const copyExport = source.slice(source.indexOf('case "copy"'), source.indexOf('case "autonomous"'))
   expect(copyExport).not.toContain("navigator.clipboard.writeText")

@@ -49,6 +49,26 @@ test("large events trigger resync rather than an event delivery", () => {
   expect(resyncs).toBe(1)
 })
 
+test("native attention accepts only fixed categories and crosses the renderer bridge without event text", async () => {
+  const sent: unknown[] = []
+  const controller = {} as BackendController
+  const host = { path: "/synthetic/preferences", read: async () => ({}), save: async () => {}, validate: () => ({ mode: "own" as const }), notify: async (input: unknown) => { sent.push(input) } }
+  const handlers = createDesktopRPC(controller, host, { notify: host.notify })
+  await handlers.notify({ kind: "request", silent: true })
+  expect(sent).toEqual([{ kind: "request", silent: true }])
+  for (const input of [undefined, { kind: "request", silent: true, text: "not allowed" }, { kind: "other", silent: false }, { kind: "complete", silent: "false" }]) await expect(handlers.notify(input as never)).rejects.toThrow("Choose a valid attention notification.")
+  expect(sent).toHaveLength(1)
+  await expect(createDesktopRPC(controller, host).notify({ kind: "failure", silent: false })).rejects.toThrow("Native notifications are unavailable in headless worker mode.")
+  const original = Reflect.get(globalThis, "window")
+  Reflect.set(globalThis, "window", {})
+  try {
+    const { createDesktopBridge } = await import("../src/bridge")
+    const bridge = createDesktopBridge({ request: { notify: (input: never) => handlers.notify(input) } } as never, () => undefined)
+    await bridge.notify({ kind: "complete", silent: false })
+    expect(sent).toEqual([{ kind: "request", silent: true }, { kind: "complete", silent: false }])
+  } finally { if (original === undefined) Reflect.deleteProperty(globalThis, "window"); else Reflect.set(globalThis, "window", original) }
+})
+
 test("RPC handlers forward every operation and persist explicit backend choices", async () => {
   const calls: unknown[][] = []
   const controller = new Proxy({}, { get: (_target, key) => (...args: unknown[]) => {
@@ -228,6 +248,21 @@ test("unexpected host failures do not expose their details to the renderer", asy
   await expect(handlers.disconnect()).rejects.toThrow("Native desktop request failed.")
 })
 
+test("quitting closes the backend connection before exiting and stops on cleanup failure", async () => {
+  const calls: string[] = []
+  let fail = false
+  const controller = { disconnect: async () => { calls.push("disconnect"); if (fail) throw new Error("synthetic cleanup failure") } } as unknown as BackendController
+  const config = { path: "/synthetic/preferences", read: async () => ({}), save: async () => {}, validate: () => ({ mode: "own" as const }) }
+  const handlers = createDesktopRPC(controller, config, { quit: () => { calls.push("quit") } })
+  await handlers.quit()
+  expect(calls).toEqual(["disconnect", "quit"])
+  fail = true
+  await expect(handlers.quit()).rejects.toThrow("Native desktop request failed.")
+  expect(calls).toEqual(["disconnect", "quit", "disconnect"])
+  await expect(createDesktopRPC(controller, config).quit()).rejects.toThrow("unavailable in headless worker mode")
+  expect(calls).toHaveLength(3)
+})
+
 test("the expanded DesktopAPI crosses RPC and bridge without changing arguments", async () => {
   const inputs = {
     browseDirectory: { directory: "/synthetic/repo", showHidden: true },
@@ -258,7 +293,8 @@ test("the expanded DesktopAPI crosses RPC and bridge without changing arguments"
     for (const [name, input] of Object.entries(inputs)) await Reflect.apply(Reflect.get(bridge, name), bridge, [input])
     await bridge.pickDirectory({ startingFolder: "/synthetic/repo" })
     await bridge.openExternalUrl({ url: "https://example.test/connect" })
-    expect(calls).toEqual([...expected, ["pickDirectory", { startingFolder: "/synthetic/repo" }], ["openExternalUrl", { url: "https://example.test/connect" }]])
+    await bridge.quit()
+    expect(calls).toEqual([...expected, ["pickDirectory", { startingFolder: "/synthetic/repo" }], ["openExternalUrl", { url: "https://example.test/connect" }], ["quit"]])
     expect(Object.keys(bridge).sort()).toEqual([...Object.keys(handlers), "onState", "onEvent", "onResync", "onMenuAction"].sort())
   } finally { if (original === undefined) Reflect.deleteProperty(globalThis, "window"); else Reflect.set(globalThis, "window", original) }
 })
@@ -354,7 +390,7 @@ test("buildDesktopApplicationMenu defines macOS App, File, Edit, View, and Windo
   expect(appItems).toEqual(expect.arrayContaining([
     expect.objectContaining({ role: "about" }),
     expect.objectContaining({ action: "check-for-updates", label: "Check for Updates…" }),
-    expect.objectContaining({ action: "open-settings", label: "Settings…", accelerator: "CmdOrCtrl+," }),
+    expect.objectContaining({ action: "open-settings", label: "Settings…" }),
     expect.objectContaining({ role: "hide" }),
     expect.objectContaining({ role: "hideOthers" }),
     expect.objectContaining({ role: "showAll" }),
@@ -364,7 +400,7 @@ test("buildDesktopApplicationMenu defines macOS App, File, Edit, View, and Windo
   const fileMenu = byLabel("File")
   expect(fileMenu).toBeDefined()
   expect(fileMenu?.submenu ?? []).toEqual(expect.arrayContaining([
-    expect.objectContaining({ action: "new-chat", label: "New Chat", accelerator: "CmdOrCtrl+N" }),
+    expect.objectContaining({ action: "new-chat", label: "New Chat" }),
     expect.objectContaining({ role: "close" }),
   ]))
 
@@ -379,6 +415,7 @@ test("buildDesktopApplicationMenu defines macOS App, File, Edit, View, and Windo
   for (const menu of menus) {
     for (const item of menu.submenu ?? []) {
       if (item.role !== undefined) expect(item).not.toHaveProperty("action")
+      if (item.action === "new-chat" || item.action === "open-settings") expect(item).not.toHaveProperty("accelerator")
     }
   }
 

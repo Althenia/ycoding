@@ -1,7 +1,7 @@
 import type { YCodingEvent } from "@ycoding-ai/client"
 import path from "node:path"
 import type { ApplicationMenuItemConfig } from "electrobun/bun"
-import type { ClipboardContent, ConnectionState, DesktopAPI, DesktopMenuAction, UpdateCheckResult, UpdateInstallResult } from "./contract"
+import type { ClipboardContent, ConnectionState, DesktopAPI, DesktopMenuAction, SavedExport, TranscriptExport, UpdateCheckResult, UpdateInstallResult } from "./contract"
 import type { BackendController } from "./backend-controller"
 import type { readPreferences, savePreferences, validateSelection } from "./preferences"
 import type { Preferences, Selection } from "./contract"
@@ -47,7 +47,7 @@ export function buildDesktopApplicationMenu(appName = "YCoding Desktop"): Applic
         { role: "about" },
         { type: "divider" },
         { label: "Check for Updates…", action: "check-for-updates" },
-        { label: "Settings…", action: "open-settings", accelerator: "CmdOrCtrl+," },
+        { label: "Settings…", action: "open-settings" },
         { type: "divider" },
         { role: "hide" },
         { role: "hideOthers" },
@@ -59,7 +59,7 @@ export function buildDesktopApplicationMenu(appName = "YCoding Desktop"): Applic
     {
       label: "File",
       submenu: [
-        { label: "New Chat", action: "new-chat", accelerator: "CmdOrCtrl+N" },
+        { label: "New Chat", action: "new-chat" },
         { type: "divider" },
         { role: "close" },
       ],
@@ -151,11 +151,25 @@ export function createDesktopRPC(controller: BackendController, preferences: {
   readonly writeClipboard?: (text: string) => void | Promise<void>
   readonly checkForUpdates?: () => Promise<UpdateCheckResult>
   readonly installUpdate?: (input: { readonly version?: string }) => Promise<UpdateInstallResult>
+  readonly saveExport?: (exported: TranscriptExport, current: () => boolean) => Promise<SavedExport>
+  readonly quit?: () => void | Promise<void>
+  readonly notify?: (input: import("./contract").AttentionNotification) => void | Promise<void>
 } = {}) {
   let notice: string | undefined
   let starting = false
   let generation = 0
   const handlers = {
+    notify: async (input: Parameters<DesktopAPI["notify"]>[0]) => {
+      if (!input || typeof input !== "object" || Object.keys(input).some((key) => key !== "kind" && key !== "silent") || !["request", "complete", "failure"].includes(input.kind) || typeof input.silent !== "boolean") throw new DesktopError("Choose a valid attention notification.")
+      if (!host.notify) throw new DesktopError("Native notifications are unavailable in headless worker mode.")
+      await host.notify({ kind: input.kind, silent: input.silent })
+    },
+    quit: async () => {
+      if (!host.quit) throw new DesktopError("Quitting the native app is unavailable in headless worker mode.")
+      generation++
+      await controller.disconnect()
+      await host.quit()
+    },
     browseDirectory: (input?: Parameters<DesktopAPI["browseDirectory"]>[0]) => controller.browseDirectory(input),
     openDirectory: (input: Parameters<DesktopAPI["openDirectory"]>[0]) => controller.openDirectory(input),
     createDirectory: (input: Parameters<DesktopAPI["createDirectory"]>[0]) => controller.createDirectory(input),
@@ -214,6 +228,9 @@ export function createDesktopRPC(controller: BackendController, preferences: {
       } finally { starting = false }
     },
     disconnect: () => { generation++; return controller.disconnect() },
+    restartBackend: (input: Parameters<DesktopAPI["restartBackend"]>[0]) => controller.restartBackend(input),
+    editorSelection: (input: Parameters<DesktopAPI["editorSelection"]>[0]) => controller.editorSelection(input),
+    editDraft: (input: Parameters<DesktopAPI["editDraft"]>[0]) => controller.editDraft(input),
     sessions: (input: Parameters<DesktopAPI["sessions"]>[0]) => controller.sessions(input),
     session: (input: Parameters<DesktopAPI["session"]>[0]) => controller.session(input),
     autonomy: (input: Parameters<DesktopAPI["autonomy"]>[0]) => controller.autonomy(input),
@@ -228,6 +245,11 @@ export function createDesktopRPC(controller: BackendController, preferences: {
     changeProject: (input: Parameters<DesktopAPI["changeProject"]>[0]) => controller.changeProject(input),
     changeWorkspace: (input: Parameters<DesktopAPI["changeWorkspace"]>[0]) => controller.changeWorkspace(input),
     usage: (input?: Parameters<DesktopAPI["usage"]>[0]) => controller.usage(input),
+    usageDashboard: (input?: Parameters<DesktopAPI["usageDashboard"]>[0]) => controller.usageDashboard(input),
+    incidents: (input: Parameters<DesktopAPI["incidents"]>[0]) => controller.incidents(input),
+    manageIncident: (input: Parameters<DesktopAPI["manageIncident"]>[0]) => controller.manageIncident(input),
+    appendTelemetry: (input: Parameters<DesktopAPI["appendTelemetry"]>[0]) => controller.appendTelemetry(input),
+    telemetryConsent: () => controller.telemetryConsent(),
     revert: (input: Parameters<DesktopAPI["revert"]>[0]) => controller.revert(input),
     pin: async (input: Parameters<DesktopAPI["pin"]>[0]) => { await controller.pin(input) },
     workspaces: () => controller.workspaces(),
@@ -243,6 +265,38 @@ export function createDesktopRPC(controller: BackendController, preferences: {
     composerCatalog: (input?: Parameters<DesktopAPI["composerCatalog"]>[0]) => controller.composerCatalog(input),
     findFiles: (input: Parameters<DesktopAPI["findFiles"]>[0]) => controller.findFiles(input),
     switchModel: async (input: Parameters<DesktopAPI["switchModel"]>[0]) => { await controller.switchModel(input) },
+    sessionSnapshot: (input: Parameters<DesktopAPI["sessionSnapshot"]>[0]) => controller.sessionSnapshot(input),
+    pendingInputs: (input: Parameters<DesktopAPI["pendingInputs"]>[0]) => controller.pendingInputs(input),
+    sessionInsights: (input: Parameters<DesktopAPI["sessionInsights"]>[0]) => controller.sessionInsights(input),
+    switchAgent: async (input: Parameters<DesktopAPI["switchAgent"]>[0]) => { await controller.switchAgent(input) },
+    activateSkill: async (input: Parameters<DesktopAPI["activateSkill"]>[0]) => { await controller.activateSkill(input) },
+    runShell: async (input: Parameters<DesktopAPI["runShell"]>[0]) => { await controller.runShell(input) },
+    sendEditorContext: (input: Parameters<DesktopAPI["sendEditorContext"]>[0]) => controller.sendEditorContext(input),
+    openSideChat: (input: Parameters<DesktopAPI["openSideChat"]>[0]) => controller.openSideChat(input),
+    steerParent: (input: Parameters<DesktopAPI["steerParent"]>[0]) => controller.steerParent(input),
+    prediction: (input: Parameters<DesktopAPI["prediction"]>[0]) => controller.prediction(input),
+    promptGenerate: (input: Parameters<DesktopAPI["promptGenerate"]>[0]) => controller.promptGenerate(input),
+    terminals: (input: Parameters<DesktopAPI["terminals"]>[0]) => controller.terminals(input),
+    terminal: (input: Parameters<DesktopAPI["terminal"]>[0]) => controller.terminal(input),
+    terminalConnect: (input: Parameters<DesktopAPI["terminalConnect"]>[0]) => controller.terminalConnect(input),
+    terminalRead: (input: Parameters<DesktopAPI["terminalRead"]>[0]) => controller.terminalRead(input),
+    terminalWrite: async (input: Parameters<DesktopAPI["terminalWrite"]>[0]) => { await controller.terminalWrite(input) },
+    terminalClose: async (input: Parameters<DesktopAPI["terminalClose"]>[0]) => { await controller.terminalClose(input) },
+    terminalControl: (input: Parameters<DesktopAPI["terminalControl"]>[0]) => controller.terminalControl(input),
+    terminalResize: (input: Parameters<DesktopAPI["terminalResize"]>[0]) => controller.terminalResize(input),
+    exportSession: (input: Parameters<DesktopAPI["exportSession"]>[0]) => controller.exportSession(input),
+    saveExportSession: async (input: Parameters<DesktopAPI["saveExportSession"]>[0]) => {
+      if (!host.saveExport) throw new DesktopError("Saving exports to a folder is unavailable in this runtime. Copy the export instead.")
+      const exported = await controller.exportSession(input)
+      const started = controller.state()
+      const changed = "The connection changed before the export was saved. Open export again."
+      if (started.status !== "connected" || started.revision !== exported.revision) throw new DesktopError(changed)
+      const current = () => { const state = controller.state(); return state.status === "connected" && state.generation === started.generation && state.revision === exported.revision }
+      return host.saveExport(exported, current)
+    },
+    artifacts: (input: Parameters<DesktopAPI["artifacts"]>[0]) => controller.artifacts(input),
+    artifact: (input: Parameters<DesktopAPI["artifact"]>[0]) => controller.artifact(input),
+    manageArtifact: (input: Parameters<DesktopAPI["manageArtifact"]>[0]) => controller.manageArtifact(input),
   }
   return new Proxy(handlers, {
     get(target, key, receiver) {

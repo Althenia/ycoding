@@ -13,6 +13,12 @@ The Effect entrypoint uses canonical decoded values such as `Session.ID`, `Locat
 
 The Promise root remains structural and has no Core or Effect runtime dependency. `/effect` depends only on Effect, Schema, and Protocol and is browser-bundle safe. Bundle-boundary tests enforce both import graphs.
 
+## Local service lifecycle
+
+`@ycoding-ai/client/service` provides Promise-based `Service.discover`, `Service.ensure` and `Service.stop`; `@ycoding-ai/client/effect/service` provides their Effect counterparts. Discovery reads the registration file and verifies service health. Ensure reuses a compatible service or starts the configured command. Stop addresses the registered service instance.
+
+Pass `expected: { url, pid, auth }` to `Service.stop` when an action belongs to a previously observed connection. The client checks the registered process, normalized URL and authentication capability before sending the stop request. A different registration, refused stop or unconfirmed fallback fails instead of reporting retirement. Omit `auth` for an unauthenticated endpoint. Keep this capability in the native host; do not expose it in logs or renderer state. Calls without `expected` retain the registration-based lifecycle contract.
+
 Effect consumers construct canonical decoded inputs:
 
 ```ts

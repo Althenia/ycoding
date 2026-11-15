@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { appendAppLog } from "../app-log"
 import { BackendController } from "../backend-controller"
+import { saveSessionExport } from "../export-file"
 import { readPreferences, savePreferences, validateSelection } from "../preferences"
 import { buildDesktopApplicationMenu, createDesktopRPC, DESKTOP_NAVIGATION_RULES, DESKTOP_RPC_MAX_REQUEST_TIME, forwardDesktopEvent, menuActionFromEvent, startDesktopConnection, type DesktopRPCSchema } from "../rpc"
 import { checkForUpdates, installUpdate, resolveAppBundlePath } from "../updater"
@@ -23,6 +24,10 @@ const startup = new AbortController()
 const readNative = <T>(operation: () => T): T | null => {
   try { return operation() } catch { return null }
 }
+const pickDirectory = async (startingFolder?: string) => {
+  const selected = await Electrobun.Utils.openFileDialog({ startingFolder: startingFolder || os.homedir(), canChooseFiles: false, canChooseDirectory: true, allowsMultipleSelection: false })
+  return selected[0]?.trim() ? selected[0] : null
+}
 const controller = new BackendController(resources, {
   cwd: os.homedir(),
   log,
@@ -32,10 +37,8 @@ const controller = new BackendController(resources, {
 const requests = createDesktopRPC(controller, {
   path: preferencesPath, read: readPreferences, save: savePreferences, validate: validateSelection,
 }, {
-  pickDirectory: async (startingFolder) => {
-    const selected = await Electrobun.Utils.openFileDialog({ startingFolder: startingFolder || os.homedir(), canChooseFiles: false, canChooseDirectory: true, allowsMultipleSelection: false })
-    return selected[0]?.trim() ? selected[0] : null
-  },
+  pickDirectory,
+  saveExport: (exported, current) => saveSessionExport(exported, current, { pickDirectory }),
   openExternal: (url) => {
     if (new URL(url).protocol !== "https:") return false
     return Electrobun.Utils.openExternal(url)
@@ -49,6 +52,8 @@ const requests = createDesktopRPC(controller, {
     }
   },
   writeClipboard: (text) => { Electrobun.Utils.clipboardWriteText(text) },
+  quit: () => { startup.abort(); Electrobun.Utils.quit() },
+  notify: ({ kind, silent }) => Electrobun.Utils.showNotification({ title: "YCoding", body: kind === "request" ? "A Session is waiting for your decision." : kind === "complete" ? "A Session finished running." : "A Session failed. Open YCoding to review it.", silent }),
   checkForUpdates: () => checkForUpdates({ currentVersion, appBundlePath }),
   installUpdate: ({ version } = {}) => installUpdate({
     currentVersion,

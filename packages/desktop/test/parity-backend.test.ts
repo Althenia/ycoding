@@ -3,12 +3,12 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { BackendController } from "../src/backend-controller"
 import { createDesktopRPC } from "../src/rpc"
-import { env, launch, revision, syntheticBundle } from "./synthetic-backend"
+import { syntheticBundle } from "./synthetic-backend"
+import { syntheticDesktop } from "./synthetic-desktop"
 
 const hidden = "synthetic-secret-never-return"
 const extra = { auth: hidden, password: hidden, authorization: hidden, headers: { authorization: hidden } }
 const sessionInfo = { id: "ses_test", title: "Synthetic", location: { directory: "/synthetic/repo" }, time: { created: 1, updated: 2 }, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0 }
-type Call = { method: string; route: string; query: URLSearchParams; body: Record<string, unknown> }
 
 function safe(value: unknown) {
   expect(JSON.stringify(value)).not.toContain(hidden)
@@ -18,31 +18,6 @@ function safe(value: unknown) {
     expect(["auth", "password", "authorization"]).not.toContain(key.toLowerCase())
     safe(item)
   }
-}
-
-async function fixture(handle: (call: Call) => unknown | Promise<unknown> = () => undefined) {
-  const resources = await syntheticBundle()
-  const calls: Call[] = []
-  const controller = new BackendController(resources, { env, launch, cwd: resources, fetch: Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const request = new Request(input, init)
-    const url = new URL(request.url)
-    if (url.pathname === "/api/health") return Response.json({ healthy: true, version: "synthetic", pid: 101, sourceEpoch: "synthetic" })
-    if (url.pathname === "/api/event") return new Response(new ReadableStream({ start(stream) {
-      stream.enqueue(new TextEncoder().encode('data: {"type":"server.connected","properties":{}}\n\n'))
-      request.signal.addEventListener("abort", () => stream.close(), { once: true })
-    } }), { headers: { "content-type": "text/event-stream" } })
-    const call = { method: request.method, route: url.pathname, query: url.searchParams, body: request.body ? await request.json() as Record<string, unknown> : {} }
-    calls.push(call)
-    const value = await handle(call)
-    if (value instanceof Response) return value
-    if (value !== undefined) return Response.json(value)
-    if (url.pathname === "/api/coordination") return Response.json({ data: [] })
-    if (url.pathname === "/api/coordination/settings") return Response.json({ data: { enabled: false, categories: [] } })
-    if (url.pathname === "/api/project/inventory") return Response.json({ data: [], cursor: {} })
-    return new Response(null, { status: 204 })
-  }, { preconnect: () => {} }) })
-  const connected = await controller.connect({ mode: "shared", server: "http://synthetic.invalid" })
-  return { controller, calls, resources, revision: revision(connected), async close() { await controller.disconnect(); await fs.rm(resources, { recursive: true, force: true }) } }
 }
 
 test("folder browsing works disconnected, sorts directories first, filters hidden entries and follows only valid symlinks", async () => {
@@ -72,7 +47,7 @@ test("folder browsing works disconnected, sorts directories first, filters hidde
 })
 
 test("opening and creating folders register exact directories without exposing backend configuration", async () => {
-  const owned = await fixture((call) => call.route === "/api/location" ? { directory: call.query.get("location[directory]"), project: { id: "prj_test", ...extra }, ...extra } : undefined)
+  const owned = await syntheticDesktop((call) => call.route === "/api/location" ? { directory: call.query.get("location[directory]"), project: { id: "prj_test", ...extra }, ...extra } : undefined)
   try {
     expect(await owned.controller.openDirectory({ directory: owned.resources })).toEqual({ revision: owned.revision, directory: owned.resources, projectID: "prj_test" })
     const created = await owned.controller.createDirectory({ parentDirectory: owned.resources, name: " New folder " })
@@ -87,7 +62,7 @@ test("opening and creating folders register exact directories without exposing b
 })
 
 test("Project searches trim and bound UTF-8 input while retaining coordination settings", async () => {
-  const owned = await fixture()
+  const owned = await syntheticDesktop()
   try {
     const snapshot = await owned.controller.projects({ search: "  repository  " })
     expect(snapshot.settings).toEqual({ enabled: false, categories: [] })
@@ -103,7 +78,7 @@ test("Project searches trim and bound UTF-8 input while retaining coordination s
 })
 
 test("Project creation registers a folder and reports a reusable Master Session after coordination failure", async () => {
-  const owned = await fixture((call) => {
+  const owned = await syntheticDesktop((call) => {
     if (call.route === "/api/location") return { directory: call.query.get("location[directory]"), project: { id: "prj_test" } }
     if (call.route === "/api/session") return { data: { ...sessionInfo, location: { directory: owned.resources } } }
     if (call.method === "POST" && call.route === "/api/coordination") return new Response(JSON.stringify({ message: hidden }), { status: 409 })
@@ -118,7 +93,7 @@ test("Project creation registers a folder and reports a reusable Master Session 
 })
 
 test("integration discovery and all credential flows keep only display fields and never return supplied keys", async () => {
-  const owned = await fixture((call) => {
+  const owned = await syntheticDesktop((call) => {
     if (call.route === "/api/integration") return { data: [{ id: "test", name: "Test", methods: [{ type: "key", ...extra }, { type: "oauth", id: "web", label: "Web", ...extra }], connections: [{ type: "credential", id: "cred_test", label: "Work", active: true, kind: "key", ...extra }], ...extra }] }
     if (call.route.endsWith("/connect/oauth") && call.method === "POST") return { data: { attemptID: "con_test", url: "https://example.test/connect", mode: "code", instructions: "Enter the code", manualCode: true, time: { created: 1, expires: 2 }, ...extra } }
     if (call.route.endsWith("/connect/command") && call.method === "POST") return { data: { attemptID: "con_test", time: { created: 1, expires: 2 }, ...extra } }
@@ -159,7 +134,7 @@ test("integration discovery and all credential flows keep only display fields an
 })
 
 test("MCP projection retains needs_auth values, tolerates unavailable resources and sends only clean runtime configs", async () => {
-  const owned = await fixture((call) => {
+  const owned = await syntheticDesktop((call) => {
     if (call.route === "/api/mcp") return { data: [{ name: "test", status: { status: "needs_auth", ...extra }, ...extra }] }
     if (call.route === "/api/mcp/resource") return new Response(null, { status: 503 })
     return undefined
@@ -177,12 +152,12 @@ test("MCP projection retains needs_auth values, tolerates unavailable resources 
 })
 
 test("Session lifecycle routes preserve explicit targets, project forks and reject stale or malformed mutations", async () => {
-  const owned = await fixture((call) => {
-    if (call.route.endsWith("/fork")) return { data: { ...sessionInfo, id: "ses_fork", ...extra } }
+  const owned = await syntheticDesktop((call) => {
+    if (call.route.endsWith("/fork")) return { data: { ...sessionInfo, id: "ses_fork", parentID: "ses_test", ...extra } }
     if (call.route.endsWith("/daybreak")) return { data: sessionInfo }
     if (call.route.endsWith("/subagent/ses_child/cancel")) return { data: {} }
     if (call.method === "GET" && call.route === "/api/session/ses_test") return { data: sessionInfo }
-    if (call.route === "/api/shell") return { location: sessionInfo.location, data: [{ id: "sh_test", metadata: { sessionID: "ses_test" } }] }
+    if (call.route === "/api/shell") return { location: sessionInfo.location, data: [{ id: "sh_test", status: "running", command: "echo", cwd: "/synthetic/repo", shell: "sh", file: "output", time: { started: 1 }, metadata: { sessionID: "ses_test" } }] }
     return undefined
   })
   try {
@@ -201,8 +176,8 @@ test("Session lifecycle routes preserve explicit targets, project forks and reje
 })
 
 test("guardrail and review replies re-read pending identity and use the owning Session without echoing metadata", async () => {
-  const owned = await fixture((call) => {
-    if (call.route.endsWith("/permission") || call.route.endsWith("/form")) return { data: [] }
+  const owned = await syntheticDesktop((call) => {
+    if (call.route.endsWith("/permission") || call.route.endsWith("/form") || call.route.endsWith("/question")) return { data: [] }
     if (call.route.endsWith("/guardrail/request")) return { data: [{ id: "grq_test", sessionID: "ses_child", rootSessionID: "ses_test", action: "edit", resources: [], ruleIDs: [], reason: "Review", standard: true, metadata: extra, ...extra }] }
     if (call.route.endsWith("/review")) return { data: [{ itemID: "rvw_test", sessionID: "ses_child", rootSessionID: "ses_test", sessionTitle: "Child", kind: "recovery", reason: "restart", created: 1, origin: { requestID: "recovery" }, payload: { type: "recovery", tools: [{ messageID: "msg_test", callID: "call", name: "shell" }] }, ...extra }] }
     return undefined
@@ -221,8 +196,57 @@ test("guardrail and review replies re-read pending identity and use the owning S
   } finally { await owned.close() }
 })
 
+test("Family Review question answers preserve ordered labels and custom text and cannot replay a settled item", async () => {
+  let pending = true
+  const item = {
+    itemID: "rvw_synthetic", sessionID: "ses_child", rootSessionID: "ses_test", sessionTitle: "Child", kind: "question", reason: "Needs an answer", created: 1,
+    origin: { requestID: "question-synthetic" },
+    payload: { type: "question" as const, questions: [
+      { header: "Choices", question: "Select the destinations", multiple: true, custom: false, options: [{ label: "Local", description: "Local target" }, { label: "Preview", description: "Preview target" }] },
+      { header: "Details", question: "Describe the result", options: [], custom: true },
+    ] },
+  }
+  const owned = await syntheticDesktop((call) => {
+    if (call.method === "GET" && call.route.endsWith("/review")) return { data: pending ? [item] : [] }
+    if (call.method === "GET" && (call.route.endsWith("/permission") || call.route.endsWith("/form") || call.route.endsWith("/question") || call.route.endsWith("/guardrail/request"))) return { data: [] }
+    if (call.method === "POST" && call.route.endsWith("/decide")) pending = false
+    return undefined
+  })
+  try {
+    const requests = await owned.controller.requests("ses_test")
+    expect(requests.reviews?.[0]?.payload).toEqual(item.payload)
+    const answer = { kind: "review", sessionID: "ses_test", revision: owned.revision, itemID: item.itemID, decision: { kind: "question", answers: [["Preview", "Local"], ["Synthetic free text"]] } }
+    await owned.controller.reply(answer)
+    expect(owned.calls.filter((call) => call.method === "POST").map((call) => [call.route, call.body])).toEqual([
+      ["/api/session/ses_child/review/rvw_synthetic/decide", { decision: { kind: "question", answers: [["Preview", "Local"], ["Synthetic free text"]] } }],
+    ])
+    await expect(owned.controller.reply(answer)).rejects.toThrow("no longer pending")
+    expect(owned.calls.filter((call) => call.method === "POST")).toHaveLength(1)
+  } finally { await owned.close() }
+})
+
+test("Family Review child answers use the owning Session and reject stale connections before sending", async () => {
+  const owned = await syntheticDesktop((call) => {
+    if (call.method === "GET" && call.route.endsWith("/review")) return { data: [{
+      itemID: "rvw_synthetic", sessionID: "ses_child", rootSessionID: "ses_test", sessionTitle: "Child", kind: "subagent_question", reason: "Needs context", created: 1,
+      origin: { requestID: "child-question-synthetic" }, payload: { type: "subagent_question", text: "Which target?" },
+    }] }
+    return undefined
+  })
+  try {
+    const answer = { kind: "review", sessionID: "ses_test", revision: owned.revision, itemID: "rvw_synthetic", decision: { kind: "subagent_question", text: "Synthetic target" } }
+    const before = owned.calls.length
+    await expect(owned.controller.reply({ ...answer, revision: owned.revision - 1 })).rejects.toThrow()
+    expect(owned.calls).toHaveLength(before)
+    await owned.controller.reply(answer)
+    expect(owned.calls.filter((call) => call.method === "POST").map((call) => [call.route, call.body])).toEqual([
+      ["/api/session/ses_child/review/rvw_synthetic/decide", { decision: { kind: "subagent_question", text: "Synthetic target" } }],
+    ])
+  } finally { await owned.close() }
+})
+
 test("VCS diff and system snapshots project nested status, server URLs and catalogs without endpoint credentials", async () => {
-  const owned = await fixture((call) => {
+  const owned = await syntheticDesktop((call) => {
     if (call.route === "/api/session/ses_test") return { data: sessionInfo }
     if (call.route === "/api/vcs/branch") return { location: sessionInfo.location, data: { current: "topic", default: "main", ...extra } }
     if (call.route === "/api/vcs/status") return { location: sessionInfo.location, data: [{ file: "a.ts", additions: 1, deletions: 1, status: "modified", ...extra }] }
@@ -265,8 +289,8 @@ test("native folder selection registers when connected and external URLs are HTT
   expect(urls).toEqual(["https://example.test/connect"])
 })
 
-test("system management forwards explicit browser and artifact expectations, returns only pairing display data and refuses unsupported plugin writes", async () => {
-  const owned = await fixture((call) => {
+test("system management forwards explicit browser and artifact expectations, returns only pairing display data and rejects plugin write kinds as invalid changes", async () => {
+  const owned = await syntheticDesktop((call) => {
     if (call.route === "/api/session/ses_test") return { data: sessionInfo }
     if (call.route.endsWith("/browser/start")) return { data: { secret: "synthetic-pairing-code", expiresAt: 1234, ...extra } }
     if (call.route.endsWith("/browser/isolated/start")) return { data: { mode: "isolated", state: "running", ...extra } }
@@ -289,7 +313,8 @@ test("system management forwards explicit browser and artifact expectations, ret
       ["/api/artifact/project/skill/sample/disable", { expectedRevision: 3, expectedVersionID: "pav_test", expectedDigest: "a".repeat(64) }],
     ])
     const before = owned.calls.length
-    await expect(owned.controller.manageSystem({ kind: "plugin-add", spec: "synthetic-plugin", revision: owned.revision })).rejects.toThrow("plugin discovery only")
+    for (const input of [{ kind: "plugin-add", spec: "synthetic-plugin" }, { kind: "plugin-activate", id: "synthetic-plugin" }, { kind: "plugin-deactivate", id: "synthetic-plugin" }])
+      await expect(owned.controller.manageSystem({ ...input, revision: owned.revision })).rejects.toThrow("Invalid desktop change.")
     await expect(owned.controller.manageSystem({ kind: "browser-start", revision: owned.revision })).rejects.toThrow("Choose a Session")
     await expect(owned.controller.manageSystem({ kind: "remote-set", revision: owned.revision - 1, enabled: true })).rejects.toThrow()
     expect(owned.calls).toHaveLength(before)
@@ -299,7 +324,7 @@ test("system management forwards explicit browser and artifact expectations, ret
 test("management reads and multi-step mutations reject a connection retired while their first request is pending", async () => {
   const entered = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
-  const owned = await fixture(async (call) => {
+  const owned = await syntheticDesktop(async (call) => {
     if (call.route === "/api/session/ses_test") { entered.resolve(); await release.promise; return { data: sessionInfo } }
     return undefined
   })

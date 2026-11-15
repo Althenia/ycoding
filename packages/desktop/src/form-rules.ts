@@ -1,4 +1,4 @@
-import { utf8Length, type FormRequest, type Messages, type SessionFileChanges, type ModelOption, type ModelProfileOption, type ModelSelection, type SessionItem, type Sessions } from "./contract"
+import { utf8Length, type FormRequest, type Messages, type SessionFileChanges, type ModelOption, type ModelProfileOption, type ModelSelection, type SessionItem, type Sessions, type PromptFile, type PromptAgent } from "./contract"
 
 export type Field = FormRequest["fields"][number]
 export type Value = string | boolean | string[]
@@ -256,7 +256,7 @@ export function insertCompletion(text: string, start: number, caret: number, ins
 }
 
 export type MentionPick =
-  | { readonly kind: "file"; readonly display: string; readonly uri: string; readonly description?: string }
+  | { readonly kind: "file"; readonly display: string; readonly uri: string; readonly name?: string; readonly description?: string }
   | { readonly kind: "agent"; readonly display: string; readonly name: string }
 
 export function mentionPayload(text: string, picks: readonly MentionPick[]) {
@@ -271,10 +271,16 @@ export function mentionPayload(text: string, picks: readonly MentionPick[]) {
     const mention = { start, end: start + pick.display.length, text: pick.display }
     if (pick.kind === "file") {
       const path = pick.uri.startsWith("file://") ? pick.uri.slice("file://".length) : pick.uri
-      files.push({ uri: pick.uri, name: path.split("/").filter(Boolean).at(-1) ?? path, ...(pick.description ? { description: pick.description } : {}), mention })
+      files.push({ uri: pick.uri, name: pick.name ?? path.split("/").filter(Boolean).at(-1) ?? path, ...(pick.description !== undefined ? { description: pick.description } : {}), mention })
     } else agents.push({ name: pick.name, mention })
   }
   return { files, agents }
+}
+
+export function restoredPrompt(input: Pick<Extract<Messages[number], { type: "user" }>, "text" | "files" | "agents">) {
+  const files = (input.files ?? []).map((file) => ({ uri: `ycoding-attachment://sha256/${file.content.digest}`, ...(file.name !== undefined ? { name: file.name } : {}), ...(file.description !== undefined ? { description: file.description } : {}), ...(file.mention ? { mention: file.mention } : {}) }))
+  const picks: MentionPick[] = [...files.flatMap((file): MentionPick[] => file.mention ? [{ kind: "file", display: file.mention.text, uri: file.uri, name: file.name, description: file.description }] : []), ...(input.agents ?? []).flatMap((agent): MentionPick[] => agent.mention ? [{ kind: "agent", name: agent.name, display: agent.mention.text }] : [])]
+  return { text: input.text, files: files.filter((file) => !file.mention), agents: (input.agents ?? []).filter((agent) => !agent.mention), picks }
 }
 
 export type SlashAction = { readonly kind: "local" | "backend"; readonly name: string; readonly args: string } | { readonly kind: "prompt" }
@@ -485,10 +491,21 @@ export function resolveDesktopTheme(choice: DesktopThemeID, systemDark: boolean)
 
 const builtInSlashCommands = [
   { name: "new", aliases: ["clear"], description: "Start a new chat" },
+  { name: "docs", description: "Open documentation" },
+  { name: "exit", aliases: ["quit", "q"], description: "Quit YCoding Desktop" },
+  { name: "editor", description: "Edit the full prompt draft" },
+  { name: "btw", description: "Open a BTW side chat" },
+  { name: "btw-send", description: "Send reviewed text to the main chat" },
+  { name: "suggest", description: "Suggest the next message" },
+  { name: "prompt", description: "Generate a prompt draft" },
+  { name: "cd", description: "Change the Session working directory" },
+  { name: "sleep", description: "Put autonomy decisions to sleep" },
+  { name: "wake", description: "Wake autonomy decisions" },
   { name: "compact", aliases: ["summarize"], description: "Compact the conversation" },
   { name: "connect", description: "Connect a provider" },
   { name: "mcp", aliases: ["mcps"], description: "Manage MCP servers" },
   { name: "status", description: "Show session and server status" },
+  { name: "restart", description: "Restart the connected local backend" },
   { name: "debug", description: "Show debug information" },
   { name: "models", aliases: ["mo"], description: "Choose a model" },
   { name: "variants", aliases: ["variant"], description: "Choose a reasoning variant" },
@@ -500,11 +517,24 @@ const builtInSlashCommands = [
   { name: "daybreak", description: "Schedule or inspect a daybreak run" },
   { name: "rename", description: "Rename the session" },
   { name: "fork", description: "Fork the session" },
+  { name: "archive", description: "Archive the Session" },
+  { name: "unarchive", description: "Restore the archived Session" },
+  { name: "delete", description: "Delete the Session and its descendants" },
+  { name: "share", description: "Inspect Session sharing availability" },
+  { name: "unshare", description: "Inspect Session unsharing availability" },
+  { name: "parent", description: "Open the parent Session" },
+  { name: "next-child", description: "Open the next subagent" },
+  { name: "previous-child", description: "Open the previous subagent" },
+  { name: "sidebar", description: "Toggle navigation rail" },
+  { name: "companion", description: "Toggle Session companion" },
   { name: "move", description: "Move the session to another workspace" },
   { name: "undo", description: "Undo the last turn" },
   { name: "redo", description: "Redo the undone turn" },
   { name: "diff", description: "Show file changes" },
   { name: "terminals", aliases: ["terminal"], description: "Open terminals" },
+  { name: "session-actions", description: "Open shell, editor context, side-chat and prompt tools" },
+  { name: "processes", description: "Manage Session shells and subagents" },
+  { name: "background", description: "Run the current Session in the background" },
   { name: "browser", aliases: ["chrome"], description: "Open the browser panel" },
   { name: "artifacts", description: "Browse artifacts" },
   { name: "plugins", description: "Manage plugins" },
@@ -515,9 +545,9 @@ const builtInSlashCommands = [
   { name: "stash", description: "Stash or restore the prompt" },
   { name: "timeline", description: "Show the session timeline" },
   { name: "find", description: "Search the transcript" },
-  { name: "copy", description: "Copy the last response" },
-  { name: "export", description: "Export the transcript as Markdown" },
-  { name: "help", aliases: ["shortcuts", "keys"], description: "Show commands and shortcuts" },
+  { name: "copy", description: "Copy the full transcript" },
+  { name: "export", description: "Export the transcript" },
+  { name: "help", aliases: ["shortcuts", "keys", "keybinds"], description: "Show commands and shortcuts" },
   { name: "workspaces", description: "Switch workspace" },
   { name: "projects", aliases: ["project-settings"], description: "Manage projects" },
   { name: "sessions", aliases: ["resume", "continue"], description: "Switch session" },
@@ -529,14 +559,21 @@ const builtInSlashCommands = [
 export const DESKTOP_BUILT_IN_SLASH_COMMANDS: ReadonlyArray<{ readonly name: string; readonly aliases?: readonly string[]; readonly description: string }> = builtInSlashCommands
 
 type BuiltInSlashKind = (typeof builtInSlashCommands)[number]["name"]
-type ArgumentSlashKind = "goal" | "daybreak" | "rename" | "find"
+type ArgumentSlashKind = "goal" | "daybreak" | "rename" | "find" | "themes" | "btw" | "btw-send" | "suggest" | "prompt" | "cd"
 
 export type DesktopSlashCommand =
   | { readonly kind: Exclude<BuiltInSlashKind, ArgumentSlashKind> }
   | { readonly kind: ArgumentSlashKind; readonly argument?: string }
   | { readonly kind: "backend"; readonly command: string; readonly arguments: string }
 
-const argumentSlashKinds: readonly string[] = ["goal", "daybreak", "rename", "find"]
+const argumentSlashKinds: readonly string[] = ["goal", "daybreak", "rename", "find", "themes", "btw", "btw-send", "suggest", "prompt", "cd"]
+
+export function composerSlash(text: string, backend: readonly string[]): SlashAction {
+  const parsed = desktopSlashCommand(text, backend)
+  if (!parsed) return slashAction(text, ["sleep", "wake"], backend)
+  if (parsed.kind === "backend") return { kind: "backend", name: parsed.command, args: parsed.arguments }
+  return { kind: "local", name: parsed.kind === "themes" ? "theme" : parsed.kind, args: "argument" in parsed ? parsed.argument ?? "" : text.replace(/^\/\S+\s*/, "") }
+}
 
 export function desktopSlashCommand(text: string, backendCommands: readonly string[]): DesktopSlashCommand | undefined {
   const match = /^\/([A-Za-z0-9][A-Za-z0-9_-]*)(?:[ \t]+([\s\S]*))?$/.exec(text)
@@ -578,18 +615,30 @@ export function formatSessionExportMarkdown(input: { readonly title: string; rea
   return `${[header.join("\n"), ...sections].join("\n\n")}\n`
 }
 
-export type PromptStashEntry = { readonly id: string; readonly text: string; readonly directory?: string; readonly createdAt: number }
+export type PastedText = { readonly label: string; readonly text: string }
+export type StashedPrompt = { readonly text: string; readonly files?: readonly PromptFile[]; readonly agents?: readonly PromptAgent[]; readonly picks?: readonly MentionPick[]; readonly pasted?: readonly PastedText[] }
+export type PromptStashEntry = StashedPrompt & { readonly id: string; readonly directory?: string; readonly createdAt: number }
 
-export const promptStashLimit = 25
+export const promptStashLimit = 50
+
+const stashMention = (value: unknown) => value === undefined || isRecord(value) && Number.isSafeInteger(value.start) && Number(value.start) >= 0 && Number.isSafeInteger(value.end) && Number(value.end) >= Number(value.start) && typeof value.text === "string"
+const stashFile = (value: unknown): value is PromptFile => isRecord(value) && typeof value.uri === "string" && (value.name === undefined || typeof value.name === "string") && (value.description === undefined || typeof value.description === "string") && stashMention(value.mention)
+const stashAgent = (value: unknown): value is PromptAgent => isRecord(value) && typeof value.name === "string" && stashMention(value.mention)
+const stashPasted = (value: unknown): value is PastedText => isRecord(value) && typeof value.label === "string" && value.label.length > 0 && typeof value.text === "string"
+const stashPick = (value: unknown): value is MentionPick => isRecord(value) && typeof value.display === "string" && (value.kind === "agent" ? typeof value.name === "string" : value.kind === "file" && stashFile(value))
 
 export function parsePromptStashes(raw: string | null): readonly PromptStashEntry[] {
   if (!raw) return []
   let value: unknown
   try { value = JSON.parse(raw) } catch { return [] }
   if (!Array.isArray(value)) return []
-  return value.flatMap((item): PromptStashEntry[] => isRecord(item) && typeof item.id === "string" && typeof item.text === "string" && item.text !== "" && typeof item.createdAt === "number" && Number.isFinite(item.createdAt)
-    ? [{ id: item.id, text: item.text, ...(typeof item.directory === "string" ? { directory: item.directory } : {}), createdAt: item.createdAt }]
-    : []).slice(0, promptStashLimit)
+  return value.flatMap((item): PromptStashEntry[] => {
+    if (!isRecord(item) || typeof item.id !== "string" || typeof item.text !== "string" || typeof item.createdAt !== "number" || !Number.isFinite(item.createdAt)) return []
+    const { files, agents, picks, pasted } = item
+    if (files !== undefined && (!Array.isArray(files) || !files.every(stashFile)) || agents !== undefined && (!Array.isArray(agents) || !agents.every(stashAgent)) || picks !== undefined && (!Array.isArray(picks) || !picks.every(stashPick)) || pasted !== undefined && (!Array.isArray(pasted) || !pasted.every(stashPasted))) return []
+    if (!item.text && !files?.length && !agents?.length && !picks?.length) return []
+    return [{ id: item.id, text: item.text, ...(typeof item.directory === "string" ? { directory: item.directory } : {}), createdAt: item.createdAt, ...(files ? { files } : {}), ...(agents ? { agents } : {}), ...(picks ? { picks } : {}), ...(pasted ? { pasted } : {}) }]
+  }).slice(0, promptStashLimit)
 }
 
 export function pushPromptStash(entries: readonly PromptStashEntry[], entry: PromptStashEntry, max: number = promptStashLimit): readonly PromptStashEntry[] {

@@ -1,12 +1,14 @@
-import { DesktopError, utf8Length, type FormAnswer, type RequestReply, type PageInput, type RevertInput, type SetAutonomyInput, type ShellOutputInput, type WorkspaceDirectoriesInput, type UsageRange } from "./contract"
+import { DesktopError, utf8Length, type FormAnswer, type RequestReply, type PageInput, type RevertInput, type SetAutonomyInput, type ShellOutputInput, type WorkspaceDirectoriesInput, type UsageRange, type RequestLocation } from "./contract"
 import path from "node:path"
 
 type ClassicReply = Exclude<RequestReply, { readonly kind: "guardrail" | "review" }>
 const invalid = "This answer is invalid. Refresh requests and answer again."
 const fields: Record<ClassicReply["kind"], readonly string[]> = {
+  question: ["kind", "answers", "requestID", "revision", "sessionID"],
+  "question-reject": ["kind", "requestID", "revision", "sessionID"],
   permission: ["kind", "message", "reply", "requestID", "revision", "sessionID"],
-  form: ["answer", "formID", "kind", "revision", "sessionID"],
-  "form-cancel": ["formID", "kind", "revision", "sessionID"],
+  form: ["answer", "formID", "kind", "location", "revision", "sessionID"],
+  "form-cancel": ["formID", "kind", "location", "revision", "sessionID"],
 }
 
 export const isSessionID = (value: unknown): value is string => typeof value === "string" && /^ses_[A-Za-z0-9_-]{1,124}$/.test(value)
@@ -96,14 +98,33 @@ function answer(value: unknown): FormAnswer {
   }))
 }
 
+function requestLocation(value: unknown): RequestLocation {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || Object.keys(value).some((key) => key !== "directory" && key !== "workspace")) throw new DesktopError(invalid)
+  const directory = "directory" in value ? value.directory : undefined
+  const workspace = "workspace" in value ? value.workspace : undefined
+  if (typeof directory !== "string" || !path.isAbsolute(directory) || utf8Length(directory) > 4096 || directory.includes("\0")) throw new DesktopError(invalid)
+  if (workspace !== undefined && (typeof workspace !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(workspace))) throw new DesktopError(invalid)
+  return { directory, ...(workspace === undefined ? {} : { workspace }) }
+}
+
 export function requestReply(value: unknown): ClassicReply {
   if (typeof value !== "object" || value === null || !("kind" in value) || !("sessionID" in value) || !("revision" in value)) throw new DesktopError(invalid)
   const kind = value.kind
-  if (kind !== "permission" && kind !== "form" && kind !== "form-cancel") throw new DesktopError(invalid)
+  if (kind !== "permission" && kind !== "form" && kind !== "form-cancel" && kind !== "question" && kind !== "question-reject") throw new DesktopError(invalid)
   if (Object.keys(value).some((key) => !fields[kind].includes(key))) throw new DesktopError(invalid)
-  const sessionID = session(value.sessionID)
+  const global = (kind === "form" || kind === "form-cancel") && value.sessionID === "global"
+  if (global !== ("location" in value)) throw new DesktopError(invalid)
+  const sessionID = global ? "global" : session(value.sessionID)
+  const scope = global && "location" in value ? { location: requestLocation(value.location) } : {}
   const revision = value.revision
   if (!isRevision(revision)) throw new DesktopError(invalid)
+  if (kind === "question" || kind === "question-reject") {
+    if (!("requestID" in value)) throw new DesktopError(invalid)
+    const requestID = identifier(value.requestID)
+    if (kind === "question-reject") return { kind, sessionID, revision, requestID }
+    if (!("answers" in value) || !Array.isArray(value.answers) || value.answers.length > 256 || !value.answers.every((row) => Array.isArray(row) && row.length <= 256 && row.every((item) => typeof item === "string")) || utf8Length(JSON.stringify(value.answers)) > 500_000) throw new DesktopError(invalid)
+    return { kind, sessionID, revision, requestID, answers: value.answers.map((row) => row.map(String)) }
+  }
   if (kind === "permission") {
     if (!("requestID" in value) || !("reply" in value)) throw new DesktopError(invalid)
     const reply = value.reply
@@ -114,7 +135,7 @@ export function requestReply(value: unknown): ClassicReply {
   }
   if (!("formID" in value)) throw new DesktopError(invalid)
   const formID = identifier(value.formID)
-  if (kind === "form-cancel") return { kind, sessionID, revision, formID }
+  if (kind === "form-cancel") return { kind, sessionID, revision, formID, ...scope }
   if (!("answer" in value)) throw new DesktopError(invalid)
-  return { kind, sessionID, revision, formID, answer: answer(value.answer) }
+  return { kind, sessionID, revision, formID, answer: answer(value.answer), ...scope }
 }

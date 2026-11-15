@@ -38,6 +38,7 @@ export type EnsureOptions = DiscoverOptions & {
 export type StopOptions = {
   /** Absolute registration file path. Defaults to the XDG state directory. */
   readonly file?: string
+  readonly expected?: Endpoint & { readonly pid: number }
 }
 
 /** Contents of the local service registration file. */

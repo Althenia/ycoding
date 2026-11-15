@@ -18,6 +18,26 @@ test("request replies keep the exact kind, Session, connection revision, request
   expect(requestReply(cancel)).toEqual(cancel)
 })
 
+test("global form answers and cancels require exactly one absolute location and Session replies refuse a location", () => {
+  const location = { directory: "/synthetic/repo", workspace: "wrk_a" }
+  const global = { ...form, sessionID: "global", location }
+  expect(requestReply(global)).toEqual(global)
+  expect(requestReply({ ...cancel, sessionID: "global", location: { directory: "/synthetic/repo" } })).toEqual({ ...cancel, sessionID: "global", location: { directory: "/synthetic/repo" } })
+  for (const value of [
+    { ...form, sessionID: "global" },
+    { ...cancel, sessionID: "global" },
+    { ...form, location },
+    { ...cancel, location },
+    { ...form, sessionID: "global", location: { directory: "relative" } },
+    { ...form, sessionID: "global", location: { directory: "/synthetic/repo", extra: true } },
+    { ...form, sessionID: "global", location: { workspace: "wrk_a" } },
+    { ...form, sessionID: "global", location: { directory: "/synthetic/repo", workspace: "" } },
+    { ...form, sessionID: "global", location: "/synthetic/repo" },
+    { ...permission, sessionID: "global", location },
+    { ...permission, sessionID: "global" },
+  ]) expect(() => requestReply(value)).toThrow()
+})
+
 test("form answers keep prototype-named field keys as their own answers without changing the answer's prototype", () => {
   const reply = requestReply(JSON.parse('{"kind":"form","sessionID":"ses_synthetic","revision":3,"formID":"frm_synthetic","answer":{"__proto__":["kept"],"constructor":"also","plain":true}}'))
   if (reply.kind !== "form") throw new Error("Expected a form answer.")
@@ -97,7 +117,7 @@ test("a same-backend reconnect reports an in-flight answer as unconfirmed and re
   const endFirstStream = Promise.withResolvers<void>()
   using server = peer(routes, () => pid, async (route) => {
     if (route === "/api/session/ses_synthetic/permission") return Response.json({ data: [{ id: "per_synthetic", sessionID: "ses_synthetic", action: "edit", resources: [] }] })
-    if (route === "/api/session/ses_synthetic/form") return Response.json({ data: [] })
+    if (route === "/api/session/ses_synthetic/form" || route === "/api/session/ses_synthetic/question") return Response.json({ data: [] })
     if (route !== "/api/session/ses_synthetic/permission/per_synthetic/reply") return undefined
     replying.resolve()
     await release.promise

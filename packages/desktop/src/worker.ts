@@ -5,7 +5,7 @@ import { DesktopError } from "./contract"
 import { readPreferences, savePreferences, validateSelection } from "./preferences"
 import { externalURL } from "./rpc"
 
-type ControllerLaunch = Pick<NonNullable<ConstructorParameters<typeof BackendController>[1]>, "env" | "launch">
+type ControllerLaunch = Pick<NonNullable<ConstructorParameters<typeof BackendController>[1]>, "env" | "launch" | "fetch">
 
 export async function runDesktopWorker(options: {
   resources: string
@@ -72,6 +72,8 @@ export async function runDesktopWorker(options: {
             case "open-directory": case "openDirectory": data = await controller.openDirectory(input); break
             case "create-directory": case "createDirectory": data = await controller.createDirectory(input); break
             case "pick-directory": case "pickDirectory": throw new DesktopError("Native folder dialog is unavailable in headless worker mode; use Browse folders.")
+            case "quit": throw new DesktopError("Quitting the native app is unavailable in headless worker mode.")
+            case "notify": throw new DesktopError("Native notifications are unavailable in headless worker mode.")
             case "open-external-url": case "openExternalUrl": externalURL(input); throw new DesktopError("External browser launch is unavailable in headless worker mode.")
             case "integrations": data = await controller.integrations(input); break
             case "manage-integration": case "manageIntegration": data = await controller.manageIntegration(input); break
@@ -82,6 +84,9 @@ export async function runDesktopWorker(options: {
             case "system-snapshot": case "systemSnapshot": data = await controller.systemSnapshot(input); break
             case "manage-system": case "manageSystem": data = await controller.manageSystem(input); break
             case "preferences": data = await readPreferences(options.preferences); break
+            case "restartBackend": data = await controller.restartBackend(input); break
+            case "editorSelection": data = await controller.editorSelection(input); break
+            case "editDraft": data = await controller.editDraft(input); break
             case "state": data = { ...controller.state(), ...(notice ? { notice } : {}) }; break
             case "connect": {
               if (starting) throw new DesktopError("A backend connection is pending. Cancel it before changing backend.")
@@ -111,6 +116,11 @@ export async function runDesktopWorker(options: {
             case "changeProject": data = await controller.changeProject(input); break
             case "changeWorkspace": data = await controller.changeWorkspace(input); break
             case "usage": data = await controller.usage(input); break
+            case "usageDashboard": data = await controller.usageDashboard(input); break
+            case "incidents": data = await controller.incidents(input); break
+            case "manageIncident": data = await controller.manageIncident(input); break
+            case "appendTelemetry": data = await controller.appendTelemetry(input); break
+            case "telemetryConsent": data = await controller.telemetryConsent(); break
             case "revert": data = await controller.revert(input); break
             case "pin": data = await controller.pin(input); break
             case "workspaces": data = await controller.workspaces(); break
@@ -126,6 +136,30 @@ export async function runDesktopWorker(options: {
             case "compact": data = await controller.compact(input); break
             case "composer-catalog": data = await controller.composerCatalog(input); break
             case "find-files": data = await controller.findFiles(input); break
+            case "sessionSnapshot": data = await controller.sessionSnapshot(input); break
+            case "pendingInputs": data = await controller.pendingInputs(input); break
+            case "sessionInsights": data = await controller.sessionInsights(input); break
+            case "switchAgent": data = await controller.switchAgent(input); break
+            case "activateSkill": data = await controller.activateSkill(input); break
+            case "runShell": data = await controller.runShell(input); break
+            case "sendEditorContext": data = await controller.sendEditorContext(input); break
+            case "openSideChat": data = await controller.openSideChat(input); break
+            case "steerParent": data = await controller.steerParent(input); break
+            case "prediction": data = await controller.prediction(input); break
+            case "promptGenerate": data = await controller.promptGenerate(input); break
+            case "terminals": data = await controller.terminals(input); break
+            case "terminal": data = await controller.terminal(input); break
+            case "terminalConnect": data = await controller.terminalConnect(input); break
+            case "terminalRead": data = await controller.terminalRead(input); break
+            case "terminalWrite": data = await controller.terminalWrite(input); break
+            case "terminalClose": data = await controller.terminalClose(input); break
+            case "terminalControl": data = await controller.terminalControl(input); break
+            case "terminalResize": data = await controller.terminalResize(input); break
+            case "exportSession": data = await controller.exportSession(input); break
+            case "artifacts": data = await controller.artifacts(input); break
+            case "artifact": data = await controller.artifact(input); break
+            case "manageArtifact": data = await controller.manageArtifact(input); break
+            case "saveExportSession": throw new DesktopError("Saving exports to a folder is unavailable in this runtime. Copy the export instead.")
             default: throw new DesktopError("Unsupported native desktop operation.")
           }
           if (!closing) await send({ type: "reply", id: request.id, data })

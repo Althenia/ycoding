@@ -78,7 +78,7 @@ function record(overrides: Record<string, unknown> = {}) {
     tokens: { input: 10, output: 20, reasoning: 3, cache: { read: 4, write: 5 }, total: 42 },
     time: { created: 1, updated: 2, active: 3, archived: 4, pinned: 5 },
     title: "Synthetic",
-    location: { directory: "/synthetic/repo", workspaceID: hidden },
+    location: { directory: "/synthetic/repo" },
     subpath: hidden,
     origin: { type: hidden },
     ...overrides,
@@ -226,6 +226,18 @@ test("a Session list query is empty, a trimmed search of at most 256 bytes, or a
   ]) expect(() => sessionsQuery(value)).toThrow(retry)
 })
 
+test("a workspace-bound Session keeps its workspace in list and record projections and a malformed workspace drops or refuses the record", () => {
+  const bound = record({ location: { directory: "/synthetic/repo", workspaceID: "wrk_synthetic", project: { id: "prj_synthetic" } } })
+  expect(projectSessions({ data: [bound] }, 1).items[0]?.location).toEqual({ directory: "/synthetic/repo", workspaceID: "wrk_synthetic" })
+  expect(projectSessionRecord(sessionID, bound).location).toEqual({ directory: "/synthetic/repo", workspaceID: "wrk_synthetic" })
+  expect(projectSessionRecord(sessionID, record()).location).toEqual({ directory: "/synthetic/repo" })
+  for (const workspaceID of ["", 7, null, { value: hidden }]) {
+    const malformed = record({ location: { directory: "/synthetic/repo", workspaceID } })
+    expect(projectSessions({ data: [malformed] }, 1).items).toEqual([])
+    expect(() => projectSessionRecord(sessionID, malformed)).toThrow(invalidSession)
+  }
+})
+
 test("a single Session record is projected like a rail item, and a different or malformed record is refused", () => {
   const item = projectSessionRecord(sessionID, record())
   expect(projectSessions({ data: [record()] }, 1).items).toEqual([item])
@@ -262,7 +274,7 @@ test("Session list and pin requests validate first and then require a connected 
     expect(await message(pending)).toBe("Connect to a backend before using Sessions.")
 })
 
-test("pages read 40 Sessions with only the trimmed search and the backend's default background setting", async () => {
+test("pages read 40 Sessions with only the trimmed search and exclude background Dots executor Sessions like the TUI", async () => {
   await connected(backend(), async (controller, observed, current) => {
     const page = await controller.sessions({})
     expect(page).toMatchObject({ revision: current, next: "synthetic-next" })
@@ -272,7 +284,7 @@ test("pages read 40 Sessions with only the trimmed search and the backend's defa
     await controller.sessions({ search: "   " })
     const search = "é".repeat(128)
     await controller.sessions({ search })
-    expect(observed.lists).toEqual([{ limit: "40" }, { limit: "40", search: "synthetic" }, { limit: "40" }, { limit: "40", search }])
+    expect(observed.lists).toEqual([{ limit: "40", background: "exclude" }, { limit: "40", search: "synthetic", background: "exclude" }, { limit: "40", background: "exclude" }, { limit: "40", search, background: "exclude" }])
     expect(await message(controller.sessions({ search: `${search}é` }))).toBe(tooLong)
     expect(observed.lists).toHaveLength(4)
   })
@@ -284,7 +296,7 @@ test("a cursor is accepted only with the revision it was issued under, and an un
     const more = await controller.sessions({ revision: first.revision, cursor: "synthetic-next" })
     expect(more.items.map((item) => item.id)).toEqual(["ses_older"])
     expect(Object.keys(more)).toEqual(["revision", "items"])
-    expect(observed.lists.at(-1)).toEqual({ limit: "40", cursor: "synthetic-next" })
+    expect(observed.lists.at(-1)).toEqual({ limit: "40", cursor: "synthetic-next", background: "exclude" })
     const reads = observed.lists.length
     expect(await message(controller.sessions({ revision: current + 1, cursor: "synthetic-next" }))).toBe(unpaged)
     expect(await message(controller.sessions({ revision: current, cursor: "synthetic-forged" }))).toBe(unknownPage)
@@ -305,7 +317,7 @@ test("re-reading the first page under the same revision keeps an earlier page-2 
     expect((await controller.sessions({ revision: current, cursor: "c1" })).next).toBe("c2")
     expect((await controller.sessions({})).next).toBe("c1")
     expect(await controller.sessions({ revision: current, cursor: "c2" })).toEqual({ revision: current, items: [] })
-    expect(observed.lists.at(-1)).toEqual({ limit: "40", cursor: "c2" })
+    expect(observed.lists.at(-1)).toEqual({ limit: "40", cursor: "c2", background: "exclude" })
   })
 }, 30_000)
 
@@ -323,7 +335,7 @@ test("cursorless reads with another search or none keep the rail's cursors accep
     expect((await controller.sessions({})).next).toBe("first:")
     expect((await controller.sessions({ search: "other" })).next).toBe("first:other")
     expect((await controller.sessions({ revision: current, cursor: "first:rail/2" })).next).toBe("first:rail/2/2")
-    expect(observed.lists.at(-1)).toEqual({ limit: "40", cursor: "first:rail/2" })
+    expect(observed.lists.at(-1)).toEqual({ limit: "40", cursor: "first:rail/2", background: "exclude" })
     for (const cursor of ["first:", "first:other"]) expect((await controller.sessions({ revision: current, cursor })).revision).toBe(current)
   })
 }, 30_000)
@@ -440,7 +452,7 @@ test("a cursor from another backend is refused before any request", async () => 
     const current = revision(await controller.connect({ mode: "shared", server: b.url.href }))
     expect(await message(controller.sessions({ revision: old, cursor: "synthetic-next" }))).toBe(unpaged)
     expect(await message(controller.sessions({ revision: current, cursor: "synthetic-next" }))).toBe(unknownPage)
-    expect([firstLists, secondLists]).toEqual([["?limit=40"], []])
+    expect([firstLists, secondLists]).toEqual([["?limit=40&background=exclude"], []])
   } finally {
     await controller.disconnect()
     await fs.rm(resources, { recursive: true, force: true })

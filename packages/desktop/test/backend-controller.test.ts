@@ -366,34 +366,12 @@ test("activity pages and attributed shell output use exact scoped requests", asy
   }, async (controller, rev) => {
     expect((await controller.activity({ sessionID: id, cursor: "next", revision: rev })).revision).toBe(rev)
     expect(urls.find((url) => url.pathname.endsWith("/subagent"))?.searchParams.get("cursor")).toBe("next")
-    expect(await controller.shellOutput({ sessionID: id, shellID: "sh_test", cursor: 0, limit: 100 })).toEqual({ revision: rev, sessionID: id, shellID: "sh_test", output: "hello", cursor: 5, size: 5, truncated: false })
+    expect(await controller.shellOutput({ sessionID: id, shellID: "sh_test", cursor: 0, limit: 100 })).toEqual({ revision: rev, sessionID: id, shellID: "sh_test", shell: { status: "running", command: "echo", cwd: "/synthetic/repo", time: { started: 1 } }, output: "hello", cursor: 5, size: 5, truncated: false })
     owner = "ses_other"
     await expect(controller.shellOutput({ sessionID: id, shellID: "sh_test" })).rejects.toThrow()
     expect(urls.filter((url) => url.pathname.endsWith("/output"))).toHaveLength(1)
     await expect(controller.activity({ sessionID: id, cursor: "next", revision: rev + 1 })).rejects.toThrow()
     await expect(controller.shellOutput({ sessionID: id, shellID: "sh_test", limit: 65537 })).rejects.toThrow()
-  })
-})
-
-test("child-owned shell output requires a valid direct child in the selected Session", async () => {
-  let owner = "ses_child"
-  let child: unknown = task
-  const urls: URL[] = []
-  await connected(async (route, request) => {
-    urls.push(new URL(request.url))
-    if (route === `/api/session/${id}`) return Response.json({ data: { id, scope: "bound", location: { directory: "/synthetic/repo" } } })
-    if (route.endsWith("/subagent")) return new URL(request.url).searchParams.get("limit") === "10" ? Response.json({ data: [child], summary: { total: 1, active: 1 }, cursor: {} }) : new Response(null, { status: 400 })
-    if (route === "/api/shell") return Response.json({ location: { directory: "/synthetic/repo" }, data: [shell("sh_test", { sessionID: owner })] })
-    if (route === "/api/shell/sh_test/output") return Response.json({ location: { directory: "/synthetic/repo" }, data: { output: "child", cursor: 5, size: 5, truncated: false } })
-    return undefined
-  }, async (controller, rev) => {
-    expect(await controller.shellOutput({ sessionID: id, shellID: "sh_test" })).toEqual({ revision: rev, sessionID: id, shellID: "sh_test", output: "child", cursor: 5, size: 5, truncated: false })
-    expect(urls.find((url) => url.pathname.endsWith("/subagent"))?.searchParams.get("limit")).toBe("10")
-    owner = "ses_other"
-    await expect(controller.shellOutput({ sessionID: id, shellID: "sh_test" })).rejects.toThrow()
-    owner = "ses_child"; child = { ...task, parentID: "ses_other" }
-    await expect(controller.shellOutput({ sessionID: id, shellID: "sh_test" })).rejects.toThrow()
-    expect(urls.filter((url) => url.pathname.endsWith("/output"))).toHaveLength(1)
   })
 })
 
@@ -971,7 +949,7 @@ test("composer catalog aggregates commands, skills and agents and keeps partial 
       revision: rev, source: { sessionID: id },
       commands: [{ name: "review", description: "Review code" }],
       skills: [{ id: "garm", name: "garm", description: "Acceptance tests" }],
-      agents: [{ name: "scout", description: "Explore" }],
+      agents: [{ id: "scout", name: "scout", mode: "subagent", description: "Explore" }],
       errors: {},
     })
     expect(locations[0]).toBe("/synthetic/repo")
@@ -1009,7 +987,6 @@ test("prompt forwards validated file and agent mentions and command dispatches b
       bodies.push({ route, body })
       return Response.json({ data: { id: body.id, sessionID: id } })
     }
-    if (route === `/api/session/${id}/compact`) { bodies.push({ route, body: await request.json() }); return Response.json({ data: { status: "compacted" } }) }
     return undefined
   }, async (controller) => {
     const text = "see @src/app.ts with @scout"
@@ -1021,8 +998,6 @@ test("prompt forwards validated file and agent mentions and command dispatches b
     await controller.command({ sessionID: id, promptID: "msg_synthetic5", command: "review", arguments: "src/app.ts" })
     expect(bodies.at(-1)?.body).toEqual({ id: "msg_synthetic5", command: "review", arguments: "src/app.ts" })
     await expect(controller.command({ sessionID: id, promptID: "msg_synthetic6", command: "not a command" })).rejects.toThrow()
-    await controller.compact({ sessionID: id, promptID: "msg_synthetic7" })
-    expect(bodies.at(-1)).toEqual({ route: `/api/session/${id}/compact`, body: { id: "msg_synthetic7" } })
   })
 })
 

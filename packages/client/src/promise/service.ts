@@ -6,6 +6,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import type { DiscoverOptions, Endpoint, Info, EnsureOptions, StopOptions } from "../service.js"
 import { pollDelay, startupTimeout } from "../service-poll.js"
+import { assertStopTarget } from "../service-stop.js"
 import type { ServiceHealth, ServiceStopResponse } from "./generated/types.js"
 
 export * from "../service.js"
@@ -154,6 +155,7 @@ function contenderFinished(contender: Contender) {
 /** Stop the registered local service. */
 export async function stop(options: StopOptions = {}) {
   const existing = await find(options)
+  assertStopTarget(options.expected, existing)
   if (existing !== undefined) await kill(existing, options)
 }
 
@@ -252,18 +254,27 @@ function same(left: Info, right: Info) {
   return left.id === right.id && left.version === right.version && left.url === right.url && left.pid === right.pid
 }
 
-async function kill(service: LocalService, options: { readonly file?: string }) {
+async function kill(service: LocalService, options: StopOptions) {
   const requested = await requestStop(service)
-  if (requested === "rejected") return
+  if (requested === "rejected") {
+    if (options.expected) throw new Error("The selected service did not stop")
+    return
+  }
   if (requested === "unsupported") {
     const current = await find(options)
-    if (current === undefined || !same(current.info, service.info)) return
+    if (current === undefined || !same(current.info, service.info)) {
+      if (options.expected) throw new Error("The registered service changed before it could be stopped")
+      return
+    }
     signal(service.info.pid, "SIGTERM")
   }
   if (await waitUntilStopped(service.info.pid)) return
 
   const latest = await find(options)
-  if (latest === undefined || !same(latest.info, service.info)) return
+  if (latest === undefined || !same(latest.info, service.info)) {
+    if (options.expected) throw new Error("The selected service did not stop")
+    return
+  }
   signal(service.info.pid, "SIGKILL")
   if (!(await waitUntilStopped(service.info.pid)))
     throw new Error(`Server process ${service.info.pid} is still running`)

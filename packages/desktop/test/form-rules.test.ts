@@ -630,8 +630,8 @@ test("desktopSlashCommand recognizes every built-in command and alias case-insen
     ["/continue", "sessions"], ["/usage", "usage"], ["/settings", "settings"], ["/thinking", "toggle-thinking"], ["/toggle-thinking", "toggle-thinking"],
   ] as const
   for (const [input, kind] of simple) {
-    expect(desktopSlashCommand(input, [])).toEqual({ kind })
-    expect(desktopSlashCommand(input.toUpperCase(), [])).toEqual({ kind })
+    expect<unknown>(desktopSlashCommand(input, [])).toEqual({ kind })
+    expect<unknown>(desktopSlashCommand(input.toUpperCase(), [])).toEqual({ kind })
   }
   expect(desktopSlashCommand("/models gpt", [])).toEqual({ kind: "models" })
 })
@@ -728,8 +728,8 @@ test("prompt stashes parse safely and stay capped", () => {
   const valid = { id: "a", text: "hello", directory: "/repo", createdAt: 1 }
   const noDirectory = { id: "b", text: "world", createdAt: 2 }
   expect(parsePromptStashes(JSON.stringify([valid, noDirectory, null, 3, { id: "c", text: 5, createdAt: 1 }, { id: "d", text: "", createdAt: 1 }, { id: "e", text: "x", createdAt: "1" }, { text: "x", createdAt: 1 }]))).toEqual([valid, noDirectory])
-  const many = Array.from({ length: 40 }, (_, index) => ({ id: `i${index}`, text: `t${index}`, createdAt: index }))
-  expect(parsePromptStashes(JSON.stringify(many))).toHaveLength(25)
+  const many = Array.from({ length: 70 }, (_, index) => ({ id: `i${index}`, text: `t${index}`, createdAt: index }))
+  expect(parsePromptStashes(JSON.stringify(many))).toHaveLength(50)
   expect(parsePromptStashes(JSON.stringify(many))[0]?.id).toBe("i0")
 })
 
@@ -742,12 +742,26 @@ test("pushPromptStash puts the newest first, replaces the same id and caps the l
   expect(pushPromptStash(second, { ...entry("a", 3), text: "edited" }).map((item) => [item.id, item.text])).toEqual([["a", "edited"], ["b", "text b"]])
   expect(second.map((item) => item.id)).toEqual(["b", "a"])
   let list: readonly ReturnType<typeof entry>[] = []
-  for (let index = 0; index < 30; index++) list = pushPromptStash(list, entry(`i${index}`, index))
-  expect(list).toHaveLength(25)
-  expect(list[0]?.id).toBe("i29")
-  expect(list.at(-1)?.id).toBe("i5")
+  for (let index = 0; index < 60; index++) list = pushPromptStash(list, entry(`i${index}`, index))
+  expect(list).toHaveLength(50)
+  expect(list[0]?.id).toBe("i59")
+  expect(list.at(-1)?.id).toBe("i10")
   expect(pushPromptStash(list, entry("z"), 3)).toHaveLength(3)
   expect(pushPromptStash([], entry("z"), 0)).toEqual([])
+})
+
+test("prompt stashes retain compact pasted text with its placeholder and reject malformed pasted entries", () => {
+  const draft = { id: "pasted", text: "Review [Pasted ~3 lines] now", createdAt: 1, pasted: [{ label: "[Pasted ~3 lines]", text: "one\ntwo\nthree" }] }
+  expect(parsePromptStashes(JSON.stringify([draft]))).toEqual([draft])
+  for (const pasted of [{}, [{ label: "", text: "x" }], [{ label: "[Pasted ~1 lines]" }], [{ label: "[Pasted ~1 lines]", text: 3 }], [null]]) expect(parsePromptStashes(JSON.stringify([{ ...draft, pasted }]))).toEqual([])
+})
+
+test("prompt stashes retain file attachments, agent attachments and editable mention picks", () => {
+  const draft = { id: "draft", text: "Review @notes with @reviewer", createdAt: 1, directory: "/synthetic/repo", files: [{ uri: `ycoding-attachment://sha256/${"a".repeat(64)}`, name: "notes.txt", description: "Synthetic notes" }], agents: [{ name: "reviewer" }], picks: [{ kind: "file", display: "@notes", uri: "file:///synthetic/notes.txt", name: "notes.txt" }, { kind: "agent", display: "@reviewer", name: "reviewer" }] } as const
+  expect(parsePromptStashes(JSON.stringify([draft]))).toEqual([draft])
+  const attached = { id: "attached", text: "", createdAt: 1, files: draft.files }
+  expect(parsePromptStashes(JSON.stringify([attached]))).toEqual([attached])
+  for (const invalid of [{ files: [{ uri: 12 }] }, { agents: [{ name: 12 }] }, { picks: [{ kind: "agent", name: "reviewer" }] }]) expect(parsePromptStashes(JSON.stringify([{ ...draft, ...invalid }]))).toEqual([])
 })
 
 test("quota windows report a bounded percent, level and unit-aware detail", () => {

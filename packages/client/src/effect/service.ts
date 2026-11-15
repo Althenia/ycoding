@@ -7,6 +7,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import type { DiscoverOptions, Endpoint, EnsureOptions, StopOptions } from "../service.js"
 import { pollDelay, startupTimeout } from "../service-poll.js"
+import { assertStopTarget } from "../service-stop.js"
 
 export * from "../service.js"
 /** Contents of the local service registration file. */
@@ -184,6 +185,7 @@ function contenderFinished(contender: Contender) {
 /** Stop the registered local service. */
 export const stop = Effect.fn("service.stop")(function* (options: StopOptions = {}) {
   const existing = yield* find(options)
+  yield* Effect.try({ try: () => assertStopTarget(options.expected, existing), catch: () => new Error("The registered service changed before it could be stopped") })
   if (existing !== undefined) yield* kill(existing, options)
 })
 
@@ -305,21 +307,30 @@ function same(left: Info, right: Info) {
   return left.id === right.id && left.version === right.version && left.url === right.url && left.pid === right.pid
 }
 
-const kill = Effect.fnUntraced(function* (service: LocalService, options: { readonly file?: string }) {
+const kill = Effect.fnUntraced(function* (service: LocalService, options: StopOptions) {
   const requested = yield* requestStop(service)
-  if (requested === "rejected") return
+  if (requested === "rejected") {
+    if (options.expected) return yield* Effect.fail(new Error("The selected service did not stop"))
+    return
+  }
   if (requested === "unsupported") {
     // A stale registration may point at a reused PID. Authenticate again
     // immediately before the legacy signal fallback.
     const current = yield* find(options)
-    if (current === undefined || !same(current.info, service.info)) return
+    if (current === undefined || !same(current.info, service.info)) {
+      if (options.expected) return yield* Effect.fail(new Error("The registered service changed before it could be stopped"))
+      return
+    }
     yield* signal(service.info.pid, "SIGTERM")
   }
   const done = yield* stopped(service.info.pid).pipe(Effect.retry(poll), Effect.option)
   if (Option.isSome(done)) return
 
   const latest = yield* find(options)
-  if (latest === undefined || !same(latest.info, service.info)) return
+  if (latest === undefined || !same(latest.info, service.info)) {
+    if (options.expected) return yield* Effect.fail(new Error("The selected service did not stop"))
+    return
+  }
   yield* signal(service.info.pid, "SIGKILL")
   yield* stopped(service.info.pid).pipe(Effect.retry(poll))
 })

@@ -68,6 +68,7 @@ function projectSession(value: unknown): SessionItem | undefined {
   const parentID = own(value, "parentID")
   const title = own(value, "title")
   const directory = own(own(value, "location"), "directory")
+  const workspaceID = own(own(value, "location"), "workspaceID")
   const times = own(value, "time")
   const updated = own(times, "updated")
   const active = own(times, "active")
@@ -87,14 +88,14 @@ function projectSession(value: unknown): SessionItem | undefined {
   const cost = own(value, "cost")
   const rawRevert = own(value, "revert")
   const revert = rawRevert === undefined ? undefined : projectRevert(rawRevert)
-  if (!isSessionID(id) || (parentID !== undefined && !isSessionID(parentID)) || !text(title) || !text(directory) || !amount(updated) ||
+  if (!isSessionID(id) || (parentID !== undefined && !isSessionID(parentID)) || !text(title) || !text(directory) || (workspaceID !== undefined && !(bounded(workspaceID) && workspaceID.length > 0)) || !amount(updated) ||
     !time(active) || !time(archived) || !time(pinned) || (agent !== undefined && !text(agent)) || reference === null ||
     !amount(input) || !amount(output) || !amount(reasoning) || !amount(read) || !amount(write) || !amount(cost) || revert === null) return undefined
   return {
     id,
     ...(parentID === undefined ? {} : { parentID }),
     title,
-    location: { directory },
+    location: { directory, ...(workspaceID === undefined ? {} : { workspaceID }) },
     time: { updated, ...(active === undefined ? {} : { active }), ...(archived === undefined ? {} : { archived }), ...(pinned === undefined ? {} : { pinned }) },
     ...(agent === undefined ? {} : { agent }),
     ...(reference === undefined ? {} : { model: reference }),
