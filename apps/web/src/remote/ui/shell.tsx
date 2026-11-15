@@ -52,7 +52,7 @@ import { ProviderConnect } from "./provider-connect"
 import { DotsConnection } from "./dots-connection"
 import type { CatalogTarget } from "../catalog"
 import { ProjectsPage, ProjectsRail, ProjectPanel, ProjectsDialogs, ProjectStatus, ProjectFreshness, createProjectsData } from "./projects"
-import { projectOf } from "../coordination"
+import { liveCounts, projectOf } from "../coordination"
 import { UsagePage } from "./usage"
 import {
   AccountSettings,
@@ -103,6 +103,7 @@ import {
 } from "./shell-model"
 
 const sessionRailKey = "ycoding.remote.desktopRailCollapsed"
+const projectContextKey = "ycoding.remote.projectContextCollapsed"
 
 export function RemoteShell(props: { readonly path: () => string }): JSX.Element {
   const remote = useRemote()
@@ -127,6 +128,15 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   }
   const storage = browserStorage()
   const [railCollapsed, setRailCollapsed] = createSignal(readStored(storage, sessionRailKey, (value) => value === "true") ?? false)
+  const [projectCollapsed, setProjectCollapsed] = createSignal(readStored(storage, projectContextKey, (value) => value === "true") ?? false)
+  let projectContextTrigger: HTMLButtonElement | undefined
+  const toggleProjectContext = () => {
+    setProjectCollapsed((collapsed) => {
+      writeStored(storage, projectContextKey, String(!collapsed))
+      return !collapsed
+    })
+    projectContextTrigger?.focus({ preventScroll: true })
+  }
   const toggleRail = () => {
     setRailCollapsed((collapsed) => {
       writeStored(storage, sessionRailKey, String(!collapsed))
@@ -551,11 +561,16 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
             onOpen: openTeam,
           } : undefined}
           view={view()}
-        /></Show>} connectionStrip={<ConnectionStrip />} workspaceClass={`workspace${projectContext() ? " workspace--project" : ""}`} workspaceAside={<Show when={projectContext()}>{(context) => <aside class="project-desktop"><ProjectPanel data={projects} project={context().detail} /></aside>}</Show>} companion={teamPanel()}>
+        /></Show>} connectionStrip={<ConnectionStrip />} workspaceClass={`workspace${projectContext() ? ` workspace--project${projectCollapsed() ? " workspace--project-closed" : ""}` : ""}`} workspaceAside={<Show when={projectContext()}>{(context) => <aside id="project-context-panel" class="project-desktop" hidden={projectCollapsed()} inert={projectCollapsed()} aria-label="Project context" onKeyDown={(event) => {
+          if (event.defaultPrevented || event.key !== "Escape" || projectCollapsed() || projects.dialog()) return
+          event.preventDefault()
+          event.stopPropagation()
+          toggleProjectContext()
+        }}><For each={[context().detail.id]}>{() => <ProjectPanel data={projects} project={context().detail} />}</For></aside>}</Show>} companion={teamPanel()}>
             <Show when={view() === "/remote/session" && selected() && ownsSessionDevice()}>
               <SharedConversationHeader class={`workspace__topbar${projectContext() ? " project-topbar" : ""}`} hidden={selectedLoading()} title={<strong>{activeSession()?.title ?? noSessionTitle}</strong>} subtitle={<>{activeSession()?.directory ? sessionProjectLabel(activeSession() ?? {}) : "No workspace selected"} · {activeDeviceName()}</>} breadcrumb={<Link to="/remote/sessions" class="conversation-back button button--ghost button--icon" ariaLabel="Back to Sessions"><Icon name="arrow-left" /></Link>} middle={<><Show when={!phoneLayout() && office.presentation() === "office"}><PresentationSwitch value={office.presentation()} attention={(state().view?.requests.length ?? 0) > 0} onChange={office.present} /></Show><KeepAwakeIndicator /></>} menu={<button type="button" class="button button--ghost button--icon app-header__menu" aria-label="Open sessions" aria-expanded={navOpen() && !navClosing()} onClick={(event) => openSessionsNavigation(event.currentTarget)}><Icon name="menu" /></button>} actions={<><Show when={!projectContext()}><SharedContextRingButton class="companion-context-trigger" ariaLabel="Open Session context" ariaDescription={contextWindowDisplay(state().view, activeSession()?.model)?.tokens} ariaControls="session-companion-panel" expanded={teamOpen() && companionTab() === "context"} fraction={contextWindowDisplay(state().view, activeSession()?.model)?.fraction} label={contextWindowDisplay(state().view, activeSession()?.model) ? `${Math.round(contextWindowDisplay(state().view, activeSession()?.model)!.fraction * 100)}%` : "—"} onClick={() => { setCompanionTab("context"); openTeam() }} /></Show><span class="remote-connection"><span class={`status-dot status-dot--${summarizeConnection(state().connection).tone}`} aria-hidden="true" /><span class="remote-connection-label">{connectionLabel(state().connection, state().transport)}</span></span><NewSessionButton newChat disabled={!canCreateSession()} onClick={() => openNewSession()} /><button ref={teamTrigger} type="button" class="button button--ghost button--icon app-header__team" aria-label="Open Team" aria-controls="session-companion-panel" aria-expanded={teamOpen() && !teamClosing()} onClick={openTeam}><Icon name="team" /></button><CommandPalette view={view()} canCreateSession={canCreateSession()} sessionSelected={paletteSessionSelected()} managedChild={managedChild()} workspaceID={newSessionWorkspaceID()} modelBinding={paletteModel()} hasTeam={true} handlers={{ ...paletteHandlers, openTeam }} /><NotificationCenter onOpenSession={openSession} onOpenUsage={openUsage} /></>}>
                 {projectContext() ? <Show when={projectContext()}>{(context) => <>
-                  <div class="project-heading"><div><Link to="/remote/projects" class="text-link">Projects</Link><h1>{context().role === "master" ? context().detail.name : activeSession()?.title}</h1><div class="project-actions"><ProjectStatus project={context().detail} /><span class="project-meta">Master: {context().detail.master.title}</span></div></div><div class="project-actions"><ProjectFreshness data={projects} /><button class="button button--ghost button--small" disabled={projects.query().isFetching} onClick={projects.refresh}>Refresh</button><button ref={projectTrigger} class="button button--secondary button--small project-phone" aria-haspopup="dialog" onClick={() => setProjectSheet(true)}>Sessions {context().detail.members.length + 1}</button></div></div>
+                  <div class="project-heading"><div><Link to="/remote/projects" class="text-link">Projects</Link><h1>{context().role === "master" ? context().detail.name : activeSession()?.title}</h1><div class="project-actions"><ProjectStatus project={context().detail} /><span class="project-meta">Master: {context().detail.master.title}</span></div></div><div class="project-actions"><ProjectFreshness data={projects} /><button class="button button--ghost button--small" disabled={projects.query().isFetching} onClick={projects.refresh}>Refresh</button><button ref={projectContextTrigger} type="button" class="button button--secondary button--small project-context-toggle" aria-label={projectCollapsed() ? "Show project context" : "Hide project context"} aria-controls="project-context-panel" aria-expanded={!projectCollapsed()} onClick={toggleProjectContext}>{projectCollapsed() ? "Show context" : "Hide context"}<span class="project-live" data-state="waiting">{liveCounts(context().detail).waiting} waiting</span></button><button ref={projectTrigger} class="button button--secondary button--small project-phone" aria-haspopup="dialog" onClick={() => setProjectSheet(true)}>Sessions {context().detail.members.length + 1}</button></div></div>
                   <div class="project-context"><span class={`project-badge${context().role === "master" ? " project-badge--master" : ""}`}>{context().role === "master" ? "Master" : "Member"}</span><strong>{context().role === "master" ? "Master" : "Member"} of {context().detail.name}</strong><Show when={context().role === "member"}><span>· master {context().detail.master.title}</span><button class="text-link" onClick={() => openSession(context().detail.master.sessionID)}>Back to project chat</button></Show><Show when={!context().detail.active}><span class="project-meta">Send a message in the Master chat to resume.</span></Show></div>
                 </>}</Show> : undefined}
               </SharedConversationHeader>

@@ -50,9 +50,9 @@ try {
       await wait(page, "document.querySelector('.project-context')?.textContent.includes('Master of Release train')")
       await capture(page, "chat", width, theme, ".workspace")
       if (width === 390) { await click(page, "Sessions 5"); await capture(page, "sessions-sheet", width, theme, "dialog") }
-      await page.evaluate(`document.querySelector('${width === 390 ? "dialog" : ".project-desktop"} .project-tab:last-child').click()`)
+      await page.evaluate(`document.querySelector('${width === 390 ? "dialog" : ".project-desktop"} [aria-label="Project settings"]').click()`)
       await capture(page, "settings", width, theme, width === 390 ? "dialog" : ".project-desktop")
-      await page.evaluate(`document.querySelector('${width === 390 ? "dialog" : ".project-desktop"} .project-tab:first-child').click()`)
+      await page.evaluate(`document.querySelector('${width === 390 ? "dialog" : ".project-desktop"} [aria-label="Project settings"]').click()`)
       await click(page, "New session…")
       await capture(page, "new-session", width, theme, "dialog")
       await page.pressKey("Escape", "Escape", 27)

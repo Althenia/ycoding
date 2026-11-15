@@ -15,6 +15,7 @@ import { App } from "../src/app"
 import { pwaInstall } from "../src/pwa/install"
 import { readAutonomyMode, type AutonomyMode, type AutonomyModes } from "../src/remote/autonomy"
 import { createRemoteStore, type RemoteStore } from "../src/remote/store"
+import { remoteKeys } from "../src/remote/queries"
 import { createRemoteTransport } from "../src/remote/transport"
 import { OFFICE_PREFERENCES_KEY, WORKSPACE_PRESENTATION_KEY } from "../src/remote/office/storage"
 import type { RemoteHttp, RemoteHttpResult } from "../src/remote/http"
@@ -803,6 +804,8 @@ function createFixtureStore(): Fixture {
   type FixtureGroup = { id: string; name: string; active: boolean; pausedReason?: "interrupted" | "restart"; revision: number; settings: Record<string, unknown>; masterSessionID: string; memberSessionIDs: string[]; created: number; updated: number }
   const coordinationMode = accountParams.get("coordination")
   const coordinationDelay = Number(accountParams.get("coordinationDelay") ?? 0)
+  const coordinationTime = accountParams.get("coordinationTime")
+  let coordinationPulse = 0
   let coordinationSeq = 0
   let coordinationGroups: FixtureGroup[] = coordinationMode === "empty" ? [] : [
     { id: "cgrp_release", name: "Release train", active: true, revision: 3, created: ago(60), updated: ago(2), settings: { concurrency: 2 }, masterSessionID: "ses_lead", memberSessionIDs: ["ses_docs", "ses_tests", "ses_api", "ses_audit"] },
@@ -811,7 +814,7 @@ function createFixtureStore(): Fixture {
   ]
   const participant = (id: string) => {
     const session = createdSessions.get(id) ?? sessions.find((entry) => entry.id === id)
-    return { sessionID: id, title: session?.title ?? id, location: session?.location ?? { directory: "/workspace/ycoding" }, state: id === "ses_lead" || id === "ses_api" ? "running" : id === "ses_tests" ? "waiting" : id === "ses_audit" ? "failed" : "idle", lastActivity: id === "ses_api" ? Date.now() - 12_000 : ago(4), pending: id === "ses_tests" ? [{ kind: "question", requestID: "q_member", fingerprint: "fp_member", summary: "Which column should checkout read?" }] : [], ...(id === "ses_api" ? { drivenBy: { sessionID: "ses_driver", title: "Migration agent" } } : {}) }
+    return { sessionID: id, title: session?.title ?? id, location: session?.location ?? { directory: "/workspace/ycoding" }, state: id === "ses_lead" || id === "ses_api" ? "running" : id === "ses_tests" ? "waiting" : id === "ses_audit" ? "failed" : "idle", lastActivity: coordinationTime === null ? id === "ses_api" ? Date.now() - 12_000 : ago(4) : Number(coordinationTime) + coordinationPulse, pending: id === "ses_tests" ? [{ kind: "question", requestID: "q_member", fingerprint: "fp_member", summary: "Which column should checkout read?" }] : [], ...(id === "ses_api" ? { drivenBy: { sessionID: "ses_driver", title: "Migration agent" } } : {}) }
   }
   const coordinationInfo = (group: FixtureGroup) => ({ id: group.id, name: group.name, active: group.active, pausedReason: group.pausedReason, revision: group.revision, settings: group.settings, master: participant(group.masterSessionID), members: group.memberSessionIDs.map(participant), time: { created: group.created, updated: group.updated } })
   const coordinationOutcome = (operation: string, input: Readonly<Record<string, unknown>> | undefined): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
@@ -868,7 +871,15 @@ function createFixtureStore(): Fixture {
     if (operation === "coordination.delete") return mutate(() => { coordinationGroups = coordinationGroups.filter((entry) => entry.id !== input?.groupID); return { status: "ok", value: undefined } })
     return { status: "failed", error: { code: "unknown_operation", message: "Unsupported coordination operation" } }
   }
-  Object.assign(window, { coordinationBump: (groupID: string) => { const group = coordinationGroups.find((entry) => entry.id === groupID); if (group) group.revision += 1 } })
+  Object.assign(window, {
+    coordinationBump: (groupID: string) => { const group = coordinationGroups.find((entry) => entry.id === groupID); if (group) group.revision += 1 },
+    coordinationRefresh: async () => {
+      coordinationPulse += 1
+      const state = store.state()
+      if (!state.activeDeviceID) throw new Error("Project refresh requires a fixture device")
+      await store.queryClient.refetchQueries({ queryKey: remoteKeys.coordination({ deviceID: state.activeDeviceID, generation: state.generation }), exact: true })
+    },
+  })
   const readMode = (value: unknown, fallback: AutonomyMode) => readAutonomyMode(value) ?? fallback
   let currentModes: AutonomyModes = {
     permissions: readMode(remoteScenarioData?.autonomy.permissions, remoteScenarioData === undefined && !ledger ? "auto" : "manual"),

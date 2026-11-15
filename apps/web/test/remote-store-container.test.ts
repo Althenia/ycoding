@@ -5,6 +5,7 @@ import type { RemoteTransportHandlers } from "../src/remote/transport"
 
 function connectedStore(onCompact?: (input: Readonly<Record<string, unknown>> | undefined) => Promise<never>) {
   const handlers = new Map<string, RemoteTransportHandlers>()
+  const requests: string[] = []
   const store = createRemoteStore({
     http: createRemoteHttp(),
     batchMs: 0,
@@ -16,6 +17,7 @@ function connectedStore(onCompact?: (input: Readonly<Record<string, unknown>> | 
         setPriority: () => {},
         status: () => ({ kind: "open" }),
         request: async (operation, request) => {
+          requests.push(operation)
           if (operation === "session.compact" && onCompact) return onCompact(request?.input)
           if (operation === "session.snapshot")
             return { status: "ok" as const, value: {
@@ -29,10 +31,56 @@ function connectedStore(onCompact?: (input: Readonly<Record<string, unknown>> | 
       }
     },
   })
-  return { store, handlers }
+  return { store, handlers, requests }
 }
 
 const todo = (content: string) => ({ type: "todo.updated", data: { sessionID: "ses_a", todos: [{ content, status: "pending", priority: "high" }] } })
+
+test("a synthetic streaming burst preserves delta order with one publication and no extra reads", async () => {
+  const { store, handlers, requests } = connectedStore()
+  try {
+    store.connect("dev_1")
+    await store.selectSession("ses_a")
+    const before = requests.length
+    let publications = 0
+    const unsubscribe = store.subscribe(() => { publications += 1 })
+    const chunks = Array.from({ length: 128 }, (_, index) => `${index},`)
+    handlers.get("dev_1")?.onEvents?.("ses_a", [
+      { type: "session.text.started", data: { assistantMessageID: "msg_stream", ordinal: 0 } },
+      ...chunks.map((delta) => ({ type: "session.text.delta", data: { assistantMessageID: "msg_stream", ordinal: 0, delta } })),
+    ])
+    await Bun.sleep(20)
+    const message = store.state().view?.messages.find((entry) => entry.id === "msg_stream")
+    expect(message?.kind).toBe("assistant")
+    expect(message?.kind === "assistant" ? message.parts.filter((part) => part.kind === "text").map((part) => part.text).join("") : undefined).toBe(chunks.join(""))
+    expect(publications).toBe(1)
+    expect(requests.length).toBe(before)
+    unsubscribe()
+  } finally { store.dispose() }
+})
+
+test("replaced device callbacks cannot publish streamed content into the selected device", async () => {
+  const { store, handlers } = connectedStore()
+  try {
+    store.connect("dev_1")
+    await store.selectSession("ses_a")
+    const retired = handlers.get("dev_1")
+    store.connect("dev_2")
+    await store.selectSession("ses_a")
+    let publications = 0
+    const unsubscribe = store.subscribe(() => { publications += 1 })
+    retired?.onEvents?.("ses_a", [todo("Retired device")])
+    await Bun.sleep(20)
+    expect(store.state().activeDeviceID).toBe("dev_2")
+    expect(store.state().todos?.[0]?.content).not.toBe("Retired device")
+    expect(publications).toBe(0)
+    handlers.get("dev_2")?.onEvents?.("ses_a", [todo("Current device")])
+    await Bun.sleep(20)
+    expect(store.state().todos?.[0]?.content).toBe("Current device")
+    expect(publications).toBe(1)
+    unsubscribe()
+  } finally { store.dispose() }
+})
 
 test("one relay events batch yields one store notification", async () => {
   const { store, handlers } = connectedStore()

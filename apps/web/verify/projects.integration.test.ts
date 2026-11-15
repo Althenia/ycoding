@@ -38,7 +38,7 @@ const mutations = (page: Page, operation: string) => page.evaluate<{ input: Reco
 const sessionCounts = (page: Page) => page.evaluate<{ tab: number; rows: number; live: Record<string, number> }>(`(()=>{
   const root=document.querySelector('.project-desktop .project-panel')
   const live=Object.fromEntries([...root.querySelectorAll('.project-summary .project-live')].map(e=>[e.dataset.state,Number(e.textContent.match(/\\d+/)[0])]))
-  return {tab:Number(root.querySelector('[role=tab]').textContent.match(/\\d+/)[0]),rows:root.querySelectorAll('.project-member').length,live}
+  return {tab:Number(root.querySelector('[aria-label="Project sessions"]').textContent.match(/\\d+/)[0]),rows:root.querySelectorAll('.project-member').length,live}
 })()`)
 const panel = (width: number) => width < 1024 ? "dialog .project-panel" : ".project-desktop .project-panel"
 async function openProject(page: Page, width = 1440) {
@@ -50,6 +50,112 @@ async function openProject(page: Page, width = 1440) {
 }
 
 describe("Projects", () => {
+  test("Project context collapse reclaims chat width independently and retains the preference and waiting count", async () => {
+    const page = await open(1024)
+    try {
+      await openProject(page, 1024)
+      const before = await page.evaluate<number>(`document.querySelector('.workspace__main').getBoundingClientRect().width`)
+      const requests = await page.evaluate<number>(`window.remoteMutationReport().length`)
+      await page.evaluate(`${button("Hide project context")}.focus({preventScroll:true})`)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      await until(page, `${button("Show project context")}?.getAttribute('aria-expanded')==='false'`)
+      expect(await page.evaluate<boolean>(`document.activeElement===${button("Show project context")}`)).toBe(true)
+      expect(await page.evaluate<number>(`document.querySelector('.workspace__main').getBoundingClientRect().width`)).toBeGreaterThan(before + 250)
+      expect(await page.evaluate<string>(`${button("Show project context")}.textContent`)).toContain("1 waiting")
+      expect(await page.evaluate<boolean>(`document.querySelector('.app').classList.contains('app--rail-collapsed')`)).toBe(false)
+      expect(await page.evaluate<boolean>(`!!document.querySelector('.project-desktop [inert]') || !document.querySelector('.project-desktop').getClientRects().length`)).toBe(true)
+      expect(await page.evaluate<number>(`window.remoteMutationReport().length`)).toBe(requests)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=coordination-projects-1440`)
+      await openProject(page, 1024)
+      await until(page, `!!${button("Show project context")}`)
+      expect(await page.evaluate<string>(`${button("Show project context")}.getAttribute('aria-expanded')`)).toBe("false")
+      await click(page, "Show project context")
+      await until(page, `document.querySelector('.project-desktop .project-member')?.getClientRects().length>0`)
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
+      await page.evaluate(`${button("Project sessions")}.focus({preventScroll:true})`)
+      const scroll = await page.evaluate<number>(`window.scrollY`)
+      await page.pressKey("Escape", "Escape", 27)
+      await until(page, `${button("Show project context")}?.getAttribute('aria-expanded')==='false'`)
+      expect(await page.evaluate<boolean>(`document.activeElement===${button("Show project context")}`)).toBe(true)
+      expect(await page.evaluate<number>(`window.scrollY`)).toBe(scroll)
+      expect(await page.evaluate<number>(`window.remoteMutationReport().length`)).toBe(requests)
+    } finally { await page.close() }
+  }, 30_000)
+
+  test("member refresh preserves the row, open details, focused action and panel scroll", async () => {
+    const page = await open(1440, "coordinationTime=1700000000000")
+    try {
+      await openProject(page)
+      if (await page.evaluate<boolean>(`!!${button("Details for Update checkout API")}`)) await click(page, "Details for Update checkout API")
+      await until(page, `!!${button("Remove Update checkout API from project")}`)
+      await until(page, `${button("Remove Update checkout API from project")}.closest('.collapsible').getAnimations().every(animation=>animation.playState!=='running')`)
+      await page.evaluate(`(() => {
+        window.projectAction=${button("Remove Update checkout API from project")};
+        window.projectRow=window.projectAction.closest('.project-member');
+        window.projectAddedRows=0;
+        window.projectObserver=new MutationObserver(records=>{
+          for(const record of records) for(const node of record.addedNodes)
+            if(node instanceof Element) window.projectAddedRows+=Number(node.matches('.project-member'))+node.querySelectorAll('.project-member').length;
+        });
+        window.projectObserver.observe(document.querySelector('.project-desktop .project-members'),{childList:true,subtree:true});
+        window.projectAction.focus({preventScroll:true});
+        const body=document.querySelector('.project-desktop .project-panel__body');
+        body.scrollTop=40;
+        window.projectScroll=body.scrollTop;
+      })()`)
+      const metrics = await page.evaluate<{ addedRows: number; elapsedMs: number; retainedRow: boolean; retainedFocus: boolean }>(`(async () => {
+        const started=performance.now();
+        await window.coordinationRefresh();
+        await new Promise(requestAnimationFrame);
+        window.projectObserver.disconnect();
+        return {addedRows:window.projectAddedRows,elapsedMs:performance.now()-started,retainedRow:window.projectRow===${button("Remove Update checkout API from project")}?.closest('.project-member'),retainedFocus:document.activeElement===window.projectAction};
+      })()`)
+      console.log("Project background refresh", JSON.stringify(metrics))
+      expect(metrics.addedRows).toBe(0)
+      expect(metrics.retainedRow).toBe(true)
+      expect(metrics.retainedFocus).toBe(true)
+      expect(await page.evaluate<string>(`${button("Details for Update checkout API")}.getAttribute('aria-expanded')`)).toBe("true")
+      expect(await page.evaluate<number>(`Math.abs(document.querySelector('.project-desktop .project-panel__body').scrollTop-window.projectScroll)`)).toBeLessThanOrEqual(1)
+      expect(await page.evaluate<string>(`document.querySelector('.project-desktop').textContent`)).toContain("Which column should checkout read?")
+      expect(await page.evaluate<number>(`window.remoteMutationReport().length`)).toBe(0)
+    } finally { await page.close() }
+  }, 30_000)
+
+  test("Project sections collapse independently and retain a focused Settings draft through refresh", async () => {
+    const page = await open(1440, "coordinationTime=1700000000000")
+    try {
+      await openProject(page)
+      await click(page, "Project settings")
+      await setField(page, "Project name", "Unsaved project title")
+      await page.evaluate(`(() => {
+        window.projectDraft=document.querySelector('.project-desktop .project-settings input');
+        window.projectDraft.focus({preventScroll:true});
+      })()`)
+      await page.evaluate(`window.coordinationRefresh()`)
+      expect(await page.evaluate<boolean>(`document.activeElement===window.projectDraft`)).toBe(true)
+      expect(await page.evaluate<string>(`window.projectDraft.value`)).toBe("Unsaved project title")
+      await page.evaluate(`${button("Project sessions")}.focus({preventScroll:true})`)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      expect(await page.evaluate<string>(`${button("Project sessions")}.getAttribute('aria-expanded')`)).toBe("false")
+      expect(await page.evaluate<string>(`${button("Project sessions")}.textContent`)).toContain("1 waiting")
+      expect(await page.evaluate<string>(`${button("Project settings")}.getAttribute('aria-expanded')`)).toBe("true")
+      await page.evaluate(`${button("Project settings")}.focus({preventScroll:true})`)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      expect(await page.evaluate<string>(`${button("Project settings")}.getAttribute('aria-expanded')`)).toBe("false")
+      expect(await page.evaluate<boolean>(`!!window.projectDraft.closest('[inert]')`)).toBe(true)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      expect(await page.evaluate<boolean>(`window.projectDraft===document.querySelector('.project-desktop .project-settings input')`)).toBe(true)
+      expect(await page.evaluate<string>(`window.projectDraft.value`)).toBe("Unsaved project title")
+      expect(await page.evaluate<number>(`window.remoteMutationReport().length`)).toBe(0)
+      await click(page, "Open project Docs sweep")
+      await until(page, `document.querySelector('.project-context')?.textContent.includes('Master of Docs sweep')`)
+      expect(await page.evaluate<string>(`${button("Project settings")}.getAttribute('aria-expanded')`)).toBe("false")
+      await click(page, "Project settings")
+      expect(await page.evaluate<string>(`document.querySelector('.project-desktop .project-settings input').value`)).toBe("Docs sweep")
+      expect(await page.evaluate<number>(`window.remoteMutationReport().length`)).toBe(0)
+    } finally { await page.close() }
+  }, 30_000)
+
   test("list, master chat and phone sheet render in both themes with no horizontal overflow", async () => {
     for (const width of [390, 1440]) for (const theme of ["light", "dark"]) {
       const page = await open(width, "", theme)
@@ -59,6 +165,7 @@ describe("Projects", () => {
         expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
         await openProject(page, width)
         expect(await page.evaluate<string>(`document.querySelector('${panel(width)} .project-member').dataset.master`)).toBe("true")
+        await click(page, "Details for Update checkout API")
         expect(await page.evaluate<string>(`document.querySelector('${panel(width)}').textContent`)).toContain("driven by Migration agent · master subagent")
         expect(await page.evaluate<string>(`document.querySelector('${panel(width)} [role=meter]').getAttribute('aria-valuetext')`)).toBe("1 of 2 running")
         expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
@@ -213,9 +320,11 @@ describe("Projects", () => {
       await click(page, "Add Triage flaky tests")
       await until(page, `!document.querySelector('dialog[open]')`)
       expect((await mutations(page, "coordination.update"))[0]?.input.memberSessionIDs).toContain("ses_available")
+      await click(page, "Details for Triage flaky tests")
       await click(page, "Remove Triage flaky tests from project")
       await until(page, `window.remoteMutationReport().filter(x=>x.operation==='coordination.update').length===2`)
       expect((await mutations(page, "coordination.update"))[1]?.input.memberSessionIDs).not.toContain("ses_available")
+      await click(page, "Details for Audit dashboards")
       await click(page, "Delete session Audit dashboards")
       expect(await mutations(page, "session.delete")).toHaveLength(0)
       await click(page, "Delete Session")
@@ -257,7 +366,7 @@ describe("Projects", () => {
     const page = await open()
     try {
       await openProject(page)
-      await page.evaluate(`document.querySelector('.project-desktop [role=tab]:last-child').click()`)
+      await click(page, "Project settings")
       await setField(page, "Project name", "Release renamed")
       await click(page, "Save name")
       await until(page, `document.querySelector('.project-heading h1')?.textContent==='Release renamed'`)

@@ -1,7 +1,8 @@
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, createUniqueId, onCleanup, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
 import { CustomSelect } from "../../ui/custom-select"
+import { Collapsible } from "../../ui/collapsible"
 import { useRemote } from "../context"
 import { createRemoteQuery } from "../query"
 import { createPushHttp } from "../http"
@@ -90,8 +91,8 @@ export function ProjectFreshness(props: { readonly data: ProjectsData }) {
 }
 
 function Meter(props: { readonly project: ProjectDetail }) {
-  const meter = () => concurrencyMeter(props.project.settings.concurrency, memberCounts(props.project.members).running)
-  const cells = () => { const value = meter(); return value.kind === "limit" ? value.cells : [false, false, false] }
+  const meter = createMemo(() => concurrencyMeter(props.project.settings.concurrency, memberCounts(props.project.members).running))
+  const cells = createMemo(() => { const value = meter(); return value.kind === "limit" ? value.cells : [false, false, false] })
   return <div class="project-meter"><div class="project-meter__label"><span>{props.project.settings.concurrency === null ? "Members running" : "Member concurrency limit"}</span><strong>{meter().text}</strong></div>
     <div class="project-meter__track" role={meter().kind === "limit" ? "meter" : undefined} aria-label="Running members against the concurrency limit" aria-valuemin={0} aria-valuemax={props.project.settings.concurrency ?? undefined} aria-valuenow={meter().running} aria-valuetext={meter().text}>
       <For each={cells()}>{(on) => <span data-on={on} data-unlimited={props.project.settings.concurrency === null} />}</For>
@@ -99,8 +100,8 @@ function Meter(props: { readonly project: ProjectDetail }) {
 }
 
 function Sparkline(props: { readonly project: ProjectDetail; readonly now: number }) {
-  const buckets = () => activityBuckets(props.project.members, props.now)
-  const max = () => Math.max(1, ...buckets())
+  const buckets = createMemo(() => activityBuckets(props.project.members, props.now))
+  const max = createMemo(() => Math.max(1, ...buckets()))
   return <span class="project-sparkwrap"><span class="project-spark" role="img" aria-label={`Members last active per 5 minutes over the last hour: ${buckets().join(", ")}`}><For each={buckets()}>{(value) => <i data-zero={value === 0} style={{ "block-size": `${Math.max(2, Math.round(value / max() * 24))}px` }} />}</For></span>member activity · 1 h</span>
 }
 
@@ -110,18 +111,26 @@ function NewProjectButton(props: { readonly data: ProjectsData; readonly onNew: 
 
 export function ProjectsRail(props: { readonly data: ProjectsData; readonly onNew: () => void }) {
   const data = props.data
+  const groups = createMemo(() => new Map(data.groups().map((group) => [group.detail.id, group])))
   return <section class="project-rail" aria-label="Projects"><div class="project-rail__head"><h2>Projects</h2><NewProjectButton data={data} onNew={props.onNew} /></div>
-    <ProjectState data={data}><ul class="project-list project-list--rail"><For each={data.groups()}>{(group) => <li><button type="button" class="project-item" aria-label={`Open project ${group.detail.name}`} aria-current={data.membership()?.detail.id === group.detail.id ? "true" : undefined} onClick={() => data.open(group.detail.master.sessionID)}><span class="project-item__name">{group.detail.name}<Icon name="chevron-right" size={16} /></span><ProjectStatus project={group.detail} /><span class="project-meta">{summaryLine(liveCounts(group.detail))}</span><Sparkline project={group.detail} now={data.now()} /></button></li>}</For></ul></ProjectState>
+    <ProjectState data={data}><ul class="project-list project-list--rail"><For each={[...groups().keys()]}>{(id) => {
+      const group = () => groups().get(id)!
+      return <li><button type="button" class="project-item" aria-label={`Open project ${group().detail.name}`} aria-current={data.membership()?.detail.id === id ? "true" : undefined} onClick={() => data.open(group().detail.master.sessionID)}><span class="project-item__name">{group().detail.name}<Icon name="chevron-right" size={16} /></span><ProjectStatus project={group().detail} /><span class="project-meta">{summaryLine(liveCounts(group().detail))}</span><Sparkline project={group().detail} now={data.now()} /></button></li>
+    }}</For></ul></ProjectState>
   </section>
 }
 
 export function ProjectsPage(props: { readonly data: ProjectsData }) {
   const data = props.data
+  const groups = createMemo(() => new Map(data.groups().map((group) => [group.detail.id, group])))
   return <div class="projects"><Show when={!data.creating()} fallback={<CreateProject data={data} />}>
     <header class="project-pagehead"><div><h1>Projects</h1><p>Each Project is a master Session plus the Sessions it directs.</p></div><div class="project-actions"><ProjectFreshness data={data} /><button class="button button--ghost button--small" disabled={data.query().isFetching} onClick={data.refresh}><Icon name="refresh" size={16} />Refresh</button><NewProjectButton data={data} onNew={() => data.setCreating(true)} /></div></header>
     <Feedback data={data} />
     <ProjectState data={data}><Show when={data.groups().length > 0} fallback={<div class="project-empty"><h2>No projects</h2><p>A Project is one master Session plus the Sessions it directs.</p><NewProjectButton data={data} onNew={() => data.setCreating(true)} /></div>}>
-      <ul class="project-list"><For each={data.groups()}>{(group) => <li class="project-card"><div class="project-card__head"><h2>{group.detail.name}</h2><ProjectStatus project={group.detail} /></div><div class="project-actions"><span class="project-badge project-badge--master">Master</span><span>{group.detail.master.title}</span></div><p class="project-meta">{summaryLine(liveCounts(group.detail))} · {sessionsLabel(group.detail)}</p><Meter project={group.detail} /><Sparkline project={group.detail} now={data.now()} /><div class="project-actions"><button class="button button--primary" aria-label={`Open project ${group.detail.name}`} onClick={() => data.open(group.detail.master.sessionID)}>Open project<Icon name="chevron-right" size={16} /></button><button class="button button--danger button--small" aria-label={`Delete project ${group.detail.name}`} onClick={(event) => data.setDialog({ kind: "delete-project", project: group.detail, trigger: event.currentTarget })}>Delete…</button></div></li>}</For></ul>
+      <ul class="project-list"><For each={[...groups().keys()]}>{(id) => {
+        const group = () => groups().get(id)!
+        return <li class="project-card"><div class="project-card__head"><h2>{group().detail.name}</h2><ProjectStatus project={group().detail} /></div><div class="project-actions"><span class="project-badge project-badge--master">Master</span><span>{group().detail.master.title}</span></div><p class="project-meta">{summaryLine(liveCounts(group().detail))} · {sessionsLabel(group().detail)}</p><Meter project={group().detail} /><Sparkline project={group().detail} now={data.now()} /><div class="project-actions"><button class="button button--primary" aria-label={`Open project ${group().detail.name}`} onClick={() => data.open(group().detail.master.sessionID)}>Open project<Icon name="chevron-right" size={16} /></button><button class="button button--danger button--small" aria-label={`Delete project ${group().detail.name}`} onClick={(event) => data.setDialog({ kind: "delete-project", project: group().detail, trigger: event.currentTarget })}>Delete…</button></div></li>
+      }}</For></ul>
     </Show></ProjectState>
   </Show></div>
 }
@@ -202,27 +211,47 @@ function LiveState(props: { readonly participant: ParticipantView }) {
   return <span class="project-live" data-state={props.participant.state}><Show when={props.participant.state === "running"} fallback={<span aria-hidden="true">{props.participant.state === "waiting" ? "△" : props.participant.state === "failed" ? "×" : "○"}</span>}><DotTrail /></Show>{liveLabel(props.participant)}</span>
 }
 
+function ProjectMember(props: { readonly entry: ParticipantView; readonly master: boolean; readonly data: ProjectsData; readonly onOpen: () => void; readonly onRemove: () => void; readonly onDelete: (trigger: HTMLElement) => void }) {
+  const [expanded, setExpanded] = createSignal(false)
+  const id = createUniqueId()
+  return <li class="project-member" data-master={props.master} data-state={props.entry.state}>
+    <div class="project-member__head"><strong>{props.entry.title}</strong><Show when={props.master}><span class="project-badge project-badge--master">Master</span></Show></div>
+    <div class="project-actions"><LiveState participant={props.entry} /><span class="project-meta">{ageLabel(props.entry, props.data.now())}</span></div>
+    <For each={props.entry.pending}>{(request) => <p class="project-member__ask">{request.summary}</p>}</For>
+    <div class="project-actions"><button class={`button button--${props.entry.state === "waiting" ? "primary" : "secondary"} button--small`} aria-label={`Open session ${props.entry.title}`} onClick={props.onOpen}>Open session<Icon name="chevron-right" size={16} /></button><button type="button" class="button button--ghost button--small" aria-label={`Details for ${props.entry.title}`} aria-expanded={expanded()} aria-controls={id} onClick={() => setExpanded((value) => !value)}>Details<Icon name={expanded() ? "chevron-up" : "chevron-down"} size={16} /></button></div>
+    <Collapsible id={id} open={expanded()}><div class="project-member__details"><p class="project-meta">{props.entry.directory}</p><Show when={props.entry.drivenBy}>{(driver) => <p class="project-meta">driven by <b>{driver().title}</b> · master subagent</p>}</Show><Show when={!props.master}><div class="project-member__actions"><button class="button button--ghost button--small" disabled={props.data.pending()} aria-label={`Remove ${props.entry.title} from project`} onClick={props.onRemove}>Remove</button><button class="button button--danger button--small" disabled={props.data.pending()} aria-label={`Delete session ${props.entry.title}`} onClick={(event) => props.onDelete(event.currentTarget)}>Delete…</button></div></Show></div></Collapsible>
+  </li>
+}
+
 export function ProjectPanel(props: { readonly data: ProjectsData; readonly project: ProjectDetail; readonly onManage?: () => HTMLElement | undefined }) {
   const data = props.data
-  const [tab, setTab] = createSignal<"sessions" | "settings">("sessions")
+  const [sessionsOpen, setSessionsOpen] = createSignal(true)
+  const [settingsOpen, setSettingsOpen] = createSignal(false)
+  const sectionsID = createUniqueId()
+  let sessionsTrigger: HTMLButtonElement | undefined
   const [removed, setRemoved] = createSignal<ParticipantView>()
-  const counts = () => liveCounts(props.project)
+  const counts = createMemo(() => liveCounts(props.project))
+  const participants = createMemo(() => new Map([props.project.master, ...props.project.members].map((entry) => [entry.sessionID, entry])))
   const manage = (kind: ProjectDialog["kind"], trigger: HTMLElement, session?: ParticipantView) => {
     const project = props.project
     const returnFocus = props.onManage?.() ?? trigger
     data.setDialog({ kind, project, trigger: returnFocus, session })
   }
   const remove = async (entry: ParticipantView) => { if (await data.run("coordination.update", removeMemberInput(props.project, entry.sessionID), `${entry.title} removed. The Session keeps running and keeps its history.`)) setRemoved(entry) }
-  return <section class="project-panel" aria-label="Project panel"><div class="project-tabs" role="tablist" aria-label="Project panel"><For each={["sessions", "settings"] as const}>{(value, index) => <button class="project-tab" role="tab" aria-selected={tab() === value} tabIndex={tab() === value ? 0 : -1} onClick={() => setTab(value)} onKeyDown={(event) => moveRadio(event, index(), 2, (next) => setTab(next === 0 ? "sessions" : "settings"))}>{value === "sessions" ? <>Sessions <span>{props.project.members.length + 1}</span></> : "Settings"}</button>}</For></div>
-    <div class="project-panel__body" role="tabpanel"><Feedback data={data} /><Show when={tab() === "sessions"} fallback={<ProjectSettings data={data} project={props.project} onMaster={(trigger) => manage("master", trigger)} onMembers={() => setTab("sessions")} />}>
+  return <section class="project-panel" aria-label="Project panel"><div class="project-panel__body"><Feedback data={data} />
+    <h2 class="project-section-heading"><button ref={sessionsTrigger} type="button" class="project-tab" aria-label="Project sessions" aria-expanded={sessionsOpen()} aria-controls={`${sectionsID}-sessions`} onClick={() => setSessionsOpen((value) => !value)}>Sessions <span>{props.project.members.length + 1}</span><span class="project-live" data-state="waiting">{counts().waiting} waiting</span><Icon name={sessionsOpen() ? "chevron-up" : "chevron-down"} size={16} /></button></h2>
+    <Collapsible id={`${sectionsID}-sessions`} open={sessionsOpen()}><div class="project-section-body">
       <div class="project-summary"><div class="project-actions"><For each={["running", "waiting", "idle", "failed"] as const}>{(state) => <span class="project-live" data-state={state}><span aria-hidden="true">{state === "running" ? "●" : state === "waiting" ? "△" : state === "failed" ? "×" : "○"}</span>{counts()[state]} {state}</span>}</For></div><Meter project={props.project} /><Sparkline project={props.project} now={data.now()} /></div>
       <div class="project-actions"><button class="button button--primary button--small" disabled={data.pending() || props.project.members.length >= maxMembers} onClick={(event) => manage("new", event.currentTarget)}><Icon name="plus" size={16} />New session…</button><button class="button button--secondary button--small" disabled={data.pending() || props.project.members.length >= maxMembers} onClick={(event) => manage("add", event.currentTarget)}><Icon name="plus" size={16} />Add session…</button></div>
       <Show when={removed()}>{(entry) => <button class="button button--ghost button--small" disabled={data.pending()} onClick={async () => { if (await data.run("coordination.update", addMemberInput(props.project, entry().sessionID), "Session restored to the Project.")) setRemoved(undefined) }}>Undo removal of {entry().title}</button>}</Show>
-      <ul class="project-members" aria-label={`Sessions in ${props.project.name}`}><For each={[props.project.master, ...props.project.members]}>{(entry) => {
-        const master = () => entry.sessionID === props.project.master.sessionID
-        return <li class="project-member" data-master={master()} data-state={entry.state}><div class="project-member__head"><strong>{entry.title}</strong><span class={`project-badge${master() ? " project-badge--master" : ""}`}>{master() ? "Master" : "Member"}</span></div><div class="project-actions"><LiveState participant={entry} /><span class="project-meta">{ageLabel(entry, data.now())}</span></div><Show when={entry.drivenBy}>{(driver) => <p class="project-meta">driven by <b>{driver().title}</b> · master subagent</p>}</Show><Show when={entry.pending[0]?.summary}><p class="project-member__ask">{entry.pending[0]?.summary}</p></Show><p class="project-meta">{entry.directory}</p><div class="project-member__actions"><button class={`button button--${entry.state === "waiting" ? "primary" : "secondary"} button--small`} aria-label={`Open session ${entry.title}`} onClick={() => { props.onManage?.(); data.open(entry.sessionID) }}>Open session<Icon name="chevron-right" size={16} /></button><Show when={!master()}><button class="button button--ghost button--small" disabled={data.pending()} aria-label={`Remove ${entry.title} from project`} onClick={() => void remove(entry)}>Remove</button><button class="button button--danger button--small" disabled={data.pending()} aria-label={`Delete session ${entry.title}`} onClick={(event) => manage("delete-session", event.currentTarget, entry)}>Delete…</button></Show></div></li>
+      <ul class="project-members" aria-label={`Sessions in ${props.project.name}`}><For each={[...participants().keys()]}>{(id) => {
+        const entry = () => participants().get(id)!
+        return <ProjectMember entry={entry()} master={id === props.project.master.sessionID} data={data} onOpen={() => { props.onManage?.(); data.open(id) }} onRemove={() => void remove(entry())} onDelete={(trigger) => manage("delete-session", trigger, entry())} />
       }}</For></ul>
-    </Show><ProjectFreshness data={data} /></div>
+    </div></Collapsible>
+    <h2 class="project-section-heading"><button type="button" class="project-tab" aria-label="Project settings" aria-expanded={settingsOpen()} aria-controls={`${sectionsID}-settings`} onClick={() => setSettingsOpen((value) => !value)}>Settings<Icon name={settingsOpen() ? "chevron-up" : "chevron-down"} size={16} /></button></h2>
+    <Collapsible id={`${sectionsID}-settings`} open={settingsOpen()}><ProjectSettings data={data} project={props.project} onMaster={(trigger) => manage("master", trigger)} onMembers={() => { setSessionsOpen(true); queueMicrotask(() => sessionsTrigger?.focus({ preventScroll: true })) }} /></Collapsible>
+    <ProjectFreshness data={data} /></div>
   </section>
 }
 
