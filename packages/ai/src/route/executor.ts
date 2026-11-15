@@ -12,10 +12,19 @@ import {
   HttpRateLimitDetails,
   HttpRequestDetails,
   HttpResponseDetails,
+  InvalidProviderOutputReason,
+  InvalidRequestReason,
   LLMError,
   TransportReason,
+  UnknownProviderReason,
 } from "../schema"
-import { classifyProviderFailure, rateLimitDetails, retryAfterMsFromHeaders } from "../provider-error"
+import {
+  classifyProviderFailure,
+  inspectProviderError,
+  rateLimitDetails,
+  retryAfterMsFromHeaders,
+  transportFailureReason,
+} from "../provider-error"
 
 export interface Interface {
   readonly execute: (
@@ -225,6 +234,8 @@ const statusError =
     })
 
 const toHttpError = (redactedNames: ReadonlyArray<string | RegExp>) => (error: unknown) => {
+  const inspected = inspectProviderError(error)
+  if (inspected.llm) return inspected.llm
   const transportError = (input: {
     readonly message: string
     readonly kind?: string | undefined
@@ -245,13 +256,37 @@ const toHttpError = (redactedNames: ReadonlyArray<string | RegExp>) => (error: u
     return transportError({ message: error.message, kind: "Timeout" })
   }
   if (!HttpClientError.isHttpClientError(error)) {
-    return transportError({ message: "HTTP transport failed" })
+    const reason = transportFailureReason(inspected.chain)
+    return new LLMError({
+      module: "RequestExecutor",
+      method: "execute",
+      reason: reason ?? new UnknownProviderReason({ message: "HTTP request failed" }),
+    })
   }
   const request = "request" in error ? error.request : undefined
+  if (error.reason._tag === "EncodeError" || error.reason._tag === "InvalidUrlError")
+    return new LLMError({
+      module: "RequestExecutor",
+      method: "execute",
+      reason: new InvalidRequestReason({ message: `HTTP request failed: ${error.reason._tag}` }),
+    })
+  if (error.reason._tag === "DecodeError")
+    return new LLMError({
+      module: "RequestExecutor",
+      method: "execute",
+      reason: new InvalidProviderOutputReason({ message: "HTTP response decoding failed" }),
+    })
+  if (error.reason._tag === "StatusCodeError")
+    return new LLMError({
+      module: "RequestExecutor",
+      method: "execute",
+      reason: classifyProviderFailure({ status: error.reason.response.status, message: "Provider request failed" }),
+    })
   if (error.reason._tag === "TransportError") {
+    const reason = transportFailureReason(inspected.chain)
     return transportError({
-      message: error.reason.description ?? "HTTP transport failed",
-      kind: error.reason._tag,
+      message: redactBody(reason?.message ?? error.reason.description ?? "HTTP transport failed", error.request),
+      kind: reason?.kind ?? error.reason._tag,
       request,
     })
   }
@@ -269,9 +304,12 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient> = Layer.e
     const executeOnce = (request: HttpClientRequest.HttpClientRequest) =>
       Effect.gen(function* () {
         const redactedNames = yield* Headers.CurrentRedactedNames
-        return yield* http
-          .execute(request)
-          .pipe(Effect.mapError(toHttpError(redactedNames)), Effect.flatMap(statusError(request, redactedNames)))
+        return yield* http.execute(request).pipe(
+          Effect.catch((error) =>
+            inspectProviderError(error).cancelled ? Effect.interrupt : Effect.fail(toHttpError(redactedNames)(error)),
+          ),
+          Effect.flatMap(statusError(request, redactedNames)),
+        )
       })
     return Service.of({
       execute: executeOnce,

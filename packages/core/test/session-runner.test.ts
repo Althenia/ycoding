@@ -4,6 +4,7 @@ import {
   LLMError,
   LLMEvent,
   LLMRequest,
+  LLM,
   Message,
   Model,
   SystemPart,
@@ -24,6 +25,7 @@ import { BedrockConverse } from "@ycoding-ai/ai/protocols/bedrock-converse"
 import * as OpenAIChat from "@ycoding-ai/ai/protocols/openai-chat"
 import * as OpenAIResponses from "@ycoding-ai/ai/protocols/openai-responses"
 import { classifyProviderFailure } from "@ycoding-ai/ai/provider-error"
+import { AISDK } from "@ycoding-ai/core/aisdk"
 import { RequestExecutor, WebSocketExecutor } from "@ycoding-ai/ai/route"
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Catalog } from "@ycoding-ai/core/catalog"
@@ -1232,6 +1234,49 @@ const bareInvalidPrompt = () =>
       message: "invalid_prompt: The prompt is invalid.",
     }),
   })
+
+const sdkSocketReset = () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    yield* aisdk.hook.sdk((event) => {
+      event.sdk = {
+        languageModel: () => ({
+          specificationVersion: "v3",
+          provider: "synthetic",
+          modelId: "synthetic",
+          supportedUrls: {},
+          doStream: () =>
+            Promise.reject(
+              Object.assign(new Error("Failed after retries"), {
+                name: "AI_RetryError",
+                lastError: Object.assign(new Error("Cannot connect to API"), {
+                  name: "AI_APICallError",
+                  url: "https://synthetic.invalid",
+                  isRetryable: true,
+                  cause: Object.assign(new Error("Synthetic exhausted socket reset"), { code: "ECONNRESET" }),
+                }),
+              }),
+            ),
+        }),
+      }
+    })
+    const model = yield* aisdk.model(
+      CatalogModel.Info.make({
+        ...CatalogModel.Info.empty(Provider.ID.make("synthetic"), CatalogModel.ID.make("synthetic")),
+        package: Provider.aisdk("@ai-sdk/openai"),
+      }),
+    )
+    return yield* LLMClient.generate(LLM.request({ model, prompt: "Synthetic retry boundary" })).pipe(
+      Effect.provide(
+        LLMClient.layer.pipe(
+          Layer.provide(
+            Layer.succeed(RequestExecutor.Service, { execute: () => Effect.die("Unexpected native HTTP") }),
+          ),
+        ),
+      ),
+      Effect.flip,
+    )
+  }).pipe(Effect.scoped, Effect.provide(AISDK.locationLayer))
 
 const rateLimited = (retryAfterMs?: number) =>
   new LLMError({
@@ -9427,7 +9472,7 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       const session = yield* setup
       yield* admit(session, "Retry transport")
-      responseStream = Stream.fail(providerUnavailable())
+      responseStream = Stream.fail(yield* sdkSocketReset())
       response = reply.text("Recovered", "retry-success")
 
       const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
@@ -10412,7 +10457,7 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       const session = yield* setup
       yield* admit(session, "Exhaust retries")
-      streamFailure = providerUnavailable()
+      streamFailure = yield* sdkSocketReset()
 
       const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
       while (requests.length < 1) yield* Effect.yieldNow

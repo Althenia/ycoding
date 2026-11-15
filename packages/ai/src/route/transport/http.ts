@@ -8,6 +8,7 @@ import { TransportAttempt } from "./attempt"
 import * as ProviderShared from "../../protocols/shared"
 import { mergeJsonRecords, type LLMRequest } from "../../schema"
 import { RequestExecutor } from "../executor"
+import { inspectProviderError } from "../../provider-error"
 
 export type JsonRequestInput<Body> = TransportPrepareInput<Body>
 
@@ -151,11 +152,10 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
         status: response.status,
         stream: prepared.framing.frame(
           response.stream.pipe(
-            Stream.mapError((error) =>
-              ProviderShared.streamReadError(
-                `${request.model.provider}/${request.model.route.id}`,
-                error,
-              ),
+            Stream.catch((error) =>
+              inspectProviderError(error).cancelled
+                ? Stream.fromEffect(Effect.interrupt)
+                : Stream.fail(ProviderShared.streamReadError(`${request.model.provider}/${request.model.route.id}`, error)),
             ),
           ),
         ),

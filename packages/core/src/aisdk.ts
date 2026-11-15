@@ -26,7 +26,6 @@ import {
   Model,
   ProviderID,
   ProviderMetadata,
-  TransportReason,
   ToolResultValue,
   ToolSchemaProjection,
   UnknownProviderReason,
@@ -36,8 +35,15 @@ import {
   type ToolDefinition,
   type UsageInput,
 } from "@ycoding-ai/ai"
-import { classifyProviderFailure, rateLimitDetails, retryAfterMsFromHeaders } from "@ycoding-ai/ai/provider-error"
+import {
+  classifyProviderFailure,
+  inspectProviderError,
+  rateLimitDetails,
+  retryAfterMsFromHeaders,
+  transportFailureReason,
+} from "@ycoding-ai/ai/provider-error"
 import { Auth, Endpoint, type AnyRoute } from "@ycoding-ai/ai/route"
+import { Logging } from "./observability/logging"
 import { ProviderShared } from "@ycoding-ai/ai/protocols/shared"
 import { Cause, Context, Effect, Layer, Option, Schema, Scope, Stream } from "effect"
 import { AISDKCache } from "./aisdk-cache"
@@ -67,7 +73,87 @@ export interface LanguageEvent {
   language?: LanguageModelV3
 }
 
-function wrapSSE(res: Response, ms: number, ctl: AbortController) {
+function diagnosticURL(input: Parameters<typeof fetch>[0]) {
+  try {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "REDACTED"
+    return `${url.origin}${url.pathname === "/" ? "/" : "/REDACTED"}${url.search ? "?REDACTED=REDACTED" : ""}`
+  } catch {
+    return "REDACTED"
+  }
+}
+
+function diagnosticErrors(error: unknown) {
+  return inspectProviderError(error)
+    .chain.slice(0, 8)
+    .map((entry) => {
+      const code =
+        transportFailureReason([{ code: entry.code }])?.kind ??
+        (typeof entry.code === "string" && ["ABORT_ERR", "ERR_CANCELED"].includes(entry.code) ? entry.code : undefined)
+      const name =
+        (typeof entry.name === "string" &&
+          ["Error", "TypeError", "AbortError", "TimeoutError", "AI_APICallError", "AI_RetryError"].includes(
+            entry.name,
+          )) ||
+        transportFailureReason([{ name: entry.name }])?.kind !== undefined
+          ? entry.name
+          : "REDACTED"
+      return {
+        name,
+        code,
+        errno:
+          typeof entry.errno === "number" && Number.isSafeInteger(entry.errno) && entry.errno < 0
+            ? entry.errno
+            : transportFailureReason([{ errno: entry.errno }])?.kind,
+        syscall:
+          typeof entry.syscall === "string" &&
+          ["connect", "read", "write", "recv", "send", "getaddrinfo", "lookup"].includes(entry.syscall)
+            ? entry.syscall
+            : undefined,
+        statusCode:
+          typeof entry.statusCode === "number" &&
+          Number.isInteger(entry.statusCode) &&
+          entry.statusCode >= 100 &&
+          entry.statusCode < 600
+            ? entry.statusCode
+            : undefined,
+        message: code ?? (entry.message === "SSE read timed out" ? "SSE read timed out" : "REDACTED"),
+      }
+    })
+}
+
+function diagnosticHeaders(headers: Headers) {
+  const result: Record<string, string> = {}
+  headers.forEach((value, key) => {
+    if (key.startsWith("x-ratelimit-")) result["x-ratelimit-*"] = "REDACTED"
+    else if (key.startsWith("anthropic-ratelimit-")) result["anthropic-ratelimit-*"] = "REDACTED"
+    else if (
+      [
+        "content-type",
+        "request-id",
+        "x-request-id",
+        "cf-ray",
+        "openai-processing-ms",
+        "retry-after",
+        "retry-after-ms",
+      ].includes(key)
+    ) {
+      const type = value.split(";")[0].trim().toLowerCase()
+      result[key] =
+        key === "content-type" && ["text/event-stream", "application/json", "text/plain"].includes(type)
+          ? type
+          : "REDACTED"
+    }
+  })
+  return result
+}
+
+function wrapSSE(
+  res: Response,
+  ms: number,
+  ctl: AbortController,
+  diagnostic?: (error: unknown, chunkTimedOut: boolean) => void,
+) {
   if (typeof ms !== "number" || ms <= 0) return res
   if (!res.body) return res
   if (!res.headers.get("content-type")?.includes("text/event-stream")) return res
@@ -77,6 +163,7 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
   const body = new ReadableStream<Uint8Array>({
     async pull(ctrl) {
       let id: ReturnType<typeof setTimeout> | undefined
+      let chunkTimedOut = false
       const clear = () => {
         if (id !== undefined) {
           clearTimeout(id)
@@ -86,6 +173,7 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
       try {
         const part = await new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
           id = setTimeout(() => {
+            chunkTimedOut = true
             const err = new Error("SSE read timed out")
             try {
               ctl.abort(err)
@@ -115,6 +203,7 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
         ctrl.enqueue(part.value)
       } catch (error) {
         clear()
+        diagnostic?.(error, chunkTimedOut)
         const reason = error instanceof Error ? error : new Error(String(error))
         try {
           await reader.cancel(reason)
@@ -139,7 +228,11 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
   })
 }
 
-function prepareOptions(model: CatalogModel.Info, pkg: string) {
+function prepareOptions(
+  model: CatalogModel.Info,
+  pkg: string,
+  debug?: (event: string, metadata: Record<string, unknown>) => void,
+) {
   const projected = mapBodyToProviderOptions(model, pkg)
   const options: Record<string, any> = {
     name: model.providerID,
@@ -152,7 +245,8 @@ function prepareOptions(model: CatalogModel.Info, pkg: string) {
   const chunkTimeout = options.chunkTimeout
   delete options.chunkTimeout
   options.fetch = async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-    const opts = { ...(init ?? {}) }
+    const opts: RequestInit & { verbose?: unknown } = { ...(init ?? {}) }
+    delete opts.verbose
     const signals = [
       opts.signal,
       typeof chunkTimeout === "number" && chunkTimeout > 0 ? new AbortController() : undefined,
@@ -186,12 +280,50 @@ function prepareOptions(model: CatalogModel.Info, pkg: string) {
       }
     }
 
-    const res = await (typeof customFetch === "function" ? customFetch : fetch)(input, {
-      ...opts,
-      timeout: false,
-    })
+    const started = debug ? performance.now() : 0
+    const diagnostic = debug
+      ? (event: string, error?: unknown, res?: Response, chunkTimedOut = false) => {
+          const method = (opts.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase()
+          debug(event, {
+            method: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"].includes(method) ? method : "REDACTED",
+            url: diagnosticURL(input),
+            provider: model.providerID,
+            package: pkg,
+            model: model.modelID ?? model.id,
+            durationMs: Math.round(performance.now() - started),
+            timeout: typeof options.timeout === "number" && Number.isFinite(options.timeout) ? options.timeout : false,
+            chunkTimeout: typeof chunkTimeout === "number" && Number.isFinite(chunkTimeout) ? chunkTimeout : undefined,
+            abort: opts.signal?.aborted === true,
+            chunkTimedOut,
+            ...(res
+              ? {
+                  status: res.status,
+                  statusText: res.statusText ? "REDACTED" : "",
+                  headers: diagnosticHeaders(res.headers),
+                }
+              : {}),
+            ...(error === undefined ? {} : { error: diagnosticErrors(error) }),
+          })
+        }
+      : undefined
+    let res: Response
+    try {
+      res = await (typeof customFetch === "function" ? customFetch : fetch)(input, {
+        ...opts,
+        timeout: false,
+      })
+      diagnostic?.("fetch.response", undefined, res)
+    } catch (error) {
+      diagnostic?.("fetch.failure", error)
+      throw error
+    }
     if (!chunkAbortCtl || typeof chunkTimeout !== "number") return res
-    return wrapSSE(res, chunkTimeout, chunkAbortCtl)
+    return wrapSSE(
+      res,
+      chunkTimeout,
+      chunkAbortCtl,
+      diagnostic ? (error, chunkTimedOut) => diagnostic("stream.failure", error, res, chunkTimedOut) : undefined,
+    )
   }
 
   return options
@@ -229,6 +361,10 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/AIS
 export const locationLayer = Layer.effect(
   Service,
   Effect.gen(function* () {
+    const context = yield* Effect.context()
+    const debug = Logging.minimumLogLevel() === "Debug"
+      ? (event: string, metadata: Record<string, unknown>) => Effect.runSyncWith(context)(Effect.logDebug(`AISDK.${event}`, metadata))
+      : undefined
     let sdkHooks: ((event: SDKEvent) => Effect.Effect<void> | void)[] = []
     let languageHooks: ((event: LanguageEvent) => Effect.Effect<void> | void)[] = []
     const languages = new Map<string, LanguageModelV3>()
@@ -315,7 +451,7 @@ export const locationLayer = Layer.effect(
           })
 
         const packageName = Provider.packageName(model.package)
-        const options = prepareOptions(model, packageName)
+        const options = prepareOptions(model, packageName, debug)
         const sdkKey = cacheKey({
           connection,
           providerID: model.providerID,
@@ -762,14 +898,18 @@ function streamLanguage(
     Stream.unwrap(
       Effect.tryPromise({
         try: () => language.doStream(google ? { ...options, includeRawChunks: true } : options),
-        catch: (error) => llmError("doStream", error),
+        catch: (error) => error,
       }).pipe(
+        Effect.catch((error) => failLLM("doStream", error, options.abortSignal)),
         Effect.map((result) =>
           Stream.fromReadableStream({
             evaluate: () => result.stream,
-            onError: (error) => llmError("readStream", error),
+            onError: (error) => error,
           }).pipe(
-            Stream.mapEffect((event) => streamPartEvents(state, event)),
+            Stream.catch((error) => Stream.fromEffect(failLLM("readStream", error, options.abortSignal))),
+            Stream.mapEffect((event) =>
+              options.abortSignal?.aborted ? Effect.interrupt : streamPartEvents(state, event),
+            ),
             Stream.flatMap((events) => Stream.fromIterable(events)),
           ),
         ),
@@ -907,7 +1047,7 @@ function streamPartEvents(
       ])
     }
     case "error":
-      return Effect.fail(llmError("stream", event.error))
+      return failLLM("stream", event.error)
   }
 }
 
@@ -1239,17 +1379,27 @@ function meaningfulProviderMessage(value: string | undefined) {
 
 function aiSdkProviderReason(error: unknown) {
   if (!isRecord(error)) return undefined
-  const structured = "statusCode" in error || "responseBody" in error || "responseHeaders" in error || "url" in error
-  if (!structured) return error instanceof Error ? undefined : streamedProviderReason(error)
+  const structured =
+    typeof error.statusCode === "number" ||
+    typeof error.status === "number" ||
+    error.responseBody !== undefined ||
+    error.responseHeaders !== undefined ||
+    error.url !== undefined
+  if (!structured) return error.name === undefined ? streamedProviderReason(error) : undefined
 
-  const status = typeof error.statusCode === "number" ? error.statusCode : undefined
+  const status =
+    typeof error.statusCode === "number"
+      ? error.statusCode
+      : typeof error.status === "number"
+        ? error.status
+        : undefined
   const responseBody = typeof error.responseBody === "string" ? error.responseBody : undefined
   const headers = safeErrorHeaders(error.responseHeaders)
   const secrets = collectSensitiveValues(error.requestBodyValues)
   urlSensitiveValues(error.url).forEach((value) => secrets.add(value))
   const body = safeErrorBody(responseBody, secrets)
   const provider = providerErrorDetails(responseBody)
-  const original = error instanceof Error ? error.message : undefined
+  const original = typeof error.message === "string" ? error.message : undefined
   const message =
     meaningfulProviderMessage(
       provider.message === undefined ? undefined : redactSensitiveValues(provider.message, secrets),
@@ -1272,7 +1422,7 @@ function aiSdkProviderReason(error: unknown) {
   return classifyProviderFailure({
     status,
     message,
-    code: provider.code,
+    code: provider.code ?? (typeof error.code === "string" ? error.code : undefined),
     retryAfterMs: retryAfter,
     rateLimit,
     http,
@@ -1312,26 +1462,37 @@ function googleStreamError(value: unknown) {
   })
 }
 
-function llmError(method: string, error: unknown) {
-  const reason =
-    error instanceof LLMError
-      ? new InvalidProviderOutputReason({ message: error.message })
-      : (aiSdkProviderReason(error) ??
-        (isTransportError(error)
-          ? new TransportReason({ message: error.message })
-          : new UnknownProviderReason({ message: error instanceof Error ? error.message : String(error) })))
-  return new LLMError({
-    module: "AISDK",
-    method,
-    reason,
-  })
-}
-
-function isTransportError(error: unknown): error is Error {
-  if (!(error instanceof Error)) return false
-  return /(?:socket|connection) (?:was )?closed unexpectedly|cannot connect to api|websocket closed with code 1006/i.test(
-    error.message,
+function failLLM(method: string, error: unknown, signal?: AbortSignal): Effect.Effect<never, LLMError> {
+  const inspected = inspectProviderError(error, signal)
+  if (inspected.cancelled) return Effect.interrupt
+  if (inspected.llm) return Effect.fail(inspected.llm)
+  const status = inspected.chain.find(
+    (error) => typeof error.statusCode === "number" || typeof error.status === "number",
   )
+  const reasons = inspected.chain.map(aiSdkProviderReason)
+  const permanent = reasons.find(
+    (reason) =>
+      reason !== undefined &&
+      ["InvalidRequest", "Authentication", "QuotaExceeded", "ContentPolicy"].includes(reason._tag),
+  )
+  const invalid = inspected.chain.find(
+    (error) =>
+      typeof error.name === "string" &&
+      /^(?:AI_)?(?:TypeValidationError|InvalidResponseDataError|JSONParseError)$/.test(error.name),
+  )
+  const reason =
+    permanent ??
+    (status === undefined ? undefined : aiSdkProviderReason(status)) ??
+    (invalid === undefined
+      ? undefined
+      : new InvalidProviderOutputReason({
+          message: typeof invalid.message === "string" ? invalid.message : "Invalid provider output",
+        })) ??
+    reasons.find((reason) => reason !== undefined && reason._tag !== "UnknownProvider") ??
+    transportFailureReason(inspected.chain) ??
+    reasons.find((reason) => reason !== undefined) ??
+    new UnknownProviderReason({ message: error instanceof Error ? error.message : String(error) })
+  return Effect.fail(new LLMError({ module: "AISDK", method, reason }))
 }
 
 export const node = makeLocationNode({ service: Service, layer: locationLayer, deps: [] })

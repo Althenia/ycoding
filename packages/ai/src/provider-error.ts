@@ -1,4 +1,4 @@
-import { Option, Schema } from "effect";
+import { Cause, Option, Schema } from "effect";
 import {
   AuthenticationReason,
   ContentPolicyReason,
@@ -8,6 +8,7 @@ import {
   ProviderInternalReason,
   QuotaExceededReason,
   RateLimitReason,
+  TransportReason,
   UnknownProviderReason,
   HttpRateLimitDetails,
   type HttpContext,
@@ -87,6 +88,115 @@ const RATE_LIMIT_TEXT =
   /rate increased too quickly|rate[-_\s]?limit|too[_\s]?many[_\s]?requests/i;
 const QUOTA_TEXT = /insufficient[-_\s]?quota|quota[-_\s]?exceeded/i;
 const CONTENT_POLICY_TEXT = /content[-_\s]?policy|content_filter|safety/i;
+
+const TRANSPORT_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "EPIPE",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "EAI_AGAIN",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET",
+  "ConnectionRefused",
+  "ConnectionClosed",
+  "FailedToOpenSocket",
+  "SocketTimeout",
+])
+
+function errorField(value: object, key: string): unknown {
+  try {
+    return Reflect.get(value, key)
+  } catch {
+    return undefined
+  }
+}
+
+export function inspectProviderError(error: unknown, signal?: AbortSignal) {
+  const pending = [{ value: error, active: true }]
+  const seen = new Set<object>()
+  const chain: Record<string, unknown>[] = []
+  let cancelled = signal?.aborted === true
+  let llm: LLMError | undefined
+  for (let index = 0; index < pending.length && index < 64; index++) {
+    const { value, active } = pending[index]
+    if (!isRecord(value) || seen.has(value)) continue
+    seen.add(value)
+    const fields = Object.fromEntries(
+      [
+        "name",
+        "message",
+        "code",
+        "errno",
+        "syscall",
+        "statusCode",
+        "status",
+        "isRetryable",
+        "responseBody",
+        "responseHeaders",
+        "requestBodyValues",
+        "url",
+        "error",
+        "response",
+      ].map((key) => [key, errorField(value, key)]),
+    )
+    if (active && value instanceof LLMError && llm === undefined) llm = value
+    if (
+      fields.name === "AbortError" ||
+      fields.code === "ABORT_ERR" ||
+      fields.code === "ERR_CANCELED" ||
+      (Cause.isCause(value) && Cause.hasInterrupts(value))
+    )
+      cancelled = true
+    const requestSignal = errorField(value, "signal")
+    if (isRecord(requestSignal) && errorField(requestSignal, "aborted") === true) cancelled = true
+    if (active) chain.push(fields)
+    const errors = errorField(value, "errors")
+    const lastError = errorField(value, "lastError")
+    const children = [lastError, errorField(value, "cause"), errorField(value, "reason")]
+      .filter(isRecord)
+      .map((value) => ({ value, active }))
+    if (Array.isArray(errors)) {
+      for (let i = errors.length - 1; i >= 0 && children.length < 64; i--) {
+        const value = errorField(errors, String(i))
+        if (isRecord(value)) children.push({ value, active: active && lastError === undefined })
+      }
+    }
+    pending.splice(index + 1, 0, ...children.slice(0, 64 - pending.length))
+  }
+  return { chain, cancelled, llm }
+}
+
+export function transportFailureReason(chain: ReadonlyArray<Record<string, unknown>>) {
+  const structured = chain.flatMap((error) => {
+    const kind = [error.code, error.errno, error.name].find(
+      (value): value is string => typeof value === "string" && TRANSPORT_CODES.has(value),
+    )
+    return kind === undefined ? [] : [{ error, kind }]
+  })[0]
+  if (structured)
+    return new TransportReason({
+      message: typeof structured.error.message === "string" ? structured.error.message : "HTTP transport failed",
+      kind: structured.kind,
+    })
+  const failure = chain.find(
+    (error) =>
+      typeof error.message === "string" &&
+      /(?:socket|connection) (?:was )?closed unexpectedly|cannot connect to api|websocket closed with code 1006|^(?:fetch failed|failed to fetch|socket hang ?up)$/i.test(
+        error.message,
+      ),
+  )
+  if (failure) return new TransportReason({ message: String(failure.message) })
+  const retryable = chain.find((error) => error.name === "AI_APICallError" && error.isRetryable === true)
+  return retryable === undefined
+    ? undefined
+    : new TransportReason({
+        message: typeof retryable.message === "string" ? retryable.message : "HTTP transport failed",
+      })
+}
 
 export interface ProviderFailure {
   readonly message: string;
@@ -303,7 +413,11 @@ export function classifyProviderFailure(
   if (input.status === 429) {
     return rateLimitReason(input, common);
   }
-  if (input.status !== undefined && input.status >= 500)
+  if (
+    input.status === 408 ||
+    (input.status !== undefined && input.status >= 500 && input.status < 600) ||
+    (input.status === undefined && /\b(?:overload(?:ed)?|overload_error)\b/i.test(text))
+  )
     return new ProviderInternalReason({
       ...common,
       status: input.status,

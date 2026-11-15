@@ -1,6 +1,13 @@
 import { describe, expect } from "bun:test"
-import { Effect, Layer, Ref, Stream } from "effect"
-import { FetchHttpClient, Headers, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { Cause, Effect, Exit, Layer, Ref, Stream } from "effect"
+import {
+  FetchHttpClient,
+  Headers,
+  HttpClient,
+  HttpClientError,
+  HttpClientRequest,
+  HttpClientResponse,
+} from "effect/unstable/http"
 import { LLM, LLMError } from "../src"
 import { LLMClient, RequestExecutor } from "../src/route"
 import * as OpenAIChat from "../src/protocols/openai-chat"
@@ -67,6 +74,75 @@ const expectLLMError = (error: unknown) => {
 const errorHttp = (error: LLMError) => ("http" in error.reason ? error.reason.http : undefined)
 
 describe("RequestExecutor", () => {
+  it.effect("native HTTP body cancellation remains an interruption", () =>
+    Effect.gen(function* () {
+      const model = OpenAIChat.route.model({ id: "synthetic" })
+      const exit = yield* LLMClient.generate(LLM.request({ model, prompt: "Synthetic cancellation" })).pipe(Effect.exit)
+      expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+    }).pipe(Effect.provide(LLMClient.layer.pipe(Layer.provide(responsesLayer([
+      new Response(new ReadableStream({ start(controller) {
+        controller.error(new DOMException("Synthetic body cancellation", "AbortError"))
+      } }), { headers: { "content-type": "text/event-stream" } }),
+    ]))))),
+  )
+
+  it.effect("does not classify request encoding failures as retryable transport", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const error = yield* executor.execute(request).pipe(Effect.flip)
+      expect(error.reason._tag).toBe("InvalidRequest")
+    }).pipe(Effect.provide(RequestExecutor.layer.pipe(Layer.provide(Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) => Effect.fail(new HttpClientError.HttpClientError({
+        reason: new HttpClientError.EncodeError({ request, cause: { code: "ECONNRESET" } }),
+      }))),
+    ))))),
+  )
+
+  for (const cancelled of [false, true]) {
+    it.effect(`retains structured socket evidence with cancellation=${cancelled}`, () =>
+      Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        const exit = yield* executor.execute(request).pipe(Effect.exit)
+        if (cancelled) {
+          expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+          return
+        }
+        if (Exit.isSuccess(exit)) throw new Error("Expected transport failure")
+        expect(expectLLMError(Cause.squash(exit.cause)).reason).toMatchObject({
+          _tag: "Transport",
+          kind: "ECONNRESET",
+          message: "Synthetic socket reset",
+        })
+      }).pipe(
+        Effect.provide(
+          RequestExecutor.layer.pipe(
+            Layer.provide(
+              Layer.succeed(
+                HttpClient.HttpClient,
+                HttpClient.make((request) =>
+                  Effect.fail(
+                    new HttpClientError.HttpClientError({
+                      reason: new HttpClientError.TransportError({
+                        request,
+                        cause: cancelled
+                          ? new AggregateError([
+                              { code: "ECONNRESET" },
+                              new DOMException("Synthetic cancel", "AbortError"),
+                            ])
+                          : Object.assign(new Error("Synthetic socket reset"), { code: "ECONNRESET" }),
+                      }),
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+  }
+
   it.live("opens a fresh TCP connection only for a fresh-bound request", () =>
     Effect.gen(function* () {
       const ports: number[] = []

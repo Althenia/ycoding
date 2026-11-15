@@ -4,6 +4,18 @@ import { classifyProviderFailure, rateLimitDetails } from "../src/provider-error
 import { HttpRateLimitDetails } from "../src/schema"
 
 describe("provider error classification", () => {
+  test("classifies request timeout and overload without changing permanent failures", () => {
+    expect(classifyProviderFailure({ status: 408, message: "Request timeout" })._tag).toBe("ProviderInternal")
+    expect(classifyProviderFailure({ message: "The model is overloaded. Please try again later." })._tag).toBe(
+      "ProviderInternal",
+    )
+    for (const status of [400, 401, 403, 404, 422]) {
+      expect(classifyProviderFailure({ status, message: "fetch failed" })._tag).not.toBe("Transport")
+    }
+    expect(classifyProviderFailure({ status: 429, code: "insufficient_quota", message: "Quota exhausted" })._tag).toBe(
+      "QuotaExceeded",
+    )
+  })
   test("classifies provider token limit messages as context overflow", () => {
     const messages = [
       "tokens in request more than max tokens allowed",

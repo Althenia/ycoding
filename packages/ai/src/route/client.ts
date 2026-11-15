@@ -492,7 +492,7 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
             protocol.stream.onHalt ? { onHalt: protocol.stream.onHalt } : undefined,
           ),
           Stream.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause) ? Stream.failCause(cause) : Stream.fail(streamError(route, `Failed to read ${route} stream`, cause)),
+            Cause.hasInterrupts(cause) ? Stream.failCause(cause) : Stream.fail(streamError(route, `Failed to read ${route} stream`, cause)),
           ),
           requireTerminalEvent(route),
         )
