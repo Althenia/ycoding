@@ -215,6 +215,35 @@ describe("macOS computer use app", () => {
     expect(yield* Effect.promise(() => readFile(`${state}.keys`, "utf8").catch(() => ""))).toContain("c")
   }), 120_000)
 
+  it.live("leaves the frontmost app, cursor, Space, and layer-zero window order unchanged while the helper launches and lists apps", () =>
+    Effect.gen(function* () {
+      const observed = yield* startObserver
+      const processes = yield* AppProcess.Service
+      const invoke = MacOSComputer.invokeWith(processes, "darwin")
+      yield* Effect.addFinalizer(invoke.shutdown)
+      yield* invoke({ action: "desktop.list", owner: { sessionID: "observed", callID: "list" } }, new AbortController().signal)
+      expectUndisturbed(yield* observed.stop)
+    }), 120_000)
+
+  it.live("leaves the frontmost app, cursor, Space, and layer-zero window order unchanged while the helper inspects, captures, and clicks an authorized off-Space window", () =>
+    Effect.gen(function* () {
+      const target = requireTarget()
+      const x = Number(process.env.YCODING_TEST_DESKTOP_CLICK_X)
+      const y = Number(process.env.YCODING_TEST_DESKTOP_CLICK_Y)
+      if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0)
+        throw new Error("Set YCODING_TEST_DESKTOP_CLICK_X/Y to a safe clickable coordinate inside the target window")
+      const observed = yield* startObserver
+      const processes = yield* AppProcess.Service
+      const invoke = MacOSComputer.invokeWith(processes, "darwin")
+      yield* Effect.addFinalizer(invoke.shutdown)
+      const desktop = { platform: "macos" as const, application: "desktop" as const, ...target }
+      const inspected = yield* invoke({ action: "desktop.inspect", owner: { sessionID: "observed", callID: "inspect" }, target: desktop }, new AbortController().signal)
+      yield* invoke({ action: "desktop.capture", owner: { sessionID: "observed", callID: "capture" }, target: desktop }, new AbortController().signal)
+      yield* invoke({ action: "desktop.click", owner: { sessionID: "observed", callID: "click" }, target: desktop,
+        expectedRevision: inspected.revision, x, y }, new AbortController().signal)
+      expectUndisturbed(yield* observed.stop)
+    }), 120_000)
+
   it.live("fails fast with window_off_space for an off-Space Chromium-class pixel click", () =>
     Effect.gen(function* () {
       const target = requireTarget("YCODING_TEST_OFFSPACE_CHROMIUM_TARGET")
@@ -230,6 +259,45 @@ describe("macOS computer use app", () => {
       expect(JSON.stringify(result)).toContain("not_started")
     }), 60_000)
 })
+
+const startObserver = Effect.gen(function* () {
+  const directory = yield* Effect.promise(() => mkdtemp(path.join(os.tmpdir(), "ycoding-observer-")))
+  yield* Effect.addFinalizer(() => Effect.promise(() => rm(directory, { recursive: true, force: true })))
+  const executable = path.join(directory, "observer")
+  const compiled = yield* Effect.promise(() => Bun.$`/usr/bin/xcrun swiftc ${path.join(import.meta.dir, "fixtures/computer-focus.swift")} -o ${executable}`.quiet())
+  expect(compiled.exitCode).toBe(0)
+  const log = path.join(directory, "events")
+  const child = Bun.spawn([executable, log, "observe"], { stdout: "ignore", stderr: "ignore" })
+  yield* Effect.addFinalizer(() => Effect.promise(async () => {
+    child.kill("SIGKILL")
+    await child.exited
+  }))
+  yield* Effect.promise(async () => {
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline) {
+      if ((await readFile(log, "utf8").catch(() => "")).includes("ready\n")) return
+      if (child.exitCode !== null) throw new Error(`Observer exited with code ${child.exitCode} before reporting its baseline`)
+      await Bun.sleep(50)
+    }
+    throw new Error("Observer did not report its baseline")
+  })
+  const stop = Effect.promise(async () => {
+    await writeFile(`${log}.stop`, "")
+    const exited = await Promise.race([child.exited.then(() => true), Bun.sleep(5000).then(() => false)])
+    if (!exited) throw new Error("Observer did not stop within five seconds")
+    expect(child.exitCode).toBe(0)
+    return (await readFile(log, "utf8")).trim().split("\n")
+  })
+  return { stop }
+})
+
+function expectUndisturbed(events: string[]) {
+  expect(events[0]).toMatch(/^frontmost [1-9][0-9]*$/)
+  expect(events[1]).toMatch(/^cursor -?[0-9.]+,-?[0-9.]+$/)
+  expect(events[2]).toMatch(/^windows /)
+  expect(Number(events.find((event) => event.startsWith("ticks "))?.slice("ticks ".length))).toBeGreaterThan(10)
+  expect(events.filter((event) => /^(frontmost-changed|cursor-moved|cursor-unavailable|windows-changed|space-changed|helper-window)\b/.test(event))).toEqual([])
+}
 
 function requireTarget(variable = "YCODING_TEST_DESKTOP_TARGET") {
   const parts = process.env[variable]?.split("/") ?? []

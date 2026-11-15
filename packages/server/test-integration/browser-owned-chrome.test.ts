@@ -396,16 +396,7 @@ test("pairs a private Chrome extension for owned and automatically listed existi
       record(await cdp.send("Target.attachToTarget", { targetId: string(foreground.targetId), flatten: true }))
         .sessionId,
     )
-    expect(
-      await evaluate(
-        cdp,
-        foregroundPage,
-        `(() => {
-          const hosts = [...document.querySelectorAll('[data-ycoding-agent-cursor]')]
-          return { count: hosts.length, pointerEvents: hosts[0] && getComputedStyle(hosts[0]).pointerEvents, positioned: hosts[0]?.dataset.x !== undefined }
-        })()`,
-      ),
-    ).toEqual({ count: 1, pointerEvents: "none", positioned: true })
+    expect(await pageOverlay(cdp, foregroundPage)).toEqual(noOverlay)
     await cdp.send("Target.detachFromTarget", { sessionId: foregroundPage })
     expect((await foregroundAction(afterType, { type: "scroll", deltaY: 20 }, "foreground-scroll")).status).toBe(
       "completed",
@@ -1945,23 +1936,10 @@ async function markerLifecycle(extensionDirectory: string) {
       action: { type: "click", ref: go.ref },
     })
     expect(clicked.status, await clicked.clone().text()).toBe(200)
-    expect(
-      await evaluate(
-        client,
-        plainPage,
-        `(() => {
-        const hosts = [...document.querySelectorAll('[data-ycoding-agent-cursor]')]
-        return { count: hosts.length, pointerEvents: hosts[0] && getComputedStyle(hosts[0]).pointerEvents }
-      })()`,
-      ),
-    ).toEqual({ count: 1, pointerEvents: "none" })
+    expect(await pageOverlay(client, plainPage)).toEqual(noOverlay)
     expect(live.popupFonts.faces).toEqual(["loaded", "loaded"])
     expect(live.popupFonts.body).toEqual([{ family: "Geist", custom: true }])
     expect(live.popupFonts.address).toEqual([{ family: "Geist Mono", custom: true }])
-    expect(await loadedFaces(client, plainPage, "YCodingGeist")).toEqual(["loaded"])
-    expect(await platformFonts(client, plainPage, textOf("YCoding · Click"))).toEqual([
-      { family: "Geist", custom: true },
-    ])
     await client.send("Target.detachFromTarget", { sessionId: plainPage })
 
     const csp = await live.profileAt(markerOther, "/csp")
@@ -2016,9 +1994,7 @@ async function markerLifecycle(extensionDirectory: string) {
     await expectMarkerGeometry(ownIcons(markedCsp)[0]?.href ?? null)
     expect(await live.targetTitle("/csp-img")).toBe("CSP image fixture")
     expect(await evaluate(client, cspImgPage, "window.__violations")).toEqual([])
-    expect(await evaluate(client, cspImgPage, "document.querySelectorAll('[data-ycoding-agent-cursor]').length")).toBe(1)
-    expect(await loadedFaces(client, cspImgPage, "YCodingGeist")).toEqual(["loaded"])
-    expect(await platformFonts(client, cspImgPage, textOf("YCoding · Click"))).toEqual([{ family: "Geist", custom: true }])
+    expect(await pageOverlay(client, cspImgPage)).toEqual(noOverlay)
     await client.send("Target.detachFromTarget", { sessionId: cspImgPage })
 
     const dynamic = await live.profileAt(markerOwner, "/dynamic")
@@ -2117,7 +2093,7 @@ async function markerLifecycle(extensionDirectory: string) {
     expect(pageAuthoredIcons(restoredPlain)).toEqual([plainPageIcon])
     expect(await live.targetTitle("/plain")).toBe("Plain fixture")
     const releasedPage = await live.pageSessionAt("/plain")
-    expect(await loadedFaces(client, releasedPage, "YCodingGeist")).toEqual([])
+    expect(await pageOverlay(client, releasedPage)).toEqual(noOverlay)
     await client.send("Target.detachFromTarget", { sessionId: releasedPage })
     const transferred = await live.observe(markerOther, plain, "marker-transfer")
     expect(transferred.status, await transferred.clone().text()).toBe(200)
@@ -2156,7 +2132,7 @@ async function markerLifecycle(extensionDirectory: string) {
       )
         return
       const details = record(context)
-      if (details.name === "ycoding-agent-cursor") contexts.add(number(details.id))
+      if (details.name === "ycoding-agent-marker") contexts.add(number(details.id))
     })
     await client.send("Runtime.enable", {}, secondPage)
     await Bun.sleep(timing.refresh * 2 + 1_000)
@@ -2213,7 +2189,7 @@ async function markerExpiry(extensionDirectory: string) {
     })
     expect(scrolled.status, await scrolled.clone().text()).toBe(200)
     const visiblePage = await live.pageSessionAt("/plain")
-    expect(await loadedFaces(client, visiblePage, "YCodingGeist")).toEqual(["loaded"])
+    expect(await pageOverlay(client, visiblePage)).toEqual(noOverlay)
     const visibleMarked = await live.awaitIcons("/plain", marked, "visible marker favicon")
     expect(visibleMarked.title).toBe("Plain fixture")
     await expectMarkerGeometry(ownIcons(visibleMarked)[0]?.href ?? null)
@@ -2255,10 +2231,7 @@ async function markerExpiry(extensionDirectory: string) {
     )
     expect(visibleExpired.title).toBe("Plain fixture")
     expect(pageAuthoredIcons(visibleExpired)).toEqual([plainPageIcon])
-    expect(await loadedFaces(client, visiblePage, "YCodingGeist")).toEqual([])
-    expect(await evaluate(client, visiblePage, "document.querySelectorAll('[data-ycoding-agent-cursor]').length")).toBe(
-      0,
-    )
+    expect(await pageOverlay(client, visiblePage)).toEqual(noOverlay)
     const hiddenExpired = await live.awaitIcons(
       "/second",
       unmarked,
@@ -2318,8 +2291,19 @@ async function platformFonts(cdp: Client, sessionID: string, match: (node: DomNo
   return fonts.map(record).map((font) => ({ family: String(font.familyName), custom: font.isCustomFont === true }))
 }
 
-const textOf = (text: string) => (node: DomNode) =>
-  node.nodeName === "SPAN" && domChildren(node).some((child) => child.nodeValue === text)
+const noOverlay = { hosts: 0, faces: 0, label: false }
+
+async function pageOverlay(cdp: Client, sessionID: string) {
+  return evaluate(
+    cdp,
+    sessionID,
+    `({
+      hosts: document.querySelectorAll('[data-ycoding-agent-cursor]').length,
+      faces: Array.from(document.fonts).filter((face) => face.family.replaceAll('"', '') === 'YCodingGeist').length,
+      label: (document.documentElement.innerText ?? '').includes('YCoding ·'),
+    })`,
+  )
+}
 
 async function loadedFaces(cdp: Client, sessionID: string, family: string) {
   const value = await evaluate(

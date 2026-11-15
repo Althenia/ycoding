@@ -71,11 +71,23 @@ describe("extension DESIGN.md token drift", () => {
     ).toEqual([])
   })
 
+  test("the indicator constants define no cursor, label, ripple, or overlay tokens", () => {
+    expect(Object.keys(tokens.colors).sort()).toEqual(["agent-mark", "badge-on"])
+    for (const group of ["typography", "rounded", "motion", "layers", "components"]) expect(tokens).not.toHaveProperty(group)
+  })
+
   test("detects changed, missing, and stale tokens on scratch copies", async () => {
     const document = await Bun.file(new URL("../DESIGN.md", import.meta.url)).text()
     const stylesheet = await Bun.file(new URL("../popup.css", import.meta.url)).text()
     const probes = [
       [document, { ...tokens, colors: { ...tokens.colors, "agent-cursor": "#000000" } }, "colors.agent-cursor"],
+      [document, { ...tokens, colors: { ...tokens.colors, "agent-mark": "#000000" } }, "colors.agent-mark"],
+      [document, { ...tokens, motion: { duration: { "cursor-move": "320ms" } } }, "motion.duration.cursor-move"],
+      [
+        document,
+        { ...tokens, components: { "agent-label": { padding: "3px 6px", gap: "4px" }, "agent-ripple": { size: "22px" } } },
+        "components.agent-label.padding",
+      ],
       [
         document,
         {
@@ -86,24 +98,11 @@ describe("extension DESIGN.md token drift", () => {
       ],
       [document.replace('  badge-on: "#28753e"', '  badge-on: "#28753e"\n  stale: "#000000"'), tokens, "colors.stale"],
       [document, { ...tokens, layers: { ...tokens.layers, extra: 1 } }, "layers.extra"],
-      [document.replace("cursor-move: 320ms", "cursor-move: 1ms"), tokens, "motion.duration.cursor-move"],
-      [document.replace("padding: 3px 6px", "padding: 0"), tokens, "components.agent-label.padding"],
-      [document.replace("gap: 4px", "gap: 0"), tokens, "components.agent-label.gap"],
-      [
-        document,
-        { ...tokens, components: { ...tokens.components, "agent-mark": { size: "16px" } } },
-        "components.agent-mark.size",
-      ],
       [document.replace("fontFamily: Geist Mono,", "fontFamily: Mono,"), tokens, "typography.popup-mono.fontFamily"],
       [document.replace("fontSize: 13px", "fontSize: 14px"), tokens, "typography.popup-body.fontSize"],
       [document.replace("popup-width: 320px", "popup-width: 360px"), tokens, "layout.popup-width"],
       [document.replace("  popup-height: 34px", ""), tokens, "controls.popup-height"],
       [document.replace("  popup-padding: 12px", "  popup-padding: 12px\n  stale: 1px"), tokens, "spacing.stale"],
-      [
-        document,
-        { ...tokens, typography: { "agent-label": { ...tokens.typography["agent-label"], fontFamily: "system-ui" } } },
-        "typography.agent-label.fontFamily",
-      ],
     ]
     for (const [specimen, code, name] of probes)
       expect(

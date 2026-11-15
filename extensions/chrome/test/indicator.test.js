@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { FAVICON_SVG, FONT_ALIAS, LABELS, markerScript, timing, tokens } from "../indicator.js"
+import { FAVICON_SVG, markerScript, timing, tokens } from "../indicator.js"
 import { createFakePage } from "./fixtures/fake-page.js"
 
 test("the page expiry outlasts several missed refreshes and is checked more often than it is refreshed", () => {
@@ -11,8 +11,9 @@ test("the page expiry outlasts several missed refreshes and is checked more ofte
   expect(timing.clear).toBeLessThan(timing.mark)
 })
 
-test("offers only the Click, Type, Scroll, Hover, and Select cursor labels", () => {
-  expect(LABELS).toEqual({ click: "Click", type: "Type", scroll: "Scroll", hover: "Hover", select: "Select" })
+test("the marker script takes only the operation and carries no cursor, label, ripple, or font payload", () => {
+  expect(markerScript.length).toBe(1)
+  for (const op of ["mark", "clear"]) expect(markerScript(op)).not.toMatch(/"cursor"|"fontData"|"fontFamily"|"ripple"|attachShadow|requestAnimationFrame|YCoding ·/)
 })
 
 test("the favicon marker is the canonical mint pixel-Y geometry on a dark tile", async () => {
@@ -28,7 +29,7 @@ describe("the favicon logo marker", () => {
     const page = createFakePage()
     page.setPageTitle("Example page")
     page.setPageIcon("https://example.test/favicon.ico")
-    expect(await page.evaluate(markerScript("mark"))).toEqual({ ok: true, font: false })
+    expect(await page.evaluate(markerScript("mark"))).toEqual({ ok: true })
     const links = page.iconLinks()
     expect(links).toHaveLength(1)
     expect(links[0].getAttribute("href")).toStartWith("data:image/svg+xml,")
@@ -75,7 +76,7 @@ describe("the favicon logo marker", () => {
     expect(page.hosts()).toHaveLength(0)
     expect(page.document.title).toBe("Strict page")
     page.faviconBlocked = false
-    expect(await page.evaluate(markerScript("mark"))).toEqual({ ok: true, font: false })
+    expect(await page.evaluate(markerScript("mark"))).toEqual({ ok: true })
     expect(page.iconLinks()[0]?.getAttribute("href")).toStartWith("data:image/svg+xml,")
   })
 
@@ -91,7 +92,7 @@ describe("the favicon logo marker", () => {
 test("the serialized marker script is self-contained and runs with only page globals", async () => {
   for (const op of ["mark", "clear"]) expect(markerScript(op)).not.toMatch(/__name|__async|__spread/)
   const page = createFakePage()
-  expect(await page.evaluate(markerScript("mark"))).toEqual({ ok: true, font: false })
+  expect(await page.evaluate(markerScript("mark"))).toEqual({ ok: true })
   expect(await page.evaluate(markerScript("clear"))).toEqual({ ok: true })
 })
 
@@ -111,12 +112,11 @@ test.each([
     const file = path.join(directory, "indicator.mjs")
     await Bun.write(file, built.outputs[0])
     const bundled = await import(file)
-    for (const [op, font, expected] of [
-      ["mark", undefined, { ok: true, font: false }],
-      ["mark", Buffer.from("wOF2-test-payload").toString("base64"), { ok: true, font: true }],
-      ["clear", undefined, { ok: true }],
+    for (const [op, expected] of [
+      ["mark", { ok: true }],
+      ["clear", { ok: true }],
     ]) {
-      const script = bundled.markerScript(op, op === "mark" && font ? { x: 1, y: 2, label: "Click", click: false } : undefined, font)
+      const script = bundled.markerScript(op)
       expect(script).not.toMatch(helpers)
       const page = createFakePage()
       expect(await page.evaluate(script)).toEqual(expected)
@@ -139,159 +139,62 @@ test.skipIf(!Bun.which("node"))("the source module serialized under Node runs wi
   expect(child.exitCode, child.stderr.toString()).toBe(0)
   const script = child.stdout.toString()
   expect(script).not.toMatch(helpers)
-  expect(await createFakePage().evaluate(script)).toEqual({ ok: true, font: false })
+  expect(await createFakePage().evaluate(script)).toEqual({ ok: true })
 })
 
-const fontData = Buffer.from("wOF2-test-payload").toString("base64")
-const cursor = { x: 5, y: 6, label: "Click", click: false }
+describe("the marker never draws in the page", () => {
+  const ownFace = { family: "Geist", status: "loaded" }
+  const drawn = (page) => ({
+    hosts: page.hosts().length,
+    chipText: page.chipText(),
+    animations: page.animations.length,
+    moves: page.moves.length,
+    frameRequests: page.frameRequests,
+    faces: page.fontFaces().filter((face) => face !== ownFace),
+    text: page.domText().includes("YCoding ·"),
+  })
+  const none = { hosts: 0, chipText: [], animations: 0, moves: 0, frameRequests: 0, faces: [], text: false }
 
-test("the cursor label chip draws the mint pixel-Y brand mark inline before its words", async () => {
-  const asset = await Bun.file(new URL("../../../assets/brand/ycoding-mark.svg", import.meta.url)).text()
-  const page = createFakePage()
-  await page.evaluate(markerScript("mark", cursor))
-  const walk = (node) => [node, ...node.children.flatMap(walk), ...(node.shadow ? walk(node.shadow) : [])]
-  const chip = walk(page.hosts()[0]).find((node) => node.tagName === "SPAN" && node.children.length > 0)
-  const [mark, words] = chip.children
-  expect(chip.children).toHaveLength(2)
-  expect(mark.tagName).toBe("SVG")
-  expect(mark.attributes.get("viewBox")).toBe("0 0 256 256")
-  expect(mark.attributes.get("width")).toBe(String(parseInt(tokens.components["agent-mark"].size)))
-  expect(mark.attributes.get("height")).toBe(String(parseInt(tokens.components["agent-mark"].size)))
-  expect(mark.attributes.get("aria-hidden")).toBe("true")
-  expect(mark.children.map((path) => [path.tagName, path.attributes.get("d"), path.attributes.get("fill")])).toEqual([
-    ["PATH", /<path d="([^"]+)"/.exec(asset)?.[1], tokens.colors["agent-mark"]],
-  ])
-  expect(words.tagName).toBe("SPAN")
-  expect(words.textContent).toBe("YCoding · Click")
-  expect(chip.style.cssText).toContain(`gap:${tokens.components["agent-label"].gap}`)
-})
-
-describe("the label font", () => {
-  test("installs one page-scoped face under a unique alias when a cursor arrives with font data", async () => {
+  test("mark adds the favicon marker only: no cursor host, label, ripple, animation frame, or page font", async () => {
     const page = createFakePage()
-    expect(await page.evaluate(markerScript("mark", cursor, fontData))).toEqual({ ok: true, font: true })
-    const faces = page.fontFaces()
-    expect(faces).toHaveLength(1)
-    expect(faces[0].family).toBe(FONT_ALIAS)
-    expect(faces[0].family).not.toBe("Geist")
-    expect(Buffer.from(faces[0].source).toString()).toBe("wOF2-test-payload")
-    expect(faces[0].descriptors).toEqual({ weight: "100 900", style: "normal", display: "swap" })
-    expect(tokens.typography["agent-label"].fontFamily.startsWith(`${FONT_ALIAS},`)).toBe(true)
-    await page.evaluate(markerScript("mark", { ...cursor, x: 9 }, fontData))
-    await page.evaluate(markerScript("mark", { ...cursor, x: 10 }))
-    expect(page.fontFaces()).toHaveLength(1)
-    expect(page.fontLoads).toHaveLength(1)
+    page.document.fonts.add(ownFace)
+    expect(await page.evaluate(markerScript("mark"))).toEqual({ ok: true })
+    expect(await page.evaluate(markerScript("mark"))).toEqual({ ok: true })
+    expect(page.markers()).toHaveLength(1)
+    expect(page.iconLinks()[0]?.getAttribute("href")).toStartWith("data:image/svg+xml,")
+    expect(drawn(page)).toEqual(none)
+    expect(page.fontFaces()).toEqual([ownFace])
   })
 
-  test("a refresh without a cursor neither carries nor installs the font", async () => {
-    const page = createFakePage()
-    expect(markerScript("mark")).not.toContain(fontData)
-    expect(await page.evaluate(markerScript("mark"))).toEqual({ ok: true, font: false })
-    expect(page.fontFaces()).toEqual([])
-  })
-
-  test("explicit clear, page removal of the marker, and expiry each remove the face", async () => {
+  test("clear, page removal of the marker, and expiry each leave the page without drawn elements and keep the page's own font face", async () => {
     const clearing = createFakePage()
-    await clearing.evaluate(markerScript("mark", cursor, fontData))
+    clearing.document.fonts.add(ownFace)
+    await clearing.evaluate(markerScript("mark"))
     await clearing.evaluate(markerScript("clear"))
-    expect(clearing.fontFaces()).toEqual([])
+    expect(drawn(clearing)).toEqual(none)
+    expect(clearing.fontFaces()).toEqual([ownFace])
 
     const removed = createFakePage()
-    await removed.evaluate(markerScript("mark", cursor, fontData))
+    await removed.evaluate(markerScript("mark"))
     removed.markers()[0].remove()
     await Bun.sleep(2)
-    expect(removed.fontFaces()).toEqual([])
+    expect(removed.markers()).toHaveLength(0)
+    expect(drawn(removed)).toEqual(none)
 
     const expiring = createFakePage()
-    await expiring.evaluate(markerScript("mark", cursor, fontData))
+    await expiring.evaluate(markerScript("mark"))
     expiring.clock.advance(timing.expiry + timing.check)
-    expect(expiring.fontFaces()).toEqual([])
     expect(expiring.markers()).toHaveLength(0)
+    expect(drawn(expiring)).toEqual(none)
   })
 
-  test("a face belongs to its document, so a navigation drops it and the next cursor installs it again", async () => {
+  test("a navigation drops the marker and the next mark again draws nothing", async () => {
     const page = createFakePage()
-    await page.evaluate(markerScript("mark", cursor, fontData))
+    await page.evaluate(markerScript("mark"))
     page.navigate()
-    expect(page.fontFaces()).toEqual([])
-    expect(await page.evaluate(markerScript("mark", cursor, fontData))).toEqual({ ok: true, font: true })
-    expect(page.fontFaces()).toHaveLength(1)
-  })
-
-  test.each([
-    ["a face that fails to decode", (page) => (page.fontLoadFails = true)],
-    ["a page without the FontFace API", (page) => (page.fontFaceMissing = true)],
-  ])("%s still draws the label, marks the tab, and reports no font", async (_name, arrange) => {
-    const page = createFakePage()
-    arrange(page)
-    expect(await page.evaluate(markerScript("mark", cursor, fontData))).toEqual({ ok: true, font: false })
-    expect(page.fontFaces()).toEqual([])
-    expect(page.chipText()).toEqual(["YCoding · Click"])
-    expect(page.iconLinks()[0]?.getAttribute("href")).toStartWith("data:image/svg+xml,")
-  })
-
-  describe("while the face is still loading", () => {
-    const settles = (promise) => Promise.race([promise.then(() => true), Bun.sleep(100).then(() => false)])
-
-    test("the cursor and label are drawn with the fallback without waiting, and the ack reports the face as not loaded", async () => {
-      const page = createFakePage()
-      page.fontLoadDeferred = true
-      const marking = page.evaluate(markerScript("mark", cursor, fontData))
-      expect(await settles(marking)).toBe(true)
-      expect(await marking).toEqual({ ok: true, font: false })
-      expect(page.chipText()).toEqual(["YCoding · Click"])
-      expect(page.fontFaces().map((face) => [face.family, face.status])).toEqual([[FONT_ALIAS, "loading"]])
-      await page.evaluate(markerScript("mark", { ...cursor, x: 9 }, fontData))
-      expect(page.fontFaces()).toHaveLength(1)
-      page.settleFonts("resolve")
-      expect(await page.evaluate(markerScript("mark", { ...cursor, x: 10 }))).toEqual({ ok: true, font: true })
-      expect(page.fontFaces().map((face) => face.status)).toEqual(["loaded"])
-    })
-
-    test.each([
-      ["an explicit clear", async (page) => void (await page.evaluate(markerScript("clear")))],
-      ["the page removing the marker", async (page) => {
-        page.markers()[0].remove()
-        await Bun.sleep(2)
-      }],
-      ["the page expiry", async (page) => page.clock.advance(timing.expiry + timing.check)],
-    ])("%s leaves neither the face nor a cursor behind when the load settles afterwards", async (_name, end) => {
-      const page = createFakePage()
-      page.fontLoadDeferred = true
-      await settlesThenMark(page)
-      await end(page)
-      expect(page.fontFaces()).toEqual([])
-      page.settleFonts("resolve")
-      await Bun.sleep(2)
-      expect(page.fontFaces()).toEqual([])
-      expect(page.hosts()).toHaveLength(0)
-      expect(page.markers()).toHaveLength(0)
-    })
-
-    test("a load that fails after registration removes only its own face", async () => {
-      const page = createFakePage()
-      page.fontLoadDeferred = true
-      const own = { family: "Geist", status: "loaded" }
-      page.document.fonts.add(own)
-      await settlesThenMark(page)
-      page.settleFonts("reject")
-      await Bun.sleep(2)
-      expect(page.fontFaces()).toEqual([own])
-      expect(page.chipText()).toEqual(["YCoding · Click"])
-    })
-
-    async function settlesThenMark(page) {
-      const marking = page.evaluate(markerScript("mark", cursor, fontData))
-      expect(await settles(marking)).toBe(true)
-    }
-  })
-
-  test("the page's own face with another name is never removed", async () => {
-    const page = createFakePage()
-    const own = { family: "Geist", status: "loaded" }
-    page.document.fonts.add(own)
-    await page.evaluate(markerScript("mark", cursor, fontData))
-    await page.evaluate(markerScript("clear"))
-    expect(page.fontFaces()).toEqual([own])
+    expect(page.markers()).toHaveLength(0)
+    expect(await page.evaluate(markerScript("mark"))).toEqual({ ok: true })
+    expect(page.markers()).toHaveLength(1)
+    expect(drawn(page)).toEqual(none)
   })
 })

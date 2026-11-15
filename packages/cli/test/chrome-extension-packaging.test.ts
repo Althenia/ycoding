@@ -68,7 +68,7 @@ test("bundles the indicator module into service-worker.js and keeps protocol.js 
   })
 })
 
-test("bundles the Geist Sans data into service-worker.js once, without shipping fonts.js or Geist Mono there", async () => {
+test("embeds the Geist faces and their license only in popup.css, with no font bytes in service-worker.js and no fonts.js", async () => {
   await packaged(async (bin, extension) => {
     const worker = await readFile(path.join(extension, "service-worker.js"), "utf8")
     const sans = Buffer.from(
@@ -77,17 +77,18 @@ test("bundles the Geist Sans data into service-worker.js once, without shipping 
     const mono = Buffer.from(
       await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/GeistMono.woff2")),
     ).toString("base64")
-    expect(worker.split(sans).length - 1).toBe(1)
+    const license = (
+      await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/OFL.txt"), "utf8")
+    ).trim()
+    expect(worker).not.toContain(sans)
     expect(worker).not.toContain(mono)
+    expect(worker).not.toContain("YCodingGeist")
+    expect(worker.replaceAll("\r\n", "\n")).not.toContain(license.replaceAll("\r\n", "\n"))
     expect(await Bun.file(path.join(extension, "fonts.js")).exists()).toBe(false)
     const css = await readFile(path.join(extension, "popup.css"), "utf8")
     expect(css).not.toBe(await readFile(path.join(chromeExtensionSource, "popup.css"), "utf8"))
     expect(css).toContain(sans)
     expect(css).toContain(mono)
-    const license = (
-      await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/OFL.txt"), "utf8")
-    ).trim()
-    expect(worker.replaceAll("\r\n", "\n")).toContain(license.replaceAll("\r\n", "\n"))
     expect(css.replaceAll("\r\n", "\n")).toContain(license.replaceAll("\r\n", "\n"))
     await releasedUpdaterAcceptsLinuxArchive(await archive(bin))
   })

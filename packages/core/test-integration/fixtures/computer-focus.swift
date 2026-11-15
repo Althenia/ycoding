@@ -68,6 +68,82 @@ final class Delegate: NSObject, NSApplicationDelegate {
     }
 }
 
+func observe(log path: String) -> Never {
+    let log = URL(fileURLWithPath: path)
+    let stop = path + ".stop"
+    FileManager.default.createFile(atPath: path, contents: nil)
+    func record(_ line: String) {
+        guard let handle = try? FileHandle(forWritingTo: log) else { return }
+        handle.seekToEndOfFile()
+        handle.write(Data((line + "\n").utf8))
+        try? handle.close()
+    }
+    func position() -> String? {
+        guard let point = CGEvent(source: nil)?.location else { return nil }
+        return "\(point.x),\(point.y)"
+    }
+    func inventory() -> String {
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        return windows.compactMap { window -> String? in
+            guard (window[kCGWindowLayer as String] as? Int) == 0,
+                  let owner = window[kCGWindowOwnerPID as String] as? Int32,
+                  let id = window[kCGWindowNumber as String] as? UInt32 else { return nil }
+            return "\(owner)/\(id)"
+        }.joined(separator: " ")
+    }
+    guard var cursor = position() else {
+        record("cursor-unavailable")
+        exit(2)
+    }
+    var front = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+    var order = inventory()
+    var seen = Set<String>()
+    var ticks = 0
+    let token = NSWorkspace.shared.notificationCenter.addObserver(
+        forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: nil) { _ in record("space-changed") }
+    record("frontmost \(front)")
+    record("cursor \(cursor)")
+    record("windows \(order)")
+    record("ready")
+    while !FileManager.default.fileExists(atPath: stop) {
+        ticks += 1
+        let current = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+        if current != front {
+            front = current
+            record("frontmost-changed \(current)")
+        }
+        if let now = position() {
+            if now != cursor {
+                cursor = now
+                record("cursor-moved \(now)")
+            }
+        } else {
+            record("cursor-unavailable")
+        }
+        let currentOrder = inventory()
+        if currentOrder != order {
+            order = currentOrder
+            record("windows-changed \(currentOrder)")
+        }
+        let helpers = Set(NSRunningApplication.runningApplications(withBundleIdentifier: "app.ycoding.computer-use").map(\.processIdentifier))
+        let windows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+        for window in windows {
+            let owner = window[kCGWindowOwnerPID as String] as? Int32 ?? 0
+            let ownerName = window[kCGWindowOwnerName as String] as? String ?? ""
+            guard helpers.contains(owner) || ownerName.hasPrefix("YCoding Computer Use") else { continue }
+            let id = window[kCGWindowNumber as String] as? UInt32 ?? 0
+            let layer = window[kCGWindowLayer as String] as? Int ?? 0
+            if seen.insert("\(owner)/\(id)").inserted { record("helper-window \(owner)/\(id) layer \(layer)") }
+        }
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+    }
+    NSWorkspace.shared.notificationCenter.removeObserver(token)
+    record("ticks \(ticks)")
+    exit(0)
+}
+
+if CommandLine.arguments[2] == "observe" { observe(log: CommandLine.arguments[1]) }
+
 try? String(getpid()).write(toFile: CommandLine.arguments[1] + ".pid", atomically: true, encoding: .utf8)
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)

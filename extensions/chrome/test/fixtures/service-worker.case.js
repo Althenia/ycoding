@@ -4,6 +4,10 @@ import { createFakeControls, createFakePage } from "./fake-page.js"
 import { timing } from "../../indicator.js"
 
 const harness = createHarness()
+const overlayEvaluations = () =>
+  harness.commands.filter(
+    (item) => item.method === "Runtime.evaluate" && /"cursor":|"fontData":|"fontFamily":|"ripple":/.test(item.params.expression),
+  )
 harness.storage.browserProfileGrant = { serverID: "server-restored-1" }
 harness.storage.browserProfileDeniedTabs = { serverID: "server-restored-1", tabIDs: [18] }
 const originalChrome = globalThis.chrome
@@ -922,7 +926,7 @@ describe("Chrome bridge service worker", () => {
     }
   })
 
-  test("animates the isolated agent cursor at the click point before CDP input", async () => {
+  test("creates the isolated world and marks the tab before CDP input without any cursor placement", async () => {
     harness.reset()
     harness.page.profileTabs = [{ id: 17, active: true, url: "https://example.test/form", title: "Active" }]
     try {
@@ -933,52 +937,41 @@ describe("Chrome bridge service worker", () => {
       const observation = socket.outgoing.find((message) => message.callID === "observe-cursor")
       await socket.receive(action("cursor-click", shared.tabID, observation, { type: "click", ref: "b1" }))
       const world = harness.commands.findIndex((item) => item.method === "Page.createIsolatedWorld")
-      const animation = harness.commands.findIndex(
-        (item) => item.method === "Runtime.evaluate" && item.params.expression.includes('"cursor":{'),
+      const marker = harness.commands.findIndex(
+        (item) => item.method === "Runtime.evaluate" && item.params.expression.includes('"op":"mark"'),
       )
       const mouse = harness.commands.findIndex((item) => item.method === "Input.dispatchMouseEvent")
       expect(world).toBeGreaterThan(-1)
-      expect(animation).toBeGreaterThan(world)
-      expect(mouse).toBeGreaterThan(animation)
+      expect(marker).toBeGreaterThan(world)
+      expect(mouse).toBeGreaterThan(marker)
       expect(harness.commands.some((item) => item.method === "Runtime.enable")).toBe(true)
-      expect(harness.cursorDOM.chipText()).toEqual(["YCoding · Click"])
-      expect(harness.commands[animation].params.contextId).toBe(1)
-      expect(harness.commands[animation].params.expression).toContain('"x":5,"y":5')
+      expect(harness.commands[marker].params.contextId).toBe(1)
       expect(harness.commands[mouse].params).toMatchObject({ type: "mousePressed", x: 5, y: 5 })
-      expect(harness.cursorDOM.hosts()).toHaveLength(1)
-      expect(harness.cursorDOM.moves.at(-1)).toBe("translate(5px,5px)")
+      expect(overlayEvaluations()).toEqual([])
+      expect(harness.cursorDOM.hosts()).toHaveLength(0)
+      expect(harness.cursorDOM.markers()).toHaveLength(1)
 
       harness.commands.length = 0
       await socket.receive(action("cursor-type", shared.tabID, observation, { type: "type", ref: "b1", text: "hello" }))
-      const typingAnimation = harness.commands.findIndex(
-        (item) => item.method === "Runtime.evaluate" && item.params.expression.includes('"cursor":{'),
+      expect(harness.commands.findIndex((item) => item.method === "Runtime.evaluate")).toBeLessThan(
+        harness.commands.findIndex((item) => item.method === "DOM.focus"),
       )
-      expect(typingAnimation).toBeGreaterThan(-1)
-      expect(typingAnimation).toBeLessThan(harness.commands.findIndex((item) => item.method === "DOM.focus"))
-      expect(typingAnimation).toBeLessThan(harness.commands.findIndex((item) => item.method === "Input.insertText"))
-      expect(harness.commands[typingAnimation].params.expression).toContain('"x":5,"y":5')
+      expect(harness.commands.some((item) => item.method === "Input.insertText")).toBe(true)
+      expect(overlayEvaluations()).toEqual([])
 
       harness.commands.length = 0
-      const movesBeforeScroll = harness.cursorDOM.moves.length
       await socket.receive(action("cursor-scroll", shared.tabID, observation, { type: "scroll", deltaY: 120 }))
-      const scrollAnimation = harness.commands.findIndex(
-        (item) => item.method === "Runtime.evaluate" && item.params.expression.includes('"cursor":{'),
-      )
-      const wheel = harness.commands.findIndex((item) => item.method === "Input.dispatchMouseEvent")
-      expect(scrollAnimation).toBeGreaterThan(-1)
-      expect(scrollAnimation).toBeLessThan(wheel)
-      expect(harness.commands[scrollAnimation].params.expression).toContain('"x":50,"y":40')
-      expect(harness.commands[wheel].params).toMatchObject({ type: "mouseWheel", x: 50, y: 40 })
-      expect(harness.cursorDOM.hosts()).toHaveLength(1)
-      expect(harness.cursorDOM.moves[movesBeforeScroll]).toBe("translate(5px,5px)")
-      expect(harness.cursorDOM.moves.at(-1)).toBe("translate(50px,40px)")
+      const wheel = harness.commands.find((item) => item.method === "Input.dispatchMouseEvent")
+      expect(wheel.params).toMatchObject({ type: "mouseWheel", x: 50, y: 40 })
+      expect(overlayEvaluations()).toEqual([])
+      expect(harness.cursorDOM.hosts()).toHaveLength(0)
     } finally {
       if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
         await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
     }
   })
 
-  test("hidden-page cursor placement skips animation and still completes the action", async () => {
+  test("hidden-page click completes with CDP input, requests no animation frame, and draws no overlay", async () => {
     harness.reset()
     harness.page.profileTabs = [{ id: 17, active: false, url: "https://example.test/form", title: "Background" }]
     harness.cursorDOM.setVisibility("hidden")
@@ -991,8 +984,9 @@ describe("Chrome bridge service worker", () => {
       await socket.receive(action("hidden-cursor-click", shared.tabID, observation, { type: "click", ref: "b1" }))
       expect(socket.outgoing.find((item) => item.callID === "hidden-cursor-click")).toMatchObject({ type: "result" })
       expect(harness.cursorDOM.frameRequests).toBe(0)
-      expect(harness.cursorDOM.hosts()).toHaveLength(1)
-      expect(harness.cursorDOM.moves.at(-1)).toBe("translate(5px,5px)")
+      expect(harness.cursorDOM.hosts()).toHaveLength(0)
+      expect(harness.cursorDOM.moves).toEqual([])
+      expect(harness.commands.some((item) => item.method === "Input.dispatchMouseEvent")).toBe(true)
     } finally {
       if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
         await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
@@ -1077,30 +1071,9 @@ describe("Chrome bridge service worker", () => {
     }
   }, 4000)
 
-  test("cursor CDP hangs cannot hold up browser input", async () => {
+  test("native detach sends no marker cleanup", async () => {
     harness.reset()
     harness.page.profileTabs = [{ id: 17, active: true, url: "https://example.test/form", title: "Active" }]
-    harness.page.cursorPlacementHangs = true
-    try {
-      await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "h".repeat(32) })
-      const socket = harness.FakeWebSocket.instance
-      const shared = socket.outgoing.find((message) => message.type === "shared")
-      await socket.receive({ type: "observe", tabID: shared.tabID, generation: "bridge-1", callID: "observe-stuck-cursor" })
-      const observation = socket.outgoing.find((message) => message.callID === "observe-stuck-cursor")
-      await socket.receive(action("stuck-cursor-click", shared.tabID, observation, { type: "click", ref: "b1" }))
-      expect(socket.outgoing.find((item) => item.callID === "stuck-cursor-click")).toMatchObject({ type: "result" })
-      expect(harness.commands.some((item) => item.method === "Input.dispatchMouseEvent")).toBe(true)
-    } finally {
-      harness.page.cursorPlacementHangs = false
-      if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
-        await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
-    }
-  }, 1500)
-
-  test("cursor placement failure does not block input and native detach sends no cleanup", async () => {
-    harness.reset()
-    harness.page.profileTabs = [{ id: 17, active: true, url: "https://example.test/form", title: "Active" }]
-    harness.page.cursorPlacementFails = true
     try {
       await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "d".repeat(32) })
       const socket = harness.FakeWebSocket.instance
@@ -1110,7 +1083,6 @@ describe("Chrome bridge service worker", () => {
       await socket.receive(action("cursor-click-fail", shared.tabID, observation, { type: "click", ref: "b1" }))
       expect(socket.outgoing.find((item) => item.callID === "cursor-click-fail")).toMatchObject({ type: "result" })
       expect(harness.commands.some((item) => item.method === "Input.dispatchMouseEvent")).toBe(true)
-      harness.page.cursorPlacementFails = false
       harness.commands.length = 0
       await harness.debuggerDetach.emit({ tabId: 17 })
       expect(harness.commands.some((item) => item.method === "Runtime.evaluate")).toBe(false)
@@ -1643,7 +1615,7 @@ describe("Chrome bridge form controls and waits", () => {
 
       const differs = await run("fill-short", observation, { type: "fill", ref: refOf(observation, "Initials"), text: "abcdef" })
       expect(differs).toMatchObject({ type: "result", control: { value: "abc" }, message: "The field value differs from the requested text" })
-      expect(harness.cursorDOM.chipText()).toEqual(["YCoding · Type"])
+      expect(harness.cursorDOM.hosts()).toHaveLength(0)
     } finally {
       await stopBridge()
     }
@@ -1780,7 +1752,7 @@ describe("Chrome bridge form controls and waits", () => {
       ])
       for (const text of ["Japan", "France", "Thailand", '"jp"', '"fr"'])
         expect(selects.some((item) => item.params.functionDeclaration.includes(text))).toBe(false)
-      expect(harness.cursorDOM.chipText()).toEqual(["YCoding · Select"])
+      expect(harness.cursorDOM.hosts()).toHaveLength(0)
     } finally {
       await stopBridge()
     }
@@ -1867,7 +1839,7 @@ describe("Chrome bridge form controls and waits", () => {
         dispatched: false,
       })
       expect(mouse(rejected, "mousePressed")).toEqual([])
-      expect(harness.cursorDOM.chipText()).toEqual(["YCoding · Select"])
+      expect(harness.cursorDOM.hosts()).toHaveLength(0)
     } finally {
       await stopBridge()
     }
@@ -1904,7 +1876,7 @@ describe("Chrome bridge form controls and waits", () => {
         message: "The control did not change state",
       })
       expect(mouse(stuckStart, "mousePressed")).toHaveLength(1)
-      expect(harness.cursorDOM.chipText()).toEqual(["YCoding · Click"])
+      expect(harness.cursorDOM.hosts()).toHaveLength(0)
     } finally {
       await stopBridge()
     }
@@ -1932,7 +1904,7 @@ describe("Chrome bridge form controls and waits", () => {
     }
   })
 
-  test("hover dispatches one mouseMoved at the element point with the Hover label and no press", async () => {
+  test("hover dispatches one mouseMoved at the element point and no press", async () => {
     const { observe, run } = await connect({ 76: { role: "button", name: "Menu", nodeName: "BUTTON", quad: [20, 20, 40, 20, 40, 40, 20, 40] } })
     try {
       const observation = await observe("hover-observe")
@@ -1943,7 +1915,7 @@ describe("Chrome bridge form controls and waits", () => {
       })
       const moves = harness.commands.slice(start).filter((item) => item.method === "Input.dispatchMouseEvent")
       expect(moves).toEqual([{ source: { tabId: 17 }, method: "Input.dispatchMouseEvent", params: { type: "mouseMoved", x: 30, y: 30 } }])
-      expect(harness.cursorDOM.chipText()).toEqual(["YCoding · Hover"])
+      expect(harness.cursorDOM.hosts()).toHaveLength(0)
     } finally {
       await stopBridge()
     }
@@ -3061,38 +3033,57 @@ describe("Chrome control marker", () => {
     }
   })
 
-  test("labels the cursor with the action type only and never puts typed text in the page", async () => {
-    const { socket, shared } = await connect("l")
+  test("click, type, hover and scroll dispatch their input without drawing a cursor overlay or installing a page font", async () => {
+    const { socket, shared } = await connect("N")
     try {
       const observation = await observe(socket, shared[0].tabID)
-      await socket.receive(action("label-click", shared[0].tabID, observation, { type: "click", ref: "b1" }))
-      expect(harness.cursorDOM.chipText()).toEqual(["YCoding · Click"])
-      expect(harness.cursorDOM.moves.at(-1)).toBe("translate(5px,5px)")
-      expect(harness.cursorDOM.animations).toHaveLength(1)
+      const inputs = (start) =>
+        harness.commands
+          .slice(start)
+          .filter((item) => ["Input.dispatchMouseEvent", "Input.insertText"].includes(item.method))
+          .map((item) => [item.method, item.params.type ?? item.params.text, item.params.x, item.params.y])
+      const noOverlay = () => {
+        expect(harness.cursorDOM.hosts()).toHaveLength(0)
+        expect(harness.cursorDOM.chipText()).toEqual([])
+        expect(harness.cursorDOM.animations).toHaveLength(0)
+        expect(harness.cursorDOM.moves).toEqual([])
+        expect(harness.cursorDOM.fontFaces()).toEqual([])
+        expect(harness.cursorDOM.frameRequests).toBe(0)
+        expect(harness.cursorDOM.domText()).not.toContain("YCoding ·")
+        expect(harness.cursorDOM.domText()).not.toContain("hunter2")
+        expect(harness.cursorDOM.domText()).not.toContain("Session")
+        expect(harness.cursorDOM.domText()).not.toContain("example.test")
+        expect(overlayEvaluations()).toEqual([])
+        expect(harness.cursorDOM.markers()).toHaveLength(1)
+        expect(harness.cursorDOM.iconLinks()[0]?.getAttribute("href")).toStartWith("data:image/svg+xml,")
+      }
 
-      await socket.receive(action("label-type", shared[0].tabID, observation, { type: "type", ref: "b1", text: "hunter2 secret" }))
-      expect(harness.cursorDOM.chipText()).toEqual(["YCoding · Type"])
-      await socket.receive(action("label-scroll", shared[0].tabID, observation, { type: "scroll", deltaY: 120 }))
-      expect(harness.cursorDOM.chipText()).toEqual(["YCoding · Scroll"])
-      expect(harness.cursorDOM.moves.at(-1)).toBe("translate(50px,40px)")
-      expect(harness.cursorDOM.domText()).not.toContain("hunter2")
-      expect(harness.cursorDOM.domText()).not.toContain("Session")
-      expect(harness.cursorDOM.domText()).not.toContain("example.test")
-    } finally {
-      await stopBridge()
-    }
-  })
+      let start = harness.commands.length
+      await socket.receive(action("plain-click", shared[0].tabID, observation, { type: "click", ref: "b1" }))
+      expect(socket.outgoing.find((item) => item.callID === "plain-click")).toMatchObject({ type: "result" })
+      expect(inputs(start)).toEqual([
+        ["Input.dispatchMouseEvent", "mousePressed", 5, 5],
+        ["Input.dispatchMouseEvent", "mouseReleased", 5, 5],
+      ])
+      noOverlay()
 
-  test("reduced motion moves the cursor instantly and skips the ripple animation", async () => {
-    const { socket, shared } = await connect("r")
-    try {
-      const observation = await observe(socket, shared[0].tabID)
-      harness.cursorDOM.reducedMotion = true
-      const before = harness.cursorDOM.frameRequests
-      await socket.receive(action("reduced-click", shared[0].tabID, observation, { type: "click", ref: "b1" }))
-      expect(harness.cursorDOM.frameRequests).toBe(before)
-      expect(harness.cursorDOM.animations).toHaveLength(0)
-      expect(harness.cursorDOM.moves.slice(-2)).toEqual(["translate(50px,40px)", "translate(5px,5px)"])
+      start = harness.commands.length
+      await socket.receive(action("plain-type", shared[0].tabID, observation, { type: "type", ref: "b1", text: "hunter2 secret" }))
+      expect(socket.outgoing.find((item) => item.callID === "plain-type")).toMatchObject({ type: "result" })
+      expect(inputs(start)).toEqual([["Input.insertText", "hunter2 secret", undefined, undefined]])
+      noOverlay()
+
+      start = harness.commands.length
+      await socket.receive(action("plain-hover", shared[0].tabID, observation, { type: "hover", ref: "b1" }))
+      expect(socket.outgoing.find((item) => item.callID === "plain-hover")).toMatchObject({ type: "result" })
+      expect(inputs(start)).toEqual([["Input.dispatchMouseEvent", "mouseMoved", 5, 5]])
+      noOverlay()
+
+      start = harness.commands.length
+      await socket.receive(action("plain-scroll", shared[0].tabID, observation, { type: "scroll", deltaY: 120 }))
+      expect(socket.outgoing.find((item) => item.callID === "plain-scroll")).toMatchObject({ type: "result" })
+      expect(inputs(start)).toEqual([["Input.dispatchMouseEvent", "mouseWheel", 50, 40]])
+      noOverlay()
     } finally {
       await stopBridge()
     }
@@ -3445,73 +3436,16 @@ describe("Chrome control marker", () => {
     }
   })
 
-  const cursorEvaluations = () =>
-    harness.commands.filter((item) => item.method === "Runtime.evaluate" && item.params.expression.includes('"cursor":{'))
-  const withFont = (item) => /"fontData":"[A-Za-z0-9+/=]{1000,}"/.test(item.params.expression)
-
-  test("sends the label font once per document and never with a refresh", async () => {
-    const { socket, shared } = await connect("F")
-    try {
-      const observation = await observe(socket, shared[0].tabID)
-      await socket.receive(action("font-scroll-1", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
-      await socket.receive(action("font-scroll-2", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
-      expect(cursorEvaluations().map(withFont)).toEqual([true, false])
-      await refresh().callback()
-      expect(harness.commands.filter((item) => item.method === "Runtime.evaluate" && withFont(item))).toHaveLength(1)
-      expect(harness.cursorDOM.fontFaces().map((face) => face.family)).toEqual(["YCodingGeist"])
-    } finally {
-      await stopBridge()
-    }
-  })
-
-  test("sends the font again for a new document but not when only the isolated world is recreated", async () => {
-    const { socket, shared } = await connect("G")
-    try {
-      const observation = await observe(socket, shared[0].tabID)
-      await socket.receive(action("font-again-1", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
-      harness.cursorDOM.navigate()
-      harness.cursorDOM.setPageTitle("Next")
-      await harness.debuggerEvents.emit({ tabId: 17 }, "Page.frameNavigated", { frame: { url: "https://example.test/next" } })
-      await flush()
-      const next = await observe(socket, shared[0].tabID, "observe-font-next")
-      await socket.receive(action("font-again-2", shared[0].tabID, next, { type: "scroll", deltaY: 10 }))
-      expect(cursorEvaluations().map(withFont)).toEqual([true, true])
-      const settled = await observe(socket, shared[0].tabID, "observe-font-settled")
-      harness.page.staleContext = 1
-      await socket.receive(action("font-again-3", shared[0].tabID, settled, { type: "scroll", deltaY: 10 }))
-      expect(cursorEvaluations().map(withFont)).toEqual([true, true, false])
-      expect(harness.cursorDOM.fontFaces()).toHaveLength(1)
-    } finally {
-      await stopBridge()
-    }
-  })
-
-  test("keeps sending the font until the page confirms it and never blocks the action when it cannot install", async () => {
-    const { socket, shared } = await connect("H")
-    try {
-      harness.cursorDOM.fontLoadFails = true
-      const observation = await observe(socket, shared[0].tabID)
-      await socket.receive(action("font-fail-1", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
-      await socket.receive(action("font-fail-2", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
-      expect(socket.outgoing.filter((message) => message.callID?.startsWith("font-fail")).map((message) => message.type)).toEqual(["result", "result"])
-      expect(cursorEvaluations().map(withFont)).toEqual([true, true])
-      harness.cursorDOM.fontLoadFails = false
-      await socket.receive(action("font-fail-3", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
-      await socket.receive(action("font-fail-4", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
-      expect(cursorEvaluations().map(withFont)).toEqual([true, true, true, false])
-    } finally {
-      await stopBridge()
-    }
-  })
-
-  test("release and stop remove the page face along with the marker", async () => {
+  test("release and stop leave no page font face and remove the marker", async () => {
     const { socket, shared } = await connect("I")
     try {
       const observation = await observe(socket, shared[0].tabID)
       await socket.receive(action("font-release", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
-      expect(harness.cursorDOM.fontFaces()).toHaveLength(1)
+      expect(harness.cursorDOM.fontFaces()).toEqual([])
+      expect(harness.cursorDOM.markers()).toHaveLength(1)
       await socket.receive({ type: "relinquish", callID: "release-font", tabID: shared[0].tabID, generation: "bridge-1" })
       expect(harness.cursorDOM.fontFaces()).toEqual([])
+      expect(harness.cursorDOM.markers()).toHaveLength(0)
     } finally {
       await stopBridge()
     }
@@ -3584,8 +3518,6 @@ function createHarness() {
     typeRedirect: undefined,
     cursorEvaluationFails: false,
     cursorEvaluationHangs: false,
-    cursorPlacementFails: false,
-    cursorPlacementHangs: false,
     focusEmulationFails: false,
     axFails: false,
     axNavigates: undefined,
@@ -3869,10 +3801,6 @@ function createHarness() {
             throw new Error('{"code":-32000,"message":"Cannot find context with specified id"}')
           }
           if (method === "Runtime.evaluate" && page.cursorEvaluationHangs) return new Promise(() => {})
-          if (method === "Runtime.evaluate" && params.expression.includes('"cursor":{')) {
-            if (page.cursorPlacementFails) throw new Error("isolated world unavailable")
-            if (page.cursorPlacementHangs) return new Promise(() => {})
-          }
           if (method === "Input.dispatchMouseEvent" && page.inputHangs) return new Promise(() => {})
           if (method === "Input.dispatchMouseEvent" && params.type === "mouseReleased") page.clickEffect?.(params)
           if (method === "Input.dispatchKeyEvent") {
@@ -3953,7 +3881,7 @@ function createHarness() {
           if (method === "Runtime.evaluate" && params.expression.includes("navigator.clipboard.writeText"))
             return { result: {} }
           if (method === "Runtime.evaluate") {
-            if (page.holdMark && params.expression.includes('"op":"mark"') && !params.expression.includes('"cursor":{')) {
+            if (page.holdMark && params.expression.includes('"op":"mark"')) {
               const gate = page.holdMark
               page.holdMark = undefined
               await gate.promise
@@ -4034,8 +3962,6 @@ function createHarness() {
       page.typeRedirect = undefined
       page.cursorEvaluationFails = false
       page.cursorEvaluationHangs = false
-      page.cursorPlacementFails = false
-      page.cursorPlacementHangs = false
       page.focusEmulationFails = false
       page.axFails = false
       page.axNavigates = undefined

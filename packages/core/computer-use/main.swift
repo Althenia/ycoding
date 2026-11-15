@@ -5,7 +5,6 @@ import CryptoKit
 import Foundation
 import CoreGraphics
 import ScreenCaptureKit
-import QuartzCore
 import Darwin
 
 private struct Owner: Decodable {
@@ -359,182 +358,6 @@ private struct SpaceMap {
 private func screenIsLocked() -> Bool {
     guard let dictionary = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
     return (dictionary["CGSSessionScreenIsLocked"] as? NSNumber)?.boolValue == true
-}
-
-private final class ControlIndicator {
-    static let shared = ControlIndicator()
-
-    private var panel: NSPanel?
-    private var hideItem: DispatchWorkItem?
-    private var prepared = false
-
-    private init() {}
-
-    func show(at point: CGPoint, label: String) {
-        if Thread.isMainThread {
-            render(at: point, label: label)
-            return
-        }
-        let semaphore = DispatchSemaphore(value: 0)
-        DispatchQueue.main.async {
-            self.render(at: point, label: label)
-            semaphore.signal()
-        }
-        _ = semaphore.wait(timeout: .now() + 0.25)
-    }
-
-    func hide() {
-        if Thread.isMainThread {
-            hideOnMain()
-            return
-        }
-        DispatchQueue.main.async { self.hideOnMain() }
-    }
-
-    private func hideOnMain() {
-        hideItem?.cancel()
-        hideItem = nil
-        panel?.orderOut(nil)
-    }
-
-    private func cocoaFrame(topLeft: CGPoint, size: CGSize) -> NSRect {
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        return NSRect(x: topLeft.x, y: primaryHeight - topLeft.y - size.height, width: size.width, height: size.height)
-    }
-
-    private func polygon(_ points: [CGPoint], scale: CGFloat, height: CGFloat, into path: CGMutablePath) {
-        for (index, point) in points.enumerated() {
-            let mapped = CGPoint(x: point.x * scale, y: height - point.y * scale)
-            if index == 0 { path.move(to: mapped) } else { path.addLine(to: mapped) }
-        }
-        path.closeSubpath()
-    }
-
-    private func markLayer(frame: NSRect) -> CAShapeLayer {
-        let path = CGMutablePath()
-        let scale = frame.width / 256
-        polygon([CGPoint(x: 40, y: 40), CGPoint(x: 72, y: 40), CGPoint(x: 72, y: 104), CGPoint(x: 40, y: 104)], scale: scale, height: frame.height, into: path)
-        polygon([CGPoint(x: 184, y: 40), CGPoint(x: 216, y: 40), CGPoint(x: 216, y: 104), CGPoint(x: 184, y: 104)], scale: scale, height: frame.height, into: path)
-        polygon([CGPoint(x: 40, y: 112), CGPoint(x: 104, y: 112), CGPoint(x: 104, y: 176), CGPoint(x: 72, y: 176), CGPoint(x: 72, y: 144), CGPoint(x: 40, y: 144)], scale: scale, height: frame.height, into: path)
-        polygon([CGPoint(x: 152, y: 112), CGPoint(x: 216, y: 112), CGPoint(x: 216, y: 144), CGPoint(x: 184, y: 144), CGPoint(x: 184, y: 176), CGPoint(x: 152, y: 176)], scale: scale, height: frame.height, into: path)
-        polygon([CGPoint(x: 112, y: 184), CGPoint(x: 144, y: 184), CGPoint(x: 144, y: 216), CGPoint(x: 112, y: 216)], scale: scale, height: frame.height, into: path)
-        let layer = CAShapeLayer()
-        layer.frame = frame
-        layer.path = path
-        layer.fillColor = CGColor(red: 103.0 / 255, green: 215.0 / 255, blue: 164.0 / 255, alpha: 1)
-        return layer
-    }
-
-    private func arrowLayer(frame: NSRect) -> CAShapeLayer {
-        let path = CGMutablePath()
-        polygon([CGPoint(x: 0, y: 0), CGPoint(x: 0, y: 17), CGPoint(x: 4.5, y: 13), CGPoint(x: 7.5, y: 20), CGPoint(x: 10, y: 19), CGPoint(x: 7, y: 12), CGPoint(x: 13, y: 12)], scale: 1, height: frame.height, into: path)
-        let layer = CAShapeLayer()
-        layer.frame = frame
-        layer.path = path
-        layer.fillColor = CGColor(red: 139.0 / 255, green: 92.0 / 255, blue: 246.0 / 255, alpha: 1)
-        layer.strokeColor = CGColor(red: 1, green: 1, blue: 1, alpha: 0.9)
-        layer.lineWidth = 0.75
-        return layer
-    }
-
-    private func render(at point: CGPoint, label: String) {
-        if !prepared {
-            _ = NSApplication.shared
-            NSApplication.shared.setActivationPolicy(.accessory)
-            NSApplication.shared.finishLaunching()
-            prepared = true
-        }
-        let size = CGSize(width: 190, height: 48)
-        let frame = cocoaFrame(topLeft: point, size: size)
-        let panel = self.panel ?? NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        self.panel = panel
-        panel.setFrame(frame, display: false)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
-        panel.ignoresMouseEvents = true
-        panel.isReleasedWhenClosed = false
-        panel.sharingType = .none
-        panel.level = .screenSaver
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-
-        let view = NSView(frame: NSRect(origin: .zero, size: size))
-        view.wantsLayer = true
-        guard let root = view.layer else { return }
-        root.backgroundColor = CGColor(red: 0, green: 0, blue: 0, alpha: 0)
-        root.addSublayer(arrowLayer(frame: NSRect(x: 0, y: 28, width: 14, height: 20)))
-
-        let chip = CALayer()
-        chip.frame = NSRect(x: 14, y: 9, width: 164, height: 24)
-        chip.backgroundColor = CGColor(red: 109.0 / 255, green: 40.0 / 255, blue: 217.0 / 255, alpha: 1)
-        chip.cornerRadius = 5
-        chip.shadowColor = CGColor(red: 0, green: 0, blue: 0, alpha: 0.53)
-        chip.shadowOpacity = 1
-        chip.shadowRadius = 2
-        chip.shadowOffset = CGSize(width: 0, height: -1)
-        root.addSublayer(chip)
-        root.addSublayer(markLayer(frame: NSRect(x: 20, y: 15, width: 12, height: 12)))
-
-        let text = CATextLayer()
-        text.frame = NSRect(x: 38, y: 13, width: 136, height: 16)
-        text.string = "YCoding · \(label)"
-        text.font = NSFont.systemFont(ofSize: 12)
-        text.fontSize = 12
-        text.foregroundColor = CGColor(red: 1, green: 1, blue: 1, alpha: 1)
-        text.alignmentMode = .left
-        text.truncationMode = .end
-        text.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
-        root.addSublayer(text)
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        panel.contentView = view
-        panel.orderFrontRegardless()
-        CATransaction.commit()
-        CATransaction.flush()
-
-        hideItem?.cancel()
-        let item = DispatchWorkItem { self.hideOnMain() }
-        hideItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: item)
-    }
-}
-
-private func indicatorLabel(_ action: String) -> String {
-    switch action {
-    case "desktop.click": return "Click"
-    case "desktop.type": return "Type"
-    case "desktop.scroll": return "Scroll"
-    case "desktop.drag": return "Drag"
-    case "desktop.key": return "Key"
-    case "desktop.paste": return "Paste"
-    case "desktop.select_text": return "Select"
-    case "desktop.perform_action": return "Action"
-    default: return "Observe"
-    }
-}
-
-private func showIndicator(_ request: Request, _ window: DesktopWindow, elements: [Element] = []) {
-    guard window.onScreen else { return }
-    let bounds = window.bounds
-    var point = CGPoint(x: bounds.midX, y: bounds.midY)
-    if let path = request.element,
-       let element = elements.first(where: { $0.path == path }), element.frame.count == 4,
-       element.frame[2] > 0 || element.frame[3] > 0 {
-        let scale = imageScale(bounds)
-        if scale > 0 {
-            point = CGPoint(x: bounds.minX + (element.frame[0] + element.frame[2] / 2) / scale,
-                            y: bounds.minY + (element.frame[1] + element.frame[3] / 2) / scale)
-        }
-    } else if request.action == "desktop.drag", let x = request.fromX, let y = request.fromY,
-              let mapped = try? windowPoint(x, y, bounds: bounds) {
-        point = mapped
-    } else if let x = request.x, let y = request.y, let mapped = try? windowPoint(x, y, bounds: bounds) {
-        point = mapped
-    } else if ["desktop.inspect", "desktop.capture", "desktop.observe"].contains(request.action) {
-        point = CGPoint(x: bounds.minX + 20, y: bounds.minY + 20)
-    }
-    ControlIndicator.shared.show(at: point, label: indicatorLabel(request.action))
 }
 
 // Chromium-derived engines build their web Accessibility tree lazily and drop it when occluded;
@@ -1691,7 +1514,6 @@ private func queryElements(_ request: Request, target: DesktopTarget) throws -> 
     guard (1...100).contains(limit), (1...5000).contains(maxNodes) else { throw HelperError.invalidRequest }
     let (window, revision, _) = try desktopSnapshot(target)
     guard revision == expected else { throw HelperError.staleRevision }
-    showIndicator(request, window)
     guard let root = window.element else { throw unreachableWindowError(window) ?? HelperError.targetNotFound }
     let wantedRole = role.map { $0.hasPrefix("AX") ? $0 : "AX" + $0 }
     var matches: [Element] = []
@@ -1820,16 +1642,13 @@ private func handle(_ request: Request) async throws -> Response {
         }
     case ("desktop.inspect", .desktop(let target)):
         let (window, revision, elements) = try desktopSnapshot(target)
-        showIndicator(request, window, elements: elements)
         return success(request.action, revision, elements: elements, accessible: window.element != nil)
     case ("desktop.capture", .desktop(let target)):
         let initial = try desktopSnapshot(target)
-        showIndicator(request, initial.0, elements: initial.2)
         let (image, width, height, scale) = try await captureWindow(target)
         return success(request.action, try desktopSnapshot(target).1, image: image, width: width, height: height, scale: scale)
     case ("desktop.observe", .desktop(let target)):
         var snapshot = try desktopSnapshot(target)
-        showIndicator(request, snapshot.0, elements: snapshot.2)
         var captured = try await captureWindow(target)
         let settled = try desktopSnapshot(target)
         if settled.1 != snapshot.1 {
@@ -1852,7 +1671,6 @@ private func handle(_ request: Request) async throws -> Response {
         guard let expected = request.expectedRevision else { throw HelperError.invalidRequest }
         let (window, revision, elements) = try desktopSnapshot(target)
         guard revision == expected else { throw HelperError.staleRevision }
-        showIndicator(request, window, elements: elements)
         let imageBefore = await windowFingerprint(target)
         let isCoordinate = request.element == nil && ["desktop.click", "desktop.drag", "desktop.scroll"].contains(request.action)
         if isCoordinate, window.placement == "other_space", !window.onScreen, isChromiumClassApp(target) {
@@ -2160,7 +1978,6 @@ private func serveClient(_ fd: Int32) async -> Bool {
               let body = await Task.detached(operation: { receive(fd, count: Int(length)) }).value,
               let command = try? JSONDecoder().decode(RPCRequest.self, from: body), command.jsonrpc == "2.0" else { return false }
         if command.method == "shutdown" {
-            ControlIndicator.shared.hide()
             _ = sendFrame(fd, RPCResponse<String>(id: command.id, result: "ok", error: nil))
             return true
         }
@@ -2200,7 +2017,7 @@ private func serve(_ launch: ServiceLaunch) async -> Bool {
     guard socketPath.utf8.count < 104 else { return false }
     let listener = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
     guard listener >= 0 else { return false }
-    defer { ControlIndicator.shared.hide(); OcclusionKeepAlive.releaseAll(); Darwin.close(listener); unlink(socketPath) }
+    defer { OcclusionKeepAlive.releaseAll(); Darwin.close(listener); unlink(socketPath) }
     var address = sockaddr_un()
     address.sun_family = sa_family_t(AF_UNIX)
     address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
@@ -2212,7 +2029,7 @@ private func serve(_ launch: ServiceLaunch) async -> Bool {
     }
     guard bound == 0, listen(listener, 8) == 0 else { return false }
     let ownerExit = DispatchSource.makeProcessSource(identifier: pid_t(launch.ownerPID), eventMask: .exit, queue: .main)
-    ownerExit.setEventHandler { ControlIndicator.shared.hide(); OcclusionKeepAlive.releaseAll(); exit(0) }
+    ownerExit.setEventHandler { OcclusionKeepAlive.releaseAll(); exit(0) }
     ownerExit.resume()
     defer { ownerExit.cancel() }
     guard FileManager.default.createFile(atPath: (launch.controlDirectory as NSString).appendingPathComponent("pid"),

@@ -19,8 +19,7 @@ import {
   safePage,
   tabID,
 } from "./protocol.js"
-import { geistSans } from "./fonts.js"
-import { LABELS, markerScript, timing, tokens } from "./indicator.js"
+import { markerScript, timing, tokens } from "./indicator.js"
 
 const PROTOCOL_VERSION = "1.3"
 const STORAGE_KEY = "browserPairing"
@@ -29,8 +28,7 @@ const RECONNECT_ALARM = "browser-reconnect"
 const RECOVERY_ALARM = "browser-recovery"
 const MAX_CAPTURE_INSPECTION_DEPTH = 32
 const MAX_CAPTURE_INSPECTION_NODES = 10_000
-const CURSOR_WORLD = "ycoding-agent-cursor"
-const CURSOR_COMMAND_TIMEOUT_MS = 600
+const MARKER_WORLD = "ycoding-agent-marker"
 const INPUT_COMMAND_TIMEOUT_MS = 2000
 const MARKER_FAILED = "YCoding could not show its control marker on this page"
 const CONTROL_WORLD = "ycoding-control"
@@ -1722,10 +1720,10 @@ async function settle(read, done) {
 }
 
 async function click(tab, ref, markDispatched) {
-  await clickTarget(tab, requireRef(tab, ref), markDispatched, LABELS.click)
+  await clickTarget(tab, requireRef(tab, ref), markDispatched)
 }
 
-async function clickTarget(tab, target, markDispatched, label) {
+async function clickTarget(tab, target, markDispatched) {
   const documentGeneration = tab.documentGeneration
   const described = await describeTarget(tab, target)
   const attributes = attrs(described.node.attributes)
@@ -1741,7 +1739,6 @@ async function clickTarget(tab, target, markDispatched, label) {
   rejectProtectedInput(described.node)
   const { x, y } = await elementPoint(tab, target)
   assertCurrent(tab, documentGeneration)
-  await moveCursor(tab, x, y, label, true)
   markDispatched()
   for (const type of ["mousePressed", "mouseReleased"])
     await inputCommand(tab, { type, x, y, button: "left", clickCount: 1 })
@@ -1755,9 +1752,8 @@ async function fill(tab, ref, text, markDispatched) {
   rejectSensitiveField(described.node, target.name)
   const planned = await controlCall(tab, target, F_FILL, [text, false])
   if (!planned?.kind) throw new Error(planned?.error ?? "Element cannot be filled")
-  const { x, y } = await elementPoint(tab, target)
+  await elementPoint(tab, target)
   assertCurrent(tab, documentGeneration)
-  await moveCursor(tab, x, y, LABELS.type)
   markDispatched()
   const applied = await controlCall(tab, target, F_FILL, [text, true])
   if (!applied?.kind) throw new Error(applied?.error ?? "Element cannot be filled")
@@ -1787,9 +1783,8 @@ async function selectOptions(tab, action, markDispatched) {
   if (String(described.node.nodeName).toLowerCase() !== "select") return selectListOption(tab, target, criteria, markDispatched)
   const checked = await controlCall(tab, target, F_SELECT, [criteria, false])
   if (!checked?.ok) throw new Error(checked?.error ?? "Select failed")
-  const { x, y } = await elementPoint(tab, target)
+  await elementPoint(tab, target)
   assertCurrent(tab, documentGeneration)
-  await moveCursor(tab, x, y, LABELS.select)
   markDispatched()
   const applied = await controlCall(tab, target, F_SELECT, [criteria, true])
   if (!applied?.ok) throw new Error(applied?.error ?? "Select failed")
@@ -1824,7 +1819,7 @@ async function selectListOption(tab, target, criteria, markDispatched) {
   const chosen = { label: normalizeText(option.name?.value).slice(0, 1024), index }
   if (booleanState(axProperty(option, "selected")) === true) return { control: { selected: [chosen] } }
   const optionTarget = { ...target, backendNodeId: option.backendDOMNodeId }
-  await clickTarget(tab, optionTarget, markDispatched, LABELS.select)
+  await clickTarget(tab, optionTarget, markDispatched)
   const selected = await settle(
     async () => booleanState(axProperty(await axNode(tab, optionTarget).catch(() => undefined), "selected")) === true,
     (value) => value,
@@ -1844,7 +1839,7 @@ async function setChecked(tab, action, markDispatched) {
   if (state === action.checked) return { control: { checked: state } }
   if (!action.checked && (role === "radio" || role === "menuitemradio"))
     throw new Error("A radio option cannot be unchecked; check another option instead")
-  await clickTarget(tab, target, markDispatched, LABELS.click)
+  await clickTarget(tab, target, markDispatched)
   const observed = await settle(
     async () => tristate(axProperty(await axNode(tab, target).catch(() => undefined), "checked")),
     (value) => value === action.checked,
@@ -1926,7 +1921,6 @@ async function hover(tab, ref, markDispatched) {
   await describeTarget(tab, target)
   const { x, y } = await elementPoint(tab, target)
   assertCurrent(tab, documentGeneration)
-  await moveCursor(tab, x, y, LABELS.hover)
   markDispatched()
   await inputCommand(tab, { type: "mouseMoved", x, y })
 }
@@ -2102,14 +2096,12 @@ async function scroll(tab, deltaY, markDispatched) {
   const { layoutViewport } = await command(tab.chromeTabID, "Page.getLayoutMetrics")
   const x = (layoutViewport?.clientWidth ?? 0) / 2
   const y = (layoutViewport?.clientHeight ?? 0) / 2
-  await moveCursor(tab, x, y, LABELS.scroll)
   markDispatched()
   await inputCommand(tab, { type: "mouseWheel", x, y, deltaX: 0, deltaY })
 }
 
 function forgetDocument(tab) {
   tab.world = undefined
-  tab.fontInstalled = false
   tab.controlWorlds = undefined
 }
 
@@ -2125,7 +2117,7 @@ async function createWorld(tab) {
   const { frameTree } = await command(tab.chromeTabID, "Page.getFrameTree")
   const { executionContextId } = await command(tab.chromeTabID, "Page.createIsolatedWorld", {
     frameId: frameTree.frame.id,
-    worldName: CURSOR_WORLD,
+    worldName: MARKER_WORLD,
   })
   return executionContextId
 }
@@ -2329,15 +2321,10 @@ async function typeText(tab, ref, text, markDispatched) {
   const described = await describeTarget(tab, target)
   rejectSensitiveField(described.node, target.name)
   assertCurrent(tab, documentGeneration)
-  const { x, y } = await elementPoint(tab, target)
-  await moveCursor(tab, x, y, LABELS.type)
+  await elementPoint(tab, target)
   markDispatched()
   await command(tab.chromeTabID, "DOM.focus", { backendNodeId: target.backendNodeId }, target.sessionId)
   await command(tab.chromeTabID, "Input.insertText", { text }, target.sessionId)
-}
-
-async function moveCursor(tab, x, y, label, click = false) {
-  await bounded(mark(tab, { x, y, label, click }), CURSOR_COMMAND_TIMEOUT_MS, "Cursor placement timed out").catch(() => {})
 }
 
 function serialize(tab, work) {
@@ -2346,22 +2333,17 @@ function serialize(tab, work) {
   return run
 }
 
-async function mark(tab, cursor) {
+async function mark(tab) {
   const epoch = tab.controlEpoch
   const controlled = () => tab.controlEpoch === epoch && tab.attached && tabs.get(tab.id) === tab
   const ok = await serialize(tab, async () => {
     if (!controlled()) return false
-    const documentGeneration = tab.documentGeneration
-    const font = cursor && !tab.fontInstalled ? geistSans : undefined
     const applied = await bounded(
-      pageEvaluate(tab, markerScript("mark", cursor, font), { awaitPromise: true }),
+      pageEvaluate(tab, markerScript("mark"), { awaitPromise: true }),
       timing.mark,
       "Control marker timed out",
     ).then(
-      ({ result }) => {
-        if (cursor && result?.value?.font === true && tab.documentGeneration === documentGeneration) tab.fontInstalled = true
-        return result?.value?.ok === true
-      },
+      ({ result }) => result?.value?.ok === true,
       () => false,
     )
     return applied && controlled()

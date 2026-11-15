@@ -1,55 +1,22 @@
 ---
 version: alpha
 name: YCoding Chrome control indicators
-description: In-page cursor with the YCoding mark, tab favicon logo marker, and toolbar badge that show which Chrome tabs YCoding is controlling.
+description: Tab favicon logo marker and toolbar badge that show which Chrome tabs YCoding is controlling.
 surface: native
 extends: ../../DESIGN.md
 colors:
-  agent-cursor: "#8b5cf6"
-  agent-label: "#6d28d9"
-  agent-label-text: "#ffffff"
-  agent-ripple: "#a78bfa"
-  agent-shadow: "#00000088"
   badge-on: "#28753e"
   agent-mark: "#67d7a4"
 typography:
-  agent-label:
-    fontFamily: YCodingGeist, system-ui, sans-serif
-    fontSize: 12px
-    fontWeight: 400
-    lineHeight: 1.2
   popup-body:
     fontFamily: Geist, system-ui, -apple-system, Segoe UI, sans-serif
     fontSize: 13px
     lineHeight: 1.45
   popup-mono:
     fontFamily: Geist Mono, ui-monospace, SFMono-Regular, Menlo, monospace
-rounded:
-  agent-label: 5px
 components:
-  agent-cursor:
-    textColor: "{colors.agent-cursor}"
-    height: 20px
-  agent-label:
-    backgroundColor: "{colors.agent-label}"
-    textColor: "{colors.agent-label-text}"
-    typography: "{typography.agent-label}"
-    rounded: "{rounded.agent-label}"
-    padding: 3px 6px
-    gap: 4px
-  agent-mark:
-    textColor: "{colors.agent-mark}"
-    size: 12px
-  agent-ripple:
-    size: 22px
   toolbar-badge:
     backgroundColor: "{colors.badge-on}"
-motion:
-  duration:
-    cursor-move: 320ms
-    ripple: 450ms
-layers:
-  agent-overlay: 2147483647
 layout:
   popup-width: 320px
 spacing:
@@ -62,13 +29,12 @@ controls:
 
 ## Overview
 
-The Chrome extension marks every tab YCoding is controlling so the person using Chrome can see it: the YCoding logo as the tab favicon in the tab strip, a cursor inside the page whose label carries the YCoding mark, and a per-tab toolbar badge. Chrome's native debugger infobar is separate, owned by Chrome, and cannot be restyled. The extension popup is a separate pre-existing surface (see Exceptions). Sources: `docs/browser-extension.md`, `specs/v2/browser.md`, `extensions/chrome/indicator.js`, `extensions/chrome/service-worker.js`.
+The Chrome extension marks every tab YCoding is controlling so the person using Chrome can see it: the YCoding logo as the tab favicon in the tab strip and a per-tab toolbar badge. The extension shows no visible in-page control indicator. Chrome's native debugger infobar is separate, owned by Chrome, and cannot be restyled. The extension popup is a separate pre-existing surface (see Exceptions). Sources: `docs/browser-extension.md`, `extensions/chrome/indicator.js`, `extensions/chrome/service-worker.js`.
 
 ## Principles
 
-- Show control where the user already looks: the tab strip first, then the page, then the toolbar. The tab strip carries the real YCoding logo as the favicon; the cursor label and badge carry words (`extensions/chrome/indicator.js`).
-- Show only what the extension knows to be true. The cursor moves only to the coordinates of an action that is actually dispatched; it never wanders, and it stays hidden for actions without a target (`extensions/chrome/service-worker.js`).
-- Carry no private text. The marker is a static logo image and the cursor label is one of a fixed action set; typed text, Session titles, Session IDs, and URLs never enter the page DOM (`extensions/chrome/indicator.js`).
+- Show control where the user already looks: the tab strip first, then the toolbar. The tab strip carries the real YCoding logo as the favicon; the badge carries a word (`extensions/chrome/indicator.js`).
+- Carry no private text. The marker is a static logo image; typed text, Session titles, Session IDs, and URLs never enter the page DOM (`extensions/chrome/indicator.js`).
 - Refuse control rather than hide it. When the marker cannot be shown and confirmed on a tab, the extension rejects the operation before dispatch (`extensions/chrome/test/service-worker.test.js`).
 - Own an expiry. The page removes the marker itself when the extension stops refreshing it, because no command can run after a native Cancel, a crash, or an extension reload.
 
@@ -78,51 +44,36 @@ The Chrome extension marks every tab YCoding is controlling so the person using 
 | --- | --- | --- | --- |
 | X1 | approved | Before any observe or action dispatch, a controlled tab MUST carry the favicon logo marker and the extension MUST confirm it by reading it back; otherwise the operation MUST fail before dispatch and MUST NOT be reported as controlled. | `extensions/chrome/test/service-worker.test.js` |
 | X2 | approved | The marker MUST preserve the page's own favicon declarations, including icons the page changes later, MUST NOT alter the page title, and cleanup MUST restore the last page-authored favicon set and remove only the marker link the extension installed. | `extensions/chrome/test/service-worker.test.js` |
-| X3 | approved | The marker image MUST be the fixed logo below and cursor labels MUST come from the action-type set (Click, Type, Scroll, Hover, Select); the page DOM MUST NEVER receive typed text, Session titles, Session IDs, or URLs. | `extensions/chrome/test/service-worker.test.js` |
-| X4 | approved | The cursor tip MUST sit on the actual action coordinates and MUST NEVER move to a coordinate that no action uses; under reduced motion it MUST jump without animation. | `extensions/chrome/test/service-worker.test.js` |
+| X3 | approved | The marker image MUST be the fixed logo below; the page DOM MUST NEVER receive typed text, Session titles, Session IDs, or URLs, and the extension MUST NOT draw a cursor, label, ripple, or other overlay in the page. | `extensions/chrome/test/service-worker.test.js` |
 | X5 | approved | Explicit cleanup MUST complete, bounded in time, before the debugger detaches; when refresh stops, the page MUST remove the marker no later than the documented expiry plus its check interval, and on visibility or resume events. | `extensions/chrome/test/service-worker.test.js`, `packages/server/test-integration/browser-owned-chrome.test.ts` |
 | X6 | approved | A pinned tab MUST NEVER be controlled, because its tab-strip presence is only its favicon and the verified marker contract is not established for pinned tabs. | `extensions/chrome/test/service-worker.test.js` |
 | X8 | approved | The popup MUST render text in Geist and its local service address and pairing code in Geist Mono, from faces embedded in `popup.css`, and MUST NOT fetch a font or add a font file, permission, or CSP source. | `extensions/chrome/test/popup.test.js`, `extensions/chrome/test/fonts.test.js`, `packages/server/test-integration/browser-owned-chrome.test.ts` |
-| X9 | approved | The page label MUST use Geist through a page-scoped `FontFace` under the alias `YCodingGeist`, registered once per document with the first cursor without delaying the label, removed with the marker whether loaded or pending, and MUST fall back to the system UI stack, never blocking the action, when the face cannot be installed. | `extensions/chrome/test/indicator.test.js`, `extensions/chrome/test/service-worker.test.js`, `packages/server/test-integration/browser-owned-chrome.test.ts` |
 | X10 | approved | The popup MUST use 320px intrinsic width, 12px outer/card padding, a 24px canonical mark, a 15px heading and 13px body text. Controls MUST be at least 34px (44px for coarse pointers); secondary help MUST remain keyboard accessible, with pairing authority visible before Connect. | `extensions/chrome/test/popup.test.js`, `packages/server/test-integration/browser-owned-chrome.test.ts` |
-| X11 | approved | The tab marker MUST be the mint pixel-Y path of `assets/brand/ycoding-mark.svg` (fill `agent-mark`) on a dark rounded tile, installed as the tab favicon through an inline SVG data URL, and the cursor label chip MUST draw the same pixel-Y path inline before its words in `agent-mark`; neither MAY add an archive entry, fetch an asset, or use an emoji or a text glyph. | `extensions/chrome/test/indicator.test.js`, `packages/cli/test/chrome-extension-packaging.test.ts` |
-| X7 | approved | Documented `colors`, `rounded`, `typography`, `motion.duration`, `layers`, and component sizes MUST equal `extensions/chrome/indicator.js`, with `popup-body` and `popup-mono` equal to the `--font-sans` and `--font-mono` values in `popup.css`, and documented values MUST NOT be missing from or extra to them. | `extensions/chrome/test/design-md.test.js` |
+| X11 | approved | The tab marker MUST be the mint pixel-Y path of `assets/brand/ycoding-mark.svg` (fill `agent-mark`) on a dark rounded tile, installed as the tab favicon through an inline SVG data URL, and MUST NOT add an archive entry, fetch an asset, or use an emoji or a text glyph. | `extensions/chrome/test/indicator.test.js`, `packages/cli/test/chrome-extension-packaging.test.ts` |
+| X7 | approved | Documented `colors` MUST equal `extensions/chrome/indicator.js`, with `popup-body` and `popup-mono` equal to the `--font-sans` and `--font-mono` values in `popup.css`, and documented values MUST NOT be missing from or extra to them. | `extensions/chrome/test/design-md.test.js` |
 
 ## Colors
 
-The purple cursor, label, and ripple, and the green badge, are the existing extension appearance and stay unchanged. They are extension-specific roles, not brand palette roles; the root brand file states that surface roles are not a claimed brand-color match. `agent-shadow` is the cursor drop shadow. `badge-on` is the toolbar badge background shown while a tab is controlled.
+`badge-on` is the toolbar badge background shown while a tab is controlled. `agent-mark` is the fill of the pixel-Y in the tab favicon. Both are extension-specific roles, not brand palette roles; the root brand file states that surface roles are not a claimed brand-color match.
 
 ## Typography
 
-The label is 12px, 1.2 line height, regular weight, white on the label color, in Geist. The page has no Geist, so the extension installs the embedded face into the controlled document as `YCodingGeist`, a name no site is likely to use, so a site's own `Geist` family is never replaced. The `FontFace` API takes bytes directly, so the label does not depend on the page's `font-src` policy. The face is registered before it loads and the label never waits for it: it shows the fallback with `font-display: swap` and switches when the face is loaded. A load that fails removes its face, a load that settles after the marker ended cannot add it back, and removing the marker removes the face, loaded or pending. If the face cannot be installed the label falls back to the system UI stack. The popup body is 13px, 1.45 line height, Geist, set on `body` because Chrome's extension-page default style sets a system family there and would override one inherited from `:root`; the local service address and pairing code are Geist Mono. Both faces are variable (100-900) and embedded in `popup.css` as data URLs, so the popup needs no network, permission, or CSP source. Native surfaces (the tab title, toolbar badge, and debugger infobar) use Chrome's own font and are outside this rule.
+The popup body is 13px, 1.45 line height, Geist, set on `body` because Chrome's extension-page default style sets a system family there and would override one inherited from `:root`; the local service address and pairing code are Geist Mono. Both faces are variable (100-900) and embedded in `popup.css` as data URLs, so the popup needs no network, permission, or CSP source. Native surfaces (the tab title, toolbar badge, and debugger infobar) use Chrome's own font and are outside this rule.
 
 ## Layout
 
 Use the popup width, padding and control-height tokens for the popup and its card. Keep the 13px body text; use a 15px heading, 24px mark, 8px heading gap and 12px bottom spacing. Use 8px paragraph/form spacing, 4px/8px status-pill padding, and 10px secondary-action separation. Keep the connected view within 300px height with help collapsed. Reflow within 320 CSS px without clipping, retain browser zoom, and increase control and help-summary targets to 44px for coarse pointers.
 
-## Elevation & Depth
-
-The overlay host uses the maximum z-index (`layers.agent-overlay`) so the cursor is never hidden by page content, with `pointer-events: none` so it never intercepts hit-testing or focus. It has no other depth treatment beyond the cursor drop shadow.
-
-## Shapes
-
-The cursor is a pointer arrow whose tip is its hotspot. The label is a 5px-radius chip beside the arrow that starts with the mint pixel-Y mark, `agent-mark` square, separated from its words by the `agent-label` gap. The click ripple is a circle centered on the hotspot.
-
-## Motion
-
-The cursor eases to each real target over `cursor-move`; a click adds a ripple over `ripple`. A hidden page skips animation because frames do not run there. Reduced-motion preferences remove both animations: the cursor jumps to the target and the ripple appears without scaling.
-
 ## Components
 
-- **Tab marker**: the YCoding logo installed as the tab favicon (inline SVG data URL: mint pixel-Y on a dark rounded tile), replacing the page's favicon links while controlled and restoring them on cleanup or expiry. The page title is never altered. Marker state lives in the extension-owned overlay host's data attributes.
-- **Agent cursor**: arrow, tip on the action coordinates, with a label chip showing the agent mark followed by `YCoding · Click`, `YCoding · Type`, `YCoding · Scroll`, `YCoding · Hover`, or `YCoding · Select`. Click labels clicks and checkbox, radio, or switch changes; Type labels typing and filling a field; Select labels choosing options; Hover labels pointer movement without a click. No label appears for actions without a target.
-- **Agent mark**: the mint pixel-Y from `assets/brand/ycoding-mark.svg`, drawn as inline SVG in `agent-mark` at `agent-mark` size, hidden from assistive technology.
+- **Tab marker**: the YCoding logo installed as the tab favicon (inline SVG data URL: mint pixel-Y on a dark rounded tile), replacing the page's favicon links while controlled and restoring them on cleanup or expiry. The page title is never altered.
+- **Agent mark**: the mint pixel-Y from `assets/brand/ycoding-mark.svg`, drawn in `agent-mark` on the favicon tile.
 - **Toolbar badge**: the text `ON` on `badge-on` for each tab with an attached debugger.
 - **Popup help**: native details, collapsed by default, with a 34px summary (44px for coarse pointers), muted text, owned plus/minus marker, pointer cursor and the control focus ring. Keep pairing scope and review requirements visible before Connect; place secondary debugger guidance in help. Use border/surface scrollbar roles, no overflow anchoring, focus-colored caret and text selection, and no tap highlight.
 
 ## Accessibility
 
-The cursor label and badge carry text; the favicon logo is a visual signal paired with Chrome's native debugger infobar, which names YCoding while attached. The label chip's white text on the label color exceeds 7:1. The cursor and its mark are presentational and never receive focus.
+The badge carries text; the favicon logo is a visual signal paired with Chrome's native debugger infobar, which names YCoding while attached. The extension shows no visible in-page control indicator.
 
 ## Verification
 
@@ -130,15 +81,15 @@ X1 to X6 and X11: `bun test` in `extensions/chrome` (service-worker fixture case
 
 ## Maintenance
 
-Read `../../DESIGN.md` and this file before changing any extension appearance. Change the rule first, update `indicator.js` and this file in the same change, run strict lint and the drift test, and obtain approval before altering a color, label, marker glyph, mark, or motion value.
+Read `../../DESIGN.md` and this file before changing any extension appearance. Change the rule first, update `indicator.js` and this file in the same change, run strict lint and the drift test, and obtain approval before altering a color, marker glyph, or mark.
 
 ## Do's and Don'ts
 
-- Do keep the existing purple cursor and green badge unless a rule here changes.
+- Do keep the green badge unless a rule here changes.
 - Do fail closed when the marker cannot be shown.
-- Don't animate toward a coordinate no action uses, or show typed text in the label.
+- Don't draw a cursor, label, ripple, or any other element in the controlled page.
 - Don't add tab groups or native window focus changes to signal control; the favicon swap in X11 is the one approved favicon change.
-- Don't replace the tab favicon logo or chip mark with an emoji, a text glyph, or a fetched or packaged image.
+- Don't replace the tab favicon logo with an emoji, a text glyph, or a fetched or packaged image.
 
 ## Exceptions
 
