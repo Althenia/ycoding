@@ -120,6 +120,29 @@ async function deliveryFixture(routes: DeliveryRoutes, deliver: string[]) {
     async cleanup() { await rm(dir, { recursive: true, force: true }) } }
 }
 
+test("source CLI explains a saved endpoint mismatch without observing or delivering", async () => {
+  const state: FollowState = { version: 1, rootSessionID: "ses_root", server: "b".repeat(64), sourceEpoch: "epoch_synthetic",
+    cursors: [{ sessionID: "ses_root", after: 24860 }, ...Array.from({ length: 63 }, (_, index) => ({ sessionID: `ses_compaction_${index}`, after: index }))],
+    pending: [], seen: [], requestSeen: [], terminalSeen: [],
+    delivery: { announced: [], targets: [{ target: "thr_synthetic_only", outbox: [{ sessionID: "ses_root", id: "evt_retained", seq: 24860, type: "session.execution.interrupted" }] }] } }
+  const f = await deliveryFixture({ state: () => state, message: () => Response.json({ data: { admission: "started" } }) }, ["thr_synthetic_only"])
+  try {
+    await f.child.exited
+    const result = await f.finish()
+    expect(result.exit).toBe(1)
+    expect(result.stderr).toContain("[state-invalid]")
+    expect(result.stderr).toContain("selected native endpoint does not match the saved server identity")
+    expect(result.stderr).toContain("retain the state and select its original endpoint")
+    expect(result.stderr).not.toContain(state.server)
+    expect(result.stderr).not.toContain(f.dir)
+    expect(f.lines).toEqual([])
+    expect(f.sent).toEqual([])
+    expect(await f.state()).toEqual(state)
+    const lockError = await readFile(`${f.filename}.lock`).then(() => undefined, (failure: unknown) => failure)
+    expect(lockError).toMatchObject({ code: "ENOENT" })
+  } finally { await f.finish(); await f.cleanup() }
+}, 30_000)
+
 for (const exhausted of [false, true]) {
   test(`source CLI ${exhausted ? "retains state on configured page exhaustion" : "resumes a complete paginated 68-Session family and sole pending delivery"}`, async () => {
     const family = [...Array.from({ length: 32 }, (_, index) => ({ id: `ses_child_${index}`, parentID: "ses_root" })),

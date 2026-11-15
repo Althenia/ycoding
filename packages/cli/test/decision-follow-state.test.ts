@@ -10,6 +10,7 @@ const state = (): FollowState => ({ version: 1, rootSessionID: "ses_root", serve
 for (const [name, change] of [
   ["root", { rootSessionID: "ses_other" }],
   ["server", { server: "b".repeat(64) }],
+  ["malformed server", { server: "http://synthetic.invalid/private" }],
   ["unknown fields", { secret: "NEVER-STORE" }],
   ["epoch", { sourceEpoch: "private/path" }],
   ["missing root cursor", { sourceEpoch: "epoch_one", cursors: [] }],
@@ -54,6 +55,36 @@ async function directory() {
   await mkdir(root, { recursive: true })
   return realpath(await mkdtemp(path.join(root, "decision-follow-test-")))
 }
+
+test("follow state explains an endpoint mismatch and preserves all v1 recovery state", async () => {
+  const dir = await directory()
+  const filename = path.join(dir, "state.json")
+  const value: FollowState = { ...state(), sourceEpoch: "epoch_one", cursors: [{ sessionID: "ses_root", after: 24860 },
+    ...Array.from({ length: 63 }, (_, index) => ({ sessionID: index < 31 ? `ses_compaction_${index}` : `ses_child_${index}`, after: index }))],
+    requestSeen: ["form\0ses_root\0frm_one"], terminalSeen: ["permission\0ses_root\0per_one"],
+    ownership: [{ groupID: "grp_one", sessionID: "ses_child_31", ownerSessionID: "ses_root", revision: 2 }],
+    delivery: { announced: [], targets: [{ target: "thr_synthetic_only", outbox: [{ sessionID: "ses_root", id: "evt_retained", type: "session.execution.interrupted", seq: 24860 }] }] } }
+  const saved = JSON.stringify(value) + "\n"
+  try {
+    await writeFile(filename, saved, { mode: 0o600 })
+    const error = await openFollowState(filename, "ses_root", "b".repeat(64)).then(() => undefined, (failure: unknown) => failure instanceof Error ? failure : undefined)
+    expect(error?.message).toStartWith("[state-invalid]")
+    expect(error?.message).toContain("selected native endpoint does not match the saved server identity")
+    expect(error?.message).toContain("retain the state and select its original endpoint")
+    expect(error?.message).not.toContain(server)
+    expect(error?.message).not.toContain("b".repeat(64))
+    expect(error?.message).not.toContain(dir)
+    expect(await readFile(filename, "utf8")).toBe(saved)
+    const lockError = await lstat(`${filename}.lock`).then(() => undefined, (failure: unknown) => failure)
+    expect(lockError).toMatchObject({ code: "ENOENT" })
+    const store = await openFollowState(filename, "ses_root", server)
+    try {
+      expect(store.state).toEqual(value)
+      await store.save(store.state)
+    } finally { await store.close() }
+    expect(await readFile(filename, "utf8")).toBe(saved)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
 
 test("follow state restores 68 cursors with a retained root cursor and one synthetic outbox under a single writer", async () => {
   const dir = await directory()

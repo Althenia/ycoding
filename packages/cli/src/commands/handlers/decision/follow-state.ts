@@ -114,8 +114,9 @@ function validateDelivery(value: unknown) {
 
 export function validateFollowState(value: unknown, root: string, server: string): FollowState {
   if (!record(value) || !keys(value, ["version", "rootSessionID", "server", "sourceEpoch", "cursors", "pending", "seen", "requestSeen", "terminalSeen", "ownership", "delivery"]) ||
-    value.version !== 1 || value.rootSessionID !== root || !followID(root) || value.server !== server || !/^[a-f0-9]{64}$/.test(server) ||
+    value.version !== 1 || value.rootSessionID !== root || !followID(root) || typeof value.server !== "string" || !/^[a-f0-9]{64}$/.test(value.server) || !/^[a-f0-9]{64}$/.test(server) ||
     value.sourceEpoch !== undefined && !followID(value.sourceEpoch)) throw new Error("Invalid follow state identity")
+  if (value.server !== server) throw new FollowError("state-invalid", "selected native endpoint does not match the saved server identity; retain the state and select its original endpoint")
   if (!Array.isArray(value.cursors) || value.cursors.length > followLedgerLimit) throw new Error("Invalid follow cursors")
   const ids = new Set<string>()
   for (const cursor of value.cursors) {
@@ -233,6 +234,7 @@ export async function openFollowState(filename: string, root: string, server: st
         state = validateFollowState(JSON.parse(buffer.subarray(0, bytesRead).toString("utf8")), root, server)
       } finally { await file.close() }
     } catch (error) {
+      if (error instanceof FollowError) throw error
       if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw new FollowError("state-invalid")
     }
     return { state, close, async save(value: FollowState) {
