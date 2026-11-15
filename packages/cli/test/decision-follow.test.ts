@@ -591,6 +591,51 @@ for (const running of [[], ["ses_child"]]) {
   })
 }
 
+for (const status of [404, 401, 409, 500]) {
+  for (const parentID of ["ses_missing_member", "ses_root"]) {
+    test(`resumed Project task reads ${status === 404 && parentID !== "ses_root" ? "skip" : "preserve"} HTTP ${status} for ${parentID}`, async () => {
+      const state = initial()
+      state.sourceEpoch = "epoch_one"
+      state.cursors = [{ sessionID: "ses_root" }]
+      state.ownership = [{ groupID: "cgrp_project", sessionID: "ses_missing_member", revision: 1 }]
+      const f = fixture(state)
+      f.client.coordination.list = async () => [{ id: "cgrp_project", masterSessionID: "ses_root" }]
+      f.client.coordination.get = async () => ({ id: "cgrp_project", revision: 2, members: [] })
+      const response = status === 404 ? { _tag: "SessionNotFoundError", sessionID: parentID, message: "Synthetic missing Session" }
+        : { _tag: "UnauthorizedError", message: "Synthetic denied read" }
+      let failure: unknown
+      const native = YCoding.make({ baseUrl: "http://native.synthetic", fetch: Object.assign(
+        async (_input: string | URL | Request, _init?: RequestInit) => Response.json(response, { status }), { preconnect: fetch.preconnect },
+      ) })
+      const list = f.client.session.subagent.list.bind(f.client.session.subagent)
+      f.client.session.subagent.list = async (input, options) => {
+        if (input.parentID !== parentID) return list(input, options)
+        try { return await native.session.subagent.list(input, options) }
+        catch (error) { failure = error; throw error }
+      }
+      const run = f.run()
+      if (status !== 404 || parentID === "ses_root") {
+        const rejected = await run.then(() => undefined, (error: unknown) => error)
+        expect(failure).toBeDefined()
+        expect(rejected).toBe(failure)
+        expect(f.receipts).toEqual([])
+        expect(f.saved).toEqual(state)
+        return
+      }
+      run.catch(() => undefined)
+      try {
+        await f.wait((receipt) => receipt.kind === "ready")
+        f.append("ses_root", 1, "session.input.admitted")
+        await f.wait((receipt) => receipt.seq === 1)
+      } finally { f.controller.abort(); await run }
+      expect(f.saved.ownership).toEqual([])
+      expect(f.saved.cursors).toEqual([{ sessionID: "ses_root", after: 1 }])
+      expect(f.receipts.filter((receipt) => receipt.kind === "ownership")).toEqual([])
+      expect(f.streams.every((stream) => stream.active === 0)).toBe(true)
+    })
+  }
+}
+
 test("owner reassignment and release emit only changed identities and survive repeated invalidations", async () => {
   const f = fixture()
   let owner: string | undefined = "ses_owner_one"

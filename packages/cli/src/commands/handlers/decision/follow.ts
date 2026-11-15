@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { FollowError, followID, followDefaultReaders, followReaderLimit, followPageLimit, followLedgerLimit, followRequestKey, requestKinds, type FollowRequest, type FollowState } from "./follow-state"
-import { ClientError } from "@ycoding-ai/client/promise"
+import { ClientError, isSessionNotFoundError } from "@ycoding-ai/client/promise"
 
 export type FollowEvent = { type: string; id?: string; created?: number; sourceEpoch?: string; aggregateID?: string; seq?: number;
   durable?: { aggregateID: string; seq: number }; data?: unknown }
@@ -253,7 +253,11 @@ export async function followFamily(client: FollowClient, options: {
         const visited = new Set<string>()
         do {
           if (++pages > maxPages) throw new FollowError("budget-exhausted", `task reconciliation exceeds --max-pages ${maxPages}; retain state and increase --max-pages up to ${followPageLimit} before resuming`)
-          const page = await read(() => client.session.subagent.list({ parentID, limit: 10, ...(cursor === undefined ? {} : { cursor }) }, { signal }))
+          const page = await read(() => client.session.subagent.list({ parentID, limit: 10, ...(cursor === undefined ? {} : { cursor }) }, { signal })).catch((error: unknown) => {
+            if (!scope.has(parentID) && isSessionNotFoundError(error) && error.sessionID === parentID) return undefined
+            throw error
+          })
+          if (page === undefined) break
           for (const task of page.data) {
             if (!followID(task.sessionID) || task.parentID !== undefined && task.parentID !== parentID) throw new FollowError("invalid-native-data")
             if (!family.has(task.sessionID) && scope.has(parentID)) { scopeChanged = true; continue }
@@ -340,10 +344,10 @@ export async function followFamily(client: FollowClient, options: {
         await send({ ...item, kind: "ownership", type: ownerSessionID === undefined ? "owner-released" : "owner-changed", resolution: "unknown", ...(snapshot ? { snapshot: true as const } : {}) })
       }
       for (const [memberKey, previous] of ownership) {
-        if (previous.groupID !== group.id || previous.ownerSessionID === undefined || detail.members.some((member) => member.sessionID === previous.sessionID)) continue
+        if (previous.groupID !== group.id || detail.members.some((member) => member.sessionID === previous.sessionID)) continue
         const item = { groupID: group.id, sessionID: previous.sessionID, revision: detail.revision }
         ownership.delete(memberKey)
-        await send({ ...item, kind: "ownership", type: "owner-released", removed: true, resolution: "unknown" })
+        await send({ ...item, kind: "ownership", type: "owner-released", removed: true, resolution: "unknown" }, previous.ownerSessionID === undefined)
       }
     }
     if (groupID === undefined) ownershipSnapshot = false

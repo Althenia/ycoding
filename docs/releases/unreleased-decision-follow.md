@@ -6,6 +6,7 @@
 
 ## Fixed
 
++ Resuming a watcher tolerates a missing former Project member while reconciling current membership, including removed unowned members. Missing root or family Sessions and other task-list failures still stop observation; acknowledged cursors and pending delivery remain intact.
 + Continuous family watching covers large and changing families, including compaction descendants, through bounded live subscriptions and sequential retained-log replay. Busy, retry and idle transitions re-evaluate live membership; active members beyond the live pool remain covered through global invalidations and finite replay.
 + Retiring a subscription or temporarily losing family membership preserves acknowledged cursors, pending delivery and deduplication history. Re-entry resumes the latest acknowledged cursor. Existing version-1 state resumes without a reset or format conversion, within the 1 MiB state limit and 8192 retained-cursor limit.
 + Retained delivery waits until family observation is ready and its state save succeeds. Discovery or recovery-budget exhaustion retains recovery state instead of reporting readiness or discarding unresolved work.
