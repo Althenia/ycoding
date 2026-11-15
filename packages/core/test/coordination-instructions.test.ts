@@ -21,6 +21,11 @@ const removed = [
   "batched with evidence and a recommendation",
   "Delegate implementation to executor Sessions.",
   "a settled turn's final text notifies no one",
+  "its resource is free",
+  "resource-limited check",
+  "A missing prior measurement",
+  "resource wait",
+  "resource or check slot",
 ]
 const once = (value: string, text: string) => expect([text, value.split(text).length]).toEqual([text, 2])
 
@@ -29,11 +34,11 @@ test("member assignments and executor guidance scale disjoint subagent lanes to 
   for (const value of [CoordinationInstructions.content, executor]) {
     once(value, "Scale executor subagent fanout from 0..5 across genuinely disjoint file and check lanes")
     once(value, "Keep small or coupled work in one Session")
+    once(value, "Never introduce ceremony, handoffs, slots, or resource-limitation throttling; run independent builds, typechecks, and selected checks directly in parallel.")
     expect(value).toContain("one writer per file")
     expect(value).not.toContain("require five subagents")
     expect(value).not.toContain("run five subagents")
   }
-  expect(CoordinationInstructions.content).toContain("within bounded memory")
 })
 
 test("Master, supervisor and executor instructions honor explicit main-agent versus subagent model and profile splits", async () => {
@@ -55,18 +60,23 @@ test("coordination and executor policies keep evidence in messages and bound ver
       "Never create REPORT.md, HANDOFF.md, RECEIPT.md, RECEIPT.json, owner-handoff.md or SHA-256 manifest artifacts unless the user explicitly requests a file artifact.",
       "Never follow up solely to request a report file or restate receipts.",
       "Reject unrequested synthetic viewport/theme combinatoric matrices.",
-      "Serialize heavy builds, Cargo workspace compiles and browser suites one at a time",
-      "allow fast single-package typechecks concurrently",
-      "within bounded memory",
       "new specifications, public-contract changes or ambiguous acceptance criteria",
       "keep routine fixes, refactors and UI polish proportional to the affected behavior.",
-      "consolidated selected checks → single commit → linear rebase onto the latest target head → ff-only merge → safe non-force worktree removal, without intermediate handoff approvals.",
+      "consolidated selected checks → single commit → linear rebase onto the latest target head → ff-only merge → safe non-force worktree removal, without ceremony, handoffs, or slots.",
       "git diff --name-only",
       "automatically rebase disjoint target advances without target-hash questions, and escalate overlapping file conflicts or failing checks.",
       "These instructions authorize no integration action by themselves",
     ]) expect(value).toContain(text)
+    for (const text of ["Serialize heavy builds", "within bounded memory", "intermediate handoff approvals"]) expect(value).not.toContain(text)
     expect(value).not.toMatch(/\bgarm\b/i)
   }
+})
+
+test("controllers start ready work immediately and hold no member on ceremony, handoffs, slots or resource limitations", () => {
+  for (const instruction of [
+    "Start ready work immediately as soon as its inputs are final, without slots, handoffs, ceremony, or resource-limitation waits.",
+    "Never attribute a one-lane pause or your own scheduling to the human, and never hold members on ceremony, handoffs, slots, or resource-limitation waits.",
+  ]) once(CoordinationInstructions.content, instruction)
 })
 
 test("Master instructions require supervision, evidence review and reasoned escalation", () => {

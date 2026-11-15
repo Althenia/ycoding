@@ -295,7 +295,17 @@ describe("Agent", () => {
           expect(item.system.split(paragraph)).toHaveLength(2)
           expect(item.system.indexOf(paragraph)).toBeLessThan(item.system.indexOf("You are "))
         }
-        for (const stale of ["run full suites", "package-wide test suite", "runs the full checks"])
+        for (const stale of [
+          "run full suites",
+          "package-wide test suite",
+          "runs the full checks",
+          "Serialize heavy builds",
+          "A queued heavy check",
+          "within bounded memory",
+          "heavy-check serialization",
+          "approval or resource limit",
+          "intermediate handoff approvals",
+        ])
           expect(item.system).not.toContain(stale)
       }
 
@@ -305,7 +315,7 @@ describe("Agent", () => {
         recovery: ["denial, unavailability and invalid input", "never replay an uncertain mutation", "Keep prompts cache-stable", "Meta Llama thought content as reasoning"],
         records: ["three or more steps", "in_progress", "cancelled", "repository-relative path", "complete, verified change", "code, tests, docs and release notes"],
         acceptance: ["formal acceptance design for new specifications, public-contract changes or ambiguous acceptance criteria", "skip that extra process for routine bug fixes, refactors and UI polish", "Reject unrequested synthetic viewport/theme combinatoric matrices"],
-        checks: ["Serialize heavy builds, Cargo workspace compiles and browser suites one at a time across agents", "allow fast single-package typechecks concurrently under memory_limit_mb within bounded memory"],
+        checks: ["Never introduce ceremony, handoffs, slots, or resource-limitation throttling; run independent builds, typechecks, and selected checks directly in parallel."],
         reporting: ["directly in turn messages as command + exit code + pass/fail counts + commit or diff stat", "distinguish unrun checks from passing results", "Never create SHA-256 file-manifest ledgers or multi-file receipt/handoff artifacts", "REPORT.md, HANDOFF.md, RECEIPT.md, RECEIPT.json, owner-handoff.md or SHA-256 manifest files unless the user explicitly requests a file artifact", "Never send follow-up turns solely to request a report file or restate receipts"],
       }
       for (const id of ["zeus", "GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein"]) {
@@ -419,9 +429,8 @@ describe("Agent", () => {
         "Edited files",
         "never wrap or collapse content in HTML elements such as details or summary",
         "do not restate a complete changed-file inventory",
-        "only when it explains a finding, behavior or action",
+        "only when it explains a finding, behavior or action.",
         "HTML the user asks for as code stays literal",
-        "or a necessary handoff",
       ]
       const blanket = [
         /names each changed file/i,
@@ -464,7 +473,7 @@ describe("Agent", () => {
         "do not retry deferred actions", "normal choices and attribution",
         "/autonomous", "Only the user creates, replaces or resumes a goal",
         "get, report, complete, stop or clear", "Never change objective text",
-        "notifications", "do not poll", "Serialize heavy builds, Cargo workspace compiles and browser suites one at a time",
+        "notifications", "do not poll", "serialize only for a real dependency, shared file, or approval, never for ceremony, handoffs, slots, or resource limitations",
         "git worktree remove <path>", "never --force",
         "bounded judgments", "not approval, a user answer or completion evidence",
       ]
@@ -524,7 +533,7 @@ describe("Agent", () => {
       const child = yield* agent.get(Agent.ID.make("zeus"))
       expect(child?.system).toContain("Escalate unresolved decisions to your parent with evidence and a recommendation; never treat its reply as native approval.")
       expect(child?.system).toContain("Do not spawn child agents")
-      expect(child?.system).toContain("coordinate heavy-check serialization and bounded concurrent fast single-package typechecks with the parent")
+      expect(child?.system).toContain("Issue independent tool calls together in one step (reads, searches, builds, typechecks, focused tests) directly without ceremony, handoffs, slots, or resource-limitation waits.")
       expect(child?.system).toContain("directly in your turn, without report files or follow-up receipt turns")
       for (const id of ["occam", "omoikane", "wittgenstein", "zeus"]) {
         const item = yield* agent.get(Agent.ID.make(id))
@@ -534,7 +543,7 @@ describe("Agent", () => {
           "automatically rebase linearly onto the latest target head when files are disjoint",
           "escalate overlapping file conflicts or failing checks to the parent",
           "consolidated checks -> single commit -> linear rebase onto the latest target head -> ff-only merge -> safe non-force worktree removal",
-          "in one continuous pass without intermediate handoff approvals",
+          "in one continuous pass without ceremony, handoffs, or slots",
           "Preserve parent ownership and native permission and approval boundaries; this prose grants no integration authority",
         ]) expect(item?.system).toContain(rule)
       }
@@ -568,7 +577,7 @@ describe("Agent", () => {
           "automatically rebase linearly onto the latest target head when files are disjoint, without target-hash questions",
           "Escalate only overlapping file conflicts or failing checks, preserving native approval gates",
           "consolidated checks -> single commit -> linear rebase onto the latest target head -> ff-only merge -> safe non-force worktree removal",
-          "in one continuous pass without intermediate handoff approvals",
+          "in one continuous pass without ceremony, handoffs, or slots",
           "This policy grants no integration authority by itself; preserve existing permission, ownership and approval boundaries",
         ]) expect(item?.system).toContain(rule)
         for (const practice of workPractice) expect(item?.system).toContain(practice)
@@ -588,14 +597,14 @@ describe("Agent", () => {
         Effect.provideService(Location.Service, Location.Service.of(testLocation)),
       )
       const duties = {
-        architech: ["big picture", "direction", "what is lacking", "what should be removed", "what must be added", "requirements through entry points", "trust boundaries", "rollback", "caller-reachable failures", "Delegate implementation"],
-        god: ["infer intent and missing context", "without asking unnecessary questions", "ground truth", "false premises", "acceptance criteria", "Delegate execution"],
-        GSD: ["relentless output-oriented", "push past obstacles", "critical path", "independent lanes", "Delegate implementation"],
-        yangi: ["Do what was assigned without hesitation or unnecessary questions", "proven simple solution", "narrow and reversible", "Delegate execution"],
-        occam: ["Do the assigned work directly without ceremony", "smallest complete change", "minimal evidence"],
-        omoikane: ["big picture", "what is lacking", "should be removed", "must be added", "callers, contracts, data flow", "dependency direction", "rollback"],
-        wittgenstein: ["Do what was assigned immediately", "no narration", "four short bullets"],
-        zeus: ["infer missing context", "push through obstacles", "independent ground truth", "false premises", "largest useful verified result"],
+        architech: ["big picture", "direction", "what is lacking", "what should be removed", "what must be added", "requirements through entry points", "trust boundaries", "rollback", "caller-reachable failures", "Delegate implementation", "Drive delivery directly without ceremony, handoffs, slots, or resource-limitation waits."],
+        god: ["infer intent and missing context", "without asking unnecessary questions", "ground truth", "false premises", "acceptance criteria", "Delegate execution", "Execute directly without ceremony, handoffs, slots, or resource-limitation waits."],
+        GSD: ["relentless output-oriented", "push past obstacles", "critical path", "independent lanes", "Delegate implementation", "Execute directly without ceremony, handoffs, slots, or resource-limitation waits."],
+        yangi: ["Do what was assigned without hesitation or unnecessary questions", "proven simple solution", "narrow and reversible", "Delegate execution", "Run directly without ceremony, handoffs, slots, or resource-limitation waits."],
+        occam: ["Do the assigned work directly without ceremony, handoffs, slots, or resource-limitation waits, and never ask the user.", "smallest complete change", "minimal evidence"],
+        omoikane: ["big picture", "what is lacking", "should be removed", "must be added", "callers, contracts, data flow", "dependency direction", "rollback", "Work directly without ceremony, handoffs, slots, or resource-limitation waits."],
+        wittgenstein: ["Do what was assigned immediately", "work with no narration, no alternatives, and no ceremony, handoffs, slots, or resource-limitation waits, and never ask the user.", "four short bullets"],
+        zeus: ["infer missing context", "push through obstacles", "independent ground truth", "false premises", "largest useful verified result", "Execute directly without ceremony, handoffs, slots, or resource-limitation waits."],
       }
       for (const [id, required] of Object.entries(duties)) {
         const item = yield* agent.get(Agent.ID.make(id))
@@ -817,6 +826,8 @@ describe("Agent", () => {
       const guardrail = yield* agent.get(Agent.ID.make("yolo-guardrail"))
       const answer = yield* agent.get(Agent.ID.make("yolo-answer"))
       const decision = yield* agent.get(Agent.ID.make("decision"))
+      expect(permission?.system).toContain("Assess this action, target and task scope against applicable grants and permission boundaries.")
+      expect(permission?.system).not.toContain("resource limits")
       expect(permission?.system).toContain("An ask rule is a request for assessment, not an explicit denial")
       expect(permission?.system).toContain("Never reinterpret a denial, ceiling or requireExplicitDecision gate as an ask")
       expect(guardrail?.system).toContain("A true hard or custom-rule review requires explicit client approval")

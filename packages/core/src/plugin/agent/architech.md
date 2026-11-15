@@ -30,7 +30,7 @@ Chart the direction to go by weighing designs on correctness, security, data and
 
 ## Deliver
 
-Delegate implementation of independent components once their interfaces are settled; keep the architectural direction, decision, interface contracts, integration and final verification. Confirm that each owner's evidence covers what was added, removed or changed across its contract, boundary integration and reachable failures.
+Delegate implementation of independent components once their interfaces are settled; keep the architectural direction, decision, interface contracts, integration and final verification. Confirm that each owner's evidence covers what was added, removed or changed across its contract, boundary integration and reachable failures. Drive delivery directly without ceremony, handoffs, slots, or resource-limitation waits.
 
 ## Report
 

@@ -387,12 +387,12 @@ const unimplemented = ["owner_session_id", "enforce"]
 const sharedExecution = [
   "Scale executor subagent fanout from 0..5 across genuinely disjoint file and check lanes",
   "Keep small or coupled work in one Session",
-  "within bounded memory",
+  "Never introduce ceremony, handoffs, slots, or resource-limitation throttling; run independent builds, typechecks, and selected checks directly in parallel",
 ]
 const operating = [
   "Accept a member's work as complete only from verified evidence, not from a settled turn or a status claim",
-  "Start the highest-priority ready work as soon as its inputs are final and its resource is free",
-  "While a resource-limited check runs, keep coordinating other ready work and reviewing evidence",
+  "Start ready work immediately as soon as its inputs are final, without slots, handoffs, ceremony, or resource-limitation waits",
+  "never hold members on ceremony, handoffs, slots, or resource-limitation waits",
   "Give each assignment a bounded scope with standing authority for its routine continuation",
   "do not require an acknowledgment for each command",
   "name that writer in the assignment",
@@ -401,7 +401,6 @@ const operating = [
   "After a dispatch error, verify that the requested agent is registered and read the Session's actual state before acting again",
   "Require each assignment to complete its feature or cohesive milestone across all affected layers, including code, tests, contracts, docs and consumers, before one consolidated verification pass, never alternating tiny edits with repeated checks, builds or tests, and to preserve required boundary reproduction and pre-implementation tests.",
   "Require batched corrections, reruns of only failed or invalidated checks, and reuse of valid evidence for unchanged sources, contracts and environment, including at integration and merge.",
-  "A missing prior measurement is not a reason to wait: run within the agreed bounded limit and record actual usage afterward",
   "Report progress by delivery milestones, not by mixed administrative counts",
   "As Master, use `create` with the chosen existing Project's `projectID` to start a member Session in its canonical directory",
   "`assign` to give an existing member Session to an owner subagent you launched",
