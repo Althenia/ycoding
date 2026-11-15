@@ -579,7 +579,7 @@ export function sessionMemoryLines(memory: DataSessionMemoryEstimate) {
 }
 
 function createSync(settled: () => void) {
-  type Load = (current: () => boolean) => Promise<void>
+  type Load = (current: () => boolean, signal: AbortSignal) => Promise<void>
   type Entry = {
     load?: Load
     generation: number
@@ -587,9 +587,11 @@ function createSync(settled: () => void) {
     loaded: boolean
     pending?: Promise<void>
     trailing?: Promise<void>
+    controller?: AbortController
   }
   const state = new Map<string, Entry>()
   let disposed = false
+  let resumed: ReturnType<typeof Promise.withResolvers<void>> | undefined
   function finish(key: string, entry: Entry) {
     if (disposed || state.get(key) !== entry) return
     if (!entry.pending && !entry.trailing && !entry.loaded) state.delete(key)
@@ -603,9 +605,11 @@ function createSync(settled: () => void) {
     if (entry.pending) {
       if (!refresh && entry.requestGeneration === entry.generation) return entry.pending
       if (entry.trailing) return entry.trailing
+      const requestGeneration = entry.requestGeneration
       const followUp = () => {
         if (entry.trailing === trailing) entry.trailing = undefined
         if (state.get(key) !== entry) return Promise.resolve()
+        if (entry.loaded && entry.requestGeneration !== requestGeneration) return Promise.resolve()
         entry.loaded = false
         return run(key, entry.load!)
       }
@@ -618,20 +622,33 @@ function createSync(settled: () => void) {
     }
     if (refresh) entry.loaded = false
     if (entry.loaded) return Promise.resolve()
-    const generation = entry.generation
-    entry.requestGeneration = generation
-    const current = () => !disposed && state.get(key) === entry && entry.generation === generation
-    const pending = load(current)
-      .catch((error: unknown) => {
-        if (!disposed) throw error
-      })
-      .then(() => {
+    const pending = (async () => {
+      for (;;) {
+        if (disposed || state.get(key) !== entry) return
+        if (resumed) {
+          await resumed.promise
+          continue
+        }
+        const generation = entry.generation
+        const controller = new AbortController()
+        entry.requestGeneration = generation
+        entry.controller = controller
+        const current = () => !disposed && state.get(key) === entry && entry.generation === generation
+        try {
+          await entry.load!(current, controller.signal)
+        } catch (error) {
+          if (!disposed && !controller.signal.aborted) throw error
+        } finally {
+          if (entry.controller === controller) entry.controller = undefined
+        }
+        if (controller.signal.aborted) continue
         if (current()) entry.loaded = true
-      })
-      .finally(() => {
-        if (entry.pending === pending) entry.pending = undefined
-        finish(key, entry)
-      })
+        return
+      }
+    })().finally(() => {
+      if (entry.pending === pending) entry.pending = undefined
+      finish(key, entry)
+    })
     entry.pending = pending
     return pending
   }
@@ -639,7 +656,27 @@ function createSync(settled: () => void) {
     run,
     dispose() {
       disposed = true
+      for (const entry of state.values()) entry.controller?.abort()
       state.clear()
+      resumed?.resolve()
+      resumed = undefined
+    },
+    pause() {
+      resumed ??= Promise.withResolvers<void>()
+      for (const [key, entry] of state) {
+        if (!entry.pending && !entry.trailing) {
+          state.delete(key)
+          continue
+        }
+        entry.generation++
+        entry.loaded = false
+        entry.controller?.abort()
+      }
+    },
+    resume() {
+      const waiting = resumed
+      resumed = undefined
+      waiting?.resolve()
     },
     complete(key: string) {
       if (disposed) return
@@ -659,7 +696,9 @@ function createSync(settled: () => void) {
       }
     },
     forget(key: string) {
+      const entry = state.get(key)
       state.delete(key)
+      entry?.controller?.abort()
     },
     pendingSessions() {
       return [...state].flatMap(([key, entry]) =>
@@ -749,7 +788,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const messageOrderSeq = new Map<string, Map<string, number>>()
     const olderMessageIDs = new Map<string, Set<string>>()
     const historyOwner = new Map<string, object>()
-    const olderLoads = new Map<string, Promise<void>>()
+    const olderLoads = new Map<string, { controller: AbortController; pending: Promise<void> }>()
+    let historyDisposed = false
     const streamSequence = new Map<string, number>()
     let applyingSequence: number | undefined
     let sourceEpoch: string | undefined
@@ -759,6 +799,16 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const retainedSessionSets = new Set<ReadonlySet<string>>()
     const sync = createSync(pruneMetadata)
     onCleanup(sync.dispose)
+    onCleanup(() => {
+      historyDisposed = true
+      for (const sessionID of olderLoads.keys()) cancelOlderMessages(sessionID)
+    })
+
+    function cancelOlderMessages(sessionID: string) {
+      const load = olderLoads.get(sessionID)
+      olderLoads.delete(sessionID)
+      load?.controller.abort()
+    }
 
     function replaceMessages(sessionID: string, messages: SessionMessageInfo[]) {
       submissions.reconcile(sessionID, messages, store.session.pending[sessionID] ?? [])
@@ -810,7 +860,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       return messages.filter((message, position) => position > boundary || message.type === "compaction")
     }
 
-    async function syncMessages(sessionID: string, current: () => boolean) {
+    async function syncMessages(sessionID: string, current: () => boolean, signal: AbortSignal) {
+      cancelOlderMessages(sessionID)
       const started = performance.now()
       const token = {}
       const requestVersion = messageVersion.get(sessionID) ?? 0
@@ -818,7 +869,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       historyOwner.set(sessionID, token)
       setStore("session", "history", sessionID, { ...store.session.history[sessionID], status: "loading", checkpoint: store.session.history[sessionID]?.checkpoint ?? false, error: undefined, failedRead: undefined })
       try {
-        const snapshot = await client.api.session.snapshot({ sessionID, limit: HISTORY_PAGE_SIZE })
+        const snapshot = await client.api.session.snapshot({ sessionID, limit: HISTORY_PAGE_SIZE }, { signal })
         if (!current() || messageSyncLoad.get(sessionID) !== token) return
         if (snapshot.session.id !== sessionID || snapshot.watermark.aggregateID !== sessionID ||
           (sourceEpoch && snapshot.sourceEpoch !== sourceEpoch)) throw new Error("The Session snapshot does not belong to the current connection")
@@ -871,15 +922,15 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       }
     }
 
-    async function loadOlderMessages(sessionID: string) {
+    async function loadOlderMessages(sessionID: string, signal: AbortSignal) {
       const history = store.session.history[sessionID]
       const before = history?.before
       const owner = historyOwner.get(sessionID)
       if (!history || !before || !owner || history.checkpoint || messageSyncLoad.has(sessionID)) return
       setStore("session", "history", sessionID, { status: "paging", error: undefined, failedRead: undefined })
       try {
-        const snapshot = await client.api.session.snapshot({ sessionID, limit: HISTORY_PAGE_SIZE, before })
-        if (historyOwner.get(sessionID) !== owner || store.session.history[sessionID]?.before !== before) return
+        const snapshot = await client.api.session.snapshot({ sessionID, limit: HISTORY_PAGE_SIZE, before }, { signal })
+        if (signal.aborted || historyOwner.get(sessionID) !== owner || store.session.history[sessionID]?.before !== before) return
         if (snapshot.session.id !== sessionID || snapshot.watermark.aggregateID !== sessionID || snapshot.sourceEpoch !== history.sourceEpoch)
           throw new Error("The older history page does not belong to the resident Session")
         if (snapshot.before === before) throw new Error("The older history cursor did not advance")
@@ -898,6 +949,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           store.session.pending[sessionID]?.forEach(projectPending)
         })
       } catch (error) {
+        if (signal.aborted) return
         if (historyOwner.get(sessionID) === owner) setStore("session", "history", sessionID, { status: "error", error: errorMessage(error), failedRead: "older" })
         throw error
       }
@@ -962,8 +1014,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         (lifecycle) => lifecycle.status !== "failed" || lifecycle.code === "cancelled" || lifecycle.code === "superseded",
       )
       if (!visible) return Promise.resolve()
-      return sync.run(`session.compaction:${sessionID}`, async (current) => {
-        const history = await client.api.session.compaction.list({ sessionID })
+      return sync.run(`session.compaction:${sessionID}`, async (current, signal) => {
+        const history = await client.api.session.compaction.list({ sessionID }, { signal })
         if (!current()) return
         setStore("session", "compactionHistory", sessionID, history)
       })
@@ -1221,7 +1273,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       messageOrderSeq.delete(sessionID)
       olderMessageIDs.delete(sessionID)
       historyOwner.delete(sessionID)
-      olderLoads.delete(sessionID)
+      cancelOlderMessages(sessionID)
       streamSequence.delete(sessionID)
       subagentGeneration.delete(sessionID)
       sync.forget(`session:${sessionID}`)
@@ -2397,10 +2449,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.pending[sessionID] ?? []
           },
           sync(sessionID: string) {
-            return sync.run(`session.pending:${sessionID}`, async (current) => {
+            return sync.run(`session.pending:${sessionID}`, async (current, signal) => {
               const pending = await client.api.session.pending.list({
                 sessionID,
-              })
+              }, { signal })
               if (!current()) return
               setStore("session", "pending", sessionID, reconcile(pending))
               setStore("session", "input", sessionID, reconcile(pending.map((item) => item.id)))
@@ -2456,8 +2508,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
         },
         sync(sessionID: string) {
-          return sync.run(`session:${sessionID}`, async (current) => {
-            const info = await client.api.session.get({ sessionID })
+          return sync.run(`session:${sessionID}`, async (current, signal) => {
+            const info = await client.api.session.get({ sessionID }, { signal })
             if (!current()) return
             setStore("session", "info", sessionID, info)
             registerSession(sessionID)
@@ -2473,7 +2525,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         syncRoots(projectID?: string) {
           return sync.run(
             "session.roots",
-            async (current) => {
+            async (current, signal) => {
               const targetProjectID = projectID ?? store.location[locationKey(defaultLocation())]?.info?.project.id
               const found: SessionInfo[] = []
               let cursor: string | undefined
@@ -2484,7 +2536,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                   limit: 200,
                   order: "desc",
                   ...(cursor === undefined ? {} : { cursor }),
-                })
+                }, { signal })
                 if (!current()) return
                 found.push(...page.data.filter((session) => !session.parentID))
                 cursor = page.cursor.next ?? undefined
@@ -2525,8 +2577,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.diagnostics[sessionID]
           },
           sync(sessionID: string) {
-            return sync.run(`session.diagnostics:${sessionID}`, async (current) => {
-              const diagnostics = await client.api.session.diagnostics({ sessionID })
+            return sync.run(`session.diagnostics:${sessionID}`, async (current, signal) => {
+              const diagnostics = await client.api.session.diagnostics({ sessionID }, { signal })
               if (!current()) return
               setStore("session", "diagnostics", sessionID, diagnostics)
             })
@@ -2543,14 +2595,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             const ids = [...new Set(sessionIDs)].sort()
             const signature = JSON.stringify(ids)
             if (JSON.stringify(taskCostInputs.get(sessionID)) !== signature) { taskCostInputs.set(sessionID, ids); sync.invalidate(`session.taskCosts:${sessionID}`) }
-            return sync.run(`session.taskCosts:${sessionID}`, async (current) => {
+            return sync.run(`session.taskCosts:${sessionID}`, async (current, signal) => {
               setStore("session", "taskCostState", sessionID, "loading")
               const tasks: SessionTaskCostsOutput["tasks"][number][] = []
               for (let offset = 0; offset < ids.length; offset += 100) {
                 const first = ids[offset]
                 if (first === undefined || !current()) return
                 const pageIDs: [string, ...string[]] = [first, ...ids.slice(offset + 1, offset + 100)]
-                const page = await client.api.session.taskCosts({ sessionID, sessionIDs: pageIDs }).catch((error: unknown) => {
+                const page = await client.api.session.taskCosts({ sessionID, sessionIDs: pageIDs }, { signal }).catch((error: unknown) => {
                   if (current()) setStore("session", "taskCostState", sessionID, "unavailable")
                   throw error
                 })
@@ -2566,8 +2618,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.usage[sessionID]
           },
           sync(sessionID: string) {
-            return sync.run(`session.usage:${sessionID}`, async (current) => {
-              const usage = await client.api.session.usage({ sessionID })
+            return sync.run(`session.usage:${sessionID}`, async (current, signal) => {
+              const usage = await client.api.session.usage({ sessionID }, { signal })
               if (!current()) return
               setStore("session", "usage", sessionID, usage)
             })
@@ -2581,8 +2633,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.todo[sessionID] ?? []
           },
           sync(sessionID: string) {
-            return sync.run(`session.todo:${sessionID}`, async (current) => {
-              const todo = await client.api.session.todo.list({ sessionID })
+            return sync.run(`session.todo:${sessionID}`, async (current, signal) => {
+              const todo = await client.api.session.todo.list({ sessionID }, { signal })
               if (!current()) return
               setStore("session", "todo", sessionID, reconcile(todo))
             })
@@ -2622,23 +2674,31 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return position === undefined ? submissions.message(sessionID, messageID) : messages?.[position]
           },
           sync(sessionID: string) {
-            return sync.run(`session.message:${sessionID}`, (current) => syncMessages(sessionID, current))
+            return sync.run(`session.message:${sessionID}`, (current, signal) => syncMessages(sessionID, current, signal))
           },
           loadOlder(sessionID: string) {
+            if (historyDisposed) return Promise.resolve()
             const current = olderLoads.get(sessionID)
-            if (current) return current
-            const pending = loadOlderMessages(sessionID).finally(() => {
-              if (olderLoads.get(sessionID) === pending) olderLoads.delete(sessionID)
+            if (current) return current.pending
+            const controller = new AbortController()
+            const pending = loadOlderMessages(sessionID, controller.signal).finally(() => {
+              if (olderLoads.get(sessionID)?.pending === pending) olderLoads.delete(sessionID)
             })
-            olderLoads.set(sessionID, pending)
+            olderLoads.set(sessionID, { controller, pending })
             return pending
           },
           async find(sessionID: string, messageID: string) {
             if (result.session.message.get(sessionID, messageID)) return true
             await result.session.message.sync(sessionID)
             while (!result.session.message.get(sessionID, messageID) && store.session.history[sessionID]?.before &&
-              !store.session.history[sessionID]?.checkpoint && client.connection.status() === "connected")
+              !store.session.history[sessionID]?.checkpoint && client.connection.status() === "connected") {
+              if (historyDisposed) break
               await result.session.message.loadOlder(sessionID)
+              const history = store.session.history[sessionID]
+              if (historyDisposed || !history?.before || history.checkpoint ||
+                client.connection.status() !== "connected" || result.session.message.get(sessionID, messageID)) break
+              await result.session.message.sync(sessionID)
+            }
             return result.session.message.get(sessionID, messageID) !== undefined
           },
           evict(sessionID: string) {
@@ -2651,7 +2711,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             messageOrderSeq.delete(sessionID)
             olderMessageIDs.delete(sessionID)
             historyOwner.delete(sessionID)
-            olderLoads.delete(sessionID)
+            cancelOlderMessages(sessionID)
             streamSequence.delete(sessionID)
             sync.forget(`session.message:${sessionID}`)
             sync.forget(`session.compaction:${sessionID}`)
@@ -2689,8 +2749,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.permission[sessionID]
           },
           sync(sessionID: string) {
-            return sync.run(`session.permission:${sessionID}`, async (current) => {
-              const permissions = await client.api.permission.list({ sessionID })
+            return sync.run(`session.permission:${sessionID}`, async (current, signal) => {
+              const permissions = await client.api.permission.list({ sessionID }, { signal })
               if (!current()) return
               setStore("session", "permission", sessionID, permissions)
             })
@@ -2707,11 +2767,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.guardrailDecided[resolveRoot(sessionID)] ?? []
           },
           sync(sessionID: string) {
-            return sync.run(`session.guardrail:${sessionID}`, async (current) => {
+            return sync.run(`session.guardrail:${sessionID}`, async (current, signal) => {
               const before = untrack(() => new Set((store.session.guardrailDecided[resolveRoot(sessionID)] ?? []).map((item) => item.requestID)))
               const [requests, status] = await Promise.all([
-                client.api.guardrail.request.list({ sessionID }),
-                client.api.guardrail.status({ sessionID }),
+                client.api.guardrail.request.list({ sessionID }, { signal }),
+                client.api.guardrail.status({ sessionID }, { signal }),
               ])
               if (!current()) return
               const rootID = status.rootSessionID
@@ -2744,8 +2804,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             const before = untrack(() => resolveRoot(sessionID))
             const rootID = await loadReviewRoot(sessionID)
             if (rootID !== before) sync.forget(`session.review:${rootID}`)
-            return sync.run(`session.review:${rootID}`, async (current) => {
-              const items = await client.api.review.list({ sessionID: rootID })
+            return sync.run(`session.review:${rootID}`, async (current, signal) => {
+              const items = await client.api.review.list({ sessionID: rootID }, { signal })
               if (!current()) return
               setStore("session", "review", rootID, reconcile(items))
             })
@@ -2764,11 +2824,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           sync(sessionID: string, ref?: LocationRef) {
             const key = `session.form:${sessionID}:${sessionID === "global" ? locationKey(ref ?? defaultLocation()) : ""}`
-            return sync.run(key, async (current) => {
+            return sync.run(key, async (current, signal) => {
               if (sessionID === "global") {
                 const response = await client.api.form.request.list({
                   location: locationQuery(ref ?? defaultLocation()),
-                })
+                }, { signal })
                 if (!current()) return
                 const location = {
                   directory: response.location.directory,
@@ -2783,7 +2843,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 ])
                 return
               }
-              const forms = await client.api.form.list({ sessionID })
+              const forms = await client.api.form.list({ sessionID }, { signal })
               if (!current()) return
               setStore("session", "form", sessionID, forms)
             })
@@ -2801,8 +2861,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.project.permission[projectID]
           },
           sync(projectID: string) {
-            return sync.run(`project.permission:${projectID}`, async (current) => {
-              const permissions = await client.api.permission.saved.list({ projectID })
+            return sync.run(`project.permission:${projectID}`, async (current, signal) => {
+              const permissions = await client.api.permission.saved.list({ projectID }, { signal })
               if (!current()) return
               setStore("project", "permission", projectID, permissions)
             })
@@ -2871,10 +2931,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         sync(ref?: LocationRef, isCurrent: () => boolean = () => true) {
           if (!isCurrent()) return Promise.resolve()
           const id = locationKey(ref ?? defaultLocation())
-          return sync.run(`location.shell:${id}`, async (current) => {
+          return sync.run(`location.shell:${id}`, async (current, signal) => {
             const response = await client.api.shell.list({
               location: locationQuery(ref ?? defaultLocation()),
-            })
+            }, { signal })
             if (!current()) return
             const key = locationKey(response.location)
             setStore("location", key, {
@@ -2901,10 +2961,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         async sync(ref?: LocationRef) {
           const current = ref ?? defaultLocation()
           viewedLocation = ref ? locationKey(ref) : undefined
-          await sync.run(`location:${locationKey(current)}`, async (isCurrent) => {
+          await sync.run(`location:${locationKey(current)}`, async (isCurrent, signal) => {
             const location = await client.api.location.get({
               location: locationQuery(current),
-            })
+            }, { signal })
             if (!isCurrent()) return
             const key = locationKey(location)
             if (!store.location[key]) setStore("location", key, {})
@@ -2954,10 +3014,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           sync(ref?: LocationRef) {
             const id = locationKey(ref ?? defaultLocation())
-            return sync.run(`location.agent:${id}`, async (current) => {
+            return sync.run(`location.agent:${id}`, async (current, signal) => {
               const response = await client.api.agent.list({
                 location: locationQuery(ref ?? defaultLocation()),
-              })
+              }, { signal })
               if (!current()) return
               const key = locationKey(response.location)
               setStore("location", key, {
@@ -2976,10 +3036,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           sync(ref?: LocationRef) {
             const id = locationKey(ref ?? defaultLocation())
-            return sync.run(`location.command:${id}`, async (current) => {
+            return sync.run(`location.command:${id}`, async (current, signal) => {
               const response = await client.api.command.list({
                 location: locationQuery(ref ?? defaultLocation()),
-              })
+              }, { signal })
               if (!current()) return
               const key = locationKey(response.location)
               setStore("location", key, {
@@ -2998,10 +3058,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           sync(ref?: LocationRef) {
             const id = locationKey(ref ?? defaultLocation())
-            return sync.run(`location.integration:${id}`, async (current) => {
+            return sync.run(`location.integration:${id}`, async (current, signal) => {
               const response = await client.api.integration.list({
                 location: locationQuery(ref ?? defaultLocation()),
-              })
+              }, { signal })
               if (!current()) return
               const key = locationKey(response.location)
               setStore("location", key, {
@@ -3021,10 +3081,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             },
             sync(ref?: LocationRef) {
               const id = locationKey(ref ?? defaultLocation())
-              return sync.run(`location.mcp.server:${id}`, async (current) => {
+              return sync.run(`location.mcp.server:${id}`, async (current, signal) => {
                 const response = await client.api.mcp.list({
                   location: locationQuery(ref ?? defaultLocation()),
-                })
+                }, { signal })
                 if (!current()) return
                 const key = locationKey(response.location)
                 setStore("location", key, {
@@ -3043,10 +3103,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             },
             sync(ref?: LocationRef) {
               const id = locationKey(ref ?? defaultLocation())
-              return sync.run(`location.mcp.resource:${id}`, async (current) => {
+              return sync.run(`location.mcp.resource:${id}`, async (current, signal) => {
                 const response = await client.api.mcp.resource.catalog({
                   location: locationQuery(ref ?? defaultLocation()),
-                })
+                }, { signal })
                 if (!current()) return
                 const key = locationKey(response.location)
                 setStore("location", key, {
@@ -3070,10 +3130,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             },
             sync(ref?: LocationRef) {
               const id = locationKey(ref ?? defaultLocation())
-              return sync.run(`location.config.diagnostics:${id}`, async (current) => {
+              return sync.run(`location.config.diagnostics:${id}`, async (current, signal) => {
                 const response = await client.api.config.diagnostics({
                   location: locationQuery(ref ?? defaultLocation()),
-                })
+                }, { signal })
                 if (!current()) return
                 const key = locationKey(response.location)
                 setStore("location", key, {
@@ -3096,11 +3156,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           sync(ref?: LocationRef) {
             const id = locationKey(ref ?? defaultLocation())
-            return sync.run(`location.model:${id}`, async (current) => {
+            return sync.run(`location.model:${id}`, async (current, signal) => {
               const requestedLocation = locationQuery(ref ?? defaultLocation())
-              const configured = await client.api.model.default({ location: requestedLocation })
+              const configured = await client.api.model.default({ location: requestedLocation }, { signal })
               if (!current()) return
-              const response = await client.api.model.list({ location: requestedLocation })
+              const response = await client.api.model.list({ location: requestedLocation }, { signal })
               if (!current()) return
               const key = locationKey(response.location)
               setStore("location", key, {
@@ -3120,10 +3180,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           sync(ref?: LocationRef) {
             const id = locationKey(ref ?? defaultLocation())
-            return sync.run(`location.provider:${id}`, async (current) => {
+            return sync.run(`location.provider:${id}`, async (current, signal) => {
               const response = await client.api.provider.list({
                 location: locationQuery(ref ?? defaultLocation()),
-              })
+              }, { signal })
               if (!current()) return
               const key = locationKey(response.location)
               setStore("location", key, {
@@ -3142,10 +3202,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           sync(ref?: LocationRef) {
             const id = locationKey(ref ?? defaultLocation())
-            return sync.run(`location.reference:${id}`, async (current) => {
+            return sync.run(`location.reference:${id}`, async (current, signal) => {
               const response = await client.api.reference.list({
                 location: locationQuery(ref ?? defaultLocation()),
-              })
+              }, { signal })
               if (!current()) return
               const key = locationKey(response.location)
               setStore("location", key, {
@@ -3164,10 +3224,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           sync(ref?: LocationRef) {
             const id = locationKey(ref ?? defaultLocation())
-            return sync.run(`location.skill:${id}`, async (current) => {
+            return sync.run(`location.skill:${id}`, async (current, signal) => {
               const response = await client.api.skill.list({
                 location: locationQuery(ref ?? defaultLocation()),
-              })
+              }, { signal })
               if (!current()) return
               const key = locationKey(response.location)
               setStore("location", key, {
@@ -3192,7 +3252,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     createEffect(
       (previous) => {
         const status = client.connection.status()
-        if (status === "connected" || previous !== "connected") return status
+        if (status === "connected") {
+          sync.resume()
+          return status
+        }
+        if (previous !== "connected") return status
         setStore(
           "session",
           "prediction",
@@ -3203,11 +3267,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           }),
         )
         activeSnapshot = undefined
-        sync.invalidate()
+        sync.pause()
         subagentGeneration.forEach((generation, parentID) => subagentGeneration.set(parentID, generation + 1))
         messageSyncLoad.clear()
         historyOwner.clear()
-        olderLoads.clear()
+        for (const sessionID of olderLoads.keys()) cancelOlderMessages(sessionID)
         return status
       },
       client.connection.status(),

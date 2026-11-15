@@ -261,28 +261,85 @@ test("an obsolete transcript read cannot enable submission after reconnect", asy
   }
   try {
     await screen.waitForEventStream()
-    const obsolete = data.session.message.sync(fixture.sessionID)
+    let obsoleteSettled = false
+    const obsolete = data.session.message.sync(fixture.sessionID).then(() => { obsoleteSettled = true })
     const connected = Promise.withResolvers<void>()
     const unsubscribe = data.on("server.connected", () => connected.resolve())
     screen.events.disconnect()
     await connected.promise
     unsubscribe()
-    await screen.renderOnce()
-    expect(requests).toBe(1)
-    reads[0].resolve()
-    await obsolete
     await wait(() => requests === 2 && screen.frame().includes("Loading session"))
+    reads[0].resolve()
+    await new Promise<void>((resolve) => setImmediate(resolve))
     await screen.renderOnce()
+    expect(obsoleteSettled).toBe(false)
     expect(screen.frame()).toContain("Loading session")
     await screen.input.typeText("held after reconnect")
     screen.input.pressKey("RETURN")
     reads[1].resolve()
+    await obsolete
     await wait(() => screen.frame().includes("Synthetic response 1"))
     expect(fixture.requests.filter((request) => request.startsWith("POST"))).toEqual([])
     expect(screen.frame()).toContain("held after reconnect")
     await screen.waitForEventStream()
   } finally {
     reads.forEach((read) => read.resolve())
+    await screen.dispose()
+  }
+}, 30000)
+
+test("reconnect hydrates the selected Session without waiting for an obsolete snapshot response", async () => {
+  const fixture = sessionHistoryFixture(2)
+  fixture.release()
+  const obsolete = Promise.withResolvers<void>()
+  const requested = Promise.withResolvers<void>()
+  let requests = 0
+  let data!: ReturnType<typeof useData>
+  let toast!: ReturnType<typeof useToast>
+  const screen = await renderScreen({
+    width: 120,
+    height: 36,
+    args: { sessionID: fixture.sessionID },
+    settle: "commands",
+    state: "/tmp/ycoding-tui-perf/state",
+    config: { session: { sidebar: "hide" } },
+    data: (value) => {
+      data = value
+      toast = useToast()
+    },
+    route: async (url, request) => {
+      if (url.pathname === `/api/session/${fixture.sessionID}/snapshot`) {
+        requests++
+        if (requests === 1) {
+          requested.resolve()
+          await obsolete.promise
+        }
+      }
+      return fixture.route(url, request)
+    },
+  })
+  let unsubscribe = () => {}
+  try {
+    await requested.promise
+    await screen.waitForEventStream()
+    expect(screen.frame()).toContain("Loading session")
+    const connected = Promise.withResolvers<void>()
+    unsubscribe = data.on("server.connected", () => connected.resolve())
+    screen.events.disconnect()
+    await connected.promise
+    unsubscribe()
+    const deadline = Date.now() + 5000
+    while (!screen.frame().includes("Synthetic response 1") && Date.now() < deadline) {
+      await screen.renderOnce()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    expect(requests).toBe(2)
+    expect(screen.frame()).toContain("Synthetic response 1")
+    expect(screen.frame()).not.toContain("Loading session")
+    expect(toast.currentToast).toBeNull()
+  } finally {
+    unsubscribe()
+    obsolete.resolve()
     await screen.dispose()
   }
 }, 30000)

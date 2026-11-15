@@ -46,6 +46,255 @@ test("disposing during an outstanding read prevents queued activity refreshes", 
   expect(reads).toBe(1)
 })
 
+for (const disconnected of [false, true]) {
+  test(disconnected
+    ? "disposing the data owner settles a cancelled metadata read while disconnected"
+    : "disposing the data owner cancels its unresolved Session metadata read", async () => {
+    const response = Promise.withResolvers<Response>()
+    const requested = Promise.withResolvers<void>()
+    let signal: AbortSignal | undefined
+    let requests = 0
+    const fixture = await mount((url, request) => {
+      if (url.pathname !== "/api/session/ses_disposed_metadata/permission") return undefined
+      requests++
+      signal = request.signal
+      const cancel = () => response.reject(new Error("Session metadata read aborted"))
+      if (signal.aborted) cancel()
+      else signal.addEventListener("abort", cancel, { once: true })
+      requested.resolve()
+      return response.promise.finally(() => request.signal.removeEventListener("abort", cancel))
+    })
+    let settled = false
+    const loading = fixture.data.session.permission.sync("ses_disposed_metadata").then(
+      () => { settled = true },
+      () => { settled = true },
+    )
+    let destroyed = false
+    try {
+      await requested.promise
+      expect(settled).toBe(false)
+      if (disconnected) {
+        await fixture.waitFor(() => fixture.events.subscriptions() > 0)
+        fixture.events.disconnect()
+        await fixture.waitFor(() => signal?.aborted === true)
+        expect(settled).toBe(false)
+      }
+      fixture.destroy()
+      destroyed = true
+      expect(signal?.aborted).toBe(true)
+      await loading
+      expect(settled).toBe(true)
+      expect(requests).toBe(1)
+      expect(fixture.data.session.permission.list("ses_disposed_metadata")).toBeUndefined()
+    } finally {
+      response.resolve(json({ data: [] }))
+      await loading
+      if (!destroyed) fixture.destroy()
+    }
+  })
+}
+
+for (const transition of ["eviction", "replacement", "disconnect", "disposal"] as const) {
+  test(`${transition} cancels an unresolved older-page snapshot`, async () => {
+    const sessionID = "ses_older_lifetime"
+    const response = Promise.withResolvers<Response>()
+    const requested = Promise.withResolvers<void>()
+    let signal: AbortSignal | undefined
+    let olderRequests = 0
+    const recent = { id: "msg_recent", type: "user", text: "Current page", time: { created: 2 } }
+    const older = { id: "msg_older", type: "user", text: "Older page", time: { created: 1 } }
+    const fixture = await mount((url, request) => {
+      if (url.pathname !== `/api/session/${sessionID}/snapshot`) return undefined
+      if (!url.searchParams.has("before")) return sessionSnapshot(sessionID, [recent], { before: "opaque_older" })
+      olderRequests++
+      if (olderRequests > 1) return sessionSnapshot(sessionID, [older])
+      signal = request.signal
+      const cancel = () => response.reject(new Error("Older page aborted"))
+      if (signal.aborted) cancel()
+      else signal.addEventListener("abort", cancel, { once: true })
+      requested.resolve()
+      return response.promise.finally(() => request.signal.removeEventListener("abort", cancel))
+    })
+    let destroyed = false
+    let paging = Promise.resolve(true)
+    try {
+      await fixture.data.session.message.sync(sessionID)
+      paging = fixture.data.session.message.loadOlder(sessionID).then(() => true, () => false)
+      await requested.promise
+      expect(fixture.data.session.message.history(sessionID)?.status).toBe("paging")
+      if (transition === "eviction") fixture.data.session.message.evict(sessionID)
+      if (transition === "replacement") {
+        fixture.data.session.message.invalidate(sessionID)
+        await fixture.data.session.message.sync(sessionID)
+      }
+      if (transition === "disconnect") {
+        await fixture.waitFor(() => fixture.events.subscriptions() > 0)
+        const connected = Promise.withResolvers<void>()
+        const unsubscribe = fixture.data.on("server.connected", () => connected.resolve())
+        fixture.events.disconnect()
+        await connected.promise
+        unsubscribe()
+      }
+      if (transition === "disposal") {
+        fixture.destroy()
+        destroyed = true
+      }
+      expect(signal?.aborted).toBe(true)
+      expect(await paging).toBe(true)
+      expect(fixture.data.session.message.get(sessionID, older.id)).toBeUndefined()
+      if (transition === "disposal") {
+        await fixture.data.session.message.loadOlder(sessionID)
+        expect(await fixture.data.session.message.find(sessionID, "msg_missing")).toBe(false)
+        expect(olderRequests).toBe(1)
+        return
+      }
+      await fixture.data.session.message.sync(sessionID)
+      expect(fixture.data.session.message.history(sessionID)?.status).toBe("ready")
+      await fixture.data.session.message.loadOlder(sessionID)
+      expect(olderRequests).toBe(2)
+      expect(fixture.data.session.message.list(sessionID).map((message) => message.id)).toEqual([older.id, recent.id])
+      expect(fixture.data.session.message.history(sessionID)?.before).toBeUndefined()
+    } finally {
+      response.resolve(sessionSnapshot(sessionID, [older]))
+      await paging
+      if (!destroyed) fixture.destroy()
+    }
+  })
+}
+
+test("Find does not rehydrate an evicted Session after its older page is cancelled", async () => {
+  const sessionID = "ses_find_evicted"
+  const response = Promise.withResolvers<Response>()
+  const requested = Promise.withResolvers<void>()
+  const recent = { id: "msg_recent", type: "user", text: "Evicted row", time: { created: 2 } }
+  let snapshots = 0
+  const fixture = await mount((url, request) => {
+    if (url.pathname !== `/api/session/${sessionID}/snapshot`) return undefined
+    if (!url.searchParams.has("before")) {
+      snapshots++
+      return sessionSnapshot(sessionID, [recent], snapshots === 1 ? { before: "older_cursor" } : {})
+    }
+    const cancel = () => response.reject(new Error("Older page evicted"))
+    request.signal.addEventListener("abort", cancel, { once: true })
+    requested.resolve()
+    return response.promise.finally(() => request.signal.removeEventListener("abort", cancel))
+  })
+  let finding = Promise.resolve(false)
+  try {
+    await fixture.data.session.message.sync(sessionID)
+    finding = fixture.data.session.message.find(sessionID, "msg_missing")
+    await requested.promise
+    fixture.data.session.message.evict(sessionID)
+    expect(await finding).toBe(false)
+    expect(snapshots).toBe(1)
+    expect(fixture.data.session.message.history(sessionID)).toBeUndefined()
+    expect(fixture.data.session.message.list(sessionID)).toEqual([])
+  } finally {
+    fixture.destroy()
+    response.resolve(sessionSnapshot(sessionID, [recent]))
+    await finding
+  }
+}, 5000)
+
+for (const fails of [false, true]) {
+  test(fails
+    ? "Find propagates a replacement snapshot failure after its older page is cancelled"
+    : "Find yields while a replacement snapshot is pending and resumes from its cursor", async () => {
+    const sessionID = "ses_find_replacement"
+    const olderResponse = Promise.withResolvers<Response>()
+    const replacement = Promise.withResolvers<Response>()
+    const olderRequested = Promise.withResolvers<void>()
+    const replacementRequested = Promise.withResolvers<void>()
+    const recent = { id: "msg_recent", type: "user", text: "Current row", time: { created: 2 } }
+    const next = { id: "msg_next", type: "user", text: "Replacement row", time: { created: 3 } }
+    const target = { id: "msg_target", type: "user", text: "Find target", time: { created: 1 } }
+    const cursors: string[] = []
+    let snapshots = 0
+    const fixture = await mount((url, request) => {
+      if (url.pathname !== `/api/session/${sessionID}/snapshot`) return undefined
+      const before = url.searchParams.get("before")
+      if (!before) {
+        if (snapshots++ === 0) return sessionSnapshot(sessionID, [recent], { before: "old_cursor" })
+        replacementRequested.resolve()
+        return replacement.promise
+      }
+      cursors.push(before)
+      if (before === "new_cursor") return sessionSnapshot(sessionID, [target])
+      const cancel = () => olderResponse.reject(new Error("Older page replaced"))
+      request.signal.addEventListener("abort", cancel, { once: true })
+      olderRequested.resolve()
+      return olderResponse.promise.finally(() => request.signal.removeEventListener("abort", cancel))
+    })
+    let finding: Promise<{ found: boolean; error?: unknown }> = Promise.resolve({ found: false })
+    let replacing = Promise.resolve()
+    try {
+      await fixture.data.session.message.sync(sessionID)
+      let settled = false
+      finding = fixture.data.session.message.find(sessionID, target.id).then(
+        (found) => {
+          settled = true
+          return { found, error: undefined }
+        },
+        (error: unknown) => {
+          settled = true
+          return { found: false, error }
+        },
+      )
+      await olderRequested.promise
+      fixture.data.session.message.invalidate(sessionID)
+      replacing = fixture.data.session.message.sync(sessionID).catch(() => undefined)
+      await replacementRequested.promise
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(settled).toBe(false)
+      expect(cursors).toEqual(["old_cursor"])
+      expect(fixture.data.session.message.history(sessionID)?.status).toBe("loading")
+      replacement.resolve(fails
+        ? json({ message: "Replacement unavailable" }, { status: 503 })
+        : sessionSnapshot(sessionID, [recent, next], { before: "new_cursor" }))
+      const result = await finding
+      await replacing
+      if (fails) {
+        expect(result).toMatchObject({ found: false, error: { reason: "UnexpectedStatus", cause: { status: 503 } } })
+        expect(cursors).toEqual(["old_cursor"])
+        expect(fixture.data.session.message.history(sessionID)).toMatchObject({ status: "error", failedRead: "latest" })
+      } else {
+        expect(result).toEqual({ found: true, error: undefined })
+        expect(cursors).toEqual(["old_cursor", "new_cursor"])
+        expect(fixture.data.session.message.list(sessionID).map((message) => message.id)).toEqual([target.id, recent.id, next.id])
+      }
+    } finally {
+      olderResponse.resolve(sessionSnapshot(sessionID, []))
+      replacement.resolve(sessionSnapshot(sessionID, []))
+      await Promise.all([finding, replacing])
+      fixture.destroy()
+    }
+  }, 5000)
+}
+
+test("an older-page failure remains visible and allows retrying the same cursor", async () => {
+  const sessionID = "ses_older_failure"
+  const cursors: string[] = []
+  const fixture = await mount((url) => {
+    if (url.pathname !== `/api/session/${sessionID}/snapshot`) return undefined
+    const before = url.searchParams.get("before")
+    if (!before) return sessionSnapshot(sessionID, [], { before: "retry_cursor" })
+    cursors.push(before)
+    if (cursors.length === 1) return json({ message: "Older snapshot unavailable" }, { status: 503 })
+    return sessionSnapshot(sessionID, [{ id: "msg_older", type: "user", text: "Recovered page", time: { created: 1 } }])
+  })
+  try {
+    await fixture.data.session.message.sync(sessionID)
+    await expect(fixture.data.session.message.loadOlder(sessionID)).rejects.toMatchObject({ reason: "UnexpectedStatus", cause: { status: 503 } })
+    expect(fixture.data.session.message.history(sessionID)).toMatchObject({ status: "error", failedRead: "older", before: "retry_cursor" })
+    await fixture.data.session.message.loadOlder(sessionID)
+    expect(cursors).toEqual(["retry_cursor", "retry_cursor"])
+    expect(fixture.data.session.message.get(sessionID, "msg_older")).toMatchObject({ text: "Recovered page" })
+    expect(fixture.data.session.message.history(sessionID)?.status).toBe("ready")
+  } finally {
+    fixture.destroy()
+  }
+})
+
 test("200 actual-provider open and evict cycles retain a bounded inactive metadata cache", async () => {
   const events = createEventStream()
   const reads: string[] = []
