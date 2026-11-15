@@ -3475,8 +3475,9 @@ describe("Chrome control marker", () => {
       expect(harness.cursorDOM.document.title).toBe("Inbox")
       expect(harness.cursorDOM.iconLinks()[0]?.getAttribute("href")).toStartWith("data:image/svg+xml,")
       await socket.receive(action("group-title", anchor.tabID, observation, { type: "group", tabIDs: [anchor.tabID, second.tabID], title: "Task" }))
-      expect(socket.outgoing.find((message) => message.callID === "group-title")).toMatchObject({ type: "result", title: "Inbox" })
-      await socket.receive(action("ungroup-title", anchor.tabID, observation, { type: "ungroup", tabIDs: [anchor.tabID, second.tabID], groupID: 7 }))
+      const grouped = socket.outgoing.find((message) => message.callID === "group-title")
+      expect(grouped).toMatchObject({ type: "result", title: "Inbox" })
+      await socket.receive(action("ungroup-title", anchor.tabID, observation, { type: "ungroup", tabIDs: [anchor.tabID, second.tabID], groupID: grouped.groupID }))
       expect(socket.outgoing.find((message) => message.callID === "ungroup-title")).toMatchObject({ type: "result", title: "Inbox" })
     } finally {
       await stopBridge()

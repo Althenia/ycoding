@@ -7,8 +7,22 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists the v0.11.3 release first with its notes", async () => {
+  test("lists the v0.11.4 release first with its notes", async () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.4", date: "2026-11-15", title: "Bounded Session reads, decision watching and Chrome control", tags: ["Added", "Changed", "Fixed"] })
+    const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.4.md", import.meta.url)).text()
+    expect(notes).toStartWith("# YCoding v0.11.4\n")
+    const changes = notes.split(/^## /m).flatMap((section) => {
+      const tag = TAGS.find((tag) => section.startsWith(`${tag}\n`))
+      if (!tag) return []
+      return [...section.matchAll(/^[+*-] (.+)$/gm)].map((match) => ({ tag, text: match[1]! }))
+    })
+    expect(entry?.changes).toEqual(changes)
+    expect(after("0.11.4")?.version).toBe("0.11.3")
+  })
+
+  test("retains the v0.11.3 release with its notes", async () => {
+    const entry = byVersion("0.11.3")
     expect(entry).toMatchObject({ version: "0.11.3", date: "2026-11-14", title: "Profile-aware Dots, Project controls and Ledger workspace", tags: ["Added", "Changed", "Fixed"] })
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.3.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.11.3\n")
@@ -1672,7 +1686,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 46)).toEqual([
+    expect(versions.slice(0, 47)).toEqual([
+      "0.11.4",
       "0.11.3",
       "0.11.2",
       "0.11.1",
