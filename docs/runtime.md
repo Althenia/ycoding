@@ -2,6 +2,42 @@
 
 This document specifies runtime behavior. Exact types and endpoint names remain owned by Schema and Protocol.
 
+## Aggregate server memory diagnostics
+
+The server samples aggregate memory only when it starts with the existing `YCODING_LOG_LEVEL=DEBUG` setting. Setting that variable on a client does not instrument an already-running server. Normal Info-level operation creates no sampler, imports no runtime-specific diagnostic module, and reads no memory counters. A diagnostic run records one sample immediately, then every 30 seconds, up to 120 samples over 59 minutes 30 seconds. Server-scope shutdown cancels the sampler, including its wait for an unresolved module load. The JavaScript module load itself can still complete; a late completion emits no record and reads no memory counter. The sampler retains no sample history in memory; records use the existing private append-only log. Earlier runs and other log records are not deleted.
+
+Each `component=memory` record includes the existing log timestamp and run ID, a sequence number, a Unix-epoch `timestampMs`, runtime name/version, and separate measurements. Available measurements have `unit=bytes`, their API source, and a `current` or `process-lifetime-peak` basis. The unsampled Bun heap field has an `unverified` basis. Unsupported APIs, unavailable modules or values, invalid readings, and read failures have explicit statuses and no numeric value. A zero RSS or RSS peak is treated as unreported, not a measured process size. A reported zero heap counter remains zero.
+
+| Runtime | Measurement | Source and meaning |
+| --- | --- | --- |
+| Bun | Current and lifetime-peak RSS | `bun:jsc.memoryUsage().current` and `.peak`, already in bytes; resident process memory, not macOS physical footprint. |
+| Bun | Heap unavailable | `sampling-cost-unverified`: the sampler does not call `bun:jsc.heapSize()`. Its wrapper delegates to `vm.heap.size()`, whose lower-level sampling cost has not been established for the bound release. |
+| Node | Current RSS | `process.memoryUsage.rss()`, bytes. |
+| Node | Lifetime-peak RSS | `process.resourceUsage().maxRSS`, KiB multiplied by 1024. This peak covers the process lifetime, not just the sampling window. |
+| Node | Current heap size, heap capacity, external memory | `process.memoryUsage().heapUsed`, `.heapTotal`, and `.external`, bytes, reported separately without summing them. |
+
+Bun heap capacity and external-memory breakdown are unsupported by this sampler. No heap semantics or sampling-cost guarantee is claimed for the bound Bun release. Native allocation attribution and allocator-retained capacity are not measured on either runtime. RSS minus a heap counter is not either quantity.
+
+The Bun 1.4.4 [`heapSize` wrapper](https://github.com/oven-sh/bun/blob/bun-v1.4.4/src/jsc/modules/BunJSCModule.h) does not itself invoke the object-count census or request a collection, but that alone does not establish the cost of its delegated call. It is excluded alongside `heapStats()`, `getHeapStatistics()`, heap snapshots, profilers and forced GC. The Node memory API can incur process-memory accounting work; no live latency benchmark is implied. The fixed cadence, sample cap and default-off behavior bound diagnostic work, not the duration of an individual runtime call. [Bun issue 46391](https://github.com/oven-sh/bun/issues/46391) reports census costs on Bun 1.4.2; its closure as a duplicate is not evidence of a fix, and its timings are not measurements of this installation.
+
+For a foreground server that is intentionally being started, rather than alongside an existing managed server:
+
+```sh
+YCODING_LOG_LEVEL=DEBUG ycoding serve --hostname 127.0.0.1 --port 4096
+```
+
+The source entry is `packages/cli/src/index.ts`; the Bun build embeds it in `ycoding`. The Node SEA build embeds `src/node/index.ts`, which enters the same CLI, in `ycoding-node`; substitute that executable in the command for a Node run. Source changes require a subsequent build and installation before an existing installed executable gains these records. No build, installation, server start, restart, or capture is performed by the diagnostics tests.
+
+Release logs are `${XDG_DATA_HOME:-$HOME/.local/share}/ycoding/log/ycoding.log`. Local builds use `ycoding-<channel>.log`, normally `ycoding-local.log`. Select the actual file and the server's run ID, then print at most its last 120 aggregate records:
+
+```sh
+log="${XDG_DATA_HOME:-$HOME/.local/share}/ycoding/log/ycoding.log"
+run='<server-run-id>'
+awk -v run="$run" 'index($0, " run=" run " ") && index($0, " component=memory ")' "$log" | tail -n 120
+```
+
+The memory records contain no prompts, messages, credentials, payloads or raw exception text. Other entries in the shared log are outside this aggregate capture. Growth between timestamped samples is observable, but the records alone do not identify a leak, allocate memory to a native subsystem, or explain a prior stall.
+
 ## Configuration reloads
 
 Built-in agent, command, skill, reference, policy and provider configuration plugins subscribe to `config.updated` before events enter their queues. Provider configuration also subscribes to `integration.connection.updated`. Unrelated transcript events do not accumulate while a reload is blocked. Matching updates remain ordered and lossless; closing the plugin scope or failing its consumer releases queued events.

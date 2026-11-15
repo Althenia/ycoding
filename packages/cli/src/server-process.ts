@@ -6,6 +6,8 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Database } from "@ycoding-ai/core/database/database"
 import { Global } from "@ycoding-ai/core/global"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { Logging } from "@ycoding-ai/core/observability/logging"
+import { MemoryDiagnostics } from "@ycoding-ai/core/observability/memory"
 import type { SdkPlugins } from "@ycoding-ai/core/plugin/sdk"
 import { AppProcess } from "@ycoding-ai/core/process"
 import { ProcessLock } from "@ycoding-ai/core/util/process-lock"
@@ -79,6 +81,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
       const global = yield* Global.Service
       const services = yield* Effect.context<FileSystem.FileSystem | Global.Service>()
       const logRemoteDiagnostic = yield* FiberSet.makeRuntime()
+      yield* MemoryDiagnostics.start(Logging.minimumLogLevel() === "Debug")
       const server = yield* start(
         {
           client: process.env.YCODING_CLIENT ?? "cli",
