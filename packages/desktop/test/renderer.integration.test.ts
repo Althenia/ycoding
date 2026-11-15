@@ -199,6 +199,112 @@ async function confirm(page: Page, label = "Confirm") {
   await page.pressKey("Enter", "Enter", 13, "\r")
 }
 
+test("layout stability keeps streaming disclosures mounted and follows only the attached reader", async () => {
+  pending = false
+  running = true
+  presentationParts = true
+  const page = await open()
+  try {
+    await page.evaluate(`(() => {
+      const scroller = document.querySelector('.conversation__scroll');
+      scroller.scrollTop = scroller.scrollHeight;
+      scroller.dispatchEvent(new Event('scroll'));
+      window.__stableReason = document.querySelector('#turn-msg_response details');
+      window.__stableReason.open = true;
+      window.__stableProse = document.querySelector('#turn-msg_response .transcript-message__text');
+    })()`)
+    replyText = "Streaming synthetic text. ".repeat(180)
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'session.text.delta', data: { sessionID: 'ses_test', assistantMessageID: 'msg_response', ordinal: 3, delta: 'synthetic' } })`)
+    await wait(page, `document.querySelector('#turn-msg_response').textContent.includes(${JSON.stringify(replyText)})`)
+    const result = await page.evaluate<{ reason: boolean; prose: boolean; open: boolean; distance: number }>(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => { const scroller = document.querySelector('.conversation__scroll'); resolve({ reason: window.__stableReason === document.querySelector('#turn-msg_response details'), prose: window.__stableProse === document.querySelector('#turn-msg_response .transcript-message__text'), open: document.querySelector('#turn-msg_response details').open, distance: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop }); })))`)
+    expect(result).toEqual({ reason: true, prose: true, open: true, distance: 0 })
+    const top = await page.evaluate<number>(`(() => { const scroller = document.querySelector('.conversation__scroll'); scroller.scrollTop -= 500; scroller.dispatchEvent(new Event('scroll')); return scroller.scrollTop; })()`)
+    replyText += " Detached streaming text. ".repeat(160)
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'session.text.delta', data: { sessionID: 'ses_test', assistantMessageID: 'msg_response', ordinal: 3, delta: 'more' } })`)
+    await wait(page, `document.querySelector('#turn-msg_response').textContent.includes('Detached streaming text.')`)
+    expect(await page.evaluate<number>(`document.querySelector('.conversation__scroll').scrollTop`)).toBe(top)
+    expect(await page.evaluate<unknown[]>(`window.__desktopFixture.errors`)).toEqual([])
+  } finally { await page.close() }
+}, 30_000)
+
+test("layout stability retains rail focus and transcript nodes when older history is prepended", async () => {
+  pending = false
+  const page = await open()
+  try {
+    await page.evaluate(`(() => { window.__stablePrompt = document.querySelector('#turn-msg_prompt_239'); document.querySelector('.rl-session-row').focus(); window.__stablePin = document.querySelector('.workspace__pin'); window.__stablePin.focus(); if (document.activeElement !== window.__stablePin) throw new Error('Pin must own focus before refresh'); window.__desktopFixture.resync(); })()`)
+    await wait(page, `(window.__desktopFixture.completed.sessionSnapshot ?? 0) >= 2`)
+    expect(await page.evaluate<boolean>(`window.__stablePin === document.activeElement && window.__stablePin.isConnected`)).toBe(true)
+    await page.evaluate(`[...document.querySelectorAll('.conversation__scroll button')].find(button => button.textContent === 'Load older messages').click()`)
+    await wait(page, `document.querySelector('#turn-msg_prompt_41')`)
+    expect(await page.evaluate<boolean>(`window.__stablePrompt === document.querySelector('#turn-msg_prompt_239')`)).toBe(true)
+  } finally { await page.close() }
+}, 30_000)
+
+test("layout stability bounds live counters and waiting badges without moving adjacent controls", async () => {
+  pending = false
+  const page = await open()
+  try {
+    const stable = await page.evaluate<boolean>(`(() => {
+      const filters = [...document.querySelectorAll('.rl-rail-filter')];
+      const before = filters.map(element => element.getBoundingClientRect().toJSON());
+      filters.forEach(element => element.lastElementChild.textContent = '999');
+      const after = filters.map(element => element.getBoundingClientRect().toJSON());
+      return before.every((rect, index) => rect.x === after[index].x && rect.width === after[index].width && rect.height === after[index].height);
+    })()`)
+    expect(stable).toBe(true)
+    const title = await page.evaluate<{ width: number; height: number }>(`(() => { const rect = document.querySelector('.rl-session-row[aria-current="page"] .rl-session-row-title').getBoundingClientRect(); return { width: rect.width, height: rect.height }; })()`)
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'permission.asked', data: { id: 'per_geometry', sessionID: 'ses_test', action: 'synthetic', resources: [] } })`)
+    await wait(page, `document.querySelector('.rl-session-row[data-state="waiting"]')`)
+    expect(await page.evaluate<{ width: number; height: number }>(`(() => { const rect = document.querySelector('.rl-session-row[aria-current="page"] .rl-session-row-title').getBoundingClientRect(); return { width: rect.width, height: rect.height }; })()`)).toEqual(title)
+  } finally { await page.close() }
+}, 30_000)
+
+test("layout stability coalesces composer growth and preserves bottom anchoring on shrink", async () => {
+  pending = false
+  const page = await open()
+  try {
+    const reads = await page.evaluate<number>(`(() => {
+      const input = document.querySelector('.rl-capsule textarea');
+      const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight');
+      let reads = 0;
+      Object.defineProperty(input, 'scrollHeight', { configurable: true, get() { reads++; return descriptor.get.call(this); } });
+      for (let index = 0; index < 30; index++) { input.value = ('Synthetic line ' + index + '\\n').repeat(index + 1); input.dispatchEvent(new InputEvent('input', { bubbles: true })); }
+      delete input.scrollHeight;
+      return reads;
+    })()`)
+    expect(reads).toBeLessThanOrEqual(1)
+    await wait(page, `document.querySelector('.rl-capsule textarea').getBoundingClientRect().height >= 160`)
+    const bottom = await page.evaluate<number>(`document.querySelector('.rl-capsule').getBoundingClientRect().bottom`)
+    await message(page, "Short draft")
+    await wait(page, `document.querySelector('.rl-capsule textarea').getBoundingClientRect().height === 44`)
+    expect(await page.evaluate<number>(`document.querySelector('.rl-capsule').getBoundingClientRect().bottom`)).toBe(bottom)
+    expect(await page.evaluate<number>(`(() => { const scroller = document.querySelector('.conversation__scroll'); return scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop; })()`)).toBe(0)
+  } finally { await page.close() }
+}, 30_000)
+
+test("layout stability reserves composer actions through live metadata and running-state changes", async () => {
+  pending = false
+  const page = await open()
+  const geometry = `(() => { const nodes = ['.rl-send', '.composer-live-action--stop', '.composer-bar > .desktop-select']; return nodes.map(selector => { const rect = document.querySelector(selector).getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; }); })()`
+  try {
+    await message(page, "Retained synthetic draft")
+    await wait(page, `document.querySelector('.composer-metrics') && document.querySelector('.rl-capsule textarea').getBoundingClientRect().height === 44`)
+    const original = await page.evaluate<unknown[]>(geometry)
+    await page.evaluate(`(() => { document.querySelector('.composer-metrics').lastChild.textContent = '999,999,999 in · 999,999 out · $999.99'; document.querySelector('.composer-chip--model > span').textContent = 'Synthetic model name with a long provider and profile label'; })()`)
+    expect(await page.evaluate<unknown[]>(geometry)).toEqual(original)
+    running = true
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'session.execution.started', data: { sessionID: 'ses_test' } })`)
+    await wait(page, `document.querySelector('[aria-label="Stop"]')`)
+    expect(await page.evaluate<unknown[]>(geometry)).toEqual(original)
+    expect(await page.evaluate<string>(`document.querySelector('.rl-capsule textarea').value`)).toBe("Retained synthetic draft")
+    running = false
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'session.idle', data: { sessionID: 'ses_test' } })`)
+    await wait(page, `!document.querySelector('[aria-label="Stop"]')`)
+    expect(await page.evaluate<unknown[]>(geometry)).toEqual(original)
+    expect(await page.evaluate<unknown[]>(`window.__desktopFixture.errors`)).toEqual([])
+  } finally { await page.close() }
+}, 30_000)
+
 test("active question controls require complete answers and send their ordered selections once", async () => {
   pending = false
   questionPending = true

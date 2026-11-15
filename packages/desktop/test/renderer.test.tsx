@@ -576,9 +576,9 @@ test("unknown message types are labelled and the transcript is not a live region
 
 test("the transcript keeps the reader's position and row identity", async () => {
   const source = await read("src/renderer.tsx")
-  expect(source).toContain("<Index each={turns()}>")
+  expect(source).toContain('<Keyed each={turns()} by={(item) => item.id}>')
   expect(source).toContain("followState(following(), { kind: \"scroll\", distance: scrollDistance() })")
-  expect(source).toContain("if (following()) toEnd()")
+  expect(source).toContain("if (following() && !jumping) toEnd()")
   expect(source).toContain("ref={focusHeading}")
 })
 
@@ -816,8 +816,8 @@ test("rail rows are icon driven with readable workspace names", async () => {
   expect(source).toContain("workspaceBase(session.location.directory)")
   expect(source).toContain("· more")
   expect(source).not.toContain(", more available")
-  expect(source).toContain('<p class="rl-nav-group-label">{workspace.name}</p>')
-  expect(source).toContain('<RailStatusIcon state={row.state} />')
+  expect(source).toContain('<p class="rl-nav-group-label">{workspace().name}</p>')
+  expect(source).toContain('<RailStatusIcon state={row().state} />')
   expect(source).not.toMatch(/<(?:a|button|span|small|p|div|strong|li|label|Link)\s[^>]*\stitle=/)
   expect(source).toContain('<Icon name="panel-left" />')
 })
@@ -865,7 +865,7 @@ test("transcript renders Markdown through the visibility filter with structured 
   expect(source).toContain("groupAssistantParts(message().content)")
   expect(source).toContain("classifyDesktopSynthetic(props.message)")
   expect(source).toContain('from "../../../apps/web/src/remote/ui/markdown"')
-  expect(source).toContain('<div class="transcript-message__text rl-bubble"><Markdown text={group.text} /></div>')
+  expect(source).toContain('<div class="transcript-message__text rl-bubble"><Markdown text={value().text} /></div>')
   expect(source).toContain("markdownText={message().text}")
   expect(source).toContain("transcript-notice-card")
   expect(source).toContain("Goal · steer")

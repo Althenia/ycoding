@@ -114,6 +114,14 @@ Every control maps to a method the desktop bridge exposes: connection, Session a
 
 Desktop rail titles wrap in full, including unbroken names, with no horizontal scrolling. Rows grow above their 36px minimum and reserve inline space for Pin; status and waiting labels remain visible. This Desktop treatment overrides the inherited single-line Ledger row treatment. Keyboard focus, current-row state and row actions retain their owned treatments.
 
+## Layout continuity
+
+Live metadata uses tabular numerals. Rail filters use bounded tracks and three-character count slots; their full counts remain accessible. Session rows reserve the status and Pin tracks in every state, so Waiting does not rewrap the title. Conversation title and workspace metadata share bounded header tracks. Context and quota values use bounded end columns. Scrollable lists, dialogs, popovers, diffs and companion panes reserve a stable scrollbar gutter.
+
+Composer controls wrap with pane width rather than live label length. The footer reserves running-action slots while their buttons are absent, and the dock reserves the running-status line while idle. Hidden actions cannot receive focus or activation.
+
+Transcript turns, assistant part groups and rail rows retain DOM identity by their durable keys across refresh, streaming and older-history insertion. Open disclosures, focused row actions and input drafts stay owned by those retained nodes. The conversation owns latest-follow; frame-coalesced content and dock measurements follow the end only while attached, preserve detached reading positions and cancel when the view retires. Composer growth and width changes coalesce into one measurement per frame, retain the 44px minimum and 168px maximum, and grow from the bottom dock. Live counters and progress geometry never run size or position transitions. Reduced motion and the animation preference retain their central still-state mapping.
+
 ## Commands and composition
 
 Commands and shortcuts share one keyboard catalog. Settings can bind, unbind and restore defaults for every catalog command. Saved overrides update shortcut help, palette hints and accessible key descriptions. Native menu actions stay clickable without pinning accelerators that would bypass overrides. Modal and autocomplete owners consume input before page or global commands; composition, repeats and standard editing shortcuts do not trigger page actions. Conflicting and reserved bindings show an error and leave the current binding unchanged. Appearance uses the existing dialog, radio group and button treatments; choosing a listed theme applies and saves it, while opening Themes changes nothing.

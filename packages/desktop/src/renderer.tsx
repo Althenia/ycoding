@@ -1,7 +1,7 @@
 import { createRootRoute, createRoute, createRouter, createHashHistory, Link, Outlet, RouterProvider, useLocation, useNavigate } from "@tanstack/solid-router"
 import { QueryClient, QueryObserver } from "@tanstack/solid-query"
 import type { YCodingEvent } from "@ycoding-ai/client"
-import { createContext, createEffect, createMemo, createSignal, For, Index, on, onCleanup, onMount, Show, useContext, type JSX } from "solid-js"
+import { createContext, createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, useContext, type JSX } from "solid-js"
 import { render } from "solid-js/web"
 import type { ConnectionState, FormAnswer, FormRequest, Messages, PendingRequests, PermissionRequest, ComposerCatalog, PromptAgent, PromptFile, RequestReply, SessionItem, ModelSelection, ShellOutput, UsageRange, RevertInput, SetAutonomyInput, SettingsMutationInput, ProjectMutationInput, WorkspaceMutationInput, PinRequest } from "./contract"
 import { desktop as api } from "./bridge"
@@ -11,6 +11,7 @@ import { createClientTelemetry } from "./client-telemetry"
 import { createDesktopAttention, createDesktopAudio } from "./attention"
 import { ActiveQuestionCard } from "./active-questions"
 import { DesktopDiffView } from "./diff-view"
+import { Keyed } from "./keyed"
 import { KEYBOARD_ACTIONS, desktopShortcut, keyboardBindings, parseKeyboardOverrides, shortcutLabel, type KeyboardOverrides } from "./keyboard"
 import { KeyboardSettings } from "./keyboard-settings"
 import { COMPANION_DOCKED_QUERY, DEFAULT_PRESENTATION, PRESENTATION_STORAGE_KEY, parsePresentationSettings, startupCompanionOpen, toolDisclosures, withCompanion, withThinking, withToolGrouping, type PresentationSettings } from "./presentation-settings"
@@ -1238,12 +1239,12 @@ function Workspace() {
       <div class="rl-nav-scroll"><Show when={!sessions.result().isPending} fallback={<SharedLoadingSkeleton kind="list" label="Loading Sessions…" />}><Show when={!sessions.result().isError} fallback={<p role="alert" class="desktop__error">Sessions could not be read. Check the connection and refresh.</p>}>
         <Show when={items().length > 0} fallback={<p role="status">{applied() ? "No Sessions match your search." : "No Sessions in this backend."}</p>}>
           <Show when={railWorkspaces().length} fallback={<p role="status">{railFilter() === "all" ? "No Sessions to show." : "No Sessions match this filter."}</p>}>
-            <For each={railWorkspaces()}>{(workspace) => <section class="workspace__group rl-nav-group" aria-label={workspace.name}>
-              <p class="rl-nav-group-label">{workspace.name}</p>
-              <ul class="desktop__sessions"><For each={workspace.rows}>{(row) =>
-                <li class="workspace__row"><Link to="/sessions/$sessionID" params={{ sessionID: row.session.id }} class="workspace__session rl-session-row" data-state={row.state} data-pinned={row.session.time.pinned !== undefined ? "true" : undefined} aria-label={row.state === "running" || row.state === "failed" ? `${row.session.title}, ${railStatusLabels[row.state]}` : undefined} aria-current={selected() === row.session.id ? "page" : undefined}><RailStatusIcon state={row.state} /><span class="rl-session-row-title">{row.session.title}</span><Show when={row.state === "waiting"}><span class="workspace__status" data-state="needs">{railStatusLabels.waiting}</span></Show></Link>
-                  <button type="button" class="workspace__pin rl-icon-button" data-pinned={row.session.time.pinned !== undefined ? "true" : undefined} disabled={!reading() || pinning() !== undefined} aria-label={`${row.session.time.pinned === undefined ? "Pin" : "Unpin"} ${row.session.title}`} onClick={() => void togglePin(row.session)}><Icon name="pin" /></button></li>}</For></ul>
-            </section>}</For>
+            <Keyed each={railWorkspaces()} by={(workspace) => workspace.name}>{(workspace) => <section class="workspace__group rl-nav-group" aria-label={workspace().name}>
+              <p class="rl-nav-group-label">{workspace().name}</p>
+              <ul class="desktop__sessions"><Keyed each={workspace().rows} by={(row) => row.session.id}>{(row) =>
+                <li class="workspace__row"><Link to="/sessions/$sessionID" params={{ sessionID: row().session.id }} class="workspace__session rl-session-row" data-state={row().state} data-pinned={row().session.time.pinned !== undefined ? "true" : undefined} aria-label={row().state === "running" || row().state === "failed" ? `${row().session.title}, ${railStatusLabels[row().state]}` : undefined} aria-current={selected() === row().session.id ? "page" : undefined}><RailStatusIcon state={row().state} /><span class="rl-session-row-title">{row().session.title}</span><span class="workspace__status" data-state="needs" data-visible={row().state === "waiting" ? "true" : undefined} aria-hidden={row().state !== "waiting"}>{railStatusLabels.waiting}</span></Link>
+                  <button type="button" class="workspace__pin rl-icon-button" data-pinned={row().session.time.pinned !== undefined ? "true" : undefined} disabled={!reading() || pinning() !== undefined} aria-label={`${row().session.time.pinned === undefined ? "Pin" : "Unpin"} ${row().session.title}`} onClick={() => void togglePin(row().session)}><Icon name="pin" /></button></li>}</Keyed></ul>
+            </section>}</Keyed>
           </Show>
           <Show when={grouped().archived}><p class="desktop__muted">{grouped().archived} archived {grouped().archived === 1 ? "Session is" : "Sessions are"} hidden.</p></Show>
         </Show>
@@ -1330,11 +1331,29 @@ function ComposerField(props: { label: string; value: string; locked: boolean; o
   const [entries, setEntries] = createSignal<readonly { readonly path: string; readonly type: "file" | "directory" }[]>([])
   const [filesError, setFilesError] = createSignal(false)
   let area: HTMLTextAreaElement | undefined
+  let resizeFrame: number | undefined
+  const resize = () => {
+    if (resizeFrame !== undefined) return
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = undefined
+      if (!area?.isConnected) return
+      area.style.height = "auto"
+      area.style.height = `${Math.min(168, Math.max(44, area.scrollHeight))}px`
+    })
+  }
   createEffect(() => {
     void props.value
-    if (!area) return
-    area.style.height = "auto"
-    area.style.height = `${Math.min(168, Math.max(44, area.scrollHeight))}px`
+    resize()
+  })
+  onMount(() => {
+    let width = 0
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry || entry.contentRect.width === width) return
+      width = entry.contentRect.width
+      resize()
+    })
+    if (area?.parentElement) observer.observe(area.parentElement)
+    onCleanup(() => { observer.disconnect(); if (resizeFrame !== undefined) cancelAnimationFrame(resizeFrame) })
   })
   let fileRequest = 0
   let fileTimer: ReturnType<typeof setTimeout> | undefined
@@ -1824,7 +1843,22 @@ function TurnView(props: { message: Messages[number] }) {
   }
   return <li id={`turn-${props.message.id}`} class={`transcript__turn ${role() === "user" ? "rl-me" : role() === "assistant" ? "rl-them" : "rl-sys"}`} data-speaker={role()} data-layout={layout()} tabindex={role() === "user" ? -1 : undefined}>
     <Show when={props.message.type === "user" ? props.message : undefined}>{(message) => <><span class="desktop__sr">You: </span><SharedMessageTurn kind="user" markdownText={message().text} attachments={<For each={message().files}>{(file) => <span class="conversation__chip">{file.name ?? "Attachment"}</span>}</For>} receipt={new Date(message().time.created).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} receiptLabel="Message created" /></>}</Show>
-    <Show when={props.message.type === "assistant" ? props.message : undefined}>{(message) => { const groups = () => groupAssistantParts(message().content); return <SharedMessageTurn kind="assistant" head={<SharedTurnHead class="transcript-message__head" mark={<span class="rl-avatar transcript-message__mark"><Icon name="sparkles" /></span>}>{message().agent} · {message().model.providerID}/{message().model.id}{message().model.variant ? ` · ${message().model.variant}` : ""}{duration(message().time.created, message().time.completed) ? ` · ${duration(message().time.created, message().time.completed)}` : ""}</SharedTurnHead>} body={<><For each={groups()}>{(group) => group.kind === "reasoning" ? <For each={[thinkingExpanded()]}>{() => <SharedReasoningDisclosure defaultOpen={thinkingExpanded()} text={group.text} streaming={!message().time.completed} durationLabel={group.created !== undefined ? duration(group.created, group.completed) : undefined} />}</For> : group.kind === "text" ? <div class="transcript-message__text rl-bubble"><Markdown text={group.text} /></div> : <For each={toolDisclosures(group.parts, presentation().grouping)}>{(parts) => <SharedToolDisclosure tools={toolSteps(parts)} lastSummary={parts.at(-1) ? toolDisplaySummary(parts.at(-1)!.name, parts.at(-1)!.state.input) : undefined} streaming={parts.some((part) => part.state.status === "running" || part.state.status === "streaming")} durationLabel={presentation().grouping === "auto" ? duration(message().time.created, message().time.completed) : undefined} />}</For>}</For><Show when={groups().length === 0 && !message().error && message().time.completed !== undefined}><p class="transcript__notice">{message().content.some((part) => part.type === "reasoning") ? "Reasoning is not shown for this response." : "No visible content in this response."}</p></Show></>} error={<Show when={message().error}>{(error) => <p role="alert" class="desktop__error">{error().message}</p>}</Show>} /> } }</Show>
+    <Show when={props.message.type === "assistant" ? props.message : undefined}>{(message) => {
+      const groups = createMemo(() => groupAssistantParts(message().content))
+      return <SharedMessageTurn kind="assistant" head={<SharedTurnHead class="transcript-message__head" mark={<span class="rl-avatar transcript-message__mark"><Icon name="sparkles" /></span>}>{message().agent} · {message().model.providerID}/{message().model.id}{message().model.variant ? ` · ${message().model.variant}` : ""}{duration(message().time.created, message().time.completed) ? ` · ${duration(message().time.created, message().time.completed)}` : ""}</SharedTurnHead>} body={<>
+        <Keyed each={groups()} by={(group) => group.key}>{(group) => {
+          const reasoning = () => { const value = group(); return value.kind === "reasoning" ? value : undefined }
+          const text = () => { const value = group(); return value.kind === "text" ? value : undefined }
+          const tools = () => { const value = group(); return value.kind === "tools" ? toolDisclosures(value.parts, presentation().grouping) : [] }
+          return <>
+            <Show when={reasoning()}>{(value) => <For each={[thinkingExpanded()]}>{() => <SharedReasoningDisclosure defaultOpen={thinkingExpanded()} text={value().text} streaming={!message().time.completed} durationLabel={value().created !== undefined ? duration(value().created!, value().completed) : undefined} />}</For>}</Show>
+            <Show when={text()}>{(value) => <div class="transcript-message__text rl-bubble"><Markdown text={value().text} /></div>}</Show>
+            <Keyed each={tools()} by={(parts) => parts[0]!.id}>{(parts) => <SharedToolDisclosure tools={toolSteps(parts())} lastSummary={parts().at(-1) ? toolDisplaySummary(parts().at(-1)!.name, parts().at(-1)!.state.input) : undefined} streaming={parts().some((part) => part.state.status === "running" || part.state.status === "streaming")} durationLabel={presentation().grouping === "auto" ? duration(message().time.created, message().time.completed) : undefined} />}</Keyed>
+          </>
+        }}</Keyed>
+        <Show when={groups().length === 0 && !message().error && message().time.completed !== undefined}><p class="transcript__notice">{message().content.some((part) => part.type === "reasoning") ? "Reasoning is not shown for this response." : "No visible content in this response."}</p></Show>
+      </>} error={<Show when={message().error}>{(error) => <p role="alert" class="desktop__error">{error().message}</p>}</Show>} />
+    }}</Show>
     <Show when={props.message.type === "shell" ? props.message : undefined}>{(message) => <SharedMessageTurn kind="shell" shellHeader={<><code class="ws-card-title">$ {message().command}</code> · {message().status}{message().exit === undefined ? "" : ` · exit ${message().exit}`}</>} shellOutput={<div class="ws-shell"><pre class="ws-out"><code>{message().output?.output ?? ""}</code></pre><Show when={message().output?.truncated}><p>Shell output is truncated.</p></Show></div>} />}</Show>
     <Show when={props.message.type === "compaction" ? props.message : undefined}>{(message) => <SharedMessageTurn kind="compaction" compaction={<CompactionView message={message()} />} />}</Show>
     <Show when={props.message.type === "system" ? props.message : undefined}>{(message) => <SharedMessageTurn kind="system" content={<><span class="transcript__speaker">System</span><div class="transcript-system-card"><Markdown text={message().text} /></div></>} />}</Show>
@@ -2354,8 +2388,7 @@ function Conversation(props: { sessionID: string }) {
   let jumpSlot: HTMLDivElement | undefined
   let dock: HTMLDivElement | undefined
   let jumping = false
-  let measureTimer: number | undefined
-  let measureQueued = false
+  let measureFrame: number | undefined
   let visibility: ReturnType<typeof createPromptVisibility> | undefined
   const ticks = createMemo(() => desktopPromptTicks(turns()))
   const syncVisibility = () => { if (scroller) visibility?.sync([...scroller.querySelectorAll<HTMLElement>('.transcript__turn[data-speaker="user"][id]')].map((node) => ({ id: node.id.slice(5), node }))) }
@@ -2373,9 +2406,12 @@ function Conversation(props: { sessionID: string }) {
     setClearance(pillClearance({ left: bounds.left + controls.offsetLeft, width: controls.offsetWidth, bottom, height: controls.offsetHeight, gap }, [...scroller.querySelectorAll<HTMLElement>(".request :is(button, input, textarea, select)")].filter((element) => getComputedStyle(element).visibility === "visible").map((element) => element.getBoundingClientRect()).filter((rect) => rect.width > 0 && rect.height > 0)))
   }
   const scheduleMeasure = () => {
-    if (measureTimer !== undefined) { measureQueued = true; return }
-    measure()
-    measureTimer = window.setTimeout(() => { measureTimer = undefined; if (measureQueued) { measureQueued = false; scheduleMeasure() } }, 100)
+    if (measureFrame !== undefined) return
+    measureFrame = requestAnimationFrame(() => {
+      measureFrame = undefined
+      if (following() && !jumping) toEnd()
+      measure()
+    })
   }
   const onScroll = () => {
     if (!scroller) return
@@ -2441,7 +2477,7 @@ function Conversation(props: { sessionID: string }) {
     })
     if (dock) dockObserver.observe(dock)
     reserve()
-    onCleanup(() => { visibility?.dispose(); visibility = undefined; observer.disconnect(); dockObserver.disconnect(); if (reserveFrame !== undefined) cancelAnimationFrame(reserveFrame); window.clearTimeout(measureTimer) })
+    onCleanup(() => { visibility?.dispose(); visibility = undefined; observer.disconnect(); dockObserver.disconnect(); if (reserveFrame !== undefined) cancelAnimationFrame(reserveFrame); if (measureFrame !== undefined) cancelAnimationFrame(measureFrame) })
   })
   const update = (value: string) => { setText(value); setPasted(livePasted(value, pasted())); if (value) drafts.set(props.sessionID, value); else drafts.delete(props.sessionID) }
   const hold = (value: PendingDraft | undefined) => { setPending(value); if (value) pendings.set(props.sessionID, value); else pendings.delete(props.sessionID) }
@@ -2607,7 +2643,7 @@ function Conversation(props: { sessionID: string }) {
     setCommandOwner(owner)
     onCleanup(() => { if (commandOwner() === owner) setCommandOwner(undefined) })
   })
-  createEffect(() => { void turns(); void requestCount(); if (following()) toEnd(); queueMicrotask(scheduleMeasure) })
+  createEffect(() => { void turns(); void requestCount(); scheduleMeasure() })
   const promptGuard = createPromptGuard<PendingDraft>({
     scope: () => `${scope().join(":")}:${props.sessionID}:${connection().status}:${ownsConversation}`,
     read: (sessionID) => api.session({ sessionID }),
@@ -2737,9 +2773,9 @@ function Conversation(props: { sessionID: string }) {
       <Show when={history()?.before}><button type="button" class="rl-btn" disabled={historyBusy() || !reading()} onClick={() => void loadOlder()}>{historyBusy() ? "Reading older history…" : "Load older messages"}</button></Show>
       <Show when={historyError()}><p role="alert">{historyError()}</p></Show>
       <Show when={!messages.result().isPending} fallback={<SharedLoadingSkeleton kind="conversation" label="Loading the transcript…" />}><Show when={!messages.result().isError} fallback={<div role="alert" class="desktop__error"><p>{failure(messages.result().error, "The transcript could not be read. Check the connection and refresh.")}</p><button type="button" onClick={messages.refetch} disabled={!reading()}>Refresh transcript</button></div>}>
-        <Show when={turns().length} fallback={<p>No messages in this Session yet.</p>}><ol class="transcript rl-thread" aria-label="Transcript"><Index each={turns()}>{(item) => <>
+        <Show when={turns().length} fallback={<p>No messages in this Session yet.</p>}><ol class="transcript rl-thread" aria-label="Transcript"><Keyed each={turns()} by={(item) => item.id}>{(item) => <>
           <TurnView message={item()} />
-          <Show when={editPlacements().get(item().id)}>{(edit) => <li class="transcript__turn transcript__edits"><SharedEditedFilesCard files={edit().files} onViewChanges={(path) => { setSelectedTurn(edit().turnID); openChanges(path) }} onUndo={() => { setSelectedTurn(edit().turnID); openChanges(); void doRevert("stage") }} undoDisabled={revertBusy() || revertUncertain() || running()} footerNote={activeRevert() ? "Staged revert · preview and confirmation required" : undefined} /></li>}</Show></>}</Index></ol></Show>
+          <Show when={editPlacements().get(item().id)}>{(edit) => <li class="transcript__turn transcript__edits"><SharedEditedFilesCard files={edit().files} onViewChanges={(path) => { setSelectedTurn(edit().turnID); openChanges(path) }} onUndo={() => { setSelectedTurn(edit().turnID); openChanges(); void doRevert("stage") }} undoDisabled={revertBusy() || revertUncertain() || running()} footerNote={activeRevert() ? "Staged revert · preview and confirmation required" : undefined} /></li>}</Show></>}</Keyed></ol></Show>
       </Show></Show>
       <Show when={requests.result().isError}><div role="alert" class="desktop__error"><p>Pending requests could not be read. Refresh to retry.</p><button type="button" onClick={requests.refetch} disabled={!reading()}>Refresh requests</button></div></Show>
       <Show when={requests.result().data && !pendingRequests()}><p role="status">Refreshing requests after a connection change…</p></Show>
@@ -2757,9 +2793,9 @@ function Conversation(props: { sessionID: string }) {
       <div class="composer-bar"><AttachButton directory={session()?.location.directory} files={files()} onChange={setFiles} locked={!!pending() || sending()} />
         <Show when={session()} fallback={<span class="composer-bar__spacer" />}>{(item) => <ModelPicker sessionID={props.sessionID} model={item().model} running={running()} agent={item().agent} sessionUsage={usage(item())} autonomyLabel={policyLabels().autonomy} onAutonomy={() => policyOpen() ? setPolicyOpen(false) : openPolicy()} onStageModel={setStagedModel} openTick={modelTick()} cycleTick={variantTick()} />}</Show>
         <DesktopSelect label="Send mode" value={pending() ? pending()!.delivery ?? "auto" : sendMode()} disabled={sending() || !!pending() || !reading()} options={[{ value: "auto", label: "Auto", description: "Use the backend delivery policy" }, { value: "queue", label: "Queue", description: "Wait behind pending messages" }, { value: "steer", label: "Steer", description: "Continue at the next step boundary" }]} onChange={(value) => { if (value === "auto" || value === "queue" || value === "steer") setSendMode(value) }} />
-        <Show when={running()}><button type="button" class="rl-btn" aria-label="Send and steer now" disabled={sending() || !!pending() || !reading() || unsure() || revertBusy() || revertUncertain() || !!stagedModel() || !text().trim()} onClick={() => void send(true)}>Steer now</button></Show>
+        <span class="composer-live-action" data-visible={running() ? "true" : undefined}><Show when={running()}><button type="button" class="rl-btn" aria-label="Send and steer now" disabled={sending() || !!pending() || !reading() || unsure() || revertBusy() || revertUncertain() || !!stagedModel() || !text().trim()} onClick={() => void send(true)}>Steer now</button></Show></span>
         <button type="submit" class="rl-send desktop__primary" aria-label={sending() ? "Sending" : pending() ? "Retry sending" : "Send prompt"} disabled={sending() || !reading() || unsure() || revertBusy() || revertUncertain() || !!stagedModel() && running() || (!pending() && !text().trim())}><Icon name="arrow-up" /></button>
-        <Show when={running()}><button type="button" class="rl-stop" aria-label="Stop" disabled={stopping() || !reading()} onClick={() => void stop()}><Icon name="stop" /></button></Show>
+        <span class="composer-live-action composer-live-action--stop" data-visible={running() ? "true" : undefined}><Show when={running()}><button type="button" class="rl-stop" aria-label="Stop" disabled={stopping() || !reading()} onClick={() => void stop()}><Icon name="stop" /></button></Show></span>
       </div></div>} feedback={<>
       <Show when={stagedModel() && running()}><p role="status">Stop the running turn before applying the staged reasoning effort to the next message.</p></Show>
       <div class="desktop__feedback"><Show when={error()}>{(message) => <p role="alert" class="desktop__error">{message()}</p>}</Show><Show when={sending()}><p role="status">Sending…</p></Show><Show when={slashNote()}>{(note) => <p role="status">{note()}</p>}</Show><Show when={revertUncertain()}><p role="status">Review the Session and staged revert before continuing.</p></Show><Show when={!reading()}><p role="status">Reconnecting. Sending resumes when the backend is connected.</p></Show></div>

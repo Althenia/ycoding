@@ -2,7 +2,7 @@
 .desktop-diff__controls { display: flex; gap: var(--yc-space-2); align-items: center; flex-wrap: wrap; }
 .desktop-diff__tree { list-style: none; padding-inline-start: var(--yc-space-4); margin-block: var(--yc-space-1); }
 .desktop-diff__tree li { margin-block: var(--yc-space-1); }
-.desktop-diff__file { container: desktop-diff / inline-size; min-width: 0; overflow: auto; }
+.desktop-diff__file { container: desktop-diff / inline-size; min-width: 0; overflow: auto; scrollbar-gutter: stable; font-variant-numeric: tabular-nums; }
 .desktop-diff__file h3 { overflow-wrap: anywhere; }
 .desktop-diff__file table { border-collapse: collapse; width: 100%; table-layout: fixed; }
 .desktop-diff__file caption { text-align: start; padding-block: var(--yc-space-2); color: var(--yc-text-muted); }
