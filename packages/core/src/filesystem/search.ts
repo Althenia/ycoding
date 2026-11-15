@@ -2,10 +2,11 @@ export * as FileSystemSearch from "./search"
 
 import { makeLocationNode } from "../effect/app-node"
 import path from "path"
-import { Context, Effect, Layer, Schema, Scope } from "effect"
+import { Clock, Context, Effect, Fiber, Layer, Schema, Scope } from "effect"
 import { Fff } from "#fff"
 import fuzzysort from "fuzzysort"
 import { FileSystem } from "../filesystem"
+import { MemoryTelemetry } from "../observability/memory-telemetry"
 import { FSUtil } from "../fs-util"
 import { Location } from "../location"
 import { Ripgrep } from "../ripgrep"
@@ -31,25 +32,37 @@ export const ripgrepLayer = Layer.effect(
     const location = yield* Location.Service
     const ripgrep = yield* Ripgrep.Service
     const scope = yield* Scope.Scope
-    const state = {
-      files: [] as string[],
-      directories: [] as string[],
-    }
-    const directories = new Set<string>()
-    yield* ripgrep
-      .find({
-        cwd: location.directory,
-        pattern: "*",
-        limit: location.vcs ? Number.MAX_SAFE_INTEGER : 100_000,
-        onEntry: (entry) =>
-          Effect.sync(() => {
-            state.files.push(entry.path)
-            const parts = entry.path.split("/")
-            parts.slice(0, -1).forEach((_, index) => directories.add(parts.slice(0, index + 1).join("/") + path.sep))
-            state.directories = Array.from(directories)
-          }),
-      })
-      .pipe(Effect.orDie, Effect.asVoid, Effect.forkIn(scope))
+    const index = yield* Effect.cached(
+      Effect.gen(function* () {
+        const startedAt = yield* Clock.currentTimeMillis
+        const before = MemoryTelemetry.sample()
+        const files: string[] = []
+        const directories = new Set<string>()
+        yield* ripgrep
+          .find({
+            cwd: location.directory,
+            pattern: "*",
+            limit: location.vcs ? Number.MAX_SAFE_INTEGER : 100_000,
+            onEntry: (entry) =>
+              Effect.sync(() => {
+                files.push(entry.path)
+                for (let end = entry.path.indexOf("/"); end !== -1; end = entry.path.indexOf("/", end + 1))
+                  directories.add(entry.path.slice(0, end) + path.sep)
+              }),
+          })
+          .pipe(Effect.orDie)
+        const state = { files, directories: [...directories] }
+        yield* Effect.logInfo("filesystem search initialized", {
+          backend: "ripgrep",
+          directory: location.directory,
+          durationMs: (yield* Clock.currentTimeMillis) - startedAt,
+          ...MemoryTelemetry.delta(before),
+          files: files.length,
+          directories: state.directories.length,
+        })
+        return state
+      }).pipe(Effect.forkIn(scope)),
+    )
     return Service.of({
       glob: (input) =>
         Effect.gen(function* () {
@@ -104,6 +117,7 @@ export const ripgrepLayer = Layer.effect(
         }),
       find: (input) =>
         Effect.gen(function* () {
+          const state = yield* index.pipe(Effect.flatMap(Fiber.join))
           const items =
             input.type === "file"
               ? state.files
@@ -127,32 +141,66 @@ export const fffLayer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const location = yield* Location.Service
-    const result = yield* Effect.try({
-      try: () =>
-        Fff.create({
-          basePath: location.directory,
-          aiMode: true,
-          disableMmapCache: true,
-          disableContentIndexing: true,
-        }),
-      catch: (cause) => cause,
-    }).pipe(
-      Effect.catch((error) => Effect.logWarning("failed to initialize fff", { error }).pipe(Effect.as(undefined))),
+    const scope = yield* Scope.Scope
+    let closed = false
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        closed = true
+      }),
     )
-    if (!result?.ok) {
-      if (result) yield* Effect.logWarning("failed to initialize fff", { error: result.error })
-      return Service.of({
-        find: () => Effect.succeed([]),
-        glob: () => Effect.succeed([]),
-        grep: () => Effect.succeed([]),
-      })
-    }
-    yield* Effect.addFinalizer(() => Effect.sync(() => result.value.destroy()).pipe(Effect.ignore))
+    const initialize = yield* Effect.cached(
+      Effect.gen(function* () {
+        const startedAt = yield* Clock.currentTimeMillis
+        const before = MemoryTelemetry.sample()
+        const picker = yield* Effect.acquireRelease(
+          Effect.gen(function* () {
+            const result = yield* Effect.try({
+              try: () =>
+                Fff.create({
+                  basePath: location.directory,
+                  aiMode: true,
+                  disableMmapCache: true,
+                  disableContentIndexing: true,
+                }),
+              catch: (cause) => cause,
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("failed to initialize fff", { error }).pipe(Effect.as(undefined)),
+              ),
+            )
+            if (!result?.ok) {
+              if (result) yield* Effect.logWarning("failed to initialize fff", { error: result.error })
+              return undefined
+            }
+            return result.value
+          }),
+          (picker) => (picker ? Effect.sync(() => picker.destroy()).pipe(Effect.ignore) : Effect.void),
+        ).pipe(Effect.provideService(Scope.Scope, scope))
+        if (picker && !closed)
+          yield* Effect.logInfo("filesystem search initialized", {
+            backend: "fff",
+            directory: location.directory,
+            durationMs: (yield* Clock.currentTimeMillis) - startedAt,
+            ...MemoryTelemetry.delta(before),
+          })
+        return picker
+      }),
+    )
+    const get = Effect.suspend(() =>
+      closed
+        ? Effect.interrupt
+        : initialize.pipe(
+            Effect.uninterruptible,
+            Effect.flatMap((picker) => (closed ? Effect.interrupt : Effect.succeed(picker))),
+          ),
+    )
     return Service.of({
       glob: (input) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          const picker = yield* get
+          if (!picker) return []
           const prefix = input.path?.replaceAll("\\", "/").replace(/\/$/, "")
-          const found = result.value.glob(prefix ? `${prefix}/${input.pattern}` : input.pattern, {
+          const found = picker.glob(prefix ? `${prefix}/${input.pattern}` : input.pattern, {
             pageIndex: 0,
             pageSize: input.limit ?? FileSystem.DEFAULT_SEARCH_LIMIT,
           })
@@ -165,9 +213,11 @@ export const fffLayer = Layer.effect(
           )
         }),
       grep: (input) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          const picker = yield* get
+          if (!picker) return []
           const prefix = input.path?.replaceAll("\\", "/").replace(/\/$/, "")
-          const found = result.value.grep(
+          const found = picker.grep(
             [prefix ? `${prefix}/**` : undefined, input.include, input.pattern]
               .filter((value) => value !== undefined)
               .join(" "),
@@ -193,11 +243,13 @@ export const fffLayer = Layer.effect(
           })
         }),
       find: (input) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          const picker = yield* get
+          if (!picker) return []
           const options = { pageIndex: 0, pageSize: input.limit ?? 50 }
           const items = (() => {
             if (input.type === "file") {
-              const found = result.value.fileSearch(input.query.trim(), options)
+              const found = picker.fileSearch(input.query.trim(), options)
               if (!found.ok) throw found.error
               return found.value.items.map((item, index) => ({
                 path: item.relativePath,
@@ -206,7 +258,7 @@ export const fffLayer = Layer.effect(
               }))
             }
             if (input.type === "directory") {
-              const found = result.value.directorySearch(input.query.trim(), options)
+              const found = picker.directorySearch(input.query.trim(), options)
               if (!found.ok) throw found.error
               return found.value.items.map((item, index) => ({
                 path: item.relativePath,
@@ -214,7 +266,7 @@ export const fffLayer = Layer.effect(
                 score: found.value.scores[index]?.total ?? 0,
               }))
             }
-            const found = result.value.mixedSearch(input.query.trim(), options)
+            const found = picker.mixedSearch(input.query.trim(), options)
             if (!found.ok) throw found.error
             return found.value.items.map((item, index) => ({
               path: item.item.relativePath,
@@ -236,15 +288,16 @@ export const fffLayer = Layer.effect(
   }),
 )
 
-export const layer = (options?: Options) => Layer.unwrap(
-  Effect.gen(function* () {
-    if (options?.fff === false || (options?.fff === undefined && process.platform === "win32") || !Fff.available())
-      return ripgrepLayer
-    const location = yield* Location.Service
-    // Non-VCS locations can contain many repositories, so avoid eagerly content-indexing the entire aggregate tree.
-    return location.vcs ? fffLayer : ripgrepLayer
-  }),
-)
+export const layer = (options?: Options) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      if (options?.fff === false || (options?.fff === undefined && process.platform === "win32") || !Fff.available())
+        return ripgrepLayer
+      const location = yield* Location.Service
+      // Non-VCS locations can contain many repositories, so avoid eagerly content-indexing the entire aggregate tree.
+      return location.vcs ? fffLayer : ripgrepLayer
+    }),
+  )
 
 export function configured(options?: Options) {
   return makeLocationNode({ service: Service, layer: layer(options), deps: [FSUtil.node, Location.node, Ripgrep.node] })

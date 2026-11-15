@@ -10,6 +10,8 @@ import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventLogger } from "@ycoding-ai/core/event-logger"
 import { FileSystemSearch } from "@ycoding-ai/core/filesystem/search"
 import { Observability } from "@ycoding-ai/core/observability"
+import { MemoryTelemetry } from "@ycoding-ai/core/observability/memory-telemetry"
+import { locationServices } from "@ycoding-ai/core/location-services"
 import { KeepAwake } from "@ycoding-ai/core/keep-awake"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Config } from "@ycoding-ai/core/config"
@@ -105,6 +107,7 @@ const applicationServices = LayerNode.group([
   WellKnown.node,
   PtyEnvironment.node,
   LocationServiceMap.node,
+  MemoryTelemetry.node(locationServices.dependencies.map((node) => node.name)),
   UsageViewStart.node,
   UsageDashboardRead.node,
   SessionRestart.node,
@@ -212,13 +215,12 @@ function makeRoutes<AuthError, AuthServices>(
         Layer.provide(authorizationLayer),
         Layer.provide(schemaErrorLayer),
         Layer.provide(auth),
-        Layer.provide(Observability.layer({ ...options.observability, client: options.client })),
         HttpRouter.provideRequest(requestServices),
         Layer.provideMerge(services),
         Layer.provideMerge(HttpRouter.layer),
       )
     }),
-  )
+  ).pipe(Layer.provide(Observability.layer({ ...options.observability, client: options.client })))
 }
 
 export const webHandler = () => HttpRouter.toWebHandler(createRoutes().pipe(Layer.provide(HttpServer.layerServices)))

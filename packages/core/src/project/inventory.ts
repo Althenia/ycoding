@@ -11,6 +11,7 @@ import { FSUtil } from "../fs-util"
 import { AbsolutePath } from "../schema"
 import { Session } from "../session"
 import { SessionTable } from "../session/sql"
+import { LocationServiceMap } from "../location-service-map"
 import { ProjectDirectories } from "./directories"
 import { ProjectDirectoryTable, ProjectTable } from "./sql"
 
@@ -48,6 +49,7 @@ const layer = Layer.effect(
     const sessions = yield* Session.Service
     const directories = yield* ProjectDirectories.Service
     const events = yield* EventRuntime.Service
+    const locations = yield* LocationServiceMap.Service
 
     const list = Effect.fn("ProjectInventory.list")(function* (input: ListInput) {
       const rows = yield* db
@@ -122,6 +124,7 @@ const layer = Layer.effect(
         { concurrency: 1, discard: true },
       )
       if (yield* directories.remove(input)) yield* events.publish(Event.Updated, { projectID: input.projectID })
+      yield* LocationServiceMap.invalidateDirectory(locations, input.directory)
     })
 
     return Service.of({ list, forget })
@@ -150,5 +153,5 @@ function anchorFilter(anchor: Anchor | undefined) {
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, FSUtil.node, Session.node, ProjectDirectories.node, EventRuntime.node],
+  deps: [Database.node, FSUtil.node, Session.node, ProjectDirectories.node, EventRuntime.node, LocationServiceMap.node],
 })

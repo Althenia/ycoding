@@ -3,6 +3,7 @@ import { LocationServiceMap } from "@ycoding-ai/core/location-services"
 import { Location } from "@ycoding-ai/core/location"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
+import { SessionTodo } from "@ycoding-ai/core/session/todo"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { Workspace } from "@ycoding-ai/core/workspace"
 import { eq } from "drizzle-orm"
@@ -32,6 +33,11 @@ const storageReads = new Set([
   "/api/session/:sessionID/file-change",
   "/api/session/:sessionID/message/:messageID",
   "/api/experimental/session/:sessionID/log",
+  "/api/session/:sessionID/message",
+  "/api/session/:sessionID/message/captured-inputs",
+  "/api/session/:sessionID/review",
+  "/api/session/:parentID/subagent",
+  "/api/session/:sessionID/pending",
 ])
 
 export const sessionLocationID = (params: Readonly<Record<string, string | undefined>>) =>
@@ -89,7 +95,9 @@ export const sessionLocationLayer = Layer.effect(
           return yield* Effect.provide(effect, Context.makeUnsafe<LocationServices>(context.mapUnsafe))
         }
 
-        return yield* effect.pipe(Effect.provide(locations.get(ref, [LocationServiceMap.full])))
+        const nodes = request.method === "GET" && route.route.path === "/api/session/:sessionID/todo"
+          ? [SessionTodo.node] : [LocationServiceMap.full]
+        return yield* effect.pipe(Effect.provide(locations.get(ref, nodes)))
       }),
     )
   }),

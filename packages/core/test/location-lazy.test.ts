@@ -1,7 +1,7 @@
 import fs from "fs"
 import os from "os"
 import path from "path"
-import { afterAll, describe, expect } from "bun:test"
+import { afterAll, describe, expect, spyOn } from "bun:test"
 import { Money } from "@ycoding-ai/schema/money"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Logger, Schema } from "effect"
@@ -29,6 +29,7 @@ import { Provider } from "../src/provider"
 import { Pty } from "../src/pty"
 import { AbsolutePath } from "../src/schema"
 import { Session } from "../src/session"
+import { SessionTodo } from "../src/session/todo"
 import { SessionExecution } from "../src/session/execution"
 import { SessionSchema } from "../src/session/schema"
 import { SessionProviderRequestTable, SessionTable } from "../src/session/sql"
@@ -40,6 +41,7 @@ import { UsageDashboardRuntime } from "../src/usage-dashboard"
 import { UsageStage } from "../src/usage-stage"
 import { UsageViews } from "../src/usage-view"
 import { UsageViewStart } from "../src/usage-view-start"
+import { WorkspaceID } from "@ycoding-ai/schema/workspace-id"
 import { testEffect } from "./lib/effect"
 
 const pricedModels = [
@@ -237,6 +239,66 @@ const loadedFor = (ref: Location.Ref) =>
   })
 
 describe("lazy Location services", () => {
+  it.effect("retention telemetry logs boot and actual disposal after active release and idle expiry", () =>
+    Effect.gen(function* () {
+      const nodes = probes()
+      const locations = yield* LocationServiceMap.Service
+      const records: unknown[] = []
+      const closedAtDisposal: boolean[] = []
+      const logger = Logger.layer([Logger.make(({ message }) => {
+        if (Array.isArray(message) && ["location services booted", "location services disposed"].includes(message[0])) records.push(message)
+        if (Array.isArray(message) && message[0] === "location services disposed") closedAtDisposal.push(nodes.events.includes("close:base"))
+      })], { mergeWithExisting: false })
+      const memory = spyOn(process, "memoryUsage").mockReturnValue({ rss: 1000, heapTotal: 200, heapUsed: 100, external: 300, arrayBuffers: 50 })
+      yield* Effect.gen(function* () {
+        const ref = refOf("/lazy/telemetry")
+        yield* Effect.gen(function* () {
+          yield* locations.contextEffect(ref, [nodes.left])
+          expect(records).toHaveLength(1)
+          expect(records[0]).toEqual(["location services booted", expect.objectContaining({ directory: ref.directory, scope: "bound", requestedCount: 1, builtCount: 2, loadedLocations: 1, rssBytes: 1000, rssDeltaBytes: 0, heapUsedBytes: 100, heapUsedDeltaBytes: 0, heapTotalBytes: 200, externalBytes: 300, arrayBuffersBytes: 50, nativeGapBytes: 500, before: expect.objectContaining({ rssBytes: 1000 }), after: expect.objectContaining({ rssBytes: 1000 }), stages: expect.any(Object) })])
+          yield* locations.invalidate(ref)
+          expect(records).toHaveLength(1)
+          expect(nodes.events).not.toContain("close:base")
+        }).pipe(Effect.scoped)
+        expect(nodes.events).toContain("close:base")
+        expect(closedAtDisposal[0]).toBe(true)
+        expect(records[1]).toEqual(["location services disposed", expect.objectContaining({ directory: ref.directory, scope: "bound", builtCount: 2, loadedLocations: 0, rssBytes: 1000, nativeGapBytes: 500 })])
+        const idle = refOf("/lazy/telemetry-idle")
+        yield* Effect.scoped(locations.contextEffect(idle, [SessionTodo.node], "standalone"))
+        yield* TestClock.adjust("60 minutes")
+        yield* Effect.yieldNow
+        expect(records[3]).toEqual(["location services disposed", expect.objectContaining({ directory: idle.directory, scope: "standalone", builtCount: 1, loadedLocations: 0 })])
+        expect(JSON.stringify(records)).not.toContain("private-query-token")
+      }).pipe(Effect.provide(logger), Effect.ensuring(Effect.sync(() => memory.mockRestore())))
+    }),
+  )
+
+  it.live("directory invalidation retires exact workspace identities while preserving active leases and neighbors", () =>
+    Effect.gen(function* () {
+      const nodes = probes()
+      const locations = yield* LocationServiceMap.Service
+      const directory = AbsolutePath.make("/lazy/directory")
+      const first = refOf(directory)
+      const second = Location.Ref.make({ directory, workspaceID: WorkspaceID.make("wrk_directory") })
+      const nested = refOf("/lazy/directory/nested")
+      const neighbor = refOf("/lazy/directory-other")
+      yield* Effect.scoped(locations.contextEffect(second, [nodes.left]))
+      yield* Effect.scoped(locations.contextEffect(nested, [nodes.left]))
+      yield* Effect.scoped(locations.contextEffect(neighbor, [nodes.left]))
+      yield* Effect.gen(function* () {
+        const leased = yield* locations.contextEffect(first, [nodes.left])
+        const build = Context.get(leased, Left).base
+        yield* LocationServiceMap.invalidateDirectory(locations, AbsolutePath.make("/lazy/directory/./"))
+        expect((yield* locations.loaded()).map((entry) => entry.ref.directory).toSorted()).toEqual([neighbor.directory, nested.directory].toSorted())
+        expect(nodes.events.filter((event) => event === "close:base")).toHaveLength(1)
+        expect(Context.get(leased, Left).base).toBe(build)
+      }).pipe(Effect.scoped)
+      expect(nodes.events.filter((event) => event === "close:base")).toHaveLength(2)
+      yield* LocationServiceMap.invalidateDirectory(locations, AbsolutePath.make("/lazy/unloaded"))
+      expect(nodes.builds()).toBe(4)
+    }),
+  )
+
   it.live("builds only the catalog closure for a pricing request", () =>
     Effect.gen(function* () {
       const capture = captureBoots()

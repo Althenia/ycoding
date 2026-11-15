@@ -14,12 +14,15 @@ import { Project } from "@ycoding-ai/core/project"
 import { ProjectDirectoryTable, ProjectTable } from "@ycoding-ai/core/project/sql"
 import { ProjectCopy } from "@ycoding-ai/core/project/copy"
 import { ProjectDirectories } from "@ycoding-ai/core/project/directories"
+import { Location } from "@ycoding-ai/core/location"
+import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
+import { SessionTodo } from "@ycoding-ai/core/session/todo"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([ProjectCopy.node, Database.node, EventRuntime.node, ProjectDirectories.node, Git.node]),
+    LayerNode.group([ProjectCopy.node, Database.node, EventRuntime.node, ProjectDirectories.node, Git.node, LocationServiceMap.node]),
   ),
 )
 
@@ -150,8 +153,12 @@ describe("ProjectCopy", () => {
       )
       expect(Array.from(yield* Fiber.join(fiber))[0]?.data).toEqual({ projectID: input.projectID })
 
+      const locations = yield* LocationServiceMap.Service
+      yield* Effect.scoped(locations.contextEffect(Location.Ref.make({ directory: created.directory }), [SessionTodo.node]))
+
       yield* copy.remove({ projectID: input.projectID, directory: created.directory, force: false })
 
+      expect((yield* locations.loaded()).filter((entry) => entry.ref.directory === created.directory)).toEqual([])
       expect(yield* stored(input.projectID)).toEqual([{ directory: input.sourceDirectory, strategy: null }])
       expect(yield* Effect.promise(() => Bun.file(target).exists())).toBe(false)
     }),
@@ -224,6 +231,8 @@ describe("ProjectCopy", () => {
         name: "copy",
       })
       yield* Effect.promise(() => Bun.write(path.join(created.directory, "dirty.txt"), "dirty"))
+      const locations = yield* LocationServiceMap.Service
+      yield* Effect.scoped(locations.contextEffect(Location.Ref.make({ directory: created.directory }), [SessionTodo.node]))
 
       const error = yield* copy
         .remove({ projectID: input.projectID, directory: created.directory, force: false })
@@ -236,9 +245,11 @@ describe("ProjectCopy", () => {
       }
       expect(yield* stored(input.projectID)).toContainEqual({ directory: created.directory, strategy: "git_worktree" })
       expect(yield* Effect.promise(() => Bun.file(path.join(created.directory, "dirty.txt")).exists())).toBe(true)
+      expect((yield* locations.loaded()).filter((entry) => entry.ref.directory === created.directory)).toHaveLength(1)
 
       yield* copy.remove({ projectID: input.projectID, directory: created.directory, force: true })
       expect(yield* Effect.promise(() => Bun.file(created.directory).exists())).toBe(false)
+      expect((yield* locations.loaded()).filter((entry) => entry.ref.directory === created.directory)).toEqual([])
     }),
   )
 
@@ -383,8 +394,11 @@ describe("ProjectCopy", () => {
       )
       expect(Array.from(yield* Fiber.join(fiber))[0]?.data).toEqual({ projectID: input.projectID })
 
+      const locations = yield* LocationServiceMap.Service
+      yield* Effect.scoped(locations.contextEffect(Location.Ref.make({ directory: discovered }), [SessionTodo.node]))
       yield* Effect.promise(() => $`git worktree remove --force ${target}`.cwd(input.root.path).quiet())
       expect(yield* copy.refresh({ projectID: input.projectID })).toEqual({ updated: [], removed: [discovered] })
+      expect((yield* locations.loaded()).filter((entry) => entry.ref.directory === discovered)).toEqual([])
       expect(yield* stored(input.projectID)).toEqual([{ directory: input.sourceDirectory, strategy: null }])
     }),
   )
@@ -448,8 +462,12 @@ describe("ProjectCopy", () => {
         .pipe(Effect.orDie)
       const copy = yield* ProjectCopy.Service
 
+      const locations = yield* LocationServiceMap.Service
+      yield* Effect.scoped(locations.contextEffect(Location.Ref.make({ directory: missing }), [SessionTodo.node]))
+
       expect(yield* copy.refresh({ projectID: input.projectID })).toEqual({ updated: [], removed: [missing] })
 
+      expect((yield* locations.loaded()).filter((entry) => entry.ref.directory === missing)).toEqual([])
       expect(yield* stored(input.projectID)).not.toContainEqual({ directory: missing, strategy: null })
     }),
   )

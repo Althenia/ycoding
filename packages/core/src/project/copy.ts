@@ -13,6 +13,7 @@ import { Slug } from "../util/slug"
 import { EventRuntime } from "../event"
 import { Database } from "../database/database"
 import { Location } from "../location"
+import { LocationServiceMap } from "../location-service-map"
 import { Event } from "@ycoding-ai/schema/project-directories"
 import { ProjectCopy } from "@ycoding-ai/schema/project-copy"
 import { eq } from "drizzle-orm"
@@ -138,6 +139,7 @@ const layer = Layer.effect(
     const directories = yield* ProjectDirectories.Service
     const db = (yield* Database.Service).db
     const events = yield* EventRuntime.Service
+    const locations = yield* LocationServiceMap.Service
 
     const changed = Effect.fnUntraced(function* (projectID: Project.ID, update: boolean) {
       if (update) yield* events.publish(Event.Updated, { projectID })
@@ -228,6 +230,7 @@ const layer = Layer.effect(
         directory: copyDirectory,
         force: input.force,
       })
+      yield* LocationServiceMap.invalidateDirectory(locations, copyDirectory)
       yield* changed(
         input.projectID,
         yield* directories.remove({ projectID: input.projectID, directory: copyDirectory }),
@@ -288,6 +291,7 @@ const layer = Layer.effect(
         updated: discovered.filter((_, index) => result.updated[index]).map((item) => item.directory),
         removed: removed.filter((_, index) => result.removed[index]),
       }
+      yield* Effect.forEach(changes.removed, (directory) => LocationServiceMap.invalidateDirectory(locations, directory), { discard: true })
       yield* changed(input.projectID, changes.updated.length > 0 || changes.removed.length > 0)
       return changes
     })
@@ -304,7 +308,7 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer: layer,
-  deps: [FSUtil.node, Git.node, ProjectDirectories.node, EventRuntime.node, Database.node],
+  deps: [FSUtil.node, Git.node, ProjectDirectories.node, EventRuntime.node, Database.node, LocationServiceMap.node],
 })
 
 export const refreshNode = makeLocationNode({

@@ -8,6 +8,9 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Database } from "@ycoding-ai/core/database/database"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { Location } from "@ycoding-ai/core/location"
+import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
+import { SessionTodo } from "@ycoding-ai/core/session/todo"
+import { WorkspaceID } from "@ycoding-ai/schema/workspace-id"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectDirectories } from "@ycoding-ai/core/project/directories"
 import { ProjectInventory } from "@ycoding-ai/core/project/inventory"
@@ -50,6 +53,7 @@ const it = testEffect(
       SessionExecution.node,
       ProjectDirectories.node,
       ProjectInventory.node,
+      LocationServiceMap.node,
     ]),
     [
       [Project.node, projects],
@@ -233,9 +237,18 @@ describe("ProjectInventory", () => {
       yield* directories.create({ projectID: alpha, directory })
       const child = yield* sessions.create({ parentID: root.id })
       const other = yield* sessions.create({ location: at(roots.beta) })
+      const locations = yield* LocationServiceMap.Service
+      const refs = [at(directory), Location.Ref.make({ directory, workspaceID: WorkspaceID.make("wrk_forgotten") })]
+      for (const ref of refs) {
+        yield* Effect.scoped(locations.contextEffect(ref, [SessionTodo.node]))
+        yield* Effect.scoped(locations.contextEffect(ref, [SessionTodo.node], "standalone"))
+      }
+      yield* Effect.scoped(locations.contextEffect(at(roots.beta), [SessionTodo.node]))
+      expect((yield* locations.loaded()).filter((entry) => entry.ref.directory === directory)).toHaveLength(4)
 
       yield* inventory.forget({ projectID: alpha, directory })
 
+      expect((yield* locations.loaded()).map((entry) => entry.ref.directory)).toEqual([AbsolutePath.make(roots.beta)])
       expect(yield* sessions.get(root.id).pipe(Effect.flip)).toBeInstanceOf(Session.NotFoundError)
       expect(yield* sessions.get(child.id).pipe(Effect.flip)).toBeInstanceOf(Session.NotFoundError)
       expect((yield* sessions.get(other.id)).id).toBe(other.id)

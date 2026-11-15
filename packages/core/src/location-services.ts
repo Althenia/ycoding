@@ -101,6 +101,7 @@ import { Database } from "./database/database"
 import { EventRuntime } from "./event"
 import { KV } from "./kv"
 import { ModelsDev } from "./models-dev"
+import { MemoryTelemetry } from "./observability/memory-telemetry"
 
 export { LocationServiceMap } from "./location-service-map"
 
@@ -221,13 +222,19 @@ export function buildLocationServiceMap(
             const [directory, workspaceID, placement] = decodeIdentity(Schema.decodeUnknownSync(Schema.UnknownFromJsonString)(key))
             const ref = Location.Ref.make({ directory: AbsolutePath.make(directory), workspaceID: workspaceID === null ? undefined : WorkspaceID.make(workspaceID) })
             const root = yield* Scope.Scope
-            const scope = yield* Scope.fork(root)
+            const scope = yield* Scope.make()
             const entry = makeEntry(ref, scope, placement)
             entries.set(key, entry)
-            yield* Scope.addFinalizer(
+            yield* Scope.addFinalizerExit(
               root,
-              Effect.sync(() => {
-                if (entries.get(key) === entry) entries.delete(key)
+              (exit) => Effect.gen(function* () {
+                yield* Scope.close(scope, exit).pipe(Effect.ensuring(Effect.sync(() => {
+                  if (entries.get(key) === entry) entries.delete(key)
+                })))
+                yield* Effect.logInfo("location services disposed", {
+                  directory: ref.directory, workspaceID: ref.workspaceID, scope: placement,
+                  builtCount: entry.built.size, loadedLocations: entries.size, ...MemoryTelemetry.sample(),
+                })
               }),
             )
             return entry
@@ -295,6 +302,7 @@ export function buildLocationServiceMap(
               .filter((node, index, all) => !requested.has(node) && all.indexOf(node) === index)
             if (missing.length === 0) return context
             const startedAt = performance.now()
+            const before = MemoryTelemetry.sample()
             stages = {}
             const closure = nodes.closure(missing)
             const unshared = closure.filter((node) => node.tag === Node.tags.values.global && !globals.has(node))
@@ -324,6 +332,11 @@ export function buildLocationServiceMap(
             yield* Effect.logInfo("location services booted", {
               directory: ref.directory,
               workspaceID: ref.workspaceID,
+              scope: placement,
+              requestedCount: requested.size,
+              builtCount: built.size,
+              loadedLocations: entries.size,
+              ...MemoryTelemetry.delta(before),
               durationMs: Math.round(performance.now() - startedAt),
               stages,
             })

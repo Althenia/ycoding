@@ -6,6 +6,8 @@ import type { LocationError, LocationServices } from "./location-services"
 import type { SessionScope } from "@ycoding-ai/schema/session-scope"
 import type { ScopeUnavailableError } from "./session/error"
 import type { StandaloneConfig } from "./config/standalone"
+import path from "node:path"
+import type { AbsolutePath } from "./schema"
 
 export type Nodes = readonly Node.LocationNode<unknown, unknown>[]
 
@@ -43,5 +45,15 @@ export const full: Node.LocationNode<LocationServices, LocationError> = {
 }
 
 export const node = LayerNode.unbound(Service, Node.tags.values.global)
+
+export const invalidateDirectory = Effect.fn("LocationServiceMap.invalidateDirectory")(function* (locations: Interface, directory: AbsolutePath) {
+  const target = path.resolve(directory)
+  const loaded = yield* locations.loaded()
+  yield* Effect.forEach(
+    loaded.filter((entry) => entry.ref.directory === target),
+    (entry) => locations.invalidate(entry.ref, entry.scope),
+    { discard: true },
+  )
+})
 
 export * as LocationServiceMap from "./location-service-map"

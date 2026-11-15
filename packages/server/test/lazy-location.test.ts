@@ -1,8 +1,8 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, parse } from "node:path"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Logger } from "effect"
 import { NodeHttpServer } from "@effect/platform-node"
 import { HttpRouter } from "effect/unstable/http"
 import { Catalog } from "@ycoding-ai/core/catalog"
@@ -11,12 +11,14 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { LocationWatcher } from "@ycoding-ai/core/filesystem/location-watcher"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { MCP } from "@ycoding-ai/core/mcp/index"
+import { Logging } from "@ycoding-ai/core/observability/logging"
 import { CatalogContributions } from "@ycoding-ai/core/plugin/catalog-contributions"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectDirectoryTable, ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
+import { SessionTodo } from "@ycoding-ai/core/session/todo"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionMessageTable, SessionTable } from "@ycoding-ai/core/session/sql"
 import { Workspace } from "@ycoding-ai/core/workspace"
@@ -25,6 +27,7 @@ import { createRoutes } from "../src/routes"
 async function withServer(
   run: (input: {
     directory: string
+    sourceDirectory: string
     sessionDirectory: string
     request: (path: string, init?: RequestInit) => Promise<Response>
     loaded: () => Promise<readonly LocationServiceMap.Loaded[]>
@@ -33,10 +36,12 @@ async function withServer(
     digest: string
     messageID: SessionMessage.ID
   }) => Promise<void>,
+  options: { seedProjectSource?: boolean } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "ycoding-lazy-location-"))
   const directory = join(root, "workspace")
   const sessionDirectory = join(root, "session-workspace")
+  const sourceDirectory = parse(root).root
   await mkdir(directory)
   await mkdir(sessionDirectory)
   let locations: LocationServiceMap.Interface | undefined
@@ -66,11 +71,16 @@ async function withServer(
           const db = Context.get(context, Database.Service).db
           yield* db
             .insert(ProjectTable)
-            .values({ id: Project.ID.global, worktree: AbsolutePath.make(parse(root).root), sandboxes: [] })
+            .values({ id: Project.ID.global, worktree: AbsolutePath.make(sourceDirectory), sandboxes: [] })
             .run()
           yield* db
             .insert(ProjectDirectoryTable)
-            .values({ project_id: Project.ID.global, directory: AbsolutePath.make(directory) })
+            .values([
+              { project_id: Project.ID.global, directory: AbsolutePath.make(directory) },
+              ...(options.seedProjectSource
+                ? [{ project_id: Project.ID.global, directory: AbsolutePath.make(sourceDirectory) }]
+                : []),
+            ])
             .run()
           yield* db
             .insert(SessionTable)
@@ -111,6 +121,7 @@ async function withServer(
     await handler.handler(new Request("http://localhost/api/health", { headers }), Context.empty())
     await run({
       directory,
+      sourceDirectory,
       sessionDirectory,
       request: (path, init) =>
         handler.handler(
@@ -133,6 +144,30 @@ async function withServer(
 }
 
 const query = (directory: string) => `location[directory]=${encodeURIComponent(directory)}`
+
+for (const suffix of ["message", "message/captured-inputs", "review", "subagent", "todo", "pending"] as const) {
+  test(`remaining cold Session ${suffix} read preserves guards and avoids the full Location graph`, async () => {
+    await withServer(async ({ request, loaded, sessionID, standaloneID, messageID }) => {
+      const base = `/api/session/${sessionID()}/${suffix}`
+      expect(await loaded()).toEqual([])
+      expect((await request(base, { headers: { authorization: "" } })).status).toBe(401)
+      expect((await request(`/api/session/invalid/${suffix}`)).status).toBe(400)
+      expect((await request(`/api/session/ses_missing/${suffix}`)).status).toBe(404)
+      expect((await request(`${base}?${query("/other")}`)).status).toBe(400)
+      expect((await request(base, { headers: { "x-ycoding-workspace": "wrk_other" } })).status).toBe(400)
+      expect((await request(`/api/session/${standaloneID}/${suffix}`)).status).toBe(400)
+      expect(await loaded()).toEqual([])
+      const response = await request(base)
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      if (suffix === "message") expect(body).toMatchObject({ data: [{ id: messageID, text: "Synthetic history" }] })
+      else if (suffix === "message/captured-inputs") expect(body.data).toBeArray()
+      else expect(body).toMatchObject({ data: [] })
+      const built = (await loaded()).flatMap((entry) => entry.built)
+      expect(built).toEqual(suffix === "todo" ? [SessionTodo.node.name] : [])
+    })
+  }, 60_000)
+}
 
 for (const read of [
   "metadata",
@@ -298,38 +333,71 @@ for (const read of ["list", "inventory", "directories", "current"] as const) {
 }
 
 test("a cold Project forget request preserves full Location middleware and authorization", async () => {
-  await withServer(async ({ directory, request, loaded }) => {
-    expect(await loaded()).toEqual([])
-    const path = `/api/project/${Project.ID.global}/directories`
-    const init = {
-      method: "DELETE",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ directory }),
+  const records: unknown[] = []
+  const disposed = Promise.withResolvers<void>()
+  const logger = Logger.make(({ message }) => {
+    if (Array.isArray(message) && ["location services booted", "location services disposed"].includes(message[0])) {
+      records.push(message)
+      if (message[0] === "location services disposed") disposed.resolve()
     }
-    const denied = await request(`${path}?${query(directory)}`, {
-      ...init,
-      headers: { ...init.headers, authorization: "" },
-    })
-    expect(denied.status).toBe(401)
-    expect(await denied.json()).toMatchObject({ _tag: "UnauthorizedError" })
-    expect(await loaded()).toEqual([])
-    expect(await (await request(path)).json()).toEqual([{ directory }])
-    const response = await request(`${path}?${query(directory)}`, init)
-    expect(response.status).toBe(204)
-    expect(await (await request(path)).json()).toEqual([])
-    const entries = await loaded()
-    expect(entries).toHaveLength(1)
-    expect(entries[0].ref.directory).toBe(AbsolutePath.make(directory))
-    expect(entries[0].built).toEqual(
-      expect.arrayContaining([
-        Catalog.node.name,
-        CatalogContributions.node.name,
-        MCP.node.name,
-        LocationWatcher.node.name,
-        PluginSupervisor.node.name,
-      ]),
-    )
   })
+  const sink = spyOn(Logging, "loggers").mockReturnValue([Effect.succeed(logger)])
+  try {
+    await withServer(
+      async ({ directory, sourceDirectory, request, loaded }) => {
+        expect(await loaded()).toEqual([])
+        const path = `/api/project/${Project.ID.global}/directories`
+        const init = {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ directory }),
+        }
+        const denied = await request(`${path}?${query(directory)}`, {
+          ...init,
+          headers: { ...init.headers, authorization: "" },
+        })
+        expect(denied.status).toBe(401)
+        expect(await denied.json()).toMatchObject({ _tag: "UnauthorizedError" })
+        expect(await loaded()).toEqual([])
+        expect(records).toEqual([])
+        const before = await (await request(path)).json()
+        expect(before).toHaveLength(2)
+        expect(before).toEqual(expect.arrayContaining([{ directory }, { directory: sourceDirectory }]))
+        expect(records).toEqual([])
+        const response = await request(`${path}?${query(directory)}`, init)
+        expect(response.status).toBe(204)
+        expect(await (await request(path)).json()).toEqual([{ directory: sourceDirectory }])
+        expect(await loaded()).toEqual([])
+        expect(records[0]).toMatchObject(["location services booted", { directory }])
+        await disposed.promise
+        expect(records).toEqual([
+          [
+            "location services booted",
+            expect.objectContaining({
+              directory,
+              scope: "bound",
+              loadedLocations: 1,
+              stages: expect.objectContaining(
+                Object.fromEntries(
+                  [
+                    Catalog.node.name,
+                    CatalogContributions.node.name,
+                    MCP.node.name,
+                    LocationWatcher.node.name,
+                    PluginSupervisor.node.name,
+                  ].map((name) => [name, expect.any(Number)]),
+                ),
+              ),
+            }),
+          ],
+          ["location services disposed", expect.objectContaining({ directory, scope: "bound", loadedLocations: 0 })],
+        ])
+      },
+      { seedProjectSource: true },
+    )
+  } finally {
+    sink.mockRestore()
+  }
 }, 60_000)
 
 test("a model list request builds only the catalog slice of a fresh Location", async () => {
@@ -358,10 +426,15 @@ test("a provider list request stays within the catalog slice", async () => {
   })
 }, 60_000)
 
-test("a session request builds the full Location graph", async () => {
+test("a Session todo mutation builds the full Location graph", async () => {
   await withServer(async ({ sessionDirectory, request, loaded, sessionID }) => {
-    const response = await request(`/api/session/${sessionID()}/pending`)
+    const response = await request(`/api/session/${sessionID()}/todo`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ todos: [{ content: "Synthetic task", status: "pending", priority: "high" }] }),
+    })
     expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ data: [{ content: "Synthetic task", status: "pending", priority: "high" }] })
     const entries = await loaded()
     const entry = entries.find((item) => item.ref.directory === sessionDirectory)
     expect(entry).toBeDefined()
