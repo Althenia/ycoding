@@ -8,6 +8,7 @@ import { ConfigAgentPlugin } from "@ycoding-ai/core/config/plugin/agent"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Global } from "@ycoding-ai/core/global"
 import { Permission } from "@ycoding-ai/core/permission"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -15,7 +16,7 @@ import { tmpdir } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { agentHost, host } from "../plugin/host"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([Agent.node, FSUtil.node, Global.node])))
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([Agent.node, FSUtil.node, Global.node, EventRuntime.node])))
 const decode = Schema.decodeUnknownSync(Config.Info)
 const defaultPermissions = [
   { action: "*", resource: "*", effect: "allow" },

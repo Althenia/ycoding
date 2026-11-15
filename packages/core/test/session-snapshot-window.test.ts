@@ -12,11 +12,62 @@ import { SessionEvent } from "../src/session/event"
 import { SessionHistory } from "../src/session/history"
 import { SessionMessage } from "../src/session/message"
 import { SessionSchema } from "../src/session/schema"
-import { SessionTable } from "../src/session/sql"
+import { InstructionStateTable, SessionTable } from "../src/session/sql"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(LayerNode.compile(Database.node))
 const sessionID = SessionSchema.ID.make("ses_snapshot_window_payload")
+
+for (const forked of [false, true]) {
+  it.effect(`snapshot windows exclude instruction payloads outside ${forked ? "inherited" : "local"} page bounds`, () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const parentID = SessionSchema.ID.make("ses_notice_parent")
+      const sessionID = forked ? SessionSchema.ID.make("ses_notice_fork") : parentID
+      const instructionType = EventRuntime.versionedType(
+        SessionEvent.InstructionsUpdated.type,
+        SessionEvent.InstructionsUpdated.durable.version,
+      )
+      yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/tmp"), sandboxes: [] }).run()
+      yield* db.insert(SessionTable).values({ id: parentID, project_id: Project.ID.global, directory: "/tmp", title: "Parent" }).run()
+      yield* db.insert(EventSequenceTable).values({ aggregate_id: parentID, seq: 12 }).run()
+      if (forked) {
+        yield* db.insert(SessionTable).values({
+          id: sessionID, project_id: Project.ID.global, directory: "/tmp", title: "Fork",
+          fork_session_id: parentID, fork_seq: 10,
+        }).run()
+        yield* db.insert(EventSequenceTable).values({ aggregate_id: sessionID, seq: 11 }).run()
+      }
+      yield* db.insert(InstructionStateTable).values({
+        session_id: sessionID, epoch_start: 1, through_seq: forked ? 11 : 12,
+        initial_values: {}, current_values: {},
+      }).run()
+      for (const seq of [4, 8, 10]) {
+        yield* db.run(sql`insert into session_message (id, session_id, type, seq, time_created, time_updated, data)
+          values (${`msg_notice_${seq}`}, ${sessionID}, 'synthetic', ${seq}, ${seq}, ${seq},
+            ${JSON.stringify({ text: `Message ${seq}`, time: { created: seq } })})`)
+      }
+      for (const seq of [2, 12]) {
+        yield* db.run(sql`insert into event (id, aggregate_id, seq, created, type, data)
+          values (${`evt_excluded_${seq}`}, ${parentID}, ${seq}, ${seq}, ${instructionType}, 'invalid JSON outside the window')`)
+      }
+      for (const [owner, seq, key] of [[parentID, 9, "core/date"], [sessionID, 11, "core/files"]] as const) {
+        yield* db.insert(EventTable).values({
+          id: EventRuntime.ID.make(`evt_notice_${seq}`), aggregate_id: owner, seq, created: seq,
+          type: instructionType, data: { sessionID: owner, delta: { [key]: "a".repeat(64) } },
+        }).run()
+      }
+      const page = yield* SessionHistory.snapshotWindow(db, sessionID, 2, 12)
+      expect(page.messages.map((message) => message.type === "system" ? message.text : message.id)).toEqual([
+        "msg_notice_8", "Instructions updated: core/date", "msg_notice_10", "Instructions updated: core/files",
+      ])
+      expect(page.before).toBeDefined()
+      expect(yield* SessionHistory.snapshotCursor(sessionID, page.before!)).toBe(8)
+      const includedCorruption = yield* SessionHistory.snapshotWindow(db, sessionID, 1, 8).pipe(Effect.exit)
+      expect(includedCorruption._tag).toBe("Failure")
+    }),
+  )
+}
 
 it.effect("snapshot windows read payloads only for returned messages, not the next-page sentinel", () =>
   Effect.gen(function* () {

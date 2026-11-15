@@ -111,6 +111,84 @@ it.effect("derives outstanding Sessions from pending input, active goal, tasks, 
   }),
 )
 
+it.effect("outstanding lineage allocation excludes unrelated idle families", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const locations = yield* LocationServiceMap.Service
+    const db = (yield* Database.Service).db
+    const root = Session.ID.make("ses_lineage_root")
+    const child = Session.ID.make("ses_lineage_child")
+    for (const id of [executing, root]) yield* sessions.create({ id, location })
+    yield* sessions.create({ id: child, parentID: root })
+    yield* sessions.synthetic({ sessionID: child, text: "Synthetic pending work", resume: false })
+    const expected = [executing, root, child].toSorted()
+    const loaded = yield* locations.loaded()
+    const measurements: { idleSessions: number; rows: number; bytes: number; unrelated: string[] }[] = []
+
+    for (const batch of [0, 1, 2]) {
+      if (batch > 0) {
+        for (let index = 0; index < 16; index++) {
+          const id = Session.ID.make(`ses_idle_${batch}_${index}`)
+          yield* sessions.create({ id, location })
+          yield* sessions.create({ id: Session.ID.make(`${id}_child`), parentID: id })
+        }
+      }
+      queries.length = 0
+      const outstanding = yield* sessions.outstanding()
+      expect([...outstanding.sessions].toSorted()).toEqual(expected)
+      expect([...outstanding.running]).toEqual([executing])
+      expect([...outstanding.failed]).toEqual([])
+      expect([...outstanding.lost]).toEqual([])
+      const reads = queries.filter((query) => query.sql.includes('"parent_id"') && query.sql.includes('"session"'))
+      const rows = yield* Effect.forEach(reads, (query) => db.$client.unsafe<{ id: string }>(query.sql, query.params))
+      measurements.push({
+        idleSessions: batch * 32,
+        rows: rows.reduce((total, page) => total + page.length, 0),
+        bytes: rows.reduce((total, page) => total + Buffer.byteLength(JSON.stringify(page)), 0),
+        unrelated: rows.flatMap((page) => page.map((row) => row.id).filter((id) => !expected.includes(Session.ID.make(id)))),
+      })
+      expect(queries.some((query) => query.sql.includes('"session_message"'))).toBe(false)
+      expect(yield* locations.loaded()).toEqual(loaded)
+    }
+
+    console.info("outstanding lineage allocation", measurements.map(({ idleSessions, rows, bytes }) => ({ idleSessions, rows, bytes })))
+    expect(measurements.map((sample) => sample.rows), JSON.stringify(measurements)).toEqual([3, 3, 3])
+    expect(measurements.map((sample) => sample.bytes)).toEqual(Array(3).fill(measurements[0].bytes))
+    expect(measurements.flatMap((sample) => sample.unrelated)).toEqual([])
+  }),
+)
+
+it.effect("outstanding ancestry terminates cycles and preserves missing ancestors and active IDs", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const events = yield* EventRuntime.Service
+    const locations = yield* LocationServiceMap.Service
+    const db = (yield* Database.Service).db
+    const first = Session.ID.make("ses_cycle_first")
+    const second = Session.ID.make("ses_cycle_second")
+    const orphan = Session.ID.make("ses_orphan_child")
+    const missing = Session.ID.make("ses_missing_parent")
+    for (const id of [first, orphan]) yield* sessions.create({ id, location })
+    yield* sessions.create({ id: second, parentID: first })
+    for (const sessionID of [second, orphan]) {
+      yield* sessions.synthetic({ sessionID, text: "Synthetic pending work", resume: false })
+      yield* events.publish(SessionEvent.Execution.Failed, { sessionID, error: { type: "unknown", message: "failed" } })
+    }
+    yield* db.update(SessionTable).set({ parent_id: second }).where(eq(SessionTable.id, first)).run()
+    yield* db.update(SessionTable).set({ parent_id: missing }).where(eq(SessionTable.id, orphan)).run()
+    const loaded = yield* locations.loaded()
+    for (const includeFailures of [false, true]) {
+      const work = yield* sessions.outstanding(includeFailures)
+      expect([...work.sessions].toSorted()).toEqual([executing, first, second, orphan, missing].toSorted())
+      expect([...work.running]).toEqual([executing])
+      expect([...work.failed]).toEqual([])
+      expect([...work.lost]).toEqual([])
+      expect([...(yield* sessions.active)]).toEqual([executing])
+      expect(yield* locations.loaded()).toEqual(loaded)
+    }
+  }),
+)
+
 it.effect("reports no lost shell notices for a fresh Session", () =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service

@@ -1,6 +1,8 @@
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Schema } from "effect"
+import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigSkillPlugin } from "@ycoding-ai/core/config/plugin/skill"
 import { Global } from "@ycoding-ai/core/global"
@@ -11,7 +13,7 @@ import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
 import { host } from "../plugin/host"
 
-const it = testEffect(Layer.empty)
+const it = testEffect(AppNodeBuilder.build(EventRuntime.node))
 const decode = Schema.decodeUnknownSync(Config.Info)
 
 describe("ConfigSkillPlugin.Plugin", () => {

@@ -2966,10 +2966,62 @@ const layer = Layer.effect(
           .all()
           .pipe(Effect.orDie)
         const active = yield* execution.active
+        const runningIDs = [
+          ...active,
+          ...tasks.filter((task) => ["starting", "running", "cancelling"].includes(task.state)).map((task) => task.sessionID),
+          ...(yield* jobs.list()).flatMap((job) => {
+            const sessionID = job.metadata?.sessionID
+            return job.type === "shell" && job.status === "running" && Schema.is(SessionSchema.ID)(sessionID)
+              ? [sessionID]
+              : []
+          }),
+        ]
+        const sessionIDs = [...tasks, ...notices, ...goals, ...pending]
+          .map((row) => row.sessionID)
+          .concat([...shellJobs, ...active])
+        const startedType = Event.versionedType(
+          SessionEvent.Execution.Started.type,
+          SessionEvent.Execution.Started.durable.version,
+        )
+        const failedType = Event.versionedType(
+          SessionEvent.Execution.Failed.type,
+          SessionEvent.Execution.Failed.durable.version,
+        )
+        const latest = (type: string) =>
+          sql`(select max(latest.seq) from ${EventTable} as latest
+            where latest.aggregate_id = ${SessionTable.id} and latest.type = ${type})`
+        const history = includeFailures
+          ? yield* db
+              .select({
+                aggregateID: EventTable.aggregate_id,
+                type: EventTable.type,
+                created: EventTable.created,
+                id: EventTable.id,
+              })
+              .from(SessionTable)
+              .crossJoin(EventTable)
+              .where(
+                and(
+                  eq(EventTable.aggregate_id, SessionTable.id),
+                  eq(EventTable.seq, sql`max(coalesce(${latest(startedType)}, -1), coalesce(${latest(failedType)}, -1))`),
+                ),
+              )
+              .orderBy(asc(EventTable.created), asc(EventTable.id))
+              .all()
+              .pipe(Effect.orDie)
+          : []
+        const lineageIDs = [...new Set([...runningIDs, ...sessionIDs, ...history.map((event) => event.aggregateID)])]
         const rows = yield* db
-          .select({ id: SessionTable.id, parentID: SessionTable.parent_id })
-          .from(SessionTable)
-          .all()
+          .all<{ id: SessionSchema.ID; parentID: SessionSchema.ID | null }>(sql`
+            WITH RECURSIVE ancestry(id, parent_id) AS (
+              SELECT ${SessionTable.id}, ${SessionTable.parent_id} FROM ${SessionTable}
+              WHERE ${SessionTable.id} IN (SELECT value FROM json_each(${JSON.stringify(lineageIDs)}))
+              UNION
+              SELECT parent.id, parent.parent_id FROM session AS parent
+              JOIN ancestry AS child ON parent.id = child.parent_id
+            )
+            SELECT id, parent_id AS "parentID" FROM ancestry
+          `)
           .pipe(Effect.orDie)
         const parents = new Map(rows.map((row) => [row.id, row.parentID]))
         const ancestors = (ids: Iterable<SessionSchema.ID>) => {
@@ -2985,50 +3037,9 @@ const layer = Layer.effect(
           }
           return family
         }
-        const running = ancestors([
-          ...active,
-          ...tasks.filter((task) => ["starting", "running", "cancelling"].includes(task.state)).map((task) => task.sessionID),
-          ...(yield* jobs.list()).flatMap((job) => {
-            const sessionID = job.metadata?.sessionID
-            return job.type === "shell" && job.status === "running" && Schema.is(SessionSchema.ID)(sessionID)
-              ? [sessionID]
-              : []
-          }),
-        ])
-        const sessions = ancestors(
-          [...tasks, ...notices, ...goals, ...pending].map((row) => row.sessionID).concat([...shellJobs, ...active]),
-        )
+        const running = ancestors(runningIDs)
+        const sessions = ancestors(sessionIDs)
         const lost = new Set([...(yield* ShellLedger.lostSessions(db)), ...(yield* SessionTask.lostSessions(db))])
-        if (!includeFailures) return { sessions, running, failed: new Set<SessionSchema.ID>(), lost }
-        const startedType = Event.versionedType(
-          SessionEvent.Execution.Started.type,
-          SessionEvent.Execution.Started.durable.version,
-        )
-        const failedType = Event.versionedType(
-          SessionEvent.Execution.Failed.type,
-          SessionEvent.Execution.Failed.durable.version,
-        )
-        const latest = (type: string) =>
-          sql`(select max(latest.seq) from ${EventTable} as latest
-            where latest.aggregate_id = ${SessionTable.id} and latest.type = ${type})`
-        const history = yield* db
-          .select({
-            aggregateID: EventTable.aggregate_id,
-            type: EventTable.type,
-            created: EventTable.created,
-            id: EventTable.id,
-          })
-          .from(SessionTable)
-          .crossJoin(EventTable)
-          .where(
-            and(
-              eq(EventTable.aggregate_id, SessionTable.id),
-              eq(EventTable.seq, sql`max(coalesce(${latest(startedType)}, -1), coalesce(${latest(failedType)}, -1))`),
-            ),
-          )
-          .orderBy(asc(EventTable.created), asc(EventTable.id))
-          .all()
-          .pipe(Effect.orDie)
         const failed = new Set<SessionSchema.ID>()
         for (const event of history) {
           const seen = new Set<SessionSchema.ID>()

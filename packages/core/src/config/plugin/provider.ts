@@ -2,8 +2,10 @@ export * as ConfigProviderPlugin from "./provider"
 
 import { define } from "../../plugin/catalog-host"
 import { Money } from "@ycoding-ai/schema/money"
+import { Event } from "@ycoding-ai/schema/config"
 import { Effect, Stream } from "effect"
 import { Config } from "../../config"
+import { EventRuntime } from "../../event"
 import { Catalog } from "../../catalog"
 import { Credential } from "../../credential"
 import { Integration } from "../../integration"
@@ -170,6 +172,7 @@ export const Plugin = define({
   id: "ycoding.config.provider",
   effect: Effect.fn(function* (ctx) {
     const config = yield* Config.Service
+    const events = yield* EventRuntime.Service
     const catalogService = yield* Catalog.Service
     const integrations = yield* Integration.Service
     const credentials = yield* Credential.Service
@@ -231,8 +234,7 @@ export const Plugin = define({
         }
       }
     })
-    yield* ctx.event.subscribe().pipe(
-      Stream.filter((event) => event.type === "config.updated" || event.type === "integration.connection.updated"),
+    yield* events.subscribe([Event.Updated, Integration.Event.ConnectionUpdated]).pipe(
       Stream.runForEach((event) =>
         event.type === "integration.connection.updated"
           ? discover(

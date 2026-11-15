@@ -908,7 +908,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     let activityRevision = 0
     let activityRead: Promise<void> | undefined
     let activityDirty = false
+    let activityDisposed = false
+    onCleanup(() => {
+      activityDisposed = true
+      activityDirty = false
+      activityRevision++
+    })
     function syncActivity(): Promise<void> {
+      if (activityDisposed) return Promise.resolve()
       activityDirty = true
       activityRevision++
       if (activityRead) return activityRead
@@ -917,7 +924,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           activityDirty = false
           const revision = activityRevision
           const work = await client.api.session.outstanding()
-          if (revision === activityRevision) setFamilyRunning(work.running ?? [])
+          if (!activityDisposed && revision === activityRevision) setFamilyRunning(work.running ?? [])
         }
       })().catch((error) => console.error("Failed to refresh Session activity", error)).finally(() => { activityRead = undefined })
       return activityRead
@@ -2459,7 +2466,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         retain(sessionIDs: ReadonlySet<string>) {
           retainedSessionSets.add(sessionIDs)
           return () => {
-            retainedSessionSets.delete(sessionIDs)
+            if (!retainedSessionSets.delete(sessionIDs)) return
+            pruneMetadata()
           }
         },
         syncRoots(projectID?: string) {

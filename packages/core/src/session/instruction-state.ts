@@ -1,6 +1,6 @@
 export * as InstructionState from "./instruction-state"
 
-import { and, asc, desc, eq, gt, inArray, lte, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, inArray, lt, lte, sql } from "drizzle-orm"
 import { DateTime, Effect, Option, Schema } from "effect"
 import type { Database } from "../database/database"
 import { EventRuntime } from "../event"
@@ -370,10 +370,11 @@ const instructionUpdatesAfter = Effect.fnUntraced(function* (
 export const transcriptNotices = Effect.fn("InstructionState.transcriptNotices")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
+  window?: { readonly from: number; readonly before?: number },
 ) {
   const state = yield* readState(db, sessionID)
   if (!state) return []
-  return (yield* instructionUpdatesAfter(db, sessionID, state.epoch_start)).flatMap((row) => {
+  return (yield* eventRows(db, sessionID, [instructionEventType], state.epoch_start, window)).flatMap((row) => {
     const keys = Object.keys(decodeInstructionsUpdated(row.data).delta)
     if (keys.length === 0) return []
     return [{
@@ -393,6 +394,7 @@ const eventRows = Effect.fnUntraced(function* (
   sessionID: SessionSchema.ID,
   types: ReadonlyArray<string>,
   after?: number,
+  window?: { readonly from: number; readonly before?: number },
 ): Effect.fn.Return<ReadonlyArray<InstructionEventRow>> {
   const segments = (yield* lineage(db, sessionID)).filter(
     (segment) => after === undefined || segment.through === undefined || segment.through > after,
@@ -407,6 +409,8 @@ const eventRows = Effect.fnUntraced(function* (
           inArray(EventTable.type, types),
           segment.through === undefined ? undefined : lte(EventTable.seq, segment.through),
           after === undefined ? undefined : gt(EventTable.seq, after),
+          window === undefined ? undefined : gte(EventTable.seq, window.from),
+          window?.before === undefined ? undefined : lt(EventTable.seq, window.before),
         ),
       )
       .orderBy(asc(EventTable.seq))

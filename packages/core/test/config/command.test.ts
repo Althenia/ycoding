@@ -1,7 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, PubSub, Schema, Stream } from "effect"
+import { Effect, Schema } from "effect"
 import { Config as ConfigSchema } from "@ycoding-ai/schema/config"
 import { Command } from "@ycoding-ai/core/command"
 import { Agent } from "@ycoding-ai/core/agent"
@@ -60,8 +60,6 @@ Review files`,
 
           const command = yield* Command.Service
           const events = yield* EventRuntime.Service
-          const update = yield* events.publish(ConfigSchema.Event.Updated, {})
-          const updates = yield* PubSub.unbounded<typeof update>({ replay: 1 })
           yield* ConfigCommandPlugin.Plugin.effect(
             host({
               command: {
@@ -69,7 +67,6 @@ Review files`,
                 transform: command.transform,
                 reload: command.reload,
               },
-              event: { subscribe: () => Stream.fromPubSub(updates) },
             }),
           ).pipe(
             Effect.provideService(
@@ -116,7 +113,7 @@ Review files`,
           ])
 
           yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "commands", "review.md"), "Review again"))
-          yield* PubSub.publish(updates, update)
+          yield* events.publish(ConfigSchema.Event.Updated, {})
           for (let attempt = 0; attempt < 100; attempt++) {
             if ((yield* command.get("review"))?.template === "Review again") break
             yield* Effect.sleep("10 millis")

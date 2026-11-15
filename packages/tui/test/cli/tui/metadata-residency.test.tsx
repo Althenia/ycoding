@@ -8,6 +8,44 @@ import { createApi, createEventStream, createFetch, json, sessionSnapshot } from
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import type { FetchHandler } from "../../fixture/tui-client"
 
+test("releasing a retained inventory immediately returns inactive metadata to its cache bound", async () => {
+  const fixture = await mount(() => undefined)
+  try {
+    const ids = new Set(Array.from({ length: 100 }, (_, index) => `ses_retained_${index}`))
+    const release = fixture.data.session.retain(ids)
+    for (const id of ids) await fixture.data.session.message.sync(id)
+    for (const id of ids) fixture.data.session.message.evict(id)
+    expect(fixture.data.session.list()).toHaveLength(100)
+    release()
+    expect(fixture.data.session.list()).toHaveLength(50)
+    release()
+    expect(fixture.data.session.list()).toHaveLength(50)
+  } finally {
+    fixture.destroy()
+  }
+})
+
+test("disposing during an outstanding read prevents queued activity refreshes", async () => {
+  const gate = Promise.withResolvers<Response>()
+  const started = Promise.withResolvers<void>()
+  let reads = 0
+  const fixture = await mount((url) => {
+    if (url.pathname !== "/api/session/outstanding") return undefined
+    reads++
+    started.resolve()
+    return gate.promise.then((response) => response.clone())
+  })
+  await started.promise
+  fixture.events.emit({ id: "evt_activity", type: "session.execution.started", created: 1,
+    data: { sessionID: "ses_active" }, durable: { aggregateID: "ses_active", seq: 1, version: 1 } })
+  await fixture.waitFor(() => fixture.data.session.status("ses_active") === "running")
+  fixture.destroy()
+  gate.resolve(json({ data: [], running: [], failed: [], lost: [] }))
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  expect(reads).toBe(1)
+})
+
 test("200 actual-provider open and evict cycles retain a bounded inactive metadata cache", async () => {
   const events = createEventStream()
   const reads: string[] = []
@@ -329,6 +367,7 @@ async function mount(handler: FetchHandler, selectedSessionID?: () => string | u
   return {
     data,
     events,
+    waitFor: screen.waitFor,
     destroy() {
       screen.renderer.destroy()
       events.disconnect()

@@ -1,9 +1,11 @@
 export * as ConfigSkillPlugin from "./skill"
 
 import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { Event } from "@ycoding-ai/schema/config"
 import path from "path"
 import { Effect, Stream } from "effect"
 import { Config } from "../../config"
+import { EventRuntime } from "../../event"
 import { AbsolutePath } from "../../schema"
 import { Skill } from "../../skill"
 import { Global } from "../../global"
@@ -13,6 +15,7 @@ export const Plugin = define({
   id: "ycoding.config.skill",
   effect: Effect.fn(function* (ctx) {
     const config = yield* Config.Service
+    const events = yield* EventRuntime.Service
     const global = yield* Global.Service
     const location = yield* Location.Service
     const loaded = { entries: yield* config.entries() }
@@ -54,8 +57,7 @@ export const Plugin = define({
         )
       }
     })
-    yield* ctx.event.subscribe().pipe(
-      Stream.filter((event) => event.type === "config.updated"),
+    yield* events.subscribe(Event.Updated).pipe(
       Stream.runForEach(() =>
         config.entries().pipe(
           Effect.tap((entries) => Effect.sync(() => (loaded.entries = entries))),

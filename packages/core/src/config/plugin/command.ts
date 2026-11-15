@@ -1,10 +1,12 @@
 export * as ConfigCommandPlugin from "./command"
 
 import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { Event } from "@ycoding-ai/schema/config"
 import path from "path"
 import { Effect, Option, Schema, Stream } from "effect"
 import { Command } from "../../command"
 import { Config } from "../../config"
+import { EventRuntime } from "../../event"
 import { FSUtil } from "../../fs-util"
 import { AbsolutePath } from "../../schema"
 import { ConfigCommand } from "../command"
@@ -16,6 +18,7 @@ export const Plugin = define({
   id: "ycoding.config.command",
   effect: Effect.fn(function* (ctx) {
     const config = yield* Config.Service
+    const events = yield* EventRuntime.Service
     const fs = yield* FSUtil.Service
     const load = Effect.fn("ConfigCommandPlugin.load")(function* () {
       return yield* Effect.forEach(yield* config.entries(), (entry) => {
@@ -63,8 +66,7 @@ export const Plugin = define({
         }
       }
     })
-    yield* ctx.event.subscribe().pipe(
-      Stream.filter((event) => event.type === "config.updated"),
+    yield* events.subscribe(Event.Updated).pipe(
       Stream.runForEach(() =>
         load().pipe(
           Effect.tap((documents) => Effect.sync(() => (loaded.documents = documents))),

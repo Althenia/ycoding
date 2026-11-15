@@ -1,9 +1,11 @@
 export * as ConfigReferencePlugin from "./reference"
 
 import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { Event } from "@ycoding-ai/schema/config"
 import path from "path"
 import { Effect, Stream } from "effect"
 import { Config } from "../../config"
+import { EventRuntime } from "../../event"
 import { ConfigReference } from "../reference"
 import { Reference } from "../../reference"
 import { AbsolutePath } from "../../schema"
@@ -14,6 +16,7 @@ export const Plugin = define({
   id: "ycoding.config.reference",
   effect: Effect.fn(function* (ctx) {
     const config = yield* Config.Service
+    const events = yield* EventRuntime.Service
     const location = yield* Location.Service
     const global = yield* Global.Service
     const loaded = { entries: yield* config.entries() }
@@ -48,8 +51,7 @@ export const Plugin = define({
       }
       for (const [name, source] of entries) draft.add(name, source)
     })
-    yield* ctx.event.subscribe().pipe(
-      Stream.filter((event) => event.type === "config.updated"),
+    yield* events.subscribe(Event.Updated).pipe(
       Stream.runForEach(() =>
         config.entries().pipe(
           Effect.tap((entries) => Effect.sync(() => (loaded.entries = entries))),

@@ -1,11 +1,13 @@
 export * as ConfigAgentPlugin from "./agent"
 
 import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { Event } from "@ycoding-ai/schema/config"
 import type { AgentDraft } from "@ycoding-ai/plugin/effect/agent"
 import path from "path"
 import { Effect, Option, Schema, Stream } from "effect"
 import { Agent } from "../../agent"
 import { Config } from "../../config"
+import { EventRuntime } from "../../event"
 import { ConfigAgent } from "../agent"
 import { ConfigMarkdown } from "../markdown"
 import { FSUtil } from "../../fs-util"
@@ -75,6 +77,7 @@ export const Plugin = define({
   id: "ycoding.config.agent",
   effect: Effect.fn(function* (ctx) {
     const config = yield* Config.Service
+    const events = yield* EventRuntime.Service
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
     const load = Effect.fn("ConfigAgentPlugin.load")(function* () {
@@ -101,8 +104,7 @@ export const Plugin = define({
       list: draft.list, has: (id) => draft.get(id) !== undefined, default: draft.default,
       update: draft.update, remove: draft.remove,
     }, loaded.documents, global.home))
-    yield* ctx.event.subscribe().pipe(
-      Stream.filter((event) => event.type === "config.updated"),
+    yield* events.subscribe(Event.Updated).pipe(
       Stream.runForEach(() =>
         load().pipe(
           Effect.tap((documents) => Effect.sync(() => (loaded.documents = documents))),

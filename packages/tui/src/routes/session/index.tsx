@@ -867,6 +867,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         data.session.review.sync(sessionID),
         data.session.form.sync(sessionID),
       ])
+      if (disposed || route.sessionID !== sessionID) return
       const info = data.session.get(sessionID)
       if (!info) {
         toast.show({

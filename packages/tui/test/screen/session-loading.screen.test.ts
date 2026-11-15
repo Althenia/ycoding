@@ -1,7 +1,11 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { sessionHistoryFixture } from "../fixture/session-history"
+import { json, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 import type { useData } from "../../src/context/data"
+import { useEditorContext } from "../../src/context/editor"
+import { useRoute } from "../../src/context/route"
+import { useToast } from "../../src/ui/toast"
 
 test("keeps Session chrome and composer mounted before sync and across disconnect", async () => {
   const fixture = sessionHistoryFixture(2)
@@ -57,6 +61,171 @@ test("keeps Session chrome and composer mounted before sync and across disconnec
     await screen.dispose()
   }
 }, 30000)
+
+test("a disposed Session hydration cannot reconnect the editor after switching Sessions", async () => {
+  const fixture = sessionHistoryFixture(2)
+  fixture.release()
+  const nextID = "ses_next_hydration"
+  const nextSession = {
+    id: nextID,
+    title: "Next hydration session",
+    projectID: "proj_performance",
+    location: { directory: "/tmp/ycoding-tui-perf/workspace" },
+    agent: "build",
+    model: { providerID: "fixture", id: "fixture" },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 1, updated: 2 },
+  }
+  const permission = Promise.withResolvers<void>()
+  const requested = Promise.withResolvers<void>()
+  const reconnected: (string | undefined)[] = []
+  let data!: ReturnType<typeof useData>
+  let router!: ReturnType<typeof useRoute>
+  let restoreEditor = () => {}
+  const screen = await renderScreen({
+    width: 120,
+    height: 36,
+    args: { sessionID: fixture.sessionID },
+    settle: "Synthetic response 1",
+    state: "/tmp/ycoding-tui-perf/state",
+    config: { session: { sidebar: "hide" } },
+    data: (value) => {
+      data = value
+      router = useRoute()
+      const reconnect = spyOn(useEditorContext(), "reconnect").mockImplementation((directory) => {
+        reconnected.push(directory)
+      })
+      restoreEditor = () => reconnect.mockRestore()
+    },
+    route: async (url, request) => {
+      if (url.pathname === `/api/session/${fixture.sessionID}/permission`) {
+        requested.resolve()
+        await permission.promise
+        return json({ data: [] })
+      }
+      if (url.pathname === `/api/session/${nextID}`) return json({ data: nextSession })
+      if (url.pathname === `/api/session/${nextID}/snapshot`) {
+        return sessionSnapshot(nextID, [], { session: nextSession })
+      }
+      return fixture.route(url, request)
+    },
+  })
+  const wait = async (ready: () => boolean) => {
+    const deadline = Date.now() + 5000
+    while (!ready() && Date.now() < deadline) {
+      await screen.renderOnce()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    expect(ready()).toBe(true)
+  }
+  try {
+    await requested.promise
+    const oldHydration = data.session.permission.sync(fixture.sessionID)
+    expect(reconnected).toEqual([])
+    router.navigate({ type: "session", sessionID: nextID })
+    await wait(() => reconnected.length > 0 && data.session.message.history(nextID)?.status === "ready")
+    expect(reconnected).toEqual(["/tmp/ycoding-tui-perf/workspace"])
+    const editor = screen.renderer.currentFocusedEditor
+    await screen.input.typeText("keep the next draft")
+    permission.resolve()
+    await oldHydration
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    await screen.renderOnce()
+    expect(router.data).toMatchObject({ type: "session", sessionID: nextID })
+    expect(screen.renderer.currentFocusedEditor).toBe(editor)
+    expect(screen.frame()).toContain("keep the next draft")
+    expect(reconnected).toEqual(["/tmp/ycoding-tui-perf/workspace"])
+  } finally {
+    permission.resolve()
+    await screen.dispose()
+    restoreEditor()
+  }
+}, 30000)
+
+for (const switched of [false, true]) {
+  test(`hydration rejection ${switched ? "from a disposed Session does not affect the selected Session" : "reports the current Session error"}`, async () => {
+    const fixture = sessionHistoryFixture(2)
+    fixture.release()
+    const nextID = "ses_next_rejection"
+    const nextSession = {
+      id: nextID,
+      title: "Next rejection session",
+      projectID: "proj_performance",
+      location: { directory: "/tmp/ycoding-tui-perf/workspace" },
+      agent: "build",
+      model: { providerID: "fixture", id: "fixture" },
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: 1, updated: 2 },
+    }
+    const review = Promise.withResolvers<void>()
+    const requested = Promise.withResolvers<void>()
+    let data!: ReturnType<typeof useData>
+    let router!: ReturnType<typeof useRoute>
+    let toast!: ReturnType<typeof useToast>
+    const screen = await renderScreen({
+      width: 120,
+      height: 36,
+      args: { sessionID: fixture.sessionID },
+      settle: "Synthetic response 1",
+      state: "/tmp/ycoding-tui-perf/state",
+      config: { session: { sidebar: "hide" } },
+      data: (value) => {
+        data = value
+        router = useRoute()
+        toast = useToast()
+      },
+      route: async (url, request) => {
+        if (url.pathname === `/api/session/${fixture.sessionID}/review`) {
+          requested.resolve()
+          await review.promise
+          return json({ message: "Synthetic hydration unavailable" }, { status: 503 })
+        }
+        if (url.pathname === `/api/session/${nextID}`) return json({ data: nextSession })
+        if (url.pathname === `/api/session/${nextID}/snapshot`) {
+          return sessionSnapshot(nextID, [], { session: nextSession })
+        }
+        return fixture.route(url, request)
+      },
+    })
+    const wait = async (ready: () => boolean) => {
+      const deadline = Date.now() + 5000
+      while (!ready() && Date.now() < deadline) {
+        await screen.renderOnce()
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+      expect(ready()).toBe(true)
+    }
+    try {
+      await requested.promise
+      const rejected = data.session.review.sync(fixture.sessionID).then(() => false, () => true)
+      if (switched) {
+        router.navigate({ type: "session", sessionID: nextID })
+        await wait(() => data.session.message.history(nextID)?.status === "ready" && screen.renderer.currentFocusedEditor !== null)
+      }
+      expect(toast.currentToast).toBeNull()
+      const editor = screen.renderer.currentFocusedEditor
+      await screen.input.typeText("retain the selected draft")
+      review.resolve()
+      expect(await rejected).toBe(true)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await screen.renderOnce()
+      expect(router.data).toMatchObject({ type: "session", sessionID: switched ? nextID : fixture.sessionID })
+      expect(screen.renderer.currentFocusedEditor).toBe(editor)
+      expect(screen.frame()).toContain("retain the selected draft")
+      if (switched) expect(toast.currentToast).toBeNull()
+      else {
+        expect(toast.currentToast?.variant).toBe("error")
+        expect(toast.currentToast?.message.length).toBeGreaterThan(0)
+        expect(screen.frame()).toContain("Error")
+      }
+    } finally {
+      review.resolve()
+      await screen.dispose()
+    }
+  }, 30000)
+}
 
 test("an obsolete transcript read cannot enable submission after reconnect", async () => {
   const fixture = sessionHistoryFixture(2)

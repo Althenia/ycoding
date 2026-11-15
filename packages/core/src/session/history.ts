@@ -245,7 +245,10 @@ export const snapshotWindow = Effect.fn("SessionHistory.snapshotWindow")(functio
   const hasMore = Boolean(rows[0]?.hasMore)
   const notices = [
     ...(floor.checkpoint ? [checkpointMessage(floor.checkpoint)] : []),
-    ...(yield* InstructionState.transcriptNotices(db, sessionID)).filter((notice) => notice.seq >= floor.seq),
+    ...(yield* InstructionState.transcriptNotices(db, sessionID, {
+      from: hasMore && oldest !== undefined ? oldest : floor.seq,
+      before,
+    })),
   ].filter((notice) => {
     if (before !== undefined && notice.seq >= before) return false
     if (oldest === undefined) return true
