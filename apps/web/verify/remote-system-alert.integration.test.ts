@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4719
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -49,7 +49,7 @@ async function openWorkspace(query: string) {
   await page.injectOnNewDocument(recordSystemAlerts)
   await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&${query}`)
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (await page.evaluate<boolean>(`Boolean(window.remoteStatus) && document.querySelector('.sessions-page__title') !== null`)) return page
+    if (await page.evaluate(`Boolean(window.remoteStatus) && document.querySelector('.sessions-page__title') !== null`)) return page
     await Bun.sleep(50)
   }
   await page.close()
@@ -62,11 +62,11 @@ describe("System alerts in the remote workspace", () => {
     try {
       await presenting.evaluate(`window.remoteStatus([], [])`)
       await Bun.sleep(300)
-      const baseline = await presenting.evaluate<number>(`window.__systemAlerts.length`)
+      const baseline = await presenting.evaluate(`window.__systemAlerts.length`, decodeNumber)
       await presenting.evaluate(`window.remoteStatus([], ['ses_fixture']); window.remoteStatus([], ['ses_fixture', 'ses_telemetry'])`)
-      for (let attempt = 0; attempt < 60 && await presenting.evaluate<number>(`window.__systemAlerts.length`) < baseline + 2; attempt += 1) await Bun.sleep(50)
+      for (let attempt = 0; attempt < 60 && await presenting.evaluate(`window.__systemAlerts.length`, decodeNumber) < baseline + 2; attempt += 1) await Bun.sleep(50)
       await Bun.sleep(200)
-      const all = await presenting.evaluate<readonly { readonly title: string; readonly tag: string }[]>(`window.__systemAlerts`)
+      const all = await presenting.evaluate(`window.__systemAlerts`, decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, title: (decodeString)(record["title"]), tag: (decodeString)(record["tag"]) } }))
       const alerts = all.slice(baseline)
       expect(alerts.map((alert) => alert.title)).toEqual(["YCoding — needs your attention", "YCoding — needs your attention"])
       expect(new Set(all.map((alert) => alert.tag)).size).toBe(all.length)
@@ -76,10 +76,10 @@ describe("System alerts in the remote workspace", () => {
     const pushed = await openWorkspace("theme=dark&push=delivered")
     try {
       await pushed.evaluate(`window.remoteStatus([], []); window.remoteStatus([], ['ses_fixture'])`)
-      for (let attempt = 0; attempt < 60 && !await pushed.evaluate<boolean>(`document.querySelector('.yc-notification-center__badge') !== null`); attempt += 1) await Bun.sleep(50)
+      for (let attempt = 0; attempt < 60 && !await pushed.evaluate(`document.querySelector('.yc-notification-center__badge') !== null`); attempt += 1) await Bun.sleep(50)
       await Bun.sleep(300)
-      expect(await pushed.evaluate<boolean>(`document.querySelector('.yc-notification-center__badge') !== null`)).toBe(true)
-      expect(await pushed.evaluate<number>(`window.__systemAlerts.length`)).toBe(0)
+      expect(await pushed.evaluate(`document.querySelector('.yc-notification-center__badge') !== null`)).toBe(true)
+      expect(await pushed.evaluate(`window.__systemAlerts.length`)).toBe(0)
     } finally { await pushed.close() }
   }, 30_000)
 
@@ -88,16 +88,16 @@ describe("System alerts in the remote workspace", () => {
     const unread = `Number(document.querySelector('.yc-notification-center__badge')?.textContent ?? 0)`
     try {
       await page.evaluate(`window.remoteStatus([], []); window.remoteStatus([], ['ses_fixture'])`)
-      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`window.__systemAlerts.length > 0`); attempt += 1) await Bun.sleep(50)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate(`window.__systemAlerts.length > 0`); attempt += 1) await Bun.sleep(50)
       await Bun.sleep(300)
-      const before = await page.evaluate<number>(unread)
-      const match = /^ycoding-(dev_[a-z]+)-(ntc_\d+)$/.exec(await page.evaluate<string>(`window.__systemAlerts.at(-1).tag`))
+      const before = await page.evaluate(unread, decodeNumber)
+      const match = /^ycoding-(dev_[a-z]+)-(ntc_\d+)$/.exec(await page.evaluate(`window.__systemAlerts.at(-1).tag`, decodeString))
       expect(match).not.toBeNull()
       expect(before).toBeGreaterThan(0)
       await page.evaluate(`window.dispatchEvent(new CustomEvent('ycoding:open-session', { detail: { sessionID: 'ses_fixture', deviceID: '${match?.[1]}', noticeID: '${match?.[2]}' } }))`)
-      for (let attempt = 0; attempt < 60 && await page.evaluate<number>(unread) === before; attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<number>(unread)).toBe(before - 1)
-      expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote/session")
+      for (let attempt = 0; attempt < 60 && await page.evaluate(unread) === before; attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate(unread)).toBe(before - 1)
+      expect(await page.evaluate(`location.pathname`)).toBe("/remote/session")
     } finally { await page.close() }
   }, 30_000)
 })

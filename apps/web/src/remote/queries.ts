@@ -11,11 +11,14 @@ import type {
   RemoteUsageDashboard,
   RemoteUsageDashboardInput,
   RemoteUsageForecast,
+  RemoteUsageMetrics,
+  RemoteUsageTokens,
 } from "@ycoding-ai/remote"
 import { readCentralPolicy, readProject, readProjects, readSessionCandidates, type CentralPolicy, type ProjectBundle, type SessionCandidate } from "./coordination"
 import { readUsageForecast } from "./usage-read"
 import { keepAwakeAnswer, readKeepAwakeStatus, type KeepAwakeState } from "./keep-awake"
 import { describeOutcome } from "./outcome"
+import { readSnapshot } from "./projection"
 import type { RemoteRequestOutcome, RemoteTransportRequest } from "./transport"
 import { reportKey, reportNeedsNewerConnector, type UsageProvider, type UsageReport, type UsageReportInput, type UsageSummary } from "./ui/usage-model"
 
@@ -60,6 +63,7 @@ export const remoteKeys = {
   workspaces: (scope: QueryScope) => [...remoteKeys.scope(scope), "workspaces"] as const,
   coordination: (scope: QueryScope) => [...remoteKeys.scope(scope), "coordination"] as const,
   projectCandidates: (scope: QueryScope, search: string) => [...remoteKeys.scope(scope), "project-candidates", search] as const,
+  childSnapshot: (scope: QueryScope, sessionID: string, revision: number) => [...remoteKeys.scope(scope), "child-snapshot", sessionID, revision] as const,
 }
 
 export type CoordinationOverview =
@@ -450,8 +454,25 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     })
   }
 
+  const childSnapshot = (scope: QueryScope | undefined, enabled: boolean, sessionID: string, revision: number) => {
+    const current = scope ?? idleScope
+    return queryOptions({
+      queryKey: remoteKeys.childSnapshot(current, sessionID, revision),
+      enabled: scope !== undefined && enabled && sessionID.length > 0,
+      staleTime: Infinity,
+      retry: false,
+      queryFn: async () => {
+        const outcome = await link.request(current, "session.snapshot", { sessionID, input: { limit: 40 } })
+        if (outcome.status !== "ok") throw new Error(describeOutcome(outcome, "Child conversation"))
+        const snapshot = readSnapshot(outcome.value)
+        if (snapshot?.sessionID !== sessionID || snapshot.watermarkSessionID !== undefined && snapshot.watermarkSessionID !== sessionID) throw new Error("The device returned a different or unreadable child conversation.")
+        return snapshot
+      },
+    })
+  }
+
   return {
-    coordination, refreshCoordination, changeCoordination, deleteProjectSession, createProjectSession, projectCandidates,
+    coordination, refreshCoordination, changeCoordination, deleteProjectSession, createProjectSession, projectCandidates, childSnapshot,
     usageProviders, usageSummary, usageForecast, usageReport, usageDashboard, refreshUsage, refreshUsageDashboard, retryUsageReport,
     incidentReport, incidentRecent, incidentGuidance, clearIncidentGuidance, retryIncidentReport, retryIncidentRecent, retryIncidentGuidance,
     keepAwake, keepAwakeMutation, toggleKeepAwake, workspaces,
@@ -496,8 +517,11 @@ const guidanceRequest = (input: IncidentGuidanceQueryInput): RemoteTransportRequ
 })
 
 export function readIncidentReport(value: unknown, group: RemoteIncidentReportInput["group"]): RemoteIncidentReport["data"] | undefined {
-  if (typeof value !== "object" || value === null || !Array.isArray(Reflect.get(value, "rows")) || !count(Reflect.get(value, "groups"))) return undefined
-  const rows = (Reflect.get(value, "rows") as unknown[]).flatMap((row) => {
+  if (typeof value !== "object" || value === null) return undefined
+  const raw: unknown = Reflect.get(value, "rows")
+  const groups: unknown = Reflect.get(value, "groups")
+  if (!Array.isArray(raw) || !count(groups)) return undefined
+  const rows = raw.flatMap((row: unknown) => {
     if (typeof row !== "object" || row === null) return []
     const agent = Reflect.get(row, "agent")
     const providerID = Reflect.get(row, "providerID")
@@ -510,8 +534,7 @@ export function readIncidentReport(value: unknown, group: RemoteIncidentReportIn
       !count(fallbacks) || !count(escalated) || !count(rejected) || !count(last)) return []
     return [{ providerID, modelID, ...(agent === undefined ? {} : { agent }), fallbacks, escalated, rejected, last }]
   })
-  const groups = Reflect.get(value, "groups") as number
-  if (rows.length !== (Reflect.get(value, "rows") as unknown[]).length || rows.length > groups) return undefined
+  if (rows.length !== raw.length || rows.length > groups) return undefined
   return { rows, groups }
 }
 
@@ -564,45 +587,74 @@ export function readIncidentGuidance(value: unknown): RemoteIncidentGuidance["da
 }
 
 function readUsageProviders(value: unknown): readonly UsageProvider[] | undefined {
-  if (!Array.isArray(value)) return undefined
-  const statuses = ["available", "stale", "unsupported", "unauthorized", "error"]
-  const units = ["percent", "usd", "requests", "tokens", "count"]
-  if (!value.every((item) => typeof item === "object" && item !== null && typeof item.providerID === "string" &&
-    typeof item.label === "string" && statuses.includes(item.status) && typeof item.source === "string" &&
-    typeof item.stability === "string" && Number.isFinite(item.updatedAt) && !Number.isNaN(new Date(item.updatedAt).getTime()) &&
-    (item.profile === undefined || typeof item.profile === "string") && (item.message === undefined || typeof item.message === "string") &&
-    Array.isArray(item.windows) && item.windows.every((window: Record<string, unknown>) =>
-      typeof window.id === "string" && typeof window.label === "string" && (window.group === undefined || typeof window.group === "string" && window.group !== "") && units.includes(String(window.unit)) &&
-      [window.used, window.limit, window.remaining, window.resetAt, window.periodSeconds].every((n) => n === undefined || typeof n === "number" && Number.isFinite(n) && n >= 0) &&
-      (window.unlimited === undefined || typeof window.unlimited === "boolean")))) return undefined
-  return value as UsageProvider[]
+  return Array.isArray(value) && value.every(validUsageProvider) ? value : undefined
+}
+
+const usageRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)
+const usageNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value)
+const usageAmount = (value: unknown): value is number => usageNumber(value) && value >= 0
+const usageLiteral = <const T extends string>(value: unknown, values: readonly T[]): value is T => values.some((literal) => literal === value)
+
+function validUsageProvider(value: unknown): value is UsageProvider {
+  return usageRecord(value) && typeof value.providerID === "string" && typeof value.label === "string" &&
+    usageLiteral(value.status, ["available", "stale", "unsupported", "unauthorized", "error"]) &&
+    usageLiteral(value.source, ["provider_api", "local_client_rpc", "response_headers", "response_stream", "provider_internal_api", "local_session"]) &&
+    usageLiteral(value.stability, ["stable", "client_contract", "observed", "best_effort"]) &&
+    usageNumber(value.updatedAt) && !Number.isNaN(new Date(value.updatedAt).getTime()) &&
+    (value.profile === undefined || typeof value.profile === "string") && (value.message === undefined || typeof value.message === "string") &&
+    Array.isArray(value.windows) && value.windows.every((window: unknown) => usageRecord(window) &&
+      typeof window.id === "string" && typeof window.label === "string" && (window.group === undefined || typeof window.group === "string" && window.group !== "") &&
+      usageLiteral(window.unit, ["percent", "usd", "requests", "tokens", "count"]) &&
+      [window.used, window.limit, window.remaining, window.resetAt, window.periodSeconds].every((amount) => amount === undefined || usageAmount(amount)) &&
+      (window.unlimited === undefined || typeof window.unlimited === "boolean"))
 }
 
 function validOutcomes(value: unknown) {
   return value === undefined || typeof value === "object" && value !== null && ["completed", "failed", "cancelled"].every((key) => count(Reflect.get(value, key)))
 }
 
-const speedAmounts = ["generationP95TokensPerSecond", "meanTokensPerSecond", "firstOutputP99Ms", "totalP99Ms"]
+const speedAmounts = ["generationP50TokensPerSecond", "generationP90TokensPerSecond", "generationP95TokensPerSecond", "meanTokensPerSecond", "firstOutputP50Ms", "firstOutputP95Ms", "firstOutputP99Ms", "totalP50Ms", "totalP95Ms", "totalP99Ms", "outputTokensPerSecond"]
 
-function validSpeed(speed: unknown) {
-  return speed === undefined || typeof speed === "object" && speed !== null &&
-    ["generationSamples", "providerTimedSamples", "observedSamples", "samples"].every((key) => Number.isSafeInteger(Reflect.get(speed, key)) && Reflect.get(speed, key) >= 0) &&
-    speedAmounts.every((key) => Reflect.get(speed, key) === undefined || Number.isFinite(Reflect.get(speed, key)) && Reflect.get(speed, key) >= 0)
+function validSpeed(speed: unknown): speed is UsageReport["speed"] {
+  return speed === undefined || usageRecord(speed) &&
+    ["generationSamples", "providerTimedSamples", "observedSamples", "samples"].every((key) => count(speed[key])) &&
+    speedAmounts.every((key) => speed[key] === undefined || usageAmount(speed[key]))
 }
 
 function readUsageMetrics(value: unknown): UsageSummary | undefined {
-  if (typeof value !== "object" || value === null) return undefined
-  const fields = ["logical", "physical", "helpers", "continued", "fallback"]
-  const tokens = Reflect.get(value, "tokens")
-  if (fields.some((field) => !Number.isFinite(Reflect.get(value, field)) || Reflect.get(value, field) < 0) ||
-    typeof tokens !== "object" || tokens === null ||
-    ["input", "output", "reasoning"].some((field) => !Number.isFinite(Reflect.get(tokens, field))) ||
-    typeof Reflect.get(tokens, "cache") !== "object" || Reflect.get(tokens, "cache") === null ||
-    ["read", "write"].some((field) => !Number.isFinite(Reflect.get(Reflect.get(tokens, "cache"), field))) ||
-    (Reflect.get(value, "cost") !== undefined && (!Number.isFinite(Reflect.get(value, "cost")) || Reflect.get(value, "cost") < 0)) ||
-    (Reflect.get(value, "costProvenance") !== undefined && !["recorded", "current_catalog"].includes(Reflect.get(value, "costProvenance"))) ||
-    !validOutcomes(Reflect.get(value, "outcomes"))) return undefined
-  return value as UsageSummary
+  return validUsageSummary(value) ? value : undefined
+}
+
+function validUsageTokens(value: unknown): value is RemoteUsageTokens {
+  return usageRecord(value) && [value.input, value.output, value.reasoning].every(usageNumber) &&
+    usageRecord(value.cache) && [value.cache.read, value.cache.write].every(usageNumber)
+}
+
+function validUsageMetrics(value: unknown): value is RemoteUsageMetrics & Record<string, unknown> {
+  return usageRecord(value) && [value.logical, value.physical, value.helpers, value.continued, value.fallback].every(usageAmount) &&
+    validUsageTokens(value.tokens) && (value.cost === undefined || usageAmount(value.cost)) &&
+    (value.costProvenance === undefined || usageLiteral(value.costProvenance, ["recorded", "current_catalog"])) &&
+    (value.cacheReadReported === undefined || typeof value.cacheReadReported === "boolean") && validOutcomes(value.outcomes) &&
+    (value.costCoverage === undefined || usageRecord(value.costCoverage) && count(value.costCoverage.pricedRequests) && count(value.costCoverage.unpricedRequests))
+}
+
+function validUsageModel(value: unknown): value is NonNullable<UsageSummary["models"]>[number]["model"] & Record<string, unknown> {
+  return usageRecord(value) && typeof value.providerID === "string" && typeof value.id === "string" &&
+    (value.variant === undefined || typeof value.variant === "string")
+}
+
+function validUsageSummary(value: unknown): value is UsageSummary {
+  return usageRecord(value) && validUsageMetrics(value) &&
+    (value.latestInvalidation === undefined || typeof value.latestInvalidation === "string") &&
+    (value.latestNamespace === undefined || typeof value.latestNamespace === "string") &&
+    (value.latestTiming === undefined || usageRecord(value.latestTiming) &&
+      [value.latestTiming.promptEvalDurationNs, value.latestTiming.generationDurationNs, value.latestTiming.loadDurationNs].every((amount) => amount === undefined || usageNumber(amount))) &&
+    (value.models === undefined || Array.isArray(value.models) && value.models.every((model: unknown) => usageRecord(model) &&
+      validUsageModel(model.model) && count(model.requests) && validUsageTokens(model.tokens) &&
+      (model.cacheReadReported === undefined || typeof model.cacheReadReported === "boolean") &&
+      (model.cost === undefined || usageAmount(model.cost)) &&
+      (model.costProvenance === undefined || usageLiteral(model.costProvenance, ["recorded", "current_catalog"])) &&
+      (model.cost === undefined) === (model.costProvenance === undefined)))
 }
 
 function readUsageDashboard(value: unknown, input: DashboardInput): RemoteUsageDashboard | undefined {
@@ -682,30 +734,37 @@ function readDashboardQuota(value: unknown): Extract<RemoteUsageDashboard, { rea
 }
 
 export function readUsageReport(value: unknown, group: UsageReportInput["group"]): UsageReport | undefined {
-  if (typeof value !== "object" || value === null || Reflect.get(value, "group") !== group || !Array.isArray(Reflect.get(value, "rows")) ||
-    !Number.isInteger(Reflect.get(value, "rowCount")) || Reflect.get(value, "rowCount") < 0 ||
-    (Reflect.get(value, "nextOffset") !== undefined && (!Number.isInteger(Reflect.get(value, "nextOffset")) || Reflect.get(value, "nextOffset") < 0)) ||
-    readUsageMetrics(Reflect.get(value, "total")) === undefined || !validSpeed(Reflect.get(value, "speed"))) return undefined
-  const rows: unknown[] = Reflect.get(value, "rows")
-  if (!rows.every((row) => typeof row === "object" && row !== null && typeof Reflect.get(row, "key") === "string" &&
-    typeof Reflect.get(row, "label") === "string" && readUsageMetrics(row) !== undefined &&
-    ((Reflect.get(row, "cost") === undefined) === (Reflect.get(row, "costProvenance") === undefined)))) return undefined
-  if (rows.some((row) => {
-    if (typeof row !== "object" || row === null) return true
-    const coverage = Reflect.get(row, "costCoverage")
-    if (coverage !== undefined && (typeof coverage !== "object" || coverage === null || ["pricedRequests", "unpricedRequests"].some((key) => !Number.isSafeInteger(Reflect.get(coverage, key)) || Reflect.get(coverage, key) < 0))) return true
-    if (!validSpeed(Reflect.get(row, "speed"))) return true
-    const concurrency = Reflect.get(row, "concurrency")
-    if (concurrency !== undefined && !(Number.isFinite(concurrency) && concurrency >= 0)) return true
-    if (!["provider", "provider-profile-model", "provider-model", "model-id", "profile", "prompt", "task"].includes(group)) return false
-    const dimension = Reflect.get(row, "dimensions")
-    if (Reflect.get(row, "model") !== undefined || typeof dimension !== "object" || dimension === null || Reflect.get(dimension, "group") !== group) return true
-    if (["provider", "provider-profile-model", "provider-model", "profile"].includes(group) && typeof Reflect.get(dimension, "providerID") !== "string") return true
-    if (["model-id", "provider-model", "provider-profile-model"].includes(group) && typeof Reflect.get(dimension, "modelID") !== "string") return true
-    if (group === "profile" || group === "provider-profile-model") return !["recorded", "provider-default"].includes(Reflect.get(dimension, "profileState")) || (Reflect.get(dimension, "profileState") === "recorded") !== (typeof Reflect.get(dimension, "profile") === "string")
-    return false
-  })) return undefined
-  return value as UsageReport
+  return validUsageReport(value, group) ? value : undefined
+}
+
+function validUsageReport(value: unknown, group: UsageReportInput["group"]): value is UsageReport {
+  if (!usageRecord(value) || value.group !== group || !Array.isArray(value.rows) ||
+    !Number.isInteger(value.rowCount) || !usageAmount(value.rowCount) ||
+    (value.nextOffset !== undefined && (!Number.isInteger(value.nextOffset) || !usageAmount(value.nextOffset))) ||
+    !validUsageMetrics(value.total) || !validSpeed(value.speed)) return false
+  const typed = ["provider", "provider-profile-model", "provider-model", "model-id", "profile", "prompt", "task"].includes(group)
+  return value.rows.every((row: unknown) => usageRecord(row) && typeof row.key === "string" && typeof row.label === "string" &&
+    validUsageMetrics(row) && (row.cost === undefined) === (row.costProvenance === undefined) &&
+    validSpeed(row.speed) && (row.concurrency === undefined || usageAmount(row.concurrency)) &&
+    (row.model === undefined || usageRecord(row.model) && validUsageModel(row.model) && (row.model.profile === undefined || typeof row.model.profile === "string")) &&
+    (row.dimensions === undefined || validUsageDimensions(row.dimensions)) &&
+    (!typed || row.model === undefined && usageRecord(row.dimensions) && row.dimensions.group === group))
+}
+
+function validUsageDimensions(value: unknown): value is NonNullable<UsageReport["rows"][number]["dimensions"]> {
+  if (!usageRecord(value)) return false
+  if (value.group === "provider") return typeof value.providerID === "string"
+  if (value.group === "model-id") return typeof value.modelID === "string"
+  if (value.group === "provider-model") return typeof value.providerID === "string" && typeof value.modelID === "string"
+  if (value.group === "profile" || value.group === "provider-profile-model") return typeof value.providerID === "string" &&
+    (value.group === "profile" || typeof value.modelID === "string") &&
+    usageLiteral(value.profileState, ["recorded", "provider-default"]) &&
+    (value.profile === undefined || typeof value.profile === "string") && (value.profileState === "recorded") === (typeof value.profile === "string")
+  if (value.group === "prompt") return usageLiteral(value.attribution, ["complete", "partial", "unattributed"]) &&
+    (value.anchor === undefined || usageRecord(value.anchor) && typeof value.anchor.sessionID === "string" && typeof value.anchor.inputID === "string")
+  if (value.group === "task") return usageLiteral(value.attribution, ["complete", "partial", "unattributed"]) &&
+    (value.sessionID === undefined || typeof value.sessionID === "string")
+  return false
 }
 
 export function readWorkspaces(payload: unknown): readonly RemoteWorkspaceInfo[] | undefined {

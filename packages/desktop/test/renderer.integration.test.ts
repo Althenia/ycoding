@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test"
 import path from "node:path"
 import { createServer, type ViteDevServer } from "vite"
-import { launchBrowser } from "../../../apps/web/verify/cdp"
+import { launchBrowser, decodeNumber, decodeRecord } from "../../../apps/web/verify/cdp"
 import { createDesktopRPC } from "../src/rpc"
 import { syntheticDesktop } from "./synthetic-desktop"
 
@@ -216,14 +216,14 @@ test("layout stability keeps streaming disclosures mounted and follows only the 
     replyText = "Streaming synthetic text. ".repeat(180)
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.text.delta', data: { sessionID: 'ses_test', assistantMessageID: 'msg_response', ordinal: 3, delta: 'synthetic' } })`)
     await wait(page, `document.querySelector('#turn-msg_response').textContent.includes(${JSON.stringify(replyText)})`)
-    const result = await page.evaluate<{ reason: boolean; prose: boolean; open: boolean; distance: number }>(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => { const scroller = document.querySelector('.conversation__scroll'); resolve({ reason: window.__stableReason === document.querySelector('#turn-msg_response details'), prose: window.__stableProse === document.querySelector('#turn-msg_response .transcript-message__text'), open: document.querySelector('#turn-msg_response details').open, distance: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop }); })))`)
+    const result = await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => { const scroller = document.querySelector('.conversation__scroll'); resolve({ reason: window.__stableReason === document.querySelector('#turn-msg_response details'), prose: window.__stableProse === document.querySelector('#turn-msg_response .transcript-message__text'), open: document.querySelector('#turn-msg_response details').open, distance: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop }); })))`)
     expect(result).toEqual({ reason: true, prose: true, open: true, distance: 0 })
-    const top = await page.evaluate<number>(`(() => { const scroller = document.querySelector('.conversation__scroll'); scroller.scrollTop -= 500; scroller.dispatchEvent(new Event('scroll')); return scroller.scrollTop; })()`)
+    const top = await page.evaluate(`(() => { const scroller = document.querySelector('.conversation__scroll'); scroller.scrollTop -= 500; scroller.dispatchEvent(new Event('scroll')); return scroller.scrollTop; })()`)
     replyText += " Detached streaming text. ".repeat(160)
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.text.delta', data: { sessionID: 'ses_test', assistantMessageID: 'msg_response', ordinal: 3, delta: 'more' } })`)
     await wait(page, `document.querySelector('#turn-msg_response').textContent.includes('Detached streaming text.')`)
-    expect(await page.evaluate<number>(`document.querySelector('.conversation__scroll').scrollTop`)).toBe(top)
-    expect(await page.evaluate<unknown[]>(`window.__desktopFixture.errors`)).toEqual([])
+    expect(await page.evaluate(`document.querySelector('.conversation__scroll').scrollTop`)).toBe(top)
+    expect(await page.evaluate(`window.__desktopFixture.errors`)).toEqual([])
   } finally { await page.close() }
 }, 30_000)
 
@@ -233,10 +233,10 @@ test("layout stability retains rail focus and transcript nodes when older histor
   try {
     await page.evaluate(`(() => { window.__stablePrompt = document.querySelector('#turn-msg_prompt_239'); document.querySelector('.rl-session-row').focus(); window.__stablePin = document.querySelector('.workspace__pin'); window.__stablePin.focus(); if (document.activeElement !== window.__stablePin) throw new Error('Pin must own focus before refresh'); window.__desktopFixture.resync(); })()`)
     await wait(page, `(window.__desktopFixture.completed.sessionSnapshot ?? 0) >= 2`)
-    expect(await page.evaluate<boolean>(`window.__stablePin === document.activeElement && window.__stablePin.isConnected`)).toBe(true)
+    expect(await page.evaluate(`window.__stablePin === document.activeElement && window.__stablePin.isConnected`)).toBe(true)
     await page.evaluate(`[...document.querySelectorAll('.conversation__scroll button')].find(button => button.textContent === 'Load older messages').click()`)
     await wait(page, `document.querySelector('#turn-msg_prompt_41')`)
-    expect(await page.evaluate<boolean>(`window.__stablePrompt === document.querySelector('#turn-msg_prompt_239')`)).toBe(true)
+    expect(await page.evaluate(`window.__stablePrompt === document.querySelector('#turn-msg_prompt_239')`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 
@@ -244,7 +244,7 @@ test("layout stability bounds live counters and waiting badges without moving ad
   pending = false
   const page = await open()
   try {
-    const stable = await page.evaluate<boolean>(`(() => {
+    const stable = await page.evaluate(`(() => {
       const filters = [...document.querySelectorAll('.rl-rail-filter')];
       const before = filters.map(element => element.getBoundingClientRect().toJSON());
       filters.forEach(element => element.lastElementChild.textContent = '999');
@@ -252,10 +252,10 @@ test("layout stability bounds live counters and waiting badges without moving ad
       return before.every((rect, index) => rect.x === after[index].x && rect.width === after[index].width && rect.height === after[index].height);
     })()`)
     expect(stable).toBe(true)
-    const title = await page.evaluate<{ width: number; height: number }>(`(() => { const rect = document.querySelector('.rl-session-row[aria-current="page"] .rl-session-row-title').getBoundingClientRect(); return { width: rect.width, height: rect.height }; })()`)
+    const title = await page.evaluate(`(() => { const rect = document.querySelector('.rl-session-row[aria-current="page"] .rl-session-row-title').getBoundingClientRect(); return { width: rect.width, height: rect.height }; })()`)
     await page.evaluate(`window.__desktopFixture.emit({ type: 'permission.asked', data: { id: 'per_geometry', sessionID: 'ses_test', action: 'synthetic', resources: [] } })`)
     await wait(page, `document.querySelector('.rl-session-row[data-state="waiting"]')`)
-    expect(await page.evaluate<{ width: number; height: number }>(`(() => { const rect = document.querySelector('.rl-session-row[aria-current="page"] .rl-session-row-title').getBoundingClientRect(); return { width: rect.width, height: rect.height }; })()`)).toEqual(title)
+    expect(await page.evaluate(`(() => { const rect = document.querySelector('.rl-session-row[aria-current="page"] .rl-session-row-title').getBoundingClientRect(); return { width: rect.width, height: rect.height }; })()`)).toEqual(title)
   } finally { await page.close() }
 }, 30_000)
 
@@ -263,7 +263,7 @@ test("layout stability coalesces composer growth and preserves bottom anchoring 
   pending = false
   const page = await open()
   try {
-    const reads = await page.evaluate<number>(`(() => {
+    const reads = await page.evaluate(`(() => {
       const input = document.querySelector('.rl-capsule textarea');
       const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight');
       let reads = 0;
@@ -274,11 +274,11 @@ test("layout stability coalesces composer growth and preserves bottom anchoring 
     })()`)
     expect(reads).toBeLessThanOrEqual(1)
     await wait(page, `document.querySelector('.rl-capsule textarea').getBoundingClientRect().height >= 160`)
-    const bottom = await page.evaluate<number>(`document.querySelector('.rl-capsule').getBoundingClientRect().bottom`)
+    const bottom = await page.evaluate(`document.querySelector('.rl-capsule').getBoundingClientRect().bottom`)
     await message(page, "Short draft")
     await wait(page, `document.querySelector('.rl-capsule textarea').getBoundingClientRect().height === 44`)
-    expect(await page.evaluate<number>(`document.querySelector('.rl-capsule').getBoundingClientRect().bottom`)).toBe(bottom)
-    expect(await page.evaluate<number>(`(() => { const scroller = document.querySelector('.conversation__scroll'); return scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop; })()`)).toBe(0)
+    expect(await page.evaluate(`document.querySelector('.rl-capsule').getBoundingClientRect().bottom`)).toBe(bottom)
+    expect(await page.evaluate(`(() => { const scroller = document.querySelector('.conversation__scroll'); return scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop; })()`)).toBe(0)
   } finally { await page.close() }
 }, 30_000)
 
@@ -289,19 +289,19 @@ test("layout stability reserves composer actions through live metadata and runni
   try {
     await message(page, "Retained synthetic draft")
     await wait(page, `document.querySelector('.composer-metrics') && document.querySelector('.rl-capsule textarea').getBoundingClientRect().height === 44`)
-    const original = await page.evaluate<unknown[]>(geometry)
+    const original = await page.evaluate(geometry)
     await page.evaluate(`(() => { document.querySelector('.composer-metrics').lastChild.textContent = '999,999,999 in · 999,999 out · $999.99'; document.querySelector('.composer-chip--model > span').textContent = 'Synthetic model name with a long provider and profile label'; })()`)
-    expect(await page.evaluate<unknown[]>(geometry)).toEqual(original)
+    expect(await page.evaluate(geometry)).toEqual(original)
     running = true
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.execution.started', data: { sessionID: 'ses_test' } })`)
     await wait(page, `document.querySelector('[aria-label="Stop"]')`)
-    expect(await page.evaluate<unknown[]>(geometry)).toEqual(original)
-    expect(await page.evaluate<string>(`document.querySelector('.rl-capsule textarea').value`)).toBe("Retained synthetic draft")
+    expect(await page.evaluate(geometry)).toEqual(original)
+    expect(await page.evaluate(`document.querySelector('.rl-capsule textarea').value`)).toBe("Retained synthetic draft")
     running = false
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.idle', data: { sessionID: 'ses_test' } })`)
     await wait(page, `!document.querySelector('[aria-label="Stop"]')`)
-    expect(await page.evaluate<unknown[]>(geometry)).toEqual(original)
-    expect(await page.evaluate<unknown[]>(`window.__desktopFixture.errors`)).toEqual([])
+    expect(await page.evaluate(geometry)).toEqual(original)
+    expect(await page.evaluate(`window.__desktopFixture.errors`)).toEqual([])
   } finally { await page.close() }
 }, 30_000)
 
@@ -322,7 +322,7 @@ test("active question controls require complete answers and send their ordered s
     })()`)
     await wait(page, `!document.querySelector('#question-que_active')`)
     expect(owned?.calls.filter((call) => call.method === "POST" && call.route.includes("/question/"))).toEqual([expect.objectContaining({ route: "/api/session/ses_test/question/que_active/reply", body: { answers: [["Local", "Preview"], ["Detailed synthetic answer"]] } })])
-    expect(await page.evaluate<unknown[]>(`window.__desktopFixture.errors`)).toEqual([])
+    expect(await page.evaluate(`window.__desktopFixture.errors`)).toEqual([])
   } finally { await page.close() }
 }, 30_000)
 
@@ -334,7 +334,7 @@ test("rendered parity opens composition commands without submitting their text a
       await message(page, input!)
       await page.evaluate(`document.querySelector('.rl-send').click()`)
       await wait(page, `document.querySelector('dialog[open] h2')?.textContent === 'Session actions' && document.querySelector('dialog[open] [role="radio"][aria-checked="true"]')?.textContent === ${JSON.stringify(tab)}`)
-      expect(await page.evaluate<string>(`document.querySelector('dialog[open] textarea').value`)).toBe(draft!)
+      expect(await page.evaluate(`document.querySelector('dialog[open] textarea').value`)).toBe(draft!)
       expect(owned!.calls.filter((call) => call.method !== "GET")).toEqual([])
       await page.pressKey("Escape", "Escape", 27)
       await wait(page, `!document.querySelector('dialog[open]')`)
@@ -357,8 +357,8 @@ test("rendered parity edits a prompt without submitting it and preserves file an
     await wait(page, `document.querySelector('dialog[open] h2')?.textContent === 'Edit prompt'`)
     await page.evaluate(`(() => { const input = document.querySelector('dialog[open] textarea'); input.value = 'Edited synthetic draft'; input.dispatchEvent(new InputEvent('input', { bubbles: true })); [...document.querySelectorAll('dialog[open] button')].find(button => button.textContent === 'Save draft').click(); })()`)
     await wait(page, `!document.querySelector('dialog[open]') && document.querySelector('.rl-capsule textarea').value === 'Edited synthetic draft'`)
-    expect(await page.evaluate<string>(`document.querySelector('[aria-label="Attached workspace files"]').textContent`)).toContain("restored-notes.txt")
-    expect(await page.evaluate<string>(`document.querySelector('[aria-label="Restored agent attachments"]').textContent`)).toContain("reviewer")
+    expect(await page.evaluate(`document.querySelector('[aria-label="Attached workspace files"]').textContent`)).toContain("restored-notes.txt")
+    expect(await page.evaluate(`document.querySelector('[aria-label="Restored agent attachments"]').textContent`)).toContain("reviewer")
     expect(owned!.calls.filter((call) => call.route.endsWith("/prompt"))).toEqual([])
   } finally { await page.close() }
 }, 30_000)
@@ -399,9 +399,9 @@ test("native external editing preserves attachments and accepts an intentionally
     await wait(page, `document.querySelector('.rl-capsule textarea').value.startsWith('Synthetic prompt 239.')`)
     await command(page, "Edit the full prompt draft")
     await wait(page, `window.__desktopFixture.completed.editDraft === 1 && document.querySelector('.rl-capsule textarea').value === ''`)
-    expect(await page.evaluate<boolean>(`!!document.querySelector('dialog[open]')`)).toBe(false)
-    expect(await page.evaluate<string>(`document.querySelector('[aria-label="Attached workspace files"]').textContent`)).toContain("restored-notes.txt")
-    expect(await page.evaluate<string>(`document.querySelector('[aria-label="Restored agent attachments"]').textContent`)).toContain("reviewer")
+    expect(await page.evaluate(`!!document.querySelector('dialog[open]')`)).toBe(false)
+    expect(await page.evaluate(`document.querySelector('[aria-label="Attached workspace files"]').textContent`)).toContain("restored-notes.txt")
+    expect(await page.evaluate(`document.querySelector('[aria-label="Restored agent attachments"]').textContent`)).toContain("reviewer")
     expect(owned!.calls.filter((call) => call.route.endsWith("/prompt"))).toEqual([])
   } finally { await page.close() }
 }, 30_000)
@@ -427,7 +427,7 @@ test("rendered parity preserves full stashed drafts across both composers", asyn
       await command(page, "Stash or restore the prompt")
       await wait(page, `document.querySelector('dialog[open] h2')?.textContent === 'Prompt stashes'`)
       await page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find(button => button.textContent === 'Stash current draft').click()`)
-      expect(await page.evaluate<unknown>(`(() => { const { text, files, agents, picks } = JSON.parse(localStorage.getItem('ycoding.desktop.prompt-stashes'))[0]; return { text, files, agents, picks }; })()`)).toEqual(draft)
+      expect(await page.evaluate(`(() => { const { text, files, agents, picks } = JSON.parse(localStorage.getItem('ycoding.desktop.prompt-stashes'))[0]; return { text, files, agents, picks }; })()`)).toEqual(draft)
       await page.pressKey("Escape", "Escape", 27)
       await wait(page, `!document.querySelector('dialog[open]')`)
     }
@@ -447,8 +447,8 @@ test("rendered parity marks diff files reviewed and preserves display controls w
     await wait(page, `document.querySelector('dialog[open]')?.textContent.includes('Mark reviewed: b.ts')`)
     await page.evaluate(`(() => { [...document.querySelectorAll('dialog[open] [role="radio"]')].find(button => button.textContent === 'Split').click(); const labels = [...document.querySelectorAll('dialog[open] label')]; labels.find(label => label.textContent === 'Wrap diff lines').querySelector('input').click(); labels.find(label => label.textContent === 'Show selected file only').querySelector('input').click(); })()`)
     await wait(page, `document.querySelector('dialog[open] .desktop-diff').dataset.view === 'split' && document.querySelectorAll('dialog[open] .desktop-diff__file').length === 1`)
-    expect(await page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.desktop.diffs'))`)).toEqual({ view: "split", wrap: "none", tree: true, single: true })
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('dialog[open] .desktop-diff__split')).display`)).toBe("table")
+    expect(await page.evaluate(`JSON.parse(localStorage.getItem('ycoding.desktop.diffs'))`)).toEqual({ view: "split", wrap: "none", tree: true, single: true })
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('dialog[open] .desktop-diff__split')).display`)).toBe("table")
     await page.evaluate(`[...document.querySelectorAll('dialog[open] [role="radio"]')].find(button => button.textContent === 'Branch').click()`)
     await wait(page, `document.querySelector('dialog[open]')?.textContent.includes('0 reviewed')`)
     expect(owned!.calls.filter((call) => call.method !== "GET")).toEqual([])
@@ -463,8 +463,8 @@ test("rendered parity gives conditional Family Review fields stable errors and l
   try {
     await wait(page, `document.querySelector('[aria-label="Reviewed answer"]')`)
     await page.evaluate(`[...document.querySelectorAll('.request button')].find(button => button.textContent === 'Send answer').click()`)
-    expect(await page.evaluate<string>(`document.querySelector('[aria-label="Reviewed answer"]').getAttribute('aria-describedby')`)).toBe("rvw_synthetic-2-error")
-    expect(await page.evaluate<string>(`document.querySelector('#rvw_synthetic-2-error').textContent`)).toBe("Required.")
+    expect(await page.evaluate(`document.querySelector('[aria-label="Reviewed answer"]').getAttribute('aria-describedby')`)).toBe("rvw_synthetic-2-error")
+    expect(await page.evaluate(`document.querySelector('#rvw_synthetic-2-error').textContent`)).toBe("Required.")
     expect(owned!.calls.filter((call) => call.method === "POST")).toEqual([])
     await page.evaluate(`(() => { const input = document.querySelector('[aria-label="Reviewed answer"]'); input.value = 'Reviewed synthetic answer'; input.dispatchEvent(new InputEvent('input', { bubbles: true })); [...document.querySelectorAll('.request button')].find(button => button.textContent === 'Send answer').click(); })()`)
     await wait(page, `document.querySelector('[aria-label="Reviewed answer"]').matches(':disabled')`)
@@ -492,7 +492,7 @@ test("rendered directory filters use canonical running Sessions and waiting fami
     await wait(page, `document.querySelector('main').innerText.includes(${JSON.stringify(unbroken)}) && !document.querySelector('main').innerText.includes(${JSON.stringify(title)})`)
     await page.evaluate(`[...document.querySelectorAll('main[data-surface="sessions"] button')].find(button => /^Waiting(?:\\s|$)/.test(button.textContent.trim())).click()`)
     await wait(page, `document.querySelector('main').innerText.includes(${JSON.stringify(title)}) && !document.querySelector('main').innerText.includes(${JSON.stringify(unbroken)})`)
-    expect(await page.evaluate<unknown[]>(`window.__desktopFixture.errors`)).toEqual([])
+    expect(await page.evaluate(`window.__desktopFixture.errors`)).toEqual([])
   } finally { await page.close() }
 }, 30_000)
 
@@ -506,7 +506,7 @@ test("rendered global MCP forms submit at their bound location without sending a
     const posts = owned!.calls.filter((call) => call.method === "POST")
     expect(posts.map((call) => call.route)).toEqual(["/api/session/global/form/frm_synthetic/reply"])
     expect(JSON.stringify(posts[0]!.body)).toContain("Synthetic choice")
-    expect(await page.evaluate<unknown[]>(`window.__desktopFixture.errors`)).toEqual([])
+    expect(await page.evaluate(`window.__desktopFixture.errors`)).toEqual([])
   } finally { await page.close() }
 }, 30_000)
 
@@ -528,7 +528,7 @@ test("rendered consented client timings batch real admission and transcript meas
     expect(payload).toContain('"metric":"transcript.load"')
     expect(payload).not.toContain("Synthetic timing draft")
     expect(payload).not.toContain("/synthetic/repo")
-    expect(await page.evaluate<unknown[]>(`window.__desktopFixture.errors`)).toEqual([])
+    expect(await page.evaluate(`window.__desktopFixture.errors`)).toEqual([])
   } finally { await page.close() }
 }, 30_000)
 
@@ -537,7 +537,7 @@ test("rendered rail titles wrap around visible status and keyboard-operated Pin 
   try {
     await page.evaluate(`['ses_test','ses_other'].forEach(sessionID => window.__desktopFixture.emit({ type: 'permission.asked', data: { sessionID, id: 'prm_' + sessionID } }))`)
     await wait(page, `document.querySelectorAll('.rl-session-row[data-state="waiting"]').length === 2`)
-    const geometry = await page.evaluate<{ contained: boolean; separate: boolean; wrapped: boolean; overflow: boolean; fullText: boolean }>(`(() => {
+    const geometry = await page.evaluate(`(() => {
       const rows = [...document.querySelectorAll('.rl-nav .workspace__row')], rail = document.querySelector('.rl-nav-scroll');
       const titles = rows.map(row => row.querySelector('.rl-session-row-title'));
       const rects = rows.map(row => { const title = row.querySelector('.rl-session-row-title'), status = row.querySelector('.workspace__status'), pin = row.querySelector('.workspace__pin'); return { row: row.getBoundingClientRect(), title: title.getBoundingClientRect(), status: status.getBoundingClientRect(), pin: pin.getBoundingClientRect(), line: parseFloat(getComputedStyle(title).lineHeight) }; });
@@ -546,9 +546,9 @@ test("rendered rail titles wrap around visible status and keyboard-operated Pin 
     expect(geometry).toEqual({ contained: true, separate: true, wrapped: true, overflow: false, fullText: true })
     await page.evaluate(`document.querySelector('.rl-session-row[aria-current="page"]').focus()`)
     await page.pressKey("Tab", "Tab", 9)
-    expect(await page.evaluate<boolean>(`document.activeElement.matches('.workspace__pin')`)).toBe(true)
+    expect(await page.evaluate(`document.activeElement.matches('.workspace__pin')`)).toBe(true)
     await wait(page, `Number(getComputedStyle(document.activeElement).opacity) === 1`)
-    expect(await page.evaluate<boolean>(`document.activeElement.matches('.workspace__pin') && getComputedStyle(document.activeElement).visibility === 'visible' && Number(getComputedStyle(document.activeElement).opacity) === 1 && getComputedStyle(document.querySelector('.rl-session-row[aria-current="page"] .workspace__status')).visibility === 'visible'`)).toBe(true)
+    expect(await page.evaluate(`document.activeElement.matches('.workspace__pin') && getComputedStyle(document.activeElement).visibility === 'visible' && Number(getComputedStyle(document.activeElement).opacity) === 1 && getComputedStyle(document.querySelector('.rl-session-row[aria-current="page"] .workspace__status')).visibility === 'visible'`)).toBe(true)
     await page.pressKey("Enter", "Enter", 13, "\r")
     await wait(page, `document.querySelector('.workspace__pin[aria-label^="Unpin "]')`)
     expect(owned!.calls.filter((call) => call.method === "POST" && call.route.endsWith("/pin")).map((call) => call.route)).toEqual(["/api/session/ses_test/pin"])
@@ -559,7 +559,7 @@ test("scrolling and streamed content do not measure every retained prompt or ref
   const page = await open()
   try {
     await page.evaluate(`window.__promptReads = 0; const read = Element.prototype.getBoundingClientRect; Element.prototype.getBoundingClientRect = function() { if (this.matches('.transcript__turn[data-speaker="user"]')) window.__promptReads++; return read.call(this); }`)
-    const point = await page.evaluate<{ x: number; y: number }>(`(() => { const rect = document.querySelector('.conversation__scroll').getBoundingClientRect(); return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }; })()`)
+    const point = await page.evaluate(`(() => { const rect = document.querySelector('.conversation__scroll').getBoundingClientRect(); return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]) } })
     await page.wheel(point.x, point.y, 0, -1200)
     await wait(page, `document.querySelector('.conversation__scroll').scrollTop < document.querySelector('.conversation__scroll').scrollHeight - document.querySelector('.conversation__scroll').clientHeight - 100`)
     const files = owned!.calls.filter((call) => call.route.endsWith("/file-change")).length
@@ -567,23 +567,23 @@ test("scrolling and streamed content do not measure every retained prompt or ref
     await page.evaluate(`Array.from({length: 50}, (_, index) => window.__desktopFixture.emit({ type: index % 2 ? 'session.text.delta' : 'session.reasoning.delta', data: { sessionID: 'ses_test', assistantMessageID: 'msg_response', ordinal: 0, delta: 'synthetic' } }))`)
     await wait(page, `document.querySelector('#turn-msg_response').textContent.includes('Updated synthetic streaming response')`)
     expect(owned!.calls.filter((call) => call.route.endsWith("/file-change"))).toHaveLength(files)
-    expect(await page.evaluate<number>(`window.__promptReads`)).toBeLessThan(12)
+    expect(await page.evaluate(`window.__promptReads`)).toBeLessThan(12)
   } finally { await page.close() }
 }, 30_000)
 
 test("older history keeps its reading position and survives a newest-window stream refresh", async () => {
   const page = await open()
   try {
-    expect(await page.evaluate<boolean>(`!!document.querySelector('#turn-msg_prompt_141') && !document.querySelector('#turn-msg_prompt_140')`)).toBe(true)
+    expect(await page.evaluate(`!!document.querySelector('#turn-msg_prompt_141') && !document.querySelector('#turn-msg_prompt_140')`)).toBe(true)
     await page.evaluate(`const scroll = document.querySelector('.conversation__scroll'); scroll.scrollTop = 0; scroll.dispatchEvent(new Event('scroll'));`)
-    const anchor = await page.evaluate<number>(`document.querySelector('#turn-msg_prompt_141').getBoundingClientRect().top`)
+    const anchor = await page.evaluate(`document.querySelector('#turn-msg_prompt_141').getBoundingClientRect().top`, decodeNumber)
     await page.evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent === 'Load older messages').click()`)
     await wait(page, `document.querySelector('#turn-msg_prompt_41') && [...document.querySelectorAll('button')].some(button => button.textContent === 'Load older messages')`)
-    expect(Math.abs(await page.evaluate<number>(`document.querySelector('#turn-msg_prompt_141').getBoundingClientRect().top`) - anchor)).toBeLessThan(3)
+    expect(Math.abs(await page.evaluate(`document.querySelector('#turn-msg_prompt_141').getBoundingClientRect().top`, decodeNumber) - anchor)).toBeLessThan(3)
     replyText = "Updated response after loading older history"
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.text.delta', data: { sessionID: 'ses_test', assistantMessageID: 'msg_response', ordinal: 0, delta: 'synthetic' } })`)
     await wait(page, `document.querySelector('#turn-msg_response').textContent.includes('Updated response after loading older history')`)
-    expect(await page.evaluate<boolean>(`!!document.querySelector('#turn-msg_prompt_41')`)).toBe(true)
+    expect(await page.evaluate(`!!document.querySelector('#turn-msg_prompt_41')`)).toBe(true)
     await page.evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent === 'Load older messages').click()`)
     await wait(page, `document.querySelector('#turn-msg_prompt_0') && ![...document.querySelectorAll('button')].some(button => button.textContent === 'Load older messages')`)
     expect(owned!.calls.filter((call) => call.route.endsWith('/snapshot') && call.query.has('before')).map((call) => call.query.get('before'))).toEqual(["141", "41"])
@@ -617,7 +617,7 @@ test("saved command shortcuts update key dispatch and accessible hints after a r
     await page.navigate(`${origin}/#/settings`)
     await wait(page, `document.querySelector('[aria-label="Keyboard shortcuts"] input')`)
     await page.evaluate(`(() => { const input = document.querySelector('[aria-label="Keyboard shortcuts"] input'); input.focus(); input.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', metaKey: /Mac|iPhone|iPad/.test(navigator.platform), ctrlKey: !/Mac|iPhone|iPad/.test(navigator.platform), bubbles: true, cancelable: true })); })()`)
-    expect(await page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.desktop.keybindings'))`)).toEqual({ palette: { key: "J", modifier: "primary" } })
+    expect(await page.evaluate(`JSON.parse(localStorage.getItem('ycoding.desktop.keybindings'))`)).toEqual({ palette: { key: "J", modifier: "primary" } })
     await page.navigate(`${origin}/#/sessions/ses_test`)
     await wait(page, `document.querySelector('.desktop__palette')?.getAttribute('aria-keyshortcuts')?.endsWith('+J')`)
     await page.evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', metaKey: /Mac|iPhone|iPad/.test(navigator.platform), ctrlKey: !/Mac|iPhone|iPad/.test(navigator.platform), bubbles: true, cancelable: true }))`)
@@ -625,7 +625,7 @@ test("saved command shortcuts update key dispatch and accessible hints after a r
     await page.pressKey("Escape", "Escape", 27)
     await wait(page, `!document.querySelector('.palette__input')`)
     await page.evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: /Mac|iPhone|iPad/.test(navigator.platform), ctrlKey: !/Mac|iPhone|iPad/.test(navigator.platform), bubbles: true, cancelable: true }))`)
-    expect(await page.evaluate<boolean>(`!!document.querySelector('.palette__input')`)).toBe(false)
+    expect(await page.evaluate(`!!document.querySelector('.palette__input')`)).toBe(false)
   } finally { await page.evaluate(`localStorage.removeItem('ycoding.desktop.keybindings')`); await page.close() }
 }, 30_000)
 
@@ -637,20 +637,20 @@ test("saved Session display choices expand reasoning, separate tool calls and re
   try {
     await page.navigate(session)
     await wait(page, `document.querySelectorAll('.transcript-tools__button').length === 1 && !!document.querySelector('.transcript-reasoning')`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.transcript-reasoning').open`)).toBe(false)
+    expect(await page.evaluate(`document.querySelector('.transcript-reasoning').open`)).toBe(false)
     await page.navigate(`${origin}/#/settings`)
     await wait(page, `document.querySelector('[aria-label="Session display"] [role="radiogroup"][aria-label="Tool calls"]')`)
     await choose("Reasoning", "Expanded")
     await choose("Tool calls", "Show each call separately")
-    expect(await page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.desktop.presentation'))`)).toEqual({ thinking: "show", grouping: "none", companion: "hide" })
+    expect(await page.evaluate(`JSON.parse(localStorage.getItem('ycoding.desktop.presentation'))`)).toEqual({ thinking: "show", grouping: "none", companion: "hide" })
     await page.navigate(session)
     await wait(page, `document.querySelectorAll('.transcript-tools__button').length === 2 && document.querySelector('.transcript-reasoning')?.open === true`)
     await page.evaluate(`document.querySelector('.rl-companion-toggle').click()`)
     await wait(page, `!!document.querySelector('.rl-companion')`)
-    expect(await page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.desktop.presentation')).companion`)).toBe("auto")
+    expect(await page.evaluate(`JSON.parse(localStorage.getItem('ycoding.desktop.presentation')).companion`)).toBe("auto")
     await page.evaluate(`document.querySelector('.rl-companion-toggle').click()`)
     await wait(page, `!document.querySelector('.rl-companion')`)
-    expect(await page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.desktop.presentation')).companion`)).toBe("hide")
+    expect(await page.evaluate(`JSON.parse(localStorage.getItem('ycoding.desktop.presentation')).companion`)).toBe("hide")
   } finally { await page.evaluate(`localStorage.removeItem('ycoding.desktop.presentation')`); await page.close() }
 }, 30_000)
 
@@ -664,13 +664,13 @@ test("attention settings persist independent sound and native notification choic
     await wait(page, `[...document.querySelectorAll('label')].some(label => label.textContent === 'Enable attention')`)
     await page.evaluate(`(() => { const labels = [...document.querySelectorAll('label')]; labels.find(label => label.textContent === 'Enable attention').querySelector('input').click(); labels.find(label => label.textContent === 'Native attention notifications').querySelector('input').click(); const volume = labels.find(label => label.textContent === 'Sound volume (%)').querySelector('input'); volume.value = '25'; volume.dispatchEvent(new Event('change', { bubbles: true })); window.__desktopFixture.emit({ type: 'permission.asked', data: { sessionID: 'ses_test', id: 'per_audio_one' } }); })()`)
     await wait(page, `window.__desktopFixture.sounds.length === 1`)
-    expect(await page.evaluate<unknown>(`window.__desktopFixture.sounds.map(sound => ({ volume: sound.volume, permission: sound.src.endsWith('/staplebops-06.mp3') }))`)).toEqual([{ volume: 0.25, permission: true }])
+    expect(await page.evaluate(`window.__desktopFixture.sounds.map(sound => ({ volume: sound.volume, permission: sound.src.endsWith('/staplebops-06.mp3') }))`)).toEqual([{ volume: 0.25, permission: true }])
     expect(notifications).toEqual([])
     await page.navigate(`${origin}/?reload=settings#/settings`)
     await wait(page, `document.querySelector('[data-action-id="st-open-notifications"]')`)
     await page.evaluate(`document.querySelector('[data-action-id="st-open-notifications"]').click()`)
     await wait(page, `[...document.querySelectorAll('label')].some(label => label.textContent === 'Sound volume (%)')`)
-    expect(await page.evaluate<unknown>(`(() => { const labels = [...document.querySelectorAll('label')]; return { enabled: labels.find(label => label.textContent === 'Enable attention').querySelector('input').checked, notifications: labels.find(label => label.textContent === 'Native attention notifications').querySelector('input').checked, volume: labels.find(label => label.textContent === 'Sound volume (%)').querySelector('input').value }; })()`)).toEqual({ enabled: true, notifications: false, volume: "25" })
+    expect(await page.evaluate(`(() => { const labels = [...document.querySelectorAll('label')]; return { enabled: labels.find(label => label.textContent === 'Enable attention').querySelector('input').checked, notifications: labels.find(label => label.textContent === 'Native attention notifications').querySelector('input').checked, volume: labels.find(label => label.textContent === 'Sound volume (%)').querySelector('input').value }; })()`)).toEqual({ enabled: true, notifications: false, volume: "25" })
   } finally {
     await page.evaluate(`['attention', 'notifications', 'notification-sound', 'notification-volume'].forEach(name => localStorage.removeItem('ycoding.desktop.' + name))`)
     await page.close()
@@ -760,22 +760,22 @@ test("full transcript copy and structured export reach the canonical backend and
 test("rendered parity opens Appearance without changing the theme and scopes shortcut help and view toggles", async () => {
   const page = await open()
   try {
-    const original = await page.evaluate<string>(`document.documentElement.dataset.theme`)
+    const original = await page.evaluate(`document.documentElement.dataset.theme`)
     await command(page, "Choose a theme")
     await wait(page, `document.querySelector('dialog[open] h2')?.textContent === 'Appearance'`)
-    expect(await page.evaluate<string>(`document.documentElement.dataset.theme`)).toBe(original)
-    expect(await page.evaluate<boolean>(`(() => { const event = new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true, cancelable: true }); document.querySelector('dialog [role="radio"]').dispatchEvent(event); return event.defaultPrevented || location.hash !== '#/sessions/ses_test'; })()`)).toBe(false)
+    expect(await page.evaluate(`document.documentElement.dataset.theme`)).toBe(original)
+    expect(await page.evaluate(`(() => { const event = new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true, cancelable: true }); document.querySelector('dialog [role="radio"]').dispatchEvent(event); return event.defaultPrevented || location.hash !== '#/sessions/ses_test'; })()`)).toBe(false)
     await page.evaluate(`[...document.querySelectorAll('dialog [role="radio"]')].find(button => button.textContent.trim() === 'Dark').click()`)
     await wait(page, `localStorage.getItem('ycoding.desktop.theme') === 'dark' && document.querySelector('dialog [role="radio"][aria-checked="true"]').textContent.trim() === 'Dark'`)
     await page.pressKey("Escape", "Escape", 27)
     await command(page, "Show commands and shortcuts")
     await wait(page, `document.querySelector('dialog[open]').textContent.includes('Ctrl+T') && document.querySelector('dialog[open]').textContent.includes('outside text fields')`)
     await page.pressKey("Escape", "Escape", 27)
-    const collapsed = await page.evaluate<string | null>(`document.querySelector('.workspace').getAttribute('data-collapsed')`)
+    const collapsed = await page.evaluate(`document.querySelector('.workspace').getAttribute('data-collapsed')`)
     await command(page, "Toggle navigation rail")
     await wait(page, `document.querySelector('.workspace').getAttribute('data-collapsed') !== ${JSON.stringify(collapsed)}`)
     await command(page, "Toggle navigation rail")
-    const companion = await page.evaluate<string | null>(`document.querySelector('.workspace').getAttribute('data-companion-open')`)
+    const companion = await page.evaluate(`document.querySelector('.workspace').getAttribute('data-companion-open')`)
     await command(page, "Toggle Session companion")
     await wait(page, `document.querySelector('.workspace').getAttribute('data-companion-open') !== ${JSON.stringify(companion)}`)
     expect(owned!.calls.filter((call) => call.method !== "GET")).toEqual([])
@@ -790,11 +790,11 @@ test("rendered large pastes show a placeholder, copy, stash and restore their te
     await message(page, "Use @a.ts after ")
     await page.evaluate(`(() => { const input = ${composer}; input.focus(); input.setSelectionRange(input.value.length, input.value.length); const data = new DataTransfer(); data.setData('text/plain', ${JSON.stringify(pasted)}); input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })); })()`)
     await wait(page, `${composer}.value === 'Use @a.ts after [Pasted ~3 lines]'`)
-    expect(await page.evaluate<string>(`(() => { const input = ${composer}; input.setSelectionRange(0, input.value.length); const data = new DataTransfer(); input.dispatchEvent(new ClipboardEvent('copy', { clipboardData: data, bubbles: true, cancelable: true })); return data.getData('text/plain'); })()`)).toBe(`Use @a.ts after ${pasted}`)
+    expect(await page.evaluate(`(() => { const input = ${composer}; input.setSelectionRange(0, input.value.length); const data = new DataTransfer(); input.dispatchEvent(new ClipboardEvent('copy', { clipboardData: data, bubbles: true, cancelable: true })); return data.getData('text/plain'); })()`)).toBe(`Use @a.ts after ${pasted}`)
     await command(page, "Stash or restore the prompt")
     await wait(page, `document.querySelector('dialog[open] h2')?.textContent === 'Prompt stashes'`)
     await page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find(button => button.textContent === 'Stash current draft').click()`)
-    expect(await page.evaluate<unknown>(`(() => { const { text, pasted } = JSON.parse(localStorage.getItem('ycoding.desktop.prompt-stashes'))[0]; return { text, pasted }; })()`)).toEqual({ text: "Use @a.ts after [Pasted ~3 lines]", pasted: [{ label: "[Pasted ~3 lines]", text: pasted }] })
+    expect(await page.evaluate(`(() => { const { text, pasted } = JSON.parse(localStorage.getItem('ycoding.desktop.prompt-stashes'))[0]; return { text, pasted }; })()`)).toEqual({ text: "Use @a.ts after [Pasted ~3 lines]", pasted: [{ label: "[Pasted ~3 lines]", text: pasted }] })
     await wait(page, `${composer}.value === ''`)
     await page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find(button => button.textContent === 'Pop and restore').click()`)
     await wait(page, `!document.querySelector('dialog[open]') && ${composer}.value === 'Use @a.ts after [Pasted ~3 lines]'`)
@@ -844,7 +844,7 @@ test("rendered parity retains and locks an unconfirmed steer without waking or r
     await message(page, "Synthetic retained steer")
     await page.evaluate(`document.querySelector('[aria-label="Send and steer now"]').click()`)
     await wait(page, `document.body.textContent.includes('will not interrupt or wake again')`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.rl-capsule textarea').value === 'Synthetic retained steer' && document.querySelector('.rl-capsule textarea').readOnly && document.querySelector('[aria-label="Send mode"]').disabled && document.querySelector('.rl-send').disabled`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.rl-capsule textarea').value === 'Synthetic retained steer' && document.querySelector('.rl-capsule textarea').readOnly && document.querySelector('[aria-label="Send mode"]').disabled && document.querySelector('.rl-send').disabled`)).toBe(true)
     await page.evaluate(`document.querySelector('.rl-send').click(); document.querySelector('[aria-label="Send and steer now"]').click()`)
     expect(owned!.calls.filter((call) => call.method !== "GET").map((call) => call.route)).toEqual(["/api/session/ses_test/prompt", "/api/session/ses_test/interrupt"])
   } finally { await page.close() }
@@ -857,12 +857,12 @@ test("rendered parity previews undo of an uncaptured message, restores its draft
     await page.evaluate(`document.querySelector('.rl-send').click()`)
     await confirm(page, "Cancel")
     expect(owned!.calls.filter((call) => call.method !== "GET")).toEqual([])
-    expect(await page.evaluate<string>(`document.querySelector('.rl-capsule textarea').value`)).toBe("/undo")
+    expect(await page.evaluate(`document.querySelector('.rl-capsule textarea').value`)).toBe("/undo")
     await wait(page, `!document.querySelector('.confirm[open]') && !document.querySelector('.rl-send').disabled`)
     await page.evaluate(`document.querySelector('.rl-send').click()`)
     await confirm(page)
     await wait(page, `document.querySelector('.rl-capsule textarea').value.startsWith('Synthetic prompt 239.') && !document.querySelector('#turn-msg_prompt_239')`)
-    expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Attached workspace files"]').textContent.includes('restored-notes.txt') && document.querySelector('[aria-label="Restored agent attachments"]').textContent.includes('reviewer')`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('[aria-label="Attached workspace files"]').textContent.includes('restored-notes.txt') && document.querySelector('[aria-label="Restored agent attachments"]').textContent.includes('reviewer')`)).toBe(true)
     expect(owned!.calls.filter((call) => call.method === "POST").map((call) => [call.route, call.body])).toEqual([["/api/session/ses_test/revert/stage", { messageID: "msg_prompt_239", files: true }]])
     await command(page, "Redo the undone turn")
     await confirm(page)
@@ -882,12 +882,12 @@ test("rendered parity stashes and restores file and agent attachments without se
     await wait(page, `document.querySelector('dialog[open] h2')?.textContent === 'Prompt stashes'`)
     await page.evaluate(`[...document.querySelectorAll('dialog button')].find(button => button.textContent === 'Stash current draft').click()`)
     await wait(page, `document.querySelector('.rl-capsule textarea').value === '' && !document.querySelector('[aria-label="Attached workspace files"]') && !document.querySelector('[aria-label="Restored agent attachments"]')`)
-    expect(await page.evaluate<string[]>(`JSON.parse(localStorage.getItem('ycoding.desktop.prompt-stashes'))[0].files.map(file => file.name)`)).toEqual(["restored-notes.txt"])
-    expect(await page.evaluate<{ name: string }[]>(`JSON.parse(localStorage.getItem('ycoding.desktop.prompt-stashes'))[0].agents`)).toEqual([{ name: "reviewer" }])
+    expect(await page.evaluate(`JSON.parse(localStorage.getItem('ycoding.desktop.prompt-stashes'))[0].files.map(file => file.name)`)).toEqual(["restored-notes.txt"])
+    expect(await page.evaluate(`JSON.parse(localStorage.getItem('ycoding.desktop.prompt-stashes'))[0].agents`)).toEqual([{ name: "reviewer" }])
     await page.evaluate(`[...document.querySelectorAll('dialog button')].find(button => button.textContent === 'Pop and restore').focus()`)
     await page.pressKey("Enter", "Enter", 13, "\r")
     await wait(page, `!document.querySelector('dialog[open]') && document.querySelector('.rl-capsule textarea').value.startsWith('Synthetic prompt 239.') && document.querySelector('[aria-label="Attached workspace files"]')?.textContent.includes('restored-notes.txt') && document.querySelector('[aria-label="Restored agent attachments"]')?.textContent.includes('reviewer')`)
-    expect(await page.evaluate<unknown[]>(`JSON.parse(localStorage.getItem('ycoding.desktop.prompt-stashes'))`)).toEqual([])
+    expect(await page.evaluate(`JSON.parse(localStorage.getItem('ycoding.desktop.prompt-stashes'))`)).toEqual([])
     expect(owned!.calls.filter((call) => call.route.endsWith('/prompt'))).toEqual([])
   } finally { await page.close() }
 }, 30_000)
@@ -983,9 +983,9 @@ test("rendered parity discards a file lookup after its mention closes and never 
     fileGate = { query: "fast", reached: () => fastReached.resolve(), wait: fast.promise }
     await message(page, "@fast")
     await fastReached.promise
-    expect(await page.evaluate<boolean>(`document.querySelector('.composer-suggestions')?.textContent.includes('src/slow.ts') ?? false`)).toBe(false)
+    expect(await page.evaluate(`document.querySelector('.composer-suggestions')?.textContent.includes('src/slow.ts') ?? false`)).toBe(false)
     fast.resolve()
     await wait(page, `document.querySelector('.composer-suggestions')?.textContent.includes('src/fast.ts')`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.composer-suggestions').textContent.includes('src/slow.ts')`)).toBe(false)
+    expect(await page.evaluate(`document.querySelector('.composer-suggestions').textContent.includes('src/slow.ts')`)).toBe(false)
   } finally { slow.resolve(); fast.resolve(); fileGate = undefined; await page.close() }
 }, 30_000)

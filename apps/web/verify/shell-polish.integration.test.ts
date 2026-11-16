@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4384
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -38,7 +38,7 @@ for (const theme of ["light", "dark"] as const) {
         await page.setColorScheme(theme)
         await page.navigate(chat(theme))
         await until(page, `document.querySelector('#pending-requests .question__custom input') !== null`)
-        const card = await page.evaluate<{ gaps: number[]; centers: number[]; appearance: string[]; inputLeft: number; labelLeft: number; inputHeight: number; controlHeight: number; headerToLegend: number; legendToDescription: number; fieldToActions: number }>(`(() => {
+        const card = await page.evaluate(`(() => {
           const card = document.querySelector('#pending-requests .question__custom input').closest('.request')
           const options = [...card.querySelectorAll('.question__option')]
           const box = (element) => element.getBoundingClientRect()
@@ -57,7 +57,7 @@ for (const theme of ["light", "dark"] as const) {
             legendToDescription: box(question.querySelector(':scope > p')).top - box(question.querySelector('legend')).bottom,
             fieldToActions: box(card.querySelector('.request__actions .button')).top - box(input).bottom,
           }
-        })()`)
+        })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, gaps: (decodeArray(decodeNumber))(record["gaps"]), centers: (decodeArray(decodeNumber))(record["centers"]), appearance: (decodeArray(decodeString))(record["appearance"]), inputLeft: (decodeNumber)(record["inputLeft"]), labelLeft: (decodeNumber)(record["labelLeft"]), inputHeight: (decodeNumber)(record["inputHeight"]), controlHeight: (decodeNumber)(record["controlHeight"]), headerToLegend: (decodeNumber)(record["headerToLegend"]), legendToDescription: (decodeNumber)(record["legendToDescription"]), fieldToActions: (decodeNumber)(record["fieldToActions"]) } })
         expect(new Set(card.gaps).size).toBe(1)
         expect(Math.max(...card.centers)).toBeLessThanOrEqual(1)
         expect(card.appearance.every((value) => value === "none")).toBe(true)
@@ -67,7 +67,7 @@ for (const theme of ["light", "dark"] as const) {
         expect(card.legendToDescription).toBeLessThanOrEqual(4)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=permission-guardrail-hard-review-form-requests-1440&theme=${theme}`)
         await until(page, `document.querySelectorAll('#pending-requests form .request__actions').length >= 3`)
-        const actionGaps = await page.evaluate<number[]>(`[...document.querySelectorAll('#pending-requests form')].map((form) => { const fields = [...form.querySelectorAll('.question')].at(-1), last = [...fields.querySelectorAll('.question__option, .question__custom input, .question__custom textarea')].at(-1); return Math.round(form.querySelector('.request__actions .button').getBoundingClientRect().top - last.getBoundingClientRect().bottom) })`)
+        const actionGaps = await page.evaluate(`[...document.querySelectorAll('#pending-requests form')].map((form) => { const fields = [...form.querySelectorAll('.question')].at(-1), last = [...fields.querySelectorAll('.question__option, .question__custom input, .question__custom textarea')].at(-1); return Math.round(form.querySelector('.request__actions .button').getBoundingClientRect().top - last.getBoundingClientRect().bottom) })`, decodeArray(decodeNumber))
         expect(new Set(actionGaps).size).toBe(1)
         expect(actionGaps[0]).toBe(card.fieldToActions)
       } finally { await page.close() }
@@ -80,10 +80,10 @@ for (const theme of ["light", "dark"] as const) {
         await page.setColorScheme(theme)
         await page.navigate(chat(theme))
         await until(page, `document.querySelector('#pending-requests .request--permission .button--primary') !== null`)
-        expect(await page.evaluate<boolean>(`document.querySelector('#pending-requests .request--permission').closest('.collapsible')?.hasAttribute('data-open') === true`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector('#pending-requests .request--permission').closest('.collapsible')?.hasAttribute('data-open') === true`)).toBe(true)
         await page.evaluate(`window.__closing = false; new MutationObserver(() => { const host = [...document.querySelectorAll('#pending-requests .presence-item > .collapsible')].find((item) => !item.hasAttribute('data-open')); if (host) window.__closing = true }).observe(document.body, { subtree: true, attributes: true, childList: true }); document.querySelector('#pending-requests .request--permission .button--primary').click()`)
         await until(page, `document.querySelector('#pending-requests .request--permission') === null`)
-        expect(await page.evaluate<boolean>(`window.__closing`)).toBe(true)
+        expect(await page.evaluate(`window.__closing`)).toBe(true)
       } finally { await page.close() }
     }, 30_000)
   })
@@ -100,11 +100,11 @@ for (const theme of ["light", "dark"] as const) {
           await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
           await until(page, `document.querySelector('#companion-context:not([hidden]) .companion__context-row') !== null`)
           await page.evaluate(`new Promise((resolve) => setTimeout(resolve, 400))`)
-          const layout = await page.evaluate<{ column: number; centers: number[]; titleLeft: number; tabsLeft: number; contentLeft: number; pillGap: number; totalBaseline: number; unitBaseline: number; unitTop: number; totalTop: number; eyebrow: string; label: string; capacity: string; noteFont: string; labelFont: string; noteLines: number; countRights: number[]; percentRights: number[]; valueFont: string; numeric: string; actionHeights: number[]; actionRadii: string[]; actionPadding: string[] }>(`(() => {
+          const layout = await page.evaluate(`(() => {
             const panel = document.querySelector('#session-companion-panel')
             const box = (element) => element.getBoundingClientRect()
             const header = panel.querySelector('.companion__header')
-            const pills = [...header.querySelectorAll('button:not([aria-label])')]
+            const pills = [...header.querySelectorAll('.companion__pill')]
             const parts = [header.querySelector('.rl-pane-kicker'), ...pills, header.querySelector('[aria-label="Close Session companion"]')]
             const baseline = (element) => { const probe = document.createElement('span'); probe.style.cssText = 'display:inline-block;inline-size:0;block-size:0;vertical-align:baseline'; element.append(probe); const value = box(probe).top; probe.remove(); return value }
             const total = panel.querySelector('.companion__context-total'), unit = panel.querySelector('.companion__context-capacity'), eyebrow = panel.querySelector('.companion__context-eyebrow'), label = panel.querySelector('.rl-context-summary'), note = panel.querySelector('.rl-context-note')
@@ -127,7 +127,7 @@ for (const theme of ["light", "dark"] as const) {
               actionRadii: actions.map((action) => getComputedStyle(action).borderRadius),
               actionPadding: actions.map((action) => getComputedStyle(action).paddingInline),
             }
-          })()`)
+          })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, column: (decodeNumber)(record["column"]), centers: (decodeArray(decodeNumber))(record["centers"]), titleLeft: (decodeNumber)(record["titleLeft"]), tabsLeft: (decodeNumber)(record["tabsLeft"]), contentLeft: (decodeNumber)(record["contentLeft"]), pillGap: (decodeNumber)(record["pillGap"]), totalBaseline: (decodeNumber)(record["totalBaseline"]), unitBaseline: (decodeNumber)(record["unitBaseline"]), unitTop: (decodeNumber)(record["unitTop"]), totalTop: (decodeNumber)(record["totalTop"]), eyebrow: (decodeString)(record["eyebrow"]), label: (decodeString)(record["label"]), capacity: (decodeString)(record["capacity"]), noteFont: (decodeString)(record["noteFont"]), labelFont: (decodeString)(record["labelFont"]), noteLines: (decodeNumber)(record["noteLines"]), countRights: (decodeArray(decodeNumber))(record["countRights"]), percentRights: (decodeArray(decodeNumber))(record["percentRights"]), valueFont: (decodeString)(record["valueFont"]), numeric: (decodeString)(record["numeric"]), actionHeights: (decodeArray(decodeNumber))(record["actionHeights"]), actionRadii: (decodeArray(decodeString))(record["actionRadii"]), actionPadding: (decodeArray(decodeString))(record["actionPadding"]) } })
           expect(layout.column).toBeCloseTo(Math.min(448, width * 0.4), 0)
           expect(Math.max(...layout.centers) - Math.min(...layout.centers)).toBeLessThanOrEqual(1)
           expect(Math.abs(layout.titleLeft - layout.tabsLeft)).toBeLessThanOrEqual(0.5)
@@ -164,7 +164,7 @@ for (const theme of ["light", "dark"] as const) {
         await until(page, `document.querySelector('[aria-label="Open Team"]') !== null`)
         await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
         await until(page, `document.querySelector('#session-companion-panel') !== null`)
-        const motion = await page.evaluate<{ properties: string; durations: string; panelAnimation: string }>(`(() => { const panel = getComputedStyle(document.querySelector('#session-companion-panel')); return { properties: panel.transitionProperty, durations: panel.transitionDuration, panelAnimation: getComputedStyle(document.querySelector('#companion-activity')).animationName } })()`)
+        const motion = await page.evaluate(`(() => { const panel = getComputedStyle(document.querySelector('#session-companion-panel')); return { properties: panel.transitionProperty, durations: panel.transitionDuration, panelAnimation: getComputedStyle(document.querySelector('#companion-activity')).animationName } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, properties: (decodeString)(record["properties"]), durations: (decodeString)(record["durations"]), panelAnimation: (decodeString)(record["panelAnimation"]) } })
         expect(motion.properties).toBe("opacity, translate")
         expect(motion.durations).toBe("0.14s, 0.22s")
         expect(motion.panelAnimation).toContain("yc-motion-fade")
@@ -181,7 +181,7 @@ for (const theme of ["light", "dark"] as const) {
           await page.setColorScheme(theme)
           await page.navigate(chat(theme))
           await until(page, `document.querySelector('.workspace__rail .session-row') !== null`)
-          const rail = await page.evaluate<{ width: number; token: number; overflow: number; footer: number; text: string }>(`(() => { const rail = document.querySelector('.workspace__rail'), box = rail.getBoundingClientRect(); return { width: box.width, token: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-rail-w')), overflow: [...rail.querySelectorAll('*')].filter((element) => element.getClientRects().length > 0 && element.getBoundingClientRect().right > box.right + 0.5).length, footer: document.querySelectorAll('.workspace__rail-footer').length, text: rail.innerText } })()`)
+          const rail = await page.evaluate(`(() => { const rail = document.querySelector('.workspace__rail'), box = rail.getBoundingClientRect(); return { width: box.width, token: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-rail-w')), overflow: [...rail.querySelectorAll('*')].filter((element) => element.getClientRects().length > 0 && element.getBoundingClientRect().right > box.right + 0.5).length, footer: document.querySelectorAll('.workspace__rail-footer').length, text: rail.innerText } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), token: (decodeNumber)(record["token"]), overflow: (decodeNumber)(record["overflow"]), footer: (decodeNumber)(record["footer"]), text: (decodeString)(record["text"]) } })
           expect(rail.width).toBe(256)
           expect(rail.width).toBe(rail.token)
           expect(rail.overflow).toBe(0)
@@ -192,8 +192,8 @@ for (const theme of ["light", "dark"] as const) {
         await page.setViewport(767, 900)
         await page.navigate(chat(theme))
         await until(page, `document.querySelector('.composer-resident textarea') !== null`)
-        expect(await page.evaluate<{ rail: number; column: number }>(`({ rail: document.querySelector('.workspace__rail').getBoundingClientRect().width, column: document.querySelector('.workspace__scroll').getBoundingClientRect().width })`)).toMatchObject({ rail: 0 })
-        expect(await page.evaluate<number>(`document.querySelector('.workspace__scroll').getBoundingClientRect().width`)).toBeGreaterThanOrEqual(320)
+        expect(await page.evaluate(`({ rail: document.querySelector('.workspace__rail').getBoundingClientRect().width, column: document.querySelector('.workspace__scroll').getBoundingClientRect().width })`)).toMatchObject({ rail: 0 })
+        expect(await page.evaluate(`document.querySelector('.workspace__scroll').getBoundingClientRect().width`)).toBeGreaterThanOrEqual(320)
       } finally { await page.close() }
     }, 30_000)
 
@@ -204,11 +204,11 @@ for (const theme of ["light", "dark"] as const) {
         await page.setColorScheme(theme)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?account=pending&noSelection=1&theme=${theme}`)
         await until(page, `document.querySelector('.status-strip__body') !== null`)
-        expect(await page.evaluate<string>(`document.querySelector('.status-strip__body').textContent`)).toContain("Checking account")
+        expect(await page.evaluate(`document.querySelector('.status-strip__body').textContent`)).toContain("Checking account")
       } finally { await page.close() }
     }, 30_000)
 
-    test("signals running, waiting and failed Sessions on rows of one height", async () => {
+    test("signals running, waiting and failed Sessions while every title fits its measured row", async () => {
       const page = await requireBrowser().openPage()
       try {
         await page.setViewport(1440, 1000)
@@ -217,18 +217,19 @@ for (const theme of ["light", "dark"] as const) {
         await until(page, `document.querySelector('.workspace__rail [data-session-id="ses_idle_pinned"]') !== null`)
         await page.evaluate(`window.remoteStatus(['ses_running'], ['ses_fixture'], ['ses_idle_pinned'])`)
         await until(page, `document.querySelector('.workspace__rail [data-session-id="ses_idle_pinned"] [data-signal="failed"]') !== null`)
-        const rows = await page.evaluate<{ id: string; signal: string; text: string; height: number; right: number; animated: boolean; chips: string[] }[]>(`[...document.querySelectorAll('.workspace__rail .session-row')].map((row) => { const signal = row.querySelector('.session-row__signal'), box = row.getBoundingClientRect(); return { id: row.dataset.sessionId, signal: signal?.dataset.signal ?? '', text: signal?.textContent.trim() ?? '', height: box.height, right: Math.round(box.right), animated: signal ? getComputedStyle(signal.querySelector('.session-row__signal-mark')).animationName !== 'none' : false, chips: [...row.querySelectorAll('.chip')].map((chip) => chip.textContent.trim()) } })`)
+        const rows = await page.evaluate(`[...document.querySelectorAll('.workspace__rail .session-row')].map((row) => { const signal = row.querySelector('.session-row__signal'), box = row.getBoundingClientRect(); return { id: row.dataset.sessionId, signal: signal?.dataset.signal ?? '', text: signal?.textContent.trim() ?? '', height: box.height, right: Math.round(box.right), animated: signal ? getComputedStyle(signal.querySelector('.session-row__signal-mark')).animationName !== 'none' : false, chips: [...row.querySelectorAll('.chip')].map((chip) => chip.textContent.trim()) } })`, decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, id: (decodeString)(record["id"]), signal: (decodeString)(record["signal"]), text: (decodeString)(record["text"]), height: (decodeNumber)(record["height"]), right: (decodeNumber)(record["right"]), animated: (decodeBoolean)(record["animated"]), chips: (decodeArray(decodeString))(record["chips"]) } }))
         const byID = Object.fromEntries(rows.map((row) => [row.id, row]))
         expect(byID.ses_running).toMatchObject({ signal: "running", text: "Running", animated: true })
         expect(byID.ses_running?.chips).not.toContain("Running")
         expect(byID.ses_fixture).toMatchObject({ signal: "waiting", text: "Waiting for approval" })
         expect(byID.ses_idle_pinned).toMatchObject({ signal: "failed", text: "Failed" })
-        expect(new Set(rows.map((row) => row.height)).size).toBe(1)
+        expect(rows.every((row) => row.height >= 36)).toBe(true)
+        expect(await page.evaluate(`[...document.querySelectorAll('.workspace__rail .session-row')].every(row=>{const name=row.querySelector('.session-row__name');return name.getBoundingClientRect().bottom<=row.getBoundingClientRect().bottom&&name.scrollWidth<=name.clientWidth})`)).toBe(true)
         expect(new Set(rows.map((row) => row.right)).size).toBe(1)
-        expect(rows[0]?.right).toBe(await page.evaluate<number>(`(() => { const body = document.querySelector('.workspace__rail-body'); return Math.round(body.getBoundingClientRect().left + body.clientLeft + body.clientWidth) })()`))
+        expect(rows[0]?.right).toBe(await page.evaluate(`(() => { const body = document.querySelector('.workspace__rail-body'); return Math.round(body.getBoundingClientRect().left + body.clientLeft + body.clientWidth) })()`, decodeNumber))
         await page.setReducedMotion(true)
         await page.evaluate(`new Promise((resolve) => setTimeout(resolve, 100))`)
-        expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.workspace__rail [data-session-id="ses_running"] .session-row__signal-mark')).animationName`)).toBe("none")
+        expect(await page.evaluate(`getComputedStyle(document.querySelector('.workspace__rail [data-session-id="ses_running"] .session-row__signal-mark')).animationName`)).toBe("none")
       } finally { await page.close() }
     }, 30_000)
 
@@ -239,7 +240,7 @@ for (const theme of ["light", "dark"] as const) {
         await page.setColorScheme(theme)
         await page.navigate(chat(theme))
         await until(page, `document.querySelector('.workspace__rail .session-row') !== null`)
-        expect(await page.evaluate<{ property: string; duration: string }>(`({ property: getComputedStyle(document.querySelector('.app')).transitionProperty, duration: getComputedStyle(document.querySelector('.app')).transitionDuration })`)).toEqual({ property: "all", duration: "0s" })
+        expect(await page.evaluate(`({ property: getComputedStyle(document.querySelector('.app')).transitionProperty, duration: getComputedStyle(document.querySelector('.app')).transitionDuration })`)).toEqual({ property: "all", duration: "0s" })
       } finally { await page.close() }
     }, 30_000)
   })

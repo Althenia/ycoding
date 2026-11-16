@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeNumber, decodeRecord, decodeString, type Page } from "./cdp"
 
 const port = 4423
 const executable = process.env.YCODING_WEB_CHROME
@@ -39,9 +39,9 @@ const detail = `document.getElementById('machine-awake-status').textContent`
 const count = (operation: "get" | "set") =>
   `window.keepAwakeFixture.calls.filter(call => call.operation === 'machine.keepAwake.${operation}').length`
 
-async function until(page: { evaluate<T>(expression: string): Promise<T> }, expression: string) {
+async function until(page: Pick<Page, "evaluate">, expression: string) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
-    if (await page.evaluate<boolean>(`Boolean(${expression})`)) return
+    if (await page.evaluate(`Boolean(${expression})`)) return
     await Bun.sleep(30)
   }
   throw new Error(`Timed out waiting for ${expression}`)
@@ -64,10 +64,10 @@ describe("Settings Keep machine awake", () => {
       const page = await open(mode, theme, width)
       try {
         await until(page, `${label} === 'On'`)
-        expect(await page.evaluate<string>(detail)).toContain(`Display on; activity ${mode === "activity-error" ? "error" : "on"}`)
-        expect(await page.evaluate<string>(`document.getElementById('machine-awake-caveat').textContent`)).toContain("deliberate locks and managed policy")
-        expect(await page.evaluate<string>(`document.getElementById('machine-awake-status').dataset.tone`)).toBe(mode === "activity-error" ? "attention" : "neutral")
-        expect(await page.evaluate<boolean>("document.documentElement.scrollWidth <= document.documentElement.clientWidth")).toBe(true)
+        expect(await page.evaluate(detail)).toContain(`Display on; activity ${mode === "activity-error" ? "error" : "on"}`)
+        expect(await page.evaluate(`document.getElementById('machine-awake-caveat').textContent`)).toContain("deliberate locks and managed policy")
+        expect(await page.evaluate(`document.getElementById('machine-awake-status').dataset.tone`)).toBe(mode === "activity-error" ? "attention" : "neutral")
+        expect(await page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")).toBe(true)
       } finally {
         await page.close()
       }
@@ -78,9 +78,9 @@ describe("Settings Keep machine awake", () => {
       const page = await open("foreign-owner", theme, width)
       try {
         await until(page, `${label} === 'On' && !${control}.disabled`)
-        expect(await page.evaluate<string>(detail)).toContain("lid held by another YCoding process")
-        expect(await page.evaluate<boolean>(`${control}.checked`)).toBe(false)
-        expect(await page.evaluate<boolean>("document.documentElement.scrollWidth <= document.documentElement.clientWidth")).toBe(true)
+        expect(await page.evaluate(detail)).toContain("lid held by another YCoding process")
+        expect(await page.evaluate(`${control}.checked`)).toBe(false)
+        expect(await page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")).toBe(true)
       } finally {
         await page.close()
       }
@@ -91,9 +91,9 @@ describe("Settings Keep machine awake", () => {
       const page = await open(mode, "dark", 390)
       try {
         await until(page, `${label} === 'On' && !${control}.disabled`)
-        expect(await page.evaluate<boolean>(`${control}.checked`)).toBe(mode !== "sleep-held")
-        expect(await page.evaluate<string>(detail)).toMatch(mode === "sleep-held" ? /Idle on; lid on.*sleeping session/ : /lid-closed keep-awake could not be armed/)
-        expect(await page.evaluate<string>(`document.getElementById('machine-awake-caveat').textContent`)).toMatch(/battery.*heat/)
+        expect(await page.evaluate(`${control}.checked`)).toBe(mode !== "sleep-held")
+        expect(await page.evaluate(detail)).toMatch(mode === "sleep-held" ? /Idle on; lid on.*sleeping session/ : /lid-closed keep-awake could not be armed/)
+        expect(await page.evaluate(`document.getElementById('machine-awake-caveat').textContent`)).toMatch(/battery.*heat/)
       } finally {
         await page.close()
       }
@@ -105,51 +105,51 @@ describe("Settings Keep machine awake", () => {
         const page = await open("held", theme, width)
         try {
           expect(
-            await page.evaluate<{ label: string; disabled: boolean; checked: boolean }>(
+            await page.evaluate(
               `({ label: ${label}, disabled: ${control}.disabled, checked: ${control}.checked })`,
             ),
           ).toEqual({ label: "Checking", disabled: true, checked: false })
-          const before = await page.evaluate<{ storage: string; gap: number; status: number }>(
-            `({ storage: JSON.stringify(localStorage) })`,
+          const before = await page.evaluate(
+            `({ storage: JSON.stringify(localStorage) })`, (value: unknown) => { const record = decodeRecord(value); return { ...record, storage: (decodeString)(record["storage"]), gap: (decodeNumber)(record["gap"]), status: (decodeNumber)(record["status"]) } },
           )
-          expect(await page.evaluate<string>(`document.getElementById('machine-awake-caveat').textContent`)).toMatch(
+          expect(await page.evaluate(`document.getElementById('machine-awake-caveat').textContent`)).toMatch(
             /macOS.*idle sleep and lid-closed sleep.*battery.*stops or restarts/,
           )
           await page.evaluate(`window.keepAwakeFixture.releaseRead('off')`)
           await until(page, `${label} === 'Off' && !${control}.disabled`)
           expect(
-            await page.evaluate<{ gap: number; clipped: boolean }>(
+            await page.evaluate(
               `({ gap: document.getElementById('machine-awake-caveat').getBoundingClientRect().top - document.getElementById('machine-awake-status').getBoundingClientRect().bottom, clipped: document.getElementById('machine-awake-status').scrollHeight > document.getElementById('machine-awake-status').clientHeight })`,
             ),
           ).toEqual({ gap: expect.any(Number), clipped: false })
           expect(
-            await page.evaluate<number>(
+            await page.evaluate(
               `document.getElementById('machine-awake-caveat').getBoundingClientRect().top - document.getElementById('machine-awake-status').getBoundingClientRect().bottom`,
             ),
           ).toBeLessThanOrEqual(24)
-          expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+          expect(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
           if (width < 768)
             expect(
-              await page.evaluate<number>(`${control}.closest('label').getBoundingClientRect().height`),
+              await page.evaluate(`${control}.closest('label').getBoundingClientRect().height`),
             ).toBeGreaterThanOrEqual(44)
           await page.evaluate(`${control}.focus()`)
-          expect(await page.evaluate<boolean>(`${control}.matches(':focus-visible')`)).toBe(true)
+          expect(await page.evaluate(`${control}.matches(':focus-visible')`)).toBe(true)
           await page.pressKey(" ", "Space", 32)
           await until(page, `${count("set")} === 1`)
           expect(
-            await page.evaluate<{ disabled: boolean; checked: boolean; message: string }>(
+            await page.evaluate(
               `({ disabled: ${control}.disabled, checked: ${control}.checked, message: ${detail} })`,
             ),
           ).toEqual({ disabled: true, checked: false, message: "Turning on…" })
           await page.evaluate(`window.keepAwakeFixture.releaseSet('on')`)
           await until(page, `${label} === 'On' && !${control}.disabled`)
-          expect(await page.evaluate<boolean>(`${control}.checked`)).toBe(true)
+          expect(await page.evaluate(`${control}.checked`)).toBe(true)
           expect(
-            await page.evaluate<unknown>(
+            await page.evaluate(
               `window.keepAwakeFixture.calls.find(call => call.operation === 'machine.keepAwake.set').request.input`,
             ),
           ).toEqual({ enabled: true })
-          expect(await page.evaluate<string>(`JSON.stringify(localStorage)`)).toBe(before.storage)
+          expect(await page.evaluate(`JSON.stringify(localStorage)`)).toBe(before.storage)
         } finally {
           await page.close()
         }
@@ -167,19 +167,19 @@ describe("Settings Keep machine awake", () => {
       const page = await open(mode, "dark", 390)
       try {
         await until(page, `${label} === '${state}'`)
-        expect(await page.evaluate<boolean>(`${control}.disabled`)).toBe(disabled)
-        expect(await page.evaluate<boolean>(`${control}.checked`)).toBe(false)
-        expect(await page.evaluate<string>(detail)).toMatch(expected)
+        expect(await page.evaluate(`${control}.disabled`)).toBe(disabled)
+        expect(await page.evaluate(`${control}.checked`)).toBe(false)
+        expect(await page.evaluate(detail)).toMatch(expected)
         expect(
-          await page.evaluate<string>(`document.getElementById('machine-awake-status').getAttribute('aria-live')`),
+          await page.evaluate(`document.getElementById('machine-awake-status').getAttribute('aria-live')`),
         ).toBe("polite")
-        expect(await page.evaluate<number>(count("set"))).toBe(0)
+        expect(await page.evaluate(count("set"))).toBe(0)
         if (mode === "failed" || mode === "silent") {
           await page.evaluate(
             `window.keepAwakeFixture.read('on'); document.querySelector('[aria-label="Retry Keep machine awake"]').click()`,
           )
           await until(page, `${label} === 'On'`)
-          expect(await page.evaluate<number>(count("get"))).toBe(2)
+          expect(await page.evaluate(count("get"))).toBe(2)
         }
       } finally {
         await page.close()
@@ -195,13 +195,13 @@ describe("Settings Keep machine awake", () => {
         `window.keepAwakeFixture.read('on'); window.keepAwakeFixture.mutation('silent'); ${control}.click()`,
       )
       await until(page, `${label} === 'On' && ${detail}.includes('unconfirmed')`)
-      expect(await page.evaluate<number>(count("set"))).toBe(1)
-      expect(await page.evaluate<number>(count("get"))).toBe(2)
-      expect(await page.evaluate<string>(detail)).not.toMatch(/turned on|confirmed on/)
+      expect(await page.evaluate(count("set"))).toBe(1)
+      expect(await page.evaluate(count("get"))).toBe(2)
+      expect(await page.evaluate(detail)).not.toMatch(/turned on|confirmed on/)
       await page.evaluate(`window.keepAwakeFixture.mutation('failed'); ${control}.click()`)
       await until(page, `${detail}.includes('Machine request failed')`)
-      expect(await page.evaluate<string>(label)).toBe("On")
-      expect(await page.evaluate<boolean>(`${control}.checked`)).toBe(true)
+      expect(await page.evaluate(label)).toBe("On")
+      expect(await page.evaluate(`${control}.checked`)).toBe(true)
     } finally {
       await page.close()
     }
@@ -213,7 +213,7 @@ describe("Settings Keep machine awake", () => {
       await page.evaluate(`window.keepAwakeFixture.store.connect('dev_laptop')`)
       await until(page, `${count("get")} === 2`)
       await page.evaluate(`window.keepAwakeFixture.releaseRead('on')`)
-      expect(await page.evaluate<string>(label)).toBe("Checking")
+      expect(await page.evaluate(label)).toBe("Checking")
       await page.evaluate(`window.keepAwakeFixture.releaseRead('off'); window.keepAwakeFixture.read('off')`)
       await until(page, `${label} === 'Off'`)
       await page.evaluate(`${control}.click()`)
@@ -223,15 +223,15 @@ describe("Settings Keep machine awake", () => {
       await page.evaluate(`window.keepAwakeFixture.reconnect()`)
       await until(page, `${label} === 'Off' && ${detail}.includes('unconfirmed')`)
       await page.evaluate(`window.keepAwakeFixture.releaseSet('on')`)
-      expect(await page.evaluate<string>(label)).toBe("Off")
-      expect(await page.evaluate<number>(count("set"))).toBe(1)
+      expect(await page.evaluate(label)).toBe("Off")
+      expect(await page.evaluate(count("set"))).toBe(1)
       await page.evaluate(`window.keepAwakeFixture.show(false)`)
       await until(page, `${control} === null`)
-      const before = await page.evaluate<number>(count("get"))
+      const before = await page.evaluate(count("get"), decodeNumber)
       await page.evaluate(`window.keepAwakeFixture.read('on'); window.keepAwakeFixture.show(true)`)
       await until(page, `${label} === 'On'`)
-      expect(await page.evaluate<number>(count("get"))).toBe(before + 1)
-      expect(await page.evaluate<number>(count("set"))).toBe(1)
+      expect(await page.evaluate(count("get"))).toBe(before + 1)
+      expect(await page.evaluate(count("set"))).toBe(1)
     } finally {
       await page.close()
     }

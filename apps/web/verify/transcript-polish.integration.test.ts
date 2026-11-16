@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNullable, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4386
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -45,7 +45,7 @@ describe("transcript activity and queued input", () => {
     const page = await open("light", "&requests=form&queued=1")
     try {
       await until(page, `document.querySelector('.transcript-activity__status') !== null && document.querySelector('.transcript-message:has([data-delivery-state="queued"])') !== null`)
-      const state = await page.evaluate<{ slots: number; activityInScroll: boolean; activity: string; composerStatus: number; queued: number; queuedLabels: number }>(`(() => {
+      const state = await page.evaluate(`(() => {
         const activity = document.querySelector('.transcript-activity')
         const queued = [...document.querySelectorAll('.transcript-message:has([data-delivery-state="queued"])')]
         return {
@@ -68,15 +68,15 @@ describe("inline images", () => {
     try {
       await page.evaluate(`document.querySelector('.transcript-message__images').scrollIntoView({ block: 'center' })`)
       await until(page, `document.querySelectorAll('.transcript-message__bubble .transcript-image img').length >= 3 && [...document.querySelectorAll('.transcript-message__bubble .transcript-image img')].every((image) => image.complete && image.naturalWidth > 0)`)
-      const bubbles = await page.evaluate<{ text: string; images: number }[]>(`[...document.querySelectorAll('.transcript-message__bubble')].filter((bubble) => bubble.querySelector('.transcript-message__images')).map((bubble) => ({ text: bubble.querySelector('.transcript-message__bubble-text')?.textContent ?? '', images: bubble.querySelectorAll('.transcript-image').length }))`)
+      const bubbles = await page.evaluate(`[...document.querySelectorAll('.transcript-message__bubble')].filter((bubble) => bubble.querySelector('.transcript-message__images')).map((bubble) => ({ text: bubble.querySelector('.transcript-message__bubble-text')?.textContent ?? '', images: bubble.querySelectorAll('.transcript-image').length }))`)
       expect(bubbles).toEqual([
         { text: "Compare with and keep the spacing from the second one.", images: 2 },
         { text: "", images: 1 },
       ])
-      expect(await page.evaluate<number>(`document.querySelectorAll('.transcript-image__unavailable').length`)).toBe(0)
+      expect(await page.evaluate(`document.querySelectorAll('.transcript-image__unavailable').length`)).toBe(0)
       await page.evaluate(`document.querySelector('.transcript-message__bubble .transcript-image').click()`)
       await until(page, `document.querySelector('dialog.transcript-lightbox[open]') !== null`)
-      expect(await page.evaluate<string>(`document.querySelector('dialog.transcript-lightbox').getAttribute('aria-label')`)).toBe("Image: layout-1.png")
+      expect(await page.evaluate(`document.querySelector('dialog.transcript-lightbox').getAttribute('aria-label')`)).toBe("Image: layout-1.png")
     } finally { await page.close() }
   }, 30_000)
 })
@@ -86,21 +86,21 @@ describe("disclosure motion", () => {
     const page = await open("light", "", viewports[0], false)
     try {
       await until(page, `document.querySelector('.transcript-reasoning__toggle') !== null`)
-      const before = await page.evaluate<{ id: string; top: number }>(`(() => {
+      const before = await page.evaluate(`(() => {
         const toggle = document.querySelector('.transcript-reasoning__toggle')
         const scroller = document.querySelector('.workspace__scroll')
         scroller.scrollTop += toggle.getBoundingClientRect().bottom - scroller.getBoundingClientRect().top + 40
         const anchor = [...document.querySelectorAll('.transcript-navigation__item, .transcript-row, article')].find((row) => row.getBoundingClientRect().top > scroller.getBoundingClientRect().top + 8)
         anchor.dataset.readingAnchor = '1'
         return { id: anchor.tagName, top: anchor.getBoundingClientRect().top }
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, id: (decodeString)(record["id"]), top: (decodeNumber)(record["top"]) } })
       await page.evaluate(`document.querySelector('.transcript-reasoning__toggle').click()`)
       await Bun.sleep(500)
-      const after = await page.evaluate<{ expanded: string | null; open: boolean; top: number }>(`(() => {
+      const after = await page.evaluate(`(() => {
         const toggle = document.querySelector('.transcript-reasoning__toggle')
         const body = document.getElementById(toggle.getAttribute('aria-controls'))
         return { expanded: toggle.getAttribute('aria-expanded'), open: body.classList.contains('collapsible') && body.hasAttribute('data-open'), top: document.querySelector('[data-reading-anchor]').getBoundingClientRect().top }
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, expanded: (decodeNullable(decodeString))(record["expanded"]), open: (decodeBoolean)(record["open"]), top: (decodeNumber)(record["top"]) } })
       expect(after.expanded).toBe("true")
       expect(after.open).toBe(true)
       expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(1)
@@ -116,7 +116,7 @@ for (const theme of ["light", "dark"] as const) {
         try {
           await page.evaluate(`(() => { const scroller = document.querySelector('.workspace__scroll'); scroller.scrollTop = scroller.scrollHeight })()`)
           await Bun.sleep(600)
-          const layout = await page.evaluate<{ placeholder: string; radius: number; shadow: string; fieldBorder: string; insetStart: number; insetEnd: number; scrollerBelowCard: boolean; clear: { name: string; bottom: number }[]; cardTop: number }>(`(() => {
+          const layout = await page.evaluate(`(() => {
             const card = document.querySelector('.composer .composer__row').getBoundingClientRect()
             const scroller = document.querySelector('.workspace__scroll')
             const box = scroller.getBoundingClientRect()
@@ -134,7 +134,7 @@ for (const theme of ["light", "dark"] as const) {
               clear: [named('Send answer', button('Send answer')), named('Cancel', button('Cancel')), named('queued bubble', document.querySelector('.transcript-message:has([data-delivery-state="queued"]) .transcript-message__bubble')), named('activity row', document.querySelector('.transcript-activity'))],
               cardTop: Math.round(card.top),
             }
-          })()`)
+          })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, placeholder: (decodeString)(record["placeholder"]), radius: (decodeNumber)(record["radius"]), shadow: (decodeString)(record["shadow"]), fieldBorder: (decodeString)(record["fieldBorder"]), insetStart: (decodeNumber)(record["insetStart"]), insetEnd: (decodeNumber)(record["insetEnd"]), scrollerBelowCard: (decodeBoolean)(record["scrollerBelowCard"]), clear: (decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, name: (decodeString)(record["name"]), bottom: (decodeNumber)(record["bottom"]) } }))(record["clear"]), cardTop: (decodeNumber)(record["cardTop"]) } })
           expect(layout.placeholder).toBe("Ask YCoding…")
           expect(layout.radius).toBe(20)
           expect(layout.shadow).toBe("none")
@@ -153,10 +153,10 @@ for (const theme of ["light", "dark"] as const) {
           await Bun.sleep(400)
           await page.evaluate(`(() => { const input = document.querySelector('.composer__input'); input.focus(); document.execCommand('insertText', false, ['one', 'two', 'three', 'four', 'five', 'six'].join('\\n')) })()`)
           await Bun.sleep(600)
-          const layout = await page.evaluate<{ queued: number; cardTop: number; scrollerVisible: boolean }>(`(() => {
+          const layout = await page.evaluate(`(() => {
             const card = document.querySelector('.composer .composer__row').getBoundingClientRect()
             return { queued: Math.round(document.querySelector('.transcript-message:has([data-delivery-state="queued"]) .transcript-message__bubble').getBoundingClientRect().bottom), cardTop: Math.round(card.top), scrollerVisible: card.top > document.querySelector('.workspace__scroll').getBoundingClientRect().top }
-          })()`)
+          })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, queued: (decodeNumber)(record["queued"]), cardTop: (decodeNumber)(record["cardTop"]), scrollerVisible: (decodeBoolean)(record["scrollerVisible"]) } })
           expect(layout.scrollerVisible).toBe(true)
           expect(layout.queued).toBeLessThanOrEqual(layout.cardTop)
         } finally { await page.close() }
@@ -176,7 +176,7 @@ async function ready() {
 
 async function until(page: Page, expression: string) {
   for (let attempt = 0; attempt < 120; attempt += 1) {
-    if (await page.evaluate<boolean>(expression)) return
+    if (await page.evaluate(expression)) return
     await Bun.sleep(50)
   }
   throw new Error(`Timed out waiting for ${expression}`)

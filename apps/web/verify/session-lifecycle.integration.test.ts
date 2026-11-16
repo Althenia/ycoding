@@ -35,7 +35,7 @@ async function open(view: "chat" | "sessions") {
   const page = await browser.openPage()
   await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=${view}`)
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(view === "chat" ? ".composer__input:not([disabled])" : ".sessions-table__select:not([disabled])")}) !== null`)) return page
+    if (await page.evaluate(`document.querySelector(${JSON.stringify(view === "chat" ? ".composer__input:not([disabled])" : ".sessions-table__select:not([disabled])")}) !== null`)) return page
     await Bun.sleep(50)
   }
   await page.close()
@@ -47,11 +47,11 @@ describe("remote session lifecycle", () => {
     const page = await open("sessions")
     try {
       await page.evaluate(`document.querySelector('.sessions-table__select')?.click()`)
-      expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote/session")
-      expect(await page.evaluate<string>(`new URLSearchParams(location.search).get('session_id') ?? ''`)).toBe("ses_fixture")
-      expect(await page.evaluate<string>(`new URLSearchParams(location.search).get('device_id') ?? ''`)).toBe("dev_studio")
-      expect(await page.evaluate<boolean>(`document.querySelector('.app--selected .composer__input') !== null`)).toBe(true)
-      expect(await page.evaluate<unknown[]>(`window.remoteMutationReport()`)).toEqual([])
+      expect(await page.evaluate(`location.pathname`)).toBe("/remote/session")
+      expect(await page.evaluate(`new URLSearchParams(location.search).get('session_id') ?? ''`)).toBe("ses_fixture")
+      expect(await page.evaluate(`new URLSearchParams(location.search).get('device_id') ?? ''`)).toBe("dev_studio")
+      expect(await page.evaluate(`document.querySelector('.app--selected .composer__input') !== null`)).toBe(true)
+      expect(await page.evaluate(`window.remoteMutationReport()`)).toEqual([])
     } finally { await page.close() }
   })
 
@@ -59,10 +59,10 @@ describe("remote session lifecycle", () => {
     const page = await open("chat")
     try {
       await page.evaluate(`(() => { const input = document.querySelector('.composer__input'); input.value = 'Keep this unsent prompt'; input.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('.remote-nav a[href="/remote/settings"]')?.click(); })()`)
-      expect(await page.evaluate<boolean>(`document.querySelector('.app--settings') !== null`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('.app--settings') !== null`)).toBe(true)
       await page.evaluate(`document.querySelector('.workspace-resume[href^="/remote/session?"]')?.click()`)
-      expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote/session")
-      expect(await page.evaluate<string>(`document.querySelector('.composer__input')?.value ?? ''`)).toBe("Keep this unsent prompt")
+      expect(await page.evaluate(`location.pathname`)).toBe("/remote/session")
+      expect(await page.evaluate(`document.querySelector('.composer__input')?.value ?? ''`)).toBe("Keep this unsent prompt")
     } finally { await page.close() }
   })
 })

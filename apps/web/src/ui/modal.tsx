@@ -1,5 +1,6 @@
 import { createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Icon } from "./icon"
+import { visualViewportFrame, watchVisualViewport } from "./visual-viewport"
 import "./button.css"
 import "./modal.css"
 
@@ -34,13 +35,17 @@ export function Modal(props: {
   const [closing, setClosing] = createSignal(false)
   const [pointerFocus, setPointerFocus] = createSignal(props.pointerOpened === true)
   let element: HTMLDialogElement | undefined
+  let surface: HTMLDivElement | undefined
+  let gesture: { readonly x: number; readonly y: number; readonly drawer: boolean } | undefined
+  let scrimPointer: number | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
+  const [frame, setFrame] = createSignal<ReturnType<typeof visualViewportFrame>>()
   const close = () => {
     if (closing()) return
     setClosing(true)
     if (element?.open) element.close()
     props.onDismiss?.()
-    props.returnFocus.focus()
+    props.returnFocus.focus({ preventScroll: true })
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       props.onClose()
       return
@@ -48,6 +53,7 @@ export function Modal(props: {
     timer = setTimeout(props.onClose, parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--yc-dur-base")))
   }
   onMount(() => {
+    onCleanup(watchVisualViewport((viewport) => setFrame(visualViewportFrame(viewport))))
     element?.showModal()
     queueMicrotask(() => {
       if (!element?.open || element.contains(document.activeElement)) return
@@ -67,12 +73,43 @@ export function Modal(props: {
       ref={element}
       class={`overlay${props.class ? ` ${props.class}` : ""}`}
       aria-label={props.label}
+      aria-modal="true"
       aria-hidden={closing() ? "true" : undefined}
       inert={closing()}
       data-closing={closing() ? "" : undefined}
       onClose={() => { if (!closing()) close() }}
       onCancel={(event) => { event.preventDefault(); event.stopPropagation(); close() }}
-      onPointerDown={() => setPointerFocus(true)}
+      onPointerDown={(event) => {
+        setPointerFocus(true)
+        if (event.target === element) scrimPointer = event.pointerId
+      }}
+      onPointerUp={(event) => {
+        const outside = scrimPointer === event.pointerId && event.target === element
+        scrimPointer = undefined
+        if (!outside || !surface) return
+        const box = surface.getBoundingClientRect()
+        if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) close()
+      }}
+      onPointerCancel={() => { scrimPointer = undefined }}
+      onTouchStart={(event) => {
+        gesture = undefined
+        if (event.touches.length !== 1 || !(event.target instanceof Element) || !window.matchMedia("(max-width: 767px), (max-height: 599px) and (pointer: coarse)").matches) return
+        const drawer = element?.classList.contains("overlay--sessions-sheet") === true
+        const touch = event.touches[0]!
+        const handle = event.target === surface && surface && getComputedStyle(surface, "::before").content === '""' && touch.clientY <= surface.getBoundingClientRect().top + parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--yc-hit-min"))
+        if (!drawer && ((!handle && !event.target.closest(".overlay__head")) || event.target.closest("button, a, input, select, textarea"))) return
+        gesture = { x: touch.clientX, y: touch.clientY, drawer }
+      }}
+      onTouchCancel={() => { gesture = undefined }}
+      onTouchEnd={(event) => {
+        const start = gesture
+        gesture = undefined
+        const touch = event.changedTouches[0]
+        if (!start || !touch || event.touches.length) return
+        const dx = touch.clientX - start.x
+        const dy = touch.clientY - start.y
+        if (start.drawer ? dx < -48 && Math.abs(dx) > Math.abs(dy) * 1.5 : dy > 48 && dy > Math.abs(dx) * 1.5) close()
+      }}
       onKeyDown={(event) => {
         setPointerFocus(false)
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return }
@@ -87,7 +124,7 @@ export function Modal(props: {
         next.focus()
       }}
     >
-      <div class="overlay__surface" style={props.surfaceStyle}>
+      <div ref={surface} class="overlay__surface" style={{ "--overlay-viewport-top": frame() ? `${frame()!.top}px` : undefined, "--overlay-viewport-height": frame() ? `${frame()!.height}px` : undefined, ...props.surfaceStyle }}>
         <div class="overlay__head">
           {props.header ?? <span class="overlay__title">{props.label}</span>}
           <button

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeRecord, decodeString } from "./cdp"
 
 const browserPath = process.env.YCODING_WEB_CHROME
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
@@ -47,17 +47,14 @@ describe("remote tool output rendering", () => {
     const page = await browser!.openPage()
     try {
       await page.navigate(`${origin}/verify/transcript.html?tool-output=1`)
-      const displayed = await page.evaluate<{
-        readonly output: string
-        readonly notes: readonly string[]
-      }>(`(async () => {
+      const displayed = await page.evaluate(`(async () => {
         for (let i = 0; i < 40 && document.querySelectorAll('.transcript-tool').length < 2; i++) await new Promise(resolve => setTimeout(resolve, 25));
         document.querySelectorAll('.transcript-tool__toggle').forEach(button => button.click());
         await new Promise(resolve => setTimeout(resolve, 25));
         const output = [...document.querySelectorAll('.transcript-tool .output code')].map(element => element.textContent ?? '').join('\\n');
         const notes = [...document.querySelectorAll('.transcript-tool')].map(tool => [...tool.querySelectorAll('.transcript-tool__note')].map(note => note.textContent ?? '').join(' '));
         return { output, notes };
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, output: (decodeString)(record["output"]), notes: (decodeArray(decodeString))(record["notes"]) } })
       expect(displayed.output).toContain("first line")
       expect(displayed.output).toContain("shell result")
       expect(displayed.output).not.toContain("/private/fixture/")

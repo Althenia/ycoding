@@ -34,19 +34,19 @@
 }
 
 @font-face {
-  font-family: "Geist Mono";
+  font-family: "JetBrains Mono";
   font-style: normal;
-  font-weight: 100 900;
+  font-weight: 100 800;
   font-display: swap;
-  src: url("../../../../assets/brand/fonts/GeistMono.woff2") format("woff2");
+  src: url("../assets/fonts/JetBrainsMono.woff2") format("woff2");
 }
 
 @font-face {
-  font-family: "Geist Mono";
+  font-family: "JetBrains Mono";
   font-style: italic;
-  font-weight: 100 900;
+  font-weight: 100 800;
   font-display: swap;
-  src: url("../../../../assets/brand/fonts/GeistMono-Italic.woff2") format("woff2");
+  src: url("../assets/fonts/JetBrainsMono-Italic.woff2") format("woff2");
 }
 
 :root {
@@ -104,7 +104,7 @@
 
   /* type scale — fixed sizes, fixed line heights */
   --yc-font-sans: "Geist", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-  --yc-font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
+  --yc-font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 
   --yc-cursor-surface: default;
   --yc-cursor-action: pointer;
@@ -186,10 +186,12 @@
   /* layout metrics — a header is one or two declared rows, never a row that
      compresses the controls inside it */
   --yc-header-h: 60px;
+  --yc-header-public-h: 56px;
   --yc-header-session-h: 44px;
   --yc-status-strip-h: 36px;
   --yc-bottom-nav-h: 56px;
   --yc-content-max: 1200px;
+  --yc-public-max: 1440px;
   --yc-content-max-wide: 1600px;
   --yc-rail-w: 256px;
   --yc-companion-w: 448px;
@@ -222,17 +224,17 @@
   color-scheme: dark;
 
   --yc-green: #27d17f;
-  --yc-green-strong: #4ee29b;
-  --yc-green-soft: rgba(78, 226, 155, 0.12);
+  --yc-green-strong: #67d7a4;
+  --yc-green-soft: rgba(103, 215, 164, 0.12);
   /* The bright green stays the primary surface; the label is dark because white on
      it reaches only 1.65:1. */
-  --yc-primary-bg: #4ee29b;
+  --yc-primary-bg: #67d7a4;
   --yc-primary-fg: #04150c;
-  --yc-yellow-strong: #f7d37c;
+  --yc-yellow-strong: #f0be62;
   --yc-yellow-soft: rgba(244, 189, 61, 0.14);
   --yc-danger: #ef6f6f;
   --yc-danger-soft: rgba(239, 111, 111, 0.14);
-  --yc-focus: #4ee29b;
+  --yc-focus: #67d7a4;
   --yc-signal: #79b8ff;
 
   --yc-effort: #d2aedf;

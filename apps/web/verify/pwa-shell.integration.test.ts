@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { CACHE_NAME } from "../src/pwa/offline"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNullable, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const browserPath = process.env.YCODING_WEB_CHROME
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
@@ -69,10 +69,10 @@ describe("built PWA shell in Chrome", () => {
         };
       })()`)
       await page.navigate(`${origin}/remote`)
-      const result = await page.evaluate<{ readonly path: string; readonly settingsMounted: boolean; readonly posts: readonly { readonly endpoint: string }[] }>(`(async () => {
+      const result = await page.evaluate(`(async () => {
         for (let attempt = 0; attempt < 80 && window.__pushPosts.length === 0; attempt++) await new Promise(resolve => setTimeout(resolve, 50));
         return { path: location.pathname, settingsMounted: Boolean(document.querySelector('#notification-settings')), posts: window.__pushPosts };
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, path: (decodeString)(record["path"]), settingsMounted: (decodeBoolean)(record["settingsMounted"]), posts: (decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, endpoint: (decodeString)(record["endpoint"]) } }))(record["posts"]) } })
       expect(result.path).toBe("/remote")
       expect(result.settingsMounted).toBe(false)
       expect(result.posts).toMatchObject([{ endpoint: "https://fcm.googleapis.com/send/local-test" }])
@@ -96,11 +96,11 @@ describe("built PWA shell in Chrome", () => {
         await page.setMobileViewport(390, 844)
         if (installed) await page.injectOnNewDocument(`Object.defineProperty(Navigator.prototype, 'standalone', { configurable: true, get: () => true })`)
         await page.navigate(`${origin}/remote`)
-        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`(document.getElementById('app')?.childElementCount ?? 0) > 0`); attempt += 1) await Bun.sleep(50)
-        const zoom = await page.evaluate<{ readonly touchAction: string; readonly viewport: string }>(`({ touchAction: getComputedStyle(document.documentElement).touchAction, viewport: document.querySelector('meta[name="viewport"]')?.getAttribute('content') ?? '' })`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate(`(document.getElementById('app')?.childElementCount ?? 0) > 0`); attempt += 1) await Bun.sleep(50)
+        const zoom = await page.evaluate(`({ touchAction: getComputedStyle(document.documentElement).touchAction, viewport: document.querySelector('meta[name="viewport"]')?.getAttribute('content') ?? '' })`, (value: unknown) => { const record = decodeRecord(value); return { ...record, touchAction: (decodeString)(record["touchAction"]), viewport: (decodeString)(record["viewport"]) } })
         await page.pinch(195, 420, 2)
         await Bun.sleep(200)
-        const zoomed = await page.evaluate<boolean>(`visualViewport.scale > 1.05`)
+        const zoomed = await page.evaluate(`visualViewport.scale > 1.05`)
         expect({ ...zoom, zoomed }).toEqual(installed
           ? { touchAction: "pan-x pan-y", viewport: "width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1", zoomed: false }
           : { touchAction: "auto", viewport: "width=device-width, initial-scale=1, viewport-fit=cover", zoomed: true })
@@ -133,15 +133,7 @@ describe("built PWA shell in Chrome", () => {
           }).observe(document, { subtree: true, attributes: true, attributeOldValue: true, attributeFilter: ['data-theme'] });
         })()`)
           await page.navigate(`${themeServer.url.origin}/docs/quickstart`)
-          const state = await page.evaluate<{
-            readonly heading: string
-            readonly preference: string
-            readonly theme: string
-            readonly systemDark: boolean
-            readonly overflow: boolean
-            readonly firstPaint: number | null
-            readonly changes: readonly { readonly previous: string | null; readonly current: string; readonly at: number }[]
-          }>(`({
+          const state = await page.evaluate(`({
           heading: document.querySelector('.docs-article > h1')?.textContent?.trim() ?? '',
           preference: document.documentElement.dataset.themePreference ?? '',
           theme: document.documentElement.dataset.theme ?? '',
@@ -149,7 +141,7 @@ describe("built PWA shell in Chrome", () => {
           overflow: document.documentElement.scrollWidth > innerWidth,
           firstPaint: performance.getEntriesByType('paint').find(entry => entry.name === 'first-paint')?.startTime ?? null,
           changes: window.__themeChanges ?? [],
-        })`)
+        })`, (value: unknown) => { const record = decodeRecord(value); return { ...record, heading: (decodeString)(record["heading"]), preference: (decodeString)(record["preference"]), theme: (decodeString)(record["theme"]), systemDark: (decodeBoolean)(record["systemDark"]), overflow: (decodeBoolean)(record["overflow"]), firstPaint: (decodeNullable(decodeNumber))(record["firstPaint"]), changes: (decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, previous: (decodeNullable(decodeString))(record["previous"]), current: (decodeString)(record["current"]), at: (decodeNumber)(record["at"]) } }))(record["changes"]) } })
           expect(state.heading).toBe("Quickstart")
           expect(state.preference).toBe(preference)
           expect(state.theme).toBe(expected)
@@ -169,17 +161,7 @@ describe("built PWA shell in Chrome", () => {
   test("applies the stored theme before first paint on cold and delayed public navigations", async () => {
     const slowServer = previewWithWorker(() => undefined, { path: "/changelog", delayMs: 750 })
     const page = await browser!.openPage()
-    const read = () => page.evaluate<{
-      readonly path: string
-      readonly heading: string
-      readonly theme: string
-      readonly preference: string
-      readonly changes: readonly { readonly previous: string | null; readonly current: string; readonly at: number }[]
-      readonly firstPaint: number | null
-      readonly firstContentfulPaint: number | null
-      readonly layoutShift: number
-      readonly overflow: boolean
-    }>(`(() => ({
+    const read = () => page.evaluate(`(() => ({
       path: location.pathname,
       heading: document.querySelector('.docs-article > h1')?.textContent?.trim() ?? '',
       theme: document.documentElement.dataset.theme ?? '',
@@ -189,7 +171,7 @@ describe("built PWA shell in Chrome", () => {
       firstContentfulPaint: performance.getEntriesByType('paint').find(entry => entry.name === 'first-contentful-paint')?.startTime ?? null,
       layoutShift: window.__paintTrace?.shifts.reduce((sum, value) => sum + value, 0) ?? 0,
       overflow: document.documentElement.scrollWidth > innerWidth,
-    }))()`)
+    }))()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, path: (decodeString)(record["path"]), heading: (decodeString)(record["heading"]), theme: (decodeString)(record["theme"]), preference: (decodeString)(record["preference"]), changes: (decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, previous: (decodeNullable(decodeString))(record["previous"]), current: (decodeString)(record["current"]), at: (decodeNumber)(record["at"]) } }))(record["changes"]), firstPaint: (decodeNullable(decodeNumber))(record["firstPaint"]), firstContentfulPaint: (decodeNullable(decodeNumber))(record["firstContentfulPaint"]), layoutShift: (decodeNumber)(record["layoutShift"]), overflow: (decodeBoolean)(record["overflow"]) } })
     const settle = async (path: string, heading: string) => {
       for (let attempt = 0; attempt < 60; attempt += 1) {
         const state = await read()
@@ -268,7 +250,7 @@ describe("built PWA shell in Chrome", () => {
       await page.disableCache()
       await page.navigate(`${slowServer.url.origin}/docs/quickstart`)
       await Bun.sleep(1200)
-      expect(await page.evaluate<string>(`document.querySelector('.docs-article > h1')?.textContent?.trim() ?? ''`)).toBe("Quickstart")
+      expect(await page.evaluate(`document.querySelector('.docs-article > h1')?.textContent?.trim() ?? ''`)).toBe("Quickstart")
       const baseline = await page.screenshot()
       expect(baseline.length).toBeGreaterThan(1000)
       const navigation = page.navigate(`${slowServer.url.origin}/changelog`)
@@ -282,10 +264,10 @@ describe("built PWA shell in Chrome", () => {
       release()
       await navigation
       for (let attempt = 0; attempt < 30; attempt += 1) {
-        if (await page.evaluate<boolean>(`document.querySelector('.docs-article > h1')?.textContent?.trim() === 'Changelog'`)) break
+        if (await page.evaluate(`document.querySelector('.docs-article > h1')?.textContent?.trim() === 'Changelog'`)) break
         await Bun.sleep(50)
       }
-      expect(await page.evaluate<string>(`document.querySelector('.docs-article > h1')?.textContent?.trim() ?? ''`)).toBe("Changelog")
+      expect(await page.evaluate(`document.querySelector('.docs-article > h1')?.textContent?.trim() ?? ''`)).toBe("Changelog")
       console.info(`built in-flight frames: two Chrome PNG frames matched the settled docs frame before releasing a changelog response held for at least 800 ms; encoded PNG SHA-256 ${digest(baseline)}`)
     } finally {
       release()
@@ -299,7 +281,7 @@ describe("built PWA shell in Chrome", () => {
     try {
       await page.allowServiceWorker()
       await page.navigate(`${origin}/offline.html`)
-      const names = await page.evaluate<readonly string[]>(`(async () => {
+      const names = await page.evaluate(`(async () => {
         await caches.open('ycoding-web-shell-v1');
         const unrelated = await caches.open('unrelated-local-cache');
         await unrelated.put('/', new Response('<p>Unrelated cached shell</p>', { headers: { 'content-type': 'text/html' } }));
@@ -323,7 +305,7 @@ describe("built PWA shell in Chrome", () => {
     try {
       await page.allowServiceWorker()
       await page.navigate(origin)
-      const ready = await page.evaluate<boolean>(`(async () => {
+      const ready = await page.evaluate(`(async () => {
         const registration = await navigator.serviceWorker.ready;
         if (!registration.active || !registration.scope.startsWith(location.origin)) return false;
         if (!navigator.serviceWorker.controller) {
@@ -337,7 +319,7 @@ describe("built PWA shell in Chrome", () => {
 
       await page.setOffline(true)
       await page.navigate(`${origin}/docs/offline-probe`)
-      const offline = await page.evaluate<{ readonly controlled: boolean; readonly publicShell: boolean; readonly privateReadFailed: boolean }>(`(async () => {
+      const offline = await page.evaluate(`(async () => {
         let privateReadFailed = false;
         try { await fetch('/api/health'); } catch { privateReadFailed = true; }
         return {
@@ -360,7 +342,7 @@ describe("built PWA shell in Chrome", () => {
     try {
       await page.allowServiceWorker()
       await page.navigate(updateServer.url.origin)
-      expect(await page.evaluate<boolean>(`(async () => {
+      expect(await page.evaluate(`(async () => {
         await navigator.serviceWorker.ready;
         if (!navigator.serviceWorker.controller) {
           await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
@@ -369,7 +351,7 @@ describe("built PWA shell in Chrome", () => {
       })()`)).toBe(true)
 
       failUpdate = true
-      expect(await page.evaluate<{ readonly failed: boolean; readonly active: boolean }>(`(async () => {
+      expect(await page.evaluate(`(async () => {
         const registration = await navigator.serviceWorker.ready;
         const active = registration.active;
         try {
@@ -381,13 +363,13 @@ describe("built PWA shell in Chrome", () => {
       })()`)).toEqual({ failed: true, active: true })
       await page.setOffline(true)
       await page.navigate(`${updateServer.url.origin}/docs/update-recovery-probe`)
-      expect(await page.evaluate<boolean>(`Boolean(navigator.serviceWorker.controller) &&
+      expect(await page.evaluate(`Boolean(navigator.serviceWorker.controller) &&
         Boolean(document.querySelector('#app')) && Boolean(document.querySelector('a[href="/docs"]'))`)).toBe(true)
 
       await page.setOffline(false)
       failUpdate = false
       await page.navigate(updateServer.url.origin)
-      expect(await page.evaluate<boolean>(`(async () => {
+      expect(await page.evaluate(`(async () => {
         const registration = await navigator.serviceWorker.ready;
         await registration.update();
         return Boolean(registration.active) && Boolean(navigator.serviceWorker.controller);
@@ -415,7 +397,7 @@ describe("built PWA shell in Chrome", () => {
     try {
       await page.allowServiceWorker()
       await page.navigate(updateServer.url.origin)
-      expect(await page.evaluate<{ readonly controlled: boolean; readonly names: readonly string[] }>(`(async () => {
+      expect(await page.evaluate(`(async () => {
         await navigator.serviceWorker.ready;
         if (!navigator.serviceWorker.controller) {
           await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
@@ -425,7 +407,7 @@ describe("built PWA shell in Chrome", () => {
       })()`)).toEqual({ controlled: true, names: ["ycoding-web-shell-v2", "unrelated-local-cache"] })
 
       publishedWorker = worker
-      expect(await page.evaluate<{ readonly switched: boolean; readonly active: boolean; readonly names: readonly string[] }>(`(async () => {
+      expect(await page.evaluate(`(async () => {
         const registration = await navigator.serviceWorker.ready;
         const previous = navigator.serviceWorker.controller;
         await registration.update();
@@ -445,7 +427,7 @@ describe("built PWA shell in Chrome", () => {
       serverStopped = true
       await page.navigate(`${updateOrigin}/docs/transport-outage-probe`)
       for (let attempt = 0; attempt < 60; attempt++) {
-        if (await page.evaluate<boolean>(`Boolean(document.querySelector('a[href="/docs"]'))`)) break
+        if (await page.evaluate(`Boolean(document.querySelector('a[href="/docs"]'))`)) break
         await Bun.sleep(50)
       }
       expect({

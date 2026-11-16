@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeBoolean, decodeNullable, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4617
 const executable = process.env.YCODING_WEB_CHROME
@@ -31,9 +31,9 @@ test("the Goal panel enters and leave over frames while restoring focus immediat
       await page.setReducedMotion(reduce)
       await page.setAnimationPlaybackRate(0)
       await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
-      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.session-status__${kind}-trigger') !== null`); attempt += 1) await Bun.sleep(50)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate(`document.querySelector('.session-status__${kind}-trigger') !== null`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; document.querySelector('.session-status__${kind}-trigger').click()`)
-      const entering = await page.evaluate<{ duration: number; opacity: number; transform: string; focusInside: boolean; animations: number; name: string | null; time: number | null; present: boolean }>(sampleGoalMotion(reduce ? null : "session-status-goal-in"))
+      const entering = await page.evaluate(sampleGoalMotion(reduce ? null : "session-status-goal-in"), (value: unknown) => { const record = decodeRecord(value); return { ...record, duration: (decodeNumber)(record["duration"]), opacity: (decodeNumber)(record["opacity"]), transform: (decodeString)(record["transform"]), focusInside: (decodeBoolean)(record["focusInside"]), animations: (decodeNumber)(record["animations"]), name: (decodeNullable(decodeString))(record["name"]), time: (decodeNullable(decodeNumber))(record["time"]), present: (decodeBoolean)(record["present"]) } })
       expect(entering.focusInside).toBe(true)
       if (reduce) expect(entering).toMatchObject({ duration: 0, opacity: 1, transform: "none", animations: 0, present: true })
       else {
@@ -45,21 +45,21 @@ test("the Goal panel enters and leave over frames while restoring focus immediat
       }
       await page.evaluate(finishGoalMotion)
       await page.pressEscape()
-      const closedImmediately = await page.evaluate<{ expanded: string; focus: boolean; inert: boolean; hidden: boolean }>(`(() => { const panel = document.querySelector('.session-status__popover'); return { expanded: document.querySelector('.session-status__${kind}-trigger').getAttribute('aria-expanded'), focus: document.activeElement === document.querySelector('.session-status__${kind}-trigger'), inert: panel?.inert ?? false, hidden: panel?.getAttribute('aria-hidden') === 'true' }; })()`)
+      const closedImmediately = await page.evaluate(`(() => { const panel = document.querySelector('.session-status__popover'); return { expanded: document.querySelector('.session-status__${kind}-trigger').getAttribute('aria-expanded'), focus: document.activeElement === document.querySelector('.session-status__${kind}-trigger'), inert: panel?.inert ?? false, hidden: panel?.getAttribute('aria-hidden') === 'true' }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, expanded: (decodeString)(record["expanded"]), focus: (decodeBoolean)(record["focus"]), inert: (decodeBoolean)(record["inert"]), hidden: (decodeBoolean)(record["hidden"]) } })
       expect(closedImmediately.expanded).toBe("false")
       expect(closedImmediately.focus).toBe(true)
-      if (reduce) expect(await page.evaluate<boolean>(`document.querySelector('.session-status__popover') === null`)).toBe(true)
+      if (reduce) expect(await page.evaluate(`document.querySelector('.session-status__popover') === null`)).toBe(true)
       else {
         expect(closedImmediately.inert).toBe(true)
         expect(closedImmediately.hidden).toBe(true)
-        const leaving = await page.evaluate<{ duration: number; opacity: number; transform: string; animations: number; name: string; time: number; present: boolean }>(sampleGoalMotion("session-status-out"))
+        const leaving = await page.evaluate(sampleGoalMotion("session-status-out"), (value: unknown) => { const record = decodeRecord(value); return { ...record, duration: (decodeNumber)(record["duration"]), opacity: (decodeNumber)(record["opacity"]), transform: (decodeString)(record["transform"]), animations: (decodeNumber)(record["animations"]), name: (decodeString)(record["name"]), time: (decodeNumber)(record["time"]), present: (decodeBoolean)(record["present"]) } })
         expect(leaving).toMatchObject({ animations: 1, name: "session-status-out", time: 110, present: true })
         expect(leaving.duration).toBe(220)
         expect(leaving.opacity).toBeGreaterThan(0)
         expect(leaving.opacity).toBeLessThan(1)
         expect(leaving.transform).not.toBe("none")
         await page.evaluate(finishGoalMotion)
-        expect(await page.evaluate<boolean>(`document.querySelector('.session-status__popover') === null`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector('.session-status__popover') === null`)).toBe(true)
       }
     } finally { await page.close() }
   }
@@ -72,28 +72,28 @@ test("reopening the Goal panel during exit cancels closure", async () => {
     await page.setReducedMotion(false)
     await page.setAnimationPlaybackRate(0)
     await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
-    for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.session-status__goal-trigger') !== null`); attempt += 1) await Bun.sleep(50)
+    for (let attempt = 0; attempt < 60 && !await page.evaluate(`document.querySelector('.session-status__goal-trigger') !== null`); attempt += 1) await Bun.sleep(50)
     await page.evaluate(`document.querySelector('.session-status__goal-trigger').click()`)
     await page.evaluate(finishGoalMotion)
     await page.pressEscape()
     await page.evaluate(sampleGoalMotion("session-status-out"))
-    expect(await page.evaluate<boolean>(`(async () => {
+    expect(await page.evaluate(`(async () => {
       const panel = document.querySelector('.session-status__popover'), animation = panel.getAnimations().find(animation => animation.animationName === 'session-status-out');
       const cancelled = animation.finished.then(() => false, () => true);
       document.querySelector('.session-status__goal-trigger').click(); getComputedStyle(panel).animationName;
       return await cancelled;
     })()`)).toBe(true)
-    expect(await page.evaluate<boolean>(`document.querySelector('.session-status__goal-trigger').getAttribute('aria-expanded') === 'true' && document.querySelector('.session-status__popover')?.inert === false`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.session-status__goal-trigger').getAttribute('aria-expanded') === 'true' && document.querySelector('.session-status__popover')?.inert === false`)).toBe(true)
     await page.evaluate(finishGoalMotion)
-    expect(await page.evaluate<boolean>(`document.querySelector('.session-status__popover') !== null && document.querySelector('.session-status__popover')?.inert === false`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.session-status__popover') !== null && document.querySelector('.session-status__popover')?.inert === false`)).toBe(true)
     await page.evaluate(`document.querySelector('.session-status__goal-trigger').click(); document.querySelector('.session-status__goal-trigger').click()`)
     await page.evaluate(sampleGoalMotion("session-status-goal-in"))
     await page.evaluate(`document.querySelector('.session-status__goal-trigger').click()`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.session-status__popover')?.inert === true`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.session-status__popover')?.inert === true`)).toBe(true)
     await page.evaluate(sampleGoalMotion("session-status-out"))
-    expect(await page.evaluate<boolean>(`document.querySelector('.session-status__popover')?.inert === true`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.session-status__popover')?.inert === true`)).toBe(true)
     await page.evaluate(finishGoalMotion)
-    expect(await page.evaluate<boolean>(`document.querySelector('.session-status__popover') === null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.session-status__popover') === null`)).toBe(true)
   } finally { await page.close() }
 }, 15_000)
 

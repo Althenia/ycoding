@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeString, type Page } from "./cdp"
 
 const port = 4206
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -35,7 +35,7 @@ describe("web color schemes", () => {
       await waitFor(page, `document.querySelector('section[aria-labelledby="appearance-settings"] [aria-label="Color scheme"]') instanceof HTMLButtonElement`)
       await selectScheme(page, "One Dark")
       await waitFor(page, `document.documentElement.dataset.scheme === 'onedark'`)
-      const light = await page.evaluate<{ scheme: string; mode: string; background: string; overflow: boolean }>(`(() => ({
+      const light = await page.evaluate(`(() => ({
         scheme: document.documentElement.dataset.scheme ?? '',
         mode: document.documentElement.dataset.theme ?? '',
         background: getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim(),
@@ -43,9 +43,9 @@ describe("web color schemes", () => {
       }))()`)
       expect(light).toEqual({ scheme: "onedark", mode: "light", background: "#fafafa", overflow: false })
 
-      await page.evaluate<void>(`[...document.querySelectorAll('section[aria-labelledby="appearance-settings"] [role="radio"]')].find(option => option.textContent?.trim() === 'Dark')?.click()`)
+      await page.evaluate(`[...document.querySelectorAll('section[aria-labelledby="appearance-settings"] [role="radio"]')].find(option => option.textContent?.trim() === 'Dark')?.click()`)
       await waitFor(page, `document.documentElement.dataset.theme === 'dark'`)
-      const dark = await page.evaluate<{ scheme: string; mode: string; background: string; text: string; persistedScheme: string; persistedMode: string }>(`(() => ({
+      const dark = await page.evaluate(`(() => ({
         scheme: document.documentElement.dataset.scheme ?? '',
         mode: document.documentElement.dataset.theme ?? '',
         background: getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim(),
@@ -57,17 +57,17 @@ describe("web color schemes", () => {
 
       await page.navigate(`${url()}/verify/remote.html?view=settings&noSelection=1`)
       await waitFor(page, `document.documentElement.dataset.scheme === 'onedark' && document.documentElement.dataset.theme === 'dark'`)
-      expect(await page.evaluate<string>(`getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim()`)).toBe("#282c34")
+      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim()`)).toBe("#282c34")
 
       await selectScheme(page, "One Dark Pro")
       await waitFor(page, `document.documentElement.dataset.scheme === 'onedark-pro'`)
-      await page.evaluate<void>(`[...document.querySelectorAll('section[aria-labelledby="appearance-settings"] [role="radio"]')].find(option => option.textContent?.trim() === 'Light')?.click()`)
+      await page.evaluate(`[...document.querySelectorAll('section[aria-labelledby="appearance-settings"] [role="radio"]')].find(option => option.textContent?.trim() === 'Light')?.click()`)
       await waitFor(page, `document.documentElement.dataset.theme === 'light'`)
-      expect(await page.evaluate<{ scheme: string; background: string }>(`({ scheme: document.documentElement.dataset.scheme, background: getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim() })`)).toEqual({ scheme: "onedark-pro", background: "#ffffff" })
+      expect(await page.evaluate(`({ scheme: document.documentElement.dataset.scheme, background: getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim() })`)).toEqual({ scheme: "onedark-pro", background: "#ffffff" })
 
       await selectScheme(page, "High contrast")
       await waitFor(page, `document.documentElement.dataset.scheme === 'high-contrast'`)
-      expect(await page.evaluate<string>(`getComputedStyle(document.documentElement).getPropertyValue('--yc-green-strong').trim()`)).toBe("#004521")
+      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-green-strong').trim()`)).toBe("#004521")
     } finally {
       await page.close()
     }
@@ -78,17 +78,17 @@ describe("web color schemes", () => {
     const second = await requireBrowser().openPage()
     try {
       await first.navigate(url())
-      await first.evaluate<void>(`localStorage.setItem('ycoding.theme', 'light'); localStorage.setItem('ycoding.theme-scheme', 'default')`)
+      await first.evaluate(`localStorage.setItem('ycoding.theme', 'light'); localStorage.setItem('ycoding.theme-scheme', 'default')`)
       await first.setViewport(1440, 900)
       await first.navigate(`${url()}/verify/remote.html?view=settings&noSelection=1`)
       await waitFor(first, `document.querySelector('section[aria-labelledby="appearance-settings"] [aria-label="Color scheme"]') instanceof HTMLButtonElement`)
-      expect(await first.evaluate<{ scheme: string; mode: string }>(`({ scheme: document.documentElement.dataset.scheme, mode: document.documentElement.dataset.theme })`)).toEqual({ scheme: "default", mode: "light" })
+      expect(await first.evaluate(`({ scheme: document.documentElement.dataset.scheme, mode: document.documentElement.dataset.theme })`)).toEqual({ scheme: "default", mode: "light" })
       await second.setViewport(1440, 900)
       await second.navigate(`${url()}/verify/remote.html?view=settings&noSelection=1`)
       await waitFor(second, `document.documentElement.dataset.scheme === 'default' && document.documentElement.dataset.theme === 'light'`)
       await selectScheme(second, "High contrast")
       await waitFor(first, `document.documentElement.dataset.scheme === 'high-contrast'`)
-      const rendered = await first.evaluate<{ scheme: string; background: string; overflow: boolean }>(`(() => ({
+      const rendered = await first.evaluate(`(() => ({
         scheme: document.documentElement.dataset.scheme ?? '',
         background: getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim(),
         overflow: document.documentElement.scrollWidth > innerWidth,
@@ -104,10 +104,10 @@ describe("web color schemes", () => {
     const page = await requireBrowser().openPage()
     try {
       await page.navigate(url())
-      await page.evaluate<void>(`localStorage.setItem('ycoding.theme', 'dark'); localStorage.setItem('ycoding.theme-scheme', 'onedark-pro')`)
+      await page.evaluate(`localStorage.setItem('ycoding.theme', 'dark'); localStorage.setItem('ycoding.theme-scheme', 'onedark-pro')`)
       await page.navigate(url())
       await waitFor(page, `document.documentElement.dataset.scheme === 'onedark-pro' && document.documentElement.dataset.theme === 'dark'`)
-      expect(await page.evaluate<{ colors: string[]; media: string[]; background: string }>(`({
+      expect(await page.evaluate(`({
         colors: [...document.querySelectorAll('meta[name="theme-color"]')].map(tag => tag.getAttribute('content') ?? ''),
         media: [...document.querySelectorAll('meta[name="theme-color"]')].map(tag => tag.getAttribute('media') ?? ''),
         background: getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim(),
@@ -122,7 +122,7 @@ describe("web color schemes", () => {
     try {
       await page.setColorScheme("light")
       await page.navigate(url())
-      await page.evaluate<void>(`localStorage.setItem('ycoding.theme', 'system'); localStorage.setItem('ycoding.theme-scheme', 'default')`)
+      await page.evaluate(`localStorage.setItem('ycoding.theme', 'system'); localStorage.setItem('ycoding.theme-scheme', 'default')`)
       await page.injectOnNewDocument(`(() => {
         const native = window.matchMedia.bind(window)
         window.matchMedia = query => {
@@ -137,7 +137,7 @@ describe("web color schemes", () => {
       })()`)
       await page.navigate(url())
       await waitFor(page, `document.documentElement.dataset.scheme === 'high-contrast' && document.documentElement.dataset.theme === 'light'`)
-      expect(await page.evaluate<{ background: string; accent: string; preference: string }>(`({
+      expect(await page.evaluate(`({
         background: getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim(),
         accent: getComputedStyle(document.documentElement).getPropertyValue('--yc-green-strong').trim(),
         preference: document.documentElement.dataset.themePreference ?? '',
@@ -147,33 +147,33 @@ describe("web color schemes", () => {
       await waitFor(page, `document.documentElement.dataset.scheme === 'high-contrast'`)
       await selectScheme(page, "One Dark")
       await waitFor(page, `document.documentElement.dataset.scheme === 'onedark'`)
-      expect(await page.evaluate<string>(`getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim()`)).toBe("#fafafa")
+      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-bg').trim()`)).toBe("#fafafa")
 
       await selectScheme(page, "Default")
-      await page.evaluate<void>(`[...document.querySelectorAll('section[aria-labelledby="appearance-settings"] [role="radio"]')].find(option => option.textContent?.trim() === 'Light')?.click()`)
+      await page.evaluate(`[...document.querySelectorAll('section[aria-labelledby="appearance-settings"] [role="radio"]')].find(option => option.textContent?.trim() === 'Light')?.click()`)
       await waitFor(page, `document.documentElement.dataset.scheme === 'default' && document.documentElement.dataset.themePreference === 'light'`)
-      expect(await page.evaluate<string>(`getComputedStyle(document.documentElement).getPropertyValue('--yc-green-strong').trim()`)).toBe("#0a7b47")
+      expect(await page.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--yc-green-strong').trim()`)).toBe("#0a7b47")
     } finally {
       await page.close()
     }
   }, 20_000)
 })
 
-async function waitFor(page: { evaluate<T>(expression: string): Promise<T> }, expression: string) {
+async function waitFor(page: Pick<Page, "evaluate">, expression: string) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
-    if (await page.evaluate<boolean>(expression)) return
+    if (await page.evaluate(expression)) return
     await Bun.sleep(50)
   }
-  throw new Error(`Browser condition did not settle: ${expression}; page text: ${await page.evaluate<string>("document.body.innerText")}`)
+  throw new Error(`Browser condition did not settle: ${expression}; page text: ${await page.evaluate("document.body.innerText", decodeString)}`)
 }
 
-async function selectScheme(page: { evaluate<T>(expression: string): Promise<T> }, label: string) {
-  await page.evaluate<void>(`document.querySelector('section[aria-labelledby="appearance-settings"] [aria-label="Color scheme"]').scrollIntoView({ block: 'center' })`)
-  await page.evaluate<void>(`document.querySelector('section[aria-labelledby="appearance-settings"] [aria-label="Color scheme"]').click()`)
+async function selectScheme(page: Pick<Page, "evaluate">, label: string) {
+  await page.evaluate(`document.querySelector('section[aria-labelledby="appearance-settings"] [aria-label="Color scheme"]').scrollIntoView({ block: 'center' })`)
+  await page.evaluate(`document.querySelector('section[aria-labelledby="appearance-settings"] [aria-label="Color scheme"]').click()`)
   await waitFor(page, `document.querySelector('dialog.custom-select__dialog [role="listbox"], .custom-select__surface [role="listbox"]') !== null`)
-  const compact = await page.evaluate<boolean>(`document.querySelector('dialog.custom-select__dialog') !== null`)
-  await page.evaluate<void>(`[...document.querySelectorAll(${JSON.stringify(compact ? "dialog.custom-select__dialog [role=option]" : ".custom-select__surface [role=option]")})].find(option => option.textContent?.includes(${JSON.stringify(label)}))?.click()`)
-  if (compact) await page.evaluate<void>(`document.querySelector('dialog.custom-select__dialog .custom-select__confirm')?.click()`)
+  const compact = await page.evaluate(`document.querySelector('dialog.custom-select__dialog') !== null`)
+  await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(compact ? "dialog.custom-select__dialog [role=option]" : ".custom-select__surface [role=option]")})].find(option => option.textContent?.includes(${JSON.stringify(label)}))?.click()`)
+  if (compact) await page.evaluate(`document.querySelector('dialog.custom-select__dialog .custom-select__confirm')?.click()`)
 }
 
 async function ready(): Promise<boolean> {

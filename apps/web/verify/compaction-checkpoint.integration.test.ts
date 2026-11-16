@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeBoolean, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4461
 const executable = process.env.YCODING_WEB_CHROME
@@ -73,14 +73,14 @@ describe("compaction checkpoint in the conversation", () => {
           scroll.dispatchEvent(new Event('scroll'))
           await new Promise((resolve) => setTimeout(resolve, 50))
         })()`)
-        const result = await page.evaluate<{ readonly cards: number; readonly first: string; readonly olderRequests: number; readonly marker: boolean; readonly scrollTop: number; readonly overflow: boolean; readonly time: string }>(`(() => {
+        const result = await page.evaluate(`(() => {
           const scroll = document.querySelector('.workspace__scroll')
           return { cards: document.querySelectorAll('.transcript-compaction').length,
             first: document.querySelector('.transcript [data-message-id]')?.getAttribute('data-message-id') ?? '',
             olderRequests: window.olderRequests, marker: !!document.querySelector('.transcript-navigation__beginning, .transcript-navigation__history-error'),
             scrollTop: scroll.scrollTop, overflow: document.documentElement.scrollWidth > innerWidth,
             time: document.querySelector('.transcript-compaction__items')?.textContent ?? '' }
-        })()`)
+        })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, cards: (decodeNumber)(record["cards"]), first: (decodeString)(record["first"]), olderRequests: (decodeNumber)(record["olderRequests"]), marker: (decodeBoolean)(record["marker"]), scrollTop: (decodeNumber)(record["scrollTop"]), overflow: (decodeBoolean)(record["overflow"]), time: (decodeString)(record["time"]) } })
         expect(result.cards).toBe(1)
         expect(result.first).toBe("cmp_latest")
         expect(result.olderRequests).toBe(0)

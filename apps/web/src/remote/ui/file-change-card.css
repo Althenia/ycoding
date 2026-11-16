@@ -35,6 +35,9 @@
 .file-change-card__code { flex:1; padding-inline:var(--yc-space-2); white-space:pre; }
 .file-change-card__hunk { grid-column:1/-1; padding:var(--yc-space-1) var(--yc-space-3); color:var(--yc-text-muted); background:var(--yc-surface-sunken); white-space:pre; }
 .file-change-card__unified { display:none; }
+.companion .file-change-card__split { display:none; }
+.companion .file-change-card__unified { display:grid; inline-size:max-content; min-inline-size:100%; }
+.companion .file-change-card__diff { max-block-size:calc(var(--yc-space-12) * 6); }
 .file-change-card__unavailable { margin:0; padding:var(--yc-space-3); color:var(--yc-text-muted); }
 @media (max-width:767px) { .file-change-card__split { display:none; } .file-change-card__unified { display:grid; inline-size:max-content; min-inline-size:100%; } }
 @media (prefers-reduced-motion:reduce) { .file-change-card__chevron { transition:none; } }

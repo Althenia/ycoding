@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { Server } from "node:http"
 import type { ViteDevServer } from "vite"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeString } from "./cdp"
 import { startRelayDouble, waitFor, type RelayDouble, type RelayHandlerOutcome } from "../test/relay-double"
 
 const executable = process.env.YCODING_WEB_CHROME
@@ -45,7 +45,7 @@ test("an acknowledged prompt stays rendered and focused while an older pending r
   const page = await browser.openPage()
   const wait = async (expression: string) => {
     for (let count = 0; count < 180; count++) {
-      if (await page.evaluate<boolean>(expression)) return
+      if (await page.evaluate(expression)) return
       await page.evaluate(`new Promise(resolve=>requestAnimationFrame(resolve))`)
     }
     throw new Error(`Prompt condition did not settle: ${expression}`)
@@ -67,16 +67,16 @@ test("an acknowledged prompt stays rendered and focused while an older pending r
     await wait(
       `window.uploadFlowState().mutations.length===0 && document.body.textContent.includes('Keep the submitted bubble')`,
     )
-    const id = await page.evaluate<string>(
-      `window.uploadFlowState().view.messages.find(message=>message.text==='Keep the submitted bubble').id`,
+    const id = await page.evaluate(
+      `window.uploadFlowState().view.messages.find(message=>message.text==='Keep the submitted bubble').id`, decodeString,
     )
     await page.evaluate(
       `window.submittedBubble=document.querySelector('.transcript-message--user');window.bubbleRemoved=false;window.bubbleObserver=new MutationObserver(()=>{if(!window.submittedBubble.isConnected)window.bubbleRemoved=true});window.bubbleObserver.observe(document.querySelector('.conversation-pane'),{childList:true,subtree:true});void 0`,
     )
     pending.resolve({ ok: true, value: { data: [] } })
     await page.evaluate(`window.pendingSelection`)
-    expect(await page.evaluate<boolean>(`document.body.textContent.includes('Keep the submitted bubble')`)).toBe(true)
-    expect(await page.evaluate<boolean>(`document.activeElement===document.querySelector('.composer__input')`)).toBe(
+    expect(await page.evaluate(`document.body.textContent.includes('Keep the submitted bubble')`)).toBe(true)
+    expect(await page.evaluate(`document.activeElement===document.querySelector('.composer__input')`)).toBe(
       true,
     )
     relay.pushEvent("ses_a", {
@@ -94,11 +94,11 @@ test("an acknowledged prompt stays rendered and focused while an older pending r
     })
     await wait(`window.uploadFlowState().view.watermark===2`)
     expect(
-      await page.evaluate<number>(
+      await page.evaluate(
         `[...document.querySelectorAll('.transcript-message--user')].filter(row=>row.textContent.includes('Keep the submitted bubble')).length`,
       ),
     ).toBe(1)
-    expect(await page.evaluate<boolean>(`window.submittedBubble.isConnected && !window.bubbleRemoved`)).toBe(true)
+    expect(await page.evaluate(`window.submittedBubble.isConnected && !window.bubbleRemoved`)).toBe(true)
     expect(
       relay.requests.filter((request) => request.operation === "session.prompt" && request.input?.id === id),
     ).toHaveLength(1)

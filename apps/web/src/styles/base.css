@@ -21,6 +21,33 @@ html {
   cursor: var(--yc-cursor-surface);
 }
 
+@media (max-width: 767px), (pointer: coarse) {
+  :where(a[href], button, select, summary, [role="button"], [role="tab"], [role="option"], label) {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  input:not([type="checkbox"], [type="radio"], [type="file"], [type="range"], [type="button"], [type="submit"], [type="reset"]),
+  textarea,
+  .input,
+  .textarea {
+    font-size: var(--yc-size-md);
+  }
+
+}
+
+:where(.code-block pre, .table-scroll, .usage-table-wrap, .team-view__output pre, .file-change-card__diff, .transcript pre) {
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (pointer: coarse) {
+  :root :is(button, summary, [role="button"], [role="tab"], [role="option"]) {
+    min-inline-size: var(--yc-hit-min);
+    min-block-size: var(--yc-hit-min);
+  }
+}
+
 :where(input:not([type="button"], [type="submit"], [type="reset"], [type="checkbox"], [type="radio"], [type="file"], [type="range"]), textarea, [contenteditable="true"], [contenteditable="plaintext-only"], h1, h2, h3, h4, h5, h6, p, pre, code, kbd, samp, blockquote, td, th, dt, dd, [data-cursor="text"]) {
   cursor: var(--yc-cursor-text);
 }
@@ -135,6 +162,39 @@ textarea {
   color: inherit;
 }
 
+select,
+select::picker(select) {
+  appearance: base-select;
+}
+
+select::picker(select) {
+  padding: var(--yc-space-1);
+  border: 1px solid var(--yc-border-strong);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface-raised);
+  color: var(--yc-text);
+}
+
+progress {
+  appearance: none;
+  border: 0;
+}
+
+progress::-webkit-progress-bar {
+  border-radius: var(--yc-radius-pill);
+  background: var(--yc-surface-sunken);
+}
+
+progress::-webkit-progress-value {
+  border-radius: var(--yc-radius-pill);
+  background: var(--yc-green-strong);
+}
+
+progress::-moz-progress-bar {
+  border-radius: var(--yc-radius-pill);
+  background: var(--yc-green-strong);
+}
+
 h1 {
   font-size: var(--yc-size-4xl);
   line-height: var(--yc-leading-4xl);
@@ -183,57 +243,75 @@ kbd {
   color: var(--yc-text);
 }
 
-/* Owned scrollbar for a fine pointer: a transparent gutter with no arrow buttons and a
-   pill thumb that widens under the pointer. Touch keeps the platform's transient
-   indicators and forced colors keep system scrollbars. Firefox, which lacks the
-   pseudo-elements, gets the standard properties instead; a non-auto scrollbar-color
-   would switch the pseudo-elements off in Chromium and WebKit. */
-@media (pointer: fine) and (forced-colors: none) {
-  ::-webkit-scrollbar {
-    width: var(--yc-scrollbar-size);
-    height: var(--yc-scrollbar-size);
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--yc-border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: var(--yc-scrollbar-size);
+  height: var(--yc-scrollbar-size);
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+}
+
+::-webkit-scrollbar-thumb {
+  border: var(--yc-space-1) solid transparent;
+  border-radius: var(--yc-radius-pill);
+  background-color: var(--yc-border-strong);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:vertical {
+  min-height: var(--yc-space-8);
+}
+
+::-webkit-scrollbar-thumb:horizontal {
+  min-width: var(--yc-space-8);
+}
+
+@media (hover: hover) { ::-webkit-scrollbar-thumb:hover { border-width: calc(var(--yc-space-1) / 2); background-color: var(--yc-text-muted); } }
+
+::-webkit-scrollbar-thumb:active {
+  border-width: calc(var(--yc-space-1) / 2);
+  background-color: var(--yc-green-strong);
+}
+
+@supports selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+}
+
+@media (forced-colors: active) {
+  * {
+    scrollbar-width: auto;
+    scrollbar-color: CanvasText Canvas;
   }
 
   ::-webkit-scrollbar-track,
   ::-webkit-scrollbar-corner {
-    background: transparent;
+    background: Canvas;
   }
 
-  ::-webkit-scrollbar-button {
-    display: none;
-  }
-
-  ::-webkit-scrollbar-thumb {
-    border: var(--yc-space-1) solid transparent;
-    border-radius: var(--yc-radius-pill);
-    background-color: var(--yc-border-strong);
-    background-clip: padding-box;
-  }
-
-  ::-webkit-scrollbar-thumb:vertical {
-    min-height: var(--yc-space-8);
-  }
-
-  ::-webkit-scrollbar-thumb:horizontal {
-    min-width: var(--yc-space-8);
-  }
-
-  @media (hover: hover) { ::-webkit-scrollbar-thumb:hover { border-width: calc(var(--yc-space-1) / 2); background-color: var(--yc-text-muted); } }
-
+  ::-webkit-scrollbar-thumb,
   ::-webkit-scrollbar-thumb:active {
-    border-width: calc(var(--yc-space-1) / 2);
-    background-color: var(--yc-green-strong);
+    border-color: Canvas;
+    background-color: CanvasText;
   }
-}
 
-@supports not selector(::-webkit-scrollbar) {
-  @media (pointer: fine) and (forced-colors: none) {
-    :root {
-      scrollbar-color: var(--yc-border-strong) transparent;
-    }
-
-    * {
-      scrollbar-width: thin;
+  @media (hover: hover) {
+    ::-webkit-scrollbar-thumb:hover {
+      border-color: Canvas;
+      background-color: CanvasText;
     }
   }
 }
@@ -516,6 +594,7 @@ kbd {
 }
 
 .check input[type="radio"] {
+  appearance: none;
   border-radius: 50%;
 }
 
@@ -761,8 +840,22 @@ kbd {
   inset-block-start: 0;
   z-index: var(--yc-z-header);
   min-block-size: var(--yc-header-h);
-  background: color-mix(in srgb, var(--yc-bg) 88%, transparent);
-  backdrop-filter: saturate(140%) blur(12px);
+  background: var(--yc-bg);
+  backdrop-filter: none;
+}
+
+@supports (backdrop-filter: blur(1px)) {
+  .app-header {
+    background: color-mix(in srgb, var(--yc-bg) 88%, transparent);
+    backdrop-filter: saturate(140%) blur(12px);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  .app-header {
+    background: var(--yc-bg);
+    backdrop-filter: none;
+  }
 }
 
 .app-header__inner {
@@ -829,21 +922,21 @@ kbd {
   align-items: center;
   min-block-size: var(--yc-control-h);
   padding: 0 var(--yc-space-3);
-  border-radius: var(--yc-radius-pill);
+  border-radius: 0;
   border-block-end: 0;
+  background: transparent;
   color: var(--yc-text-muted);
   text-decoration: none;
   font-size: var(--yc-size-sm);
   font-weight: var(--yc-weight-medium);
-  transition: color var(--yc-dur-quick) var(--yc-ease-standard),
-    background-color var(--yc-dur-quick) var(--yc-ease-standard);
+  transition: color var(--yc-dur-quick) var(--yc-ease-standard);
 }
 
-@media (hover: hover) { .nav__link:hover { color: var(--yc-text); background: var(--yc-surface); } }
+@media (hover: hover) { .nav__link:hover { color: var(--yc-text); background: transparent; } }
 
 .nav__link--active {
-  color: var(--yc-green-strong);
-  background: var(--yc-green-soft);
+  color: var(--yc-text);
+  background: transparent;
   font-weight: var(--yc-weight-semibold);
 }
 

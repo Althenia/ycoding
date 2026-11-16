@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeBoolean, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4748
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -23,15 +23,15 @@ test("remote refresh keeps the scrolled option nodes, anchor, and active option 
     await page.evaluate(`document.querySelector('.app-header__palette').click()`)
     await wait(page, `document.querySelector('dialog.overlay--command-palette[open]') !== null`)
     await page.wheel(700, 600, 0, 520)
-    const hovered = await page.evaluate<string>(`(() => { const row = [...document.querySelectorAll('[role=option]')].find((item) => item.querySelector('.command-palette__title').textContent === 'Go to Usage'); row.dispatchEvent(new PointerEvent('pointermove', { bubbles: true })); return row.id })()`)
-    expect(await page.evaluate<string>(`document.querySelector('[role=option][aria-selected=true]').id`)).toBe(hovered)
+    const hovered = await page.evaluate(`(() => { const row = [...document.querySelectorAll('[role=option]')].find((item) => item.querySelector('.command-palette__title').textContent === 'Go to Usage'); row.dispatchEvent(new PointerEvent('pointermove', { bubbles: true })); return row.id })()`, decodeString)
+    expect(await page.evaluate(`document.querySelector('[role=option][aria-selected=true]').id`)).toBe(hovered)
     await page.wheel(700, 600, 0, 540)
     await wait(page, `document.querySelector('.command-palette__list').scrollTop > 900`)
-    const before = await page.evaluate<{ anchorID: string; anchorTop: number; activeID: string; scrollTop: number }>(`(() => { const list = document.querySelector('.command-palette__list'); const rows = [...list.querySelectorAll('[role=option]')]; const anchor = rows.find((row) => row.getBoundingClientRect().bottom > list.getBoundingClientRect().top); window.paletteScrollAnchor = anchor; return { anchorID: anchor.id, anchorTop: anchor.getBoundingClientRect().top, activeID: document.querySelector('[role=option][aria-selected=true]').id, scrollTop: list.scrollTop } })()`)
+    const before = await page.evaluate(`(() => { const list = document.querySelector('.command-palette__list'); const rows = [...list.querySelectorAll('[role=option]')]; const anchor = rows.find((row) => row.getBoundingClientRect().bottom > list.getBoundingClientRect().top); window.paletteScrollAnchor = anchor; return { anchorID: anchor.id, anchorTop: anchor.getBoundingClientRect().top, activeID: document.querySelector('[role=option][aria-selected=true]').id, scrollTop: list.scrollTop } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, anchorID: (decodeString)(record["anchorID"]), anchorTop: (decodeNumber)(record["anchorTop"]), activeID: (decodeString)(record["activeID"]), scrollTop: (decodeNumber)(record["scrollTop"]) } })
     expect(before.anchorID).not.toBe(hovered)
     await page.evaluate(`window.responseSnapshot([], [], true)`)
     await wait(page, `document.querySelector('[role=option][aria-selected=true]')?.id === ${JSON.stringify(hovered)}`)
-    const after = await page.evaluate<{ anchorID: string; anchorTop: number; sameAnchorNode: boolean; activeID: string; overflow: boolean; scrollTop: number }>(`(() => { const anchor = document.getElementById(${JSON.stringify(before.anchorID)}); const list = document.querySelector('.command-palette__list'); return { anchorID: anchor.id, anchorTop: anchor.getBoundingClientRect().top, sameAnchorNode: anchor === window.paletteScrollAnchor, activeID: document.querySelector('[role=option][aria-selected=true]').id, overflow: list.scrollWidth > list.clientWidth, scrollTop: list.scrollTop } })()`)
+    const after = await page.evaluate(`(() => { const anchor = document.getElementById(${JSON.stringify(before.anchorID)}); const list = document.querySelector('.command-palette__list'); return { anchorID: anchor.id, anchorTop: anchor.getBoundingClientRect().top, sameAnchorNode: anchor === window.paletteScrollAnchor, activeID: document.querySelector('[role=option][aria-selected=true]').id, overflow: list.scrollWidth > list.clientWidth, scrollTop: list.scrollTop } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, anchorID: (decodeString)(record["anchorID"]), anchorTop: (decodeNumber)(record["anchorTop"]), sameAnchorNode: (decodeBoolean)(record["sameAnchorNode"]), activeID: (decodeString)(record["activeID"]), overflow: (decodeBoolean)(record["overflow"]), scrollTop: (decodeNumber)(record["scrollTop"]) } })
     expect(after.activeID).toBe(hovered)
     expect(after.anchorID).toBe(before.anchorID)
     expect(Math.abs(after.anchorTop - before.anchorTop)).toBeLessThanOrEqual(1)
@@ -41,17 +41,17 @@ test("remote refresh keeps the scrolled option nodes, anchor, and active option 
     await page.evaluate(`window.responseSnapshot([], [], false)`)
     await wait(page, `document.querySelector('[role=option][aria-selected=true]')?.id === ${JSON.stringify(hovered)}`)
     await page.pressKey("ArrowDown", "ArrowDown", 40)
-    expect(await page.evaluate<boolean>(`(() => { const list = document.querySelector('.command-palette__list'); const active = document.querySelector('[role=option][aria-selected=true]').getBoundingClientRect(); const box = list.getBoundingClientRect(); return active.top >= box.top && active.bottom <= box.bottom })()`)).toBe(true)
+    expect(await page.evaluate(`(() => { const list = document.querySelector('.command-palette__list'); const active = document.querySelector('[role=option][aria-selected=true]').getBoundingClientRect(); const box = list.getBoundingClientRect(); return active.top >= box.top && active.bottom <= box.bottom })()`)).toBe(true)
     await page.evaluate(`window.responseSnapshot([], [], true)`)
     await page.evaluate(`document.getElementById('command-palette-option-session.interrupt').dispatchEvent(new PointerEvent('pointermove', { bubbles: true }))`)
     await page.evaluate(`window.responseSnapshot([], [], false)`)
-    expect(await page.evaluate<boolean>(`(() => { const active = document.querySelector('.command-palette__option[aria-selected=true]'); return active !== null && document.getElementById('command-palette-input').getAttribute('aria-activedescendant') === active.id })()`)).toBe(true)
+    expect(await page.evaluate(`(() => { const active = document.querySelector('.command-palette__option[aria-selected=true]'); return active !== null && document.getElementById('command-palette-input').getAttribute('aria-activedescendant') === active.id })()`)).toBe(true)
   } finally { await page.close() }
 }, 60_000)
 
 async function wait(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, expression: string) {
   for (let index = 0; index < 50; index++) {
-    if (await page.evaluate<boolean>(expression)) return
+    if (await page.evaluate(expression)) return
     await Bun.sleep(100)
   }
   throw new Error(`Timed out: ${expression}`)

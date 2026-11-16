@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNumber, decodeOptional, decodeRecord, decodeString } from "./cdp"
 
 const port = 4181
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -36,7 +36,7 @@ describe("public docs and site layout", () => {
   test("renders decision setup and remote recovery guidance on phones and desktops", async () => {
     const page = await requireBrowser().openPage()
     const guides = [
-      { route: "/docs/configuration/tools", anchor: "structured-decisions", text: ["agents.decision.model", "efficiency.helper_models.decision", "min_confidence"] },
+      { route: "/docs/configuration/tools", anchor: "structured-decisions", text: ["agents.decision.model", "efficiency.helper_models.decision", "uncalibrated"] },
       { route: "/docs/usage/remote", anchor: "connection-recovery", text: ["pending enable", "off and then on", "ycoding remote status"] },
       { route: "/docs/troubleshooting", anchor: "remote-connection-needs-attention", text: ["rejected credentials", "off and then on", "ycoding remote disconnect"] },
     ]
@@ -45,8 +45,8 @@ describe("public docs and site layout", () => {
       await page.setViewport(width, 1000)
       for (const guide of guides) {
         await page.navigate(url(guide.route))
-        for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(`document.getElementById(${JSON.stringify(guide.anchor)}) !== null`)); attempt += 1) await Bun.sleep(100)
-        await page.evaluate<void>(`(async () => {
+        for (let attempt = 0; attempt < 50 && !(await page.evaluate(`document.getElementById(${JSON.stringify(guide.anchor)}) !== null`)); attempt += 1) await Bun.sleep(100)
+        await page.evaluate(`(async () => {
           document.documentElement.dataset.theme = 'light'
           await document.fonts.ready
           const anchor = document.getElementById(${JSON.stringify(guide.anchor)})
@@ -67,7 +67,7 @@ describe("public docs and site layout", () => {
             .filter(animation => Number.isFinite(animation.effect?.getComputedTiming().endTime))
             .map(animation => animation.finished))
         })()`)
-        const result = await page.evaluate<{ text: string; anchor: boolean; overflow: boolean; settled: boolean }>(`(() => {
+        const result = await page.evaluate(`(() => {
           const article = document.querySelector('.docs-article')
           const section = document.getElementById(${JSON.stringify(guide.anchor)})?.closest('.doc-section')
           const style = section instanceof HTMLElement ? getComputedStyle(section) : undefined
@@ -77,7 +77,7 @@ describe("public docs and site layout", () => {
             overflow: document.documentElement.scrollWidth > innerWidth,
             settled: style?.opacity === '1' && (style.filter === 'none' || style.filter === 'blur(0px)'),
           }
-        })()`)
+        })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, text: (decodeString)(record["text"]), anchor: (decodeBoolean)(record["anchor"]), overflow: (decodeBoolean)(record["overflow"]), settled: (decodeBoolean)(record["settled"]) } })
         expect({ route: guide.route, width, anchor: result.anchor, overflow: result.overflow, settled: result.settled }).toEqual({ route: guide.route, width, anchor: true, overflow: false, settled: true })
         for (const text of guide.text) expect(result.text).toContain(text)
         await saveScreenshot(page, "after", guide.route, width, "light")
@@ -92,20 +92,8 @@ describe("public docs and site layout", () => {
       await page.setViewport(width, 1000)
       for (const route of routes) {
         await page.navigate(url(route))
-        for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(`document.querySelector('.app-header__inner') instanceof HTMLElement`)); attempt += 1) await Bun.sleep(100)
-        const layout = await page.evaluate<{
-          readonly width: number
-          readonly scrollWidth: number
-          readonly header: readonly number[]
-          readonly content?: readonly number[]
-          readonly rail?: readonly number[]
-          readonly docsBar?: readonly number[]
-          readonly footer?: readonly number[]
-          readonly mainSurface?: readonly number[]
-          readonly toc?: readonly number[]
-          readonly tocVisible: boolean
-          readonly cardWidths: readonly number[]
-        }>(`(() => {
+        for (let attempt = 0; attempt < 50 && !(await page.evaluate(`document.querySelector('.app-header__inner') instanceof HTMLElement`)); attempt += 1) await Bun.sleep(100)
+        const layout = await page.evaluate(`(() => {
           const box = (element) => { const rect = element.getBoundingClientRect(); return [rect.left, rect.right] }
           const header = document.querySelector('.app-header__inner')
           const content = document.querySelector('.docs-shell')
@@ -129,7 +117,7 @@ describe("public docs and site layout", () => {
             tocVisible: toc instanceof HTMLElement && getComputedStyle(toc).display !== 'none',
             cardWidths: [...document.querySelectorAll('.docs--index .card')].map(card => card.getBoundingClientRect().width),
           }
-        })()`)
+        })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), scrollWidth: (decodeNumber)(record["scrollWidth"]), header: (decodeArray(decodeNumber))(record["header"]), ...("content" in record ? { content: (decodeOptional(decodeArray(decodeNumber)))(record["content"]) } : {}), ...("rail" in record ? { rail: (decodeOptional(decodeArray(decodeNumber)))(record["rail"]) } : {}), ...("docsBar" in record ? { docsBar: (decodeOptional(decodeArray(decodeNumber)))(record["docsBar"]) } : {}), ...("footer" in record ? { footer: (decodeOptional(decodeArray(decodeNumber)))(record["footer"]) } : {}), ...("mainSurface" in record ? { mainSurface: (decodeOptional(decodeArray(decodeNumber)))(record["mainSurface"]) } : {}), ...("toc" in record ? { toc: (decodeOptional(decodeArray(decodeNumber)))(record["toc"]) } : {}), tocVisible: (decodeBoolean)(record["tocVisible"]), cardWidths: (decodeArray(decodeNumber))(record["cardWidths"]) } })
         expect({ route, width, overflow: layout.scrollWidth <= width }).toEqual({ route, width, overflow: true })
         if (layout.content && width >= 1024) {
           expect(layout.content[0]!).toBeGreaterThanOrEqual(layout.header[0]! - 1)
@@ -172,7 +160,7 @@ describe("public docs and site layout", () => {
         await page.setColorScheme(theme)
         for (const route of routes) {
           await page.navigate(url(route))
-          await page.evaluate<void>(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+          await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
           if (["/", "/docs/quickstart", "/changelog"].includes(route)) await saveScreenshot(page, "mid", route, width, theme)
           await Bun.sleep(650)
           await saveScreenshot(page, "after", route, width, theme)

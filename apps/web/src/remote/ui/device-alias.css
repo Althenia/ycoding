@@ -95,3 +95,19 @@
 .machine-row__scope {
   margin: 0;
 }
+
+@media (pointer: coarse) {
+  .machine-row {
+    flex-direction: row;
+    align-items: stretch;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+  }
+
+  .machine-row__item {
+    flex: 0 0 min(300px, max(220px, 72vw));
+    scroll-snap-align: start;
+  }
+}

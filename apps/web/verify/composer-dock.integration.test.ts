@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4471
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -22,15 +22,15 @@ test("the hide control sits beneath the capsule and draft, and an open keyboard 
     await page.evaluate(`document.documentElement.dataset.theme = "dark"; localStorage.removeItem('ycoding.remote.composer-collapsed'); window.composerSetDraft('ses_fixture', ${JSON.stringify("Keep the draft clear of the hide control. ".repeat(12))})`)
     for (const viewport of [{ width: 390, height: 844 }, { width: 820, height: 1180 }]) {
       await page.setViewport(viewport.width, viewport.height)
-      const boxes = await page.evaluate<{ toggleTop: number; capsuleBottom: number; fieldBottom: number }>(`(() => { const toggle=document.querySelector('.mini-composer__mount .composer__dock-toggle').getBoundingClientRect(); const capsule=document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect(); const field=document.querySelector('.mini-composer__mount .composer__input').getBoundingClientRect(); return { toggleTop:toggle.top, capsuleBottom:capsule.bottom, fieldBottom:field.bottom }; })()`)
+      const boxes = await page.evaluate(`(() => { const toggle=document.querySelector('.mini-composer__mount .composer__dock-toggle').getBoundingClientRect(); const capsule=document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect(); const field=document.querySelector('.mini-composer__mount .composer__input').getBoundingClientRect(); return { toggleTop:toggle.top, capsuleBottom:capsule.bottom, fieldBottom:field.bottom }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, toggleTop: (decodeNumber)(record["toggleTop"]), capsuleBottom: (decodeNumber)(record["capsuleBottom"]), fieldBottom: (decodeNumber)(record["fieldBottom"]) } })
       expect(boxes.toggleTop).toBeGreaterThanOrEqual(boxes.capsuleBottom - 0.5)
       expect(boxes.toggleTop).toBeGreaterThanOrEqual(boxes.fieldBottom - 0.5)
       await page.evaluate(`document.querySelector('.mini-composer__mount .composer__dock-toggle').click()`)
       await wait(page, `document.querySelector('.mini-composer__mount .composer--collapsed') !== null`)
-      const handle = await page.evaluate<number>(`document.querySelector('.mini-composer__mount .composer__dock').getBoundingClientRect().height`)
+      const handle = await page.evaluate(`document.querySelector('.mini-composer__mount .composer__dock').getBoundingClientRect().height`)
       expect(handle).toBeLessThanOrEqual(52)
       expect(handle).toBeGreaterThanOrEqual(44)
-      const announcementDisplay = await page.evaluate<string>(`getComputedStyle(document.querySelector('.mini-composer__mount .composer--collapsed .session-status__announce')).display`)
+      const announcementDisplay = await page.evaluate(`getComputedStyle(document.querySelector('.mini-composer__mount .composer--collapsed .session-status__announce')).display`)
       expect(announcementDisplay).not.toBe("none")
       await page.evaluate(`document.querySelector('.mini-composer__mount .composer__dock-toggle').click()`)
       await wait(page, `document.querySelector('.mini-composer__mount .composer--collapsed') === null`)
@@ -39,11 +39,11 @@ test("the hide control sits beneath the capsule and draft, and an open keyboard 
     await page.setColorScheme("dark")
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=conversation-workspace-1440`)
     await wait(page, `document.querySelector('.composer-resident .composer__input') !== null`)
-    const before = await page.evaluate<number>(`document.querySelector('.composer-resident .composer').getBoundingClientRect().bottom`)
-    const navBefore = await page.evaluate<number>(`document.querySelector('.bottom-nav').getBoundingClientRect().height`)
-    const appBottomBefore = await page.evaluate<number>(`document.querySelector('.app').getBoundingClientRect().bottom`)
+    const before = await page.evaluate(`document.querySelector('.composer-resident .composer').getBoundingClientRect().bottom`, decodeNumber)
+    const navBefore = await page.evaluate(`document.querySelector('.bottom-nav').getBoundingClientRect().height`, decodeNumber)
+    const appBottomBefore = await page.evaluate(`document.querySelector('.app').getBoundingClientRect().bottom`, decodeNumber)
     await page.evaluate(`const app=document.querySelector('.app'); app.setAttribute('data-keyboard-open',''); app.style.setProperty('--yc-keyboard-inset','280px')`)
-    const lifted = await page.evaluate<{ margin: string; padding: string; bottom: number; appBottom: number; navDisplay: string }>(`(() => { const node=document.querySelector('.composer-resident .composer'); const style=getComputedStyle(node); return { margin:style.marginBlockEnd, padding:style.paddingBlockEnd, bottom:node.getBoundingClientRect().bottom, appBottom:document.querySelector('.app').getBoundingClientRect().bottom, navDisplay:getComputedStyle(document.querySelector('.bottom-nav')).display }; })()`)
+    const lifted = await page.evaluate(`(() => { const node=document.querySelector('.composer-resident .composer'); const style=getComputedStyle(node); return { margin:style.marginBlockEnd, padding:style.paddingBlockEnd, bottom:node.getBoundingClientRect().bottom, appBottom:document.querySelector('.app').getBoundingClientRect().bottom, navDisplay:getComputedStyle(document.querySelector('.bottom-nav')).display }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, margin: (decodeString)(record["margin"]), padding: (decodeString)(record["padding"]), bottom: (decodeNumber)(record["bottom"]), appBottom: (decodeNumber)(record["appBottom"]), navDisplay: (decodeString)(record["navDisplay"]) } })
     expect(lifted.margin).toBe("280px")
     expect(Number.parseFloat(lifted.padding)).toBeLessThan(16)
     expect(lifted.navDisplay).toBe("none")
@@ -83,11 +83,11 @@ for (const viewport of [{ width: 390, height: 844, inset: 424 }, { width: 390, h
           Object.defineProperty(window, 'visualViewport', { configurable:true, value:stub }); window.dispatchEvent(new Event('resize'));
         })()`)
         if (state === "jump") {
-          const reader = await page.evaluate<{ x: number; y: number }>(`(() => { const rect=document.querySelector('.workspace__scroll').getBoundingClientRect(); return { x:rect.left+3, y:rect.top+rect.height/2 }; })()`)
+          const reader = await page.evaluate(`(() => { const rect=document.querySelector('.workspace__scroll').getBoundingClientRect(); return { x:rect.left+3, y:rect.top+rect.height/2 }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]) } })
           await page.wheel(reader.x, reader.y, 0, -600)
           await wait(page, `document.querySelector('.conversation-jump-slot .transcript-navigation__controls--visible [aria-label="Jump to latest"]') !== null`)
         }
-        const geometry = await page.evaluate<KeyboardGeometry>(keyboardGeometry())
+        const geometry = await page.evaluate(keyboardGeometry(), (value: unknown) => { const record = decodeRecord(value); return { ...record, bottom: (decodeNumber)(record["bottom"]), toggleTop: (decodeNumber)(record["toggleTop"]), capsuleBottom: (decodeNumber)(record["capsuleBottom"]), scrollContainer: (decodeBoolean)(record["scrollContainer"]), smallTargets: (decodeArray(decodeString))(record["smallTargets"]), overlaps: (decodeArray(decodeString))(record["overlaps"]), coveredTargets: (decodeArray(decodeString))(record["coveredTargets"]), attachmentCount: (decodeNumber)(record["attachmentCount"]), attachmentProblems: (decodeArray(decodeString))(record["attachmentProblems"]) } })
         if (state === "attachment") {
           expect(geometry.attachmentCount).toBe(2)
           expect(geometry.attachmentProblems, JSON.stringify(geometry)).toEqual([])
@@ -118,13 +118,13 @@ test("closed-keyboard attachment chips truncate long filenames within phone view
         input.files=transfer.files; input.dispatchEvent(new Event('change', { bubbles:true }));
       })()`)
       await wait(page, `document.querySelectorAll('.composer-resident .composer__attachment').length === 2`)
-      expect(await page.evaluate<boolean>(`document.querySelector('.app').hasAttribute('data-keyboard-open') || document.documentElement.hasAttribute('data-keyboard-open')`)).toBe(false)
-      const attachments = await page.evaluate<{ filename: string; chip: AttachmentBounds; name: AttachmentBounds; size: AttachmentBounds; remove: AttachmentBounds; nameStyle: { overflow: string; textOverflow: string; whiteSpace: string }; reachable: boolean }[]>(`Array.from(document.querySelectorAll('.composer-resident .composer__attachment')).map(chip=>{
+      expect(await page.evaluate(`document.querySelector('.app').hasAttribute('data-keyboard-open') || document.documentElement.hasAttribute('data-keyboard-open')`)).toBe(false)
+      const attachments = await page.evaluate(`Array.from(document.querySelectorAll('.composer-resident .composer__attachment')).map(chip=>{
         const name=chip.querySelector('.composer__attachment-name'); const size=chip.querySelector('.composer__attachment-size'); const remove=chip.querySelector('button');
         const bounds=node=>{const rect=node.getBoundingClientRect(); return {left:rect.left,right:rect.right,width:rect.width,height:rect.height,scrollWidth:node.scrollWidth,clientWidth:node.clientWidth}};
         const style=getComputedStyle(name); const rect=remove.getBoundingClientRect();
         return {filename:name.textContent,chip:bounds(chip),name:bounds(name),size:bounds(size),remove:bounds(remove),nameStyle:{overflow:style.overflow,textOverflow:style.textOverflow,whiteSpace:style.whiteSpace},reachable:remove.contains(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2))};
-      })`)
+      })`, decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, filename: (decodeString)(record["filename"]), chip: ((value: unknown) => { const record = decodeRecord(value); return { ...record, left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]), width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]), scrollWidth: (decodeNumber)(record["scrollWidth"]), clientWidth: (decodeNumber)(record["clientWidth"]) } })(record["chip"]), name: ((value: unknown) => { const record = decodeRecord(value); return { ...record, left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]), width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]), scrollWidth: (decodeNumber)(record["scrollWidth"]), clientWidth: (decodeNumber)(record["clientWidth"]) } })(record["name"]), size: ((value: unknown) => { const record = decodeRecord(value); return { ...record, left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]), width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]), scrollWidth: (decodeNumber)(record["scrollWidth"]), clientWidth: (decodeNumber)(record["clientWidth"]) } })(record["size"]), remove: ((value: unknown) => { const record = decodeRecord(value); return { ...record, left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]), width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]), scrollWidth: (decodeNumber)(record["scrollWidth"]), clientWidth: (decodeNumber)(record["clientWidth"]) } })(record["remove"]), nameStyle: ((value: unknown) => { const record = decodeRecord(value); return { ...record, overflow: (decodeString)(record["overflow"]), textOverflow: (decodeString)(record["textOverflow"]), whiteSpace: (decodeString)(record["whiteSpace"]) } })(record["nameStyle"]), reachable: (decodeBoolean)(record["reachable"]) } }))
       expect(attachments.map((item) => item.filename)).toEqual(files)
       for (const item of attachments) {
         for (const box of [item.chip, item.name, item.size, item.remove]) {
@@ -150,7 +150,6 @@ async function openEffort(page: Awaited<ReturnType<Awaited<ReturnType<typeof lau
   await wait(page, `(() => { const panel=document.querySelector('.composer-resident .composer__effort-panel'), content=document.querySelector('.composer-resident .reasoning-effort'); return content !== null && panel.getBoundingClientRect().height >= content.getBoundingClientRect().height - 1 && getComputedStyle(panel).opacity === '1' })()`)
 }
 
-type AttachmentBounds = { left: number; right: number; width: number; height: number; scrollWidth: number; clientWidth: number }
 
 test("queued status spans the keyboard-open draft row on phones", async () => {
   for (const viewport of [{ width: 390, height: 844, inset: 424 }, { width: 320, height: 700, inset: 280 }]) {
@@ -168,10 +167,10 @@ test("queued status spans the keyboard-open draft row on phones", async () => {
         Object.defineProperty(window, 'visualViewport', { configurable:true, value:stub }); window.dispatchEvent(new Event('resize'));
       })()`)
       await wait(page, `document.querySelector('.composer-resident .composer__queue-indicator') !== null`)
-      const indicator = await page.evaluate<{ width: number; height: number }>(`(() => { const rect=document.querySelector('.composer-resident .composer__queue-indicator').getBoundingClientRect(); return { width:rect.width, height:rect.height }; })()`)
+      const indicator = await page.evaluate(`(() => { const rect=document.querySelector('.composer-resident .composer__queue-indicator').getBoundingClientRect(); return { width:rect.width, height:rect.height }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]) } })
       expect(indicator.width).toBeGreaterThanOrEqual(200)
       expect(indicator.height).toBeLessThanOrEqual(24)
-      const geometry = await page.evaluate<KeyboardGeometry>(keyboardGeometry())
+      const geometry = await page.evaluate(keyboardGeometry(), (value: unknown) => { const record = decodeRecord(value); return { ...record, bottom: (decodeNumber)(record["bottom"]), toggleTop: (decodeNumber)(record["toggleTop"]), capsuleBottom: (decodeNumber)(record["capsuleBottom"]), scrollContainer: (decodeBoolean)(record["scrollContainer"]), smallTargets: (decodeArray(decodeString))(record["smallTargets"]), overlaps: (decodeArray(decodeString))(record["overlaps"]), coveredTargets: (decodeArray(decodeString))(record["coveredTargets"]), attachmentCount: (decodeNumber)(record["attachmentCount"]), attachmentProblems: (decodeArray(decodeString))(record["attachmentProblems"]) } })
       expect(geometry.bottom, JSON.stringify(geometry)).toBeLessThanOrEqual(viewport.height - viewport.inset + 1)
       if (viewport.width >= 360) expect(geometry.toggleTop, JSON.stringify(geometry)).toBeGreaterThanOrEqual(geometry.capsuleBottom - 0.5)
       expect(geometry.scrollContainer).toBe(false)
@@ -182,17 +181,6 @@ test("queued status spans the keyboard-open draft row on phones", async () => {
   }
 }, 15_000)
 
-type KeyboardGeometry = {
-  bottom: number
-  toggleTop: number
-  capsuleBottom: number
-  scrollContainer: boolean
-  smallTargets: string[]
-  overlaps: string[]
-  coveredTargets: string[]
-  attachmentCount: number
-  attachmentProblems: string[]
-}
 
 function keyboardGeometry() {
   return `(() => {
@@ -225,7 +213,7 @@ async function ready() {
 }
 async function wait(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, expression: string) {
   for (let index = 0; index < 120; index++) {
-    if (await page.evaluate<boolean>(expression).catch(() => false)) return
+    if (await page.evaluate(expression, decodeBoolean).catch(() => false)) return
     await Bun.sleep(50)
   }
   throw new Error(`Timed out waiting for ${expression}`)

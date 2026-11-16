@@ -12,9 +12,6 @@ import { CodeBlock, DocsSearch } from "./docs"
 export function BrandMark(props: { readonly compact?: boolean }): JSX.Element {
   return (
     <>
-      <span class="brand__mark">
-        <img src="/brand/ycoding-mark.svg" alt="" width="28" height="28" />
-      </span>
       <span class="brand__text">
         <span class="brand__name">{SITE.productName}</span>
         <Show when={!props.compact}>
@@ -113,6 +110,7 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
             </Link>
           </nav>
           <div class="app-header__end">
+            <Show when={inDocs() || inChangelog()}><span class="app-header__docs-search"><DocsSearch /></span></Show>
             <span class="app-header__theme">
               <ThemeToggle />
             </span>
@@ -226,6 +224,7 @@ export function LandingPage(): JSX.Element {
     <>
       <section class="hero hero--compact">
         <div class="container hero__content">
+          <p class="hero__eyebrow enter">Terminal-first coding agent</p>
           <h1 class="hero__headline enter">{SITE.hero.headline}</h1>
           <p class="hero__support enter enter-1">{SITE.hero.support}</p>
           <div class="hero__actions enter enter-2">
@@ -245,6 +244,7 @@ export function LandingPage(): JSX.Element {
             </button>
           </div>
           <CodeBlock code={SITE.installing.command} language="shell" label="Install command" class="enter enter-3" />
+          <p class="hero__platforms">{SITE.installing.platforms.join(" · ")}</p>
         </div>
       </section>
 
@@ -254,6 +254,7 @@ export function LandingPage(): JSX.Element {
             <For each={SITE.features}>
               {(feature) => (
                 <article class="feature motion-reveal">
+                  <Icon name={feature.icon} size={22} />
                   <h2 class="feature__title">{feature.title}</h2>
                   <p class="feature__text">{feature.text}</p>
                 </article>

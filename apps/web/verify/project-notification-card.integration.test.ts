@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNullable, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4767
 const executable = process.env.YCODING_WEB_CHROME
@@ -24,7 +24,7 @@ afterAll(async () => { await browser?.close(); server?.kill(); if (server) await
 
 async function wait(page: Page, expression: string) {
   for (let attempt = 0; attempt < 150; attempt++) {
-    if (await page.evaluate<boolean>(expression)) return
+    if (await page.evaluate(expression)) return
     await Bun.sleep(40)
   }
   throw new Error(`Project cards did not settle: ${expression}`)
@@ -35,7 +35,7 @@ async function openCards(page: Page, theme: "light" | "dark") {
   await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=coordination-projects-1440&projectCards=1&theme=${theme}`)
   await wait(page, `!!document.querySelector('.project-card')`)
   await page.evaluate(`document.querySelectorAll('.fixture__banner,.fixture__controls').forEach(element => element.remove())`)
-  expect(await page.evaluate<string>(`document.documentElement.dataset.theme`)).toBe(theme)
+  expect(await page.evaluate(`document.documentElement.dataset.theme`)).toBe(theme)
   await page.evaluate(`[...document.querySelectorAll('button')].find(e => e.getAttribute('aria-label') === 'Open project Release train').click()`)
   await wait(page, `document.querySelectorAll('.project-event').length === 5`)
   await page.evaluate(`document.fonts.ready.then(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))`)
@@ -43,11 +43,11 @@ async function openCards(page: Page, theme: "light" | "dark") {
 }
 
 async function revealCard(page: Page, refresh = false) {
-  const viewport = await page.evaluate<{ x: number; y: number; distance: number }>(`(() => {
+  const viewport = await page.evaluate(`(() => {
     const root = document.querySelector('.workspace__scroll')
     const rect = root.getBoundingClientRect()
     return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, distance: root.scrollHeight }
-  })()`)
+  })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]), distance: (decodeNumber)(record["distance"]) } })
   await page.wheel(viewport.x, viewport.y, 0, -viewport.distance)
   await wait(page, `document.querySelector('.workspace__scroll').scrollTop <= 1 && !!document.querySelector('[aria-label="Jump to latest"]')`)
   await page.evaluate(`(() => {
@@ -63,7 +63,7 @@ test("Project card reading survives a snapshot arriving during scroll positionin
     await page.setViewport(1440, 900)
     await openCards(page, "light")
     await revealCard(page, true)
-    const target = await page.evaluate<{ hit: boolean; inside: boolean; reading: boolean }>(`(() => {
+    const target = await page.evaluate(`(() => {
       const link = document.querySelector('.project-event a')
       const rect = link.getBoundingClientRect()
       const root = document.querySelector('.workspace__scroll').getBoundingClientRect()
@@ -83,9 +83,9 @@ test.each(cases)("Project cards use bounded full-width previews at $width in $th
     if (width < 640) await page.setMobileViewport(width, 900)
     if (width >= 640) await page.setViewport(width, 900)
     await openCards(page, theme)
-    expect(await page.evaluate<number>(`innerWidth`)).toBe(width)
+    expect(await page.evaluate(`innerWidth`)).toBe(width)
     if (process.env.YCODING_CARD_CAPTURE_DIR) await Bun.write(`${process.env.YCODING_CARD_CAPTURE_DIR}/${theme}-${width}.png`, Buffer.from(await page.screenshot(), "base64"))
-    const measured = await page.evaluate<{ overflow: number; cards: { event: string; preview: boolean; contained: boolean; width: number; available: number; height: number; line: number; below: boolean; action: boolean; compact: boolean }[] }>(`(() => {
+    const measured = await page.evaluate(`(() => {
       const rect = e => e.getBoundingClientRect()
       return { overflow: document.documentElement.scrollWidth - innerWidth, cards: [...document.querySelectorAll('.project-event')].map(card => {
         const title = rect(card.querySelector('strong'))
@@ -103,7 +103,7 @@ test.each(cases)("Project cards use bounded full-width previews at $width in $th
           action: action.left >= title.right && action.left >= status.right && action.right <= box.right,
           compact: box.height <= header - box.top + (excerpt?.height || 0) + parseFloat(style.paddingBottom) + 8 }
       }) }
-    })()`)
+    })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, overflow: (decodeNumber)(record["overflow"]), cards: (decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, event: (decodeString)(record["event"]), preview: (decodeBoolean)(record["preview"]), contained: (decodeBoolean)(record["contained"]), width: (decodeNumber)(record["width"]), available: (decodeNumber)(record["available"]), height: (decodeNumber)(record["height"]), line: (decodeNumber)(record["line"]), below: (decodeBoolean)(record["below"]), action: (decodeBoolean)(record["action"]), compact: (decodeBoolean)(record["compact"]) } }))(record["cards"]) } })
     expect(measured.overflow).toBeLessThanOrEqual(0)
     expect(measured.cards.map(card => card.event)).toEqual(["completed", "failed", "interrupted", "question", "escalated"])
     for (const card of measured.cards) {
@@ -118,10 +118,10 @@ test.each(cases)("Project cards use bounded full-width previews at $width in $th
     }
     const link = `.project-event a`
     await revealCard(page)
-    if (await page.evaluate<boolean>(`matchMedia('(hover:hover)').matches`)) {
+    if (await page.evaluate(`matchMedia('(hover:hover)').matches`)) {
       await page.mouse("mouseMoved", 0, 0)
-      expect(await page.evaluate<boolean>(`document.querySelector('${link}').matches(':hover')`)).toBe(false)
-      const target = await page.evaluate<{ x: number; y: number; hit: boolean; element: string | null; ancestors: unknown[] }>(`(() => {
+      expect(await page.evaluate(`document.querySelector('${link}').matches(':hover')`)).toBe(false)
+      const target = await page.evaluate(`(() => {
         const link = document.querySelector('${link}')
         const r = link.getBoundingClientRect()
         const x = r.x + r.width / 2, y = r.y + r.height / 2
@@ -132,7 +132,7 @@ test.each(cases)("Project cards use bounded full-width previews at $width in $th
           ancestors.push({ tag: node.tagName, class: node.className, x: rect.x, y: rect.y, width: rect.width, height: rect.height, scrollTop: node.scrollTop, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight })
         }
         return { x, y, hit: link.contains(hit), element: hit ? hit.tagName + '.' + hit.className : null, ancestors }
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]), hit: (decodeBoolean)(record["hit"]), element: (decodeNullable(decodeString))(record["element"]), ancestors: (decodeArray((value: unknown) => value))(record["ancestors"]) } })
       if (!target.hit) throw new Error(`Project link is not hit-testable: ${JSON.stringify(target)}`)
       expect(target.hit).toBe(true)
       await page.mouse("mouseMoved", target.x, target.y)
@@ -141,9 +141,9 @@ test.each(cases)("Project cards use bounded full-width previews at $width in $th
     }
     await page.pressKey("Tab", "Tab", 9)
     await page.evaluate(`document.querySelector('${link}').focus()`)
-    expect(await page.evaluate<boolean>(`document.activeElement.matches('${link}')`)).toBe(true)
-    expect(await page.evaluate<string>(`document.activeElement.getAttribute('aria-label')`)).toBe("Open session Coordinate-the-release-train-checkout-api-migration-and-rollout-notes-for-every-region")
-    expect(await page.evaluate<boolean>(`(() => { const s = getComputedStyle(document.activeElement); return s.outlineStyle !== 'none' || s.boxShadow !== 'none' })()`)).toBe(true)
+    expect(await page.evaluate(`document.activeElement.matches('${link}')`)).toBe(true)
+    expect(await page.evaluate(`document.activeElement.getAttribute('aria-label')`)).toBe("Open session Coordinate-the-release-train-checkout-api-migration-and-rollout-notes-for-every-region")
+    expect(await page.evaluate(`(() => { const s = getComputedStyle(document.activeElement); return s.outlineStyle !== 'none' || s.boxShadow !== 'none' })()`)).toBe(true)
     if (process.env.YCODING_CARD_CAPTURE_DIR) await Bun.write(`${process.env.YCODING_CARD_CAPTURE_DIR}/${theme}-${width}-focus.png`, Buffer.from(await page.screenshot(), "base64"))
     await page.pressKey("Enter", "Enter", 13)
     await wait(page, `new URL(location.href).searchParams.get('session_id') === 'ses_card_0'`)

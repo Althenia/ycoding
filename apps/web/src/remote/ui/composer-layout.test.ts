@@ -15,6 +15,19 @@ test("explicit motion off stops reasoning sparkles", () => {
   expect(base(':root[data-motion="off"] .model-control__sparkles, :root[data-motion="off"] .model-control__sparkles i').animation).toBe("none")
 })
 
+test("reasoning sparkles derive their timing from motion tokens", () => {
+  expect(base(".model-control__sparkles").animation).toContain("calc(var(--yc-dur-slow) * 12.5)")
+  expect(base(".model-control__sparkles i").animation).toContain("calc(var(--yc-dur-slow) * 5)")
+})
+
+test("keyboard draft geometry does not depend on hover", () => {
+  expect(composer.rules.filter(rule => rule.header.includes("data-keyboard-open") && rule.header.includes("composer__input")).every(rule => !rule.header.includes(":hover"))).toBe(true)
+})
+
+test("the speed trend uses the wide layout breakpoint", () => {
+  expect(declarationsWhere(composer, rule => rule.header === ".composer__speed-trend" && rule.conditions.includes("@media (min-width:1280px)")).display).toBe("inline")
+})
+
 test("the expanded dock follows the floating card at its end edge and the collapsed handle is a raised floating pill in flow", () => {
   expect(base(".composer")).toMatchObject({ display: "flex", "flex-direction": "column" })
   expect(base(".composer__dock")).toMatchObject({ position: "static", order: "1", "align-self": "end" })
@@ -146,11 +159,14 @@ test("the agent and model summary lives inside the phone card and is hidden from
   expect(composer.rules.some((rule) => rule.header.includes("composer__mobile-identity"))).toBe(false)
 })
 
-test("controls wrap beside a desktop companion while the model can shrink", () => {
+test("companion clusters reserve the actions, retain readable model width and allow wrapping", () => {
   expect(base(".composer .composer__controls")["flex-wrap"]).toBe("wrap")
   const companion = (header: string) => declarationsWhere(composer, (rule) => rule.header === header && rule.conditions.includes("@media (min-width: 1280px) and (pointer: fine)"))
   expect(companion(".app--team-open .composer .composer__controls")["flex-wrap"]).toBe("wrap")
-  expect(companion(".app--team-open .composer__controls .model-control")).toMatchObject({ flex: "1 1 40px", "min-inline-size": "40px" })
+  expect(companion(".app--team-open .composer__context-controls").flex).toBe("1 1 0")
+  expect(companion(".app--team-open .composer__controls .model-control")).toMatchObject({ flex: "1 1 var(--yc-space-16)", "min-inline-size": "var(--yc-space-16)" })
+  expect(companion(".app--team-open .composer__effort-name, .app--team-open .composer__controls .session-status__autonomous-full").display).toBe("none")
+  expect(companion(".app--team-open .composer__controls .session-status__autonomous-word").display).toBe("inline")
 })
 
 test("below 768px the card puts the summary on its own wrapping line above the draft, with attach and the end-aligned primary actions on one line below it", () => {

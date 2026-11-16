@@ -67,13 +67,14 @@ export function NewSessionComposer(props: { readonly workspaceID?: string; reado
     if (mounted && sessionID) props.onCreated(sessionID)
   }
   return <section class="new-session-composer" aria-label="New chat">
-    <div class="new-session-composer__header"><div class="new-session-composer__brand"><BrandMark /></div><p>A LITTLE CONTEXT. A CLEAR NEXT STEP.</p><h2>Start with a conversation.</h2><p>Start a standalone draft, or add a repository for context.</p></div>
+    <div class="new-session-composer__header"><div class="new-session-composer__brand"><BrandMark compact /></div><p>A LITTLE CONTEXT. A CLEAR NEXT STEP.</p><h2>Start with a conversation.</h2><p>Start a standalone draft, or add a repository for context.</p></div>
+    <MiniComposer registerPaletteModel={props.registerPaletteModel} target={workspace() ? { workspaceID: workspaceID() } : undefined} text={text()} onText={setText} disabled={!!creation()} sendDisabled={disabled()} allowEmpty onSubmit={create} />
     <Show when={!connected()}><p role="status">Connect to an online machine to create a session.</p></Show>
     <Show when={workspaceStatus() === "error"}><p role="alert">{listed().error?.message ?? "Repositories could not be loaded."}</p></Show>
     <Show when={connected() && workspaceStatus() === "ready" && !workspace()}><p role="status">{workspaces().length ? "Choose an available repository before sending; your draft stays here until a repository is chosen." : "No previously opened repositories are available. Open a repository locally once, then refresh; your draft stays here until a repository is chosen."}</p></Show>
     <Show when={props.workspaceID !== undefined && workspaceStatus() === "ready" && !workspace()}><p role="alert">The originating repository is unavailable on this machine. <Link to="/remote" class="text-link">Choose another repository</Link>.</p></Show>
     <p class="field__hint new-session-composer__scope-note">This standalone draft is editable before selection. Sending to this machine currently requires selecting a repository. Coordination Projects stay optional and are never inherited.</p>
-    <div class="new-session-composer__repository"><Show when={workspaceStatus() === "loading"} fallback={<ComposerPicker label="Repository" icon="folder" placeholder="Choose repository" value={workspaceID()} options={workspaces().map((item) => ({ value: item.id, label: labels().get(item.id) ?? item.name ?? "Repository" }))} disabled={!connected() || props.workspaceID !== undefined} onChange={setWorkspaceID} />}><LoadingPlaceholder kind="repository" label="Loading previously opened repositories…" /></Show>
+    <div class="new-session-composer__repository"><div class="new-session-composer__repository-heading"><h3>Repository</h3><Show when={workspaceStatus() === "ready"}><span>{workspaces().length} available</span></Show></div><Show when={workspaceStatus() === "loading"} fallback={<ComposerPicker label="Repository" icon="folder" placeholder="Choose repository" value={workspaceID()} options={workspaces().map((item) => ({ value: item.id, label: labels().get(item.id) ?? item.name ?? "Repository" }))} disabled={!connected() || props.workspaceID !== undefined} onChange={setWorkspaceID} />}><LoadingPlaceholder kind="repository" label="Loading previously opened repositories…" /></Show>
       <button type="button" class="new-session-composer__refresh" aria-label="Refresh repositories" title="Refresh repositories" disabled={!connected() || workspaceStatus() === "loading"} onClick={() => void listed().refetch()}><Icon name="refresh" /></button>
     </div>
     <Show when={creation()?.status === "creating"}><p role="status">Creating session…</p></Show>
@@ -83,6 +84,5 @@ export function NewSessionComposer(props: { readonly workspaceID?: string; reado
       <button class="button button--primary" type="button" disabled={!connected()} onClick={() => void retry()}>Retry</button>
       <button class="button button--secondary" type="button" onClick={() => remote.store.dismissSessionCreation()}>{creation()?.status === "unknown" ? "Dismiss" : "Choose another repository"}</button>
     </div></Show>
-    <MiniComposer registerPaletteModel={props.registerPaletteModel} target={workspace() ? { workspaceID: workspaceID() } : undefined} text={text()} onText={setText} disabled={!!creation()} sendDisabled={disabled()} allowEmpty onSubmit={create} />
   </section>
 }

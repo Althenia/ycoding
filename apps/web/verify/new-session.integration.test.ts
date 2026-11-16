@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNumber, decodeRecord, decodeString } from "./cdp"
+import { chooseWorkspace } from "./workspace-controls"
 
 const port = 4326
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -14,13 +15,13 @@ test("new chat identifies standalone scope and retains its own draft", async () 
     await wait(page, `document.querySelector('.workspace-new-session button[aria-label="New chat"]') !== null`)
     await page.evaluate(`document.querySelector('.workspace-new-session button[aria-label="New chat"]').click()`)
     await wait(page, `document.querySelector('.new-session-composer textarea') !== null`)
-    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer__scope-note').textContent`)).toContain("standalone")
+    expect(await page.evaluate(`document.querySelector('.new-session-composer__scope-note').textContent`)).toContain("standalone")
     await type(page, ".new-session-composer textarea", "Separate draft")
     await page.evaluate(`document.querySelector('.workspace-resume').click()`)
     await wait(page, `document.querySelector('.composer-resident:not([inert]) textarea') !== null`)
     await page.evaluate(`document.querySelector('.workspace-new-session button[aria-label="New chat"]').click()`)
     await wait(page, `document.querySelector('.new-session-composer textarea') !== null`)
-    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer textarea').value`)).toBe("Separate draft")
+    expect(await page.evaluate(`document.querySelector('.new-session-composer textarea').value`)).toBe("Separate draft")
   } finally { await page.close() }
 }, 30_000)
 
@@ -29,19 +30,19 @@ test("a draft and attachments remain editable without an available repository", 
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1&workspaces=recoverable`)
     await wait(page, `document.querySelector('.new-session-composer [role="status"]')?.textContent.includes('No previously opened repositories')`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer textarea').disabled`)).toBe(false)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer textarea').disabled`)).toBe(false)
     await type(page, ".new-session-composer textarea", "Keep this draft")
     await page.evaluate(`(() => { const input=document.querySelector('.new-session-composer input[type=file]'); const files=new DataTransfer(); files.items.add(new File(['hello'],'draft.txt')); input.files=files.files; input.dispatchEvent(new Event('change',{bubbles:true})); })()`)
     await wait(page, `document.querySelector('.new-session-composer .composer__attachments-summary')`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer button[aria-label="New chat"]').disabled`)).toBe(true)
-    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer [role="status"]').textContent`)).toContain("your draft stays here until a repository is chosen")
+    expect(await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]').disabled`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer [role="status"]').textContent`)).toContain("your draft stays here until a repository is chosen")
     await page.pressKey("Enter", "Enter", 13)
-    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer textarea').value`)).toBe("Keep this draft")
-    expect(await page.evaluate<number>(`window.requestLog.filter(item => item.operation === 'session.create').length`)).toBe(0)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer textarea').value`)).toBe("Keep this draft")
+    expect(await page.evaluate(`window.requestLog.filter(item => item.operation === 'session.create').length`)).toBe(0)
     await page.evaluate(`window.remoteExposeWorkspaces(); document.querySelector('[aria-label="Refresh repositories"]').click()`)
     await wait(page, `document.querySelector('.new-session-composer button[aria-label="New chat"]:not([disabled])')`)
-    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer textarea').value`)).toBe("Keep this draft")
-    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer .composer__attachments-summary') !== null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer textarea').value`)).toBe("Keep this draft")
+    expect(await page.evaluate(`document.querySelector('.new-session-composer .composer__attachments-summary') !== null`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 
@@ -56,7 +57,7 @@ test("a file still being read survives repository selection", async () => {
     await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]')?.textContent.includes('YCoding')`)
     await page.evaluate(`window.releaseFile()`)
     await wait(page, `document.querySelector('.new-session-composer .composer__attachments-summary')`)
-    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer .composer__attachments-summary').textContent`)).toContain("1/64 files")
+    expect(await page.evaluate(`document.querySelector('.new-session-composer .composer__attachments-summary').textContent`)).toContain("1/64 files")
   } finally { await page.close() }
 }, 30_000)
 
@@ -73,18 +74,18 @@ test("New session stays reachable separately from the selected Session and the U
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
     await wait(page, `document.querySelector('.conversation-breadcrumb strong') !== null`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb [aria-label="New conversation"]') === null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.conversation-breadcrumb [aria-label="New conversation"]') === null`)).toBe(true)
     await page.evaluate(`document.querySelector('.workspace-new-session .new-session__trigger').click()`)
     await wait(page, `document.querySelector('.route-panel:not([inert]) .new-session-composer textarea') !== null`)
-    expect(await page.evaluate<string>(`new URL(location.href).pathname`)).toBe("/remote")
-    expect(await page.evaluate<string | null>(`new URL(location.href).searchParams.get('workspace_id')`)).toBeNull()
-    expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('device_id')`)).toBe("dev_studio")
+    expect(await page.evaluate(`new URL(location.href).pathname`)).toBe("/remote")
+    expect(await page.evaluate(`new URL(location.href).searchParams.get('workspace_id')`)).toBeNull()
+    expect(await page.evaluate(`new URL(location.href).searchParams.get('device_id')`)).toBe("dev_studio")
     await page.evaluate(`document.querySelector('.workspace-resume[href^="/remote/session?"]').click()`)
     await wait(page, `document.querySelector('.workspace__topbar:not([inert]) .conversation-breadcrumb strong') !== null`)
-    expect(await page.evaluate<string>(`new URL(location.href).pathname`)).toBe("/remote/session")
-    expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('session_id')`)).toBe("ses_fixture")
-    expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('device_id')`)).toBe("dev_studio")
-    expect(await page.evaluate<number>(`window.requestLog.filter(item => item.operation === 'session.create').length`)).toBe(0)
+    expect(await page.evaluate(`new URL(location.href).pathname`)).toBe("/remote/session")
+    expect(await page.evaluate(`new URL(location.href).searchParams.get('session_id')`)).toBe("ses_fixture")
+    expect(await page.evaluate(`new URL(location.href).searchParams.get('device_id')`)).toBe("dev_studio")
+    expect(await page.evaluate(`window.requestLog.filter(item => item.operation === 'session.create').length`)).toBe(0)
   } finally { await page.close() }
 }, 30_000)
 
@@ -93,9 +94,9 @@ test("Session without a selected ID settles to its empty state rather than loadi
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=session&noSelection=1`)
     await wait(page, `window.remoteInventoryReport().listStatus === 'ready'`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.remote-conversation-view:not([inert]) .empty-conversation') !== null`)).toBe(true)
-    expect(await page.evaluate<boolean>(`document.querySelector('.remote-conversation-view:not([inert]) .loading-placeholder--screen') === null`)).toBe(true)
-    expect(await page.evaluate<number>(`window.requestLog.filter(item => item.operation === 'session.create').length`)).toBe(0)
+    expect(await page.evaluate(`document.querySelector('.remote-conversation-view:not([inert]) .empty-conversation') !== null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.remote-conversation-view:not([inert]) .loading-placeholder--screen') === null`)).toBe(true)
+    expect(await page.evaluate(`window.requestLog.filter(item => item.operation === 'session.create').length`)).toBe(0)
   } finally { await page.close() }
 }, 30_000)
 
@@ -106,7 +107,7 @@ test("choosing a Session from Sessions hands focus to its selected workspace hea
     await wait(page, `document.querySelector('.sessions-table__select') !== null`)
     await page.evaluate(`[...document.querySelectorAll('.sessions-table__select')].find(item => item.textContent.includes('Archived: release notes')).click()`)
     await wait(page, `document.querySelector('.workspace__topbar:not([inert]) .conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes') === true`)
-    expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.workspace__topbar:not([inert]) .conversation-breadcrumb')`)).toBe(true)
+    expect(await page.evaluate(`document.activeElement === document.querySelector('.workspace__topbar:not([inert]) .conversation-breadcrumb')`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 
@@ -115,8 +116,8 @@ test("the first inventory read holds a named loading frame before Conversation r
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1&inventoryGate=1`)
     await wait(page, `window.requestLog.some(item => item.operation === 'workspace.list' && item.input?.sessionsOnly === true)`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.route-panel:not([inert]) .loading-placeholder--screen') !== null`)).toBe(true)
-    expect(await page.evaluate<boolean>(`document.querySelector('.route-panel:not([inert]) .new-session-composer') === null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.route-panel:not([inert]) .loading-placeholder--screen') !== null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.route-panel:not([inert]) .new-session-composer') === null`)).toBe(true)
     await page.evaluate(`window.remoteReleaseInventory()`)
     await wait(page, `document.querySelector('.route-panel:not([inert]) .new-session-composer') !== null`)
   } finally { await page.evaluate(`window.remoteReleaseInventory?.()`); await page.close() }
@@ -126,16 +127,16 @@ test("a workspace plus button locks its source repository instead of choosing th
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=20`)
-    await wait(page, `document.querySelector('.workspace-nav button') !== null`)
-    await page.evaluate(`[...document.querySelectorAll('.workspace-nav button')].find(item => item.textContent.includes('Other repository')).click()`)
+    await wait(page, `document.querySelector('.sessions-page__workspace-select [aria-label="Workspace"]') !== null`)
+    await chooseWorkspace(page, "Other repository")
     await wait(page, `document.querySelector('.sessions-page__content .sessions-page__toolbar .new-session__trigger:not([disabled])') !== null`)
     await page.evaluate(`document.querySelector('.sessions-page__content .sessions-page__toolbar .new-session__trigger').click()`)
     await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]') !== null`)
-    expect(await page.evaluate<{ label: string; locked: boolean; workspace: string | null; source: string | null }>(`(() => { const repository = document.querySelector('.new-session-composer button[aria-label="Repository"]'); const params = new URL(location.href).searchParams; return { label: repository.textContent.trim(), locked: repository.disabled, workspace: params.get('workspace_id'), source: params.get('source') } })()`)).toMatchObject({ label: "Other repository", locked: true, workspace: "workspace_other", source: "sessions" })
+    expect(await page.evaluate(`(() => { const repository = document.querySelector('.new-session-composer button[aria-label="Repository"]'); const params = new URL(location.href).searchParams; return { label: repository.textContent.trim(), locked: repository.disabled, workspace: params.get('workspace_id'), source: params.get('source') } })()`)).toMatchObject({ label: "Other repository", locked: true, workspace: "workspace_other", source: "sessions" })
     await type(page, ".new-session-composer textarea", "Stay in this repository")
     await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]').click()`)
     await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.create')`)
-    expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.create').input`)).toMatchObject({ workspace: "workspace_other" })
+    expect(await page.evaluate(`window.remoteMutationReport().find(item => item.operation === 'session.create').input`)).toMatchObject({ workspace: "workspace_other" })
   } finally { await page.close() }
 }, 30_000)
 
@@ -146,12 +147,12 @@ for (const notice of [false, true]) test(`notification selects its owning machin
     await wait(page, `document.querySelector('.conversation-breadcrumb strong') !== null`)
     await page.evaluate(`window.remoteDeviceRequests.length = 0; window.dispatchEvent(new CustomEvent('ycoding:open-session', { detail: { sessionID: 'ses_fixture', deviceID: 'dev_laptop'${notice ? ", noticeID: 'ntc_3'" : ""} } }))`)
     await wait(page, `window.remoteDeviceRequests.some(item => item.operation === 'session.subscribe' && item.deviceID === 'dev_laptop')`)
-    expect(await page.evaluate<unknown>(`window.remoteDeviceRequests.filter(item => item.operation === 'session.subscribe').map(item => ({ deviceID: item.deviceID, sessionID: item.sessionID }))`)).toEqual([{ deviceID: "dev_laptop", sessionID: "ses_fixture" }])
-    expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('device_id')`)).toBe("dev_laptop")
-    expect(await page.evaluate<string>(`new URL(location.href).searchParams.get('session_id')`)).toBe("ses_fixture")
+    expect(await page.evaluate(`window.remoteDeviceRequests.filter(item => item.operation === 'session.subscribe').map(item => ({ deviceID: item.deviceID, sessionID: item.sessionID }))`)).toEqual([{ deviceID: "dev_laptop", sessionID: "ses_fixture" }])
+    expect(await page.evaluate(`new URL(location.href).searchParams.get('device_id')`)).toBe("dev_laptop")
+    expect(await page.evaluate(`new URL(location.href).searchParams.get('session_id')`)).toBe("ses_fixture")
     if (notice) {
       await wait(page, `window.remoteDeviceRequests.some(item => item.operation === 'notice.read')`)
-      expect(await page.evaluate<unknown>(`window.remoteDeviceRequests.filter(item => item.operation === 'notice.read').map(item => item.deviceID)`)).toEqual(["dev_laptop"])
+      expect(await page.evaluate(`window.remoteDeviceRequests.filter(item => item.operation === 'notice.read').map(item => item.deviceID)`)).toEqual(["dev_laptop"])
     }
   } finally { await page.close() }
 }, 30_000)
@@ -163,8 +164,8 @@ test("an unavailable notification machine never opens its Session on the selecte
     await wait(page, `document.querySelector('.conversation-breadcrumb strong') !== null`)
     await page.evaluate(`window.remoteDeviceRequests.length = 0; window.dispatchEvent(new CustomEvent('ycoding:open-session', { detail: { sessionID: 'ses_fixture', deviceID: 'dev_unknown' } }))`)
     await wait(page, `document.body.innerText.includes('unavailable to this account')`)
-    expect(await page.evaluate<unknown>(`window.remoteDeviceRequests.filter(item => item.operation === 'session.subscribe')`)).toEqual([])
-    expect(await page.evaluate<boolean>(`document.querySelector('.remote-conversation-view:not([inert])') === null`)).toBe(true)
+    expect(await page.evaluate(`window.remoteDeviceRequests.filter(item => item.operation === 'session.subscribe')`)).toEqual([])
+    expect(await page.evaluate(`document.querySelector('.remote-conversation-view:not([inert])') === null`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 
@@ -173,7 +174,7 @@ test("a malformed device in a Session URL cannot fall back to the selected machi
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&session_id=ses_fixture&device_id=${encodeURIComponent(JSON.stringify(["dev_laptop"]))}`)
     await wait(page, `document.body.innerText.includes('Session link is invalid')`)
-    expect(await page.evaluate<unknown>(`window.remoteDeviceRequests.filter(item => item.operation === 'session.subscribe')`)).toEqual([])
+    expect(await page.evaluate(`window.remoteDeviceRequests.filter(item => item.operation === 'session.subscribe')`)).toEqual([])
   } finally { await page.close() }
 }, 30_000)
 
@@ -184,7 +185,7 @@ test("a Session link preserves its machine and Session through the sign-in redir
     await wait(page, `document.querySelector('.sign-in__provider') !== null`)
     await page.evaluate(`document.querySelector('.sign-in__provider').click()`)
     await wait(page, `location.pathname === '/api/auth/google/start'`)
-    const destination = await page.evaluate<string>(`new URL(location.href).searchParams.get('redirect_after')`)
+    const destination = await page.evaluate(`new URL(location.href).searchParams.get('redirect_after')`, decodeString)
     expect(new URL(destination, "https://example.invalid").searchParams.get("session_id")).toBe("ses_fixture")
     expect(new URL(destination, "https://example.invalid").searchParams.get("device_id")).toBe("dev_laptop")
   } finally { await page.close() }
@@ -195,9 +196,9 @@ test("an unavailable origin repository blocks creation instead of replacing it",
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1&workspace_id=workspace_missing&source=sessions`)
     await wait(page, `document.body.innerText.includes('originating repository is unavailable')`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer button[aria-label="Repository"]').disabled`)).toBe(true)
-    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer button[aria-label="New chat"]').disabled`)).toBe(true)
-    expect(await page.evaluate<number>(`window.requestLog.filter(item => item.operation === 'session.create').length`)).toBe(0)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Repository"]').disabled`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]').disabled`)).toBe(true)
+    expect(await page.evaluate(`window.requestLog.filter(item => item.operation === 'session.create').length`)).toBe(0)
   } finally { await page.close() }
 }, 30_000)
 
@@ -209,9 +210,9 @@ test("rejecting an older snapshot preserves the displayed live reply without a w
     await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find(item => item.textContent.includes('Simulate streaming step')).click()`)
     await wait(page, `document.body.innerText.includes('Streaming through the relay with bounded tool output.')`)
     await page.evaluate(`window.remoteReloadMessages()`)
-    expect(await page.evaluate<string>(`document.body.innerText`)).toContain("Streaming through the relay with bounded tool output.")
-    expect(await page.evaluate<string>(`document.body.innerText`)).not.toContain("An older session snapshot arrived and was ignored.")
-    expect(await page.evaluate<boolean>(`document.querySelector('.remote-conversation-view:not([inert]) .loading-placeholder--screen') === null`)).toBe(true)
+    expect(await page.evaluate(`document.body.innerText`)).toContain("Streaming through the relay with bounded tool output.")
+    expect(await page.evaluate(`document.body.innerText`)).not.toContain("An older session snapshot arrived and was ignored.")
+    expect(await page.evaluate(`document.querySelector('.remote-conversation-view:not([inert]) .loading-placeholder--screen') === null`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 
@@ -222,17 +223,17 @@ test("new session opens in the main area with repository names, selected model a
     await wait(page, `document.querySelector('.sessions-page__content .sessions-page__toolbar .new-session__trigger:not([disabled])') !== null`)
     await page.evaluate(`document.querySelector('.workspace-new-session .new-session__trigger')?.click()`)
     await wait(page, `document.querySelector('.workspace__main .new-session-composer textarea') !== null`)
-    expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="New session"]') === null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('dialog[aria-label="New session"]') === null`)).toBe(true)
     await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]:not([disabled])') !== null`)
     await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Repository"]')?.click()`)
     await wait(page, `document.querySelector('.mini-picker__surface [role="option"]') !== null`)
-    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.mini-picker__surface [role="option"]')].map(item => item.textContent.trim())`)).toEqual(["YCoding", "Other repository"])
+    expect(await page.evaluate(`[...document.querySelectorAll('.mini-picker__surface [role="option"]')].map(item => item.textContent.trim())`)).toEqual(["YCoding", "Other repository"])
     await page.evaluate(`[...document.querySelectorAll('.mini-picker__surface [role="option"]')].find(item => item.textContent.trim() === 'Other repository')?.click()`)
     await wait(page, `document.querySelector('.new-session-composer button[aria-label="Model"]:not([disabled])') !== null`)
     await type(page, ".new-session-composer textarea", "Start a new task")
     await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]')?.click()`)
     await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.create')`)
-    expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.create')?.input`)).toMatchObject({ workspace: "workspace_other", model: { providerID: "anthropic", id: "claude-opus-5-5", variant: "high" } })
+    expect(await page.evaluate(`window.remoteMutationReport().find(item => item.operation === 'session.create')?.input`)).toMatchObject({ workspace: "workspace_other", model: { providerID: "anthropic", id: "claude-opus-5-5", variant: "high" } })
     await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.prompt' && item.input?.text === 'Start a new task')`)
     await wait(page, `document.querySelector('.conversation-breadcrumb strong')?.textContent?.trim() === 'New session'`)
   } finally { await page.close() }
@@ -247,10 +248,10 @@ test("unknown creation retries the same admission without a second create", asyn
     await wait(page, `document.querySelector('.new-session-composer button[aria-label="New chat"]:not([disabled])') !== null`)
     await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]')?.click()`)
     await wait(page, `document.querySelector('.new-session__outcome--unknown') !== null`)
-    expect(await page.evaluate<string>(`document.querySelector('.new-session__outcome--unknown')?.textContent`)).toContain("Check Sessions before dismissing")
+    expect(await page.evaluate(`document.querySelector('.new-session__outcome--unknown')?.textContent`)).toContain("Check Sessions before dismissing")
     await page.evaluate(`document.querySelector('.new-session__outcome--unknown button')?.click()`)
     await wait(page, `document.querySelector('.conversation-breadcrumb strong')?.textContent?.trim() === 'New session'`)
-    expect(await page.evaluate<number>(`window.remoteMutationReport().filter(item => item.operation === 'session.create').length`)).toBe(1)
+    expect(await page.evaluate(`window.remoteMutationReport().filter(item => item.operation === 'session.create').length`)).toBe(1)
   } finally { await page.close() }
 }, 30_000)
 
@@ -264,15 +265,15 @@ for (const command of [false, true]) test(`first ${command ? "command" : "prompt
     await wait(page, `document.querySelector('.new-session-composer .composer__attachment') !== null`)
     await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]').click()`)
     await wait(page, `document.querySelector('.workspace__topbar:not([inert]) .conversation-breadcrumb strong')?.textContent?.trim() === 'New session'`)
-    expect(await page.evaluate<number>(`window.requestLog.filter(item => item.operation === 'session.subscribe').length`)).toBe(1)
-    expect(await page.evaluate<string>(`document.querySelector('.composer-resident:not([inert]) .composer__upload')?.textContent ?? ''`)).toContain("capture.png · 0%")
+    expect(await page.evaluate(`window.requestLog.filter(item => item.operation === 'session.subscribe').length`)).toBe(1)
+    expect(await page.evaluate(`document.querySelector('.composer-resident:not([inert]) .composer__upload')?.textContent ?? ''`)).toContain("capture.png · 0%")
     await page.evaluate(`window.remoteReleaseAttachments()`)
     const operation = command ? "session.command" : "session.prompt"
     await wait(page, `window.remoteMutationReport().some(item => item.operation === '${operation}')`)
-    const sent = await page.evaluate<readonly { readonly input: { readonly files: readonly { readonly uri: string; readonly name: string }[] } }[]>(`window.remoteMutationReport().filter(item => item.operation === '${operation}')`)
+    const sent = await page.evaluate(`window.remoteMutationReport().filter(item => item.operation === '${operation}')`, decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, input: ((value: unknown) => { const record = decodeRecord(value); return { ...record, files: (decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, uri: (decodeString)(record["uri"]), name: (decodeString)(record["name"]) } }))(record["files"]) } })(record["input"]) } }))
     expect(sent).toHaveLength(1)
     expect(sent[0]?.input.files).toEqual([{ uri: expect.stringMatching(/^ycoding-upload:\/\//), name: "capture.png" }])
-    expect(await page.evaluate<string>(`document.body.innerText`)).not.toContain("cancelled by Session selection")
+    expect(await page.evaluate(`document.body.innerText`)).not.toContain("cancelled by Session selection")
   } finally { await page.evaluate(`window.remoteReleaseAttachments?.()`); await page.close() }
 }, 30_000)
 
@@ -289,8 +290,8 @@ test("new-session hero centers in both Conversation placements and remains top-s
         await page.evaluate(`document.querySelector(${JSON.stringify(plus)})?.click()`)
       }
       await wait(page, `document.querySelector('.workspace__scroll .new-session-composer textarea') !== null`)
-      if (width === 390 || width === 1440) expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer__close, .new-session-composer [aria-label="Close new session"]') === null`)).toBe(true)
-      const measure = () => page.evaluate<{ centerX: number; centerY: number; repositoryEdge: number; heroRatio: number; mark: number; name: number; fullLockup: boolean; ordered: boolean; overflow: boolean }>(`(() => { const scroll=document.querySelector('.workspace__scroll'), block=scroll.querySelector('.new-session-composer'), brand=block.querySelector('.new-session-composer__brand'), repository=block.querySelector('.new-session-composer__repository'), card=block.querySelector('.composer__row'), mark=brand.querySelector('img'), name=brand.querySelector('.brand__name'), descriptor=brand.querySelector('.brand__descriptor'), s=scroll.getBoundingClientRect(), b=block.getBoundingClientRect(), a=brand.getBoundingClientRect(), c=card.getBoundingClientRect(), r=repository.getBoundingClientRect(); return { centerX:Math.abs((b.left+b.right-s.left-s.right)/2), centerY:Math.abs((a.top+c.bottom-s.top-s.bottom)/2), repositoryEdge:Math.abs(r.left-c.left), heroRatio:a.width/c.width, mark:mark.getBoundingClientRect().height, name:parseFloat(getComputedStyle(name).fontSize), fullLockup:!!descriptor && descriptor.getBoundingClientRect().height>0, ordered:a.bottom<=r.top && r.bottom<=c.top, overflow:document.documentElement.scrollWidth>innerWidth || scroll.scrollWidth>scroll.clientWidth+1 } })()`)
+      if (width === 390 || width === 1440) expect(await page.evaluate(`document.querySelector('.new-session-composer__close, .new-session-composer [aria-label="Close new session"]') === null`)).toBe(true)
+      const measure = () => page.evaluate(`(() => { const scroll=document.querySelector('.workspace__scroll'), block=scroll.querySelector('.new-session-composer'), brand=block.querySelector('.new-session-composer__brand'), repository=block.querySelector('.new-session-composer__repository'), card=block.querySelector('.composer__row'), mark=brand.querySelector('img'), name=brand.querySelector('.brand__name'), descriptor=brand.querySelector('.brand__descriptor'), s=scroll.getBoundingClientRect(), b=block.getBoundingClientRect(), a=brand.getBoundingClientRect(), c=card.getBoundingClientRect(), r=repository.getBoundingClientRect(); return { centerX:Math.abs((b.left+b.right-s.left-s.right)/2), centerY:Math.abs((a.top+c.bottom-s.top-s.bottom)/2), repositoryEdge:Math.abs(r.left-c.left), heroRatio:a.width/c.width, mark:mark.getBoundingClientRect().height, name:parseFloat(getComputedStyle(name).fontSize), fullLockup:!!descriptor && descriptor.getBoundingClientRect().height>0, ordered:a.bottom<=r.top && r.bottom<=c.top, overflow:document.documentElement.scrollWidth>innerWidth || scroll.scrollWidth>scroll.clientWidth+1 } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, centerX: (decodeNumber)(record["centerX"]), centerY: (decodeNumber)(record["centerY"]), repositoryEdge: (decodeNumber)(record["repositoryEdge"]), heroRatio: (decodeNumber)(record["heroRatio"]), mark: (decodeNumber)(record["mark"]), name: (decodeNumber)(record["name"]), fullLockup: (decodeBoolean)(record["fullLockup"]), ordered: (decodeBoolean)(record["ordered"]), overflow: (decodeBoolean)(record["overflow"]) } })
       const layout = await measure()
       expect(layout.centerX).toBeLessThanOrEqual(8)
       expect(layout.centerY).toBeLessThanOrEqual(8)
@@ -304,7 +305,7 @@ test("new-session hero centers in both Conversation placements and remains top-s
       if (!noSelection) await Bun.write(new URL(`../../../.cache/tmp/new-session-hero-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       if (width !== 390) continue
       await page.setViewport(390, 320)
-      const short = await page.evaluate<{ top: number; scrollTop: number; scrollable: boolean; composerReachable: boolean; overflow: boolean }>(`(() => { const scroll=document.querySelector('.workspace__scroll'), brand=scroll.querySelector('.new-session-composer__brand'), card=scroll.querySelector('.new-session-composer .composer__row'); const top=brand.getBoundingClientRect().top-scroll.getBoundingClientRect().top; const scrollable=scroll.scrollHeight>scroll.clientHeight; scroll.scrollTop=scroll.scrollHeight; return { top, scrollTop:scroll.scrollTop, scrollable, composerReachable:card.getBoundingClientRect().bottom<=scroll.getBoundingClientRect().bottom-8, overflow:document.documentElement.scrollWidth>innerWidth } })()`)
+      const short = await page.evaluate(`(() => { const scroll=document.querySelector('.workspace__scroll'), brand=scroll.querySelector('.new-session-composer__brand'), card=scroll.querySelector('.new-session-composer .composer__row'); const top=brand.getBoundingClientRect().top-scroll.getBoundingClientRect().top; const scrollable=scroll.scrollHeight>scroll.clientHeight; scroll.scrollTop=scroll.scrollHeight; return { top, scrollTop:scroll.scrollTop, scrollable, composerReachable:card.getBoundingClientRect().bottom<=scroll.getBoundingClientRect().bottom-8, overflow:document.documentElement.scrollWidth>innerWidth } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, top: (decodeNumber)(record["top"]), scrollTop: (decodeNumber)(record["scrollTop"]), scrollable: (decodeBoolean)(record["scrollable"]), composerReachable: (decodeBoolean)(record["composerReachable"]), overflow: (decodeBoolean)(record["overflow"]) } })
       expect(short.top).toBeGreaterThanOrEqual(8)
       expect(short.top).toBeLessThanOrEqual(48)
       expect(short.scrollable).toBe(true)
@@ -324,14 +325,14 @@ test("repository loading holds the picker's box and keeps Refresh in place", asy
       await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]') !== null`)
       await page.evaluate(`window.composerSetWorkspaceLoading(true)`)
       await wait(page, `document.querySelector('.new-session-composer__repository .loading-placeholder--repository') !== null`)
-      const loading = await page.evaluate<{ width: number; height: number; left: number; refresh: number; announced: boolean; pickerAbsent: boolean; disabled: boolean }>(`(() => { const row=document.querySelector('.new-session-composer__repository'), placeholder=row.querySelector('.loading-placeholder--repository'), shape=placeholder.querySelector('.loading-placeholder__shape').getBoundingClientRect(), refresh=row.querySelector('.new-session-composer__refresh'); return { width:shape.width, height:shape.height, left:shape.left, refresh:refresh.getBoundingClientRect().left, announced:placeholder.getAttribute('role')==='status' && placeholder.textContent.includes('Loading previously opened repositories…'), pickerAbsent:row.querySelector('[aria-label="Repository"]')===null, disabled:refresh.disabled } })()`)
+      const loading = await page.evaluate(`(() => { const row=document.querySelector('.new-session-composer__repository'), placeholder=row.querySelector('.loading-placeholder--repository'), shape=placeholder.querySelector('.loading-placeholder__shape').getBoundingClientRect(), refresh=row.querySelector('.new-session-composer__refresh'); return { width:shape.width, height:shape.height, left:shape.left, refresh:refresh.getBoundingClientRect().left, announced:placeholder.getAttribute('role')==='status' && placeholder.textContent.includes('Loading previously opened repositories…'), pickerAbsent:row.querySelector('[aria-label="Repository"]')===null, disabled:refresh.disabled } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]), left: (decodeNumber)(record["left"]), refresh: (decodeNumber)(record["refresh"]), announced: (decodeBoolean)(record["announced"]), pickerAbsent: (decodeBoolean)(record["pickerAbsent"]), disabled: (decodeBoolean)(record["disabled"]) } })
       expect(loading.announced).toBe(true)
       expect(loading.pickerAbsent).toBe(true)
       expect(loading.disabled).toBe(true)
       expect(loading.height).toBe(width! < 768 ? 44 : 36)
       await page.evaluate(`window.composerSetWorkspaceLoading(false)`)
       await wait(page, `document.querySelector('.new-session-composer__repository button[aria-label="Repository"]') !== null`)
-      const ready = await page.evaluate<{ width: number; height: number; left: number; refresh: number }>(`(() => { const row=document.querySelector('.new-session-composer__repository'), picker=row.querySelector('[aria-label="Repository"]').getBoundingClientRect(); return { width:picker.width, height:picker.height, left:picker.left, refresh:row.querySelector('.new-session-composer__refresh').getBoundingClientRect().left } })()`)
+      const ready = await page.evaluate(`(() => { const row=document.querySelector('.new-session-composer__repository'), picker=row.querySelector('[aria-label="Repository"]').getBoundingClientRect(); return { width:picker.width, height:picker.height, left:picker.left, refresh:row.querySelector('.new-session-composer__refresh').getBoundingClientRect().left } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]), left: (decodeNumber)(record["left"]), refresh: (decodeNumber)(record["refresh"]) } })
       expect(Math.abs(ready.width - loading.width)).toBeLessThanOrEqual(1)
       expect(Math.abs(ready.height - loading.height)).toBeLessThanOrEqual(1)
       expect(Math.abs(ready.left - loading.left)).toBeLessThanOrEqual(1)
@@ -339,6 +340,70 @@ test("repository loading holds the picker's box and keeps Refresh in place", asy
     } finally { await page.close() }
   }
 }, 30_000)
+
+test("phone Sessions drawer stays full-height at the left with search, selection and five navigation destinations", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(390, 844)
+    await page.setCoarsePointer(true)
+    await page.setReducedMotion(true)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=dark&paletteAcceptance=1`)
+    await wait(page, `document.querySelector('.composer__input') !== null`)
+    await page.evaluate(`(()=>{window.sessionsOpener=document.querySelector('.app-header__menu[aria-label="Open sessions"]');window.sessionsOpener.focus();window.sessionsOpener.click()})()`)
+    await wait(page, `document.querySelector('.overlay--sessions-sheet[open] .session-row') !== null`)
+    const drawer = await page.evaluate(`(()=>{const d=document.querySelector('.overlay--sessions-sheet'),s=d.querySelector('.overlay__surface'),b=s.getBoundingClientRect(),nav=d.querySelector('.bottom-nav'),links=[...d.querySelectorAll('.bottom-nav__item')],n=nav?.getBoundingClientRect();return{x:b.x,y:b.y,width:b.width,height:b.height,radius:getComputedStyle(s).borderRadius,focus:d.contains(document.activeElement),destinations:links.map(e=>e.textContent.trim()),targets:links.every(e=>{const r=e.getBoundingClientRect();return r.width>=44&&r.height>=44}),contained:!!n&&n.top>=b.top&&n.bottom<=b.bottom}})()`)
+    expect(drawer).toEqual({ x: 0, y: 0, width: 320, height: 844, radius: "0px", focus: true, destinations: ["Projects", "Sessions", "Workspaces", "Usage", "Settings"], targets: true, contained: true })
+    await type(page, '.overlay--sessions-sheet [aria-label="Search sessions"]', "Archived")
+    await wait(page, `document.querySelectorAll('.overlay--sessions-sheet .session-row').length===1 && document.querySelector('.overlay--sessions-sheet .session-row').textContent.includes('Archived: release notes')`)
+    await page.evaluate(`document.querySelector('.overlay--sessions-sheet .session-row').click()`)
+    await wait(page, `document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes')===true && document.querySelector('.overlay--sessions-sheet')===null`)
+    expect(await page.evaluate(`document.activeElement===window.sessionsOpener`)).toBe(true)
+    await page.evaluate(`window.sessionsOpener.click()`)
+    await wait(page, `document.querySelector('.overlay--sessions-sheet[open]')!==null`)
+    await page.evaluate(`(()=>{const d=document.querySelector('.overlay--sessions-sheet');window.drawerFirst=d.querySelector('button');window.drawerLast=[...d.querySelectorAll('a[href],button,input')].filter(e=>e.getClientRects().length&&!e.disabled).at(-1);window.drawerLast.focus()})()`)
+    await page.pressKey("Tab", "Tab", 9)
+    expect(await page.evaluate(`document.activeElement===window.drawerFirst`)).toBe(true)
+    await page.evaluate(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',shiftKey:true,bubbles:true,cancelable:true}))`)
+    expect(await page.evaluate(`document.activeElement===window.drawerLast`)).toBe(true)
+    await page.pressKey("Escape", "Escape", 27)
+    await wait(page, `document.querySelector('.overlay--sessions-sheet')===null`)
+    expect(await page.evaluate(`document.activeElement===window.sessionsOpener`)).toBe(true)
+    await page.evaluate(`window.sessionsOpener.click()`)
+    await wait(page, `document.querySelector('.overlay--sessions-sheet[open]')!==null`)
+    await page.evaluate(`document.querySelector('.overlay--sessions-sheet .overlay__close').click()`)
+    await wait(page, `document.querySelector('.overlay--sessions-sheet')===null`)
+    expect(await page.evaluate(`document.activeElement===window.sessionsOpener`)).toBe(true)
+    await page.evaluate(`window.sessionsOpener.click()`)
+    await wait(page, `document.querySelector('.overlay--sessions-sheet[open]')!==null`)
+    await page.evaluate(`document.querySelector('.overlay--sessions-sheet a[href="/remote/usage"]').click()`)
+    await wait(page, `document.querySelector('.usage-page')!==null&&document.querySelector('.overlay--sessions-sheet')===null`)
+    expect(await page.evaluate(`[...document.querySelectorAll('.app > .bottom-nav .bottom-nav__item')].every(e=>e.getBoundingClientRect().height>=44)`)).toBe(true)
+    await page.evaluate(`document.querySelector('.app-header__menu[aria-label="Open sessions"]').click()`)
+    await wait(page, `document.querySelector('.overlay--sessions-sheet[open]')!==null`)
+    await page.evaluate(`document.querySelector('.overlay--sessions-sheet .new-session__trigger').click()`)
+    await wait(page, `document.querySelector('.new-session-composer')!==null&&document.querySelector('.overlay--sessions-sheet')===null`)
+  } finally { await page.close() }
+}, 30000)
+
+test("phone Sessions drawer enters from the left and keeps its closing surface inert", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(390, 844)
+    await page.setCoarsePointer(true)
+    await page.setReducedMotion(false)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=dark`)
+    await wait(page, `document.querySelector('.composer__input')!==null`)
+    await page.setAnimationPlaybackRate(0)
+    await page.evaluate(`(()=>{window.sessionsOpener=document.querySelector('.app-header__menu[aria-label="Open sessions"]');window.sessionsOpener.focus();window.sessionsOpener.click()})()`)
+    await wait(page, `document.querySelector('.overlay--sessions-sheet[open]')!==null`)
+    expect(await page.evaluate(`(()=>{const s=document.querySelector('.overlay--sessions-sheet .overlay__surface'),css=getComputedStyle(s);return parseFloat(css.translate)<0&&s.getBoundingClientRect().y===0})()`)).toBe(true)
+    await page.setAnimationPlaybackRate(1)
+    await page.evaluate(`Promise.all(document.querySelector('.overlay--sessions-sheet .overlay__surface').getAnimations().map(a=>a.finished))`)
+    await page.evaluate(`document.querySelector('.overlay--sessions-sheet .overlay__close').click()`)
+    expect(await page.evaluate(`(()=>{const d=document.querySelector('.overlay--sessions-sheet');return !!d&&!d.open&&d.inert&&d.getAttribute('aria-hidden')==='true'&&document.activeElement===window.sessionsOpener})()`)).toBe(true)
+    await wait(page, `document.querySelector('.overlay--sessions-sheet')===null`)
+  } finally { await page.close() }
+}, 15000)
 
 test("phone Sessions sheet returns focus to its opener and opens Conversation from New session", async () => {
   for (const theme of ["light", "dark"]) for (const [reduced, method] of [[false, "close"], [false, "select"], [false, "new-session"], [true, "close"]] as const) {
@@ -354,16 +419,16 @@ test("phone Sessions sheet returns focus to its opener and opens Conversation fr
       if (method === "close") await page.evaluate(`document.querySelector('.overlay--sessions-sheet .overlay__close').click()`)
       if (method === "select") await page.evaluate(`[...document.querySelectorAll('.overlay--sessions-sheet .session-row')].find((row) => row.textContent.includes('Archived: release notes'))?.click()`)
       if (method === "new-session") await page.evaluate(`document.querySelector('.overlay--sessions-sheet .new-session__trigger').click()`)
-      expect(await page.evaluate<boolean>(`document.activeElement === window.sessionsOpener && window.sessionsOpener.getAttribute('aria-expanded') === 'false'`)).toBe(true)
-      if (reduced) expect(await page.evaluate<boolean>(`document.querySelector('dialog.overlay--sessions-sheet') === null`)).toBe(true)
+      expect(await page.evaluate(`document.activeElement === window.sessionsOpener && window.sessionsOpener.getAttribute('aria-expanded') === 'false'`)).toBe(true)
+      if (reduced) expect(await page.evaluate(`document.querySelector('dialog.overlay--sessions-sheet') === null`)).toBe(true)
       else {
-        expect(await page.evaluate<boolean>(`(() => { const sheet=document.querySelector('dialog.overlay--sessions-sheet'); return sheet?.inert === true && sheet?.getAttribute('aria-hidden') === 'true' && !sheet.open })()`)).toBe(true)
-        for (let attempt = 0; attempt < 30 && await page.evaluate<boolean>(`document.querySelector('dialog.overlay--sessions-sheet') !== null`); attempt += 1) await Bun.sleep(25)
-        expect(await page.evaluate<boolean>(`document.querySelector('dialog.overlay--sessions-sheet') === null`)).toBe(true)
+        expect(await page.evaluate(`(() => { const sheet=document.querySelector('dialog.overlay--sessions-sheet'); return sheet?.inert === true && sheet?.getAttribute('aria-hidden') === 'true' && !sheet.open })()`)).toBe(true)
+        for (let attempt = 0; attempt < 30 && await page.evaluate(`document.querySelector('dialog.overlay--sessions-sheet') !== null`, decodeBoolean); attempt += 1) await Bun.sleep(25)
+        expect(await page.evaluate(`document.querySelector('dialog.overlay--sessions-sheet') === null`)).toBe(true)
       }
       if (method === "select") {
         await wait(page, `document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('Archived: release notes') === true`)
-        expect(await page.evaluate<boolean>(`document.activeElement === window.sessionsOpener`)).toBe(true)
+        expect(await page.evaluate(`document.activeElement === window.sessionsOpener`)).toBe(true)
       }
       if (method === "new-session") {
         await wait(page, `document.querySelector('.new-session-composer textarea') !== null`)
@@ -383,9 +448,9 @@ async function type(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBro
 }
 async function wait(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, expression: string) {
   for (let index = 0; index < 50; index++) {
-    if (await page.evaluate<boolean>(expression)) return
+    if (await page.evaluate(expression)) return
     await Bun.sleep(100)
   }
-  throw new Error(`Timed out: ${expression}; ${await page.evaluate<string>(`JSON.stringify({ url: location.href, breadcrumb: document.querySelector('.conversation-breadcrumb')?.textContent, composer: document.querySelector('.new-session-composer')?.outerHTML?.slice(0, 800), body: document.body.innerText.slice(-500), requests: window.remoteMutationReport?.().slice(-3) })`)} `)
+  throw new Error(`Timed out: ${expression}; ${await page.evaluate(`JSON.stringify({ url: location.href, breadcrumb: document.querySelector('.conversation-breadcrumb')?.textContent, composer: document.querySelector('.new-session-composer')?.outerHTML?.slice(0, 800), body: document.body.innerText.slice(-500), requests: window.remoteMutationReport?.().slice(-3) })`, decodeString)} `)
 }
 async function ready() { return fetch(`http://127.0.0.1:${port}/verify/remote.html`).then((response) => response.ok, () => false) }

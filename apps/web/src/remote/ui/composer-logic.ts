@@ -162,11 +162,6 @@ export function autocompleteBound(availableAbove: number, viewportHeight: number
   return Math.floor(Math.max(54, Math.min(share, availableAbove - 8)))
 }
 
-export function sheetFrame(viewport: { readonly offsetTop: number; readonly height: number } | undefined): { readonly top: number; readonly height: number } | undefined {
-  if (!viewport || !(viewport.height > 0)) return undefined
-  return { top: Math.max(0, Math.round(viewport.offsetTop)), height: Math.round(viewport.height) }
-}
-
 function fuzzy(value: string, query: string): number {
   if (!query) return 1
   const target = value.toLocaleLowerCase()
@@ -243,7 +238,7 @@ export function submission(text: string, parts: readonly MentionPart[], catalog:
   if (command?.[1] === "goal") return command[2]?.trim()
     ? { kind: "goal" as const, input: { goal: command[2].trim() } }
     : { kind: "invalid" as const, message: "Enter goal text after /goal." }
-  const autonomy = command && Object.hasOwn(autonomyActions, command[1]!) ? autonomyActions[command[1] as keyof typeof autonomyActions] : undefined
+  const autonomy = Object.entries(autonomyActions).find(([action]) => action === command?.[1])?.[1]
   if (autonomy) return command?.[2]?.trim()
     ? { kind: "invalid" as const, message: `Use /${command[1]} without arguments.` }
     : { kind: autonomy.kind }

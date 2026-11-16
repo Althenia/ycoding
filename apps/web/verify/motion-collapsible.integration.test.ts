@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeBoolean, decodeNullable, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 5183
 const url = `http://127.0.0.1:${port}/verify/motion-collapsible-fixture.html`
@@ -36,11 +36,10 @@ const state = `(() => {
   }
 })()`
 
-type Snapshot = { readonly open: boolean; readonly inert: boolean; readonly ariaHidden: string | null; readonly opacity: number; readonly height: number; readonly belowTop: number; readonly mounted: boolean; readonly mounts: number }
 
 async function ready(page: Awaited<ReturnType<NonNullable<typeof browser>["openPage"]>>) {
   await page.navigate(url)
-  for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`document.getElementById('toggle') !== null`); attempt += 1) await Bun.sleep(50)
+  for (let attempt = 0; attempt < 100 && !await page.evaluate(`document.getElementById('toggle') !== null`); attempt += 1) await Bun.sleep(50)
   await Bun.sleep(400)
 }
 
@@ -48,24 +47,24 @@ test("expanding animates height and opacity so content below slides, and a colla
   const page = await browser!.openPage()
   try {
     await ready(page)
-    const closed = await page.evaluate<Snapshot>(state)
+    const closed = await page.evaluate(state, (value: unknown) => { const record = decodeRecord(value); return { ...record, open: (decodeBoolean)(record["open"]), inert: (decodeBoolean)(record["inert"]), ariaHidden: (decodeNullable(decodeString))(record["ariaHidden"]), opacity: (decodeNumber)(record["opacity"]), height: (decodeNumber)(record["height"]), belowTop: (decodeNumber)(record["belowTop"]), mounted: (decodeBoolean)(record["mounted"]), mounts: (decodeNumber)(record["mounts"]) } })
     expect(closed).toMatchObject({ open: false, inert: true, ariaHidden: "true", opacity: 0, height: 0, mounted: false, mounts: 0 })
     await page.evaluate(`document.getElementById('toggle').click()`)
     await Bun.sleep(90)
-    const middle = await page.evaluate<Snapshot>(state)
+    const middle = await page.evaluate(state, (value: unknown) => { const record = decodeRecord(value); return { ...record, open: (decodeBoolean)(record["open"]), inert: (decodeBoolean)(record["inert"]), ariaHidden: (decodeNullable(decodeString))(record["ariaHidden"]), opacity: (decodeNumber)(record["opacity"]), height: (decodeNumber)(record["height"]), belowTop: (decodeNumber)(record["belowTop"]), mounted: (decodeBoolean)(record["mounted"]), mounts: (decodeNumber)(record["mounts"]) } })
     expect(middle.open).toBe(true)
     expect(middle.height).toBeGreaterThan(0)
     expect(middle.belowTop).toBeGreaterThan(closed.belowTop)
     expect(middle.opacity).toBeGreaterThan(0)
     await Bun.sleep(500)
-    const opened = await page.evaluate<Snapshot>(state)
+    const opened = await page.evaluate(state, (value: unknown) => { const record = decodeRecord(value); return { ...record, open: (decodeBoolean)(record["open"]), inert: (decodeBoolean)(record["inert"]), ariaHidden: (decodeNullable(decodeString))(record["ariaHidden"]), opacity: (decodeNumber)(record["opacity"]), height: (decodeNumber)(record["height"]), belowTop: (decodeNumber)(record["belowTop"]), mounted: (decodeBoolean)(record["mounted"]), mounts: (decodeNumber)(record["mounts"]) } })
     expect(opened).toMatchObject({ open: true, inert: false, ariaHidden: null, opacity: 1, mounted: true, mounts: 1 })
     expect(opened.height).toBeGreaterThanOrEqual(120)
     expect(middle.height).toBeLessThan(opened.height)
     expect(middle.belowTop).toBeLessThan(opened.belowTop)
     await page.evaluate(`document.getElementById('toggle').click()`)
     await Bun.sleep(600)
-    const collapsed = await page.evaluate<Snapshot>(state)
+    const collapsed = await page.evaluate(state, (value: unknown) => { const record = decodeRecord(value); return { ...record, open: (decodeBoolean)(record["open"]), inert: (decodeBoolean)(record["inert"]), ariaHidden: (decodeNullable(decodeString))(record["ariaHidden"]), opacity: (decodeNumber)(record["opacity"]), height: (decodeNumber)(record["height"]), belowTop: (decodeNumber)(record["belowTop"]), mounted: (decodeBoolean)(record["mounted"]), mounts: (decodeNumber)(record["mounts"]) } })
     expect(collapsed).toMatchObject({ open: false, inert: true, ariaHidden: "true", opacity: 0, height: 0, mounted: true, mounts: 1 })
     expect(collapsed.belowTop).toBe(closed.belowTop)
   } finally { await page.close() }
@@ -76,22 +75,22 @@ test("reduced motion makes the expand instant, keeps a crossfade at or under 150
   try {
     await page.setReducedMotion(true)
     await ready(page)
-    const timing = await page.evaluate<{ readonly panel: string; readonly properties: string; readonly enter: string; readonly enterName: string }>(`(() => {
+    const timing = await page.evaluate(`(() => {
       const panel = getComputedStyle(document.getElementById('panel'))
       const enter = getComputedStyle(document.getElementById('below'))
       return { panel: panel.transitionDuration, properties: panel.transitionProperty, enter: enter.animationDuration, enterName: enter.animationName }
-    })()`)
+    })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, panel: (decodeString)(record["panel"]), properties: (decodeString)(record["properties"]), enter: (decodeString)(record["enter"]), enterName: (decodeString)(record["enterName"]) } })
     expect(timing.properties).toBe("grid-template-rows, opacity")
     expect(timing.panel).toBe("0s, 0.08s")
     expect(timing.enterName).toBe("yc-motion-fade, yc-motion-rise")
     expect(timing.enter).toBe("0.08s, 0s")
-    const closed = await page.evaluate<Snapshot>(state)
+    const closed = await page.evaluate(state, (value: unknown) => { const record = decodeRecord(value); return { ...record, open: (decodeBoolean)(record["open"]), inert: (decodeBoolean)(record["inert"]), ariaHidden: (decodeNullable(decodeString))(record["ariaHidden"]), opacity: (decodeNumber)(record["opacity"]), height: (decodeNumber)(record["height"]), belowTop: (decodeNumber)(record["belowTop"]), mounted: (decodeBoolean)(record["mounted"]), mounts: (decodeNumber)(record["mounts"]) } })
     await page.evaluate(`document.getElementById('toggle').click()`)
     await Bun.sleep(40)
-    const opened = await page.evaluate<Snapshot>(state)
+    const opened = await page.evaluate(state, (value: unknown) => { const record = decodeRecord(value); return { ...record, open: (decodeBoolean)(record["open"]), inert: (decodeBoolean)(record["inert"]), ariaHidden: (decodeNullable(decodeString))(record["ariaHidden"]), opacity: (decodeNumber)(record["opacity"]), height: (decodeNumber)(record["height"]), belowTop: (decodeNumber)(record["belowTop"]), mounted: (decodeBoolean)(record["mounted"]), mounts: (decodeNumber)(record["mounts"]) } })
     expect(opened.height).toBeGreaterThanOrEqual(120)
     expect(opened.belowTop - closed.belowTop).toBe(opened.height)
     await Bun.sleep(200)
-    expect((await page.evaluate<Snapshot>(state)).opacity).toBe(1)
+    expect((await page.evaluate(state, (value: unknown) => { const record = decodeRecord(value); return { ...record, open: (decodeBoolean)(record["open"]), inert: (decodeBoolean)(record["inert"]), ariaHidden: (decodeNullable(decodeString))(record["ariaHidden"]), opacity: (decodeNumber)(record["opacity"]), height: (decodeNumber)(record["height"]), belowTop: (decodeNumber)(record["belowTop"]), mounted: (decodeBoolean)(record["mounted"]), mounts: (decodeNumber)(record["mounts"]) } })).opacity).toBe(1)
   } finally { await page.close() }
 })

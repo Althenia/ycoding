@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeBoolean, decodeNullable, decodeNumber, decodeRecord, decodeString } from "./cdp"
 import { startRelayDouble } from "../test/relay-double"
 import { readModelRef, type ModelRefView } from "../src/remote/projection"
 import type { ModelOption } from "../src/remote/catalog"
@@ -38,7 +38,7 @@ const cursorModels: ModelOption[] = ["", "-fast", "-500k", "-500k-fast"].map((su
 type Page = Awaited<ReturnType<NonNullable<typeof browser>["openPage"]>>
 async function wait(page: Page, expression: string) {
   for (let attempt = 0; attempt < 100; attempt++) {
-    if (await page.evaluate<boolean>(`Boolean(${expression})`)) return
+    if (await page.evaluate(`Boolean(${expression})`)) return
     await Bun.sleep(30)
   }
   throw new Error(`Timed out: ${expression}`)
@@ -116,7 +116,7 @@ test("composer effort slider submits a provider-offered variant", async () => {
   try {
     await h.page.evaluate(`document.querySelector('.reasoning-effort input').focus()`)
     await h.page.pressKey("End", "End", 35)
-    expect(await h.page.evaluate<string>(`document.querySelector('.reasoning-effort input').getAttribute('aria-valuetext')`)).toBe("Max")
+    expect(await h.page.evaluate(`document.querySelector('.reasoning-effort input').getAttribute('aria-valuetext')`)).toBe("Max")
     await send(h.page, "Use maximum effort")
     await wait(h.page, `document.querySelector('textarea').value === ''`)
     expect(h.relay.requests.find((request) => request.operation === "session.switchModel")?.input?.model).toEqual({ providerID: "openai", id: "model-a", variant: "max" })
@@ -126,19 +126,19 @@ test("composer effort slider submits a provider-offered variant", async () => {
 test("composer default effort is a separate slider stop", async () => {
   const h = await harness({ providerID: "openai", id: "model-a" })
   try {
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.reasoning-effort__labels span')].map(node => node.textContent)`)).toEqual(["Default", "Low", "High", "Max"])
-    expect(await h.page.evaluate<string>(`document.querySelector('.reasoning-effort input').value`)).toBe("0")
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.reasoning-effort__labels span')].map(node => node.textContent)`)).toEqual(["Default", "Low", "High", "Max"])
+    expect(await h.page.evaluate(`document.querySelector('.reasoning-effort input').value`)).toBe("0")
     await h.page.evaluate(`document.querySelector('.reasoning-effort input').focus()`)
     await h.page.pressKey("ArrowRight", "ArrowRight", 39)
-    expect(await h.page.evaluate<string>(`document.querySelector('.reasoning-effort input').getAttribute('aria-valuetext')`)).toBe("Low")
+    expect(await h.page.evaluate(`document.querySelector('.reasoning-effort input').getAttribute('aria-valuetext')`)).toBe("Low")
   } finally { await h.close() }
 })
 
 test("composer does not offer effort for a model without variants", async () => {
   const h = await harness({ providerID: "openai", id: "model-plain" })
   try {
-    expect(await h.page.evaluate<boolean>(`document.querySelector('.reasoning-effort input') === null`)).toBe(true)
-    expect(await h.page.evaluate<string>(`document.querySelector('.reasoning-effort').textContent`)).toContain("No adjustable effort")
+    expect(await h.page.evaluate(`document.querySelector('.reasoning-effort input') === null`)).toBe(true)
+    expect(await h.page.evaluate(`document.querySelector('.reasoning-effort').textContent`)).toContain("No adjustable effort")
   } finally { await h.close() }
 })
 
@@ -147,8 +147,8 @@ test("models without adjustable effort explain their settings in the picker", as
     const h = await harness({ providerID: "openai", id: "model-plain" }, undefined, undefined, viewport)
     try {
       await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
-      expect(await h.page.evaluate<string | null>(`document.querySelector('.model-control__surface')?.textContent ?? null`)).toContain("This model has no adjustable effort; it uses its own settings.")
-      expect(await h.page.evaluate<boolean>(`document.querySelector('.model-control__surface [role="slider"]') === null`)).toBe(true)
+      expect(await h.page.evaluate(`document.querySelector('.model-control__surface')?.textContent ?? null`)).toContain("This model has no adjustable effort; it uses its own settings.")
+      expect(await h.page.evaluate(`document.querySelector('.model-control__surface [role="slider"]') === null`)).toBe(true)
       expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
     } finally { await h.close() }
   }
@@ -158,25 +158,25 @@ test("models without adjustable effort explain their settings in the picker", as
     await h.page.evaluate(`window.modelReplayStore.loadCatalog({sessionID:'ses_a'}, {refresh:true})`)
     await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.find(item=>item.id==='model-a')?.profiles?.[0]?.name === 'no-effort'`)
     await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__surface').textContent`)).toContain("This model has no adjustable effort; it uses its own settings.")
-    expect(await h.page.evaluate<boolean>(`document.querySelector('.model-control__surface [role="slider"]') === null`)).toBe(true)
+    expect(await h.page.evaluate(`document.querySelector('.model-control__surface').textContent`)).toContain("This model has no adjustable effort; it uses its own settings.")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__surface [role="slider"]') === null`)).toBe(true)
   } finally { await h.close() }
 })
 
 test("omitted effort is not an offered slider stop and clearing stays separate from variant selection", async () => {
   const h = await harness({ providerID: "openai", id: "model-a" })
   try {
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Model settings")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__effort').textContent`)).toBe("Model settings")
     await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["Low", "High", "Max"])
-    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("No effort override")
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["Low", "High", "Max"])
+    expect(await h.page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("No effort override")
     await h.page.evaluate(`document.querySelector('[role="slider"]').focus()`)
     await h.page.pressKey("Home", "Home", 36)
-    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("Low")
+    expect(await h.page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("Low")
     await h.page.evaluate(`document.querySelector('[aria-label="Clear reasoning effort override"]').click()`)
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__switch strong').textContent`)).toBe("Model settings")
-    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("No effort override")
-    expect(await h.page.evaluate<unknown>(`window.modelReplayStore.state().selectedSessionInfo.model`)).toEqual({ providerID: "openai", id: "model-a" })
+    expect(await h.page.evaluate(`document.querySelector('.model-control__switch strong').textContent`)).toBe("Model settings")
+    expect(await h.page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("No effort override")
+    expect(await h.page.evaluate(`window.modelReplayStore.state().selectedSessionInfo.model`)).toEqual({ providerID: "openai", id: "model-a" })
     expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
   } finally { await h.close() }
 })
@@ -186,12 +186,12 @@ test("provider-offered none and default remain selectable explicit variants", as
   try {
     await choose(h.page, "Model D")
     await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["None", "Default"])
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["None", "Default"])
     await h.page.evaluate(`document.querySelector('[role="slider"]').focus()`)
     await h.page.pressKey("Home", "Home", 36)
-    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("None")
+    expect(await h.page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("None")
     await h.page.pressKey("End", "End", 35)
-    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("Default")
+    expect(await h.page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("Default")
     await h.page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
     await send(h.page, "Use offered default")
     await wait(h.page, `document.querySelector('textarea').value === ''`)
@@ -205,12 +205,12 @@ test("explicit provider profiles switch before prompts, fail closed, and never a
     await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__trigger').textContent`)).toContain("profileA")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__trigger').textContent`)).toContain("profileA")
     await send(h.page, "Profile A")
     await wait(h.page, `document.querySelector('textarea').value === ''`)
     expect(h.relay.requests.filter((request) => request.operation === "session.switchModel").at(-1)?.input?.model).toEqual({ providerID: "openai", id: "model-a", profile: "profileA" })
-    expect(h.relay.requests.some((request) => String(request.operation) === "integration.activate")).toBe(false)
-    expect(await h.page.evaluate<boolean>(`document.querySelector('.composer__model-warning') === null`)).toBe(true)
+    expect(h.relay.requests.some((request) => ["integration.activate"].includes(request.operation))).toBe(false)
+    expect(await h.page.evaluate(`document.querySelector('.composer__model-warning') === null`)).toBe(true)
   } finally { await h.close() }
 
   const failed = await harness({ providerID: "openai", id: "model-a" })
@@ -223,7 +223,7 @@ test("explicit provider profiles switch before prompts, fail closed, and never a
     await wait(failed.page, `window.modelReplayStore.state().mutations.some(item=>item.state==='failed')`)
     expect(failed.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(1)
     expect(failed.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(0)
-    expect(failed.relay.requests.some((request) => String(request.operation) === "integration.activate")).toBe(false)
+    expect(failed.relay.requests.some((request) => ["integration.activate"].includes(request.operation))).toBe(false)
   } finally { await failed.close() }
 })
 
@@ -231,12 +231,12 @@ test("compact Profile Default row opens full choices inside the same model panel
   const h = await harness({ providerID: "openai", id: "model-a" })
   try {
     await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
-    expect(await h.page.evaluate<string>(`document.querySelector('[aria-label="Profile"]').textContent`)).toBe("Profile · Default")
+    expect(await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').textContent`)).toBe("Profile · Default")
     await h.page.evaluate(`window.profileSurface=document.querySelector('.model-control__surface'); document.querySelector('[aria-label="Profile"]').click()`)
-    expect(await h.page.evaluate<boolean>(`window.profileSurface === document.querySelector('.model-control__surface') && window.profileSurface.contains(document.querySelector('[role="option"]'))`)).toBe(true)
-    expect(await h.page.evaluate<number>(`document.querySelectorAll('[role="dialog"]').length`)).toBe(1)
+    expect(await h.page.evaluate(`window.profileSurface === document.querySelector('.model-control__surface') && window.profileSurface.contains(document.querySelector('[role="option"]'))`)).toBe(true)
+    expect(await h.page.evaluate(`document.querySelectorAll('[role="dialog"]').length`)).toBe(1)
     await h.page.pressKey("Escape", "Escape", 27)
-    expect(await h.page.evaluate<boolean>(`document.activeElement === document.querySelector('[aria-label="Profile"]')`)).toBe(true)
+    expect(await h.page.evaluate(`document.activeElement === document.querySelector('[aria-label="Profile"]')`)).toBe(true)
   } finally { await h.close() }
 })
 
@@ -247,7 +247,7 @@ test("a long selected profile stays inside the composer model trigger without hi
     h.setCatalogModels(models.map((item) => item.id === "model-a" ? { ...item, profiles: [{ name: profile, active: true, variants: ["high"] }] } : item))
     await h.page.evaluate(`window.modelReplayStore.loadCatalog({sessionID:'ses_a'}, {refresh:true})`)
     await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.find(item=>item.id==='model-a')?.profiles?.[0]?.name === ${JSON.stringify(profile)}`)
-    expect(await h.page.evaluate<boolean>(`(() => { const trigger=document.querySelector('.model-control__trigger'), rect=trigger.getBoundingClientRect(); return trigger.scrollWidth<=trigger.clientWidth && trigger.querySelector('.model-control__name').getBoundingClientRect().width>=24 && [...trigger.children].every(child=>{ const box=child.getBoundingClientRect(); return box.left>=rect.left && box.right<=rect.right; }); })()`)).toBe(true)
+    expect(await h.page.evaluate(`(() => { const trigger=document.querySelector('.model-control__trigger'), rect=trigger.getBoundingClientRect(); return trigger.scrollWidth<=trigger.clientWidth && trigger.querySelector('.model-control__name').getBoundingClientRect().width>=24 && [...trigger.children].every(child=>{ const box=child.getBoundingClientRect(); return box.left>=rect.left && box.right<=rect.right; }); })()`)).toBe(true)
   } finally { await h.close() }
 })
 
@@ -258,18 +258,18 @@ test("catalog speeds and Cursor effort labels submit their exact original IDs", 
     await h.page.evaluate(`window.modelReplayStore.loadCatalog({sessionID:'ses_a'}, {refresh:true})`)
     await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.some(item=>item.id==='grok-4.7-ultrafast')`)
     await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["Low", "Medium", "High", "Extra High"])
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__switch strong').textContent`)).toBe("Low")
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["Low", "Medium", "High", "Extra High"])
+    expect(await h.page.evaluate(`document.querySelector('.model-control__switch strong').textContent`)).toBe("Low")
     await send(h.page, "Retain prefixed ID")
     await waitForOperation(h.relay, "session.prompt")
     expect(h.current()?.variant).toBe("Grok 4.7 Low")
     await h.page.evaluate(`document.querySelector('[aria-label="Model speed"]').click()`)
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('[role="option"]')].map(node=>node.textContent)`)).toEqual(["Standard", "Fast", "Ultrafast"])
+    expect(await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].map(node=>node.textContent)`)).toEqual(["Standard", "Fast", "Ultrafast"])
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(node=>node.textContent==='Ultrafast').click()`)
-    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("No effort override")
+    expect(await h.page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("No effort override")
     await h.page.evaluate(`document.querySelector('[role="slider"]').focus()`)
     await h.page.pressKey("End", "End", 35)
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__switch strong').textContent`)).toBe("Extra High")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__switch strong').textContent`)).toBe("Extra High")
     await send(h.page, "Use ultrafast xhigh")
     await wait(h.page, `window.modelReplayStore.state().selectedSessionInfo?.model?.id === 'grok-4.7-ultrafast'`)
     expect(h.relay.requests.find((request) => request.operation === "session.switchModel")?.input?.model).toEqual({ providerID: "cursor", id: "grok-4.7-ultrafast", variant: "xhigh" })
@@ -280,7 +280,7 @@ test("effort particles actually move within the fill and every automatic animati
   const h = await harness()
   try {
     await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
-    const motion = await h.page.evaluate<{ moved: boolean; bounded: boolean; clipped: boolean }>(`(async () => { const field=document.querySelector('.model-control__sparkles'), before=getComputedStyle(field).transform, animations=field.getAnimations({subtree:true}); await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))); const moved=getComputedStyle(field).transform!==before; return { moved, bounded:animations.every(animation=>animation.effect.getComputedTiming().endTime<=5000), clipped:getComputedStyle(field.parentElement).overflow==='hidden' }; })()`)
+    const motion = await h.page.evaluate(`(async () => { const field=document.querySelector('.model-control__sparkles'), before=getComputedStyle(field).transform, animations=field.getAnimations({subtree:true}); await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))); const moved=getComputedStyle(field).transform!==before; return { moved, bounded:animations.every(animation=>animation.effect.getComputedTiming().endTime<=5000), clipped:getComputedStyle(field.parentElement).overflow==='hidden' }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, moved: (decodeBoolean)(record["moved"]), bounded: (decodeBoolean)(record["bounded"]), clipped: (decodeBoolean)(record["clipped"]) } })
     expect(motion.moved).toBe(true)
     expect(motion.clipped).toBe(true)
     expect(motion.bounded).toBe(true)
@@ -296,18 +296,18 @@ test("verified Cursor raw IDs render cleanly, retain cancellation and keyboard f
       await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.some(item=>item.id==='grok-4.7-500k-fast')`)
       if (width < 480) await h.page.evaluate(`document.querySelector('.composer__mobile-trigger').click()`)
       await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
-      expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["Low", "Medium", "High", "Extra High"])
-      expect(await h.page.evaluate<string>(`document.querySelector('.model-control__switch strong').textContent`)).toBe("High")
+      expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["Low", "Medium", "High", "Extra High"])
+      expect(await h.page.evaluate(`document.querySelector('.model-control__switch strong').textContent`)).toBe("High")
       await h.page.evaluate(`document.querySelector('[role="slider"]').focus()`)
       await h.page.pressKey("End", "End", 35)
-      expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("Extra High")
+      expect(await h.page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("Extra High")
       await h.page.pressKey("ArrowLeft", "ArrowLeft", 37)
-      expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("High")
+      expect(await h.page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("High")
       await h.page.evaluate(`(() => { const slider=document.querySelector('[role="slider"]'), rect=slider.getBoundingClientRect(); slider.setPointerCapture=()=>{}; slider.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:8,clientX:rect.left,clientY:rect.top+12})); slider.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:8,clientX:rect.right,clientY:rect.top+12})); slider.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:8})); })()`)
-      expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("High")
+      expect(await h.page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("High")
       if (width === 390 || width === 1440) await h.page.evaluate(`Promise.all(document.querySelector('.model-control__surface').getAnimations({subtree:true}).map(animation=>animation.finished.catch(()=>{})))`)
       else { await h.page.setReducedMotion(true); await h.page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`) }
-      const geometry = await h.page.evaluate<{ overflow: boolean; contained: boolean; focus: boolean; profileHeight: number; sliderHeight: number; activeMotion: number }>(`(() => { const surface=document.querySelector('.model-control__surface'), rect=surface.getBoundingClientRect(), slider=surface.querySelector('[role="slider"]'), profile=surface.querySelector('[aria-label="Profile"]'); return { overflow:document.documentElement.scrollWidth>innerWidth || surface.scrollWidth>surface.clientWidth, contained:rect.left>=0 && rect.right<=innerWidth && rect.top>=0 && rect.bottom<=innerHeight, focus:document.activeElement===slider && getComputedStyle(slider.querySelector('.model-control__track')).outlineStyle==='solid', profileHeight:profile.getBoundingClientRect().height, sliderHeight:slider.getBoundingClientRect().height, activeMotion:surface.getAnimations({subtree:true}).filter(animation=>animation.playState==='running').length }; })()`)
+      const geometry = await h.page.evaluate(`(() => { const surface=document.querySelector('.model-control__surface'), rect=surface.getBoundingClientRect(), slider=surface.querySelector('[role="slider"]'), profile=surface.querySelector('[aria-label="Profile"]'); return { overflow:document.documentElement.scrollWidth>innerWidth || surface.scrollWidth>surface.clientWidth, contained:rect.left>=0 && rect.right<=innerWidth && rect.top>=0 && rect.bottom<=innerHeight, focus:document.activeElement===slider && getComputedStyle(slider.querySelector('.model-control__track')).outlineStyle==='solid', profileHeight:profile.getBoundingClientRect().height, sliderHeight:slider.getBoundingClientRect().height, activeMotion:surface.getAnimations({subtree:true}).filter(animation=>animation.playState==='running').length }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, overflow: (decodeBoolean)(record["overflow"]), contained: (decodeBoolean)(record["contained"]), focus: (decodeBoolean)(record["focus"]), profileHeight: (decodeNumber)(record["profileHeight"]), sliderHeight: (decodeNumber)(record["sliderHeight"]), activeMotion: (decodeNumber)(record["activeMotion"]) } })
       expect(geometry).toMatchObject({ overflow: false, contained: true, focus: true, activeMotion: 0 })
       expect(geometry.profileHeight).toBeGreaterThanOrEqual(44)
       expect(geometry.sliderHeight).toBeGreaterThanOrEqual(44)
@@ -315,25 +315,25 @@ test("verified Cursor raw IDs render cleanly, retain cancellation and keyboard f
       await h.page.setReducedMotion(true)
       await h.page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`)
       await h.page.pressKey("Home", "Home", 36)
-      expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("Low")
-      const staticTexture = await h.page.evaluate<{ before: string; after: string; animations: number }>(`(async () => { const field=document.querySelector('.model-control__sparkles'), before=getComputedStyle(field).transform; await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))); return { before, after:getComputedStyle(field).transform, animations:field.getAnimations({subtree:true}).length }; })()`)
+      expect(await h.page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("Low")
+      const staticTexture = await h.page.evaluate(`(async () => { const field=document.querySelector('.model-control__sparkles'), before=getComputedStyle(field).transform; await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))); return { before, after:getComputedStyle(field).transform, animations:field.getAnimations({subtree:true}).length }; })()`)
       expect(staticTexture).toEqual({ before: "none", after: "none", animations: 0 })
       await h.page.evaluate(`window.profileSurface=document.querySelector('.model-control__surface'); document.querySelector('[aria-label="Profile"]').click()`)
-      expect(await h.page.evaluate<boolean>(`window.profileSurface===document.querySelector('.model-control__surface') && document.querySelector('.model-control__sparkles')===null`)).toBe(true)
+      expect(await h.page.evaluate(`window.profileSurface===document.querySelector('.model-control__surface') && document.querySelector('.model-control__sparkles')===null`)).toBe(true)
       await h.page.pressKey("End", "End", 35)
-      expect(await h.page.evaluate<string>(`document.activeElement.textContent`)).toContain("Research and development account")
+      expect(await h.page.evaluate(`document.activeElement.textContent`)).toContain("Research and development account")
       await h.page.pressKey("Enter", "Enter", 13, "\r")
-      expect(await h.page.evaluate<boolean>(`document.activeElement===document.querySelector('[aria-label="Profile"]')`)).toBe(true)
-      expect(await h.page.evaluate<string>(`document.querySelector('[aria-label="Profile"]').textContent`)).toBe("Profile · Research and development account")
+      expect(await h.page.evaluate(`document.activeElement===document.querySelector('[aria-label="Profile"]')`)).toBe(true)
+      expect(await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').textContent`)).toBe("Profile · Research and development account")
       await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
       if (width === 390 || width === 1440) await Bun.write(new URL(`../../../.cache/tmp/model-profiles-${theme}-${width}.png`, import.meta.url), Buffer.from(await h.page.screenshot(), "base64"))
       await h.page.pressKey("Escape", "Escape", 27)
       await h.page.evaluate(`document.querySelector('[aria-label="Model speed"]').click()`)
-      expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__choices [role="option"]')].map(node=>node.childNodes[0].textContent)`)).toEqual(["Standard", "Fast"])
+      expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__choices [role="option"]')].map(node=>node.childNodes[0].textContent)`)).toEqual(["Standard", "Fast"])
       await h.page.pressKey("Escape", "Escape", 27)
-      expect(await h.page.evaluate<boolean>(`document.activeElement===document.querySelector('[aria-label="Model speed"]')`)).toBe(true)
+      expect(await h.page.evaluate(`document.activeElement===document.querySelector('[aria-label="Model speed"]')`)).toBe(true)
       await h.page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
-      expect(await h.page.evaluate<boolean>(`document.querySelector('.model-control__sparkles')===null`)).toBe(true)
+      expect(await h.page.evaluate(`document.querySelector('.model-control__sparkles')===null`)).toBe(true)
       expect(h.relay.requests.some((request) => request.operation === "session.switchModel")).toBe(false)
     } finally { await h.close() }
   }
@@ -378,13 +378,13 @@ test("a speed without the selected profile is unavailable until an explicit elig
     await h.page.evaluate(`window.modelReplayStore.loadCatalog({sessionID:'ses_a'}, {refresh:true})`)
     await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.find(item=>item.id==='model-a-fast')?.profiles?.[0]?.name === 'profileB'`)
     await h.page.evaluate(`document.querySelector('.model-control__trigger').click(); document.querySelector('[aria-label="Model speed"]').click()`)
-    expect(await h.page.evaluate<boolean>(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.startsWith('Fast')).disabled`)).toBe(true)
+    expect(await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.startsWith('Fast')).disabled`)).toBe(true)
     await h.page.pressKey("Escape", "Escape", 27)
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__trigger').textContent`)).toContain("profileA")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__trigger').textContent`)).toContain("profileA")
     expect(h.relay.requests.filter((request) => request.operation === "session.switchModel" || request.operation === "session.prompt")).toHaveLength(0)
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click(); [...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('Use provider default')).click()`)
     await h.page.evaluate(`document.querySelector('[aria-label="Model speed"]').click(); [...document.querySelectorAll('[role="option"]')].find(option=>option.textContent==='Fast').click()`)
-    expect(await h.page.evaluate<boolean>(`document.querySelector('.composer__model-warning') === null`)).toBe(true)
+    expect(await h.page.evaluate(`document.querySelector('.composer__model-warning') === null`)).toBe(true)
     await send(h.page, "Use provider default explicitly")
     await waitForOperation(h.relay, "session.prompt")
     expect(h.relay.requests.find((request) => request.operation === "session.switchModel")?.input?.model).toEqual({ providerID: "openai", id: "model-a-fast", variant: "high" })
@@ -395,10 +395,10 @@ test("an unavailable saved profile remains truthful and sends nothing until expl
   const h = await harness({ providerID: "openai", id: "model-a", profile: "Removed profile", variant: "high" })
   try {
     await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
-    expect(await h.page.evaluate<string>(`document.querySelector('[aria-label="Profile"]').textContent`)).toBe("Profile · Unavailable: Removed profile")
-    expect(await h.page.evaluate<boolean>(`document.querySelector('[role="slider"]')===null`)).toBe(true)
+    expect(await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').textContent`)).toBe("Profile · Unavailable: Removed profile")
+    expect(await h.page.evaluate(`document.querySelector('[role="slider"]')===null`)).toBe(true)
     await send(h.page, "Keep this draft")
-    expect(await h.page.evaluate<string>(`document.querySelector('textarea').value`)).toBe("Keep this draft")
+    expect(await h.page.evaluate(`document.querySelector('textarea').value`)).toBe("Keep this draft")
     expect(h.relay.requests.some((request) => request.operation === "session.switchModel" || request.operation === "session.prompt")).toBe(false)
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click(); [...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.startsWith('profileA')).click()`)
     await send(h.page, "Choose profile explicitly")
@@ -417,21 +417,21 @@ test("profile variants, effort choices, and remembered values stay profile-speci
     await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('Work')).click()`)
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["High"])
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["High"])
     await h.page.evaluate(`document.querySelector('[role="slider"]').focus()`)
     await h.page.pressKey("End", "End", 35)
-    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("High")
+    expect(await h.page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("High")
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('Personal')).click()`)
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["Low"])
-    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("No effort override")
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["Low"])
+    expect(await h.page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("No effort override")
     await h.page.evaluate(`document.querySelector('[role="slider"]').focus()`)
     await h.page.pressKey("Home", "Home", 35)
-    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("Low")
+    expect(await h.page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("Low")
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('Work')).click()`)
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["High"])
-    expect(await h.page.evaluate<string>(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("High")
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["High"])
+    expect(await h.page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("High")
     await send(h.page, "Use remembered Work effort")
     await waitForOperation(h.relay, "session.prompt")
     expect(h.relay.requests.find((request) => request.operation === "session.switchModel")?.input?.model).toEqual({ providerID: "cursor", id: "claude-profiles", variant: "high", profile: "Work" })
@@ -473,7 +473,7 @@ test("a confirmed same-profile rebind is not repeated when retrying rejected pro
     await send(h.page, "Retry admission only")
     await waitForOperation(h.relay, "session.prompt")
     await wait(h.page, `window.modelReplayStore.state().mutations.some(item=>item.state==='failed')`)
-    const mutationID = await h.page.evaluate<string>(`window.modelReplayStore.state().mutations.find(item=>item.state==='failed').id`)
+    const mutationID = await h.page.evaluate(`window.modelReplayStore.state().mutations.find(item=>item.state==='failed').id`)
     await h.page.evaluate(`window.modelReplayStore.retryMutation(${JSON.stringify(mutationID)})`)
     await waitForOperation(h.relay, "session.prompt")
     for (let attempt = 0; attempt < 100 && h.relay.requests.filter((request) => request.operation === "session.prompt").length < 2; attempt++) await Bun.sleep(30)
@@ -491,13 +491,13 @@ test("a retry fails closed if another client changes the model after the confirm
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
     await send(h.page, "Do not retry under a different profile")
     await wait(h.page, `window.modelReplayStore.state().mutations.some(item=>item.state==='failed')`)
-    const mutationID = await h.page.evaluate<string>(`window.modelReplayStore.state().mutations.find(item=>item.state==='failed').id`)
+    const mutationID = await h.page.evaluate(`window.modelReplayStore.state().mutations.find(item=>item.state==='failed').id`)
     h.external({ providerID: "openai", id: "model-a", profile: "profileB" })
     await wait(h.page, `window.modelReplayStore.state().selectedSessionInfo.model.profile === 'profileB'`)
     await h.page.evaluate(`window.modelReplayStore.retryMutation(${JSON.stringify(mutationID)})`)
     expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(1)
     expect(h.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(1)
-    expect(await h.page.evaluate<string[]>(`window.modelReplayStore.state().mutations.filter(item=>item.id===${JSON.stringify(mutationID)}).map(item=>item.state)`)).toEqual(["failed"])
+    expect(await h.page.evaluate(`window.modelReplayStore.state().mutations.filter(item=>item.id===${JSON.stringify(mutationID)}).map(item=>item.state)`)).toEqual(["failed"])
   } finally { await h.close() }
 })
 
@@ -507,10 +507,10 @@ test("a refreshed equal Session Model.Ref cannot clear an unsubmitted profile re
     await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
-    const updatedAt = await h.page.evaluate<number>(`window.modelReplayStore.state().selectedSessionInfo.updatedAt`)
+    const updatedAt = await h.page.evaluate(`window.modelReplayStore.state().selectedSessionInfo.updatedAt`, decodeNumber)
     h.refreshSessionInfo()
     await wait(h.page, `window.modelReplayStore.state().selectedSessionInfo.updatedAt > ${updatedAt}`)
-    expect(await h.page.evaluate<boolean>(`document.querySelector('.model-control__trigger').classList.contains('mini-picker__trigger--pending')`)).toBe(true)
+    expect(await h.page.evaluate(`document.querySelector('.model-control__trigger').classList.contains('mini-picker__trigger--pending')`)).toBe(true)
     await send(h.page, "Keep pending rebind")
     await waitForOperation(h.relay, "session.prompt")
     expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(1)
@@ -553,12 +553,12 @@ test("two Sessions retain independent profile picks and drafts across composer s
     await page.evaluate(`(() => { const field=document.querySelector('textarea'); field.value='draft B'; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
     await page.evaluate(`window.modelReplayStore.selectSession('ses_a')`)
     await wait(page, `window.modelReplayStore.state().activeSessionID === 'ses_a' && document.querySelector('textarea')?.value === 'draft A'`)
-    expect(await page.evaluate<string>(`document.querySelector('.model-control__trigger').textContent`)).toContain("profileA")
+    expect(await page.evaluate(`document.querySelector('.model-control__trigger').textContent`)).toContain("profileA")
     await send(page, "draft A")
     await waitForOperation(relay, "session.prompt")
     await page.evaluate(`window.modelReplayStore.selectSession('ses_b')`)
     await wait(page, `window.modelReplayStore.state().activeSessionID === 'ses_b' && document.querySelector('textarea')?.value === 'draft B'`)
-    expect(await page.evaluate<string>(`document.querySelector('.model-control__trigger').textContent`)).toContain("profileB")
+    expect(await page.evaluate(`document.querySelector('.model-control__trigger').textContent`)).toContain("profileB")
     await send(page, "draft B")
     for (let attempt = 0; attempt < 100 && relay.requests.filter((request) => request.operation === "session.prompt").length < 2; attempt++) await Bun.sleep(30)
     expect(relay.requests.filter((request) => request.operation === "session.switchModel").map((request) => [request.sessionID, request.input?.model])).toEqual([
@@ -573,18 +573,18 @@ test("each model restores its own valid effort instead of another model's effort
   const h = await harness()
   try {
     await choose(h.page, "Model B")
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Model settings")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__effort').textContent`)).toBe("Model settings")
     await choose(h.page, "Model A")
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Max")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__effort').textContent`)).toBe("Max")
     await choose(h.page, "Model B")
     await effort(h.page, "high")
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("High")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__effort').textContent`)).toBe("High")
     await choose(h.page, "Model A")
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Max")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__effort').textContent`)).toBe("Max")
     await effort(h.page, "Model settings")
     await choose(h.page, "Model B")
     await choose(h.page, "Model A")
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Model settings")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__effort').textContent`)).toBe("Model settings")
     expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
   } finally { await h.close() }
 })
@@ -592,16 +592,16 @@ test("each model restores its own valid effort instead of another model's effort
 test("invalid incoming effort blocks ordinary sends until an explicit clear intent without rewriting the Session on read", async () => {
   const h = await harness({ providerID: "openai", id: "model-b", variant: "max" })
   try {
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toContain("Unavailable")
-    expect(await h.page.evaluate<string>(`document.querySelector('.composer__model-warning').textContent`)).toContain("max")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__effort').textContent`)).toContain("Unavailable")
+    expect(await h.page.evaluate(`document.querySelector('.composer__model-warning').textContent`)).toContain("max")
     await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
-    expect(await h.page.evaluate<unknown>(`({hero:document.querySelector('.model-control__switch strong').textContent,slider:document.querySelector('[role="slider"]')!==null})`)).toEqual({ hero: "Unavailable: max", slider: false })
+    expect(await h.page.evaluate(`({hero:document.querySelector('.model-control__switch strong').textContent,slider:document.querySelector('[role="slider"]')!==null})`)).toEqual({ hero: "Unavailable: max", slider: false })
     expect(h.current()?.variant).toBe("max")
-    expect(await h.page.evaluate<string>(`window.modelReplayStore.state().selectedSessionInfo.model.variant`)).toBe("max")
+    expect(await h.page.evaluate(`window.modelReplayStore.state().selectedSessionInfo.model.variant`)).toBe("max")
     expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
     await h.page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
     await send(h.page, "Retain invalid draft")
-    expect(await h.page.evaluate<string>(`document.querySelector('textarea').value`)).toBe("Retain invalid draft")
+    expect(await h.page.evaluate(`document.querySelector('textarea').value`)).toBe("Retain invalid draft")
     expect(h.relay.requests.filter((request) => request.operation === "session.prompt" || request.operation === "session.switchModel")).toHaveLength(0)
     await effort(h.page, "Model settings")
     await send(h.page, "Use model settings")
@@ -615,15 +615,15 @@ test("a confirmed local choice releases its override, an external model owns lat
   try {
     await choose(h.page, "Model B")
     await effort(h.page, "high")
-    const beforeRead = await h.page.evaluate<number>(`window.modelReplayStore.state().view.updatedAt ?? 0`)
+    const beforeRead = await h.page.evaluate(`window.modelReplayStore.state().view.updatedAt ?? 0`, decodeNumber)
     h.external({ providerID: "openai", id: "model-a", variant: "max" })
     await wait(h.page, `window.modelReplayStore.state().view.updatedAt > ${beforeRead}`)
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__name').textContent`)).toBe("Model B")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__name').textContent`)).toBe("Model B")
     await send(h.page, "Confirm B")
     await wait(h.page, `window.modelReplayStore.state().selectedSessionInfo?.model?.id === 'model-b' && document.querySelector('textarea').value === ''`)
     h.external({ providerID: "openai", id: "model-c", variant: "medium" })
     await wait(h.page, `window.modelReplayStore.state().selectedSessionInfo?.model?.id === 'model-c'`)
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__name').textContent`)).toBe("Model C")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__name').textContent`)).toBe("Model C")
     await send(h.page, "Follow C")
     await wait(h.page, `document.querySelector('textarea').value === ''`)
     expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(1)
@@ -634,15 +634,15 @@ test("a confirmed local choice releases its override, an external model owns lat
     await send(h.page, "Retain on refusal")
     await wait(h.page, `window.modelReplayStore.state().mutations.some(mutation=>mutation.kind==='prompt' && mutation.state==='failed' && mutation.detail==='Switch refused')`)
     expect(h.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(2)
-    expect(await h.page.evaluate<string>(`window.modelReplayStore.state().mutations.find(mutation=>mutation.state==='failed')?.input.text`)).toBe("Retain on refusal")
+    expect(await h.page.evaluate(`window.modelReplayStore.state().mutations.find(mutation=>mutation.state==='failed')?.input.text`)).toBe("Retain on refusal")
   } finally { await h.close() }
 })
 
 test("a no-effort model needs explicit clear intent for obsolete effort and a fast counterpart uses omission when it cannot retain effort", async () => {
   const plain = await harness({ providerID: "openai", id: "model-plain", variant: "max" })
   try {
-    expect(await plain.page.evaluate<boolean>(`document.querySelector('.model-control__effort') === null`)).toBe(true)
-    expect(await plain.page.evaluate<string>(`document.querySelector('.composer__model-warning').textContent`)).toContain("max")
+    expect(await plain.page.evaluate(`document.querySelector('.model-control__effort') === null`)).toBe(true)
+    expect(await plain.page.evaluate(`document.querySelector('.composer__model-warning').textContent`)).toContain("max")
     await effort(plain.page, "Model settings")
     await send(plain.page, "Use plain model")
     await wait(plain.page, `document.querySelector('textarea').value === ''`)
@@ -663,9 +663,9 @@ test("an omitted effort stays unselected with authoritative diagnostics and no i
     const sample = { model: h.current(), tokens: 12, durationNs: 2_000_000_000, tokensPerSecond: 6 }
     h.relay.pushEvent("ses_a", { type: "session.diagnostics.updated", data: { sessionID: "ses_a", diagnostics: { model: h.current(), context: { total: 800, limit: 2_000 }, generationSpeed: { latest: sample, recent: [sample] } } } })
     await wait(h.page, `window.modelReplayStore.state().view.contextWindow?.used === 800`)
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("Model settings")
-    expect(await h.page.evaluate<string>(`document.querySelector('.composer__speed')?.textContent ?? ''`)).toContain("6 tok/s")
-    expect(await h.page.evaluate<boolean>(`document.querySelector('.composer__context-trigger') !== null`)).toBe(true)
+    expect(await h.page.evaluate(`document.querySelector('.model-control__effort').textContent`)).toBe("Model settings")
+    expect(await h.page.evaluate(`document.querySelector('.composer__speed')?.textContent ?? ''`)).toContain("6 tok/s")
+    expect(await h.page.evaluate(`document.querySelector('.composer__context-trigger') !== null`)).toBe(true)
     await send(h.page, "Keep the actual model")
     await wait(h.page, `document.querySelector('textarea').value === ''`)
     expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
@@ -678,24 +678,24 @@ test("an existing Session without a model uses the catalog default identity, not
   const configuredDefault = { providerID: "openai", id: "model-a", variant: "high", profile: "profileA" }
   const h = await harness(null, preferred, configuredDefault)
   try {
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__name').textContent`)).toBe("Model A")
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("profileA")
-    expect(await h.page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.remote.preferred-model'))`)).toEqual(preferred)
+    expect(await h.page.evaluate(`document.querySelector('.model-control__name').textContent`)).toBe("Model A")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__effort').textContent`)).toBe("profileA")
+    expect(await h.page.evaluate(`JSON.parse(localStorage.getItem('ycoding.remote.preferred-model'))`)).toEqual(preferred)
     await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__switch strong').textContent`)).toBe("High")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__switch strong').textContent`)).toBe("High")
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
-    expect(await h.page.evaluate<unknown>(`window.modelReplayStore.state().selectedSessionInfo.model`)).toBeUndefined()
+    expect(await h.page.evaluate(`window.modelReplayStore.state().selectedSessionInfo.model`)).toBeUndefined()
     await send(h.page, "Use the configured default")
     await wait(h.page, `document.querySelector('textarea').value === ''`)
     expect(h.relay.requests.find((request) => request.operation === "session.switchModel")?.input?.model).toEqual(configuredDefault)
     expect(h.relay.requests.find((request) => request.operation === "session.prompt")?.input?.model).toBeUndefined()
     expect(h.current()).toEqual(configuredDefault)
-    expect(await h.page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.remote.preferred-model'))`)).toEqual(configuredDefault)
+    expect(await h.page.evaluate(`JSON.parse(localStorage.getItem('ycoding.remote.preferred-model'))`)).toEqual(configuredDefault)
     await h.page.evaluate(`window.modelReplayShowWorkspace()`)
     await wait(h.page, `document.querySelector('.model-control__trigger')?.disabled === false`)
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__name').textContent`)).toBe("Model A")
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__effort').textContent`)).toBe("profileA")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__name').textContent`)).toBe("Model A")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__effort').textContent`)).toBe("profileA")
   } finally { await h.close() }
 })
 
@@ -709,9 +709,9 @@ test("named profile choices replace the body inside the same content-sized model
     await wait(h.page, `document.querySelector('.composer__selection-sheet .model-control__trigger')?.disabled === false`)
     await h.page.evaluate(`document.querySelector('.composer__selection-sheet .model-control__trigger')?.click()`)
     await wait(h.page, `document.querySelector('.model-control__profile [aria-label="Profile"]') !== null`)
-    expect(await h.page.evaluate<boolean>(`(() => { const surface=document.querySelector('.model-control__surface'); document.querySelector('.model-control__profile [aria-label="Profile"]').click(); return surface === document.querySelector('.model-control__surface'); })()`)).toBe(true)
+    expect(await h.page.evaluate(`(() => { const surface=document.querySelector('.model-control__surface'); document.querySelector('.model-control__profile [aria-label="Profile"]').click(); return surface === document.querySelector('.model-control__surface'); })()`)).toBe(true)
     await wait(h.page, `document.querySelector('.model-control__surface[role="dialog"][aria-label="Choose profile"]') !== null`)
-    const geometry = await h.page.evaluate<{ width: number; height: number; bottom: number; viewportWidth: number; viewportHeight: number; viewportBottom: number; modal: string | null; panels: number; options: number; optionsVisible: boolean }>(`(() => { const surface=document.querySelector('.model-control__surface[aria-label="Choose profile"]'),rect=surface.getBoundingClientRect(),options=[...surface.querySelectorAll('[role="option"]')],viewport=visualViewport; return { width:rect.width, height:rect.height, bottom:rect.bottom, viewportWidth:viewport?.width ?? innerWidth, viewportHeight:viewport?.height ?? innerHeight, viewportBottom:(viewport?.offsetTop ?? 0)+(viewport?.height ?? innerHeight), modal:surface.getAttribute('aria-modal'), panels:document.querySelectorAll('.model-control__surface').length, options:options.length, optionsVisible:options.every(option=>{const item=option.getBoundingClientRect();return item.height>0&&item.top>=rect.top&&item.bottom<=rect.bottom}) }; })()`)
+    const geometry = await h.page.evaluate(`(() => { const surface=document.querySelector('.model-control__surface[aria-label="Choose profile"]'),rect=surface.getBoundingClientRect(),options=[...surface.querySelectorAll('[role="option"]')],viewport=visualViewport; return { width:rect.width, height:rect.height, bottom:rect.bottom, viewportWidth:viewport?.width ?? innerWidth, viewportHeight:viewport?.height ?? innerHeight, viewportBottom:(viewport?.offsetTop ?? 0)+(viewport?.height ?? innerHeight), modal:surface.getAttribute('aria-modal'), panels:document.querySelectorAll('.model-control__surface').length, options:options.length, optionsVisible:options.every(option=>{const item=option.getBoundingClientRect();return item.height>0&&item.top>=rect.top&&item.bottom<=rect.bottom}) }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]), bottom: (decodeNumber)(record["bottom"]), viewportWidth: (decodeNumber)(record["viewportWidth"]), viewportHeight: (decodeNumber)(record["viewportHeight"]), viewportBottom: (decodeNumber)(record["viewportBottom"]), modal: (decodeNullable(decodeString))(record["modal"]), panels: (decodeNumber)(record["panels"]), options: (decodeNumber)(record["options"]), optionsVisible: (decodeBoolean)(record["optionsVisible"]) } })
     expect(geometry.modal).toBe("true")
     expect(geometry.panels).toBe(1)
     expect(geometry.width).toBeGreaterThanOrEqual(geometry.viewportWidth - 16)
@@ -721,7 +721,7 @@ test("named profile choices replace the body inside the same content-sized model
     expect(geometry.bottom).toBeCloseTo(geometry.viewportBottom, 0)
     expect(geometry.options).toBe(3)
     expect(geometry.optionsVisible).toBe(true)
-    expect(await h.page.evaluate<boolean>(`[...document.querySelectorAll('.model-control__surface [role="option"]')].some(option=>option.textContent.includes('profileA'))`)).toBe(true)
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__surface [role="option"]')].some(option=>option.textContent.includes('profileA'))`)).toBe(true)
   } finally { await h.close() }
 })
 
@@ -732,19 +732,19 @@ test("model choices persist as recent-first rows, keep provider groups stable, a
     await choose(h.page, "Claude 1")
     expect(h.current()).toEqual({ providerID: "openai", id: "model-a", variant: "max" })
     await openModelList(h.page)
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__model')].map(node=>node.childNodes[0].textContent.trim())`)).toEqual([
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__model')].map(node=>node.childNodes[0].textContent.trim())`)).toEqual([
       "Claude 1", "Model B", "Claude 2", "Model A", "Model C", "Model D", "Model Plain",
     ])
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__provider')].map(node=>node.textContent.trim())`)).toEqual([
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__provider')].map(node=>node.textContent.trim())`)).toEqual([
       "Recent", "Anthropic", "OpenAI",
     ])
     await h.page.evaluate(`document.querySelector('.mini-picker__search').value='Model'; document.querySelector('.mini-picker__search').dispatchEvent(new Event('input',{bubbles:true}))`)
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__model')].map(node=>node.childNodes[0].textContent.trim())`)).toEqual([
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__model')].map(node=>node.childNodes[0].textContent.trim())`)).toEqual([
       "Model B", "Model A", "Model C", "Model D", "Model Plain",
     ])
     await h.page.evaluate(`document.querySelector('.mini-picker__search').focus()`)
     await h.page.pressKey("ArrowDown", "ArrowDown", 35)
-    expect(await h.page.evaluate<string>(`document.querySelector('.mini-picker__option--active')?.childNodes[0].textContent.trim()`)).toBe("Model A")
+    expect(await h.page.evaluate(`document.querySelector('.mini-picker__option--active')?.childNodes[0].textContent.trim()`)).toBe("Model A")
     expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
     await h.page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
     await h.page.navigate(`http://127.0.0.1:${port}/verify/model-replay-fixture.html?relay=${encodeURIComponent(h.relay.wsURL("dev_1"))}`)
@@ -752,31 +752,31 @@ test("model choices persist as recent-first rows, keep provider groups stable, a
     await h.page.evaluate(`window.modelReplayStore.selectSession('ses_a')`)
     await wait(h.page, `document.querySelector('.model-control__trigger')?.disabled === false`)
     await openModelList(h.page)
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__model')].map(node=>node.childNodes[0].textContent.trim())`)).toEqual([
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__model')].map(node=>node.childNodes[0].textContent.trim())`)).toEqual([
       "Claude 1", "Model B", "Model A", "Model C", "Model D", "Model Plain", "Claude 2",
     ])
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__provider')].map(node=>node.textContent.trim())`)).toEqual([
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__provider')].map(node=>node.textContent.trim())`)).toEqual([
       "Recent", "OpenAI", "Anthropic",
     ])
-    expect(await h.page.evaluate<unknown>(`window.modelReplayStore.state().selectedSessionInfo.model`)).toEqual({ providerID: "openai", id: "model-a", variant: "max" })
+    expect(await h.page.evaluate(`window.modelReplayStore.state().selectedSessionInfo.model`)).toEqual({ providerID: "openai", id: "model-a", variant: "max" })
     expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
     await h.page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
     h.setCatalogModels(models.filter((item) => item.id !== "model-b" && item.id !== "claude-1"))
     await h.page.evaluate(`window.modelReplayStore.loadCatalog({sessionID:'ses_a'}, {refresh:true})`)
     await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.length === 6`)
     await openModelList(h.page)
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__model')].map(node=>node.childNodes[0].textContent.trim())`)).toEqual([
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__model')].map(node=>node.childNodes[0].textContent.trim())`)).toEqual([
       "Model A", "Model C", "Model D", "Model Plain", "Claude 2",
     ])
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__provider')].map(node=>node.textContent.trim())`)).toEqual([
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__provider')].map(node=>node.textContent.trim())`)).toEqual([
       "OpenAI", "Anthropic",
     ])
     await h.page.evaluate(`document.querySelector('.mini-picker__search').value='Model'; document.querySelector('.mini-picker__search').dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('.mini-picker__search').focus()`)
     await wait(h.page, `document.querySelectorAll('.model-control__model').length === 4`)
     await h.page.pressKey("ArrowDown", "ArrowDown", 35)
-    expect(await h.page.evaluate<string>(`document.querySelector('.mini-picker__option--active')?.childNodes[0].textContent.trim()`)).toBe("Model C")
+    expect(await h.page.evaluate(`document.querySelector('.mini-picker__option--active')?.childNodes[0].textContent.trim()`)).toBe("Model C")
     await h.page.pressKey("Enter", "Enter", 35)
-    expect(await h.page.evaluate<string>(`document.querySelector('.model-control__name').textContent`)).toBe("Model C")
+    expect(await h.page.evaluate(`document.querySelector('.model-control__name').textContent`)).toBe("Model C")
     expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
   } finally { await h.close() }
 })
@@ -791,9 +791,9 @@ test("recent models with matching names identify their providers", async () => {
     await h.page.evaluate(`window.modelReplayStore.selectSession('ses_a')`)
     await wait(h.page, `document.querySelector('.model-control__trigger')?.disabled === false`)
     await openModelList(h.page)
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__model')].slice(0,2).map(row=>row.querySelector('small')?.textContent.trim())`))
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__model')].slice(0,2).map(row=>row.querySelector('small')?.textContent.trim())`))
       .toEqual(["Cursor · model-b", "OpenAI · model-b"])
-    expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__model')].slice(0,2).map(row=>row.getAttribute('aria-label'))`))
+    expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__model')].slice(0,2).map(row=>row.getAttribute('aria-label'))`))
       .toEqual(["Model B · Cursor · model-b", "Model B · OpenAI · model-b"])
   } finally { await h.close() }
 })

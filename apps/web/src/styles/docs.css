@@ -1,31 +1,6 @@
 /* Public documentation and changelog surfaces: the bar, shell tracks, article,
    search overlay, release rows, and filter rail. */
 
-/* --- bar ---------------------------------------------------------------- */
-
-.docs-bar {
-  background: var(--yc-bg);
-  border-block-end: 0;
-}
-
-.docs-bar__inner {
-  display: flex;
-  align-items: center;
-  gap: var(--yc-space-3);
-  min-block-size: var(--yc-control-h);
-  padding-block: var(--yc-space-2);
-}
-
-.docs-bar__title {
-  font-size: var(--yc-size-sm);
-  font-weight: var(--yc-weight-semibold);
-}
-
-.docs-bar__crumbs {
-  padding-block-end: var(--yc-space-2);
-}
-
-/* Below 1024 the documentation navigation is a sheet, so the bar carries the trigger. */
 .docs-bar__nav-toggle {
   display: inline-flex;
   align-items: center;
@@ -36,22 +11,16 @@
   border-radius: var(--yc-radius-pill);
   font-size: var(--yc-size-sm);
 }
-
-@media (max-width: 1023px) {
-  .docs-bar__title {
-    display: none;
-  }
-}
+.docs-bar__toc-toggle { display:inline-flex; align-items:center; gap:var(--yc-space-2); min-block-size:var(--yc-hit-min); padding:0 var(--yc-space-3); border:0; border-radius:var(--yc-radius-pill); background:var(--yc-surface); color:var(--yc-text); font-size:var(--yc-size-sm); }
+.docs-toc__sheet { display:grid; gap:var(--yc-space-2); }
+.docs-toc__sheet a { display:flex; align-items:center; min-block-size:var(--yc-hit-min); color:var(--yc-text); text-decoration:none; }
 
 @media (min-width: 1024px) {
   .docs-bar__nav-toggle {
     display: none;
   }
-
-  .docs-bar__crumbs {
-    display: none;
-  }
 }
+@media (min-width:1280px) { .docs-bar__toc-toggle { display:none; } }
 
 .docs-search-trigger {
   display: inline-flex;
@@ -61,7 +30,8 @@
   min-block-size: var(--yc-control-h);
   padding: 0 var(--yc-space-3);
   background: var(--yc-surface);
-  border-radius: var(--yc-radius-pill);
+  border: 1px solid var(--yc-border);
+  border-radius: var(--yc-radius-sm);
   color: var(--yc-text-muted);
   font-size: var(--yc-size-sm);
 }
@@ -141,7 +111,7 @@
   align-items: center;
   min-block-size: var(--yc-control-h);
   padding: 0 var(--yc-space-3);
-  border-radius: var(--yc-radius-pill);
+  border-radius: var(--yc-radius-sm);
   color: var(--yc-text-muted);
   text-decoration: none;
   font-size: var(--yc-size-sm);
@@ -179,17 +149,6 @@
   min-block-size: var(--yc-hit-min);
 }
 
-/* Above 1024 the breadcrumbs belong to the article, not to the bar. */
-.breadcrumbs--article {
-  display: none;
-}
-
-@media (min-width: 1024px) {
-  .breadcrumbs--article {
-    display: flex;
-  }
-}
-
 /* --- article ------------------------------------------------------------ */
 
 .docs-article {
@@ -211,9 +170,10 @@
 }
 
 .docs--index .docs-article > h1 {
-  font-size: 24px;
-  line-height: 32px;
+  font-size: var(--yc-size-3xl);
+  line-height: var(--yc-leading-3xl);
 }
+.docs--index .docs-article__lede { font-size:var(--yc-size-sm); line-height:var(--yc-leading-sm); }
 
 .docs--article .docs-article > h1 {
   font-size: 26px;
@@ -252,7 +212,7 @@
 
 @media (min-width: 640px) and (max-width: 1023px) {
   .overlay--docs-nav .overlay__surface {
-    inset-block-start: var(--yc-header-h);
+    inset-block-start: calc(var(--yc-header-public-h) + env(safe-area-inset-top));
     inset-block-end: 0;
     inset-inline-start: 0;
     inset-inline-end: auto;
@@ -267,7 +227,7 @@
 
 @media (min-width: 768px) {
   .overlay--docs-search .overlay__surface {
-    inline-size: min(620px, calc(100vw - 2 * var(--yc-gutter)));
+    inline-size: min(600px, calc(100vw - 2 * var(--yc-gutter)));
   }
 }
 
@@ -500,6 +460,7 @@
 .search__result {
   display: grid;
   gap: 2px;
+  border: 0;
   inline-size: 100%;
   min-block-size: var(--yc-hit-min);
   padding: var(--yc-space-3);
@@ -513,16 +474,33 @@
 @media (hover: hover) { .search__result:hover { background: var(--yc-surface-sunken); } }
 
 .search__result--active {
-  background: var(--yc-green-soft);
+  background: var(--yc-surface-raised);
+  box-shadow: inset 2px 0 var(--yc-green-strong);
 }
+
+.overlay--docs-search .overlay__surface { background:var(--yc-surface); }
+.overlay--docs-search .overlay__body { display:flex; min-block-size:0; overflow:hidden; }
+.docs-search-pane { flex:1; min-inline-size:0; min-block-size:0; padding:0; gap:0; grid-template-rows:minmax(0,1fr) auto; }
+.docs-search-pane > .search__results { min-block-size:0; max-block-size:380px; overflow:auto; align-content:start; padding:var(--yc-space-2) var(--yc-space-1); }
+@media (min-width: 768px) { .overlay--docs-search .overlay__surface { inset-block-start:calc(var(--yc-space-12) * 2); translate:-50% 0; max-block-size:calc(100dvh - var(--yc-space-12) * 2 - var(--yc-space-4)); } }
+.docs-search__field { display:flex; flex:1; align-items:center; gap:var(--yc-space-3); min-inline-size:0; color:var(--yc-text-muted); }
+.docs-search__field .input { min-inline-size:0; border-color:transparent; background:transparent; }
+.search__result-heading { display:flex; flex-wrap:wrap; align-items:baseline; gap:var(--yc-space-2); }
+.search__result-group { color:var(--yc-text-muted); font:var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); }
+.search__result--active .search__result-group { color:var(--yc-green-strong); }
+.docs-search__footer { display:flex; align-items:center; min-block-size:var(--yc-space-10); padding:var(--yc-space-2) var(--yc-space-4); border-block-start:var(--yc-border-width) solid var(--yc-border); color:var(--yc-text-muted); font:var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); }
+.app-header__docs-search { display:flex; }
+@media (max-width: 767px) { .app-header__docs-search .docs-search-trigger { justify-content:center; min-inline-size:var(--yc-hit-min); } .app-header__docs-search .docs-search-trigger > :is(span,kbd) { display:none; } }
 
 .search__result-title {
   font-size: var(--yc-size-sm);
+  line-height: var(--yc-leading-sm);
   font-weight: var(--yc-weight-semibold);
 }
 
 .search__result-text {
   font-size: var(--yc-size-xs);
+  line-height: var(--yc-leading-xs);
   color: var(--yc-text-muted);
 }
 
@@ -552,9 +530,14 @@
 
 @media (min-width: 1024px) {
   .release__inline-filters {
-    display: none;
+    display: grid;
   }
 }
+
+.docs--changelog .docs-shell { grid-template-columns:minmax(0,1fr); }
+.docs--changelog .docs-shell__nav { display:none; }
+.docs--changelog .docs-article { padding-inline:0; }
+.docs--changelog .docs-bar__nav-toggle { display:inline-flex; }
 
 .releases {
   display: grid;
@@ -702,7 +685,7 @@
 
 @media (min-width: 1280px) {
   .docs--index .docs-shell {
-    grid-template-columns: var(--yc-docs-nav-w) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -722,12 +705,31 @@
   font-size: var(--yc-size-md);
 }
 
+.docs--index .docs-shell { grid-template-columns:minmax(0,1fr); max-inline-size:calc(1280px + min(var(--yc-gutter), var(--yc-space-8)) * 2); }
+.docs--index .docs-shell__nav { display:none; }
+.docs--index .docs-article { padding-inline:0; }
+.docs-topic-index { display:grid; gap:var(--yc-space-8); }
+.docs--index .card-grid { grid-template-columns:minmax(0,1fr); gap:var(--yc-space-4); }
+.docs--index .card-grid > .card { padding:0; border:0; border-radius:var(--yc-radius-sm); background:transparent; }
+.docs--index .card__link { padding:0; gap:var(--yc-space-1); min-block-size:var(--yc-hit-min); }
+.docs--index .card__title { font-size:var(--yc-size-sm); line-height:var(--yc-leading-sm); }
+.docs--index .card__text { font-size:var(--yc-size-xs); line-height:var(--yc-leading-xs); }
+.docs--index .doc-section h2 { color: var(--yc-text-muted); font: var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); letter-spacing: var(--yc-tracking-wide); text-transform: uppercase; }
+.docs--index .doc-section h2 { display:flex; justify-content:space-between; gap:var(--yc-space-2); }
+.docs-topic-index__count { font-size:var(--yc-size-2xs); letter-spacing:normal; text-transform:none; color:var(--yc-text-subtle); }
+@media (min-width: 640px) {
+  .docs-topic-index { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
 @media (min-width: 1024px) {
-  /* Every group shares one three-track grid, so cards align across groups and an
-     incomplete row reads left to right like the rest of the page. */
-  .docs--index .card-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
+  .docs-topic-index { grid-template-columns:repeat(3,minmax(0,1fr)); grid-template-areas:"start configuration help" "use configuration help"; align-items:start; }
+  .docs-topic-index > [data-doc-group="get-started"] { grid-area:start; }
+  .docs-topic-index > [data-doc-group="use"] { grid-area:use; }
+  .docs-topic-index > [data-doc-group="configuration"] { grid-area:configuration; }
+  .docs-topic-index > [data-doc-group="help"] { grid-area:help; }
+}
+@media (min-width: 1280px) {
+  .docs-topic-index { grid-template-columns:minmax(0,1.25fr) minmax(0,1.6fr) minmax(0,.9fr); }
+  .docs-topic-index [data-doc-group="configuration"] .card-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 
 @media (max-width: 639px) {
@@ -797,7 +799,7 @@
 }
 
 .releases--timeline::before {
-  content: "";
+  content: none;
   position: absolute;
   inset-block: 0;
   inset-inline-start: 0;
@@ -825,10 +827,11 @@
 }
 
 .releases--timeline .release {
-  padding: var(--yc-space-5);
+  padding: var(--yc-space-6) 0;
   border: 0;
-  border-radius: var(--yc-radius-lg);
-  background: var(--yc-surface);
+  border-block-end:1px solid var(--yc-border);
+  border-radius: 0;
+  background: transparent;
   transition: background-color var(--yc-dur-base) var(--yc-ease-standard);
 }
 
@@ -872,11 +875,11 @@
 
 @media (min-width: 1280px) {
   .docs--changelog .docs-shell {
-    grid-template-columns: var(--yc-docs-nav-w) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .docs--changelog .docs-article {
-    max-inline-size: calc(768px + var(--yc-gutter) * 2);
+    max-inline-size: none;
   }
 }
 
@@ -927,7 +930,6 @@
   }
 }
 
-.docs--index .doc-section,
 .docs--article .code-block,
 .docs--article .callout,
 .docs .filters__option {
@@ -937,11 +939,6 @@
 .docs-bar__nav-toggle,
 .docs-search-trigger {
   border-radius: var(--yc-radius-pill);
-}
-
-.docs--index .card,
-.releases--timeline .release {
-  border-radius: var(--yc-radius-lg);
 }
 
 @media (max-width: 1023px) {

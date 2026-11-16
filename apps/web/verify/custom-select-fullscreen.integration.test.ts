@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeBoolean, decodeNumber, decodeRecord, type Page } from "./cdp"
 
 const port = 4207
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -37,11 +37,11 @@ describe("shared selector mobile sheets", () => {
         await page.setMobileViewport(390, 844)
         await page.navigate(`${url()}/verify/remote.html?scenario=${scenario}`)
         await waitFor(page, `document.querySelector(${JSON.stringify(selector)}) !== null`)
-        await page.evaluate<void>(`document.querySelector(${JSON.stringify(selector)}).click()`)
+        await page.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`)
         await waitFor(page, `document.querySelector('.custom-select__dialog[open]') !== null`)
-        await page.evaluate<void>(`Promise.all(document.querySelector('.custom-select__dialog .overlay__surface').getAnimations().map(animation => animation.finished))`)
-        expect(await page.evaluate<string>(`document.querySelector('.custom-select__dialog .overlay__title').textContent`)).toBe(title)
-        expect(await page.evaluate<number>(`document.querySelectorAll('.custom-select__dialog [role="option"]').length`)).toBe(count)
+        await page.evaluate(`Promise.all(document.querySelector('.custom-select__dialog .overlay__surface').getAnimations().map(animation => animation.finished))`)
+        expect(await page.evaluate(`document.querySelector('.custom-select__dialog .overlay__title').textContent`)).toBe(title)
+        expect(await page.evaluate(`document.querySelectorAll('.custom-select__dialog [role="option"]').length`)).toBe(count)
         const state = await geometry(page)
         expect(state.headingHeight, JSON.stringify({ title, state })).toBeLessThanOrEqual(64)
         expect(state.handleHeadGap).toBeCloseTo(state.handleBottomMargin, 0)
@@ -66,7 +66,7 @@ describe("shared selector mobile sheets", () => {
     for (const width of [390, 767] as const) {
       const page = await openSchemePicker(width, 844)
       try {
-        await page.evaluate<void>(`(() => {
+        await page.evaluate(`(() => {
           const list = document.querySelector('.custom-select__list')
           const option = list?.querySelector('[role="option"]')
           if (!list || !option) throw new Error('Color scheme options are missing')
@@ -86,7 +86,7 @@ describe("shared selector mobile sheets", () => {
         expect(initial.bodyClipped).toBe(true)
         expect(initial.pageOverflow).toBe(false)
 
-        await page.evaluate<void>(`(() => { const list = document.querySelector('.custom-select__list'); list.scrollTop = list.scrollHeight })()`)
+        await page.evaluate(`(() => { const list = document.querySelector('.custom-select__list'); list.scrollTop = list.scrollHeight })()`)
         const scrolled = await geometry(page)
         expect(scrolled.confirmTop).toBe(initial.confirmTop)
         expect(scrolled.headingTop).toBe(initial.headingTop)
@@ -99,12 +99,12 @@ describe("shared selector mobile sheets", () => {
         expect(resized.confirmReachable).toBe(true)
         expect(resized.pageOverflow).toBe(false)
 
-        const before = await page.evaluate<string>(`document.querySelector('[aria-label="Color scheme"] .custom-select__value')?.textContent?.trim() ?? ''`)
-        await page.evaluate<void>(`document.querySelector('.custom-select__option[aria-selected="false"]')?.click()`)
-        expect(await page.evaluate<string>(`document.querySelector('[aria-label="Color scheme"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe(before)
+        const before = await page.evaluate(`document.querySelector('[aria-label="Color scheme"] .custom-select__value')?.textContent?.trim() ?? ''`)
+        await page.evaluate(`document.querySelector('.custom-select__option[aria-selected="false"]')?.click()`)
+        expect(await page.evaluate(`document.querySelector('[aria-label="Color scheme"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe(before)
         await page.pressEscape()
-        expect(await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog')?.open === false && document.activeElement?.getAttribute('aria-label') === 'Color scheme'`)).toBe(true)
-        expect(await page.evaluate<string>(`document.querySelector('[aria-label="Color scheme"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe(before)
+        expect(await page.evaluate(`document.querySelector('.custom-select__dialog')?.open === false && document.activeElement?.getAttribute('aria-label') === 'Color scheme'`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector('[aria-label="Color scheme"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe(before)
       } finally {
         await page.close()
       }
@@ -114,7 +114,7 @@ describe("shared selector mobile sheets", () => {
   test("retains the anchored popover at 768px", async () => {
     const page = await openSchemePicker(768, 900)
     try {
-      const state = await page.evaluate<{ dialog: boolean; bounded: boolean; anchored: boolean; width: number; height: number }>(`(() => {
+      const state = await page.evaluate(`(() => {
         const surface = document.querySelector('.custom-select__surface')
         const trigger = document.querySelector('[aria-label="Color scheme"]')
         const box = surface?.getBoundingClientRect()
@@ -126,7 +126,7 @@ describe("shared selector mobile sheets", () => {
           width: box?.width ?? 0,
           height: box?.height ?? 0,
         }
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, dialog: (decodeBoolean)(record["dialog"]), bounded: (decodeBoolean)(record["bounded"]), anchored: (decodeBoolean)(record["anchored"]), width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]) } })
       expect(state.dialog).toBe(false)
       expect(state.bounded).toBe(true)
       expect(state.anchored).toBe(true)
@@ -144,42 +144,16 @@ async function openSchemePicker(width: number, height: number) {
   else await page.setViewport(width, height)
   await page.navigate(`${url()}/verify/remote.html?scenario=conversation-workspace-390`)
   await waitFor(page, `document.querySelector('a[href="/remote/settings"]') !== null`)
-  await page.evaluate<void>(`document.querySelector('a[href="/remote/settings"]')?.click()`)
+  await page.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
   await waitFor(page, `document.querySelector('[aria-label="Color scheme"]') !== null`)
-  await page.evaluate<void>(`document.querySelector('[aria-label="Color scheme"]')?.click()`)
+  await page.evaluate(`document.querySelector('[aria-label="Color scheme"]')?.click()`)
   await waitFor(page, width < 768 ? `document.querySelector('.custom-select__dialog[open]') !== null` : `document.querySelector('.custom-select__surface [role="listbox"]') !== null`)
-  await page.evaluate<void>(`Promise.all([...document.querySelector('.custom-select__dialog .overlay__surface, .custom-select__surface')?.getAnimations() ?? []].map(animation => animation.finished))`)
+  await page.evaluate(`Promise.all([...document.querySelector('.custom-select__dialog .overlay__surface, .custom-select__surface')?.getAnimations() ?? []].map(animation => animation.finished))`)
   return page
 }
 
-async function geometry(page: { evaluate<T>(expression: string): Promise<T> }) {
-  return page.evaluate<{
-    fullHeight: boolean
-    contentSized: boolean
-    bottomTracksVisualViewport: boolean
-    tallestOption: number
-    topTracksVisualViewport: boolean
-    headingReachable: boolean
-    confirmReachable: boolean
-    listScrollable: boolean
-    bodyClipped: boolean
-    pageOverflow: boolean
-    headingTop: number
-    headingHeight: number
-    handleHeadGap: number
-    handleBottomMargin: number
-    bodyHeadGap: number
-    subtitleBodyGap: number
-    bodyPaddingTop: number
-    listSubtitleGap: number
-    subtitleListMargin: number
-    confirmTop: number
-    surfaceTop: number
-    surfaceBottom: number
-    viewportTop: number
-    viewportHeight: number
-    confirmBottom: number
-  }>(`(() => {
+async function geometry(page: Pick<Page, "evaluate">) {
+  return page.evaluate(`(() => {
     const viewport = window.visualViewport
     const dialog = document.querySelector('.custom-select__dialog')
     const surface = dialog?.querySelector('.overlay__surface')
@@ -224,12 +198,12 @@ async function geometry(page: { evaluate<T>(expression: string): Promise<T> }) {
       viewportHeight: viewport.height,
       confirmBottom: confirmBox.bottom,
     }
-  })()`)
+  })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, fullHeight: (decodeBoolean)(record["fullHeight"]), contentSized: (decodeBoolean)(record["contentSized"]), bottomTracksVisualViewport: (decodeBoolean)(record["bottomTracksVisualViewport"]), tallestOption: (decodeNumber)(record["tallestOption"]), topTracksVisualViewport: (decodeBoolean)(record["topTracksVisualViewport"]), headingReachable: (decodeBoolean)(record["headingReachable"]), confirmReachable: (decodeBoolean)(record["confirmReachable"]), listScrollable: (decodeBoolean)(record["listScrollable"]), bodyClipped: (decodeBoolean)(record["bodyClipped"]), pageOverflow: (decodeBoolean)(record["pageOverflow"]), headingTop: (decodeNumber)(record["headingTop"]), headingHeight: (decodeNumber)(record["headingHeight"]), handleHeadGap: (decodeNumber)(record["handleHeadGap"]), handleBottomMargin: (decodeNumber)(record["handleBottomMargin"]), bodyHeadGap: (decodeNumber)(record["bodyHeadGap"]), subtitleBodyGap: (decodeNumber)(record["subtitleBodyGap"]), bodyPaddingTop: (decodeNumber)(record["bodyPaddingTop"]), listSubtitleGap: (decodeNumber)(record["listSubtitleGap"]), subtitleListMargin: (decodeNumber)(record["subtitleListMargin"]), confirmTop: (decodeNumber)(record["confirmTop"]), surfaceTop: (decodeNumber)(record["surfaceTop"]), surfaceBottom: (decodeNumber)(record["surfaceBottom"]), viewportTop: (decodeNumber)(record["viewportTop"]), viewportHeight: (decodeNumber)(record["viewportHeight"]), confirmBottom: (decodeNumber)(record["confirmBottom"]) } })
 }
 
-async function waitFor(page: { evaluate<T>(expression: string): Promise<T> }, expression: string) {
+async function waitFor(page: Pick<Page, "evaluate">, expression: string) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
-    if (await page.evaluate<boolean>(expression)) return
+    if (await page.evaluate(expression)) return
     await Bun.sleep(50)
   }
   throw new Error(`Browser condition did not settle: ${expression}`)

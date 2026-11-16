@@ -1,13 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNumber, decodeOptional, decodeRecord, decodeString } from "./cdp"
 
 const port = 4483
 const browserPath = process.env.YCODING_WEB_CHROME
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
 
 type Page = Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>
-type Logged = { readonly at: number; readonly operation: string; readonly input?: unknown }
-type Frame = { readonly at: number; readonly text: number; readonly frame: boolean; readonly content: boolean }
 
 const panel = `document.querySelector(".workspace__scroll .route-panel:not([inert])")`
 const usage = {
@@ -74,11 +72,11 @@ describe("remote route transitions with a slow relay", () => {
     try {
       await openConversation(page, 400)
       await drain(page)
-      const link = await page.evaluate<{ readonly x: number; readonly y: number }>(`(() => {
+      const link = await page.evaluate(`(() => {
         const box = document.querySelector('.remote-nav a[href="/remote/usage"]').getBoundingClientRect()
         return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
-      })()`)
-      const hoveredAt = await page.evaluate<number>("performance.now()")
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]) } })
+      const hoveredAt = await page.evaluate("performance.now()", decodeNumber)
       await page.mouse("mouseMoved", link.x, link.y)
       await until(page, `window.requestLog.some((entry) => entry.operation === "usage.dashboard")`)
       const preloaded = await drain(page)
@@ -104,7 +102,7 @@ describe("remote route transitions with a slow relay", () => {
       })()`)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&latency=400`)
       await until(page, `document.querySelector(".transcript-message")`)
-      const seen = await page.evaluate<{ readonly composer?: number; readonly listed?: number }>("window.coldLoad")
+      const seen = await page.evaluate("window.coldLoad", (value: unknown) => { const record = decodeRecord(value); return { ...record, ...("composer" in record ? { composer: (decodeOptional(decodeNumber))(record["composer"]) } : {}), ...("listed" in record ? { listed: (decodeOptional(decodeNumber))(record["listed"]) } : {}) } })
       expect(seen.listed, "the workspace session list resolved").toBeNumber()
       expect(seen.composer ?? Infinity, "the New-session composer never painted before the session list resolved").toBeGreaterThanOrEqual(seen.listed ?? 0)
     } finally { await page.close() }
@@ -146,7 +144,7 @@ async function openConversation(page: Page, latency: number) {
 }
 
 async function follow(page: Page, route: { readonly href: string; readonly frame: string; readonly content: string }) {
-  return page.evaluate<Frame[]>(`(async () => {
+  return page.evaluate(`(async () => {
     const link = [...document.querySelectorAll(".remote-nav a, .workspace-resume")].find((anchor) => anchor.getAttribute("href") === ${JSON.stringify(route.href)})
     const start = performance.now()
     const frames = []
@@ -159,16 +157,16 @@ async function follow(page: Page, route: { readonly href: string; readonly frame
       if (content) break
     }
     return frames
-  })()`)
+  })()`, decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, at: (decodeNumber)(record["at"]), text: (decodeNumber)(record["text"]), frame: (decodeBoolean)(record["frame"]), content: (decodeBoolean)(record["content"]) } }))
 }
 
 function drain(page: Page) {
-  return page.evaluate<Logged[]>("window.requestLog.splice(0)")
+  return page.evaluate("window.requestLog.splice(0)", decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, at: (decodeNumber)(record["at"]), operation: (decodeString)(record["operation"]), ...("input" in record ? { input: ((value: unknown) => value)(record["input"]) } : {}) } }))
 }
 
 async function until(page: Page, expression: string) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (await page.evaluate<boolean>(`Boolean(${expression})`).catch(() => false)) return
+    if (await page.evaluate(`Boolean(${expression})`, decodeBoolean).catch(() => false)) return
     await Bun.sleep(50)
   }
   throw new Error(`Timed out waiting for ${expression}`)
