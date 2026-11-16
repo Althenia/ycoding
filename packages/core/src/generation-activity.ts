@@ -60,6 +60,7 @@ export function registry(anchor: { readonly wallMs: number; readonly ns: bigint 
   }
 
   return {
+    active: () => entries.size,
     update(meter: GenerationMeter.Meter, time: bigint) {
       const at = advance(time)
       const known = entries.get(meter)
@@ -130,6 +131,7 @@ export interface StartInput {
 
 export interface Interface {
   readonly start: (input: StartInput) => Effect.Effect<GenerationMeter.Meter, never, Scope.Scope>
+  readonly active: () => Effect.Effect<number>
   readonly snapshot: () => Effect.Effect<UsageDashboard.Live>
 }
 
@@ -140,6 +142,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const state = registry({ wallMs: yield* Clock.currentTimeMillis, ns: yield* Clock.currentTimeNanos })
     return Service.of({
+      active: () => Effect.sync(state.active),
       start: (input) =>
         Effect.acquireRelease(
           Effect.map(Clock.currentTimeNanos, (startedNs) => {

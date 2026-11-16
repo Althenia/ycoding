@@ -118,7 +118,9 @@ type Exchange = { readonly ok: boolean; readonly body: ArrayBuffer; readonly ini
 
 const exchanges = new Map<string, Promise<Exchange>>()
 const rotations = new Map<string, string>()
-const decodeRotation = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({ refresh_token: Schema.String })))
+const decodeRotation = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ refresh_token: Schema.String })),
+)
 
 export const refreshFetch =
   (onRejected: (refreshToken: string) => void): FetchLike =>
@@ -139,8 +141,8 @@ export const refreshFetch =
   }
 
 const exchange = (key: string, refreshToken: string, url: string | URL, init?: RequestInit) => {
-  const pending = fetch(url, init).then(
-    async (response): Promise<Exchange> => {
+  const pending = fetch(url, init)
+    .then(async (response): Promise<Exchange> => {
       const result = {
         ok: response.ok,
         body: await response.arrayBuffer(),
@@ -155,12 +157,11 @@ const exchange = (key: string, refreshToken: string, url: string | URL, init?: R
       }
       rotations.set(rotated, key)
       return result
-    },
-    (error) => {
+    })
+    .catch((error) => {
       exchanges.delete(key)
       throw error
-    },
-  )
+    })
   exchanges.set(key, pending)
   return pending
 }
@@ -238,7 +239,9 @@ export const authorize = (input: {
       }
       const fail = (reason: string) => {
         Effect.runFork(Deferred.fail(code, new Error(reason)))
-        response.writeHead(400, { "Content-Type": "text/html" }).end(OauthCallbackPage.error(reason, { provider: input.name }))
+        response
+          .writeHead(400, { "Content-Type": "text/html" })
+          .end(OauthCallbackPage.error(reason, { provider: input.name }))
       }
       // Reject a redirect whose state does not match what we issued: this is the CSRF defense the
       // state parameter exists for, so an attacker can't inject their own authorization code.
@@ -299,7 +302,12 @@ export const authorize = (input: {
 
     // The provider may already hold valid tokens (e.g. a re-auth), in which case there is no browser step.
     if (result === "AUTHORIZED") {
-      return { url: input.config.url, instructions: `Connected to ${input.name}.`, mode: "auto" as const, callback: finalize }
+      return {
+        url: input.config.url,
+        instructions: `Connected to ${input.name}.`,
+        mode: "auto" as const,
+        callback: finalize,
+      }
     }
     if (!authorizationUrl)
       return yield* Effect.fail(new Error(`MCP server "${input.name}" did not provide an authorization URL`))

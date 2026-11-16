@@ -270,6 +270,8 @@ YCoding adds skill sources from:
 
 `.claude` and `.agents` are compatibility skill roots only. They do not define YCoding agents or commands.
 
+Local skill listings re-read and parse the current Markdown bytes without adding full documents to a process-wide parser cache. Unquoted colons in frontmatter scalar values use the YAML block-scalar fallback; malformed frontmatter remains invalid on repeated reads.
+
 `capabilities.skills` filters skills by ID after discovery from every source above, managed project-artifact skills, MCP-served skills, and the built-in `ycoding`, `chatgpt-connectors` and `report` skills; a filtered skill is absent from the catalog and cannot be loaded by explicit ID. `capabilities.skills.enabled: false` also hides the `skill` tool.
 
 ### Supported layouts

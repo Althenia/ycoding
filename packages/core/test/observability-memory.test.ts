@@ -12,10 +12,14 @@ import { it } from "./lib/effect"
 test("Bun reports RSS without calling unverified heap, census or snapshot APIs", async () => {
   let footprints = 0
   let heaps = 0
-  const input = await MemoryDiagnostics.sources({ versions: { bun: "1.4.4", node: "24.3.0" } }, async (specifier) => {
+  let resources = 0
+  const input = await MemoryDiagnostics.sources({
+    versions: { bun: "1.4.4", node: "24.3.0" },
+    resourceUsage: () => { resources++; return { maxRSS: 2, minorPageFault: 17, majorPageFault: 0 } },
+  }, async (specifier) => {
     expect(specifier).toBe("bun:jsc")
     return {
-      memoryUsage: () => { footprints++; return { current: 500, peak: 900, currentCommit: 700 } },
+      memoryUsage: () => { footprints++; return { current: 500, peak: 900, currentCommit: 700, peakCommit: 1100, pageFaults: 42, payload: "private-payload" } },
       heapSize: () => { heaps++; throw new Error("Unverified heap sampling must not run") },
       heapStats: () => { throw new Error("Heap census must not run") },
       getHeapStatistics: () => { throw new Error("Heap statistics must not run") },
@@ -34,8 +38,13 @@ test("Bun reports RSS without calling unverified heap, census or snapshot APIs",
   expect(sample.heap.external.status).toBe("unsupported")
   expect(sample.nativeAllocations.status).toBe("unavailable")
   expect(sample.allocatorRetained.status).toBe("unavailable")
-  expect([footprints, heaps]).toEqual([1, 0])
-  expect(JSON.stringify(sample)).not.toContain("currentCommit")
+  expect(sample.commit.current).toMatchObject({ status: "available", value: 700, unit: "bytes", source: "bun:jsc.memoryUsage.currentCommit", basis: "current" })
+  expect(sample.commit.peak).toMatchObject({ status: "available", value: 1100, unit: "bytes", basis: "process-lifetime-peak" })
+  expect(sample.pageFaults.minor).toMatchObject({ status: "available", value: 17, unit: "count", source: "process.resourceUsage.minorPageFault", basis: "process-lifetime-counter" })
+  expect(sample.pageFaults.major).toMatchObject({ status: "available", value: 0, unit: "count" })
+  expect([footprints, heaps, resources]).toEqual([1, 0, 1])
+  expect(JSON.stringify(sample)).not.toContain("bun:jsc.memoryUsage.pageFaults")
+  expect(JSON.stringify(sample)).not.toContain("private-payload")
 })
 
 test("Node reports bytes separately and converts only the process-lifetime RSS peak from KiB", async () => {
@@ -56,9 +65,47 @@ test("Node reports bytes separately and converts only the process-lifetime RSS p
   expect(sample.heap.size).toMatchObject({ status: "available", value: 200, basis: "current" })
   expect(sample.heap.capacity).toMatchObject({ status: "available", value: 400 })
   expect(sample.heap.external).toMatchObject({ status: "available", value: 75 })
+  expect(sample.commit.current.status).toBe("unsupported")
+  expect(sample.commit.peak.status).toBe("unsupported")
   expect(heapReads).toBe(1)
   expect(JSON.stringify(sample)).not.toContain("secret-payload")
   expect(JSON.stringify(sample)).not.toContain("arrayBuffers")
+})
+
+test("commit and page-fault summaries isolate missing, invalid and failed reads without fabricating values", async () => {
+  const missing = await MemoryDiagnostics.sources({
+    versions: { bun: "1.4.4" },
+    resourceUsage: () => ({ minorPageFault: 0, majorPageFault: 9 }),
+  }, async () => { throw new Error("private-module-error") })
+  const partial = MemoryDiagnostics.collect(missing, 0)
+  expect(partial.commit.current).toMatchObject({ status: "unavailable", reason: "module-unavailable" })
+  expect(partial.pageFaults.minor).toMatchObject({ status: "available", value: 0 })
+  expect(partial.pageFaults.major).toMatchObject({ status: "available", value: 9 })
+  for (const value of [-1, Infinity, NaN, "private-reading", 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const sample = MemoryDiagnostics.collect({
+      runtime: "bun", version: "1.4.4",
+      footprint: () => ({ currentCommit: value, peakCommit: 0 }),
+      peak: () => ({ minorPageFault: value }),
+    }, 0)
+    expect(sample.commit.current).toMatchObject({ status: "error", reason: "invalid-reading" })
+    expect(sample.commit.current).not.toHaveProperty("value")
+    expect(sample.commit.peak).toMatchObject({ status: "available", value: 0 })
+    expect(sample.pageFaults.minor).toMatchObject({ status: "error", reason: "invalid-reading" })
+    expect(sample.pageFaults.minor).not.toHaveProperty("value")
+    expect(sample.pageFaults.major).toMatchObject({ status: "unavailable", reason: "no-reading" })
+    expect(JSON.stringify(sample)).not.toContain("private-reading")
+  }
+  const failed = MemoryDiagnostics.collect({
+    runtime: "bun", version: "1.4.4",
+    footprint: () => { throw new Error("private-footprint-error") },
+    peak: () => { throw new Error("private-resource-error") },
+  }, 0)
+  expect(failed.commit.current).toMatchObject({ status: "error", reason: "read-failed" })
+  expect(failed.pageFaults.minor).toMatchObject({ status: "error", reason: "read-failed" })
+  expect(JSON.stringify(failed)).not.toContain("private")
+  const unsupported = MemoryDiagnostics.collect({ runtime: "unknown", version: "unknown" }, 0)
+  expect(unsupported.commit.current.status).toBe("unsupported")
+  expect(unsupported.pageFaults.minor.status).toBe("unsupported")
 })
 
 test("unavailable modules, unsupported APIs, read errors and missing fields never become zero measurements", async () => {
