@@ -180,7 +180,7 @@ test("below 768px the card puts the summary on its own wrapping line above the d
 })
 
 test("tablet widths narrow the identity pickers so the action buttons stay on the first control line", () => {
-  const band = "@media (min-width: 768px) and (max-width: 1199px)"
+  const band = "@media (min-width: 768px) and (max-width: 1279px)"
   const pick = (header: string) => declarationsWhere(composer, (rule) => rule.header === header && rule.conditions.includes(band))
   expect(pick(".mini-composer__mount .composer__controls .mini-picker__trigger")["max-inline-size"]).toBe("7rem")
   expect(pick(".mini-composer__mount .composer__controls .model-control__trigger")["max-inline-size"]).toBe("10rem")
