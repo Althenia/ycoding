@@ -6,9 +6,17 @@ import fs from "node:fs/promises"
 import path from "node:path"
 
 export async function backupUnsupported(filename = Database.filename()) {
-  if (filename === ":memory:" || !(await Bun.file(filename).exists())) return
-  const sqlite = await import("bun:sqlite")
-  const db = new sqlite.Database(filename, { readonly: true, create: false })
+  if (filename === ":memory:") return
+  const exists = await fs.stat(filename).then(
+    (info) => info.isFile(),
+    (error: unknown) => {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return false
+      throw error
+    },
+  )
+  if (!exists) return
+  const sqlite = await import("#database-recovery-sqlite")
+  const db = sqlite.open(filename)
   try {
     const tables = db
       .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
@@ -33,9 +41,7 @@ export async function backupUnsupported(filename = Database.filename()) {
     await fs.rm(backup, { recursive: true, force: true })
     return
   }
-  await Promise.all(
-    ["-wal", "-shm"].map((suffix) => move(filename + suffix, path.join(backup, name + suffix))),
-  )
+  await Promise.all(["-wal", "-shm"].map((suffix) => move(filename + suffix, path.join(backup, name + suffix))))
   await fs.writeFile(
     path.join(backup, "RECOVERY.txt"),
     [

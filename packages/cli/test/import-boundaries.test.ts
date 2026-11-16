@@ -1,11 +1,54 @@
 import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import path from "node:path"
+import { build } from "vite"
+import { mainConfig } from "../vite.node.config"
+import { nodeTarget } from "../src/node/target"
 
 const root = path.resolve(import.meta.dir, "../../..")
 const coldBundleTimeout = 60_000
 
 describe("CLI frontend import boundaries", () => {
+  test(
+    "the Node bundle excludes all Bun ESM imports and Desktop runtime modules",
+    async () => {
+      const config = mainConfig({
+        version: "test",
+        channel: "local",
+        models: "undefined",
+        assetHash: "test",
+        target: nodeTarget(process.platform, process.arch),
+      })
+      const result = await build({ ...config, logLevel: "silent", build: { ...config.build, write: false } })
+      const outputs = Array.isArray(result) ? result : [result]
+      const chunks = outputs.flatMap((output) =>
+        "output" in output ? output.output.filter((chunk) => chunk.type === "chunk") : [],
+      )
+      expect(chunks.length).toBeGreaterThan(0)
+      const imports = chunks.flatMap((chunk) =>
+        new Bun.Transpiler({ loader: "js" }).scanImports(chunk.code.replace(/^#![^\n]*\n/, "")),
+      )
+      const modules = chunks.flatMap((chunk) => Object.keys(chunk.modules).map((id) => id.replaceAll("\\", "/")))
+      expect({
+        bunImports: imports.filter((item) => item.path.startsWith("bun:")),
+        desktopModules: modules.filter((id) => id.includes("/packages/desktop/")),
+      }).toEqual({ bunImports: [], desktopModules: [] })
+      expect(modules.some((id) => id.endsWith("/services/database-recovery-sqlite.node.ts"))).toBe(true)
+      expect(modules.some((id) => id.endsWith("/services/database-recovery-sqlite.bun.ts"))).toBe(false)
+    },
+    coldBundleTimeout,
+  )
+
+  test(
+    "the Bun Desktop client retains the real Desktop worker and editor",
+    async () => {
+      const graph = await bundleInputs("packages/cli/src/commands/handlers/desktop-client.ts")
+      expect(graph).toContain("packages/desktop/src/worker.ts")
+      expect(graph).toContain("packages/desktop/src/editor-zed.ts")
+    },
+    coldBundleTimeout,
+  )
+
   test(
     "exposes only the intentional package entrypoints",
     async () => {
