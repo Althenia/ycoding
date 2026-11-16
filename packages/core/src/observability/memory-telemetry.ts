@@ -1,6 +1,8 @@
 import { Clock, Effect, Layer, Schedule } from "effect"
 import { makeGlobalNode } from "../effect/app-node"
 import { LocationServiceMap } from "../location-service-map"
+import { GenerationActivity } from "../generation-activity"
+import { MemoryDiagnostics } from "./memory"
 
 export function sample() {
   const value = process.memoryUsage()
@@ -24,17 +26,26 @@ export function delta(before: ReturnType<typeof sample>, after = sample()) {
   }
 }
 
-export function start(locations: Pick<LocationServiceMap.Interface, "loaded">, fullServices: readonly string[]) {
+export function start(
+  locations: Pick<LocationServiceMap.Interface, "loaded">,
+  fullServices: readonly string[],
+  activity: Pick<GenerationActivity.Interface, "active">,
+  load: () => Promise<MemoryDiagnostics.Sources> = MemoryDiagnostics.sources,
+) {
   return Effect.gen(function* () {
+    const sources = yield* MemoryDiagnostics.loadSources(load)
     let highWaterRss: number | undefined
     let lastLoggedInfoRss = 0
     yield* Effect.gen(function* () {
       const memory = sample()
       const loaded = yield* locations.loaded()
+      const timestampMs = yield* Clock.currentTimeMillis
       const metadata = {
         component: "memory",
         ...memory,
-        timestampMs: yield* Clock.currentTimeMillis,
+        timestampMs,
+        runtimeMemory: MemoryDiagnostics.collect(sources, timestampMs),
+        activeGenerations: yield* activity.active(),
         loadedLocations: loaded.length,
         boundLocations: loaded.filter((entry) => entry.scope !== "standalone").length,
         standaloneLocations: loaded.filter((entry) => entry.scope === "standalone").length,
@@ -66,10 +77,11 @@ export const node = (fullServices: readonly string[]) =>
     layer: Layer.effectDiscard(
       Effect.gen(function* () {
         const locations = yield* LocationServiceMap.Service
-        yield* start(locations, fullServices)
+        const activity = yield* GenerationActivity.Service
+        yield* start(locations, fullServices, activity)
       }),
     ),
-    deps: [LocationServiceMap.node],
+    deps: [LocationServiceMap.node, GenerationActivity.node],
   })
 
 export * as MemoryTelemetry from "./memory-telemetry"

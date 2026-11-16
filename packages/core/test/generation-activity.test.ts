@@ -109,12 +109,27 @@ test("removes an attempt and settles it as cancelled when its scope is interrupt
     const run = yield* Effect.scoped(Effect.gen(function* () {
       const meter = yield* activity.start({ requestID: ProviderRequest.ID.make("prq_scoped"), attempt: 1, model: fast })
       captured.push(meter)
+      expect(yield* activity.active()).toBe(1)
       expect((yield* activity.snapshot()).active).toBe(1)
       return yield* Effect.interrupt
     })).pipe(Effect.exit)
     expect(Exit.isFailure(run)).toBe(true)
     expect(captured[0]!.phase()).toBe("cancelled")
+    expect(yield* activity.active()).toBe(0)
     expect((yield* activity.snapshot()).active).toBe(0)
   }).pipe(Effect.provide(GenerationActivity.layer)))
   expect(Exit.isSuccess(exit)).toBe(true)
+})
+
+test("active attempt count includes waiting generations and releases terminal attempts without a dashboard snapshot", () => {
+  const { registry, start } = setup()
+  expect(registry.active()).toBe(0)
+  const first = start(fast)
+  const second = start(slow)
+  second.waiting(s(1))
+  expect(registry.active()).toBe(2)
+  first.settle("failed", s(2))
+  expect(registry.active()).toBe(1)
+  second.settle("completed", s(3))
+  expect(registry.active()).toBe(0)
 })
