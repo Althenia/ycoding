@@ -4,6 +4,7 @@ import { Location } from "@ycoding-ai/core/location"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionTodo } from "@ycoding-ai/core/session/todo"
+import { InstructionEntry } from "@ycoding-ai/core/session/instruction-entry"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { Workspace } from "@ycoding-ai/core/workspace"
 import { eq } from "drizzle-orm"
@@ -38,6 +39,10 @@ const storageReads = new Set([
   "/api/session/:sessionID/review",
   "/api/session/:parentID/subagent",
   "/api/session/:sessionID/pending",
+  "/api/session/:sessionID/usage",
+  "/api/session/:sessionID/usage/report",
+  "/api/session/:sessionID/usage/prompts",
+  "/api/session/:sessionID/usage/tasks",
 ])
 
 export const sessionLocationID = (params: Readonly<Record<string, string | undefined>>) =>
@@ -96,7 +101,9 @@ export const sessionLocationLayer = Layer.effect(
         }
 
         const nodes = request.method === "GET" && route.route.path === "/api/session/:sessionID/todo"
-          ? [SessionTodo.node] : [LocationServiceMap.full]
+          ? [SessionTodo.node]
+          : request.method === "GET" && route.route.path === "/api/session/:sessionID/instructions/entries"
+            ? [InstructionEntry.node] : [LocationServiceMap.full]
         return yield* effect.pipe(Effect.provide(locations.get(ref, nodes)))
       }),
     )

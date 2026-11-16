@@ -46,14 +46,12 @@ import { DotsGroup } from "./groups/dots.js"
 import { DecisionGroup } from "./groups/decision.js"
 
 type LocationGroups<LocationId extends HttpApiMiddleware.AnyId> =
-  | HttpApiGroup.AddMiddleware<typeof LocationGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof AgentGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof PluginGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof GenerateGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof ProviderUsageGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof IntegrationGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof McpGroup, LocationId>
-  | HttpApiGroup.AddMiddleware<typeof ConfigGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof CredentialGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof FileSystemGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof CommandGroup, LocationId>
@@ -122,6 +120,8 @@ type ApiGroups<
   | typeof RemoteGroup
   | typeof KeepAwakeGroup
   | typeof DebugGroup
+  | typeof LocationGroup
+  | typeof ConfigGroup
   | typeof CoordinationGroup
   | typeof DecisionGroup
   | LocationGroups<LocationId>
@@ -204,7 +204,7 @@ const makeApiFromGroup = <
   HttpApi.make("server")
     .add(HealthGroup)
     .add(ServerGroup)
-    .add(LocationGroup.middleware(locationMiddleware))
+    .add(LocationGroup)
     .add(AgentGroup.middleware(locationMiddleware))
     .add(PluginGroup.middleware(locationMiddleware))
     .add(makeSessionGroup(sessionLocationMiddleware))
@@ -238,7 +238,7 @@ const makeApiFromGroup = <
     .add(makeIncidentGroup(locationMiddleware))
     .add(RemoteGroup)
     .add(KeepAwakeGroup)
-    .add(ConfigGroup.middleware(locationMiddleware))
+    .add(ConfigGroup)
     .add(makeReviewGroup(sessionLocationMiddleware))
     .add(CoordinationGroup)
     .add(DotsGroup)

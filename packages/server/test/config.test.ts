@@ -10,13 +10,14 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Global } from "@ycoding-ai/core/global"
 import { Location } from "@ycoding-ai/core/location"
+import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Authorization } from "@ycoding-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@ycoding-ai/protocol/middleware/schema-error"
 import { location } from "../../core/test/fixture/location"
+import { fixedLocations } from "../../core/test/fixture/location-map"
 import { Api } from "../src/api"
 import { ConfigHandler } from "../src/handlers/config"
-import { LocationMiddleware, type LocationServices } from "../src/location"
 
 test("GET /api/config/diagnostics exposes every recovered item from real configuration loading", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-config-http-"))
@@ -46,7 +47,7 @@ test("GET /api/config/diagnostics exposes every recovered item from real configu
         HttpApiBuilder.layer(HttpApi.make("server").add(Api.groups["server.config"])).pipe(
           Layer.provide(ConfigHandler),
           Layer.provide(Layer.mergeAll(
-            Layer.succeed(LocationMiddleware, (effect) => Effect.provide(effect, Context.makeUnsafe<LocationServices>(context.mapUnsafe))),
+            Layer.effect(LocationServiceMap.Service, fixedLocations(() => Layer.succeedContext(context))),
             Layer.succeed(Authorization, (effect) => effect),
             Layer.succeed(SchemaErrorMiddleware, (effect) => effect),
           )),

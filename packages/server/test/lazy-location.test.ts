@@ -6,6 +6,7 @@ import { Context, Effect, Layer, Logger } from "effect"
 import { NodeHttpServer } from "@effect/platform-node"
 import { HttpRouter } from "effect/unstable/http"
 import { Catalog } from "@ycoding-ai/core/catalog"
+import { Config } from "@ycoding-ai/core/config"
 import { AttachmentStore } from "@ycoding-ai/core/attachment-store"
 import { Database } from "@ycoding-ai/core/database/database"
 import { LocationWatcher } from "@ycoding-ai/core/filesystem/location-watcher"
@@ -19,8 +20,11 @@ import { ProjectDirectoryTable, ProjectTable } from "@ycoding-ai/core/project/sq
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionTodo } from "@ycoding-ai/core/session/todo"
+import { InstructionEntry } from "@ycoding-ai/core/session/instruction-entry"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
-import { SessionMessageTable, SessionTable } from "@ycoding-ai/core/session/sql"
+import { SessionMessageTable, SessionTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
 import { Workspace } from "@ycoding-ai/core/workspace"
 import { createRoutes } from "../src/routes"
 
@@ -36,7 +40,7 @@ async function withServer(
     digest: string
     messageID: SessionMessage.ID
   }) => Promise<void>,
-  options: { seedProjectSource?: boolean } = {},
+  options: { seedProjectSource?: boolean; seedTasks?: boolean } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "ycoding-lazy-location-"))
   const directory = join(root, "workspace")
@@ -112,6 +116,32 @@ async function withServer(
               data: message,
             })
             .run()
+          if (options.seedTasks) {
+            for (let index = 0; index < 2; index++) {
+              const childID = Session.ID.make(`ses_lazy_child_${index}`)
+              yield* db.insert(SessionTable).values({
+                id: childID,
+                parent_id: sessionID,
+                project_id: Project.ID.global,
+                directory: sessionDirectory,
+                title: `Synthetic child ${index}`,
+              }).run()
+              yield* db.insert(SessionTaskTable).values({
+                session_id: childID,
+                parent_id: sessionID,
+                parent_assistant_message_id: messageID,
+                tool_call_id: `call_lazy_${index}`,
+                input_id: SessionMessage.ID.make(`msg_lazy_child_${index}`),
+                description: "Synthetic completed task",
+                agent: "build",
+                model: CatalogModel.Ref.make({ providerID: Provider.ID.make("synthetic"), id: CatalogModel.ID.make("fixture") }),
+                prompt_digest: "synthetic",
+                background: true,
+                delivery: "steer",
+                state: "completed",
+              }).run()
+            }
+          }
         }),
       ),
     ),
@@ -332,6 +362,58 @@ for (const read of ["list", "inventory", "directories", "current"] as const) {
   }, 60_000)
 }
 
+for (const read of ["usage", "usage/report?group=model", "usage/prompts?inputIDs=msg_lazy_history&inputIDs=msg_lazy_missing", "usage/tasks?sessionIDs=ses_lazy_child_0&sessionIDs=ses_lazy_child_1", "instructions/entries"] as const) {
+  test(`a cold Session ${read} read avoids execution services and preserves placement guards`, async () => {
+    await withServer(async ({ request, loaded, sessionID, standaloneID }) => {
+      const path = `/api/session/${sessionID()}/${read}`
+      expect((await request(path, { headers: { authorization: "" } })).status).toBe(401)
+      expect((await request(path.replace(sessionID(), "ses_missing"))).status).toBe(404)
+      expect((await request(path, { headers: { "x-ycoding-directory": "/other" } })).status).toBe(400)
+      expect((await request(path.replace(sessionID(), standaloneID))).status).toBe(400)
+      expect(await loaded()).toEqual([])
+      const response = await request(path)
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      if (read === "usage") expect(body).toMatchObject({ data: { logical: 0, physical: 0, helpers: 0 } })
+      else if (read.startsWith("usage/report")) expect(body).toMatchObject({ data: { rows: [] } })
+      else if (read.startsWith("usage/prompts")) expect(body.data.units).toMatchObject([
+        { anchor: { sessionID: sessionID(), inputID: "msg_lazy_history" }, total: { requests: 0 } },
+        { anchor: { sessionID: sessionID(), inputID: "msg_lazy_missing" }, total: { requests: 0 } },
+      ])
+      else if (read.startsWith("usage/tasks")) expect(body.data.tasks).toMatchObject([
+        { sessionID: "ses_lazy_child_0", total: { requests: 0 } },
+        { sessionID: "ses_lazy_child_1", total: { requests: 0 } },
+      ])
+      else expect(body).toEqual({ data: [] })
+      expect((await loaded()).flatMap((entry) => entry.built)).toEqual(read === "instructions/entries" ? [InstructionEntry.node.name] : [])
+    }, { seedTasks: read.startsWith("usage/tasks") })
+  }, 60_000)
+}
+
+for (const read of ["location", "config/diagnostics"] as const) {
+  test(`a cold ${read} read resolves metadata without starting execution services`, async () => {
+    await withServer(async ({ directory, request, loaded }) => {
+      const path = `/api/${read}?${query(directory)}`
+      expect((await request(path, { headers: { authorization: "" } })).status).toBe(401)
+      expect(await loaded()).toEqual([])
+      const response = await request(path)
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      if (read === "location") expect(body).toMatchObject({ directory, project: { id: Project.ID.global } })
+      else expect(body).toEqual({ location: { directory, project: { id: Project.ID.global, directory: parse(directory).root } }, data: [] })
+      const entries = await loaded()
+      expect(entries).toHaveLength(1)
+      expect(entries[0].ref.directory).toBe(AbsolutePath.make(directory))
+      const built = entries[0].built
+      expect(built).not.toContain(MCP.node.name)
+      expect(built).not.toContain(LocationWatcher.node.name)
+      expect(built).not.toContain(PluginSupervisor.node.name)
+      expect(built).not.toContain(Catalog.node.name)
+      if (read === "config/diagnostics") expect(built).toContain(Config.node.name)
+    })
+  }, 60_000)
+}
+
 test("a cold Project forget request preserves full Location middleware and authorization", async () => {
   const records: unknown[] = []
   const disposed = Promise.withResolvers<void>()
@@ -455,7 +537,7 @@ test("a full request after a catalog request extends the same Location", async (
     await request(`/api/model?${query(directory)}`)
     const find = async () => (await loaded()).filter((item) => item.ref.directory === directory)
     expect((await find())[0]!.built).not.toContain(MCP.node.name)
-    expect((await request(`/api/location?${query(directory)}`)).status).toBe(200)
+    expect((await request(`/api/shell?${query(directory)}`)).status).toBe(200)
     const entries = await find()
     expect(entries).toHaveLength(1)
     expect(entries[0]!.built).toContain(MCP.node.name)

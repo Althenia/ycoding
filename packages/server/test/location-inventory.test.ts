@@ -13,7 +13,6 @@ import { Authorization } from "@ycoding-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@ycoding-ai/protocol/middleware/schema-error"
 import { Api } from "../src/api"
 import { LocationHandler } from "../src/handlers/location"
-import { layer } from "../src/location"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -86,7 +85,6 @@ function server(database: string, global: Global.Interface) {
   ])
   const services = Layer.mergeAll(
     projectLayer,
-    layer.pipe(Layer.provide(projectLayer)),
     Layer.succeed(Authorization, (effect) => effect),
     Layer.succeed(SchemaErrorMiddleware, (effect) => effect),
   )

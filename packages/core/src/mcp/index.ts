@@ -645,7 +645,14 @@ export const layer = Layer.effect(
           status: entry.status,
         })
         yield* events.publish(McpEvent.StatusChanged, { server: name }).pipe(Effect.ignore)
-      }).pipe(Effect.ensuring(Deferred.succeed(entry.startup, undefined)))
+      }).pipe(
+        Effect.onInterrupt(() => Effect.gen(function* () {
+          yield* stopServer(name, entry)
+          entry.status = { status: "failed", error: "Connection interrupted" }
+          yield* events.publish(McpEvent.StatusChanged, { server: name }).pipe(Effect.ignore)
+        })),
+        Effect.ensuring(Deferred.succeed(entry.startup, undefined)),
+      )
 
     const stopServer = Effect.fnUntraced(function* (name: ServerName, entry: ServerEntry) {
       const scope = entry.scope

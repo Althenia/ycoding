@@ -1,6 +1,6 @@
 import path from "node:path"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import {
   createMcpHandler,
   inputRequired,
@@ -264,6 +264,83 @@ function resourceMcpLayer(
     ),
   )
 }
+
+test("offline MCP reconnects release replaced, failed and interrupted clients without duplicating tools", async () => {
+  const active = new Set<number>()
+  let acquired = 0
+  let released = 0
+  let mode: "ready" | "failed" | "blocked" = "ready"
+  const entered = Deferred.makeUnsafe<void>()
+  const connect = spyOn(MCPClient, "connect").mockImplementation(() => Effect.acquireRelease(
+    Effect.sync(() => {
+      const id = ++acquired
+      active.add(id)
+      const selected = mode
+      const unused = () => Effect.die("unused offline MCP operation")
+      const connection: Effect.Success<ReturnType<typeof MCPClient.connect>> = {
+        instructions: undefined,
+        skills: undefined,
+        tools: () => selected === "failed" ? Effect.fail(new Error("Synthetic catalog failure"))
+          : selected === "blocked" ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never))
+          : Effect.succeed(Array.from({ length: 32 }, (_, index) => ({
+            name: `tool_${index}`,
+            description: undefined,
+            inputSchema: { type: "object" as const },
+            outputSchema: undefined,
+            metadata: undefined,
+          }))),
+        rawTools: unused,
+        skillEntries: unused,
+        skillEntry: unused,
+        prompts: () => Effect.succeed([]),
+        resources: unused,
+        resourceTemplates: unused,
+        readResource: unused,
+        readResourceDirectory: unused,
+        prompt: unused,
+        callTool: unused,
+        onClose: () => {},
+        onLog: () => {},
+        onToolsChanged: () => {},
+        onPromptsChanged: () => {},
+        onResourcesChanged: () => {},
+      }
+      return { id, connection }
+    }),
+    ({ id }) => Effect.sync(() => { active.delete(id); released++ }),
+  ).pipe(Effect.map(({ connection }) => connection)))
+  try {
+    await Effect.runPromise(Effect.gen(function* () {
+      const service = yield* MCP.Service
+      for (let index = 0; index < 8; index++) {
+        expect(yield* service.tools()).toHaveLength(32)
+        expect(active.size).toBe(1)
+        yield* service.connect("resources")
+      }
+      mode = "failed"
+      yield* service.connect("resources")
+      expect(active.size).toBe(0)
+      expect(yield* service.tools()).toEqual([])
+      expect((yield* service.servers())[0]?.status).toEqual({ status: "failed", error: "Synthetic catalog failure" })
+      mode = "blocked"
+      const blocked = yield* service.connect("resources").pipe(Effect.forkScoped)
+      yield* Deferred.await(entered)
+      yield* Fiber.interrupt(blocked)
+      expect(active.size).toBe(0)
+      expect(yield* service.tools()).toEqual([])
+      expect((yield* service.servers())[0]?.status).toEqual({ status: "failed", error: "Connection interrupted" })
+      mode = "ready"
+      yield* service.connect("resources")
+      expect(yield* service.tools()).toHaveLength(32)
+      expect(active.size).toBe(1)
+    }).pipe(Effect.provide(resourceMcpLayer("https://fixture.invalid/mcp")), Effect.scoped))
+    expect(active.size).toBe(0)
+    expect(acquired).toBe(12)
+    expect(released).toBe(acquired)
+  } finally {
+    connect.mockRestore()
+  }
+})
 
 const mcp = Layer.mock(MCP.Service, {
   tools: () =>
