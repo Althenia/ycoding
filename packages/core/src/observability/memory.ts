@@ -25,7 +25,11 @@ export async function sources(
   load: (specifier: string) => Promise<Record<string, unknown>> = (specifier) => import(specifier),
 ): Promise<Sources> {
   if (runtime.versions.bun) {
-    const base = { runtime: "bun" as const, version: runtime.versions.bun }
+    const base = {
+      runtime: "bun" as const,
+      version: runtime.versions.bun,
+      peak: runtime.resourceUsage?.bind(runtime),
+    }
     try {
       const jsc = await load("bun:jsc")
       const footprint = jsc.memoryUsage
@@ -64,12 +68,13 @@ function read(get?: () => unknown, unavailable = false): Reading {
 function metric(
   reading: Reading,
   source: string,
-  basis: "current" | "process-lifetime-peak" | "unverified",
+  basis: "current" | "process-lifetime-peak" | "process-lifetime-counter" | "unverified",
   field?: string,
   scale = 1,
   zeroUnavailable = false,
+  unit: "bytes" | "count" = "bytes",
 ) {
-  const metadata = { source, basis, unit: "bytes" as const }
+  const metadata = { source, basis, unit }
   if (reading.status !== "available") return { ...metadata, ...reading }
   const selected = field === undefined ? reading : read(() => {
     if (typeof reading.value !== "object" || reading.value === null) return undefined
@@ -86,6 +91,7 @@ function metric(
 export function collect(input: Sources, timestampMs: number) {
   const footprint = read(input.footprint, input.moduleUnavailable)
   const heap = input.runtime === "node" ? read(input.heap, input.moduleUnavailable) : read()
+  const resources = read(input.peak)
   const unsupported = read()
   const bun = input.runtime === "bun"
   const node = input.runtime === "node"
@@ -100,7 +106,15 @@ export function collect(input: Sources, timestampMs: number) {
       : metric(read(input.rss, input.moduleUnavailable), "process.memoryUsage.rss", "current", undefined, 1, true),
     peakRss: bun
       ? metric(footprint, "bun:jsc.memoryUsage.peak", "process-lifetime-peak", "peak", 1, true)
-      : metric(read(input.peak, input.moduleUnavailable), "process.resourceUsage.maxRSS", "process-lifetime-peak", "maxRSS", 1024, true),
+      : metric(resources, "process.resourceUsage.maxRSS", "process-lifetime-peak", "maxRSS", 1024, true),
+    commit: {
+      current: metric(bun ? footprint : unsupported, "bun:jsc.memoryUsage.currentCommit", "current", "currentCommit"),
+      peak: metric(bun ? footprint : unsupported, "bun:jsc.memoryUsage.peakCommit", "process-lifetime-peak", "peakCommit"),
+    },
+    pageFaults: {
+      minor: metric(resources, "process.resourceUsage.minorPageFault", "process-lifetime-counter", "minorPageFault", 1, false, "count"),
+      major: metric(resources, "process.resourceUsage.majorPageFault", "process-lifetime-counter", "majorPageFault", 1, false, "count"),
+    },
     heap: {
       size: bun
         ? metric({ status: "unavailable", reason: "sampling-cost-unverified" }, "bun:jsc.heapSize", "unverified")
@@ -113,16 +127,20 @@ export function collect(input: Sources, timestampMs: number) {
   }
 }
 
+export function loadSources(load: () => Promise<Sources> = sources) {
+  return Effect.promise(async () => {
+    try {
+      return await load()
+    } catch {
+      return { runtime: "unknown" as const, version: "unknown", moduleUnavailable: true }
+    }
+  })
+}
+
 export function start(enabled: boolean, load: () => Promise<Sources> = sources) {
   if (!enabled) return Effect.void
   return Effect.gen(function* () {
-    const input = yield* Effect.promise(async () => {
-      try {
-        return await load()
-      } catch {
-        return { runtime: "unknown" as const, version: "unknown", moduleUnavailable: true }
-      }
-    })
+    const input = yield* loadSources(load)
     for (let index = 0; index < 120; index++) {
       const timestamp = yield* Clock.currentTimeMillis
       yield* Effect.logDebug("memory sample", { component: "memory", sequence: index + 1, ...collect(input, timestamp) })

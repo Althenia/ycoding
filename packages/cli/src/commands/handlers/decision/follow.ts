@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { FollowError, followID, followDefaultReaders, followReaderLimit, followPageLimit, followLedgerLimit, followRequestKey, requestKinds, type FollowRequest, type FollowState } from "./follow-state"
-import { ClientError } from "@ycoding-ai/client/promise"
+import { ClientError, isSessionNotFoundError } from "@ycoding-ai/client/promise"
 
 export type FollowEvent = { type: string; id?: string; created?: number; sourceEpoch?: string; aggregateID?: string; seq?: number;
   durable?: { aggregateID: string; seq: number }; data?: unknown }
@@ -253,7 +253,11 @@ export async function followFamily(client: FollowClient, options: {
         const visited = new Set<string>()
         do {
           if (++pages > maxPages) throw new FollowError("budget-exhausted", `task reconciliation exceeds --max-pages ${maxPages}; retain state and increase --max-pages up to ${followPageLimit} before resuming`)
-          const page = await read(() => client.session.subagent.list({ parentID, limit: 10, ...(cursor === undefined ? {} : { cursor }) }, { signal }))
+          const page = await read(() => client.session.subagent.list({ parentID, limit: 10, ...(cursor === undefined ? {} : { cursor }) }, { signal })).catch((error: unknown) => {
+            if (!scope.has(parentID) && isSessionNotFoundError(error) && error.sessionID === parentID) return undefined
+            throw error
+          })
+          if (page === undefined) break
           for (const task of page.data) {
             if (!followID(task.sessionID) || task.parentID !== undefined && task.parentID !== parentID) throw new FollowError("invalid-native-data")
             if (!family.has(task.sessionID) && scope.has(parentID)) { scopeChanged = true; continue }
@@ -286,28 +290,37 @@ export async function followFamily(client: FollowClient, options: {
       }
     }
     const recovery = createHash("sha256").update(JSON.stringify([lost, failedSessions])).digest("hex")
-    if ((lost.length || failedSessions.length) && reconciliation.recovery !== recovery) {
-      reconciliation.recovery = recovery
-      await send({ kind: "reconciliation", sessionID: root, id: `watch_${recovery}`, reason: "recovery-needed", evidence: [
-        ...(lost.length ? [`lost: ${lost.join(", ")}`] : []), ...(failedSessions.length ? [`failed: ${failedSessions.join(", ")}`] : []),
-        ...(progressing ? ["other work is progressing; do not interrupt it"] : [])].join("; ").slice(0, 2000) })
-    }
+    const announceRecovery = (lost.length > 0 || failedSessions.length > 0) && reconciliation.recovery !== recovery
     if (!lost.length && !failedSessions.length) delete reconciliation.recovery
-    if (progressing || rootActive) return
-    const todos = client.session.todo === undefined ? [] : await read(() => client.session.todo!.list({ sessionID: root }, { signal }))
+    if ((progressing || rootActive) && !announceRecovery) return
+    const todos = progressing || rootActive || client.session.todo === undefined ? [] : await read(() => client.session.todo!.list({ sessionID: root }, { signal }))
     const open = todos.filter((item) => !["completed", "cancelled"].includes(item.status))
     const next = open.find((item) => item.status === "in_progress") ?? open[0]
     const failed = [...new Set([...failedSessions, ...[...taskStates].filter(([, value]) => ["failed", "lost"].includes(value)).map(([id]) => id)])].toSorted()
-    const requests = [...pending.values()].map((item) => `${item.kind} ${item.id} sessionID=${item.sessionID}`).toSorted()
+    const settled = failed.filter((id) => !lost.includes(id) && !failedSessions.includes(id))
     const current = completion !== undefined && completion > superseded
-    const reason = lost.length || failed.length ? "recovery-needed" : requests.length ? "open-questions" : current ? "completed" : "unfinished-idle"
-    const members = [...ownership.values()].map((item) => `${item.sessionID}${item.ownerSessionID ? ` owner=${item.ownerSessionID}` : ""}`).toSorted()
-    const evidence = [reason === "completed" ? `task complete; work.completed seq=${completion}` : reason === "open-questions" ? `open questions / pending approvals: ${requests.join(", ")}` :
-      `no current work.completed receipt; open root todos: ${open.length}${next ? `; next ${next.status}: ${next.content}` : ""}`,
-      ...(requests.length && reason !== "open-questions" ? [`pending: ${requests.join(", ")}`] : []),
-      ...(failed.length ? [`failed/lost tasks: ${failed.join(", ")}`] : []), ...(lost.length ? [`lost: ${lost.join(", ")}`] : []),
-      ...(members.length ? [`idle Project members: ${members.join(", ")}`] : []),
-      ...(!current && activityOutstanding ? ["outstanding work with zero active workers"] : [])].join("; ").replaceAll(/[\u0000-\u001f\u007f]/g, " ").slice(0, 2000)
+    const reason = lost.length || failed.length ? "recovery-needed" : pending.size ? "open-questions" : current ? "completed" : "unfinished-idle"
+    const members = new Set([...ownership.values()].map((item) => item.sessionID))
+    const groups = [...new Set([...ownership.values()].map((item) => item.groupID))].toSorted()
+    const actionable = [...lost.map((id) => `lost ${id}`), ...failedSessions.filter((id) => !lost.includes(id)).map((id) => `failed ${id}`)]
+    const shown = actionable.slice(0, 3).filter((_, index, values) => values.slice(0, index + 1).join(", ").length <= 320)
+    const evidence = [
+      `State: ${lost.length || failedSessions.length ? `current Session recovery required${progressing ? "; other work is progressing; do not interrupt it" : ""}`
+        : settled.length ? "idle; no current lost/failed Sessions; settled child failures need review"
+        : pending.size ? "idle; pending decisions need attention" : current ? "task complete" : "idle; no current work.completed receipt"}${current ? `; work.completed seq=${completion}` : ""}`,
+      progressing || rootActive ? "Work: inspect affected Sessions; leave progressing work alone; root todos not read while work is active"
+        : `Work: open root todos: ${open.length}${next ? `; ${next.status.slice(0, 32)}: ${next.content.replaceAll(/[\u0000-\u001f\u007f;]/g, " ").slice(0, 180)}${next.content.length > 180 ? "…" : ""}` : "; no open root todo"}`,
+      `Counts: pending requests: ${pending.size}; lost sessions: ${lost.length}; failed sessions: ${failedSessions.length}; settled failed/lost child tasks: ${settled.length}; ${progressing ? "Project members" : "idle Project members"}: ${members.size}`,
+      ...(actionable.length ? [`Action: ${shown.join(", ")}${actionable.length > shown.length ? ` (+${actionable.length - shown.length} more; inspect family)` : ""}`] : []),
+      ...(!current && activityOutstanding && !progressing ? ["Action: outstanding work with zero active workers"] : []),
+      ...(taskStates.size || actionable.length ? [`Read tasks: ycoding api session.subagent.list --param parentID=${root}`] : []),
+      ...(groups.length ? [`Read members: ycoding api coordination.${groups.length === 1 ? `get --param groupID=${groups[0]}` : "list"}`] : []),
+    ].join("; ").replaceAll(/[\u0000-\u001f\u007f]/g, " ")
+    if (announceRecovery) {
+      reconciliation.recovery = recovery
+      await send({ kind: "reconciliation", sessionID: root, id: `watch_${recovery}`, reason: "recovery-needed", evidence })
+    }
+    if (progressing || rootActive) return
     const watermark = [...entries.values()].map((entry) => [entry.id, entry.after]).sort(([a], [b]) => String(a).localeCompare(String(b)))
     const idle = createHash("sha256").update(JSON.stringify([watermark, reason, evidence, activityRevision])).digest("hex")
     if (reconciliation.idle === idle) return
@@ -340,10 +353,10 @@ export async function followFamily(client: FollowClient, options: {
         await send({ ...item, kind: "ownership", type: ownerSessionID === undefined ? "owner-released" : "owner-changed", resolution: "unknown", ...(snapshot ? { snapshot: true as const } : {}) })
       }
       for (const [memberKey, previous] of ownership) {
-        if (previous.groupID !== group.id || previous.ownerSessionID === undefined || detail.members.some((member) => member.sessionID === previous.sessionID)) continue
+        if (previous.groupID !== group.id || detail.members.some((member) => member.sessionID === previous.sessionID)) continue
         const item = { groupID: group.id, sessionID: previous.sessionID, revision: detail.revision }
         ownership.delete(memberKey)
-        await send({ ...item, kind: "ownership", type: "owner-released", removed: true, resolution: "unknown" })
+        await send({ ...item, kind: "ownership", type: "owner-released", removed: true, resolution: "unknown" }, previous.ownerSessionID === undefined)
       }
     }
     if (groupID === undefined) ownershipSnapshot = false

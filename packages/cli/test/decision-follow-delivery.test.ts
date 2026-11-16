@@ -176,6 +176,42 @@ test("Project escalations deliver once with exact decision identity and no autho
   } finally { await h.stop(run) }
 })
 
+test("structured recovery delivery preserves every actionable request and escalation through reload", async () => {
+  const evidence = "State: current Session recovery required; Work: open root todos: 2; in_progress: Verify recovery output; Counts: pending requests: 4; lost sessions: 1; failed sessions: 1; settled failed/lost child tasks: 43; idle Project members: 40; Action: lost ses_task_0, failed ses_task_1; Read tasks: ycoding api session.subagent.list --param parentID=ses_root; Read members: ycoding api coordination.get --param groupID=cgrp_synthetic"
+  const items = [item("question", "que_action", "session.question.reply", "requestID"),
+    item("permission", "per_action", "session.permission.reply", "requestID"),
+    item("review", "rvw_action", "session.review.decide", "itemID")]
+  const h = harness({ items })
+  await h.observe({ kind: "reconciliation", sessionID: "ses_root", id: "watch_synthetic", reason: "recovery-needed", evidence },
+    ...items.map((value) => pending(value.kind, value.id)),
+    pending("child-question", "qst_child", "ses_waiting", { parentID: "ses_root", revision: 2 }),
+    { ...pending("review", "rvw_action"), kind: "project-escalation", type: "coordination.request.escalated" })
+  const saved = validateFollowState(JSON.parse(JSON.stringify(h.saved)), "ses_root", server)
+  const reloaded = harness({ state: saved, items })
+  const run = reloaded.delivery.run()
+  try {
+    await until(() => reloaded.records.some((record) => record.outcome === "delivered"), "structured recovery and decisions")
+    const text = reloaded.sends[0].text
+    expect(text).toContain("Session ses_root: recovery-needed\n   State: current Session recovery required\n   Work:")
+    expect(text).toContain("\n   Counts: pending requests: 4;")
+    expect(text).toContain("\n   Action: lost ses_task_0, failed ses_task_1")
+    expect(text).toContain("\n   Read tasks: ycoding api session.subagent.list --param parentID=ses_root")
+    expect(text).toContain("\n   Read members: ycoding api coordination.get --param groupID=cgrp_synthetic")
+    expect(text).toContain("Inspect/resume: ycoding decision watch ses_root --family")
+    for (const value of items) {
+      expect(text).toContain(`${value.kind} ${value.id} pending in ses_root`)
+      expect(text).toContain(value.decide[0].argv.slice(0, 3).join(" "))
+    }
+    expect(text).toContain("child-question qst_child pending in ses_waiting (parent ses_root)")
+    expect(text).toContain("session.subagent.answer --param parentID=ses_root --param childID=ses_waiting --param questionID=qst_child")
+    expect(text).toContain("review rvw_action pending in ses_root, escalated to the user by its Project")
+    expect(text.match(/ses_task_\d+/g)).toEqual(["ses_task_0", "ses_task_1"])
+    expect(text.length).toBeLessThan(3300)
+    expect(reloaded.records.find((record) => record.outcome === "delivered")?.events).toEqual(saved.delivery!.targets[0].outbox)
+    expect(reloaded.calls.every((call) => ["dots.threads", "decision.list", "dots.thread.send"].includes(call))).toBe(true)
+  } finally { await reloaded.stop(run) }
+})
+
 for (const reason of ["completed", "open-questions", "recovery-needed", "unfinished-idle"]) {
   test(`compact ${reason} summary survives reload and drains with one inspect command`, async () => {
     const h = harness()
@@ -185,9 +221,10 @@ for (const reason of ["completed", "open-questions", "recovery-needed", "unfinis
     const run = reloaded.delivery.run()
     try {
       await until(() => reloaded.records.some((record) => record.outcome === "delivered"), "retained summary")
-      const text = reloaded.sends[0]!.text
-      expect(text.split("\n")).toHaveLength(3)
-      expect(text).toContain(`Session ses_root: ${reason};`)
+      const text = reloaded.sends[0].text
+      expect(text.split("\n")).toHaveLength(4)
+      expect(text).toContain(`Session ses_root: ${reason}\n   `)
+      expect(text).toContain(reason === "open-questions" ? "review rvw_pending sessionID=ses_root" : "synthetic retained evidence")
       expect(text).toContain("ycoding decision watch ses_root --family")
       expect(text).not.toContain(authority)
     } finally { await reloaded.stop(run) }

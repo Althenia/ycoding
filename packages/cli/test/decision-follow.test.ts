@@ -46,7 +46,7 @@ function fixture(state = initial()) {
   let failLog = false
   let failGlobal = false
   let saved = structuredClone(state)
-  let work = { data: [] as string[], running: [] as string[], lost: [] as string[] }
+  let work = { data: [] as string[], running: [] as string[], lost: [] as string[], failed: [] as string[] | undefined }
   let tasks: { sessionID: string; parentID?: string; state: string; revision: number; question?: { id: string; deferred?: true } }[] = []
   const reads = { global: 0, log: 0, active: 0, list: 0, snapshot: 0, pending: 0 }
   const faults: { global?: number; log?: number; snapshot?: number; pending?: number; handshake?: boolean; error?: ClientError } = {}
@@ -110,7 +110,7 @@ function fixture(state = initial()) {
     return event
   }
   return { client, controller, children, history, receipts, logs, append, wait, emit, reads, faults, get global() { return global! }, streams,
-    setWork(value: typeof work) { work = value }, setTasks(value: typeof tasks) { tasks = value },
+    setWork(value: Omit<typeof work, "failed"> & { failed?: string[] }) { work = { ...value, failed: value.failed } }, setTasks(value: typeof tasks) { tasks = value },
     setPending(value: FollowRequest[]) { pending = value }, setEpoch(value: string) { epoch = value }, failRead() { failRead = true }, failLog() { failLog = true }, failGlobal() { failGlobal = true },
     get saved() { return saved },
     run(overrides: { emit?: (receipt: FollowReceipt) => Promise<void>; save?: (value: FollowState) => Promise<void>; heartbeatSeconds?: number; maxReaders?: number; maxPages?: number } = {}) {
@@ -119,6 +119,107 @@ function fixture(state = initial()) {
         save: async (value) => { await overrides.save?.(value); saved = structuredClone(validateFollowState(value, state.rootSessionID, state.server)) }, emit: overrides.emit ?? emit })
     } }
 }
+
+for (const currentFailure of [false, true]) {
+  test(`reconciliation bounds historical task and Project IDs without hiding decisions${currentFailure ? " or current recovery" : ""}`, async () => {
+    const f = fixture()
+    const children = Array.from({ length: 45 }, (_, index) => `ses_task_${index}`)
+    const members = Array.from({ length: 40 }, (_, index) => ({ sessionID: `ses_project_${index}`, owner: { sessionID: children[index] } }))
+    f.children.push(...children, "ses_waiting")
+    f.setTasks([...children.map((sessionID) => ({ sessionID, state: "failed", revision: 1 })),
+      { sessionID: "ses_waiting", state: "waiting", revision: 2, question: { id: "qst_child" } }])
+    f.client.coordination.list = async () => [{ id: "cgrp_synthetic", masterSessionID: "ses_root" }]
+    f.client.coordination.get = async () => ({ id: "cgrp_synthetic", revision: 1, members })
+    f.client.session.todo = { async list() { return [
+      { status: "completed", content: "Finished setup" },
+      { status: "pending", content: "Publish the verified result" },
+      { status: "in_progress", content: "Verify recovery output" },
+    ] } }
+    if (currentFailure) f.setWork({ data: [], running: [], lost: [children[0]], failed: [children[1]] })
+    const requests = [
+      { kind: "question", sessionID: "ses_root", id: "que_action" },
+      { kind: "permission", sessionID: "ses_project_39", id: "per_action" },
+      { kind: "review", sessionID: "ses_root", id: "rvw_action" },
+    ]
+    f.setPending(requests)
+    const run = f.run()
+    try {
+      const summary = await f.wait((receipt) => receipt.kind === "reconciliation")
+      await f.wait((receipt) => receipt.kind === "ready")
+      expect(summary.reason).toBe("recovery-needed")
+      expect(summary.evidence).toContain(currentFailure ? "State: current Session recovery required" : "State: idle; no current lost/failed Sessions; settled child failures need review")
+      expect(summary.evidence).toContain("Work: open root todos: 2; in_progress: Verify recovery output")
+      expect(summary.evidence).toContain(`Counts: pending requests: 4; lost sessions: ${currentFailure ? 1 : 0}; failed sessions: ${currentFailure ? 1 : 0}; settled failed/lost child tasks: ${currentFailure ? 43 : 45}; idle Project members: 40`)
+      expect(summary.evidence!.length).toBeLessThan(1300)
+      expect(summary.evidence!.match(/ses_task_\d+/g) ?? []).toEqual(currentFailure ? [children[0], children[1]] : [])
+      expect(summary.evidence).not.toContain("ses_project_")
+      expect(summary.evidence).not.toContain("owner=")
+      expect(summary.evidence).toContain("ycoding api session.subagent.list --param parentID=ses_root")
+      expect(summary.evidence).toContain("ycoding api coordination.get --param groupID=cgrp_synthetic")
+      expect(f.receipts.filter((receipt) => receipt.kind === "pending").map((receipt) => [receipt.requestKind, receipt.sessionID, receipt.id].join("\0")).toSorted()).toEqual([
+        ...requests.map((request) => [request.kind, request.sessionID, request.id].join("\0")), "child-question\0ses_waiting\0qst_child",
+      ].toSorted())
+      f.global.push({ type: "coordination.request.escalated", sourceEpoch: "epoch_one", data: { sessionID: "ses_root", kind: "review", requestID: "rvw_action", coordinationEscalation: { reasons: [{ sessionID: "ses_task_0", reason: "synthetic escalation" }] } } })
+      expect(await f.wait((receipt) => receipt.kind === "project-escalation")).toMatchObject({ requestKind: "review", sessionID: "ses_root", id: "rvw_action" })
+      expect(f.saved.pending).toHaveLength(4)
+      expect(f.saved.cursors).toHaveLength(47)
+      expect(f.saved.ownership).toHaveLength(40)
+    } finally { f.controller.abort(); await run }
+  })
+}
+
+test("unfinished idle reconciliation keeps bounded next work and counts without a completion claim", async () => {
+  const f = fixture()
+  f.client.session.todo = { async list() { return [{ status: "pending", content: `Inspect\n${"x".repeat(3000)}` }] } }
+  const run = f.run()
+  try {
+    const summary = await f.wait((receipt) => receipt.kind === "reconciliation")
+    expect(summary.reason).toBe("unfinished-idle")
+    expect(summary.evidence).toContain("State: idle; no current work.completed receipt")
+    expect(summary.evidence).toContain("Work: open root todos: 1; pending: Inspect ")
+    expect(summary.evidence).toContain("Counts: pending requests: 0; lost sessions: 0; failed sessions: 0")
+    expect(summary.evidence!.length).toBeLessThan(700)
+    expect(summary.evidence).not.toMatch(/[\u0000-\u001f\u007f]/)
+  } finally { f.controller.abort(); await run }
+})
+
+test("active current recovery and readiness do not depend on the todo provider", async () => {
+  const f = fixture()
+  f.children.push("ses_failed")
+  f.setWork({ data: [], running: ["ses_root"], lost: [], failed: ["ses_failed"] })
+  f.client.session.todo = { async list() { throw new Error("synthetic unavailable todo provider") } }
+  const run = f.run()
+  try {
+    const summary = await Promise.race([f.wait((receipt) => receipt.kind === "reconciliation"), run.then(() => { throw new Error("Observer ended before recovery output") })])
+    expect(summary.reason).toBe("recovery-needed")
+    expect(summary.evidence).toContain("State: current Session recovery required; other work is progressing; do not interrupt it")
+    expect(summary.evidence).toContain("Work: inspect affected Sessions; leave progressing work alone; root todos not read while work is active")
+    expect(summary.evidence).toContain("Counts: pending requests: 0; lost sessions: 0; failed sessions: 1")
+    expect(summary.evidence).toContain("Action: failed ses_failed")
+    expect(summary.evidence).not.toContain("open root todos:")
+    expect(await f.wait((receipt) => receipt.kind === "ready")).toMatchObject({ rootActive: true, activity: "running" })
+  } finally { f.controller.abort(); await run }
+})
+
+test("current recovery with many maximum-length IDs stays bounded while other work progresses", async () => {
+  const f = fixture()
+  const children = Array.from({ length: 12 }, (_, index) => `ses_${String(index).padStart(2, "0")}_${"x".repeat(249)}`)
+  f.children.push(...children)
+  f.setWork({ data: [], running: ["ses_root"], lost: children.slice(0, 6), failed: children.slice(5) })
+  f.client.session.todo = { async list() { return [{ status: "in_progress", content: "Verify the active worker" }] } }
+  const run = f.run()
+  try {
+    const summary = await f.wait((receipt) => receipt.kind === "reconciliation")
+    expect(summary.reason).toBe("recovery-needed")
+    expect(summary.evidence).toContain("State: current Session recovery required; other work is progressing; do not interrupt it")
+    expect(summary.evidence).toContain("Work: inspect affected Sessions; leave progressing work alone; root todos not read while work is active")
+    expect(summary.evidence).toContain("lost sessions: 6; failed sessions: 7")
+    expect(summary.evidence).toContain("(+11 more; inspect family)")
+    expect(summary.evidence!.match(/ses_\d+_x+/g)).toEqual([children[0]])
+    expect(summary.evidence!.length).toBeLessThanOrEqual(2000)
+    expect(summary.evidence).toContain("Read tasks: ycoding api session.subagent.list --param parentID=ses_root")
+  } finally { f.controller.abort(); await run }
+})
 
 for (const resumed of [false, true]) {
   test(`complete paginated 68-Session family includes 35 compaction descendants on ${resumed ? "resume" : "fresh follow"}`, async () => {
@@ -589,6 +690,51 @@ for (const running of [[], ["ses_child"]]) {
       expect(await f.wait((receipt) => receipt.kind === "activity")).toMatchObject({ rootActive: running.length > 0, activity: running.length > 0 ? "running" : "idle" })
     } finally { f.controller.abort(); await run }
   })
+}
+
+for (const status of [404, 401, 409, 500]) {
+  for (const parentID of ["ses_missing_member", "ses_root"]) {
+    test(`resumed Project task reads ${status === 404 && parentID !== "ses_root" ? "skip" : "preserve"} HTTP ${status} for ${parentID}`, async () => {
+      const state = initial()
+      state.sourceEpoch = "epoch_one"
+      state.cursors = [{ sessionID: "ses_root" }]
+      state.ownership = [{ groupID: "cgrp_project", sessionID: "ses_missing_member", revision: 1 }]
+      const f = fixture(state)
+      f.client.coordination.list = async () => [{ id: "cgrp_project", masterSessionID: "ses_root" }]
+      f.client.coordination.get = async () => ({ id: "cgrp_project", revision: 2, members: [] })
+      const response = status === 404 ? { _tag: "SessionNotFoundError", sessionID: parentID, message: "Synthetic missing Session" }
+        : { _tag: "UnauthorizedError", message: "Synthetic denied read" }
+      let failure: unknown
+      const native = YCoding.make({ baseUrl: "http://native.synthetic", fetch: Object.assign(
+        async (_input: string | URL | Request, _init?: RequestInit) => Response.json(response, { status }), { preconnect: fetch.preconnect },
+      ) })
+      const list = f.client.session.subagent.list.bind(f.client.session.subagent)
+      f.client.session.subagent.list = async (input, options) => {
+        if (input.parentID !== parentID) return list(input, options)
+        try { return await native.session.subagent.list(input, options) }
+        catch (error) { failure = error; throw error }
+      }
+      const run = f.run()
+      if (status !== 404 || parentID === "ses_root") {
+        const rejected = await run.then(() => undefined, (error: unknown) => error)
+        expect(failure).toBeDefined()
+        expect(rejected).toBe(failure)
+        expect(f.receipts).toEqual([])
+        expect(f.saved).toEqual(state)
+        return
+      }
+      run.catch(() => undefined)
+      try {
+        await f.wait((receipt) => receipt.kind === "ready")
+        f.append("ses_root", 1, "session.input.admitted")
+        await f.wait((receipt) => receipt.seq === 1)
+      } finally { f.controller.abort(); await run }
+      expect(f.saved.ownership).toEqual([])
+      expect(f.saved.cursors).toEqual([{ sessionID: "ses_root", after: 1 }])
+      expect(f.receipts.filter((receipt) => receipt.kind === "ownership")).toEqual([])
+      expect(f.streams.every((stream) => stream.active === 0)).toBe(true)
+    })
+  }
 }
 
 test("owner reassignment and release emit only changed identities and survive repeated invalidations", async () => {

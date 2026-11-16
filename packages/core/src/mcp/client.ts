@@ -378,10 +378,11 @@ export const connect = Effect.fnUntraced(function* (
     // Some MCP servers require roots capability declaration before they request the workspace root.
     roots: {},
   }
+  const validation = tolerantValidator()
   const client = new Client(clientInfo, {
     versionNegotiation: { mode: "auto" },
     capabilities,
-    jsonSchemaValidator: tolerantValidator(new AjvJsonSchemaValidator()),
+    jsonSchemaValidator: validation,
   })
   const startupTimeout = config.timeout?.startup ?? DEFAULT_STARTUP_TIMEOUT
   client.setRequestHandler("roots/list", () => ({ roots: [{ uri: pathToFileURL(directory).href }] }))
@@ -540,6 +541,7 @@ export const connect = Effect.fnUntraced(function* (
           }).pipe(
             Effect.tapError((error) => Effect.logWarning("failed to list MCP tools", { server, error: error.message })),
           )
+          validation.reset()
           return result.tools.map((tool) => ({
             name: tool.name,
             description: tool.description,
@@ -803,15 +805,21 @@ const unsupportedModernVersion = (error: JSONRPCErrorResponse["error"]) =>
   Array.isArray(error.data.supported) &&
   error.data.supported.some((version) => typeof version === "string" && version >= MODERN_PROTOCOL_VERSION)
 
-const tolerantValidator = (validators: jsonSchemaValidator): jsonSchemaValidator => ({
-  getValidator: <T>(schema: JsonSchemaType) =>
-    Effect.try(() => validators.getValidator<T>(schema)).pipe(
-      Effect.orElseSucceed(
-        (): JsonSchemaValidator<T> => (input) => ({ valid: true, data: input as T, errorMessage: undefined }),
+const tolerantValidator = () => {
+  let validators: jsonSchemaValidator = new AjvJsonSchemaValidator()
+  return {
+    reset: () => {
+      validators = new AjvJsonSchemaValidator()
+    },
+    getValidator: <T>(schema: JsonSchemaType) =>
+      Effect.try(() => validators.getValidator<T>(schema)).pipe(
+        Effect.orElseSucceed(
+          (): JsonSchemaValidator<T> => (input) => ({ valid: true, data: input as T, errorMessage: undefined }),
+        ),
+        Effect.runSync,
       ),
-      Effect.runSync,
-    ),
-})
+  }
+}
 
 const stop = (transport: Transport) =>
   cleanupStdioDescendants(transport).pipe(Effect.andThen(Effect.promise(() => transport.close())), Effect.ignore)
