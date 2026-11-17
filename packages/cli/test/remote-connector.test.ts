@@ -5,7 +5,36 @@ import path from "node:path"
 import { createRemoteConnector } from "../src/commands/handlers/remote/connector"
 import { privateLocalServer } from "../src/commands/handlers/remote/connect"
 import { RemoteAgent } from "../src/remote-bridge"
-import { createLocalServer } from "../src/remote-local"
+import { createLocalServer, LocalFailure } from "../src/remote-local"
+
+test.each(["bridge", "connect", "untrusted-kind"] as const)("startup diagnostics bound the %s stage without disclosing errors", async (stage) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-diagnostic-"))
+  const diagnostics: unknown[] = []
+  const raw = "Bearer synthetic-secret https://relay.invalid/private/device.json"
+  const failure = new LocalFailure("server", raw, { cause: new Error(raw) })
+  if (stage === "untrusted-kind") Reflect.set(failure, "kind", raw)
+  const connector = createRemoteConnector({
+    directory, notice: "Synthetic owner access", onDiagnostic: (message, fields) => diagnostics.push({ message, fields }),
+    makeBridge: () => {
+      if (stage === "bridge") throw failure
+      return { connect: async () => { throw failure }, close: async () => {} }
+    },
+  })
+  try {
+    await connector.start()
+    expect(diagnostics).toContainEqual({ message: "remote connector failed", fields: {
+      cause: "startup_failed", stage: stage === "bridge" ? "bridge" : "connect",
+      ...(stage === "untrusted-kind" ? {} : { kind: "server" }),
+    } })
+    expect(JSON.stringify(diagnostics)).not.toContain(raw)
+    expect(JSON.stringify(diagnostics)).not.toContain("synthetic-secret")
+    expect(JSON.stringify(diagnostics)).not.toContain("https://")
+    expect(JSON.stringify(diagnostics)).not.toContain("/private/")
+  } finally {
+    await connector.stop()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
 
 describe("shared remote connector", () => {
   test("refuses a nonprivate server backend before bridging it to the relay", () => {

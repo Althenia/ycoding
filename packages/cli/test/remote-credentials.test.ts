@@ -19,6 +19,10 @@ import {
 } from "../src/remote-credentials"
 import { RemoteSetupError } from "../src/remote-error"
 import { makeRemoteConnector } from "../src/commands/handlers/remote/connect"
+import { createRemoteConnector } from "../src/commands/handlers/remote/connector"
+import { createRemoteHost } from "../src/remote-host"
+import { createAuthService } from "../../../infra/cloudflare/src/auth/service"
+import { createMemoryAuthStore } from "../../../infra/cloudflare/test/support/memory-store"
 
 const enrollmentIdentity = {
   deviceID: "dev_1",
@@ -51,6 +55,146 @@ function provide(root: string) {
 function json(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })
 }
+
+async function enrolledRelay(root: string, condition: "rotated" | "unknown-credential" | "revoked-device" | "unknown-device") {
+  const now = 1_700_000_000_000
+  const keys = await generateDeviceKey()
+  const service = createAuthService(createMemoryAuthStore(), { now: () => now })
+  const enrollment = await service.createEnrollment("usr_synthetic")
+  const completed = await service.completeEnrollment({ ...enrollment, name: "synthetic", publicKey: keys.publicKey })
+  if (!completed.ok) throw new Error("Synthetic enrollment failed")
+  const issued = await service.issueCredentials(completed.value.deviceID)
+  if (!issued.ok) throw new Error("Synthetic credential issuance failed")
+  const identity = Identity.make({
+    ...enrollmentIdentity, ...keys, deviceID: completed.value.deviceID,
+    refreshToken: condition === "unknown-credential" ? "unknown-synthetic-credential" : issued.value.refreshToken,
+    refreshExpiresAt: issued.value.refreshExpiresAt,
+  })
+  await provide(root)(create(identity))
+  if (condition === "rotated") expect((await service.refreshCredentials({ deviceID: identity.deviceID, refreshToken: issued.value.refreshToken })).ok).toBe(true)
+  if (condition === "revoked-device" || condition === "unknown-device") {
+    await service.revokeDevice({ deviceID: identity.deviceID, userID: "usr_synthetic" })
+    if (condition === "unknown-device") await service.deleteRevokedDevices("usr_synthetic", identity.deviceID)
+  }
+  const calls: Array<{ operation: string; status: number }> = []
+  const fetcher: typeof fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const operation = new URL(String(input)).pathname.split("/").at(-1)!
+    const body = JSON.parse(String(init?.body)) as { deviceID: string; refreshToken: string; challengeID: string; signature: string }
+    const outcome = operation === "refresh" ? await service.refreshCredentials(body)
+      : operation === "challenge" ? await service.createChallenge(body.deviceID)
+      : operation === "token" ? await service.redeemChallenge(body)
+      : undefined
+    if (outcome === undefined) throw new Error("Unexpected device operation")
+    const response = outcome.ok ? json(outcome.value) : new Response(null, { status: 401 })
+    calls.push({ operation, status: response.status })
+    return response
+  }, { preconnect: fetch.preconnect })
+  return { identity, fetcher, calls, now, service }
+}
+
+test.each(["rotated", "unknown-credential"] as const)("refresh401 recovers an active enrolled device with %s credentials through the auth service HTTP contract", async (condition) => {
+  await withHome(async (root) => {
+    const relay = await enrolledRelay(root, condition)
+    const before = await fs.stat(path.join(root, "state", "remote-device.json"))
+    const result = await provide(root)(credentials(relay.identity, { fetcher: relay.fetcher, now: () => relay.now }))
+    expect(relay.calls).toEqual([{ operation: "refresh", status: 401 }, { operation: "challenge", status: 200 }, { operation: "token", status: 200 }])
+    expect((await relay.service.authorizeAgentToken(result.accessToken)).ok).toBe(true)
+    const stored = await provide(root)(read())
+    expect(stored).toMatchObject({ ...relay.identity, refreshToken: expect.any(String), refreshExpiresAt: expect.any(Number) })
+    expect(stored?.refreshToken).not.toBe(relay.identity.refreshToken)
+    const after = await fs.stat(path.join(root, "state", "remote-device.json"))
+    expect(after.ino).not.toBe(before.ino)
+    expect(after.mode & 0o777).toBe(0o600)
+    expect(await fs.readdir(path.join(root, "state"))).toEqual(["remote-device.json"])
+  })
+})
+
+test.each(["revoked-device", "unknown-device"] as const)("refresh401 fails closed for %s without host retries or changing identity", async (condition) => {
+  await withHome(async (root) => {
+    const relay = await enrolledRelay(root, condition)
+    const before = await fs.readFile(path.join(root, "state", "remote-device.json"), "utf8")
+    let failure: unknown
+    let retries = 0
+    const failed = Promise.withResolvers<void>()
+    const host = await createRemoteHost({
+      file: path.join(root, "remote.json"), scheduleRetry: () => { retries++; return () => {} },
+      create: async () => {
+        const connector = createRemoteConnector({ directory: root, notice: "Synthetic owner access", makeBridge: () => ({
+          connect: async () => {
+            try { await provide(root)(credentials(relay.identity, { fetcher: relay.fetcher, now: () => relay.now })) }
+            catch (error) { failure = error; throw error }
+          }, close: async () => {},
+        }) })
+        connector.subscribe((status) => { if (status.state === "error") failed.resolve() })
+        return connector
+      },
+    })
+    try {
+      await host.set(true)
+      await failed.promise
+      expect(failure).toBeInstanceOf(DeviceAuthorizationError)
+      expect(failure).toMatchObject({ status: 401, operation: "challenge" })
+      expect(await host.status()).toMatchObject({ state: "error" })
+      expect(retries).toBe(0)
+      expect(relay.calls).toEqual([{ operation: "refresh", status: 401 }, { operation: "challenge", status: 401 }])
+      expect(await fs.readFile(path.join(root, "state", "remote-device.json"), "utf8")).toBe(before)
+    } finally { await host.shutdown() }
+  })
+})
+
+test.each([
+  ["refresh", 403], ["refresh", 410],
+  ["challenge", 401], ["challenge", 403], ["challenge", 410],
+  ["token", 401], ["token", 403], ["token", 410],
+] as const)("credential rejection at %s with %s is terminal and preserves identity", async (operation, status) => {
+  await withHome(async (root) => {
+    const identity = Identity.make({ ...enrollmentIdentity, ...await generateDeviceKey(), refreshToken: "refresh_old", refreshExpiresAt: 9_000 })
+    await provide(root)(create(identity))
+    const calls: string[] = []
+    const fetcher: typeof fetch = Object.assign(async (input: RequestInfo | URL) => {
+      const stage = new URL(String(input)).pathname.split("/").at(-1)!
+      calls.push(stage)
+      if (stage === operation) return new Response("synthetic-secret-body", { status })
+      if (stage === "refresh") return new Response(null, { status: 401 })
+      return json({ challengeID: "chal_1", nonce: "nonce_1" })
+    }, { preconnect: fetch.preconnect })
+    const failure = await provide(root)(credentials(identity, { fetcher, now: () => 1_000 })).catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(DeviceAuthorizationError)
+    expect(failure).toMatchObject({ status, operation })
+    expect(String(failure)).not.toContain("synthetic-secret-body")
+    expect(calls).toEqual(operation === "refresh" ? ["refresh"] : operation === "challenge" ? ["refresh", "challenge"] : ["refresh", "challenge", "token"])
+    expect(await provide(root)(read())).toEqual(identity)
+  })
+})
+
+test.each(["disable", "deadline"] as const)("%s cancellation fences every recovery boundary", async (boundary) => {
+  await withHome(async (root) => {
+    const identity = Identity.make({ ...enrollmentIdentity, ...await generateDeviceKey(), refreshToken: "refresh_old", refreshExpiresAt: 9_000 })
+    await provide(root)(create(identity))
+    for (const cancelAt of ["before", "refresh", "challenge", "token"] as const) {
+      const controller = new AbortController()
+      const deadline = new AbortController()
+      const timeout = spyOn(AbortSignal, "timeout").mockImplementation(() => deadline.signal)
+      const calls: string[] = []
+      const cancel = () => (boundary === "disable" ? controller : deadline).abort()
+      const fetcher: typeof fetch = Object.assign(async (input: RequestInfo | URL) => {
+        const operation = new URL(String(input)).pathname.split("/").at(-1)!
+        calls.push(operation)
+        if (operation === cancelAt) cancel()
+        if (operation === "refresh") return new Response(null, { status: 401 })
+        if (operation === "challenge") return json({ challengeID: "chal_1", nonce: "nonce_1" })
+        return json({ accessToken: "access_new", accessExpiresAt: 5_000, refreshToken: "refresh_new", refreshExpiresAt: 20_000 })
+      }, { preconnect: fetch.preconnect })
+      try {
+        if (cancelAt === "before") cancel()
+        const failure = await provide(root)(credentials(identity, { fetcher, now: () => 1_000, signal: controller.signal })).catch((error: unknown) => error)
+        expect(failure).toBeInstanceOf(Error)
+        expect(calls).toEqual(cancelAt === "before" ? [] : cancelAt === "refresh" ? ["refresh"] : cancelAt === "challenge" ? ["refresh", "challenge"] : ["refresh", "challenge", "token"])
+        expect(await provide(root)(read())).toEqual(identity)
+      } finally { timeout.mockRestore() }
+    }
+  })
+})
 
 describe("device key material", () => {
   test("generates a P-256 public key the shared contract accepts and signs the exact challenge payload", async () => {

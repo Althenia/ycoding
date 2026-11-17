@@ -79,17 +79,21 @@ export const update = Effect.fn("cli.remote-credentials.update")(function* (iden
   return yield* write(identity, yield* file)
 })
 
-const write = Effect.fnUntraced(function* (identity: Identity, target: string) {
+const write = Effect.fnUntraced(function* (identity: Identity, target: string, signal?: AbortSignal) {
+  const active = Effect.try(() => signal?.throwIfAborted())
+  yield* active
   const fs = yield* FileSystem.FileSystem
   const info = yield* lstat(target)
   if (Option.isSome(info) && info.value.isSymbolicLink()) return yield* Effect.fail(new Error(symlinkError(target)))
   const encoded = yield* encodeIdentity(identity)
   yield* fs.makeDirectory(path.dirname(target), { recursive: true })
   const temp = `${target}.${crypto.randomUUID()}.tmp`
-  yield* fs.writeFileString(temp, encoded, { mode: 0o600 })
-  // Rename replaces the destination entry itself, so a link planted at the
-  // destination cannot redirect the write to another file.
-  yield* fs.rename(temp, target)
+  yield* active
+  yield* fs.writeFileString(temp, encoded, { mode: 0o600 }).pipe(
+    Effect.andThen(active),
+    Effect.andThen(fs.rename(temp, target)),
+    Effect.ensuring(fs.remove(temp, { force: true }).pipe(Effect.orDie)),
+  )
 })
 
 /** Read-only symlink probe: `FileSystem.stat` follows links, which is unsafe here. */
@@ -140,11 +144,6 @@ export async function signChallenge(privateKey: PrivateKey, challengeID: string,
 
 export type FetchLike = typeof globalThis.fetch
 
-/**
- * The relay authoritatively rejected this device (revoked, expired, or unknown).
- * A caller must treat this as terminal: reconnecting or retrying credential
- * exchange cannot recover it, only a new enrollment can.
- */
 export class DeviceAuthorizationError extends Error {
   override readonly name = "DeviceAuthorizationError"
 
@@ -185,9 +184,13 @@ export const credentials = Effect.fn("cli.remote-credentials.credentials")(funct
   const signal = options.signal === undefined ? deadline : AbortSignal.any([options.signal, deadline])
   const rotated =
     identity.refreshToken !== undefined && identity.refreshExpiresAt !== undefined && identity.refreshExpiresAt > current
-      ? yield* refresh(identity, options.fetcher, signal)
+      ? yield* refresh(identity, options.fetcher, signal).pipe(Effect.catch((error) =>
+          error instanceof DeviceAuthorizationError && error.status === 401 && error.operation === "refresh" && !signal.aborted
+            ? challenge(identity, options.fetcher, signal)
+            : Effect.fail(error),
+        ))
       : yield* challenge(identity, options.fetcher, signal)
-  yield* update({ ...identity, refreshToken: rotated.refreshToken, refreshExpiresAt: rotated.refreshExpiresAt })
+  yield* write({ ...identity, refreshToken: rotated.refreshToken, refreshExpiresAt: rotated.refreshExpiresAt }, yield* file, signal)
   return { accessToken: rotated.accessToken, accessExpiresAt: rotated.accessExpiresAt }
 })
 
@@ -229,6 +232,7 @@ function authenticationError(cause: unknown, message: string) {
 }
 
 async function post(relayURL: string, operation: NonNullable<DeviceAuthorizationError["operation"]>, fetcher: FetchLike | undefined, body: unknown, signal?: AbortSignal) {
+  signal?.throwIfAborted()
   const url = new URL(`/api/devices/${operation}`, withTrailingSlash(relayURL))
   if (url.search !== "") throw new Error("Device credentials are never sent as URL parameters")
   const response = await (fetcher ?? globalThis.fetch)(url, {
@@ -239,11 +243,14 @@ async function post(relayURL: string, operation: NonNullable<DeviceAuthorization
     signal,
     body: JSON.stringify(body),
   })
+  signal?.throwIfAborted()
   if (response.status === 401 || response.status === 403 || response.status === 410)
     throw new DeviceAuthorizationError(response.status, operation)
   // Never read or log the response body: it may contain credentials.
   if (!response.ok) throw new Error(`Relay rejected the request with status ${response.status}`)
-  return (await response.json()) as unknown
+  const value: unknown = await response.json()
+  signal?.throwIfAborted()
+  return value
 }
 
 function withTrailingSlash(value: string) {

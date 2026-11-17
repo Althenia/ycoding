@@ -3,13 +3,105 @@ import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { RemoteCloseCode } from "@ycoding-ai/remote"
+import { ServerProcess } from "@ycoding-ai/server/process"
+import type { RemoteConnection } from "@ycoding-ai/server/remote-connection"
+import { SdkPlugins } from "@ycoding-ai/core/plugin/sdk"
+import { Effect, Exit, Layer, Scope } from "effect"
+import { HttpServer } from "effect/unstable/http"
 import { createRemoteConnector } from "../src/commands/handlers/remote/connector"
 import { createRemoteHost } from "../src/remote-host"
 import { RemoteAgent, type BridgeCredentials } from "../src/remote-bridge"
 import { DeviceAuthorizationError } from "../src/remote-credentials"
 import { createLocalServer } from "../src/remote-local"
 import { CloudflareRemoteTransport, type RemoteSocket } from "../src/remote-transport"
-import { password, startServer } from "./remote-harness"
+import { auth, availablePort, password, startServer } from "./remote-harness"
+
+test.each(["ready", "disable", "shutdown", "failed"] as const)("server readiness gates connector startup through %s", async (boundary) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-readiness-"))
+  const scope = await Effect.runPromise(Scope.make())
+  const native = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const plugin = Promise.withResolvers<void>()
+  const releasePlugin = Promise.withResolvers<void>()
+  const port = await availablePort()
+  const base = `http://127.0.0.1:${port}`
+  const diagnostics: unknown[] = []
+  let host: RemoteConnection.Interface | undefined
+  let stop = Effect.void
+  let creates = 0
+  let inventories = 0
+  let connects = 0
+  await Bun.write(path.join(directory, "remote.json"), JSON.stringify({ enabled: true }))
+  const startingRaw = ServerProcess.start<never, never>({
+    hostname: "127.0.0.1", port, password,
+    database: { path: ":memory:" },
+    config: { directory, project: false, content: "{}" },
+    models: { fetch: false }, fs: { filewatcher: false, fff: false },
+  }, {
+    instanceID: "connector-readiness",
+    onListen: (_address, shutdown) => { stop = shutdown; return Effect.succeed(Effect.void) },
+  }, async (address, _password, waitUntilReady) => {
+    const local = createLocalServer({ url: HttpServer.formatAddress(address), auth: { type: "basic", username: "ycoding", password } })
+    host = await createRemoteHost({
+      file: path.join(directory, "remote.json"), waitUntilReady,
+      create: async () => {
+        creates++
+        return createRemoteConnector({
+          directory, notice: "Synthetic owner access", onDiagnostic: (message, fields) => diagnostics.push({ message, fields }),
+          makeBridge: (hooks) => new RemoteAgent({
+            relayURL: "https://relay.invalid",
+            local: { ...local, listPage: async (input) => { inventories++; return local.listPage(input) } },
+            credentials: async () => ({ accessToken: "synthetic", accessExpiresAt: Date.now() + 600_000 }),
+            createConnection: (input) => ({
+              connect: async () => { connects++; input.onOpen() }, send: async () => {}, onMessage: () => {}, disconnect: async () => {},
+            }), onDiagnostic: hooks.onDiagnostic, onTerminal: hooks.onTerminal,
+          }),
+        })
+      },
+    })
+    return host
+  }, [], async () => {
+    native.resolve()
+    await release.promise
+    if (boundary === "failed") throw new Error("synthetic boot failure")
+  }, [[SdkPlugins.node, SdkPlugins.layer.pipe(Layer.tap(() => Effect.promise(() => { plugin.resolve(); return releasePlugin.promise })))]]).pipe(Effect.provideService(Scope.Scope, scope))
+  const starting = Effect.runPromise(startingRaw as Effect.Effect<Effect.Success<typeof startingRaw>, Effect.Error<typeof startingRaw>>)
+  try {
+    await plugin.promise
+    expect((await fetch(`${base}/api/health`, { headers: { authorization: auth } })).status).toBe(503)
+    expect(creates).toBe(0)
+    expect(inventories).toBe(0)
+    releasePlugin.resolve()
+    await native.promise
+    expect(await host?.status()).toEqual({ state: "connecting" })
+    expect(creates).toBe(0)
+    expect(inventories).toBe(0)
+    if (boundary === "disable") await host?.set(false)
+    if (boundary === "shutdown") await Effect.runPromise(stop)
+    release.resolve()
+    if (boundary === "failed") {
+      await waitFor(async () => (await fetch(`${base}/api/health`, { headers: { authorization: auth } })).status === 500)
+      await Effect.runPromise(stop)
+    }
+    await starting
+    if (boundary === "ready") {
+      await waitFor(async () => (await host?.status())?.state === "on")
+      expect((await fetch(`${base}/api/health`, { headers: { authorization: auth } })).status).toBe(200)
+    }
+    await host?.shutdown()
+    expect(creates).toBe(boundary === "ready" ? 1 : 0)
+    expect(inventories).toBe(boundary === "ready" ? 1 : 0)
+    expect(connects).toBe(boundary === "ready" ? 1 : 0)
+    expect(JSON.stringify(diagnostics)).not.toContain("startup_failed")
+  } finally {
+    releasePlugin.resolve()
+    release.resolve()
+    await Effect.runPromise(stop)
+    await starting
+    await Effect.runPromise(Scope.close(scope, Exit.void))
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 20_000)
 
 class RelaySocket implements RemoteSocket {
   readyState = 0

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import type { SessionCompletionsOutput, SessionInfo, SessionPredictionUpdated } from "@ycoding-ai/client/promise"
 import { RemoteCloseCode, RemoteLimits, parseAgentMessage, parseChunkedValue } from "@ycoding-ai/remote"
 import { RemoteAgent, type BridgeCredentials, type ConnectionInput, type RelayConnection } from "../src/remote-bridge"
@@ -185,6 +185,46 @@ function sentFrames(record: ConnectionRecord) {
     return frame.value
   })
 }
+
+test("conflict recovery and periodic rotation share one pending credential exchange", async () => {
+  const timeout = spyOn(globalThis, "setTimeout")
+  const fire = (delay: number) => {
+    const index = timeout.mock.calls.findIndex((call) => call[1] === delay)
+    const callback = timeout.mock.calls[index]?.[0]
+    const result = timeout.mock.results[index]
+    if (typeof callback !== "function" || result?.type !== "return") throw new Error("Expected connector timer")
+    clearTimeout(result.value)
+    callback()
+  }
+  const entered = Promise.withResolvers<void>()
+  const credential = Promise.withResolvers<BridgeCredentials>()
+  let calls = 0
+  const test = harness({ credentials: async () => {
+    if (++calls === 1) return { accessToken: "initial", accessExpiresAt: 600_000 }
+    entered.resolve()
+    return credential.promise
+  } })
+  try {
+    await test.bridge.connect()
+    test.records[0].input.onClose(RemoteCloseCode.agentConflict)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    test.advance(600_000)
+    fire(3_600_000)
+    await entered.promise
+    fire(300)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(calls).toBe(2)
+    credential.resolve({ accessToken: "rotated", accessExpiresAt: 1_200_000 })
+    await waitFor(() => test.records.length === 2 ? true : undefined)
+    expect(test.records).toHaveLength(2)
+    expect(test.records[1].input.accessToken).toBe("rotated")
+  } finally {
+    credential.resolve({ accessToken: "rotated", accessExpiresAt: 1_200_000 })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    await test.bridge.close()
+    timeout.mockRestore()
+  }
+})
 
 test("global Dots reads remain available during a pending write without Session inventory", async () => {
   const release = Promise.withResolvers<void>()

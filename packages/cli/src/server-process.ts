@@ -134,10 +134,11 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
                   return yield* register(address, password, instanceID, serviceOptions.file, shutdown)
                 }),
             },
-        async (address, password) => {
+        async (address, password, waitUntilReady) => {
           const { createRemoteHost } = await import("./remote-host")
           return createRemoteHost({
             file: path.join(global.state, "remote.json"),
+            waitUntilReady,
             create: async () => {
               const { makeRemoteConnector } = await import("./commands/handlers/remote/connect")
               const url = new URL(HttpServer.formatAddress(address))

@@ -123,6 +123,7 @@ export class RemoteAgent {
   private readonly authRetryWindowMs: number
 
   private connection?: RelayConnection
+  private opening?: Promise<void>
   private state: BridgeState = "idle"
   private generation = 0
   private readonly lifetime = new AbortController()
@@ -247,61 +248,65 @@ export class RemoteAgent {
     await this.sendQuotas(true)
   }
 
-  private async openConnection() {
-    if (this.state === "closed" || this.state === "terminal") return
-    const cycle = this.generation
-    const credentials = await this.options.credentials(this.lifetime.signal)
-    if (cycle !== this.generation) return
-    this.accessExpiresAt = credentials.accessExpiresAt
-    const connection = (this.options.createConnection ?? createRelayConnection)({
-      url: agentURL(this.options.relayURL),
-      accessToken: credentials.accessToken,
-      onOpen: () => {
-        if (this.connection !== connection || cycle !== this.generation) return
-        this.setConnected(true)
-        this.resetStatusRetry()
-        this.resetCompletionRetry()
-        this.statusOwner = {}
-        this.scheduler.reset()
-        this.subscriptions.clear()
-        this.uploads.clear()
-        this.uploads = createAttachmentUploads()
-        this.resetAdvertise()
-        this.advertise()
-        this.lastStatus = undefined
-        this.attentionStatus = undefined
-        this.attentionGeneration++
-        this.failedRoots.clear()
-        this.failureChanges.clear()
-        this.failuresHydrated = false
-        this.failureGeneration++
-        this.statusReading = undefined
-        this.statusDirty = false
-        this.completionReading = undefined
-        this.completionDirty = false
-        void this.sendStatus()
-        void this.sendCompletions()
-        void this.sendQuotas()
-        this.syncEventStream()
-      },
-      onClose: (code, reason) => { if (this.connection === connection) this.onConnectionClosed(code, reason) },
-    })
-    this.connection = connection
-    connection.onMessage((frame) => { if (this.connection === connection) this.onFrame(frame) })
-    // The invalidation is sent from the open callback, so the bridge is live
-    // before the connection settles.
-    this.state = "live"
-    try {
-      await connection.connect()
-    } catch (error) {
-      if (this.connection === connection && cycle === this.generation) {
-        this.state = "idle"
-        this.connection = undefined
-        this.setConnected(false)
-        await connection.disconnect().catch(() => this.diagnostic("could not close the failed relay connection"))
+  private openConnection(): Promise<void> {
+    if (this.state === "closed" || this.state === "terminal") return Promise.resolve()
+    if (this.opening) return this.opening
+    this.opening = (async () => {
+      const cycle = this.generation
+      const credentials = await this.options.credentials(this.lifetime.signal)
+      if (cycle !== this.generation) return
+      this.accessExpiresAt = credentials.accessExpiresAt
+      const connection = (this.options.createConnection ?? createRelayConnection)({
+        url: agentURL(this.options.relayURL),
+        accessToken: credentials.accessToken,
+        onOpen: () => {
+          if (this.connection !== connection || cycle !== this.generation) return
+          this.setConnected(true)
+          this.resetStatusRetry()
+          this.resetCompletionRetry()
+          this.statusOwner = {}
+          this.scheduler.reset()
+          this.subscriptions.clear()
+          this.uploads.clear()
+          this.uploads = createAttachmentUploads()
+          this.resetAdvertise()
+          this.advertise()
+          this.lastStatus = undefined
+          this.attentionStatus = undefined
+          this.attentionGeneration++
+          this.failedRoots.clear()
+          this.failureChanges.clear()
+          this.failuresHydrated = false
+          this.failureGeneration++
+          this.statusReading = undefined
+          this.statusDirty = false
+          this.completionReading = undefined
+          this.completionDirty = false
+          void this.sendStatus()
+          void this.sendCompletions()
+          void this.sendQuotas()
+          this.syncEventStream()
+        },
+        onClose: (code, reason) => { if (this.connection === connection) this.onConnectionClosed(code, reason) },
+      })
+      this.connection = connection
+      connection.onMessage((frame) => { if (this.connection === connection) this.onFrame(frame) })
+      // The invalidation is sent from the open callback, so the bridge is live
+      // before the connection settles.
+      this.state = "live"
+      try {
+        await connection.connect()
+      } catch (error) {
+        if (this.connection === connection && cycle === this.generation) {
+          this.state = "idle"
+          this.connection = undefined
+          this.setConnected(false)
+          await connection.disconnect().catch(() => this.diagnostic("could not close the failed relay connection"))
+        }
+        throw error
       }
-      throw error
-    }
+    })().finally(() => { this.opening = undefined })
+    return this.opening
   }
 
   private onFrame(frame: unknown) {

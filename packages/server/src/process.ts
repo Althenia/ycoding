@@ -40,7 +40,7 @@ type App = Effect.Effect<
 export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   options: ServerOptions,
   lifecycle?: Lifecycle<E, R>,
-  remoteFactory?: (address: HttpServer.Address, password: string) => Promise<RemoteConnection.Interface>,
+  remoteFactory?: (address: HttpServer.Address, password: string, waitUntilReady: (signal: AbortSignal) => Promise<void>) => Promise<RemoteConnection.Interface>,
   plugins: ReadonlyArray<Parameters<SdkPlugins.Interface["register"]>[0]> = [],
   nativeFactory?: (host: NativeDots.Host) => Promise<void | (() => Promise<void>)>,
   replacements: LayerNode.Replacements = [],
@@ -60,6 +60,7 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   const quiet = Logger.layer([], { mergeWithExisting: false })
   const bound = yield* listen({ hostname, port }).pipe(Effect.provide(quiet))
   const application = yield* Ref.make(Option.none<App>())
+  const ready = yield* Deferred.make<void>()
   // Request fibers may continue inbound trace context, but must not inherit the server startup parent.
   yield* bound.http
     .serve(dispatch(password, status, application, shutdown), HttpMiddleware.logger)
@@ -83,7 +84,7 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
 
   const boot = Effect.gen(function* () {
     const remote = remoteFactory
-      ? yield* Effect.promise(() => remoteFactory(bound.http.address, password))
+      ? yield* Effect.promise(() => remoteFactory(bound.http.address, password, (signal) => Effect.runPromise(Deferred.await(ready), { signal })))
       : RemoteConnection.unavailable
     yield* Effect.addFinalizer(() => Effect.promise(() => remote.shutdown())).pipe(
       Effect.provideService(Scope.Scope, applicationScope),
@@ -120,6 +121,7 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
     if (!lifecycle) yield* restart.loseStaleTasks
     yield* Ref.set(application, Option.some(Context.get(context, HttpRouter.HttpRouter).asHttpEffect()))
     yield* status.ready
+    if ((yield* status.current).type === "ready") yield* Deferred.succeed(ready, undefined)
     return { address: bound.http.address, shutdown: Deferred.await(shutdown) }
   }).pipe(
     Effect.catchCause((cause) => {

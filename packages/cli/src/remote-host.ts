@@ -9,6 +9,7 @@ type Connector = ReturnType<typeof createRemoteConnector>
 export async function createRemoteHost(input: {
   file: string
   create: () => Promise<Connector>
+  waitUntilReady?: (signal: AbortSignal) => Promise<void>
   scheduleRetry?: (retry: () => void, delayMs: number) => () => void
 }): Promise<RemoteConnection.Interface> {
   const repository = createRemotePreferenceRepository(input.file)
@@ -21,6 +22,7 @@ export async function createRemoteHost(input: {
   const pending = new Set<Promise<void>>()
   let cancelRetry: (() => void) | undefined
   let retryAttempt = 0
+  let lifetime = new AbortController()
 
   function retry(cycle: number, message: string) {
     if (!desired || cycle !== generation || cancelRetry) return
@@ -45,6 +47,8 @@ export async function createRemoteHost(input: {
     unsubscribe = undefined
     connector = undefined
     desired = true
+    lifetime.abort()
+    lifetime = new AbortController()
     retryAttempt = 0
     const cycle = ++generation
     current = { state: "connecting" }
@@ -53,9 +57,11 @@ export async function createRemoteHost(input: {
   }
 
   function run(cycle: number, previous?: Connector) {
+    const signal = lifetime.signal
     const running = (async () => {
       try {
         await previous?.stop()
+        if (input.waitUntilReady) await input.waitUntilReady(signal)
         if (cycle !== generation) return
         const next = connector ?? await input.create()
         if (cycle !== generation) { await next.stop(); return }
@@ -74,7 +80,7 @@ export async function createRemoteHost(input: {
         await next.start()
         if (cycle !== generation) await next.stop()
       } catch (error) {
-        if (cycle !== generation) return
+        if (cycle !== generation || signal.aborted) return
         if (error instanceof RemoteSetupError || error instanceof DeviceAuthorizationError) current = { state: "error", message: error.message }
         else retry(cycle, "Could not start remote connector")
       }
@@ -86,6 +92,7 @@ export async function createRemoteHost(input: {
   async function stop() {
     desired = false
     generation++
+    lifetime.abort()
     cancelRetry?.()
     cancelRetry = undefined
     unsubscribe?.()

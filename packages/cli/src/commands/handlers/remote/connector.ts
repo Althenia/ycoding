@@ -1,6 +1,7 @@
 import { acquireRemoteLock } from "./lock"
 import { DeviceAuthorizationError } from "../../../remote-credentials"
 import { RemoteSetupError, type RemoteDiagnostic } from "../../../remote-error"
+import { LocalFailure } from "../../../remote-local"
 
 export type RemoteConnectorStatus = {
   state: "off" | "connecting" | "on" | "other-process" | "error"
@@ -55,6 +56,7 @@ export function createRemoteConnector(input: {
     if (starting) return starting
     if (current.state === "on") return Promise.resolve()
     const cycle = ++generation
+    let stage: "lock" | "bridge" | "connect" = "lock"
     setStatus({ state: "connecting", notice: input.notice })
     starting = (async () => {
       await settlement
@@ -69,6 +71,7 @@ export function createRemoteConnector(input: {
         setStatus({ state: "other-process", message: `Remote is on in another process (PID ${lock.pid})` })
         return
       }
+      stage = "bridge"
       bridge = input.makeBridge({
         onDiagnostic: (message, fields) => input.onDiagnostic?.(message, fields),
         onTerminal: (message, retryable = false) => {
@@ -84,12 +87,15 @@ export function createRemoteConnector(input: {
         if (cycle !== generation || current.state === "error") return
         setStatus({ state: connected ? "on" : "connecting", notice: input.notice })
       })
+      stage = "connect"
       await next.connect()
       if (cycle !== generation || current.state === "error") return
       if (!next.subscribe) setStatus({ state: "on", notice: input.notice })
     })().catch(async (error: unknown) => {
       if (cycle === generation) input.onDiagnostic?.("remote connector failed", {
         cause: error instanceof DeviceAuthorizationError ? "authorization_rejected" : error instanceof RemoteSetupError ? "setup_failed" : "startup_failed",
+        stage,
+        ...(error instanceof LocalFailure && ["not_found", "location_unavailable", "invalid", "conflict", "transport", "too_large", "telemetry_disabled", "server"].includes(error.kind) ? { kind: error.kind } : {}),
         ...(error instanceof DeviceAuthorizationError ? { status: error.status, ...(error.operation === undefined ? {} : { operation: error.operation }) } : {}),
       })
       try {
