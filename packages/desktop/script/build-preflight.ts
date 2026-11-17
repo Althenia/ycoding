@@ -3,6 +3,7 @@ import { execFile } from "node:child_process"
 import { createReadStream } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { applicationName, numericBundleVersion } from "./app-bundle"
 
 export const smokeUnavailable = "electrobun@1.18.1 BrowserWindow unconditionally creates a persist:default BrowserView without partition or incognito support; isolated smoke is unavailable."
 export type Entry = { path: string; type: "file" | "dir" | "symlink"; mode: number; size?: number; sha256?: string; target?: string }
@@ -22,7 +23,7 @@ export function parseArguments(argv: readonly string[]) {
 }
 
 export const overlaps = (a: string, b: string) => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep)
-const innerApp = "YCoding Desktop.app"
+const innerApp = `${applicationName}.app`
 const bundleIdentifier = "app.ycoding.desktop"
 const missing = (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT"
 const sha = (value: string) => createHash("sha256").update(value).digest("hex")
@@ -90,12 +91,16 @@ async function validatePayload(contents: string, validation: string) {
   }
   await fs.mkdir(validation)
   await execute("/usr/bin/tar", ["-xf", archive, "-C", validation]).catch(() => { throw new Error("The stable bundle payload could not be extracted.") })
-  return path.join(validation, innerApp, "Contents/Resources/app/runtime/backend.json")
+  return { app: path.join(validation, innerApp), manifest: path.join(validation, innerApp, "Contents/Resources/app/runtime/backend.json"), archive }
 }
 
-async function assertSigned(boundary: BuildBoundary, app: string, sha1: string) {
+async function assertSigned(boundary: BuildBoundary, app: string, sha1?: string) {
   const label = path.basename(path.dirname(app)) === "validation" ? "the extracted" : "the built"
-  if ((await boundary.codesign(["--verify", "--deep", "--strict", app])).status !== 0) throw new Error(`The signature of ${label} application does not verify.`)
+  const verification = await boundary.codesign(["--verify", "--deep", "--strict", app])
+  if (verification.status !== 0) throw new Error(`The signature of ${label} application does not verify: ${verification.output.trim()}`)
+  const resources = await fs.lstat(path.join(app, "Contents/_CodeSignature/CodeResources")).catch(() => undefined)
+  if (!resources?.isFile() || resources.size === 0) throw new Error(`The signature of ${label} application has no CodeResources seal.`)
+  if (!sha1) return
   const read = await boundary.codesign(["-d", "-r-", app])
   const expected = new RegExp(`^designated => identifier "${bundleIdentifier.replaceAll(".", "\\.")}" and certificate (leaf|root) = H"${sha1}"$`, "i")
   if (read.status !== 0 || !read.output.split("\n").some((line) => expected.test(line.trim())))
@@ -108,21 +113,39 @@ export async function finalizeBuild(boundary: BuildBoundary, input: { desktop: s
   if (await fileDigest(path.join(desktop, "runtime/backend.json")) !== prepared) throw new Error("The prepared backend manifest changed during the build.")
   const built = path.join(desktop, "build", `stable-macos-${input.arch}`, "YCoding Desktop.app")
   const validation = path.join(output, "validation")
-  const innerManifest = await validatePayload(path.join(built, "Contents"), validation)
-  if (await fileDigest(innerManifest).catch(() => "") !== prepared) throw new Error("The built application's backend manifest differs from the prepared manifest.")
+  const payload = await validatePayload(path.join(built, "Contents"), validation)
+  if (await fileDigest(payload.manifest).catch(() => "") !== prepared) throw new Error("The built application's backend manifest differs from the prepared manifest.")
+  const version = numericBundleVersion(input.version)
+  for (const app of [built, payload.app]) for (const key of ["CFBundleVersion", "CFBundleShortVersionString"]) {
+    const value = await execute("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", path.join(app, "Contents/Info.plist")]).catch(error => { throw new Error(`The bundle version metadata is missing: ${key}`, { cause: error }) })
+    if (value.trim() !== version) throw new Error(`The bundle version ${key} differs from the prepared backend version.`)
+  }
+  const metadata: { version?: unknown; hash?: unknown } = JSON.parse(await fs.readFile(path.join(payload.app, "Contents/Resources/version.json"), "utf8"))
+  if (metadata.version !== input.version || typeof metadata.hash !== "string" || `${metadata.hash}.tar.zst` !== path.basename(payload.archive)) throw new Error("The payload version metadata differs from the prepared backend version or archive hash.")
   for (const icon of [path.join(built, "Contents/Resources/AppIcon.icns"), path.join(validation, innerApp, "Contents/Resources/AppIcon.icns")]) {
     const stat = await fs.lstat(icon).catch(() => undefined)
     if (!stat?.isFile() || stat.size === 0) throw new Error("The built application is missing its AppIcon.icns. Check the icon.iconset and Electrobun icon conversion.")
+  }
+  if (!input.signing) {
+    for (const app of [payload.app, built]) {
+      if (app === built) {
+        await execute("/usr/bin/tar", ["--no-mac-metadata", "--no-xattrs", "--zstd", "-cf", payload.archive, "-C", validation, innerApp])
+        const archived = await validatePayload(path.join(built, "Contents"), path.join(output, "validation-packed"))
+        if ((await fingerprint(archived.app)).digest !== (await fingerprint(payload.app)).digest) throw new Error("The sealed payload archive differs from the validated application.")
+      }
+      const signed = await boundary.codesign(["--force", "--sign", "-", app])
+      if (signed.status !== 0) throw new Error(`The application ad-hoc signature could not be created: ${signed.output.trim()}`)
+    }
   }
   const original = await fingerprint(built)
   const application = path.join(output, "YCoding Desktop.app")
   await fs.cp(built, application, { recursive: true, dereference: false, verbatimSymlinks: true, errorOnExist: true, force: false })
   if ((await fingerprint(application)).digest !== original.digest || (await fingerprint(built)).digest !== original.digest) throw new Error("The built application changed or its copy differs.")
-  if (input.signing) for (const app of [application, path.join(validation, innerApp)]) await assertSigned(boundary, app, input.signing)
+  for (const app of [application, payload.app]) await assertSigned(boundary, app, input.signing)
   const executable = path.join(application, "Contents/MacOS/launcher")
   const stat = await fs.lstat(executable)
   if (!stat.isFile() || (stat.mode & 0o111) === 0) throw new Error("The built application launcher must be a regular executable.")
-  return { application, validation, version: input.version, executable: { path: executable, sha256: await fileDigest(executable) }, manifest: { sha256: prepared }, build: { argv: input.command, status: 0 }, frontend: { argv: input.frontend, status: 0 }, bundle: { sha256: original.digest }, lock: { sha256: input.lockDigest }, signing: input.signing ? { sha1: input.signing } : null }
+  return { application, validation, version: input.version, bundleVersion: version, executable: { path: executable, sha256: await fileDigest(executable) }, manifest: { sha256: prepared }, build: { argv: input.command, status: 0 }, frontend: { argv: input.frontend, status: 0 }, bundle: { sha256: original.digest }, lock: { sha256: input.lockDigest }, signing: input.signing ? { sha1: input.signing } : { type: "ad-hoc" as const } }
 }
 
 export type BuildBoundary = {

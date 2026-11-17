@@ -1,9 +1,49 @@
 import { expect, test, mock } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
+import type { Messages } from "../src/contract"
 
 const root = path.join(import.meta.dir, "..")
 const read = (file: string) => fs.readFile(path.join(root, file), "utf8")
+
+test("Desktop component chrome retains native dialogs and separately owned member controls", async () => {
+  const source = await read("src/renderer.tsx")
+  expect(source).toContain('data-kind={props.kind}')
+  expect(source).toContain('label="Project member inspector"')
+  expect(await read("src/responsive-layer.tsx")).toContain('aria-label={props.label}')
+  expect(await read("src/style.css")).toContain('.rl-page[data-surface="workspaces"] .rl-page-content')
+  expect(source).toContain('class="desktop-session-row"')
+  expect(source).toContain('dialog?.showModal()')
+  expect(source).toContain('if (opener?.isConnected) opener.focus()')
+})
+
+test("Desktop transient activity distinguishes sending, active phases, idle and queued-only input", async () => {
+  const { desktopTransientActivity } = await import("../src/renderer")
+  expect(desktopTransientActivity({ active: false, sending: false, messages: [], shells: [] })).toBeUndefined()
+  expect(desktopTransientActivity({ active: false, sending: true, messages: [], shells: [] })).toBe("Sending")
+  expect(desktopTransientActivity({ active: true, sending: false, messages: [], shells: [{ command: "bun test selected.test.ts", status: "running" }] })).toBe("Shell · bun test selected.test.ts")
+  expect(desktopTransientActivity({ active: false, sending: false, messages: [], shells: [{ command: "old command", status: "running" }] })).toBeUndefined()
+})
+
+test("Desktop quota visibility keeps stale, operational and account failures and omits every unsupported snapshot", async () => {
+  const { visibleDesktopQuotas } = await import("../src/renderer")
+  const quotas = ["unsupported", "available", "stale", "unauthorized", "error", "unsupported"].map(status => ({ status }))
+  expect(visibleDesktopQuotas(quotas).map(item => item.status)).toEqual(["available", "stale", "unauthorized", "error"])
+})
+
+test("Desktop transient activity names streamed reasoning, text and tools only during active execution", async () => {
+  const { desktopTransientActivity } = await import("../src/renderer")
+  const parts: Extract<Messages[number], { type: "assistant" }>["content"] = [
+    { type: "reasoning", text: "Synthetic reasoning", time: { created: 1 } },
+    { type: "text", text: "Synthetic reply", time: { created: 1 } },
+    { id: "part_tool", type: "tool", name: "read", state: { status: "running", input: { path: "synthetic.ts" }, structured: {}, content: [] }, time: { created: 1 } },
+  ]
+  for (const [index, part] of parts.entries()) {
+    const message: Messages[number] = { id: "msg_activity", type: "assistant", agent: "build", model: { id: "synthetic", providerID: "synthetic" }, content: [part], time: { created: 1 } }
+    expect(desktopTransientActivity({ active: true, sending: false, messages: [message], shells: [] })).toBe(["Thinking", "Writing", "Tool · read"][index])
+    expect(desktopTransientActivity({ active: false, sending: false, messages: [message], shells: [] })).toBeUndefined()
+  }
+})
 
 test("desktop parity exposes theme schemes, registered folder selection, typed dialogs and review cards", async () => {
   const source = await read("src/renderer.tsx")
@@ -57,7 +97,7 @@ test("all theme labels, schemes and persistence reach the desktop appearance con
 
 test("folder exploration reaches every folder-entry path and creates only validated names", async () => {
   const source = await read("src/renderer.tsx")
-  for (const text of ['mode: "directory"', 'mode: "create-directory"', 'mode: "file"', "validateFolderSegment(name())", "api.createDirectory({ parentDirectory, name: valid.name })", "api.pickDirectory({ startingFolder: currentDir() })", "Choose in Finder…", "desktop-dialog__breadcrumbs", "Show hidden", "onOpenFolder=", "onCreateFolder=", "onCreateProject=", "onCreateProjectInDirectory=", "onBrowseFolder=", "explorer={selectedWorkspace()", "onNavigate: setExplorerDir", "showHidden: explorerHidden()", "setExplorerDir(undefined)", "openedDirectories().has(newDirectory())"]) expect(source).toContain(text)
+  for (const text of ['mode: "directory"', 'mode: "create-directory"', 'mode: "file"', "validateFolderSegment(name())", "api.createDirectory({ parentDirectory, name: valid.name })", "api.pickDirectory({ startingFolder: currentDir() })", "Choose in Finder…", "desktop-dialog__breadcrumbs", "Show hidden", "onOpenFolder=", "onCreateFolder=", "onCreateProject=", "onCreateProjectInDirectory=", "onBrowseFolder=", "explorer={explorerData() && selectedWorkspace()", "onNavigate: setExplorerDir", "showHidden: explorerHidden()", "setExplorerDir(undefined)", "openedDirectories().has(newDirectory())"]) expect(source).toContain(text)
   const create = source.slice(source.indexOf("const create = () => perform"), source.indexOf("return <DesktopDialog title={props.options.title}"))
   expect(create.indexOf("if (!valid.valid)")).toBeLessThan(create.indexOf("api.createDirectory("))
   expect(create).toContain('refresh(["workspaces"]); refresh(["projects"]); listing.refetch()')
@@ -304,6 +344,7 @@ test("YOLO consent names its risks and cancellation sends no autonomy update", a
     expect(prompt).toContain("permission limits")
     expect(prompt).toContain("hard policies and custom rules")
     expect(prompt).toContain("send messages")
+    expect(prompt).toContain("full responsibility")
     expect(prompt).toContain("Accept these risks")
     const cancelled = createActionGuard(() => false, () => "connected", async () => { writes++ })
     expect((await cancelled.run(payload, prompt)).status).toBe("cancelled")
@@ -439,15 +480,15 @@ test("new chats send standalone or with an explicitly selected repository", asyn
   expect(source).toContain('locked={!!newPending()}')
 })
 
-test("the workspace has a Review Home rail, dock, companion and reference geometry", async () => {
-  const [source, style] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
+test("the workspace has a Ledger rail, dock, companion and source geometry", async () => {
+  const [source, tokens] = await Promise.all([read("src/renderer.tsx"), read("src/tokens.css")])
   for (const item of ["rl-shell", "rl-app", "rl-nav", "rl-top", "rl-intro", "rl-capsule", "rl-companion", "rl-context-ring", "composer-bar"]) expect(source).toContain(item)
-  for (const token of ["--rl-rail: 256px", "--rl-rail-compact: 64px", "--rl-companion: 400px", "--rl-column: 58rem"]) expect(style).toContain(token)
+  for (const token of ["--rl-rail: 256px", "--rl-rail-compact: 64px", "--rl-companion: 320px", "--rl-header: 40px"]) expect(tokens).toContain(token)
 })
 
 test("the rail takes its groups from the pure railGroups and sends search, cursor and pin requests", async () => {
   const [source, style] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
-  expect(source).toContain("railGroups(items(), activity())")
+  expect(source).toContain("railGroups(items(), activity(), statusSnapshot(), executionStates())")
   expect(source).toContain("const sessionsQuery = (search = \"\") =>")
   expect(source).toContain("api.sessions(search ? { search } : {})")
   expect(source).toContain("api.sessions({ revision: current.revision, cursor })")
@@ -469,7 +510,7 @@ test("Needs action and Running come from live events and never from time.active"
   const source = await read("src/renderer.tsx")
   for (const type of ["permission.asked", "question.asked", "guardrail.asked", "form.created", "session.execution.started", "session.idle"]) expect(source).toContain(`"${type}"`)
   expect(source).not.toMatch(/time\.active\s*(!==|===|!=|==)/)
-  expect(source).toContain("Earlier status is unavailable")
+  expect(source).toContain('unknown: "Status unknown"')
   expect(source).toContain("setActivity(noActivity)")
 })
 
@@ -551,7 +592,7 @@ test("the narrow drawer makes the main column inert and reasoning is disclosed",
   const source = await read("src/renderer.tsx")
   expect(source).toContain('createEffect(() => main?.toggleAttribute("inert", railOpen() && drawer()))')
   expect(source).not.toContain("attr:inert")
-  expect(source).toContain("<SharedReasoningDisclosure")
+  expect(source).toContain("<DesktopReasoningDisclosure")
 })
 
 test("repeat announcements are new nodes and opening a Session announces nothing historic", async () => {
@@ -695,10 +736,16 @@ test("rail destinations, palette navigation, header ownership and settings discl
 })
 
 test("the narrow layout turns the rail into a drawer and coarse pointers get full-size targets", async () => {
-  const [source, styles] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
+  const [source, styles, compact, layers] = await Promise.all([read("src/renderer.tsx"), read("src/style.css"), read("src/compact.css"), read("src/responsive-layer.tsx")])
   expect(source).toContain('aria-expanded={railOpen()}')
-  expect(source).toContain("Back to chat")
-  expect(styles).toMatch(/@media \(max-width: 700px\)[\s\S]*\.workspace__rail\[data-open\] \{ display: grid; \}/)
+  expect(source).toContain('aria-label="Close navigation" onClick={() => setRailOpen(false)}')
+  expect(source).toContain('mode="drawer" shown={railOpen()} onClose={() => setRailOpen(false)}')
+  expect(source).toContain('import "./compact.css"')
+  expect(compact).toMatch(/@media \(max-width: 700px\) \{[\s\S]*\.rl-nav\[data-responsive-layer\]\[data-compact="true"\] \{[^}]*display: flex;/)
+  expect(compact).toContain('.rl-nav[data-responsive-layer]:not([open]) { display: none; }')
+  expect(layers).toContain('element.showModal()')
+  expect(layers).toContain('onCancel={(event: Event) => { event.preventDefault(); props.onClose() }}')
+  expect(layers).toContain('const restore = () => { if (opener?.isConnected) opener.focus({ preventScroll: true }) }')
   expect(styles).toMatch(/@media \(pointer: coarse\)[\s\S]*\.workspace__session[\s\S]*min-block-size: var\(--yc-hit-min\)/)
   expect(styles).toMatch(/@media \(pointer: coarse\) \{ \.companion__tabs\.rl-pane-tabs \.rl-pane-tab > button, \.rl-companion \.rl-icon, [^}]*min-height: var\(--yc-hit-min\); min-width: var\(--yc-hit-min\)/)
   expect(source).toContain('const opener = visible(".rl-companion-toggle") ?? visible(".rl-context-ring")')
@@ -720,7 +767,7 @@ test("conversation header truncates on phone and companion grid reserves the scr
 })
 
 test("composer and header expose workspace file attachments and staged autonomy", async () => {
-  const [source, styles, contract] = await Promise.all([read("src/renderer.tsx"), read("src/style.css"), read("src/contract.ts")])
+  const [source, styles, contract, compact] = await Promise.all([read("src/renderer.tsx"), read("src/style.css"), read("src/contract.ts"), read("src/compact.css")])
   expect(contract).toContain("readonly files?: readonly PromptFile[]; readonly agents?: readonly PromptAgent[]")
   expect(source.match(/<AttachButton directory=/g)?.length).toBe(2)
   expect(source).toContain('aria-label="Attach files" disabled={props.locked || !props.onChange || !reading()}')
@@ -743,13 +790,16 @@ test("composer and header expose workspace file attachments and staged autonomy"
   expect(styles).toMatch(/@media \(pointer: coarse\) \{ \.rl-shell \.rl-icon, [^}]*\.rl-pane-tabs \.rl-pane-tab > button:last-child:not\(\[role="tab"\]\)[^}]*min-width: var\(--yc-hit-min\); min-height: var\(--yc-hit-min\)/)
   expect(styles).toMatch(/@media \(pointer: coarse\) \{[^@]*\.rl-shell \.rl-btn, [^}]*\.rl-page \.rl-option > \.rl-btn[^}]*\.rl-capsule textarea[^}]*min-height: var\(--yc-hit-min\)/)
   expect(styles).toContain(".companion__activity-heading .button { min-block-size: 32px;")
-  expect(styles).toContain(".rl-intro .rl-menu-anchor > .rl-btn { min-block-size: 40px; padding: 0 16px; border-radius: var(--rl-pill);")
+  expect(styles).toContain(".rl-intro .rl-menu-anchor > .rl-btn { min-block-size: 40px; padding: 0 16px; border-radius: var(--yc-radius-md);")
   expect(styles).toContain(".rl-page .rl-option-text { grid-template-columns: minmax(0, 1fr); }")
   expect(styles).toContain(".rl-page .rl-option-text .rl-option-name { max-width: 100%; }")
   expect(styles).toContain("@media (pointer: coarse) { .rl-composer-context .rl-autonomy > button { min-height: var(--yc-hit-min); } .rl-page .rl-pin-btn, .rl-page .rl-option > .rl-btn { min-width: var(--yc-hit-min); justify-content: center; } }")
   expect(styles).toContain(".rl-page .rl-page-head { flex-wrap: wrap; }")
   expect(styles).toContain(".rl-page .rl-page-title, .rl-page .rl-page-actions { min-width: min-content; }")
-  expect(styles).toContain("@media (max-width: 700px) { .rl-top-actions .rl-companion-toggle { display: none; } }")
+  expect(styles).not.toContain("@media (max-width: 700px) { .rl-top-actions .rl-companion-toggle { display: none; } }")
+  expect(compact).toContain('.desktop.rl-ledger .rl-top-actions { gap: 0; flex-wrap: nowrap; }')
+  expect(compact).toContain('.desktop.rl-ledger :is(.rl-icon, .rl-icon-button, .rl-mobile-menu, .rl-drawer-close, .workspace__pin, .rl-companion-toggle) { min-inline-size: var(--yc-hit-min); min-block-size: var(--yc-hit-min); }')
+  expect(source.match(/<ResponsiveLayer class="rl-companion" label="Session companion" role="complementary" mode="panel"/g)?.length).toBe(2)
   expect(source).not.toContain('title="Attaching files')
   expect(source).not.toContain('title={`Commands')
   expect(source).not.toContain('title="Staged autonomy')
@@ -804,14 +854,13 @@ test("a form submits unless locked, reveals every error and keeps focus after a 
   expect(source.match(/tabindex="-1" ref=\{heading\}/g)?.length).toBe(2)
 })
 
-test("session read refetches on mount and narrow dock styles bound the composer", async () => {
+test("session read refetches on mount and reasoning controls remain shrinkable", async () => {
   const [source, styles] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
   const line = source.split("\n").find((entry) => entry.includes("const sessionRead = observe")) ?? ""
   expect(line).toContain('queryKey: ["session", ...scope(), props.sessionID] as const')
   expect(line).toContain('api.session({ sessionID: props.sessionID })')
   expect(line).toContain('refetchOnMount: "always" as const')
   expect(styles).toMatch(/\.reasoning-effort \{[^}]*min-width: 0;/)
-  expect(styles).toMatch(/\.rl-dock \{[^}]*max-height: 55%;/)
 })
 
 test("desktop renderer owns every select surface and the composer control row", async () => {
@@ -851,12 +900,19 @@ test("focus rings sit on composite wrappers, scrollbars stay thin and dialogs ar
   expect(styles).toContain(".rl-capsule:focus-within")
   expect(styles).toContain(".rl-capsule textarea:focus-visible { outline: none; box-shadow: none; }")
   expect(styles).toContain("box-shadow: 0 0 0 1px var(--yc-green), 0 0 0 4px var(--yc-focus-ring-soft)")
-  expect(styles).toContain("min(54rem, calc(100dvw - (2 * var(--yc-space-6))))")
+  expect(styles).toMatch(/\.desktop-dialog \{[^}]*inline-size: min\(var\(--rl-dialog-width, [^)]+\), calc\(100dvw - \(2 \* var\(--yc-space-6\)\)\)\)/)
+  expect(styles).toContain('.desktop-dialog[data-kind="agents"], .desktop-dialog[data-kind="diff"] { --rl-dialog-width: 1080px; --rl-dialog-height: 720px; }')
+  expect(styles).toContain('.desktop-dialog[data-kind="browser"] { --rl-dialog-width: 960px; --rl-dialog-height: 640px; }')
+  expect(styles).toContain('.desktop-dialog[data-kind="system"] { --rl-dialog-width: 980px; --rl-dialog-height: 650px; }')
+  expect(styles).toContain('.desktop-dialog[data-kind="session"] { --rl-dialog-width: 920px; --rl-dialog-height: 680px; --rl-dialog-header: var(--rl-system-header); }')
+  expect(styles).toContain('.desktop-dialog[data-kind="providers"] { --rl-dialog-width: 660px; --rl-dialog-header: 44px; }')
+  expect(styles).toContain('.desktop-dialog[data-kind="folder"] { --rl-dialog-width: 580px; }')
+  expect(styles).toContain('inline-size: min(460px, calc(100dvw - (2 * var(--yc-space-5)))); max-inline-size: 460px;')
   expect(styles).toContain("min(28rem, calc(100dvw - (2 * var(--yc-space-5))))")
   expect(styles).toContain("@keyframes desktop-rise")
   expect(styles).toContain("translateY(calc(var(--yc-space-1) / 2))")
   expect(styles).not.toMatch(/@keyframes (desktop-rise|desktop-handoff|ws-reveal) \{ from \{ opacity: 0/)
-  expect(styles).toContain(".relay-settings .st-section-head h3 { display: inline-flex; align-items: center; gap: 6px;")
+  expect(styles).toContain(".relay-settings .st-section-head h3 { display: inline-flex; align-items: center; gap: 8px;")
   expect(styles).toContain(".relay-settings .st-section-head h3 > svg { flex: none; inline-size: 16px; block-size: 16px; overflow: visible; }")
   expect(styles).toContain(".transcript-tools__button { display: flex; max-inline-size: 100%; min-inline-size: 0; }")
   expect(styles).toContain(".rl-companion .companion__activity-heading { padding: 12px 20px 4px; }")
@@ -941,7 +997,7 @@ test("destination pages focus their heading, the slider reset keeps the popover 
   expect(source).toContain('[data-page-heading]')
   expect(source).toContain('focus({ preventScroll: true })')
   expect(styles).toContain(".rl-page-scroll { flex: 1; min-block-size: 0; overflow-y: auto; overscroll-behavior: contain;")
-  expect(styles).toContain("margin-inline: auto; margin-block: 0;")
+  expect(styles).toContain("margin-inline: 0; margin-block: 0;")
   expect(source).toContain("let slider: HTMLDivElement | undefined")
   expect(source).toContain("slider?.focus()")
   expect(source).toContain("model-slider__reset")
@@ -971,7 +1027,7 @@ test("the effort slider binds inline geometry, keeps stop labels outside the sli
 
 test("desktop usage quotas, hidden-window transitions, model popover layout, search input and collapsed rail expose the verified contracts", async () => {
   const [source, styles] = await Promise.all([read("src/renderer.tsx"), read("src/style.css")])
-  expect(source).toContain("formatQuotaProviders(data().quotas ?? [], Date.now())")
+  expect(source).toContain("formatQuotaProviders(visibleDesktopQuotas(data().quotas ?? []), Date.now())")
   expect(styles).toContain(".rl-progress > :is(i, span)")
   expect(source).toContain('document.documentElement.dataset.hidden = "true"')
   expect(source).toContain('document.addEventListener("visibilitychange", syncDocumentVisibility)')
@@ -991,26 +1047,25 @@ const declarations = (css: string, selector: string) => [...css.matchAll(new Reg
 
 test("every screen shares responsive conversation and page tracks", async () => {
   const style = await read("src/style.css")
-  expect(style).toContain("--rl-column: 58rem")
-  expect(style).toMatch(/@media \(min-width: 1280px\) \{ :root \{ --rl-column: 74rem;/)
-  expect(style).toMatch(/@media \(min-width: 1600px\) \{ :root \{ --rl-column: 84rem;/)
   expect(style).toContain("--rl-page-max: var(--yc-content-max);")
   expect(style).toMatch(/@media \(min-width: 1440px\) \{ :root \{ --rl-page-max: var\(--yc-content-max-wide\);/)
   expect(style).toMatch(/@media \(min-width: 1920px\) \{ :root \{ --rl-page-max: 1760px;/)
-  for (const selector of [".rl-col", ".rl-notices"]) expect(declarations(style, selector)).toContain("width: min(var(--rl-column), calc(100% - (2 * var(--yc-gutter))))")
+  expect(declarations(style, ".rl-notices")).toContain("width: calc(100% - (2 * var(--yc-space-6)))")
+  expect(declarations(style, ".rl-notices")).toContain("margin-inline: var(--yc-space-6)")
   for (const selector of [".rl-page .rl-page-head", ".rl-page-content"]) {
     const body = declarations(style, selector)
-    expect(body).toContain("width: min(var(--rl-page-max), 100%)")
-    expect(body).toContain("margin-inline: auto")
-    expect(body).toContain("padding-inline: var(--yc-gutter)")
+    expect(body).toContain("width: 100%")
+    expect(body).toContain("margin-inline: 0")
+    expect(body).toContain("padding-inline: var(--yc-space-6)")
   }
   expect(style).toMatch(/\.rl-page \.ws-projects \{[^}]*grid-template-columns: minmax\(280px, 380px\) minmax\(0, 1fr\)/)
   expect(style).toMatch(/\.rl-page \.ws-workspaces \{[^}]*grid-template-columns: minmax\(300px, 400px\) minmax\(0, 1fr\)/)
   expect(style).toMatch(/\.relay-settings \.st-tiles \{[^}]*repeat\(4, minmax\(0, 1fr\)\)/)
-  expect(style).toContain(".transcript-md > :is(p, ul, ol, blockquote) { max-inline-size: 100%; }")
-  expect(style).toMatch(/\.rl-page \.relay-settings \.st-section \{[^}]*border: 1px solid var\(--yc-border\)/)
+  expect(style).toMatch(/\.rl-page \.relay-settings \.st-section \{[^}]*border: 0;/)
   expect(style).not.toContain(".rl-settings-grid")
-  expect(style).toMatch(/\.st-ledger, \.st-ledger > \.relay-settings \{[^}]*gap: 32px;[^}]*max-inline-size: 760px;/)
+  expect(declarations(style, ".st-ledger")).toContain("grid-template-columns: repeat(2, minmax(0, 1fr))")
+  expect(declarations(style, ".st-ledger")).not.toContain("max-inline-size")
+  expect(declarations(style, ".st-ledger > .relay-settings")).toContain("display: contents")
   expect(style).toMatch(/\.rl-page \.st-ledger \.st-section \{[^}]*padding: 0; border: 0;/)
 })
 
@@ -1024,8 +1079,6 @@ test("stream blocks share one column, edge and radius", async () => {
   expect(declarations(style, ".rl-thread")).toContain("grid-template-columns: minmax(0, 1fr)")
   expect(declarations(style, ".transcript")).toContain("grid-template-columns: minmax(0, 1fr)")
   expect(declarations(style, ".transcript__turn[data-layout=\"block\"]")).toContain("inline-size: 100%")
-  expect(declarations(style, ".transcript__turn[data-layout=\"pill\"]")).toContain("justify-self: center")
-  expect(declarations(style, ".rl-me")).toContain("max-inline-size: min(48rem, 88%)")
   for (const selector of [".rl-them .rl-bubble", ".rl-edited-card", ".transcript-compaction", ".shell", ".transcript-notice-card"]) expect(declarations(style, selector)).toContain("border-radius: var(--yc-radius-lg)")
   expect(source).toContain("data-layout={layout()}")
 })
@@ -1075,7 +1128,7 @@ test("the effort slider drags, aligns every stop label and bounds the switch wai
 
 test("numbers are formatted by shared rules on every screen", async () => {
   const source = await read("src/renderer.tsx")
-  expect(source).toContain("formatQuotaProviders(data().quotas ?? [], Date.now())")
+  expect(source).toContain("formatQuotaProviders(visibleDesktopQuotas(data().quotas ?? []), Date.now())")
   expect(source).toContain("requests={formatCount(data().report.total.logical)}")
   expect(source).toContain("inputTokens={formatCompactCount(data().report.total.tokens.input)}")
   expect(source).toContain("formatCompactCount(data().report.total.tokens.cache.read)")
@@ -1086,14 +1139,14 @@ test("numbers are formatted by shared rules on every screen", async () => {
 })
 
 test("semantic palette tokens exist in both themes and component rules never use raw colors", async () => {
-  const style = await read("src/style.css")
-  const light = declarations(style, ":root")
-  const dark = declarations(style, ':root[data-theme="dark"]') + declarations(style, '[data-theme="dark"]')
+  const [style, tokens] = await Promise.all([read("src/style.css"), read("src/tokens.css")])
+  const light = declarations(tokens, ":root")
+  const dark = declarations(tokens, ':root[data-theme="dark"]')
   for (const token of ["--yc-info-strong", "--yc-info-soft", "--yc-violet-strong", "--yc-violet-soft", "--yc-teal-strong", "--yc-teal-soft", "--yc-meter-warn"]) {
     expect(light).toContain(`${token}:`)
     expect(dark).toContain(`${token}:`)
   }
-  expect(style).toContain('[data-scheme="high-contrast"]')
+  expect(tokens).toContain('[data-scheme="high-contrast"]')
   expect(declarations(style, ".rl-avatar")).toContain("var(--yc-violet-soft)")
   expect(declarations(style, ".transcript-reasoning__tag")).toContain("var(--yc-violet-strong)")
   expect(style).not.toContain(".rl-page-mark")
@@ -1111,7 +1164,8 @@ test("live-verified polish: USD grouping, quota grid areas, composer dock parity
   expect(source).toContain("formatUsd(cost)")
   expect(source).toContain("formatUsd(session.cost)")
   expect(source).not.toContain("<div class=\"rl-dock\"><div class=\"rl-col\"><div class=\"rl-capsule\">")
-  expect(source).toContain('<div class="rl-dock"><div class="rl-col"><SharedComposerSurface formClass="composer" busy={busy()} onSubmit={(event) => { event.preventDefault(); void start() }} field={<div class="rl-capsule">')
+  expect(source).toContain('<div class="rl-dock"><div class="rl-col"><DesktopComposerSurface formClass="composer" busy={busy()} onSubmit={(event) => { event.preventDefault(); void start() }} feedback={null} field={<div class="rl-capsule">')
+  expect(source).toContain('<DesktopComposerSurface formClass="composer" busy={sending()} onSubmit={(event) => { event.preventDefault(); void send() }} field={<div class="rl-capsule">')
   const row = declarations(style, ".relay-settings .st-quota-row")
   expect(row).toContain("display: grid")
   expect(row).toContain('grid-template-areas: "label value" "bar bar"')
@@ -1121,11 +1175,11 @@ test("live-verified polish: USD grouping, quota grid areas, composer dock parity
   expect(style).not.toContain(".st-quota-label { flex-basis: 100%; }")
   expect(declarations(style, ".rl-scroll")).toContain("overflow-y: scroll; overflow-x: auto;")
   expect(declarations(style, ".rl-dock")).toContain("padding: 8px var(--yc-scrollbar-size) 12px 0;")
-  expect(declarations(style, ".rl-dock")).toContain("max-height: 55%;")
   const list = declarations(style, ".model-popover__list")
   expect(list).toContain("padding-block-end: var(--yc-space-2)")
   expect(list).toContain("border-block-end: 1px solid var(--yc-border)")
-  expect(design).toContain("84rem from 1600px")
+  expect(design).toContain("Inside that pane, transcript content and composer use one centered outer track, with a wide-window maximum between 960px and 1040px, margin-inline:auto and equal inline gutters.")
+  expect(design).toContain("Wide gutters begin from 24px spacing; compact gutters use 12px.")
   expect(design).not.toContain("82ch")
 })
 
@@ -1154,21 +1208,20 @@ test("the desktop conversation ticks only user turns and reuses the shared rail 
   expect(style).not.toMatch(/\.conversation__jump \{/)
 })
 
-test("the companion title stays on one line beside its actions", async () => {
-  const style = await read("src/style.css")
-  expect(style).toMatch(/\.rl-companion \.companion__header \{[^}]*padding-inline: 8px;/)
-  expect(style).toMatch(/\.rl-companion \.companion__header \{[^}]*gap: 4px;/)
-  expect(style).toMatch(/\.rl-companion \.companion__header > \.rl-pane-kicker \{[^}]*white-space: nowrap;/)
-  expect(style).toMatch(/\.rl-companion \.companion__header \.rl-pane-policy \{[^}]*flex: none;/)
-  expect(style).toMatch(/\.rl-companion \.companion__header \.rl-pane-policy \{[^}]*gap: 4px;/)
+test("the companion places tabs and close in one header and retains its policy controls", async () => {
+  const [style, source] = await Promise.all([read("src/style.css"), read("src/renderer.tsx")])
+  expect(style).toMatch(/\.rl-companion \.companion > \.desktop-companion-head \{[^}]*block-size: var\(--rl-header\);/)
+  expect(source).toContain('<SharedCompanionTabs class="companion__tabs"')
+  expect(source).toContain('<footer class="desktop-companion-policy">{props.policyActions}</footer>')
+  expect(style).toContain('.rl-companion .companion > [role="tabpanel"]:not([hidden])')
 })
 
-test("the selected conversation floats its composer over reserved scroll space and grows the draft", async () => {
+test("the selected conversation docks its composer outside the scroller and grows the draft", async () => {
   const source = await read("src/renderer.tsx")
   const style = await read("src/style.css")
-  expect(style).toContain(".conversation:not([data-new-chat]) > .rl-dock { position: absolute;")
-  expect(style).toContain("scroll-padding-block-end: var(--yc-composer-reserve, 0px)")
-  expect(source).toContain('scroller.style.setProperty("--yc-composer-reserve", `${dock.getBoundingClientRect().height}px`)')
+  expect(style).toContain(".rl-ledger .rl-dock { position: relative; flex: none;")
+  expect(style).toContain("scroll-padding-block-end: 0")
+  expect(source).not.toContain('scroller.style.setProperty("--yc-composer-reserve"')
   expect(source).toContain("scroller.scrollTop = following() ? scroller.scrollHeight : top")
   expect(source).toContain("Math.min(168, Math.max(44, area.scrollHeight))")
   expect(source).toContain("dockObserver.disconnect()")
@@ -1202,8 +1255,9 @@ test("running work excludes waiting and completed rows and reconciles lifecycle 
 })
 
 test("model settings separate grouped recent choices and provider connection methods", async () => {
-  const source = await read("src/renderer.tsx")
-  expect(source).toContain('aria-label={listing() ? "Choose model" : "Model and reasoning effort"}')
+  const [source, layers] = await Promise.all([read("src/renderer.tsx"), read("src/responsive-layer.tsx")])
+  expect(source).toContain('<ResponsiveLayer class="desktop-popover model-popover" label="Model and reasoning effort"')
+  expect(layers).toContain('aria-label={props.label}')
   expect(source).toContain("orderedModelOptions(props.models, recent()")
   expect(source).toContain("rememberRecentModel(undefined, model)")
   expect(source).toContain('recent ? "Recent" : model.providerID')
@@ -1271,10 +1325,11 @@ test("rail omits the machine footer while Settings owns Machine & Backend and DE
   expect(frame).toContain("props.machineName !== undefined")
   expect(frame.indexOf("props.machineName !== undefined")).toBeLessThan(frame.indexOf("workspace__rail-footer"))
   const workspaceStart = source.indexOf("function Workspace()")
-  const workspaceEnd = source.indexOf("</SharedWorkspaceFrame>", workspaceStart)
+  const workspaceEnd = source.indexOf("</DesktopWorkspaceFrame>", workspaceStart)
   expect(workspaceStart).toBeGreaterThan(0)
   expect(workspaceEnd).toBeGreaterThan(workspaceStart)
   const workspace = source.slice(workspaceStart, workspaceEnd)
+  expect(workspace).toContain('<DesktopWorkspaceFrame railClass="workspace__rail rl-nav" railLabel="Sessions"')
   expect(workspace).not.toContain("machineName")
   expect(workspace).not.toContain("machineMeta")
   expect(workspace).not.toContain("Selected machine")
@@ -1322,23 +1377,22 @@ test("Settings, Command Palette and application menu wire desktop updates", asyn
 })
 
 test("Stitch Direction A Ledger structure and token rules preserve desktop geometry and color invariants", async () => {
-  const [source, style, design, workspaceShell] = await Promise.all([
+  const [source, style, design, workspaceShell, tokens] = await Promise.all([
     read("src/renderer.tsx"),
     read("src/style.css"),
     read("DESIGN.md"),
     fs.readFile(path.resolve(root, "../../apps/web/src/styles/workspace-shell.css"), "utf8"),
+    read("src/tokens.css"),
   ])
   expect(source).toMatch(/\brl-ledger\b|data-ledger/)
   expect(style).toMatch(/\.rl-ledger\b|\[data-ledger/)
   expect(style).not.toContain(".rl-setup-card")
   expect(style).toMatch(/\.rl-session-row\[aria-current="page"\][^{]*\{[^}]*var\(--yc-green-strong\)|\.rl-session-row\[aria-current="page"\]::before/)
-  expect(style).toContain("--rl-rail: 256px")
-  expect(style).toContain("--rl-companion: 400px")
+  expect(tokens).toContain("--rl-rail: 256px")
+  expect(tokens).toContain("--rl-companion: 320px")
   expect(declarations(style, ".rl-scroll")).toContain("overflow-y: scroll; overflow-x: auto;")
   expect(declarations(style, ".rl-dock")).toContain("padding: 8px var(--yc-scrollbar-size) 12px 0;")
-  expect(declarations(style, ".rl-dock")).toContain("max-height: 55%;")
-  expect(style).toMatch(/@media \(min-width: 1600px\) \{ :root \{ --rl-column: 84rem;/)
-  expect(design).toContain("84rem from 1600px")
+  expect(design).toContain("Prose MUST NOT introduce a second narrowed track.")
   expect(source).not.toContain(".toFixed(")
   const component = style.split("\n").filter((line) => !/^(:root|\[data-theme|:root\[data-theme|\.model-popover|\[data-theme="dark"\] \.model-popover|@media[^{]*\{ :root|@media[^{]*\{ \[data|\[data-scheme)/.test(line) && !line.includes("--yc-brand-") && !line.includes("--rl-context-") && !line.includes("--rl-diff-"))
   expect(component.filter((line) => /#[0-9a-fA-F]{3,8}\b|rgba?\(/.test(line))).toEqual([])

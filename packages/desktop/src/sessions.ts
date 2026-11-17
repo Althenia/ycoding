@@ -10,6 +10,8 @@ const plain = (value: unknown): value is object =>
 const cursor = (value: unknown): value is string => text(value) && value.length > 0 && utf8Length(value) <= 4096
 const time = (value: unknown): value is number | undefined => value === undefined || amount(value)
 
+export const ordinarySession = (item: SessionItem) => item.parentID === undefined && item.agent !== "compaction" && !/^ses_compaction_[a-f0-9]{24}$/.test(item.id)
+
 export function sessionsQuery(value: unknown): SessionsQuery {
   if (!plain(value)) throw new DesktopError(retry)
   const keys = Object.keys(value).sort().join()

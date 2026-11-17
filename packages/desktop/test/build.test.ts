@@ -6,14 +6,17 @@ import os from "node:os"
 import path from "node:path"
 import { buildDesktop, fileDigest, fingerprint, freshOutput, parseArguments, type BuildBoundary } from "../script/build-preflight"
 
-type Payload = { manifest?: string; metadata?: string | null; archive?: "corrupt" | "missing" | "outside-root" | "parent-escape"; icon?: "missing" | "outer-only" }
+type Payload = { manifest?: string; metadata?: string | null; archive?: "corrupt" | "missing" | "outside-root" | "parent-escape"; icon?: "missing" | "outer-only"; version?: string; resources?: "missing"; innerVersion?: string; shortVersion?: string | null; payloadVersion?: string }
 const hash = "synthetic1hash"
 const identity = "9dd524184b0db949ffac7f0ada0ae860ac7f5f85"
 const requirement = (sha1: string, name = "app.ycoding.desktop", anchor = "leaf") => `Executable=/synthetic/YCoding Desktop.app/Contents/MacOS/launcher\ndesignated => identifier "${name}" and certificate ${anchor} = H"${sha1}"\n`
+const bundlePlist = (version: string, short: string | null = version) => `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>app.ycoding.desktop</string><key>CFBundleVersion</key><string>${version}</string>${short === null ? "" : `<key>CFBundleShortVersionString</key><string>${short}</string>`}</dict></plist>`
 
 async function writeStableApp(contents: string, payload: Payload) {
   await fs.mkdir(path.join(contents, "MacOS"), { recursive: true })
   await fs.mkdir(path.join(contents, "Resources"), { recursive: true })
+  await fs.writeFile(path.join(contents, "Info.plist"), bundlePlist(payload.version ?? "1.2.3", payload.shortVersion))
+  if (payload.resources !== "missing") { await fs.mkdir(path.join(contents, "_CodeSignature")); await fs.writeFile(path.join(contents, "_CodeSignature/CodeResources"), "synthetic-release-seal") }
   await fs.writeFile(path.join(contents, "MacOS/launcher"), "synthetic-executable", { mode: 0o755 })
   if (payload.icon !== "missing") await fs.writeFile(path.join(contents, "Resources/AppIcon.icns"), "icns-synthetic-outer")
   const metadata = payload.metadata === undefined ? JSON.stringify({ identifier: "app.ycoding.desktop", name: "YCoding Desktop", channel: "stable", hash }) : payload.metadata
@@ -25,6 +28,9 @@ async function writeStableApp(contents: string, payload: Payload) {
   const inner = path.join(stage, "YCoding Desktop.app/Contents")
   await fs.mkdir(path.join(inner, "MacOS"), { recursive: true })
   await fs.mkdir(path.join(inner, "Resources/app/runtime"), { recursive: true })
+  await fs.writeFile(path.join(inner, "Info.plist"), bundlePlist(payload.innerVersion ?? payload.version ?? "1.2.3", payload.shortVersion))
+  await fs.writeFile(path.join(inner, "Resources/version.json"), JSON.stringify({ version: payload.payloadVersion ?? "1.2.3", hash }))
+  if (payload.resources !== "missing") { await fs.mkdir(path.join(inner, "_CodeSignature")); await fs.writeFile(path.join(inner, "_CodeSignature/CodeResources"), "synthetic-release-seal") }
   await fs.writeFile(path.join(inner, "MacOS/launcher"), "synthetic-inner-executable", { mode: 0o755 })
   await fs.writeFile(path.join(inner, "Resources/app/runtime/backend.json"), payload.manifest ?? "synthetic-manifest")
   if (payload.icon === undefined) await fs.writeFile(path.join(inner, "Resources/AppIcon.icns"), "icns-synthetic-inner")
@@ -54,6 +60,11 @@ async function fixture(payload: Payload = {}) {
     },
     codesign: async (args) => {
       events.push(`codesign ${args.join(" ")}`)
+      if (args.includes("--sign")) {
+        const app = args.at(-1)!
+        await fs.mkdir(path.join(app, "Contents/_CodeSignature"), { recursive: true })
+        await fs.writeFile(path.join(app, "Contents/_CodeSignature/CodeResources"), "synthetic-ad-hoc-seal")
+      }
       return { status: 0, output: args[0] === "-d" ? requirement(identity) : "" }
     },
     run: async (args, env) => {
@@ -108,7 +119,13 @@ test("standalone build copies the verified app and writes a digest-bound receipt
   const f = await fixture()
   try {
     const receipt = await f.run()
-    expect(f.events).toEqual(["signing", "toolchain", "prepare", "/bun run build:frontend", "/bun run electrobun build --env=stable"])
+    expect(f.events.slice(0, 5)).toEqual(["signing", "toolchain", "prepare", "/bun run build:frontend", "/bun run electrobun build --env=stable"])
+    expect(f.events.slice(5)).toEqual([
+      `codesign --force --sign - ${path.join(f.output, "validation/YCoding Desktop.app")}`,
+      `codesign --force --sign - ${path.join(f.desktop, "build/stable-macos-arm64/YCoding Desktop.app")}`,
+      `codesign --verify --deep --strict ${path.join(f.output, "YCoding Desktop.app")}`,
+      `codesign --verify --deep --strict ${path.join(f.output, "validation/YCoding Desktop.app")}`,
+    ])
     expect(receipt.version).toBe("1.2.3")
     expect(receipt.executable.sha256).toBe(await fileDigest(receipt.executable.path))
     expect(receipt.manifest.sha256).toBe(createHash("sha256").update("synthetic-manifest").digest("hex"))
@@ -252,15 +269,46 @@ test("a signed build passes the identity only to the Electrobun build", async ()
   } finally { await fs.rm(f.root, { recursive: true, force: true }) }
 })
 
-test("an unsigned build passes no environment to any command and never runs codesign", async () => {
+test("a local build passes no signing environment and ad-hoc seals the archived payload and outer app", async () => {
   const f = await fixture()
   try {
     const receipt = await f.run()
     expect(f.envs).toEqual([undefined, undefined])
-    expect(f.events.some((event) => event.startsWith("codesign"))).toBe(false)
-    expect(receipt.signing).toBeNull()
-    expect(JSON.parse(await fs.readFile(path.join(f.output, "build-receipt.json"), "utf8")).signing).toBeNull()
+    expect(f.events.filter((event) => event.startsWith("codesign"))).toHaveLength(4)
+    expect(receipt.signing).toEqual({ type: "ad-hoc" })
+    expect(JSON.parse(await fs.readFile(path.join(f.output, "build-receipt.json"), "utf8")).signing).toEqual({ type: "ad-hoc" })
+    const extracted = path.join(f.root, "archived-payload")
+    await fs.mkdir(extracted)
+    execFileSync("/usr/bin/tar", ["-xf", path.join(receipt.application, "Contents/Resources", `${hash}.tar.zst`), "-C", extracted])
+    expect(await fs.readFile(path.join(extracted, "YCoding Desktop.app/Contents/_CodeSignature/CodeResources"), "utf8")).toBe("synthetic-ad-hoc-seal")
+    expect(await fs.readFile(path.join(receipt.application, "Contents/_CodeSignature/CodeResources"), "utf8")).toBe("synthetic-ad-hoc-seal")
   } finally { await fs.rm(f.root, { recursive: true, force: true }) }
+})
+
+test("local builds refuse a failed ad-hoc signature verification without writing a receipt", async () => {
+  const f = await fixture()
+  try {
+    await expect(f.run({ codesign: async args => ({ status: args.includes("--verify") ? 1 : 0, output: "code has no resources but signature indicates they must be present" }) })).rejects.toThrow("signature")
+    expect(await fs.stat(path.join(f.output, "build-receipt.json")).then(() => true, () => false)).toBe(false)
+  } finally { await fs.rm(f.root, { recursive: true, force: true }) }
+})
+
+test("a successful signature command cannot substitute for sealed bundle resources", async () => {
+  const f = await fixture({ resources: "missing" })
+  try {
+    await expect(f.run({ codesign: async () => ({ status: 0, output: requirement(identity) }) }, signedArgv(f.output))).rejects.toThrow("CodeResources")
+    expect(await fs.stat(path.join(f.output, "build-receipt.json")).then(() => true, () => false)).toBe(false)
+  } finally { await fs.rm(f.root, { recursive: true, force: true }) }
+})
+
+test("bundle versions must agree with the prepared backend version before delivery", async () => {
+  for (const payload of [{ version: "1.18.4" }, { innerVersion: "1.18.4" }, { shortVersion: null }, { payloadVersion: "1.18.4" }]) {
+    const f = await fixture(payload)
+    try {
+      await expect(f.run()).rejects.toThrow("version")
+      expect(await fs.stat(path.join(f.output, "build-receipt.json")).then(() => true, () => false)).toBe(false)
+    } finally { await fs.rm(f.root, { recursive: true, force: true }) }
+  }
 })
 
 test("a signed build verifies and pins the designated requirement of the outer and extracted apps and records the identity", async () => {

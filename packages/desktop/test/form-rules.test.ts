@@ -294,10 +294,10 @@ test("an archived Session that needs action or is running is still shown", () =>
   expect(grouped.archived).toBe(1)
 })
 
-test("a child whose parent is not loaded shows as a root and keeps its own state", () => {
+test("a child whose parent is not loaded stays out of ordinary rail groups", () => {
   const rows = [row("child", { parentID: "missing" })]
-  expect(railGroups(rows, { busy: new Set(), waiting: new Map() }).groups.map((group) => [group.key, group.rows.map((item) => item.id)])).toEqual([["recent", ["child"]]])
-  expect(railGroups(rows, { busy: new Set(["child"]), waiting: new Map() }).groups.map((group) => group.key)).toEqual(["running"])
+  expect(railGroups(rows, { busy: new Set(), waiting: new Map() }).groups).toEqual([])
+  expect(railGroups(rows, { busy: new Set(["child"]), waiting: new Map() }).groups).toEqual([])
 })
 
 test("only invalid visible fields are reported, in form order, and hidden ones are ignored", () => {

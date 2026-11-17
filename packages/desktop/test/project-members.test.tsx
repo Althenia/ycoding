@@ -7,7 +7,7 @@ const jsxRuntime = () => ({ jsxDEV: (type: unknown, props: unknown) => ({ type, 
 mock.module("solid-js/jsx-dev-runtime", jsxRuntime)
 mock.module("solid-js/jsx-runtime", jsxRuntime)
 
-const { DesktopProjectMembers, memberCandidates, memberChange } = await import("../src/project-members")
+const { DesktopProjectMembers, DesktopProjectRoster, memberCandidates, memberChange } = await import("../src/project-members")
 const { For, Show } = await import("solid-js")
 
 type Group = ProjectsSnapshot["groups"][number]
@@ -65,10 +65,14 @@ test("rendered controls dispatch exact changes, never offer master actions and s
     let browse: [string, (directory: string) => void] | undefined
     const [disabled, setDisabled] = createSignal(false)
     const props = { group: group(), revision: 3, sessions, get disabled() { return disabled() }, onChange: (input: ProjectMutationInput, confirmation: string) => { changes.push([input, confirmation]) }, onBrowseFolder: (initial: string, choose: (directory: string) => void) => { browse = [initial, choose] } }
-    const tree = DesktopProjectMembers(props)
+    const workflows = DesktopProjectMembers(props)
+    const roster = DesktopProjectRoster({ group: props.group, revision: props.revision, get disabled() { return disabled() }, onChange: props.onChange, onOpen: () => {} })
+    const tree = [workflows, roster]
+    expect(action(workflows, "project-member-remove")).toEqual([])
+    expect(action(workflows, "project-member-delete")).toEqual([])
     expect(action(tree, "project-member-remove").map((node) => node.props["aria-label"])).toEqual(["Remove Alpha from project", "Remove Beta from project"])
     expect(action(tree, "project-member-delete").map((node) => node.props["aria-label"])).toEqual(["Delete member Session Alpha", "Delete member Session Beta"])
-    expect(text(tree)).toContain("Master")
+    expect(nodes(roster).some(node => node.type === "small" && text(node) === "Master")).toBe(true)
     ;(action(tree, "project-member-remove")[1]!.props.onClick as () => void)()
     expect(changes.at(-1)?.[0]).toEqual({ kind: "update", revision: 3, groupID: "cgrp_team", groupRevision: 7, memberSessionIDs: ["ses_a"] })
     ;(action(tree, "project-member-delete")[0]!.props.onClick as () => void)()

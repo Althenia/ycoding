@@ -1,5 +1,6 @@
 import { utf8Length, type FormRequest, type Messages, type SessionFileChanges, type ModelOption, type ModelProfileOption, type ModelSelection, type SessionItem, type Sessions, type PromptFile, type PromptAgent } from "./contract"
 import { isInternalTranscriptEnvelope } from "@ycoding-ai/client/transcript-visibility"
+import { ordinarySession } from "./sessions"
 export { isInternalTranscriptEnvelope } from "@ycoding-ai/client/transcript-visibility"
 
 export type Field = FormRequest["fields"][number]
@@ -172,6 +173,16 @@ export function appendPage(paging: Paging, page: Sessions): Paging | undefined {
 export const pagedItems = (first: Sessions, paging: Paging) => mergeItems(first.items, paging.extra)
 
 export type Activity = { readonly busy: ReadonlySet<string>; readonly waiting: ReadonlyMap<string, ReadonlySet<string>> }
+export function sessionState(id: string, live: Activity, snapshot?: Pick<Sessions, "running" | "waiting">, executions?: ReadonlyMap<string, "idle" | "failed">): "waiting" | "running" | "failed" | "idle" | "unknown" {
+  if ((live.waiting.get(id)?.size ?? 0) > 0) return "waiting"
+  if (live.busy.has(id)) return "running"
+  const execution = executions?.get(id)
+  if (execution !== undefined) return execution
+  if (snapshot?.waiting?.includes(id)) return "waiting"
+  if (snapshot?.running?.includes(id)) return "running"
+  return snapshot?.running !== undefined && snapshot.waiting !== undefined ? "idle" : "unknown"
+}
+
 export type GroupKey = "needs" | "running" | "pinned" | "recent"
 const groupLabels: Record<GroupKey, string> = { needs: "Needs action", running: "Running", pinned: "Pinned", recent: "Recent" }
 const groupOrder: readonly GroupKey[] = ["needs", "running", "pinned", "recent"]
@@ -186,7 +197,7 @@ function rootOf(rows: ReadonlyMap<string, SessionItem>, id: string) {
   return current?.id
 }
 
-export function railGroups(rows: readonly SessionItem[], state: Activity) {
+export function railGroups(rows: readonly SessionItem[], state: Activity, snapshot?: Pick<Sessions, "running" | "waiting">, executions?: ReadonlyMap<string, "idle" | "failed">) {
   const byID = new Map(rows.map((row) => [row.id, row] as const))
   const roots = (ids: Iterable<string>) => new Set([...ids].flatMap((id) => rootOf(byID, id) ?? []))
   const needs = roots([...state.waiting].flatMap(([id, requests]) => requests.size ? [id] : []))
@@ -194,8 +205,9 @@ export function railGroups(rows: readonly SessionItem[], state: Activity) {
   const groups: Record<GroupKey, SessionItem[]> = { needs: [], running: [], pinned: [], recent: [] }
   let archived = 0
   for (const row of rows) {
-    if (row.parentID !== undefined && byID.has(row.parentID)) continue
-    const key: GroupKey = needs.has(row.id) ? "needs" : running.has(row.id) ? "running" : row.time.pinned !== undefined ? "pinned" : "recent"
+    if (!ordinarySession(row)) continue
+    const status = needs.has(row.id) ? "waiting" : running.has(row.id) ? "running" : sessionState(row.id, state, snapshot, executions)
+    const key: GroupKey = status === "waiting" ? "needs" : status === "running" ? "running" : row.time.pinned !== undefined ? "pinned" : "recent"
     if (row.time.archived !== undefined && (key === "pinned" || key === "recent")) { archived++; continue }
     groups[key].push(row)
   }

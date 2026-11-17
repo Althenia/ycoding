@@ -1,9 +1,12 @@
 import { createMemo, createSignal, For, Show, type JSX } from "solid-js"
 import { SharedRadioGroup } from "../../../apps/web/src/remote/ui/shared-workspace"
+import { Icon } from "../../../apps/web/src/ui/icon"
+import { DesktopStateIndicator } from "./state-indicator"
 import type { ProjectMutationInput, ProjectsSnapshot, SessionItem } from "./contract"
 import { formatCount } from "./form-rules"
 
 type Group = ProjectsSnapshot["groups"][number]
+export function ProjectDeleteIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6M14 11v6" /></svg> }
 type MemberAction =
   | { readonly kind: "add" | "remove" | "delete"; readonly sessionID: string }
   | { readonly kind: "new"; readonly directory: string; readonly title: string }
@@ -37,6 +40,24 @@ export function memberChange(state: MemberState, action: MemberAction): { readon
   return { input: { kind: "delete-member", ...identity, sessionID: member.sessionID }, confirmation: `Delete member Session “${member.title}”? This permanently deletes its stored Session data, including its transcript, and removes it from project “${group.name}”.` }
 }
 
+export function DesktopProjectRoster(props: { group: Group; revision: number; disabled: boolean; onChange: (input: ProjectMutationInput, confirmation: string) => void; onOpen: (sessionID: string) => void }) {
+  const [error, setError] = createSignal<string>()
+  const change = (kind: "remove" | "delete", sessionID: string) => {
+    const result = memberChange({ group: props.group, revision: props.revision, sessions: [], disabled: props.disabled }, { kind, sessionID })
+    if (!result) return
+    if ("error" in result) { setError(result.error); return }
+    setError(undefined)
+    props.onChange(result.input, result.confirmation)
+  }
+  return <><ul class="desktop-project-roster" data-project-roster aria-label={`Members of ${props.group.name}`}><For each={[props.group.master, ...props.group.members]}>{member => <li>
+    <DesktopStateIndicator state={member.state} /><span class="desktop-project-roster__identity"><strong>{member.title}</strong><small>{member.sessionID === props.group.master.sessionID ? "Master" : "Member"}</small></span>
+    <div class="desktop-project-roster__actions"><button type="button" class="rl-icon-button" aria-label={`Open ${member.title}`} data-tooltip="Open Session" onClick={() => props.onOpen(member.sessionID)}><Icon name="external" /></button><Show when={member.sessionID !== props.group.master.sessionID}>
+      <button type="button" class="rl-icon-button" data-action-id="project-member-remove" aria-label={`Remove ${member.title} from project`} data-tooltip="Remove from project · keep Session" disabled={props.disabled} onClick={() => change("remove", member.sessionID)}><Icon name="minus" /></button>
+      <button type="button" class="rl-icon-button" data-tone="danger" data-action-id="project-member-delete" aria-label={`Delete member Session ${member.title}`} data-tooltip="Delete Session and its stored data" disabled={props.disabled} onClick={() => change("delete", member.sessionID)}><ProjectDeleteIcon /></button>
+    </Show></div>
+  </li>}</For></ul><Show when={error()}>{message => <p role="alert">{message()}</p>}</Show></>
+}
+
 export function DesktopProjectMembers(props: { readonly group: Group; readonly revision: number; readonly sessions: readonly SessionItem[]; readonly disabled: boolean; readonly onChange: (input: ProjectMutationInput, confirmation: string) => void; readonly onBrowseFolder: (initialDirectory: string, choose: (directory: string) => void) => void }): JSX.Element {
   const identity = () => `${props.revision}:${props.group.id}:${props.group.revision}`
   const empty = (): Draft => ({ identity: identity(), selected: "", directory: "", title: "" })
@@ -60,12 +81,7 @@ export function DesktopProjectMembers(props: { readonly group: Group; readonly r
     const owner = identity()
     props.onBrowseFolder(directory() || props.group.master.location.directory, (chosen) => { if (identity() === owner) stage({ directory: chosen, error: undefined }) })
   }
-  return <section class="st-section" aria-label={`Members of ${props.group.name}`}>
-    <header class="st-section-head"><h3>Members</h3></header>
-    <ul class="st-rows">
-      <li class="st-row"><span class="st-row-main"><span>{props.group.master.title}</span><small>Master · change it in project settings before removing it</small></span></li>
-      <For each={props.group.members} fallback={<li class="st-row"><span class="st-muted">No members yet.</span></li>}>{(member) => <li class="st-row"><span class="st-row-main"><span>{member.title}</span><small>Member · {member.state}</small></span><button type="button" class="rl-btn" data-action-id="project-member-remove" aria-label={`Remove ${member.title} from project`} disabled={props.disabled} onClick={() => run({ kind: "remove", sessionID: member.sessionID })}>Remove member</button><button type="button" class="rl-btn" data-tone="danger" data-action-id="project-member-delete" aria-label={`Delete member Session ${member.title}`} disabled={props.disabled} onClick={() => run({ kind: "delete", sessionID: member.sessionID })}>Delete member</button></li>}</For>
-    </ul>
+  return <section class="st-section desktop-project-workflows" aria-label={`Member workflows for ${props.group.name}`}>
     <h3>Add an existing Session</h3>
     <p class="st-muted">{formatCount(candidates().length)} eligible of {formatCount(props.sessions.length)} Sessions loaded in the rail. Load more Sessions in the rail to add others.</p>
     <Show when={candidates().length} fallback={<p class="st-muted">No loaded Session can be added.</p>}>
