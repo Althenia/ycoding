@@ -9,7 +9,7 @@ const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.ve
 describe("release entries", () => {
   test("lists v0.11.7 first with its notes", async () => {
     const entry = RELEASES[0]
-    expect(entry).toMatchObject({ version: "0.11.7", date: "2026-11-17", title: "Persistent defer and explicit YOLO risk", tags: ["Changed"] })
+    expect(entry).toMatchObject({ version: "0.11.7", date: "2026-11-18", title: "Desktop navigation, persistent defer and remote recovery", tags: ["Added", "Changed", "Fixed"] })
     const notes = await Bun.file(new URL("../../../../docs/releases/v0.11.7.md", import.meta.url)).text()
     expect(notes).toStartWith("# YCoding v0.11.7\n")
     const changes = notes.split(/^## /m).flatMap((section) => {
