@@ -283,6 +283,7 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
                   label: "Claude",
                   subscriptionType: dispatched.subscriptionType,
                   observedAt: Date.now(),
+                  status: response.status,
                   headers: response.headers,
                 })
                 if (snapshot.windows.length === 0) return

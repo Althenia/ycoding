@@ -480,7 +480,7 @@ describe("ProviderUsageRuntime", () => {
         item.windows[0]?.id,
       ]),
     ).toEqual([
-      [undefined, "provider_internal_api", "session"],
+      ["default", "provider_internal_api", "session"],
       ["YCoding local", "local_session", "today"],
     ])
   })

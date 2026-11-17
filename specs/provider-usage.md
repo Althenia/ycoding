@@ -16,7 +16,7 @@ The local provider-request ledger's closed request-source set is `step`, `title`
 A snapshot includes:
 
 - provider ID and safe display label, including a normalized provider-reported account type when available;
-- the stored credential profile name, present only when the provider has more than one stored profile;
+- the safe stored credential profile name whenever the snapshot is bound to a named profile, including a provider with one stored profile; email-shaped labels are withheld;
 - availability status;
 - source and stability classification;
 - update time;
@@ -68,6 +68,8 @@ Claude Code OAuth accounts use two sources:
 2. the provider-owned OAuth usage snapshot endpoint for cold start, weekly model lanes, and extra-usage values.
 
 Live response observations replace overlapping older OAuth windows while retaining account-bound prepaid data from the cached OAuth snapshot. The OAuth usage request retries once after a forced credential refresh on HTTP 401. The managed account's OAuth profile identifies the organization for the prepaid credits endpoint; the same token must remain current through the read. A USD `prepaid-balance` window reports the provider's prepaid amount, separate from the monthly extra-usage limit. Unavailable or non-USD prepaid data is omitted without discarding subscription quota.
+
+Rejected unified headers report an exhausted subscription or scoped window even when utilization is missing or optimistic. A unified HTTP 429 with a reported unified reset also establishes subscription exhaustion; ordinary throughput limits do not. Model-scoped weekly headers retain their own windows. An exhausted response window with a future reset remains authoritative over an OAuth poll for that account until its reset or a later response reporting that window. A partial response cannot clear an omitted exhausted window. Capacity in another window or profile never offsets that exhaustion.
 
 ### Codex and Spark
 
@@ -229,6 +231,8 @@ Quota observations from response headers, response streams, and explicit Usage r
 Process-local state is isolated by account, provider, and window. The first real observation records a silent baseline, including an already-exhausting window. Repeated observations do not repeat delivered milestones. A worsening jump directly to Will run out skips Cutting it close. Recovery re-arms the recovered local milestone. A skipped or failed delivery leaves its edge pending. Reset changes of at most one second retain the same window; a greater change re-arms milestones. Restart establishes a new silent baseline.
 
 Terminal delivery uses a warning toast and the TUI attention channel. The ephemeral `provider.quota.pace` event carries `providerID`, `windowID`, `milestone`, required `resetAt`, `title`, and `body`, without a Location or Session ID. Its process-global evaluator is shared across Locations, with a bounded nonblocking observation queue. Saturation can drop an observation; a later observation reevaluates the window. No quota history is persisted.
+
+The local alert body identifies the provider label, bound profile when known, and window label. Account digests and credential references remain internal. Relay frames and push payloads discard local copy and use generic client-owned text without a profile.
 
 Relay delivery uses the Quota pace category with independent In app and System preferences, enabled by default. Cross-machine collapse keys are provider ID, window ID, milestone, and reset rounded to its nearest minute; matching reset minutes can also collapse distinct provider accounts. The closed agent frame is `quota`; its `quota.result` reply is `settled` or `pending`. Browsers receive a live `notice.quota` or a quota item in `notice.present`, never a stored Session notice. The relay derives the owner and device from the verified connection. Each browser's live notice and System attempt is claimed independently in owner-wide durable storage before dispatch. Unexpired claims are retained; exhausted key-storage capacity or push budget leaves delivery pending. Claim storage permits 512 active keys per owner and 64 recipient claims per key; excess recipients are not guaranteed delivery. A rejected or uncertain push attempt is not resent. Push payloads contain only category, authenticated device ID, provider ID, window ID, milestone, and reset time; clients supply generic short copy. They carry no account identity, credential reference, profile, email, or raw response. Activating one opens Usage on its originating online machine. The Worker and its push-preference migration must be ready before connectors that send quota frames are released.
 

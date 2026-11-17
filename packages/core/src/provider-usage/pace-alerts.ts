@@ -59,17 +59,18 @@ export function make(input: {
   const deliver = (
     window: ProviderUsage.Window,
     resetAt: number,
-    providerID: ProviderUsage.Snapshot["providerID"],
+    snapshot: ProviderUsage.Snapshot,
     milestone: ProviderUsage.PaceMilestone,
   ) =>
     Effect.suspend(() =>
       input.deliver(
         new ProviderUsage.QuotaPaceAlert({
-          providerID,
+          providerID: snapshot.providerID,
           windowID: window.id,
           milestone,
           resetAt,
           ...copy[milestone],
+          body: `${snapshot.label}${snapshot.profile ? ` · ${snapshot.profile}` : ""} · ${window.label}: ${copy[milestone].body}`,
         }),
       ),
     ).pipe(Effect.catchCause(() => Effect.succeed(false)))
@@ -146,8 +147,8 @@ export function make(input: {
     const crossed = underNow && !state.underTen
     const under = crossed && !state.fired.has("almost-out") ? ("almost-out" as const) : undefined
     if (!underNow) state.fired.delete("almost-out")
-    const paceDelivered = pace === undefined ? false : yield* deliver(window, resetAt, snapshot.providerID, pace)
-    const underDelivered = under === undefined ? false : yield* deliver(window, resetAt, snapshot.providerID, under)
+    const paceDelivered = pace === undefined ? false : yield* deliver(window, resetAt, snapshot, pace)
+    const underDelivered = under === undefined ? false : yield* deliver(window, resetAt, snapshot, under)
     if (pace !== undefined && paceDelivered) state.fired.add(pace)
     if (pace === "will-run-out" && paceDelivered) state.fired.add("cutting-it-close")
     if (under !== undefined && underDelivered) state.fired.add(under)
