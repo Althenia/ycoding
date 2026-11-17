@@ -22,6 +22,27 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.6",
+    date: "2026-11-17",
+    title: "Lighter Session switching and reliable recovery",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Runtime memory diagnostics and periodic telemetry include lifetime-peak RSS, Bun-reported current and peak commit bytes, separate minor and major page-fault counters, and the number of active model attempts. Unsupported or unavailable measurements remain explicitly unreported." },
+      { tag: "Added", text: "Web Team views can inspect child conversations and discover paginated descendants, with parent navigation and decisions kept with their owning Session." },
+      { tag: "Changed", text: "Web refreshes public pages, documentation navigation, Session controls, Projects and Team views with shared typography, self-hosted monospace fonts and phone layouts. Conversation, Usage and Settings columns start at the same edge while prose keeps its reading measure; hover and keyboard tooltips work inside dialogs." },
+      { tag: "Changed", text: "Decision-watch recovery messages separate State, Work, Counts, Action and inspection commands. They bound long task and member summaries, identify current failures separately from settled child failures, and leave progressing work alone without reading root todos during active recovery." },
+      { tag: "Fixed", text: "Resuming a decision watcher tolerates a missing former Project member while reconciling current membership. Missing root or family Sessions and other task-read failures still stop observation; acknowledged cursors and pending delivery remain intact." },
+      { tag: "Fixed", text: "Location metadata, configuration diagnostics and durable Session reads acquire only the services they need instead of starting execution services or MCP clients. Interrupted MCP startup closes its acquired clients and clears its tools." },
+      { tag: "Fixed", text: "Skill and configured Markdown reads avoid retaining full documents in the parser cache. MCP tool-catalog refreshes replace superseded output-schema validators, and failed OAuth exchanges, including response-body failures, leave the shared exchange cache so later requests can retry." },
+      { tag: "Fixed", text: "The TUI Session switcher loads global pins and project-local recent roots without enumerating unrelated unpinned Sessions or loading full child-task progress pages. Waiting and running roots remain visible across projects, lifecycle refreshes are coalesced, and progress-only updates do not refresh global picker queries." },
+      { tag: "Fixed", text: "Node CLI builds isolate native-only Desktop and SQLite imports. Database recovery uses Node's read-only SQLite API, allowing the packaged Node executable to start without importing Bun SQLite." },
+      { tag: "Fixed", text: "Meeting Stop remains available for this page's active capture when state reads fail, are denied or stall. It releases local capture sources before waiting for runtime confirmation and reports an unconfirmed runtime stop when acknowledgement is unavailable." },
+      { tag: "Fixed", text: "Chrome and isolated-browser control discard a lost execution context without replaying the failed page action. A fill or select whose result was lost may already have changed the page; fresh observation is required before another action." },
+      { tag: "Fixed", text: "Claude quota warnings retain rejected subscription and model-scoped windows for the bound profile until their reported reset or a later response for that window. Optimistic usage polls and partial responses cannot clear an exhausted future-reset window, and local alerts identify the provider, safe profile label and quota window." },
+      { tag: "Fixed", text: "Expired Claude response quota windows are removed from usage reads and forecasts at their reset boundary. Cached quota is used when reported; a cold cache leaves quota unreported rather than retaining expired exhaustion." },
+    ],
+  },
+  {
     version: "0.11.5",
     date: "2026-11-15",
     title: "Desktop Session controls and resilient runtime recovery",
