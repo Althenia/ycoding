@@ -59,6 +59,46 @@ function incidents(answer: (operation: string, request: RemoteTransportRequest |
 
 const scope: QueryScope = { deviceID: "dev_1", generation: 1 }
 
+describe("descendant reads", () => {
+  const child = (sessionID = "ses_grandchild", parentID = "ses_child") => ({ sessionID, parentID, description: "Nested task", state: "waiting", revision: 1, time: { created: 1, updated: 2 }, question: { id: "qst_nested", text: "Proceed?" } })
+  test("requests a bounded page from the owning parent, with its opaque cursor", async () => {
+    const h = incidents(() => ({ status: "ok", value: { data: [child()], cursor: { next: "next-page" } } }))
+    const first = await h.client.fetchQuery(h.queries.childTeam(scope, true, "ses_root", "ses_child"))
+    expect(first).toMatchObject({ tasks: [{ sessionID: "ses_grandchild", parentID: "ses_child", question: { id: "qst_nested" } }], next: "next-page" })
+    expect(h.calls).toEqual([{ operation: "session.subagent.list", scope, request: { sessionID: "ses_child" } }])
+    await h.client.fetchQuery(h.queries.childTeam(scope, true, "ses_root", "ses_child"))
+    expect(h.calls).toHaveLength(1)
+    const next = incidents(() => ({ status: "ok", value: { data: [], cursor: {} } }))
+    expect(await next.client.fetchQuery(next.queries.childTeam(scope, true, "ses_root", "ses_child", "next-page"))).toEqual({ tasks: [] })
+    expect(next.calls[0]?.request).toEqual({ sessionID: "ses_child", input: { cursor: "next-page" } })
+    h.client.clear(); next.client.clear()
+  })
+  test("unrelated, malformed, duplicate and cyclic pages are errors, never empty success", async () => {
+    for (const value of [{ data: [child("ses_root")] }, { data: [child("ses_child")] }, { data: [child("ses_other", "ses_wrong")] }, { data: [child(), child()] }, { data: [{}] }, { data: [], cursor: null }, { data: [], cursor: { next: 9 } }, { data: [], cursor: { next: "x".repeat(1_025) } }, { data: [], cursor: { next: "same" } }]) {
+      const h = incidents(() => ({ status: "ok", value }))
+      await expect(h.client.fetchQuery(h.queries.childTeam(scope, true, "ses_root", "ses_child", "same"))).rejects.toThrow("unreadable or unrelated")
+      h.client.clear()
+    }
+    const unsupported = incidents(() => ({ status: "failed", error: { code: "unknown_operation", message: "unsupported" } }))
+    await expect(unsupported.client.fetchQuery(unsupported.queries.childTeam(scope, true, "ses_root", "ses_child"))).rejects.toThrow()
+    unsupported.client.clear()
+  })
+  test("late parent answers remain separate from a new parent, family, device and connection", async () => {
+    const held = Promise.withResolvers<RemoteRequestOutcome>()
+    const client = createRemoteQueryClient()
+    const queries = createRemoteQueries({ recoveries: () => 0, recovered: async () => false, request: async (_scope, _operation, request) => request?.sessionID === "ses_child" ? held.promise : { status: "ok", value: { data: [child("ses_deep", "ses_grandchild")], cursor: {} } } }, client)
+    const first = queries.childTeam(scope, true, "ses_root", "ses_child")
+    const current = queries.childTeam(scope, true, "ses_root", "ses_grandchild")
+    const old = client.fetchQuery(first)
+    await client.fetchQuery(current)
+    held.resolve({ status: "ok", value: { data: [child()], cursor: {} } })
+    await old
+    expect(client.getQueryData(current.queryKey)).toMatchObject({ tasks: [{ sessionID: "ses_deep" }] })
+    for (const key of [remoteKeys.childTeam(scope, "ses_other_family", "ses_child"), remoteKeys.childTeam({ ...scope, deviceID: "dev_other" }, "ses_root", "ses_child"), remoteKeys.childTeam({ ...scope, generation: 2 }, "ses_root", "ses_child")]) expect(client.getQueryData(key)).toBeUndefined()
+    client.clear()
+  })
+})
+
 test("Usage refresh starts its cached forecast without waiting for provider quota refresh", async () => {
   const providerGate = Promise.withResolvers<RemoteRequestOutcome>()
   const forecastStarted = Promise.withResolvers<void>()

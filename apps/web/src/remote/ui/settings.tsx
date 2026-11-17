@@ -114,7 +114,7 @@ export function MachineSettings(): JSX.Element {
     <div class="machine-selected">
       <Icon name="devices" size={16} class="machine-selected__icon" />
       <span id="machine-selected-name" class="machine-selected__name" aria-labelledby="machine-selected-label">{selectedMachineName()}</span>
-      <span class="machine-selected__status" data-tone={connection().tone}>{connection().label}<Show when={connection().tone === "online"}><Icon name="check" size={14} /></Show></span>
+      <span class="machine-selected__status" data-tone={connection().tone}>{connection().label}<Show when={connection().tone === "online"}><Icon name="check" size={16} /></Show></span>
     </div>
     <p class="settings__hint machine-selected__hint">Choose an online machine to access its Sessions.</p>
     <Show when={machineIDs().length > 0} fallback={<p class="machine-row__empty field__hint" role="status">{availability().placeholder}</p>}>
@@ -133,7 +133,7 @@ export function MachineSettings(): JSX.Element {
                   const connectLabel = () => current() && eligible() ? "Connected" : eligible() ? "Connect" : stateLabel()
                   return <>
                     <div class="machine-row__identity">
-                      <Show when={isEditing()} fallback={<span class="machine-row__name" title={machine().name} onDblClick={(event) => { if (machine().status === "active") startEditing(id, name(), event.currentTarget.closest("li")) }}>{name()}</span>}>
+                      <Show when={isEditing()} fallback={<span class="machine-row__name" data-tooltip={machine().name} onDblClick={(event) => { if (machine().status === "active") startEditing(id, name(), event.currentTarget.closest("li")) }}>{name()}</span>}>
                         <form class="machine-row__form" aria-busy={savingAlias()} onSubmit={(event) => { event.preventDefault(); void saveAlias(id, machine().name, event.currentTarget.closest("li")) }}
                           onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); stopEditing(event.currentTarget.closest("li")) } }}>
                           <input class="input machine-row__input" aria-label={`Name for ${machine().name}`} aria-describedby="machine-row-scope" value={draft()} maxLength={deviceAliasLimit} disabled={savingAlias()}
@@ -379,7 +379,7 @@ function Section(props: {
     <section class="settings__section" aria-labelledby={props.id}>
       <div class="settings__head">
         <p class="settings__category">{props.category}</p>
-        <Icon name={sectionIcons[props.category]} size={18} />
+        <Icon name={sectionIcons[props.category]} size={20} />
         <h2 id={props.id}>{props.title}</h2>
         <Show when={props.hint}><p class="settings__hint">{props.hint}</p></Show>
       </div>
@@ -518,7 +518,7 @@ export function DeviceSettings(): JSX.Element {
             {(device) => (
               <div class="device" role="row">
                 <div class="device__body" role="cell">
-                  <span class="device__name" title={device.name}>{remote.deviceName(device)}</span>
+                  <span class="device__name" data-tooltip={device.name}>{remote.deviceName(device)}</span>
                 </div>
                 <span class="device__registration" role="cell">{device.status === "revoked" ? "Revoked" : "Enrolled"}</span>
                 <span class="device__connection" role="cell">

@@ -214,7 +214,7 @@ export function CommandPalette(props: {
         type="button"
         class="button button--ghost button--icon app-header__palette"
         aria-label="Open command palette"
-        title="Command palette (Ctrl+K)"
+        data-tooltip="Command palette (Ctrl+K)"
         aria-haspopup="dialog"
         aria-expanded={open()}
         aria-keyshortcuts="Control+K Meta+K Control+P"

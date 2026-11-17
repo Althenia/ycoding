@@ -26,7 +26,7 @@ export function InvitePage(): JSX.Element {
   return (
     <main id="remote-main" class="sign-in">
       <header class="sign-in__bar">
-        <Link to="/" class="brand" title="YCoding home"><BrandMark compact /></Link>
+        <Link to="/" class="brand" data-tooltip="YCoding home"><BrandMark compact /></Link>
         <ThemeToggle />
       </header>
       <div class="sign-in__panel">

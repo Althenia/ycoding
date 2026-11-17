@@ -115,7 +115,7 @@ describe("remote shell layout", () => {
       const aliased = await page.evaluate(`(() => {
         const item = ${nameOf("Studio Alias")}
         const name = document.querySelector('.device__name')
-        return { row: item?.querySelector('.machine-row__name')?.textContent?.trim() ?? '', rowHostnames: document.querySelectorAll('.machine-row__hostname').length, name: name?.textContent?.trim() ?? '', hostnames: document.querySelectorAll('.device__hostname').length, title: name?.getAttribute('title') ?? null }
+        return { row: item?.querySelector('.machine-row__name')?.textContent?.trim() ?? '', rowHostnames: document.querySelectorAll('.machine-row__hostname').length, name: name?.textContent?.trim() ?? '', hostnames: document.querySelectorAll('.device__hostname').length, title: name?.getAttribute('data-tooltip') ?? null }
       })()`)
       expect(aliased).toEqual({ row: "Studio Alias", rowHostnames: 0, name: "Studio Alias", hostnames: 0, title: "Studio Mac" })
       await page.evaluate(`${nameOf("Laptop")}.querySelector('.machine-row__connect').click()`)

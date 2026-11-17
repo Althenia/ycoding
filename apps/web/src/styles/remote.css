@@ -415,7 +415,7 @@ body:has(.app) {
 .session-search .input:focus-visible { border-color: var(--yc-border-strong); outline: 2px solid var(--yc-focus); outline-offset: 1px; }
 @media (pointer: coarse) { .session-search .input { min-block-size: var(--yc-hit-min); block-size: var(--yc-hit-min); } }
 .session-search__icon { position: absolute; inset-inline-start: var(--yc-space-3); inset-block-start: 50%; translate: 0 -50%; color: var(--yc-text-subtle); pointer-events: none; }
-.session-list__group { display: flex; align-items: flex-end; min-inline-size: 0; padding: var(--yc-space-3) var(--yc-space-2) var(--yc-space-1); color: var(--yc-text-subtle); font: 11px/var(--yc-leading-2xs) var(--yc-font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-list__group { display: flex; align-items: flex-end; min-inline-size: 0; padding: var(--yc-space-3) var(--yc-space-2) var(--yc-space-1); color: var(--yc-text-subtle); font: var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-resume { justify-content: flex-start; min-block-size: var(--yc-hit-min); min-inline-size: var(--yc-hit-min); gap: var(--yc-space-2); position: relative; }
 .workspace-resume svg { flex: none; }
 .app-header .workspace-resume { display: none; }
@@ -664,7 +664,7 @@ body:has(.app) {
   font-weight: var(--yc-weight-semibold);
 }
 
-.session-panel__collapse { display: grid; place-items: center; flex: none; inline-size: var(--yc-hit-min); block-size: var(--yc-hit-min); border: 0; border-radius: var(--yc-radius-pill); background: transparent; color: var(--yc-text-muted); }
+.session-panel__collapse { display: grid; place-items: center; flex: none; inline-size: var(--yc-hit-min); block-size: var(--yc-hit-min); padding: 0; border: 0; border-radius: var(--yc-radius-pill); background: transparent; color: var(--yc-text-muted); }
 @media (hover: hover) { .session-panel__collapse:hover { color: var(--yc-text); background: var(--yc-surface-sunken); } }
 .session-panel__collapse:focus-visible { outline: 2px solid var(--yc-focus); outline-offset: 2px; }
 
@@ -766,7 +766,7 @@ body:has(.app) {
 .session-row__state {
   flex: none;
   color: var(--yc-yellow-strong);
-  font: 11px/var(--yc-leading-2xs) var(--yc-font-mono);
+  font: var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono);
 }
 
 .sessions-table__status .chip {
@@ -853,7 +853,7 @@ body:has(.app) {
 }
 
 .session-panel .session-filters { flex-wrap: nowrap; justify-content: flex-start; gap: 2px; margin-block: 0 var(--yc-space-1); }
-.session-panel .session-filters__option { display: inline-flex; flex: none; align-items: center; gap: var(--yc-space-1); min-block-size: var(--yc-space-6); padding-inline: 6px; border: 1px solid transparent; color: var(--yc-text-muted); font: var(--yc-weight-medium) 11px/var(--yc-leading-2xs) var(--yc-font-sans); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.session-panel .session-filters__option { display: inline-flex; flex: none; align-items: center; gap: var(--yc-space-1); min-block-size: var(--yc-space-6); padding-inline: 6px; border: 1px solid transparent; color: var(--yc-text-muted); font: var(--yc-weight-medium) var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-sans); font-variant-numeric: tabular-nums; white-space: nowrap; }
 @media (hover: hover) { .session-panel .session-filters__option:hover:not(:disabled) { color: var(--yc-text); } }
 .session-panel .session-filters__option:focus-visible { outline: 2px solid var(--yc-focus); outline-offset: -2px; }
 .session-panel .session-filters__option--active { border-color: var(--yc-border-strong); background: var(--yc-surface-sunken); color: var(--yc-text); font-weight: var(--yc-weight-medium); }
@@ -2571,6 +2571,7 @@ form .request__actions .button--secondary {
 
 @media (max-width: 767px), (max-height: 599px) and (pointer: coarse) {
   .app .overlay--sessions-sheet .overlay__surface {
+    grid-template-columns: minmax(0, 1fr);
     inset-block: 0;
     inset-inline-start: 0;
     inset-inline-end: auto;
@@ -2585,6 +2586,7 @@ form .request__actions .button--secondary {
 
   .app .overlay--sessions-sheet .overlay__body {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) auto;
     overflow: hidden;
   }

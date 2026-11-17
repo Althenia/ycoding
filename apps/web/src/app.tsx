@@ -10,6 +10,7 @@ import type { RemoteStore } from "./remote/store"
 import { RemoteShell } from "./remote/ui/shell"
 import { InvitePage } from "./remote/ui/invite"
 import { REMOTE_INVITE_PATH, REMOTE_VIEWS } from "./routes"
+import { Tooltips } from "./ui/tooltip"
 
 const remoteUnknownPath = "/remote/$"
 
@@ -137,7 +138,7 @@ function RootShell(): JSX.Element {
     preference.removeEventListener("change", updateMotion)
     delete document.documentElement.dataset.motion
   })
-  return <Outlet />
+  return <><Outlet /><Tooltips /></>
 }
 
 export function App(props: { readonly createRemoteStore?: () => RemoteStore }): JSX.Element {

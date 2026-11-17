@@ -19,6 +19,7 @@ import { readUsageForecast } from "./usage-read"
 import { keepAwakeAnswer, readKeepAwakeStatus, type KeepAwakeState } from "./keep-awake"
 import { describeOutcome } from "./outcome"
 import { readSnapshot } from "./projection"
+import { readTeamChildren } from "./team-read"
 import type { RemoteRequestOutcome, RemoteTransportRequest } from "./transport"
 import { reportKey, reportNeedsNewerConnector, type UsageProvider, type UsageReport, type UsageReportInput, type UsageSummary } from "./ui/usage-model"
 
@@ -64,6 +65,7 @@ export const remoteKeys = {
   coordination: (scope: QueryScope) => [...remoteKeys.scope(scope), "coordination"] as const,
   projectCandidates: (scope: QueryScope, search: string) => [...remoteKeys.scope(scope), "project-candidates", search] as const,
   childSnapshot: (scope: QueryScope, sessionID: string, revision: number) => [...remoteKeys.scope(scope), "child-snapshot", sessionID, revision] as const,
+  childTeam: (scope: QueryScope, familyID: string, parentID: string, cursor?: string) => [...remoteKeys.scope(scope), "child-team", familyID, parentID, cursor ?? ""] as const,
 }
 
 export type CoordinationOverview =
@@ -471,8 +473,25 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     })
   }
 
+  const childTeam = (scope: QueryScope | undefined, enabled: boolean, familyID: string, parentID: string, cursor?: string) => {
+    const current = scope ?? idleScope
+    return queryOptions({
+      queryKey: remoteKeys.childTeam(current, familyID, parentID, cursor),
+      enabled: scope !== undefined && enabled && parentID.length > 0,
+      staleTime: 15_000,
+      retry: false,
+      queryFn: async () => {
+        const outcome = await link.request(current, "session.subagent.list", { sessionID: parentID, ...(cursor === undefined ? {} : { input: { cursor } }) })
+        if (outcome.status !== "ok") throw new Error(describeOutcome(outcome, "Child subagents"))
+        const page = readTeamChildren(outcome.value, parentID)
+        if (!page || page.next !== undefined && page.next === cursor || page.tasks.some(task => task.sessionID === familyID)) throw new Error("The device returned an unreadable or unrelated child list.")
+        return page
+      },
+    })
+  }
+
   return {
-    coordination, refreshCoordination, changeCoordination, deleteProjectSession, createProjectSession, projectCandidates, childSnapshot,
+    coordination, refreshCoordination, changeCoordination, deleteProjectSession, createProjectSession, projectCandidates, childSnapshot, childTeam,
     usageProviders, usageSummary, usageForecast, usageReport, usageDashboard, refreshUsage, refreshUsageDashboard, retryUsageReport,
     incidentReport, incidentRecent, incidentGuidance, clearIncidentGuidance, retryIncidentReport, retryIncidentRecent, retryIncidentGuidance,
     keepAwake, keepAwakeMutation, toggleKeepAwake, workspaces,

@@ -137,6 +137,10 @@
 .team-overview__back { display:none; }
 .team-overview .team-view__button { min-block-size:var(--yc-hit-min); }
 .team-conversation { display:grid; gap:var(--yc-space-4); min-inline-size:0; }
+.team-children { display:grid; gap:var(--yc-space-3); min-inline-size:0; }
+.team-children__list { display:grid; gap:var(--yc-space-2); margin:0; padding:0; list-style:none; }
+.team-children__list .team-view__button { display:grid; justify-items:start; inline-size:100%; white-space:normal; overflow-wrap:anywhere; text-align:start; }
+.team-children__list span { color:var(--yc-text-muted); font-size:var(--yc-size-2xs); }
 .team-conversation__heading { display:flex; align-items:center; justify-content:space-between; gap:var(--yc-space-2); }
 .team-conversation__heading h3 { font-size:var(--yc-size-sm); }
 .team-conversation__message { display:grid; gap:var(--yc-space-2); min-inline-size:0; padding-block:var(--yc-space-3); font-size:var(--yc-size-sm); }

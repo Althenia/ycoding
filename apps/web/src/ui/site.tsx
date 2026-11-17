@@ -31,7 +31,7 @@ export function ThemeToggle(): JSX.Element {
       type="button"
       class="button button--ghost button--icon"
       aria-label={label()}
-      title={label()}
+      data-tooltip={label()}
       onClick={() => theme.cycle()}
     >
       <Icon name={icon()} />
@@ -254,7 +254,7 @@ export function LandingPage(): JSX.Element {
             <For each={SITE.features}>
               {(feature) => (
                 <article class="feature motion-reveal">
-                  <Icon name={feature.icon} size={22} />
+                  <Icon name={feature.icon} size={24} />
                   <h2 class="feature__title">{feature.title}</h2>
                   <p class="feature__text">{feature.text}</p>
                 </article>

@@ -423,7 +423,7 @@ export function DocsShell(props: {
               aria-expanded={navOpen()}
               onClick={() => setNavOpen(true)}
             >
-              <Icon name="menu" size={18} />
+              <Icon name="menu" size={20} />
               <span>{props.navLabel}</span>
             </button>
           </Show>

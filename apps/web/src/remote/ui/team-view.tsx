@@ -4,6 +4,7 @@ import { Modal } from "../../ui/modal"
 import { TeamAnswerForm } from "./subagent-bar"
 import { LoadingPlaceholder } from "./loading"
 import { TeamConversation } from "./team-conversation"
+import { TeamChildren } from "./team-children"
 import { appendTeamShellOutput, canAnswerSubagent, canCancelSubagent, canContinueRecovery, formatElapsed, isActiveSubagent, pinAction, isDeferredQuestion, shellOwnerLabel, taskStateLabel, teamActivityLabel, teamShellCommand, shellRows, taskRows, usageSlots, runningExecution, type TeamActionOutcome, type TeamPanelData, type TeamShellOutput, type TeamSubagent } from "./team-model"
 import "./team-view.css"
 
@@ -18,7 +19,7 @@ const tabMeta: Readonly<Record<Tab, { readonly label: string; readonly icon: Ico
 function StateMark(props: { readonly state: TeamSubagent["state"] }): JSX.Element {
   const icon = (): IconName | undefined => props.state === "completed" ? "check" : props.state === "failed" || props.state === "lost" ? "alert" : props.state === "cancelled" ? "minus" : undefined
   return <span class={`team-view__mark team-view__mark--${props.state}`} aria-hidden="true">
-    <Show when={icon()} fallback={<span class="status-dot" />}>{(name) => <Icon name={name()} size={14} />}</Show>
+    <Show when={icon()} fallback={<span class="status-dot" />}>{(name) => <Icon name={name()} size={16} />}</Show>
   </span>
 }
 
@@ -31,7 +32,7 @@ function TaskUsage(props: { readonly task: () => TeamSubagent; readonly loading:
     <For each={usageKeys}>{(key) => {
       const slot = () => slots().find((entry) => entry.key === key)!
       return <div class="team-view__usage-cell" data-slot={key} data-state={slot().state}>
-        <dt title={slot().label}>{slot().label}</dt>
+        <dt data-tooltip={slot().label}>{slot().label}</dt>
         <dd><Show when={slot().state === "loading"} fallback={slot().value}><span class="team-view__skeleton" aria-hidden="true" /><span class="visually-hidden">Loading</span></Show>
           <Show when={slot().meter !== undefined}><span class="team-view__meter" role="img" aria-label={`${Math.round((slot().meter ?? 0) * 100)}% of context used`}><span style={{ "inline-size": `${Math.round((slot().meter ?? 0) * 100)}%` }} /></span></Show></dd>
       </div>
@@ -75,6 +76,7 @@ export function TeamView(props: {
   readonly onClose: () => void
   readonly onOpen: (sessionID: string) => void
   readonly onCancel: (childID: string) => Promise<TeamActionOutcome>
+  readonly connectionKey?: string
   readonly onAnswer: (childID: string, questionID: string, text: string) => Promise<TeamActionOutcome>
   readonly onPin: (childID: string, pinned: boolean) => Promise<TeamActionOutcome>
   readonly onContinueRecovery: (childID: string) => Promise<TeamActionOutcome>
@@ -88,12 +90,17 @@ export function TeamView(props: {
   const [tab, setTab] = createSignal<Tab>("subagents")
   const [expanded, setExpanded] = createSignal<HTMLButtonElement>()
   const [selectedChild, setSelectedChild] = createSignal<string>()
-  const selectedTask = () => props.data().tasks.find((task) => task.sessionID === selectedChild())
+  const [descendants, setDescendants] = createSignal<readonly TeamSubagent[]>([])
+  const [childCursors, setChildCursors] = createSignal<Readonly<Record<string, string | undefined>>>({})
+  const directTask = () => props.data().tasks.find((task) => task.sessionID === selectedChild())
+  const selectedTask = () => directTask() === undefined ? undefined : descendants().at(-1) ?? directTask()
+  createEffect(() => { selectedChild(); setDescendants([]); setChildCursors({}) })
   let childTrigger: HTMLButtonElement | undefined
   let childScroll: HTMLElement | null = null
   let childTop = 0
   const backToChildren = () => {
     setSelectedChild(undefined)
+    setDescendants([])
     queueMicrotask(() => { if (childScroll) childScroll.scrollTop = childTop; childTrigger?.focus({ preventScroll: true }) })
   }
   const [confirm, setConfirm] = createSignal<{ readonly kind: "cancel" | "kill"; readonly id: string; readonly label: string; readonly trigger: HTMLButtonElement }>()
@@ -102,9 +109,10 @@ export function TeamView(props: {
   const [answerID, setAnswerID] = createSignal<string>()
   const [continuing, setContinuing] = createSignal<string>()
   const [output, setOutput] = createSignal<{ readonly ownerID: string; readonly shellID: string; readonly page?: TeamShellOutput; readonly loading: boolean; readonly error?: string }>()
-  let familyID = props.data().rootID
+  const familyKey = () => `${props.connectionKey ?? ""}:${props.data().rootID}`
+  let familyID = familyKey()
   createEffect(() => {
-    const current = props.data().rootID
+    const current = familyKey()
     if (current === familyID) return
     familyID = current
     setExpanded(undefined)
@@ -148,28 +156,28 @@ export function TeamView(props: {
   }
   const runAction = (item: { readonly kind: "cancel" | "kill"; readonly id: string }, action: () => Promise<TeamActionOutcome>, dismiss: () => void) => {
     if (working() !== undefined) return
-    const rootID = props.data().rootID
+    const family = familyKey()
     setWorking(item.id)
     setError(undefined)
-    void action().then((result) => { if (rootID === props.data().rootID && result.status !== "ok") setError(result.message) },
-      (cause: unknown) => { if (rootID === props.data().rootID) setError(cause instanceof Error ? cause.message : "The action could not be completed.") }).finally(() => {
-      if (rootID !== props.data().rootID) return
+    void action().then((result) => { if (family === familyKey() && result.status !== "ok") setError(result.message) },
+      (cause: unknown) => { if (family === familyKey()) setError(cause instanceof Error ? cause.message : "The action could not be completed.") }).finally(() => {
+      if (family !== familyKey()) return
       setWorking(undefined)
       if (confirm()?.id === item.id && confirm()?.kind === item.kind) dismiss()
     })
   }
   const readOutput = (ownerID: string, shellID: string, cursor?: number) => {
     if (output()?.loading) return
-    const rootID = props.data().rootID
+    const family = familyKey()
     const previous = output()?.shellID === shellID ? output()?.page : undefined
     setOutput({ ownerID, shellID, page: previous, loading: true })
     setError(undefined)
     void props.onViewShell(ownerID, shellID, cursor).then((page) => {
-      if (rootID !== props.data().rootID || output()?.shellID !== shellID) return
+      if (family !== familyKey() || output()?.shellID !== shellID) return
       setOutput({ ownerID, shellID, page: previous && cursor !== undefined
         ? { ...page, text: appendTeamShellOutput(previous.text, page.text) } : { ...page, text: appendTeamShellOutput("", page.text) }, loading: false })
     }, (cause: unknown) => {
-      if (rootID !== props.data().rootID || output()?.shellID !== shellID) return
+      if (family !== familyKey() || output()?.shellID !== shellID) return
       setOutput({ ownerID, shellID, page: previous, loading: false, error: cause instanceof Error ? cause.message : "Shell output is unavailable." })
     })
   }
@@ -188,9 +196,9 @@ export function TeamView(props: {
     onCleanup(() => clearInterval(interval))
   })
   const runRead = (action: () => Promise<void>) => {
-    const rootID = props.data().rootID
+    const family = familyKey()
     setError(undefined)
-    void action().catch((cause: unknown) => { if (rootID === props.data().rootID) setError(cause instanceof Error ? cause.message : "The page could not be loaded.") })
+    void action().catch((cause: unknown) => { if (family === familyKey()) setError(cause instanceof Error ? cause.message : "The page could not be loaded.") })
   }
   const firstLoad = () => props.data().status === "loading" && props.data().tasks.length === 0
   const hasRows = () => props.data().tasks.length > 0 && props.data().status !== "unsupported"
@@ -212,27 +220,27 @@ export function TeamView(props: {
             : <li class="team-view__task" data-session-id={id} data-state={task(id).state} data-attached={id === props.currentSessionID ? "true" : undefined}>
               <div class="team-view__row">
                 <span class="team-view__state"><StateMark state={task(id).state} /><span>{working() === id ? "cancelling…" : taskStateLabel(task(id))}</span></span>
-                <strong class="team-view__title" title={`${task(id).agent ?? "Agent unreported"} · ${task(id).description}`}>{task(id).agent ?? "Agent unreported"} · {task(id).description}</strong>
+                <strong class="team-view__title" data-tooltip={`${task(id).agent ?? "Agent unreported"} · ${task(id).description}`}>{task(id).agent ?? "Agent unreported"} · {task(id).description}</strong>
                 <div class="team-view__actions">
-                  <button type="button" class="team-view__icon" data-action="open" aria-label={`Open ${task(id).description}`} title="Open" onClick={() => props.onOpen(id)}><Icon name="external" size={16} /></button>
-                  <button type="button" class="team-view__icon team-view__pin" data-action={pin(id).action} aria-label={pin(id).label} title={pin(id).title} disabled={props.data().status !== "ready" || working() !== undefined} onClick={() => {
+                  <button type="button" class="team-view__icon" data-action="open" aria-label={`Open ${task(id).description}`} data-tooltip="Open" onClick={() => props.onOpen(id)}><Icon name="external" size={16} /></button>
+                  <button type="button" class="team-view__icon team-view__pin" data-action={pin(id).action} aria-label={pin(id).label} data-tooltip={pin(id).title} disabled={props.data().status !== "ready" || working() !== undefined} onClick={() => {
                     if (working() !== undefined) return
-                    const rootID = props.data().rootID
+                    const family = familyKey()
                     setWorking(id)
                     setError(undefined)
-                    void props.onPin(id, !pin(id).pinned).then((result) => { if (rootID === props.data().rootID && result.status !== "ok") setError(result.message) },
-                      (cause: unknown) => { if (rootID === props.data().rootID) setError(cause instanceof Error ? cause.message : "Pin state could not be changed.") }).finally(() => { if (rootID === props.data().rootID) setWorking(undefined) })
+                    void props.onPin(id, !pin(id).pinned).then((result) => { if (family === familyKey() && result.status !== "ok") setError(result.message) },
+                      (cause: unknown) => { if (family === familyKey()) setError(cause instanceof Error ? cause.message : "Pin state could not be changed.") }).finally(() => { if (family === familyKey()) setWorking(undefined) })
                   }}><Icon name="pin" size={16} /></button>
-                  <Show when={!controlsUnsupported() && canCancelSubagent(task(id).state)}><button type="button" class="team-view__icon team-view__icon--danger" data-action="cancel" aria-label={`Cancel ${task(id).description}`} title={controlsChecking() ? "Checking Team controls…" : "Cancel"}
+                  <Show when={!controlsUnsupported() && canCancelSubagent(task(id).state)}><button type="button" class="team-view__icon team-view__icon--danger" data-action="cancel" aria-label={`Cancel ${task(id).description}`} data-tooltip={controlsChecking() ? "Checking Team controls…" : "Cancel"}
                     disabled={!canControl() || working() !== undefined} onClick={(event) => setConfirm({ kind: "cancel", id, label: task(id).description, trigger: event.currentTarget })}><Icon name="stop" size={16} /></button></Show>
                   <Show when={!controlsUnsupported() && canContinueRecovery(task(id))}><button type="button" class="team-view__answer" data-action="continue-recovery" disabled={!canControl() || working() !== undefined || continuing() === id} onClick={() => {
-                    const rootID = props.data().rootID
+                    const family = familyKey()
                     setContinuing(id)
                     setError(undefined)
-                    void props.onContinueRecovery(id).then((result) => { if (rootID === props.data().rootID && result.status !== "ok") setError(result.message) },
-                      (cause: unknown) => { if (rootID === props.data().rootID) setError(cause instanceof Error ? cause.message : "The subagent could not be continued.") }).finally(() => { if (rootID === props.data().rootID) setContinuing(undefined) })
-                  }}><Icon name="arrow-right" size={14} /><span>{continuing() === id ? "Continuing…" : "Continue"}</span></button></Show>
-                  <Show when={!controlsUnsupported() && canAnswerSubagent(task(id))}><button type="button" class="team-view__answer" data-action="answer" aria-expanded={answerID() === id} disabled={!canControl()} onClick={() => setAnswerID(answerID() === id ? undefined : id)}><Icon name="chat" size={14} /><span>Answer</span></button></Show>
+                    void props.onContinueRecovery(id).then((result) => { if (family === familyKey() && result.status !== "ok") setError(result.message) },
+                      (cause: unknown) => { if (family === familyKey()) setError(cause instanceof Error ? cause.message : "The subagent could not be continued.") }).finally(() => { if (family === familyKey()) setContinuing(undefined) })
+                  }}><Icon name="arrow-right" size={16} /><span>{continuing() === id ? "Continuing…" : "Continue"}</span></button></Show>
+                  <Show when={!controlsUnsupported() && canAnswerSubagent(task(id))}><button type="button" class="team-view__answer" data-action="answer" aria-expanded={answerID() === id} disabled={!canControl()} onClick={() => setAnswerID(answerID() === id ? undefined : id)}><Icon name="chat" size={16} /><span>Answer</span></button></Show>
                 </div>
               </div>
               <p class="team-view__meta">{[task(id).modelLabel, id === props.currentSessionID ? "attached" : undefined,
@@ -253,7 +261,7 @@ export function TeamView(props: {
           <ul class="team-view__list"><For each={shells()}>{(id) => id.startsWith("owner:")
             ? <li class="team-view__owner"><h3>{ownerLabel(id.slice(6))}</h3></li>
             : <li class="team-view__shell" data-shell-id={id}>
-            <div class="team-view__row"><span class="team-view__state"><StateMark state={shellMark[shell(id).status]} /><span>{working() === id ? "killing…" : shell(id).status}</span></span><strong class="team-view__title team-view__title--code" title={shell(id).command}>{shell(id).command}</strong></div>
+            <div class="team-view__row"><span class="team-view__state"><StateMark state={shellMark[shell(id).status]} /><span>{working() === id ? "killing…" : shell(id).status}</span></span><strong class="team-view__title team-view__title--code" data-tooltip={shell(id).command}>{shell(id).command}</strong></div>
             <p class="team-view__meta">{formatElapsed(shell(id).startedAt, shell(id).completedAt ?? props.now())}</p>
             <div class="team-view__actions"><button type="button" class="team-view__button" data-action="output" onClick={() => readOutput(shell(id).ownerID, id)}>View output</button>
               <Show when={shell(id).status === "running"}><button type="button" class="team-view__button team-view__button--danger" data-action="kill" disabled={working() !== undefined} onClick={(event) => setConfirm({ kind: "kill", id, label: shell(id).command, trigger: event.currentTarget })}>Kill</button></Show></div>
@@ -271,23 +279,23 @@ export function TeamView(props: {
         <Show when={props.data().sideChatStatus !== "unsupported" && (props.data().sideChatStatus === "ready" || props.data().sideChats.length > 0)} fallback={props.data().sideChatStatus === "loading" ? <LoadingPlaceholder kind="team" label="Loading side chats…" /> : <p role="status">{props.data().sideChatStatus === "unsupported" ? "Update YCoding on this machine to use side chats." : "Side chats could not be loaded."}</p>}>
           <button type="button" class="team-view__button team-view__button--primary" data-action="new-side-chat" disabled={working() !== undefined} onClick={() => {
             if (working() !== undefined) return
-            const rootID = props.data().rootID
+            const family = familyKey()
             setWorking("new-side-chat")
             setError(undefined)
-            void props.onCreateSideChat().then((result) => { if (rootID !== props.data().rootID) return; if (result.status === "ok") props.onOpenSideChat(result.sessionID); else setError(result.message) },
-              (cause: unknown) => { if (rootID === props.data().rootID) setError(cause instanceof Error ? cause.message : "Side chat could not be created.") }).finally(() => { if (rootID === props.data().rootID) setWorking(undefined) })
+            void props.onCreateSideChat().then((result) => { if (family !== familyKey()) return; if (result.status === "ok") props.onOpenSideChat(result.sessionID); else setError(result.message) },
+              (cause: unknown) => { if (family === familyKey()) setError(cause instanceof Error ? cause.message : "Side chat could not be created.") }).finally(() => { if (family === familyKey()) setWorking(undefined) })
           }}>{working() === "new-side-chat" ? "Creating…" : "New side chat"}</button>
           <ul class="team-view__list"><For each={props.data().sideChats.map((item) => item.id)}>{(id) => <li class="team-view__side-chat" data-session-id={id}>
             <div class="team-view__row"><strong class="team-view__title">{sideChat(id).title}</strong><span class="team-view__time">{new Date(sideChat(id).updatedAt).toLocaleString()}</span>
-            <div class="team-view__actions"><button type="button" class="team-view__icon" data-action="open" aria-label={`Open ${sideChat(id).title}`} title="Open" onClick={() => props.onOpenSideChat(id)}><Icon name="external" size={16} /></button></div></div>
+            <div class="team-view__actions"><button type="button" class="team-view__icon" data-action="open" aria-label={`Open ${sideChat(id).title}`} data-tooltip="Open" onClick={() => props.onOpenSideChat(id)}><Icon name="external" size={16} /></button></div></div>
           </li>}</For></ul>
           <Show when={props.data().sideChatNext}><button type="button" class="team-view__more" data-action="older-side-chats" disabled={props.data().sideChatLoading} onClick={() => runRead(props.onLoadOlderSideChats)}>{props.data().sideChatLoading ? "Loading older…" : "Load older side chats"}</button></Show>
           <Show when={props.data().sideChatLoading}><LoadingPlaceholder kind="team" label="Loading older side chats…" /></Show>
         </Show>
     </section>
   const panel = <section class="team-view" classList={{ "team-view--sheet": props.sheet }} ref={section} aria-label="Team">
-    <Show when={props.sheet}><button type="button" class="team-view__button" aria-label="Expand Team" onClick={(event) => setExpanded(event.currentTarget)}>Team overview <Icon name="external" size={14} /></button></Show>
-    <Show when={!props.sheet}><div class="team-view__header"><TeamHeading data={props.data} /><div class="team-view__actions"><button type="button" class="team-view__icon" aria-label="Expand Team" title="Expand Team" onClick={(event) => setExpanded(event.currentTarget)}><Icon name="external" size={16} /></button><button type="button" class="team-view__close" aria-label="Close Team" onClick={props.onClose}><Icon name="close" size={18} /></button></div></div></Show>
+    <Show when={props.sheet}><button type="button" class="team-view__button" aria-label="Expand Team" onClick={(event) => setExpanded(event.currentTarget)}>Team overview <Icon name="external" size={16} /></button></Show>
+    <Show when={!props.sheet}><div class="team-view__header"><TeamHeading data={props.data} /><div class="team-view__actions"><button type="button" class="team-view__icon" aria-label="Expand Team" data-tooltip="Expand Team" onClick={(event) => setExpanded(event.currentTarget)}><Icon name="external" size={16} /></button><button type="button" class="team-view__close" aria-label="Close Team" onClick={props.onClose}><Icon name="close" size={20} /></button></div></div></Show>
     <Show when={!props.sheet && props.sessionSummary?.()}>{(summary) => <section class="team-view__session-summary" aria-label="Session context and autonomy">
       <Show when={summary().contextLabel}><strong>Context window</strong><span>{summary().contextLabel} · {summary().contextTokens}</span><span class="team-view__meter" role="img" aria-label={summary().contextLabel}><span style={{ "inline-size": `${Math.min(100, (summary().contextFraction ?? 0) * 100)}%` }} /></span></Show>
       <Show when={summary().autonomyLabel}><button type="button" class="team-view__button" onClick={props.onOpenAutonomy}>{summary().autonomyLabel}</button></Show>
@@ -306,7 +314,7 @@ export function TeamView(props: {
   </section>
   return <>
     {panel}
-    <Show when={expanded()}>{(trigger) => <Modal class="overlay--team-overview" label="Team overview" returnFocus={trigger()} onClose={() => setExpanded(undefined)} header={<div class="team-overview__heading"><Icon name="team" size={18} /><h2>Team</h2><span>{teamActivityLabel(props.data())}</span></div>}>
+    <Show when={expanded()}>{(trigger) => <Modal class="overlay--team-overview" label="Team overview" returnFocus={trigger()} onClose={() => setExpanded(undefined)} header={<div class="team-overview__heading"><Icon name="team" size={20} /><h2>Team</h2><span>{teamActivityLabel(props.data())}</span></div>}>
       <div class="team-overview" classList={{ "team-overview--inspecting": selectedTask() !== undefined }}>
         <section class="team-overview__master" aria-label="Master session"><h3>Master session</h3><code>{props.data().rootID}</code>
           <Show when={props.sessionSummary?.()}>{(summary) => <><Show when={summary().contextLabel}><p>{summary().contextLabel} · {summary().contextTokens}</p></Show><Show when={summary().autonomyLabel}><p>{summary().autonomyLabel}</p></Show><Show when={summary().goalText}><p>{summary().goalText}</p></Show></>}</Show>
@@ -327,14 +335,16 @@ export function TeamView(props: {
           <Show when={props.data().tasks.some((task) => task.state === "waiting" || task.state === "failed" || task.state === "lost" || task.stoppedRecovery !== undefined)} fallback={<p class="team-view__note">No reported blockers.</p>}>
             <For each={props.data().tasks.filter((task) => task.state === "waiting" || task.state === "failed" || task.state === "lost" || task.stoppedRecovery !== undefined).map((task) => task.sessionID)}>{(id) => <article class="team-overview__blocker" data-state={task(id).state}><header><StateMark state={task(id).state} /><strong>{task(id).agent ?? "Agent unreported"} · {task(id).description}</strong><span>{taskStateLabel(task(id))}</span></header>
               <Show when={task(id).question}>{(question) => <Show when={!question().deferred} fallback={<p class="team-view__note">This question is waiting in Review.</p>}><TeamAnswerForm question={question()} onAnswer={(questionID, text) => props.onAnswer(id, questionID, text)} /></Show>}</Show>
-              <button type="button" class="team-view__button" onClick={() => { setExpanded(undefined); props.onOpen(id) }}>Open child Session <Icon name="external" size={14} /></button>
+              <button type="button" class="team-view__button" onClick={() => { setExpanded(undefined); props.onOpen(id) }}>Open child Session <Icon name="external" size={16} /></button>
             </article>}</For>
           </Show>
         </section>
         <Show when={selectedTask()}>{(task) => <aside class="team-overview__inspector" aria-label="Selected child"><div class="team-overview__section-heading"><span class="team-overview__eyebrow">Selected child</span><button type="button" class="team-view__icon team-overview__close" aria-label="Close child inspector" onClick={backToChildren}><Icon name="close" size={16} /></button></div><button type="button" class="button button--ghost team-overview__back" onClick={backToChildren}><Icon name="arrow-left" size={16} />Back to children</button>
+          <Show when={descendants().length > 0}><button type="button" class="team-view__button" aria-label={`Back to ${descendants().at(-2)?.description ?? directTask()?.description}`} onClick={() => { const id = task().sessionID; setDescendants(path => path.slice(0, -1)); queueMicrotask(() => document.querySelector<HTMLButtonElement>(`[data-child-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true })) }}><Icon name="arrow-left" size={16} />Back to parent</button></Show>
           <h3>{task().agent ?? "Agent unreported"}</h3><p>{task().description}</p><span class="team-view__state"><StateMark state={task().state} />{taskStateLabel(task())}</span><code>{task().modelLabel}</code>
           <TaskUsage task={task} loading={() => props.data().economicsLoading === true} accountingUnsupported={() => props.data().accountingUnsupported === true} />
-          <button type="button" class="team-view__button" onClick={() => { const id = task().sessionID; setExpanded(undefined); props.onOpen(id) }}>Open child Session <Icon name="external" size={14} /></button>
+          <button type="button" class="team-view__button" onClick={() => { const id = task().sessionID; setExpanded(undefined); props.onOpen(id) }}>Open child Session <Icon name="external" size={16} /></button>
+          <Show when={task().sessionID} keyed>{_sessionID => <TeamChildren familyID={props.data().rootID} task={task} cursor={() => childCursors()[task().sessionID]} onCursor={cursor => setChildCursors(current => ({ ...current, [task().sessionID]: cursor }))} ancestors={() => [props.data().rootID, selectedChild()!, ...descendants().map(task => task.sessionID)]} onInspect={child => setDescendants(path => [...path, child])} />}</Show>
           <TeamConversation task={task} onOpen={() => { const id = task().sessionID; setExpanded(undefined); props.onOpen(id) }} />
         </aside>}</Show>
       </div>

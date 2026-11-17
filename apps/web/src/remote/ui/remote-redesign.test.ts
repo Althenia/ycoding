@@ -498,7 +498,7 @@ describe("tonal sidebar and phone navigation", () => {
     expect(at(".bottom-nav__new", landscape).display).toBe("grid")
     expect(declared(css, ".bottom-nav__new").display).toBe("none")
     expect(declared(css, ".app[data-keyboard-open] > .bottom-nav").display).toBe("none")
-    expect(await shell()).toContain('<Link to="/remote" class="bottom-nav__new" ariaLabel="New chat" title="New chat" onClick={props.onNavigate}><Icon name="plus" /></Link>')
+    expect(await shell()).toContain('<Link to="/remote" class="bottom-nav__new" ariaLabel="New chat" data-tooltip="New chat" onClick={props.onNavigate}><Icon name="plus" /></Link>')
   })
 
   test("keeps translucent portrait navigation legible and provides all opaque fallbacks", async () => {

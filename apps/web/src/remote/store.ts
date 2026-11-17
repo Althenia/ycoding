@@ -1,11 +1,12 @@
 import { replaceEqualDeep } from "@tanstack/solid-query"
 import { RemoteLimits, isRemoteLatencySample, isRemoteReviewItemID, isWellFormedBase64, noticeSequence, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, parseNoticePage, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticePage, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
 import { catalogKey, readCatalog, readFileFind, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileFindResult } from "./catalog"
-import type { DeviceAliasResponse, RemoteStoppedRecovery, RemoteUsageTaskCost } from "@ycoding-ai/remote"
+import type { DeviceAliasResponse } from "@ycoding-ai/remote"
 import { displayDeviceName } from "./device-alias"
 import { externalDelivery, readFilter, writeFilter, normalizeFilter, type ExternalKind, type NotificationFilter } from "./coordination"
 import { readTaskCosts } from "./usage-read"
 import { isConversationRoot } from "./session-collection"
+import { readTeamTask, type TeamTaskView } from "./team-read"
 import { readGuardrailDecisions, mergeGuardrailDecisions } from "./decision-grades"
 import { signInURL, type RemoteHttp, type RemoteHttpResult, type SignInProvider } from "./http"
 import {
@@ -132,30 +133,6 @@ export type SessionInfoView = {
   readonly attention?: boolean
   readonly failed?: boolean
   readonly lost?: boolean
-}
-
-export type TeamTaskView = {
-  readonly accounting?: RemoteUsageTaskCost
-  readonly accountingUnavailable?: boolean
-  readonly sessionID: string
-  readonly parentID: string
-  readonly description: string
-  readonly agent?: string
-  readonly modelLabel?: string
-  readonly state: "starting" | "running" | "waiting" | "supervising" | "cancelling" | "cancelled" | "completed" | "failed" | "lost"
-  readonly revision: number
-  readonly updatedAt: number
-  readonly pinnedAt?: number
-  readonly startedAt?: number
-  readonly question?: { readonly id: string; readonly text: string; readonly deferred?: true }
-  readonly stoppedRecovery?: RemoteStoppedRecovery
-  readonly cacheHitRatio?: number
-  readonly cacheRead?: number
-  readonly cacheWrite?: number
-  readonly contextTotal?: number
-  readonly contextLimit?: number
-  readonly cost?: number
-  readonly tokens?: number
 }
 
 type TeamView = {
@@ -4349,39 +4326,6 @@ export function readSessionInfo(value: unknown, options: { readonly running?: bo
     ...(options.failed === undefined ? {} : { failed: options.failed }),
     ...(options.lost === undefined ? {} : { lost: options.lost }),
   }
-}
-
-function readTeamTask(value: unknown): TeamTaskView | undefined {
-  if (typeof value !== "object" || value === null) return undefined
-  const sessionID = Reflect.get(value, "sessionID")
-  const parentID = Reflect.get(value, "parentID")
-  const description = Reflect.get(value, "description")
-  const agent = Reflect.get(value, "agent")
-  const state = Reflect.get(value, "state")
-  const revision = Reflect.get(value, "revision")
-  const time = Reflect.get(value, "time")
-  const question = Reflect.get(value, "question")
-  const questionID = typeof question === "object" && question !== null ? Reflect.get(question, "id") : undefined
-  const questionText = typeof question === "object" && question !== null ? Reflect.get(question, "text") : undefined
-  const startedAt = typeof time === "object" && time !== null ? Reflect.get(time, "created") : undefined
-  const updatedAt = typeof time === "object" && time !== null ? Reflect.get(time, "updated") : undefined
-  const pinnedAt = Reflect.get(value, "pinnedAt")
-  const stoppedRecovery = Reflect.get(value, "stoppedRecovery")
-  const stoppedItemID = typeof stoppedRecovery === "object" && stoppedRecovery !== null ? Reflect.get(stoppedRecovery, "itemID") : undefined
-  const questionDeferred = typeof question === "object" && question !== null && Reflect.get(question, "deferred") === true
-  if (typeof sessionID !== "string" || sessionID.length === 0 || typeof parentID !== "string" || parentID.length === 0 ||
-    typeof description !== "string" || (agent !== undefined && typeof agent !== "string") ||
-    (state !== "starting" && state !== "running" && state !== "waiting" && state !== "supervising" && state !== "cancelling" &&
-      state !== "cancelled" && state !== "completed" && state !== "failed" && state !== "lost") ||
-    typeof revision !== "number" || !Number.isInteger(revision) || revision < 0 ||
-    typeof updatedAt !== "number" || !Number.isFinite(updatedAt)) return undefined
-  const model = readModelRef(Reflect.get(value, "model"))
-  return { sessionID, parentID, description, ...(agent === undefined ? {} : { agent }),
-    ...(model === undefined ? {} : { modelLabel: modelLabel(model) }), state, revision, updatedAt,
-    ...(typeof startedAt === "number" && Number.isFinite(startedAt) ? { startedAt } : {}),
-    ...(typeof pinnedAt === "number" && Number.isFinite(pinnedAt) ? { pinnedAt } : {}),
-    ...(isRemoteReviewItemID(stoppedItemID) ? { stoppedRecovery: { itemID: stoppedItemID } } : {}),
-    ...(typeof questionID === "string" && typeof questionText === "string" && state === "waiting" ? { question: { id: questionID, text: questionText, ...(questionDeferred ? { deferred: true as const } : {}) } } : {}) }
 }
 
 function readTeamEconomics(value: unknown): (Pick<TeamTaskView, "sessionID" | "cacheHitRatio" | "cacheRead" | "cacheWrite" | "contextTotal" | "contextLimit" | "cost" | "tokens">) | undefined {

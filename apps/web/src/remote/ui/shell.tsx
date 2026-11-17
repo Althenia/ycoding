@@ -505,6 +505,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   })
   const paletteSessionSelected = () => selected() && (view() !== "/remote/session" || (ownsSessionDevice() && ownsSessionRoute()))
   const teamView = () => <TeamView
+    connectionKey={`${state().activeDeviceID}:${state().generation}`}
     data={() => state().team!} currentSessionID={state().activeSessionID ?? ""} now={Date.now} sheet={true}
     onClose={closeTeam} onOpen={openFromTeam} onCancel={remote.store.cancelSubagent} onAnswer={remote.store.answerSubagent} onPin={remote.store.pinSubagent} onContinueRecovery={remote.store.continueRecovery}
     onLoadOlder={remote.store.loadMoreTeam} onViewShell={remote.store.teamShellOutput} onKillShell={remote.store.killTeamShell}
@@ -534,7 +535,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
       <div ref={bindKeyboardChrome} class={`app app--${viewClass()}${view() === "/remote/session" && selected() && ownsSessionDevice() ? " app--selected" : view() === "/remote" ? " app--empty" : ""}${view() === "/remote/session" && managedChild() ? " app--managed-child" : ""}${view() === "/remote/session" && selectedLoading() ? " app--selected-loading" : ""}${railCollapsed() ? " app--rail-collapsed" : ""}${officeShown() ? " app--office" : ""}${showNewSession() ? " app--new-session" : ""}${teamVisible() && !phoneLayout() && view() === "/remote/session" && selected() ? " app--team-open" : ""}`}>
         <a class="skip-link" href="#remote-main">Skip to content</a>
         <SharedWorkspaceFrame railHeader={<Link to="/" class="brand"><BrandMark compact /></Link>} newChat={<div class="workspace__rail-actions">
-            <button type="button" class="workspace__new-chat" aria-keyshortcuts="Meta+N Control+N" disabled={!canCreateSession()} onClick={() => openNewSession()}><Icon name="plus" size={14} /><span>New chat</span></button>
+            <button type="button" class="workspace__new-chat" aria-keyshortcuts="Meta+N Control+N" disabled={!canCreateSession()} onClick={() => openNewSession()}><Icon name="plus" size={16} /><span>New chat</span></button>
             <Show when={railCollapsed()} fallback={<button ref={railCollapse} type="button" class="session-panel__collapse" aria-label="Hide workspace sidebar" aria-expanded="true" aria-controls="session-rail" onClick={collapseRail}><Icon name="panel-left" size={16} /></button>}>
               <button ref={railExpand} type="button" class="session-panel__collapse workspace__rail-expand" aria-label="Show workspace sidebar" aria-expanded="false" aria-controls="session-rail" onClick={expandRail}><Icon name="panel-left" size={16} /></button>
             </Show>
@@ -736,7 +737,7 @@ function SignInScreen(): JSX.Element {
   return (
     <main id="remote-main" class="sign-in">
       <header class="sign-in__bar">
-        <Link to="/" class="brand" title="YCoding home">
+        <Link to="/" class="brand" data-tooltip="YCoding home">
           <BrandMark compact />
         </Link>
         <ThemeToggle />
@@ -827,7 +828,7 @@ function RemoteHeader(props: {
         >
           <Icon name="menu" />
         </button>
-        <Link to="/" class={`brand${props.view !== "/remote/session" && state().activeSessionID !== undefined ? " brand--with-resume" : ""}`} title="YCoding home">
+        <Link to="/" class={`brand${props.view !== "/remote/session" && state().activeSessionID !== undefined ? " brand--with-resume" : ""}`} data-tooltip="YCoding home">
           <img class="brand__mark" src="/brand/ycoding-mark.svg" alt="YCoding" width={28} height={28} />
         </Link>
         <ResumeSession view={props.view} />
@@ -838,7 +839,7 @@ function RemoteHeader(props: {
           </span>
         </div>
         <div class="app-header__end">
-          <button type="button" class="button button--ghost button--icon app-header__new-chat" aria-label="New chat" title="New chat" disabled={!props.palette.canCreateSession} onClick={props.onNewChat}><Icon name="plus" /></button>
+          <button type="button" class="button button--ghost button--icon app-header__new-chat" aria-label="New chat" data-tooltip="New chat" disabled={!props.palette.canCreateSession} onClick={props.onNewChat}><Icon name="plus" /></button>
           <CommandPalette
             view={props.view}
             canCreateSession={props.palette.canCreateSession}
@@ -906,7 +907,7 @@ function Notices(): JSX.Element {
     <>
       <Show when={telemetryConsentNoticeView(state().telemetryConsent, state().transport.kind === "open" && state().connection.kind === "connected")}>
         <section class="telemetry-consent" aria-labelledby="telemetry-consent-title">
-          <Icon name="usage" size={18} />
+          <Icon name="usage" size={20} />
           <div class="telemetry-consent__body"><h2 id="telemetry-consent-title">Help improve YCoding</h2>
             <p>Save usage, speed, and latency for each provider, model, and profile on this machine only. Nothing leaves your machine. You can change this anytime in Settings → Diagnostics.</p></div>
           <div class="telemetry-consent__actions">
@@ -1026,7 +1027,7 @@ function SessionPanel(props: {
       >
         <Show when={state().sessionGroups.length > 0 || state().sessionListStatus === "loading"} fallback={<NoSessionsState />}>
           <label class="field session-search">
-            <Icon name="search" size={14} class="session-search__icon" />
+            <Icon name="search" size={16} class="session-search__icon" />
             <input
               class="input"
               type="search"
@@ -1151,7 +1152,7 @@ function SessionPin(props: { readonly session: SessionInfoView; readonly disable
   const pinned = () => props.session.pinnedAt !== undefined
   const label = () => `${pinned() ? "Unpin" : "Pin"} ${props.session.title}`
   return <span class="session-pin">
-    <button type="button" class="session-pin__button" aria-label={label()} title={label()} aria-pressed={pinned()} disabled={props.disabled || pending()} onClick={async () => {
+    <button type="button" class="session-pin__button" aria-label={label()} data-tooltip={label()} aria-pressed={pinned()} disabled={props.disabled || pending()} onClick={async () => {
       setPending(true)
       setError("")
       const result = await remote.store.pinSession(props.session.id, !pinned())
@@ -1808,7 +1809,7 @@ function BottomNav(props: { readonly view: RemoteView; readonly onNavigate?: () 
   const flagged = (view: RemoteView) => view === "/remote/sessions" && attention().sessions
   return (
     <nav class="bottom-nav" aria-label="Workspace">
-      <Link to="/remote" class="bottom-nav__new" ariaLabel="New chat" title="New chat" onClick={props.onNavigate}><Icon name="plus" /></Link>
+      <Link to="/remote" class="bottom-nav__new" ariaLabel="New chat" data-tooltip="New chat" onClick={props.onNavigate}><Icon name="plus" /></Link>
       <For each={WORKSPACE_DESTINATIONS}>
         {(item) => (
           <Link

@@ -145,6 +145,7 @@ export function Icon(props: { readonly name: IconName; readonly size?: number; r
   return (
     <svg
       class={props.class}
+      style={{ "flex-shrink": 0 }}
       width={props.size ?? 20}
       height={props.size ?? 20}
       viewBox="0 0 24 24"

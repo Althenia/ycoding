@@ -1,4 +1,5 @@
-import type { SessionInfoView, TeamTaskView } from "../store"
+import type { SessionInfoView } from "../store"
+import type { TeamTaskView } from "../team-read"
 import { inclusiveCostText } from "./usage-accounting"
 import { tokenCount } from "./usage-model"
 
