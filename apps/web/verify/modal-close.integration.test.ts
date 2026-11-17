@@ -145,7 +145,11 @@ describe("one close control per modal", () => {
         await page.pressKey("Tab", "Tab", 9)
         expect(await page.evaluate(`document.querySelector('dialog.team-view__sheet[open]')?.contains(document.activeElement) === true`)).toBe(true)
         if (method === "button") await page.evaluate(`document.querySelector('dialog.team-view__sheet .overlay__close').click()`)
-        else await page.pressEscape()
+        else {
+          await page.evaluate(`document.querySelector('dialog.team-view__sheet .overlay__close').focus()`)
+          expect(await page.evaluate(`document.querySelector('[role="tooltip"]')===null`)).toBe(true)
+          await page.pressEscape()
+        }
         expect(await page.evaluate(`document.activeElement?.getAttribute('aria-label') === 'Open Team' && document.querySelector('dialog.team-view__sheet[open]') === null`)).toBe(true)
         expect(await page.evaluate(`getComputedStyle(document.activeElement).getPropertyValue('--yc-focus').trim() === getComputedStyle(document.documentElement).getPropertyValue('--yc-border-strong').trim()`)).toBe(true)
       } finally { await page.close() }
@@ -164,6 +168,8 @@ describe("one close control per modal", () => {
       expect(report.sizes.every((size) => size.width >= report.minimum && size.height >= report.minimum)).toBe(true)
       await page.pressEscape()
       expect(await page.evaluate(`document.activeElement?.getAttribute('data-action') === 'cancel' && document.querySelector('dialog[aria-label="Cancel subagent"][open]') === null`)).toBe(true)
+      await page.evaluate(`document.querySelector('dialog.team-view__sheet .overlay__close').focus()`)
+      expect(await page.evaluate(`document.querySelector('[role="tooltip"]')===null`)).toBe(true)
       await page.pressEscape()
       expect(await page.evaluate(`document.activeElement?.getAttribute('aria-label') === 'Open Team'`)).toBe(true)
     } finally { await page.close() }
@@ -176,6 +182,8 @@ describe("one close control per modal", () => {
       for (let attempt = 0; attempt < 40 && !await page.evaluate(`document.querySelector('dialog[aria-label="Cancel subagent"][open]') !== null`); attempt += 1) await Bun.sleep(25)
       await page.pressEscape()
       expect(await page.evaluate(`document.querySelector('dialog.team-view__sheet[open]') !== null && document.querySelector('dialog[aria-label="Cancel subagent"][open]') === null && document.activeElement?.getAttribute('data-action') === 'cancel'`)).toBe(true)
+      await page.evaluate(`document.querySelector('dialog.team-view__sheet .overlay__close').focus()`)
+      expect(await page.evaluate(`document.querySelector('[role="tooltip"]')===null`)).toBe(true)
       await page.pressEscape()
       expect(await page.evaluate(`document.querySelector('dialog.team-view__sheet[open]') === null && document.activeElement?.getAttribute('aria-label') === 'Open Team'`)).toBe(true)
     } finally { await page.close() }

@@ -146,7 +146,7 @@ test("keeps every captured file, path, and count reachable from one compact summ
         const card = document.querySelector('.file-change-card'), summary = card.querySelector('.file-change-card__summary')
         const rows = [...card.querySelectorAll('.file-change-card__file-toggle')].filter(row => row.getBoundingClientRect().height > 0)
         return { height: card.getBoundingClientRect().height, name: summary.textContent.replace(/\\s+/g, ' ').trim(), expanded: summary.getAttribute('aria-expanded'),
-          rows: rows.length, paths: rows.map(row => row.querySelector('.file-change-card__path').getAttribute('title')),
+          rows: rows.length, paths: rows.map(row => row.querySelector('.file-change-card__path').getAttribute('data-tooltip')),
           titled: rows.every(row => row.textContent.includes(row.querySelector('.file-change-card__basename').textContent)),
           overflow: document.documentElement.scrollWidth > innerWidth, summaryHeight: summary.getBoundingClientRect().height }
       })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, height: (decodeNumber)(record["height"]), name: (decodeString)(record["name"]), expanded: (decodeString)(record["expanded"]), rows: (decodeNumber)(record["rows"]), paths: (decodeArray(decodeString))(record["paths"]), titled: (decodeBoolean)(record["titled"]), overflow: (decodeBoolean)(record["overflow"]), summaryHeight: (decodeNumber)(record["summaryHeight"]) } })

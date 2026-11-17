@@ -15,7 +15,7 @@ describe("machine and device presentation", () => {
 
   test("keeps hostname data for tooltips, edit labels and removal identification", async () => {
     const tsx = await read("settings.tsx")
-    expect(tsx).toContain("title={machine().name}")
+    expect(tsx).toContain("data-tooltip={machine().name}")
     expect(tsx).toContain("`Name for ${machine().name}`")
     expect(tsx).toContain("`Remove ${device.name}`")
   })

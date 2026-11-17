@@ -189,13 +189,13 @@ export function ModelIncidents(props: { readonly phone?: boolean }) {
                 <td data-label="Fallbacks">{incidentCount(row.fallbacks)}</td><td data-label="Escalated">{incidentCount(row.escalated)}</td><td data-label="Rejected">{incidentCount(row.rejected)}</td>
                 <td data-label="Total">{incidentCount(incidentTotal(row))}</td>
                 <td data-label="Last incident"><time datetime={new Date(row.last).toISOString()}>{incidentTime(row.last)}</time></td>
-                <td><button type="button" class="incidents__details" data-incident-details aria-expanded={selected()?.key === key} aria-controls="incident-detail" aria-label={`Details for ${name}`} title="Details" onClick={() => toggleDetails(row)}><Icon name="chevron-right" /><span class="usage-action-label">Details</span></button></td>
+                <td><button type="button" class="incidents__details" data-incident-details aria-expanded={selected()?.key === key} aria-controls="incident-detail" aria-label={`Details for ${name}`} data-tooltip="Details" onClick={() => toggleDetails(row)}><Icon name="chevron-right" /><span class="usage-action-label">Details</span></button></td>
               </tr>
               <Show when={props.phone && selected()?.key === key}><tr class="incidents__detail-row"><td colspan="8">{detailPanel()}</td></tr></Show></>
             }}</For></tbody></table></div>
           <div class="incidents__pagination"><span class="incidents__summary">{incidentPageSummary(page().input.offset ?? 0, page().report.rows.length, page().report.groups)}</span>
-            <div><button type="button" aria-label="Previous incident groups" title="Previous page" disabled={updating() || (page().input.offset ?? 0) === 0} onClick={() => move(Math.max(0, (page().input.offset ?? 0) - incidentPageSize))}><Icon name="arrow-left" /><span class="usage-action-label">Previous</span></button>
-              <button type="button" aria-label="Next incident groups" title="Next page" disabled={updating() || (page().input.offset ?? 0) + page().report.rows.length >= page().report.groups} onClick={() => move((page().input.offset ?? 0) + incidentPageSize)}><span class="usage-action-label">Next</span><Icon name="arrow-right" /></button></div></div>
+            <div><button type="button" aria-label="Previous incident groups" data-tooltip="Previous page" disabled={updating() || (page().input.offset ?? 0) === 0} onClick={() => move(Math.max(0, (page().input.offset ?? 0) - incidentPageSize))}><Icon name="arrow-left" /><span class="usage-action-label">Previous</span></button>
+              <button type="button" aria-label="Next incident groups" data-tooltip="Next page" disabled={updating() || (page().input.offset ?? 0) + page().report.rows.length >= page().report.groups} onClick={() => move((page().input.offset ?? 0) + incidentPageSize)}><span class="usage-action-label">Next</span><Icon name="arrow-right" /></button></div></div>
         </Show>
       </>}</Show>
     </div>

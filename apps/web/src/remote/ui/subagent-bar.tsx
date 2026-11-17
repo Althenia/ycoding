@@ -95,18 +95,18 @@ export function SubagentBar(props: {
   return <aside class="subagent-bar" aria-label="Subagent context">
     <div class="subagent-bar__header">
       <div class="subagent-bar__identity">
-        <strong class="subagent-bar__agent" title={props.agent ?? "Subagent"}>{props.agent ?? "Subagent"}</strong>
-        <Show when={props.economics?.speed}>{(speed) => <span class="subagent-bar__speed" title={speed().description}>{speed().label}</span>}</Show>
+        <strong class="subagent-bar__agent" data-tooltip={props.agent ?? "Subagent"}>{props.agent ?? "Subagent"}</strong>
+        <Show when={props.economics?.speed}>{(speed) => <span class="subagent-bar__speed" data-tooltip={speed().description}>{speed().label}</span>}</Show>
         <span class={`subagent-bar__status subagent-bar__status--${props.status ?? "unreported"}`}>
           <span class="subagent-bar__mark" aria-hidden="true"><Show when={props.status !== undefined ? statusIcon[props.status] : undefined} fallback={<span class="status-dot" />}>{(name) => <Icon name={name()} size={12} />}</Show></span>
           {props.status ?? "Status unreported"}
         </span>
       </div>
       <nav class="subagent-bar__navigation" aria-label="Subagent navigation">
-        <button type="button" class="subagent-bar__main" aria-label="Main session" title={props.parentTitle} onClick={props.onMain}><Icon name="arrow-up" size={16} /></button>
-        <button type="button" aria-label="Previous subagent" title="Previous subagent" disabled={props.previousID === undefined} onClick={props.onPrevious}><Icon name="arrow-left" size={16} /></button>
-        <button type="button" aria-label="Next subagent" title="Next subagent" disabled={props.nextID === undefined} onClick={props.onNext}><Icon name="arrow-right" size={16} /></button>
-        <button ref={detailsTrigger} type="button" aria-label="Subagent details" title="Subagent details" aria-haspopup="dialog" onClick={() => setDetailsOpen(true)}><Icon name="file" size={16} /></button>
+        <button type="button" class="subagent-bar__main" aria-label="Main session" data-tooltip={props.parentTitle} onClick={props.onMain}><Icon name="arrow-up" size={16} /></button>
+        <button type="button" aria-label="Previous subagent" data-tooltip="Previous subagent" disabled={props.previousID === undefined} onClick={props.onPrevious}><Icon name="arrow-left" size={16} /></button>
+        <button type="button" aria-label="Next subagent" data-tooltip="Next subagent" disabled={props.nextID === undefined} onClick={props.onNext}><Icon name="arrow-right" size={16} /></button>
+        <button ref={detailsTrigger} type="button" aria-label="Subagent details" data-tooltip="Subagent details" aria-haspopup="dialog" onClick={() => setDetailsOpen(true)}><Icon name="file" size={16} /></button>
       </nav>
     </div>
     <Show when={props.question !== undefined && props.onAnswer !== undefined ? props.question.id : undefined} keyed><TeamAnswerForm question={props.question!} onAnswer={props.onAnswer!} /></Show>

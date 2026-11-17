@@ -7,6 +7,7 @@ import { defaultOfficePreferences } from "../src/remote/office/preferences"
 import { createRemoteTransport } from "../src/remote/transport"
 import { pacedFlowTimeoutMs, startRelayDouble, waitFor, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
 import { createRemoteStoreClock } from "./remote-store-clock"
+import { createRemoteQueries } from "../src/remote/queries"
 import type { RemoteRequest } from "@ycoding-ai/remote"
 
 const task = (sessionID: string, parentID = "ses_a", state = "running") => ({
@@ -35,6 +36,24 @@ async function setup(handler: (operation: string, sessionID?: string, cursor?: u
 }
 
 describe("remote team facts", () => {
+  test("discovering a grandchild never installs it in the root's controlled Team or sends a root-owned mutation", async () => {
+    const h = await setup((_operation, ownerID) => ({ ok: true, value: { data: ownerID === "ses_child" ? [{ ...task("ses_grandchild", "ses_child", "waiting"), question: { id: "qst_nested", text: "Proceed?" } }] : [task("ses_child")], summary: { total: 1, active: 1 }, cursor: {} } }))
+    try {
+      h.store.watchTeam(true); await h.store.selectSession("ses_a")
+      await waitFor(() => h.store.state().team?.status === "ready")
+      const state = h.store.state()
+      const queries = createRemoteQueries(h.store.link, h.store.queryClient)
+      const page = await h.store.queryClient.fetchQuery(queries.childTeam({ deviceID: state.activeDeviceID!, generation: state.generation }, true, "ses_a", "ses_child"))
+      expect(page.tasks.map(task => task.sessionID)).toEqual(["ses_grandchild"])
+      expect(h.store.state().team?.rootID).toBe("ses_a")
+      expect(h.store.state().team?.tasks.map(task => task.sessionID)).toEqual(["ses_child"])
+      expect(await h.store.cancelSubagent("ses_grandchild")).toMatchObject({ status: "failed" })
+      expect(await h.store.answerSubagent("ses_grandchild", "qst_nested", "Proceed")).toMatchObject({ status: "failed" })
+      expect(await h.store.pinSubagent("ses_grandchild", true)).toMatchObject({ status: "failed" })
+      expect(h.relay.requests.filter(request => ["session.subagent.cancel", "session.subagent.answer", "session.subagent.pin"].includes(request.operation))).toEqual([])
+      expect(h.relay.requests.some(request => request.operation === "session.subagent.list" && request.sessionID === "ses_child" && request.input === undefined)).toBe(true)
+    } finally { await h.stop() }
+  })
   test("unsupported shell states are excluded and cannot be killed", async () => {
     const h = await setup(() => ({ ok: true, value: { data: [], summary: { total: 0, active: 0 }, cursor: {} } }), undefined, (request) => {
       if (request.operation === "session.team.shell.list") return { ok: true, value: { data: [

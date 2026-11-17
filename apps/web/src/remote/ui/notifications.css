@@ -9,6 +9,7 @@
   place-items: center;
   inline-size: var(--yc-control-h);
   block-size: var(--yc-control-h);
+  padding: 0;
   border: 0;
   border-radius: var(--yc-radius-pill);
   background: transparent;
@@ -33,7 +34,7 @@
   border-radius: var(--yc-radius-pill);
   background: var(--yc-text);
   color: var(--yc-bg);
-  font: var(--yc-weight-bold) 10px/1 var(--yc-font-mono);
+  font: var(--yc-weight-bold) var(--yc-size-2xs)/1 var(--yc-font-mono);
 }
 
 .yc-notification-panel {

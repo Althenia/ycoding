@@ -68,7 +68,7 @@ test("provider distribution keeps exact large values readable in one accessible 
               return [[rect.left, rect.top], [rect.right, rect.top], [rect.left, rect.bottom], [rect.right, rect.bottom]].every(([x, y]) => Math.hypot(x - (chart.left + chart.width / 2), y - (chart.top + chart.height / 2)) <= innerRadius);
             });
             const nodes = [...card.querySelectorAll('.usage-donut__total, .usage-donut__caption, .usage-distribution__legend li > span, .usage-distribution__legend li > strong')];
-            return {total:total.textContent, exact:total.getAttribute('aria-label'), title:total.getAttribute('title'), unit:card.querySelector('.usage-donut__caption').textContent,
+            return {total:total.textContent, exact:total.getAttribute('aria-label'), title:total.getAttribute('data-tooltip'), unit:card.querySelector('.usage-donut__caption').textContent,
               insideHole, exactTooWide,
               contained:nodes.every(node => { const rect=node.getBoundingClientRect(); return rect.left >= bounds.left && rect.right <= bounds.right && rect.top >= bounds.top && rect.bottom <= bounds.bottom && node.scrollWidth <= node.clientWidth; }),
               overflow:document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -121,7 +121,7 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
         expect(await page.evaluate(`document.activeElement?.getAttribute('aria-label') === 'Codex details'`)).toBe(true)
         expect(await page.evaluate(`document.querySelector('.usage-donut__total')?.textContent ?? ''`)).toBe("$15.00")
          expect(await page.evaluate(`document.querySelector('.usage-donut__total')?.getAttribute('aria-label') ?? ''`)).toBe("Exact known USD subtotal: $15.00")
-         expect(await page.evaluate(`document.querySelector('.usage-donut__total')?.getAttribute('title') ?? ''`)).toBe("Exact known USD subtotal: $15.00")
+         expect(await page.evaluate(`document.querySelector('.usage-donut__total')?.getAttribute('data-tooltip') ?? ''`)).toBe("Exact known USD subtotal: $15.00")
         expect(await page.evaluate(`[...document.querySelectorAll('.usage-provider')].find(card => card.textContent.includes('OpenRouter'))?.innerText ?? ''`)).toContain("$38.42 remaining")
         expect(await page.evaluate(`[...document.querySelectorAll('.usage-provider')].find(card => card.textContent.includes('OpenRouter'))?.innerText ?? ''`)).toContain("$0.00")
         const result = await page.evaluate(`(() => {
@@ -607,7 +607,7 @@ test("three same-device reloads and Refresh update values without removing cards
       const refresh = await page.evaluate(`(() => {
         const button = document.querySelector('.usage-refresh');
         const rect = button.getBoundingClientRect();
-        return { accessibleName: button.getAttribute('aria-label'), title: button.getAttribute('title'), text: button.innerText.trim(),
+        return { accessibleName: button.getAttribute('aria-label'), title: button.getAttribute('data-tooltip'), text: button.innerText.trim(),
           idle: button.getAttribute('aria-busy'), target: rect.height, width: rect.width,
           icon: !!button.querySelector('svg[aria-hidden="true"]') };
       })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, accessibleName: (decodeNullable(decodeString))(record["accessibleName"]), title: (decodeNullable(decodeString))(record["title"]), text: (decodeString)(record["text"]), idle: (decodeNullable(decodeString))(record["idle"]), target: (decodeNumber)(record["target"]), width: (decodeNumber)(record["width"]), icon: (decodeBoolean)(record["icon"]) } })

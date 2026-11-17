@@ -168,7 +168,7 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
             <Show when={newCount() > 0}><span class="yc-notification-panel__new">{newCount()} new</span></Show>
             <span class="yc-notification-panel__spacer" />
             <Show when={unread() > 0}>
-              <button type="button" class="yc-notification-panel__action" aria-label="Read all" title="Read all" onClick={() => { void remote.store.readAllNotifications(); trigger?.focus() }}><Icon name="check-all" size={16} /></button>
+              <button type="button" class="yc-notification-panel__action" aria-label="Read all" data-tooltip="Read all" onClick={() => { void remote.store.readAllNotifications(); trigger?.focus() }}><Icon name="check-all" size={16} /></button>
             </Show>
           </header>
           <Show when={failed()}>
@@ -185,7 +185,7 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
           )}</Show>
           <div class="yc-notification-panel__scroll">
             <Show when={notifications().length > 0} fallback={<div class="yc-notification-panel__empty">
-              <Icon name={sync().status === "ready" && sync().total === 0 ? "check" : "bell"} size={22} />
+              <Icon name={sync().status === "ready" && sync().total === 0 ? "check" : "bell"} size={24} />
               <strong>{failed() ? "Notification sync unavailable" : sync().status === "loading" ? "Loading notifications" : sync().total > 0 ? "Notices hidden by settings" : "You're all caught up"}</strong>
               <span>{sync().total > 0 ? "Load older notices or change In app settings." : failed() ? "Retry to check stored notices." : "New activity will appear here."}</span>
             </div>}>
@@ -212,7 +212,7 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
                           <span>{item().sessionTitle ?? item().body}</span>
                         </button>
                         <time datetime={new Date(item().at).toISOString()}>{notificationAge(item().at, clock())}</time>
-                        <button type="button" class="yc-notification__dismiss" aria-label={`Dismiss ${kinds[item().category].label}`} onClick={(event) => dismiss(id, event)}><Icon name="close" size={14} /></button>
+                        <button type="button" class="yc-notification__dismiss" aria-label={`Dismiss ${kinds[item().category].label}`} onClick={(event) => dismiss(id, event)}><Icon name="close" size={16} /></button>
                       </li>
                     )}</Show>
                   }}</For></ul>
@@ -234,10 +234,10 @@ function NoticeToast(props: { readonly notification: () => RemoteNotificationVie
   const remote = useRemote()
   return (
     <Toast class={`yc-toast--${props.notification().category}`} onDismiss={() => props.onDismiss(props.notification().id)}>{(dismiss) => <>
-      <span class="yc-toast__icon" aria-hidden="true"><Icon name={kinds[props.notification().category].icon} size={18} /></span>
+      <span class="yc-toast__icon" aria-hidden="true"><Icon name={kinds[props.notification().category].icon} size={20} /></span>
       <div class="yc-toast__body"><strong>{kinds[props.notification().category].label}</strong><span>{props.notification().sessionTitle ?? props.notification().body}</span></div>
       <Show when={props.notification().sessionID}><button type="button" class="yc-toast__open" onClick={() => { const sessionID = props.notification().sessionID; if (sessionID) { void remote.store.readNotification(props.notification().id); props.onOpenSession(sessionID) } dismiss() }}>Open</button></Show>
-      <button type="button" class="yc-toast__close" aria-label={`Dismiss ${kinds[props.notification().category].label} toast`} onClick={dismiss}><Icon name="close" size={14} /></button>
+      <button type="button" class="yc-toast__close" aria-label={`Dismiss ${kinds[props.notification().category].label} toast`} onClick={dismiss}><Icon name="close" size={16} /></button>
     </>}</Toast>
   )
 }
@@ -246,9 +246,9 @@ function OutcomeToast(props: { readonly toast: MutationToast }): JSX.Element {
   const remote = useRemote()
   return (
     <Toast class={`mutation-toast mutation-toast--${props.toast.state}`} role="alert" onDismiss={() => remote.store.dismissMutationToast(props.toast.id)}>{(dismiss) => <>
-      <span class="yc-toast__icon" aria-hidden="true"><Icon name="alert" size={18} /></span>
+      <span class="yc-toast__icon" aria-hidden="true"><Icon name="alert" size={20} /></span>
       <div class="yc-toast__body"><strong>{props.toast.label} · {props.toast.state === "unknown" ? "Outcome unknown" : "Failed"}</strong><Show when={props.toast.detail}><span>{props.toast.detail}</span></Show></div>
-      <button type="button" class="yc-toast__close" aria-label={`Dismiss ${props.toast.label} outcome`} onClick={dismiss}><Icon name="close" size={14} /></button>
+      <button type="button" class="yc-toast__close" aria-label={`Dismiss ${props.toast.label} outcome`} onClick={dismiss}><Icon name="close" size={16} /></button>
     </>}</Toast>
   )
 }

@@ -22,17 +22,18 @@
   display: flex;
   gap: var(--yc-space-3);
   margin: 0;
-  padding: 0;
+  padding: 0 0 var(--yc-space-2);
   list-style: none;
   min-inline-size: 0;
   max-inline-size: 100%;
   overflow-x: auto;
   scroll-snap-type: x mandatory;
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--yc-border-strong) transparent;
   overscroll-behavior-inline: contain;
 }
 
-.running-sessions__list::-webkit-scrollbar { display: none; }
+.running-sessions__list::-webkit-scrollbar { block-size: var(--yc-scrollbar-size); }
 
 .running-sessions__list li {
   min-inline-size: 0;

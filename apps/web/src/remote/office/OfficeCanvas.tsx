@@ -76,11 +76,11 @@ export function OfficeCanvas(props: {
   return <section class="office-stage" aria-label="Office visualization">
     <div class="office-camera-controls" aria-label="Office camera">
       <p class="office-camera-hint" id="office-camera-hint">Drag / scroll · Arrow keys</p>
-      <button type="button" onClick={() => handle?.zoomBy(1.25)} aria-label="Zoom in" data-tooltip="Zoom in"><Icon name="plus" size={22} /></button>
-      <button type="button" onClick={() => handle?.zoomBy(0.8)} aria-label="Zoom out" data-tooltip="Zoom out"><Icon name="minus" size={22} /></button>
-      <button type="button" onClick={() => handle?.fit()} aria-label="Fit office" data-tooltip="Fit office"><Icon name="maximize" size={22} /></button>
-      <button type="button" onClick={() => handle?.follow()} aria-label="Follow selected" data-tooltip="Follow selected"><Icon name="crosshair" size={22} /></button>
-      <button type="button" onClick={props.onNormalView} aria-label="Back to conversation" data-tooltip="Back to conversation"><Icon name="chat" size={22} /></button>
+      <button type="button" onClick={() => handle?.zoomBy(1.25)} aria-label="Zoom in" data-tooltip="Zoom in"><Icon name="plus" size={24} /></button>
+      <button type="button" onClick={() => handle?.zoomBy(0.8)} aria-label="Zoom out" data-tooltip="Zoom out"><Icon name="minus" size={24} /></button>
+      <button type="button" onClick={() => handle?.fit()} aria-label="Fit office" data-tooltip="Fit office"><Icon name="maximize" size={24} /></button>
+      <button type="button" onClick={() => handle?.follow()} aria-label="Follow selected" data-tooltip="Follow selected"><Icon name="crosshair" size={24} /></button>
+      <button type="button" onClick={props.onNormalView} aria-label="Back to conversation" data-tooltip="Back to conversation"><Icon name="chat" size={24} /></button>
     </div>
     <Show when={loading() || hydrating()}>
       <LoadingPlaceholder kind="office" label={loadingLabel()} announce={false} />

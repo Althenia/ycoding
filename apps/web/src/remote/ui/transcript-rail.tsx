@@ -48,7 +48,7 @@ export function pillClearance(pill: { readonly left: number; readonly width: num
 }
 
 export function JumpControls(props: { readonly onTop?: () => void; readonly onBottom?: () => void; readonly hidden?: boolean; readonly clearance?: number }): JSX.Element {
-  return <div class="transcript-navigation__controls" style={{ "margin-block-end": `${props.clearance ?? 0}px` }} classList={{ "transcript-navigation__controls--visible": props.hidden !== true && (props.onTop !== undefined || props.onBottom !== undefined) }}><Show when={props.onTop}>{(jump) => <button type="button" aria-label="Jump to top" onClick={jump()}><Icon name="arrow-up" size={18} /></button>}</Show><Show when={props.onBottom}>{(jump) => <button type="button" aria-label="Jump to latest" onClick={jump()}><Icon name="arrow-down" size={18} /></button>}</Show></div>
+  return <div class="transcript-navigation__controls" style={{ "margin-block-end": `${props.clearance ?? 0}px` }} classList={{ "transcript-navigation__controls--visible": props.hidden !== true && (props.onTop !== undefined || props.onBottom !== undefined) }}><Show when={props.onTop}>{(jump) => <button type="button" aria-label="Jump to top" onClick={jump()}><Icon name="arrow-up" size={20} /></button>}</Show><Show when={props.onBottom}>{(jump) => <button type="button" aria-label="Jump to latest" onClick={jump()}><Icon name="arrow-down" size={20} /></button>}</Show></div>
 }
 
 export function PromptRail(props: { readonly prompts: readonly PromptTick[]; readonly visible: ReadonlySet<string>; readonly onSelect: (id: string) => void }): JSX.Element {

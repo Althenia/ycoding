@@ -18,7 +18,7 @@ export function FileChangeCard(props: { readonly files: () => readonly CapturedF
         <span class="file-change-card__totals" aria-label={`${totals().additions} additions, ${totals().deletions} deletions`}>
           <span class="file-change-card__added">+{totals().additions}</span>{" "}<span class="file-change-card__removed">−{totals().deletions}</span>
         </span>
-        <span class="file-change-card__chevron" aria-hidden="true"><Icon name="chevron-down" size={14} /></span>
+        <span class="file-change-card__chevron" aria-hidden="true"><Icon name="chevron-down" size={16} /></span>
       </button>
       <Show when={!props.inCompanion}><button type="button" class="file-change-card__view" onClick={() => props.onOpenChanges ? props.onOpenChanges(props.files()[0]?.path) : window.dispatchEvent(new CustomEvent("ycoding:open-companion", { detail: "changes" }))}>View changes</button></Show>
       <ul class="file-change-card__files" id={filesID} hidden={!open()}><For each={props.files().map((file) => file.path)}>{(path) => <FileChangeRow file={() => props.files().find((file) => file.path === path)!} />}</For></ul>
@@ -33,9 +33,9 @@ function FileChangeRow(props: { readonly file: () => CapturedFile }): JSX.Elemen
   return (
     <li class="file-change-card__file">
       <button type="button" class="file-change-card__file-toggle" aria-expanded={expanded()} aria-controls={id} onClick={() => setExpanded(!expanded())}>
-        <span class="file-change-card__path" title={props.file().path}><span class="file-change-card__directory">{path().directory}</span><span class="file-change-card__basename">{path().basename}</span></span>
+        <span class="file-change-card__path" data-tooltip={props.file().path}><span class="file-change-card__directory">{path().directory}</span><span class="file-change-card__basename">{path().basename}</span></span>
         <span class="file-change-card__file-counts"><span class="file-change-card__added">+{props.file().additions}</span><span class="file-change-card__removed">−{props.file().deletions}</span></span>
-        <span class="file-change-card__chevron" aria-hidden="true"><Icon name="chevron-down" size={14} /></span>
+        <span class="file-change-card__chevron" aria-hidden="true"><Icon name="chevron-down" size={16} /></span>
       </button>
       <div class="file-change-card__diff" id={id} role="region" aria-label={`${props.file().files.length === 1 ? "Latest change" : "Recorded changes"} in ${props.file().path}`} hidden={!expanded()} tabindex="0">
         <Show when={expanded()}>

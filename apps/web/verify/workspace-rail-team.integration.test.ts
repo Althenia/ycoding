@@ -36,6 +36,96 @@ async function fixture(query: string) {
   return page
 }
 
+for (const width of [390, 1440]) test(`Team discovers descendants through named controls at ${width}px without taking their owner's authority`, async () => {
+  const page = await fixture("view=chat&presentation=conversation&team=two&descendants=1&childTranscript=ready")
+  const wait = async (condition: string) => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await page.evaluate(condition)) return
+      await Bun.sleep(25)
+    }
+    throw new Error(`Descendant navigation did not settle: ${condition}`)
+  }
+  try {
+    await page.setViewport(width, 900)
+    await page.setCoarsePointer(width === 390)
+    await page.setReducedMotion(true)
+    expect(await page.evaluate(`window.providerAuthState().sessions.some(session=>['ses_grandchild','ses_deep'].includes(session.id))`)).toBe(false)
+    await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
+    await wait(`!!document.querySelector('[aria-label="Expand Team"]')`)
+    await page.evaluate(`document.querySelector('[aria-label="Expand Team"]').click();document.querySelector('[data-action="inspect-child"]').click()`)
+    await wait(`!!document.querySelector('.team-conversation__message')`)
+    expect(await page.evaluate(`!!document.querySelector('[aria-label="Children of Fix flaky suite"]')`)).toBe(true)
+    await wait(`!!document.querySelector('[aria-label="Inspect Verify descendant"]')`)
+    await page.evaluate(`document.querySelector('[aria-label="Inspect Verify descendant"]').click()`)
+    await wait(`document.querySelector('.team-overview__inspector > p')?.textContent==='Verify descendant'`)
+    await wait(`!!document.querySelector('[aria-label="Inspect Inspect deeper work"]')`)
+    expect(await page.evaluate(`document.querySelector('.team-overview__inspector').querySelectorAll('form,[data-action="cancel"],[data-action="pin"],[data-action="confirm"]').length`)).toBe(0)
+    await page.evaluate(`document.querySelector('[aria-label="Inspect Inspect deeper work"]').click()`)
+    await wait(`document.querySelector('.team-overview__inspector > p')?.textContent==='Inspect deeper work'`)
+    await wait(`document.querySelector('.team-conversation').textContent.includes('Transcript from ses_deep.')`)
+    expect(await page.evaluate(`window.providerAuthState().activeSessionID`)).toBe("ses_fixture")
+    expect(await page.evaluate(`window.providerAuthState().team.tasks.map(task=>task.sessionID)`)).toEqual(["ses_child", "ses_second"])
+    expect(await page.evaluate(`window.requestLog.filter(row=>['session.subagent.cancel','session.subagent.answer','session.prompt','session.review.decide'].includes(row.operation)).length`)).toBe(0)
+    await page.evaluate(`document.querySelector('[aria-label="Back to Verify descendant"]').click()`)
+    await wait(`document.querySelector('.team-overview__inspector > p')?.textContent==='Verify descendant'`)
+    await page.evaluate(`document.querySelector('[aria-label="Back to Fix flaky suite"]').click()`)
+    await wait(`document.querySelector('.team-overview__inspector > p')?.textContent==='Fix flaky suite'`)
+    expect(await page.evaluate(`document.documentElement.scrollWidth>innerWidth`)).toBe(false)
+    expect(await page.evaluate(`window.descendantListReads.map(row=>row.sessionID)`)).toEqual(["ses_child", "ses_grandchild", "ses_deep"])
+    await page.evaluate(`document.querySelector('[aria-label="Inspect Verify descendant"]').click()`)
+    await wait(`document.querySelector('.team-overview__inspector > p')?.textContent==='Verify descendant'`)
+    await page.evaluate(`[...document.querySelectorAll('.team-overview__inspector button')].find(button=>button.textContent.includes('Open child Session')).click()`)
+    await wait(`window.providerAuthState().activeSessionID==='ses_grandchild' && window.providerAuthState().team?.rootID==='ses_child' && window.providerAuthState().team.status==='ready'`)
+    expect(await page.evaluate(`window.providerAuthState().selectedSessionInfo.parentID`)).toBe("ses_child")
+    expect(await page.evaluate(`window.providerAuthState().team.rootID`)).toBe("ses_child")
+    expect(await page.evaluate(`window.providerAuthState().team.tasks.map(task=>task.sessionID)`)).toEqual(["ses_grandchild", "ses_grand_sibling"])
+    expect(await page.evaluate(`[...document.querySelectorAll('.composer,.mini-composer__mount')].every(element=>element.getClientRects().length===0||element.closest('[inert]')!==null)`)).toBe(true)
+    expect(await page.evaluate(`!!document.querySelector('[aria-label="Main session"]')`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('[aria-label="Next subagent"]').disabled`)).toBe(false)
+    await page.evaluate(`document.querySelector('[aria-label="Main session"]').click()`)
+    await wait(`window.providerAuthState().activeSessionID==='ses_child'`)
+  } finally { await page.close() }
+}, 20000)
+
+test("owned controls keep the typography floor and expose dismissible keyboard tooltips", async () => {
+  const page = await fixture("view=chat&acceptedPreview=1&presentation=conversation")
+  try {
+    const floors = await page.evaluate(`(()=>{const root=document.querySelector('.app');return [...root.querySelectorAll('*')].filter(element=>element.getClientRects().length && [...element.childNodes].some(node=>node.nodeType===Node.TEXT_NODE && node.textContent.trim()) && parseFloat(getComputedStyle(element).fontSize)<12).map(element=>({class:element.className,size:getComputedStyle(element).fontSize}))})()`)
+    expect(floors).toEqual([])
+    expect(await page.evaluate(`document.querySelectorAll('.app :is(button,a,input,select,textarea,summary)[title]').length`)).toBe(0)
+    await page.evaluate(`document.querySelector('[aria-label="Open command palette"]').focus()`)
+    for (let attempt = 0; attempt < 60 && !await page.evaluate(`!!document.querySelector('[role="tooltip"]')`); attempt++) await Bun.sleep(25)
+    expect(await page.evaluate(`document.querySelector('[role="tooltip"]')?.textContent`)).toBe("Command palette (Ctrl+K)")
+    expect(await page.evaluate(`document.activeElement.getAttribute('aria-describedby')?.split(' ').includes(document.querySelector('[role="tooltip"]').id)`)).toBe(true)
+    await page.pressEscape()
+    expect(await page.evaluate(`document.querySelector('[role="tooltip"]')===null`)).toBe(true)
+    expect(await page.evaluate(`document.activeElement.getAttribute('aria-label')`)).toBe("Open command palette")
+    await page.setViewport(390, 844)
+    await page.evaluate(`document.querySelector('[aria-label="Open Team"]').focus();document.querySelector('[aria-label="Open Team"]').click()`)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate(`!!document.querySelector('dialog[open] .team-view__pin')`); attempt++) await Bun.sleep(25)
+    await page.evaluate(`Promise.allSettled(document.querySelector('dialog[open]').getAnimations({subtree:true}).filter(animation=>animation.effect?.getComputedTiming().iterations!==Infinity).map(animation=>animation.finished)).then(()=>undefined)`)
+    await page.evaluate(`document.querySelector('dialog[open] .team-view__pin').focus()`)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate(`!!document.querySelector('dialog[open] [role="tooltip"]')`); attempt++) await Bun.sleep(25)
+    await page.evaluate(`new Promise(resolve=>requestAnimationFrame(resolve))`)
+    const tooltip = await page.evaluate(`(()=>{const tip=document.querySelector('dialog[open] [role="tooltip"]'),box=tip.getBoundingClientRect();return{x:box.x+box.width/2,y:box.y+box.height/2,visible:box.width>0&&box.height>0&&getComputedStyle(tip).visibility==='visible',dialog:tip.closest('dialog').matches(':modal'),described:document.activeElement.getAttribute('aria-describedby').split(' ').includes(tip.id)}})()`, value => { const record = decodeRecord(value); return { x: decodeNumber(record.x), y: decodeNumber(record.y), visible: decodeBoolean(record.visible), dialog: decodeBoolean(record.dialog), described: decodeBoolean(record.described) } })
+    expect(tooltip).toMatchObject({ visible: true, dialog: true, described: true })
+    await page.mouse("mouseMoved", tooltip.x, tooltip.y)
+    await Bun.sleep(180)
+    expect(await page.evaluate(`document.querySelector('[role="tooltip"]')?.contains(document.elementFromPoint(${tooltip.x},${tooltip.y}))`)).toBe(true)
+    const trigger = await page.evaluate(`(()=>{const box=document.querySelector('dialog[open] .team-view__pin').getBoundingClientRect();return{x:box.x+box.width/2,y:box.y+box.height/2}})()`, value => { const record = decodeRecord(value); return { x: decodeNumber(record.x), y: decodeNumber(record.y) } })
+    await page.mouse("mouseMoved", trigger.x, trigger.y)
+    await page.pressEscape()
+    expect(await page.evaluate(`({tooltip:!!document.querySelector('[role="tooltip"]'),dialog:!!document.querySelector('dialog[open]'),focused:document.activeElement===document.querySelector('dialog[open] .team-view__pin')})`)).toEqual({ tooltip: false, dialog: true, focused: true })
+    await page.mouse("mouseMoved", trigger.x + 3, trigger.y)
+    await page.evaluate(`(()=>{const button=document.querySelector('dialog[open] .team-view__pin');button.querySelector('svg').dispatchEvent(new PointerEvent('pointerover',{bubbles:true,relatedTarget:button}));button.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,relatedTarget:button.querySelector('svg')}));})()`)
+    expect(await page.evaluate(`document.querySelector('[role="tooltip"]')===null`)).toBe(true)
+    await page.pressEscape()
+    for (let attempt = 0; attempt < 80 && await page.evaluate(`!!document.querySelector('dialog[open]')`); attempt++) await Bun.sleep(25)
+    expect(await page.evaluate(`document.querySelector('dialog[open]')===null`)).toBe(true)
+    expect(await page.evaluate(`document.activeElement.getAttribute('aria-label')`)).toBe("Open Team")
+  } finally { await page.close() }
+}, 15000)
+
 for (const [name, query, ready] of [
   ["Projects", "scenario=coordination-projects-1440", ".project-card"],
   ["Sessions", "scenario=session-list-1440", ".sessions-table"],

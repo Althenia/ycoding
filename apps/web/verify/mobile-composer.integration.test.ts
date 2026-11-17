@@ -47,7 +47,7 @@ for (const [width, height] of viewports) for (const theme of ["light", "dark"]) 
           words: document.querySelector('#session-companion-panel .session-status__active-goal').textContent.trim(),
           trigger: auto.innerText.trim(),
           name: auto.getAttribute('aria-label'),
-          title: auto.getAttribute('title'),
+          title: auto.getAttribute('data-tooltip'),
           chips: [...document.querySelectorAll('#session-companion-panel .session-status__mode')].filter(item => item.getClientRects().length > 0).map(item => item.innerText.trim()),
           codes: /(^|\\s)(Au·|P·|G·|Q·|Zz|R\\d)/.test(mount.innerText),
           summaryHeight: mount.querySelector('.composer__row').getBoundingClientRect().height,

@@ -81,6 +81,8 @@ const requestLog: { readonly at: number; readonly operation: string; readonly in
 Object.assign(window, { requestLog })
 const childSnapshotReads: { readonly sessionID: string; readonly input?: unknown }[] = []
 Object.assign(window, { childSnapshotReads })
+const descendantListReads: { readonly sessionID: string; readonly input?: unknown }[] = []
+Object.assign(window, { descendantListReads })
 const deviceRequests: { readonly deviceID: string; readonly operation: string; readonly sessionID?: string; readonly sent?: boolean }[] = []
 Object.assign(window, { remoteDeviceRequests: deviceRequests })
 const attachmentGate = Promise.withResolvers<void>()
@@ -1205,7 +1207,7 @@ function createFixtureStore(): Fixture {
     if (operation === "session.get") {
       if (emptyBackend && !createdSessions.has(targetSessionID))
         return { status: "failed", error: { code: "session_not_allowed", message: "Session not found" } }
-      const info = createdSessions.get(targetSessionID) ?? sessions.find((item) => item.id === targetSessionID)
+      const info = createdSessions.get(targetSessionID) ?? sessions.find((item) => item.id === targetSessionID) ?? (accountParams.has("descendants") && ["ses_grandchild", "ses_grand_sibling", "ses_deep"].includes(targetSessionID) ? { id: targetSessionID, title: `Child: ${targetSessionID}`, parentID: targetSessionID === "ses_deep" ? "ses_grandchild" : "ses_child", agent: "builder", time: { created: ago(10), updated: ago(1) } } : undefined)
       return info ? { status: "ok", value: { data: info } } : { status: "failed", error: { code: "session_not_allowed", message: "Session not found" } }
     }
     if (operation === "session.list") {
@@ -1265,6 +1267,13 @@ function createFixtureStore(): Fixture {
     }
     if (operation === "session.active") return { status: "ok", value: { data: { [sessionID]: { type: "running" } } } }
     if (operation === "session.subagent.list") {
+      if (accountParams.has("descendants") && targetSessionID !== sessionID) {
+        descendantListReads.push({ sessionID: targetSessionID, input })
+        const children = targetSessionID === "ses_child"
+          ? [{ sessionID: "ses_grandchild", description: "Verify descendant", state: "waiting" }, { sessionID: "ses_grand_sibling", description: "Review sibling work", state: "completed" }]
+          : targetSessionID === "ses_grandchild" ? [{ sessionID: "ses_deep", description: "Inspect deeper work", state: "running" }] : []
+        return { status: "ok", value: { data: children.map(child => ({ ...child, parentID: targetSessionID, agent: "builder", model, background: true, revision: 1, time: { created: ago(10), updated: ago(1) }, ...(child.state === "waiting" ? { question: { id: "qst_grandchild", text: "May I proceed?" } } : {}) })), summary: { total: children.length }, cursor: {} } }
+      }
       if (accountParams.get("team") === "unsupported") return { status: "failed", error: { code: "unknown_operation", message: "Unknown operation" } }
       const tasks = targetSessionID === sessionID && accountParams.get("team") !== "none" ? [{
         sessionID: "ses_child", parentID: sessionID, description: "Fix flaky suite", agent: "general", model, background: true,
@@ -1343,7 +1352,7 @@ function createFixtureStore(): Fixture {
         const returnedID = firstRead && childTranscript === "mismatched" ? "ses_wrong_child" : targetSessionID
         return { status: "ok", value: {
           sourceEpoch,
-          session: { ...sessions.find(item => item.id === targetSessionID), id: returnedID },
+          session: { ...sessions.find(item => item.id === targetSessionID), ...(accountParams.has("descendants") && ["ses_grandchild", "ses_grand_sibling", "ses_deep"].includes(targetSessionID) ? { title: `Child: ${targetSessionID}`, parentID: targetSessionID === "ses_deep" ? "ses_grandchild" : "ses_child", agent: "builder", time: { created: ago(10), updated: ago(1) } } : {}), id: returnedID },
           messages: [
             { id: `${returnedID}_prompt`, type: "user", text: `Prompt from ${returnedID}.`, time: { created: ago(3), consumed: ago(3) } },
             { id: `${returnedID}_reply`, type: "assistant", agent: "general", model, content: [

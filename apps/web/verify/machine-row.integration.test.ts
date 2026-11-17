@@ -148,7 +148,7 @@ describe("machine row", () => {
       await page.pressKey("Enter", "Enter", 13, "\r")
       await until(page, `document.querySelector('${section} .machine-row__input') === null && ${item("Desk Linux")} !== undefined`)
       expect(await aliases(page)).toEqual({ dev_laptop: "Desk Linux" })
-      const identity = await page.evaluate(`(() => { const node = ${item("Desk Linux")}; return { name: node.querySelector('.machine-row__name').textContent, hostname: node.querySelectorAll('.machine-row__hostname').length, title: node.querySelector('.machine-row__name').getAttribute('title'), same: [...document.querySelectorAll('${section} .machine-row__item')].every((entry, index) => entry === window.rowNodes[index]), focus: document.activeElement?.getAttribute('aria-label') ?? null } })()`)
+      const identity = await page.evaluate(`(() => { const node = ${item("Desk Linux")}; return { name: node.querySelector('.machine-row__name').textContent, hostname: node.querySelectorAll('.machine-row__hostname').length, title: node.querySelector('.machine-row__name').getAttribute('data-tooltip'), same: [...document.querySelectorAll('${section} .machine-row__item')].every((entry, index) => entry === window.rowNodes[index]), focus: document.activeElement?.getAttribute('aria-label') ?? null } })()`)
       expect(identity).toEqual({ name: "Desk Linux", hostname: 0, title: "Laptop", same: true, focus: "Edit name of Desk Linux" })
       expect(await laptopRequests(page)).toBe(before)
       expect(await page.evaluate(`${item("Studio Mac")}.getAttribute('aria-current')`)).toBe("true")
@@ -245,7 +245,7 @@ describe("machine row", () => {
         await page.pressKey("Enter", "Enter", 13, "\r")
         await until(page, `document.querySelector('${section} .machine-row__input') === null`)
         expect(await names(page)).toEqual(["<b>Studio</b>", hostile, "Sleeping Mac"])
-        const markup = await page.evaluate(`({ images: document.querySelectorAll('${section} img').length, bold: document.querySelectorAll('${section} b').length, pwned: window.pwned ?? null, title: ${item(hostile)}.querySelector('.machine-row__name').getAttribute('title'), overflow: document.documentElement.scrollWidth > innerWidth })`)
+        const markup = await page.evaluate(`({ images: document.querySelectorAll('${section} img').length, bold: document.querySelectorAll('${section} b').length, pwned: window.pwned ?? null, title: ${item(hostile)}.querySelector('.machine-row__name').getAttribute('data-tooltip'), overflow: document.documentElement.scrollWidth > innerWidth })`)
         expect(markup).toEqual({ images: 0, bold: 0, pwned: null, title: "Laptop", overflow: false })
         expect(await aliases(page)).toEqual({ dev_laptop: hostile })
       } finally { await page.close() }
@@ -281,7 +281,7 @@ describe("machine row", () => {
       expect(await page.evaluate(`window.remoteAliasReport().requests`)).toEqual([{ deviceID: "dev_studio", alias: "Studio Alias" }])
       expect(await page.evaluate(`document.querySelector('.device__name')?.textContent?.trim() ?? ''`)).toBe("Studio Alias")
       expect(await names(page)).toEqual(["Studio Alias", "Laptop", "Sleeping Mac"])
-      expect(await page.evaluate(`${item("Studio Alias")}.querySelector('.machine-row__name').getAttribute('title')`)).toBe("Studio Mac")
+      expect(await page.evaluate(`${item("Studio Alias")}.querySelector('.machine-row__name').getAttribute('data-tooltip')`)).toBe("Studio Mac")
       expect(await page.evaluate(`document.querySelectorAll('.machine-row__hostname, .device__hostname').length`)).toBe(0)
       expect(await page.evaluate(`document.querySelector('${section} .machine-row__scope').textContent`)).toMatch(/account.*browsers/i)
     } finally { await page.close() }
@@ -294,7 +294,7 @@ describe("machine row", () => {
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=settings&machines=distinct&machineAlias=Account%20name`)
       await until(page, `${item("Account name")} !== undefined`)
       expect(await names(page)).toEqual(["Account name", "Laptop", "Sleeping Mac"])
-      expect(await page.evaluate(`${item("Account name")}.querySelector('.machine-row__name').getAttribute('title')`)).toBe("Studio Mac")
+      expect(await page.evaluate(`${item("Account name")}.querySelector('.machine-row__name').getAttribute('data-tooltip')`)).toBe("Studio Mac")
       expect(await page.evaluate(`JSON.parse(localStorage.getItem('ycoding.remote.device-aliases'))`)).toEqual({ dev_studio: "Browser-only name" })
     } finally { await page.close() }
   }, 30_000)
