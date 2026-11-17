@@ -1715,6 +1715,42 @@ describe("Chrome bridge form controls and waits", () => {
     }
   })
 
+  test.each(["fill", "select"])("does not replay %s after a stale-context response loses an applied control change", async (type) => {
+    const dom = createFakeControls()
+    const control = type === "fill"
+      ? dom.control({ tag: "input", attributes: { type: "date" }, value: "2026-11-01" })
+      : dom.control({ tag: "select", options: [{ value: "a", label: "A" }, { value: "b", label: "B" }] })
+    const { observe, run } = await connect({ 49: field(control, "Choice") })
+    const send = harness.chrome.debugger.sendCommand
+    let applications = 0
+    const input = type === "fill" ? { type, text: "2026-11-17" } : { type, values: ["b"] }
+    try {
+      const observation = await observe(`recovery-${type}-observe`)
+      harness.chrome.debugger.sendCommand = async (source, method, params) => {
+        const result = await send(source, method, params)
+        if (method === "Runtime.callFunctionOn" && params.arguments?.[1]?.value === true) {
+          applications++
+          if (applications === 1) throw new Error("Cannot find context with specified id")
+        }
+        return result
+      }
+      const result = await run(`recovery-${type}-lost`, observation, { ...input, ref: refOf(observation, "Choice") })
+      expect({ applications, events: control.events.map((event) => event.type), result }).toMatchObject({
+        applications: 1,
+        events: ["input", "change"],
+        result: { type: "error", dispatched: true },
+      })
+      const fresh = await observe(`recovery-${type}-fresh`)
+      expect(applications).toBe(1)
+      expect(await run(`recovery-${type}-explicit`, fresh, { ...input, ref: refOf(fresh, "Choice") })).toMatchObject({ type: "result" })
+      expect(applications).toBe(2)
+      expect(control.events.map((event) => event.type)).toEqual(["input", "change", "input", "change"])
+    } finally {
+      harness.chrome.debugger.sendCommand = send
+      await stopBridge()
+    }
+  })
+
   test("fill and type refuse sensitive and file inputs before dispatch", async () => {
     const dom = createFakeControls()
     const { observe, run, socket } = await connect({

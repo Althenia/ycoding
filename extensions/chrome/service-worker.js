@@ -1739,9 +1739,9 @@ async function controlEvaluate(tab, target, functionDeclaration, values, returnB
     return response?.result
   }
   return run().catch((error) => {
-    if (!/Cannot find context/i.test(error instanceof Error ? error.message : String(error))) throw error
-    forgetControlWorlds(tab, target.sessionId, target.frameId)
-    return run()
+    if (/Cannot find context|Execution context was destroyed|Inspected target navigated/i.test(error instanceof Error ? error.message : String(error)))
+      forgetControlWorlds(tab, target.sessionId, target.frameId)
+    throw error
   })
 }
 
