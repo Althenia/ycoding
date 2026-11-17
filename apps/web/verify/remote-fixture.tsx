@@ -79,6 +79,8 @@ const fixtureGrades = [
 let dashboardCalls = 0
 const requestLog: { readonly at: number; readonly operation: string; readonly input?: unknown }[] = []
 Object.assign(window, { requestLog })
+const childSnapshotReads: { readonly sessionID: string; readonly input?: unknown }[] = []
+Object.assign(window, { childSnapshotReads })
 const deviceRequests: { readonly deviceID: string; readonly operation: string; readonly sessionID?: string; readonly sent?: boolean }[] = []
 Object.assign(window, { remoteDeviceRequests: deviceRequests })
 const attachmentGate = Promise.withResolvers<void>()
@@ -197,6 +199,7 @@ const syntheticHttp: RemoteHttp = {
 }
 
 const acceptedPreview = accountParams.get("acceptedPreview") === "1"
+const teamSize = accountParams.get("team") === "five" ? 5 : accountParams.get("team") === "four" ? 4 : accountParams.get("team") === "two" ? 2 : 1
 const defaultSessions: readonly WireSession[] = [
   { id: sessionID, title: "Stream remote output safely", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(42), updated: ago(1), ...(acceptedPreview ? { pinned: ago(5) } : {}) }, running: !acceptedPreview },
   ...(acceptedPreview ? [{ id: "ses_running", title: "Verify provider auth fallback", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(15), updated: ago(1), ...(accountParams.has("priorityPins") ? { pinned: ago(5) } : {}) }, running: true }] : []),
@@ -206,7 +209,9 @@ const defaultSessions: readonly WireSession[] = [
   ...(accountParams.get("team") === "office-large-family" ? Array.from({ length: 5 }, (_, index) => ({
     id: `ses_office_child_${index + 2}`, title: `Office child ${index + 2}`, parentID: sessionID, time: { created: ago(25 - index), updated: ago(3) },
   })) : []),
-  ...(accountParams.get("team") === "two" ? [{ id: "ses_second", title: "Child: inspect source", parentID: sessionID, time: { created: ago(20), updated: ago(2) } }] : []),
+  ...(teamSize >= 2 ? [{ id: "ses_second", title: "Child: inspect source", parentID: sessionID, time: { created: ago(20), updated: ago(2) } }] : []),
+  ...(teamSize >= 4 ? [{ id: "ses_third", title: "Child: mock socket drops", parentID: sessionID, time: { created: ago(18), updated: ago(1) } }, { id: "ses_fourth", title: "Child: verify jitter", parentID: sessionID, time: { created: ago(16), updated: ago(1) } }] : []),
+  ...(teamSize === 5 ? [{ id: "ses_fifth", title: "Child: sync documentation", parentID: sessionID, time: { created: ago(14), updated: ago(2) } }] : []),
   ...(accountParams.get("team") === "two" ? [{ id: "ses_btw", title: "Side question", parentID: sessionID, agent: "btw", time: { created: ago(19), updated: ago(2) } }] : []),
 ]
 const ledgerModel = { providerID: "anthropic", id: "claude-opus-5-5", variant: "high" }
@@ -220,7 +225,7 @@ const ledgerSessions: readonly WireSession[] = [
   ledgerSession("ses_ledger_settings", "Settings machine row", 130),
   ledgerSession("ses_ledger_changelog", "Changelog November", 1_500),
 ]
-let sessions: readonly WireSession[] = [...(ledger ? ledgerSessions : remoteScenarioData?.sessions ?? defaultSessions), ...(accountParams.get("masterInput") === "1" ? [{ id: "ses_master", title: "Release master", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(50), updated: ago(1) } }] : []), ...(accountParams.has("carouselFamily") ? [{
+let sessions: readonly WireSession[] = [...(ledger ? ledgerSessions : remoteScenarioData?.sessions ?? defaultSessions), ...(ledger && teamSize >= 4 ? defaultSessions.filter(item => "parentID" in item && item.parentID === sessionID) : []), ...(accountParams.get("masterInput") === "1" ? [{ id: "ses_master", title: "Release master", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(50), updated: ago(1) } }] : []), ...(accountParams.has("carouselFamily") ? [{
   id: "ses_postgres_child", title: "Inspect Postgres indexes", parentID: "ses_postgres", projectID: "project-auth",
   location: { directory: "/workspace/db-pruner" }, time: { created: ago(15), updated: ago(2) }, running: true,
 }] : [])]
@@ -514,10 +519,14 @@ if (ledger) messages = [
   },
 ]
 
+const fixtureRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)
+const fixtureStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((item: unknown) => typeof item === "string")
+
 async function fixtureImage(digest: string) {
   const canvas = new OffscreenCanvas(640, 400)
   const context = canvas.getContext("2d")!
-  const hue = { a: 150, b: 210, c: 30 }[digest[0] as "a" | "b" | "c"] ?? 0
+  const key = digest[0]
+  const hue = key === "a" || key === "b" || key === "c" ? { a: 150, b: 210, c: 30 }[key] : 0
   const gradient = context.createLinearGradient(0, 0, 640, 400)
   gradient.addColorStop(0, `hsl(${hue} 55% 42%)`)
   gradient.addColorStop(1, `hsl(${hue + 40} 60% 70%)`)
@@ -825,6 +834,7 @@ function createFixtureStore(): Fixture {
       mutationRequests.push({ operation, input })
       return coordinationDelay > 0 ? new Promise((resolve) => setTimeout(() => resolve(apply()), coordinationDelay)) : apply()
     }
+    const invalidInput = (message: string): RemoteRequestOutcome => ({ status: "failed", error: { code: "invalid_message", message } })
     const stale = () => group !== undefined && input?.revision !== group.revision
     const staleOutcome: RemoteRequestOutcome = { status: "failed", error: { code: "invalid_message", message: "Group revision changed" } }
     if (operation === "coordination.list") {
@@ -850,21 +860,27 @@ function createFixtureStore(): Fixture {
       return undefined
     }
     if (operation === "coordination.create") return mutate(() => {
-      const refused = ineligible(undefined, String(input?.masterSessionID), input?.memberSessionIDs as string[])
+      const members = input?.memberSessionIDs
+      if (!fixtureStrings(members)) return invalidInput("memberSessionIDs must contain only Session ids")
+      const refused = ineligible(undefined, String(input?.masterSessionID), members)
       if (refused) return refused
-      const created: FixtureGroup = { id: `cgrp_new_${++coordinationSeq}`, name: String(input?.name), active: false, revision: 0, created: Date.now(), updated: Date.now(), settings: { concurrency: null }, masterSessionID: String(input?.masterSessionID), memberSessionIDs: structuredClone(input?.memberSessionIDs) as string[] }
+      const created: FixtureGroup = { id: `cgrp_new_${++coordinationSeq}`, name: String(input?.name), active: false, revision: 0, created: Date.now(), updated: Date.now(), settings: { concurrency: null }, masterSessionID: String(input?.masterSessionID), memberSessionIDs: structuredClone(members) }
       coordinationGroups = [...coordinationGroups, created]
       return { status: "ok", value: { data: coordinationInfo(created) } }
     })
     if (operation === "coordination.update") return mutate(() => {
       if (group === undefined) return missing
       if (stale()) return staleOutcome
-      const refused = ineligible(group.id, typeof input?.masterSessionID === "string" ? input.masterSessionID : group.masterSessionID, (input?.memberSessionIDs ?? group.memberSessionIDs) as string[])
+      const members = input?.memberSessionIDs === undefined ? group.memberSessionIDs : input.memberSessionIDs
+      const settings = input?.settings
+      if (!fixtureStrings(members)) return invalidInput("memberSessionIDs must contain only Session ids")
+      if (settings !== undefined && !fixtureRecord(settings)) return invalidInput("settings must be an object")
+      const refused = ineligible(group.id, typeof input?.masterSessionID === "string" ? input.masterSessionID : group.masterSessionID, members)
       if (refused) return refused
       if (typeof input?.name === "string") group.name = input.name
-      if (input?.memberSessionIDs !== undefined) group.memberSessionIDs = structuredClone(input.memberSessionIDs) as string[]
+      if (input?.memberSessionIDs !== undefined) group.memberSessionIDs = structuredClone(members)
       if (typeof input?.masterSessionID === "string") group.masterSessionID = input.masterSessionID
-      if (input?.settings !== undefined) group.settings = structuredClone(input.settings) as Record<string, unknown>
+      if (settings !== undefined) group.settings = structuredClone(settings)
       group.revision += 1
       return { status: "ok", value: { data: coordinationInfo(group) } }
     })
@@ -943,9 +959,12 @@ function createFixtureStore(): Fixture {
     model?: unknown
   }>()
   const groupOf = (value: unknown) => {
-    const record = value as { readonly projectID?: string; readonly location?: { readonly directory?: string } }
-    const projectID = record.projectID ?? "prj_remote"
-    const directory = record.location?.directory ?? "/workspace/ycoding"
+    if (!fixtureRecord(value)) throw new Error("A fixture Session must be an object")
+    const location = value.location
+    if (location !== undefined && location !== null && !fixtureRecord(location)) throw new Error("A fixture location must be an object")
+    const projectID = value.projectID ?? "prj_remote"
+    const directory = (fixtureRecord(location) ? location.directory : undefined) ?? "/workspace/ycoding"
+    if (typeof projectID !== "string" || typeof directory !== "string") throw new Error("Fixture project and directory ids must be strings")
     return { id: workspaces.find((workspace) => workspace.projectID === projectID && workspace.directory === directory)?.id
       ?? `wsp_${projectID}_${directory.replaceAll("/", "_")}`,
       projectID, directory, name: directory.split("/").at(-1) ?? projectID }
@@ -1068,7 +1087,13 @@ function createFixtureStore(): Fixture {
       { path: "apps/web/src/remote/ui/context-panel.css", additions: 31, deletions: 12 },
       { path: "apps/web/src/remote/ui/context-panel.tsx", additions: 12, deletions: 5 },
       { path: "apps/web/src/remote/ui/shared-workspace.tsx", additions: 5, deletions: 2 },
-    ].map((file) => ({ placementMessageID: "msg_ledger_assistant", ...file, status: "modified", files: [{ ...file, status: "modified", diff: `@@ -1 +1,2 @@\n-.companion__context-total { display: block }\n+.companion__context-total { display: flex; align-items: baseline }` }] })) } }
+      ...(accountParams.get("capturedChanges") === "four" ? [{ path: "apps/web/src/remote/ui/composer.css", additions: 34, deletions: 0 }] : []),
+    ].map((file) => {
+      const removed = Array.from({ length: file.deletions }, (_, index) => `-.companion__context-total { --fixture-line: ${index}; display: block }`)
+      const added = Array.from({ length: file.additions }, (_, index) => `+.companion__context-total { --fixture-line: ${index}; display: flex; align-items: baseline }`)
+      const diff = `@@ -1,${file.deletions} +1,${file.additions} @@\n${[...removed, ...added].join("\n")}`
+      return { placementMessageID: "msg_ledger_assistant", ...file, status: "modified", files: [{ ...file, status: "modified", diff }] }
+    }) } }
     if (acceptedPreview && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [{ placementMessageID: "msg_assistant", path: "src/remote/store.ts", additions: 2, deletions: 1, status: "modified", files: [{ path: "src/remote/store.ts", diff: "@@ -1 +1,2 @@\n-const old = 1\n+const next = 2\n+export { next }", additions: 2, deletions: 1, status: "modified" }] }] } }
     if (transcriptProbe && operation === "session.todo.list") return { status: "ok", value: { data: [{ content: "Verify stable transcript", status: "in_progress", priority: "high" }] } }
     if (transcriptProbe && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [{ placementMessageID: "probe_reply_4", path: "src/probe.ts", additions: 1, deletions: 1, status: "modified", files: [{ path: "src/probe.ts", diff: `@@ -1 +1 @@\n-before\n+${probeCaptured}`, additions: 1, deletions: 1, status: "modified" }] }] } }
@@ -1109,6 +1134,20 @@ function createFixtureStore(): Fixture {
       failed: [...statusFailed],
       lost: [...statusLost],
     } }
+    if (operation === "incident.report") {
+      const rows = [
+        { providerID: model.providerID, modelID: model.id, fallbacks: 2, escalated: 1, rejected: 0, last: ago(1) },
+        { providerID: "anthropic", modelID: "claude-opus", fallbacks: 1, escalated: 0, rejected: 1, last: ago(2) },
+      ].filter((row) => (typeof input?.from !== "number" || row.last >= input.from) && (typeof input?.to !== "number" || row.last < input.to))
+        .map((row) => input?.group === "agent" ? { ...row, agent: "general" } : row)
+      const offset = typeof input?.offset === "number" ? input.offset : 0
+      const limit = typeof input?.limit === "number" ? input.limit : 25
+      return { status: "ok", value: { data: { rows: rows.slice(offset, offset + limit), groups: rows.length } } }
+    }
+    if (operation === "incident.recent") return { status: "ok", value: { data: { items: [{
+      id: "inc_fixture", time: ago(1), kind: "fallback", category: "fallback", ruleIDs: [], agent: "general", target: model,
+    }] } } }
+    if (operation === "incident.guidance") return { status: "ok", value: { data: { enabled: false } } }
     if (operation === "usage.dashboard") {
       const mode = accountParams.get("usageForecast")
       if (mode === "unsupported") return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding on this machine" } }
@@ -1229,11 +1268,19 @@ function createFixtureStore(): Fixture {
       if (accountParams.get("team") === "unsupported") return { status: "failed", error: { code: "unknown_operation", message: "Unknown operation" } }
       const tasks = targetSessionID === sessionID && accountParams.get("team") !== "none" ? [{
         sessionID: "ses_child", parentID: sessionID, description: "Fix flaky suite", agent: "general", model, background: true,
-        state: childQuestion && !childQuestionAnswered ? "waiting" : teamReported ? "completed" : teamCancelState, revision: teamReported ? 2 : teamCancelState === "running" ? 1 : 2,
-        ...(childQuestion && !childQuestionAnswered ? { question: { id: "qst_fixture", text: "May I update the scoped tests?", time: ago(1) } } : {}),
+        ...(teamSize === 5 ? { pinnedAt: ago(10) } : {}),
+        state: childQuestion && !childQuestionAnswered && teamSize < 4 ? "waiting" : teamReported ? "completed" : teamCancelState, revision: teamReported ? 2 : teamCancelState === "running" ? 1 : 2,
+        ...(childQuestion && !childQuestionAnswered && teamSize < 4 ? { question: { id: "qst_fixture", text: "May I update the scoped tests?", time: ago(1) } } : {}),
         time: { created: ago(30), updated: ago(teamReported ? 0 : 4) },
-      }, ...(accountParams.get("team") === "two" ? [{ sessionID: "ses_second", parentID: sessionID, description: "Inspect source", agent: "researcher", model, background: true,
-        state: "running", revision: 1, time: { created: ago(20), updated: ago(2) } }] : [])] : []
+      }, ...(teamSize >= 2 ? [{ sessionID: "ses_second", parentID: sessionID, description: "Inspect source", agent: "researcher", model, background: true,
+        state: teamSize >= 4 ? "supervising" : "running", revision: 1, time: { created: ago(20), updated: ago(2) } }] : []),
+      ...(teamSize >= 4 ? [{ sessionID: "ses_third", parentID: sessionID, description: "Mock socket drops", agent: "tester", model, background: true,
+        state: childQuestion && !childQuestionAnswered ? "waiting" : "running", revision: childQuestionAnswered ? 3 : 1,
+        ...(childQuestion && !childQuestionAnswered ? { question: { id: "qst_fixture", text: "May I update the scoped tests?", time: ago(1) } } : {}),
+        time: { created: ago(18), updated: ago(1) } }, { sessionID: "ses_fourth", parentID: sessionID, description: "Verify jitter", agent: "tester", model, background: true,
+        state: "failed", revision: 2, time: { created: ago(16), updated: ago(1), completed: ago(1) } }] : []),
+      ...(teamSize === 5 ? [{ sessionID: "ses_fifth", parentID: sessionID, description: "Sync documentation", agent: "writer", model, background: true,
+        state: "completed", revision: 2, time: { created: ago(14), updated: ago(2), completed: ago(2) } }] : [])] : []
       const officeTasks = accountParams.get("team") === "office-large-family" ? Array.from({ length: 5 }, (_, index) => ({
         sessionID: `ses_office_child_${index + 2}`, parentID: sessionID, description: `Inspect Office area ${index + 2}`, agent: "researcher", model, background: true,
         state: "running", revision: 1, time: { created: ago(25 - index), updated: ago(3) },
@@ -1249,11 +1296,12 @@ function createFixtureStore(): Fixture {
     }
     if (operation === "session.team.economics") return { status: "ok", value: { data: Array.isArray(input?.sessionIDs) ? input.sessionIDs.map((id) => ({ sessionID: id, cost: 0.25, tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 3, write: 0 } }, cacheHitRatio: 0.75, contextTotal: 800, contextLimit: 2_000, cacheRead: 3, cacheWrite: 0 })) : [] } }
     if (operation === "session.subagent.answer" && childQuestion) {
-      if (targetSessionID !== sessionID || input?.childID !== "ses_child" || input.questionID !== "qst_fixture" || childQuestionAnswered)
+      const childID = teamSize >= 4 ? "ses_third" : "ses_child"
+      if (targetSessionID !== sessionID || input?.childID !== childID || input.questionID !== "qst_fixture" || childQuestionAnswered)
         return { status: "failed", error: { code: "forbidden", message: "Question is not pending in this family" } }
       const answered = (): RemoteRequestOutcome => {
         childQuestionAnswered = true
-        return { status: "ok", value: { data: { sessionID: "ses_child", parentID: sessionID, description: "Fix flaky suite", agent: "general", model, background: true, state: "running", revision: 3, time: { created: ago(30), updated: ago(0) } } } }
+        return { status: "ok", value: { data: { sessionID: childID, parentID: sessionID, description: teamSize >= 4 ? "Mock socket drops" : "Fix flaky suite", agent: teamSize >= 4 ? "tester" : "general", model, background: true, state: "running", revision: 3, time: { created: ago(teamSize >= 4 ? 18 : 30), updated: ago(0) } } } }
       }
       return accountParams.get("childAnswerGate") === "1" ? new Promise<void>((resolve) => { releaseChildAnswer = resolve }).then(answered) : answered()
     }
@@ -1286,6 +1334,26 @@ function createFixtureStore(): Fixture {
         : { kind: "tool", room: "qa", text: "Running bun test" } })),
     ] } }
     if (operation === "session.snapshot") {
+      const childTranscript = accountParams.get("childTranscript")
+      if (targetSessionID !== sessionID && ["ready", "unavailable", "failed", "mismatched"].includes(childTranscript ?? "")) {
+        childSnapshotReads.push({ sessionID: targetSessionID, input })
+        const firstRead = targetSessionID === "ses_child" && childSnapshotReads.filter(read => read.sessionID === targetSessionID).length === 1
+        if (firstRead && childTranscript === "unavailable") return { status: "unavailable", reason: "request-limit" }
+        if (firstRead && childTranscript === "failed") return { status: "failed", error: { code: "unknown_operation", message: "Child snapshots are unavailable on this connector." } }
+        const returnedID = firstRead && childTranscript === "mismatched" ? "ses_wrong_child" : targetSessionID
+        return { status: "ok", value: {
+          sourceEpoch,
+          session: { ...sessions.find(item => item.id === targetSessionID), id: returnedID },
+          messages: [
+            { id: `${returnedID}_prompt`, type: "user", text: `Prompt from ${returnedID}.`, time: { created: ago(3), consumed: ago(3) } },
+            { id: `${returnedID}_reply`, type: "assistant", agent: "general", model, content: [
+              { type: "text", text: `Transcript from ${returnedID}.` },
+              { type: "tool", id: `${returnedID}_read`, name: "read", executed: true, state: { status: "completed", input: { path: "synthetic-child.txt" }, content: [{ type: "text", text: `Tool output from ${returnedID}.` }] }, time: { created: ago(2), ran: ago(2), completed: ago(2) } },
+            ], time: { created: ago(2), completed: ago(1) } },
+          ],
+          watermark: { type: "log.synced", aggregateID: targetSessionID, seq: 0 },
+        } }
+      }
       return {
         status: "ok",
         value: {
@@ -1305,7 +1373,7 @@ function createFixtureStore(): Fixture {
               { id: "project_ask", type: "synthetic", text: "Project notification", description: "Project notification", metadata: { source: "project_notification", groupID: "cgrp_release", memberSessionID: "ses_tests", title: "Test runner", event: "question", requestID: "q_member", excerpt: "Which column should checkout read?" }, time: { created: ago(4) } },
             ]),
             ...(projectChain === undefined ? [] : [{ id: "project_escalated", type: "synthetic", text: "Project notification", description: "Project notification", metadata: { source: "project_notification", groupID: "cgrp_release", memberSessionID: "ses_api", title: "Update checkout API", event: "escalated", requestID: "per_api", kind: "permission", excerpt: "Needs production credentials.", escalatedBy: { sessionID: "ses_driver", title: "Migration agent" } }, time: { created: ago(2) } }]),
-          ] : targetSessionID === sessionID ? structuredClone(messages) : targetSessionID === "ses_child" && accountParams.has("childTranscript") ? structuredClone(defaultMessages) : [],
+          ] : targetSessionID === sessionID ? structuredClone(messages) : targetSessionID === "ses_child" && accountParams.has("childTranscript") ? structuredClone(accountParams.get("childTranscript") === "images" ? messages : defaultMessages) : [],
           watermark: { type: "log.synced", aggregateID: targetSessionID, seq: targetSessionID === sessionID ? snapshotWatermark : 0 },
         },
       }
@@ -1535,6 +1603,7 @@ function createFixtureStore(): Fixture {
     open = false
     handlers?.onStatus?.({ kind: "closed", code: 1006, reason: "synthetic disconnect", retryable: true })
     handlers?.onStatus?.({ kind: "connecting", attempt: 1 })
+    if (accountParams.get("holdReconnect") === "1") return
     setTimeout(() => {
       open = true
       handlers?.onStatus?.({ kind: "open" })
@@ -1717,7 +1786,7 @@ Object.assign(window, { remoteComposerState: (mode: "prediction" | "upload" | "c
   ...(mode === "fallback" && state.selectedSessionInfo ? { selectedSessionInfo: { ...state.selectedSessionInfo, model: { providerID: "openrouter", id: "perceptron/perceptron-mk1.5" } } } : {}),
   ...(mode === "prediction" && state.view ? { view: { ...state.view, status: "idle", messages: [{ kind: "assistant", id: "msg_keyboard_prediction", created: 1, completed: 2, parts: [{ kind: "text", ordinal: 0, text: "The build is fixed." }] }], prediction: { sessionID, sourceMessageID: "msg_keyboard_prediction", text: "Run the focused tests" } } } : {}),
 })) })
-Object.assign(window, { transcriptDelta: fixture.transcriptDelta, transcriptRefresh: fixture.transcriptRefresh, responseSnapshot: fixture.responseSnapshot, responseStatus: () => fixture.store.state().view?.status })
+Object.assign(window, { transcriptDelta: fixture.transcriptDelta, transcriptRefresh: fixture.transcriptRefresh, responseSnapshot: fixture.responseSnapshot, responseStatus: () => fixture.store.state().view?.status, remoteDisconnect: fixture.drop })
 Object.assign(window, { remoteReadingTail: fixture.readingTail })
 Object.assign(window, { remoteQuestionAssessment: fixture.assessQuestion })
 Object.assign(window, { providerAuthState: () => fixture.store.state() })

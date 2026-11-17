@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNumber, decodeRecord, decodeString } from "./cdp"
 import { startRelayDouble } from "../test/relay-double"
 import { accountedTask } from "../test/usage-fixture"
 import { mkdir } from "node:fs/promises"
@@ -68,7 +68,7 @@ async function harness(width: number, height: number, project = false, surfaces 
   const page = await browser.openPage()
   const wait = async (expression: string) => {
     for (let i = 0; i < 200; i++) {
-      if (await page.evaluate<boolean>(`Boolean(${expression})`)) return
+      if (await page.evaluate(`Boolean(${expression})`)) return
       await Bun.sleep(30)
     }
     throw new Error(`Timed out: ${expression}`)
@@ -94,7 +94,7 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
       await h.wait(`document.body.textContent.includes('No matching files in this workspace.')`)
       await h.input("@fail")
       await h.wait(`document.querySelector('[aria-label="Retry file search"]')`)
-      expect(await h.page.evaluate<number>(`document.querySelectorAll('.mini-composer__autocomplete [role=option]').length`)).toBe(0)
+      expect(await h.page.evaluate(`document.querySelectorAll('.mini-composer__autocomplete [role=option]').length`)).toBe(0)
       await h.page.evaluate(`document.querySelector('[aria-label="Retry file search"]').click()`)
       await h.wait(`[...document.querySelectorAll('[role=option]')].some(item=>item.textContent.includes('src/fail.ts'))`)
     } finally { h.release(); await h.close() }
@@ -112,17 +112,17 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
       await h.page.evaluate(`[...document.querySelectorAll('[role=option]')].find(item=>item.textContent.includes('src/file.ts')).click()`)
       await h.page.evaluate(`(() => { const input=document.querySelector('.composer-resident:not([inert]) input[type=file]'); const dt=new DataTransfer(); dt.items.add(new File(['hello'],'test.txt',{type:'text/plain'})); input.files=dt.files; input.dispatchEvent(new Event('change',{bubbles:true})); })()`)
       await h.wait(`document.querySelector('.composer-resident:not([inert]) .composer__attachments-summary')`)
-      expect(await h.page.evaluate<string>(`document.querySelector('.composer-resident:not([inert]) .composer__attachments-summary').textContent`)).toBe("1/64 files · 5 B / 40 MiB · 20 MiB per-file limit")
+      expect(await h.page.evaluate(`document.querySelector('.composer-resident:not([inert]) .composer__attachments-summary').textContent`)).toBe("1/64 files · 5 B / 40 MiB · 20 MiB per-file limit")
       if (width < 768) await h.page.evaluate(`document.querySelector('[aria-label="Open sessions"]').click()`)
       await h.wait(`document.querySelector('.session-row[data-session-id="ses_b"]')`)
       await h.page.evaluate(`document.querySelector('.session-row[data-session-id="ses_b"]').click()`)
       await h.wait(`document.querySelector('.composer-resident:not([inert]) .composer__input')?.value === ''`)
-      expect(await h.page.evaluate<boolean>(`!document.querySelector('.composer-resident:not([inert]) .composer__attachments-summary')`)).toBe(true)
+      expect(await h.page.evaluate(`!document.querySelector('.composer-resident:not([inert]) .composer__attachments-summary')`)).toBe(true)
       if (width < 768) await h.page.evaluate(`document.querySelector('[aria-label="Open sessions"]').click()`)
       await h.wait(`document.querySelector('.session-row[data-session-id="ses_a"]')`)
       await h.page.evaluate(`document.querySelector('.session-row[data-session-id="ses_a"]').click()`)
       await h.wait(`document.querySelector('.composer-resident:not([inert]) .composer__attachments-summary')`)
-      expect(await h.page.evaluate<string>(`document.querySelector('.composer-resident:not([inert]) button[aria-label="Agent"]').textContent`)).toContain("Builder")
+      expect(await h.page.evaluate(`document.querySelector('.composer-resident:not([inert]) button[aria-label="Agent"]').textContent`)).toContain("Builder")
       await h.page.evaluate(`document.querySelector('.composer-resident:not([inert]) [aria-label="Send prompt"]').click()`)
       await h.wait(`!document.querySelector('.composer-resident:not([inert]) .composer__attachments-summary')`)
       await h.waitRequest("session.prompt")
@@ -144,10 +144,10 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
     try {
       await h.wait(`document.body.textContent.includes('Atlas')`)
       const nav = width < 768 ? ".bottom-nav" : ".remote-nav"
-      expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('${nav} a[href]')].filter(item => item.getBoundingClientRect().width > 0).map(item => item.getAttribute('href'))`)).toEqual(expect.arrayContaining(["/remote/sessions", "/remote/usage", "/remote/settings"]))
+      expect(await h.page.evaluate(`[...document.querySelectorAll('${nav} a[href]')].filter(item => item.getBoundingClientRect().width > 0).map(item => item.getAttribute('href'))`)).toEqual(expect.arrayContaining(["/remote/sessions", "/remote/usage", "/remote/settings"]))
       await h.wait(`document.querySelector('[aria-label="Open Team"]:not([inert])')?.getBoundingClientRect().width > 0`)
       await h.waitRequest("session.review.list")
-      expect(await h.page.evaluate<boolean>(`document.body.textContent.includes('Review items could not be loaded')`)).toBe(false)
+      expect(await h.page.evaluate(`document.body.textContent.includes('Review items could not be loaded')`)).toBe(false)
       if (width < 768) {
         await h.page.evaluate(`document.querySelector('[aria-label="Open sessions"]').click()`)
         await h.wait(`document.querySelector('.overlay--sessions-sheet') !== null`)
@@ -157,7 +157,7 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
       const newSession = width < 768 ? '.conversation-header__actions .new-session__trigger[aria-label^="New chat"]' : ".workspace-new-session button"
       await h.wait(`document.querySelector(${JSON.stringify(newSession)})?.getBoundingClientRect().width > 0`)
       if (width < 768) {
-        const hit = await h.page.evaluate<{ x: number; y: number; reachable: boolean }>(`(() => { const button=document.querySelector(${JSON.stringify(newSession)}), rect=button.getBoundingClientRect(), x=rect.left+rect.width/2, y=rect.top+rect.height/2; return { x, y, reachable: rect.width > 0 && rect.height > 0 && !button.disabled && !button.closest('[inert], [aria-hidden="true"]') && x >= 0 && x < innerWidth && y >= 0 && y < innerHeight && button.contains(document.elementFromPoint(x,y)) } })()`)
+        const hit = await h.page.evaluate(`(() => { const button=document.querySelector(${JSON.stringify(newSession)}), rect=button.getBoundingClientRect(), x=rect.left+rect.width/2, y=rect.top+rect.height/2; return { x, y, reachable: rect.width > 0 && rect.height > 0 && !button.disabled && !button.closest('[inert], [aria-hidden="true"]') && x >= 0 && x < innerWidth && y >= 0 && y < innerHeight && button.contains(document.elementFromPoint(x,y)) } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]), reachable: (decodeBoolean)(record["reachable"]) } })
         expect(hit.reachable).toBe(true)
         await h.page.mouse("mousePressed", hit.x, hit.y)
         await h.page.mouse("mouseReleased", hit.x, hit.y)
@@ -167,7 +167,7 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
       await h.wait(`location.pathname === '/remote/sessions'`)
       await h.wait(`document.querySelector('.sessions-table__row[data-session-id="ses_a"]')?.textContent.includes('Master · Atlas')`)
       await h.wait(`document.querySelector('.sessions-table__row[data-session-id="ses_b"]')?.textContent.includes('Member · Atlas')`)
-      expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.session-filters button')].filter(item => item.getBoundingClientRect().width > 0).map(item => item.textContent.trim())`)).toEqual(["All (2)", "Waiting (0)", "Running (0)", "Idle (2)"])
+      expect(await h.page.evaluate(`[...document.querySelectorAll('.session-filters button')].filter(item => item.getBoundingClientRect().width > 0).map(item => item.textContent.trim())`)).toEqual(["All (2)", "Waiting (0)", "Running (0)", "Idle (2)"])
       await h.page.evaluate(`document.querySelector('.sessions-table__row[data-session-id="ses_a"] .sessions-table__select').click()`)
       await h.wait(`location.pathname === '/remote/session' && document.querySelector('.composer-resident:not([inert]) .composer__input')`)
       await h.wait(`document.querySelector('[aria-label="Open Team"]:not([inert])')?.getBoundingClientRect().width > 0`)
@@ -180,7 +180,7 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
       await h.wait(`document.querySelector('.composer-resident:not([inert]) .model-control__trigger:not([disabled])')`)
       await h.page.evaluate(`document.querySelector('.composer-resident:not([inert]) .model-control__trigger').click(); document.documentElement.dataset.motion='off'`)
       await h.wait(`document.querySelector('.model-control__surface .model-control__sparkles i')`)
-      const animations = await h.page.evaluate<string[]>(`[...document.querySelectorAll('.model-control__surface .model-control__sparkles,.model-control__surface .model-control__sparkles i')].map(item=>getComputedStyle(item).animationName)`)
+      const animations = await h.page.evaluate(`[...document.querySelectorAll('.model-control__surface .model-control__sparkles,.model-control__surface .model-control__sparkles i')].map(item=>getComputedStyle(item).animationName)`, decodeArray(decodeString))
       expect(animations.length).toBeGreaterThan(1)
       expect(animations.every((animation) => animation === "none")).toBe(true)
     } finally { await h.close() }
@@ -195,12 +195,12 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
       for (let i = 0; i < 400 && h.relay.connections < 2; i++) await Bun.sleep(30)
       expect(h.relay.connections).toBeGreaterThanOrEqual(2)
       await h.wait(`document.querySelector('.composer-resident:not([inert]) .composer__input:not([disabled])')`)
-      expect(await h.page.evaluate<boolean>(`document.querySelector('.composer-resident:not([inert]) .composer__attachments-summary') !== null`)).toBe(true)
+      expect(await h.page.evaluate(`document.querySelector('.composer-resident:not([inert]) .composer__attachments-summary') !== null`)).toBe(true)
       h.relay.dropConnections(4403, "revoked")
       for (let i = 0; i < 400 && h.relay.connections < 3; i++) await Bun.sleep(30)
       expect(h.relay.connections).toBeGreaterThanOrEqual(3)
       await h.wait(`location.search.includes('ses_a') && document.querySelector('.composer-resident:not([inert]) .composer__input:not([disabled])')`)
-      expect(await h.page.evaluate<boolean>(`document.querySelector('.composer-resident:not([inert]) .composer__attachments-summary') === null`)).toBe(true)
+      expect(await h.page.evaluate(`document.querySelector('.composer-resident:not([inert]) .composer__attachments-summary') === null`)).toBe(true)
     } finally { await h.close() }
   }, 30000)
 
@@ -217,18 +217,18 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
         await h.wait(`document.querySelector('.composer__context-popover')`)
       }
       const context = width < 768 ? ".composer__selection-sheet .composer__context-summary" : ".composer__context-popover"
-      expect(await h.page.evaluate<string>(`document.querySelector('${context}').textContent`)).toContain("19% used · 81% left")
+      expect(await h.page.evaluate(`document.querySelector('${context}').textContent`)).toContain("19% used · 81% left")
       await h.page.pressEscape()
       await h.wait(`document.querySelector('.file-change-card__summary')?.textContent.includes('1 file changed')`)
       await h.page.evaluate(`document.querySelector('.file-change-card__summary').click()`)
       await h.wait(`document.querySelector('.file-change-card__file-toggle')?.textContent.includes('app.ts')`)
       await h.page.evaluate(`document.querySelector('.file-change-card__file-toggle').click()`)
-      expect(await h.page.evaluate<boolean>(`(() => { const node = document.querySelector(${JSON.stringify(width < 768 ? '.file-change-card__unified' : '.file-change-card__split')}); return node && getComputedStyle(node).display !== 'none' && node.textContent.includes('const old = 1') && node.textContent.includes('const next = 2') ${width < 768 ? '' : "&& node.textContent.includes('Old') && node.textContent.includes('New')"}; })()`)).toBe(true)
+      expect(await h.page.evaluate(`(() => { const node = document.querySelector(${JSON.stringify(width < 768 ? '.file-change-card__unified' : '.file-change-card__split')}); return node && getComputedStyle(node).display !== 'none' && node.textContent.includes('const old = 1') && node.textContent.includes('const next = 2') ${width < 768 ? '' : "&& node.textContent.includes('Old') && node.textContent.includes('New')"}; })()`)).toBe(true)
       await h.wait(`document.querySelector('[aria-label="Open Team"]:not([inert])')`)
       await h.page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
       await h.wait(`document.querySelector('.team-view__usage .team-view__meter')`)
-      expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.team-view__tabs [role=tab] .team-view__tab-label')].map(item => item.textContent)`)).toEqual(["Subagents", "Shell", "Side chats"])
-      expect(await h.page.evaluate<string[]>(`[...document.querySelectorAll('.team-view__usage dt')].map(item => item.textContent)`)).toEqual(["Tokens (inclusive)", "Cost (inclusive)", "Context", "Cache"])
+      expect(await h.page.evaluate(`[...document.querySelectorAll('.team-view__tabs [role=tab] .team-view__tab-label')].map(item => item.textContent)`)).toEqual(["Subagents", "Shell", "Side chats"])
+      expect(await h.page.evaluate(`[...document.querySelectorAll('.team-view__usage dt')].map(item => item.textContent)`)).toEqual(["Tokens (inclusive)", "Cost (inclusive)", "Context", "Cache"])
       if (width < 768) await h.page.pressEscape()
       else await h.page.evaluate(`document.querySelector('[aria-label="Close Team"]').click()`)
       const nav = width < 768 ? ".bottom-nav" : ".remote-nav"

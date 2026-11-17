@@ -18,7 +18,7 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 async function wait(page: Page, expression: string) {
   for (let remaining = 100; remaining > 0; remaining--) {
-    if (await page.evaluate<boolean>(`Boolean(${expression})`)) return
+    if (await page.evaluate(`Boolean(${expression})`)) return
     await Bun.sleep(30)
   }
   throw new Error(`Timed out: ${expression}`)
@@ -56,14 +56,14 @@ test("palette provider connection adds a named key profile to the Session's mach
       await choose(page, "Authentication method", "API key")
       await input(page, "provider-profile-name", "Web profile")
       await input(page, "provider-api-key", "synthetic-test-key")
-      expect(await page.evaluate<boolean>(`document.getElementById('provider-api-key').type==='password'`)).toBe(true)
+      expect(await page.evaluate(`document.getElementById('provider-api-key').type==='password'`)).toBe(true)
       await page.evaluate(`[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Connect profile').click()`)
       await wait(page, `window.providerAuthFixture.report().acceptedKey===true`)
       await wait(page, `document.querySelector('dialog[aria-label="Connect provider"]').textContent.includes('Provider profile connected.')`)
-      expect(await page.evaluate<unknown>(`window.requestLog.find(item=>item.operation==='provider.auth.key').input`)).toEqual({ target: { sessionID: "ses_fixture" }, integrationID: "openai", label: "Web profile" })
-      expect(await page.evaluate<string>(`JSON.stringify(window.providerAuthState())+JSON.stringify(window.requestLog)+JSON.stringify(localStorage)`)).not.toContain("synthetic-test-key")
-      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
-      expect(await page.evaluate<boolean>(`document.getElementById('provider-api-key').value===''`)).toBe(true)
+      expect(await page.evaluate(`window.requestLog.find(item=>item.operation==='provider.auth.key').input`)).toEqual({ target: { sessionID: "ses_fixture" }, integrationID: "openai", label: "Web profile" })
+      expect(await page.evaluate(`JSON.stringify(window.providerAuthState())+JSON.stringify(window.requestLog)+JSON.stringify(localStorage)`)).not.toContain("synthetic-test-key")
+      expect(await page.evaluate(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
+      expect(await page.evaluate(`document.getElementById('provider-api-key').value===''`)).toBe(true)
     } finally { await page.close() }
   }
 }, 60000)
@@ -80,18 +80,18 @@ test("manual-code auth keeps a failed status read unresolved, submits once, then
     await wait(page, `document.getElementById('provider-authorization-code') !== null`)
     await page.evaluate(`window.providerAuthFixture.failRead();[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Check authentication status').click()`)
     await wait(page, `document.querySelector('dialog[aria-label="Connect provider"]').textContent.includes('Provider authentication could not finish.')`)
-    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Connect profile')`)).toBe(false)
-    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Refresh provider profiles')`)).toBe(false)
-    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Check authentication status' && !item.disabled)`)).toBe(true)
-    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Cancel authentication' && !item.disabled)`)).toBe(true)
-    expect(await page.evaluate<boolean>(`document.getElementById('provider-authorization-code').disabled`)).toBe(true)
+    expect(await page.evaluate(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Connect profile')`)).toBe(false)
+    expect(await page.evaluate(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Refresh provider profiles')`)).toBe(false)
+    expect(await page.evaluate(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Check authentication status' && !item.disabled)`)).toBe(true)
+    expect(await page.evaluate(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Cancel authentication' && !item.disabled)`)).toBe(true)
+    expect(await page.evaluate(`document.getElementById('provider-authorization-code').disabled`)).toBe(true)
     await page.evaluate(`[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Check authentication status').click()`)
     await wait(page, `document.getElementById('provider-authorization-code').disabled===false`)
     await input(page, "provider-authorization-code", "synthetic-test-code")
     await page.evaluate(`[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Submit authorization code').click()`)
     await wait(page, `window.providerAuthFixture.report().acceptedCode===true && document.getElementById('provider-authorization-code')===null`)
-    expect(await page.evaluate<number>(`window.requestLog.filter(item=>item.operation==='provider.auth.complete').length`)).toBe(1)
-    expect(await page.evaluate<string>(`JSON.stringify(window.providerAuthState())+JSON.stringify(window.requestLog)+JSON.stringify(localStorage)`)).not.toContain("synthetic-test-code")
+    expect(await page.evaluate(`window.requestLog.filter(item=>item.operation==='provider.auth.complete').length`)).toBe(1)
+    expect(await page.evaluate(`JSON.stringify(window.providerAuthState())+JSON.stringify(window.requestLog)+JSON.stringify(localStorage)`)).not.toContain("synthetic-test-code")
   } finally { await page.close() }
 }, 30000)
 
@@ -108,8 +108,8 @@ test("an unconfirmed key without an attempt can refresh provider profiles", asyn
     await wait(page, `document.querySelector('dialog[aria-label="Connect provider"]').textContent.includes('The machine did not confirm the result.')`)
     await page.evaluate(`[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Refresh provider profiles').click()`)
     await wait(page, `window.requestLog.filter(item=>item.operation==='provider.auth.list').length===2`)
-    expect(await page.evaluate<number>(`window.requestLog.filter(item=>item.operation==='provider.auth.key').length`)).toBe(1)
-    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Refresh provider profiles')`)).toBe(false)
+    expect(await page.evaluate(`window.requestLog.filter(item=>item.operation==='provider.auth.key').length`)).toBe(1)
+    expect(await page.evaluate(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Refresh provider profiles')`)).toBe(false)
   } finally { await page.close() }
 }, 30000)
 
@@ -119,14 +119,14 @@ test("landing provider auth uses the chosen repository and exposes a local-only 
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1&workspace_id=workspace_other&source=sessions`)
     await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]')?.textContent.includes('Other repository')`)
     await palette(page)
-    expect(await page.evaluate<unknown>(`window.requestLog.find(item=>item.operation==='provider.auth.list').input.target`)).toEqual({ workspace: "workspace_other" })
+    expect(await page.evaluate(`window.requestLog.find(item=>item.operation==='provider.auth.list').input.target`)).toEqual({ workspace: "workspace_other" })
     await choose(page, "Provider", "OpenAI")
     await choose(page, "Authentication method", "Local browser")
-    expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Connect provider"]').textContent.includes('Sign in on the backend machine')`)).toBe(true)
-    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Connect profile').disabled`)).toBe(true)
-    expect(await page.evaluate<number>(`window.requestLog.filter(item=>item.operation==='provider.auth.begin').length`)).toBe(0)
+    expect(await page.evaluate(`document.querySelector('dialog[aria-label="Connect provider"]').textContent.includes('Sign in on the backend machine')`)).toBe(true)
+    expect(await page.evaluate(`[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Connect profile').disabled`)).toBe(true)
+    expect(await page.evaluate(`window.requestLog.filter(item=>item.operation==='provider.auth.begin').length`)).toBe(0)
     await choose(page, "Provider", "Environment provider")
-    expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Connect provider"] button[aria-label="Authentication method"]')===null`)).toBe(true)
-    expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Connect provider"]').textContent.includes('requires machine-local configuration')`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('dialog[aria-label="Connect provider"] button[aria-label="Authentication method"]')===null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('dialog[aria-label="Connect provider"]').textContent.includes('requires machine-local configuration')`)).toBe(true)
   } finally { await page.close() }
 }, 30000)

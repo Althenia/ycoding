@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeBoolean } from "./cdp"
 
 const port = 4673
 const origin = `http://127.0.0.1:${port}`
@@ -43,10 +43,10 @@ async function open(width: 390 | 1440, theme: "light" | "dark", setup = "") {
   if (width === 390) await page.setCoarsePointer(true)
   await page.injectOnNewDocument(`localStorage.setItem('ycoding.theme', ${JSON.stringify(theme)}); ${setup}`)
   await page.navigate(`${origin}/verify/remote.html?view=settings`)
-  for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="app-settings"]') !== null`); attempt += 1) await Bun.sleep(50)
-  expect(await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="app-settings"]') !== null`)).toBe(true)
-  expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`)).toBe(true)
-  expect(await page.evaluate<string>(`document.documentElement.dataset.theme ?? ''`)).toBe(theme)
+  for (let attempt = 0; attempt < 80 && !await page.evaluate(`document.querySelector('[aria-labelledby="app-settings"]') !== null`); attempt += 1) await Bun.sleep(50)
+  expect(await page.evaluate(`document.querySelector('[aria-labelledby="app-settings"]') !== null`)).toBe(true)
+  expect(await page.evaluate(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`)).toBe(true)
+  expect(await page.evaluate(`document.documentElement.dataset.theme ?? ''`)).toBe(theme)
   return page
 }
 
@@ -59,9 +59,9 @@ describe("Settings installation in a real Chrome render", () => {
     const page = await browser!.openPage()
     try {
       await page.navigate(`${origin}/verify/remote.html?view=sessions`)
-      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('a[href="/remote/settings"]') !== null`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="app-settings"]') !== null`)).toBe(false)
-      expect(await page.evaluate<boolean>(`(() => {
+      for (let attempt = 0; attempt < 80 && !await page.evaluate(`document.querySelector('a[href="/remote/settings"]') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate(`document.querySelector('[aria-labelledby="app-settings"]') !== null`)).toBe(false)
+      expect(await page.evaluate(`(() => {
         const event = Object.assign(new Event('beforeinstallprompt', { cancelable: true }), {
           prompt: async () => {}, userChoice: Promise.resolve({ outcome: 'accepted' })
         });
@@ -69,8 +69,8 @@ describe("Settings installation in a real Chrome render", () => {
         return event.defaultPrevented;
       })()`)).toBe(true)
       await page.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
-      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('${button}') !== null`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<boolean>(`document.querySelector('${button}') !== null`)).toBe(true)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate(`document.querySelector('${button}') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate(`document.querySelector('${button}') !== null`)).toBe(true)
     } finally { await page.close() }
   }, 30_000)
 
@@ -78,10 +78,10 @@ describe("Settings installation in a real Chrome render", () => {
     test(`native prompt accepted and dismissed at ${width} in ${theme}`, async () => {
       const page = await open(width, theme)
       try {
-        expect(await page.evaluate<string>(`document.querySelector('${mode}')?.textContent?.trim() ?? ''`)).toBe("Browser")
-        expect(await page.evaluate<boolean>(`document.querySelector('${button}') !== null`)).toBe(false)
+        expect(await page.evaluate(`document.querySelector('${mode}')?.textContent?.trim() ?? ''`)).toBe("Browser")
+        expect(await page.evaluate(`document.querySelector('${button}') !== null`)).toBe(false)
         for (const outcome of ["accepted", "dismissed"] as const) {
-          const prevented = await page.evaluate<boolean>(`(() => {
+          const prevented = await page.evaluate(`(() => {
             const event = new Event('beforeinstallprompt', { cancelable: true });
             event.prompt = async () => { window.__promptCalls = (window.__promptCalls ?? 0) + 1 };
             event.userChoice = Promise.resolve({ outcome: '${outcome}' });
@@ -89,18 +89,18 @@ describe("Settings installation in a real Chrome render", () => {
             return event.defaultPrevented;
           })()`)
           expect(prevented).toBe(true)
-          expect(await page.evaluate<boolean>(`document.querySelector('${button}')?.textContent?.trim() === 'Install App'`)).toBe(true)
+          expect(await page.evaluate(`document.querySelector('${button}')?.textContent?.trim() === 'Install App'`)).toBe(true)
           await page.evaluate(`document.querySelector('${button}')?.click()`)
-          for (let attempt = 0; attempt < 30 && await page.evaluate<boolean>(`document.querySelector('${button}') !== null`); attempt += 1) await Bun.sleep(20)
-          expect(await page.evaluate<boolean>(`document.querySelector('${button}') !== null`)).toBe(false)
-          expect(await page.evaluate<number>(`window.__promptCalls ?? 0`)).toBe(outcome === "accepted" ? 1 : 2)
-          expect(await page.evaluate<boolean>(`document.querySelector('${label}') !== null`)).toBe(false)
+          for (let attempt = 0; attempt < 30 && await page.evaluate(`document.querySelector('${button}') !== null`, decodeBoolean); attempt += 1) await Bun.sleep(20)
+          expect(await page.evaluate(`document.querySelector('${button}') !== null`)).toBe(false)
+          expect(await page.evaluate(`window.__promptCalls ?? 0`)).toBe(outcome === "accepted" ? 1 : 2)
+          expect(await page.evaluate(`document.querySelector('${label}') !== null`)).toBe(false)
         }
         await page.evaluate(`window.dispatchEvent(Object.assign(new Event('beforeinstallprompt', { cancelable: true }), { prompt: async () => {}, userChoice: Promise.resolve({ outcome: 'accepted' }) }))`)
-        expect(await page.evaluate<boolean>(`document.querySelector('${button}') !== null`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector('${button}') !== null`)).toBe(true)
         await page.evaluate(`window.dispatchEvent(new Event('appinstalled'))`)
-        expect(await page.evaluate<string>(`document.querySelector('${mode}')?.textContent?.trim() ?? ''`)).toBe("Installed app")
-        expect(await page.evaluate<boolean>(`document.querySelector('${button}, ${label}') !== null`)).toBe(false)
+        expect(await page.evaluate(`document.querySelector('${mode}')?.textContent?.trim() ?? ''`)).toBe("Installed app")
+        expect(await page.evaluate(`document.querySelector('${button}, ${label}') !== null`)).toBe(false)
       } finally { await page.close() }
     }, 30_000)
 
@@ -110,8 +110,8 @@ describe("Settings installation in a real Chrome render", () => {
         window.matchMedia = query => query === '(display-mode: standalone)' ? { matches: true, addEventListener() {}, removeEventListener() {} } : original(query);
       })()`)
       try {
-        expect(await page.evaluate<string>(`document.querySelector('${mode}')?.textContent?.trim() ?? ''`)).toBe("Installed app")
-        expect(await page.evaluate<boolean>(`document.querySelector('${button}, ${label}') !== null`)).toBe(false)
+        expect(await page.evaluate(`document.querySelector('${mode}')?.textContent?.trim() ?? ''`)).toBe("Installed app")
+        expect(await page.evaluate(`document.querySelector('${button}, ${label}') !== null`)).toBe(false)
       } finally { await page.close() }
     }, 30_000)
   }
@@ -124,18 +124,18 @@ describe("Settings installation in a real Chrome render", () => {
     test(`${name} displays manual instructions with contained focus`, async () => {
       const page = await open(name === "macOS Safari" ? 1440 : 390, "light", setup)
       try {
-        expect(await page.evaluate<boolean>(`document.querySelector('${button}') !== null`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector('${button}') !== null`)).toBe(true)
         await page.evaluate(`document.querySelector('${button}')?.click()`)
-        for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('${label}')?.open === true`); attempt += 1) await Bun.sleep(20)
-        expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('${label} li')].map(item => item.textContent.trim())`)).toEqual(expected)
+        for (let attempt = 0; attempt < 30 && !await page.evaluate(`document.querySelector('${label}')?.open === true`); attempt += 1) await Bun.sleep(20)
+        expect(await page.evaluate(`[...document.querySelectorAll('${label} li')].map(item => item.textContent.trim())`)).toEqual(expected)
         await page.evaluate(`Promise.all([...document.querySelector('${label}').getAnimations({ subtree: true })].map(animation => animation.finished.catch(() => {})))`)
-        expect(await page.evaluate<{ count: number; named: boolean; hit: boolean }>(`(() => { const dialog = document.querySelector('${label}'); const close = dialog?.querySelector('.overlay__close'); const minimum = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-hit-min')); return { count: dialog?.querySelectorAll('.overlay__close').length ?? 0, named: close?.getAttribute('aria-label') === 'Close Install YCoding', hit: (close?.getBoundingClientRect().width ?? 0) >= minimum && (close?.getBoundingClientRect().height ?? 0) >= minimum } })()`)).toEqual({ count: 1, named: true, hit: true })
-        expect(await page.evaluate<boolean>(`document.querySelector('${label}')?.contains(document.activeElement) === true`)).toBe(true)
+        expect(await page.evaluate(`(() => { const dialog = document.querySelector('${label}'); const close = dialog?.querySelector('.overlay__close'); const minimum = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-hit-min')); return { count: dialog?.querySelectorAll('.overlay__close').length ?? 0, named: close?.getAttribute('aria-label') === 'Close Install YCoding', hit: (close?.getBoundingClientRect().width ?? 0) >= minimum && (close?.getBoundingClientRect().height ?? 0) >= minimum } })()`)).toEqual({ count: 1, named: true, hit: true })
+        expect(await page.evaluate(`document.querySelector('${label}')?.contains(document.activeElement) === true`)).toBe(true)
         await page.pressKey("Tab", "Tab", 9)
-        expect(await page.evaluate<boolean>(`document.querySelector('${label}')?.contains(document.activeElement) === true`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector('${label}')?.contains(document.activeElement) === true`)).toBe(true)
         await page.pressEscape()
-        expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('${button}')`)).toBe(true)
-        expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`)).toBe(true)
+        expect(await page.evaluate(`document.activeElement === document.querySelector('${button}')`)).toBe(true)
+        expect(await page.evaluate(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`)).toBe(true)
       } finally { await page.close() }
     }, 30_000)
   }
@@ -143,8 +143,8 @@ describe("Settings installation in a real Chrome render", () => {
   test("unsupported browser has only the Browser status", async () => {
     const page = await open(1440, "dark", `Object.defineProperty(Navigator.prototype, 'userAgent', { configurable: true, get: () => 'Mozilla/5.0 Firefox/130.0' })`)
     try {
-      expect(await page.evaluate<string>(`document.querySelector('${mode}')?.textContent?.trim() ?? ''`)).toBe("Browser")
-      expect(await page.evaluate<boolean>(`document.querySelector('${button}, ${label}') !== null`)).toBe(false)
+      expect(await page.evaluate(`document.querySelector('${mode}')?.textContent?.trim() ?? ''`)).toBe("Browser")
+      expect(await page.evaluate(`document.querySelector('${button}, ${label}') !== null`)).toBe(false)
     } finally { await page.close() }
   }, 30_000)
 })

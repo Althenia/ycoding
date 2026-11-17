@@ -158,6 +158,7 @@
 }
 
 @media (max-width: 767px), (max-height: 599px) and (pointer: coarse) {
+  .command-palette__input { font-size:var(--yc-size-md); }
   .overlay--command-palette .overlay__surface {
     display: flex;
     flex-direction: column;

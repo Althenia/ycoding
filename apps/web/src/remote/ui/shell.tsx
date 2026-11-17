@@ -51,7 +51,7 @@ import { NewSessionButton, NewSessionComposer } from "./new-session"
 import { ProviderConnect } from "./provider-connect"
 import { DotsConnection } from "./dots-connection"
 import type { CatalogTarget } from "../catalog"
-import { ProjectsPage, ProjectsRail, ProjectPanel, ProjectsDialogs, ProjectStatus, ProjectFreshness, createProjectsData } from "./projects"
+import { ProjectsPage, ProjectPanel, ProjectsDialogs, ProjectStatus, ProjectFreshness, createProjectsData } from "./projects"
 import { liveCounts, projectOf } from "../coordination"
 import { UsagePage } from "./usage"
 import {
@@ -121,6 +121,8 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const [dotsConnection, setDotsConnection] = createSignal<HTMLElement>()
   let closeSessionsSheet: (() => void) | undefined
   let navTrigger: HTMLButtonElement | undefined
+  let drawer: HTMLDivElement | undefined
+  let drawerTop = 0
   const closeNav = () => {
     if (!navOpen()) return
     if (closeSessionsSheet) closeSessionsSheet()
@@ -335,7 +337,6 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const projectContext = () => view() === "/remote/session" ? projects.membership() : undefined
   const [projectSheet, setProjectSheet] = createSignal(false)
   let projectTrigger: HTMLButtonElement | undefined
-  const newProject = () => { projects.setCreating(true); void navigate({ to: "/remote/projects" }) }
   const requested = () => view() === "/remote/session" ? readSessionSearch(search()) : undefined
   const ownsSessionRoute = () => {
     const target = requested()
@@ -513,7 +514,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const goalLabel = () => state().view?.autonomy === undefined ? "Unreported" : state().view?.autonomy?.goal?.status === "active" ? "Active" : state().view?.autonomy?.goal ? "Stopped" : "Off"
   const teamContent = () => <SharedCompanionSurface
     runningContent={<RunningExecution data={() => state().team!} onOpen={openSession} />}
-    active={companionTab()} onSelect={setCompanionTab} headerActions={<><button type="button" class="companion__pill" onClick={() => { closeTeam(); prefillComposer("/goal ") }}>Goal · {goalLabel()}</button><button type="button" class="companion__pill" onClick={requestAutonomousDialog}>{companionSummary()?.autonomyLabel ?? "Autonomy unreported"}</button><Show when={!phoneLayout()}><button type="button" class="companion__close" aria-label="Close Session companion" onClick={closeTeam}><Icon name="close" size={16} /></button></Show></>} beforeTabs={<><SessionStatusDetails /><Show when={phoneLayout()}><button type="button" class="button button--secondary companion__back" onClick={closeTeam}>Back to chat</button></Show></>} activitySubtitle={<>{state().view?.status ?? "Status unreported"} · {activeDeviceName()} · {activeSession()?.directory ? sessionProjectLabel(activeSession() ?? {}) : "No workspace selected"}</>} onRefresh={() => void remote.store.loadTeamControls()} activityContent={<>{teamView()}<Show when={state().view?.capturedChanges?.length}><button type="button" class="button button--secondary button--small" onClick={() => setCompanionTab("changes")}>Changes</button></Show></>} changesContent={<><Show when={state().view?.capturedChanges?.length} fallback={<p>No captured changes reported for this Session.</p>}><FileChangeCard inCompanion files={() => state().view?.capturedChanges ?? []} /></Show><p>Machine-local Git changes are managed on the enrolled machine.</p></>} contextContent={<SharedContextBreakdownPanel used={companionSummary()?.contextUsed} capacity={companionSummary()?.contextCapacity} label={companionSummary()?.contextLabel} fraction={companionSummary()?.contextFraction} remaining={contextWindow() ? Math.max(0, contextWindow()!.limit - contextWindow()!.used) : undefined} stepDiagnostics={contextWindow()?.stepDiagnostics} modelLabel={contextWindow() ? `${contextWindow()!.model.providerID} · ${contextWindow()!.model.id}` : undefined} nearLimit={contextWindow() ? contextWindow()!.used / contextWindow()!.limit >= 0.88 : false} breakdown={contextWindow()?.breakdown} contextMessagesLabel="Loaded transcript messages" contextMessages={state().view === undefined ? undefined : transcriptContextMessages(state().view!.messages)} onOpenUsage={() => { const deviceID = state().activeDeviceID; if (deviceID) openUsage(deviceID); else void navigate({ to: "/remote/usage" }) }} onCompact={() => void remote.store.compactSession()} compactDisabled={!canCreateSession() || managedChild()} />} />
+    active={companionTab()} onSelect={setCompanionTab} headerActions={<><button type="button" class="companion__pill" aria-label={`Goal · ${goalLabel()}`} data-tooltip={`Goal · ${goalLabel()}`} onClick={() => { closeTeam(); prefillComposer("/goal ") }}>Goal<Show when={companionTab() !== "activity"}> · {goalLabel()}</Show></button><button type="button" class="companion__pill" onClick={requestAutonomousDialog}>{companionSummary()?.autonomyLabel ?? "Autonomy unreported"}</button><Show when={!phoneLayout()}><button type="button" class="companion__close" aria-label="Close Session companion" onClick={closeTeam}><Icon name="close" size={16} /></button></Show></>} beforeTabs={<><SessionStatusDetails /><Show when={phoneLayout()}><button type="button" class="button button--secondary companion__back" onClick={closeTeam}>Back to chat</button></Show></>} activitySubtitle={<>{state().view?.status ?? "Status unreported"} · {activeDeviceName()} · {activeSession()?.directory ? sessionProjectLabel(activeSession() ?? {}) : "No workspace selected"}</>} onRefresh={() => void remote.store.loadTeamControls()} activityContent={<>{teamView()}<Show when={state().view?.capturedChanges?.length}><button type="button" class="button button--secondary button--small" onClick={() => setCompanionTab("changes")}>Changes</button></Show></>} changesContent={<><Show when={state().view?.capturedChanges?.length} fallback={<p>No captured changes reported for this Session.</p>}><FileChangeCard inCompanion files={() => state().view?.capturedChanges ?? []} /></Show><p>Machine-local Git changes are managed on the enrolled machine.</p></>} contextContent={<SharedContextBreakdownPanel used={companionSummary()?.contextUsed} capacity={companionSummary()?.contextCapacity} label={companionSummary()?.contextLabel} fraction={companionSummary()?.contextFraction} remaining={contextWindow() ? Math.max(0, contextWindow()!.limit - contextWindow()!.used) : undefined} stepDiagnostics={contextWindow()?.stepDiagnostics} modelLabel={contextWindow() ? `${contextWindow()!.model.providerID} · ${contextWindow()!.model.id}` : undefined} nearLimit={contextWindow() ? contextWindow()!.used / contextWindow()!.limit >= 0.88 : false} breakdown={contextWindow()?.breakdown} contextMessagesLabel="Loaded transcript messages" contextMessages={state().view === undefined ? undefined : transcriptContextMessages(state().view!.messages)} onOpenUsage={() => { const deviceID = state().activeDeviceID; if (deviceID) openUsage(deviceID); else void navigate({ to: "/remote/usage" }) }} onCompact={() => void remote.store.compactSession()} compactDisabled={!canCreateSession() || managedChild()} />} />
 
   const teamPanel = () => <Show when={(phoneLayout() ? teamOpen() : teamVisible()) && view() === "/remote/session" && state().team !== undefined && selected()}>
     <aside id="session-companion-panel" ref={teamLayer} class={`${phoneLayout() ? "team-control__phone" : "team-control__panel"}${teamEntering() ? " team-control--entering" : ""}${!teamOpen() ? " team-control--exiting" : ""}`} aria-label="Session companion" aria-hidden={!teamOpen() || teamClosing() ? "true" : undefined} inert={!teamOpen() || teamClosing()}
@@ -538,14 +539,8 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
               <button ref={railExpand} type="button" class="session-panel__collapse workspace__rail-expand" aria-label="Show workspace sidebar" aria-expanded="false" aria-controls="session-rail" onClick={expandRail}><Icon name="panel-left" size={16} /></button>
             </Show>
           </div>} railBodyRef={(element) => { rail = element }} railBodyInert={railCollapsed()} railBody={<>
-            <Show when={view() === "/remote/projects" || projectContext()}>
-              <ProjectsRail data={projects} onNew={newProject} />
-            </Show>
-            <Show when={(composition().showSessionRail || view() === "/remote") && !projectContext()}>
-              <SessionPanel onSelectSession={openSession} />
-            </Show>
-            <Show when={view() === "/remote/sessions"}><WorkspaceNav /></Show>
-          </>} railNavigation={<><PrimaryNav view={view()} /><ResumeSession view={view()} /></>} topHeader={<Show when={view() !== "/remote/session"}><RemoteHeader
+            <SessionPanel onSelectSession={openSession} />
+          </>} railNavigation={<><PrimaryNav view={view()} /><ResumeSession view={view()} /></>} topHeader={<><Show when={view() !== "/remote/session"}><RemoteHeader
           navExpanded={navOpen() && !navClosing()}
           onOpenNav={openSessionsNavigation}
           onOpenSession={openSession}
@@ -561,12 +556,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
             onOpen: openTeam,
           } : undefined}
           view={view()}
-        /></Show>} connectionStrip={<ConnectionStrip />} workspaceClass={`workspace${projectContext() ? ` workspace--project${projectCollapsed() ? " workspace--project-closed" : ""}` : ""}`} workspaceAside={<Show when={projectContext()}>{(context) => <aside id="project-context-panel" class="project-desktop" hidden={projectCollapsed()} inert={projectCollapsed()} aria-label="Project context" onKeyDown={(event) => {
-          if (event.defaultPrevented || event.key !== "Escape" || projectCollapsed() || projects.dialog()) return
-          event.preventDefault()
-          event.stopPropagation()
-          toggleProjectContext()
-        }}><For each={[context().detail.id]}>{() => <ProjectPanel data={projects} project={context().detail} />}</For></aside>}</Show>} companion={teamPanel()}>
+        /></Show>
             <Show when={view() === "/remote/session" && selected() && ownsSessionDevice()}>
               <SharedConversationHeader class={`workspace__topbar${projectContext() ? " project-topbar" : ""}`} hidden={selectedLoading()} title={<strong>{activeSession()?.title ?? noSessionTitle}</strong>} subtitle={<>{activeSession()?.directory ? sessionProjectLabel(activeSession() ?? {}) : "No workspace selected"} · {activeDeviceName()}</>} breadcrumb={<Link to="/remote/sessions" class="conversation-back button button--ghost button--icon" ariaLabel="Back to Sessions"><Icon name="arrow-left" /></Link>} middle={<><Show when={!phoneLayout() && office.presentation() === "office"}><PresentationSwitch value={office.presentation()} attention={(state().view?.requests.length ?? 0) > 0} onChange={office.present} /></Show><KeepAwakeIndicator /></>} menu={<button type="button" class="button button--ghost button--icon app-header__menu" aria-label="Open sessions" aria-expanded={navOpen() && !navClosing()} onClick={(event) => openSessionsNavigation(event.currentTarget)}><Icon name="menu" /></button>} actions={<><Show when={!projectContext()}><SharedContextRingButton class="companion-context-trigger" ariaLabel="Open Session context" ariaDescription={contextWindowDisplay(state().view, activeSession()?.model)?.tokens} ariaControls="session-companion-panel" expanded={teamOpen() && companionTab() === "context"} fraction={contextWindowDisplay(state().view, activeSession()?.model)?.fraction} label={contextWindowDisplay(state().view, activeSession()?.model) ? `${Math.round(contextWindowDisplay(state().view, activeSession()?.model)!.fraction * 100)}%` : "—"} onClick={() => { setCompanionTab("context"); openTeam() }} /></Show><span class="remote-connection"><span class={`status-dot status-dot--${summarizeConnection(state().connection).tone}`} aria-hidden="true" /><span class="remote-connection-label">{connectionLabel(state().connection, state().transport)}</span></span><NewSessionButton newChat disabled={!canCreateSession()} onClick={() => openNewSession()} /><button ref={teamTrigger} type="button" class="button button--ghost button--icon app-header__team" aria-label="Open Team" aria-controls="session-companion-panel" aria-expanded={teamOpen() && !teamClosing()} onClick={openTeam}><Icon name="team" /></button><CommandPalette view={view()} canCreateSession={canCreateSession()} sessionSelected={paletteSessionSelected()} managedChild={managedChild()} workspaceID={newSessionWorkspaceID()} modelBinding={paletteModel()} hasTeam={true} handlers={{ ...paletteHandlers, openTeam }} /><NotificationCenter onOpenSession={openSession} onOpenUsage={openUsage} /></>}>
                 {projectContext() ? <Show when={projectContext()}>{(context) => <>
@@ -574,7 +564,12 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                   <div class="project-context"><span class={`project-badge${context().role === "master" ? " project-badge--master" : ""}`}>{context().role === "master" ? "Master" : "Member"}</span><strong>{context().role === "master" ? "Master" : "Member"} of {context().detail.name}</strong><Show when={context().role === "member"}><span>· master {context().detail.master.title}</span><button class="text-link" onClick={() => openSession(context().detail.master.sessionID)}>Back to project chat</button></Show><Show when={!context().detail.active}><span class="project-meta">Send a message in the Master chat to resume.</span></Show></div>
                 </>}</Show> : undefined}
               </SharedConversationHeader>
-            </Show>
+            </Show></>} connectionStrip={<ConnectionStrip />} workspaceClass={`workspace${projectContext() ? ` workspace--project${projectCollapsed() ? " workspace--project-closed" : ""}` : ""}`} workspaceAside={<Show when={projectContext()}>{(context) => <aside id="project-context-panel" class="project-desktop" hidden={projectCollapsed()} inert={projectCollapsed()} aria-label="Project context" onKeyDown={(event) => {
+          if (event.defaultPrevented || event.key !== "Escape" || projectCollapsed() || projects.dialog()) return
+          event.preventDefault()
+          event.stopPropagation()
+          toggleProjectContext()
+        }}><For each={[context().detail.id]}>{() => <ProjectPanel data={projects} project={context().detail} />}</For></aside>}</Show>} companion={teamPanel()}>
             <div class="workspace__scroll" ref={scrollHost} onScroll={() => {
               if (scrollHost) lastScroll = { top: scrollHost.scrollTop, distance: scrollHost.scrollHeight - scrollHost.clientHeight - scrollHost.scrollTop }
             }}>
@@ -663,13 +658,14 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
         <ToastLayer sessionID={composerSessionID()} onOpenSession={openSession} />
 
         <Show when={navOpen() ? navGeneration() : undefined} keyed>
-          {(generation) => <Modal class="overlay--slideover overlay--sessions-sheet" label="Sessions" returnFocus={navTrigger!} requestClose={(close) => { closeSessionsSheet = close }} onDismiss={() => setNavClosing(true)} onClose={() => {
+          {(generation) => <Modal class="overlay--slideover overlay--sessions-sheet" label="Sessions" header={<><strong>YCoding</strong><NewSessionButton newChat labeled disabled={!canCreateSession()} onClick={() => openNewSession()} /></>} returnFocus={navTrigger!} requestClose={(close) => { closeSessionsSheet = close }} onDismiss={() => setNavClosing(true)} onClose={() => {
             if (navGeneration() !== generation) return
             closeSessionsSheet = undefined
             setNavClosing(false)
             setNavOpen(false)
           }}>
-            <SessionPanel onSelectSession={openSession} onNavigate={closeNav} />
+            <div ref={(element) => { drawer = element; queueMicrotask(() => { element.scrollTop = drawerTop }) }} class="sessions-drawer__list" onScroll={() => { drawerTop = drawer?.scrollTop ?? 0 }}><SessionPanel onSelectSession={openSession} onNavigate={closeNav} /></div>
+            <BottomNav view={view()} onNavigate={closeNav} />
           </Modal>}
         </Show>
 
@@ -1093,7 +1089,6 @@ function SessionRailList(props: {
     scroller: () => scroller ??= list ? scrollParent(list) : undefined,
     keys,
     estimate: () => 36,
-    typicalSize: true,
     overscan: 6,
     layout: () => keys().length > 0,
   })
@@ -1311,7 +1306,7 @@ function NoSessionsState(): JSX.Element {
     inventoryFailed: state().sessionGroups.length === 0 && state().carouselStatus === "error",
   })
   return (
-    <div class="empty">
+    <div class="empty" role="status">
       <p class="empty__title">{availability()?.title ?? (state().sessionQuery || state().sessionFilter !== "all" ? "No matching sessions" : "No sessions")}</p>
       <p>{availability()?.body ?? (state().sessionQuery || state().sessionFilter !== "all" ? "No matching sessions in this workspace." : "Start YCoding in your project folder on this machine.")}</p>
       <Show when={availability()?.note}>{(note) => <p class="panel__note">{note()}</p>}</Show>
@@ -1652,68 +1647,13 @@ function WorkspacesPage(): JSX.Element {
   const query = createRemoteQuery(remote.store.queryClient, () => remote.queries.workspaces(remote.scope(), connected()))
   const workspaces = () => query().data ?? []
   const labels = () => workspaceLabels(workspaces())
-  return <section class="sessions-page workspaces-page" aria-label="Workspaces"><h1>Workspaces</h1><p>Repositories previously opened on the connected machine.</p><Show when={connected()} fallback={<p role="status">Connect to a machine to see its workspaces.</p>}><Show when={!query().isFetching || workspaces().length > 0} fallback={<p role="status">Loading workspaces…</p>}><Show when={!query().isError} fallback={<div role="alert"><p>{query().error?.message ?? "Workspaces could not be loaded."}</p><button type="button" class="button button--secondary" onClick={() => void query().refetch()}>Retry</button></div>}><Show when={workspaces().length > 0} fallback={<p>No previously opened workspaces are available.</p>}><ul class="workspace-nav__list"><For each={workspaces()}>{(workspace) => <li class="workspace-nav__item"><Icon name="folder" size={16} /><span><strong>{labels().get(workspace.id) ?? workspace.directory}</strong><span class="project-meta"> {workspace.directory}</span></span></li>}</For></ul></Show></Show></Show></Show></section>
-}
-
-function WorkspaceNav(): JSX.Element {
-  const remote = useRemote()
-  const labels = createMemo(() => workspaceLabels(remote.state().sessionGroups))
-  const disabled = () => remote.state().transport.kind !== "open" || remote.state().connection.kind === "offline"
-  let nav: HTMLElement | undefined
-  let scrollport: HTMLElement | null = null
-  const updateCue = () => {
-    if (!nav) return
-    const available = `${Math.max(0, Math.floor(Math.min(window.innerHeight, scrollport?.getBoundingClientRect().bottom ?? window.innerHeight) - nav.getBoundingClientRect().top))}px`
-    if (nav.style.getPropertyValue("--workspace-nav-available") !== available) nav.style.setProperty("--workspace-nav-available", available)
-    nav.toggleAttribute("data-more-below", nav.scrollHeight - nav.clientHeight - nav.scrollTop > 1)
-  }
-  const pacedCue = createThrottler(updateCue, { wait: 50 })
-  onMount(() => {
-    if (!nav) return
-    scrollport = nav.closest(".workspace__rail-body")
-    const observer = new ResizeObserver(pacedCue.maybeExecute)
-    observer.observe(nav)
-    const list = nav.querySelector(".workspace-nav__list")
-    if (list) observer.observe(list)
-    if (nav.parentElement) observer.observe(nav.parentElement)
-    scrollport?.addEventListener("scroll", pacedCue.maybeExecute, { passive: true })
-    window.addEventListener("resize", pacedCue.maybeExecute)
-    updateCue()
-    onCleanup(() => {
-      observer.disconnect()
-      scrollport?.removeEventListener("scroll", pacedCue.maybeExecute)
-      window.removeEventListener("resize", pacedCue.maybeExecute)
-    })
-  })
-  return (
-    <nav ref={nav} class="workspace-nav" aria-label="Workspaces" onScroll={pacedCue.maybeExecute}>
-      <p class="workspace-nav__title">Workspaces</p>
-      <ul class="workspace-nav__list">
-        <Show when={remote.state().sessionListStatus === "loading" && remote.state().sessionGroups.length === 0}><For each={[0, 1, 2]}>{(index) => <li><LoadingPlaceholder kind="session" label="Loading workspaces…" announce={index === 0} /></li>}</For></Show>
-        <For each={remote.state().sessionGroups}>
-          {(group) => (
-            <li>
-              <button
-                type="button"
-                class={`workspace-nav__item${remote.state().selectedWorkspaceID === group.id ? " workspace-nav__item--active" : ""}`}
-                aria-current={remote.state().selectedWorkspaceID === group.id ? "true" : undefined}
-                title={group.directory}
-                disabled={disabled()}
-                onClick={() => remote.store.selectWorkspace(group.id)}
-              >
-                <Icon name="folder" size={16} />
-                <span class="workspace-nav__label">{labels().get(group.id)}</span>
-              </button>
-            </li>
-          )}
-        </For>
-      </ul>
-    </nav>
-  )
+  const [selection, setSelection] = createSignal<{ readonly id: string; readonly trigger: HTMLButtonElement }>()
+  const selected = () => workspaces().find(workspace => workspace.id === selection()?.id)
+  return <section class="sessions-page workspaces-page" aria-label="Workspaces"><h1>Workspaces</h1><p>Repositories previously opened on the connected machine.</p><Show when={connected()} fallback={<p role="status">Connect to a machine to see its workspaces.</p>}><Show when={!query().isFetching || workspaces().length > 0} fallback={<p role="status">Loading workspaces…</p>}><Show when={!query().isError} fallback={<div role="alert"><p>{query().error?.message ?? "Workspaces could not be loaded."}</p><button type="button" class="button button--secondary" onClick={() => void query().refetch()}>Retry</button></div>}><Show when={workspaces().length > 0} fallback={<p>No previously opened workspaces are available.</p>}><ul class="workspace-nav__list"><For each={workspaces()}>{(workspace) => <li class="workspace-nav__item"><button type="button" class="workspace-nav__inspect" aria-label={`View workspace ${labels().get(workspace.id) ?? workspace.directory}`} onClick={(event) => setSelection({ id: workspace.id, trigger: event.currentTarget })}><Icon name="folder" size={16} /><span><strong>{labels().get(workspace.id) ?? workspace.directory}</strong><span class="project-meta"> {workspace.directory}</span></span><Icon name="chevron-right" size={16} /></button></li>}</For></ul></Show></Show></Show></Show><Show when={selected()}>{(workspace) => <Modal class="overlay--sheet overlay--workspace-details" label={labels().get(workspace().id) ?? workspace().directory} returnFocus={selection()!.trigger} onClose={() => setSelection(undefined)}><div class="pane"><h2>Workspace</h2><dl class="defs"><div class="defs__row"><dt>Directory</dt><dd>{workspace().directory}</dd></div></dl><Link to="/remote/sessions" class="button button--primary" ariaLabel="Open workspace Sessions" onClick={() => { remote.store.selectWorkspace(workspace().id); setSelection(undefined) }}>Open Sessions<Icon name="chevron-right" /></Link></div></Modal>}</Show></section>
 }
 
 function attachSessionFeed(element: HTMLDivElement, store: ReturnType<typeof useRemote>["store"], virtualRows: () => ReturnType<typeof createRowVirtualizer> | undefined) {
-  const root = element.closest<HTMLElement>(".workspace__scroll, .workspace__rail-body") ??
+  const root = element.closest<HTMLElement>(".workspace__scroll, .workspace__rail-body, .sessions-drawer__list") ??
     (document.scrollingElement instanceof HTMLElement ? document.scrollingElement : undefined)
   if (!root) return () => {}
   let direction = 0
@@ -1843,8 +1783,6 @@ function SettingsPage(props: { readonly office: OfficeSettingsStore; readonly ph
   )
 }
 
-const primaryDestinations: readonly { readonly view: RemoteView; readonly label: string; readonly icon: IconName }[] = WORKSPACE_DESTINATIONS.filter((item) => item.id === "sessions" || item.id === "usage" || item.id === "settings").map((item) => ({ view: item.route, label: item.label, icon: item.icon }))
-
 function PrimaryNav(props: { readonly view: RemoteView }): JSX.Element {
   const attention = useNavigationAttention()
   return <nav class="remote-nav" aria-label="Remote workspace"><For each={WORKSPACE_DESTINATIONS}>{(item) => <Link
@@ -1865,23 +1803,24 @@ function ResumeSession(props: { readonly view: RemoteView }): JSX.Element {
   </Link>}</Show>
 }
 
-function BottomNav(props: { readonly view: RemoteView }): JSX.Element {
+function BottomNav(props: { readonly view: RemoteView; readonly onNavigate?: () => void }): JSX.Element {
   const attention = useNavigationAttention()
   const flagged = (view: RemoteView) => view === "/remote/sessions" && attention().sessions
   return (
     <nav class="bottom-nav" aria-label="Workspace">
-      <Link to="/remote" class="bottom-nav__new" ariaLabel="New chat" title="New chat"><Icon name="plus" /></Link>
-      <For each={primaryDestinations}>
+      <Link to="/remote" class="bottom-nav__new" ariaLabel="New chat" title="New chat" onClick={props.onNavigate}><Icon name="plus" /></Link>
+      <For each={WORKSPACE_DESTINATIONS}>
         {(item) => (
           <Link
-            to={item.view}
-            class={`bottom-nav__item${workspaceDestination(props.view) === item.view ? " bottom-nav__item--active" : ""}`}
-            ariaLabel={flagged(item.view) ? `${item.label}, waiting for your decision` : item.label}
-            ariaCurrent={workspaceDestination(props.view) === item.view ? "page" : undefined}
+            to={item.route}
+            class={`bottom-nav__item${workspaceDestination(props.view) === item.route ? " bottom-nav__item--active" : ""}`}
+            ariaLabel={flagged(item.route) ? `${item.label}, waiting for your decision` : item.label}
+            ariaCurrent={workspaceDestination(props.view) === item.route ? "page" : undefined}
+            onClick={props.onNavigate}
           >
             <span class="bottom-nav__icon">
               <Icon name={item.icon} size={20} />
-              <Show when={flagged(item.view)}>
+              <Show when={flagged(item.route)}>
                 <span class="attention-dot" aria-hidden="true" />
               </Show>
             </span>

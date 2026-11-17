@@ -22,7 +22,7 @@ afterAll(async () => { await browser?.close(); server?.kill(); if (server) await
 
 async function wait(page: Awaited<ReturnType<typeof browser.openPage>>, expression: string) {
   for (let index = 0; index < 100; index++) {
-    if (await page.evaluate<boolean>(expression)) return
+    if (await page.evaluate(expression)) return
     await Bun.sleep(30)
   }
   throw new Error(`Cursor fixture did not settle: ${expression}`)
@@ -37,14 +37,14 @@ test("shared cursor roles cover real native and design-system controls in both t
     const expected = ["default", "pointer", "pointer", "pointer", "pointer", "pointer", "not-allowed", "not-allowed", "not-allowed", "progress", "progress", "progress", "pointer", "text", "text", "not-allowed", "text", "text", "pointer", "pointer", "not-allowed", "not-allowed", "not-allowed", "not-allowed", "pointer", "pointer", "pointer", "not-allowed"]
     for (const theme of ["light", "dark"]) {
       await page.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
-      expect(await page.evaluate<string[]>(`${JSON.stringify(selectors)}.map((selector)=>getComputedStyle(document.querySelector(selector)).cursor)`)).toEqual(expected)
+      expect(await page.evaluate(`${JSON.stringify(selectors)}.map((selector)=>getComputedStyle(document.querySelector(selector)).cursor)`)).toEqual(expected)
     }
     await page.evaluate(`document.querySelector('#action').click()`)
-    expect(await page.evaluate<string>(`document.querySelector('output').textContent`)).toBe("1 actions")
+    expect(await page.evaluate(`document.querySelector('output').textContent`)).toBe("1 actions")
     await page.evaluate(`document.querySelector('[aria-label="Example selection"]').click()`)
     await wait(page, `document.querySelector('[role="option"]') !== null`)
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('[role="option"]')).cursor`)).toBe("pointer")
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.custom-select__footer')).cursor`)).toBe("pointer")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('[role="option"]')).cursor`)).toBe("pointer")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('.custom-select__footer')).cursor`)).toBe("pointer")
   } finally { await page.close() }
 })
 
@@ -53,15 +53,15 @@ test("cursor inheritance preserves legend actions, disabled native parts, image 
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/cursors-fixture.html`)
     await wait(page, `document.querySelector('#fieldset-legend-action') !== null`)
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('#fieldset-legend-action')).cursor`)).toBe("pointer")
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('#disabled-file'),'::file-selector-button').cursor`)).toBe("not-allowed")
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('#textarea'),'::-webkit-resizer').cursor`)).toBe("ns-resize")
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.transcript-image img')).cursor`)).toBe("zoom-in")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('#fieldset-legend-action')).cursor`)).toBe("pointer")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('#disabled-file'),'::file-selector-button').cursor`)).toBe("not-allowed")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('#textarea'),'::-webkit-resizer').cursor`)).toBe("ns-resize")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('.transcript-image img')).cursor`)).toBe("zoom-in")
     await page.evaluate(`document.querySelector('.transcript-image').click()`)
     await wait(page, `document.querySelector('dialog[open]') !== null`)
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('dialog'),'::backdrop').cursor`)).toBe("pointer")
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.overlay__surface')).cursor`)).toBe("default")
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.overlay__close svg')).cursor`)).toBe("pointer")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('dialog'),'::backdrop').cursor`)).toBe("pointer")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('.overlay__surface')).cursor`)).toBe("default")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('.overlay__close svg')).cursor`)).toBe("pointer")
   } finally { await page.close() }
 })
 
@@ -70,32 +70,32 @@ test("public links and actual remote composer controls consume the shared cursor
   try {
     await page.navigate(`http://127.0.0.1:${port}/`)
     await wait(page, `document.querySelector('.nav__link') !== null`)
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.nav__link')).cursor`)).toBe("pointer")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('.nav__link')).cursor`)).toBe("pointer")
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=dark&responseProbe=1`)
     await wait(page, `document.querySelector('.composer__input') !== null`)
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.composer__input')).cursor`)).toBe("text")
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.composer__attach')).cursor`)).toBe("pointer")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('.composer__input')).cursor`)).toBe("text")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('.composer__attach')).cursor`)).toBe("pointer")
     await page.evaluate(`(() => { const input=document.querySelector('.composer__input'); input.value=''; input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'deleteContentBackward'})); })()`)
     await wait(page, `document.querySelector('.mini-composer__send')?.disabled === true`)
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.mini-composer__send')).cursor`)).toBe("not-allowed")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('.mini-composer__send')).cursor`)).toBe("not-allowed")
     await page.evaluate(`document.querySelector('.model-control__trigger').click()`)
     await wait(page, `document.querySelector('[role="slider"]') !== null`)
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('[role="slider"]')).cursor`)).toBe("ew-resize")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('[role="slider"]')).cursor`)).toBe("ew-resize")
     await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html`)
     await wait(page, `document.querySelector('.usage-chart__bar') !== null && document.querySelector('.usage-donut__arc') !== null`)
-    expect(await page.evaluate<string[]>(`['.usage-chart__bar','.usage-donut__arc'].map((selector)=>getComputedStyle(document.querySelector(selector)).cursor)`)).toEqual(["pointer", "pointer"])
+    expect(await page.evaluate(`['.usage-chart__bar','.usage-donut__arc'].map((selector)=>getComputedStyle(document.querySelector(selector)).cursor)`)).toEqual(["pointer", "pointer"])
     await page.setViewport(390, 844)
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=light&responseProbe=1`)
     await wait(page, `document.querySelector('.composer__mobile-trigger')?.getBoundingClientRect().height > 0`)
     await page.evaluate(`document.querySelector('.composer__mobile-trigger').click()`)
     await wait(page, `document.querySelector('.composer__selection-scrim') !== null`)
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.composer__selection-scrim')).cursor`)).toBe("pointer")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('.composer__selection-scrim')).cursor`)).toBe("pointer")
     await page.evaluate(`document.querySelector('.composer__selection-scrim').click()`)
     await wait(page, `document.querySelector('.composer__selection-scrim') === null && document.querySelector('[aria-label="Open Team"]') !== null`)
     await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
     await wait(page, `document.querySelector('dialog.team-view__sheet[open]') !== null`)
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('dialog.team-view__sheet'),'::backdrop').cursor`)).toBe("pointer")
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('dialog.team-view__sheet .overlay__surface')).cursor`)).toBe("default")
-    expect(await page.evaluate<unknown>(`(() => { document.querySelector('[aria-label="Close Team"]').click(); const dialog=document.querySelector('dialog.team-view__sheet'); return {inert:dialog.inert,cursor:getComputedStyle(dialog,'::backdrop').cursor}; })()`)).toEqual({ inert: true, cursor: "not-allowed" })
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('dialog.team-view__sheet'),'::backdrop').cursor`)).toBe("pointer")
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('dialog.team-view__sheet .overlay__surface')).cursor`)).toBe("default")
+    expect(await page.evaluate(`(() => { document.querySelector('[aria-label="Close Team"]').click(); const dialog=document.querySelector('dialog.team-view__sheet'); return {inert:dialog.inert,cursor:getComputedStyle(dialog,'::backdrop').cursor}; })()`)).toEqual({ inert: true, cursor: "not-allowed" })
   } finally { await page.close() }
 })

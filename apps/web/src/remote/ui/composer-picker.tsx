@@ -1,7 +1,7 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Portal } from "solid-js/web"
 import { Icon, type IconName } from "../../ui/icon"
-import { containTab, createSheetFrame } from "./composer-sheet"
+import { Modal } from "../../ui/modal"
 
 export type PickerOption = { readonly value: string; readonly label: string; readonly detail?: string; readonly group?: string }
 
@@ -29,7 +29,7 @@ export function ComposerPicker(props: {
   let searchInput: HTMLInputElement | undefined
   let list: HTMLDivElement | undefined
   let closeTimer: ReturnType<typeof setTimeout> | undefined
-  const sheetStyle = createSheetFrame(() => compact() && (open() || closing()))
+  let dismissSheet: (() => void) | undefined
 
   const settle = () => {
     if (closeTimer !== undefined) clearTimeout(closeTimer)
@@ -40,6 +40,7 @@ export function ComposerPicker(props: {
 
   const close = (focus = false) => {
     if (!open()) return
+    if (compact() && dismissSheet) { dismissSheet(); return }
     if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) setClosing(true)
     setOpen(false)
     if (focus) trigger?.focus()
@@ -60,10 +61,6 @@ export function ComposerPicker(props: {
   }
   const keys: JSX.EventHandler<HTMLElement, KeyboardEvent> = (event) => {
     if (closing()) return
-    if (compact() && open() && surface && containTab(event, surface)) {
-      event.stopPropagation()
-      return
-    }
     if (event.key === "Escape") {
       if (!open()) return
       event.preventDefault()
@@ -89,10 +86,11 @@ export function ComposerPicker(props: {
     setPosition({ left: Math.min(Math.max(8, rect.left), window.innerWidth - width - 8), top: Math.max(8, rect.top - surface.offsetHeight - 8), width })
   }
   onMount(() => {
-    const media = window.matchMedia("(max-width: 767px)")
+    const media = window.matchMedia("(max-width: 767px), (max-height: 599px) and (pointer: coarse)")
     setCompact(media.matches)
-    const resize = () => { close(); settle(); setCompact(media.matches) }
+    const resize = () => { dismissSheet = undefined; close(); settle(); setCompact(media.matches) }
     const outside = (event: PointerEvent) => {
+      if (compact()) return
       if (open() && event.target instanceof Node && !surface?.contains(event.target) && !trigger?.contains(event.target)) close()
     }
     media.addEventListener("change", resize)
@@ -120,10 +118,9 @@ export function ComposerPicker(props: {
     <button ref={trigger} type="button" class="mini-picker__trigger" classList={{ "mini-picker__trigger--pending": props.pending }} role="combobox" aria-label={props.label} aria-description={props.pending ? "applies with your next send" : undefined} aria-haspopup="listbox" aria-expanded={open()} aria-controls={`${id}-list`} aria-activedescendant={open() && !compact() && !props.searchable && filtered().length ? `${id}-${active()}` : undefined} disabled={props.disabled} aria-disabled={closing()} onKeyDown={keys} onClick={() => { if (closing()) return; setActive(Math.max(0, filtered().findIndex((option) => option.value === props.value))); if (open()) close(); else setOpen(true) }}>
       <Show when={props.icon}><Icon name={props.icon!} /></Show><span>{props.options.find((option) => option.value === props.value)?.label ?? props.placeholder}</span><Icon name="chevron-down" />
     </button>
-    <Show when={open() || closing()}><Portal>
-      <Show when={compact()}><div class="mini-picker__scrim" data-cursor="action" classList={{ "mini-picker__scrim--closing": closing() }} inert={closing()} aria-hidden={closing() ? "true" : undefined} onClick={() => close()} /></Show>
-      <div ref={surface} class={`mini-picker__surface${compact() ? " mini-picker__surface--sheet" : ""}`} classList={{ "mini-picker__surface--closing": closing() }} role={compact() ? "dialog" : undefined} aria-modal={compact() ? "true" : undefined} aria-label={compact() ? props.label : undefined} inert={closing()} aria-hidden={closing() ? "true" : undefined} style={compact() ? sheetStyle() : { left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} onKeyDown={keys}>
-        <div class="mini-picker__heading"><strong>{props.label}</strong><button type="button" aria-label={`Close ${props.label}`} onClick={() => close(true)}><Icon name="close" /></button></div>
+    <Show when={open() || closing()}><Portal>{(() => {
+      const content = <div ref={surface} class={`mini-picker__surface${compact() ? " mini-picker__surface--sheet" : ""}`} classList={{ "mini-picker__surface--closing": closing() }} inert={closing()} aria-hidden={closing() ? "true" : undefined} style={compact() ? undefined : { left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} onKeyDown={keys}>
+        <Show when={!compact()}><div class="mini-picker__heading"><strong>{props.label}</strong><button type="button" aria-label={`Close ${props.label}`} onClick={() => close(true)}><Icon name="close" /></button></div></Show>
         <Show when={props.searchable}><input ref={searchInput} class="mini-picker__search" type="search" role="combobox" aria-label={`Search ${props.label}`} aria-autocomplete="list" aria-expanded="true" aria-controls={`${id}-list`} aria-activedescendant={filtered().length ? `${id}-${active()}` : undefined} placeholder={`Search ${props.label.toLocaleLowerCase()}…`} value={query()} onInput={(event) => { setQuery(event.currentTarget.value); setActive(0) }} /></Show>
         <div ref={list} id={`${id}-list`} role="listbox" aria-label={props.label} aria-activedescendant={filtered().length ? `${id}-${active()}` : undefined} tabindex={compact() && !props.searchable ? "-1" : undefined} class="mini-picker__list">
           <For each={filtered()}>{(option, index) => <>
@@ -135,6 +132,7 @@ export function ComposerPicker(props: {
           <Show when={!filtered().length}><p class="mini-picker__empty">No matches</p></Show>
         </div>
       </div>
-    </Portal></Show>
+      return compact() ? <Modal class="overlay--sheet overlay--composer-picker" label={props.label} returnFocus={trigger!} requestClose={(close) => { dismissSheet = close }} onClose={() => { dismissSheet = undefined; setOpen(false); settle() }}>{content}</Modal> : content
+    })()}</Portal></Show>
   </div>
 }

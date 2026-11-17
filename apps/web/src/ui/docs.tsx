@@ -214,11 +214,16 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
   const [generation, setGeneration] = createSignal(1)
   const [query, setQuery] = createSignal("")
   const [active, setActive] = createSignal(0)
+  const [navigationError, setNavigationError] = createSignal("")
   const navigate = useNavigate()
   let trigger: HTMLButtonElement | undefined
   let requestClose: (() => void) | undefined
   const hits = createMemo(() => searchDocs(query(), 8))
   const optionId = (index: number) => `docs-search-option-${index}`
+  createEffect(() => {
+    const id = hits()[active()] ? optionId(active()) : undefined
+    if (open() && id) document.getElementById(id)?.scrollIntoView({ block: "nearest" })
+  })
   const openSearch = () => {
     if (closing()) setGeneration((current) => current + 1)
     setOpen(true)
@@ -267,9 +272,11 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
   }
 
   const navigateTo = (hit: ReturnType<typeof searchDocs>[number]) => {
-    setOpen(false)
-    props.onNavigate?.()
-    navigate({ to: `/docs/${hit.page.slug}`, hash: hit.matchedHeading ? anchorFor(hit.matchedHeading) : undefined })
+    setNavigationError("")
+    navigate({ to: `/docs/${hit.page.slug}`, hash: hit.matchedHeading ? anchorFor(hit.matchedHeading) : undefined }).then(
+      () => { setOpen(false); props.onNavigate?.() },
+      (cause: unknown) => { setNavigationError(cause instanceof Error ? cause.message : "The documentation page could not be opened. Try again.") },
+    )
   }
 
   window.addEventListener("keydown", keydown)
@@ -293,9 +300,9 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
       <Show when={open() || closing()}>
         <Show when={generation()} keyed>{(current) => <Modal class="overlay--dialog overlay--docs-search" label="Search docs" returnFocus={trigger!}
           requestClose={(close) => { requestClose = close }} onDismiss={() => { setClosing(true); setOpen(false) }}
-          onClose={() => { if (generation() === current) setClosing(false) }}>
-          <div class="pane docs-search-pane">
-            <label class="field" for="docs-search-field">
+          onClose={() => { if (generation() === current) setClosing(false) }} header={
+            <label class="docs-search__field" for="docs-search-field">
+              <Icon name="search" size={16} />
               <span class="visually-hidden">Search documentation</span>
               <input
                 class="input"
@@ -312,6 +319,9 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
                 }}
               />
             </label>
+          }>
+          <div class="pane docs-search-pane">
+            <Show when={navigationError()}><p class="search__empty" role="alert">{navigationError()}</p></Show>
             <Show
               when={hits().length > 0}
               fallback={
@@ -332,7 +342,7 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
                         class={`search__result${index() === active() ? " search__result--active" : ""}`}
                         onClick={() => navigateTo(hit)}
                       >
-                        <span class="search__result-title">{hit.page.title}</span>
+                        <span class="search__result-heading"><span class="search__result-title">{hit.page.title}</span><span class="search__result-group">{docGroupLabel(hit.page.group)}</span></span>
                         <span class="search__result-text">{hit.matchedHeading ?? hit.page.description}</span>
                       </button>
                     </li>
@@ -340,6 +350,7 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
                 </For>
               </ul>
             </Show>
+            <footer class="docs-search__footer">↑↓ navigate · ↵ open · Esc close</footer>
           </div>
         </Modal>}</Show>
       </Show>
@@ -356,7 +367,6 @@ function anchorFor(heading: string): string {
 
 export function DocsShell(props: {
   readonly page: DocPage
-  readonly title: string
   readonly crumbLabel: string
   readonly navLabel: string
   readonly children: JSX.Element
@@ -365,6 +375,9 @@ export function DocsShell(props: {
 }): JSX.Element {
   const [navOpen, setNavOpen] = createSignal(false)
   let navTrigger: HTMLButtonElement | undefined
+  const [contentsOpen, setContentsOpen] = createSignal(false)
+  let contentsTrigger: HTMLButtonElement | undefined
+  let closeContents: (() => void) | undefined
   // A surface without sections has nothing to put on this page, so it renders no
   // rail instead of an empty one.
   const showToc = () => props.class !== "docs--index" && props.page.sections.length > 0
@@ -393,27 +406,6 @@ export function DocsShell(props: {
   })
   return (
     <div class={`docs${props.class ? ` ${props.class}` : ""}`}>
-      <div class="docs-bar">
-        <div class="container docs-bar__inner">
-          <button
-            ref={navTrigger}
-            type="button"
-            class="docs-bar__nav-toggle"
-            aria-label={props.navLabel}
-            aria-haspopup="dialog"
-            aria-expanded={navOpen()}
-            onClick={() => setNavOpen(true)}
-          >
-            <Icon name="menu" size={18} />
-            <span>{props.navLabel}</span>
-          </button>
-          <span class="docs-bar__title">{props.title}</span>
-          <DocsSearch />
-        </div>
-        <div class="container docs-bar__crumbs">
-          <Breadcrumbs page={props.page} label={props.crumbLabel} />
-        </div>
-      </div>
       <div class="container docs-shell">
         <div class="docs-shell__nav">
           <Show when={props.rail} fallback={<DocsNav />}>
@@ -421,7 +413,22 @@ export function DocsShell(props: {
           </Show>
         </div>
         <article class="docs-article">
+          <Show when={props.class !== "docs--index"}>
+            <button
+              ref={navTrigger}
+              type="button"
+              class="docs-bar__nav-toggle"
+              aria-label={props.navLabel}
+              aria-haspopup="dialog"
+              aria-expanded={navOpen()}
+              onClick={() => setNavOpen(true)}
+            >
+              <Icon name="menu" size={18} />
+              <span>{props.navLabel}</span>
+            </button>
+          </Show>
           <Breadcrumbs page={props.page} label={props.crumbLabel} class="breadcrumbs--article" />
+          <Show when={showToc()}><button ref={contentsTrigger} type="button" class="docs-bar__toc-toggle" aria-haspopup="dialog" aria-expanded={contentsOpen()} onClick={() => setContentsOpen(true)}><Icon name="list" size={16} />On this page</button></Show>
           <h1>{props.page.title}</h1>
           <p class="docs-article__lede"><Inline text={props.page.description} /></p>
           {props.children}
@@ -448,18 +455,19 @@ export function DocsShell(props: {
           </div>
         </Modal>
       </Show>
+      <Show when={contentsOpen()}><Modal class="overlay--sheet overlay--docs-toc" label="On this page" returnFocus={contentsTrigger!} requestClose={(close) => { closeContents = close }} onClose={() => setContentsOpen(false)}><nav class="pane docs-toc__sheet" aria-label="Article contents"><For each={props.page.sections}>{(section, index) => <a href={`#${sectionId(props.page, index())}`} onClick={() => closeContents?.()}>{section.heading}</a>}</For></nav></Modal></Show>
     </div>
   )
 }
 
 export function DocsIndexPage(): JSX.Element {
   return (
-    <DocsShell page={DOC_INDEX} title="Docs" crumbLabel="Docs" navLabel="Docs menu" class="docs--index">
+    <DocsShell page={DOC_INDEX} crumbLabel="Docs" navLabel="Docs menu" class="docs--index">
       <div class="docs-topic-index">
         <For each={docsByGroup()}>
           {(group) => (
             <section class="doc-section motion-reveal" data-doc-group={docGroupID(group.group)}>
-              <h2>{docGroupLabel(group.group)}</h2>
+              <h2><span class="docs-topic-index__label">{docGroupLabel(group.group)}</span><span class="docs-topic-index__count">{group.pages.length} topics</span></h2>
               <ul class="card-grid">
                 <For each={group.pages}>
                   {(page) => (
@@ -493,7 +501,7 @@ export function DocsPage(props: { readonly slug: string }): JSX.Element {
   const page = () => findDocPage(props.slug)
   return (
     <Show when={page()} fallback={<DocsNotFound />}>
-      <DocsShell page={page()!} title="Docs" crumbLabel="Docs" navLabel="Docs menu" class="docs--article">
+      <DocsShell page={page()!} crumbLabel="Docs" navLabel="Docs menu" class="docs--article">
         <For each={page()!.sections}>
           {(section, index) => <Section page={page()!} section={section} index={index()} />}
         </For>
@@ -506,7 +514,6 @@ function DocsNotFound(): JSX.Element {
   return (
     <DocsShell
       page={{ ...DOC_INDEX, title: "Page not found", description: "That documentation page is not published." }}
-      title="Docs"
       crumbLabel="Docs"
       navLabel="Docs menu"
     >

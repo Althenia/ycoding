@@ -14,6 +14,18 @@
     "./run": "./src/run/index.ts",
     "./server-process": "./src/server-process.ts"
   },
+  "imports": {
+    "#database-recovery-sqlite": {
+      "bun": "./src/services/database-recovery-sqlite.bun.ts",
+      "node": "./src/services/database-recovery-sqlite.node.ts",
+      "default": "./src/services/database-recovery-sqlite.bun.ts"
+    },
+    "#desktop-worker": {
+      "bun": "./src/desktop-worker.bun.ts",
+      "node": "./src/desktop-worker.node.ts",
+      "default": "./src/desktop-worker.bun.ts"
+    }
+  },
   "scripts": {
     "build": "bun run script/build.ts",
     "build:tui": "bun run script/build.ts --tui-only",

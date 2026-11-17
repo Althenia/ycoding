@@ -3,6 +3,7 @@ import { Icon, type IconName } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
 import { TeamAnswerForm } from "./subagent-bar"
 import { LoadingPlaceholder } from "./loading"
+import { TeamConversation } from "./team-conversation"
 import { appendTeamShellOutput, canAnswerSubagent, canCancelSubagent, canContinueRecovery, formatElapsed, isActiveSubagent, pinAction, isDeferredQuestion, shellOwnerLabel, taskStateLabel, teamActivityLabel, teamShellCommand, shellRows, taskRows, usageSlots, runningExecution, type TeamActionOutcome, type TeamPanelData, type TeamShellOutput, type TeamSubagent } from "./team-model"
 import "./team-view.css"
 
@@ -85,6 +86,16 @@ export function TeamView(props: {
   readonly onLoadOlderSideChats: () => Promise<void>
 }): JSX.Element {
   const [tab, setTab] = createSignal<Tab>("subagents")
+  const [expanded, setExpanded] = createSignal<HTMLButtonElement>()
+  const [selectedChild, setSelectedChild] = createSignal<string>()
+  const selectedTask = () => props.data().tasks.find((task) => task.sessionID === selectedChild())
+  let childTrigger: HTMLButtonElement | undefined
+  let childScroll: HTMLElement | null = null
+  let childTop = 0
+  const backToChildren = () => {
+    setSelectedChild(undefined)
+    queueMicrotask(() => { if (childScroll) childScroll.scrollTop = childTop; childTrigger?.focus({ preventScroll: true }) })
+  }
   const [confirm, setConfirm] = createSignal<{ readonly kind: "cancel" | "kill"; readonly id: string; readonly label: string; readonly trigger: HTMLButtonElement }>()
   const [working, setWorking] = createSignal<string>()
   const [error, setError] = createSignal<string>()
@@ -96,6 +107,8 @@ export function TeamView(props: {
     const current = props.data().rootID
     if (current === familyID) return
     familyID = current
+    setExpanded(undefined)
+    setSelectedChild(undefined)
     setTab("subagents")
     setConfirm(undefined)
     setWorking(undefined)
@@ -273,7 +286,8 @@ export function TeamView(props: {
         </Show>
     </section>
   const panel = <section class="team-view" classList={{ "team-view--sheet": props.sheet }} ref={section} aria-label="Team">
-    <Show when={!props.sheet}><div class="team-view__header"><TeamHeading data={props.data} /><button type="button" class="team-view__close" aria-label="Close Team" onClick={props.onClose}><Icon name="close" size={18} /></button></div></Show>
+    <Show when={props.sheet}><button type="button" class="team-view__button" aria-label="Expand Team" onClick={(event) => setExpanded(event.currentTarget)}>Team overview <Icon name="external" size={14} /></button></Show>
+    <Show when={!props.sheet}><div class="team-view__header"><TeamHeading data={props.data} /><div class="team-view__actions"><button type="button" class="team-view__icon" aria-label="Expand Team" title="Expand Team" onClick={(event) => setExpanded(event.currentTarget)}><Icon name="external" size={16} /></button><button type="button" class="team-view__close" aria-label="Close Team" onClick={props.onClose}><Icon name="close" size={18} /></button></div></div></Show>
     <Show when={!props.sheet && props.sessionSummary?.()}>{(summary) => <section class="team-view__session-summary" aria-label="Session context and autonomy">
       <Show when={summary().contextLabel}><strong>Context window</strong><span>{summary().contextLabel} · {summary().contextTokens}</span><span class="team-view__meter" role="img" aria-label={summary().contextLabel}><span style={{ "inline-size": `${Math.min(100, (summary().contextFraction ?? 0) * 100)}%` }} /></span></Show>
       <Show when={summary().autonomyLabel}><button type="button" class="team-view__button" onClick={props.onOpenAutonomy}>{summary().autonomyLabel}</button></Show>
@@ -292,6 +306,39 @@ export function TeamView(props: {
   </section>
   return <>
     {panel}
+    <Show when={expanded()}>{(trigger) => <Modal class="overlay--team-overview" label="Team overview" returnFocus={trigger()} onClose={() => setExpanded(undefined)} header={<div class="team-overview__heading"><Icon name="team" size={18} /><h2>Team</h2><span>{teamActivityLabel(props.data())}</span></div>}>
+      <div class="team-overview" classList={{ "team-overview--inspecting": selectedTask() !== undefined }}>
+        <section class="team-overview__master" aria-label="Master session"><h3>Master session</h3><code>{props.data().rootID}</code>
+          <Show when={props.sessionSummary?.()}>{(summary) => <><Show when={summary().contextLabel}><p>{summary().contextLabel} · {summary().contextTokens}</p></Show><Show when={summary().autonomyLabel}><p>{summary().autonomyLabel}</p></Show><Show when={summary().goalText}><p>{summary().goalText}</p></Show></>}</Show>
+          <p class="team-view__note">Select a child to inspect its reported work. The master conversation stays attached.</p>
+        </section>
+        <section class="team-overview__children" aria-label="Direct children"><div class="team-overview__section-heading"><h3>Direct children</h3><span>{props.data().total ?? props.data().tasks.length}</span></div>
+          <Show when={error()}>{(message) => <p class="team-view__error" role="alert">{message()}</p>}</Show>
+          <Show when={props.data().status === "loading"}><LoadingPlaceholder kind="team" label="Loading direct children…" /></Show>
+          <Show when={props.data().status === "error" || props.data().status === "unsupported"}><p role="status">{props.data().status === "unsupported" ? "Update YCoding on this machine to view subagents." : "Direct children could not be loaded."}</p></Show>
+          <Show when={props.data().status === "ready" && props.data().tasks.length === 0}><p role="status">No subagents have been launched.</p></Show>
+          <ul class="team-overview__list"><For each={props.data().tasks.map((task) => task.sessionID)}>{(id) => <li class="team-overview__child" data-state={task(id).state} data-selected={selectedChild() === id}>
+            <button type="button" data-action="inspect-child" aria-pressed={selectedChild() === id} onClick={(event) => { childTrigger = event.currentTarget; childScroll = event.currentTarget.closest<HTMLElement>(".overlay__body"); childTop = childScroll?.scrollTop ?? 0; setSelectedChild(id); if (window.matchMedia("(max-width: 767px), (max-height: 599px) and (pointer: coarse)").matches) queueMicrotask(() => { if (childScroll) { childScroll.scrollTop = 0; childScroll.querySelector<HTMLButtonElement>('.team-overview__back')?.focus({ preventScroll: true }) } }) }}><span class="team-view__state"><StateMark state={task(id).state} />{taskStateLabel(task(id))}</span><strong>{task(id).agent ?? "Agent unreported"}</strong><span>{task(id).description}</span><small>{task(id).modelLabel}</small></button>
+            <TaskUsage task={() => task(id)} loading={() => props.data().economicsLoading === true} accountingUnsupported={() => props.data().accountingUnsupported === true} />
+          </li>}</For></ul>
+          <Show when={props.data().next}><button type="button" class="team-view__button" disabled={props.data().pageLoading} onClick={() => runRead(props.onLoadOlder)}>{props.data().pageLoading ? "Loading older…" : "Load older children"}</button></Show>
+        </section>
+        <section class="team-overview__blockers" aria-label="Blockers and escalations"><h3>Blockers and escalations</h3>
+          <Show when={props.data().tasks.some((task) => task.state === "waiting" || task.state === "failed" || task.state === "lost" || task.stoppedRecovery !== undefined)} fallback={<p class="team-view__note">No reported blockers.</p>}>
+            <For each={props.data().tasks.filter((task) => task.state === "waiting" || task.state === "failed" || task.state === "lost" || task.stoppedRecovery !== undefined).map((task) => task.sessionID)}>{(id) => <article class="team-overview__blocker" data-state={task(id).state}><header><StateMark state={task(id).state} /><strong>{task(id).agent ?? "Agent unreported"} · {task(id).description}</strong><span>{taskStateLabel(task(id))}</span></header>
+              <Show when={task(id).question}>{(question) => <Show when={!question().deferred} fallback={<p class="team-view__note">This question is waiting in Review.</p>}><TeamAnswerForm question={question()} onAnswer={(questionID, text) => props.onAnswer(id, questionID, text)} /></Show>}</Show>
+              <button type="button" class="team-view__button" onClick={() => { setExpanded(undefined); props.onOpen(id) }}>Open child Session <Icon name="external" size={14} /></button>
+            </article>}</For>
+          </Show>
+        </section>
+        <Show when={selectedTask()}>{(task) => <aside class="team-overview__inspector" aria-label="Selected child"><div class="team-overview__section-heading"><span class="team-overview__eyebrow">Selected child</span><button type="button" class="team-view__icon team-overview__close" aria-label="Close child inspector" onClick={backToChildren}><Icon name="close" size={16} /></button></div><button type="button" class="button button--ghost team-overview__back" onClick={backToChildren}><Icon name="arrow-left" size={16} />Back to children</button>
+          <h3>{task().agent ?? "Agent unreported"}</h3><p>{task().description}</p><span class="team-view__state"><StateMark state={task().state} />{taskStateLabel(task())}</span><code>{task().modelLabel}</code>
+          <TaskUsage task={task} loading={() => props.data().economicsLoading === true} accountingUnsupported={() => props.data().accountingUnsupported === true} />
+          <button type="button" class="team-view__button" onClick={() => { const id = task().sessionID; setExpanded(undefined); props.onOpen(id) }}>Open child Session <Icon name="external" size={14} /></button>
+          <TeamConversation task={task} onOpen={() => { const id = task().sessionID; setExpanded(undefined); props.onOpen(id) }} />
+        </aside>}</Show>
+      </div>
+    </Modal>}</Show>
     <Show when={confirm()} keyed>{(item) => {
       let close: (() => void) | undefined
       return <Modal class="overlay--dialog" label={item.kind === "cancel" ? "Cancel subagent" : "Kill shell"} returnFocus={item.trigger} onClose={() => { if (confirm()?.id === item.id && confirm()?.kind === item.kind) setConfirm(undefined) }}

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeBoolean, decodeNumber, decodeRecord, decodeString } from "./cdp"
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 
@@ -26,11 +26,11 @@ test("Team loading reserves a card-shaped region with one polite announcement", 
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/loading-fixture.html`)
-    for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.team-view') !== null`); attempt += 1) await Bun.sleep(50)
-    const pending = await page.evaluate<{ readonly skeleton: boolean; readonly status: number; readonly busy: boolean }>(`({ skeleton: document.querySelector('#team-panel-subagents .loading-placeholder') !== null, status: document.querySelectorAll('#team-panel-subagents [role="status"]').length, busy: document.querySelector('#team-panel-subagents')?.getAttribute('aria-busy') === 'true' })`)
+    for (let attempt = 0; attempt < 50 && !await page.evaluate(`document.querySelector('.team-view') !== null`); attempt += 1) await Bun.sleep(50)
+    const pending = await page.evaluate(`({ skeleton: document.querySelector('#team-panel-subagents .loading-placeholder') !== null, status: document.querySelectorAll('#team-panel-subagents [role="status"]').length, busy: document.querySelector('#team-panel-subagents')?.getAttribute('aria-busy') === 'true' })`)
     expect(pending).toEqual({ skeleton: true, status: 1, busy: true })
     await page.evaluate(`window.finishLoading()`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.team-view__task') !== null && document.querySelector('#team-panel-subagents .loading-placeholder') === null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.team-view__task') !== null && document.querySelector('#team-panel-subagents .loading-placeholder') === null`)).toBe(true)
   } finally { await page.close() }
 })
 
@@ -38,16 +38,16 @@ test("Team pages and shell output keep visual loading affordances inside their p
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/loading-fixture.html`)
-    for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.team-view') !== null`); attempt += 1) await Bun.sleep(50)
+    for (let attempt = 0; attempt < 50 && !await page.evaluate(`document.querySelector('.team-view') !== null`); attempt += 1) await Bun.sleep(50)
     await page.evaluate(`window.finishLoading()`)
     await page.evaluate(`document.querySelector('.team-view__more').click()`)
-    expect(await page.evaluate<boolean>(`document.querySelector('#team-panel-subagents .team-view__more').textContent.trim() === 'Loading older…' && document.querySelector('#team-panel-subagents .team-view__more').disabled && document.querySelector('[data-session-id="ses_child"]') !== null && document.querySelector('#team-panel-subagents .loading-placeholder') === null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('#team-panel-subagents .team-view__more').textContent.trim() === 'Loading older…' && document.querySelector('#team-panel-subagents .team-view__more').disabled && document.querySelector('[data-session-id="ses_child"]') !== null && document.querySelector('#team-panel-subagents .loading-placeholder') === null`)).toBe(true)
     await page.evaluate(`window.finishPage()`)
-    expect(await page.evaluate<boolean>(`document.querySelector('[data-session-id="ses_old"]') !== null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('[data-session-id="ses_old"]') !== null`)).toBe(true)
     await page.evaluate(`document.querySelector('[data-tab="shell"]').click(); document.querySelector('[data-action="output"]').click()`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.team-view__output .loading-placeholder--output') !== null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.team-view__output .loading-placeholder--output') !== null`)).toBe(true)
     await page.evaluate(`window.finishOutput()`)
-    expect(await page.evaluate<string>(`document.querySelector('.team-view__output pre')?.textContent ?? ''`)).toContain("Tests passed")
+    expect(await page.evaluate(`document.querySelector('.team-view__output pre')?.textContent ?? ''`)).toContain("Tests passed")
   } finally { await page.close() }
 })
 
@@ -55,12 +55,12 @@ test("Office loading holds the canvas and roster geometry while subagents arrive
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/loading-fixture.html`)
-    for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.office-roster') !== null`); attempt += 1) await Bun.sleep(50)
-    const pending = await page.evaluate<{ readonly placeholder: boolean; readonly height: number }>(`({ placeholder: document.querySelector('.office-roster .loading-placeholder--team') !== null, height: document.querySelector('.office-workspace__canvas').getBoundingClientRect().height })`)
+    for (let attempt = 0; attempt < 50 && !await page.evaluate(`document.querySelector('.office-roster') !== null`); attempt += 1) await Bun.sleep(50)
+    const pending = await page.evaluate(`({ placeholder: document.querySelector('.office-roster .loading-placeholder--team') !== null, height: document.querySelector('.office-workspace__canvas').getBoundingClientRect().height })`, (value: unknown) => { const record = decodeRecord(value); return { ...record, placeholder: (decodeBoolean)(record["placeholder"]), height: (decodeNumber)(record["height"]) } })
     expect(pending.placeholder).toBe(true)
-    expect(await page.evaluate<boolean>(`document.querySelector('.office-roster__empty') === null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.office-roster__empty') === null`)).toBe(true)
     await page.evaluate(`window.finishOfficeTeam()`)
-    const settled = await page.evaluate<{ readonly placeholder: boolean; readonly height: number }>(`({ placeholder: document.querySelector('.office-roster .loading-placeholder--team') !== null, height: document.querySelector('.office-workspace__canvas').getBoundingClientRect().height })`)
+    const settled = await page.evaluate(`({ placeholder: document.querySelector('.office-roster .loading-placeholder--team') !== null, height: document.querySelector('.office-workspace__canvas').getBoundingClientRect().height })`, (value: unknown) => { const record = decodeRecord(value); return { ...record, placeholder: (decodeBoolean)(record["placeholder"]), height: (decodeNumber)(record["height"]) } })
     expect(settled.placeholder).toBe(false)
     expect(Math.abs(settled.height - pending.height)).toBeLessThanOrEqual(1)
   } finally { await page.close() }
@@ -70,13 +70,13 @@ test("image loading reserves the exact thumbnail frame until the source arrives"
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/loading-fixture.html`)
-    for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.transcript-attachment') !== null`); attempt += 1) await Bun.sleep(50)
+    for (let attempt = 0; attempt < 50 && !await page.evaluate(`document.querySelector('.transcript-attachment') !== null`); attempt += 1) await Bun.sleep(50)
     await page.evaluate(`document.querySelector('.transcript-attachment').scrollIntoView()`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.transcript-attachment .loading-placeholder--image') !== null`)).toBe(true)
-    const before = await page.evaluate<{ readonly width: number; readonly height: number }>(`(() => { const box = document.querySelector('.transcript-attachment').getBoundingClientRect(); return { width: box.width, height: box.height } })()`)
+    expect(await page.evaluate(`document.querySelector('.transcript-attachment .loading-placeholder--image') !== null`)).toBe(true)
+    const before = await page.evaluate(`(() => { const box = document.querySelector('.transcript-attachment').getBoundingClientRect(); return { width: box.width, height: box.height } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]) } })
     await page.evaluate(`window.finishImage()`)
-    for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.transcript-attachment img')?.naturalWidth > 0`); attempt += 1) await Bun.sleep(20)
-    const after = await page.evaluate<{ readonly width: number; readonly height: number }>(`(() => { const box = document.querySelector('.transcript-attachment').getBoundingClientRect(); return { width: box.width, height: box.height } })()`)
+    for (let attempt = 0; attempt < 50 && !await page.evaluate(`document.querySelector('.transcript-attachment img')?.naturalWidth > 0`); attempt += 1) await Bun.sleep(20)
+    const after = await page.evaluate(`(() => { const box = document.querySelector('.transcript-attachment').getBoundingClientRect(); return { width: box.width, height: box.height } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]) } })
     expect(Math.abs(after.height - before.height)).toBeLessThanOrEqual(1)
     expect(Math.abs(after.width - before.width)).toBeLessThanOrEqual(1)
   } finally { await page.close() }
@@ -86,11 +86,11 @@ test("older history loading appears without moving the resident message", async 
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/loading-fixture.html`)
-    for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('[data-message-id="prompt_1"]') !== null`); attempt += 1) await Bun.sleep(50)
-    const before = await page.evaluate<number>(`document.querySelector('[data-message-id="prompt_1"]').getBoundingClientRect().top`)
+    for (let attempt = 0; attempt < 50 && !await page.evaluate(`document.querySelector('[data-message-id="prompt_1"]') !== null`); attempt += 1) await Bun.sleep(50)
+    const before = await page.evaluate(`document.querySelector('[data-message-id="prompt_1"]').getBoundingClientRect().top`, decodeNumber)
     await page.evaluate(`window.startHistory()`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.transcript-navigation .loading-placeholder--history') !== null`)).toBe(true)
-    const after = await page.evaluate<number>(`document.querySelector('[data-message-id="prompt_1"]').getBoundingClientRect().top`)
+    expect(await page.evaluate(`document.querySelector('.transcript-navigation .loading-placeholder--history') !== null`)).toBe(true)
+    const after = await page.evaluate(`document.querySelector('[data-message-id="prompt_1"]').getBoundingClientRect().top`, decodeNumber)
     expect(Math.abs(after - before)).toBeLessThanOrEqual(1)
   } finally { await page.close() }
 })
@@ -99,10 +99,10 @@ test("shell output loading keeps a terminal-sized placeholder until its page set
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/loading-fixture.html`)
-    for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('[data-message-id="shell_1"]') !== null`); attempt += 1) await Bun.sleep(50)
-    expect(await page.evaluate<boolean>(`document.querySelector('[data-message-id="shell_1"] .loading-placeholder--output') !== null`)).toBe(true)
+    for (let attempt = 0; attempt < 50 && !await page.evaluate(`document.querySelector('[data-message-id="shell_1"]') !== null`); attempt += 1) await Bun.sleep(50)
+    expect(await page.evaluate(`document.querySelector('[data-message-id="shell_1"] .loading-placeholder--output') !== null`)).toBe(true)
     await page.evaluate(`window.finishShellOutput()`)
-    expect(await page.evaluate<string>(`document.querySelector('[data-message-id="shell_1"] .output')?.textContent ?? ''`)).toContain("Tests passed")
+    expect(await page.evaluate(`document.querySelector('[data-message-id="shell_1"] .output')?.textContent ?? ''`)).toContain("Tests passed")
   } finally { await page.close() }
 })
 
@@ -112,23 +112,23 @@ test("loading placeholders wait 140 ms in both motion modes and never flash for 
     for (const reduce of [false, true]) {
       await page.setReducedMotion(reduce)
       await page.navigate(`http://127.0.0.1:${port}/verify/loading-fixture.html`)
-      for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.team-view__header') !== null`); attempt += 1) await Bun.sleep(50)
+      for (let attempt = 0; attempt < 50 && !await page.evaluate(`document.querySelector('.team-view__header') !== null`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`window.finishLoading()`)
-      const loadedHeight = await page.evaluate<number>(`document.querySelector('.team-view__task').getBoundingClientRect().height`)
-      const initial = await page.evaluate<{ readonly visibility: string; readonly height: number }>(`(() => { window.startLoading(); const shape = document.querySelector('#team-panel-subagents .loading-placeholder__shape'); return { visibility: getComputedStyle(shape).visibility, height: shape.getBoundingClientRect().height } })()`)
+      const loadedHeight = await page.evaluate(`document.querySelector('.team-view__task').getBoundingClientRect().height`, decodeNumber)
+      const initial = await page.evaluate(`(() => { window.startLoading(); const shape = document.querySelector('#team-panel-subagents .loading-placeholder__shape'); return { visibility: getComputedStyle(shape).visibility, height: shape.getBoundingClientRect().height } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, visibility: (decodeString)(record["visibility"]), height: (decodeNumber)(record["height"]) } })
       expect(Math.abs(initial.height - loadedHeight)).toBeLessThanOrEqual(1)
       expect(initial.visibility).toBe("hidden")
       await page.evaluate(`window.finishLoading()`)
       await Bun.sleep(180)
-      expect(await page.evaluate<boolean>(`document.querySelector('#team-panel-subagents .loading-placeholder') === null`)).toBe(true)
-      const delayed = await page.evaluate<{ readonly elapsed: number; readonly animation: string }>(`new Promise((resolve, reject) => {
+      expect(await page.evaluate(`document.querySelector('#team-panel-subagents .loading-placeholder') === null`)).toBe(true)
+      const delayed = await page.evaluate(`new Promise((resolve, reject) => {
         window.startLoading(); const start = performance.now();
         const read = () => { const shape = document.querySelector('#team-panel-subagents .loading-placeholder__shape');
           if (shape && getComputedStyle(shape).visibility === 'visible') return resolve({ elapsed: performance.now() - start, animation: getComputedStyle(shape.querySelector('.loading-placeholder__bar')).animationName });
           if (performance.now() - start > 1000) return reject(new Error('Loading placeholder stayed hidden'));
           requestAnimationFrame(read);
         }; read();
-      })`)
+      })`, (value: unknown) => { const record = decodeRecord(value); return { ...record, elapsed: (decodeNumber)(record["elapsed"]), animation: (decodeString)(record["animation"]) } })
       expect(delayed.elapsed).toBeGreaterThanOrEqual(130)
       expect(delayed.animation === "none").toBe(reduce)
     }
@@ -144,22 +144,22 @@ test("captures pending and settled loading surfaces at desktop and phone in both
       await page.setViewport(width, height)
       await page.setReducedMotion(theme === "dark")
       await page.navigate(`http://127.0.0.1:${port}/verify/loading-fixture.html?theme=${theme}`)
-      for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.office-roster .loading-placeholder--team') !== null`); attempt += 1) await Bun.sleep(50)
+      for (let attempt = 0; attempt < 50 && !await page.evaluate(`document.querySelector('.office-roster .loading-placeholder--team') !== null`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`window.startHistory()`)
       await Bun.sleep(190)
-      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
-      const canvasTop = await page.evaluate<number>(`document.querySelector('.office-workspace__canvas').getBoundingClientRect().top`)
+      expect(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+      const canvasTop = await page.evaluate(`document.querySelector('.office-workspace__canvas').getBoundingClientRect().top`, decodeNumber)
       await Bun.write(join(output, `pending-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
       await page.evaluate(`document.querySelector('.transcript-attachment').scrollIntoView()`)
       await Bun.write(join(output, `pending-detail-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
       await page.evaluate(`window.finishLoading(); window.finishOfficeTeam(); window.finishImage(); window.finishShellOutput(); window.finishHistory()`)
-      for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.transcript-attachment img')?.naturalWidth > 0`); attempt += 1) await Bun.sleep(20)
+      for (let attempt = 0; attempt < 50 && !await page.evaluate(`document.querySelector('.transcript-attachment img')?.naturalWidth > 0`); attempt += 1) await Bun.sleep(20)
       await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
       await Bun.write(join(output, `settled-detail-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
       await page.evaluate(`window.scrollTo(0, 0)`)
-      expect(Math.abs(await page.evaluate<number>(`document.querySelector('.office-workspace__canvas').getBoundingClientRect().top`) - canvasTop)).toBeLessThanOrEqual(1)
+      expect(Math.abs(await page.evaluate(`document.querySelector('.office-workspace__canvas').getBoundingClientRect().top`, decodeNumber) - canvasTop)).toBeLessThanOrEqual(1)
       await Bun.write(join(output, `settled-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
-      expect(await page.evaluate<boolean>(`document.querySelector('.team-view__task') !== null && document.querySelector('.office-roster .loading-placeholder') === null && document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('.team-view__task') !== null && document.querySelector('.office-roster .loading-placeholder') === null && document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
     }
   } finally { await page.close() }
 }, 30_000)

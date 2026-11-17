@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdirSync } from "node:fs"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeDictionary, decodeNullable, decodeNumber, decodeOptional, decodeRecord, decodeString, type Page } from "./cdp"
+import { chooseWorkspace } from "./workspace-controls"
 
 const port = 4231
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -33,64 +34,24 @@ afterAll(async () => {
 })
 
 describe("remote navigation", () => {
-  test("lists workspaces by name in a sidebar, root Sessions only, and no native select", async () => {
+  test("keeps repository filtering in Sessions content beside the shared Session rail", async () => {
     const page = await requireBrowser().openPage()
     try {
-      for (const theme of themes) {
-        for (const [width, height] of viewports) {
-          await page.setViewport(width, height)
-          await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&workspaces=many&theme=${theme}`)
-          await until(page, `document.querySelectorAll(".sessions-table__name").length > 0`)
-          const report = await page.evaluate<{
-            readonly navVisible: boolean
-            readonly compactVisible: boolean
-            readonly labels: readonly string[]
-            readonly active: string | null
-            readonly title: string | undefined
-            readonly hashes: boolean
-            readonly nativeSelects: number
-            readonly overflow: boolean
-            readonly rows: readonly string[]
-          }>(`(() => {
-            const visible = (element) => element instanceof HTMLElement && getComputedStyle(element).display !== "none" && element.getBoundingClientRect().width > 0
-            return {
-              navVisible: visible(document.querySelector(".workspace-nav")),
-              compactVisible: visible(document.querySelector(".sessions-page__workspace-select")),
-              labels: [...document.querySelectorAll(".workspace-nav__label")].map((label) => label.textContent.trim()),
-              active: document.querySelector('.workspace-nav__item[aria-current="true"] .workspace-nav__label')?.textContent.trim() ?? null,
-              title: document.querySelector(".sessions-page__title")?.textContent.trim(),
-              hashes: /[0-9a-f]{40}/.test(document.body.innerText),
-              nativeSelects: document.querySelectorAll("select").length,
-              overflow: document.documentElement.scrollWidth > innerWidth,
-              rows: [...document.querySelectorAll(".sessions-table__name")].map((name) => name.textContent.trim()),
-            }
-          })()`)
-          expect(report.navVisible).toBe(width >= 768)
-          expect(report.compactVisible).toBe(width < 768)
-          expect(report.labels).toEqual(["ycoding (workspace)", ".agents", "office", "ycoding (Archive)", "llama-cpp-proxy-with-a-long-repository-name"])
-          expect(report.active).toBe("ycoding (workspace)")
-          expect(report.title).toBe("ycoding (workspace)")
-          expect(report.hashes).toBe(false)
-          expect(report.nativeSelects).toBe(0)
-          expect(report.overflow).toBe(false)
-          expect(report.rows).toContain("Stream remote output safely")
-          expect(report.rows).not.toContain("Child: fix flaky suite")
-          await capture(page, `sessions-${width}-${theme}`)
-        }
-      }
-
-      await page.setViewport(1440, 900)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&workspaces=many&theme=dark`)
-      await until(page, `document.querySelectorAll(".workspace-nav__item").length === 5 && document.querySelectorAll(".sessions-table__name").length > 0`)
-      await page.evaluate(`[...document.querySelectorAll(".workspace-nav__item")].find((item) => item.textContent.trim() === ".agents").click()`)
-      await until(page, `document.querySelector(".sessions-page__title")?.textContent.trim() === ".agents"`)
-      expect(await page.evaluate<string | null>(`document.querySelector('.workspace-nav__item[aria-current="true"]')?.textContent.trim() ?? null`)).toBe(".agents")
-    } finally {
-      await page.close()
-    }
-  }, 180_000)
+      await until(page, `document.querySelectorAll('.sessions-table__name').length>0`)
+      expect(await page.evaluate(`!!document.querySelector('.workspace__rail [aria-label="Search sessions"]')`)).toBe(true)
+      expect(await page.evaluate(`!!document.querySelector('.sessions-page__workspace-select [aria-label="Workspace"]')?.getClientRects().length`)).toBe(true)
+      expect(await page.evaluate(`[...document.querySelectorAll('.sessions-table__name')].map(e=>e.textContent.trim())`)).toContain("Stream remote output safely")
+      expect(await page.evaluate(`[...document.querySelectorAll('.sessions-table__name')].map(e=>e.textContent.trim())`)).not.toContain("Child: fix flaky suite")
+      expect(await page.evaluate(`document.querySelectorAll('select').length`)).toBe(0)
+      await chooseWorkspace(page, ".agents")
+      await until(page, `document.querySelector('.sessions-page__title')?.textContent.trim()==='.agents'`)
+      expect(await page.evaluate(`document.activeElement===document.querySelector('.sessions-page__workspace-select [aria-label="Workspace"]')`)).toBe(true)
+      expect(await page.evaluate(`document.documentElement.scrollWidth>innerWidth`)).toBe(false)
+    } finally { await page.close() }
+  }, 30_000)
 
-  test("offers Sessions, Usage and Settings without Activity and shows the connection strip only when it has something to say", async () => {
+  test("offers five global destinations without Activity and shows the connection strip only when it has something to say", async () => {
     const page = await requireBrowser().openPage()
     const links = `(() => ({
       header: [...document.querySelectorAll('.remote-nav a')].map((link) => link.getAttribute('href')),
@@ -100,14 +61,14 @@ describe("remote navigation", () => {
       strip: document.querySelector('.status-strip') !== null,
       overflow: document.documentElement.scrollWidth > innerWidth,
     }))()`
-    const destinations = ["/remote/sessions", "/remote/usage", "/remote/settings"]
+    const destinations = ["/remote/projects", "/remote/sessions", "/remote/workspaces", "/remote/usage", "/remote/settings"]
     try {
       for (const theme of themes) {
         for (const [width, height] of [[390, 844], [1440, 900]] as const) {
           await page.setViewport(width, height)
           await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`)
           await until(page, `document.querySelector('.remote-connection-label')?.textContent.trim() === 'Connected' && document.querySelector('.composer') !== null`)
-          const healthy = await page.evaluate<{ header: readonly string[]; bottom: readonly string[]; activityButton: boolean; pill: string | null; strip: boolean; overflow: boolean }>(links)
+          const healthy = await page.evaluate(links, (value: unknown) => { const record = decodeRecord(value); return { ...record, header: (decodeArray(decodeString))(record["header"]), bottom: (decodeArray(decodeString))(record["bottom"]), activityButton: (decodeBoolean)(record["activityButton"]), pill: (decodeNullable(decodeString))(record["pill"]), strip: (decodeBoolean)(record["strip"]), overflow: (decodeBoolean)(record["overflow"]) } })
           expect(healthy.header).toEqual(destinations)
           expect(healthy.bottom).toEqual(destinations)
           expect(healthy.activityButton).toBe(false)
@@ -119,7 +80,7 @@ describe("remote navigation", () => {
       await page.setViewport(768, 1024)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=selected-machine-offline-768`)
       await until(page, `document.querySelector('.status-strip')?.innerText.includes('Studio Mac is not reachable')`)
-      expect(await page.evaluate<string>(`document.querySelector('.status-strip__body')?.textContent ?? ''`)).toContain("Reconnect after it is back online.")
+      expect(await page.evaluate(`document.querySelector('.status-strip__body')?.textContent ?? ''`)).toContain("Reconnect after it is back online.")
     } finally {
       await page.close()
     }
@@ -137,14 +98,7 @@ describe("remote navigation", () => {
             await page.evaluate(`document.querySelector('.app-header__menu').click()`)
             await until(page, `document.querySelector('.overlay--sessions-sheet[open] .session-row--active') !== null`)
           }
-          const report = await page.evaluate<{
-            readonly bar: boolean
-            readonly navDot: boolean
-            readonly bottomDot: boolean
-            readonly rowDot: boolean
-            readonly rows: readonly string[]
-            readonly overflow: boolean
-          }>(`(() => {
+          const report = await page.evaluate(`(() => {
             const visible = (element) => element instanceof HTMLElement && getComputedStyle(element).display !== "none" && element.getBoundingClientRect().width > 0
             return {
               bar: (() => { const bar = document.querySelector('.workspace__topbar'); const team = document.querySelector('.app-header [aria-label="Open Team"]'); return Boolean(team) && bar?.querySelector('[aria-label="Open Team"]') == null && bar?.parentElement === document.querySelector('.workspace__main') && bar.querySelector('.presentation-switch') === null && bar.querySelector('.conversation-breadcrumb') !== null })(),
@@ -154,7 +108,7 @@ describe("remote navigation", () => {
               rows: [...document.querySelectorAll(".session-row__name")].map((name) => name.textContent.trim()),
               overflow: document.documentElement.scrollWidth > innerWidth,
             }
-          })()`)
+          })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, bar: (decodeBoolean)(record["bar"]), navDot: (decodeBoolean)(record["navDot"]), bottomDot: (decodeBoolean)(record["bottomDot"]), rowDot: (decodeBoolean)(record["rowDot"]), rows: (decodeArray(decodeString))(record["rows"]), overflow: (decodeBoolean)(record["overflow"]) } })
           expect(report.bar).toBe(true)
           expect(report.navDot || report.bottomDot).toBe(true)
           expect(report.rowDot).toBe(true)
@@ -168,7 +122,7 @@ describe("remote navigation", () => {
       await page.setViewport(1440, 900)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=dark&presentation=office`)
       await until(page, `document.querySelector('.remote-conversation-view')?.inert === true`)
-      expect(await page.evaluate<boolean>(`(() => { const conversation=document.querySelector('.remote-conversation-view'); const composer=document.querySelector('.composer-resident'); return conversation?.getAttribute('aria-hidden') === 'true' && composer !== null && getComputedStyle(composer).display === 'none' })()`)).toBe(true)
+      expect(await page.evaluate(`(() => { const conversation=document.querySelector('.remote-conversation-view'); const composer=document.querySelector('.composer-resident'); return conversation?.getAttribute('aria-hidden') === 'true' && composer !== null && getComputedStyle(composer).display === 'none' })()`)).toBe(true)
       await page.evaluate(`document.querySelector('[aria-label="Back to conversation"]').click()`)
       await until(page, `document.querySelector('.remote-conversation-view')?.inert === false && getComputedStyle(document.querySelector('.composer-resident')).display !== 'none'`)
     } finally {
@@ -198,7 +152,7 @@ describe("remote navigation", () => {
           await until(page, `window.remoteStatus && document.querySelectorAll(".sessions-table__name").length > 0`)
           await page.evaluate(`window.remoteStatus([], ["ses_fixture"], ["ses_fixture"])`)
           await until(page, `(${findRow})?.querySelector('.sessions-table__status .chip')?.textContent.trim() === 'Failed'`)
-          const failed = await page.evaluate<{ chips: readonly string[]; rowDot: boolean; navDot: boolean; navLabel: string | null; overflow: boolean }>(report)
+          const failed = await page.evaluate(report, (value: unknown) => { const record = decodeRecord(value); return { ...record, chips: (decodeArray(decodeString))(record["chips"]), rowDot: (decodeBoolean)(record["rowDot"]), navDot: (decodeBoolean)(record["navDot"]), navLabel: (decodeNullable(decodeString))(record["navLabel"]), overflow: (decodeBoolean)(record["overflow"]) } })
           expect(failed.chips).toEqual(["Failed"])
           expect(failed.rowDot).toBe(false)
           expect(failed.navDot).toBe(false)
@@ -207,7 +161,7 @@ describe("remote navigation", () => {
           await capture(page, `failed-session-${width}-${theme}`)
           await page.evaluate(`window.remoteStatus([], ["ses_fixture"])`)
           await until(page, `(${findRow})?.querySelector('.sessions-table__status .chip')?.textContent.trim() === 'Waiting for you'`)
-          const waiting = await page.evaluate<{ chips: readonly string[]; rowDot: boolean; navDot: boolean; navLabel: string | null }>(report)
+          const waiting = await page.evaluate(report, (value: unknown) => { const record = decodeRecord(value); return { ...record, chips: (decodeArray(decodeString))(record["chips"]), rowDot: (decodeBoolean)(record["rowDot"]), navDot: (decodeBoolean)(record["navDot"]), navLabel: (decodeNullable(decodeString))(record["navLabel"]) } })
           expect(waiting.chips).toEqual(["Waiting for you"])
           expect(waiting.rowDot).toBe(true)
           expect(waiting.navDot).toBe(true)
@@ -236,7 +190,6 @@ describe("remote navigation", () => {
         overflow: document.documentElement.scrollWidth > innerWidth,
       }
     })()`
-    type Report = { chips: readonly string[] | null; rowDot: boolean; card: string | null; cardColor: string | null; navDot: boolean; navLabel: string | null; overflow: boolean }
     const filter = (name: string) => `[...document.querySelectorAll('.session-filters__option')].find((button) => button.textContent.trim() === '${name}').click()`
     try {
       for (const theme of themes) {
@@ -246,14 +199,14 @@ describe("remote navigation", () => {
           await until(page, `window.remoteStatus && document.querySelectorAll(".sessions-table__name").length > 0 && document.querySelectorAll(".running-sessions__item").length > 0`)
           await page.evaluate(`window.remoteStatus([], ["ses_fixture"])`)
           await until(page, `(${report}).card === 'Waiting for you'`)
-          const waiting = await page.evaluate<Report>(report)
+          const waiting = await page.evaluate(report, (value: unknown) => { const record = decodeRecord(value); return { ...record, chips: (decodeNullable(decodeArray(decodeString)))(record["chips"]), rowDot: (decodeBoolean)(record["rowDot"]), card: (decodeNullable(decodeString))(record["card"]), cardColor: (decodeNullable(decodeString))(record["cardColor"]), navDot: (decodeBoolean)(record["navDot"]), navLabel: (decodeNullable(decodeString))(record["navLabel"]), overflow: (decodeBoolean)(record["overflow"]) } })
           expect(waiting.chips).toEqual(["Waiting for you"])
           expect(waiting.rowDot).toBe(true)
           expect(waiting.navDot).toBe(true)
 
           await page.evaluate(`window.remoteStatus([], ["ses_fixture"], [], ["ses_fixture"])`)
           await until(page, `(${report}).card === 'Background result lost' && (${report}).chips?.[0] === 'Background result lost'`)
-          const lost = await page.evaluate<Report>(report)
+          const lost = await page.evaluate(report, (value: unknown) => { const record = decodeRecord(value); return { ...record, chips: (decodeNullable(decodeArray(decodeString)))(record["chips"]), rowDot: (decodeBoolean)(record["rowDot"]), card: (decodeNullable(decodeString))(record["card"]), cardColor: (decodeNullable(decodeString))(record["cardColor"]), navDot: (decodeBoolean)(record["navDot"]), navLabel: (decodeNullable(decodeString))(record["navLabel"]), overflow: (decodeBoolean)(record["overflow"]) } })
           expect(lost.chips).toEqual(["Background result lost"])
           expect(lost.rowDot).toBe(false)
           expect(lost.navDot).toBe(false)
@@ -270,17 +223,17 @@ describe("remote navigation", () => {
 
           await page.evaluate(`window.remoteStatus(['ses_fixture'], ["ses_fixture"], [], ["ses_fixture"])`)
           await until(page, `(${report}).chips?.[0] === 'Background result lost' && (${report}).chips?.[1] === undefined`)
-          const running = await page.evaluate<Report>(report)
+          const running = await page.evaluate(report, (value: unknown) => { const record = decodeRecord(value); return { ...record, chips: (decodeNullable(decodeArray(decodeString)))(record["chips"]), rowDot: (decodeBoolean)(record["rowDot"]), card: (decodeNullable(decodeString))(record["card"]), cardColor: (decodeNullable(decodeString))(record["cardColor"]), navDot: (decodeBoolean)(record["navDot"]), navLabel: (decodeNullable(decodeString))(record["navLabel"]), overflow: (decodeBoolean)(record["overflow"]) } })
           expect(running.card).toBe("Background result lost")
           expect(running.rowDot).toBe(false)
 
           await page.evaluate(`window.remoteStatus([], ["ses_fixture"], ["ses_fixture"])`)
           await until(page, `(${report}).chips?.[0] === 'Failed'`)
-          expect((await page.evaluate<Report>(report)).card).not.toBe("Background result lost")
+          expect((await page.evaluate(report, (value: unknown) => { const record = decodeRecord(value); return { ...record, chips: (decodeNullable(decodeArray(decodeString)))(record["chips"]), rowDot: (decodeBoolean)(record["rowDot"]), card: (decodeNullable(decodeString))(record["card"]), cardColor: (decodeNullable(decodeString))(record["cardColor"]), navDot: (decodeBoolean)(record["navDot"]), navLabel: (decodeNullable(decodeString))(record["navLabel"]), overflow: (decodeBoolean)(record["overflow"]) } })).card).not.toBe("Background result lost")
 
           await page.evaluate(`window.remoteStatus([], [])`)
           await until(page, `!(${report}).chips?.length || (${report}).chips?.[0] === 'Idle'`)
-          const cleared = await page.evaluate<Report>(report)
+          const cleared = await page.evaluate(report, (value: unknown) => { const record = decodeRecord(value); return { ...record, chips: (decodeNullable(decodeArray(decodeString)))(record["chips"]), rowDot: (decodeBoolean)(record["rowDot"]), card: (decodeNullable(decodeString))(record["card"]), cardColor: (decodeNullable(decodeString))(record["cardColor"]), navDot: (decodeBoolean)(record["navDot"]), navLabel: (decodeNullable(decodeString))(record["navLabel"]), overflow: (decodeBoolean)(record["overflow"]) } })
           expect(cleared.chips).not.toContain("Background result lost")
           expect(cleared.card).not.toBe("Background result lost")
           expect(cleared.rowDot).toBe(false)
@@ -298,18 +251,12 @@ describe("remote navigation", () => {
         await page.setViewport(width, height)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=dark`)
         await until(page, width < 768 ? `typeof window.remoteStatus === "function" && document.querySelector(".composer") !== null` : `document.querySelector('.session-row__signal[data-signal="running"], .session-row__signal[data-signal="waiting"]') !== null`)
-        expect(await page.evaluate<boolean>(`document.querySelector(".yc-notification-center__badge") === null`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector(".yc-notification-center__badge") === null`)).toBe(true)
         await page.evaluate(`window.remoteStatus([], ["ses_archived"])`)
         await until(page, `document.querySelector(".yc-notification-center__badge") !== null`)
         await page.evaluate(`document.querySelector(".yc-notification-center__trigger").click()`)
         await until(page, `document.querySelector(".yc-notification-panel") !== null`)
-        const report = await page.evaluate<{
-          readonly titles: readonly string[]
-          readonly details: readonly string[]
-          readonly badge: boolean
-          readonly expanded: string | null
-          readonly inViewport: boolean
-        }>(`(() => {
+        const report = await page.evaluate(`(() => {
           const panel = document.querySelector(".yc-notification-panel").getBoundingClientRect()
           return {
             titles: [...document.querySelectorAll(".yc-notification__open strong")].map((title) => title.textContent.trim()),
@@ -318,7 +265,7 @@ describe("remote navigation", () => {
             expanded: document.querySelector(".yc-notification-center__trigger").getAttribute("aria-expanded"),
             inViewport: panel.left >= 0 && panel.right <= innerWidth && panel.top >= 0,
           }
-        })()`)
+        })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, titles: (decodeArray(decodeString))(record["titles"]), details: (decodeArray(decodeString))(record["details"]), badge: (decodeBoolean)(record["badge"]), expanded: (decodeNullable(decodeString))(record["expanded"]), inViewport: (decodeBoolean)(record["inViewport"]) } })
         expect(report.titles).toEqual(["Work finished", "Needs your attention"])
         expect(report.details).toContain("Stream remote output safely")
         expect(report.details).toContain("Archived: release notes")
@@ -329,7 +276,7 @@ describe("remote navigation", () => {
 
         await page.pressEscape()
         await until(page, `document.querySelector(".yc-notification-panel") === null`)
-        expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector(".yc-notification-center__trigger")`)).toBe(true)
+        expect(await page.evaluate(`document.activeElement === document.querySelector(".yc-notification-center__trigger")`)).toBe(true)
 
         await page.evaluate(`document.querySelector(".yc-notification-center__trigger").click()`)
         await until(page, `document.querySelector(".yc-notification-panel") !== null`)
@@ -349,18 +296,7 @@ describe("remote navigation", () => {
           await page.setViewport(width, height)
           await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=usage&theme=${theme}`)
           await until(page, `document.querySelectorAll(".usage-provider").length === 3 && document.querySelectorAll(".usage-tile").length > 0 && document.querySelector(".usage-breakdown table") !== null && document.querySelectorAll(".usage-distribution__legend li").length > 0`)
-          const report = await page.evaluate<{
-            readonly heading: string
-            readonly providers: readonly string[]
-            readonly openRouter: string
-            readonly copilot: string
-            readonly activeNav: readonly string[]
-            readonly placeholders: readonly string[]
-            readonly overflow: boolean
-            readonly operations: Readonly<Record<string, number>>
-            readonly distribution: readonly string[]
-            readonly provenanceText: boolean
-          }>(`(() => {
+          const report = await page.evaluate(`(() => {
             const visible = (element) => element instanceof HTMLElement && getComputedStyle(element).display !== "none" && element.getBoundingClientRect().width > 0
             const card = (label) => [...document.querySelectorAll(".usage-provider")].find((item) => item.querySelector("h3")?.textContent.trim() === label)?.textContent ?? ""
             return {
@@ -375,7 +311,7 @@ describe("remote navigation", () => {
               distribution: [...document.querySelectorAll(".usage-distribution__legend .usage-distribution__name")].map((item) => item.textContent.trim()),
               provenanceText: [...document.querySelectorAll(".usage-provider")].some((card) => /source:|stability:/i.test(card.innerText)),
             }
-          })()`)
+          })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, heading: (decodeString)(record["heading"]), providers: (decodeArray(decodeString))(record["providers"]), openRouter: (decodeString)(record["openRouter"]), copilot: (decodeString)(record["copilot"]), activeNav: (decodeArray(decodeString))(record["activeNav"]), placeholders: (decodeArray(decodeString))(record["placeholders"]), overflow: (decodeBoolean)(record["overflow"]), operations: (decodeDictionary(decodeNumber))(record["operations"]), distribution: (decodeArray(decodeString))(record["distribution"]), provenanceText: (decodeBoolean)(record["provenanceText"]) } })
           expect(report.heading).toBe("Usage")
           expect(report.providers).toEqual(["Codex", "OpenRouter", "GitHub Copilot"])
           expect(report.openRouter).toContain("Balance")
@@ -412,10 +348,10 @@ describe("remote navigation", () => {
         ]) {
           await page.evaluate(`[...document.querySelectorAll('a[href="${route.href}"]')].find(link => link.getBoundingClientRect().width > 0)?.click()`)
           await until(page, `location.pathname === '${route.pathname}'`)
-          expect(await page.evaluate<boolean>(`(() => { const p=window.routeProbe; return p.app===document.querySelector('.app') && p.header===document.querySelector('.app-header') && p.main===document.querySelector('.workspace__main') && p.scroll===document.querySelector('.workspace__scroll') && p.message===document.querySelector('.conversation-pane .transcript-message') && p.composer===document.querySelector('.composer') })()`)).toBe(true)
+          expect(await page.evaluate(`(() => { const p=window.routeProbe; return p.app===document.querySelector('.app') && p.header===document.querySelector('.app-header') && p.main===document.querySelector('.workspace__main') && p.scroll===document.querySelector('.workspace__scroll') && p.message===document.querySelector('.conversation-pane .transcript-message') && p.composer===document.querySelector('.composer') })()`)).toBe(true)
         }
-        expect(await page.evaluate<boolean>(`window.routeProbe.entrance === window.routeProbe.message.getAnimations({subtree:true})[0]`)).toBe(true)
-        expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+        expect(await page.evaluate(`window.routeProbe.entrance === window.routeProbe.message.getAnimations({subtree:true})[0]`)).toBe(true)
+        expect(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
       } finally { await page.close() }
     }
   }, 60_000)
@@ -428,8 +364,8 @@ describe("remote navigation", () => {
         await page.setReducedMotion(reduced)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`)
         await until(page, `document.querySelector('.conversation-pane .transcript-message') !== null`)
-        const transition = await page.evaluate<{ readonly exiting: boolean; readonly entering: boolean; readonly duration: string; readonly hidden: boolean; readonly oldVisibility: string; readonly frames: readonly number[] }>(`new Promise(resolve => { [...document.querySelectorAll('a[href="/remote/usage"]')].find(link => link.getBoundingClientRect().width > 0)?.click(); queueMicrotask(() => { const old=document.querySelector('.route-panel--exiting'); const next=document.querySelector('.route-panel--active, .route-panel--entering'); const report={exiting:old?.inert === true && old?.getAttribute('aria-hidden') === 'true', entering:next !== null, duration:next ? getComputedStyle(next).transitionDuration : '', hidden:old?.contains(document.activeElement) ?? false, oldVisibility:old ? getComputedStyle(old).contentVisibility : ''}; const frames=[]; const sample=() => { frames.push(Number(getComputedStyle(document.querySelector('.route-panel--active, .route-panel--entering')).opacity)); if(frames.length === 5) resolve({...report,frames}); else requestAnimationFrame(sample) }; requestAnimationFrame(sample) }) })`)
-        expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote/usage")
+        const transition = await page.evaluate(`new Promise(resolve => { [...document.querySelectorAll('a[href="/remote/usage"]')].find(link => link.getBoundingClientRect().width > 0)?.click(); queueMicrotask(() => { const old=document.querySelector('.route-panel--exiting'); const next=document.querySelector('.route-panel--active, .route-panel--entering'); const report={exiting:old?.inert === true && old?.getAttribute('aria-hidden') === 'true', entering:next !== null, duration:next ? getComputedStyle(next).transitionDuration : '', hidden:old?.contains(document.activeElement) ?? false, oldVisibility:old ? getComputedStyle(old).contentVisibility : ''}; const frames=[]; const sample=() => { frames.push(Number(getComputedStyle(document.querySelector('.route-panel--active, .route-panel--entering')).opacity)); if(frames.length === 5) resolve({...report,frames}); else requestAnimationFrame(sample) }; requestAnimationFrame(sample) }) })`, (value: unknown) => { const record = decodeRecord(value); return { ...record, exiting: (decodeBoolean)(record["exiting"]), entering: (decodeBoolean)(record["entering"]), duration: (decodeString)(record["duration"]), hidden: (decodeBoolean)(record["hidden"]), oldVisibility: (decodeString)(record["oldVisibility"]), frames: (decodeArray(decodeNumber))(record["frames"]) } })
+        expect(await page.evaluate(`location.pathname`)).toBe("/remote/usage")
         expect(transition.exiting).toBe(true)
         expect(transition.entering).toBe(true)
         expect(transition.hidden).toBe(false)
@@ -438,7 +374,7 @@ describe("remote navigation", () => {
         if (reduced) expect(transition.frames.every((opacity) => opacity === 1)).toBe(true)
         else expect(new Set(transition.frames).size).toBeGreaterThan(1)
         await until(page, `document.querySelector('.route-panel--exiting') === null`)
-        expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+        expect(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
       }
     } finally { await page.close() }
   }, 90_000)
@@ -451,13 +387,13 @@ describe("remote navigation", () => {
         await page.setReducedMotion(reduced)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}&team=two`)
         await until(page, `document.querySelector('[aria-label="Open Team"]') !== null && document.querySelector('.conversation-pane') !== null`)
-        const entrance = await page.evaluate<{ readonly duration: string; readonly frames: readonly number[] }>(`new Promise(resolve => { document.querySelector('[aria-label="Open Team"]').click(); queueMicrotask(() => { const panel=document.querySelector('.team-control__panel'); const duration=panel ? getComputedStyle(panel).transitionDuration : ''; const frames=[]; const sample=() => { frames.push(Number(getComputedStyle(panel).opacity)); if(frames.length===5) resolve({duration,frames}); else requestAnimationFrame(sample) }; requestAnimationFrame(sample) }) })`)
+        const entrance = await page.evaluate(`new Promise(resolve => { document.querySelector('[aria-label="Open Team"]').click(); queueMicrotask(() => { const panel=document.querySelector('.team-control__panel'); const duration=panel ? getComputedStyle(panel).transitionDuration : ''; const frames=[]; const sample=() => { frames.push(Number(getComputedStyle(panel).opacity)); if(frames.length===5) resolve({duration,frames}); else requestAnimationFrame(sample) }; requestAnimationFrame(sample) }) })`, (value: unknown) => { const record = decodeRecord(value); return { ...record, duration: (decodeString)(record["duration"]), frames: (decodeArray(decodeNumber))(record["frames"]) } })
         expect(motionDurations(entrance.duration, reduced)).toBe(true)
         if (reduced) expect(entrance.frames.every((opacity) => opacity === 1)).toBe(true)
         else expect(new Set(entrance.frames).size).toBeGreaterThan(1)
         await until(page, `document.querySelector('.team-control__panel [aria-label="Close Session companion"]') !== null`)
         await page.evaluate(`document.querySelector('.team-control__panel [aria-label="Close Session companion"]').click()`)
-        const exit = await page.evaluate<{ readonly inert: boolean; readonly hidden: boolean; readonly focused: boolean; readonly duration: string; readonly contentVisibility: string }>(`(() => { const layer=document.querySelector('.team-control--exiting'); return {inert:layer?.inert === true, hidden:layer?.getAttribute('aria-hidden') === 'true', focused:document.activeElement === document.querySelector('[aria-label="Open Team"]'), duration:layer ? getComputedStyle(layer).transitionDuration : '', contentVisibility:layer ? getComputedStyle(layer).contentVisibility : ''} })()`)
+        const exit = await page.evaluate(`(() => { const layer=document.querySelector('.team-control--exiting'); return {inert:layer?.inert === true, hidden:layer?.getAttribute('aria-hidden') === 'true', focused:document.activeElement === document.querySelector('[aria-label="Open Team"]'), duration:layer ? getComputedStyle(layer).transitionDuration : '', contentVisibility:layer ? getComputedStyle(layer).contentVisibility : ''} })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, inert: (decodeBoolean)(record["inert"]), hidden: (decodeBoolean)(record["hidden"]), focused: (decodeBoolean)(record["focused"]), duration: (decodeString)(record["duration"]), contentVisibility: (decodeString)(record["contentVisibility"]) } })
         expect(exit.inert && exit.hidden && exit.focused).toBe(true)
         expect(motionDurations(exit.duration, reduced)).toBe(true)
         expect(exit.contentVisibility).toBe(reduced ? "hidden" : "visible")
@@ -480,10 +416,10 @@ describe("remote navigation", () => {
         }
         await page.evaluate(`([...document.querySelectorAll('.new-session__trigger')].find(button => button.getBoundingClientRect().width > 0))?.click()`)
         await until(page, `document.querySelector('.new-session-composer') !== null`)
-        expect(await page.evaluate<boolean>(`(() => { const old=document.querySelector('.remote-conversation-view'); const composer=document.querySelector('.composer-resident'); return old?.inert===true && old?.getAttribute('aria-hidden')==='true' && getComputedStyle(composer).display==='none' && window.draftProbe===document.querySelector('.mini-composer__mount textarea') && window.draftProbe.value==='Keep this draft' })()`)).toBe(true)
+        expect(await page.evaluate(`(() => { const old=document.querySelector('.remote-conversation-view'); const composer=document.querySelector('.composer-resident'); return old?.inert===true && old?.getAttribute('aria-hidden')==='true' && getComputedStyle(composer).display==='none' && window.draftProbe===document.querySelector('.mini-composer__mount textarea') && window.draftProbe.value==='Keep this draft' })()`)).toBe(true)
         await page.evaluate(`document.querySelector('${width >= 768 ? ".remote-nav" : ".bottom-nav"} a[href="/remote/sessions"]')?.click()`)
         await until(page, `location.pathname === '/remote/sessions'`)
-        expect(await page.evaluate<boolean>(`(() => { const old=[...document.querySelectorAll('.route-panel--exiting')].find(panel=>panel.querySelector('.new-session-composer')); return old?.inert===true && old?.getAttribute('aria-hidden')==='true' && window.draftProbe===document.querySelector('.mini-composer__mount textarea') && window.draftProbe.value==='Keep this draft' })()`)).toBe(true)
+        expect(await page.evaluate(`(() => { const old=[...document.querySelectorAll('.route-panel--exiting')].find(panel=>panel.querySelector('.new-session-composer')); return old?.inert===true && old?.getAttribute('aria-hidden')==='true' && window.draftProbe===document.querySelector('.mini-composer__mount textarea') && window.draftProbe.value==='Keep this draft' })()`)).toBe(true)
         await page.evaluate(`document.querySelector('.workspace-resume[href^="/remote/session?"]')?.click()`)
         await until(page, `location.pathname === '/remote/session' && document.querySelector('.remote-conversation-view:not([inert])') !== null && document.querySelector('.mini-composer__mount textarea')?.value === 'Keep this draft'`)
       }
@@ -498,7 +434,7 @@ describe("remote navigation", () => {
         await page.injectOnNewDocument(`window.shellHandoff=[]; const seen=new Set(); const capture=()=>{ const app=document.querySelector('.app--selected'); if(!app) return; const stage=document.querySelector('.transcript-message') ? 'ready' : document.querySelector('.workspace__scroll .loading-placeholder--screen') ? 'loading' : 'unready'; if(seen.has(stage)) return; seen.add(stage); const main=document.querySelector('.workspace__main')?.getBoundingClientRect(); const rail=document.querySelector('.workspace__rail')?.getBoundingClientRect(); const controls=[...document.querySelectorAll('.workspace__topbar button:not([disabled]), .mini-composer__mount button:not([disabled])')].some(button=>button.getBoundingClientRect().width>0 && !button.closest('[inert]') && getComputedStyle(button).display!=='none'); window.shellHandoff.push({stage,mainLeft:main?.left,mainWidth:main?.width,railWidth:rail?.width ?? 0,placeholderHeight:document.querySelector('.workspace__scroll .loading-placeholder--screen')?.getBoundingClientRect().height ?? 0,controls}) }; new MutationObserver(capture).observe(document,{subtree:true,childList:true,attributes:true}); capture()`)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}&inventoryCount=80&sessionListDelay=1800&latency=100`)
         await until(page, `window.shellHandoff?.some(item => item.stage === 'ready')`)
-        const stages = await page.evaluate<readonly { readonly stage: string; readonly mainLeft: number; readonly mainWidth: number; readonly railWidth: number; readonly placeholderHeight: number; readonly controls: boolean }[]>(`window.shellHandoff`)
+        const stages = await page.evaluate(`window.shellHandoff`, decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, stage: (decodeString)(record["stage"]), mainLeft: (decodeNumber)(record["mainLeft"]), mainWidth: (decodeNumber)(record["mainWidth"]), railWidth: (decodeNumber)(record["railWidth"]), placeholderHeight: (decodeNumber)(record["placeholderHeight"]), controls: (decodeBoolean)(record["controls"]) } }))
         const loading = stages.find((item) => item.stage === "loading")
         const ready = stages.find((item) => item.stage === "ready")
         expect(loading?.placeholderHeight).toBeGreaterThan(0)
@@ -520,12 +456,12 @@ describe("remote navigation", () => {
         await until(page, `document.querySelector('.conversation-pane .transcript-message') !== null && document.querySelectorAll('.workspace__rail .session-row, .bottom-nav__item').length > 0`)
         await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden' })()`)
         const label = `${width}px ${theme} reduced=${reduced}`
-        const conversation = await page.evaluate<number>(`(() => { const scroll = document.querySelector('.workspace__scroll'); document.querySelector('.conversation-pane').style.minHeight = '2600px'; scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -300 })); scroll.scrollTop = 900; scroll.dispatchEvent(new Event('scroll')); return scroll.scrollTop })()`)
+        const conversation = await page.evaluate(`(() => { const scroll = document.querySelector('.workspace__scroll'); document.querySelector('.conversation-pane').style.minHeight = '2600px'; scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -300 })); scroll.scrollTop = 900; scroll.dispatchEvent(new Event('scroll')); return scroll.scrollTop })()`)
         expect(conversation, label).toBeGreaterThanOrEqual(800)
         await page.evaluate(`[...document.querySelectorAll('a[href="/remote/sessions"]')].find(link => link.getBoundingClientRect().width > 0)?.click()`)
         await until(page, `location.pathname === '/remote/sessions' && document.querySelector('.route-panel--exiting') === null && document.querySelectorAll('.sessions-table__name').length > 0`)
         await Bun.sleep(350)
-        const entry = await page.evaluate<{ readonly scrollTop: number; readonly scrollable: boolean; readonly pill: boolean; readonly overflow: boolean }>(`(() => { const scroll = document.querySelector('.workspace__scroll'); const pill = document.querySelector('.conversation-jump-slot .transcript-navigation__controls'); return { scrollTop: scroll.scrollTop, scrollable: scroll.scrollHeight > scroll.clientHeight * 1.2, pill: Boolean(pill && getComputedStyle(pill).visibility === 'visible'), overflow: document.documentElement.scrollWidth > innerWidth } })()`)
+        const entry = await page.evaluate(`(() => { const scroll = document.querySelector('.workspace__scroll'); const pill = document.querySelector('.conversation-jump-slot .transcript-navigation__controls'); return { scrollTop: scroll.scrollTop, scrollable: scroll.scrollHeight > scroll.clientHeight * 1.2, pill: Boolean(pill && getComputedStyle(pill).visibility === 'visible'), overflow: document.documentElement.scrollWidth > innerWidth } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, scrollTop: (decodeNumber)(record["scrollTop"]), scrollable: (decodeBoolean)(record["scrollable"]), pill: (decodeBoolean)(record["pill"]), overflow: (decodeBoolean)(record["overflow"]) } })
         expect(entry.scrollTop, `${label} entry scroll`).toBe(0)
         expect(entry.scrollable, `${label} long list`).toBe(true)
         expect(entry.pill, `${label} no top anchor at the top`).toBe(false)
@@ -534,19 +470,19 @@ describe("remote navigation", () => {
         await page.evaluate(`(() => { const scroll = document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: 300 })); scroll.scrollTop = 700; scroll.dispatchEvent(new Event('scroll')) })()`)
         await until(page, `document.querySelector('.conversation-jump-slot .transcript-navigation__controls--visible [aria-label="Jump to top"]') !== null`)
         await page.evaluate(`Promise.all(document.getAnimations().filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => undefined)))`)
-        const anchor = await page.evaluate<{ readonly width: number; readonly height: number; readonly insideScroll: boolean; readonly clearOfNav: boolean; readonly down: boolean; readonly reachable: boolean; readonly overflow: boolean; readonly slotHeight: number }>(`(() => { const button = document.querySelector('.conversation-jump-slot .transcript-navigation__controls--visible [aria-label="Jump to top"]'); const rect = button.getBoundingClientRect(); const scroll = document.querySelector('.workspace__scroll').getBoundingClientRect(); const nav = document.querySelector('.bottom-nav'); const navRect = nav && getComputedStyle(nav).display !== 'none' ? nav.getBoundingClientRect() : undefined; const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2); return { width: rect.width, height: rect.height, insideScroll: rect.top >= scroll.top && rect.bottom <= scroll.bottom && rect.left >= scroll.left && rect.right <= scroll.right, clearOfNav: !navRect || rect.bottom <= navRect.top, down: document.querySelector('.conversation-jump-slot [aria-label="Jump to latest"]') !== null && getComputedStyle(document.querySelector('.conversation-jump-slot [aria-label="Jump to latest"]')).visibility === 'visible', reachable: button.contains(hit), overflow: document.documentElement.scrollWidth > innerWidth, slotHeight: document.querySelector('.conversation-jump-slot').getBoundingClientRect().height } })()`)
+        const anchor = await page.evaluate(`(() => { const button = document.querySelector('.conversation-jump-slot .transcript-navigation__controls--visible [aria-label="Jump to top"]'); const rect = button.getBoundingClientRect(); const scroll = document.querySelector('.workspace__scroll').getBoundingClientRect(); const nav = document.querySelector('.bottom-nav'); const navRect = nav && getComputedStyle(nav).display !== 'none' ? nav.getBoundingClientRect() : undefined; const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2); return { width: rect.width, height: rect.height, insideScroll: rect.top >= scroll.top && rect.bottom <= scroll.bottom && rect.left >= scroll.left && rect.right <= scroll.right, clearOfNav: !navRect || rect.bottom <= navRect.top, down: document.querySelector('.conversation-jump-slot [aria-label="Jump to latest"]') !== null && getComputedStyle(document.querySelector('.conversation-jump-slot [aria-label="Jump to latest"]')).visibility === 'visible', reachable: button.contains(hit), overflow: document.documentElement.scrollWidth > innerWidth, slotHeight: document.querySelector('.conversation-jump-slot').getBoundingClientRect().height } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]), insideScroll: (decodeBoolean)(record["insideScroll"]), clearOfNav: (decodeBoolean)(record["clearOfNav"]), down: (decodeBoolean)(record["down"]), reachable: (decodeBoolean)(record["reachable"]), overflow: (decodeBoolean)(record["overflow"]), slotHeight: (decodeNumber)(record["slotHeight"]) } })
         expect(anchor.width, `${label} anchor width`).toBeGreaterThanOrEqual(width < 768 ? 36 : 36)
         expect(anchor.height, `${label} anchor height`).toBeGreaterThanOrEqual(36)
         expect(anchor, label).toMatchObject({ insideScroll: true, clearOfNav: true, down: false, reachable: true, overflow: false, slotHeight: 0 })
         await page.evaluate(`document.querySelector('.conversation-jump-slot .transcript-navigation__controls--visible [aria-label="Jump to top"]').click()`)
-        for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`document.querySelector('.workspace__scroll').scrollTop`) > 8; attempt += 1) await Bun.sleep(25)
-        expect(await page.evaluate<number>(`document.querySelector('.workspace__scroll').scrollTop`), `${label} anchor returns to top`).toBeLessThanOrEqual(8)
+        for (let attempt = 0; attempt < 80 && await page.evaluate(`document.querySelector('.workspace__scroll').scrollTop`, decodeNumber) > 8; attempt += 1) await Bun.sleep(25)
+        expect(await page.evaluate(`document.querySelector('.workspace__scroll').scrollTop`), `${label} anchor returns to top`).toBeLessThanOrEqual(8)
         await until(page, `document.querySelector('.conversation-jump-slot .transcript-navigation__controls--visible') === null`)
 
         await page.evaluate(`[...document.querySelectorAll('a[href^="/remote/session?"]')].find(link => link.getBoundingClientRect().width > 0)?.click()`)
         await until(page, `location.pathname === '/remote/session' && document.querySelector('.route-panel--exiting') === null`)
         await Bun.sleep(350)
-        expect(await page.evaluate<number>(`(() => { const scroll = document.querySelector('.workspace__scroll'); return scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop })()`), `${label} Conversation re-enters at the latest message`).toBeLessThanOrEqual(2)
+        expect(await page.evaluate(`(() => { const scroll = document.querySelector('.workspace__scroll'); return scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop })()`), `${label} Conversation re-enters at the latest message`).toBeLessThanOrEqual(2)
       }
     } finally { await page.close() }
   }, 120_000)
@@ -563,17 +499,17 @@ describe("remote navigation", () => {
         await until(page, `document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="open"]') !== null`)
         await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="open"]').click()`)
         await until(page, `document.querySelector('.subagent-bar [aria-label="Main session"]') !== null`)
-        expect(await page.evaluate<boolean>(`(() => { const parent=document.querySelector('.composer-resident'); return window.parentDraft===parent?.querySelector('textarea') && window.parentDraft.value==='Parent draft remains' && parent?.inert===true && parent?.getAttribute('aria-hidden')==='true' })()`)).toBe(true)
+        expect(await page.evaluate(`(() => { const parent=document.querySelector('.composer-resident'); return window.parentDraft===parent?.querySelector('textarea') && window.parentDraft.value==='Parent draft remains' && parent?.inert===true && parent?.getAttribute('aria-hidden')==='true' })()`)).toBe(true)
         await page.evaluate(`document.querySelector('.subagent-bar [aria-label="Main session"]').click()`)
         await until(page, `document.querySelector('.mini-composer__mount textarea') !== null && document.querySelector('.subagent-bar') === null`)
-        expect(await page.evaluate<boolean>(`window.parentDraft===document.querySelector('.mini-composer__mount textarea') && window.parentDraft.value==='Parent draft remains'`)).toBe(true)
+        expect(await page.evaluate(`window.parentDraft===document.querySelector('.mini-composer__mount textarea') && window.parentDraft.value==='Parent draft remains'`)).toBe(true)
       }
     } finally { await page.close() }
   }, 90_000)
 
   test("opening a Team child selects it once, never re-selects or re-reads its stale parent, and Main restores the parent anchor and draft", async () => {
     const page = await requireBrowser().openPage()
-    const frames = () => page.evaluate<boolean>(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))`)
+    const frames = () => page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))`, decodeBoolean)
     try {
       await page.setViewport(1440, 900)
       await page.setReducedMotion(true)
@@ -585,7 +521,7 @@ describe("remote navigation", () => {
         await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true })); root.scrollTop = 400; root.dispatchEvent(new Event('scroll')) })()`)
         await frames()
         await frames()
-        const anchor = await page.evaluate<{ readonly id: string; readonly top: number }>(`(() => { const root = document.querySelector('.workspace__scroll'), bounds = root.getBoundingClientRect(); const row = [...document.querySelectorAll('[data-message-id]')].find(row => row.getBoundingClientRect().top >= bounds.top && row.getBoundingClientRect().top < bounds.bottom); if (!row) throw Error('No visible transcript anchor'); return { id: row.dataset.messageId, top: row.getBoundingClientRect().top } })()`)
+        const anchor = await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'), bounds = root.getBoundingClientRect(); const row = [...document.querySelectorAll('[data-message-id]')].find(row => row.getBoundingClientRect().top >= bounds.top && row.getBoundingClientRect().top < bounds.bottom); if (!row) throw Error('No visible transcript anchor'); return { id: row.dataset.messageId, top: row.getBoundingClientRect().top } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, id: (decodeString)(record["id"]), top: (decodeNumber)(record["top"]) } })
         await page.evaluate(`(() => { const draft = document.querySelector('.mini-composer__mount textarea'); draft.value = 'Parent draft remains'; draft.dispatchEvent(new Event('input', { bubbles: true })); window.parentDraft = draft })()`)
         await page.evaluate(`(() => {
           const record = { selections: [], stale: 0, mark: window.remoteDeviceRequests.length, stop: false }
@@ -605,13 +541,13 @@ describe("remote navigation", () => {
         await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_second"] [data-action="open"]').click()`)
         await until(page, `(() => { const state = window.providerAuthState(); return state.activeSessionID === 'ses_second' && state.history?.status === 'idle' && document.querySelector('.subagent-bar [aria-label="Main session"]') !== null })()`)
         await frames()
-        const entry = await page.evaluate<{ readonly selections: readonly string[]; readonly stale: number; readonly parentReads: readonly string[]; readonly url: string }>(`(() => { const record = window.childEntry; record.stop = true; return { selections: record.selections, stale: record.stale, parentReads: window.remoteDeviceRequests.slice(record.mark).filter(request => (request.operation === 'session.subscribe' || request.operation === 'session.snapshot') && request.sessionID === 'ses_fixture').map(request => request.operation), url: new URL(location.href).searchParams.get('session_id') } })()`)
+        const entry = await page.evaluate(`(() => { const record = window.childEntry; record.stop = true; return { selections: record.selections, stale: record.stale, parentReads: window.remoteDeviceRequests.slice(record.mark).filter(request => (request.operation === 'session.subscribe' || request.operation === 'session.snapshot') && request.sessionID === 'ses_fixture').map(request => request.operation), url: new URL(location.href).searchParams.get('session_id') } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, selections: (decodeArray(decodeString))(record["selections"]), stale: (decodeNumber)(record["stale"]), parentReads: (decodeArray(decodeString))(record["parentReads"]), url: (decodeString)(record["url"]) } })
         expect({ run, ...entry }).toEqual({ run, selections: ["ses_fixture", "ses_second"], stale: 0, parentReads: [], url: "ses_second" })
         await page.evaluate(`document.querySelector('.subagent-bar [aria-label="Main session"]').click()`)
         await until(page, `document.querySelector('.mini-composer__mount textarea') !== null && document.querySelector('.subagent-bar') === null && document.querySelector('.conversation-pane [data-message-id="${anchor.id}"]') !== null`)
         await frames()
         await frames()
-        const restored = await page.evaluate<{ readonly shift: number; readonly sameDraft: boolean; readonly draft: string; readonly active: string | undefined }>(`({ shift: Math.abs(document.querySelector('[data-message-id="${anchor.id}"]').getBoundingClientRect().top - ${anchor.top}), sameDraft: window.parentDraft === document.querySelector('.mini-composer__mount textarea'), draft: window.parentDraft.value, active: window.providerAuthState().activeSessionID })`)
+        const restored = await page.evaluate(`({ shift: Math.abs(document.querySelector('[data-message-id="${anchor.id}"]').getBoundingClientRect().top - ${anchor.top}), sameDraft: window.parentDraft === document.querySelector('.mini-composer__mount textarea'), draft: window.parentDraft.value, active: window.providerAuthState().activeSessionID })`, (value: unknown) => { const record = decodeRecord(value); return { ...record, shift: (decodeNumber)(record["shift"]), sameDraft: (decodeBoolean)(record["sameDraft"]), draft: (decodeString)(record["draft"]), active: (decodeOptional(decodeString))(record["active"]) } })
         expect({ run, sameDraft: restored.sameDraft, draft: restored.draft, active: restored.active }).toEqual({ run, sameDraft: true, draft: "Parent draft remains", active: "ses_fixture" })
         expect(restored.shift).toBeLessThanOrEqual(1)
       }
@@ -627,7 +563,7 @@ describe("remote navigation", () => {
         await until(page, `document.querySelector('.conversation-pane .transcript-message') !== null`)
         await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden' })()`)
         const label = `${width}px ${theme} reduced=${reduced}`
-        const before = await page.evaluate<number>(`(() => { const scroll=document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-300})); scroll.scrollTop=300; scroll.dispatchEvent(new Event('scroll')); window.anchorMessage=document.querySelector('.conversation-pane .transcript'); return scroll.scrollTop })()`)
+        const before = await page.evaluate(`(() => { const scroll=document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-300})); scroll.scrollTop=300; scroll.dispatchEvent(new Event('scroll')); window.anchorMessage=document.querySelector('.conversation-pane .transcript'); return scroll.scrollTop })()`)
         expect(before, label).toBeGreaterThanOrEqual(250)
         await page.evaluate(`[...document.querySelectorAll('a[href="/remote/usage"]')].find(link=>link.getBoundingClientRect().width>0)?.click()`)
         await until(page, `location.pathname === '/remote/usage' && document.querySelector('.route-panel--exiting') === null`)
@@ -635,13 +571,13 @@ describe("remote navigation", () => {
         await page.evaluate(`[...document.querySelectorAll('a[href^="/remote/session?"]')].find(link=>link.getBoundingClientRect().width>0)?.click()`)
         await until(page, `location.pathname === '/remote/session' && document.querySelector('.route-panel--exiting') === null`)
         await Bun.sleep(400)
-        const after = await page.evaluate<{ readonly distance: number; readonly sameMessage: boolean; readonly samples: readonly number[] }>(`(() => { cancelAnimationFrame(window.entryFrame); const scroll = document.querySelector('.workspace__scroll'); return { distance: scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop, sameMessage: window.anchorMessage === document.querySelector('.conversation-pane .transcript'), samples: window.entrySamples } })()`)
+        const after = await page.evaluate(`(() => { cancelAnimationFrame(window.entryFrame); const scroll = document.querySelector('.workspace__scroll'); return { distance: scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop, sameMessage: window.anchorMessage === document.querySelector('.conversation-pane .transcript'), samples: window.entrySamples } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, distance: (decodeNumber)(record["distance"]), sameMessage: (decodeBoolean)(record["sameMessage"]), samples: (decodeArray(decodeNumber))(record["samples"]) } })
         expect(after.distance, `${label} lands at the latest message`).toBeLessThanOrEqual(2)
         expect(after.sameMessage, `${label} resident transcript`).toBe(true)
         expect(after.samples.length, `${label} sampled visible frames`).toBeGreaterThan(0)
         expect(Math.max(...after.samples), `${label} no visible frame at an inherited position`).toBeLessThanOrEqual(48)
 
-        const held = await page.evaluate<{ readonly top: number; readonly after: number; readonly anchorShift: number; readonly sameAnchor: boolean }>(`(() => new Promise(resolve => { const scroll = document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -300 })); scroll.scrollTop = 200; scroll.dispatchEvent(new Event('scroll')); const top = scroll.scrollTop; const bounds = scroll.getBoundingClientRect(); const anchor = [...document.querySelectorAll('.conversation-pane [data-message-id]')].find((row) => { const rect = row.getBoundingClientRect(); return rect.bottom > bounds.top && rect.top < bounds.bottom }); const anchorTop = anchor.getBoundingClientRect().top; document.querySelector('.conversation-pane').style.minHeight = '4200px'; setTimeout(() => resolve({ top, after: scroll.scrollTop, anchorShift: anchor.getBoundingClientRect().top - anchorTop, sameAnchor: document.contains(anchor) }), 400) }))()`)
+        const held = await page.evaluate(`(() => new Promise(resolve => { const scroll = document.querySelector('.workspace__scroll'); scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -300 })); scroll.scrollTop = 200; scroll.dispatchEvent(new Event('scroll')); const top = scroll.scrollTop; const bounds = scroll.getBoundingClientRect(); const anchor = [...document.querySelectorAll('.conversation-pane [data-message-id]')].find((row) => { const rect = row.getBoundingClientRect(); return rect.bottom > bounds.top && rect.top < bounds.bottom }); const anchorTop = anchor.getBoundingClientRect().top; document.querySelector('.conversation-pane').style.minHeight = '4200px'; setTimeout(() => resolve({ top, after: scroll.scrollTop, anchorShift: anchor.getBoundingClientRect().top - anchorTop, sameAnchor: document.contains(anchor) }), 400) }))()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, top: (decodeNumber)(record["top"]), after: (decodeNumber)(record["after"]), anchorShift: (decodeNumber)(record["anchorShift"]), sameAnchor: (decodeBoolean)(record["sameAnchor"]) } })
         expect(held.sameAnchor, `${label} the visible row stays mounted`).toBe(true)
         expect(Math.abs(held.anchorShift), `${label} a deliberate scroll-up is not forced back: the visible row does not move on screen`).toBeLessThanOrEqual(2)
         expect(held.after, `${label} the reader is not snapped back to the tail`).toBeLessThan(held.top + 400)
@@ -658,9 +594,9 @@ function motionDurations(computed: string, reduced: boolean) {
   return reduced ? milliseconds.every((duration) => duration <= 150) : milliseconds.length === 2 && milliseconds[0] === 140 && milliseconds[1] === 220
 }
 
-async function until(page: { evaluate<T>(expression: string): Promise<T> }, expression: string) {
+async function until(page: Pick<Page, "evaluate">, expression: string) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
-    if (await page.evaluate<boolean>(`Boolean(${expression})`).catch(() => false)) return
+    if (await page.evaluate(`Boolean(${expression})`, decodeBoolean).catch(() => false)) return
     await Bun.sleep(100)
   }
   throw new Error(`Timed out waiting for ${expression}`)

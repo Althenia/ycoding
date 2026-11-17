@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4399
 const executable = process.env.YCODING_WEB_CHROME
@@ -28,7 +28,7 @@ async function open(width: number, theme: "light" | "dark", initial = "seeded", 
   await page.setViewport(width, 844)
   await page.navigate(`http://127.0.0.1:${port}/verify/notifications-fixture.html?theme=${theme}&initial=${initial}${extra}`)
   for (let attempt = 0; attempt < 60; attempt += 1) {
-    if (await page.evaluate<boolean>(`document.querySelector('.yc-notification-center__trigger') !== null`)) return page
+    if (await page.evaluate(`document.querySelector('.yc-notification-center__trigger') !== null`)) return page
     await Bun.sleep(50)
   }
   await page.close()
@@ -40,19 +40,19 @@ describe("notification center and live toasts", () => {
     for (const [width, theme] of [[390, "light"], [1440, "dark"]] as const) {
       const page = await open(width, theme, "empty")
       try {
-        expect(await page.evaluate<string>(`document.visibilityState`)).toBe("visible")
+        expect(await page.evaluate(`document.visibilityState`)).toBe("visible")
         await page.evaluate(`window.remoteNotify('approval-requested', 'ses_alpha', false)`)
-        for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('.yc-toast__body span') !== null`); attempt += 1) await Bun.sleep(30)
+        for (let attempt = 0; attempt < 30 && !await page.evaluate(`document.querySelector('.yc-toast__body span') !== null`); attempt += 1) await Bun.sleep(30)
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-        expect(await page.evaluate<{ row: string; toast: string }>(`({ row: document.querySelector('.yc-notification__open span')?.textContent, toast: document.querySelector('.yc-toast__body span')?.textContent })`)).toEqual({ row: "An action needs attention.", toast: "An action needs attention." })
+        expect(await page.evaluate(`({ row: document.querySelector('.yc-notification__open span')?.textContent, toast: document.querySelector('.yc-toast__body span')?.textContent })`)).toEqual({ row: "An action needs attention.", toast: "An action needs attention." })
         await page.evaluate(`window.noticeRow = document.querySelector('.yc-notification'); window.noticeToast = document.querySelector('.yc-toast'); window.remoteResolveTitle('ses_alpha', 'Alpha Session')`)
-        expect(await page.evaluate<{ row: string; toast: string; sameRow: boolean; sameToast: boolean }>(`({ row: document.querySelector('.yc-notification__open span')?.textContent, toast: document.querySelector('.yc-toast__body span')?.textContent, sameRow: document.querySelector('.yc-notification') === window.noticeRow, sameToast: document.querySelector('.yc-toast') === window.noticeToast })`)).toEqual({ row: "Alpha Session", toast: "Alpha Session", sameRow: true, sameToast: true })
+        expect(await page.evaluate(`({ row: document.querySelector('.yc-notification__open span')?.textContent, toast: document.querySelector('.yc-toast__body span')?.textContent, sameRow: document.querySelector('.yc-notification') === window.noticeRow, sameToast: document.querySelector('.yc-toast') === window.noticeToast })`)).toEqual({ row: "Alpha Session", toast: "Alpha Session", sameRow: true, sameToast: true })
         await page.pressEscape()
         await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-        expect(await page.evaluate<string>(`document.querySelector('.yc-notification__open span')?.textContent ?? ''`)).toBe("Alpha Session")
+        expect(await page.evaluate(`document.querySelector('.yc-notification__open span')?.textContent ?? ''`)).toBe("Alpha Session")
         await page.evaluate(`document.querySelector('.yc-notification__dismiss').click()`)
-        expect(await page.evaluate<string>(`document.querySelector('.yc-toast__body span')?.textContent ?? ''`)).toBe("Alpha Session")
+        expect(await page.evaluate(`document.querySelector('.yc-toast__body span')?.textContent ?? ''`)).toBe("Alpha Session")
       } finally { await page.close() }
     }
   }, 15_000)
@@ -73,9 +73,9 @@ describe("notification center and live toasts", () => {
           window.advanceNoticeMinutes = (count) => { offset += count * 60000; minutes.forEach(tick => tick()); };
         })()`)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}`)
-        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`(window.remoteOperationReport?.().operations['session.status'] ?? 0) > 0 && document.querySelector('.yc-notification-center__trigger') !== null`); attempt += 1) await Bun.sleep(50)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate(`(window.remoteOperationReport?.().operations['session.status'] ?? 0) > 0 && document.querySelector('.yc-notification-center__trigger') !== null`); attempt += 1) await Bun.sleep(50)
         await page.evaluate(`window.remoteStatus(['ses_fixture','ses_a','ses_b','ses_c'], []); window.remoteStatus(['ses_a','ses_b','ses_c'], []); window.advanceNoticeMinutes(2); window.remoteStatus(['ses_b','ses_c'], []); window.advanceNoticeMinutes(2); window.remoteStatus(['ses_c'], []); window.advanceNoticeMinutes(1); window.remoteStatus([], []); window.advanceNoticeMinutes(3)`)
-        expect(await page.evaluate<number>(`Number(document.querySelector('.yc-notification-center__badge')?.textContent)`)).toBe(4)
+        expect(await page.evaluate(`Number(document.querySelector('.yc-notification-center__badge')?.textContent)`)).toBe(4)
         await page.evaluate(`(() => {
           window.addedNoticeRows = new Set(); window.removedNoticeRows = new Set();
           new MutationObserver(records => records.forEach(record => {
@@ -92,7 +92,7 @@ describe("notification center and live toasts", () => {
         })()`)
         await page.evaluate(`Promise.allSettled([...document.querySelectorAll('.yc-notification-panel, .yc-notification')].flatMap(node => node.getAnimations()).map(animation => animation.finished))`)
         await Bun.sleep(300)
-        const initial = await page.evaluate<{ added: number; removed: number; ages: readonly string[]; label: string; unread: number }>(`(() => {
+        const initial = await page.evaluate(`(() => {
           window.noticePanel = document.querySelector('.yc-notification-panel');
           window.noticeRows = [...document.querySelectorAll('.yc-notification')];
           return { added: window.addedNoticeRows.size, removed: window.removedNoticeRows.size, ages: [...document.querySelectorAll('.yc-notification time')].map(node => node.textContent), label: document.querySelector('.yc-notification-panel__new')?.textContent ?? '', unread: document.querySelectorAll('.yc-notification__unread:not([aria-hidden="true"])').length };
@@ -105,18 +105,18 @@ describe("notification center and live toasts", () => {
             label: document.querySelector('.yc-notification-panel__new')?.textContent ?? '', rect: [rect.left, rect.top, rect.width, rect.height],
             added: window.addedNoticeRows.size, removed: window.removedNoticeRows.size };
         })()`
-        const before = await page.evaluate<{ rect: readonly number[]; badge: string }>(sample)
+        const before = await page.evaluate(sample, (value: unknown) => { const record = decodeRecord(value); return { ...record, rect: (decodeArray(decodeNumber))(record["rect"]), badge: (decodeString)(record["badge"]) } })
         await page.evaluate(`window.remoteStatus([], [])`)
-        const status = await page.evaluate<{ retained: boolean; panelSame: boolean; activeRows: number; rect: readonly number[]; added: number; removed: number }>(sample)
+        const status = await page.evaluate(sample, (value: unknown) => { const record = decodeRecord(value); return { ...record, retained: (decodeBoolean)(record["retained"]), panelSame: (decodeBoolean)(record["panelSame"]), activeRows: (decodeNumber)(record["activeRows"]), rect: (decodeArray(decodeNumber))(record["rect"]), added: (decodeNumber)(record["added"]), removed: (decodeNumber)(record["removed"]) } })
         await page.evaluate(`window.advanceNoticeMinutes(1)`)
-        const tick = await page.evaluate<{ retained: boolean; panelSame: boolean; activeRows: number; age: readonly string[]; rect: readonly number[]; added: number; removed: number }>(sample)
+        const tick = await page.evaluate(sample, (value: unknown) => { const record = decodeRecord(value); return { ...record, retained: (decodeBoolean)(record["retained"]), panelSame: (decodeBoolean)(record["panelSame"]), activeRows: (decodeNumber)(record["activeRows"]), age: (decodeArray(decodeString))(record["age"]), rect: (decodeArray(decodeNumber))(record["rect"]), added: (decodeNumber)(record["added"]), removed: (decodeNumber)(record["removed"]) } })
         await page.evaluate(`window.remoteStatus(['ses_new'], []); window.remoteStatus([], [])`)
         await page.evaluate(`Promise.allSettled([...document.querySelectorAll('.yc-notification')].flatMap(node => node.getAnimations()).map(animation => animation.finished))`)
-        const newNotice = await page.evaluate<{ retained: boolean; panelSame: boolean; activeRows: number; rect: readonly number[]; badge: string; added: number; removed: number }>(sample)
-        const snapshotReads = await page.evaluate<number>(`window.remoteOperationReport().operations['session.snapshot'] ?? 0`)
+        const newNotice = await page.evaluate(sample, (value: unknown) => { const record = decodeRecord(value); return { ...record, retained: (decodeBoolean)(record["retained"]), panelSame: (decodeBoolean)(record["panelSame"]), activeRows: (decodeNumber)(record["activeRows"]), rect: (decodeArray(decodeNumber))(record["rect"]), badge: (decodeString)(record["badge"]), added: (decodeNumber)(record["added"]), removed: (decodeNumber)(record["removed"]) } })
+        const snapshotReads = await page.evaluate(`window.remoteOperationReport().operations['session.snapshot'] ?? 0`, decodeNumber)
         await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find(button => button.textContent?.includes('Simulate disconnect and reconnect')).click()`)
-        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.remote-connection-label')?.textContent?.trim() === 'Connected' && document.querySelector('.status-strip') === null`); attempt += 1) await Bun.sleep(50)
-        const reconnect = await page.evaluate<{ retained: boolean; panelSame: boolean; activeRows: number; rect: readonly number[]; added: number; removed: number }>(sample)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate(`document.querySelector('.remote-connection-label')?.textContent?.trim() === 'Connected' && document.querySelector('.status-strip') === null`); attempt += 1) await Bun.sleep(50)
+        const reconnect = await page.evaluate(sample, (value: unknown) => { const record = decodeRecord(value); return { ...record, retained: (decodeBoolean)(record["retained"]), panelSame: (decodeBoolean)(record["panelSame"]), activeRows: (decodeNumber)(record["activeRows"]), rect: (decodeArray(decodeNumber))(record["rect"]), added: (decodeNumber)(record["added"]), removed: (decodeNumber)(record["removed"]) } })
         expect(initial).toEqual({ added: 4, removed: 0, ages: ["3m", "4m", "6m", "8m"], label: "4 new", unread: 4 })
         for (const update of [status, tick, newNotice, reconnect]) {
           expect(update.retained).toBe(true)
@@ -130,7 +130,7 @@ describe("notification center and live toasts", () => {
         expect(reconnect.rect).toEqual(newNotice.rect)
         expect(reconnect.added).toBe(5)
         expect(reconnect.removed).toBe(0)
-        expect(await page.evaluate<number>(`window.remoteOperationReport().operations['session.snapshot'] ?? 0`)).toBeGreaterThan(snapshotReads)
+        expect(await page.evaluate(`window.remoteOperationReport().operations['session.snapshot'] ?? 0`)).toBeGreaterThan(snapshotReads)
         expect(tick.age).toEqual(["4m", "5m", "7m", "9m"])
       } finally { await page.close() }
     }
@@ -142,13 +142,13 @@ describe("notification center and live toasts", () => {
     try {
       await page.setViewport(390, 844)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
-      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.remote-connection-label')?.textContent?.trim() === 'Connected'`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<boolean>(`document.querySelector('.status-strip') === null`)).toBe(true)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate(`document.querySelector('.remote-connection-label')?.textContent?.trim() === 'Connected'`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate(`document.querySelector('.status-strip') === null`)).toBe(true)
       await page.evaluate(`[...document.querySelectorAll('.fixture__controls button')].find(button => button.textContent?.includes('Simulate disconnect and reconnect'))?.click()`)
-      expect(await page.evaluate<string>(`document.querySelector('.status-strip__body')?.textContent?.trim() ?? ''`)).toBe("Connecting — Opening the relay connection. · Last browser relay drop (1006): synthetic disconnect")
-      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.remote-connection-label')?.textContent?.trim() === 'Connected' && document.querySelector('.status-strip') === null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate(`document.querySelector('.status-strip__body')?.textContent?.trim() ?? ''`)).toBe("Connecting — Opening the relay connection. · Last browser relay drop (1006): synthetic disconnect")
+      for (let attempt = 0; attempt < 80 && !await page.evaluate(`document.querySelector('.remote-connection-label')?.textContent?.trim() === 'Connected' && document.querySelector('.status-strip') === null`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger')?.click()`)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification--machine-offline').length`)).toBe(0)
+      expect(await page.evaluate(`document.querySelectorAll('.yc-notification--machine-offline').length`)).toBe(0)
     } finally { await page.close() }
   }, 15_000)
 
@@ -156,14 +156,14 @@ describe("notification center and live toasts", () => {
     for (const width of [390, 1440]) for (const theme of ["light", "dark"] as const) {
       const page = await open(width, theme)
       try {
-        expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(0)
-        expect(await page.evaluate<string>(`document.querySelector('.yc-notification-center__trigger').getAttribute('aria-label')`)).toContain("2 unread")
+        expect(await page.evaluate(`document.querySelectorAll('.yc-toast').length`)).toBe(0)
+        expect(await page.evaluate(`document.querySelector('.yc-notification-center__trigger').getAttribute('aria-label')`)).toContain("2 unread")
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-        const result = await page.evaluate<{ count: number; today: boolean; newLabel: string; unread: number; overflow: boolean; left: number; right: number; radius: string; motion: string; theme: string; bodyWidth: number; tonesMatch: boolean }>(`(() => {
+        const result = await page.evaluate(`(() => {
           const panel = document.querySelector('.yc-notification-panel'); const rect = panel.getBoundingClientRect();
           const item = panel.querySelector('.yc-notification');
           return { count: panel.querySelectorAll('.yc-notification').length, today: panel.textContent.includes('Today'), newLabel: panel.querySelector('.yc-notification-panel__new')?.textContent ?? '', unread: panel.querySelectorAll('.yc-notification__unread:not([aria-hidden="true"])').length, overflow: document.documentElement.scrollWidth > innerWidth, left: rect.left, right: rect.right, radius: getComputedStyle(panel).borderTopLeftRadius, motion: getComputedStyle(panel).animationName, theme: document.documentElement.dataset.theme, bodyWidth: item.querySelector('.yc-notification__open').getBoundingClientRect().width, tonesMatch: [...panel.querySelectorAll('.yc-notification')].every(row => getComputedStyle(row.querySelector('strong')).color === getComputedStyle(row.querySelector('.yc-notification__icon')).color) };
-        })()`)
+        })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, count: (decodeNumber)(record["count"]), today: (decodeBoolean)(record["today"]), newLabel: (decodeString)(record["newLabel"]), unread: (decodeNumber)(record["unread"]), overflow: (decodeBoolean)(record["overflow"]), left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]), radius: (decodeString)(record["radius"]), motion: (decodeString)(record["motion"]), theme: (decodeString)(record["theme"]), bodyWidth: (decodeNumber)(record["bodyWidth"]), tonesMatch: (decodeBoolean)(record["tonesMatch"]) } })
         expect(result).toMatchObject({ count: 2, today: true, newLabel: "2 new", unread: 2, overflow: false, radius: "20px", theme, tonesMatch: true })
         expect(result.left).toBeGreaterThanOrEqual(0)
         expect(result.right).toBeLessThanOrEqual(width)
@@ -172,22 +172,22 @@ describe("notification center and live toasts", () => {
         await page.evaluate(`Promise.all([...document.querySelectorAll('.yc-notification-panel, .yc-notification')].flatMap(node => node.getAnimations()).map(animation => animation.finished))`)
         await Bun.write(new URL(`../../../.cache/tmp/notifications-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
         await page.evaluate(`document.querySelector('.yc-notification__dismiss').focus(); document.querySelector('.yc-notification__dismiss').click()`)
-        expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(1)
+        expect(await page.evaluate(`document.querySelectorAll('.yc-notification').length`)).toBe(1)
         await page.evaluate(`document.querySelector('.yc-notification__open').click()`)
-        expect(await page.evaluate<string[]>(`window.remoteOpened()`)).toEqual(["ses_alpha"])
-        expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-center__trigger').getAttribute('aria-expanded') === 'false' && document.querySelector('.yc-notification-panel')?.inert === true`)).toBe(true)
+        expect(await page.evaluate(`window.remoteOpened()`)).toEqual(["ses_alpha"])
+        expect(await page.evaluate(`document.querySelector('.yc-notification-center__trigger').getAttribute('aria-expanded') === 'false' && document.querySelector('.yc-notification-panel')?.inert === true`)).toBe(true)
         await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
-        expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
         await page.evaluate(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`)
         await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
-        expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-        expect(await page.evaluate<string>(`document.querySelector('.yc-notification-panel__empty strong')?.textContent ?? ''`)).toBe("You're all caught up")
+        expect(await page.evaluate(`document.querySelector('.yc-notification-panel__empty strong')?.textContent ?? ''`)).toBe("You're all caught up")
         await page.pressEscape()
-        expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.yc-notification-center__trigger') && document.querySelector('.yc-notification-panel')?.inert === true`)).toBe(true)
+        expect(await page.evaluate(`document.activeElement === document.querySelector('.yc-notification-center__trigger') && document.querySelector('.yc-notification-panel')?.inert === true`)).toBe(true)
         await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
-        expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
       } finally { await page.close() }
     }
   }, 30_000)
@@ -197,14 +197,14 @@ describe("notification center and live toasts", () => {
       const page = await open(width, theme)
       try {
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-        const opened = await page.evaluate<{ rows: number; badge: string; actions: number; label: string; icon: boolean }>(`(() => {
+        const opened = await page.evaluate(`(() => {
           const action = document.querySelector('.yc-notification-panel__action');
           return { rows: document.querySelectorAll('.yc-notification').length, badge: document.querySelector('.yc-notification-center__badge')?.textContent ?? '',
             actions: document.querySelectorAll('.yc-notification-panel__action').length, label: action?.getAttribute('aria-label') ?? '', icon: action?.querySelector('svg') !== null };
         })()`)
         expect(opened).toEqual({ rows: 2, badge: "2", actions: 1, label: "Read all", icon: true })
         await page.evaluate(`document.querySelector('.yc-notification-panel__action').click()`)
-        expect(await page.evaluate<{ rows: number; badge: boolean; empty: string }>(`({ rows: document.querySelectorAll('.yc-notification').length, badge: document.querySelector('.yc-notification-center__badge') !== null, empty: document.querySelector('.yc-notification-panel__empty strong')?.textContent ?? '' })`))
+        expect(await page.evaluate(`({ rows: document.querySelectorAll('.yc-notification').length, badge: document.querySelector('.yc-notification-center__badge') !== null, empty: document.querySelector('.yc-notification-panel__empty strong')?.textContent ?? '' })`))
           .toEqual({ rows: 0, badge: false, empty: "You're all caught up" })
       } finally { await page.close() }
     }
@@ -215,12 +215,12 @@ describe("notification center and live toasts", () => {
     try {
       await page.evaluate(`window.remoteNotify('agent-completed', 'ses_alpha'); window.remoteNotify('machine-offline', 'ses_alpha'); window.remoteNotify('approval-requested', 'ses_beta', true, true)`)
       await Bun.sleep(300)
-      expect(await page.evaluate<{ toasts: number; badge: string }>(`({ toasts: document.querySelectorAll('.yc-toast').length, badge: document.querySelector('.yc-notification-center__badge')?.textContent ?? '' })`)).toEqual({ toasts: 0, badge: "3" })
+      expect(await page.evaluate(`({ toasts: document.querySelectorAll('.yc-toast').length, badge: document.querySelector('.yc-notification-center__badge')?.textContent ?? '' })`)).toEqual({ toasts: 0, badge: "3" })
       await page.evaluate(`window.remoteNotify('approval-requested', 'ses_alpha')`)
-      for (let attempt = 0; attempt < 30 && await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`) !== 1; attempt += 1) await Bun.sleep(30)
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.yc-toast')].map(toast => toast.className.includes('yc-toast--approval-requested') ? 'attention' : 'other')`)).toEqual(["attention"])
+      for (let attempt = 0; attempt < 30 && await page.evaluate(`document.querySelectorAll('.yc-toast').length`) !== 1; attempt += 1) await Bun.sleep(30)
+      expect(await page.evaluate(`[...document.querySelectorAll('.yc-toast')].map(toast => toast.className.includes('yc-toast--approval-requested') ? 'attention' : 'other')`)).toEqual(["attention"])
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(4)
+      expect(await page.evaluate(`document.querySelectorAll('.yc-notification').length`)).toBe(4)
     } finally { await page.close() }
   }, 15_000)
 
@@ -228,11 +228,11 @@ describe("notification center and live toasts", () => {
     const page = await open(390, "light", "empty")
     try {
       await page.evaluate(`window.remoteNotify('approval-requested', 'ses_alpha')`)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(1)
+      expect(await page.evaluate(`document.querySelectorAll('.yc-toast').length`)).toBe(1)
       await page.evaluate(`document.querySelector('.yc-toast__open').click()`)
-      expect(await page.evaluate<string[]>(`window.remoteOpened()`)).toEqual(["ses_alpha"])
+      expect(await page.evaluate(`window.remoteOpened()`)).toEqual(["ses_alpha"])
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(0)
+      expect(await page.evaluate(`document.querySelectorAll('.yc-notification').length`)).toBe(0)
     } finally { await page.close() }
   }, 15_000)
 
@@ -240,10 +240,10 @@ describe("notification center and live toasts", () => {
     for (const [width, theme] of [[390, "light"], [1440, "dark"]] as const) {
       const page = await open(width, theme, "seeded", "&sync=error")
       try {
-        const bell = await page.evaluate<{ label: string; badge: string }>(`({ label: document.querySelector('.yc-notification-center__trigger').getAttribute('aria-label'), badge: document.querySelector('.yc-notification-center__badge--error')?.textContent ?? '' })`)
+        const bell = await page.evaluate(`({ label: document.querySelector('.yc-notification-center__trigger').getAttribute('aria-label'), badge: document.querySelector('.yc-notification-center__badge--error')?.textContent ?? '' })`)
         expect(bell).toEqual({ label: "Notifications, 2 unread, sync unavailable", badge: "!" })
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-        const panel = await page.evaluate<{ role: string | null; text: string; retry: string; overflow: boolean }>(`(() => {
+        const panel = await page.evaluate(`(() => {
           const error = document.querySelector('.yc-notification-panel__error');
           return { role: error?.getAttribute('role') ?? null, text: error?.querySelector('span')?.textContent ?? '', retry: error?.querySelector('button')?.textContent ?? '', overflow: document.documentElement.scrollWidth > innerWidth };
         })()`)
@@ -259,7 +259,7 @@ describe("notification center and live toasts", () => {
         await page.setViewport(width!, height!)
         await page.setReducedMotion(reduce)
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-        const entering = await page.evaluate<{ duration: number; opacity: number; transform: string }>(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => { const panel = document.querySelector('.yc-notification-panel'), style = getComputedStyle(panel); resolve({ duration: parseFloat(style.animationDuration) * 1000, opacity: Number(style.opacity), transform: style.transform }); })))`)
+        const entering = await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => { const panel = document.querySelector('.yc-notification-panel'), style = getComputedStyle(panel); resolve({ duration: parseFloat(style.animationDuration) * 1000, opacity: Number(style.opacity), transform: style.transform }); })))`, (value: unknown) => { const record = decodeRecord(value); return { ...record, duration: (decodeNumber)(record["duration"]), opacity: (decodeNumber)(record["opacity"]), transform: (decodeString)(record["transform"]) } })
         if (reduce) expect(entering).toEqual({ duration: 0, opacity: 1, transform: "none" })
         else {
           expect(entering.duration).toBe(220)
@@ -269,11 +269,11 @@ describe("notification center and live toasts", () => {
         }
         await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
         await page.evaluate(`document.querySelector('.yc-notification-panel__action:last-child').focus(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
-        expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.yc-notification-center__trigger') && document.querySelector('.yc-notification-center__trigger').getAttribute('aria-expanded') === 'false'`)).toBe(true)
-        const closing = await page.evaluate<{ expanded: string; inert: boolean; focused: boolean; duration: number; opacity: number; transform: string; tabbable: boolean }>(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => { const panel = document.querySelector('.yc-notification-panel'), style = panel && getComputedStyle(panel); resolve({ expanded: document.querySelector('.yc-notification-center__trigger').getAttribute('aria-expanded'), inert: panel?.inert ?? false, focused: document.activeElement === document.querySelector('.yc-notification-center__trigger'), duration: style ? parseFloat(style.animationDuration) * 1000 : 0, opacity: style ? Number(style.opacity) : 0, transform: style?.transform ?? 'none', tabbable: !!panel?.querySelector('button:not([tabindex="-1"])') && !panel.inert }); })))`)
+        expect(await page.evaluate(`document.activeElement === document.querySelector('.yc-notification-center__trigger') && document.querySelector('.yc-notification-center__trigger').getAttribute('aria-expanded') === 'false'`)).toBe(true)
+        const closing = await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => { const panel = document.querySelector('.yc-notification-panel'), style = panel && getComputedStyle(panel); resolve({ expanded: document.querySelector('.yc-notification-center__trigger').getAttribute('aria-expanded'), inert: panel?.inert ?? false, focused: document.activeElement === document.querySelector('.yc-notification-center__trigger'), duration: style ? parseFloat(style.animationDuration) * 1000 : 0, opacity: style ? Number(style.opacity) : 0, transform: style?.transform ?? 'none', tabbable: !!panel?.querySelector('button:not([tabindex="-1"])') && !panel.inert }); })))`, (value: unknown) => { const record = decodeRecord(value); return { ...record, expanded: (decodeString)(record["expanded"]), inert: (decodeBoolean)(record["inert"]), focused: (decodeBoolean)(record["focused"]), duration: (decodeNumber)(record["duration"]), opacity: (decodeNumber)(record["opacity"]), transform: (decodeString)(record["transform"]), tabbable: (decodeBoolean)(record["tabbable"]) } })
         expect(closing.expanded).toBe("false")
         expect(closing.focused).toBe(true)
-        if (reduce) expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
+        if (reduce) expect(await page.evaluate(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
         else {
           expect(closing.inert).toBe(true)
           expect(closing.tabbable).toBe(false)
@@ -281,7 +281,7 @@ describe("notification center and live toasts", () => {
           expect(closing.opacity).toBeLessThan(1)
           expect(closing.transform).not.toBe("none")
           await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
-          expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
+          expect(await page.evaluate(`document.querySelector('.yc-notification-panel') === null`)).toBe(true)
         }
       } finally { await page.close() }
     }
@@ -294,15 +294,15 @@ describe("notification center and live toasts", () => {
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
       await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click(); document.querySelector('.yc-notification-center__trigger').click()`)
-      expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-center__trigger').getAttribute('aria-expanded') === 'true' && document.querySelector('.yc-notification-panel')?.inert === false`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('.yc-notification-center__trigger').getAttribute('aria-expanded') === 'true' && document.querySelector('.yc-notification-panel')?.inert === false`)).toBe(true)
       await Bun.sleep(260)
-      expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel') !== null && document.querySelector('.yc-notification-panel')?.inert === false`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('.yc-notification-panel') !== null && document.querySelector('.yc-notification-panel')?.inert === false`)).toBe(true)
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click(); document.querySelector('.yc-notification-center__trigger').click()`)
       await Bun.sleep(50)
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-      expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel')?.inert === true`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('.yc-notification-panel')?.inert === true`)).toBe(true)
       await Bun.sleep(50)
-      expect(await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel')?.inert === true`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('.yc-notification-panel')?.inert === true`)).toBe(true)
     } finally { await page.close() }
   })
 
@@ -310,34 +310,34 @@ describe("notification center and live toasts", () => {
     const page = await open(390, "dark", "empty")
     try {
       await page.evaluate(`window.remoteNotify('approval-requested', 'ses_alpha')`)
-      for (let attempt = 0; attempt < 30 && await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`) !== 1; attempt += 1) await Bun.sleep(30)
-      expect(await page.evaluate<string>(`document.querySelector('.yc-toasts').getAttribute('role')`)).toBe("status")
-      expect(await page.evaluate<boolean>(`document.querySelector('.yc-toast').getBoundingClientRect().top >= document.querySelector('header').getBoundingClientRect().bottom`)).toBe(true)
+      for (let attempt = 0; attempt < 30 && await page.evaluate(`document.querySelectorAll('.yc-toast').length`) !== 1; attempt += 1) await Bun.sleep(30)
+      expect(await page.evaluate(`document.querySelector('.yc-toasts').getAttribute('role')`)).toBe("status")
+      expect(await page.evaluate(`document.querySelector('.yc-toast').getBoundingClientRect().top >= document.querySelector('header').getBoundingClientRect().bottom`)).toBe(true)
       await page.evaluate(`document.querySelector('.yc-toast').dispatchEvent(new MouseEvent('mouseenter'))`)
-      expect(await page.evaluate<boolean>(`document.querySelector('.yc-toast').classList.contains('yc-toast--paused')`)).toBe(true)
-      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.yc-toast__progress')).animationPlayState`)).toBe("paused")
+      expect(await page.evaluate(`document.querySelector('.yc-toast').classList.contains('yc-toast--paused')`)).toBe(true)
+      expect(await page.evaluate(`getComputedStyle(document.querySelector('.yc-toast__progress')).animationPlayState`)).toBe("paused")
       await page.evaluate(`document.querySelector('.yc-toast').dispatchEvent(new MouseEvent('mouseleave'))`)
       await page.evaluate(`document.querySelector('.yc-toast__open').focus()`)
-      expect(await page.evaluate<boolean>(`document.querySelector('.yc-toast').classList.contains('yc-toast--paused')`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('.yc-toast').classList.contains('yc-toast--paused')`)).toBe(true)
       await Bun.sleep(260)
       await Bun.write(new URL("../../../.cache/tmp/notifications-toast-390-dark.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       await page.evaluate(`document.querySelector('.yc-toast__open').click()`)
       await Bun.sleep(260)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(0)
-      expect(await page.evaluate<string[]>(`window.remoteOpened()`)).toEqual(["ses_alpha"])
+      expect(await page.evaluate(`document.querySelectorAll('.yc-toast').length`)).toBe(0)
+      expect(await page.evaluate(`window.remoteOpened()`)).toEqual(["ses_alpha"])
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(0)
+      expect(await page.evaluate(`document.querySelectorAll('.yc-notification').length`)).toBe(0)
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click(); ['ses_alpha','ses_beta','ses_alpha','ses_beta'].forEach(id => window.remoteNotify('approval-requested', id))`)
-      for (let attempt = 0; attempt < 30 && await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`) !== 3; attempt += 1) await Bun.sleep(30)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(3)
+      for (let attempt = 0; attempt < 30 && await page.evaluate(`document.querySelectorAll('.yc-toast').length`) !== 3; attempt += 1) await Bun.sleep(30)
+      expect(await page.evaluate(`document.querySelectorAll('.yc-toast').length`)).toBe(3)
       await page.evaluate(`document.querySelector('.yc-toast__close').click()`)
       await Bun.sleep(260)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(2)
-      expect(await page.evaluate<number>(`document.documentElement.scrollWidth - innerWidth`)).toBeLessThanOrEqual(0)
+      expect(await page.evaluate(`document.querySelectorAll('.yc-toast').length`)).toBe(2)
+      expect(await page.evaluate(`document.documentElement.scrollWidth - innerWidth`)).toBeLessThanOrEqual(0)
       await Bun.sleep(6_300)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-toast').length`)).toBe(0)
+      expect(await page.evaluate(`document.querySelectorAll('.yc-toast').length`)).toBe(0)
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-      expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification').length`)).toBe(4)
+      expect(await page.evaluate(`document.querySelectorAll('.yc-notification').length`)).toBe(4)
     } finally { await page.close() }
   }, 15_000)
 
@@ -347,7 +347,7 @@ describe("notification center and live toasts", () => {
       await page.setCoarsePointer(true)
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
       await page.evaluate(`Promise.all([...document.querySelector('.yc-notification-panel').getAnimations()].map(animation => animation.finished))`)
-      const result = await page.evaluate<{ size: number; visible: boolean; overflow: boolean }>(`(() => { const button = document.querySelector('.yc-notification__dismiss'); const style = getComputedStyle(button); return { size: button.getBoundingClientRect().width, visible: style.opacity === '1', overflow: document.documentElement.scrollWidth > innerWidth }; })()`)
+      const result = await page.evaluate(`(() => { const button = document.querySelector('.yc-notification__dismiss'); const style = getComputedStyle(button); return { size: button.getBoundingClientRect().width, visible: style.opacity === '1', overflow: document.documentElement.scrollWidth > innerWidth }; })()`)
       expect(result).toEqual({ size: 44, visible: true, overflow: false })
     } finally { await page.close() }
   })
@@ -377,8 +377,8 @@ describe("notification center and live toasts", () => {
       })()`)
       await page.setViewport(1440, 844)
       await page.navigate(`http://127.0.0.1:${port}/verify/notifications-fixture.html?theme=dark`)
-      for (let attempt = 0; attempt < 60 && await page.evaluate<number>(`window.__pushCalls.length`) === 0; attempt += 1) await Bun.sleep(50)
-      const calls = await page.evaluate<readonly { method: string; body: { endpoint: string } }[]>(`window.__pushCalls`)
+      for (let attempt = 0; attempt < 60 && await page.evaluate(`window.__pushCalls.length`) === 0; attempt += 1) await Bun.sleep(50)
+      const calls = await page.evaluate(`window.__pushCalls`, decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, method: (decodeString)(record["method"]), body: ((value: unknown) => { const record = decodeRecord(value); return { ...record, endpoint: (decodeString)(record["endpoint"]) } })(record["body"]) } }))
       expect(calls).toHaveLength(1)
       expect(calls[0]).toMatchObject({ method: "POST", body: { endpoint: "https://fcm.googleapis.com/send/existing" } })
     } finally { await page.close() }
@@ -413,17 +413,17 @@ describe("notification center and live toasts", () => {
         })()`)
         await page.setViewport(width, 844)
         await page.navigate(`http://127.0.0.1:${port}/verify/notifications-fixture.html?theme=${theme}`)
-        for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.yc-notification-center__trigger') !== null`); attempt += 1) await Bun.sleep(50)
+        for (let attempt = 0; attempt < 60 && !await page.evaluate(`document.querySelector('.yc-notification-center__trigger') !== null`); attempt += 1) await Bun.sleep(50)
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-        for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel__alerts button') !== null`); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<{ text: string; button: string; live: string | null; requests: number; fits: boolean }>(`(() => {
+        for (let attempt = 0; attempt < 60 && !await page.evaluate(`document.querySelector('.yc-notification-panel__alerts button') !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate(`(() => {
           const strip = document.querySelector('.yc-notification-panel__alerts'); const panel = document.querySelector('.yc-notification-panel');
           return { text: strip.querySelector('[role=status]').textContent, button: strip.querySelector('button').textContent, live: strip.querySelector('[role=status]').getAttribute('aria-live'),
             requests: window.__permissionRequests, fits: strip.scrollWidth <= panel.clientWidth && strip.getBoundingClientRect().right <= panel.getBoundingClientRect().right + 1 }
         })()`)).toEqual({ text: "System alerts are off. Turn them on to hear about finished work and approvals when YCoding is closed.", button: "Turn on System alerts", live: "polite", requests: 0, fits: true })
         await page.evaluate(`document.querySelector('.yc-notification-panel__alerts button').click()`)
-        for (let attempt = 0; attempt < 60 && await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel__alerts button') !== null`); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<{ text: string; requests: number; calls: number; endpoint: string }>(`({ text: document.querySelector('.yc-notification-panel__alerts [role=status]').textContent, requests: window.__permissionRequests, calls: window.__pushCalls.length, endpoint: window.__pushCalls[0].body.endpoint })`))
+        for (let attempt = 0; attempt < 60 && await page.evaluate(`document.querySelector('.yc-notification-panel__alerts button') !== null`, decodeBoolean); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate(`({ text: document.querySelector('.yc-notification-panel__alerts [role=status]').textContent, requests: window.__permissionRequests, calls: window.__pushCalls.length, endpoint: window.__pushCalls[0].body.endpoint })`))
           .toEqual({ text: "System alerts are on for this device.", requests: 1, calls: 1, endpoint: "https://fcm.googleapis.com/send/new" })
       } finally { await page.close() }
     }
@@ -436,10 +436,10 @@ describe("notification center and live toasts", () => {
       await page.injectOnNewDocument(`Object.defineProperty(Notification, 'permission', { configurable: true, get: () => 'denied' })`)
       await page.setViewport(1440, 844)
       await page.navigate(`http://127.0.0.1:${port}/verify/notifications-fixture.html?theme=light`)
-      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.yc-notification-center__trigger') !== null`); attempt += 1) await Bun.sleep(50)
+      for (let attempt = 0; attempt < 60 && !await page.evaluate(`document.querySelector('.yc-notification-center__trigger') !== null`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-      for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.yc-notification-panel__alerts') !== null`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<{ text: string; buttons: number }>(`({ text: document.querySelector('.yc-notification-panel__alerts').textContent, buttons: document.querySelectorAll('.yc-notification-panel__alerts button').length })`))
+      for (let attempt = 0; attempt < 60 && !await page.evaluate(`document.querySelector('.yc-notification-panel__alerts') !== null`); attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate(`({ text: document.querySelector('.yc-notification-panel__alerts').textContent, buttons: document.querySelectorAll('.yc-notification-panel__alerts button').length })`))
         .toEqual({ text: "System alerts are blocked. Allow notifications for this site in your browser settings.", buttons: 0 })
     } finally { await page.close() }
   })
@@ -469,8 +469,7 @@ describe("notification center and live toasts", () => {
             dismissRight: dismiss.getBoundingClientRect().right, dismissVisible: getComputedStyle(dismiss).opacity === '1',
             timeVisible: getComputedStyle(panel.querySelector('.yc-notification time')).visibility === 'visible' };
         })()`
-        const resting = await page.evaluate<{ contentLeft: number; contentRight: number; labelLeft: number; scrollLeft: number; scrollRight: number;
-          rows: readonly { rowLeft: number; rowRight: number; icon: number; time: number }[]; timeVisible: boolean }>(measure)
+        const resting = await page.evaluate(measure, (value: unknown) => { const record = decodeRecord(value); return { ...record, contentLeft: (decodeNumber)(record["contentLeft"]), contentRight: (decodeNumber)(record["contentRight"]), labelLeft: (decodeNumber)(record["labelLeft"]), scrollLeft: (decodeNumber)(record["scrollLeft"]), scrollRight: (decodeNumber)(record["scrollRight"]), rows: (decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, rowLeft: (decodeNumber)(record["rowLeft"]), rowRight: (decodeNumber)(record["rowRight"]), icon: (decodeNumber)(record["icon"]), time: (decodeNumber)(record["time"]) } }))(record["rows"]), timeVisible: (decodeBoolean)(record["timeVisible"]) } })
         expect(resting.rows.length, `${width}`).toBe(2)
         expect(Math.abs(resting.labelLeft - resting.contentLeft), `${width} label`).toBeLessThanOrEqual(1)
         for (const row of resting.rows) {
@@ -481,7 +480,7 @@ describe("notification center and live toasts", () => {
         }
         expect(resting.timeVisible).toBe(true)
         await page.evaluate(`document.querySelector('.yc-notification__dismiss').focus()`)
-        const focused = await page.evaluate<{ contentRight: number; dismissRight: number; dismissVisible: boolean; timeVisible: boolean }>(measure)
+        const focused = await page.evaluate(measure, (value: unknown) => { const record = decodeRecord(value); return { ...record, contentRight: (decodeNumber)(record["contentRight"]), dismissRight: (decodeNumber)(record["dismissRight"]), dismissVisible: (decodeBoolean)(record["dismissVisible"]), timeVisible: (decodeBoolean)(record["timeVisible"]) } })
         expect(focused.dismissVisible, `${width} dismiss`).toBe(true)
         expect(focused.timeVisible, `${width} time hidden behind dismiss`).toBe(false)
         expect(Math.abs(focused.dismissRight - focused.contentRight), `${width} dismiss edge`).toBeLessThanOrEqual(1)
@@ -495,20 +494,20 @@ describe("notification center and live toasts", () => {
       try {
         await page.evaluate(`window.remoteNotifyQuota('will-run-out', 'dev_laptop'); window.remoteNotifyQuota('almost-out', 'dev_studio')`)
         await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => resolve(true)))`)
-        expect(await page.evaluate<boolean>(`document.querySelector('.yc-toast') !== null`)).toBe(false)
+        expect(await page.evaluate(`document.querySelector('.yc-toast') !== null`)).toBe(false)
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-        expect(await page.evaluate<unknown>(`[...document.querySelectorAll('.yc-notification--quota-pace')].map(row => ({
+        expect(await page.evaluate(`[...document.querySelectorAll('.yc-notification--quota-pace')].map(row => ({
           label: row.querySelector('.yc-notification__open strong').textContent, body: row.querySelector('.yc-notification__open span').textContent,
           enabled: !row.querySelector('.yc-notification__open').disabled, time: row.querySelector('time').textContent }))`)).toEqual([
           { label: "Quota pace", body: "A provider quota is almost out. Open Usage to review.", enabled: true, time: "now" },
           { label: "Quota pace", body: "A provider quota will run out before it resets. Open Usage to review.", enabled: true, time: "now" },
         ])
         await page.evaluate(`document.querySelectorAll('.yc-notification--quota-pace .yc-notification__open')[1].click()`)
-        expect(await page.evaluate<unknown>(`({ usage: window.remoteOpenedUsage(), sessions: window.remoteOpened() })`)).toEqual({ usage: ["dev_laptop"], sessions: [] })
+        expect(await page.evaluate(`({ usage: window.remoteOpenedUsage(), sessions: window.remoteOpened() })`)).toEqual({ usage: ["dev_laptop"], sessions: [] })
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
-        expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification--quota-pace').length`)).toBe(1)
+        expect(await page.evaluate(`document.querySelectorAll('.yc-notification--quota-pace').length`)).toBe(1)
         await page.evaluate(`document.querySelector('.yc-notification__dismiss').click()`)
-        expect(await page.evaluate<unknown>(`({ rows: document.querySelectorAll('.yc-notification').length, usage: window.remoteOpenedUsage() })`)).toEqual({ rows: 0, usage: ["dev_laptop"] })
+        expect(await page.evaluate(`({ rows: document.querySelectorAll('.yc-notification').length, usage: window.remoteOpenedUsage() })`)).toEqual({ rows: 0, usage: ["dev_laptop"] })
       } finally { await page.close() }
     }
   }, 30_000)

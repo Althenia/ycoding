@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4328
 const chrome = process.env.YCODING_WEB_CHROME
@@ -32,12 +32,12 @@ test("light landing keeps its hero neutral while dark retains the ambient glow",
     try {
       await page.setColorScheme(theme)
       await page.navigate(`http://127.0.0.1:${port}/`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`!!document.querySelector('.hero')`); attempt++) await Bun.sleep(100)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate(`!!document.querySelector('.hero')`); attempt++) await Bun.sleep(100)
       await page.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
-      const glow = await page.evaluate<string>(`getComputedStyle(document.querySelector('.hero'),'::before').backgroundImage`)
+      const glow = await page.evaluate(`getComputedStyle(document.querySelector('.hero'),'::before').backgroundImage`)
       if (theme === "light") expect(glow).toBe("none")
       else expect(glow).toContain("radial-gradient")
-      const command = await page.evaluate<{ background: string; ink: string }>(`(() => ({background:getComputedStyle(document.querySelector('.hero .code-block')).backgroundColor,ink:getComputedStyle(document.querySelector('.hero .code-block pre')).color}))()`)
+      const command = await page.evaluate(`(() => ({background:getComputedStyle(document.querySelector('.hero .code-block')).backgroundColor,ink:getComputedStyle(document.querySelector('.hero .code-block pre')).color}))()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, background: (decodeString)(record["background"]), ink: (decodeString)(record["ink"]) } })
       expect(command.background).toBe("rgb(12, 20, 19)")
       expect(ratio(command.ink, command.background)).toBeGreaterThanOrEqual(4.5)
     } finally { await page.close() }
@@ -51,10 +51,10 @@ test("tall landing keeps the feature cards next to the footer", async () => {
       await page.setViewport(1440, 1200)
       await page.setColorScheme(theme)
       await page.navigate(`http://127.0.0.1:${port}/`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`!!document.querySelector('.features')`); attempt++) await Bun.sleep(100)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate(`!!document.querySelector('.features')`); attempt++) await Bun.sleep(100)
       await page.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
       await Bun.sleep(650)
-      const layout = await page.evaluate<{ gap: number; heroCenter: number; pageHeight: number }>(`(() => { const hero=document.querySelector('.hero').getBoundingClientRect(), content=document.querySelector('.hero__content').getBoundingClientRect();return {gap:document.querySelector('.site-footer').getBoundingClientRect().top-document.querySelector('.features').getBoundingClientRect().bottom,heroCenter:Math.abs((hero.top+hero.bottom-content.top-content.bottom)/2),pageHeight:document.documentElement.scrollHeight} })()`)
+      const layout = await page.evaluate(`(() => { const hero=document.querySelector('.hero').getBoundingClientRect(), content=document.querySelector('.hero__content').getBoundingClientRect();return {gap:document.querySelector('.site-footer').getBoundingClientRect().top-document.querySelector('.features').getBoundingClientRect().bottom,heroCenter:Math.abs((hero.top+hero.bottom-content.top-content.bottom)/2),pageHeight:document.documentElement.scrollHeight} })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, gap: (decodeNumber)(record["gap"]), heroCenter: (decodeNumber)(record["heroCenter"]), pageHeight: (decodeNumber)(record["pageHeight"]) } })
       console.log(`Tall landing ${phase} ${theme}: ${JSON.stringify(layout)}`)
       await Bun.write(join(captures, `landing-tall-1440-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
       if (phase !== "before") {
@@ -72,9 +72,9 @@ test("light new-session icon actions have perceivable boundaries", async () => {
     try {
       await page.setViewport(width, width === 390 ? 844 : 900)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=light&noSelection=1`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`!!document.querySelector('.new-session-composer__refresh')`); attempt++) await Bun.sleep(100)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate(`!!document.querySelector('.new-session-composer__refresh')`); attempt++) await Bun.sleep(100)
       for (const selector of [".new-session-composer__refresh", ".new-session-composer .composer__attach"]) {
-        const pair = await page.evaluate<{ border: string; width: number }>(`(() => { const style=getComputedStyle(document.querySelector(${JSON.stringify(selector)}));return {border:style.borderColor,width:parseFloat(style.borderWidth)} })()`)
+        const pair = await page.evaluate(`(() => { const style=getComputedStyle(document.querySelector(${JSON.stringify(selector)}));return {border:style.borderColor,width:parseFloat(style.borderWidth)} })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, border: (decodeString)(record["border"]), width: (decodeNumber)(record["width"]) } })
         expect(pair.width, `${selector} border width`).toBeGreaterThanOrEqual(1)
         expect(ratio(pair.border, "rgb(255, 255, 255)"), `${selector} boundary contrast`).toBeGreaterThanOrEqual(3)
       }
@@ -86,9 +86,9 @@ test("light composer and picker boundaries separate from white surfaces", async 
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=light&noSelection=1`)
-    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`!!document.querySelector('.new-session-composer .model-control__trigger')`); attempt++) await Bun.sleep(100)
+    for (let attempt = 0; attempt < 40 && !await page.evaluate(`!!document.querySelector('.new-session-composer .model-control__trigger')`); attempt++) await Bun.sleep(100)
     for (const selector of [".new-session-composer .composer__row", ".new-session-composer__repository .mini-picker__trigger", ".new-session-composer .mini-picker__trigger", ".new-session-composer .model-control__trigger"]) {
-      const edge = await page.evaluate<{ color: string; width: number }>(`(() => { const style = getComputedStyle(document.querySelector(${JSON.stringify(selector)})); return { color: style.borderColor, width: parseFloat(style.borderTopWidth) } })()`)
+      const edge = await page.evaluate(`(() => { const style = getComputedStyle(document.querySelector(${JSON.stringify(selector)})); return { color: style.borderColor, width: parseFloat(style.borderTopWidth) } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, color: (decodeString)(record["color"]), width: (decodeNumber)(record["width"]) } })
       expect(edge.width, `${selector} boundary width`).toBeGreaterThanOrEqual(1)
       expect(ratio(edge.color, "rgb(255, 255, 255)"), `${selector} boundary contrast`).toBeGreaterThanOrEqual(3)
     }
@@ -122,19 +122,19 @@ test("light and dark presentation retains contained public and workspace surface
         await page.setColorScheme(theme)
         await page.setReducedMotion(false)
         await page.navigate(`http://127.0.0.1:${port}${route}`)
-        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}) !== null`); attempt++) await Bun.sleep(100)
-        expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}) !== null`), `${name} rendered`).toBe(true)
-        if (name === "settings" && width < 768) expect(await page.evaluate<boolean>(`document.querySelector('.office-settings') === null`)).toBe(true)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate(`document.querySelector(${JSON.stringify(selector)}) !== null`); attempt++) await Bun.sleep(100)
+        expect(await page.evaluate(`document.querySelector(${JSON.stringify(selector)}) !== null`), `${name} rendered`).toBe(true)
+        if (name === "settings" && width < 768) expect(await page.evaluate(`document.querySelector('.office-settings') === null`)).toBe(true)
         await page.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
         await page.evaluate(`document.querySelectorAll('.fixture__banner,.fixture__controls').forEach((element) => element.remove())`)
         await Bun.sleep(850)
-        const measures = await page.evaluate<{ scrollWidth: number }>(`(() => {
+        const measures = await page.evaluate(`(() => {
           const rect = (selector) => { const node=document.querySelector(selector); if(!node) return null; const r=node.getBoundingClientRect(); return {top:r.top,bottom:r.bottom,height:r.height,width:r.width} };
           const style = (selector) => { const node=document.querySelector(selector); if(!node) return null; const s=getComputedStyle(node); return {font:s.fontFamily,border:s.borderColor,background:s.backgroundColor,color:s.color} };
           return {theme:document.documentElement.dataset.theme,viewport:innerHeight,scrollHeight:document.documentElement.scrollHeight,scrollWidth:document.documentElement.scrollWidth,
             app:rect('.app'),workspace:rect('.workspace'),main:rect('.workspace__main'),scroll:rect('.workspace__scroll'),footer:rect('.site-footer'),features:rect('.features'),header:rect('.app-header'),strip:rect('.status-strip'),
             composer:style('.composer__row'),refresh:style('.new-session-composer__refresh'),attach:style('.composer__attach'),picker:style('.composer__controls .mini-picker__trigger'),input:style('.composer__input'),heroGlow:getComputedStyle(document.querySelector('.hero') ?? document.body,'::before').backgroundImage};
-        })()`)
+        })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, scrollWidth: (decodeNumber)(record["scrollWidth"]) } })
         console.log(JSON.stringify({ phase, name, width, theme, measures }))
         await Bun.write(join(captures, `${name}-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
         if (phase !== "before") {

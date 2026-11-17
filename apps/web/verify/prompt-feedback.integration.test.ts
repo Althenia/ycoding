@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4421
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -16,7 +16,6 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
 type Page = Awaited<ReturnType<NonNullable<typeof browser>["openPage"]>>
-type Geometry = { readonly bubble: readonly number[]; readonly inline: boolean; readonly receipt: readonly number[]; readonly status: string; readonly focused: boolean; readonly animation: string; readonly toasts: number }
 
 const long = "Please review the release workflow, the installer contract, and every notification surface before the next tag so nothing regresses"
 
@@ -50,10 +49,10 @@ async function open(width: number, text: string, reducedMotion = false): Promise
 for (const [width, text] of [[390, "Review"], [390, long], [1440, long]] as const) test(`the submitted prompt uses one static receipt beneath its bubble at ${width}px (${text.length} chars)`, async () => {
   const page = await open(width, text)
   try {
-    const before = await page.evaluate<Geometry>(geometry)
+    const before = await page.evaluate(geometry, (value: unknown) => { const record = decodeRecord(value); return { ...record, bubble: (decodeArray(decodeNumber))(record["bubble"]), inline: (decodeBoolean)(record["inline"]), receipt: (decodeArray(decodeNumber))(record["receipt"]), status: (decodeString)(record["status"]), focused: (decodeBoolean)(record["focused"]), animation: (decodeString)(record["animation"]), toasts: (decodeNumber)(record["toasts"]) } })
     expect(before.inline).toBe(false)
     await page.evaluate(`window.composerSetMutation('sending')`)
-    const sending = await page.evaluate<Geometry>(geometry)
+    const sending = await page.evaluate(geometry, (value: unknown) => { const record = decodeRecord(value); return { ...record, bubble: (decodeArray(decodeNumber))(record["bubble"]), inline: (decodeBoolean)(record["inline"]), receipt: (decodeArray(decodeNumber))(record["receipt"]), status: (decodeString)(record["status"]), focused: (decodeBoolean)(record["focused"]), animation: (decodeString)(record["animation"]), toasts: (decodeNumber)(record["toasts"]) } })
     expect(sending.bubble).toEqual(before.bubble)
     expect(sending.inline).toBe(false)
     expect(sending.status).toBe("Sending prompt")
@@ -64,7 +63,7 @@ for (const [width, text] of [[390, "Review"], [390, long], [1440, long]] as cons
     expect(sending.receipt[3]).toEqual(before.receipt[3])
     await page.evaluate(`window.composerSetMutation('sent')`)
     await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') !== 'Sending prompt'`)
-    const accepted = await page.evaluate<Geometry>(geometry)
+    const accepted = await page.evaluate(geometry, (value: unknown) => { const record = decodeRecord(value); return { ...record, bubble: (decodeArray(decodeNumber))(record["bubble"]), inline: (decodeBoolean)(record["inline"]), receipt: (decodeArray(decodeNumber))(record["receipt"]), status: (decodeString)(record["status"]), focused: (decodeBoolean)(record["focused"]), animation: (decodeString)(record["animation"]), toasts: (decodeNumber)(record["toasts"]) } })
     expect(accepted.bubble).toEqual(before.bubble)
     expect(accepted.toasts).toBe(0)
     expect(accepted.focused).toBe(true)
@@ -79,9 +78,9 @@ test("a failed or unknown send replaces the sending receipt and raises its error
       await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') === 'Sending prompt'`)
       await page.evaluate(`window.composerSetMutation(${JSON.stringify(status)})`)
       await wait(page, `document.querySelector('.mutation-toast--${status}') !== null`)
-      expect(await page.evaluate<{ ring: boolean; retry: number }>(`({ ring: document.querySelector('.transcript-message__sending') !== null, retry: document.querySelectorAll('.transcript-message__send-error button').length })`))
+      expect(await page.evaluate(`({ ring: document.querySelector('.transcript-message__sending') !== null, retry: document.querySelectorAll('.transcript-message__send-error button').length })`))
         .toEqual({ ring: false, retry: 1 })
-      expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).toBe(status === "failed" ? "Send failed" : "Outcome unknown")
+      expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).toBe(status === "failed" ? "Send failed" : "Outcome unknown")
       await page.evaluate(`window.composerSetMutation(null)`)
     }
   } finally { await page.close() }
@@ -91,13 +90,13 @@ test("configured commands show sending and failure receipts with a correlated re
   const page = await open(390, "/review")
   try {
     await page.evaluate(`window.composerSetMutation('sending'); window.composerUseCommandMutation()`)
-    expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).toBe("Sending prompt")
+    expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).toBe("Sending prompt")
     for (const status of ["failed", "unknown"] as const) {
       await page.evaluate(`window.composerSetMutation(${JSON.stringify(status)}); window.composerUseCommandMutation()`)
-      expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).toBe(status === "failed" ? "Send failed" : "Outcome unknown")
+      expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).toBe(status === "failed" ? "Send failed" : "Outcome unknown")
       await page.evaluate(`document.querySelector('.transcript-message__send-error button').click()`)
     }
-    expect(await page.evaluate<{ operation: string; input: { id: string } }[]>(`window.composerRequests()`)).toEqual([
+    expect(await page.evaluate(`window.composerRequests()`)).toEqual([
       { operation: "retry", input: { id: "msg_fixture" } },
       { operation: "retry", input: { id: "msg_fixture" } },
     ])
@@ -109,12 +108,12 @@ test("a send in flight for another Session never changes this Session's receipt"
   try {
     await page.evaluate(`window.composerSetMutation('sending', 'ses_other')`)
     await Bun.sleep(150)
-    expect(await page.evaluate<string>(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).not.toBe("Sending prompt")
+    expect(await page.evaluate(`document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label')`)).not.toBe("Sending prompt")
     await page.evaluate(`window.composerSetMutation('sending')`)
     await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') === 'Sending prompt'`)
     await page.evaluate(`window.composerSwitchSession()`)
     await wait(page, `document.querySelector('.transcript-message__bubble') === null`)
-    expect(await page.evaluate<number>(`document.querySelectorAll('.transcript-message__sending').length`)).toBe(0)
+    expect(await page.evaluate(`document.querySelectorAll('.transcript-message__sending').length`)).toBe(0)
   } finally { await page.close() }
 })
 
@@ -123,7 +122,7 @@ test("reduced motion keeps the same static sending receipt", async () => {
   try {
     await page.evaluate(`window.composerSetMutation('sending')`)
     await wait(page, `document.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') === 'Sending prompt'`)
-    const reduced = await page.evaluate<Geometry>(geometry)
+    const reduced = await page.evaluate(geometry, (value: unknown) => { const record = decodeRecord(value); return { ...record, bubble: (decodeArray(decodeNumber))(record["bubble"]), inline: (decodeBoolean)(record["inline"]), receipt: (decodeArray(decodeNumber))(record["receipt"]), status: (decodeString)(record["status"]), focused: (decodeBoolean)(record["focused"]), animation: (decodeString)(record["animation"]), toasts: (decodeNumber)(record["toasts"]) } })
     expect(reduced.inline).toBe(false)
     expect(reduced.animation).toBe("none")
     expect(reduced.status).toBe("Sending prompt")
@@ -136,7 +135,7 @@ async function ready() {
 
 async function wait(page: Page, expression: string) {
   for (let index = 0; index < 50; index++) {
-    if (await page.evaluate<boolean>(expression)) return
+    if (await page.evaluate(expression)) return
     await Bun.sleep(100)
   }
   throw new Error(`Timed out: ${expression}`)

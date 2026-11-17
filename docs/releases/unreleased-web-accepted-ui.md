@@ -9,3 +9,6 @@
 - Open captured file diffs in companion Changes using View changes.
 - Switch Usage between Today, 7 days, and 30 days, and refresh quotas with a labelled control.
 - Keep phone jump controls clear of decisions, show permission reply failures, and clarify machine-managed Settings.
+- Exclude compaction helpers and child Sessions from ordinary Session lists, counts and Project root choices while retaining direct navigation.
+- Start-align fluid Session, Usage and Settings columns, keep assistant prose and Settings explanations within their reading measure, and align the composer dock with its column.
+- Style Markdown task checkboxes with existing tokens while preserving native checked, disabled, keyboard and forced-color behavior.

@@ -708,7 +708,7 @@ test("collapsed transcript disclosures and edited files stay one quiet row until
     "#companion-context .rl-context-panel .companion__context-bar { display:flex; gap:1px; block-size:8px;",
     "grid-template-columns:minmax(0, 1fr) auto auto",
     ".rl-context-panel .rl-context-footer-row { display:flex; align-items:center; gap:var(--yc-space-2); inline-size:100%; min-block-size:44px;",
-    ".relay-settings.st-stack.st-ledger-settings { display:grid; gap:var(--yc-space-8); inline-size:100%; max-inline-size:760px;",
+    ".relay-settings.st-stack.st-ledger-settings { display:grid; gap:var(--yc-space-8); inline-size:100%; min-inline-size:0;",
     ".relay-settings.st-stack.st-ledger-settings .st-section { display:grid; gap:var(--yc-space-3); min-inline-size:0; padding:0; border:0; border-radius:0; background:transparent;",
   ]) expect(css).toContain(text)
   for (const disclosure of [".transcript-tools__button.rl-chip {", ".transcript-reasoning.rl-reason-disclosure > summary {", ".rl-edited-card .rl-edited-summary .rl-edited-disclosure {"]) {

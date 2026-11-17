@@ -159,7 +159,7 @@
   font-size: var(--yc-size-2xs);
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (max-height: 599px) and (pointer: coarse) {
   .custom-select__dialog.overlay--sheet .overlay__surface {
     display: flex;
     flex-direction: column;
@@ -181,6 +181,7 @@
     margin: 0 auto var(--yc-space-3);
     border-radius: var(--yc-radius-pill);
     background: var(--yc-border-strong);
+    touch-action: pan-x pinch-zoom;
   }
 
   .custom-select__dialog .overlay__body {

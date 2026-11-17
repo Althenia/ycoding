@@ -34,7 +34,6 @@ export function ChangelogPage(): JSX.Element {
   return (
     <DocsShell
       page={CHANGELOG_PAGE}
-      title="Changelog"
       crumbLabel="Changelog"
       navLabel="Filters"
       rail={filters}

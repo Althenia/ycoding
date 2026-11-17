@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeBoolean, decodeNullable, decodeRecord, decodeString } from "./cdp"
 
 const port = 4393
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -29,17 +29,17 @@ test("repository picker enters and exits with semantic closure across viewport, 
       await Bun.sleep(600)
       await page.evaluate(`(() => { const button=document.querySelector('.new-session-composer button[aria-label="Repository"]'); button.focus(); button.click(); })()`)
       await wait(page, `document.querySelector('.mini-picker__surface') !== null`)
-      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.mini-picker__surface')).animationName`)).toBe(reduced ? "none" : width! < 768 ? "mini-sheet-enter" : "mini-float")
+      expect(await page.evaluate(`getComputedStyle(document.querySelector('.mini-picker__surface')).animationName`)).toBe(reduced ? "none" : width! < 768 ? "mini-sheet-enter" : "mini-float")
       await Bun.sleep(350)
       await page.evaluate(`document.querySelector('.mini-picker__surface button[aria-label="Close Repository"]')?.click()`)
-      const state = await page.evaluate<{ expanded: string | null; focused: boolean; present: boolean; inert: boolean; hidden: string | null; animation: string; duration: string }>(`(() => { const trigger=document.querySelector('.new-session-composer button[aria-label="Repository"]'), surface=document.querySelector('.mini-picker__surface'); return { expanded:trigger?.getAttribute('aria-expanded') ?? null, focused:document.activeElement === trigger, present:!!surface, inert:surface?.inert ?? false, hidden:surface?.getAttribute('aria-hidden') ?? null, animation:surface ? getComputedStyle(surface).animationName : 'none', duration:surface ? getComputedStyle(surface).animationDuration : '0s' } })()`)
+      const state = await page.evaluate(`(() => { const trigger=document.querySelector('.new-session-composer button[aria-label="Repository"]'), surface=document.querySelector('.mini-picker__surface'); return { expanded:trigger?.getAttribute('aria-expanded') ?? null, focused:document.activeElement === trigger, present:!!surface, inert:surface?.inert ?? false, hidden:surface?.getAttribute('aria-hidden') ?? null, animation:surface ? getComputedStyle(surface).animationName : 'none', duration:surface ? getComputedStyle(surface).animationDuration : '0s' } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, expanded: (decodeNullable(decodeString))(record["expanded"]), focused: (decodeBoolean)(record["focused"]), present: (decodeBoolean)(record["present"]), inert: (decodeBoolean)(record["inert"]), hidden: (decodeNullable(decodeString))(record["hidden"]), animation: (decodeString)(record["animation"]), duration: (decodeString)(record["duration"]) } })
       expect(state.expanded).toBe("false")
       expect(state.focused).toBe(true)
       if (reduced) expect(state.present).toBe(false)
       else expect(state).toMatchObject({ present: true, inert: true, hidden: "true", animation: width! < 768 ? "mini-sheet-exit" : "mini-float-out", duration: width! < 768 ? "0.22s" : "0.14s" })
       if (!reduced && theme === "light" && width === 390) await Bun.write(new URL("../../../.cache/tmp/overlay-repository-exit-phone.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       await Bun.sleep(400)
-      expect(await page.evaluate<boolean>(`document.querySelector('.mini-picker__surface') === null`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('.mini-picker__surface') === null`)).toBe(true)
     } finally { await page.close() }
   }
 }, 60_000)
@@ -57,11 +57,11 @@ test("color scheme picker desktop popover and phone native sheet exit without tr
       await page.evaluate(`(() => { const button=document.querySelector('button[aria-label="Color scheme"]'); button.focus(); button.click(); })()`)
       const surfaceSelector = width! < 480 ? ".custom-select__dialog .overlay__surface" : ".custom-select__surface"
       await wait(page, `document.querySelector(${JSON.stringify(surfaceSelector)}) !== null`)
-      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector(${JSON.stringify(surfaceSelector)})).animationName`)).toBe(reduced ? "none" : width! < 480 ? "yc-sheet-in" : "yc-picker-in")
+      expect(await page.evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(surfaceSelector)})).animationName`)).toBe(reduced ? "none" : width! < 480 ? "yc-sheet-in" : "yc-picker-in")
       await Bun.sleep(350)
       if (width! < 480) await page.evaluate(`document.querySelector('.custom-select__dialog button[aria-label="Close Select Color Scheme"]')?.click()`)
       else await page.evaluate(`document.querySelector('button[aria-label="Color scheme"]')?.click()`)
-      const state = await page.evaluate<{ expanded: string | null; focused: boolean; dialogOpen: boolean; present: boolean; inert: boolean; hidden: string | null; animation: string; duration: string }>(`(() => { const trigger=document.querySelector('button[aria-label="Color scheme"]'), surface=document.querySelector(${JSON.stringify(surfaceSelector)}), dialog=document.querySelector('.custom-select__dialog'), compact=${width! < 480}; return { expanded:trigger?.getAttribute('aria-expanded') ?? null, focused:document.activeElement === trigger, dialogOpen:dialog?.open ?? false, present:!!surface, inert:compact ? dialog?.inert ?? false : surface?.inert ?? false, hidden:(compact ? dialog : surface)?.getAttribute('aria-hidden') ?? null, animation:surface ? getComputedStyle(surface).animationName : 'none', duration:surface ? getComputedStyle(surface).animationDuration : '0s' } })()`)
+      const state = await page.evaluate(`(() => { const trigger=document.querySelector('button[aria-label="Color scheme"]'), surface=document.querySelector(${JSON.stringify(surfaceSelector)}), dialog=document.querySelector('.custom-select__dialog'), compact=${width! < 480}; return { expanded:trigger?.getAttribute('aria-expanded') ?? null, focused:document.activeElement === trigger, dialogOpen:dialog?.open ?? false, present:!!surface, inert:compact ? dialog?.inert ?? false : surface?.inert ?? false, hidden:(compact ? dialog : surface)?.getAttribute('aria-hidden') ?? null, animation:surface ? getComputedStyle(surface).animationName : 'none', duration:surface ? getComputedStyle(surface).animationDuration : '0s' } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, expanded: (decodeNullable(decodeString))(record["expanded"]), focused: (decodeBoolean)(record["focused"]), dialogOpen: (decodeBoolean)(record["dialogOpen"]), present: (decodeBoolean)(record["present"]), inert: (decodeBoolean)(record["inert"]), hidden: (decodeNullable(decodeString))(record["hidden"]), animation: (decodeString)(record["animation"]), duration: (decodeString)(record["duration"]) } })
       expect(state.expanded).toBe("false")
       expect(state.focused).toBe(true)
       expect(state.dialogOpen).toBe(false)
@@ -69,7 +69,7 @@ test("color scheme picker desktop popover and phone native sheet exit without tr
       else expect(state).toMatchObject({ present: true, inert: true, hidden: "true", animation: width! < 480 ? "yc-sheet-out" : "yc-picker-out", duration: width! < 480 ? "0.22s" : "0.14s" })
       if (!reduced && theme === "dark" && width === 1440) await Bun.write(new URL("../../../.cache/tmp/overlay-color-scheme-exit-desktop.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       await Bun.sleep(400)
-      expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(surfaceSelector)}) === null`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector(${JSON.stringify(surfaceSelector)}) === null`)).toBe(true)
     } finally { await page.close() }
   }
 }, 60_000)
@@ -86,16 +86,16 @@ test("confirmation dialog releases its native modal focus before its visual exit
       await Bun.sleep(600)
       await page.evaluate(`(() => { const trigger=document.querySelector('button[aria-label="Remove all revoked devices"]'); trigger.focus(); trigger.click(); })()`)
       await wait(page, `document.querySelector('dialog[aria-label="Remove all revoked devices"][open]') !== null`)
-      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('dialog[aria-label="Remove all revoked devices"] .overlay__surface')).animationName`)).toBe(reduced ? "none" : width < 768 ? "yc-sheet-in" : "yc-dialog-in")
+      expect(await page.evaluate(`getComputedStyle(document.querySelector('dialog[aria-label="Remove all revoked devices"] .overlay__surface')).animationName`)).toBe(reduced ? "none" : width < 768 ? "yc-sheet-in" : "yc-dialog-in")
       await Bun.sleep(350)
       await page.evaluate(`document.querySelector('dialog[aria-label="Remove all revoked devices"] button[aria-label="Close Remove all revoked devices"]')?.click()`)
-      const state = await page.evaluate<{ focused: boolean; open: boolean; present: boolean; inert: boolean; hidden: string | null; animation: string; duration: string }>(`(() => { const dialog=document.querySelector('dialog[aria-label="Remove all revoked devices"]'), surface=dialog?.querySelector('.overlay__surface'); return { focused:document.activeElement === document.querySelector('button[aria-label="Remove all revoked devices"]'), open:dialog?.open ?? false, present:!!dialog, inert:dialog?.inert ?? false, hidden:dialog?.getAttribute('aria-hidden') ?? null, animation:surface ? getComputedStyle(surface).animationName : 'none', duration:surface ? getComputedStyle(surface).animationDuration : '0s' } })()`)
+      const state = await page.evaluate(`(() => { const dialog=document.querySelector('dialog[aria-label="Remove all revoked devices"]'), surface=dialog?.querySelector('.overlay__surface'); return { focused:document.activeElement === document.querySelector('button[aria-label="Remove all revoked devices"]'), open:dialog?.open ?? false, present:!!dialog, inert:dialog?.inert ?? false, hidden:dialog?.getAttribute('aria-hidden') ?? null, animation:surface ? getComputedStyle(surface).animationName : 'none', duration:surface ? getComputedStyle(surface).animationDuration : '0s' } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, focused: (decodeBoolean)(record["focused"]), open: (decodeBoolean)(record["open"]), present: (decodeBoolean)(record["present"]), inert: (decodeBoolean)(record["inert"]), hidden: (decodeNullable(decodeString))(record["hidden"]), animation: (decodeString)(record["animation"]), duration: (decodeString)(record["duration"]) } })
       expect(state.focused).toBe(true)
       expect(state.open).toBe(false)
       if (reduced) expect(state.present).toBe(false)
       else expect(state).toMatchObject({ present: true, inert: true, hidden: "true", animation: width < 768 ? "yc-sheet-out" : "yc-dialog-out", duration: "0.22s" })
       await Bun.sleep(400)
-      expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Remove all revoked devices"]') === null`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('dialog[aria-label="Remove all revoked devices"]') === null`)).toBe(true)
     } finally { await page.close() }
   }
 }, 60_000)
@@ -111,7 +111,7 @@ test("remove-devices dialog Cancel plays the dialog exit and returns focus to it
       if (reduced) expect(state.present).toBe(false)
       else expect(state).toMatchObject({ present: true, inert: true, hidden: "true", animation: width < 768 ? "yc-sheet-out" : "yc-dialog-out" })
       await Bun.sleep(400)
-      expect(await page.evaluate<boolean>(`document.querySelector('${removal.dialog}') === null`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('${removal.dialog}') === null`)).toBe(true)
     } finally { await page.close() }
   }
 }, 60_000)
@@ -124,7 +124,7 @@ test("reopening the remove-devices dialog during its exit opens a fresh interact
       await page.evaluate(`document.querySelector('${removal.dialog} button[aria-label="Close Remove all revoked devices"]')?.click()`)
       await openRemoval(page)
       await Bun.sleep(400)
-      expect(await page.evaluate<boolean>(`document.querySelector('${removal.dialog}')?.open === true && !document.querySelector('${removal.dialog}').inert`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('${removal.dialog}')?.open === true && !document.querySelector('${removal.dialog}').inert`)).toBe(true)
     } finally { await page.close() }
   }
 }, 60_000)
@@ -141,7 +141,7 @@ test("a completed removal closes the remove-devices dialog through its exit", as
       if (reduced) expect(state.present).toBe(false)
       else expect(state).toMatchObject({ present: true, inert: true, hidden: "true", animation: width < 768 ? "yc-sheet-out" : "yc-dialog-out" })
       await Bun.sleep(400)
-      expect(await page.evaluate<boolean>(`document.querySelector('${removal.dialog}') === null`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('${removal.dialog}') === null`)).toBe(true)
     } finally { await page.close() }
   }
 }, 60_000)
@@ -163,14 +163,14 @@ async function openRemoval(page: Page) {
 }
 
 function removalState(page: Page) {
-  return page.evaluate<{ triggerFocused: boolean; focusInside: boolean; open: boolean; present: boolean; inert: boolean; hidden: string | null; animation: string }>(`(() => { const dialog=document.querySelector('${removal.dialog}'), surface=dialog?.querySelector('.overlay__surface'); return { triggerFocused:document.activeElement === document.querySelector('${removal.trigger}'), focusInside:!!dialog?.contains(document.activeElement), open:dialog?.open ?? false, present:!!dialog, inert:dialog?.inert ?? false, hidden:dialog?.getAttribute('aria-hidden') ?? null, animation:surface ? getComputedStyle(surface).animationName : 'none' } })()`)
+  return page.evaluate(`(() => { const dialog=document.querySelector('${removal.dialog}'), surface=dialog?.querySelector('.overlay__surface'); return { triggerFocused:document.activeElement === document.querySelector('${removal.trigger}'), focusInside:!!dialog?.contains(document.activeElement), open:dialog?.open ?? false, present:!!dialog, inert:dialog?.inert ?? false, hidden:dialog?.getAttribute('aria-hidden') ?? null, animation:surface ? getComputedStyle(surface).animationName : 'none' } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, triggerFocused: (decodeBoolean)(record["triggerFocused"]), focusInside: (decodeBoolean)(record["focusInside"]), open: (decodeBoolean)(record["open"]), present: (decodeBoolean)(record["present"]), inert: (decodeBoolean)(record["inert"]), hidden: (decodeNullable(decodeString))(record["hidden"]), animation: (decodeString)(record["animation"]) } })
 }
 
 type Page = Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>
 
 async function wait(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, expression: string) {
   for (let attempt = 0; attempt < 60; attempt++) {
-    if (await page.evaluate<boolean>(expression)) return
+    if (await page.evaluate(expression)) return
     await Bun.sleep(100)
   }
   throw new Error(`Timed out: ${expression}`)

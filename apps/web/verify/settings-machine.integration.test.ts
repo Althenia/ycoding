@@ -34,7 +34,7 @@ afterAll(async () => {
 
 async function until(page: Page, expression: string) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (await page.evaluate<boolean>(expression)) return
+    if (await page.evaluate(expression)) return
     await Bun.sleep(40)
   }
   throw new Error(`Page did not settle: ${expression}`)
@@ -54,7 +54,7 @@ describe("selected machine placement", () => {
       const page = await open("view=settings&machines=distinct&machineName=Build%20Box", width, height)
       try {
         await until(page, `document.getElementById('machine-selected-name') !== null`)
-        expect(await page.evaluate<{ readonly label: string; readonly name: string; readonly inMachineSection: boolean }>(`(() => {
+        expect(await page.evaluate(`(() => {
           const name = document.getElementById('machine-selected-name')
           return {
             label: document.getElementById('machine-selected-label').textContent.trim(),
@@ -70,11 +70,11 @@ describe("selected machine placement", () => {
     const page = await open("view=chat", 1440, 900)
     try {
       await until(page, `document.querySelector('.workspace__rail .session-row') !== null && document.querySelector('.remote-connection-label')?.textContent.trim() === 'Connected'`)
-      const rail = await page.evaluate<string>(`document.querySelector('.workspace__rail').textContent`)
+      const rail = await page.evaluate(`document.querySelector('.workspace__rail').textContent`)
       expect(rail).not.toContain("Selected machine")
       expect(rail).not.toContain("Manage connection")
-      expect(await page.evaluate<number>(`document.querySelectorAll('.workspace__rail-footer').length`)).toBe(0)
-      expect(await page.evaluate<string | null>(`document.querySelector('.workspace__rail .remote-nav__link--settings')?.getAttribute('href') ?? null`)).toBe("/remote/settings")
+      expect(await page.evaluate(`document.querySelectorAll('.workspace__rail-footer').length`)).toBe(0)
+      expect(await page.evaluate(`document.querySelector('.workspace__rail .remote-nav__link--settings')?.getAttribute('href') ?? null`)).toBe("/remote/settings")
     } finally { await page.close() }
   })
 })

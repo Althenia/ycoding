@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4197
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -22,7 +22,7 @@ for (const [outcome, copy] of [["unsupported", "Update YCoding"], ["error", "Rec
   try {
     const started = performance.now()
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=usage&latency=100&usageForecast=${outcome}`)
-    const settled = await page.evaluate<{ text: string; elapsed: number; placeholders: number }>(`new Promise((resolve, reject) => {
+    const settled = await page.evaluate(`new Promise((resolve, reject) => {
       const start = performance.now();
       const timer = setTimeout(() => { observer.disconnect(); reject(new Error('Usage did not settle: ' + document.body.innerText.slice(-600))); }, 10000);
       const inspect = () => {
@@ -34,7 +34,7 @@ for (const [outcome, copy] of [["unsupported", "Update YCoding"], ["error", "Rec
         clearTimeout(timer); observer.disconnect(); resolve({ text: consumption.textContent, elapsed: performance.now() - start, placeholders });
       };
       const observer = new MutationObserver(inspect); observer.observe(document.body, { childList: true, subtree: true, characterData: true }); inspect();
-    })`)
+    })`, (value: unknown) => { const record = decodeRecord(value); return { ...record, text: (decodeString)(record["text"]), elapsed: (decodeNumber)(record["elapsed"]), placeholders: (decodeNumber)(record["placeholders"]) } })
     expect(performance.now() - started).toBeLessThan(10_000)
     expect(settled.placeholders).toBe(0)
     expect(settled.text).toContain("Recorded consumption")
@@ -47,7 +47,7 @@ test("Usage reports a failed dashboard envelope as one distinct error with a ret
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=usage&usageDashboard=error`)
-    const shown = await page.evaluate<{ alert: string; placeholders: number; retry: boolean; tiles: number }>(`new Promise((resolve, reject) => {
+    const shown = await page.evaluate(`new Promise((resolve, reject) => {
       const timer = setTimeout(() => { observer.disconnect(); reject(new Error('Usage error did not render: ' + document.body.innerText.slice(-600))); }, 10000);
       const inspect = () => {
         const page = document.querySelector('.route-panel:not([inert]) .usage-page');
@@ -57,7 +57,7 @@ test("Usage reports a failed dashboard envelope as one distinct error with a ret
         resolve({ alert: alert.textContent, placeholders: 0, retry: [...alert.querySelectorAll('button')].some((button) => button.textContent === 'Retry'), tiles: page.querySelectorAll('.usage-tile').length });
       };
       const observer = new MutationObserver(inspect); observer.observe(document.body, { childList: true, subtree: true, characterData: true }); inspect();
-    })`)
+    })`, (value: unknown) => { const record = decodeRecord(value); return { ...record, alert: (decodeString)(record["alert"]), placeholders: (decodeNumber)(record["placeholders"]), retry: (decodeBoolean)(record["retry"]), tiles: (decodeNumber)(record["tiles"]) } })
     expect(shown.retry).toBe(true)
     expect(shown.tiles).toBe(0)
   } finally { await page.close() }
@@ -67,7 +67,7 @@ test("Usage labels Preparing visibly, then replaces it with the ready dashboard 
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=usage&usageDashboard=preparing`)
-    const shown = await page.evaluate<{ sawPreparing: boolean; usageOperations: string[] }>(`new Promise((resolve, reject) => {
+    const shown = await page.evaluate(`new Promise((resolve, reject) => {
       let sawPreparing = false;
       const timer = setTimeout(() => { observer.disconnect(); reject(new Error('Usage did not become ready: ' + document.body.innerText.slice(-600))); }, 20000);
       const inspect = () => {
@@ -78,7 +78,7 @@ test("Usage labels Preparing visibly, then replaces it with the ready dashboard 
         resolve({ sawPreparing, usageOperations: window.requestLog.map((entry) => entry.operation).filter((operation) => operation.startsWith('usage.')) });
       };
       const observer = new MutationObserver(inspect); observer.observe(document.body, { childList: true, subtree: true, characterData: true }); inspect();
-    })`)
+    })`, (value: unknown) => { const record = decodeRecord(value); return { ...record, sawPreparing: (decodeBoolean)(record["sawPreparing"]), usageOperations: (decodeArray(decodeString))(record["usageOperations"]) } })
     expect(shown.sawPreparing).toBe(true)
     expect(new Set(shown.usageOperations)).toEqual(new Set(["usage.dashboard"]))
   } finally { await page.close() }
@@ -90,7 +90,7 @@ for (const scheme of ["dark", "light"] as const) for (const width of [390, 1440]
     await page.setViewport(width, 900)
     await page.setColorScheme(scheme)
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=usage&usageForecast=pace`)
-    const shown = await page.evaluate<{ theme: string; labels: string[]; colors: string[]; recent: string[]; openRouterPace: number; overflow: boolean }>(`new Promise((resolve, reject) => {
+    const shown = await page.evaluate(`new Promise((resolve, reject) => {
       const timer = setTimeout(() => { observer.disconnect(); reject(new Error('Pace did not render: ' + document.body.innerText.slice(-600))); }, 10000);
       const inspect = () => {
         const page = document.querySelector('.route-panel:not([inert]) .usage-page');
@@ -108,7 +108,7 @@ for (const scheme of ["dark", "light"] as const) for (const width of [390, 1440]
         });
       };
       const observer = new MutationObserver(inspect); observer.observe(document.body, { childList: true, subtree: true, characterData: true }); inspect();
-    })`)
+    })`, (value: unknown) => { const record = decodeRecord(value); return { ...record, theme: (decodeString)(record["theme"]), labels: (decodeArray(decodeString))(record["labels"]), colors: (decodeArray(decodeString))(record["colors"]), recent: (decodeArray(decodeString))(record["recent"]), openRouterPace: (decodeNumber)(record["openRouterPace"]), overflow: (decodeBoolean)(record["overflow"]) } })
     expect(shown.theme).toBe(scheme)
     expect(shown.labels).toHaveLength(3)
     expect(shown.labels[0]).toBe("Pace: Ahead")

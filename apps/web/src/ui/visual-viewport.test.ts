@@ -12,11 +12,13 @@ function chrome(): KeyboardChromeTarget & { readonly props: Map<string, string> 
 }
 
 describe("keyboard occlusion", () => {
-  test("treats a covered inset above 80px below 1200px as an open keyboard", () => {
+  test("treats a covered inset above 80px below 1280px as an open keyboard", () => {
     expect(keyboardOpenThreshold).toBe(80)
-    expect(keyboardLayoutMax).toBe(1200)
+    expect(keyboardLayoutMax).toBe(1280)
     expect(keyboardOcclusion({ layoutWidth: 390, layoutHeight: 844, offsetTop: 0, height: 420 })).toEqual({ open: true, inset: 424 })
     expect(keyboardOcclusion({ layoutWidth: 820, layoutHeight: 1180, offsetTop: 40, height: 700 })).toEqual({ open: true, inset: 440 })
+    expect(keyboardOcclusion({ layoutWidth: 1279, layoutHeight: 900, offsetTop: 0, height: 600 })).toEqual({ open: true, inset: 300 })
+    expect(keyboardOcclusion({ layoutWidth: 1280, layoutHeight: 900, offsetTop: 0, height: 600 })).toEqual({ open: false, inset: 0 })
   })
 
   test("stays closed for a small inset, a desktop width, and an unreported viewport", () => {
@@ -30,9 +32,12 @@ describe("keyboard occlusion", () => {
 describe("visual viewport frame", () => {
   test("rounds a reported viewport and omits an unreported one", () => {
     expect(visualViewportFrame({ offsetTop: 40.4, height: 700.2 })).toEqual({ top: 40, height: 700 })
+    expect(visualViewportFrame({ offsetTop: 0, height: 844 })).toEqual({ top: 0, height: 844 })
+    expect(visualViewportFrame({ offsetTop: 12.4, height: 420.6 })).toEqual({ top: 12, height: 421 })
     expect(visualViewportFrame({ offsetTop: -12, height: 400 })).toEqual({ top: 0, height: 400 })
     expect(visualViewportFrame(undefined)).toBeUndefined()
     expect(visualViewportFrame({ offsetTop: 0, height: 0 })).toBeUndefined()
+    expect(visualViewportFrame({ offsetTop: 0, height: Number.NaN })).toBeUndefined()
   })
 })
 

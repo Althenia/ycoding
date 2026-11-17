@@ -58,12 +58,12 @@ test("Session companion reports only current measured context, effective autonom
 })
 
 describe("screen-specific workspace composition", () => {
-  test("keeps the session rail and composer only on a selected conversation", () => {
-    expect(remoteSurfaceComposition("/remote/session", true)).toEqual({ showSessionRail: true, showComposer: true })
-    expect(remoteSurfaceComposition("/remote", true)).toEqual({ showSessionRail: false, showComposer: false })
-    expect(remoteSurfaceComposition("/remote", false)).toEqual({ showSessionRail: false, showComposer: false })
-    expect(remoteSurfaceComposition("/remote/sessions", true)).toEqual({ showSessionRail: false, showComposer: false })
-    expect(remoteSurfaceComposition("/remote/settings", true)).toEqual({ showSessionRail: false, showComposer: false })
+  test("keeps the composer only on a selected conversation", () => {
+    expect(remoteSurfaceComposition("/remote/session", true)).toEqual({ showComposer: true })
+    expect(remoteSurfaceComposition("/remote", true)).toEqual({ showComposer: false })
+    expect(remoteSurfaceComposition("/remote", false)).toEqual({ showComposer: false })
+    expect(remoteSurfaceComposition("/remote/sessions", true)).toEqual({ showComposer: false })
+    expect(remoteSurfaceComposition("/remote/settings", true)).toEqual({ showComposer: false })
   })
 })
 
@@ -448,8 +448,8 @@ const boundaryFree = (declarations: Declarations) => {
 describe("tonal sidebar and phone navigation", () => {
   test("uses a borderless sidebar and a soft active destination pill", async () => {
     const css = await readStylesheet("remote.css")
-    expect(declared(css, ".workspace__rail").background).toBe("var(--yc-surface)")
-    expect(declared(css, ".workspace__rail")["border-inline-end"]).toBe("1px solid var(--yc-border)")
+    expect(declared(css, ".workspace__rail").background).toBe("var(--yc-surface-sunken)")
+    expect(declared(css, ".workspace__rail")["border-inline-end"]).toBe("0")
     expect(declared(css, ".workspace__rail-body > .pane")["border-block-start"]).toBeUndefined()
     const active = declared(css, ".remote-nav__link--active")
     expect(active["box-shadow"]).toBe("none")
@@ -471,11 +471,12 @@ describe("tonal sidebar and phone navigation", () => {
     expect(nav).not.toContain("title=")
   })
 
-  test("keeps three labeled phone targets with the label under the icon and a heavier active label", async () => {
+  test("keeps five labeled phone targets with owned leading under the icon and a heavier active label", async () => {
     const css = await readStylesheet("remote.css")
     const item = declared(css, ".bottom-nav__item")
     expect(item["font-size"]).toBe("var(--yc-size-2xs)")
     expect(item["min-height"]).toBe("var(--yc-bottom-nav-h)")
+    expect(declared(css, ".bottom-nav__label")["line-height"]).toBe("var(--yc-leading-2xs)")
     expect(declared(css, ".bottom-nav__item--active .bottom-nav__label")["font-weight"]).toBe("var(--yc-weight-bold)")
     expect(await shell()).toContain('<span class="bottom-nav__label" aria-hidden="true">{item.label}</span>')
   })
@@ -497,24 +498,35 @@ describe("tonal sidebar and phone navigation", () => {
     expect(at(".bottom-nav__new", landscape).display).toBe("grid")
     expect(declared(css, ".bottom-nav__new").display).toBe("none")
     expect(declared(css, ".app[data-keyboard-open] > .bottom-nav").display).toBe("none")
-    expect(await shell()).toContain('<Link to="/remote" class="bottom-nav__new" ariaLabel="New chat" title="New chat"><Icon name="plus" /></Link>')
+    expect(await shell()).toContain('<Link to="/remote" class="bottom-nav__new" ariaLabel="New chat" title="New chat" onClick={props.onNavigate}><Icon name="plus" /></Link>')
   })
 
   test("keeps translucent portrait navigation legible and provides all opaque fallbacks", async () => {
     const css = await readStylesheet("remote.css")
-    expect(declared(css, ".bottom-nav").background).toBe("color-mix(in srgb, var(--yc-surface) 92%, transparent)")
-    expect(declared(css, ".bottom-nav")["backdrop-filter"]).toBe("blur(16px) saturate(1.4)")
-    for (const condition of ["@supports not (backdrop-filter: blur(1px))", "@media (prefers-reduced-transparency: reduce)", "@media (forced-colors: active)"]) {
+    expect(declared(css, ".bottom-nav").background).toBe("var(--yc-surface)")
+    expect(declared(css, ".bottom-nav")["backdrop-filter"]).toBeUndefined()
+    expect(declared(css, ".bottom-nav")["-webkit-backdrop-filter"]).toBeUndefined()
+    const support = "@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))"
+    const enhanced = declarationsWhere(css, (rule) => rule.header === ".bottom-nav" && rule.conditions.includes(support))
+    expect(enhanced).toMatchObject({
+      background: "color-mix(in srgb, var(--yc-surface) 92%, transparent)",
+      "backdrop-filter": "blur(16px) saturate(1.4)",
+      "-webkit-backdrop-filter": "blur(16px) saturate(1.4)",
+    })
+    expect(css.rules.some((rule) => rule.header === ".bottom-nav" && rule.conditions.includes("@supports not (backdrop-filter: blur(1px))"))).toBe(false)
+    for (const condition of ["@media (prefers-reduced-transparency: reduce)", "@media (forced-colors: active)"]) {
       const fallback = declarationsWhere(css, (rule) => rule.header === ".bottom-nav" && rule.conditions.includes(condition))
       expect(fallback.background).toBe("var(--yc-surface)")
       expect(fallback["backdrop-filter"]).toBe("none")
+      expect(fallback["-webkit-backdrop-filter"]).toBe("none")
+      expect(css.rules.findIndex((rule) => rule.header === ".bottom-nav" && rule.conditions.includes(condition))).toBeGreaterThan(css.rules.findIndex((rule) => rule.header === ".bottom-nav" && rule.conditions.includes(support)))
     }
   })
 
   test("retains distinct header borders and the existing focus and toast handoffs", async () => {
     const css = await readStylesheet("remote.css")
-    for (const selector of [".app > .app-header", ".workspace__topbar"]) {
-      expect(declared(css, selector).background).toBe("var(--yc-bg)")
+    for (const [selector, background] of [[".app > .app-header", "var(--yc-bg)"], [".workspace__topbar", "var(--yc-surface)"]] as const) {
+      expect(declared(css, selector).background).toBe(background)
     }
     expect(declared(css, ".app > .app-header")["border-block-end"]).toBeUndefined()
     expect(declared(css, ".workspace__topbar")["border-block-end"]).toBe("1px solid var(--yc-border)")
@@ -604,7 +616,7 @@ describe("open Sessions rows", () => {
     expect(head["border-block-end"]).toBeUndefined()
     expect(declared(css, ".sessions-table__row")["border-block-end"]).toBeUndefined()
     expect(declared(css, ".sessions-table__row")["border-radius"]).toBe("var(--yc-radius-lg)")
-    expect(declared(css, ".session-row--active").background).toBe("var(--yc-green-soft)")
+    expect(declared(css, ".session-row--active").background).toBe("var(--yc-surface-sunken)")
     expect(declared(css, ".session-row--active")["border-radius"]).toBe("var(--yc-radius-sm)")
   })
 
@@ -629,7 +641,7 @@ describe("open Sessions rows", () => {
 })
 
 describe("Ledger rail, conversation header and companion wiring", () => {
-  test("renders flat single-line rail rows without pins or a meta line while the Sessions table keeps pins", async () => {
+  test("renders measured wrapping rail rows without pins or a meta line while the Sessions table keeps pins", async () => {
     const source = await shell()
     const row = source.slice(source.indexOf("function SessionRow("), source.indexOf("function SessionSummaryRow("))
     expect(row).not.toContain("SessionPin")
@@ -641,8 +653,11 @@ describe("Ledger rail, conversation header and companion wiring", () => {
     expect(rail).toContain("estimate: () => 36")
     expect(rail).toContain("groupRailSessions(props.sessions)")
     const css = await readStylesheet("remote.css")
-    expect(declared(css, ".session-row")).toMatchObject({ "block-size": "var(--yc-control-h-dense)", "min-block-size": "var(--yc-control-h-dense)", border: "1px solid transparent", "border-radius": "var(--yc-radius-sm)" })
-    expect(declared(css, ".session-row--active")).toMatchObject({ color: "var(--yc-green-strong)", "border-color": "color-mix(in srgb, var(--yc-green-strong) 28%, transparent)" })
+    expect(declared(css, ".session-row")).toMatchObject({ "min-block-size": "var(--yc-control-h-dense)", border: "1px solid transparent", "border-radius": "var(--yc-radius-sm)" })
+    expect(declared(css, ".session-row")["block-size"]).toBeUndefined()
+    expect(declared(css, ".session-row__name")).toMatchObject({ "white-space": "normal", "overflow-wrap": "anywhere" })
+    expect(rail).not.toContain("typicalSize: true")
+    expect(declared(css, ".session-row--active")).toMatchObject({ color: "var(--yc-text)", "border-color": "transparent" })
     expect(declared(css, ".session-row__state").color).toBe("var(--yc-yellow-strong)")
     expect(declared(css, ".session-row__signal-mark")).toMatchObject({ "inline-size": "6px", "block-size": "6px", background: "var(--yc-text-subtle)" })
   })
@@ -659,8 +674,8 @@ describe("Ledger rail, conversation header and companion wiring", () => {
     expect(source).toContain('class="workspace__new-chat"')
     expect(source).not.toContain('title="YCoding home"><BrandMark compact /></Link>')
     const css = await readStylesheet("remote.css")
-    expect(declared(css, ".workspace__rail-head")).toMatchObject({ display: "flex", "align-items": "center", "justify-content": "space-between", "block-size": "52px", "padding-inline": "var(--yc-space-3)" })
-    expect(declared(css, ".workspace__new-chat")).toMatchObject({ "min-block-size": "28px", "padding-inline": "10px", "border-radius": "var(--yc-radius-pill)", border: "1px solid var(--yc-border-strong)", background: "transparent" })
+    expect(declared(css, ".workspace__rail-head")).toMatchObject({ display: "flex", "align-items": "center", "justify-content": "space-between", "block-size": "var(--yc-header-public-h)", "padding-inline": "var(--yc-space-3)" })
+    expect(declared(css, ".workspace__new-chat")).toMatchObject({ "min-block-size": "28px", "padding-inline": "10px", "border-radius": "var(--yc-radius-sm)", border: "1px solid var(--yc-border)", background: "var(--yc-surface-sunken)" })
     expect(declared(css, ".session-search .input")).toMatchObject({ "block-size": "var(--yc-space-8)", background: "var(--yc-bg)", border: "1px solid var(--yc-border)", "border-radius": "var(--yc-radius-md)" })
     expect(declared(css, ".session-panel .session-filters")["flex-wrap"]).toBe("nowrap")
     expect(declared(css, ".session-panel .session-filters__option--active")).toMatchObject({ background: "var(--yc-surface-sunken)", color: "var(--yc-text)", "border-color": "var(--yc-border-strong)" })
@@ -770,7 +785,7 @@ describe("Ledger accents and floating request cards", () => {
 
   test("keeps companion header pills neutral and prose strips and filters in the sans face", async () => {
     const css = await readStylesheet("remote.css")
-    expect(declared(css, ".companion__pill")).toMatchObject({ background: "var(--yc-surface-sunken)", color: "var(--yc-text-muted)", "min-block-size": "var(--yc-space-6)", border: "0" })
+    expect(declared(css, ".companion__pill")).toMatchObject({ background: "var(--yc-surface-sunken)", color: "var(--yc-text-muted)", "min-block-size": "var(--yc-space-6)", "padding-inline": "var(--yc-space-1)", border: "0" })
     expect(declared(css, ".companion__close")).toMatchObject({ "inline-size": "28px", "block-size": "28px", background: "transparent" })
     expect(declared(css, ".app .status-strip")["font-family"]).toBe("var(--yc-font-sans)")
     expect(declared(css, ".session-filters__option")["font-family"]).toBe("var(--yc-font-sans)")

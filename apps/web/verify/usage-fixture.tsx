@@ -193,7 +193,7 @@ type DashboardRequest = { readonly daily?: UsageReportInput; readonly monthly?: 
 
 const providerSnapshot = (refresh: boolean) => {
   if (musePendingMode && refresh) museRefreshed = true
-  quotaSnapshots = musePendingMode ? [museRefreshed ? museObservedProvider : musePendingProvider, ...providers] : museMode ? [museProvider, ...providers] : none ? providers.filter((provider) => provider.providerID === "other" || provider.providerID === "empty") : refreshCycle ? refreshedProviders() : providers
+  quotaSnapshots = musePendingMode ? [museRefreshed ? museObservedProvider : musePendingProvider, ...providers] : museMode ? [museProvider, ...providers] : none ? providers.filter((provider) => provider.status === "unsupported") : refreshCycle ? refreshedProviders() : providers
   return quotaSnapshots
 }
 

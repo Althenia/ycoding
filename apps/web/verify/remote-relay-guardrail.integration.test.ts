@@ -72,11 +72,11 @@ for (const [decision, reply] of [
         `http://127.0.0.1:${port}/verify/remote.html?scenario=permission-guardrail-hard-review-form-requests-1440&relay=${encodeURIComponent(`ws://127.0.0.1:${relay.port}`)}`,
       )
       for (let attempt = 0; attempt < 50; attempt += 1) {
-        if (await page.evaluate<boolean>(`document.querySelector('.request--hard') !== null`)) break
+        if (await page.evaluate(`document.querySelector('.request--hard') !== null`)) break
         await Bun.sleep(100)
       }
       expect(
-        await page.evaluate<readonly string[]>(
+        await page.evaluate(
           `[...document.querySelectorAll('.request--hard .request__actions button')].map(button => button.textContent.trim())`,
         ),
       ).toEqual(["Approve once", "Reject"])
@@ -97,14 +97,14 @@ for (const [decision, reply] of [
       ).toEqual([
         { operation: "session.guardrail.reply", sessionID: "ses_fixture", input: { requestID: "grq_hard", reply } },
       ])
-      expect(await page.evaluate<boolean>(`document.querySelector('.request--hard') !== null`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('.request--hard') !== null`)).toBe(true)
       if (!acknowledge) throw new Error("The relay did not receive a guardrail reply")
       acknowledge()
       for (let attempt = 0; attempt < 50; attempt += 1) {
-        if (await page.evaluate<boolean>(`document.querySelector('.request--hard') === null`)) break
+        if (await page.evaluate(`document.querySelector('.request--hard') === null`)) break
         await Bun.sleep(50)
       }
-      expect(await page.evaluate<boolean>(`document.querySelector('.request--hard') === null`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('.request--hard') === null`)).toBe(true)
       expect(requests).toHaveLength(1)
     } finally {
       await page.close()

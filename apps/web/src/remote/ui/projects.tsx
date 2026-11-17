@@ -13,7 +13,7 @@ import {
   delegatedCategories, delegationDraftIssue, effectiveDelegation, expiryAt, expiryChoices, externalKinds,
   filterLabel, freshnessLabel, liveCounts, liveLabel, maxMembers, memberCounts, parseConcurrency, parseList, parseProjectName,
   projectOf, pushFilterWire, removeMemberInput, renameInput, sessionsLabel, sessionTitle, setScope, settingsInput, statusLabel, summaryLine, toggleCategory, toggleMaster,
-  type DelegatedCategory, type ExpiryChoice, type ExternalKind, type ParticipantView, type ProjectDetail,
+  type ExpiryChoice, type ExternalKind, type ParticipantView, type ProjectDetail,
 } from "../coordination"
 import type { CoordinationChange, CoordinationOperation } from "../queries"
 import { moveRadio } from "./settings"
@@ -109,30 +109,21 @@ function NewProjectButton(props: { readonly data: ProjectsData; readonly onNew: 
   return <button type="button" class="button button--primary button--small" disabled={!props.data.ready() || props.data.pending()} onClick={props.onNew}><Icon name="plus" size={16} />New project</button>
 }
 
-export function ProjectsRail(props: { readonly data: ProjectsData; readonly onNew: () => void }) {
-  const data = props.data
-  const groups = createMemo(() => new Map(data.groups().map((group) => [group.detail.id, group])))
-  return <section class="project-rail" aria-label="Projects"><div class="project-rail__head"><h2>Projects</h2><NewProjectButton data={data} onNew={props.onNew} /></div>
-    <ProjectState data={data}><ul class="project-list project-list--rail"><For each={[...groups().keys()]}>{(id) => {
-      const group = () => groups().get(id)!
-      return <li><button type="button" class="project-item" aria-label={`Open project ${group().detail.name}`} aria-current={data.membership()?.detail.id === id ? "true" : undefined} onClick={() => data.open(group().detail.master.sessionID)}><span class="project-item__name">{group().detail.name}<Icon name="chevron-right" size={16} /></span><ProjectStatus project={group().detail} /><span class="project-meta">{summaryLine(liveCounts(group().detail))}</span><Sparkline project={group().detail} now={data.now()} /></button></li>
-    }}</For></ul></ProjectState>
-  </section>
-}
-
 export function ProjectsPage(props: { readonly data: ProjectsData }) {
   const data = props.data
   const groups = createMemo(() => new Map(data.groups().map((group) => [group.detail.id, group])))
+  const [inspection, setInspection] = createSignal<{ readonly id: string; readonly trigger: HTMLButtonElement }>()
+  const inspected = () => groups().get(inspection()?.id ?? "")?.detail
   return <div class="projects"><Show when={!data.creating()} fallback={<CreateProject data={data} />}>
     <header class="project-pagehead"><div><h1>Projects</h1><p>Each Project is a master Session plus the Sessions it directs.</p></div><div class="project-actions"><ProjectFreshness data={data} /><button class="button button--ghost button--small" disabled={data.query().isFetching} onClick={data.refresh}><Icon name="refresh" size={16} />Refresh</button><NewProjectButton data={data} onNew={() => data.setCreating(true)} /></div></header>
     <Feedback data={data} />
     <ProjectState data={data}><Show when={data.groups().length > 0} fallback={<div class="project-empty"><h2>No projects</h2><p>A Project is one master Session plus the Sessions it directs.</p><NewProjectButton data={data} onNew={() => data.setCreating(true)} /></div>}>
       <ul class="project-list"><For each={[...groups().keys()]}>{(id) => {
         const group = () => groups().get(id)!
-        return <li class="project-card"><div class="project-card__head"><h2>{group().detail.name}</h2><ProjectStatus project={group().detail} /></div><div class="project-actions"><span class="project-badge project-badge--master">Master</span><span>{group().detail.master.title}</span></div><p class="project-meta">{summaryLine(liveCounts(group().detail))} · {sessionsLabel(group().detail)}</p><Meter project={group().detail} /><Sparkline project={group().detail} now={data.now()} /><div class="project-actions"><button class="button button--primary" aria-label={`Open project ${group().detail.name}`} onClick={() => data.open(group().detail.master.sessionID)}>Open project<Icon name="chevron-right" size={16} /></button><button class="button button--danger button--small" aria-label={`Delete project ${group().detail.name}`} onClick={(event) => data.setDialog({ kind: "delete-project", project: group().detail, trigger: event.currentTarget })}>Delete…</button></div></li>
+        return <li class="project-card"><div class="project-card__head"><h2><span class="project-card__name">{group().detail.name}</span><button type="button" class="project-card__inspect" aria-label={`View project ${group().detail.name}`} onClick={(event) => setInspection({ id, trigger: event.currentTarget })}>{group().detail.name}<Icon name="chevron-right" size={16} /></button></h2><ProjectStatus project={group().detail} /></div><div class="project-actions"><span class="project-badge project-badge--master">Master</span><span>{group().detail.master.title}</span></div><p class="project-meta">{summaryLine(liveCounts(group().detail))} · {sessionsLabel(group().detail)}</p><Meter project={group().detail} /><Sparkline project={group().detail} now={data.now()} /><div class="project-actions"><button class="button button--primary" aria-label={`Open project ${group().detail.name}`} onClick={() => data.open(group().detail.master.sessionID)}>Open project<Icon name="chevron-right" size={16} /></button><button class="button button--danger button--small" aria-label={`Delete project ${group().detail.name}`} onClick={(event) => data.setDialog({ kind: "delete-project", project: group().detail, trigger: event.currentTarget })}>Delete…</button></div></li>
       }}</For></ul>
     </Show></ProjectState>
-  </Show></div>
+  </Show><Show when={inspected()}>{(project) => <Modal class="overlay--sheet project-sheet" label={project().name} returnFocus={inspection()!.trigger} onClose={() => setInspection(undefined)}><ProjectPanel data={data} project={project()} onManage={() => { const trigger = inspection()?.trigger; setInspection(undefined); return trigger }} /></Modal>}</Show></div>
 }
 
 export function Segmented<Value extends string>(props: { readonly label: string; readonly value: Value; readonly options: readonly { readonly id: Value; readonly label: string }[]; readonly onChange: (value: Value) => void; readonly disabled?: boolean }) {
@@ -180,11 +171,11 @@ function CreateProject(props: { readonly data: ProjectsData }) {
   const save = async (event: SubmitEvent) => {
     event.preventDefault()
     const parsed = parseProjectName(name())
-    if ("error" in parsed) return setError(parsed.error ?? "Project name is required")
-    if (source() === "existing" && !master()) return setError("Choose a master Session")
-    if (source() === "new" && !workspace()) return setError("Choose a directory")
+    if ("error" in parsed) { setError(parsed.error ?? "Project name is required"); return }
+    if (source() === "existing" && !master()) { setError("Choose a master Session"); return }
+    if (source() === "new" && !workspace()) { setError("Choose a directory"); return }
     const sessionName = sessionTitle(title(), parsed.value)
-    if ("error" in sessionName) return setError(sessionName.error)
+    if ("error" in sessionName) { setError(sessionName.error); return }
     let id = source() === "existing" ? master() : created()
     if (!id) {
       const scope = data.remote.scope()
@@ -197,7 +188,7 @@ function CreateProject(props: { readonly data: ProjectsData }) {
       id = result.sessionID
       setCreated(id)
     }
-    if (await data.run("coordination.create", createProjectInput(parsed.value!, id), "Project created.")) { data.setCreating(false); data.open(id) }
+    if (await data.run("coordination.create", createProjectInput(parsed.value, id), "Project created.")) { data.setCreating(false); data.open(id) }
     else if (data.notice()?.tone === "attention") setUnconfirmed(true)
   }
   return <form class="project-create" onSubmit={(event) => void save(event)}><header class="project-pagehead"><div><h1>New project</h1><p>Name it, then choose the master. Add other Sessions afterwards.</p></div></header><Feedback data={data} />
@@ -232,14 +223,26 @@ export function ProjectPanel(props: { readonly data: ProjectsData; readonly proj
   const [removed, setRemoved] = createSignal<ParticipantView>()
   const counts = createMemo(() => liveCounts(props.project))
   const participants = createMemo(() => new Map([props.project.master, ...props.project.members].map((entry) => [entry.sessionID, entry])))
+  const [expanded, setExpanded] = createSignal<HTMLButtonElement>()
+  const [selected, setSelected] = createSignal<string>()
+  const inspected = () => participants().get(selected() ?? "")
+  let memberTrigger: HTMLButtonElement | undefined
+  let memberScroll: HTMLElement | null = null
+  let memberTop = 0
+  const backToMembers = () => {
+    setSelected(undefined)
+    queueMicrotask(() => { if (memberScroll) memberScroll.scrollTop = memberTop; memberTrigger?.focus({ preventScroll: true }) })
+  }
   const manage = (kind: ProjectDialog["kind"], trigger: HTMLElement, session?: ParticipantView) => {
     const project = props.project
     const returnFocus = props.onManage?.() ?? trigger
     data.setDialog({ kind, project, trigger: returnFocus, session })
   }
   const remove = async (entry: ParticipantView) => { if (await data.run("coordination.update", removeMemberInput(props.project, entry.sessionID), `${entry.title} removed. The Session keeps running and keeps its history.`)) setRemoved(entry) }
-  return <section class="project-panel" aria-label="Project panel"><div class="project-panel__body"><Feedback data={data} />
-    <h2 class="project-section-heading"><button ref={sessionsTrigger} type="button" class="project-tab" aria-label="Project sessions" aria-expanded={sessionsOpen()} aria-controls={`${sectionsID}-sessions`} onClick={() => setSessionsOpen((value) => !value)}>Sessions <span>{props.project.members.length + 1}</span><span class="project-live" data-state="waiting">{counts().waiting} waiting</span><Icon name={sessionsOpen() ? "chevron-up" : "chevron-down"} size={16} /></button></h2>
+  return <><section class="project-panel" aria-label="Project panel"><div class="project-panel__body"><Feedback data={data} />
+    <div class="project-phone project-actions"><ProjectStatus project={props.project} /><button type="button" class="button button--ghost button--small" disabled={data.query().isFetching} onClick={data.refresh}><Icon name="refresh" size={16} />Refresh project</button></div>
+    <button type="button" class="button button--secondary button--small" aria-label="Expand project coordination" onClick={(event) => setExpanded(event.currentTarget)}><Icon name="team" size={16} />Project coordination<Icon name="external" size={14} /></button>
+    <h2 class="project-section-heading"><button ref={sessionsTrigger} type="button" class="project-tab" aria-label="Project sessions" aria-expanded={sessionsOpen()} aria-controls={`${sectionsID}-sessions`} onClick={() => setSessionsOpen((value) => !value)}>Sessions <span>{props.project.members.length + 1}</span>{" "}<span class="project-live" data-state="waiting">{counts().waiting} waiting</span><Icon name={sessionsOpen() ? "chevron-up" : "chevron-down"} size={16} /></button></h2>
     <Collapsible id={`${sectionsID}-sessions`} open={sessionsOpen()}><div class="project-section-body">
       <div class="project-summary"><div class="project-actions"><For each={["running", "waiting", "idle", "failed"] as const}>{(state) => <span class="project-live" data-state={state}><span aria-hidden="true">{state === "running" ? "●" : state === "waiting" ? "△" : state === "failed" ? "×" : "○"}</span>{counts()[state]} {state}</span>}</For></div><Meter project={props.project} /><Sparkline project={props.project} now={data.now()} /></div>
       <div class="project-actions"><button class="button button--primary button--small" disabled={data.pending() || props.project.members.length >= maxMembers} onClick={(event) => manage("new", event.currentTarget)}><Icon name="plus" size={16} />New session…</button><button class="button button--secondary button--small" disabled={data.pending() || props.project.members.length >= maxMembers} onClick={(event) => manage("add", event.currentTarget)}><Icon name="plus" size={16} />Add session…</button></div>
@@ -253,6 +256,20 @@ export function ProjectPanel(props: { readonly data: ProjectsData; readonly proj
     <Collapsible id={`${sectionsID}-settings`} open={settingsOpen()}><ProjectSettings data={data} project={props.project} onMaster={(trigger) => manage("master", trigger)} onMembers={() => { setSessionsOpen(true); queueMicrotask(() => sessionsTrigger?.focus({ preventScroll: true })) }} /></Collapsible>
     <ProjectFreshness data={data} /></div>
   </section>
+    <Show when={expanded()}>{(trigger) => <Modal class="overlay--team-overview overlay--project-coordination" label="Project coordination" returnFocus={trigger()} onClose={() => setExpanded(undefined)} header={<div class="project-heading"><h2>{props.project.name}</h2><ProjectStatus project={props.project} /><ProjectFreshness data={data} /></div>}>
+      <div class="project-coordination" classList={{ "project-coordination--inspecting": inspected() !== undefined }}>
+        <section class="project-coordination__master" aria-label="Project master"><span class="project-badge project-badge--master">Master</span><h3>{props.project.master.title}</h3><LiveState participant={props.project.master} /><p class="project-meta">{props.project.master.directory}</p><Meter project={props.project} /><p class="field__hint">The master owns this Project. Members retain their own Sessions and histories.</p></section>
+        <section class="project-coordination__members" aria-label="Project member sessions"><div class="project-pagehead"><h3>Member sessions</h3><span class="project-meta">{sessionsLabel(props.project)}</span></div>
+          <ul class="project-coordination__list"><For each={[...participants().keys()]}>{(id) => {
+            const entry = () => participants().get(id)!
+            return <li data-selected={selected() === id}><button type="button" data-action="inspect-member" aria-pressed={selected() === id} onClick={(event) => { memberTrigger = event.currentTarget; memberScroll = event.currentTarget.closest<HTMLElement>(".overlay__body"); memberTop = memberScroll?.scrollTop ?? 0; setSelected(id); if (window.matchMedia("(max-width: 767px), (max-height: 599px) and (pointer: coarse)").matches) queueMicrotask(() => { if (memberScroll) { memberScroll.scrollTop = 0; memberScroll.querySelector<HTMLButtonElement>('.project-coordination__inspector button')?.focus({ preventScroll: true }) } }) }}><strong>{entry().title}</strong><Show when={id === props.project.master.sessionID}><span class="project-badge project-badge--master">Master</span></Show><code>{entry().directory}</code><LiveState participant={entry()} /><span class="project-meta">{ageLabel(entry(), data.now())}</span></button></li>
+          }}</For></ul>
+        </section>
+        <section class="project-coordination__pending" aria-label="Project pending requests"><h3>Pending requests</h3><Show when={[...participants().values()].some((entry) => entry.pending.length > 0)} fallback={<p class="field__hint">No pending requests reported.</p>}><For each={[...participants().keys()]}>{(id) => <For each={participants().get(id)!.pending}>{(request) => <article class="project-coordination__request"><header><Icon name="shield" size={16} /><strong>{participants().get(id)!.title}</strong><span class="project-meta">{request.kind}</span></header><p>{request.summary}</p><button type="button" class="button button--secondary button--small" onClick={() => { setExpanded(undefined); props.onManage?.(); data.open(id) }}>Open session to review<Icon name="external" size={14} /></button></article>}</For>}</For></Show></section>
+        <Show when={inspected()}>{(entry) => <aside class="project-coordination__inspector" aria-label="Selected project member"><div class="project-pagehead"><span class="project-meta">Selected member</span><button type="button" class="button button--ghost button--icon project-coordination__close" aria-label="Close member inspector" onClick={backToMembers}><Icon name="close" size={16} /></button></div><button type="button" class="button button--ghost project-coordination__back" onClick={backToMembers}><Icon name="arrow-left" size={16} />Back to members</button><h3>{entry().title}</h3><LiveState participant={entry()} /><p class="project-meta">{entry().directory}</p><Show when={entry().drivenBy}>{(driver) => <p>Driven by {driver().title} · master subagent</p>}</Show><For each={entry().pending}>{(request) => <p class="project-member__ask">{request.summary}</p>}</For><button type="button" class="button button--primary" onClick={() => { const id = entry().sessionID; setExpanded(undefined); props.onManage?.(); data.open(id) }}>Open session<Icon name="external" size={16} /></button></aside>}</Show>
+      </div>
+    </Modal>}</Show>
+  </>
 }
 
 function ProjectSettings(props: { readonly data: ProjectsData; readonly project: ProjectDetail; readonly onMaster: (trigger: HTMLElement) => void; readonly onMembers: () => void }) {
@@ -262,33 +279,34 @@ function ProjectSettings(props: { readonly data: ProjectsData; readonly project:
   const [limit, setLimit] = createSignal(String(props.project.settings.concurrency ?? 1))
   const current = props.project.settings.delegatedDecisions
   const [narrow, setNarrow] = createSignal(current !== undefined)
-  const [categories, setCategories] = createSignal<readonly DelegatedCategory[]>(current?.categories ?? data.ready()?.central?.categories ?? [])
+  const [categories, setCategories] = createSignal(current?.categories ?? data.ready()?.central?.categories ?? [])
   const [actions, setActions] = createSignal(current?.actions?.join("\n") ?? "")
   const [resources, setResources] = createSignal(current?.resources?.join("\n") ?? "")
   const [expiry, setExpiry] = createSignal<ExpiryChoice | "keep">(current?.expiresAt === undefined ? "none" : "keep")
   const [error, setError] = createSignal("")
   const saveLimit = () => {
     const parsed = capped() ? parseConcurrency(limit()) : { value: null }
-    if ("error" in parsed) return setError(parsed.error ?? "Invalid concurrency")
+    if ("error" in parsed) { setError(parsed.error ?? "Invalid concurrency"); return }
     setError("")
     void data.run("coordination.update", settingsInput(props.project, { ...props.project.settings, concurrency: parsed.value! }), "Concurrency updated.")
   }
   const saveDelegation = () => {
     const a = parseList(actions(), { limit: 32, length: 512, noun: "action" })
     const r = parseList(resources(), { limit: 32, length: 512, noun: "resource" })
-    if ("error" in a || "error" in r) return setError("error" in a ? a.error : "error" in r ? r.error : "Invalid patterns")
-    const expires = expiry() === "keep" ? current?.expiresAt : expiryAt(expiry() as ExpiryChoice, Date.now())
+    if ("error" in a || "error" in r) { setError("error" in a ? a.error : "error" in r ? r.error : "Invalid patterns"); return }
+    const choice = expiry()
+    const expires = choice === "keep" ? current?.expiresAt : expiryAt(choice, Date.now())
     const delegated = { categories: categories(), ...(a.value.length ? { actions: a.value } : {}), ...(r.value.length ? { resources: r.value } : {}), ...(expires === undefined ? {} : { expiresAt: expires }) }
     const issue = narrow() ? delegationDraftIssue(data.ready()?.central, delegated, Date.now()) : undefined
-    if (issue) return setError(issue)
+    if (issue) { setError(issue); return }
     setError("")
     void data.run("coordination.update", settingsInput(props.project, { concurrency: props.project.settings.concurrency, ...(narrow() ? { delegatedDecisions: delegated } : {}) }), "Delegated decisions updated.")
   }
-  return <div class="project-settings"><section class="project-setting"><h3>Name</h3><form onSubmit={(event) => { event.preventDefault(); const parsed = parseProjectName(name()); if ("error" in parsed) setError(parsed.error ?? "Invalid name"); else void data.run("coordination.update", renameInput(props.project, parsed.value!), "Project name updated.") }}><label class="field"><span class="field__label">Project name</span><input class="input" value={name()} maxLength={120} onInput={(event) => setName(event.currentTarget.value)} /></label><button class="button button--secondary button--small" disabled={data.pending() || name() === props.project.name}>Save name</button></form></section>
+  return <div class="project-settings"><section class="project-setting"><h3>Name</h3><form onSubmit={(event) => { event.preventDefault(); const parsed = parseProjectName(name()); if ("error" in parsed) setError(parsed.error ?? "Invalid name"); else void data.run("coordination.update", renameInput(props.project, parsed.value), "Project name updated.") }}><label class="field"><span class="field__label">Project name</span><input class="input" value={name()} maxLength={120} onInput={(event) => setName(event.currentTarget.value)} /></label><button class="button button--secondary button--small" disabled={data.pending() || name() === props.project.name}>Save name</button></form></section>
     <section class="project-setting"><h3>Master</h3><div class="project-actions"><span class="project-badge project-badge--master">Master</span><strong>{props.project.master.title}</strong></div><button class="button button--secondary button--small" onClick={(event) => props.onMaster(event.currentTarget)}>Change master…</button><p class="field__hint">Choosing another master keeps {props.project.master.title} as an ordinary member.</p></section>
     <section class="project-setting"><h3>Members</h3><p>{sessionsLabel(props.project)}, including the Master.</p><button class="button button--secondary button--small" onClick={props.onMembers}>Manage Sessions</button></section>
     <section class="project-setting"><h3>Concurrency limit</h3><Segmented label="Concurrency limit" value={capped() ? "limit" : "none"} options={[{ id: "none", label: "No limit" }, { id: "limit", label: "Set a limit" }]} onChange={(value) => setCapped(value === "limit")} /><Show when={capped()}><label class="field"><span class="field__label">Members running at once</span><input class="input" inputMode="numeric" value={limit()} onInput={(event) => setLimit(event.currentTarget.value)} /></label></Show><p class="field__hint">When the limit is reached the master cannot message an idle member.</p><button class="button button--secondary button--small" disabled={data.pending()} onClick={saveLimit}>Save concurrency</button></section>
-    <section class="project-setting"><h3>Delegated decisions</h3><p class="field__hint">{centralPolicyNote(data.ready()?.central)}</p><Segmented label="Delegation" value={narrow() ? "narrow" : "inherit"} disabled={!data.ready()?.central?.enabled} options={[{ id: "inherit", label: "Inherit central policy" }, { id: "narrow", label: "Narrow for this project" }]} onChange={(value) => setNarrow(value === "narrow")} /><Show when={narrow()}><div class="project-switches"><For each={delegatedCategories}>{(category) => <label class="switch"><input type="checkbox" checked={categories().includes(category)} disabled={!data.ready()?.central?.categories.includes(category)} onChange={() => setCategories(categories().includes(category) ? categories().filter((entry) => entry !== category) : [...categories(), category])} /><span>{category}</span></label>}</For></div><label class="field"><span class="field__label">Action patterns</span><textarea class="textarea" rows={2} value={actions()} onInput={(event) => setActions(event.currentTarget.value)} /></label><label class="field"><span class="field__label">Resource patterns</span><textarea class="textarea" rows={2} value={resources()} onInput={(event) => setResources(event.currentTarget.value)} /></label><CustomSelect label="Expires" placeholder="No expiry" value={expiry()} options={[...(current?.expiresAt === undefined ? [] : [{ value: "keep", label: "Keep current expiry" }]), ...expiryChoices.map((entry) => ({ value: entry.id, label: entry.label }))]} onChange={(value) => setExpiry(value as ExpiryChoice | "keep")} /></Show><p class="field__hint">Hard reviews always reach you. Effective categories: {effectiveDelegation(data.ready()?.central, props.project.settings.delegatedDecisions).categories.join(", ") || "none"}.</p><button class="button button--secondary button--small" disabled={data.pending() || !data.ready()?.central?.enabled} onClick={saveDelegation}>Save delegation</button></section>
+    <section class="project-setting"><h3>Delegated decisions</h3><p class="field__hint">{centralPolicyNote(data.ready()?.central)}</p><Segmented label="Delegation" value={narrow() ? "narrow" : "inherit"} disabled={!data.ready()?.central?.enabled} options={[{ id: "inherit", label: "Inherit central policy" }, { id: "narrow", label: "Narrow for this project" }]} onChange={(value) => setNarrow(value === "narrow")} /><Show when={narrow()}><div class="project-switches"><For each={delegatedCategories}>{(category) => <label class="switch"><input type="checkbox" checked={categories().includes(category)} disabled={!data.ready()?.central?.categories.includes(category)} onChange={() => setCategories(categories().includes(category) ? categories().filter((entry) => entry !== category) : [...categories(), category])} /><span>{category}</span></label>}</For></div><label class="field"><span class="field__label">Action patterns</span><textarea class="textarea" rows={2} value={actions()} onInput={(event) => setActions(event.currentTarget.value)} /></label><label class="field"><span class="field__label">Resource patterns</span><textarea class="textarea" rows={2} value={resources()} onInput={(event) => setResources(event.currentTarget.value)} /></label><CustomSelect label="Expires" placeholder="No expiry" value={expiry()} options={[...(current?.expiresAt === undefined ? [] : [{ value: "keep", label: "Keep current expiry" }]), ...expiryChoices.map((entry) => ({ value: entry.id, label: entry.label }))]} onChange={(value) => { const choice = value === "keep" ? "keep" : expiryChoices.find((entry) => entry.id === value)?.id; if (choice !== undefined) setExpiry(choice) }} /></Show><p class="field__hint">Hard reviews always reach you. Effective categories: {effectiveDelegation(data.ready()?.central, props.project.settings.delegatedDecisions).categories.join(", ") || "none"}.</p><button class="button button--secondary button--small" disabled={data.pending() || !data.ready()?.central?.enabled} onClick={saveDelegation}>Save delegation</button></section>
     <NotificationFilter data={data} /><Show when={error()}><p class="projects__notice" data-tone="danger" role="alert">{error()}</p></Show>
   </div>
 }
@@ -326,9 +344,9 @@ export function ProjectsDialogs(props: { readonly data: ProjectsData }) {
       } catch (cause) { setError(cause instanceof Error ? cause.message : "The Session could not be added.") }
     }
     const create = async () => {
-      if (!workspace()) return setError("Choose a directory")
+      if (!workspace()) { setError("Choose a directory"); return }
       const sessionName = sessionTitle(title())
-      if ("error" in sessionName) return setError(sessionName.error)
+      if ("error" in sessionName) { setError(sessionName.error); return }
       let id = created()
       if (!id) {
         const scope = data.remote.scope()

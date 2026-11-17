@@ -20,7 +20,7 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 async function wait(page: Page, expression: string) {
   for (let i = 0; i < 100; i++) {
-    if (await page.evaluate<boolean>(`Boolean(${expression})`)) return
+    if (await page.evaluate(`Boolean(${expression})`)) return
     await Bun.sleep(30)
   }
   throw new Error(`Timed out: ${expression}`)
@@ -63,7 +63,7 @@ test("unresolved authorization retains check and cancel without a no-op refresh"
       await wait(h.page, `document.getElementById('provider-authorization-code') !== null`)
       await h.page.evaluate(`[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Check authentication status').click()`)
       await wait(h.page, `document.querySelector('dialog[aria-label="Connect provider"]').textContent.includes('Provider authentication could not finish.')`)
-      const state = await h.page.evaluate<{ check: boolean; cancel: boolean; refresh: boolean; connect: boolean; overflow: boolean }>(`(() => { const d=document.querySelector('dialog[aria-label="Connect provider"]'); const buttons=[...d.querySelectorAll('button')]; const enabled=(name)=>buttons.some(b=>b.textContent.trim()===name&&!b.disabled); return {check:enabled('Check authentication status'),cancel:enabled('Cancel authentication'),refresh:buttons.some(b=>b.textContent.trim()==='Refresh provider profiles'),connect:buttons.some(b=>b.textContent.trim()==='Connect profile'),overflow:document.documentElement.scrollWidth>innerWidth||d.scrollWidth>d.clientWidth}; })()`)
+      const state = await h.page.evaluate(`(() => { const d=document.querySelector('dialog[aria-label="Connect provider"]'); const buttons=[...d.querySelectorAll('button')]; const enabled=(name)=>buttons.some(b=>b.textContent.trim()===name&&!b.disabled); return {check:enabled('Check authentication status'),cancel:enabled('Cancel authentication'),refresh:buttons.some(b=>b.textContent.trim()==='Refresh provider profiles'),connect:buttons.some(b=>b.textContent.trim()==='Connect profile'),overflow:document.documentElement.scrollWidth>innerWidth||d.scrollWidth>d.clientWidth}; })()`)
       expect(state).toEqual({ check: true, cancel: true, refresh: false, connect: false, overflow: false })
       expect(h.relay.requests.filter((r) => r.operation === "provider.auth.begin")).toHaveLength(1)
       expect(h.relay.requests.filter((r) => r.operation === "provider.auth.list")).toHaveLength(1)

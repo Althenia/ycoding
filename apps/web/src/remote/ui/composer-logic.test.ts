@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { autocompleteBound, sheetFrame, modelSelection, modelSelectionKey, optionsForTrigger, applyMention, profileForModel, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, orderedVariants, visibleModels, orderedModelOptions, modelSpeeds, switchModelSpeed, effortLabel, effortLevel, needsCatalogRead } from "./composer-logic"
+import { autocompleteBound, modelSelection, modelSelectionKey, optionsForTrigger, applyMention, profileForModel, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, orderedVariants, visibleModels, orderedModelOptions, modelSpeeds, switchModelSpeed, effortLabel, effortLevel, needsCatalogRead } from "./composer-logic"
 import { readCatalog, type CatalogView, type ModelOption } from "../catalog"
 
 const models: ModelOption[] = [
@@ -268,15 +268,6 @@ test("phone suggestions use the visual viewport space above the field up to thre
   expect(autocompleteBound(60, 300, true)).toBe(54)
   expect(autocompleteBound(30, 300, true)).toBe(54)
   expect(autocompleteBound(700, 844, false)).toBe(autocompleteBound(700, 844))
-})
-
-test("a phone sheet follows the visual viewport top and height in whole pixels and ignores an unreported viewport", () => {
-  expect(sheetFrame({ offsetTop: 0, height: 844 })).toEqual({ top: 0, height: 844 })
-  expect(sheetFrame({ offsetTop: 12.4, height: 420.6 })).toEqual({ top: 12, height: 421 })
-  expect(sheetFrame({ offsetTop: -3, height: 400 })).toEqual({ top: 0, height: 400 })
-  expect(sheetFrame({ offsetTop: 0, height: 0 })).toBeUndefined()
-  expect(sheetFrame({ offsetTop: 0, height: Number.NaN })).toBeUndefined()
-  expect(sheetFrame(undefined)).toBeUndefined()
 })
 
 test("a dismissed suggestion token stays closed until the token changes or another token is chosen", () => {

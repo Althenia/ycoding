@@ -36,6 +36,7 @@ test("every Session list read asks the connector to exclude background Sessions"
     const reads = relay.requests.filter((request) => request.operation === "session.list")
     expect(reads.length).toBeGreaterThan(0)
     expect(reads.every((request) => request.input?.background === "exclude")).toBe(true)
+    expect(reads.every((request) => request.input?.parentID === null)).toBe(true)
   } finally { store.dispose(); await relay.stop() }
 }, 15_000)
 

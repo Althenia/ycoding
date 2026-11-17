@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeNumber, type Page } from "./cdp"
 
 const port = 4437
 const executable = process.env.YCODING_WEB_CHROME
@@ -29,9 +29,9 @@ afterAll(async () => {
   if (server) await server.exited
 })
 
-async function wait(page: { evaluate<T>(expression: string): Promise<T> }, expression: string) {
+async function wait(page: Pick<Page, "evaluate">, expression: string) {
   for (let attempt = 0; attempt < 100; attempt++) {
-    if (await page.evaluate<boolean>(expression)) return
+    if (await page.evaluate(expression)) return
     await Bun.sleep(30)
   }
   throw new Error(`Image cache consumer did not settle: ${expression}`)
@@ -51,10 +51,10 @@ test("eviction refetches an old source without replacing its mounted preview or 
       })()`)
       await wait(page, `document.querySelector('.transcript-lightbox[open] img')?.naturalWidth>0`)
       await page.evaluate(`window.lightbox=document.querySelector('.transcript-lightbox img')`)
-      const before = await page.evaluate<number>(`window.imageFetchCount()`)
+      const before = await page.evaluate(`window.imageFetchCount()`, decodeNumber)
       await page.evaluate(`window.imageUpdate('evict')`)
-      expect(await page.evaluate<number>(`window.imageFetchCount()`)).toBe(before + 1)
-      expect(await page.evaluate<{ preview: boolean; lightbox: boolean; source: boolean; decoded: boolean; unavailable: boolean }>(`({
+      expect(await page.evaluate(`window.imageFetchCount()`)).toBe(before + 1)
+      expect(await page.evaluate(`({
         preview:window.preview===document.querySelector('[data-message-id="msg_image"] .transcript-image img'),
         lightbox:window.lightbox===document.querySelector('.transcript-lightbox[open] img'),
         source:window.preview.src===window.previewSource&&window.lightbox.src===window.previewSource,
@@ -63,7 +63,7 @@ test("eviction refetches an old source without replacing its mounted preview or 
       })`)).toEqual({ preview: true, lightbox: true, source: true, decoded: true, unavailable: false })
       await page.pressEscape()
       await wait(page, `document.querySelector('.transcript-lightbox[open]')===null`)
-      expect(await page.evaluate<boolean>(`window.preview===document.querySelector('[data-message-id="msg_image"] .transcript-image img')&&window.preview.naturalWidth>0`)).toBe(true)
+      expect(await page.evaluate(`window.preview===document.querySelector('[data-message-id="msg_image"] .transcript-image img')&&window.preview.naturalWidth>0`)).toBe(true)
     } finally { await page.close() }
   }
 }, 30_000)

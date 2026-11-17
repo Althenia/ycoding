@@ -1,10 +1,10 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { Portal } from "solid-js/web"
 import { Icon } from "../../ui/icon"
+import { Modal } from "../../ui/modal"
 import type { ModelOption } from "../catalog"
 import type { ModelRefView } from "../projection"
 import { modelEffortNotice } from "../view-model"
-import { containTab, createSheetFrame } from "./composer-sheet"
 import { effortLabel, effortLevel, modelSelection, modelSpeeds, orderedModelOptions, orderedVariants, profileForModel, switchModelSpeed, variantsForModel, type ModelSpeed } from "./composer-logic"
 import { SharedEffortControl } from "./shared-workspace"
 
@@ -61,9 +61,11 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
   let surface: HTMLDivElement | undefined
   let search: HTMLInputElement | undefined
   const id = `model-control-${crypto.randomUUID()}`
-  const sheetStyle = createSheetFrame(() => compact() && open())
+  let dismissSheet: (() => void) | undefined
+  const panelLabel = () => listing() ? "Choose model" : choices() === "profile" ? "Choose profile" : choices() === "speed" ? "Model speed" : "Model settings"
 
   const close = (focus = false) => {
+    if (compact() && dismissSheet) { dismissSheet(); return }
     setOpen(false)
     setDrag(undefined)
     setListing(false)
@@ -137,10 +139,11 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
     return Math.max(0, Math.min(1, (event.clientX - rect.left - inset) / Math.max(1, rect.width - inset * 2)))
   }
   onMount(() => {
-    const media = window.matchMedia("(max-width: 767px)")
+    const media = window.matchMedia("(max-width: 767px), (max-height: 599px) and (pointer: coarse)")
     setCompact(media.matches)
-    const resize = () => { setCompact(media.matches); close() }
+    const resize = () => { dismissSheet = undefined; close(); setCompact(media.matches) }
     const outside = (event: PointerEvent) => {
+      if (compact()) return
       if (open() && event.target instanceof Node && !surface?.contains(event.target) && !trigger?.contains(event.target)) close()
     }
     media.addEventListener("change", resize)
@@ -168,10 +171,8 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
     <button ref={trigger} type="button" class="model-control__trigger" classList={{ "mini-picker__trigger--pending": props.pending }} aria-label="Model" aria-description={`${displayOption()?.name ?? props.selected?.id ?? "Model"}${props.pending ? "; applies with your next send" : ""}`} aria-expanded={open()} aria-haspopup="dialog" disabled={props.disabled} onClick={() => { if (open()) close(); else { setListing(false); setOpen(true) } }}>
       <span class="model-control__name">{displayOption()?.name ?? props.selected?.id ?? "Model"}</span><Show when={selected()?.profile}><span class="model-control__effort">{selected()?.profile}</span></Show><Show when={stops().length}><span class="model-control__effort">{effort()}</span></Show><Icon name="chevron-down" />
     </button>
-    <Show when={open()}><Portal>
-      <Show when={compact()}><div class="mini-picker__scrim" data-cursor="action" onClick={() => close()} /></Show>
-      <div ref={surface} class="mini-picker__surface model-control__surface" classList={{ "mini-picker__surface--sheet": compact(), "model-control__surface--dragging": !!drag() }} data-level={level()} style={compact() ? sheetStyle() : { left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} role="dialog" aria-modal={compact() ? "true" : undefined} aria-label={listing() ? "Choose model" : choices() === "profile" ? "Choose profile" : choices() === "speed" ? "Model speed" : "Model settings"} onKeyDown={(event) => {
-        if (compact() && surface && containTab(event, surface)) { event.stopPropagation(); return }
+    <Show when={open()}><Portal>{(() => {
+      const content = <div ref={surface} class="mini-picker__surface model-control__surface" classList={{ "mini-picker__surface--sheet": compact(), "model-control__surface--dragging": !!drag() }} data-level={level()} style={compact() ? undefined : { left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} role={compact() ? undefined : "dialog"} aria-label={compact() ? undefined : panelLabel()} onKeyDown={(event) => {
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (listing() || choices()) returnToSettings(); else close(true) }
         if (choices() && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
           event.preventDefault()
@@ -185,13 +186,13 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
         if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setActive((active() + (event.key === "ArrowDown" ? 1 : -1) + models().length) % (models().length || 1)); queueMicrotask(() => document.getElementById(`${id}-${active()}`)?.scrollIntoView({ block: "nearest" })) }
         if (event.key === "Enter" && models()[active()]) { event.preventDefault(); chooseModel(models()[active()]!) }
       }}>
-        <Show when={listing()}><div class="mini-picker__heading"><strong><Icon name="chevron-right" /> Choose model</strong><button type="button" aria-label="Close model picker" onClick={() => close(true)}><Icon name="close" /></button></div></Show>
-        <Show when={choices()}><div class="mini-picker__heading"><button type="button" class="model-control__back" aria-label="Back to model settings" onClick={returnToSettings}><Icon name="chevron-right" /></button><strong>{choices() === "profile" ? "Choose profile" : "Model speed"}</strong><button type="button" aria-label="Close model picker" onClick={() => close(true)}><Icon name="close" /></button></div><div class="mini-picker__list model-control__choices" role="listbox" aria-label={choices() === "profile" ? "Profiles" : "Model speeds"}>
+        <Show when={listing() && !compact()}><div class="mini-picker__heading"><strong><Icon name="chevron-right" /> Choose model</strong><button type="button" aria-label="Close model picker" onClick={() => close(true)}><Icon name="close" /></button></div></Show>
+        <Show when={choices()}><Show when={!compact()}><div class="mini-picker__heading"><button type="button" class="model-control__back" aria-label="Back to model settings" onClick={returnToSettings}><Icon name="chevron-right" /></button><strong>{choices() === "profile" ? "Choose profile" : "Model speed"}</strong><button type="button" aria-label="Close model picker" onClick={() => close(true)}><Icon name="close" /></button></div></Show><div class="mini-picker__list model-control__choices" role="listbox" aria-label={choices() === "profile" ? "Profiles" : "Model speeds"}>
           <Show when={choices() === "profile"}><For each={profiles()}>{(profile) => <button type="button" class="mini-picker__option" role="option" aria-selected={(selected()?.profile ?? "") === profile.value} onClick={() => chooseProfile(profile.value)}>{profile.label}<Show when={profile.detail}><small>{profile.detail}</small></Show></button>}</For><Show when={!profiles().length}><p class="mini-picker__empty">No available profiles</p></Show></Show>
           <Show when={choices() === "speed"}><For each={speeds()?.options}>{(speed) => <button type="button" class="mini-picker__option" role="option" aria-selected={speeds()?.active === speed.speed} disabled={!speed.available} aria-description={!speed.available ? "The selected profile is not available at this speed. Choose an available profile first." : undefined} onClick={() => chooseSpeed(speed.speed)}>{speed.label}<Show when={!speed.available}><small>Selected profile unavailable</small></Show></button>}</For></Show>
         </div></Show>
         <Show when={!listing() && !choices()}>
-          <div class="model-control__hero"><button type="button" class="model-control__fast" aria-label="Model speed" aria-pressed={speeds()?.active !== undefined && speeds()?.active !== "standard"} aria-expanded={choices() === "speed"} aria-haspopup="listbox" aria-disabled={(speeds()?.options.length ?? 0) < 2} aria-description={(speeds()?.options.length ?? 0) < 2 ? `No alternate model speed for ${displayOption()?.name ?? "this model"}` : `Current speed: ${speeds()?.options.find((entry) => entry.speed === speeds()?.active)?.label}`} title="Model speed" onClick={() => { if ((speeds()?.options.length ?? 0) > 1) setChoices("speed") }}><Icon name="zap" /></button><button type="button" class="model-control__switch" onClick={() => { setListing(true); setActive(0) }}><strong>{effort()}</strong><span>{displayOption()?.name ?? "Choose model"}<Icon name="chevron-down" /></span></button><div class="model-control__heading-actions"><Show when={option()}><button type="button" aria-label="Clear reasoning effort override" title="Clear reasoning effort override" onClick={clearOverride}><Icon name="reset" /></button></Show><button type="button" aria-label="Close model picker" onClick={() => close(true)}><Icon name="close" /></button></div></div>
+          <div class="model-control__hero"><button type="button" class="model-control__fast" aria-label="Model speed" aria-pressed={speeds()?.active !== undefined && speeds()?.active !== "standard"} aria-expanded={choices() === "speed"} aria-haspopup="listbox" aria-disabled={(speeds()?.options.length ?? 0) < 2} aria-description={(speeds()?.options.length ?? 0) < 2 ? `No alternate model speed for ${displayOption()?.name ?? "this model"}` : `Current speed: ${speeds()?.options.find((entry) => entry.speed === speeds()?.active)?.label}`} title="Model speed" onClick={() => { if ((speeds()?.options.length ?? 0) > 1) setChoices("speed") }}><Icon name="zap" /></button><button type="button" class="model-control__switch" onClick={() => { setListing(true); setActive(0) }}><strong>{effort()}</strong><span>{displayOption()?.name ?? "Choose model"}<Icon name="chevron-down" /></span></button><div class="model-control__heading-actions"><Show when={option()}><button type="button" aria-label="Clear reasoning effort override" title="Clear reasoning effort override" onClick={clearOverride}><Icon name="reset" /></button></Show><Show when={!compact()}><button type="button" aria-label="Close model picker" onClick={() => close(true)}><Icon name="close" /></button></Show></div></div>
           <Show when={option()}><div class="model-control__profile"><button type="button" aria-label="Profile" aria-haspopup="listbox" aria-expanded={choices() === "profile"} disabled={props.disabled} onClick={() => setChoices("profile")}><span>Profile · {profileLabel()}</span><Icon name="chevron-right" /></button></div></Show>
           <Show when={modelEffortNotice({ known: option() !== undefined, blocked: selection().blocked === true, variants: stops().length })}>{(notice) => <p class="field__hint" style={{ padding: "var(--yc-space-2) var(--yc-space-3)" }}>{notice()}</p>}</Show>
           <Show when={stops().length && !selection().blocked}><div class="model-control__slider" role="slider" tabindex="0" aria-label="Reasoning effort" aria-valuemin="0" aria-valuemax={stops().length - 1} aria-valuenow={selectedIndex()} aria-valuetext={selected()?.variant === undefined ? "No effort override" : effort()} onKeyDown={(event) => {
@@ -206,6 +207,7 @@ export function ModelControl(props: { readonly models: readonly ModelOption[]; r
         </Show>
         <Show when={listing()}><input ref={search} class="mini-picker__search" type="search" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls={`${id}-list`} aria-activedescendant={models().length ? `${id}-${active()}` : undefined} aria-label="Search models" placeholder="Search models…" value={query()} onInput={(event) => { setQuery(event.currentTarget.value); setActive(0) }} /><div id={`${id}-list`} class="mini-picker__list" role="listbox" aria-label="Models"><For each={models()}>{(item, index) => <><Show when={index() === 0 || index() === recentCount() || !isRecent(item) && !isRecent(models()[index() - 1]!) && models()[index() - 1]?.providerID !== item.providerID}><div class="mini-picker__group model-control__provider" role="presentation">{isRecent(item) ? "Recent" : item.providerName ?? item.providerID}</div></Show><button id={`${id}-${index()}`} type="button" role="option" aria-label={isRecent(item) ? `${item.name} · ${item.providerName ?? item.providerID} · ${item.id}${item.recentSelection?.profile ? ` · profile ${item.recentSelection.profile}` : ""}` : undefined} aria-selected={displayOption()?.providerID === item.providerID && displayOption()?.id === item.id && (item.recentSelection === undefined || displayOption()?.providerID === item.recentSelection.providerID && displayOption()?.id === item.recentSelection.id && selected()?.profile === item.recentSelection.profile)} class="mini-picker__option model-control__model" classList={{ "mini-picker__option--active": active() === index() }} onPointerEnter={() => setActive(index())} onClick={() => chooseModel(item)}>{item.name}<small>{isRecent(item) ? `${item.providerName ?? item.providerID} · ${item.recentSelection?.profile ? `Profile ${item.recentSelection.profile} · ` : ""}` : ""}{item.id}</small></button></>}</For><Show when={!models().length}><p class="mini-picker__empty">No matches</p></Show></div></Show>
       </div>
-    </Portal></Show>
+      return compact() ? <Modal class="overlay--sheet overlay--composer-picker overlay--model-control" label={panelLabel()} header={<><Show when={listing() || choices()}><button type="button" class="button button--ghost button--icon" aria-label="Back to model settings" onClick={returnToSettings}><Icon name="arrow-left" /></button></Show><strong>{panelLabel()}</strong></>} returnFocus={trigger!} requestClose={(close) => { dismissSheet = close }} onClose={() => { dismissSheet = undefined; close() }}>{content}</Modal> : content
+    })()}</Portal></Show>
   </div>
 }

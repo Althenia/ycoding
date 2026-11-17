@@ -30,7 +30,7 @@ test("built App opens provider authentication from the palette and resolves a fa
     const page = await browser.openPage()
     const wait = async (expression: string) => {
       for (let i = 0; i < 150; i++) {
-        if (await page.evaluate<boolean>(`Boolean(${expression})`)) return
+        if (await page.evaluate(`Boolean(${expression})`)) return
         await Bun.sleep(30)
       }
       throw new Error(`Timed out: ${expression}`)
@@ -55,9 +55,9 @@ test("built App opens provider authentication from the palette and resolves a fa
     await wait(`document.getElementById('provider-authorization-code') !== null`)
     await page.evaluate(`[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Check authentication status').click()`)
     await wait(`document.querySelector('dialog[aria-label="Connect provider"]').textContent.includes('Provider authentication could not finish.')`)
-    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Refresh provider profiles')`)).toBe(false)
-    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Connect profile')`)).toBe(false)
-    expect(await page.evaluate<boolean>(`document.getElementById('provider-authorization-code').disabled`)).toBe(true)
+    expect(await page.evaluate(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Refresh provider profiles')`)).toBe(false)
+    expect(await page.evaluate(`[...document.querySelectorAll('dialog button')].some(item=>item.textContent.trim()==='Connect profile')`)).toBe(false)
+    expect(await page.evaluate(`document.getElementById('provider-authorization-code').disabled`)).toBe(true)
     await page.evaluate(`[...document.querySelectorAll('dialog button')].find(item=>item.textContent.trim()==='Check authentication status').click()`)
     await wait(`document.getElementById('provider-authorization-code').disabled===false`)
     await page.evaluate(`(() => { const field=document.getElementById('provider-authorization-code');field.value='synthetic-test-code';field.dispatchEvent(new InputEvent('input',{bubbles:true})) })()`)
@@ -66,7 +66,7 @@ test("built App opens provider authentication from the palette and resolves a fa
     expect(fixture.report().acceptedCode).toBe(true)
     expect(relay.requests.filter((r) => r.operation === "provider.auth.begin")).toHaveLength(1)
     expect(relay.requests.filter((r) => r.operation === "provider.auth.complete")).toHaveLength(1)
-    expect(await page.evaluate<boolean>(`document.getElementById('provider-authorization-code')===null`)).toBe(true)
+    expect(await page.evaluate(`document.getElementById('provider-authorization-code')===null`)).toBe(true)
     await page.close()
   } finally {
     await browser?.close()

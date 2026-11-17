@@ -1,5 +1,6 @@
 import type { RemoteAlertDetail, RemoteNoticeCategory } from "@ycoding-ai/remote"
 import { browserStorage, readStored, writeStored, type StorageLike } from "../lib/storage"
+import { isConversationRoot } from "./session-collection"
 
 export const delegatedCategories = ["question", "permission", "review"] as const
 export type DelegatedCategory = (typeof delegatedCategories)[number]
@@ -154,10 +155,10 @@ export function readCentralPolicy(value: unknown): CentralPolicy | undefined {
 export function readSessionCandidates(value: unknown): readonly SessionCandidate[] {
   const data = payload(value)
   if (!Array.isArray(data)) return []
-  return data.flatMap((entry): SessionCandidate[] => {
+  return data.filter(isConversationRoot).flatMap((entry): SessionCandidate[] => {
     if (!record(entry) || !text(entry.id, 96)) return []
     const time = record(entry.time) ? entry.time : {}
-    if (entry.parentID !== undefined || time.archived !== undefined) return []
+    if (time.archived !== undefined) return []
     const active = typeof time.active === "number" ? time.active : typeof time.updated === "number" ? time.updated : 0
     const directory = record(entry.location) && typeof entry.location.directory === "string" ? entry.location.directory : ""
     return [{ id: entry.id, title: typeof entry.title === "string" && entry.title.length > 0 ? entry.title : entry.id, directory, active }]

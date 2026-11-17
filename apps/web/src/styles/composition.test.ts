@@ -21,41 +21,47 @@ const SURFACE_FILES = ["base.css", "../ui/button.css", "../ui/modal.css", "site.
 const STYLESHEETS = [...SURFACE_FILES, "tokens.css"] as const
 
 describe("responsive contract", () => {
-  test("uses pill navigation with a soft current state and no bottom rule", async () => {
+  test("owns documentation search result button borders", async () => {
+    const sheet = await readStylesheet("docs.css")
+    expect(base(sheet, ".search__result").border).toBe("0")
+  })
+
+  test("uses open public text navigation with a quiet current state and no bottom rule", async () => {
     const sheet = await readStylesheet("base.css")
     expect(base(sheet, ".nav__link")).toMatchObject({
-      "border-radius": "var(--yc-radius-pill)",
+      "border-radius": "0",
       "border-block-end": "0",
+      background: "transparent",
     })
-    expect(hover(sheet, ".nav__link:hover").background).toBe("var(--yc-surface)")
+    expect(hover(sheet, ".nav__link:hover").background).toBe("transparent")
     expect(base(sheet, ".nav__link--active")).toMatchObject({
-      background: "var(--yc-green-soft)",
-      color: "var(--yc-green-strong)",
+      background: "transparent",
+      color: "var(--yc-text)",
       "font-weight": "var(--yc-weight-semibold)",
     })
   })
 
-  test("assigns Spatial Canvas radii: controls medium, tonal planes large, trust strip extra large, nav pills", async () => {
+  test("assigns compact public control radii and retains owned navigation and article shapes", async () => {
     const site = await readStylesheet("site.css")
     const docs = await readStylesheet("docs.css")
     const radii: readonly (readonly [Stylesheet, string, string])[] = [
-      [site, ".marketing .button", "md"],
-      [site, ".marketing .code-block", "md"],
-      [site, ".marketing .input", "md"],
+      [site, ".marketing .button", "sm"],
+      [site, ".marketing .code-block", "sm"],
+      [site, ".marketing .input", "sm"],
       [site, ".marketing .card", "lg"],
       [site, ".marketing .callout-bar", "lg"],
       [site, ".marketing .feature", "lg"],
       [site, ".marketing .trust__item", "xl"],
       [docs, ".docs-bar__nav-toggle", "pill"],
       [docs, ".docs-search-trigger", "pill"],
-      [docs, ".docs--index .doc-section", "md"],
-      [docs, ".docs--index .card", "lg"],
+      [docs, ".docs--index .card-grid > .card", "sm"],
       [docs, ".docs--article .code-block", "md"],
-      [docs, ".releases--timeline .release", "lg"],
     ]
     for (const [sheet, selector, step] of radii) {
       expect({ selector, radius: declarationsWhere(sheet, (rule) => rule.header.includes(selector))["border-radius"] }).toEqual({ selector, radius: `var(--yc-radius-${step})` })
     }
+    expect(base(docs, ".releases--timeline .release")["border-radius"]).toBe("0")
+    expect(base(docs, ".docs--index .doc-section")["border-radius"]).toBe("0")
   })
 
   test("de-boxes public content: borderless tonal planes and open feature columns", async () => {
@@ -76,13 +82,15 @@ describe("responsive contract", () => {
     expect(frameless(site, ".feature__icon")).toMatchObject({ background: "var(--yc-green-soft)", color: "var(--yc-green-strong)" })
     expect(frameless(site, ".trust__item").background).toBe("var(--yc-surface)")
     expect(base(site, ".callout-bar").border).toBeUndefined()
-    expect(frameless(docs, ".releases--timeline .release").background).toBe("var(--yc-surface)")
-    expect(base(docs, ".docs-bar")).toMatchObject({ background: "var(--yc-bg)", "border-block-end": "0" })
+    expect(frameless(docs, ".releases--timeline .release").background).toBe("transparent")
+    expect(base(docs, ".releases--timeline .release")["border-block-end"]).toBe("1px solid var(--yc-border)")
+    expect(docs.rules.some(rule => rule.header === ".docs-bar")).toBe(false)
+    expect(base(site, ".marketing .app-header")["border-block-end"]).toBe("1px solid var(--yc-border)")
     expect(base(docs, ".docs-shell__nav")["border-inline-end"]).toBeUndefined()
     expect(docs.rules.filter((rule) => rule.header === ".docs-shell__nav" && rule.declarations["border-inline-end"] !== undefined)).toEqual([])
     expect(base(docs, ".doc-section")["border-block-start"]).toBe("0")
     expect(base(docs, ".inline-code").border).toBeUndefined()
-    expect(base(docs, ".docs-nav__link")["border-radius"]).toBe("var(--yc-radius-pill)")
+    expect(base(docs, ".docs-nav__link")["border-radius"]).toBe("var(--yc-radius-sm)")
     expect(base(docs, ".card-grid > .card").background).toBe("var(--yc-surface)")
     expect(hover(docs, ".card-grid > .card:hover").background).toBe("var(--yc-surface-sunken)")
   })
@@ -90,34 +98,37 @@ describe("responsive contract", () => {
   test("makes the public header translucent at 92% with opaque fallbacks", async () => {
     const site = await readStylesheet("site.css")
     expect(base(site, ".marketing .app-header")).toMatchObject({
+      background: "var(--yc-bg)",
+      "backdrop-filter": "none",
+    })
+    expect(declarationsWhere(site, (rule) => rule.header === ".marketing .app-header" && rule.conditions.includes("@supports (backdrop-filter: blur(1px))"))).toMatchObject({
       background: "color-mix(in srgb, var(--yc-bg) 92%, transparent)",
       "backdrop-filter": "saturate(140%) blur(16px)",
     })
-    for (const condition of ["@supports not (backdrop-filter: blur(1px))", "@media (prefers-reduced-transparency: reduce)", "@media (forced-colors: active)"]) {
-      expect({ condition, background: declarationsWhere(site, (rule) => rule.header === ".marketing .app-header" && rule.conditions.includes(condition)).background }).toEqual({ condition, background: "var(--yc-bg)" })
+    for (const condition of ["@media (prefers-reduced-transparency: reduce)", "@media (forced-colors: active)"]) {
+      expect(declarationsWhere(site, (rule) => rule.header === ".marketing .app-header" && rule.conditions.includes(condition))).toMatchObject({ background: "var(--yc-bg)", "backdrop-filter": "none" })
     }
   })
 
   test("uses only the declared breakpoints in every stylesheet", async () => {
-    for (const name of STYLESHEETS) {
+    for (const name of [...STYLESHEETS, "../remote/ui/composer.css"]) {
       const sheet = await readStylesheet(name)
       for (const rule of sheet.rules) {
         for (const condition of rule.conditions) {
           // A keyframes prelude is not a condition on width; only media queries carry
           // a breakpoint that must be declared.
           if (!condition.startsWith("@media")) continue
-          if (condition === "@media (max-width: 1180px)" || condition === "@media (min-width: 1181px)") {
-            expect(name).toBe("remote.css")
-            expect(rule.header.startsWith(condition.includes("max-width") ? ".team-control__panel" : ".app--team-open")).toBe(true)
+          if (condition === PHONE_LAYOUT_QUERY) {
+            expect(["remote.css", "site.css", "../ui/modal.css"]).toContain(name)
             continue
           }
-          if (condition === PHONE_LAYOUT_QUERY || condition === COARSE_LANDSCAPE_QUERY || condition === "@media (max-width: 767px) and (max-height: 480px)" || condition === "@media (max-height: 599px)") {
-            expect(name).toBe("remote.css")
+          if (condition === COARSE_LANDSCAPE_QUERY || condition === "@media (max-width: 767px) and (max-height: 480px)" || condition === "@media (max-height: 599px)") {
+            expect(["remote.css", "../remote/ui/composer.css"]).toContain(name)
             continue
           }
-          for (const feature of condition.replace(/^@media\s+/, "").split(" and ")) {
+          for (const feature of condition.replace(/^@media\s+/, "").split(/,\s*| and /)) {
             if (feature.startsWith("(pointer:") || feature.startsWith("(hover:") || feature.startsWith("(prefers-") || feature.startsWith("(forced-colors:")) continue
-            const width = feature.match(/^\((min|max)-width: (\d+)px\)$/)
+            const width = feature.match(/^\((min|max)-width:\s*(\d+)px\)$/)
             expect({ name, condition, unrecognized: width === null ? feature : undefined }).toEqual({
               name,
               condition,
@@ -134,6 +145,33 @@ describe("responsive contract", () => {
         }
       }
     }
+  })
+
+  test("owns scrollbars unconditionally through the shared foundation", async () => {
+    const sheet = await readStylesheet("base.css")
+    expect(base(sheet, "*")).toMatchObject({ "scrollbar-width": "thin", "scrollbar-color": "var(--yc-border-strong) transparent" })
+    expect(base(sheet, "::-webkit-scrollbar")).toMatchObject({ width: "var(--yc-scrollbar-size)", height: "var(--yc-scrollbar-size)" })
+    expect(base(sheet, "::-webkit-scrollbar-thumb")).toMatchObject({ "background-color": "var(--yc-border-strong)", "border-radius": "var(--yc-radius-pill)" })
+    expect(declarationsWhere(sheet, rule => rule.conditions.includes("@media (forced-colors: active)") && rule.header === "*")).toMatchObject({ "scrollbar-color": "CanvasText Canvas", "scrollbar-width": "auto" })
+  })
+
+  test("owns native primitive resets and an opaque header fallback", async () => {
+    const sheet = await readStylesheet("base.css")
+    expect(declarationsWhere(sheet, rule => rule.conditions.length === 0 && rule.header.split(",").some(selector => selector.trim() === "select")).appearance).toBe("base-select")
+    expect(base(sheet, "select::picker(select)")).toMatchObject({ background: "var(--yc-surface-raised)", color: "var(--yc-text)", border: "1px solid var(--yc-border-strong)" })
+    expect(base(sheet, '.check input[type="radio"]').appearance).toBe("none")
+    expect(base(sheet, "progress")).toMatchObject({ appearance: "none", border: "0" })
+    for (const part of ["::-webkit-progress-bar", "::-webkit-progress-value", "::-moz-progress-bar"]) expect(base(sheet, `progress${part}`).background).toMatch(/^var\(--yc-/)
+    expect(base(sheet, ".app-header")).toMatchObject({ background: "var(--yc-bg)", "backdrop-filter": "none" })
+  })
+
+  test("uses semantic frame planes, aligned headers and a coarse action floor", async () => {
+    const remote = await readStylesheet("remote.css")
+    const foundation = await readStylesheet("base.css")
+    expect(base(remote, ".workspace__rail").background).toBe("var(--yc-surface-sunken)")
+    expect(base(remote, ".workspace__rail-head")["block-size"]).toBe("var(--yc-header-public-h)")
+    expect(base(remote, ".workspace__topbar").background).toBe("var(--yc-surface)")
+    expect(declarationsWhere(foundation, rule => rule.header.startsWith(":root :is(button,") && rule.conditions.includes("@media (pointer: coarse)"))).toMatchObject({ "min-inline-size": "var(--yc-hit-min)", "min-block-size": "var(--yc-hit-min)" })
   })
 
   test("leaves Office visibility to the shell's phone-layout flag, not heading-only CSS", async () => {
@@ -180,8 +218,7 @@ describe("responsive contract", () => {
     expect(shownFrom(docs, ".docs-shell__nav", 1024)).toBe(true)
     expect(shownFrom(docs, ".docs-shell__toc", 1280)).toBe(true)
     expect(hiddenAbove(docs, ".docs-bar__nav-toggle", 1024)).toBe(true)
-    expect(hiddenAbove(docs, ".docs-bar__crumbs", 1024)).toBe(true)
-    expect(hiddenBelow(docs, ".docs-bar__title", 1024)).toBe(true)
+    expect(docs.rules.some(rule => rule.header === ".docs-bar__crumbs" || rule.header === ".docs-bar__title")).toBe(false)
   })
 
   test("adds one shared workspace rail at 768 and keeps each screen in the remaining column", async () => {
@@ -202,30 +239,33 @@ describe("responsive contract", () => {
     expect(columnSteps(remote, ".defs__row")).toEqual([{ min: 1024, tracks: 2 }])
   })
 
-  test("widens the Sessions and Usage columns at 1600, keeps Settings a fixed open column, and lets assistant prose fill the column", async () => {
+  test("keeps start-aligned route columns fluid and bounds assistant prose to its reading measure", async () => {
     const remote = await readStylesheet("remote.css")
     const listed = (selector: string, min?: number) =>
       declarationsWhere(remote, (rule) =>
-        rule.header.split(",").map((part) => part.trim()).includes(selector) &&
+        (rule.header === selector || rule.header.split(",").map((part) => part.trim()).includes(selector)) &&
         (min === undefined
           ? rule.conditions.length === 0
           : rule.conditions.some((condition) => widthThreshold(condition)?.min === min)),
       )
     for (const screen of ["sessions", "usage"]) {
       expect(listed(`.app--${screen} .workspace__scroll > .route-panel`)["max-inline-size"]).toBe("var(--yc-content-max)")
+      expect(listed(`.app--${screen} .workspace__scroll > .route-panel`)["margin-inline"]).toBe("0")
       expect(listed(`.app--${screen} .workspace__scroll > .route-panel`, 1600)["max-inline-size"]).toBe("var(--yc-content-max-wide)")
     }
     for (const block of [".app--settings .page-head", ".app--settings .pane"]) {
-      expect(listed(block)["inline-size"]).toBe("min(100%, 760px)")
-      expect(listed(block)["margin-inline"]).toBe("auto")
-      expect(listed(block, 1600)).toEqual({})
+      expect(listed(block)["inline-size"]).toBe("min(100%, var(--yc-content-max))")
+      expect(listed(block)["margin-inline"]).toBe("0")
+      expect(listed(block, 1600)["inline-size"]).toBe("min(100%, var(--yc-content-max-wide))")
     }
     expect(listed(".app--settings .workspace__scroll", 1024).padding).toBe("var(--yc-space-12) var(--yc-space-16)")
     expect(listed(".app")["--remote-column"]).toBe("720px")
-    expect(listed(".app--conversation.app--selected")["--remote-column"]).toBeUndefined()
+    expect(listed(".app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading)")["--remote-column"]).toBe("var(--yc-content-max)")
     expect(listed(".app--conversation.app--selected", 1600)).toEqual({})
     const transcript = await readStylesheet("../remote/ui/transcript.css")
-    expect(transcript.rules.filter((rule) => rule.header.includes(".transcript-md") && rule.declarations["max-inline-size"]?.includes("--yc-measure"))).toEqual([])
+    expect(transcript.rules.filter((rule) => rule.header.includes(".transcript-md") && rule.declarations["max-inline-size"] === "var(--yc-measure)")).toHaveLength(1)
+    const settings = await readStylesheet("../remote/ui/settings.css")
+    expect(declarationsWhere(settings, rule => rule.header === ".app--settings .pane p")["max-inline-size"]).toBe("var(--yc-measure)")
   })
 
   test("reserves the command palette's scrollbar gutter beside the workspace scroller", async () => {
@@ -237,13 +277,13 @@ describe("responsive contract", () => {
     expect(gutter["scrollbar-gutter"]).toBe("stable")
   })
 
-  test("keeps compact navigation to one row of three labeled targets above the bottom safe area", async () => {
+  test("keeps compact navigation to one row of five labeled targets above the bottom safe area", async () => {
     const remote = await readStylesheet("remote.css")
     const nav = base(remote, ".bottom-nav")
     const item = base(remote, ".bottom-nav__item")
     expect(nav).toMatchObject({
       display: "grid",
-      "grid-template-columns": "repeat(3, minmax(0, 1fr))",
+      "grid-template-columns": "repeat(5, minmax(0, 1fr))",
       "padding-block-end": "env(safe-area-inset-bottom)",
     })
     expect(item).toMatchObject({
@@ -252,6 +292,8 @@ describe("responsive contract", () => {
       "min-height": "var(--yc-bottom-nav-h)",
     })
     expect(base(remote, ".bottom-nav__label").display).toBe("block")
+    const machines = await readStylesheet("../remote/ui/device-alias.css")
+    expect(declarationsWhere(machines, (rule) => rule.header === ".machine-row")["scroll-snap-type"]).toBe("x proximity")
   })
 
   test("keeps the header connection label readable to assistive technology when the row has no room for it", async () => {
@@ -292,17 +334,20 @@ describe("responsive contract", () => {
 
   test("sizes phone picker sheets to their content up to the visual viewport while the list scrolls", async () => {
     const composer = await readStylesheet("../remote/ui/composer.css")
+    const modal = await readStylesheet("../ui/modal.css")
     const phone = (rule: { readonly header: string; readonly conditions: readonly string[] }, header: string) => rule.header === header && rule.conditions.includes("@media (max-width: 767px)")
-    const cap = "calc(var(--composer-sheet-height, 100dvh) - env(safe-area-inset-top) - env(safe-area-inset-bottom))"
-    const anchor = "max(env(safe-area-inset-bottom), calc(100dvh - (var(--composer-sheet-top, 0px) + var(--composer-sheet-height, 100dvh))))"
-    const picker = declarationsWhere(composer, (rule) => phone(rule, ".mini-picker__surface.mini-picker__surface--sheet"))
-    expect(picker).toMatchObject({ "inset-inline": "0", "inset-block-start": "auto", "inset-block-end": anchor, "block-size": "auto", "max-block-size": cap, "border-radius": "0", overflow: "hidden" })
-    expect(picker["padding-block"]).toBe("env(safe-area-inset-top) env(safe-area-inset-bottom)")
+    const cap = "calc(var(--overlay-viewport-height, 100dvh) - env(safe-area-inset-top) - env(safe-area-inset-bottom))"
+    const anchor = "calc(100dvh - (var(--overlay-viewport-top, 0px) + var(--overlay-viewport-height, 100dvh)))"
+    const sheet = base(modal, ".overlay--sheet .overlay__surface")
+    expect(sheet).toMatchObject({ "inset-inline": "0", "inset-block-start": "auto", "inset-block-end": anchor, "block-size": "auto", "max-block-size": cap, overflow: "hidden" })
+    expect(base(modal, ".overlay__body")["overscroll-behavior"]).toBe("contain")
+    expect(base(composer, ".overlay--composer-picker .mini-picker__surface")).toMatchObject({ position:"static", "min-block-size":"0", "max-block-size":"none" })
     expect(declarationsWhere(composer, (rule) => phone(rule, ".mini-picker__surface--sheet > :not(.mini-picker__list)"))).toMatchObject({ flex: "none" })
     expect(declarationsWhere(composer, (rule) => phone(rule, ".mini-picker__surface--sheet .mini-picker__list"))).toMatchObject({ display: "grid", flex: "0 1 auto", "align-content": "start", "min-block-size": "0", "overscroll-behavior": "contain" })
     expect(declarationsWhere(composer, (rule) => phone(rule, ".mini-picker__surface--sheet .mini-picker__option"))["min-block-size"]).toBe("var(--yc-hit-min)")
     const selection = base(composer, ".composer__selection-sheet")
-    expect(selection).toMatchObject({ position: "fixed", "inset-block-start": "auto", "inset-block-end": anchor, "block-size": "auto", "max-block-size": cap, overflow: "hidden", "border-radius": "0" })
+    expect(selection).toMatchObject({ display:"flex", "min-block-size":"0", overflow:"hidden" })
+    expect(selection.position).not.toBe("fixed")
     expect(base(composer, ".composer__selection-options")).toMatchObject({ flex: "0 1 auto", "align-content": "start", "min-block-size": "0", overflow: "auto" })
   })
 
@@ -345,8 +390,14 @@ describe("responsive contract", () => {
     }
     expect(base(remote, ".remote-nav__link")["font-family"]).toBe("var(--yc-font-sans)")
     expect(base(remote, ".app .pane__title")["text-transform"]).toBe("uppercase")
-    expect(base(remote, ".session-row--active")).toMatchObject({ background: "var(--yc-green-soft)", "border-radius": "var(--yc-radius-sm)" })
+    expect(base(remote, ".session-row--active")).toMatchObject({ background: "var(--yc-surface-sunken)", "border-radius": "var(--yc-radius-sm)" })
   })
+})
+
+test("documentation topic groups use two columns from the tablet breakpoint", async () => {
+  const docs = await readStylesheet("docs.css")
+  const tablet = declarationsWhere(docs, (rule) => rule.header === ".docs-topic-index" && rule.conditions.includes("@media (min-width: 640px)"))
+  expect(tablet["grid-template-columns"]).toBe("repeat(2,minmax(0,1fr))")
 })
 
 describe("motion contract", () => {
@@ -593,7 +644,7 @@ describe("modal primitive stylesheet ownership", () => {
     expect(base(".overlay")).toMatchObject({ border: "0", padding: "0", background: "transparent" })
     expect(base(".overlay::backdrop").background).toBe("var(--yc-scrim)")
     expect(base(".overlay__surface")).toMatchObject({ position: "fixed", background: "var(--yc-surface-raised)" })
-    expect(base(".overlay--sheet .overlay__surface")).toMatchObject({ "inset-inline": "0", "inset-block-end": "0", "inline-size": "100%" })
+    expect(base(".overlay--sheet .overlay__surface")).toMatchObject({ "inset-inline": "0", "inset-block-end": "calc(100dvh - (var(--overlay-viewport-top, 0px) + var(--overlay-viewport-height, 100dvh)))", "inline-size": "100%", "block-size":"auto" })
     for (const part of [".overlay__head", ".overlay__title", ".overlay__close", ".overlay__body"]) expect(Object.keys(base(part)).length).toBeGreaterThan(0)
     const keyframes = new Set(modal.rules.flatMap((rule) => rule.conditions.filter((condition) => condition.startsWith("@keyframes "))))
     for (const name of EXTRACTED_KEYFRAMES) expect(keyframes.has(`@keyframes ${name}`)).toBe(true)

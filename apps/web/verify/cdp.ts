@@ -5,6 +5,118 @@ import { join } from "node:path"
 
 type Pending = { readonly method: string; readonly resolve: (value: unknown) => void; readonly reject: (error: Error) => void }
 
+export type Decoder<T> = (value: unknown) => T
+export type Page = Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>
+
+export function decodeString(value: unknown): string {
+  if (typeof value !== "string") throw new Error("Expected a string")
+  return value
+}
+
+export function decodeNumber(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error("Expected a finite number")
+  return value
+}
+
+export function decodeBoolean(value: unknown): boolean {
+  if (typeof value !== "boolean") throw new Error("Expected a boolean")
+  return value
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+export function decodeRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("Expected a record")
+  return value
+}
+
+export const decodeArray = <T>(decode: Decoder<T>): Decoder<T[]> => (value) => {
+  if (!Array.isArray(value)) throw new Error("Expected an array")
+  return value.map((item: unknown) => decode(item))
+}
+
+export const decodeOptional = <T>(decode: Decoder<T>): Decoder<T | undefined> => (value) => value === undefined ? undefined : decode(value)
+export const decodeNullable = <T>(decode: Decoder<T>): Decoder<T | null> => (value) => value === null ? null : decode(value)
+
+export const decodeLiteral = <const T extends string | number | boolean | null | undefined>(literal: T): Decoder<T> => (value) => {
+  if (value !== literal) throw new Error("Expected the literal value")
+  return literal
+}
+
+export const decodeUnion = <A, B>(first: Decoder<A>, second: Decoder<B>): Decoder<A | B> => (value) => {
+  const errors: unknown[] = []
+  for (const decode of [first, second]) {
+    try { return decode(value) }
+    catch (cause) { errors.push(cause) }
+  }
+  throw new AggregateError(errors, "Expected a value from either union member")
+}
+
+export const decodeDictionary = <T>(decode: Decoder<T>): Decoder<Record<string, T>> => (value) =>
+  Object.fromEntries(Object.entries(decodeRecord(value)).map(([key, item]) => [key, decode(item)] as const))
+
+export function decodeCDPMessage(value: unknown) {
+  const message = decodeRecord(value)
+  if (message.id === undefined) return undefined
+  const id = decodeNumber(message.id)
+  if (!Number.isSafeInteger(id) || id < 1) throw new Error("Expected a positive CDP response id")
+  if (message.error !== undefined) return { id, error: decodeString(decodeRecord(message.error).message) }
+  if (!("result" in message)) throw new Error("Expected a CDP response result")
+  return { id, result: message.result }
+}
+
+export const cdpResponses = {
+  "Target.createTarget": (value: unknown) => {
+    const result = decodeRecord(value)
+    return { ...result, targetId: decodeString(result.targetId) }
+  },
+  "Target.attachToTarget": (value: unknown) => {
+    const result = decodeRecord(value)
+    return { ...result, sessionId: decodeString(result.sessionId) }
+  },
+  "DOM.getDocument": (value: unknown) => {
+    const result = decodeRecord(value)
+    const root = decodeRecord(result.root)
+    return { ...result, root: { ...root, nodeId: decodeNumber(root.nodeId) } }
+  },
+  "DOM.querySelector": (value: unknown) => {
+    const result = decodeRecord(value)
+    return { ...result, nodeId: decodeNumber(result.nodeId) }
+  },
+  "CSS.getPlatformFontsForNode": (value: unknown) => {
+    const result = decodeRecord(value)
+    return { ...result, fonts: decodeArray((value) => {
+      const font = decodeRecord(value)
+      return { ...font, familyName: decodeString(font.familyName), isCustomFont: decodeBoolean(font.isCustomFont), glyphCount: decodeNumber(font.glyphCount) }
+    })(result.fonts) }
+  },
+  "Page.captureScreenshot": (value: unknown) => {
+    const result = decodeRecord(value)
+    return { ...result, data: decodeString(result.data) }
+  },
+  "Page.getInstallabilityErrors": (value: unknown) => {
+    const result = decodeRecord(value)
+    return { ...result, installabilityErrors: decodeArray((value) => {
+      const error = decodeRecord(value)
+      return { ...error, errorId: decodeString(error.errorId) }
+    })(result.installabilityErrors) }
+  },
+  "Runtime.evaluate": (value: unknown): unknown => {
+    const result = decodeRecord(value)
+    if (result.exceptionDetails !== undefined) {
+      const error = decodeRecord(result.exceptionDetails)
+      const text = decodeString(error.text)
+      const exception = decodeOptional(decodeRecord)(error.exception)
+      throw new Error(exception?.description === undefined ? text : decodeString(exception.description))
+    }
+    const remote = decodeRecord(result.result)
+    decodeString(remote.type)
+    return remote.value
+  },
+}
+
 export async function launchBrowser(executable: string, width: number, height: number, options: { readonly scrollbars?: boolean } = {}) {
   const profile = mkdtempSync(join(tmpdir(), "ycoding-web-verify-"))
   const child = spawn(executable, ["--headless", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--disable-gpu", "--enable-unsafe-swiftshader", ...(options.scrollbars ? [] : ["--hide-scrollbars"]), "about:blank"], { stdio: ["ignore", "pipe", "pipe"] })
@@ -17,25 +129,40 @@ export async function launchBrowser(executable: string, width: number, height: n
   let next = 0
   const pending = new Map<number, Pending>()
   socket.addEventListener("message", (event) => {
-    const message = JSON.parse(String(event.data)) as { readonly id?: number; readonly error?: { readonly message: string }; readonly result?: unknown }
-    if (message.id === undefined) return
+    let message: ReturnType<typeof decodeCDPMessage>
+    try {
+      const value: unknown = JSON.parse(String(event.data))
+      message = decodeCDPMessage(value)
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause))
+      for (const wait of pending.values()) wait.reject(error)
+      pending.clear()
+      return
+    }
+    if (message === undefined) return
     const wait = pending.get(message.id)
     if (!wait) return
     pending.delete(message.id)
-    if (message.error) wait.reject(new Error(`${wait.method}: ${message.error.message}`))
+    if (message.error !== undefined) wait.reject(new Error(`${wait.method}: ${message.error}`))
     else wait.resolve(message.result)
   })
-  const send = <T>(method: string, params: Record<string, unknown> = {}, sessionId?: string) =>
-    new Promise<T>((resolve, reject) => {
+  const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string) =>
+    new Promise<unknown>((resolve, reject) => {
       const id = ++next
-      pending.set(id, { method, resolve: (value) => resolve(value as T), reject })
+      pending.set(id, { method, resolve, reject })
       socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }))
     })
   return {
     async openPage() {
-      const target = await send<{ readonly targetId: string }>("Target.createTarget", { url: "about:blank" })
-      const attached = await send<{ readonly sessionId: string }>("Target.attachToTarget", { targetId: target.targetId, flatten: true })
-      const call = <T>(method: string, params: Record<string, unknown> = {}) => send<T>(method, params, attached.sessionId)
+      const target = cdpResponses["Target.createTarget"](await send("Target.createTarget", { url: "about:blank" }))
+      const attached = cdpResponses["Target.attachToTarget"](await send("Target.attachToTarget", { targetId: target.targetId, flatten: true }))
+      const call = (method: string, params: Record<string, unknown> = {}) => send(method, params, attached.sessionId)
+      function evaluate(expression: string): Promise<unknown>
+      function evaluate<T>(expression: string, decode: Decoder<T>): Promise<T>
+      async function evaluate(expression: string, decode?: Decoder<unknown>): Promise<unknown> {
+        const value = cdpResponses["Runtime.evaluate"](await call("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }))
+        return decode === undefined ? value : decode(value)
+      }
       const media = new Map<string, string>()
       const setMedia = (name: string, value: string) => {
         media.set(name, value)
@@ -70,10 +197,10 @@ export async function launchBrowser(executable: string, width: number, height: n
         platformFonts: async (selector: string) => {
           await call("DOM.enable")
           await call("CSS.enable")
-          const document = await call<{ readonly root: { readonly nodeId: number } }>("DOM.getDocument")
-          const node = await call<{ readonly nodeId: number }>("DOM.querySelector", { nodeId: document.root.nodeId, selector })
+          const document = cdpResponses["DOM.getDocument"](await call("DOM.getDocument"))
+          const node = cdpResponses["DOM.querySelector"](await call("DOM.querySelector", { nodeId: document.root.nodeId, selector }))
           if (node.nodeId === 0) throw new Error(`Font inspection target missing: ${selector}`)
-          return (await call<{ readonly fonts: readonly { readonly familyName: string; readonly isCustomFont: boolean; readonly glyphCount: number }[] }>("CSS.getPlatformFontsForNode", { nodeId: node.nodeId })).fonts
+          return cdpResponses["CSS.getPlatformFontsForNode"](await call("CSS.getPlatformFontsForNode", { nodeId: node.nodeId })).fonts
         },
         injectOnNewDocument: (source: string) => call("Page.addScriptToEvaluateOnNewDocument", { source }),
         disableCache: () => call("Network.setCacheDisabled", { cacheDisabled: true }),
@@ -99,10 +226,10 @@ export async function launchBrowser(executable: string, width: number, height: n
             },
           }
         },
-        screenshot: async () => (await call<{ readonly data: string }>("Page.captureScreenshot", { format: "png" })).data,
+        screenshot: async () => cdpResponses["Page.captureScreenshot"](await call("Page.captureScreenshot", { format: "png" })).data,
         allowServiceWorker: () => call("Network.setBlockedURLs", { urls: [] }),
         blockURLs: (patterns: readonly string[]) => call("Network.setBlockedURLs", { urls: ["*sw.js*", ...patterns] }),
-        installabilityErrors: async () => (await call<{ readonly installabilityErrors: readonly { readonly errorId: string }[] }>("Page.getInstallabilityErrors")).installabilityErrors,
+        installabilityErrors: async () => cdpResponses["Page.getInstallabilityErrors"](await call("Page.getInstallabilityErrors")).installabilityErrors,
         setOffline: (offline: boolean) => call("Network.emulateNetworkConditions", {
           offline,
           latency: 0,
@@ -115,10 +242,10 @@ export async function launchBrowser(executable: string, width: number, height: n
           // compiles on first visit; wait briefly for the application root to hold a rendered child.
           // Fixtures that render into detached hosts leave the root empty and fall through after the cap.
           for (let attempt = 0; attempt < 30; attempt += 1) {
-            const mounted = await call<{ readonly result: { readonly value?: boolean } }>("Runtime.evaluate", {
+            const mounted = await call("Runtime.evaluate", {
               expression: "document.readyState === 'complete' && (document.getElementById('app') ?? document.getElementById('root') ?? document.body).children.length > 0",
               returnByValue: true,
-            }).then((result) => result.result.value === true, () => false)
+            }).then((result) => cdpResponses["Runtime.evaluate"](result) === true, () => false)
             if (mounted) break
             await Bun.sleep(50)
           }
@@ -127,6 +254,7 @@ export async function launchBrowser(executable: string, width: number, height: n
         async setViewport(nextWidth: number, nextHeight: number) {
           await call("Emulation.setDeviceMetricsOverride", { width: nextWidth, height: nextHeight, deviceScaleFactor: 1, mobile: false })
         },
+        setSafeAreaInsets: (top: number, bottom: number) => call("Emulation.setSafeAreaInsetsOverride", { insets: { top, bottom, left: 0, right: 0 } }),
         async setMobileViewport(nextWidth: number, nextHeight: number) {
           await call("Emulation.setDeviceMetricsOverride", { width: nextWidth, height: nextHeight, deviceScaleFactor: 3, mobile: true })
           await call("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 })
@@ -165,11 +293,7 @@ export async function launchBrowser(executable: string, width: number, height: n
           await call("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 })
           await call("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 })
         },
-        async evaluate<T>(expression: string): Promise<T> {
-          const result = await call<{ readonly result: { readonly value: T }; readonly exceptionDetails?: { readonly text: string; readonly exception?: { readonly description?: string } } }>("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true })
-          if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text)
-          return result.result.value
-        },
+        evaluate,
         async close() {
           pausedCleanup.forEach((cleanup) => cleanup())
           pausedCleanup.clear()

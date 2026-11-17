@@ -40,18 +40,22 @@ export const SITE = {
   },
   features: [
     {
+      icon: "sessions",
       title: "Durable Sessions",
       text: "Long-running agent workflows persist across connection drops, device switches, and system restarts.",
     },
     {
+      icon: "shield",
       title: "Explicit autonomy",
       text: "Set precise guardrails and permission tiers so your agent takes only actions you explicitly authorize.",
     },
     {
+      icon: "terminal",
       title: "Tools and approvals",
       text: "Review and approve tool calls, code modifications, and terminal executions with clear interactive inspection.",
     },
     {
+      icon: "monitor",
       title: "Remote access",
       text: "Monitor and control Sessions from your browser while YCoding runs on your machine.",
     },

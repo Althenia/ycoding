@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeRecord, decodeString } from "./cdp"
 import { listPage, parseListQuery } from "../../../packages/cli/src/remote-operations"
 import { startRelayDouble } from "../test/relay-double"
 
@@ -14,16 +14,16 @@ let port = 0
 let server: ReturnType<typeof Bun.spawn> | undefined
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
 
-const freePort = () => {
+const freePort = async () => {
   const probe = Bun.serve({ port: 0, fetch: () => new Response("") })
   const chosen = probe.port
-  probe.stop(true)
+  await probe.stop(true)
   if (chosen === undefined) throw new Error("No free port was assigned for the picker fixture server")
   return chosen
 }
 
 beforeAll(async () => {
-  port = freePort()
+  port = await freePort()
   server = Bun.spawn([`${webRoot}/node_modules/.bin/vite`, "--host", "127.0.0.1", "--port", `${port}`, "--strictPort"], {
     cwd: webRoot, env: { ...process.env, YCODING_WEB_VERIFY: "1" }, stdout: "ignore", stderr: "ignore",
   })
@@ -67,7 +67,6 @@ async function relayFor() {
   } })
 }
 
-type PageReport = { readonly store: readonly string[]; readonly dom: readonly string[]; readonly domTitles: readonly string[]; readonly loading: boolean }
 const report = `(() => {
   const rows = [...document.querySelectorAll('.sessions-table__row')]
   return {
@@ -86,9 +85,9 @@ describe("background Sessions in the Sessions picker", () => {
       try {
         await page.setViewport(width, 900)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&noSelection=1&relaySessions=1&relay=${encodeURIComponent(relay.wsURL("dev_studio"))}`)
-        for (let attempt = 0; attempt < 120 && !await page.evaluate<boolean>(`window.providerAuthState?.().sessions.length === 25 && window.providerAuthState().carouselStatus === 'ready'`); attempt++) await Bun.sleep(25)
+        for (let attempt = 0; attempt < 120 && !await page.evaluate(`window.providerAuthState?.().sessions.length === 25 && window.providerAuthState().carouselStatus === 'ready'`); attempt++) await Bun.sleep(25)
 
-        const first = await page.evaluate<PageReport>(report)
+        const first = await page.evaluate(report, (value: unknown) => { const record = decodeRecord(value); return { ...record, store: (decodeArray(decodeString))(record["store"]), dom: (decodeArray(decodeString))(record["dom"]), domTitles: (decodeArray(decodeString))(record["domTitles"]), loading: (decodeBoolean)(record["loading"]) } })
         expect(first.store, `${width}px store`).toEqual(ordinary.slice(0, 25).map((session) => session.id))
         expect(first.dom.length, `${width}px mounted rows`).toBeGreaterThan(0)
         expect(first.dom.every((id) => id.startsWith("ses_ord_")), `${width}px DOM ids`).toBe(true)
@@ -98,9 +97,9 @@ describe("background Sessions in the Sessions picker", () => {
         expect(first.domTitles.some((title) => /Executor job|Alpha executor/.test(title))).toBe(false)
 
         await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'); root.scrollTop = root.scrollHeight; root.dispatchEvent(new WheelEvent('wheel', { deltaY: 250, bubbles: true })); })()`)
-        for (let attempt = 0; attempt < 120 && !await page.evaluate<boolean>(`window.providerAuthState().sessions.length === 50 && !window.providerAuthState().sessionPageLoading`); attempt++) await Bun.sleep(25)
+        for (let attempt = 0; attempt < 120 && !await page.evaluate(`window.providerAuthState().sessions.length === 50 && !window.providerAuthState().sessionPageLoading`); attempt++) await Bun.sleep(25)
         await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
-        const second = await page.evaluate<PageReport>(report)
+        const second = await page.evaluate(report, (value: unknown) => { const record = decodeRecord(value); return { ...record, store: (decodeArray(decodeString))(record["store"]), dom: (decodeArray(decodeString))(record["dom"]), domTitles: (decodeArray(decodeString))(record["domTitles"]), loading: (decodeBoolean)(record["loading"]) } })
         expect(second.store, `${width}px paginated store`).toEqual(ordinary.slice(0, 50).map((session) => session.id))
         expect(second.dom.length).toBeGreaterThan(0)
         expect(second.dom.every((id) => id.startsWith("ses_ord_"))).toBe(true)
@@ -108,9 +107,9 @@ describe("background Sessions in the Sessions picker", () => {
 
         await page.evaluate(`(() => { const root = document.querySelector('.workspace__scroll'); root.scrollTop = 0; root.dispatchEvent(new Event('scroll')); })()`)
         await page.evaluate(`(() => { const input = document.querySelector('input[type=search][placeholder="Search sessions…"]'); input.value = 'alpha'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
-        for (let attempt = 0; attempt < 160 && !await page.evaluate<boolean>(`window.providerAuthState().sessionQuery === 'alpha' && window.providerAuthState().sessionListStatus === 'ready' && !window.providerAuthState().sessionPageLoading && window.providerAuthState().sessions.length === ${alphaOrdinary.length}`); attempt++) await Bun.sleep(25)
+        for (let attempt = 0; attempt < 160 && !await page.evaluate(`window.providerAuthState().sessionQuery === 'alpha' && window.providerAuthState().sessionListStatus === 'ready' && !window.providerAuthState().sessionPageLoading && window.providerAuthState().sessions.length === ${alphaOrdinary.length}`); attempt++) await Bun.sleep(25)
         await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
-        const searched = await page.evaluate<PageReport>(report)
+        const searched = await page.evaluate(report, (value: unknown) => { const record = decodeRecord(value); return { ...record, store: (decodeArray(decodeString))(record["store"]), dom: (decodeArray(decodeString))(record["dom"]), domTitles: (decodeArray(decodeString))(record["domTitles"]), loading: (decodeBoolean)(record["loading"]) } })
         expect(searched.store, `${width}px searched store`).toEqual(alphaOrdinary)
         expect(searched.dom, `${width}px searched DOM`).toEqual(alphaOrdinary)
         expect(searched.domTitles.every((title) => title.includes("Alpha ordinary"))).toBe(true)

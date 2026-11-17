@@ -20,10 +20,9 @@ export const views = ["/remote", "/remote/sessions", "/remote/session", "/remote
 
 export type RemoteView = (typeof views)[number]
 
-/** The rail and composer belong only to an active conversation, never every remote screen. */
 export function remoteSurfaceComposition(path: RemoteView, hasSession: boolean) {
   const selectedConversation = path === "/remote/session" && hasSession
-  return { showSessionRail: selectedConversation, showComposer: selectedConversation }
+  return { showComposer: selectedConversation }
 }
 
 export type ConnectionStripView = {

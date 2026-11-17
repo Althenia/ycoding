@@ -135,6 +135,10 @@ describe("DESIGN.md token drift", () => {
         [document, css.replace("--yc-primary-bg: #0b8550;", "--yc-primary-bg: #000000;"), ":root --yc-primary-bg"],
         [document, css.replace("--yc-scrollbar-size: 12px;", ""), ":root --yc-scrollbar-size"],
         [document.replace("  green: \"#27d17f\"", "  green: \"#27d17f\"\n  stale: \"#000000\""), css, ":root --yc-stale"],
+        [document.replace('  primary-bg: "#0b8550"\n', ""), css, ":root --yc-primary-bg"],
+        [document, css.replace("  --yc-primary-fg: #ffffff;", "  --yc-primary-fg: #ffffff;\n  --yc-undocumented: 1px;"), ":root --yc-undocumented"],
+        [document.replace('      bg: "#0b1115"', '      bg: "#000000"'), css, '[data-theme="dark"] --yc-bg'],
+        [document, css.replace("  --yc-bg: #0b1115;", ""), '[data-theme="dark"] --yc-bg'],
       ] as const
       for (const [specimen, stylesheet, expected] of probes) {
         await Bun.write(path.join(directory, "DESIGN.md"), specimen)
@@ -145,5 +149,73 @@ describe("DESIGN.md token drift", () => {
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
+  })
+})
+
+describe("Web design authority", () => {
+  test("retained visual rules name the current Web families without an override tier", async () => {
+    const document = await Bun.file(new URL("../../DESIGN.md", import.meta.url)).text()
+    const rules = (document.split("## Rules\n")[1] ?? "").split("\n## ")[0]!.split("\n").filter(line => /^\| W\d+ \|/.test(line))
+    expect(rules.filter(line => !line.startsWith("| W73 |")).join("\n")).not.toContain("Geist Mono")
+    expect(rules.find(line => line.startsWith("| W47 |"))).toContain("JetBrains Mono")
+    expect(document).not.toMatch(/older Web presentation|replace conflicting Web presentation|Spatial Canvas|once W104 is approved/)
+    expect(new Set(rules.map(line => line.split("|")[1]?.trim())).size).toBe(rules.length)
+  })
+
+  test("public rules own one header boundary, open releases and component-specific radii", async () => {
+    const document = await Bun.file(new URL("../../DESIGN.md", import.meta.url)).text()
+    const rule = document.split("\n").find(line => line.startsWith("| W93 |")) ?? ""
+    expect(rule).toContain("1px solid var(--yc-border)")
+    expect(rule).toContain("one public header")
+    expect(rule).toContain("transparent")
+    expect(rule).toContain("zero radius")
+    expect(rule).toContain("--yc-radius-sm")
+    expect(rule).toContain("open text links")
+    expect(rule).toContain("bare currentColor icons")
+    expect(rule).not.toMatch(/pill-shaped|soft icon wells/)
+    expect(rule).not.toMatch(/docs-bar.*draws no border|releases? entries are borderless tonal planes/)
+  })
+
+  test("token governance covers every declared group rather than a closed historical allowlist", async () => {
+    const document = await Bun.file(new URL("../../DESIGN.md", import.meta.url)).text()
+    const rule = document.split("\n").find(line => line.startsWith("| W80 |")) ?? ""
+    expect(rule).toContain("every declared token group")
+    expect(rule).toContain("front matter")
+    expect(rule).toContain("approval")
+    expect(rule).not.toContain("MUST NOT add, remove or change a token")
+    expect(documentedTokens(document)).toMatchObject({ "--yc-header-public-h": "56px", "--yc-public-max": "1440px" })
+    expect(document).toMatch(/light and alternate themes are native product variants/i)
+    expect(document).toContain("not observed dark Stitch variants")
+  })
+
+  test("the brand principles and rules state the current scoped Web contract directly", async () => {
+    const document = await Bun.file(new URL("../../../../DESIGN.md", import.meta.url)).text()
+    expect(document.slice(document.indexOf("## Principles"), document.indexOf("## Rules"))).not.toMatch(/Spatial Canvas|W80–W94/)
+    const rules = document.slice(document.indexOf("## Rules"), document.indexOf("## Colors"))
+    expect(rules).toMatch(/R9[^\n]*Web[^\n]*JetBrains Mono/)
+    expect(rules).toMatch(/R12[^\n]*public header/)
+    expect(document).not.toContain("scoped Web exception")
+  })
+  test("both Web rule owners bind the approved Stitch project without a specimen-value exclusion", async () => {
+    const documents = await Promise.all([
+      Bun.file(new URL("../../DESIGN.md", import.meta.url)).text(),
+      Bun.file(new URL("../../../../.stitch/DESIGN.md", import.meta.url)).text(),
+    ])
+    for (const document of documents) {
+      expect(document).toContain("10627183425669399580")
+      expect(document).not.toContain("15933380309160575156")
+      expect(document).not.toContain("specimen hex values, fonts and canvas labels MUST NOT enter production")
+      expect(document).toContain("JetBrains Mono")
+    }
+  })
+
+  test("the brand chain scopes Web type and composition without replacing other surfaces", async () => {
+    const document = await Bun.file(new URL("../../../../DESIGN.md", import.meta.url)).text()
+    const rules = document.slice(document.indexOf("## Rules"), document.indexOf("## Colors"))
+    expect(rules.split("\n").some(line => /^\| R9\s*\|/.test(line) && line.includes("Web") && line.includes("JetBrains Mono"))).toBe(true)
+    expect(rules.split("\n").some(line => /^\| R12\s*\|/.test(line) && line.includes("public header") && line.includes("selected-detail"))).toBe(true)
+    expect(document).toContain("extension fonts MUST be embedded")
+    expect(document).toContain("without changing the user's terminal font settings")
+    expect(document).not.toContain("Web and Desktop share Stitch Direction A")
   })
 })

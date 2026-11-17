@@ -57,15 +57,15 @@ const LIGHT = {
 
 const DARK = {
   "--yc-green": "#27d17f",
-  "--yc-green-strong": "#4ee29b",
-  "--yc-green-soft": "rgba(78, 226, 155, 0.12)",
-  "--yc-primary-bg": "#4ee29b",
+  "--yc-green-strong": "#67d7a4",
+  "--yc-green-soft": "rgba(103, 215, 164, 0.12)",
+  "--yc-primary-bg": "#67d7a4",
   "--yc-primary-fg": "#04150c",
-  "--yc-yellow-strong": "#f7d37c",
+  "--yc-yellow-strong": "#f0be62",
   "--yc-yellow-soft": "rgba(244, 189, 61, 0.14)",
   "--yc-danger": "#ef6f6f",
   "--yc-danger-soft": "rgba(239, 111, 111, 0.14)",
-  "--yc-focus": "#4ee29b",
+  "--yc-focus": "#67d7a4",
   "--yc-signal": "#79b8ff",
   "--yc-effort": "#d2aedf",
   "--yc-effort-none": "#a9bacb",
@@ -134,6 +134,7 @@ const GUTTER_STEPS = [
 
 const INVARIANT_LAYOUT = {
   "--yc-header-h": "60px",
+  "--yc-header-public-h": "56px",
   "--yc-header-session-h": "44px",
   "--yc-status-strip-h": "36px",
   "--yc-bottom-nav-h": "56px",
@@ -154,6 +155,7 @@ const INVARIANT_LAYOUT = {
 
 const COMPOSITIONAL_LAYOUT = {
   "--yc-content-max": "1200px",
+  "--yc-public-max": "1440px",
   "--yc-content-max-wide": "1600px",
   "--yc-rail-w": "256px",
   "--yc-companion-w": "448px",

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4721
 const executable = process.env.YCODING_WEB_CHROME
@@ -27,7 +27,7 @@ async function open(mode: string, width = 1440, theme: "light" | "dark" = "light
   return page
 }
 async function wait(page: Page, expression: string) {
-  for (let attempt = 0; attempt < 60; attempt += 1) { if (await page.evaluate<boolean>(expression)) return; await Bun.sleep(100) }
+  for (let attempt = 0; attempt < 60; attempt += 1) { if (await page.evaluate(expression)) return; await Bun.sleep(100) }
   throw new Error(`Timed out: ${expression}`)
 }
 const click = (page: Page, selector: string, text?: string) => page.evaluate(`(() => {
@@ -36,10 +36,27 @@ const click = (page: Page, selector: string, text?: string) => page.evaluate(`((
   if (!node) throw new Error('Missing ${selector} ${text ?? ""}')
   node.click()
 })()`)
-const requests = (page: Page, operation: string) => page.evaluate<Record<string, unknown>[]>(`window.incidentRequests().filter((item) => item.operation === ${JSON.stringify(operation)}).map((item) => item.input)`)
-const rows = (page: Page) => page.evaluate<number>(`document.querySelectorAll('.incidents [data-incident-row]').length`)
-const text = (page: Page, selector: string) => page.evaluate<string>(`document.querySelector(${JSON.stringify(selector)})?.textContent?.replace(/\\s+/g, ' ').trim() ?? ''`)
+const requests = (page: Page, operation: string) => page.evaluate(`window.incidentRequests().filter((item) => item.operation === ${JSON.stringify(operation)}).map((item) => item.input)`, decodeArray(decodeRecord))
+const rows = (page: Page) => page.evaluate(`document.querySelectorAll('.incidents [data-incident-row]').length`, decodeNumber)
+const text = (page: Page, selector: string) => page.evaluate(`document.querySelector(${JSON.stringify(selector)})?.textContent?.replace(/\\s+/g, ' ').trim() ?? ''`, decodeString)
 const ready = () => fetch(`http://127.0.0.1:${port}/verify/incident-usage-fixture.html`).then((response) => response.ok, () => false)
+
+test("remote workspace fixture renders the incident report and its read-only details", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=dark&scenario=usage-quotas-1440`)
+    await wait(page, `!!document.querySelector('.incidents')`)
+    await page.evaluate(`document.querySelector('.incidents').scrollIntoView({block:'start'})`)
+    await wait(page, `!!document.querySelector('.incidents [data-incident-row], .incidents [role="alert"]')`)
+    expect(await rows(page)).toBe(2)
+    expect(await page.evaluate(`document.querySelector('.incidents [role="alert"]') === null`)).toBe(true)
+    await click(page, ".incidents [data-incident-details]")
+    await wait(page, `!!document.querySelector('.incidents__recent li') && !document.querySelector('.incidents__guidance [role="status"]')`)
+    expect(await text(page, ".incidents__recent")).toContain("Fallback")
+    expect(await text(page, ".incidents__guidance")).toContain("Model guidance")
+    expect(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+  } finally { await page.close() }
+}, 15000)
 
 test("incidents section reports exact counts, totals, and the last UTC time per model without overflow", async () => {
   for (const [width, theme] of [[1440, "light"], [820, "dark"], [390, "light"], [320, "dark"]] as const) {
@@ -48,15 +65,15 @@ test("incidents section reports exact counts, totals, and the last UTC time per 
       await wait(page, `document.querySelectorAll('.incidents [data-incident-row]').length === 3`)
       expect(await text(page, '.incidents h2')).toBe("Model incidents")
       expect(await requests(page, "incident.report")).toEqual([{ group: "model", offset: 0, limit: 25 }])
-      const first = await page.evaluate<{ readonly text: string; readonly time: string; readonly datetime: string; readonly overflow: boolean }>(`(() => {
+      const first = await page.evaluate(`(() => {
         const row = document.querySelector('.incidents [data-incident-row]'), time = row.querySelector('time')
         return { text: row.textContent.replace(/\\s+/g, ' '), time: time.textContent, datetime: time.dateTime, overflow: document.documentElement.scrollWidth > innerWidth }
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, text: (decodeString)(record["text"]), time: (decodeString)(record["time"]), datetime: (decodeString)(record["datetime"]), overflow: (decodeBoolean)(record["overflow"]) } })
       expect(first.text).toContain("openai/gpt-6-sol")
       for (const count of ["1,234", "1,241"]) expect(first.text).toContain(count)
       expect(first.time).toBe(new Date(first.datetime).toISOString().slice(0, 19).replace("T", " ") + " UTC")
       expect(first.overflow).toBe(false)
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.incidents [data-incident-row] [data-label="Model"]')].map((item) => item.textContent.trim())`)).toEqual(["openai/gpt-6-sol", "anthropic/claude-opus", "openrouter/deepseek-v4"])
+      expect(await page.evaluate(`[...document.querySelectorAll('.incidents [data-incident-row] [data-label="Model"]')].map((item) => item.textContent.trim())`)).toEqual(["openai/gpt-6-sol", "anthropic/claude-opus", "openrouter/deepseek-v4"])
       expect(await text(page, ".incidents__summary")).toBe("Showing 1–3 of 3 groups")
     } finally { await page.close() }
   }
@@ -66,13 +83,13 @@ test("agent grouping adds the agent to each group and requests the agent report"
   const page = await open("default")
   try {
     await wait(page, `document.querySelectorAll('.incidents [data-incident-row]').length === 3`)
-    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.incidents [aria-label="Incident grouping"] button')].map((item) => item.textContent + ':' + item.getAttribute('aria-pressed'))`)).toEqual(["Model:true", "Agent:false"])
+    expect(await page.evaluate(`[...document.querySelectorAll('.incidents [aria-label="Incident grouping"] button')].map((item) => item.textContent + ':' + item.getAttribute('aria-pressed'))`)).toEqual(["Model:true", "Agent:false"])
     await click(page, '.incidents [aria-label="Incident grouping"] button', "Agent")
     await wait(page, `document.querySelector('.incidents [data-incident-row] [data-label="Agent"]')?.textContent.trim() === 'build'`)
     expect((await requests(page, "incident.report")).at(-1)).toEqual({ group: "agent", offset: 0, limit: 25 })
-    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.incidents [data-incident-row]')].map((row) => row.querySelector('[data-label="Model"]').textContent.trim() + '|' + row.querySelector('[data-label="Agent"]').textContent.trim())`))
+    expect(await page.evaluate(`[...document.querySelectorAll('.incidents [data-incident-row]')].map((row) => row.querySelector('[data-label="Model"]').textContent.trim() + '|' + row.querySelector('[data-label="Agent"]').textContent.trim())`))
       .toEqual(["openai/gpt-6-sol|build", "openai/gpt-6-sol|plan", "anthropic/claude-opus|build"])
-    expect(await page.evaluate<string>(`document.querySelector('.incidents [aria-label="Incident grouping"] [aria-pressed="true"]').textContent`)).toBe("Agent")
+    expect(await page.evaluate(`document.querySelector('.incidents [aria-label="Incident grouping"] [aria-pressed="true"]').textContent`)).toBe("Agent")
   } finally { await page.close() }
 }, 30_000)
 
@@ -83,7 +100,7 @@ test("time filters bound the report with exact millisecond edges and an empty ra
     await click(page, '.incidents [aria-label="Incident range"] button', "7 days")
     await wait(page, `document.querySelectorAll('.incidents [data-incident-row]').length === 2`)
     const week = (await requests(page, "incident.report")).at(-1)!
-    expect(Math.abs(Date.now() - 7 * 86_400_000 - (week.from as number))).toBeLessThan(60_000)
+    expect(Math.abs(Date.now() - 7 * 86_400_000 - decodeNumber(week.from))).toBeLessThan(60_000)
     expect(week).toMatchObject({ group: "model", offset: 0, limit: 25 })
     expect(week).not.toHaveProperty("to")
     expect(await text(page, ".incidents__summary")).toBe("Showing 1–2 of 2 groups")
@@ -106,13 +123,13 @@ test("paging walks the exact group count 25 at a time and disables the ends", as
     await wait(page, `document.querySelectorAll('.incidents [data-incident-row]').length === 25`)
     expect(await text(page, ".incidents__summary")).toBe("Showing 1–25 of 60 groups")
     const buttons = `[...document.querySelectorAll('.incidents__pagination button')].map((item) => item.textContent + ':' + item.disabled)`
-    expect(await page.evaluate<string[]>(buttons)).toEqual(["Previous:true", "Next:false"])
+    expect(await page.evaluate(buttons)).toEqual(["Previous:true", "Next:false"])
     await click(page, ".incidents__pagination button", "Next")
     await wait(page, `document.querySelector('.incidents__summary')?.textContent === 'Showing 26–50 of 60 groups'`)
     await click(page, ".incidents__pagination button", "Next")
     await wait(page, `document.querySelector('.incidents__summary')?.textContent === 'Showing 51–60 of 60 groups'`)
     expect(await rows(page)).toBe(10)
-    expect(await page.evaluate<string[]>(buttons)).toEqual(["Previous:false", "Next:true"])
+    expect(await page.evaluate(buttons)).toEqual(["Previous:false", "Next:true"])
     expect((await requests(page, "incident.report")).map((item) => item.offset)).toEqual([0, 25, 50])
     await click(page, ".incidents__pagination button", "Previous")
     await wait(page, `document.querySelector('.incidents__summary')?.textContent === 'Showing 26–50 of 60 groups'`)
@@ -125,12 +142,12 @@ test("details load the newest 20 incidents and the exact guidance preview with a
     await wait(page, `document.querySelectorAll('.incidents [data-incident-row]').length === 3`)
     await click(page, "[data-incident-details]")
     await wait(page, `document.querySelectorAll('.incidents__recent li').length === 20 && !!document.querySelector('.incidents__preview')`)
-    expect(await page.evaluate<string>(`document.querySelector('[data-incident-details]').getAttribute('aria-expanded')`)).toBe("true")
+    expect(await page.evaluate(`document.querySelector('[data-incident-details]').getAttribute('aria-expanded')`)).toBe("true")
     expect(await requests(page, "incident.recent")).toEqual([{ provider: "openai", model: "gpt-6-sol", limit: 20 }])
     expect(await requests(page, "incident.guidance")).toEqual([{ provider: "openai", model: "gpt-6-sol" }])
-    expect(await page.evaluate<string>(`document.querySelector('.incidents__preview').textContent`)).toBe(guidanceText)
+    expect(await page.evaluate(`document.querySelector('.incidents__preview').textContent`)).toBe(guidanceText)
     expect(await text(page, ".incidents__indicator")).toBe("Guidance enabled")
-    const items = await page.evaluate<string[]>(`[...document.querySelectorAll('.incidents__recent li')].map((item) => item.textContent.replace(/\\s+/g, ' ').trim())`)
+    const items = await page.evaluate(`[...document.querySelectorAll('.incidents__recent li')].map((item) => item.textContent.replace(/\\s+/g, ' ').trim())`, decodeArray(decodeString))
     expect(items[0]).toContain("Fallback")
     expect(items[0]).toContain("anthropic/claude-opus")
     expect(items[1]).toContain("Guardrail escalated")
@@ -138,7 +155,7 @@ test("details load the newest 20 incidents and the exact guidance preview with a
     expect(items[1]).toContain("custom")
     expect(items.some((item) => item.includes("Guardrail rejected") && item.includes("decided by Client"))).toBe(true)
     expect(items.some((item) => item.includes("Decision model"))).toBe(true)
-    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.incidents__recent time')].every((item) => /^\\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d:\\d\\d UTC$/.test(item.textContent))`)).toBe(true)
+    expect(await page.evaluate(`[...document.querySelectorAll('.incidents__recent time')].every((item) => /^\\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d:\\d\\d UTC$/.test(item.textContent))`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 
@@ -162,7 +179,7 @@ test("a disabled capability reads Guidance disabled in words", async () => {
     await click(page, "[data-incident-details]")
     await wait(page, `!!document.querySelector('.incidents__indicator')`)
     expect(await text(page, ".incidents__indicator")).toBe("Guidance disabled")
-    expect(await page.evaluate<string>(`document.querySelector('.incidents__indicator').dataset.enabled`)).toBe("false")
+    expect(await page.evaluate(`document.querySelector('.incidents__indicator').dataset.enabled`)).toBe("false")
   } finally { await page.close() }
 }, 30_000)
 
@@ -181,7 +198,7 @@ test("clearing guidance confirms first, clears the whole model, and keeps every 
     expect(dialog).toContain("Incident counts are kept")
     await click(page, "dialog.overlay--confirm button", "Cancel")
     await wait(page, `!document.querySelector('dialog.overlay--confirm')`)
-    expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('[data-incident-clear]')`)).toBe(true)
+    expect(await page.evaluate(`document.activeElement === document.querySelector('[data-incident-clear]')`)).toBe(true)
     expect(await requests(page, "incident.guidance.clear")).toEqual([])
     await click(page, "[data-incident-clear]")
     await wait(page, `!!document.querySelector('dialog.overlay--confirm[open]')`)
@@ -189,7 +206,7 @@ test("clearing guidance confirms first, clears the whole model, and keeps every 
     await wait(page, `document.querySelector('.incidents__status')?.textContent.includes('Guidance cleared for openai/gpt-6-sol')`)
     expect(await requests(page, "incident.guidance.clear")).toEqual([{ provider: "openai", model: "gpt-6-sol" }])
     await wait(page, `!document.querySelector('.incidents__preview') && document.querySelector('.incidents__guidance')?.textContent.includes('Cleared 20')`)
-    expect(await page.evaluate<boolean>(`document.querySelector('[data-incident-clear]').disabled`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('[data-incident-clear]').disabled`)).toBe(true)
     expect(await text(page, ".incidents__table tbody")).toBe(before)
   } finally { await page.close() }
 }, 40_000)
@@ -205,7 +222,7 @@ test("a failed clear stays in the dialog with its error and can be retried; a pe
     await click(failing, "dialog.overlay--confirm button", "Clear guidance")
     await wait(failing, `document.querySelector('dialog.overlay--confirm [role="alert"]')?.textContent.includes('Guidance could not be cleared.')`)
     expect(await page_has(failing, "dialog.overlay--confirm[open]")).toBe(true)
-    expect(await failing.evaluate<string>(`document.querySelector('.incidents__preview').textContent`)).toBe(guidanceText)
+    expect(await failing.evaluate(`document.querySelector('.incidents__preview').textContent`)).toBe(guidanceText)
     await click(failing, "dialog.overlay--confirm button", "Clear guidance")
     await wait(failing, `document.querySelector('.incidents__status')?.textContent.includes('Guidance cleared')`)
     expect((await requests(failing, "incident.guidance.clear")).length).toBe(2)
@@ -225,7 +242,7 @@ test("a failed clear stays in the dialog with its error and can be retried; a pe
   } finally { await pending.close() }
 }, 60_000)
 
-const page_has = (page: Page, selector: string) => page.evaluate<boolean>(`!!document.querySelector(${JSON.stringify(selector)})`)
+const page_has = (page: Page, selector: string) => page.evaluate(`!!document.querySelector(${JSON.stringify(selector)})`, decodeBoolean)
 
 test("loading, empty, unsupported, failed, and detail-failure states each speak and recover", async () => {
   const loading = await open("loading")
@@ -270,14 +287,14 @@ test("details and confirmation are keyboard operable with focus returned, and ph
     await page.evaluate(`document.querySelector('[data-incident-details]').focus()`)
     await page.pressKey("Enter", "Enter", 13, "\r")
     await wait(page, `document.querySelector('[data-incident-details]').getAttribute('aria-expanded') === 'true' && !!document.querySelector('[data-incident-clear]') && !document.querySelector('[data-incident-clear]').disabled`)
-    expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+    expect(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
     await page.evaluate(`document.querySelector('[data-incident-clear]').focus()`)
     await page.pressKey("Enter", "Enter", 13, "\r")
     await wait(page, `!!document.querySelector('dialog.overlay--confirm[open]')`)
     await page.pressEscape()
     await wait(page, `!document.querySelector('dialog.overlay--confirm')`)
-    expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('[data-incident-clear]')`)).toBe(true)
-    const small = await page.evaluate<number>(`[...document.querySelectorAll('.incidents button')].filter((item) => item.getBoundingClientRect().height < 36 - 0.5).length`)
+    expect(await page.evaluate(`document.activeElement === document.querySelector('[data-incident-clear]')`)).toBe(true)
+    const small = await page.evaluate(`[...document.querySelectorAll('.incidents button')].filter((item) => item.getBoundingClientRect().height < 36 - 0.5).length`)
     expect(small).toBe(0)
   } finally { await page.close() }
 }, 30_000)

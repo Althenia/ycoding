@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNullable, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4577
 const executable = process.env.YCODING_WEB_CHROME
@@ -31,35 +31,35 @@ test("todo panel occupies composer flow and keeps transcript clear on phone, tab
       await page.setColorScheme(theme)
       await page.injectOnNewDocument(`localStorage.removeItem('ycoding.remote.todo.expanded')`)
       await page.navigate(`http://127.0.0.1:${port}/verify/todo-fixture.html?theme=${theme}`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`!!document.querySelector('.todo-panel__toggle')`); attempt++) await Bun.sleep(50)
-      expect(await page.evaluate<boolean>(`!!document.querySelector('.todo-panel__toggle')`)).toBe(true)
-      expect(await page.evaluate<string>(`document.querySelector('.todo-panel__toggle').getAttribute('aria-expanded')`)).toBe("false")
-      expect(await page.evaluate<string>(`document.querySelector('.todo-panel__progress').textContent.trim()`)).toBe("3/8")
-      const alignment = await page.evaluate<{ icon: boolean; offset: number }>(`(() => { const label = document.querySelector('.todo-panel__heading').getBoundingClientRect(); const icon = document.querySelector('.todo-panel__chevron svg')?.getBoundingClientRect(); return { icon: !!icon, offset: icon ? Math.abs((label.top + label.bottom)/2 - (icon.top + icon.bottom)/2) : Infinity }; })()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate(`!!document.querySelector('.todo-panel__toggle')`); attempt++) await Bun.sleep(50)
+      expect(await page.evaluate(`!!document.querySelector('.todo-panel__toggle')`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('.todo-panel__toggle').getAttribute('aria-expanded')`)).toBe("false")
+      expect(await page.evaluate(`document.querySelector('.todo-panel__progress').textContent.trim()`)).toBe("3/8")
+      const alignment = await page.evaluate(`(() => { const label = document.querySelector('.todo-panel__heading').getBoundingClientRect(); const icon = document.querySelector('.todo-panel__chevron svg')?.getBoundingClientRect(); return { icon: !!icon, offset: icon ? Math.abs((label.top + label.bottom)/2 - (icon.top + icon.bottom)/2) : Infinity }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, icon: (decodeBoolean)(record["icon"]), offset: (decodeNumber)(record["offset"]) } })
       expect(alignment.icon).toBe(true)
       expect(alignment.offset).toBeLessThanOrEqual(1)
       await page.setCoarsePointer(true)
-      expect(await page.evaluate<number>(`document.querySelector('.todo-panel__toggle').getBoundingClientRect().height`)).toBeGreaterThanOrEqual(44)
+      expect(await page.evaluate(`document.querySelector('.todo-panel__toggle').getBoundingClientRect().height`)).toBeGreaterThanOrEqual(44)
       await page.evaluate(`document.querySelector('.todo-panel__toggle').click()`)
-      expect(await page.evaluate<string>(`document.querySelector('.todo-panel__toggle').getAttribute('aria-expanded')`)).toBe("true")
-      expect(await page.evaluate<number>(`document.querySelectorAll('.todo-panel__item').length`)).toBe(8)
-      expect(await page.evaluate<{ completed: string; active: string; cancelled: string; struck: boolean; contrast: boolean }>(`(() => { const done = document.querySelector('.todo-panel__item--completed'); const active = document.querySelector('.todo-panel__item--in_progress'); const cancelled = document.querySelector('.todo-panel__item--cancelled'); return { completed: done.querySelector('.todo-panel__marker').textContent, active: active.querySelector('.todo-panel__marker').textContent, cancelled: cancelled.querySelector('.todo-panel__marker').textContent, struck: getComputedStyle(cancelled.querySelector('.todo-panel__text')).textDecorationLine.includes('line-through'), contrast: getComputedStyle(done).color !== getComputedStyle(active).color }; })()`)).toEqual({ completed: "✓", active: "●", cancelled: "–", struck: true, contrast: true })
-      const bounds = await page.evaluate<{ transcriptBottom: number; panelTop: number; panelBottom: number; composerTop: number; scrollable: boolean; pageOverflow: boolean }>(`(() => { const t = document.querySelector('[data-testid="transcript"]').getBoundingClientRect(); const p = document.querySelector('.todo-panel').getBoundingClientRect(); const c = document.querySelector('.composer').getBoundingClientRect(); const l = document.querySelector('.todo-panel__list'); return { transcriptBottom: t.bottom, panelTop: p.top, panelBottom: p.bottom, composerTop: c.top, scrollable: l.scrollHeight > l.clientHeight, pageOverflow: document.documentElement.scrollWidth > innerWidth }; })()`)
+      expect(await page.evaluate(`document.querySelector('.todo-panel__toggle').getAttribute('aria-expanded')`)).toBe("true")
+      expect(await page.evaluate(`document.querySelectorAll('.todo-panel__item').length`)).toBe(8)
+      expect(await page.evaluate(`(() => { const done = document.querySelector('.todo-panel__item--completed'); const active = document.querySelector('.todo-panel__item--in_progress'); const cancelled = document.querySelector('.todo-panel__item--cancelled'); return { completed: done.querySelector('.todo-panel__marker').textContent, active: active.querySelector('.todo-panel__marker').textContent, cancelled: cancelled.querySelector('.todo-panel__marker').textContent, struck: getComputedStyle(cancelled.querySelector('.todo-panel__text')).textDecorationLine.includes('line-through'), contrast: getComputedStyle(done).color !== getComputedStyle(active).color }; })()`)).toEqual({ completed: "✓", active: "●", cancelled: "–", struck: true, contrast: true })
+      const bounds = await page.evaluate(`(() => { const t = document.querySelector('[data-testid="transcript"]').getBoundingClientRect(); const p = document.querySelector('.todo-panel').getBoundingClientRect(); const c = document.querySelector('.composer').getBoundingClientRect(); const l = document.querySelector('.todo-panel__list'); return { transcriptBottom: t.bottom, panelTop: p.top, panelBottom: p.bottom, composerTop: c.top, scrollable: l.scrollHeight > l.clientHeight, pageOverflow: document.documentElement.scrollWidth > innerWidth }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, transcriptBottom: (decodeNumber)(record["transcriptBottom"]), panelTop: (decodeNumber)(record["panelTop"]), panelBottom: (decodeNumber)(record["panelBottom"]), composerTop: (decodeNumber)(record["composerTop"]), scrollable: (decodeBoolean)(record["scrollable"]), pageOverflow: (decodeBoolean)(record["pageOverflow"]) } })
       expect(bounds.transcriptBottom).toBeLessThanOrEqual(bounds.panelTop)
       expect(bounds.panelBottom).toBeLessThanOrEqual(bounds.composerTop)
       expect(bounds.scrollable).toBe(true)
       expect(bounds.pageOverflow).toBe(false)
       await page.evaluate(`window.updateTodos([{content:'Live work',status:'in_progress',priority:'high'}])`)
-      expect(await page.evaluate<string>(`document.querySelector('.todo-panel__item').textContent`)).toContain("Live work")
-      expect(await page.evaluate<string>(`document.querySelector('.todo-panel__progress').textContent.trim()`)).toBe("0/1")
+      expect(await page.evaluate(`document.querySelector('.todo-panel__item').textContent`)).toContain("Live work")
+      expect(await page.evaluate(`document.querySelector('.todo-panel__progress').textContent.trim()`)).toBe("0/1")
       await page.evaluate(`window.updateTodos([{content:'Live work',status:'completed',priority:'high'},{content:'Wrapped up',status:'completed',priority:'low'}])`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.todo-panel') === null`); attempt++) await Bun.sleep(20)
-      expect(await page.evaluate<boolean>(`document.querySelector('.todo-panel') === null`)).toBe(true)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate(`document.querySelector('.todo-panel') === null`); attempt++) await Bun.sleep(20)
+      expect(await page.evaluate(`document.querySelector('.todo-panel') === null`)).toBe(true)
       await page.evaluate(`window.updateTodos([{content:'Live work',status:'completed',priority:'high'},{content:'Follow-up',status:'pending',priority:'low'}])`)
-      expect(await page.evaluate<string>(`document.querySelector('.todo-panel__progress').textContent.trim()`)).toBe("1/2")
+      expect(await page.evaluate(`document.querySelector('.todo-panel__progress').textContent.trim()`)).toBe("1/2")
       await page.evaluate(`window.updateTodos([])`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.todo-panel') === null`); attempt++) await Bun.sleep(20)
-      expect(await page.evaluate<boolean>(`document.querySelector('.todo-panel') === null`)).toBe(true)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate(`document.querySelector('.todo-panel') === null`); attempt++) await Bun.sleep(20)
+      expect(await page.evaluate(`document.querySelector('.todo-panel') === null`)).toBe(true)
     } finally { await page.close() }
   }
 }, 60_000)
@@ -74,17 +74,12 @@ test("terminal Todo exit keeps its flow slot and focus blocked until one bounded
       await page.setAnimationPlaybackRate(reduced ? 1 : 0)
       await page.injectOnNewDocument(`localStorage.removeItem('ycoding.remote.todo.expanded')`)
       await page.navigate(`http://127.0.0.1:${port}/verify/todo-fixture.html?theme=${theme}`)
-      expect(await page.evaluate<boolean>(`matchMedia('(prefers-reduced-motion: reduce)').matches`)).toBe(reduced)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`!!document.querySelector('.todo-panel__toggle')`); attempt++) await Bun.sleep(50)
+      expect(await page.evaluate(`matchMedia('(prefers-reduced-motion: reduce)').matches`)).toBe(reduced)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate(`!!document.querySelector('.todo-panel__toggle')`); attempt++) await Bun.sleep(50)
       await page.evaluate(`document.fonts.ready`)
       await page.evaluate(`document.querySelector('.todo-panel__toggle').click()`)
       await page.evaluate(`(async () => { const animations = document.querySelector('.todo-panel__drawer').getAnimations(); await Promise.all(animations.map(animation => animation.ready)); animations.forEach(animation => animation.finish()); await Promise.all(animations.map(animation => animation.finished)); })()`)
-      const exit = await page.evaluate<{
-        readonly before: { readonly height: number; readonly bottom: number; readonly scroll: number }
-        readonly pending: { readonly present: boolean; readonly inert: boolean; readonly hidden: boolean; readonly focusable: boolean; readonly height: number; readonly bottom: number; readonly scroll: number }
-        readonly transitions: readonly { readonly property: string; readonly duration: number }[]
-        readonly midpoint: { readonly present: boolean; readonly height: number; readonly opacity: number } | null
-      }>(`(() => {
+      const exit = await page.evaluate(`(() => {
         const root = document.querySelector('[data-testid="transcript"]'), panel = document.querySelector('.todo-panel'); root.scrollTop = 180;
         const before = { height:panel.getBoundingClientRect().height, bottom:document.querySelector('.composer').getBoundingClientRect().bottom, scroll:root.scrollTop };
         window.todoRemovals = 0; new MutationObserver(() => { if (!panel.isConnected) window.todoRemovals++ }).observe(panel.parentElement, { childList:true });
@@ -96,7 +91,7 @@ test("terminal Todo exit keeps its flow slot and focus blocked until one bounded
         const midpoint = current ? { present:current.isConnected, height:current.getBoundingClientRect().height, opacity:Number(getComputedStyle(current).opacity) } : null;
         animations.forEach(animation => animation.play());
         return { before, pending, transitions, midpoint };
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, before: ((value: unknown) => { const record = decodeRecord(value); return { ...record, height: (decodeNumber)(record["height"]), bottom: (decodeNumber)(record["bottom"]), scroll: (decodeNumber)(record["scroll"]) } })(record["before"]), pending: ((value: unknown) => { const record = decodeRecord(value); return { ...record, present: (decodeBoolean)(record["present"]), inert: (decodeBoolean)(record["inert"]), hidden: (decodeBoolean)(record["hidden"]), focusable: (decodeBoolean)(record["focusable"]), height: (decodeNumber)(record["height"]), bottom: (decodeNumber)(record["bottom"]), scroll: (decodeNumber)(record["scroll"]) } })(record["pending"]), transitions: (decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, property: (decodeString)(record["property"]), duration: (decodeNumber)(record["duration"]) } }))(record["transitions"]), midpoint: (decodeNullable((value: unknown) => { const record = decodeRecord(value); return { ...record, present: (decodeBoolean)(record["present"]), height: (decodeNumber)(record["height"]), opacity: (decodeNumber)(record["opacity"]) } }))(record["midpoint"]) } })
       await page.setAnimationPlaybackRate(1)
       const before = exit.before
       const pending = exit.pending
@@ -123,11 +118,11 @@ test("terminal Todo exit keeps its flow slot and focus blocked until one bounded
         expect(midHeight).toBeLessThan(before.height)
         if (theme === "light" && width === 390) console.info("todo exit geometry", JSON.stringify({ before, pending, midHeight }))
       }
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.todo-panel') === null`); attempt++) await Bun.sleep(20)
-      expect(await page.evaluate<boolean>(`document.querySelector('.todo-panel') === null`)).toBe(true)
-      expect(await page.evaluate<number>(`window.todoRemovals`)).toBe(1)
-      expect(await page.evaluate<number>(`Math.abs(document.querySelector('.composer').getBoundingClientRect().bottom - ${before.bottom})`)).toBeLessThanOrEqual(2)
-      expect(await page.evaluate<number>(`Math.abs(document.querySelector('[data-testid="transcript"]').scrollTop - ${before.scroll})`)).toBeLessThanOrEqual(2)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate(`document.querySelector('.todo-panel') === null`); attempt++) await Bun.sleep(20)
+      expect(await page.evaluate(`document.querySelector('.todo-panel') === null`)).toBe(true)
+      expect(await page.evaluate(`window.todoRemovals`)).toBe(1)
+      expect(await page.evaluate(`Math.abs(document.querySelector('.composer').getBoundingClientRect().bottom - ${before.bottom})`)).toBeLessThanOrEqual(2)
+      expect(await page.evaluate(`Math.abs(document.querySelector('[data-testid="transcript"]').scrollTop - ${before.scroll})`)).toBeLessThanOrEqual(2)
     }
   } finally { await page.close() }
 }, 30_000)
@@ -139,12 +134,12 @@ test("no-todo Session keeps the composer at its original bottom edge", async () 
     try {
       await page.setViewport(width, 820)
       await page.navigate(`http://127.0.0.1:${port}/verify/todo-fixture.html?panel=off`)
-      expect(await page.evaluate<boolean>(`document.querySelector('.todo-panel') === null`)).toBe(true)
-      const original = await page.evaluate<number>(`document.querySelector('.composer').getBoundingClientRect().bottom`)
+      expect(await page.evaluate(`document.querySelector('.todo-panel') === null`)).toBe(true)
+      const original = await page.evaluate(`document.querySelector('.composer').getBoundingClientRect().bottom`, decodeNumber)
       await page.navigate(`http://127.0.0.1:${port}/verify/todo-fixture.html`)
       await page.evaluate(`window.updateTodos([])`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.todo-panel') === null`); attempt++) await Bun.sleep(20)
-      const empty = await page.evaluate<{ panel: boolean; composerBottom: number; transcriptBottom: number; composerTop: number }>(`(() => { const c = document.querySelector('.composer').getBoundingClientRect(); return { panel: !!document.querySelector('.todo-panel'), composerBottom: c.bottom, composerTop: c.top, transcriptBottom: document.querySelector('[data-testid="transcript"]').getBoundingClientRect().bottom }; })()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate(`document.querySelector('.todo-panel') === null`); attempt++) await Bun.sleep(20)
+      const empty = await page.evaluate(`(() => { const c = document.querySelector('.composer').getBoundingClientRect(); return { panel: !!document.querySelector('.todo-panel'), composerBottom: c.bottom, composerTop: c.top, transcriptBottom: document.querySelector('[data-testid="transcript"]').getBoundingClientRect().bottom }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, panel: (decodeBoolean)(record["panel"]), composerBottom: (decodeNumber)(record["composerBottom"]), transcriptBottom: (decodeNumber)(record["transcriptBottom"]), composerTop: (decodeNumber)(record["composerTop"]) } })
       expect(empty.panel).toBe(false)
       expect(empty.composerBottom).toBe(original)
       expect(empty.transcriptBottom).toBeLessThanOrEqual(empty.composerTop)
@@ -160,11 +155,11 @@ test("todo toggle persists per browser and reduced motion disables expansion tra
     await page.setReducedMotion(true)
     await page.injectOnNewDocument(`if (!sessionStorage.getItem('todo-persistence-started')) { localStorage.removeItem('ycoding.remote.todo.expanded'); sessionStorage.setItem('todo-persistence-started', 'true') }`)
     await page.navigate(`http://127.0.0.1:${port}/verify/todo-fixture.html?theme=dark`)
-    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`!!document.querySelector('.todo-panel__toggle')`); attempt++) await Bun.sleep(50)
-    expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.todo-panel__drawer')).transitionDuration`)).toBe("0s")
+    for (let attempt = 0; attempt < 40 && !await page.evaluate(`!!document.querySelector('.todo-panel__toggle')`); attempt++) await Bun.sleep(50)
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('.todo-panel__drawer')).transitionDuration`)).toBe("0s")
     await page.evaluate(`document.querySelector('.todo-panel__toggle').click()`)
-    expect(await page.evaluate<string>(`localStorage.getItem('ycoding.remote.todo.expanded')`)).toBe("true")
+    expect(await page.evaluate(`localStorage.getItem('ycoding.remote.todo.expanded')`)).toBe("true")
     await page.navigate(`http://127.0.0.1:${port}/verify/todo-fixture.html?theme=dark`)
-    expect(await page.evaluate<string>(`document.querySelector('.todo-panel__toggle').getAttribute('aria-expanded')`)).toBe("true")
+    expect(await page.evaluate(`document.querySelector('.todo-panel__toggle').getAttribute('aria-expanded')`)).toBe("true")
   } finally { await page.close() }
 })

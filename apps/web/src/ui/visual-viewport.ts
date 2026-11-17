@@ -1,5 +1,5 @@
 export const keyboardOpenThreshold = 80
-export const keyboardLayoutMax = 1200
+export const keyboardLayoutMax = 1280
 
 export function keyboardOcclusion(input: {
   readonly layoutWidth: number

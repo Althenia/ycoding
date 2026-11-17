@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNullable, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4757
 const executable = process.env.YCODING_WEB_CHROME
@@ -23,7 +23,7 @@ const origin = () => `http://127.0.0.1:${port}/verify`
 const ready = () => fetch(`${origin()}/usage-fixture.html`).then((response) => response.ok, () => false)
 
 async function wait(page: Page, expression: string) {
-  for (let attempt = 0; attempt < 60; attempt++) { if (await page.evaluate<boolean>(expression)) return; await Bun.sleep(100) }
+  for (let attempt = 0; attempt < 60; attempt++) { if (await page.evaluate(expression)) return; await Bun.sleep(100) }
   throw new Error(`Timed out: ${expression}`)
 }
 async function openUsage(width: number, theme: "light" | "dark" = "light", query = "forecast=states") {
@@ -42,11 +42,10 @@ async function openIncidents(width: number, mode = "default", theme: "light" | "
   await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
   return page
 }
-const hiddenLabel = (selector: string) => `(() => { const label = document.querySelector(${JSON.stringify(selector)}); const box = label.getBoundingClientRect(); return box.width <= 1 && box.height <= 1 })()`
 const settled = (page: Page, selector: string) => page.evaluate(`Promise.all(document.querySelector(${JSON.stringify(selector)}).getAnimations({ subtree: true }).map((animation) => animation.finished.catch(() => undefined)))`)
 const capture = async (page: Page, name: string) => Bun.write(new URL(`../../../.cache/tmp/mobile-usage-${name}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
-const isPhone = (page: Page) => page.evaluate<boolean>(`document.querySelector('.usage-page').getBoundingClientRect().width <= 767`)
-const overflow = (page: Page) => page.evaluate<boolean>(`document.documentElement.scrollWidth > document.documentElement.clientWidth`)
+const isPhone = (page: Page) => page.evaluate(`document.querySelector('.usage-page').getBoundingClientRect().width <= 767`, decodeBoolean)
+const overflow = (page: Page) => page.evaluate(`document.documentElement.scrollWidth > document.documentElement.clientWidth`, decodeBoolean)
 const click = (page: Page, selector: string) => page.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`)
 const setInput = (page: Page, label: string, value: string) => page.evaluate(`(() => {
   const input = document.querySelector('[aria-label=${JSON.stringify(label)}]') ?? [...document.querySelectorAll('dialog label')].find((item) => item.textContent.includes(${JSON.stringify(label)}))?.querySelector('input')
@@ -54,8 +53,8 @@ const setInput = (page: Page, label: string, value: string) => page.evaluate(`((
   input.dispatchEvent(new Event('input', { bubbles: true }))
 })()`)
 const sheetButton = (page: Page, text: string) => page.evaluate(`[...document.querySelectorAll('dialog.overlay--usage-filters button')].find((item) => item.textContent.trim() === ${JSON.stringify(text)}).click()`)
-const lastBreakdown = (page: Page) => page.evaluate<Record<string, unknown>>(`window.usageRequests().filter((item) => item.input?.breakdown?.limit === 25).at(-1).input.breakdown`)
-const text = (page: Page, selector: string) => page.evaluate<string>(`document.querySelector(${JSON.stringify(selector)})?.textContent?.replace(/\\s+/g, ' ').trim() ?? ''`)
+const lastBreakdown = (page: Page) => page.evaluate(`window.usageRequests().filter((item) => item.input?.breakdown?.limit === 25).at(-1).input.breakdown`, decodeRecord)
+const text = (page: Page, selector: string) => page.evaluate(`document.querySelector(${JSON.stringify(selector)})?.textContent?.replace(/\\s+/g, ' ').trim() ?? ''`, decodeString)
 
 async function chooseInSheet(page: Page, label: string, option: string) {
   await click(page, `dialog.overlay--usage-filters [aria-label="${label}"]`)
@@ -75,11 +74,11 @@ test("phone Backend consumption rows are compact identity-and-rate summaries wit
         await page.evaluate(`document.querySelector('.usage-consumption').scrollIntoView()`)
         await capture(page, `consumption-${width}-${theme}`)
       }
-      const first = await page.evaluate<{ text: string; height: number; button: { name: string; title: string; labelHidden: boolean; width: number; height: number; popup: string | null } }>(`(() => {
+      const first = await page.evaluate(`(() => {
         const row = document.querySelector('.usage-consumption__row'), button = row.querySelector('button'), box = button.getBoundingClientRect()
         return { text: row.innerText.replace(/\\s+/g, ' '), height: row.getBoundingClientRect().height,
           button: { name: button.getAttribute('aria-label'), title: button.title, labelHidden: (() => { const box = button.querySelector('.usage-details-trigger__label').getBoundingClientRect(); return box.width <= 1 && box.height <= 1 })(), width: box.width, height: box.height, popup: button.getAttribute('aria-haspopup') } }
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, text: (decodeString)(record["text"]), height: (decodeNumber)(record["height"]), button: ((value: unknown) => { const record = decodeRecord(value); return { ...record, name: (decodeString)(record["name"]), title: (decodeString)(record["title"]), labelHidden: (decodeBoolean)(record["labelHidden"]), width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]), popup: (decodeNullable(decodeString))(record["popup"]) } })(record["button"]) } })
       expect(first.button.name).toBe("openai · gpt-6-sol · profile Personal details")
       expect(first.button.popup).toBe("dialog")
       expect(first.button.title).toBe("Details")
@@ -106,11 +105,11 @@ test("a phone Details action opens the exact diagnostic dialog by keyboard and r
     await page.evaluate(`document.querySelector('.usage-consumption__row button').focus()`)
     await page.pressKey("Enter", "Enter", 13, "\r")
     await wait(page, `!!document.querySelector('dialog.overlay--usage-details[open]')`)
-    const body = await page.evaluate<string>(`document.querySelector('dialog.overlay--usage-details .overlay__body').innerText`)
+    const body = await page.evaluate(`document.querySelector('dialog.overlay--usage-details .overlay__body').innerText`)
     for (const exact of ["Rate 12,345.678 tokens/min", "5m 15,000.25 tokens/min · 60m 9,876.5 tokens/min", "Estimated cost rate $1.23456/hour", "40 priced · 0 unpriced"]) expect(body).toContain(exact)
     await page.pressEscape()
     await wait(page, `!document.querySelector('dialog.overlay--usage-details')`)
-    expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.usage-consumption__row button')`)).toBe(true)
+    expect(await page.evaluate(`document.activeElement === document.querySelector('.usage-consumption__row button')`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 
@@ -119,11 +118,11 @@ test("Breakdown opens with one filter summary and a Filters trigger on phones an
     const page = await openUsage(width)
     try {
       const phone = await isPhone(page)
-      const state = await page.evaluate<{ trigger: boolean; summary: string; inline: boolean; groupOutsideDialog: boolean; label: string | null; height: number }>(`(() => {
+      const state = await page.evaluate(`(() => {
         const trigger = document.querySelector('.usage-filter-bar__trigger')
         return { trigger: !!trigger, label: trigger?.getAttribute('aria-label') ?? null, height: trigger?.getBoundingClientRect().height ?? 0, summary: document.querySelector('.usage-filter-bar__summary')?.textContent ?? '',
           inline: !!document.querySelector('.usage-filter-controls'), groupOutsideDialog: !!document.querySelector('.usage-breakdown__head [aria-label="Usage group"]') }
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, trigger: (decodeBoolean)(record["trigger"]), summary: (decodeString)(record["summary"]), inline: (decodeBoolean)(record["inline"]), groupOutsideDialog: (decodeBoolean)(record["groupOutsideDialog"]), label: (decodeNullable(decodeString))(record["label"]), height: (decodeNumber)(record["height"]) } })
       expect(state.trigger).toBe(phone)
       expect(state.inline).toBe(!phone)
       expect(state.groupOutsideDialog).toBe(!phone)
@@ -131,8 +130,8 @@ test("Breakdown opens with one filter summary and a Filters trigger on phones an
         expect(state.summary).toBe("Model (recorded selection) · Last 30 days")
         expect(state.label).toBe("Filters")
         expect(state.height).toBeGreaterThanOrEqual(44)
-        expect(await page.evaluate<number>(`document.querySelectorAll('.usage-breakdown-section select, .usage-breakdown-section .custom-select').length`)).toBe(0)
-        const head = await page.evaluate<number>(`document.querySelector('.usage-filter-bar').getBoundingClientRect().height`)
+        expect(await page.evaluate(`document.querySelectorAll('.usage-breakdown-section select, .usage-breakdown-section .custom-select').length`)).toBe(0)
+        const head = await page.evaluate(`document.querySelector('.usage-filter-bar').getBoundingClientRect().height`)
         expect(head).toBeLessThanOrEqual(140)
       }
       expect(await overflow(page)).toBe(false)
@@ -148,14 +147,14 @@ test("the Filters sheet holds every control, applies once, preserves selections 
       await page.pressKey("Enter", "Enter", 13, "\r")
       await wait(page, `!!document.querySelector('dialog.overlay--usage-filters[open]')`)
       await settled(page, "dialog.overlay--usage-filters")
-      const sheet = await page.evaluate<{ modal: boolean; label: string | null; labels: string[]; ranges: string[]; pressed: string; inside: boolean; fits: boolean; applyVisible: boolean; vars: string; close: string | null }>(`(() => {
+      const sheet = await page.evaluate(`(() => {
         const dialog = document.querySelector('dialog.overlay--usage-filters'), surface = dialog.querySelector('.overlay__surface'), box = surface.getBoundingClientRect()
         const apply = [...dialog.querySelectorAll('button')].find((item) => item.textContent.trim() === 'Apply filters').getBoundingClientRect()
         return { modal: dialog.matches(':modal'), label: dialog.getAttribute('aria-label'), labels: [...dialog.querySelectorAll('.field__label')].map((item) => item.textContent.trim()),
           ranges: [...dialog.querySelectorAll('.usage-filter-sheet__range')].map((item) => item.textContent.trim()), pressed: dialog.querySelector('.usage-filter-sheet__range[aria-pressed="true"]').textContent.trim(),
           inside: dialog.contains(document.activeElement), fits: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight + 1,
           applyVisible: apply.top >= 0 && apply.bottom <= innerHeight + 1 && apply.height >= 44, vars: surface.style.getPropertyValue('--usage-filters-height'), close: dialog.querySelector('.overlay__close').getAttribute('aria-label') }
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, modal: (decodeBoolean)(record["modal"]), label: (decodeNullable(decodeString))(record["label"]), labels: (decodeArray(decodeString))(record["labels"]), ranges: (decodeArray(decodeString))(record["ranges"]), pressed: (decodeString)(record["pressed"]), inside: (decodeBoolean)(record["inside"]), fits: (decodeBoolean)(record["fits"]), applyVisible: (decodeBoolean)(record["applyVisible"]), vars: (decodeString)(record["vars"]), close: (decodeNullable(decodeString))(record["close"]) } })
       await capture(page, `filters-sheet-${width}-${theme}`)
       expect(sheet.modal).toBe(true)
       expect(sheet.label).toBe("Usage filters")
@@ -169,26 +168,26 @@ test("the Filters sheet holds every control, applies once, preserves selections 
       expect(sheet.vars).toMatch(/^\d+px$/)
       for (let step = 0; step < 14; step++) {
         await page.pressKey("Tab", "Tab", 9)
-        expect(await page.evaluate<boolean>(`document.querySelector('dialog.overlay--usage-filters').contains(document.activeElement)`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector('dialog.overlay--usage-filters').contains(document.activeElement)`)).toBe(true)
       }
       await chooseInSheet(page, "Usage group", "Provider / model")
       await setInput(page, "Recorded profile", "Personal")
       await setInput(page, "Model ID", "gpt-6-sol")
       await setInput(page, "Selected effort", "high")
       await click(page, `dialog.overlay--usage-filters .usage-filter-sheet__range:nth-child(1)`)
-      expect(await page.evaluate<boolean>(`window.usageRequests().some((item) => item.input?.breakdown?.selectedEffort === 'high')`)).toBe(false)
+      expect(await page.evaluate(`window.usageRequests().some((item) => item.input?.breakdown?.selectedEffort === 'high')`)).toBe(false)
       await sheetButton(page, "Apply filters")
       await wait(page, `!document.querySelector('dialog.overlay--usage-filters')`)
       await wait(page, `window.usageRequests().some((item) => item.input?.breakdown?.selectedEffort === 'high')`)
       expect(await lastBreakdown(page)).toMatchObject({ group: "provider-model", profile: "Personal", modelID: "gpt-6-sol", selectedEffort: "high", offset: 0, limit: 25 })
       expect(await text(page, ".usage-filter-bar__summary")).toBe("Provider / model · Last 7 days · Profile Personal · Model gpt-6-sol · Effort high")
-      expect(await page.evaluate<string>(`document.querySelector('.usage-filter-bar__trigger').getAttribute('aria-label')`)).toBe("Filters, 5 active")
-      expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.usage-filter-bar__trigger')`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('.usage-filter-bar__trigger').getAttribute('aria-label')`)).toBe("Filters, 5 active")
+      expect(await page.evaluate(`document.activeElement === document.querySelector('.usage-filter-bar__trigger')`)).toBe(true)
 
       await click(page, ".usage-filter-bar__trigger")
       await wait(page, `!!document.querySelector('dialog.overlay--usage-filters[open]')`)
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('dialog.overlay--usage-filters .input')].map((item) => item.value)`)).toEqual(["Personal", "gpt-6-sol", "high"])
-      expect(await page.evaluate<string>(`document.querySelector('dialog.overlay--usage-filters .usage-filter-sheet__range[aria-pressed="true"]').textContent.trim()`)).toBe("7 days")
+      expect(await page.evaluate(`[...document.querySelectorAll('dialog.overlay--usage-filters .input')].map((item) => item.value)`)).toEqual(["Personal", "gpt-6-sol", "high"])
+      expect(await page.evaluate(`document.querySelector('dialog.overlay--usage-filters .usage-filter-sheet__range[aria-pressed="true"]').textContent.trim()`)).toBe("7 days")
       await click(page, `dialog.overlay--usage-filters .usage-filter-sheet__range:nth-child(4)`)
       await wait(page, `!!document.querySelector('[aria-label="Usage from UTC"]')`)
       await setInput(page, "Usage from UTC", "2026-10-08")
@@ -206,23 +205,23 @@ test("the Filters sheet holds every control, applies once, preserves selections 
 
       await click(page, ".usage-filter-bar__trigger")
       await wait(page, `!!document.querySelector('dialog.overlay--usage-filters[open]')`)
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('dialog.overlay--usage-filters [aria-label^="Usage from"], dialog.overlay--usage-filters [aria-label^="Usage to"]')].map((item) => item.value)`)).toEqual(["2026-10-01", "2026-10-08"])
+      expect(await page.evaluate(`[...document.querySelectorAll('dialog.overlay--usage-filters [aria-label^="Usage from"], dialog.overlay--usage-filters [aria-label^="Usage to"]')].map((item) => item.value)`)).toEqual(["2026-10-01", "2026-10-08"])
       await setInput(page, "Model ID", "discarded")
       await page.pressEscape()
       await wait(page, `!document.querySelector('dialog.overlay--usage-filters')`)
       expect(await text(page, ".usage-filter-bar__summary")).not.toContain("discarded")
-      expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.usage-filter-bar__trigger')`)).toBe(true)
+      expect(await page.evaluate(`document.activeElement === document.querySelector('.usage-filter-bar__trigger')`)).toBe(true)
 
       await click(page, ".usage-filter-bar__trigger")
       await wait(page, `!!document.querySelector('dialog.overlay--usage-filters[open]')`)
       await sheetButton(page, "Reset")
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('dialog.overlay--usage-filters .input')].map((item) => item.value)`)).toEqual(["", "", ""])
-      expect(await page.evaluate<string>(`document.querySelector('dialog.overlay--usage-filters .usage-filter-sheet__range[aria-pressed="true"]').textContent.trim()`)).toBe("30 days")
+      expect(await page.evaluate(`[...document.querySelectorAll('dialog.overlay--usage-filters .input')].map((item) => item.value)`)).toEqual(["", "", ""])
+      expect(await page.evaluate(`document.querySelector('dialog.overlay--usage-filters .usage-filter-sheet__range[aria-pressed="true"]').textContent.trim()`)).toBe("30 days")
       await sheetButton(page, "Apply filters")
       await wait(page, `!document.querySelector('dialog.overlay--usage-filters')`)
       await wait(page, `document.querySelector('.usage-filter-bar__summary').textContent === 'Model (recorded selection) · Last 30 days'`)
       await wait(page, `document.querySelector('.usage-breakdown caption')?.textContent === 'Model by usage'`)
-      expect(await page.evaluate<string>(`document.querySelector('.usage-filter-bar__trigger').getAttribute('aria-label')`)).toBe("Filters")
+      expect(await page.evaluate(`document.querySelector('.usage-filter-bar__trigger').getAttribute('aria-label')`)).toBe("Filters")
       expect(await overflow(page)).toBe(false)
     } finally { await page.close() }
   }
@@ -233,7 +232,7 @@ test("range choices keep distinct labelled values and expose selection without c
   try {
     await click(page, ".usage-filter-bar__trigger")
     await wait(page, `!!document.querySelector('dialog.overlay--usage-filters[open]')`)
-    const state = await page.evaluate<{ distinct: number; visibleChecks: number; pressed: string[] }>(`(() => {
+    const state = await page.evaluate(`(() => {
       const buttons = [...document.querySelectorAll('dialog.overlay--usage-filters .usage-filter-sheet__range')]
       return { distinct: new Set(buttons.map((item) => item.textContent.trim())).size, visibleChecks: buttons.filter((item) => getComputedStyle(item.querySelector('svg')).visibility === 'visible').length,
         pressed: buttons.filter((item) => item.getAttribute('aria-pressed') === 'true').map((item) => item.textContent.trim()) }
@@ -247,7 +246,7 @@ test("breakdown pagination uses named icon actions that keyboard-page and disabl
     const page = await openUsage(width)
     try {
       await page.evaluate(`document.querySelector('.usage-pagination').scrollIntoView({ block: 'center' })`)
-      const buttons = await page.evaluate<{ name: string | null; title: string; labelHidden: boolean; width: number; height: number; disabled: boolean }[]>(`[...document.querySelectorAll('.usage-pagination button')].map((item) => ({ name: item.getAttribute('aria-label'), title: item.title, labelHidden: (() => { const box = item.querySelector('.usage-action-label').getBoundingClientRect(); return box.width <= 1 && box.height <= 1 })(), width: item.getBoundingClientRect().width, height: item.getBoundingClientRect().height, disabled: item.disabled }))`)
+      const buttons = await page.evaluate(`[...document.querySelectorAll('.usage-pagination button')].map((item) => ({ name: item.getAttribute('aria-label'), title: item.title, labelHidden: (() => { const box = item.querySelector('.usage-action-label').getBoundingClientRect(); return box.width <= 1 && box.height <= 1 })(), width: item.getBoundingClientRect().width, height: item.getBoundingClientRect().height, disabled: item.disabled }))`, decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, name: (decodeNullable(decodeString))(record["name"]), title: (decodeString)(record["title"]), labelHidden: (decodeBoolean)(record["labelHidden"]), width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]), disabled: (decodeBoolean)(record["disabled"]) } }))
       expect(buttons.map((item) => item.name)).toEqual(["Previous breakdown page", "Next breakdown page"])
       expect(buttons.map((item) => item.title)).toEqual(["Previous page", "Next page"])
       expect(buttons.every((item) => item.labelHidden && item.width >= 44 && item.width <= 46 && item.height >= 44)).toBe(true)
@@ -266,12 +265,12 @@ test("phone incident rows are one compact summary each with exact counts and UTC
     try {
       expect(await overflow(page)).toBe(false)
       const phone = await isPhone(page)
-      const row = await page.evaluate<{ text: string; height: number; time: string; datetime: string; after: string[]; details: { name: string | null; title: string; labelHidden: boolean; width: number; height: number; expanded: string | null } }>(`(() => {
+      const row = await page.evaluate(`(() => {
         const row = document.querySelector('.incidents [data-incident-row]'), button = row.querySelector('[data-incident-details]'), time = row.querySelector('time')
         return { text: row.textContent.replace(/\\s+/g, ' '), height: row.getBoundingClientRect().height, time: time.textContent, datetime: time.dateTime,
           after: ['Fallbacks', 'Escalated', 'Rejected', 'Total'].map((label) => getComputedStyle(row.querySelector('[data-label="' + label + '"]'), '::after').content),
           details: { name: button.getAttribute('aria-label'), title: button.title, labelHidden: (() => { const box = button.querySelector('.usage-action-label').getBoundingClientRect(); return box.width <= 1 && box.height <= 1 })(), width: button.getBoundingClientRect().width, height: button.getBoundingClientRect().height, expanded: button.getAttribute('aria-expanded') } }
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, text: (decodeString)(record["text"]), height: (decodeNumber)(record["height"]), time: (decodeString)(record["time"]), datetime: (decodeString)(record["datetime"]), after: (decodeArray(decodeString))(record["after"]), details: ((value: unknown) => { const record = decodeRecord(value); return { ...record, name: (decodeNullable(decodeString))(record["name"]), title: (decodeString)(record["title"]), labelHidden: (decodeBoolean)(record["labelHidden"]), width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]), expanded: (decodeNullable(decodeString))(record["expanded"]) } })(record["details"]) } })
       if (width === 320 || width === 390 || width === 1440) {
         await page.evaluate(`document.querySelector('.incidents').scrollIntoView()`)
         await capture(page, `incidents-${width}-${theme}`)
@@ -286,7 +285,7 @@ test("phone incident rows are one compact summary each with exact counts and UTC
       if (phone) {
         expect(row.height).toBeLessThanOrEqual(140)
         expect(row.after.every((content) => content.length > 3)).toBe(true)
-        expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.incidents [data-incident-row] [data-label="Last incident"]'), '::before').content`)).toContain("Last")
+        expect(await page.evaluate(`getComputedStyle(document.querySelector('.incidents [data-incident-row] [data-label="Last incident"]'), '::before').content`)).toContain("Last")
       }
     } finally { await page.close() }
   }
@@ -300,11 +299,11 @@ test("phone incident Details expands under its own row with exact incidents and 
       await page.evaluate(`document.querySelector('[data-incident-details]').focus()`)
       await page.pressKey("Enter", "Enter", 13, "\r")
       await wait(page, `document.querySelectorAll('.incidents__recent li').length === 20 && !!document.querySelector('.incidents__preview')`)
-      const state = await page.evaluate<{ expanded: string | null; controls: string | null; underRow: boolean; inTable: boolean; times: boolean; indicator: string; rotate: string }>(`(() => {
+      const state = await page.evaluate(`(() => {
         const button = document.querySelector('[data-incident-details]'), panel = document.getElementById('incident-detail')
         return { expanded: button.getAttribute('aria-expanded'), controls: button.getAttribute('aria-controls'), underRow: panel.closest('tr')?.previousElementSibling === button.closest('tr'), inTable: !!panel.closest('table'),
           times: [...document.querySelectorAll('.incidents__recent time')].every((item) => /^\\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d:\\d\\d UTC$/.test(item.textContent)), indicator: document.querySelector('.incidents__indicator').textContent, rotate: getComputedStyle(button.querySelector('svg')).rotate }
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, expanded: (decodeNullable(decodeString))(record["expanded"]), controls: (decodeNullable(decodeString))(record["controls"]), underRow: (decodeBoolean)(record["underRow"]), inTable: (decodeBoolean)(record["inTable"]), times: (decodeBoolean)(record["times"]), indicator: (decodeString)(record["indicator"]), rotate: (decodeString)(record["rotate"]) } })
       await page.evaluate(`document.querySelector('[data-incident-details]').scrollIntoView({ block: 'start' })`)
       await capture(page, `incident-detail-${width}`)
       expect(state).toMatchObject({ expanded: "true", controls: "incident-detail", times: true, indicator: "Guidance enabled", underRow: phone, inTable: phone })
@@ -316,11 +315,11 @@ test("phone incident Details expands under its own row with exact incidents and 
       expect(await text(page, "dialog.overlay--confirm")).toContain("Incident counts are kept")
       await page.pressEscape()
       await wait(page, `!document.querySelector('dialog.overlay--confirm')`)
-      expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('[data-incident-clear]')`)).toBe(true)
+      expect(await page.evaluate(`document.activeElement === document.querySelector('[data-incident-clear]')`)).toBe(true)
       await page.evaluate(`document.querySelector('[data-incident-details]').focus()`)
       await page.pressKey(" ", "Space", 32, " ")
       await wait(page, `!document.getElementById('incident-detail')`)
-      expect(await page.evaluate<string>(`document.querySelector('[data-incident-details]').getAttribute('aria-expanded')`)).toBe("false")
+      expect(await page.evaluate(`document.querySelector('[data-incident-details]').getAttribute('aria-expanded')`)).toBe("false")
     } finally { await page.close() }
   }
 }, 90_000)
@@ -330,10 +329,10 @@ test("incident pagination uses named icon actions at every width, pages by keybo
   const page = await openIncidents(width, "paged")
   try {
     await wait(page, `document.querySelectorAll('.incidents [data-incident-row]').length === 25`)
-    const start = await page.evaluate<{ names: (string | null)[]; hidden: boolean[]; widths: number[]; disabled: boolean[] }>(`(() => {
+    const start = await page.evaluate(`(() => {
       const buttons = [...document.querySelectorAll('.incidents__pagination button')]
       return { names: buttons.map((item) => item.getAttribute('aria-label')), hidden: buttons.map((item) => { const box = item.querySelector('.usage-action-label').getBoundingClientRect(); return box.width <= 1 && box.height <= 1 }), widths: buttons.map((item) => item.getBoundingClientRect().width), disabled: buttons.map((item) => item.disabled) }
-    })()`)
+    })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, names: (decodeArray(decodeNullable(decodeString)))(record["names"]), hidden: (decodeArray(decodeBoolean))(record["hidden"]), widths: (decodeArray(decodeNumber))(record["widths"]), disabled: (decodeArray(decodeBoolean))(record["disabled"]) } })
     expect(start.names).toEqual(["Previous incident groups", "Next incident groups"])
     expect(start.hidden).toEqual([true, true])
     expect(start.widths.every((width) => width >= 44 && width <= 46)).toBe(true)
@@ -345,7 +344,7 @@ test("incident pagination uses named icon actions at every width, pages by keybo
     await page.evaluate(`document.querySelector('[aria-label="Previous incident groups"]').focus()`)
     await page.pressKey("Enter", "Enter", 13, "\r")
     await wait(page, `document.querySelector('.incidents__summary')?.textContent === 'Showing 1–25 of 60 groups'`)
-    expect(await page.evaluate<unknown[]>(`window.incidentRequests().filter((item) => item.operation === 'incident.report').map((item) => item.input.offset)`)).toEqual([0, 25])
+    expect(await page.evaluate(`window.incidentRequests().filter((item) => item.operation === 'incident.report').map((item) => item.input.offset)`)).toEqual([0, 25])
     expect(await overflow(page)).toBe(false)
   } finally { await page.close() }
   }
@@ -354,13 +353,13 @@ test("incident pagination uses named icon actions at every width, pages by keybo
 test("phone incident controls use distinct group icons and a labelled range selector that keeps 7, 30, All and Custom UTC distinguishable", async () => {
   const page = await openIncidents(390)
   try {
-    expect(await page.evaluate<boolean>(`!document.querySelector('.incidents [role="group"][aria-label="Incident range"]')`)).toBe(true)
-    expect(await page.evaluate<boolean>(`(() => { const icons = [...document.querySelectorAll('.incidents [aria-label="Incident grouping"] button svg')].map((item) => item.innerHTML); return icons.length === 2 && icons[0] !== icons[1] })()`)).toBe(true)
+    expect(await page.evaluate(`!document.querySelector('.incidents [role="group"][aria-label="Incident range"]')`)).toBe(true)
+    expect(await page.evaluate(`(() => { const icons = [...document.querySelectorAll('.incidents [aria-label="Incident grouping"] button svg')].map((item) => item.innerHTML); return icons.length === 2 && icons[0] !== icons[1] })()`)).toBe(true)
     expect(await text(page, '.incidents button[aria-label="Incident range"]')).toBe("All retained")
     await click(page, '.incidents button[aria-label="Incident range"]')
     await wait(page, `!!document.querySelector('[role="listbox"][aria-label="Incident range"]')`)
-    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('[role="listbox"][aria-label="Incident range"] [role="option"]')].map((item) => item.textContent.trim().replace(/^✓/, ''))`)).toEqual(["7 days", "30 days", "All retained", "Custom UTC"])
-    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('[role="listbox"][aria-label="Incident range"] [role="option"][aria-selected="true"]')].map((item) => item.textContent.trim().replace(/^✓/, ''))`)).toEqual(["All retained"])
+    expect(await page.evaluate(`[...document.querySelectorAll('[role="listbox"][aria-label="Incident range"] [role="option"]')].map((item) => item.textContent.trim().replace(/^✓/, ''))`)).toEqual(["7 days", "30 days", "All retained", "Custom UTC"])
+    expect(await page.evaluate(`[...document.querySelectorAll('[role="listbox"][aria-label="Incident range"] [role="option"][aria-selected="true"]')].map((item) => item.textContent.trim().replace(/^✓/, ''))`)).toEqual(["All retained"])
     await page.evaluate(`[...document.querySelectorAll('[role="listbox"][aria-label="Incident range"] [role="option"]')].find((item) => item.textContent.trim() === '7 days').click()`)
     await page.evaluate(`[...document.querySelectorAll('button')].find((button) => button.textContent.includes('Confirm Selection'))?.click()`)
     await wait(page, `!document.querySelector('.custom-select__dialog')`)

@@ -1,4 +1,4 @@
-import { runDesktopWorker } from "@ycoding-ai/desktop/worker"
+import { runDesktopWorker } from "#desktop-worker"
 import { Effect } from "effect"
 import { DesktopClientCommand } from "../desktop-client"
 import { Runtime } from "../../framework/runtime"

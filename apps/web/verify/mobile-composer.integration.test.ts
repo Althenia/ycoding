@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeLiteral, decodeNullable, decodeNumber, decodeRecord, decodeString, decodeUnion } from "./cdp"
 
 const port = 4829
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -35,7 +35,7 @@ for (const [width, height] of viewports) for (const theme of ["light", "dark"]) 
       await wait(page, `document.querySelector('#session-companion-panel .session-status__active-goal') !== null`)
       await page.evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent === 'Toggle running').click()`)
       await wait(page, `document.querySelector('${composer} .mini-composer__interrupt') !== null`)
-      const layout = await page.evaluate<{ overflow: boolean; escaped: string[]; undersized: string[]; words: string; trigger: string; name: string | null; title: string | null; chips: string[]; codes: boolean; summaryHeight: number; names: string[]; draftHeight: number; draftLabel: string | null }>(`(() => {
+      const layout = await page.evaluate(`(() => {
         const mount = document.querySelector('${composer}'), row = mount.querySelector('.composer__row').getBoundingClientRect()
         const named = { attach: '.composer__attach', delivery: '.composer__delivery-toggle', interrupt: '.mini-composer__interrupt', send: '.mini-composer__send', autonomy: '.session-status__autonomous-trigger', goal: '.session-status__goal-trigger' }
         const boxes = Object.entries(named).map(([name, selector]) => [name, mount.querySelector(selector).getBoundingClientRect()])
@@ -55,7 +55,7 @@ for (const [width, height] of viewports) for (const theme of ["light", "dark"]) 
           draftHeight: mount.querySelector('textarea').getBoundingClientRect().height,
           draftLabel: mount.querySelector('textarea').getAttribute('aria-label'),
         }
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, overflow: (decodeBoolean)(record["overflow"]), escaped: (decodeArray(decodeString))(record["escaped"]), undersized: (decodeArray(decodeString))(record["undersized"]), words: (decodeString)(record["words"]), trigger: (decodeString)(record["trigger"]), name: (decodeNullable(decodeString))(record["name"]), title: (decodeNullable(decodeString))(record["title"]), chips: (decodeArray(decodeString))(record["chips"]), codes: (decodeBoolean)(record["codes"]), summaryHeight: (decodeNumber)(record["summaryHeight"]), names: (decodeArray(decodeString))(record["names"]), draftHeight: (decodeNumber)(record["draftHeight"]), draftLabel: (decodeNullable(decodeString))(record["draftLabel"]) } })
       expect(layout.overflow).toBe(false)
       expect(layout.escaped).toEqual([])
       expect(layout.undersized).toEqual([])
@@ -80,11 +80,11 @@ for (const [width, height] of [[768, 1024], [820, 1180], [1024, 768], [1440, 900
     try {
       await page.setViewport(width, height)
       await openComposer(page, theme)
-      const idle = await page.evaluate<number>(`document.querySelector('${composer} .composer__row').getBoundingClientRect().height`)
+      const idle = await page.evaluate(`document.querySelector('${composer} .composer__row').getBoundingClientRect().height`, decodeNumber)
       await page.evaluate(`window.composerSetGoalStatus('active')`)
       await wait(page, `document.querySelector('#session-companion-panel .session-status__active-goal') !== null && document.querySelectorAll('#session-companion-panel .session-status__mode').length === 2`)
       await settle(page)
-      const geometry = await page.evaluate<{ row: number; sameLine: boolean; detailsOutsideComposer: boolean; goalText: boolean; words: string[] }>(`(() => {
+      const geometry = await page.evaluate(`(() => {
         const mount = document.querySelector('${composer}'), row = mount.querySelector('.composer__row'), box = row.getBoundingClientRect()
         const rect = selector => mount.querySelector(selector).getBoundingClientRect()
         const controls = ['.composer__controls button[aria-label="Agent"]', '.composer__controls button[aria-label="Model"]', '.session-status__autonomous-trigger', '.session-status__goal-trigger'].map(rect)
@@ -96,13 +96,13 @@ for (const [width, height] of [[768, 1024], [820, 1180], [1024, 768], [1440, 900
           goalText: goal.scrollWidth <= goal.clientWidth + 1,
           words: [...panel.querySelectorAll('.session-status__mode')].map(item => item.innerText.trim()),
         }
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, row: (decodeNumber)(record["row"]), sameLine: (decodeBoolean)(record["sameLine"]), detailsOutsideComposer: (decodeBoolean)(record["detailsOutsideComposer"]), goalText: (decodeBoolean)(record["goalText"]), words: (decodeArray(decodeString))(record["words"]) } })
       expect(geometry.sameLine).toBe(true)
       expect(geometry.detailsOutsideComposer).toBe(true)
       expect(geometry.words).toEqual(["Permissions Auto", "Guardrails Auto"])
       expect(geometry.goalText).toBe(true)
       expect(geometry.row).toBeLessThanOrEqual(idle + 1)
-      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+      expect(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
       await capture(page, `mobile-composer-wide-${width}-${theme}`)
     } finally { await page.close() }
   }, 120_000)
@@ -118,7 +118,7 @@ for (const [width, height] of [[320, 700], [390, 844], [820, 1180]] as const) fo
       await wait(page, `document.querySelector('.workspace__main .composer__row') !== null && document.querySelector('.workspace__main .session-status__goal-trigger') !== null`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove()`)
       await settle(page)
-      const shell = await page.evaluate<{ overflow: boolean; composerInside: boolean; draft: number; transcript: number; targets: string[]; identityVisible: boolean | null; identityLine: boolean | null; activityText: string; activityFits: boolean; activityOutsideComposer: boolean; goalAbsent: boolean }>(`(() => {
+      const shell = await page.evaluate(`(() => {
         const composer = document.querySelector('.workspace__main .composer').getBoundingClientRect(), draft = document.querySelector('.workspace__main textarea').getBoundingClientRect(), transcript = document.querySelector('.workspace__scroll').getBoundingClientRect()
         const small = [...document.querySelectorAll('.workspace__main .composer button')].filter(item => item.getClientRects().length > 0).filter(item => ${width < 768 ? "item.getBoundingClientRect().height < 44" : "false"}).map(item => item.outerHTML.slice(0,300))
         const main = document.querySelector('.workspace__main'), label = main.querySelector('.composer__mobile-label'), slot = document.querySelector('.workspace__scroll .transcript-activity'), slotLabel = slot.querySelector('.transcript-activity__status span'), preview = main.querySelector('.session-status__active-goal')
@@ -126,7 +126,7 @@ for (const [width, height] of [[320, 700], [390, 844], [820, 1180]] as const) fo
         const identity = main.querySelector('.composer__mobile-trigger')
         const slotRange = document.createRange(); slotRange.selectNodeContents(slotLabel)
         return { overflow: document.documentElement.scrollWidth > innerWidth, composerInside: composer.left >= 0 && composer.right <= innerWidth && composer.bottom <= innerHeight + 1, draft: draft.height, transcript: transcript.height, targets: small, identityVisible: prefixVisible(), identityLine: identity ? Math.abs(identity.getBoundingClientRect().top - main.querySelector('.session-status__autonomous-trigger').getBoundingClientRect().top) <= 1 : null, activityText: slotLabel.textContent.trim(), activityFits: getComputedStyle(slotLabel).position !== 'absolute' && slotLabel.scrollWidth <= slotLabel.clientWidth + 1 && slot.scrollWidth <= slot.clientWidth + 1 && slotRange.getBoundingClientRect().right <= slot.getBoundingClientRect().right, activityOutsideComposer: !main.querySelector('.composer').contains(slot), goalAbsent: !preview }
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, overflow: (decodeBoolean)(record["overflow"]), composerInside: (decodeBoolean)(record["composerInside"]), draft: (decodeNumber)(record["draft"]), transcript: (decodeNumber)(record["transcript"]), targets: (decodeArray(decodeString))(record["targets"]), identityVisible: (decodeNullable(decodeUnion(decodeLiteral(false), decodeLiteral(true))))(record["identityVisible"]), identityLine: (decodeNullable(decodeUnion(decodeLiteral(false), decodeLiteral(true))))(record["identityLine"]), activityText: (decodeString)(record["activityText"]), activityFits: (decodeBoolean)(record["activityFits"]), activityOutsideComposer: (decodeBoolean)(record["activityOutsideComposer"]), goalAbsent: (decodeBoolean)(record["goalAbsent"]) } })
       expect(shell.overflow).toBe(false)
       expect(shell.composerInside).toBe(true)
       expect(shell.draft).toBeGreaterThanOrEqual(44)
@@ -140,11 +140,11 @@ for (const [width, height] of [[320, 700], [390, 844], [820, 1180]] as const) fo
         expect(shell.identityLine).toBe(true)
       }
       expect(shell.goalAbsent).toBe(true)
-      expect(await page.evaluate<string[]>(`(() => { const root=document.querySelector('.workspace__main .composer'), controls=[...root.querySelectorAll('button')].filter(e=>e.getClientRects().length && e.getBoundingClientRect().width>0), hit=(a,b)=>a.left<b.right && b.left<a.right && a.top<b.bottom && b.top<a.bottom, name=e=>(e.getAttribute('aria-label')||e.textContent)+' '+JSON.stringify(e.getBoundingClientRect().toJSON()); return controls.flatMap((e,i)=>controls.slice(i+1).filter(other=>hit(e.getBoundingClientRect(),other.getBoundingClientRect())).map(other=>name(e)+' / '+name(other))) })()`)).toEqual([])
+      expect(await page.evaluate(`(() => { const root=document.querySelector('.workspace__main .composer'), controls=[...root.querySelectorAll('button')].filter(e=>e.getClientRects().length && e.getBoundingClientRect().width>0), hit=(a,b)=>a.left<b.right && b.left<a.right && a.top<b.bottom && b.top<a.bottom, name=e=>(e.getAttribute('aria-label')||e.textContent)+' '+JSON.stringify(e.getBoundingClientRect().toJSON()); return controls.flatMap((e,i)=>controls.slice(i+1).filter(other=>hit(e.getBoundingClientRect(),other.getBoundingClientRect())).map(other=>name(e)+' / '+name(other))) })()`)).toEqual([])
       await capture(page, `mobile-shell-${width}-${theme}`)
       await page.evaluate(`document.querySelector('.companion-context-trigger').click()`)
       await wait(page, `document.querySelector('#session-companion-panel .session-status__active-goal') !== null`)
-      expect(await page.evaluate<string>(`document.querySelector('#session-companion-panel .session-status__active-goal').textContent`)).toContain('Goal active')
+      expect(await page.evaluate(`document.querySelector('#session-companion-panel .session-status__active-goal').textContent`)).toContain('Goal active')
     } finally { await page.close() }
   }, 120_000)
 }
@@ -157,15 +157,15 @@ test("compact composer preserves prediction, attachments and dock actions", asyn
     await openComposer(page, "light")
     await page.evaluate(`window.composerPrediction('Run focused checks')`)
     await wait(page, `document.querySelector('.composer__use-prediction') !== null`)
-    expect(await page.evaluate<boolean>(`(() => { const prediction=document.querySelector('.composer__use-prediction'), dock=document.querySelector('.composer__dock-toggle'), a=prediction.getBoundingClientRect(), b=dock.getBoundingClientRect(); return a.width>=44 && a.height>=44 && b.width>=44 && b.height>=44 && (a.right<=b.left || b.right<=a.left || a.bottom<=b.top || b.bottom<=a.top) })()`)).toBe(true)
+    expect(await page.evaluate(`(() => { const prediction=document.querySelector('.composer__use-prediction'), dock=document.querySelector('.composer__dock-toggle'), a=prediction.getBoundingClientRect(), b=dock.getBoundingClientRect(); return a.width>=44 && a.height>=44 && b.width>=44 && b.height>=44 && (a.right<=b.left || b.right<=a.left || a.bottom<=b.top || b.bottom<=a.top) })()`)).toBe(true)
     await page.evaluate(`(() => { const input=document.querySelector('.composer__file-input'), files=new DataTransfer(); files.items.add(new File(['sample'], 'sample.txt', {type:'text/plain'})); input.files=files.files; input.dispatchEvent(new Event('change',{bubbles:true})) })()`)
     await wait(page, `document.querySelector('.composer__attachment') !== null`)
-    expect(await page.evaluate<boolean>(`(() => { const file=document.querySelector('.composer__attachment').getBoundingClientRect(), actions=document.querySelector('.composer__actions').getBoundingClientRect(); return file.bottom<=actions.top || actions.bottom<=file.top || file.right<=actions.left || actions.right<=file.left })()`)).toBe(true)
+    expect(await page.evaluate(`(() => { const file=document.querySelector('.composer__attachment').getBoundingClientRect(), actions=document.querySelector('.composer__actions').getBoundingClientRect(); return file.bottom<=actions.top || actions.bottom<=file.top || file.right<=actions.left || actions.right<=file.left })()`)).toBe(true)
     await page.evaluate(`document.querySelector('.composer__dock-toggle').click()`)
     await wait(page, `document.querySelector('.composer--collapsed') !== null`)
     await page.evaluate(`document.querySelector('.composer__dock-toggle').click()`)
     await wait(page, `document.querySelector('.composer--collapsed') === null`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.composer__attachment') !== null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.composer__attachment') !== null`)).toBe(true)
   } finally { await page.evaluate(`localStorage.removeItem('ycoding.remote.composer-collapsed')`).catch(() => {}); await page.close() }
 }, 30_000)
 
@@ -177,19 +177,19 @@ test("send follows the draft, a missing connection disables editing without hidi
       if (width < 768) await page.setCoarsePointer(true)
       await openComposer(page, "light")
       const send = `document.querySelector('${composer} button[aria-label="Send prompt"]')`
-      expect(await page.evaluate<boolean>(`${send}.disabled`)).toBe(true)
+      expect(await page.evaluate(`${send}.disabled`)).toBe(true)
       await type(page, `${composer} textarea`, "Check the mobile layout")
-      expect(await page.evaluate<boolean>(`${send}.disabled`)).toBe(false)
+      expect(await page.evaluate(`${send}.disabled`)).toBe(false)
       await page.evaluate(`window.composerPredictionEnabled(false)`)
-      expect(await page.evaluate<unknown>(`({ field: document.querySelector('${composer} textarea').disabled, send: ${send}.disabled, attach: document.querySelector('${composer} .composer__attach').disabled, autonomy: document.querySelector('${composer} .session-status__autonomous-trigger').disabled, label: document.querySelector('${composer} .session-status__autonomous-trigger').getAttribute('aria-label') })`)).toEqual({ field: true, send: true, attach: true, autonomy: false, label: "Autonomous: Autonomous Manual" })
+      expect(await page.evaluate(`({ field: document.querySelector('${composer} textarea').disabled, send: ${send}.disabled, attach: document.querySelector('${composer} .composer__attach').disabled, autonomy: document.querySelector('${composer} .session-status__autonomous-trigger').disabled, label: document.querySelector('${composer} .session-status__autonomous-trigger').getAttribute('aria-label') })`)).toEqual({ field: true, send: true, attach: true, autonomy: false, label: "Autonomous: Autonomous Manual" })
       await page.evaluate(`window.composerPredictionEnabled(true); window.composerFailCatalogs()`)
       await wait(page, `document.querySelector('${composer} button[aria-label="Retry agent and model catalog"]') !== null`)
-      expect(await page.evaluate<{ height: number; inside: boolean; trigger: boolean }>(`(() => { const retry = document.querySelector('${composer} button[aria-label="Retry agent and model catalog"]').getBoundingClientRect(), row = document.querySelector('${composer} .composer__row').getBoundingClientRect(), trigger = document.querySelector('${composer} .composer__mobile-trigger'); return { height: retry.height, inside: retry.left >= row.left - 1 && retry.right <= row.right + 1, trigger: trigger === null || trigger.disabled } })()`)).toMatchObject({ inside: true, trigger: true })
-      if (width < 768) expect(await page.evaluate<number>(`document.querySelector('${composer} button[aria-label="Retry agent and model catalog"]').getBoundingClientRect().height`)).toBeGreaterThanOrEqual(44)
+      expect(await page.evaluate(`(() => { const retry = document.querySelector('${composer} button[aria-label="Retry agent and model catalog"]').getBoundingClientRect(), row = document.querySelector('${composer} .composer__row').getBoundingClientRect(), trigger = document.querySelector('${composer} .composer__mobile-trigger'); return { height: retry.height, inside: retry.left >= row.left - 1 && retry.right <= row.right + 1, trigger: trigger === null || trigger.disabled } })()`)).toMatchObject({ inside: true, trigger: true })
+      if (width < 768) expect(await page.evaluate(`document.querySelector('${composer} button[aria-label="Retry agent and model catalog"]').getBoundingClientRect().height`)).toBeGreaterThanOrEqual(44)
       await page.evaluate(`window.composerSetUpload(40)`)
       await wait(page, `document.querySelector('${composer} .composer__upload') !== null`)
-      expect(await page.evaluate<{ text: string; cancel: number; overflow: boolean }>(`({ text: document.querySelector('${composer} .composer__upload').innerText, cancel: document.querySelector('${composer} .composer__upload button').getBoundingClientRect().height, overflow: document.documentElement.scrollWidth > innerWidth })`)).toMatchObject({ overflow: false })
-      if (width < 768) expect(await page.evaluate<number>(`document.querySelector('${composer} .composer__upload button').getBoundingClientRect().height`)).toBeGreaterThanOrEqual(44)
+      expect(await page.evaluate(`({ text: document.querySelector('${composer} .composer__upload').innerText, cancel: document.querySelector('${composer} .composer__upload button').getBoundingClientRect().height, overflow: document.documentElement.scrollWidth > innerWidth })`)).toMatchObject({ overflow: false })
+      if (width < 768) expect(await page.evaluate(`document.querySelector('${composer} .composer__upload button').getBoundingClientRect().height`)).toBeGreaterThanOrEqual(44)
     } finally { await page.close() }
   }
 }, 90_000)
@@ -208,15 +208,15 @@ test("below tablet width Autonomous and Goal open named focus-contained sheets a
       await page.evaluate(`${autonomy}.focus(); ${autonomy}.click()`)
       await wait(page, `document.querySelector('dialog.overlay--autonomous[open]') !== null`)
       await settle(page)
-      expect(await page.evaluate<{ label: string | null; rows: string[]; inside: boolean }>(`({ label: document.querySelector('dialog.overlay--autonomous').getAttribute('aria-label'), rows: ['permissions','guardrails','answers'].map(category => document.querySelector('#autonomous-row-' + category).getAttribute('aria-label')), inside: (() => { const rect = document.querySelector('dialog.overlay--autonomous .overlay__surface').getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight })() })`)).toEqual({ label: "Autonomous", rows: ["Permissions: Auto", "Guardrails: Auto", "Answers: Manual"], inside: true })
+      expect(await page.evaluate(`({ label: document.querySelector('dialog.overlay--autonomous').getAttribute('aria-label'), rows: ['permissions','guardrails','answers'].map(category => document.querySelector('#autonomous-row-' + category).getAttribute('aria-label')), inside: (() => { const rect = document.querySelector('dialog.overlay--autonomous .overlay__surface').getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight })() })`)).toEqual({ label: "Autonomous", rows: ["Permissions: Auto", "Guardrails: Auto", "Answers: Manual"], inside: true })
       if (!reduced) await capture(page, `mobile-autonomous-sheet-${width}`)
       for (let step = 0; step < 8; step += 1) {
         await page.pressKey("Tab", "Tab", 9)
-        expect(await page.evaluate<boolean>(`document.querySelector('dialog.overlay--autonomous').contains(document.activeElement)`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector('dialog.overlay--autonomous').contains(document.activeElement)`)).toBe(true)
       }
       await page.pressEscape()
       await wait(page, `document.querySelector('dialog.overlay--autonomous') === null`)
-      expect(await page.evaluate<boolean>(`document.activeElement === ${autonomy}`)).toBe(true)
+      expect(await page.evaluate(`document.activeElement === ${autonomy}`)).toBe(true)
 
       const goal = `document.querySelector('${composer} .session-status__goal-trigger')`
       await page.evaluate(`${goal}.focus(); ${goal}.click()`)
@@ -224,56 +224,54 @@ test("below tablet width Autonomous and Goal open named focus-contained sheets a
       if (width < 768) {
         await wait(page, `document.querySelector('dialog.overlay--confirm[open]') !== null`)
         await settle(page)
-        expect(await page.evaluate<{ label: string | null; text: string; inside: boolean; stop: number }>(`({ label: document.querySelector('dialog.overlay--confirm').getAttribute('aria-label'), text: document.querySelector('.session-status__goal-sheet').textContent, inside: (() => { const rect = document.querySelector('dialog.overlay--confirm .overlay__surface').getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight })(), stop: document.querySelector('.session-status__goal-sheet button').getBoundingClientRect().height })`)).toMatchObject({ label: "Goal", inside: true })
-        expect(await page.evaluate<string>(`document.querySelector('.session-status__goal-sheet').textContent`)).toContain("Finish task")
-        expect(await page.evaluate<number>(`document.querySelector('.session-status__goal-sheet button').getBoundingClientRect().height`)).toBeGreaterThanOrEqual(44)
+        expect(await page.evaluate(`({ label: document.querySelector('dialog.overlay--confirm').getAttribute('aria-label'), text: document.querySelector('.session-status__goal-sheet').textContent, inside: (() => { const rect = document.querySelector('dialog.overlay--confirm .overlay__surface').getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight })(), stop: document.querySelector('.session-status__goal-sheet button').getBoundingClientRect().height })`)).toMatchObject({ label: "Goal", inside: true })
+        expect(await page.evaluate(`document.querySelector('.session-status__goal-sheet').textContent`)).toContain("Finish task")
+        expect(await page.evaluate(`document.querySelector('.session-status__goal-sheet button').getBoundingClientRect().height`)).toBeGreaterThanOrEqual(44)
         for (let step = 0; step < 4; step += 1) {
           await page.pressKey("Tab", "Tab", 9)
-          expect(await page.evaluate<boolean>(`document.querySelector('dialog.overlay--confirm').contains(document.activeElement)`)).toBe(true)
+          expect(await page.evaluate(`document.querySelector('dialog.overlay--confirm').contains(document.activeElement)`)).toBe(true)
         }
         await capture(page, `mobile-goal-sheet-${width}-${reduced ? "reduced" : "motion"}`)
         await page.pressEscape()
         await wait(page, `document.querySelector('dialog.overlay--confirm') === null`)
       } else {
         await wait(page, `document.querySelector('.session-status__goal-popover') !== null`)
-        expect(await page.evaluate<boolean>(`document.querySelector('dialog.overlay--confirm') === null`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector('dialog.overlay--confirm') === null`)).toBe(true)
         await page.pressEscape()
         await wait(page, `document.querySelector('.session-status__goal-popover') === null`)
       }
-      expect(await page.evaluate<boolean>(`document.activeElement === ${goal}`)).toBe(true)
+      expect(await page.evaluate(`document.activeElement === ${goal}`)).toBe(true)
       await wait(page, `${goal}.getAttribute('aria-expanded') === 'false'`)
-      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+      expect(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
     } finally { await page.close() }
   }
 }, 120_000)
 
-test("the agent and model sheet stays inside the visual viewport while the keyboard is open", async () => {
+test("the agent and model sheet follows native viewport resize", async () => {
   for (const width of [320, 390]) {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width, 844)
       await page.setCoarsePointer(true)
       await openComposer(page, "light")
-      await page.evaluate(`(() => {
-        document.documentElement.setAttribute('data-keyboard-open', ''); document.documentElement.style.setProperty('--yc-keyboard-inset', '300px')
-        const stub = Object.assign(new EventTarget(), { height: 420, width: ${width}, offsetTop: 0, offsetLeft: 0, scale: 1, pageTop: 0, pageLeft: 0 })
-        Object.defineProperty(window, 'visualViewport', { configurable: true, value: stub })
-      })()`)
-      const lifted = await page.evaluate<{ margin: string; actions: boolean; summary: boolean }>(`(() => { const dock = document.querySelector('${composer} .composer'), actions = document.querySelector('${composer} .mini-composer__send').getBoundingClientRect(), summary = document.querySelector('${composer} .composer__mobile-trigger').getBoundingClientRect(); return { margin: getComputedStyle(dock).marginBlockEnd, actions: actions.width >= 44 && actions.height >= 44, summary: summary.height >= 44 } })()`)
-      expect(lifted).toEqual({ margin: "300px", actions: true, summary: true })
+      const controls = await page.evaluate(`(() => { const actions = document.querySelector('${composer} .mini-composer__send').getBoundingClientRect(), summary = document.querySelector('${composer} .composer__mobile-trigger').getBoundingClientRect(); return { actions: actions.width >= 44 && actions.height >= 44, summary: summary.height >= 44 } })()`)
+      expect(controls).toEqual({ actions: true, summary: true })
       await page.evaluate(`document.querySelector('${composer} .composer__mobile-trigger').click()`)
       await wait(page, `document.querySelector('.composer__selection-sheet') !== null`)
       await settle(page)
-      await wait(page, `getComputedStyle(document.querySelector('.composer__selection-sheet')).getPropertyValue('--composer-sheet-height') === '420px'`)
-      const sheet = await page.evaluate<{ top: number; bottom: number; left: number; right: number; modal: string | null }>(`(() => { const node = document.querySelector('.composer__selection-sheet'), rect = node.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, modal: node.getAttribute('aria-modal') } })()`)
+      await page.setViewport(width, 420)
+      await wait(page, `visualViewport.height === 420 && document.querySelector('.overlay--agent-model .overlay__surface').getBoundingClientRect().bottom <= visualViewport.offsetTop + visualViewport.height + 1`)
+      const sheet = await page.evaluate(`(() => { const node = document.querySelector('.overlay--agent-model'), rect = node.querySelector('.overlay__surface').getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, modal: node.getAttribute('aria-modal'), viewportTop: visualViewport.offsetTop, viewportBottom: visualViewport.offsetTop + visualViewport.height } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, top: (decodeNumber)(record["top"]), bottom: (decodeNumber)(record["bottom"]), left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]), modal: (decodeNullable(decodeString))(record["modal"]), viewportTop: (decodeNumber)(record["viewportTop"]), viewportBottom: (decodeNumber)(record["viewportBottom"]) } })
       expect(sheet.modal).toBe("true")
       expect(sheet.left).toBeGreaterThanOrEqual(0)
       expect(sheet.right).toBeLessThanOrEqual(width)
-      expect(sheet.top).toBeGreaterThanOrEqual(0)
-      expect(sheet.bottom).toBeLessThanOrEqual(421)
+      expect(sheet.top).toBeGreaterThanOrEqual(sheet.viewportTop)
+      expect(sheet.bottom).toBeLessThanOrEqual(sheet.viewportBottom + 1)
       await page.pressEscape()
+      expect(await page.evaluate(`document.activeElement?.className`)).toBe("composer__mobile-trigger")
+      await page.evaluate(`document.querySelector('${composer} textarea').focus()`)
       await wait(page, `document.querySelector('.composer__selection-sheet') === null`)
-      expect(await page.evaluate<string>(`document.activeElement?.className`)).toBe("composer__mobile-trigger")
+      expect(await page.evaluate(`document.activeElement === document.querySelector('${composer} textarea')`)).toBe(true)
     } finally { await page.close() }
   }
 }, 60_000)
@@ -288,16 +286,16 @@ test("the todo summary starts compact on phones, names its progress and keeps th
       await page.navigate(`http://127.0.0.1:${port}/verify/todo-fixture.html`)
       await wait(page, `document.querySelector('.todo-panel__toggle') !== null`)
       const toggle = `document.querySelector('.todo-panel__toggle')`
-      expect(await page.evaluate<string>(`${toggle}.getAttribute('aria-label')`)).toBe("Todo list: 3/8 done, current: Current work")
-      expect(await page.evaluate<string>(`${toggle}.getAttribute('aria-expanded')`)).toBe(width < 768 ? "false" : "true")
-      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+      expect(await page.evaluate(`${toggle}.getAttribute('aria-label')`)).toBe("Todo list: 3/8 done, current: Current work")
+      expect(await page.evaluate(`${toggle}.getAttribute('aria-expanded')`)).toBe(width < 768 ? "false" : "true")
+      expect(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
       if (width >= 768) continue
-      expect(await page.evaluate<number>(`${toggle}.getBoundingClientRect().height`)).toBeGreaterThanOrEqual(44)
+      expect(await page.evaluate(`${toggle}.getBoundingClientRect().height`)).toBeGreaterThanOrEqual(44)
       await page.evaluate(`${toggle}.click()`)
-      expect(await page.evaluate<string>(`${toggle}.getAttribute('aria-expanded')`)).toBe("true")
-      expect(await page.evaluate<boolean>(`(() => { const list = document.querySelector('.todo-panel__list'); return list.getBoundingClientRect().height <= Math.min(176, innerHeight * 0.24) + 1 })()`)).toBe(true)
-      expect(await page.evaluate<string | null>(`localStorage.getItem('ycoding.remote.todo.expanded')`)).toBe("true")
-      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+      expect(await page.evaluate(`${toggle}.getAttribute('aria-expanded')`)).toBe("true")
+      expect(await page.evaluate(`(() => { const list = document.querySelector('.todo-panel__list'); return list.getBoundingClientRect().height <= Math.min(176, innerHeight * 0.24) + 1 })()`)).toBe(true)
+      expect(await page.evaluate(`localStorage.getItem('ycoding.remote.todo.expanded')`)).toBe("true")
+      expect(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
     } finally { await page.close() }
   }
 }, 60_000)
@@ -325,7 +323,7 @@ async function type(page: Page, selector: string, text: string) {
 
 async function wait(page: Page, expression: string) {
   for (let index = 0; index < 50; index++) {
-    if (await page.evaluate<boolean>(expression)) return
+    if (await page.evaluate(expression)) return
     await Bun.sleep(100)
   }
   throw new Error(`Timed out: ${expression}`)

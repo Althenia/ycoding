@@ -1,4 +1,4 @@
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeBoolean, decodeRecord, decodeString } from "./cdp"
 
 const executable = process.env.YCODING_WEB_CHROME
 const auditPath = process.env.DAEDALUS_RENDER_AUDIT
@@ -11,7 +11,7 @@ let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
 type Page = Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>
 const results: unknown[] = []
 async function wait(page: Page, expression: string) {
-  for (let i = 0; i < 100; i++) { if (await page.evaluate<boolean>(expression)) return; await Bun.sleep(40) }
+  for (let i = 0; i < 100; i++) { if (await page.evaluate(expression)) return; await Bun.sleep(40) }
   throw new Error(`Unsettled capture: ${expression}`)
 }
 async function click(page: Page, label: string) {
@@ -25,7 +25,7 @@ async function capture(page: Page, scene: string, width: number, theme: string, 
   await Bun.write(new URL(filename, output), Buffer.from(await page.screenshot(), "base64"))
   await page.evaluate(audit)
   const result = await page.evaluate(`auditRender({root:${JSON.stringify(root)},spacing:[0,1,2,4,6,8,12,16,20,24,28,32,40,48,64],iconSizes:[14,16,18,20,24],controlHeights:[24,32,36,40,44,48],minTarget:24,coarseTarget:44})`)
-  const overflow = await page.evaluate<boolean>("document.documentElement.scrollWidth>innerWidth")
+  const overflow = await page.evaluate("document.documentElement.scrollWidth>innerWidth")
   results.push({ filename, width, theme, overflow, audit: result })
 }
 try {
@@ -75,7 +75,7 @@ try {
     } finally { await page.close() }
   }
   await Bun.write(new URL("render-audit.json", output), JSON.stringify(results, null, 2))
-  console.log(JSON.stringify(results.map((entry) => { const r = entry as { filename: string; overflow: boolean; audit: { counts: unknown } }; return { file: r.filename, overflow: r.overflow, counts: r.audit.counts } }), null, 2))
+  console.log(JSON.stringify(results.map((entry) => { const record = decodeRecord(entry); return { file: decodeString(record.filename), overflow: decodeBoolean(record.overflow), counts: decodeRecord(record.audit).counts } }), null, 2))
 } finally {
   await browser?.close()
   server.kill()

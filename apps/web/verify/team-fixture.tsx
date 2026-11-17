@@ -41,7 +41,7 @@ let shellDropped = false
 let shellReads = 0
 const removedShells = new Set<string>()
 let releaseCancel: ((outcome: TeamActionOutcome) => void) | undefined
-const panel = (): TeamPanelData => ({ rootID: rootID(), economicsLoading: usageLoading(), accountingUnsupported: params.get("accounting") === "unsupported", status: params.has("unsupported") ? "unsupported" : "ready", tasks: tasks(), total: params.has("crowded") ? 53 : 4, activeTotal: tasks().filter((task) => task.state === "running" || task.state === "waiting" || task.state === "starting" || task.state === "cancelling").length, next: next(), pageLoading: false,
+const panel = (): TeamPanelData => ({ rootID: rootID(), economicsLoading: usageLoading(), accountingUnsupported: params.get("accounting") === "unsupported", status: params.has("unsupported") ? "unsupported" : params.has("error") ? "error" : "ready", tasks: params.has("empty") || params.has("error") ? [] : tasks(), total: params.has("error") ? undefined : params.has("empty") ? 0 : params.has("crowded") ? 53 : 4, activeTotal: params.has("error") ? undefined : params.has("empty") ? 0 : tasks().filter((task) => task.state === "running" || task.state === "waiting" || task.state === "starting" || task.state === "cancelling").length, next: params.has("empty") || params.has("error") ? undefined : next(), pageLoading: false,
   shells: shells(), shellStatus: params.has("unsupported") ? "unsupported" : "ready", sideChats: sideChats(), sideChatStatus: params.has("unsupported") ? "unsupported" : "ready", sideChatNext: sideNext(), sideChatLoading: false })
 const success: TeamActionOutcome = { status: "ok" }
 const select = (id: string) => { setSelectedID(id); events.push(`open:${id}`) }

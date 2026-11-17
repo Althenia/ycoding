@@ -151,11 +151,11 @@ html[data-animations="off"] :is(.rl-ring-value, .rl-context-messages__chev) { tr
   .rl-context-panel .rl-btn:not(:disabled):hover { background:var(--yc-surface-sunken); }
 }
 .rl-page .ws-bar .ws-new-session { flex:none; margin-inline-start:auto; }
-.relay-settings.st-stack.st-ledger-settings { display:grid; gap:var(--yc-space-8); inline-size:100%; max-inline-size:760px; min-inline-size:0; }
+.relay-settings.st-stack.st-ledger-settings { display:grid; gap:var(--yc-space-8); inline-size:100%; min-inline-size:0; }
 .relay-settings.st-stack.st-ledger-settings .st-section { display:grid; gap:var(--yc-space-3); min-inline-size:0; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }
 .relay-settings.st-stack.st-ledger-settings .st-section-head h3 { display:inline-flex; align-items:center; gap:var(--yc-space-2); margin:0; color:var(--yc-text); font:var(--yc-weight-semibold) var(--yc-size-md)/var(--yc-leading-md) var(--yc-font-sans); letter-spacing:0; text-transform:none; }
 .relay-settings.st-stack.st-ledger-settings .st-section-head h3 > svg { flex:none; color:var(--yc-text-muted); }
-.relay-settings.st-stack.st-ledger-settings .st-section > p { max-inline-size:520px; margin:0; color:var(--yc-text-muted); font:var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-sans); }
+.relay-settings.st-stack.st-ledger-settings .st-section > p { max-inline-size:var(--yc-measure); margin:0; color:var(--yc-text-muted); font:var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-sans); }
 .relay-settings.st-stack.st-ledger-settings .rl-switch-row { max-inline-size:520px; }
 .relay-settings.st-stack.st-ledger-settings .st-actions { display:flex; flex-wrap:wrap; align-items:center; gap:var(--yc-space-2); }
 .relay-settings.st-stack.st-ledger-settings .st-actions > .rl-btn:not([data-tone]) { justify-self:start; inline-size:auto; min-block-size:var(--yc-control-h-dense); padding-inline:var(--yc-space-4); border:1px solid var(--yc-border); border-radius:var(--yc-radius-pill); background:transparent; color:var(--yc-text); font:var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-sans); transition:background-color var(--yc-dur-quick) var(--yc-ease-standard); }

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { SITEMAP_PATHS } from "../src/seo/sitemap"
 import { PUBLIC_ROUTE_PATTERNS, REMOTE_ROUTE_PATHS } from "../src/routes"
 import { REMOTE_SCENARIOS } from "./remote-scenarios"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNullable, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const port = 4197
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -40,8 +40,8 @@ describe("web design contract inventory", () => {
     const page = await requireBrowser().openPage()
     for (const path of SITEMAP_PATHS) {
       await page.navigate(url(path))
-      for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(`document.querySelector("#main") instanceof HTMLElement`)); attempt += 1) await Bun.sleep(100)
-      const rendered = await page.evaluate<{ readonly title: string; readonly notFound: boolean; readonly overflow: boolean; readonly activeNav: string }>(`(() => {
+      for (let attempt = 0; attempt < 50 && !(await page.evaluate(`document.querySelector("#main") instanceof HTMLElement`)); attempt += 1) await Bun.sleep(100)
+      const rendered = await page.evaluate(`(() => {
         const main = document.querySelector("#main")
         if (!(main instanceof HTMLElement)) throw new Error("public route has no main landmark")
         return {
@@ -50,14 +50,14 @@ describe("web design contract inventory", () => {
           overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
           activeNav: document.querySelector('nav[aria-label="Primary"] .nav__link--active')?.textContent?.trim() ?? "",
         }
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, title: (decodeString)(record["title"]), notFound: (decodeBoolean)(record["notFound"]), overflow: (decodeBoolean)(record["overflow"]), activeNav: (decodeString)(record["activeNav"]) } })
       expect({ path, ...rendered }).toMatchObject({ path, notFound: false, overflow: false })
       expect({ path, title: rendered.title }).toEqual({ path, title: expect.any(String) })
       expect(rendered.title.length).toBeGreaterThan(0)
       expect(rendered.activeNav).toBe(path === "/" ? "Home" : path.startsWith("/docs") ? "Documentation" : "Changelog")
     }
     await page.navigate(url("/not-a-route"))
-    expect(await page.evaluate<boolean>(`document.querySelector("#main .not-found__card") !== null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector("#main .not-found__card") !== null`)).toBe(true)
     await page.close()
   }, 60_000)
 
@@ -76,8 +76,8 @@ describe("web design contract inventory", () => {
     for (const scenario of REMOTE_SCENARIOS) {
       await page.setViewport(scenario.viewport, 900)
       await page.navigate(`${url("/verify/remote.html")}?scenario=${scenario.name}-${scenario.viewport}`)
-      for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.documentElement.dataset.theme === ${JSON.stringify(scenario.theme)} && (document.querySelector('.app') !== null || document.querySelector('main.sign-in') !== null)`); attempt += 1) await Bun.sleep(50)
-      const state = await page.evaluate<{ readonly theme: string; readonly background: string; readonly ink: string; readonly overflow: boolean; readonly path: string; readonly pathname: string; readonly sessionID: string | null; readonly deviceID: string | null; readonly signIn: boolean }>(`(() => ({
+      for (let attempt = 0; attempt < 50 && !await page.evaluate(`document.documentElement.dataset.theme === ${JSON.stringify(scenario.theme)} && (document.querySelector('.app') !== null || document.querySelector('main.sign-in') !== null)`); attempt += 1) await Bun.sleep(50)
+      const state = await page.evaluate(`(() => ({
         theme: document.documentElement.dataset.theme ?? "",
         background: getComputedStyle(document.documentElement).getPropertyValue("--yc-bg").trim(),
         ink: getComputedStyle(document.documentElement).getPropertyValue("--yc-text").trim(),
@@ -87,7 +87,7 @@ describe("web design contract inventory", () => {
         sessionID: new URLSearchParams(location.search).get("session_id"),
         deviceID: new URLSearchParams(location.search).get("device_id"),
         signIn: document.querySelector("main.sign-in") !== null,
-      }))()`)
+      }))()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, theme: (decodeString)(record["theme"]), background: (decodeString)(record["background"]), ink: (decodeString)(record["ink"]), overflow: (decodeBoolean)(record["overflow"]), path: (decodeString)(record["path"]), pathname: (decodeString)(record["pathname"]), sessionID: (decodeNullable(decodeString))(record["sessionID"]), deviceID: (decodeNullable(decodeString))(record["deviceID"]), signIn: (decodeBoolean)(record["signIn"]) } })
       expect({ id: scenario.id, theme: state.theme }).toEqual({ id: scenario.id, theme: scenario.theme })
       expect(state.background).not.toBe("")
       expect(state.ink).not.toBe("")
@@ -99,11 +99,11 @@ describe("web design contract inventory", () => {
       if (!state.signIn && scenario.view === "chat" && !scenario.noSelection) expect({ sessionID: state.sessionID, deviceID: state.deviceID }).toEqual({ sessionID: "ses_fixture", deviceID: "dev_studio" })
       if (!state.signIn) {
         const current = scenario.view === "usage" ? "Usage" : scenario.view === "settings" ? "Settings" : scenario.view === "projects" ? "Projects" : scenario.view === "workspaces" ? "Workspaces" : "Sessions"
-        expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.remote-nav a[aria-current="page"], .bottom-nav a[aria-current="page"]')].filter(link => getComputedStyle(link).display !== "none" && link.getBoundingClientRect().width > 0).map(link => link.textContent?.trim() ?? "")`)).toEqual(scenario.viewport < 768 && (scenario.view === "projects" || scenario.view === "workspaces") ? [] : [current])
+        expect(await page.evaluate(`[...document.querySelectorAll('.remote-nav a[aria-current="page"], .bottom-nav a[aria-current="page"]')].filter(link => getComputedStyle(link).display !== "none" && link.getBoundingClientRect().width > 0).map(link => link.textContent?.trim() ?? "")`)).toEqual([current])
       }
       const settled = `${JSON.stringify(scenario.expectedText)}.every((text) => document.body.innerText.includes(text))`
-      for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(settled)); attempt += 1) await Bun.sleep(100)
-      const visibleText = await page.evaluate<string>("document.body.innerText")
+      for (let attempt = 0; attempt < 50 && !(await page.evaluate(settled)); attempt += 1) await Bun.sleep(100)
+      const visibleText = await page.evaluate("document.body.innerText", decodeString)
       for (const expected of scenario.expectedText) {
         expect({ id: scenario.id, missing: visibleText.includes(expected) ? undefined : expected }).toEqual({ id: scenario.id, missing: undefined })
       }
@@ -121,7 +121,7 @@ describe("web design contract inventory", () => {
       for (const theme of ["light", "dark"] as const) {
         await page.setViewport(width, height)
         await page.navigate(url(path))
-        const geometry = await page.evaluate<{ readonly theme: string; readonly background: string; readonly ink: string; readonly overflow: boolean; readonly content: { readonly left: number; readonly right: number }; readonly footer: { readonly left: number; readonly right: number }; readonly controls: readonly { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number }[] }>(`(() => {
+        const geometry = await page.evaluate(`(() => {
           document.documentElement.dataset.theme = ${JSON.stringify(theme)}
           const main = document.querySelector("#main")
           const footer = document.querySelector(".site-footer")
@@ -139,7 +139,7 @@ describe("web design contract inventory", () => {
             footer: box(footerContent),
             controls: [...document.querySelectorAll("#main button, #main a.button")].filter(element => element instanceof HTMLElement && getComputedStyle(element).display !== "none" && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0).map(box),
           }
-        })()`)
+        })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, theme: (decodeString)(record["theme"]), background: (decodeString)(record["background"]), ink: (decodeString)(record["ink"]), overflow: (decodeBoolean)(record["overflow"]), content: ((value: unknown) => { const record = decodeRecord(value); return { ...record, left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]) } })(record["content"]), footer: ((value: unknown) => { const record = decodeRecord(value); return { ...record, left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]) } })(record["footer"]), controls: (decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]), top: (decodeNumber)(record["top"]), bottom: (decodeNumber)(record["bottom"]) } }))(record["controls"]) } })
         expect(geometry.theme).toBe(theme)
         expect(geometry.background).not.toBe("")
         expect(geometry.ink).not.toBe("")
@@ -156,13 +156,13 @@ describe("web design contract inventory", () => {
     for (const [path, width, height, short] of [["/not-a-route", 1440, 900, true], ["/docs/quickstart", 390, 844, false]] as const) {
       await page.setViewport(width, height)
       await page.navigate(url(path))
-      const footer = await page.evaluate<{ readonly top: number; readonly bottom: number; readonly position: string; readonly short: boolean; readonly mainBottom: number; readonly scrollHeight: number }>(`(() => {
+      const footer = await page.evaluate(`(() => {
         const element = document.querySelector(".site-footer")
         const main = document.querySelector("#main")
         if (!(element instanceof HTMLElement) || !(main instanceof HTMLElement)) throw new Error("public page landmarks missing")
         const rect = element.getBoundingClientRect()
         return { top: rect.top, bottom: rect.bottom, position: getComputedStyle(element).position, short: document.documentElement.scrollHeight <= innerHeight, mainBottom: main.getBoundingClientRect().bottom, scrollHeight: document.documentElement.scrollHeight }
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, top: (decodeNumber)(record["top"]), bottom: (decodeNumber)(record["bottom"]), position: (decodeString)(record["position"]), short: (decodeBoolean)(record["short"]), mainBottom: (decodeNumber)(record["mainBottom"]), scrollHeight: (decodeNumber)(record["scrollHeight"]) } })
       expect(footer.short).toBe(short)
       expect(footer.position).not.toBe("fixed")
       expect(footer.position).not.toBe("sticky")
@@ -176,7 +176,7 @@ describe("web design contract inventory", () => {
 
     await page.setViewport(390, 700)
     await page.navigate(`${url("/verify/remote.html")}?view=settings`)
-    const ownership = await page.evaluate<{ readonly owners: number; readonly documentScrollable: boolean; readonly edges: readonly { readonly left: number; readonly right: number }[] }>(`(() => {
+    const ownership = await page.evaluate(`(() => {
       document.querySelector(".fixture__banner")?.remove()
       document.querySelector(".fixture__controls")?.remove()
       const fixture = document.querySelector(".fixture")
@@ -185,18 +185,18 @@ describe("web design contract inventory", () => {
       const owners = candidates.filter(element => element.scrollHeight > element.clientHeight + 1 && ["auto", "scroll"].includes(getComputedStyle(element).overflowY)).length
       const sections = [...document.querySelectorAll(".settings > *, .settings__section")].filter(element => element instanceof HTMLElement && element.getBoundingClientRect().width > 0).slice(0, 4)
       return { owners, documentScrollable: document.documentElement.scrollHeight > document.documentElement.clientHeight && ["auto", "scroll"].includes(getComputedStyle(document.documentElement).overflowY), edges: sections.map(element => { const rect = element.getBoundingClientRect(); return { left: rect.left, right: rect.right } }) }
-    })()`)
+    })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, owners: (decodeNumber)(record["owners"]), documentScrollable: (decodeBoolean)(record["documentScrollable"]), edges: (decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]) } }))(record["edges"]) } })
     expect(ownership.owners).toBe(1)
     expect(ownership.documentScrollable).toBe(false)
     expect(ownership.edges.length).toBeGreaterThan(1)
     expect(ownership.edges.every((edge) => Math.abs(edge.left - ownership.edges[0]!.left) <= 1 && Math.abs(edge.right - ownership.edges[0]!.right) <= 1)).toBe(true)
 
     await page.navigate(`${url("/verify/remote.html")}?scenario=conversation-workspace-390`)
-    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('a[href="/remote/settings"]') !== null`); attempt += 1) await Bun.sleep(50)
+    for (let attempt = 0; attempt < 40 && !await page.evaluate(`document.querySelector('a[href="/remote/settings"]') !== null`); attempt += 1) await Bun.sleep(50)
     await page.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
-    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Color scheme"]') !== null`); attempt += 1) await Bun.sleep(50)
+    for (let attempt = 0; attempt < 40 && !await page.evaluate(`document.querySelector('[aria-label="Color scheme"]') !== null`); attempt += 1) await Bun.sleep(50)
     await page.evaluate(`document.querySelector('[aria-label="Color scheme"]')?.click()`)
-    const dropdown = await page.evaluate<{ readonly expanded: boolean; readonly withinViewport: boolean }>(`(() => {
+    const dropdown = await page.evaluate(`(() => {
       const trigger = document.querySelector('[aria-label="Color scheme"]')
       const list = document.querySelector('[role="listbox"]')
       if (!(trigger instanceof HTMLElement) || !(list instanceof HTMLElement)) return { expanded: false, withinViewport: false }
@@ -206,63 +206,45 @@ describe("web design contract inventory", () => {
     expect(dropdown).toEqual({ expanded: true, withinViewport: true })
     await page.evaluate(`document.querySelector('[aria-label="Color scheme"]')?.focus()`)
     await page.pressEscape()
-    expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Color scheme"]')?.getAttribute("aria-expanded") === "false" && document.activeElement?.getAttribute("aria-label") === "Color scheme"`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('[aria-label="Color scheme"]')?.getAttribute("aria-expanded") === "false" && document.activeElement?.getAttribute("aria-label") === "Color scheme"`)).toBe(true)
 
     await page.close()
   }, 30_000)
 
-  test("widens the Sessions and Usage columns from 1600, keeps Settings a fixed 760px column, while Session detail is a centered 720px reading column", async () => {
+  test("start-aligns fluid route columns and caps selected Session detail at 1200px", async () => {
     const page = await requireBrowser().openPage()
     const widths = { 1599: 1200, 1600: 1600, 1920: 1600, 2000: 1600, 2560: 1600 } as const
     for (const [width, expected] of Object.entries(widths).map(([key, value]) => [Number(key), value] as const)) {
       await page.setViewport(width, 1000)
-      for (const [view, selector] of [["sessions", ".app--sessions .workspace__scroll > .route-panel"], ["usage", ".app--usage .workspace__scroll > .route-panel"], ["settings", ".app--settings .pane"], ["chat", ".transcript"]] as const) {
+      for (const [view, selector] of [["sessions", ".app--sessions .workspace__scroll > .route-panel--active"], ["usage", ".app--usage .workspace__scroll > .route-panel--active"], ["settings", ".app--settings .workspace__scroll > .route-panel--active > .pane"], ["chat", ".transcript"]] as const) {
         await page.navigate(url(`/verify/remote.html?view=${view}`))
-        for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`document.querySelector('.workspace__scroll') !== null`); attempt += 1) await Bun.sleep(50)
-        for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}) !== null`); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<string>(`JSON.stringify({ view: document.querySelector('.app')?.className ?? '', found: document.querySelector(${JSON.stringify(selector)}) !== null })`), `${view} ${width} mounted`).toContain('"found":true')
-        const geometry = await page.evaluate<{ readonly width: number; readonly wide: number; readonly reserve: number; readonly container: number; readonly available: number; readonly gutter: number; readonly overflow: boolean; readonly centered: boolean }>(`(() => {
+        for (let attempt = 0; attempt < 100 && !await page.evaluate(`document.querySelector('.workspace__scroll') !== null`); attempt += 1) await Bun.sleep(50)
+        for (let attempt = 0; attempt < 100 && !await page.evaluate(`document.querySelector(${JSON.stringify(selector)}) !== null`); attempt += 1) await Bun.sleep(50)
+        expect(await page.evaluate(`JSON.stringify({ view: document.querySelector('.app')?.className ?? '', found: document.querySelector(${JSON.stringify(selector)}) !== null })`), `${view} ${width} mounted`).toContain('"found":true')
+        const geometry = await page.evaluate(`(() => {
           const element = document.querySelector(${JSON.stringify(selector)})
           const scroll = document.querySelector('.workspace__scroll')
           const box = element.getBoundingClientRect()
           const host = scroll.getBoundingClientRect()
           const styles = getComputedStyle(scroll)
-          const probe = document.createElement('div')
-          probe.style.width = 'var(--yc-measure-wide)'
-          element.append(probe)
-          const wide = Math.round(probe.getBoundingClientRect().width)
-          probe.style.width = 'var(--yc-space-12)'
-          const reserve = Math.round(probe.getBoundingClientRect().width)
-          probe.remove()
-          const parent = (element.closest('.conversation-pane') ?? element).parentElement
-          if (!parent) throw new Error('Route container is missing')
-          const parentStyles = getComputedStyle(parent)
-          const container = Math.round(parent.clientWidth - parseFloat(parentStyles.paddingLeft) - parseFloat(parentStyles.paddingRight))
           return {
             width: Math.round(box.width),
-            wide,
-            reserve,
-            container,
             available: Math.round(scroll.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight)),
             gutter: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-gutter')),
             overflow: document.documentElement.scrollWidth > innerWidth,
-            centered: Math.abs((box.left - host.left) - (host.right - box.right)) <= 16,
+            startAligned: Math.abs(box.left - host.left - parseFloat(styles.paddingLeft)) <= 1,
           }
-        })()`)
+        })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), available: (decodeNumber)(record["available"]), gutter: (decodeNumber)(record["gutter"]), overflow: (decodeBoolean)(record["overflow"]), startAligned: (decodeBoolean)(record["startAligned"]) } })
         expect(geometry.overflow, `${view} ${width}`).toBe(false)
-        expect(geometry.centered, `${view} ${width}`).toBe(true)
+        expect(geometry.startAligned, `${view} ${width}`).toBe(true)
         expect(geometry.gutter, `${view} ${width}`).toBe(width >= 1600 ? 48 : 40)
         if (view === "chat") {
-          expect(geometry.reserve, `${view} ${width}`).toBe(48)
-          expect(geometry.centered, `${view} ${width}`).toBe(true)
-          expect(geometry.container, `${view} ${width}`).toBeGreaterThanOrEqual(geometry.available - 1)
-          const column = Math.min(720, geometry.container - geometry.reserve)
+          const column = Math.min(1200, geometry.available)
           expect(geometry.width, `${view} ${width}`).toBeLessThanOrEqual(column + 1)
           expect(geometry.width, `${view} ${width}`).toBeGreaterThanOrEqual(column - 1)
           continue
         }
-        // The column is the declared cap, or the scroll area's content box when that is narrower.
-        const cap = view === "settings" ? 760 : expected
+        const cap = expected
         expect(geometry.width, `${view} ${width}`).toBeLessThanOrEqual(cap)
         expect(geometry.width, `${view} ${width}`).toBeGreaterThanOrEqual(Math.min(cap, geometry.available) - 1)
       }
@@ -277,8 +259,8 @@ describe("web design contract inventory", () => {
         await page.setViewport(width, height)
         for (const path of ["/", "/docs/quickstart", "/changelog", "/verify/remote.html?view=chat", "/verify/remote.html?view=settings"]) {
           await page.navigate(url(path))
-          if (path.includes("view=chat")) for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.composer') !== null`); attempt += 1) await Bun.sleep(50)
-          const layout = await page.evaluate<{ readonly overflow: boolean; readonly escaped: readonly string[]; readonly undersizedTabs: readonly string[]; readonly composer: boolean }>(`(() => {
+          if (path.includes("view=chat")) for (let attempt = 0; attempt < 50 && !await page.evaluate(`document.querySelector('.composer') !== null`); attempt += 1) await Bun.sleep(50)
+          const layout = await page.evaluate(`(() => {
             document.documentElement.dataset.theme = ${JSON.stringify(theme)}
             const visible = (element) => element instanceof HTMLElement && getComputedStyle(element).visibility !== 'hidden' && getComputedStyle(element).display !== 'none' && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0
             const controls = [...document.querySelectorAll('.app-header button, .app-header a, .remote-nav a, .bottom-nav a, .site-header button, .site-header a')].filter(visible)
@@ -288,7 +270,7 @@ describe("web design contract inventory", () => {
               undersizedTabs: [...document.querySelectorAll('.remote-nav a')].filter(visible).filter(element => { const box = element.getBoundingClientRect(); return box.width < 44 || box.height < 44 }).map(element => element.textContent?.trim() ?? ''),
               composer: visible(document.querySelector('.composer')),
             }
-          })()`)
+          })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, overflow: (decodeBoolean)(record["overflow"]), escaped: (decodeArray(decodeString))(record["escaped"]), undersizedTabs: (decodeArray(decodeString))(record["undersizedTabs"]), composer: (decodeBoolean)(record["composer"]) } })
           expect(layout.overflow, `${path} ${width}/${theme}`).toBe(false)
           expect(layout.escaped, `${path} ${width}/${theme}`).toEqual([])
           expect(layout.undersizedTabs, `${path} ${width}/${theme}`).toEqual([])

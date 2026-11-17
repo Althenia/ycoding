@@ -216,7 +216,10 @@ describe("translucent navigation contrast (W94)", () => {
   const MIX = /^color-mix\(in srgb, var\((--[a-z0-9-]+)\) (\d+)%, transparent\)$/
 
   test("the public header paints at least 92% of an opaque surface", async () => {
-    const mix = declarations(await stylesheet("site.css"), ".marketing .app-header").background?.match(MIX)
+    const site = await stylesheet("site.css")
+    expect(declarations(site, ".marketing .app-header").background).toBe("var(--yc-bg)")
+    const supported = site.slice(site.indexOf("@supports (backdrop-filter: blur(1px))"))
+    const mix = declarations(supported, ".marketing .app-header").background?.match(MIX)
     expect(mix?.[1]).toBe("--yc-bg")
     expect(Number(mix?.[2])).toBeGreaterThanOrEqual(92)
   })
@@ -225,16 +228,15 @@ describe("translucent navigation contrast (W94)", () => {
     test(`${theme} theme keeps every header ink at AA over the worst-case backdrop`, async () => {
       const { themes } = await stylesheets()
       const tokens = themeOf(themes, theme)
-      const site = await stylesheet("site.css")
-      const active = resolveColor(value(declarations(site, ".marketing .nav__link--active"), "color"), tokens)
+      const base = await stylesheet("base.css")
+      const active = resolveColor(value(declarations(base, ".nav__link--active"), "color"), tokens)
       const worst = required(tokens, "--yc-text")
       for (const surface of ["--yc-bg", "--yc-surface"]) {
         const veil = composite(`rgba(${channels(required(tokens, surface)).join(", ")}, 0.92)`, worst)
-        const pill = composite(required(tokens, "--yc-green-soft"), veil)
         for (const [name, ink, background] of [
           ["text", required(tokens, "--yc-text"), veil],
           ["muted", required(tokens, "--yc-text-muted"), veil],
-          ["active label", active, pill],
+          ["active label", active, veil],
           ["hover label", required(tokens, "--yc-text"), veil],
         ] as const) {
           expect(contrastRatio(ink, background), `${theme} ${surface} ${name}`).toBeGreaterThanOrEqual(AA_NORMAL_TEXT)

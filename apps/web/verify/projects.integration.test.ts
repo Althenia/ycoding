@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeDictionary, decodeNumber, decodeRecord } from "./cdp"
 
 const port = 4603
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -19,7 +19,7 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
 async function until(page: Page, expression: string) {
-  for (let attempt = 0; attempt < 100; attempt++) { if (await page.evaluate<boolean>(expression)) return; await Bun.sleep(40) }
+  for (let attempt = 0; attempt < 100; attempt++) { if (await page.evaluate(expression)) return; await Bun.sleep(40) }
   throw new Error(`Projects did not settle: ${expression}`)
 }
 async function open(width = 1440, extra = "", theme = "light") {
@@ -34,12 +34,12 @@ async function open(width = 1440, extra = "", theme = "light") {
 const button = (name: string) => `[...document.querySelectorAll('button,a')].filter(e=>e.getClientRects().length && !e.closest('[inert]')).find(e=>(e.getAttribute('aria-label')||e.textContent).trim()===${JSON.stringify(name)})`
 const click = (page: Page, name: string) => page.evaluate(`${button(name)}.click()`)
 const setField = (page: Page, label: string, value: string) => page.evaluate(`(()=>{const el=[...document.querySelectorAll('label')].find(e=>e.textContent.includes(${JSON.stringify(label)})).querySelector('input,textarea');el.value=${JSON.stringify(value)};el.dispatchEvent(new InputEvent('input',{bubbles:true}))})()`)
-const mutations = (page: Page, operation: string) => page.evaluate<{ input: Record<string, unknown> }[]>(`window.remoteMutationReport().filter(x=>x.operation===${JSON.stringify(operation)})`)
-const sessionCounts = (page: Page) => page.evaluate<{ tab: number; rows: number; live: Record<string, number> }>(`(()=>{
+const mutations = (page: Page, operation: string) => page.evaluate(`window.remoteMutationReport().filter(x=>x.operation===${JSON.stringify(operation)})`, decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, input: (decodeRecord)(record["input"]) } }))
+const sessionCounts = (page: Page) => page.evaluate(`(()=>{
   const root=document.querySelector('.project-desktop .project-panel')
   const live=Object.fromEntries([...root.querySelectorAll('.project-summary .project-live')].map(e=>[e.dataset.state,Number(e.textContent.match(/\\d+/)[0])]))
   return {tab:Number(root.querySelector('[aria-label="Project sessions"]').textContent.match(/\\d+/)[0]),rows:root.querySelectorAll('.project-member').length,live}
-})()`)
+})()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, tab: (decodeNumber)(record["tab"]), rows: (decodeNumber)(record["rows"]), live: (decodeDictionary(decodeNumber))(record["live"]) } })
 const panel = (width: number) => width < 1024 ? "dialog .project-panel" : ".project-desktop .project-panel"
 async function openProject(page: Page, width = 1440) {
   await until(page, `document.querySelectorAll('.project-card').length===2`)
@@ -54,39 +54,42 @@ describe("Projects", () => {
     const page = await open(1024)
     try {
       await openProject(page, 1024)
-      const before = await page.evaluate<number>(`document.querySelector('.workspace__main').getBoundingClientRect().width`)
-      const requests = await page.evaluate<number>(`window.remoteMutationReport().length`)
+      const before = await page.evaluate(`document.querySelector('.workspace__main').getBoundingClientRect().width`, decodeNumber)
+      const requests = await page.evaluate(`window.remoteMutationReport().length`)
       await page.evaluate(`${button("Hide project context")}.focus({preventScroll:true})`)
       await page.pressKey("Enter", "Enter", 13, "\r")
       await until(page, `${button("Show project context")}?.getAttribute('aria-expanded')==='false'`)
-      expect(await page.evaluate<boolean>(`document.activeElement===${button("Show project context")}`)).toBe(true)
-      expect(await page.evaluate<number>(`document.querySelector('.workspace__main').getBoundingClientRect().width`)).toBeGreaterThan(before + 250)
-      expect(await page.evaluate<string>(`${button("Show project context")}.textContent`)).toContain("1 waiting")
-      expect(await page.evaluate<boolean>(`document.querySelector('.app').classList.contains('app--rail-collapsed')`)).toBe(false)
-      expect(await page.evaluate<boolean>(`!!document.querySelector('.project-desktop [inert]') || !document.querySelector('.project-desktop').getClientRects().length`)).toBe(true)
-      expect(await page.evaluate<number>(`window.remoteMutationReport().length`)).toBe(requests)
+      expect(await page.evaluate(`document.activeElement===${button("Show project context")}`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('.workspace__main').getBoundingClientRect().width`)).toBeGreaterThan(before + 250)
+      expect(await page.evaluate(`${button("Show project context")}.textContent`)).toContain("1 waiting")
+      expect(await page.evaluate(`document.querySelector('.app').classList.contains('app--rail-collapsed')`)).toBe(false)
+      expect(await page.evaluate(`!!document.querySelector('.project-desktop [inert]') || !document.querySelector('.project-desktop').getClientRects().length`)).toBe(true)
+      expect(await page.evaluate(`window.remoteMutationReport().length`)).toBe(requests)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=coordination-projects-1440`)
       await openProject(page, 1024)
       await until(page, `!!${button("Show project context")}`)
-      expect(await page.evaluate<string>(`${button("Show project context")}.getAttribute('aria-expanded')`)).toBe("false")
+      expect(await page.evaluate(`${button("Show project context")}.getAttribute('aria-expanded')`)).toBe("false")
       await click(page, "Show project context")
       await until(page, `document.querySelector('.project-desktop .project-member')?.getClientRects().length>0`)
-      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
+      expect(await page.evaluate(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
       await page.evaluate(`${button("Project sessions")}.focus({preventScroll:true})`)
-      const scroll = await page.evaluate<number>(`window.scrollY`)
+      const scroll = await page.evaluate(`window.scrollY`)
       await page.pressKey("Escape", "Escape", 27)
       await until(page, `${button("Show project context")}?.getAttribute('aria-expanded')==='false'`)
-      expect(await page.evaluate<boolean>(`document.activeElement===${button("Show project context")}`)).toBe(true)
-      expect(await page.evaluate<number>(`window.scrollY`)).toBe(scroll)
-      expect(await page.evaluate<number>(`window.remoteMutationReport().length`)).toBe(requests)
-    } finally { await page.close() }
+      expect(await page.evaluate(`document.activeElement===${button("Show project context")}`)).toBe(true)
+      expect(await page.evaluate(`window.scrollY`)).toBe(scroll)
+      expect(await page.evaluate(`window.remoteMutationReport().length`)).toBe(requests)
+    } finally {
+      if (await page.evaluate(`!!${button("Show project context")}`)) await click(page, "Show project context")
+      await page.close()
+    }
   }, 30_000)
 
   test("member refresh preserves the row, open details, focused action and panel scroll", async () => {
     const page = await open(1440, "coordinationTime=1700000000000")
     try {
       await openProject(page)
-      if (await page.evaluate<boolean>(`!!${button("Details for Update checkout API")}`)) await click(page, "Details for Update checkout API")
+      if (await page.evaluate(`!!${button("Details for Update checkout API")}`)) await click(page, "Details for Update checkout API")
       await until(page, `!!${button("Remove Update checkout API from project")}`)
       await until(page, `${button("Remove Update checkout API from project")}.closest('.collapsible').getAnimations().every(animation=>animation.playState!=='running')`)
       await page.evaluate(`(() => {
@@ -103,21 +106,21 @@ describe("Projects", () => {
         body.scrollTop=40;
         window.projectScroll=body.scrollTop;
       })()`)
-      const metrics = await page.evaluate<{ addedRows: number; elapsedMs: number; retainedRow: boolean; retainedFocus: boolean }>(`(async () => {
+      const metrics = await page.evaluate(`(async () => {
         const started=performance.now();
         await window.coordinationRefresh();
         await new Promise(requestAnimationFrame);
         window.projectObserver.disconnect();
         return {addedRows:window.projectAddedRows,elapsedMs:performance.now()-started,retainedRow:window.projectRow===${button("Remove Update checkout API from project")}?.closest('.project-member'),retainedFocus:document.activeElement===window.projectAction};
-      })()`)
+      })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, addedRows: (decodeNumber)(record["addedRows"]), elapsedMs: (decodeNumber)(record["elapsedMs"]), retainedRow: (decodeBoolean)(record["retainedRow"]), retainedFocus: (decodeBoolean)(record["retainedFocus"]) } })
       console.log("Project background refresh", JSON.stringify(metrics))
       expect(metrics.addedRows).toBe(0)
       expect(metrics.retainedRow).toBe(true)
       expect(metrics.retainedFocus).toBe(true)
-      expect(await page.evaluate<string>(`${button("Details for Update checkout API")}.getAttribute('aria-expanded')`)).toBe("true")
-      expect(await page.evaluate<number>(`Math.abs(document.querySelector('.project-desktop .project-panel__body').scrollTop-window.projectScroll)`)).toBeLessThanOrEqual(1)
-      expect(await page.evaluate<string>(`document.querySelector('.project-desktop').textContent`)).toContain("Which column should checkout read?")
-      expect(await page.evaluate<number>(`window.remoteMutationReport().length`)).toBe(0)
+      expect(await page.evaluate(`${button("Details for Update checkout API")}.getAttribute('aria-expanded')`)).toBe("true")
+      expect(await page.evaluate(`Math.abs(document.querySelector('.project-desktop .project-panel__body').scrollTop-window.projectScroll)`)).toBeLessThanOrEqual(1)
+      expect(await page.evaluate(`document.querySelector('.project-desktop').textContent`)).toContain("Which column should checkout read?")
+      expect(await page.evaluate(`window.remoteMutationReport().length`)).toBe(0)
     } finally { await page.close() }
   }, 30_000)
 
@@ -132,27 +135,29 @@ describe("Projects", () => {
         window.projectDraft.focus({preventScroll:true});
       })()`)
       await page.evaluate(`window.coordinationRefresh()`)
-      expect(await page.evaluate<boolean>(`document.activeElement===window.projectDraft`)).toBe(true)
-      expect(await page.evaluate<string>(`window.projectDraft.value`)).toBe("Unsaved project title")
+      expect(await page.evaluate(`document.activeElement===window.projectDraft`)).toBe(true)
+      expect(await page.evaluate(`window.projectDraft.value`)).toBe("Unsaved project title")
       await page.evaluate(`${button("Project sessions")}.focus({preventScroll:true})`)
       await page.pressKey("Enter", "Enter", 13, "\r")
-      expect(await page.evaluate<string>(`${button("Project sessions")}.getAttribute('aria-expanded')`)).toBe("false")
-      expect(await page.evaluate<string>(`${button("Project sessions")}.textContent`)).toContain("1 waiting")
-      expect(await page.evaluate<string>(`${button("Project settings")}.getAttribute('aria-expanded')`)).toBe("true")
+      expect(await page.evaluate(`${button("Project sessions")}.getAttribute('aria-expanded')`)).toBe("false")
+      expect(await page.evaluate(`${button("Project sessions")}.textContent`)).toContain("1 waiting")
+      expect(await page.evaluate(`${button("Project settings")}.getAttribute('aria-expanded')`)).toBe("true")
       await page.evaluate(`${button("Project settings")}.focus({preventScroll:true})`)
       await page.pressKey("Enter", "Enter", 13, "\r")
-      expect(await page.evaluate<string>(`${button("Project settings")}.getAttribute('aria-expanded')`)).toBe("false")
-      expect(await page.evaluate<boolean>(`!!window.projectDraft.closest('[inert]')`)).toBe(true)
+      expect(await page.evaluate(`${button("Project settings")}.getAttribute('aria-expanded')`)).toBe("false")
+      expect(await page.evaluate(`!!window.projectDraft.closest('[inert]')`)).toBe(true)
       await page.pressKey("Enter", "Enter", 13, "\r")
-      expect(await page.evaluate<boolean>(`window.projectDraft===document.querySelector('.project-desktop .project-settings input')`)).toBe(true)
-      expect(await page.evaluate<string>(`window.projectDraft.value`)).toBe("Unsaved project title")
-      expect(await page.evaluate<number>(`window.remoteMutationReport().length`)).toBe(0)
+      expect(await page.evaluate(`window.projectDraft===document.querySelector('.project-desktop .project-settings input')`)).toBe(true)
+      expect(await page.evaluate(`window.projectDraft.value`)).toBe("Unsaved project title")
+      expect(await page.evaluate(`window.remoteMutationReport().length`)).toBe(0)
+      await page.evaluate(`document.querySelector('.remote-nav a[href="/remote/projects"]').click()`)
+      await until(page, `${button("Open project Docs sweep")} !== undefined`)
       await click(page, "Open project Docs sweep")
       await until(page, `document.querySelector('.project-context')?.textContent.includes('Master of Docs sweep')`)
-      expect(await page.evaluate<string>(`${button("Project settings")}.getAttribute('aria-expanded')`)).toBe("false")
+      expect(await page.evaluate(`${button("Project settings")}.getAttribute('aria-expanded')`)).toBe("false")
       await click(page, "Project settings")
-      expect(await page.evaluate<string>(`document.querySelector('.project-desktop .project-settings input').value`)).toBe("Docs sweep")
-      expect(await page.evaluate<number>(`window.remoteMutationReport().length`)).toBe(0)
+      expect(await page.evaluate(`document.querySelector('.project-desktop .project-settings input').value`)).toBe("Docs sweep")
+      expect(await page.evaluate(`window.remoteMutationReport().length`)).toBe(0)
     } finally { await page.close() }
   }, 30_000)
 
@@ -161,14 +166,14 @@ describe("Projects", () => {
       const page = await open(width, "", theme)
       try {
         await until(page, `document.querySelectorAll('.project-card').length===2`)
-        expect(await page.evaluate<string>(`document.querySelector('.projects').textContent`)).toContain("Paused · interrupted")
-        expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector('.projects').textContent`)).toContain("Paused · interrupted")
+        expect(await page.evaluate(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
         await openProject(page, width)
-        expect(await page.evaluate<string>(`document.querySelector('${panel(width)} .project-member').dataset.master`)).toBe("true")
+        expect(await page.evaluate(`document.querySelector('${panel(width)} .project-member').dataset.master`)).toBe("true")
         await click(page, "Details for Update checkout API")
-        expect(await page.evaluate<string>(`document.querySelector('${panel(width)}').textContent`)).toContain("driven by Migration agent · master subagent")
-        expect(await page.evaluate<string>(`document.querySelector('${panel(width)} [role=meter]').getAttribute('aria-valuetext')`)).toBe("1 of 2 running")
-        expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
+        expect(await page.evaluate(`document.querySelector('${panel(width)}').textContent`)).toContain("driven by Migration agent · master subagent")
+        expect(await page.evaluate(`document.querySelector('${panel(width)} [role=meter]').getAttribute('aria-valuetext')`)).toBe("1 of 2 running")
+        expect(await page.evaluate(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
       } finally { await page.close() }
     }
   }, 120_000)
@@ -176,7 +181,7 @@ describe("Projects", () => {
   test("loading, empty, error and unsupported lists retain orientation", async () => {
     for (const [mode, text] of [["loading", "Loading projects…"], ["empty", "No projects"], ["error", "Projects are unavailable"], ["unsupported", "This machine does not offer Projects yet."]]) {
       const page = await open(390, `coordination=${mode}`)
-      try { await until(page, `document.querySelector('.projects').textContent.includes(${JSON.stringify(text)})`); expect(await page.evaluate<string>(`document.querySelector('.projects h1').textContent`)).toBe("Projects") } finally { await page.close() }
+      try { await until(page, `document.querySelector('.projects').textContent.includes(${JSON.stringify(text)})`); expect(await page.evaluate(`document.querySelector('.projects h1').textContent`)).toBe("Projects") } finally { await page.close() }
     }
   }, 60_000)
 
@@ -214,13 +219,13 @@ describe("Projects", () => {
     const page = await open()
     try {
       await until(page, `document.querySelectorAll('.project-card').length===2`)
-      const card = await page.evaluate<string>(`[...document.querySelectorAll('.project-card')].find(e=>e.textContent.includes('Release train')).querySelector('.project-meta').textContent`)
+      const card = await page.evaluate(`[...document.querySelectorAll('.project-card')].find(e=>e.textContent.includes('Release train')).querySelector('.project-meta').textContent`)
       expect(card).toBe("2 running · 1 waiting · 1 failed · 5 Sessions")
       await openProject(page)
-      expect(await page.evaluate<string>(`document.querySelector('.project-rail [aria-current=true]').textContent`)).toContain("2 running · 1 waiting · 1 failed")
+      expect(await page.evaluate(`!!document.querySelector('.workspace__rail [aria-label="Search sessions"]') && !document.querySelector('.project-rail')`)).toBe(true)
       expect(await sessionCounts(page)).toEqual({ tab: 5, rows: 5, live: { running: 2, waiting: 1, idle: 1, failed: 1 } })
-      expect(await page.evaluate<string>(`document.querySelector('${panel(1440)} [role=meter]').getAttribute('aria-valuetext')`)).toBe("1 of 2 running")
-      expect(await page.evaluate<string>(`document.querySelector('${panel(1440)} .project-meter__label').textContent`)).toContain("Member concurrency limit")
+      expect(await page.evaluate(`document.querySelector('${panel(1440)} [role=meter]').getAttribute('aria-valuetext')`)).toBe("1 of 2 running")
+      expect(await page.evaluate(`document.querySelector('${panel(1440)} .project-meter__label').textContent`)).toContain("Member concurrency limit")
     } finally { await page.close() }
   }, 30_000)
 
@@ -241,7 +246,7 @@ describe("Projects", () => {
       expect((await mutations(page, "coordination.create"))[0]?.input).toEqual({ name: "Fresh project", masterSessionID: created[0]?.input.id, memberSessionIDs: [] })
       await until(page, `document.querySelectorAll('${panel(1440)} .project-member').length===1`)
       expect(await sessionCounts(page)).toEqual({ tab: 1, rows: 1, live: { running: 0, waiting: 0, idle: 1, failed: 0 } })
-      expect(await page.evaluate<string>(`document.querySelector('${panel(1440)} .project-meter__label').textContent`)).toContain("Members running")
+      expect(await page.evaluate(`document.querySelector('${panel(1440)} .project-meter__label').textContent`)).toContain("Members running")
 
       await click(page, "Add session…")
       await click(page, "Add Triage flaky tests")
@@ -254,7 +259,7 @@ describe("Projects", () => {
       await click(page, "Create and add")
       await until(page, `!document.querySelector('dialog[open]') && document.querySelectorAll('${panel(1440)} .project-member').length===3`)
       expect(await sessionCounts(page)).toEqual({ tab: 3, rows: 3, live: { running: 0, waiting: 0, idle: 3, failed: 0 } })
-      expect(await page.evaluate<string>(`document.querySelector('${panel(1440)} [role=meter]')?.getAttribute('aria-valuetext') ?? document.querySelector('${panel(1440)} .project-meter strong').textContent`)).toBe("0 · no limit")
+      expect(await page.evaluate(`document.querySelector('${panel(1440)} [role=meter]')?.getAttribute('aria-valuetext') ?? document.querySelector('${panel(1440)} .project-meter strong').textContent`)).toBe("0 · no limit")
 
       const members = await mutations(page, "coordination.update")
       expect(members.map((entry) => entry.input.memberSessionIDs)).toEqual([["ses_available"], ["ses_available", expect.stringMatching(/^ses_/)]])
@@ -265,7 +270,7 @@ describe("Projects", () => {
 
       await page.evaluate(`document.querySelector('.project-heading .text-link').click()`)
       await until(page, `[...document.querySelectorAll('.project-card')].some(e=>e.textContent.includes('Fresh project'))`)
-      expect(await page.evaluate<string>(`[...document.querySelectorAll('.project-card')].find(e=>e.textContent.includes('Fresh project')).querySelector('.project-meta').textContent`)).toBe("0 running · 3 Sessions")
+      expect(await page.evaluate(`[...document.querySelectorAll('.project-card')].find(e=>e.textContent.includes('Fresh project')).querySelector('.project-meta').textContent`)).toBe("0 running · 3 Sessions")
     } finally { await page.close() }
   }, 60_000)
 
@@ -277,7 +282,7 @@ describe("Projects", () => {
         await click(page, "New project")
         await setField(page, "Project name", "Billing migration")
         await click(page, "Create a new Session")
-        expect(await page.evaluate<string>(`[...document.querySelectorAll('label')].find(e=>e.textContent.includes('Session title')).querySelector('input').placeholder`)).toBe("Defaults to the Project name")
+        expect(await page.evaluate(`[...document.querySelectorAll('label')].find(e=>e.textContent.includes('Session title')).querySelector('input').placeholder`)).toBe("Defaults to the Project name")
         if (typed) await setField(page, "Session title", typed)
         await click(page, "Directory")
         await page.evaluate(`document.querySelector('[role=option]').click()`)
@@ -301,14 +306,14 @@ describe("Projects", () => {
       await click(page, "Create and add")
       await until(page, `!document.querySelector('dialog[open]') && document.querySelectorAll('${panel(1440)} .project-member').length===6`)
       expect((await mutations(page, "session.create"))[0]?.input).toMatchObject({ title: "Docs member" })
-      expect(await page.evaluate<string>(`[...document.querySelectorAll('${panel(1440)} .project-member strong')].at(-1).textContent`)).toBe("Docs member")
+      expect(await page.evaluate(`[...document.querySelectorAll('${panel(1440)} .project-member strong')].at(-1).textContent`)).toBe("Docs member")
       await click(page, "New session…")
       await click(page, "Directory")
       await page.evaluate(`document.querySelector('[role=option]').click()`)
       await click(page, "Create and add")
       await until(page, `!document.querySelector('dialog[open]') && document.querySelectorAll('${panel(1440)} .project-member').length===7`)
       expect((await mutations(page, "session.create"))[1]?.input).not.toHaveProperty("title")
-      expect(await page.evaluate<string>(`[...document.querySelectorAll('${panel(1440)} .project-member strong')].at(-1).textContent`)).toBe("New session")
+      expect(await page.evaluate(`[...document.querySelectorAll('${panel(1440)} .project-member strong')].at(-1).textContent`)).toBe("New session")
     } finally { await page.close() }
   }, 60_000)
 
@@ -353,7 +358,7 @@ describe("Projects", () => {
       await openProject(page)
       await click(page, "Open session Docs worker")
       await until(page, `document.querySelector('.project-context')?.textContent.includes('Member of Release train')`)
-      expect(await page.evaluate<string>(`document.querySelector('.project-context').textContent`)).toContain("master Release lead")
+      expect(await page.evaluate(`document.querySelector('.project-context').textContent`)).toContain("master Release lead")
       await click(page, "Back to project chat")
       await until(page, `document.querySelector('.project-context')?.textContent.includes('Master of Release train')`)
       await until(page, `document.querySelectorAll('.project-event').length===2`)
@@ -378,7 +383,7 @@ describe("Projects", () => {
       await click(page, "Save delegation")
       await until(page, `window.remoteMutationReport().filter(x=>x.operation==='coordination.update').length===3`)
       await click(page, "All masters")
-      expect(await page.evaluate<string>(`JSON.parse(localStorage.getItem('ycoding.remote.notification-filter')).scope`)).toBe("coordinators")
+      expect(await page.evaluate(`JSON.parse(localStorage.getItem('ycoding.remote.notification-filter')).scope`)).toBe("coordinators")
       await click(page, "Change master…")
       await click(page, "Use as master Docs worker")
       await until(page, `!document.querySelector('dialog[open]')`)
@@ -393,7 +398,7 @@ describe("Projects", () => {
     try {
       await until(page, `document.querySelectorAll('.project-card').length===2`)
       await click(page, "Delete project Release train")
-      expect(await page.evaluate<string>(`document.querySelector('dialog').textContent`)).toContain("keep running and keep their histories")
+      expect(await page.evaluate(`document.querySelector('dialog').textContent`)).toContain("keep running and keep their histories")
       await click(page, "Delete project")
       await until(page, `document.querySelectorAll('.project-card').length===1`)
       expect((await mutations(page, "coordination.delete"))[0]?.input).toEqual({ groupID: "cgrp_release" })
@@ -407,10 +412,10 @@ describe("Projects", () => {
       await openProject(page, 390)
       await page.evaluate(`document.querySelector('dialog .overlay__close').focus()`)
       await page.evaluate(`document.querySelector('dialog').dispatchEvent(new KeyboardEvent('keydown', {key:'Tab',shiftKey:true,bubbles:true,cancelable:true}))`)
-      expect(await page.evaluate<boolean>(`!!document.activeElement.closest('dialog')`)).toBe(true)
+      expect(await page.evaluate(`!!document.activeElement.closest('dialog')`)).toBe(true)
       await page.pressKey("Escape", "Escape", 27)
       await until(page, `!document.querySelector('dialog[open]')`)
-      expect(await page.evaluate<string>(`document.activeElement.textContent`)).toBe("Sessions 5")
+      expect(await page.evaluate(`document.activeElement.textContent`)).toBe("Sessions 5")
     } finally { await page.close() }
   }, 30_000)
 
@@ -419,9 +424,9 @@ describe("Projects", () => {
       const page = await open(width)
       try {
         await openProject(page, width)
-        expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
-        if (width < 1024) expect(await page.evaluate<number>(`document.querySelectorAll('dialog[open]').length`)).toBe(1)
-        else expect(await page.evaluate<boolean>(`document.querySelector('.project-desktop').getClientRects().length>0`)).toBe(true)
+        expect(await page.evaluate(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
+        if (width < 1024) expect(await page.evaluate(`document.querySelectorAll('dialog[open]').length`)).toBe(1)
+        else expect(await page.evaluate(`document.querySelector('.project-desktop').getClientRects().length>0`)).toBe(true)
       } finally { await page.close() }
     }
   }, 60_000)
@@ -435,7 +440,7 @@ describe("Projects", () => {
       await page.evaluate(`document.querySelector('[role=option]').click()`)
       await click(page, "Create and add")
       await until(page, `document.querySelector('dialog').textContent.includes('may already exist')`)
-      expect(await page.evaluate<boolean>(`${button("Create and add")}.disabled`)).toBe(true)
+      expect(await page.evaluate(`${button("Create and add")}.disabled`)).toBe(true)
       expect(await mutations(page, "session.create")).toHaveLength(1)
       expect(await mutations(page, "coordination.update")).toHaveLength(0)
     } finally { await page.close() }
@@ -448,10 +453,10 @@ describe("Projects", () => {
       await click(page, "New session…")
       await until(page, `document.querySelector('dialog[open]')?.getAttribute('aria-label')==='New session in this project'`)
       await Bun.sleep(300)
-      expect(await page.evaluate<number>(`document.querySelectorAll('dialog[open]').length`)).toBe(1)
+      expect(await page.evaluate(`document.querySelectorAll('dialog[open]').length`)).toBe(1)
       await page.pressKey("Escape", "Escape", 27)
       await until(page, `!document.querySelector('dialog[open]')`)
-      expect(await page.evaluate<string>(`document.activeElement.textContent`)).toBe("Sessions 5")
+      expect(await page.evaluate(`document.activeElement.textContent`)).toBe("Sessions 5")
     } finally { await page.close() }
   }, 30_000)
 })

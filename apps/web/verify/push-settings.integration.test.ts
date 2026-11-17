@@ -77,7 +77,7 @@ async function open(initial: { readonly permission: "default" | "granted"; reado
 
 async function until(page: { evaluate: <T>(expression: string) => Promise<T> }, expression: string) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (await page.evaluate<boolean>(expression)) return
+    if (await page.evaluate(expression)) return
     await Bun.sleep(30)
   }
   throw new Error(`Timed out waiting for ${expression}`)
@@ -95,23 +95,23 @@ describe("Settings push to this device", () => {
       await page.evaluate(`window.__push.holdPermission = true; window.__push.holdKey = true; window.__push.holdPost = true`)
       await page.evaluate(`${pushButton}.click()`)
       await until(page, `window.__push.gates.permission !== undefined`)
-      expect(await page.evaluate<string>(`${pushButton}.textContent`)).toBe("Checking…")
+      expect(await page.evaluate(`${pushButton}.textContent`)).toBe("Checking…")
       await page.evaluate(toggle("Work finished"))
       await page.evaluate(`window.__push.gates.permission()`)
       await until(page, `window.__push.gates.key !== undefined`)
       await page.evaluate(toggle("Machine offline"))
       await page.evaluate(`window.__push.gates.key()`)
       await until(page, `window.__push.posts.length === 1`)
-      expect(await page.evaluate<unknown>(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": false, "quota-pace": true })
+      expect(await page.evaluate(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": false, "quota-pace": true })
       await page.evaluate(toggle("Needs your attention"))
       await Bun.sleep(100)
-      expect(await page.evaluate<number>(`window.__push.posts.length`)).toBe(1)
+      expect(await page.evaluate(`window.__push.posts.length`)).toBe(1)
       await page.evaluate(`window.__push.gates.post1()`)
       await until(page, `window.__push.posts.length === 2`)
-      expect(await page.evaluate<unknown>(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": false, "machine-offline": false, "quota-pace": true })
+      expect(await page.evaluate(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": false, "machine-offline": false, "quota-pace": true })
       await page.evaluate(`window.__push.gates.post2()`)
       await until(page, `${pushButton}.textContent === 'Turn off'`)
-      expect(await page.evaluate<string>(status)).toBe("Push is registered on this device for the System alerts chosen above.")
+      expect(await page.evaluate(status)).toBe("Push is registered on this device for the System alerts chosen above.")
     } finally { await page.close() }
   })
 
@@ -119,15 +119,15 @@ describe("Settings push to this device", () => {
     const page = await open({ permission: "granted", subscribed: true })
     try {
       await until(page, `${pushButton}.textContent === 'Turn off'`)
-      expect(await page.evaluate<unknown>(`['In app', 'System'].map(channel => document.querySelector('[aria-label="Quota pace via ' + channel + '"]').checked)`)).toEqual([true, true])
+      expect(await page.evaluate(`['In app', 'System'].map(channel => document.querySelector('[aria-label="Quota pace via ' + channel + '"]').checked)`)).toEqual([true, true])
       await page.evaluate(`document.querySelector('[aria-label="Quota pace via In app"]').click()`)
       await Bun.sleep(100)
-      expect(await page.evaluate<number>(`window.__push.posts.length`)).toBe(1)
-      expect(await page.evaluate<unknown>(`['In app', 'System'].map(channel => document.querySelector('[aria-label="Quota pace via ' + channel + '"]').checked)`)).toEqual([false, true])
+      expect(await page.evaluate(`window.__push.posts.length`)).toBe(1)
+      expect(await page.evaluate(`['In app', 'System'].map(channel => document.querySelector('[aria-label="Quota pace via ' + channel + '"]').checked)`)).toEqual([false, true])
       await page.evaluate(toggle("Quota pace"))
       await until(page, `window.__push.posts.length === 2`)
-      expect(await page.evaluate<unknown>(lastCategories)).toEqual({ "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": false })
-      expect(await page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.notifications'))['quota-pace']`)).toEqual({ "in-app": false, desktop: false })
+      expect(await page.evaluate(lastCategories)).toEqual({ "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": false })
+      expect(await page.evaluate(`JSON.parse(localStorage.getItem('ycoding.notifications'))['quota-pace']`)).toEqual({ "in-app": false, desktop: false })
     } finally { await page.close() }
   })
 
@@ -140,8 +140,8 @@ describe("Settings push to this device", () => {
       await until(second, `!document.querySelector('[aria-label="Work finished via System"]').checked`)
       await second.evaluate(toggle("Machine offline"))
       await until(second, `window.__push.posts.length === 2`)
-      expect(await second.evaluate<unknown>(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": false, "quota-pace": true })
-      expect(await first.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.notifications'))`)).toMatchObject({
+      expect(await second.evaluate(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": false, "quota-pace": true })
+      expect(await first.evaluate(`JSON.parse(localStorage.getItem('ycoding.notifications'))`)).toMatchObject({
         "agent-completed": { desktop: false }, "machine-offline": { desktop: false } })
     } finally { await first.close(); await second.close() }
   })
@@ -156,14 +156,14 @@ describe("Settings push to this device", () => {
       await first.evaluate(toggle("Work finished"))
       await until(first, `window.__push.posts.length === 2`)
       await until(second, `window.__push.heldStorage.length === 1`)
-      expect(await second.evaluate<boolean>(`document.querySelector('[aria-label="Work finished via System"]').checked`)).toBe(true)
+      expect(await second.evaluate(`document.querySelector('[aria-label="Work finished via System"]').checked`)).toBe(true)
       await second.evaluate(toggle("Machine offline"))
       await until(second, `window.__push.posts.length === 2`)
-      expect(await second.evaluate<unknown>(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": false, "quota-pace": true })
-      expect(await second.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.notifications'))`)).toMatchObject({
+      expect(await second.evaluate(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": false, "quota-pace": true })
+      expect(await second.evaluate(`JSON.parse(localStorage.getItem('ycoding.notifications'))`)).toMatchObject({
         "agent-completed": { desktop: false }, "machine-offline": { desktop: false } })
       await second.evaluate(`window.__push.holdStorage = false; window.__push.heldStorage.splice(0).forEach(deliver => deliver())`)
-      expect(await second.evaluate<boolean>(`document.querySelector('[aria-label="Work finished via System"]').checked`)).toBe(false)
+      expect(await second.evaluate(`document.querySelector('[aria-label="Work finished via System"]').checked`)).toBe(false)
     } finally { await first.close(); await second.close() }
   })
 
@@ -174,8 +174,8 @@ describe("Settings push to this device", () => {
       await page.evaluate(`window.__push.answers.post = 'Web Push is unavailable'`)
       await page.evaluate(toggle("Work finished"))
       await until(page, `${status}.startsWith('Saved on this device only')`)
-      expect(await page.evaluate<string>(status)).toBe("Saved on this device only. Closed-app alerts still use the previous choice: Web Push is unavailable")
-      expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Work finished via System"]').checked`)).toBe(false)
+      expect(await page.evaluate(status)).toBe("Saved on this device only. Closed-app alerts still use the previous choice: Web Push is unavailable")
+      expect(await page.evaluate(`document.querySelector('[aria-label="Work finished via System"]').checked`)).toBe(false)
     } finally { await page.close() }
   })
 
@@ -185,11 +185,11 @@ describe("Settings push to this device", () => {
       try {
         await page.setViewport(width, 844)
         await until(page, `${pushButton}.textContent === 'Turn off'`)
-        expect(await page.evaluate<string[]>(`[...document.querySelector('[aria-label="Push to this device"]').closest('.defs__row').querySelectorAll('button')].map((button) => button.textContent)`)).toEqual(["Turn off"])
-        expect(await page.evaluate<string>(status)).toBe("Push is registered on this device for the System alerts chosen above.")
+        expect(await page.evaluate(`[...document.querySelector('[aria-label="Push to this device"]').closest('.defs__row').querySelectorAll('button')].map((button) => button.textContent)`)).toEqual(["Turn off"])
+        expect(await page.evaluate(status)).toBe("Push is registered on this device for the System alerts chosen above.")
         await page.evaluate(`${pushButton}.click()`)
         await until(page, `${pushButton}.textContent === 'Turn on'`)
-        expect(await page.evaluate<{ readonly requests: readonly unknown[]; readonly unsubscribed: number }>(`({ requests: window.__push.tests, unsubscribed: window.__push.unsubscribed })`)).toEqual({ requests: [], unsubscribed: 1 })
+        expect(await page.evaluate(`({ requests: window.__push.tests, unsubscribed: window.__push.unsubscribed })`)).toEqual({ requests: [], unsubscribed: 1 })
       } finally { await page.close() }
     }
   })

@@ -13,7 +13,6 @@ import { nextMessagePrediction, acceptNextMessagePrediction } from "../view-mode
 import type { ModelRefView } from "../projection"
 import { applyMention, autocompleteBound, effortLabel, modelSelection, orderedVariants, variantsForModel, modelSelectionKey, modelSpeeds, needsCatalogRead, optionsForTrigger, promptGenerateModes, queuedDraftDelivery, queuedPromptIndicator, reconcileMentions, sameModel, submission, suggestionTrigger, tokenKey, triggerAt, type MentionPart, type PromptGenerateMode } from "./composer-logic"
 import { ComposerPicker } from "./composer-picker"
-import { containTab, createSheetFrame } from "./composer-sheet"
 import { attachmentCapacitySummary, attachmentLimit, encodeAttachment, type ComposerAttachment } from "./composer-attachment"
 import { ModelControl, ReasoningEffort } from "./model-control"
 import { requestAutonomousDialog } from "./autonomous-dialog"
@@ -98,8 +97,6 @@ export function MiniComposer(props: {
   const contextClose = createDebouncer(() => { if (!contextPinned()) closeContext() }, { wait: 100 })
   let request = 0
   let attachmentGeneration = 0
-  const closeMobile = () => { setMobileOpen(false); queueMicrotask(() => mobileTrigger?.focus()) }
-  const mobileSheetStyle = createSheetFrame(mobileOpen)
 
   const targetKey = createMemo(() => props.target ? catalogKey(props.target) : undefined)
   const modelKey = createMemo(() => modelSelectionKey(props.target, remote.state().activeDeviceID, remote.state().generation))
@@ -585,15 +582,12 @@ export function MiniComposer(props: {
   }
   return <>
     <Show when={mobileOpen()}><Portal>
-        <div class="mini-picker__scrim composer__selection-scrim" data-cursor="action" onClick={closeMobile} />
-        <section ref={mobileSheet} class="composer__selection-sheet" role="dialog" aria-modal="true" aria-label="Choose agent and model" tabindex="-1" style={mobileSheetStyle()} onKeyDown={(event) => {
-          if (event.key === "Escape") { event.preventDefault(); closeMobile() }
-          containTab(event, event.currentTarget)
-        }}>
-          <div class="mini-picker__heading"><strong>Agent and model</strong><button type="button" aria-label="Close agent and model picker" onClick={closeMobile}><Icon name="close" /></button></div>
+        <Modal class="overlay--sheet overlay--agent-model" label="Choose agent and model" returnFocus={mobileTrigger!} onClose={() => setMobileOpen(false)}>
+        <section ref={mobileSheet} class="composer__selection-sheet">
           <Show when={contextWindow()}>{(value) => <div class="composer__context-summary"><strong>Context window</strong><div class="composer__context-bar" aria-hidden="true"><span class="composer__context-bar-fill" style={{ width: `${Math.min(100, value().fraction * 100)}%` }} /></div><span>{contextLabel()}</span><span>{value().tokens}</span></div>}</Show>
           <div class="composer__selection-options"><ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} /><ModelControl models={catalog()?.models ?? []} selected={selectedModel()} selectionKey={modelKey()} recent={recentModels()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} /></div>
         </section>
+        </Modal>
     </Portal></Show>
     <SharedComposerSurface classList={{ "composer--collapsed": collapsed(), "composer--phone-summary": props.phoneSummary === true, "composer--metadata-in-transcript": props.metadataMount !== undefined }} collapsed={collapsed()} dragging={dragging()} onSubmit={(event) => event.preventDefault()} onDragOver={(event) => { if (event.dataTransfer?.types.includes("Files")) { event.preventDefault(); setDragging(true) } }} onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false) }} onDrop={(event) => { setDragging(false); if (!event.dataTransfer?.files.length) return; event.preventDefault(); void addFiles(Array.from(event.dataTransfer.files)) }} fieldRef={(element) => { inputWrap = element }} field={<>
         <input ref={fileInput} class="composer__file-input" type="file" multiple aria-label="Choose files" onChange={(event) => { void addFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = "" }} />
@@ -746,7 +740,7 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
                 : value.kind === "sleep" || value.kind === "wake" ? await remote.store.setSleep(value.kind === "sleep")
                   : value.kind === "keepAwake" ? await toggleKeepAwake()
                     : false
-      if (result !== false && remote.state().drafts[sessionID] === draft) remote.store.setDraft(sessionID, "")
+      if (result && remote.state().drafts[sessionID] === draft) remote.store.setDraft(sessionID, "")
       return result
     }} />
     <Show when={suggestion()} keyed>{(request) => <SuggestDialog returnFocus={request.returnFocus} onClose={() => setSuggestion(undefined)} onConfirm={(memory) => { void remote.store.requestPrediction({ memory, ...(request.hint ? { hint: request.hint } : {}) }) }} />}</Show>

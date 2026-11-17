@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import type { ViteDevServer } from "vite"
 import { Server } from "node:http"
-import { launchBrowser } from "./cdp"
+import { launchBrowser, decodeArray, decodeBoolean, decodeNumber, decodeRecord, decodeString } from "./cdp"
 
 const executable = process.env.YCODING_WEB_CHROME
 if (!executable) throw new Error("Set YCODING_WEB_CHROME to an installed Chrome executable.")
@@ -25,12 +25,17 @@ afterAll(async () => { await browser?.close(); await server?.close(); if (listen
 
 type Page = Awaited<ReturnType<typeof launchBrowser>> extends { openPage(): Promise<infer P> } ? P : never
 const frames = (page: Page, count = 4) => page.evaluate(`new Promise(resolve => { let left=${count}; const tick=()=>--left ? requestAnimationFrame(tick) : resolve(true); requestAnimationFrame(tick) })`)
+async function readingGesture(page: Page) {
+  const point=await page.evaluate(`(()=>{const root=document.querySelector('.workspace__scroll'),box=root.getBoundingClientRect();window.readingScrollSettled=new Promise(resolve=>root.addEventListener('scrollend',()=>resolve(true),{once:true}));return {x:box.left+10,y:box.top+40}})()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]) } })
+  await page.wheel(point.x,point.y,0,-500)
+  await page.evaluate(`window.readingScrollSettled`)
+}
 async function wait(page: Page, expression: string) {
   for (let attempt = 0; attempt < 120; attempt++) {
-    if (await page.evaluate<boolean>(expression)) return
+    if (await page.evaluate(expression)) return
     await frames(page, 1)
   }
-  throw new Error(`Rendered condition did not settle: ${expression}`)
+  throw new Error(`Rendered condition did not settle: ${expression}; ${JSON.stringify(await page.evaluate(`({route:location.pathname,app:document.querySelector('.app')?.className,rail:document.querySelector('.workspace__rail')?.innerText,loading:[...document.querySelectorAll('[aria-busy="true"]')].map(node=>({class:node.className,label:node.getAttribute('aria-label')}))})`))}`)
 }
 async function open(page: Page, params = "") {
   await page.navigate(`${origin}/verify/remote.html?view=chat&team=two&transcriptProbe=1&${params}`)
@@ -49,19 +54,20 @@ test("manual scroll during streaming retains the visible row while latest-follow
       await page.setReducedMotion(true)
       await open(page, `theme=${theme}`)
       await wait(page, `document.querySelector('.workspace__scroll').scrollTop>500`)
-      await page.evaluate(`(() => { ${delta}; const root=document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel',{deltaY:-600,bubbles:true})); root.scrollTop=400; root.dispatchEvent(new Event('scroll')); })()`)
+      await readingGesture(page)
+      await page.evaluate(`(() => { ${delta}; const root=document.querySelector('.workspace__scroll');root.scrollTop=400 })()`)
       await frames(page)
-      expect(await page.evaluate<number>(`document.querySelector('.workspace__scroll').scrollTop`)).toBeLessThan(500)
+      expect(await page.evaluate(`(()=>{const root=document.querySelector('.workspace__scroll');return root.scrollHeight-root.clientHeight-root.scrollTop})()`)).toBeGreaterThan(1)
       await page.evaluate(anchor)
       await page.evaluate(delta)
       await frames(page, 8)
-      const held = await page.evaluate<{ connected: boolean; shift: number; jump: boolean }>(`({ connected:window.readingAnchor.isConnected, shift:Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop), jump:!!document.querySelector('[aria-label="Jump to latest"]') })`)
+      const held = await page.evaluate(`({ connected:window.readingAnchor.isConnected, shift:Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop), jump:!!document.querySelector('[aria-label="Jump to latest"]') })`)
       expect(held).toEqual({ connected: true, shift: 0, jump: true })
       await page.evaluate(`document.querySelector('[aria-label="Jump to latest"]').click()`)
       await frames(page, 8)
       await page.evaluate(delta)
       await frames(page, 8)
-      expect(await page.evaluate<number>(`(() => { const root=document.querySelector('.workspace__scroll'); return root.scrollHeight-root.clientHeight-root.scrollTop })()`)).toBeLessThanOrEqual(1)
+      expect(await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); return root.scrollHeight-root.clientHeight-root.scrollTop })()`)).toBeLessThanOrEqual(1)
     }
   } finally { await page.close() }
 }, 60_000)
@@ -82,13 +88,13 @@ test("all screen entries choose their position before paint without resetting sa
     ]) {
       await page.evaluate(`(() => { window.entryPositions=[]; window.entryRoute=${JSON.stringify(route.pathname)}; window.entryBottom=${route.bottom}; window.entrySampling=true; const tick=()=>{ if(!window.entrySampling) return; const panel=[...document.querySelectorAll('.workspace__scroll > .route-panel')].find(panel=>!panel.inert); if(location.pathname===window.entryRoute && panel && panel.children.length && getComputedStyle(panel).opacity!=='0') { const root=document.querySelector('.workspace__scroll'); window.entryPositions.push(window.entryBottom ? root.scrollHeight-root.clientHeight-root.scrollTop : root.scrollTop); } requestAnimationFrame(tick); }; requestAnimationFrame(tick); document.querySelector(${JSON.stringify(entryControl(width, route.href))}).click(); })()`)
       await wait(page, `window.entryPositions.length>=4`)
-      const samples = await page.evaluate<number[]>(`(() => {window.entrySampling=false; return window.entryPositions})()`)
+      const samples = await page.evaluate(`(() => {window.entrySampling=false; return window.entryPositions})()`, decodeArray(decodeNumber))
       expect(Math.max(...samples), route.pathname).toBeLessThanOrEqual(1)
       await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel',{deltaY:300,bubbles:true})); root.scrollTop=200; root.dispatchEvent(new Event('scroll')); })()`)
       await frames(page, 2)
-      const top = await page.evaluate<number>(`document.querySelector('.workspace__scroll').scrollTop`)
+      const top = await page.evaluate(`document.querySelector('.workspace__scroll').scrollTop`)
       await frames(page, 8)
-      expect(await page.evaluate<number>(`document.querySelector('.workspace__scroll').scrollTop`), route.pathname).toBe(top)
+      expect(await page.evaluate(`document.querySelector('.workspace__scroll').scrollTop`), route.pathname).toBe(top)
     }
     }
   } finally { await page.close() }
@@ -99,11 +105,11 @@ test("a native wheel gesture interrupts latest-follow while output arrives every
   try {
     await open(page)
     await page.evaluate(`(() => { window.streaming=true; const tick=()=>{ if(!window.streaming) return; window.transcriptDelta(' live output '.repeat(10)); requestAnimationFrame(tick); }; requestAnimationFrame(tick); })()`)
-    const bounds = await page.evaluate<{ x: number; y: number }>(`(() => {const rect=document.querySelector('.workspace__scroll').getBoundingClientRect(); return {x:(rect.left+rect.right)/2,y:(rect.top+rect.bottom)/2}})()`)
+    const bounds = await page.evaluate(`(() => {const rect=document.querySelector('.workspace__scroll').getBoundingClientRect(); return {x:(rect.left+rect.right)/2,y:(rect.top+rect.bottom)/2}})()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]) } })
     await page.wheel(bounds.x, bounds.y, 0, -600)
     await frames(page, 8)
     await page.evaluate(`window.streaming=false`)
-    expect(await page.evaluate<number>(`(() => {const root=document.querySelector('.workspace__scroll'); return root.scrollHeight-root.clientHeight-root.scrollTop})()`)).toBeGreaterThan(400)
+    expect(await page.evaluate(`(() => {const root=document.querySelector('.workspace__scroll'); return root.scrollHeight-root.clientHeight-root.scrollTop})()`)).toBeGreaterThan(400)
   } finally { await page.close() }
 }, 60_000)
 
@@ -112,16 +118,16 @@ test("a small deliberate wheel scroll does not resume following merely because t
   try {
     await page.setReducedMotion(true)
     await open(page)
-    const bounds = await page.evaluate<{ x: number; y: number }>(`(() => {const rect=document.querySelector('.workspace__scroll').getBoundingClientRect(); return {x:(rect.left+rect.right)/2,y:(rect.top+rect.bottom)/2}})()`)
+    const bounds = await page.evaluate(`(() => {const rect=document.querySelector('.workspace__scroll').getBoundingClientRect(); return {x:(rect.left+rect.right)/2,y:(rect.top+rect.bottom)/2}})()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]) } })
     await page.wheel(bounds.x, bounds.y, 0, -12)
     await frames(page, 8)
     await page.evaluate(anchor)
-    const before = await page.evaluate<number>(`document.querySelector('.workspace__scroll').scrollTop`)
+    const before = await page.evaluate(`document.querySelector('.workspace__scroll').scrollTop`)
     await page.evaluate(delta)
     await frames(page, 8)
-    expect(await page.evaluate<number>(`document.querySelector('.workspace__scroll').scrollTop`)).toBe(before)
-    expect(await page.evaluate<number>(`Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop)`)).toBeLessThanOrEqual(1)
-    expect(await page.evaluate<boolean>(`!!document.querySelector('[aria-label="Jump to latest"]')`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.workspace__scroll').scrollTop`)).toBe(before)
+    expect(await page.evaluate(`Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop)`)).toBeLessThanOrEqual(1)
+    expect(await page.evaluate(`!!document.querySelector('[aria-label="Jump to latest"]')`)).toBe(true)
   } finally { await page.close() }
 }, 60_000)
 
@@ -131,14 +137,14 @@ test("a small native touch scroll keeps the reader's visible message while outpu
     await page.setMobileViewport(390, 900)
     await page.setReducedMotion(true)
     await open(page)
-    const bounds = await page.evaluate<{ x: number; y: number }>(`(() => {const rect=document.querySelector('.workspace__scroll').getBoundingClientRect(); return {x:rect.left+6,y:(rect.top+rect.bottom)/2}})()`)
+    const bounds = await page.evaluate(`(() => {const rect=document.querySelector('.workspace__scroll').getBoundingClientRect(); return {x:rect.left+6,y:(rect.top+rect.bottom)/2}})()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]) } })
     await page.touch("touchStart", bounds.x, bounds.y)
     await page.touch("touchMove", bounds.x, bounds.y + 40)
     await frames(page, 8)
     await page.evaluate(anchor)
     await page.evaluate(delta)
     await frames(page, 8)
-    expect(await page.evaluate<number>(`Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop)`)).toBeLessThanOrEqual(1)
+    expect(await page.evaluate(`Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop)`)).toBeLessThanOrEqual(1)
     await page.touch("touchEnd")
   } finally { await page.close() }
 }, 60_000)
@@ -150,7 +156,7 @@ test("trusted scroll-away survives tool progress, footer settlement, todo and de
       await page.setViewport(width, 900)
       await page.setReducedMotion(true)
       await open(page)
-      const bounds = await page.evaluate<{ x: number; y: number }>(`(() => {const rect=document.querySelector('.workspace__scroll').getBoundingClientRect(); return {x:(rect.left+rect.right)/2,y:(rect.top+rect.bottom)/2}})()`)
+      const bounds = await page.evaluate(`(() => {const rect=document.querySelector('.workspace__scroll').getBoundingClientRect(); return {x:(rect.left+rect.right)/2,y:(rect.top+rect.bottom)/2}})()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]) } })
       await page.wheel(bounds.x, bounds.y, 0, -700)
       await frames(page, 8)
       await page.evaluate(anchor)
@@ -159,17 +165,17 @@ test("trusted scroll-away survives tool progress, footer settlement, todo and de
       for (const kind of ["progress", "decisions", "settle", "epoch"]) {
         await page.evaluate(`window.remoteReadingTail(${JSON.stringify(kind)})`)
         await frames(page, 8)
-        if (kind === "progress") expect(await page.evaluate<string>(`document.querySelector('[data-message-id="probe_tail"] .transcript-tool__status')?.innerText`)).toContain("Running")
+        if (kind === "progress") expect(await page.evaluate(`document.querySelector('[data-message-id="probe_tail"] .transcript-tool__status')?.innerText`)).toContain("Running")
         if (kind === "decisions") {
-          expect(await page.evaluate<number>(`document.querySelectorAll('.todo-panel__item').length`)).toBe(4)
-          expect(await page.evaluate<boolean>(`!!document.querySelector('#pending-requests')`)).toBe(true)
+          expect(await page.evaluate(`document.querySelectorAll('.todo-panel__item').length`)).toBe(4)
+          expect(await page.evaluate(`!!document.querySelector('#pending-requests')`)).toBe(true)
         }
-        if (kind === "settle") expect(await page.evaluate<string>(`document.querySelector('[data-message-id="probe_tail"] .transcript-tool__status')?.innerText`)).toContain("Completed")
+        if (kind === "settle") expect(await page.evaluate(`document.querySelector('[data-message-id="probe_tail"] .transcript-tool__status')?.innerText`)).toContain("Completed")
       }
       await page.evaluate(`window.transcriptRefresh()`)
       await page.evaluate(delta)
       await frames(page, 8)
-      const result = await page.evaluate<{ shift: number; connected: boolean; focus: string; tool: boolean; decision: boolean }>(`(() => {window.samplingReading=false; return {shift:Math.max(...window.geometrySamples), connected:window.readingAnchor.isConnected,focus:document.activeElement?.getAttribute('aria-label')??document.activeElement?.tagName, tool:!!document.querySelector('.transcript-tool'), decision:!!document.querySelector('#pending-requests')} })()`)
+      const result = await page.evaluate(`(() => {window.samplingReading=false; return {shift:Math.max(...window.geometrySamples), connected:window.readingAnchor.isConnected,focus:document.activeElement?.getAttribute('aria-label')??document.activeElement?.tagName, tool:!!document.querySelector('.transcript-tool'), decision:!!document.querySelector('#pending-requests')} })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, shift: (decodeNumber)(record["shift"]), connected: (decodeBoolean)(record["connected"]), focus: (decodeString)(record["focus"]), tool: (decodeBoolean)(record["tool"]), decision: (decodeBoolean)(record["decision"]) } })
       expect(result.shift, `${width}, focus ${result.focus}`).toBeLessThanOrEqual(1)
       expect(result.connected).toBe(true)
       expect(result.decision).toBe(true)
@@ -189,47 +195,50 @@ test("sidebar collapse and reopen retain the actual virtual row and transcript a
     await page.evaluate(`${anchor}; (() => {const rail=document.querySelector('.workspace__rail-body'), bounds=rail.getBoundingClientRect(); const row=[...rail.querySelectorAll('.session-list__row')].find(row=>row.getBoundingClientRect().top>=bounds.top); window.railAnchor=row; window.railTop=row.getBoundingClientRect().top; })()`)
     await page.evaluate(`document.querySelector('[aria-label="Hide workspace sidebar"]').click()`)
     await frames(page, 8)
-    const held = await page.evaluate<{ shift: number; focus: string }>(`({shift:Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop),focus:document.activeElement?.getAttribute('aria-label')??document.activeElement?.tagName})`)
+    const held = await page.evaluate(`({shift:Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop),focus:document.activeElement?.getAttribute('aria-label')??document.activeElement?.tagName})`, (value: unknown) => { const record = decodeRecord(value); return { ...record, shift: (decodeNumber)(record["shift"]), focus: (decodeString)(record["focus"]) } })
     expect(held.shift, `focused ${held.focus}`).toBeLessThanOrEqual(1)
     await page.evaluate(`document.querySelector('[aria-label="Show workspace sidebar"]').click()`)
     await frames(page, 8)
-    expect(await page.evaluate<boolean>(`window.railAnchor.isConnected`)).toBe(true)
-    expect(await page.evaluate<number>(`Math.abs(window.railAnchor.getBoundingClientRect().top-window.railTop)`)).toBeLessThanOrEqual(1)
-    expect(await page.evaluate<number>(`Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop)`)).toBeLessThanOrEqual(1)
+    expect(await page.evaluate(`window.railAnchor.isConnected`)).toBe(true)
+    expect(await page.evaluate(`Math.abs(window.railAnchor.getBoundingClientRect().top-window.railTop)`)).toBeLessThanOrEqual(1)
+    expect(await page.evaluate(`Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop)`)).toBeLessThanOrEqual(1)
     }
   } finally { await page.close() }
 }, 60_000)
 
-const placeRow = (position: "above" | "across" | "below") => `(() => { const root=document.querySelector('.workspace__scroll'), reply=document.querySelector('[data-message-id="probe_reply_3"]'); const rect=reply.getBoundingClientRect(), bounds=root.getBoundingClientRect(); const top=rect.top-bounds.top+root.scrollTop; root.dispatchEvent(new WheelEvent('wheel',{deltaY:-500,bubbles:true})); root.scrollTop=${position === "above" ? "top+rect.height" : position === "across" ? "top+rect.height/2" : "top-rect.height"}; root.dispatchEvent(new Event('scroll')); })()`
+const placeRow = (position: "above" | "across" | "below") => `(() => { const root=document.querySelector('.workspace__scroll'), reply=document.querySelector('[data-message-id="probe_reply_3"]'); const rect=reply.getBoundingClientRect(), bounds=root.getBoundingClientRect(); const top=rect.top-bounds.top+root.scrollTop;root.scrollTop=${position === "above" ? "top+rect.height" : position === "across" ? "top+rect.height/2" : "top-rect.height"} })()`
 const readerState = `(() => { const root=document.querySelector('.workspace__scroll'), bounds=root.getBoundingClientRect(); const rows=[...document.querySelectorAll('.transcript-navigation__item')]; const anchor=rows.find(row=>row.getBoundingClientRect().top>=bounds.top); const reply=document.querySelector('[data-message-id="probe_reply_3"]'); const rect=reply.getBoundingClientRect(); return { anchor: anchor.dataset.messageId, top: anchor.getBoundingClientRect().top-bounds.top, replyHeight: rect.height, replyPosition: rect.bottom<=bounds.top ? "above" : rect.top<bounds.top ? "across" : "below" } })()`
 
 test("a width reflow keeps the reading anchor whether the re-wrapping row is above, across or below the fold", async () => {
   const page = await browser.openPage()
+  let reflows=0
   try {
     for (const width of [820, 1000, 1440]) {
       for (const position of ["above", "across", "below"] as const) {
         await page.setViewport(width, 900)
         await page.setReducedMotion(true)
         await open(page, "inventoryCount=150&pageRows=150")
-        await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel',{deltaY:-500,bubbles:true})); root.scrollTop=0; root.dispatchEvent(new Event('scroll')) })()`)
+        await readingGesture(page)
+        await page.evaluate(`document.querySelector('.workspace__scroll').scrollTop=0`)
         await wait(page, `document.querySelector('[data-message-id="probe_reply_3"]') !== null`)
         await page.evaluate(placeRow(position))
         await frames(page, 8)
-        const before = await page.evaluate<{ anchor: string; top: number; replyHeight: number; replyPosition: string }>(readerState)
+        const before = await page.evaluate(readerState, (value: unknown) => { const record = decodeRecord(value); return { ...record, anchor: (decodeString)(record["anchor"]), top: (decodeNumber)(record["top"]), replyHeight: (decodeNumber)(record["replyHeight"]), replyPosition: (decodeString)(record["replyPosition"]) } })
         expect(before.replyPosition, `${width} ${position}`).toBe(position)
         await page.evaluate(`document.querySelector('[aria-label="Hide workspace sidebar"]').click()`)
         await frames(page, 8)
-        const hidden = await page.evaluate<{ anchor: string; top: number; replyHeight: number }>(readerState)
-        if (width < 1440 && position !== "above") expect(hidden.replyHeight, `${width} ${position} wraps differently`).not.toBe(before.replyHeight)
+        const hidden = await page.evaluate(readerState, (value: unknown) => { const record = decodeRecord(value); return { ...record, anchor: (decodeString)(record["anchor"]), top: (decodeNumber)(record["top"]), replyHeight: (decodeNumber)(record["replyHeight"]) } })
+        if(hidden.replyHeight!==before.replyHeight) reflows++
         expect(hidden.anchor, `${width} ${position} hide`).toBe(before.anchor)
         expect(Math.abs(hidden.top - before.top), `${width} ${position} hide`).toBeLessThanOrEqual(1)
         await page.evaluate(`document.querySelector('[aria-label="Show workspace sidebar"]').click()`)
         await frames(page, 8)
-        const shown = await page.evaluate<{ anchor: string; top: number }>(readerState)
+        const shown = await page.evaluate(readerState, (value: unknown) => { const record = decodeRecord(value); return { ...record, anchor: (decodeString)(record["anchor"]), top: (decodeNumber)(record["top"]) } })
         expect(shown.anchor, `${width} ${position} show`).toBe(before.anchor)
         expect(Math.abs(shown.top - before.top), `${width} ${position} show`).toBeLessThanOrEqual(1)
       }
     }
+    expect(reflows).toBeGreaterThan(0)
   } finally { await page.close() }
 }, 120_000)
 
@@ -240,6 +249,7 @@ test("ordinary growth of a row across the fold does not drag the reader after a 
       await page.setViewport(820, 900)
       await page.setReducedMotion(true)
       await open(page, "inventoryCount=150&pageRows=150")
+      await page.evaluate("window.transcriptDelta('\\n```\\n\\n')")
       for (let index = 0; index < 8; index++) {
         await page.evaluate(delta)
         await frames(page, 2)
@@ -248,14 +258,15 @@ test("ordinary growth of a row across the fold does not drag the reader after a 
         await page.evaluate(`document.querySelector('[aria-label="Hide workspace sidebar"]').click()`)
         await frames(page, 8)
       }
-      await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'), tail=document.querySelector('[data-message-id="probe_tail"]'); const rect=tail.getBoundingClientRect(), bounds=root.getBoundingClientRect(); root.dispatchEvent(new WheelEvent('wheel',{deltaY:-500,bubbles:true})); root.scrollTop=rect.top-bounds.top+root.scrollTop+rect.height/2; root.dispatchEvent(new Event('scroll')); })()`)
+      await readingGesture(page)
+      await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'), tail=document.querySelector('[data-message-id="probe_tail"]'); const rect=tail.getBoundingClientRect(), bounds=root.getBoundingClientRect();root.scrollTop=rect.top-bounds.top+root.scrollTop+rect.height/2 })()`)
       await frames(page, 8)
       const tailTop = `(() => { const root=document.querySelector('.workspace__scroll'), tail=document.querySelector('[data-message-id="probe_tail"]'); const bounds=root.getBoundingClientRect(), rect=tail.getBoundingClientRect(); return { top: rect.top-bounds.top, height: rect.height, across: rect.top<bounds.top && rect.bottom>bounds.top } })()`
-      const before = await page.evaluate<{ top: number; height: number; across: boolean }>(tailTop)
+      const before = await page.evaluate(tailTop, (value: unknown) => { const record = decodeRecord(value); return { ...record, top: (decodeNumber)(record["top"]), height: (decodeNumber)(record["height"]), across: (decodeBoolean)(record["across"]) } })
       expect(before.across, `resized ${resized}`).toBe(true)
       await page.evaluate(delta)
       await frames(page, 8)
-      const after = await page.evaluate<{ top: number; height: number }>(tailTop)
+      const after = await page.evaluate(tailTop, (value: unknown) => { const record = decodeRecord(value); return { ...record, top: (decodeNumber)(record["top"]), height: (decodeNumber)(record["height"]) } })
       expect(after.height, `resized ${resized} grew`).toBeGreaterThan(before.height)
       expect(Math.abs(after.top - before.top), `resized ${resized}`).toBeLessThanOrEqual(1)
     }
@@ -269,13 +280,13 @@ test("reading the last message above pending decisions does not enable virtual-l
     await open(page)
     await page.evaluate(`window.remoteReadingTail('decisions')`)
     await frames(page, 8)
-    const bounds = await page.evaluate<{ x: number; y: number }>(`(() => {const rect=document.querySelector('.workspace__scroll').getBoundingClientRect(); return {x:(rect.left+rect.right)/2,y:(rect.top+rect.bottom)/2}})()`)
+    const bounds = await page.evaluate(`(() => {const rect=document.querySelector('.workspace__scroll').getBoundingClientRect(); return {x:(rect.left+rect.right)/2,y:(rect.top+rect.bottom)/2}})()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]) } })
     await page.wheel(bounds.x, bounds.y, 0, -160)
     await frames(page, 8)
     await page.evaluate(anchor)
     await page.evaluate(`window.remoteReadingTail('progress')`)
     await frames(page, 8)
-    expect(await page.evaluate<number>(`Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop)`)).toBeLessThanOrEqual(1)
+    expect(await page.evaluate(`Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop)`)).toBeLessThanOrEqual(1)
   } finally { await page.close() }
 }, 60_000)
 
@@ -296,24 +307,24 @@ test("a phone snapshot retains its reader and a growing draft leaves the latest 
       await window.responseSnapshot(window.phoneMessages,[],false);
     })()`)
     await frames(page, 12)
-    const point = await page.evaluate<{ x: number; y: number }>(`(() => {const host=document.querySelector('.workspace__scroll').getBoundingClientRect(),card=document.querySelector('.composer__row').getBoundingClientRect();return {x:(host.left+host.right)/2,y:host.top+(card.top-host.top)/2}})()`)
+    const point = await page.evaluate(`(() => {const host=document.querySelector('.workspace__scroll').getBoundingClientRect(),card=document.querySelector('.composer__row').getBoundingClientRect();return {x:(host.left+host.right)/2,y:host.top+(card.top-host.top)/2}})()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]) } })
     await page.wheel(point.x, point.y, 0, -420)
     await frames(page, 12)
-    const farther = await page.evaluate<number>(`(() => {const card=document.querySelector('.composer__row').getBoundingClientRect(),row=[...document.querySelectorAll('[data-message-id]')].find(row=>{const rect=row.getBoundingClientRect();return rect.top<card.bottom&&rect.bottom>card.top});if(!row)throw Error('No row behind the card');return Math.ceil(card.bottom-row.getBoundingClientRect().top+24)})()`)
+    const farther = await page.evaluate(`(() => {const card=document.querySelector('.composer__row').getBoundingClientRect(),row=[...document.querySelectorAll('[data-message-id]')].find(row=>{const rect=row.getBoundingClientRect();return rect.top<card.bottom&&rect.bottom>card.top});if(!row)throw Error('No row behind the card');return Math.ceil(card.bottom-row.getBoundingClientRect().top+24)})()`, decodeNumber)
     await page.wheel(point.x, point.y, 0, -farther)
     await frames(page, 12)
     await page.evaluate(anchor)
     await page.evaluate(`window.responseSnapshot(window.phoneMessages,[],false)`)
     await frames(page, 12)
-    expect(await page.evaluate<number>(`Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop)`)).toBeLessThanOrEqual(1)
+    expect(await page.evaluate(`Math.abs(window.readingAnchor.getBoundingClientRect().top-window.readingTop)`)).toBeLessThanOrEqual(1)
     await page.evaluate(`(() => {const field=document.querySelector('.composer__input');const value=Array.from({length:12},(_,i)=>'Synthetic line '+i+': λ 漢字 👩🏽‍💻').join(String.fromCharCode(10));field.focus({preventScroll:true});Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,value);field.dispatchEvent(new Event('input',{bubbles:true}));field.setSelectionRange(value.length,value.length)})()`)
     await frames(page, 12)
     await page.evaluate(`window.remoteReadingTail('decisions')`)
     await frames(page, 12)
-    const grown = await page.evaluate<{ x: number; y: number; distance: number }>(`(() => {const host=document.querySelector('.workspace__scroll'),bounds=host.getBoundingClientRect(),card=document.querySelector('.composer__row').getBoundingClientRect();return {x:(bounds.left+bounds.right)/2,y:bounds.top+(card.top-bounds.top)/2,distance:host.scrollHeight}})()`)
+    const grown = await page.evaluate(`(() => {const host=document.querySelector('.workspace__scroll'),bounds=host.getBoundingClientRect(),card=document.querySelector('.composer__row').getBoundingClientRect();return {x:(bounds.left+bounds.right)/2,y:bounds.top+(card.top-bounds.top)/2,distance:host.scrollHeight}})()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]), distance: (decodeNumber)(record["distance"]) } })
     await page.wheel(grown.x, grown.y, 0, grown.distance)
     await frames(page, 12)
-    const actions = await page.evaluate<{ visible: boolean; hit: boolean }[]>(`(() => {const host=document.querySelector('.workspace__scroll').getBoundingClientRect(),card=document.querySelector('.composer__row').getBoundingClientRect();return [...document.querySelectorAll('.remote-conversation-view:not(.route-panel--idle) .request__actions button')].map(button=>{const rect=button.getBoundingClientRect(),top=document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2);return {visible:rect.top>=host.top-1&&rect.bottom<=card.top+1,hit:top===button||button.contains(top)}})})()`)
+    const actions = await page.evaluate(`(() => {const host=document.querySelector('.workspace__scroll').getBoundingClientRect(),card=document.querySelector('.composer__row').getBoundingClientRect();return [...document.querySelectorAll('.remote-conversation-view:not(.route-panel--idle) .request__actions button')].map(button=>{const rect=button.getBoundingClientRect(),top=document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2);return {visible:rect.top>=host.top-1&&rect.bottom<=card.top+1,hit:top===button||button.contains(top)}})})()`, decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, visible: (decodeBoolean)(record["visible"]), hit: (decodeBoolean)(record["hit"]) } }))
     expect(actions.length).toBeGreaterThan(0)
     expect(actions.every((action) => action.visible && action.hit)).toBe(true)
   } finally { await page.close() }
@@ -327,22 +338,22 @@ test("Conversation opens the new-session landing while selected Session and land
     await page.setCoarsePointer(width < 768)
     await open(page)
     await page.evaluate(`(() => { const field=document.querySelector('.composer-resident textarea'); field.value='Keep my unsent draft'; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb [aria-label="New conversation"]') === null`)).toBe(true)
-    expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth>innerWidth`)).toBe(false)
+    expect(await page.evaluate(`document.querySelector('.conversation-breadcrumb [aria-label="New conversation"]') === null`)).toBe(true)
+    expect(await page.evaluate(`document.documentElement.scrollWidth>innerWidth`)).toBe(false)
     await openNewSession(page, width)
     await wait(page, `!!document.querySelector('.route-panel:not([inert]) .new-session-composer__brand')`)
-    expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote")
-    expect(await page.evaluate<number>(`window.requestLog.filter(row=>row.operation==='session.create').length`)).toBe(0)
+    expect(await page.evaluate(`location.pathname`)).toBe("/remote")
+    expect(await page.evaluate(`window.requestLog.filter(row=>row.operation==='session.create').length`)).toBe(0)
     await page.evaluate(`(() => { const field=document.querySelector('.new-session-composer textarea'); window.newConversationDraft=field; field.value='Keep the new-conversation draft too'; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
     await page.evaluate(`document.querySelector('.workspace-resume[href^="/remote/session?"]').click()`)
     await wait(page, `location.pathname === '/remote/session' && !!document.querySelector('.remote-conversation-view:not([inert]) .conversation-pane')`)
-    expect(await page.evaluate<string>(`document.querySelector('.composer-resident textarea').value`)).toBe("Keep my unsent draft")
+    expect(await page.evaluate(`document.querySelector('.composer-resident textarea').value`)).toBe("Keep my unsent draft")
     await wait(page, `!document.querySelector('.workspace__scroll > .route-panel--exiting')`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer').closest('.route-panel').getClientRects().length===0`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer').closest('.route-panel').getClientRects().length===0`)).toBe(true)
     await openNewSession(page, width)
     await wait(page, `!!document.querySelector('.route-panel:not([inert]) .new-session-composer textarea')`)
-    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer textarea').value`)).toBe("Keep the new-conversation draft too")
-    expect(await page.evaluate<boolean>(`document.querySelector('.new-session-composer textarea')===window.newConversationDraft`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer textarea').value`)).toBe("Keep the new-conversation draft too")
+    expect(await page.evaluate(`document.querySelector('.new-session-composer textarea')===window.newConversationDraft`)).toBe(true)
     await wait(page, `!document.querySelector('.workspace__scroll > .route-panel--exiting')`)
     if (width === 390 || width === 1440) await Bun.write(new URL(`../../../.cache/tmp/web-reading/start-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
     }
@@ -357,7 +368,7 @@ test("returning to a resident Session restores its reader anchor once and leaves
     await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); root.dispatchEvent(new WheelEvent('wheel',{deltaY:-500,bubbles:true})); root.scrollTop=400; root.dispatchEvent(new Event('scroll')); })()`)
     await frames(page, 8)
     await page.evaluate(anchor)
-    const before = await page.evaluate<{ id: string; top: number }>(`({id:window.readingAnchor.dataset.messageId,top:window.readingTop})`)
+    const before = await page.evaluate(`({id:window.readingAnchor.dataset.messageId,top:window.readingTop})`, (value: unknown) => { const record = decodeRecord(value); return { ...record, id: (decodeString)(record["id"]), top: (decodeNumber)(record["top"]) } })
     await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
     await wait(page, `!!document.querySelector('.team-view [data-action="open"]')`)
     await page.evaluate(`document.querySelector('.team-view [data-action="open"]').click()`)
@@ -365,11 +376,11 @@ test("returning to a resident Session restores its reader anchor once and leaves
     await page.evaluate(`document.querySelector('[aria-label="Main session"]').click()`)
     await wait(page, `!!document.querySelector('.conversation-pane [data-message-id="${before.id}"]')`)
     await frames(page, 2)
-    expect(await page.evaluate<number>(`Math.abs(document.querySelector('[data-message-id="${before.id}"]').getBoundingClientRect().top-${before.top})`)).toBeLessThanOrEqual(1)
+    expect(await page.evaluate(`Math.abs(document.querySelector('[data-message-id="${before.id}"]').getBoundingClientRect().top-${before.top})`)).toBeLessThanOrEqual(1)
     await page.evaluate(`(() => { const root=document.querySelector('.workspace__scroll'); root.focus({preventScroll:true}); root.dispatchEvent(new KeyboardEvent('keydown',{key:'PageUp',bubbles:true})); root.scrollTop-=100; root.dispatchEvent(new Event('scroll')); })()`)
-    const moved = await page.evaluate<number>(`document.querySelector('.workspace__scroll').scrollTop`)
+    const moved = await page.evaluate(`document.querySelector('.workspace__scroll').scrollTop`)
     await frames(page, 8)
-    expect(await page.evaluate<number>(`document.querySelector('.workspace__scroll').scrollTop`)).toBe(moved)
+    expect(await page.evaluate(`document.querySelector('.workspace__scroll').scrollTop`)).toBe(moved)
   } finally { await page.close() }
 }, 60_000)
 
@@ -378,13 +389,16 @@ test("a new-conversation attachment draft survives an uncertain creation outcome
   try {
     await open(page, "creation=unknown")
     await openNewSession(page, 1440)
-    await wait(page, `location.pathname === '/remote' && !!document.querySelector('.new-session-composer [aria-label="New chat"]:not([disabled])')`)
+    await wait(page, `!!document.querySelector('.new-session-composer [aria-label="Repository"]:not([disabled])')`)
+    await page.evaluate(`document.querySelector('.new-session-composer [aria-label="Repository"]').click()`)
+    await wait(page, `!!document.querySelector('.mini-picker__surface [role="option"]')`)
+    await page.evaluate(`document.querySelector('.mini-picker__surface [role="option"]').click()`)
     await wait(page, `!!document.querySelector('.new-session-composer [aria-label="New chat"]:not([disabled])')`)
     await page.evaluate(`(() => {const transfer=new DataTransfer(); transfer.items.add(new File(['A scoped draft'], 'scope.txt', {type:'text/plain'})); document.querySelector('.new-session-composer .composer__row').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));})()`)
     await wait(page, `!!document.querySelector('.new-session-composer .composer__attachment-name')`)
     await page.evaluate(`document.querySelector('.new-session-composer [aria-label="New chat"]').click()`)
     await wait(page, `!!document.querySelector('.new-session__outcome--unknown')`)
-    expect(await page.evaluate<string>(`document.querySelector('.new-session-composer .composer__attachment-name')?.textContent??''`)).toBe("scope.txt")
+    expect(await page.evaluate(`document.querySelector('.new-session-composer .composer__attachment-name')?.textContent??''`)).toBe("scope.txt")
   } finally { await page.close() }
 }, 60_000)
 
@@ -396,21 +410,21 @@ test("a completed two-step response leaves the visible composer able to admit tw
     await wait(page, `window.responseStatus()==='idle'`)
     await page.evaluate(`(() => {const input=document.querySelector('.composer-resident .composer__input'); input.value='Scoped next prompt';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.composer-resident [aria-label="Send prompt"]').click()})()`)
     await wait(page, `window.remoteOperationReport().operations['session.prompt']===1`)
-    expect(await page.evaluate<string>(`document.querySelector('.composer-resident .composer__input').value`)).toBe("")
+    expect(await page.evaluate(`document.querySelector('.composer-resident .composer__input').value`)).toBe("")
     await page.evaluate(`(() => {const input=document.querySelector('.composer-resident .composer__input'); input.value='Independent next draft';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.composer-resident [aria-label="Send prompt"]').click()})()`)
     await wait(page, `window.remoteOperationReport().operations['session.prompt']===2`)
-    expect(await page.evaluate<number>(`document.querySelectorAll('.transcript-message__receipt[aria-label="Sending prompt"]').length`)).toBe(2)
+    expect(await page.evaluate(`document.querySelectorAll('.transcript-message__receipt[aria-label="Sending prompt"]').length`)).toBe(2)
     await page.evaluate(`window.remoteReleasePrompt('unknown');window.remoteReleasePrompt('ok')`)
     await wait(page, `!!document.querySelector('.transcript-message__receipt[aria-label="Outcome unknown"]')`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.composer-resident .composer__input').disabled`)).toBe(false)
-    expect(await page.evaluate<number>(`window.remoteOperationReport().operations['session.prompt']`)).toBe(2)
+    expect(await page.evaluate(`document.querySelector('.composer-resident .composer__input').disabled`)).toBe(false)
+    expect(await page.evaluate(`window.remoteOperationReport().operations['session.prompt']`)).toBe(2)
   } finally { await page.close() }
 }, 60_000)
 
 test("completed output and snapshot refresh leave trusted typing, agent/model controls and navigation interactive", async () => {
   const page = await browser.openPage()
   const click = async (selector: string) => {
-    const point = await page.evaluate<{ x: number; y: number; hit: boolean }>(`(() => {const target=document.querySelector(${JSON.stringify(selector)});const box=target.getBoundingClientRect();const x=box.x+box.width/2,y=box.y+box.height/2;return{x,y,hit:target.contains(document.elementFromPoint(x,y))}})()`)
+    const point = await page.evaluate(`(() => {const target=document.querySelector(${JSON.stringify(selector)});const box=target.getBoundingClientRect();const x=box.x+box.width/2,y=box.y+box.height/2;return{x,y,hit:target.contains(document.elementFromPoint(x,y))}})()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]), hit: (decodeBoolean)(record["hit"]) } })
     expect(point.hit).toBe(true)
     await page.mouse("mousePressed", point.x, point.y)
     await page.mouse("mouseReleased", point.x, point.y)
@@ -421,8 +435,8 @@ test("completed output and snapshot refresh leave trusted typing, agent/model co
     await page.evaluate(`window.remoteReadingTail('settle')`)
     await page.evaluate(`window.responseSnapshot([{id:'msg_completed_one',type:'assistant',agent:'GSD',content:[{type:'text',text:'First completed step'}],time:{created:1,completed:2}},{id:'msg_completed_two',type:'assistant',agent:'GSD',content:[{type:'text',text:'Second completed step'}],time:{created:3,completed:4}}],[],false)`)
     await wait(page, `window.responseStatus()==='idle'`)
-    expect(await page.evaluate<number>(`document.querySelectorAll('dialog[open],.mini-picker__scrim').length`)).toBe(0)
-    expect(await page.evaluate<boolean>(`document.querySelector('.composer-resident .composer__input').closest('[inert]')===null`)).toBe(true)
+    expect(await page.evaluate(`document.querySelectorAll('dialog[open],.mini-picker__scrim').length`)).toBe(0)
+    expect(await page.evaluate(`document.querySelector('.composer-resident .composer__input').closest('[inert]')===null`)).toBe(true)
     await page.setViewport(390, 900)
     await frames(page, 2)
     await click('[aria-label="Open Team"]')
@@ -434,7 +448,7 @@ test("completed output and snapshot refresh leave trusted typing, agent/model co
     await frames(page, 2)
     await click('.composer-resident .composer__input')
     await page.pressKey("x", "KeyX", 88, "x")
-    expect(await page.evaluate<string>(`document.querySelector('.composer-resident .composer__input').value`)).toBe("x")
+    expect(await page.evaluate(`document.querySelector('.composer-resident .composer__input').value`)).toBe("x")
     await click('.composer-resident [aria-label="Agent"]')
     await wait(page, `!!document.querySelector('[role="listbox"][aria-label="Agent"]')`)
     await page.pressEscape()
@@ -446,7 +460,7 @@ test("completed output and snapshot refresh leave trusted typing, agent/model co
     await wait(page, `!!document.querySelector('.route-panel--active .sessions-page')`)
     await click('.workspace-resume[href^="/remote/session?"]')
     await wait(page, `!!document.querySelector('.remote-conversation-view.route-panel--active')`)
-    expect(await page.evaluate<string>(`document.querySelector('.composer-resident .composer__input').value`)).toBe("x")
+    expect(await page.evaluate(`document.querySelector('.composer-resident .composer__input').value`)).toBe("x")
   } finally { await page.close() }
 }, 60_000)
 
@@ -455,27 +469,29 @@ test("Connected Sessions paints named loading content in the carousel and worksp
   try {
     await page.setViewport(1440, 900)
     await page.navigate(`${origin}/verify/remote.html?view=sessions&inventoryGate=1`)
-    await wait(page, `document.querySelector('.sessions-page')!==null && document.querySelector('.workspace-nav')!==null`)
-    expect(await page.evaluate<string>(`document.querySelector('.app-header__connection')?.textContent??document.querySelector('.connection-label')?.textContent??document.querySelector('.app-header').textContent`)).toContain("Connected")
-    expect(await page.evaluate<number>(`document.querySelectorAll('.running-sessions [role="status"]').length`)).toBe(1)
-    expect(await page.evaluate<number>(`document.querySelectorAll('.workspace-nav [role="status"]').length`)).toBe(1)
+    await wait(page, `document.querySelector('.sessions-page')!==null`)
+    await page.evaluate(`document.querySelector('[aria-label="Show workspace sidebar"]')?.click()`)
+    await wait(page, `document.querySelector('.sessions-page')!==null && document.querySelector('.workspace__rail .empty')!==null`)
+    expect(await page.evaluate(`document.querySelector('.app-header__connection')?.textContent??document.querySelector('.connection-label')?.textContent??document.querySelector('.app-header').textContent`)).toContain("Connected")
+    expect(await page.evaluate(`document.querySelectorAll('.running-sessions [role="status"]').length`)).toBe(1)
+    expect(await page.evaluate(`document.querySelectorAll('.workspace__rail [role="status"]').length`)).toBeGreaterThanOrEqual(1)
     await wait(page, `(() => {const node=document.querySelector('.running-sessions .loading-placeholder');return node!==null&&getComputedStyle(node).visibility==='visible'})()`)
-    const before = await page.evaluate<number>(`document.querySelector('.sessions-page__content').getBoundingClientRect().top`)
+    const before = await page.evaluate(`document.querySelector('.sessions-page__content,.sessions-page__empty').getBoundingClientRect().top`, decodeNumber)
     await page.evaluate(`window.remoteReleaseInventory()`)
-    await wait(page, `document.querySelectorAll('.workspace-nav__item').length>0 && document.querySelectorAll('.running-sessions__item').length>0`)
-    expect(await page.evaluate<number>(`Math.abs(document.querySelector('.sessions-page__content').getBoundingClientRect().top-${before})`)).toBeLessThanOrEqual(1)
-    expect(await page.evaluate<number>(`document.querySelectorAll('.workspace-nav .loading-placeholder,.running-sessions .loading-placeholder').length`)).toBe(0)
+    await wait(page, `document.querySelectorAll('.workspace__rail .session-row').length>0 && document.querySelectorAll('.running-sessions__item').length>0`)
+    expect(await page.evaluate(`Math.abs(document.querySelector('.sessions-page__content').getBoundingClientRect().top-${before})`)).toBeLessThanOrEqual(1)
+    expect(await page.evaluate(`document.querySelectorAll('.workspace__rail .loading-placeholder,.running-sessions .loading-placeholder').length`)).toBe(0)
   } finally { await page.close() }
 }, 60_000)
 
 function entryControl(width: number, href: string) {
-  if (href === "/remote") return width < 768 ? ".sessions-page > .page-head .new-session__trigger" : ".workspace-new-session .new-session__trigger"
+  if (href === "/remote") return width < 768 ? ".sessions-page > .page-head .new-session__trigger" : ".workspace__new-chat"
   if (href.startsWith("/remote/session?")) return `.workspace-resume[href="${href}"]`
   return `${width < 768 ? ".bottom-nav" : ".remote-nav"} a[href="${href}"]`
 }
 
 async function openNewSession(page: Awaited<ReturnType<typeof browser.openPage>>, width: number) {
-  if (width < 768 && await page.evaluate<boolean>(`location.pathname !== '/remote/sessions'`)) {
+  if (width < 768 && await page.evaluate(`location.pathname !== '/remote/sessions'`, decodeBoolean)) {
     await page.evaluate(`document.querySelector('.bottom-nav a[href="/remote/sessions"]').click()`)
     await wait(page, `location.pathname === '/remote/sessions'`)
   }

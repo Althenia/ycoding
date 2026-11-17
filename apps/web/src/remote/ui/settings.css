@@ -29,6 +29,8 @@
   gap: var(--yc-space-8);
 }
 
+.app--settings .pane p { max-inline-size: var(--yc-measure); }
+
 .settings > .settings__section {
   padding-block-end: 0;
   gap: var(--yc-space-4);

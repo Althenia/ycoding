@@ -123,7 +123,7 @@ export function CustomSelect(props: {
   }
 
   onMount(() => {
-    const media = window.matchMedia("(max-width: 767px)")
+    const media = window.matchMedia("(max-width: 767px), (max-height: 599px) and (pointer: coarse)")
     setCompact(media.matches)
     updateSheetFrame()
     const resize = () => {

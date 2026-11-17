@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test"
 import { declarationsWhere, parseStylesheet } from "../../styles/css-rules"
 
-test("assistant transcript prose fills the column and user bubbles keep their cap", async () => {
+test("selected Session prose keeps its reading measure while tools and user bubbles retain their own bounds", async () => {
   const sheet = parseStylesheet("transcript.css", await Bun.file(new URL("./transcript.css", import.meta.url)).text())
   const capped = sheet.rules.filter((rule) => rule.header.includes("transcript-md") && Object.values(rule.declarations).some((value) => value.includes("--yc-measure")))
-  expect(capped).toEqual([])
+  expect(capped).toHaveLength(1)
+  expect(capped[0]?.header).toBe(".app--conversation.app--selected .transcript-md :is(p,ul,ol,blockquote,h1,h2,h3,h4,h5,h6)")
+  expect(capped[0]?.declarations["max-inline-size"]).toBe("var(--yc-measure)")
   const user = declarationsWhere(sheet, (rule) => rule.header === ".transcript-message--user" && rule.conditions.length === 0)
   expect(user["max-inline-size"]).toBe("min(560px,88%)")
   expect(user["justify-self"]).toBe("end")
