@@ -43,7 +43,7 @@ const childModel = CatalogModel.Ref.make({ providerID: Provider.ID.make("test"),
 for (const change of ["action", "child", "payload", "launch-prompt", "launch-model"] as const) it.effect(`subagent permission grants bind ${change} and permit an identical re-issue`, () => Effect.gen(function* () {
   const sessions = yield* Session.Service
   const root = yield* sessions.create({ location: yield* reviewLocation })
-  yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: root.id, defer: true })
   const locations = yield* LocationServiceMap.Service
   const located = locations.get(root.location, [LocationServiceMap.full])
   const agents = yield* Agent.Service.pipe(Effect.provide(located))
@@ -73,7 +73,7 @@ for (const change of ["action", "child", "payload", "launch-prompt", "launch-mod
 for (const change of ["operation", "content", "arguments"] as const) it.effect(`single-use grants reject changed ${change} and retain the identical operation`, () => Effect.gen(function* () {
   const sessions = yield* Session.Service
   const root = yield* sessions.create({ location: yield* reviewLocation })
-  yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: root.id, defer: true })
   const locations = yield* LocationServiceMap.Service
   const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
   const input = { sessionID: root.id, action: "file_mutation", resources: ["/outside/review-operation"],
@@ -138,7 +138,7 @@ for (const change of ["cancel", "child", "text"] as const) it.effect(`the subage
     : { ...original, sessionID: change === "child" ? child.id : fixture.child.id, text: change === "text" ? "Different input" : original.text }
   const call = (id: string, input: unknown) => executeTool(registry, { sessionID: fixture.root.id, ...toolIdentity,
     call: { type: "tool-call", id, name: toolName, input } }).pipe(Effect.exit)
-  yield* sessions.autonomy.set({ sessionID: fixture.root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: fixture.root.id, defer: true })
   expect(Exit.isFailure(yield* call("first", original))).toBe(true)
   const reviews = yield* SessionReview.Service
   const item = (yield* reviews.list(fixture.root.id))[0]
@@ -204,7 +204,7 @@ it.effect("the subagent control tool reports bounded corrected permission feedba
 it.effect("permission grants normalize omitted metadata fields without changing operation identity", () => Effect.gen(function* () {
   const sessions = yield* Session.Service
   const root = yield* sessions.create({ location: yield* reviewLocation })
-  yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: root.id, defer: true })
   const locations = yield* LocationServiceMap.Service
   const located = locations.get(root.location, [LocationServiceMap.full])
   const agents = yield* Agent.Service.pipe(Effect.provide(located))
@@ -225,7 +225,7 @@ it.effect("a child decision and its human answer become visible atomically", () 
   const sessions = yield* Session.Service
   const orchestration = yield* SessionOrchestration.Service
   const question = yield* orchestration.question(fixture.child.id, "Need human evidence")
-  yield* sessions.autonomy.set({ sessionID: fixture.root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: fixture.root.id, defer: true })
   const reviews = yield* SessionReview.Service
   const item = (yield* reviews.list(fixture.root.id))[0]
   const entered = yield* Deferred.make<void>()
@@ -255,7 +255,7 @@ it.effect("sleep conversion keeps an old child question pending under human revi
   const sessions = yield* Session.Service
   const orchestration = yield* SessionOrchestration.Service
   const question = yield* orchestration.question(fixture.child.id, "Need human evidence")
-  yield* sessions.autonomy.set({ sessionID: fixture.root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: fixture.root.id, defer: true })
   yield* TestClock.adjust("24 hours")
   expect(yield* orchestration.get(fixture.root.id, fixture.child.id)).toMatchObject({
     state: "waiting", question: { id: question.question.id, deferred: true },
@@ -272,7 +272,7 @@ it.effect("a human answer cannot overtake a historically closed child question",
   const sessions = yield* Session.Service
   const orchestration = yield* SessionOrchestration.Service
   const question = yield* orchestration.question(fixture.child.id, "Need evidence")
-  yield* sessions.autonomy.set({ sessionID: fixture.root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: fixture.root.id, defer: true })
   const reviews = yield* SessionReview.Service
   const item = (yield* reviews.list(fixture.root.id))[0]
   const events = yield* EventRuntime.Service
@@ -394,7 +394,7 @@ test("a persisted child decision retains ownership across restart before reconci
     yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
     const orchestration = yield* SessionOrchestration.Service
     const question = yield* orchestration.question(child.id, "Need evidence")
-    yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+    yield* sessions.autonomy.set({ sessionID: root.id, defer: true })
     const reviews = yield* SessionReview.Service
     const item = (yield* reviews.list(root.id))[0]
     yield* events.publish(SessionEvent.Review.Decided, { sessionID: child.id, itemID: item.itemID, decision: { kind: "subagent_question", text: "Recovered human evidence" } })

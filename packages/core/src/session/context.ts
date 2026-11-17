@@ -3,12 +3,14 @@ export * as SessionContext from "./context"
 import { Context, Effect, Layer } from "effect"
 import { eq } from "drizzle-orm"
 import type { Model } from "@ycoding-ai/schema/model"
+import type { DecisionMode } from "@ycoding-ai/schema/session-autonomy"
 import { Agent } from "../agent"
 import { Catalog } from "../catalog"
 import { Config } from "../config"
 import { StandaloneConfig } from "../config/standalone"
 import { ConfigMemory } from "../config/memory"
 import { Database } from "../database/database"
+import { DecisionChoice } from "../decision-choice"
 import { CoordinationService } from "../coordination/index"
 import { CoordinationInstructions } from "../coordination/instructions"
 import { CoordinationAccess } from "./coordination-access"
@@ -39,6 +41,7 @@ import { StandaloneModel } from "./runner/standalone-model"
 import { SessionSchema } from "./schema"
 import { SessionContextStateTable } from "./sql"
 import { SessionStore } from "./store"
+import { SessionAutonomy } from "./autonomy"
 
 export interface Selection {
   readonly session: SessionSchema.Info
@@ -77,7 +80,8 @@ export interface Interface {
 }
 
 /** Rules that decide which tools a Session's selected agent can see and call. */
-export function toolPermissions(agent: Pick<Agent.Info, "mode" | "permissions">, ceiling: Permission.Ruleset) {
+export function toolPermissions(agent: Pick<Agent.Info, "mode" | "permissions">, ceiling: Permission.Ruleset, mode: DecisionMode) {
+  if (mode === "yolo") return []
   return Permission.merge(
     agent.permissions,
     ceiling,
@@ -112,6 +116,7 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
     const agents = yield* Agent.Service
     const catalog = yield* Catalog.Service
     const coordination = yield* CoordinationService.Service
+    const autonomy = yield* SessionAutonomy.Service
     const builtins = yield* InstructionBuiltIns.Service
     const db = (yield* Database.Service).db
     const entries = yield* InstructionEntry.Service
@@ -156,7 +161,9 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
       if (source.scope === "standalone" && !Agent.isSelectable(agent.info)) return yield* new AgentNotFoundError({ sessionID: session.id, agent: agent.id })
       const configEntries = configSnapshot.entries
       const capabilities = Config.capabilities(configEntries)
-      const permissions = toolPermissions(agent.info, session.permissionCeiling ?? [])
+      const mode = yield* DecisionChoice.decisionMode(autonomy, sessionID, "permissions")
+      const permissions = toolPermissions(agent.info, session.permissionCeiling ?? [], mode)
+      const instructionAgent = mode === "yolo" ? { ...agent, info: { ...agent.info, permissions } } : agent
       const tools = yield* registry.available([...permissions, ...CoordinationAccess.visibility(access?.role, coordinating)], capabilities)
       const memoryEnabled = ConfigMemory.resolve(
         configEntries.flatMap((entry) => (entry.type === "document" && entry.info.memory ? [entry.info.memory] : [])),
@@ -165,7 +172,7 @@ const makeLayer = <R>(sourceEffect: Effect.Effect<Effect.Success<typeof boundSou
       const instructions = yield* Effect.all(
         [
           builtins.load({ sessionID, capabilities, tools, scope: source.scope }),
-          ...(source.scope === "bound" ? [source.discovery.load(), source.skillInstructions.load(agent), source.referenceInstructions.load(), source.mcpInstructions.load(agent)] : []),
+          ...(source.scope === "bound" ? [source.discovery.load(), source.skillInstructions.load(instructionAgent), source.referenceInstructions.load(), source.mcpInstructions.load(instructionAgent)] : []),
           Effect.succeed(Instructions.when(access !== undefined, CoordinationInstructions.make(access?.role ?? "executor", coordinating))),
           Effect.succeed(
             Instructions.when(
@@ -259,11 +266,12 @@ export const node = makeLocationNode({
     SkillInstructions.node,
     ToolRegistry.node,
     CoordinationService.node,
+    SessionAutonomy.node,
   ],
 })
 
 export const standaloneNode = makeLocationNode({
   service: Service,
   layer: makeLayer(standaloneSource),
-  deps: [Agent.node, Catalog.node, StandaloneConfig.node, StandaloneAgent.node, Database.node, InstructionBuiltIns.node, InstructionEntry.node, Location.node, SessionLiveState.standaloneNode, StandaloneModel.node, SessionStore.node, ToolRegistry.standaloneNode, StandaloneTools.node, CoordinationService.node],
+  deps: [Agent.node, Catalog.node, StandaloneConfig.node, StandaloneAgent.node, Database.node, InstructionBuiltIns.node, InstructionEntry.node, Location.node, SessionLiveState.standaloneNode, StandaloneModel.node, SessionStore.node, ToolRegistry.standaloneNode, StandaloneTools.node, CoordinationService.node, SessionAutonomy.node],
 })

@@ -44,15 +44,30 @@ testEffect(Layer.empty).effect("goal reminders resolve routine choices without m
   }
 }))
 
-testEffect(Layer.empty).effect("sleep state never claims lid control when only idle sleep is inhibited", () =>
+testEffect(Layer.empty).effect("defer notices persist across prompts and distinguish YOLO from manual review", () =>
   Effect.sync(() => {
-    const state = { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", sleep: {} } as const
-    expect(SessionLiveState.sleepReminder(state, true, false)).toContain(
+    const state = { mode: "normal", permissions: "yolo", guardrails: "yolo", answers: "yolo", defer: {} } as const
+    const text = SessionLiveState.deferReminder(state, true, true)
+    expect(text).toContain("Defer mode is active")
+    expect(text).toContain("User prompts do not disable defer")
+    expect(text).toContain("YOLO")
+    expect(text).toContain("manual")
+    expect(SessionLiveState.deferReminder({ ...state, defer: undefined })).toBeUndefined()
+    const goal = SessionLiveState.goalReminder({ ...state, goal: SessionAutonomy.makeGoal({ text: "Complete the synthetic task" }) })
+    expect(goal).toContain("hard, catastrophic, and destructive")
+    expect(goal).toContain("valid fallback")
+  }),
+)
+
+testEffect(Layer.empty).effect("defer state never claims lid control when only idle sleep is inhibited", () =>
+  Effect.sync(() => {
+    const state = { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", defer: {} } as const
+    expect(SessionLiveState.deferReminder(state, true, false)).toContain(
       "lid-closed keep-awake is unavailable or unreported",
     )
-    expect(SessionLiveState.sleepReminder(state, true, false)).not.toContain("holds idle and lid-closed sleep off")
-    expect(SessionLiveState.sleepReminder(state, false, false)).toContain("battery")
-    expect(SessionLiveState.sleepReminder(state, true, true)).toContain("holds idle and lid-closed sleep off")
+    expect(SessionLiveState.deferReminder(state, true, false)).not.toContain("holds idle and lid-closed sleep off")
+    expect(SessionLiveState.deferReminder(state, false, false)).toContain("battery")
+    expect(SessionLiveState.deferReminder(state, true, true)).toContain("holds idle and lid-closed sleep off")
   }),
 )
 const guardrailDigest = "a".repeat(64)
@@ -70,6 +85,7 @@ const guardrails = Layer.succeed(
     reconsider: () => Effect.die("unused"),
     escalate: () => Effect.die("unused"),
     deferPending: () => Effect.die("unused"),
+    reconcileAutonomy: () => Effect.die("unused"),
     forSession: () => Effect.die("unused"),
     list: () => Effect.succeed([]),
     status: () => Effect.die("unused"),
@@ -123,9 +139,9 @@ unobserved.effect("does not claim sleep-controller status when no controller is 
   Effect.gen(function* () {
     yield* seed
     const db = (yield* Database.Service).db
-    yield* db.update(SessionTable).set({ autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", sleep: {} } }).where(eq(SessionTable.id, sessionID)).run()
+    yield* db.update(SessionTable).set({ autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", defer: {} } }).where(eq(SessionTable.id, sessionID)).run()
     const snapshot = yield* SessionLiveState.Service.use((service) => service.load(sessionID))
-    expect(snapshot.text).toContain("The user is asleep")
+    expect(snapshot.text).toContain("Defer mode is active")
     expect(snapshot.text).toContain("Keep-awake status is unknown")
     expect(snapshot.text).not.toContain("Keep-awake is not holding")
     expect(snapshot.text).not.toContain("Keep-awake holds idle")
@@ -141,7 +157,7 @@ observedLiveState.effect("renders the status of the actual controller only while
   Effect.gen(function* () {
     yield* seed
     const db = (yield* Database.Service).db
-    yield* db.update(SessionTable).set({ autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", sleep: {} } }).where(eq(SessionTable.id, sessionID)).run()
+    yield* db.update(SessionTable).set({ autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", defer: {} } }).where(eq(SessionTable.id, sessionID)).run()
     const live = yield* SessionLiveState.Service
     expect((yield* live.load(sessionID)).text).toContain("Keep-awake status is unknown")
     const scope = yield* Scope.make()

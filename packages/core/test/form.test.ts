@@ -1,10 +1,11 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { Config } from "@ycoding-ai/core/config"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Decision } from "@ycoding-ai/core/decision"
+import { AnswerFallback } from "@ycoding-ai/core/answer"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
@@ -19,7 +20,7 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { testEffect } from "./lib/effect"
 
 let decisionBehavior: (input: Decision.Input) => Effect.Effect<Decision.Output, Decision.Error> = () =>
-  Effect.die("Forms must not request judgments unless asleep")
+  Effect.die("Forms must not request judgments unless deferred")
 
 const forms = AppNodeBuilder.build(
   LayerNode.group([Config.node, Database.node, EventRuntime.node, SessionAutonomy.node, Decision.node, Form.node]),
@@ -91,6 +92,235 @@ const setupAutonomy = Effect.fn("FormTest.setupAutonomy")(function* (mode: "norm
 })
 
 describe("Form", () => {
+  it.effect("restored YOLO discards revoked Form grades and confidence without another evaluator", () => Effect.gen(function* () {
+    yield* setupAutonomy("normal")
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo" })
+    const entered = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    let calls = 0
+    decisionBehavior = request => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.andThen(Effect.sync(() => {
+      calls++
+      return Schema.decodeUnknownSync(Decision.Output)({ provider: "agent", response: {
+        model: { providerID: "test", id: "decision-model" }, semantics: "model-estimate", version: 1,
+        answers: request.request.questions.map(question => ({ name: question.name, type: "choice", answer: null, choice: null, score: null, confidence: 0,
+          grades: question.type === "choice" ? question.choices.map(choice => ({ choice: choice.value, confidence: choice.value === "Careful" ? 0.9 : 0.1, evidence: "Held evaluator evidence" })) : [],
+        })),
+      } })
+    })))
+    const service = yield* Form.Service
+    const fiber = yield* service.ask({ ...input, metadata: { kind: "question" }, fields: [{ key: "plan", type: "string", required: true, options: [{ value: "Fast", label: "Fast" }, { value: "Careful", label: "Careful" }] }] }).pipe(Effect.forkScoped)
+    yield* Deferred.await(entered)
+    yield* autonomy.set({ sessionID: input.sessionID, answers: "manual" })
+    yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo" })
+    yield* Deferred.succeed(release, undefined)
+    const result = yield* Fiber.join(fiber)
+    expect(result).toMatchObject({ status: "answered", answer: { plan: "Fast" }, automatic: true, via: "yolo", assessment: { mode: "yolo", sourceSessionID: input.sessionID } })
+    expect(result).not.toHaveProperty("confidence")
+    expect(result.assessment?.fields).toEqual([{ key: "plan", status: "not_assessed", reason: "Previous assessment was revoked; current YOLO uses a deterministic valid fallback." }])
+    expect(calls).toBe(1)
+    expect(yield* service.list()).toEqual([])
+  }))
+
+  for (const mode of ["manual", "auto"] as const) {
+    it.effect(`${mode} preserves closed empty-option membership and invalid defaults`, () => Effect.gen(function* () {
+      yield* setupAutonomy("normal")
+      yield* (yield* SessionAutonomy.Service).set({ sessionID: input.sessionID, answers: mode })
+      decisionBehavior = () => Effect.die("Manual and Auto must not consult an evaluator")
+      const service = yield* Form.Service
+      const created = yield* Deferred.make<Form.Info>()
+      const unsubscribe = yield* (yield* EventRuntime.Service).listen(event => event.type === Form.Event.Created.type
+        ? Deferred.succeed(created, Schema.decodeUnknownSync(Form.Event.Created.data)(event.data).form).pipe(Effect.asVoid) : Effect.void)
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const fiber = yield* service.ask({ ...input, fields: [
+        { key: "text", type: "string", options: [], default: "invented" },
+        { key: "closedText", type: "string", options: [], custom: false, default: "invented" },
+        { key: "selected", type: "multiselect", options: [], default: ["invented"] },
+        { key: "closedSelected", type: "multiselect", options: [], custom: false, default: ["invented"] },
+      ] }).pipe(Effect.forkScoped)
+      const form = yield* Deferred.await(created)
+      const invalidAnswers: ReadonlyArray<Form.Answer> = [{ text: "invented" }, { closedText: "invented" }, { selected: ["invented"] }, { closedSelected: ["invented"] }]
+      for (const answer of invalidAnswers) {
+        expect(yield* service.reply({ id: form.id, answer }).pipe(Effect.flip)).toBeInstanceOf(Form.InvalidAnswerError)
+        expect(yield* service.state(form.id)).toEqual({ status: "pending" })
+      }
+      yield* service.reply({ id: form.id, answer: { selected: [], closedSelected: [] } })
+      expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answer: { selected: [], closedSelected: [] } })
+    }))
+  }
+
+  it.effect("YOLO rejects closed empty-option required fields without invalid fallback or review", () => Effect.gen(function* () {
+    yield* setupAutonomy("normal")
+    yield* (yield* SessionAutonomy.Service).set({ sessionID: input.sessionID, answers: "yolo", defer: true })
+    decisionBehavior = () => Effect.fail(new Decision.Error({ reason: "refused" }))
+    const service = yield* Form.Service
+    for (const type of ["string", "multiselect"] as const) {
+      expect(yield* service.ask({ ...input, id: Form.ID.create(), fields: [{ key: "closed", type, options: [], custom: false, required: true }] }).pipe(Effect.flip)).toBeInstanceOf(Form.InvalidFormError)
+      expect(yield* service.list()).toEqual([])
+    }
+    expect(yield* SessionReviewFold.fold((yield* Database.Service).db, [input.sessionID])).toEqual([])
+  }))
+
+  test("pattern witnesses stay bounded through nested quantifiers and long sequences", () => {
+    const nested = AnswerFallback.patternText("^((a{128}){128}){128}$")
+    const sequence = AnswerFallback.patternText("^a{8192}b{8192}$")
+    expect(nested.length).toBeLessThanOrEqual(8192)
+    expect(sequence.length).toBeLessThanOrEqual(8192)
+    expect(AnswerFallback.patternText("^[A-Z]{2}[0-9]{3}$")).toMatch(/^[A-Z]{2}[0-9]{3}$/)
+  })
+
+  for (const failure of ["provider-failed", "timeout", "refused", "invalid-output", "empty", "low-confidence"] as const) {
+    it.effect(`YOLO settles explicit required, optional and conditional typed fields after ${failure}`, () => Effect.gen(function* () {
+      yield* setupAutonomy("normal")
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo", defer: true })
+      decisionBehavior = failure === "empty" ? () => Effect.succeed(Schema.decodeUnknownSync(Decision.Output)({ provider: "agent", response: {
+        model: { providerID: "test", id: "decision-model" }, semantics: "model-estimate", version: 1, answers: [],
+      } })) : failure === "low-confidence" ? decisionChoice("bad", 0.1)
+        : () => Effect.fail(new Decision.Error({ reason: failure }))
+      const service = yield* Form.Service
+      const settings = { ...input, metadata: { requireExplicitDecision: true }, fields: [
+        { key: "choice", type: "string", options: [{ value: "bad", label: "Bad" }, { value: "good", label: "Good (Recommended)" }], required: true },
+        { key: "count", type: "integer", minimum: 1.2, maximum: 2.2, required: true },
+        { key: "negative", type: "integer", maximum: -0.2 },
+        { key: "ratio", type: "number", minimum: 0.2, maximum: 0.3 },
+        { key: "confirm", type: "boolean", default: true },
+        { key: "selected", type: "multiselect", options: [{ value: "one", label: "One (Recommended)" }, { value: "two", label: "Two" }], minItems: 2, maxItems: 2, required: true },
+        { key: "text", type: "string", options: [], custom: true, minLength: 8, maxLength: 12, required: true },
+        { key: "code", type: "string", pattern: "^[A-Z]{2}[0-9]{3}$", required: true },
+        { key: "email", type: "string", format: "email" },
+        { key: "uri", type: "string", format: "uri" },
+        { key: "date", type: "string", format: "date" },
+        { key: "time", type: "string", format: "date-time" },
+        { key: "active", type: "string", required: true, when: [{ key: "confirm", op: "eq", value: true }] },
+        { key: "inactive", type: "string", required: true, when: [{ key: "confirm", op: "eq", value: false }] },
+      ] } satisfies Form.CreateInput
+      const outcome = yield* service.ask(settings)
+      expect(outcome).toMatchObject({ status: "answered", automatic: true, via: "yolo" })
+      if (outcome.status === "answered") {
+        expect(Form.validateAnswer(settings, outcome.answer)).toBeUndefined()
+        expect(outcome.answer).toMatchObject({ choice: "good", count: 2, negative: -1, ratio: 0.2, confirm: true, selected: ["one", "two"] })
+        expect(Object.keys(outcome.answer)).toHaveLength(13)
+        expect(outcome.answer).not.toHaveProperty("inactive")
+      }
+      expect(yield* service.list()).toEqual([])
+    }))
+  }
+
+  it.effect("YOLO reconciles a pending explicit form exactly once", () => Effect.gen(function* () {
+    yield* setupAutonomy("normal")
+    const service = yield* Form.Service
+    const created = yield* service.create({ ...input, metadata: { requireExplicitDecision: true } })
+    const autonomy = yield* SessionAutonomy.Service
+    const events = yield* EventRuntime.Service
+    const replies: unknown[] = []
+    const unsubscribe = yield* events.listen(event => Effect.sync(() => { if (event.type === Form.Event.Replied.type) replies.push(event.data) }))
+    yield* Effect.addFinalizer(() => unsubscribe)
+    decisionBehavior = () => Effect.fail(new Decision.Error({ reason: "refused" }))
+    yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo" })
+    yield* service.reconcileAutonomy(input.sessionID)
+    yield* service.reconcileAutonomy(input.sessionID)
+    expect((yield* service.state(created.id)).status).toBe("answered")
+    expect(replies).toHaveLength(1)
+    expect(yield* service.list()).toEqual([])
+  }))
+
+  it.effect("YOLO free-text multiselect and optional text progress after evaluator deadlines", () => Effect.gen(function* () {
+    yield* setupAutonomy("normal")
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo", defer: true })
+    const entered = yield* Deferred.make<void>()
+    decisionBehavior = () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never))
+    const service = yield* Form.Service
+    const fiber = yield* service.ask({ ...input, fields: [
+      { key: "steps", type: "multiselect", options: [], custom: true, minItems: 2, maxItems: 2, required: true },
+      { key: "note", type: "string" },
+    ] }).pipe(Effect.forkScoped)
+    yield* Deferred.await(entered)
+    yield* TestClock.adjust("121 seconds")
+    const outcome = yield* Fiber.join(fiber)
+    expect(outcome).toMatchObject({ status: "answered", automatic: true, via: "yolo" })
+    if (outcome.status === "answered") {
+      expect(outcome.answer.steps).toHaveLength(2)
+      expect(String(outcome.answer.note).trim().length).toBeGreaterThan(0)
+    }
+    expect(yield* service.list()).toEqual([])
+  }))
+
+  it.effect("YOLO rejects contradictory constraints without opening a review", () => Effect.gen(function* () {
+    yield* setupAutonomy("normal")
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo", defer: true })
+    const service = yield* Form.Service
+    const error = yield* service.ask({ ...input, fields: [{ key: "name", type: "string", minLength: 3, maxLength: 2 }] }).pipe(Effect.flip)
+    expect(error).toBeInstanceOf(Form.InvalidFormError)
+    expect(yield* service.list()).toEqual([])
+    expect(yield* SessionReviewFold.fold((yield* Database.Service).db, [input.sessionID])).toEqual([])
+  }))
+
+  it.effect("YOLO rejects unsatisfiable patterns instead of waiting or returning invalid text", () => Effect.gen(function* () {
+    yield* setupAutonomy("normal")
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo", defer: true })
+    decisionBehavior = () => Effect.fail(new Decision.Error({ reason: "refused" }))
+    const service = yield* Form.Service
+    expect(yield* service.ask({ ...input, fields: [{ key: "name", type: "string", pattern: "(?!)", required: true }] }).pipe(Effect.flip)).toBeInstanceOf(Form.InvalidFormError)
+    expect(yield* service.list()).toEqual([])
+    expect(yield* SessionReviewFold.fold((yield* Database.Service).db, [input.sessionID])).toEqual([])
+  }))
+
+  it.effect("YOLO reconciliation releases an explicit form waiter with machine attribution", () => Effect.gen(function* () {
+    yield* setupAutonomy("normal")
+    const service = yield* Form.Service
+    const events = yield* EventRuntime.Service
+    const created = yield* Deferred.make<void>()
+    const replies: unknown[] = []
+    const unsubscribe = yield* events.listen(event => event.type === Form.Event.Created.type ? Deferred.succeed(created, undefined).pipe(Effect.asVoid) : Effect.sync(() => { if (event.type === Form.Event.Replied.type) replies.push(event.data) }))
+    yield* Effect.addFinalizer(() => unsubscribe)
+    const fiber = yield* service.ask({ ...input, metadata: { requireExplicitDecision: true } }).pipe(Effect.forkScoped)
+    yield* Deferred.await(created)
+    yield* Effect.yieldNow
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo", defer: true })
+    decisionBehavior = () => Effect.fail(new Decision.Error({ reason: "refused" }))
+    yield* Effect.all([service.reconcileAutonomy(input.sessionID), service.deferPending(input.sessionID)], { concurrency: "unbounded" })
+    expect(yield* Fiber.join(fiber)).toMatchObject({ status: "answered", automatic: true, via: "yolo" })
+    expect(replies).toHaveLength(1)
+    expect(yield* SessionReviewFold.fold((yield* Database.Service).db, [input.sessionID])).toEqual([])
+  }))
+
+  it.effect("YOLO accepts valid optional scalar evaluator values and exposes their constraints", () => Effect.gen(function* () {
+    yield* setupAutonomy("normal")
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo" })
+    const calls: Decision.Input[] = []
+    decisionBehavior = request => {
+      calls.push(request)
+      return Effect.succeed(Schema.decodeUnknownSync(Decision.Output)({ provider: "agent", response: {
+        model: { providerID: "test", id: "decision-model" }, semantics: "model-estimate", version: 1,
+        answers: request.request.questions.map(question => ({ name: question.name, type: question.type === "predicate" ? "predicate" : "text", answer: question.type === "predicate" ? false : null, choice: null, score: null, confidence: 0.9, text: question.type === "predicate" ? null : question.name === "count" ? "-1" : question.name === "ratio" ? "0.25" : "bounded" })),
+      } }))
+    }
+    const service = yield* Form.Service
+    expect(yield* service.ask({ ...input, fields: [
+      { key: "count", type: "integer", maximum: -0.2 }, { key: "ratio", type: "number", minimum: 0.2, maximum: 0.3 },
+      { key: "confirm", type: "boolean" }, { key: "text", type: "string", minLength: 7, maxLength: 7 },
+    ] })).toMatchObject({ status: "answered", answer: { count: -1, ratio: 0.25, confirm: false, text: "bounded" }, automatic: true, via: "yolo", confidence: 0.9 })
+    expect(JSON.stringify(calls)).toContain('"maximum":-0.2')
+    expect(JSON.stringify(calls)).toContain('"minLength":7')
+    expect(JSON.stringify(calls)).not.toContain("Refuse if the evidence is insufficient")
+  }))
+
+  it.effect("YOLO preserves physical external fields without synthetic acknowledgement", () => Effect.gen(function* () {
+    yield* setupAutonomy("normal")
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo", defer: true })
+    decisionBehavior = () => Effect.die("Physical external fields must not consult the evaluator")
+    const service = yield* Form.Service
+    expect(yield* service.ask({ ...input, fields: [{ key: "oauth", type: "external", url: "https://example.invalid/authorize" }] })).toMatchObject({ status: "deferred" })
+    expect(yield* service.list()).toEqual([])
+  }))
+
   for (const yolo of [false] as const) {
     it.effect(`forms use explicit defaults automatically only with Auto answers: yolo ${yolo}`, () => Effect.gen(function* () {
       yield* setupAutonomy("normal")
@@ -276,14 +506,14 @@ describe("Form", () => {
     }))
   }
 
-  for (const asleep of [false, true]) {
+  for (const deferred of [false, true]) {
     for (const settlement of ["reply", "cancel"] as const) {
-      it.effect(`${asleep ? "sleeping" : "awake"} automatic answers preserve a winning human ${settlement}`, () => Effect.gen(function* () {
+      it.effect(`${deferred ? "deferred" : "without defer"} automatic answers preserve a winning human ${settlement}`, () => Effect.gen(function* () {
         yield* setupAutonomy("goal")
         const autonomy = yield* SessionAutonomy.Service
-        yield* autonomy.set({ sessionID: input.sessionID, answers: asleep ? "yolo" : "auto" })
-        if (asleep) yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
-        decisionBehavior = asleep ? decisionChoice("Fast", 0.9) : () => Effect.die("Awake forms must not request judgments")
+        yield* autonomy.set({ sessionID: input.sessionID, answers: deferred ? "yolo" : "auto" })
+        if (deferred) yield* autonomy.set({ sessionID: input.sessionID, defer: true })
+        decisionBehavior = deferred ? decisionChoice("Fast", 0.9) : () => Effect.die("Awake forms must not request judgments")
         const service = yield* Form.Service
         const events = yield* EventRuntime.Service
         const published: EventRuntime.Payload[] = []
@@ -542,6 +772,10 @@ describe("Form", () => {
           message: "Form field condition value must be one of the field's options: b -> a",
         }),
       )
+      expect(yield* flipCreate([
+        { key: "a", type: "string", options: [], custom: false },
+        { key: "b", type: "string", when: [{ key: "a", op: "eq", value: "invented" }] },
+      ])).toEqual(new Form.InvalidFormError({ message: "Form field condition value must be one of the field's options: b -> a" }))
     }),
   )
 
@@ -615,17 +849,17 @@ describe("Form", () => {
     }),
   )
 
-  it.effect("sleep answers option fields through the decision model", () =>
+  it.effect("defer answers option fields through the decision model", () =>
     Effect.gen(function* () {
       yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo" })
-      yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
+      yield* autonomy.set({ sessionID: input.sessionID, defer: true })
       decisionBehavior = decisionChoice("Careful", 0.9)
       const service = yield* Form.Service
       const settings = {
         ...input,
-        id: Form.ID.create("frm_sleep_choice"),
+        id: Form.ID.create("frm_defer_choice"),
         fields: [
           {
             key: "plan",
@@ -643,17 +877,17 @@ describe("Form", () => {
     }),
   )
 
-  it.effect("sleep defers to the review box when the decision model fails", () =>
+  it.effect("YOLO selects a valid fallback when the evaluator fails with defer enabled", () =>
     Effect.gen(function* () {
       yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo" })
-      yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
+      yield* autonomy.set({ sessionID: input.sessionID, defer: true })
       decisionBehavior = () => Effect.fail(new Decision.Error({ reason: "provider-failed" }))
       const service = yield* Form.Service
       const settings = {
         ...input,
-        id: Form.ID.create("frm_sleep_fallback"),
+        id: Form.ID.create("frm_defer_fallback"),
         fields: [
           {
             key: "plan",
@@ -666,20 +900,20 @@ describe("Form", () => {
           },
         ],
       } satisfies Form.CreateInput
-      const deferred = yield* service.ask(settings)
-      expect(deferred).toEqual({ status: "deferred", itemID: expect.any(String) })
+      const answered = yield* service.ask(settings)
+      expect(answered).toEqual({ status: "answered", answer: { plan: "Fast" }, automatic: true, via: "yolo" })
       expect(yield* service.list()).toEqual([])
     }),
   )
 
   for (const reason of ["disabled", "free_text", "low_confidence"] as const) {
-    it.effect(`sleep ${reason} deferral carries no automatic answer attribution`, () => Effect.gen(function* () {
+    it.effect(`defer ${reason} preserves decision-mode attribution`, () => Effect.gen(function* () {
       yield* setupAutonomy("goal")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.set({
         sessionID: input.sessionID,
         answers: reason === "low_confidence" ? "yolo" : reason === "free_text" ? "auto" : "manual",
-        sleep: true,
+        defer: true,
       })
       const calls: Decision.Input[] = []
       decisionBehavior = (value) => {
@@ -692,18 +926,20 @@ describe("Form", () => {
         fields: reason === "free_text"
           ? [{ key: "plan", type: "string", required: true }]
           : [{ key: "plan", type: "string", required: true, options: [{ value: "Careful", label: "Careful" }] }],
-      })).toEqual({ status: "deferred", itemID: expect.any(String) })
+      })).toEqual(reason === "low_confidence"
+        ? { status: "answered", answer: { plan: "Careful" }, automatic: true, via: "yolo" }
+        : { status: "deferred", itemID: expect.any(String) })
       expect(calls).toHaveLength(reason === "low_confidence" ? 1 : 0)
       expect(yield* service.list()).toEqual([])
     }))
   }
 
-  it.effect("sleep inference creates no human-wait form state before the decision settles", () =>
+  it.effect("defer inference creates no human-wait form state before the decision settles", () =>
     Effect.gen(function* () {
       yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo" })
-      yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
+      yield* autonomy.set({ sessionID: input.sessionID, defer: true })
       const entered = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
       decisionBehavior = (value) => Deferred.succeed(entered, undefined).pipe(
@@ -717,7 +953,7 @@ describe("Form", () => {
       }))
       yield* Effect.addFinalizer(() => unsubscribe)
       const service = yield* Form.Service
-      const id = Form.ID.create("frm_sleep_inference_state")
+      const id = Form.ID.create("frm_defer_inference_state")
       const fiber = yield* service.ask({
         id, sessionID: input.sessionID, title: "Choose a plan",
         fields: [{ key: "plan", type: "string", required: true, options: [
@@ -733,12 +969,12 @@ describe("Form", () => {
     }),
   )
 
-  it.effect("turning YOLO off while a sleeping answer is pending defers instead of applying it", () =>
+  it.effect("turning YOLO off while a deferred answer is pending defers instead of applying it", () =>
     Effect.gen(function* () {
       yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo" })
-      yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
+      yield* autonomy.set({ sessionID: input.sessionID, defer: true })
       const entered = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
       decisionBehavior = (value) => Deferred.succeed(entered, undefined).pipe(
@@ -748,7 +984,7 @@ describe("Form", () => {
       const service = yield* Form.Service
       const fiber = yield* service.ask({
         ...input,
-        id: Form.ID.create("frm_sleep_toggle_off"),
+        id: Form.ID.create("frm_defer_toggle_off"),
         fields: [
           {
             key: "plan",
@@ -822,7 +1058,7 @@ describe("Form", () => {
       expect(published.map((event) => event.type)).toEqual([Form.Event.Created.type, Form.Event.Created.type, Form.Event.Cancelled.type, Form.Event.Cancelled.type])
     }))
 
-    it.effect("sleep entry defers an unanswered form after 25 hours without answering it", () => Effect.gen(function* () {
+    it.effect("defer entry defers an unanswered form after 25 hours without answering it", () => Effect.gen(function* () {
       yield* setupAutonomy("normal")
       const service = yield* Form.Service
       const { fiber, form, published } = yield* start(service)
@@ -909,7 +1145,7 @@ describe("Form", () => {
       }),
     )
 
-    it.effect("Auto answers settle a default awake and YOLO answers settle a choice asleep", () =>
+    it.effect("Auto answers settle a default without defer and YOLO answers settle a choice deferred", () =>
       Effect.gen(function* () {
         yield* setupAutonomy("normal")
         const autonomy = yield* SessionAutonomy.Service
@@ -917,12 +1153,12 @@ describe("Form", () => {
         const settings = { ...input, fields: [{ key: "confirm", type: "boolean", default: true }] } satisfies Form.CreateInput
         yield* autonomy.set({ sessionID: input.sessionID, answers: "auto" })
         expect(yield* service.ask(settings)).toEqual({ status: "answered", answer: { confirm: true }, automatic: true, via: "auto-answer" })
-        yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo", sleep: true })
+        yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo", defer: true })
         decisionBehavior = decisionChoice("Fast", 0.9)
         expect(
           yield* service.ask({
             ...input,
-            id: Form.ID.create("frm_automatic_sleep"),
+            id: Form.ID.create("frm_automatic_defer"),
             fields: [{ key: "plan", type: "string", required: true, options: [{ value: "Fast", label: "Fast" }] }],
           }),
         ).toEqual({ status: "answered", answer: { plan: "Fast" }, automatic: true, via: "yolo", confidence: 0.9 })

@@ -13,6 +13,14 @@ const catalog: CatalogView = {
   references: [{ name: "guide", uri: "file:///work/guide" }], resources: [],
 }
 
+test("defer is the only Session deferral slash action", () => {
+  const labels = optionsForTrigger("/", "", catalog, []).map((option) => option.label)
+  expect(labels).toContain("/defer")
+  expect(labels).not.toContain("/sleep")
+  expect(labels).not.toContain("/wake")
+  expect(submission("/defer", [], catalog, "steer")).toEqual({ kind: "defer" })
+})
+
 test("slash goal and Autonomous use Session actions, server commands run, slash skills load, and unsupported local actions are refused", () => {
   expect(optionsForTrigger("/", "go", catalog, []).map((option) => option.label)).toContain("/goal")
   expect(optionsForTrigger("/", "autonom", catalog, []).map((option) => option.label)).toContain("/autonomous")
@@ -23,8 +31,8 @@ test("slash goal and Autonomous use Session actions, server commands run, slash 
   expect(submission("/editor", [], catalog, "steer")).toMatchObject({ kind: "invalid" })
 })
 
-test("sleep, wake, and keep-awake are Session actions that never become prompts", () => {
-  for (const [command, kind] of [["sleep", "sleep"], ["wake", "wake"], ["keep-awake", "keepAwake"]] as const) {
+test("defer and keep-awake are Session actions that never become prompts", () => {
+  for (const [command, kind] of [["defer", "defer"], ["keep-awake", "keepAwake"]] as const) {
     expect(optionsForTrigger("/", command, catalog, []).map((option) => option.label)).toContain(`/${command}`)
     expect(optionsForTrigger("/", command, catalog, [], false).map((option) => option.label)).not.toContain(`/${command}`)
     expect(submission(`/${command}`, [], catalog, "steer")).toEqual({ kind })

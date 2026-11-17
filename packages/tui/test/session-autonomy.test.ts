@@ -94,30 +94,31 @@ test("decision kinds separate manual from automated rows", () => {
   const kinds = (view: SessionAutonomyView | undefined) => categories.map((action) => autonomyDecisionKind(view, action))
   expect(kinds(autonomyView())).toEqual(["manual", "manual", "manual"])
   expect(kinds(autonomyView({ permissions: "yolo", guardrails: "auto", answers: "yolo" }))).toEqual(["automated", "automated", "automated"])
-  expect(kinds(autonomyView({ sleep: {} }))).toEqual(["automated", "automated", "automated"])
+  expect(kinds(autonomyView({ defer: {} }))).toEqual(["automated", "automated", "automated"])
   expect(kinds(autonomyView({}, { guardrailsEnabled: false }))).toEqual(["manual", "manual", "manual"])
   expect(kinds(undefined)).toEqual(["unknown", "unknown", "unknown"])
 })
 
-test("sleep sends only manual rows to the review box", () => {
-  expect(categories.map((action) => autonomyDecisionLabel(autonomyView({ sleep: {} }), action))).toEqual([
+test("defer sends only manual rows to the review box", () => {
+  expect(categories.map((action) => autonomyDecisionLabel(autonomyView({ defer: {} }), action))).toEqual([
     "review box",
     "review box",
     "review box",
   ])
-  const configured = autonomyView({ sleep: {}, permissions: "auto", guardrails: "yolo" })
+  const configured = autonomyView({ defer: {}, permissions: "auto", guardrails: "yolo" })
   expect(categories.map((action) => autonomyDecisionLabel(configured, action))).toEqual(["auto", "yolo", "review box"])
 })
 
-test("disabled guardrails read disabled whatever the mode", () => {
+test("disabled guardrails preserve the effective YOLO decision label", () => {
   expect(autonomyDecisionLabel(autonomyView({ guardrails: "auto" }, { guardrailsEnabled: false }), "guardrails")).toBe("disabled")
+  expect(autonomyDecisionLabel(autonomyView({ guardrails: "yolo" }, { guardrailsEnabled: false }), "guardrails")).toBe("yolo")
   expect(autonomyDecisionLabel(autonomyView({ permissions: "auto" }, { guardrailsEnabled: false }), "permissions")).toBe("auto")
 })
 
 test("the local autonomy view mirrors the draft as its effective modes", () => {
   const view = localAutonomyView(autonomyState({ permissions: "auto", answers: "yolo" }))
-  expect(view.effective).toMatchObject({ permissions: "auto", guardrails: "manual", answers: "yolo", inherited: {}, asleep: false })
-  expect(localAutonomyView(autonomyState({ sleep: {} })).effective.asleep).toBe(true)
+  expect(view.effective).toMatchObject({ permissions: "auto", guardrails: "manual", answers: "yolo", inherited: {}, deferred: false })
+  expect(localAutonomyView(autonomyState({ defer: {} })).effective.deferred).toBe(true)
 })
 
 test("a malformed mode reads unknown instead of Manual", () => {
@@ -134,11 +135,11 @@ test("automation is reported from any non-manual effective mode", () => {
 })
 
 test("lists active modes in shared order", () => {
-  const view = autonomyView({ permissions: "auto", guardrails: "yolo", answers: "auto", sleep: {}, goal: activeGoal() })
-  expect(autonomyModeParts(view)).toEqual(["permissions auto", "guardrails yolo", "answers auto", "goal", "asleep"])
+  const view = autonomyView({ permissions: "auto", guardrails: "yolo", answers: "auto", defer: {}, goal: activeGoal() })
+  expect(autonomyModeParts(view)).toEqual(["permissions auto", "guardrails yolo", "answers auto", "goal", "deferred"])
   expect(autonomyModeParts(autonomyView())).toEqual(["manual"])
   expect(autonomyModeParts(autonomyView({ goal: activeGoal() }))).toEqual(["manual", "goal"])
-  expect(autonomyModeLabel(view)).toBe("permissions auto · guardrails yolo · answers auto · goal · asleep")
+  expect(autonomyModeLabel(view)).toBe("permissions auto · guardrails yolo · answers auto · goal · deferred")
 })
 
 test("represents explicit goal reports through the progress label", () => {

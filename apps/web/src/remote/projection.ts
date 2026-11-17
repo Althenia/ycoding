@@ -398,7 +398,7 @@ export type ReviewItemView = {
 export type RecoveryToolView = { readonly messageID: string; readonly callID: string; readonly name: string }
 
 const reviewReasons = [
-  "disabled", "free_text", "refused", "low_confidence", "escalated", "conflicting_grades", "error", "timeout", "sleep_entry", "restart",
+  "disabled", "free_text", "refused", "low_confidence", "escalated", "conflicting_grades", "error", "timeout", "defer_entry", "sleep_entry", "restart",
   "unavailable", "invalid-request", "provider-failed", "input-too-large", "invalid-output", "truncated-output", "unsupported-output",
 ] as const
 export type ReviewReason = (typeof reviewReasons)[number]
@@ -414,16 +414,16 @@ export type SessionAutonomyView = AutonomyModes & {
     readonly noProgress: number
     readonly maxNoProgress: number
   }
-  readonly sleep?: Readonly<Record<string, never>>
+  readonly defer?: Readonly<Record<string, never>>
   readonly effective?: EffectiveAutonomyView
 }
 
-export function autonomyModeParts(autonomy: Pick<SessionAutonomyView, "permissions" | "guardrails" | "answers" | "goal" | "sleep" | "effective">): readonly string[] {
-  const asleep = autonomy.effective?.asleep ?? autonomy.sleep !== undefined
+export function autonomyModeParts(autonomy: Pick<SessionAutonomyView, "permissions" | "guardrails" | "answers" | "goal" | "defer" | "effective">): readonly string[] {
+  const deferred = autonomy.effective?.deferred ?? autonomy.defer !== undefined
   return [
     ...autonomyLabels(autonomy.effective ?? autonomy),
     ...(autonomy.goal?.status === "active" ? ["goal"] : []),
-    ...(asleep ? ["asleep"] : []),
+    ...(deferred ? ["deferred"] : []),
   ]
 }
 
@@ -963,7 +963,7 @@ export function readAutonomyState(payload: unknown): SessionAutonomyView | undef
     mode: "normal",
     ...modes,
     ...(goal === undefined ? {} : { goal }),
-    ...(isRecord(data.sleep) ? { sleep: {} } : {}),
+    ...(isRecord(data.defer) ? { defer: {} } : {}),
   }
 }
 
@@ -984,7 +984,7 @@ function readModes(value: Record<string, unknown>): AutonomyModes | undefined {
 }
 
 function readEffective(value: unknown): EffectiveAutonomyView | undefined {
-  if (!isRecord(value) || !isRecord(value.inherited) || typeof value.asleep !== "boolean" || typeof value.guardrailsEnabled !== "boolean") return undefined
+  if (!isRecord(value) || !isRecord(value.inherited) || typeof value.deferred !== "boolean" || typeof value.guardrailsEnabled !== "boolean") return undefined
   const modes = readModes(value)
   if (modes === undefined) return undefined
   const inherited: { -readonly [Category in AutonomyCategory]?: string } = {}
@@ -994,7 +994,7 @@ function readEffective(value: unknown): EffectiveAutonomyView | undefined {
     if (typeof source !== "string") return undefined
     inherited[category] = source
   }
-  return { ...modes, inherited, asleep: value.asleep, guardrailsEnabled: value.guardrailsEnabled }
+  return { ...modes, inherited, deferred: value.deferred, guardrailsEnabled: value.guardrailsEnabled }
 }
 
 export function applySessionEvent(view: SessionView, payload: unknown, now: number): SessionView {

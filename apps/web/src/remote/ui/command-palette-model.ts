@@ -23,7 +23,7 @@ export type PaletteIntent =
   | { readonly type: "interrupt" }
   | { readonly type: "stopGoal" }
   | { readonly type: "autonomous" }
-  | { readonly type: "sleep"; readonly sleep: boolean }
+  | { readonly type: "defer"; readonly defer: boolean }
   | { readonly type: "keepAwake" }
   | { readonly type: "dotsConnection" }
   | { readonly type: "skill"; readonly skill: string }
@@ -64,7 +64,7 @@ export type PaletteContext = {
     readonly managedChild: boolean
     readonly autonomous?: AutonomyModes
     readonly goalActive: boolean
-    readonly asleep?: boolean
+    readonly deferred?: boolean
   }
   readonly commands: readonly { readonly name: string; readonly description?: string }[]
   readonly skills: readonly { readonly id: string; readonly name: string; readonly description?: string }[]
@@ -120,9 +120,7 @@ function sessionActions(context: PaletteContext): readonly PaletteAction[] {
       keywords: "/autonomous autonomy manual yolo auto permissions guardrails answers approval",
       intent: { type: "autonomous" as const },
     }]),
-    ...(session.asleep === undefined ? [] : [session.asleep
-      ? { id: "session.wake", title: "Wake Session family", description: "End sleep; configured automation stays in effect", group: "Session" as const, keywords: "/wake sleep autonomy", intent: { type: "sleep" as const, sleep: false } }
-      : { id: "session.sleep", title: "Sleep Session family", description: "Unsettled questions and reviews wait for you in Review", group: "Session" as const, keywords: "/sleep autonomy away", intent: { type: "sleep" as const, sleep: true } }]),
+    ...(session.deferred === undefined ? [] : [{ id: "session.defer", title: session.deferred ? "Disable defer" : "Enable defer", description: "Unresolved manual decisions wait in Review; keep-awake is held while deferred", group: "Session" as const, keywords: "/defer autonomy", intent: { type: "defer" as const, defer: !session.deferred } }]),
     { id: "machine.keepAwake", title: "Toggle keep machine awake", description: "Flip this machine's manual keep-awake preference", group: "Session" as const, keywords: "/keep-awake machine sleep lid", intent: { type: "keepAwake" as const } },
   ]
 }
@@ -131,7 +129,7 @@ function commandActions(context: PaletteContext): readonly PaletteAction[] {
   const session = context.session
   if (!session || !context.connected || session.managedChild) return []
   return context.commands
-    .filter((command) => !["compact", "goal", "autonomous", "suggest", "prompt", "sleep", "wake", "keep-awake"].includes(command.name))
+    .filter((command) => !["compact", "goal", "autonomous", "suggest", "prompt", "sleep", "wake", "defer", "keep-awake"].includes(command.name))
     .filter((command) => submission(`/${command.name}`, [], {
       status: "ready",
       agents: [],

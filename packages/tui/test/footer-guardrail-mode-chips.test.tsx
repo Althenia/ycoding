@@ -11,29 +11,29 @@ import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { localAutonomyView } from "../src/util/session-autonomy"
 import { autonomyState, autonomyView } from "./fixture/autonomy"
 
-test("sleep chips wait for the machine read", () => {
-  const autonomy = localAutonomyView(autonomyState({ sleep: {} }))
+test("defer chips do not depend on the machine read", () => {
+  const autonomy = localAutonomyView(autonomyState({ defer: {} }))
   for (const machineAwake of [undefined, true, false]) {
     const chips = modeChips({ autonomy, machineAwake })
     expect(chips.find((chip) => chip.key === "autonomy")).toEqual({ key: "autonomy", label: "autonomy manual", tone: "off" })
-    expect(chips.find((chip) => chip.key === "sleep")).toEqual({
-      key: "sleep",
-      label: machineAwake === false ? "asleep · machine may sleep" : "asleep",
-      tone: machineAwake === false ? "warning" : "on",
+    expect(chips.find((chip) => chip.key === "defer")).toEqual({
+      key: "defer",
+      label: "deferred",
+      tone: "on",
     })
   }
 })
 
 for (const mode of ["dark", "light"] as const) {
-  test(`renders sleep mode chips in ${mode}`, async () => {
-    const [asleep, setAsleep] = createSignal(true)
+  test(`renders defer mode chips in ${mode}`, async () => {
+    const [deferred, setDeferred] = createSignal(true)
     const app = await testRender(
       () => (
         <TestTuiContexts>
           <ConfigProvider config={createTuiResolvedConfig()}>
             <ThemeProvider mode={mode} source={{ discover: () => Promise.resolve({}) }}>
               <box flexDirection="row" gap={2}>
-                <ModeChips autonomy={localAutonomyView(autonomyState({ sleep: asleep() ? {} : undefined }))} />
+                <ModeChips autonomy={localAutonomyView(autonomyState({ defer: deferred() ? {} : undefined }))} />
               </box>
             </ThemeProvider>
           </ConfigProvider>
@@ -43,15 +43,15 @@ for (const mode of ["dark", "light"] as const) {
     )
     app.renderer.start()
     try {
-      await app.waitForFrame((frame) => frame.includes("asleep"))
+      await app.waitForFrame((frame) => frame.includes("deferred"))
       expect(app.captureCharFrame()).toContain("autonomy manual")
       expect(app.captureCharFrame()).not.toContain("machine may sleep")
       const spans = app.captureSpans().lines.flatMap((line) => line.spans)
       const manual = spans.find((span) => span.text.includes("autonomy manual"))
-      const sleep = spans.find((span) => span.text.includes("asleep"))
-      expect(manual?.bg.toInts()).not.toEqual(sleep?.bg.toInts())
-      setAsleep(false)
-      await app.waitForFrame((frame) => frame.includes("autonomy manual") && !frame.includes("asleep"))
+      const defer = spans.find((span) => span.text.includes("deferred"))
+      expect(manual?.bg.toInts()).not.toEqual(defer?.bg.toInts())
+      setDeferred(false)
+      await app.waitForFrame((frame) => frame.includes("autonomy manual") && !frame.includes("deferred"))
     } finally {
       app.renderer.destroy()
     }

@@ -129,6 +129,7 @@ describe("Projects", () => {
     try {
       await openProject(page)
       await click(page, "Project settings")
+      expect(await page.evaluate(`document.querySelector('.project-settings')?.textContent`)).toContain("Hard reviews are not delegated; Guardrails YOLO bypasses guardrail blockers.")
       await setField(page, "Project name", "Unsaved project title")
       await page.evaluate(`(() => {
         window.projectDraft=document.querySelector('.project-desktop .project-settings input');

@@ -21,7 +21,7 @@ const autonomyData = (state: Record<string, unknown>) => ({
     guardrails: state.guardrails ?? "manual",
     answers: state.answers ?? "manual",
     inherited: {},
-    asleep: state.sleep !== undefined,
+    deferred: state.defer !== undefined,
     guardrailsEnabled: true,
   },
 })
@@ -2357,15 +2357,15 @@ describe("remote store integration", () => {
     }
   })
 
-  test("sleep and wake set the Session's autonomy and follow Session-state notices", async () => {
+  test("defer toggles the Session's autonomy and follows Session-state notices", async () => {
     let autonomy: Record<string, unknown> = { mode: "normal", ...manualModes }
     const test = await harness({
       handler: (request) => {
         if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(autonomy) } }
         if (request.operation !== "session.autonomy.set") return "default" as const
         const input = request.input ?? {}
-        if (input.sleep === true) autonomy = { ...autonomy, sleep: {} }
-        if (input.sleep === false) autonomy = Object.fromEntries(Object.entries(autonomy).filter(([key]) => key !== "sleep"))
+        if (input.defer === true) autonomy = { ...autonomy, defer: {} }
+        if (input.defer === false) autonomy = Object.fromEntries(Object.entries(autonomy).filter(([key]) => key !== "defer"))
         return { ok: true, value: { data: autonomyData(autonomy) } }
       },
     })
@@ -2376,21 +2376,23 @@ describe("remote store integration", () => {
       await test.store.selectSession("ses_a")
       await waitFor(() => test.store.state().view?.autonomy !== undefined)
 
-      expect(await test.store.setSleep(true)).toBe(true)
-      expect(test.store.state().view?.autonomy?.sleep).toEqual({})
-      expect(await test.store.setSleep(false)).toBe(true)
-      expect(test.store.state().view?.autonomy?.sleep).toBeUndefined()
+      expect(await test.store.setDefer(true)).toBe(true)
+      expect(test.store.state().view?.autonomy?.defer).toEqual({})
+      expect(await test.store.sendPrompt({ text: "Continue", delivery: "queue" })).toBe(true)
+      expect(await test.store.runCommand({ command: "build", delivery: "queue" })).toBe(true)
+      expect(test.store.state().view?.autonomy?.defer).toEqual({})
+      expect(await test.store.setDefer(false)).toBe(true)
+      expect(test.store.state().view?.autonomy?.defer).toBeUndefined()
       expect(sets()).toEqual([
-        { sessionID: "ses_a", input: { sleep: true } },
-        { sessionID: "ses_a", input: { sleep: false } },
+        { sessionID: "ses_a", input: { defer: true } },
+        { sessionID: "ses_a", input: { defer: false } },
       ])
-      expect(test.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
 
-      autonomy = { ...autonomy, sleep: {} }
+      autonomy = { ...autonomy, defer: {} }
       const reads = test.relay.requests.filter((request) => request.operation === "session.autonomy.get").length
       test.relay.pushEvent("ses_a", { id: "evt_team", type: "session.context.observed", created: 30, data: { sessionID: "ses_a", source: "team-view", text: "{}" } })
-      test.relay.pushEvent("ses_a", { id: "evt_sleep", type: "session.context.observed", created: 31, data: { sessionID: "ses_a", source: "session-state", text: "The user is asleep and cannot interact." } })
-      await test.runUntil(() => test.store.state().view?.autonomy?.sleep !== undefined)
+      test.relay.pushEvent("ses_a", { id: "evt_defer", type: "session.context.observed", created: 31, data: { sessionID: "ses_a", source: "session-state", text: "Decisions are deferred." } })
+      await test.runUntil(() => test.store.state().view?.autonomy?.defer !== undefined)
       expect(test.relay.requests.filter((request) => request.operation === "session.autonomy.get").length).toBe(reads + 1)
     } finally {
       await test.stop()
@@ -3216,7 +3218,7 @@ describe("remote store integration", () => {
   })
 
   test("keeps the inherited source of an effective mode from the authoritative read", async () => {
-    const effective = { permissions: "auto", guardrails: "manual", answers: "yolo", inherited: { permissions: "ses_parent", answers: "ses_root" }, asleep: false, guardrailsEnabled: true }
+    const effective = { permissions: "auto", guardrails: "manual", answers: "yolo", inherited: { permissions: "ses_parent", answers: "ses_root" }, deferred: false, guardrailsEnabled: true }
     const test = await harness({ handler: (request) => request.operation === "session.autonomy.get"
       ? { ok: true, value: { data: { mode: "normal", ...manualModes, effective } } } : "default" as const })
     try {
@@ -3232,7 +3234,7 @@ describe("remote store integration", () => {
 
   test("the removed YOLO flag shape and a response without effective modes leave autonomy unreported", async () => {
     const modern = { permissions: "manual", guardrails: "manual", answers: "manual" }
-    const effective = { ...modern, inherited: {}, asleep: false, guardrailsEnabled: true }
+    const effective = { ...modern, inherited: {}, deferred: false, guardrailsEnabled: true }
     for (const data of [
       { mode: "normal", yolo: false, autoPermission: false, autoGuardrail: false, autoAnswer: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } },
       { mode: "normal", yolo: 2, effective },

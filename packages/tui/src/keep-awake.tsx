@@ -11,11 +11,11 @@ export type KeepAwakeStatus = KeepAwake.Status
 export function keepAwakeStatusLabel(status: KeepAwakeStatus | undefined): string {
   if (!status) return "Checking"
   if (status.state !== "on")
-    return `${status.state} · lid ${status.lid === "held" ? "held elsewhere" : status.lid ?? "unreported"}${status.sleepHold ? " · sleep-held" : ""}${status.system === "on" || status.system === "error" ? ` · system ${status.system}` : ""}`
+    return `${status.state} · lid ${status.lid === "held" ? "held elsewhere" : status.lid ?? "unreported"}${status.deferHold ? " · defer-held" : ""}${status.system === "on" || status.system === "error" ? ` · system ${status.system}` : ""}`
   const parts = ["idle"]
   if (status.lid === "on") parts.push("lid")
   if (status.lid !== "on") parts.push(`lid ${status.lid === "held" ? "held elsewhere" : status.lid ?? "unreported"}`)
-  if (status.sleepHold) parts.push("sleep-held")
+  if (status.deferHold) parts.push("defer-held")
   const system = status.system === undefined ? undefined : systemParts[status.system]
   if (system) parts.push(system)
   return `on · ${parts.join(" + ")}`
@@ -94,11 +94,11 @@ export function KeepAwakeProvider(props: ParentProps<{ server?: KeepAwakeServer 
       const next = await server.set(enabled)
       if (disposed || cycle !== generation) return
       setStatus(next)
-      if (next.state === "on" && !enabled && next.sleepHold)
+      if (next.state === "on" && !enabled && next.deferHold)
         toast.show({
           variant: "info",
           title: "Keep machine awake",
-          message: "Held on by a sleeping session; your manual setting is off and applies when the last session wakes.",
+          message: "Held on by a deferred session; your manual setting is off and applies when the last deferral ends.",
           duration: 6000,
         })
       if (next.state === "on" && enabled)

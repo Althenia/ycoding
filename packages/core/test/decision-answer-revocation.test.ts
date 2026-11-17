@@ -20,6 +20,7 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
+import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import type { SessionPending } from "@ycoding-ai/core/session/pending"
@@ -38,7 +39,7 @@ const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("child"), provide
 
 let decide: (input: Decision.Input) => Effect.Effect<Decision.Output, Decision.Error> = () =>
   Effect.die("No judgment is expected")
-const synthetic: Array<{ readonly sessionID: Session.ID; readonly metadata?: Record<string, unknown> }> = []
+const synthetic: Array<{ readonly sessionID: Session.ID; readonly text: string; readonly metadata?: Record<string, unknown> }> = []
 let beforeSessionGet: Effect.Effect<void> = Effect.void
 let beforeSleepRead: Effect.Effect<void> = Effect.void
 let sleepReads = 0
@@ -70,12 +71,12 @@ const harness = AppNodeBuilder.build(
       const service = SessionAutonomy.make({ db: database.db })
       return SessionAutonomy.Service.of({
         ...service,
-        isAsleep: (sessionID) => Effect.suspend(() =>
-          (sessionID === leaf && ++sleepReads === 2 ? beforeSleepRead : Effect.void).pipe(Effect.andThen(service.isAsleep(sessionID))),
+        isDeferred: (sessionID) => Effect.suspend(() =>
+          (sessionID === leaf && ++sleepReads === 2 ? beforeSleepRead : Effect.void).pipe(Effect.andThen(service.isDeferred(sessionID))),
         ),
       })
     }))],
-    [SessionExecution.node, Layer.mock(SessionExecution.Service, { wake: () => Effect.void })],
+    [SessionExecution.node, Layer.mock(SessionExecution.Service, { wake: () => Effect.void, prepareTask: () => Effect.void })],
     [
       Session.node,
       Layer.mock(Session.Service, {
@@ -93,7 +94,7 @@ const harness = AppNodeBuilder.build(
         get: (sessionID: Session.ID) => beforeSessionGet.pipe(Effect.as({ id: sessionID, location } as unknown as Session.Info)),
         synthetic: (input) =>
           Effect.sync(() => {
-            synthetic.push({ sessionID: input.sessionID, ...(input.metadata === undefined ? {} : { metadata: input.metadata }) })
+            synthetic.push({ sessionID: input.sessionID, text: input.text, ...(input.metadata === undefined ? {} : { metadata: input.metadata }) })
             return input as unknown as SessionPending.Synthetic
           }),
       }),
@@ -119,9 +120,10 @@ const choice = (value: string) => (input: Decision.Input) =>
         name: question.name,
         type: "choice",
         answer: null,
-        choice: value,
+        choice: question.type === "choice" && question.grade === true ? null : value,
         score: null,
-        confidence: 0.9,
+        confidence: question.type === "choice" && question.grade === true ? 0 : 0.9,
+        ...(question.type === "choice" && question.grade === true ? { grades: question.choices.map((option) => ({ choice: option.value, confidence: option.value === value ? 0.9 : 0.1, evidence: "Synthetic plan comparison." })) } : {}),
       })),
     },
   })
@@ -129,12 +131,13 @@ const choice = (value: string) => (input: Decision.Input) =>
 const holdChoice = Effect.fn("RevocationTest.holdChoice")(function* (value: string) {
   const entered = yield* Deferred.make<void>()
   const release = yield* Deferred.make<void>()
+  let calls = 0
   decide = (input) =>
-    Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as(choice(value)(input)))
-  return { entered, release }
+    Effect.sync(() => { calls++ }).pipe(Effect.andThen(Deferred.succeed(entered, undefined)), Effect.andThen(Deferred.await(release)), Effect.as(choice(value)(input)))
+  return { entered, release, calls: () => calls }
 })
 
-const family = Effect.fn("RevocationTest.family")(function* (input: { readonly asleep: boolean }) {
+const family = Effect.fn("RevocationTest.family")(function* (input: { readonly deferred: boolean }) {
   const { db } = yield* Database.Service
   synthetic.length = 0
   beforeSessionGet = Effect.void
@@ -183,7 +186,7 @@ const family = Effect.fn("RevocationTest.family")(function* (input: { readonly a
     { discard: true },
   )
   const autonomy = yield* SessionAutonomy.Service
-  if (input.asleep) yield* autonomy.set({ sessionID: root, sleep: true })
+  if (input.deferred) yield* autonomy.set({ sessionID: root, defer: true })
   return autonomy
 })
 
@@ -236,9 +239,44 @@ const planQuestion: Question.Info = {
 }
 
 describe("automatic answer fallback uses the current family sleep state", () => {
-  for (const asleep of [false, true]) {
-    it.effect(`a human reply during the refreshed sleep read wins for an initially ${asleep ? "asleep" : "awake"} Question`, () => Effect.gen(function* () {
-      const autonomy = yield* family({ asleep })
+  for (const initialMode of ["manual", "auto"] as const) {
+    for (const deferred of [false, true]) {
+      it.effect(`managed child admits fresh YOLO after ${initialMode} changes during the ${deferred ? "deferred" : "awake"} Session read`, () => Effect.gen(function* () {
+        const autonomy = yield* family({ deferred })
+        yield* autonomy.set({ sessionID: leaf, answers: initialMode })
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        beforeSessionGet = Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+        let calls = 0
+        decide = () => Effect.sync(() => { calls++ }).pipe(Effect.andThen(Effect.die("Fresh bounded fallback needs no evaluator")))
+        const orchestration = yield* SessionOrchestration.Service
+        const changes: unknown[] = []
+        const unsubscribe = yield* (yield* EventRuntime.Service).listen(event => Effect.sync(() => {
+          if (event.type === SessionEvent.Task.Updated.type) changes.push(event.data)
+        }))
+        yield* Effect.addFinalizer(() => unsubscribe)
+        const fiber = yield* orchestration.question(leaf, "Which plan?", { options: ["Fast", "Careful"] }).pipe(Effect.forkScoped)
+        yield* Deferred.await(entered)
+        yield* autonomy.set({ sessionID: root, answers: "yolo" })
+        yield* orchestration.reconcileAutonomy(leaf)
+        yield* Deferred.succeed(release, undefined)
+        const result = yield* Fiber.join(fiber)
+        expect(result.autoAnswered).toBe(true)
+        expect(result.question.deferred).toBeUndefined()
+        expect(synthetic).toHaveLength(1)
+        expect(synthetic[0]?.text).toContain('"text":"Fast"')
+        expect(synthetic[0]?.metadata).toMatchObject({ automatic: true, via: "yolo" })
+        expect(synthetic[0]?.metadata).not.toHaveProperty("confidence")
+        expect(calls).toBe(0)
+        expect(changes).toEqual([])
+        expect(yield* SessionReviewFold.openCount((yield* Database.Service).db, leaf)).toBe(0)
+      }))
+    }
+  }
+
+  for (const deferred of [false, true]) {
+    it.effect(`a human reply during the refreshed sleep read wins for an initially ${deferred ? "deferred" : "awake"} Question`, () => Effect.gen(function* () {
+      const autonomy = yield* family({ deferred })
       yield* autonomy.set({ sessionID: root, answers: "yolo" })
       const gate = yield* holdChoice("Careful")
       const reading = yield* Deferred.make<void>()
@@ -267,7 +305,7 @@ describe("automatic answer fallback uses the current family sleep state", () => 
   }
 
   it.effect("sleep conversion during the refreshed sleep read owns exactly one Question review", () => Effect.gen(function* () {
-    const autonomy = yield* family({ asleep: false })
+    const autonomy = yield* family({ deferred: false })
     yield* autonomy.set({ sessionID: root, answers: "yolo" })
     const gate = yield* holdChoice("Careful")
     const reading = yield* Deferred.make<void>()
@@ -279,7 +317,7 @@ describe("automatic answer fallback uses the current family sleep state", () => 
     yield* autonomy.set({ sessionID: root, answers: "manual" })
     yield* Deferred.succeed(gate.release, undefined)
     yield* Deferred.await(reading)
-    yield* autonomy.set({ sessionID: root, sleep: true })
+    yield* autonomy.set({ sessionID: root, defer: true })
     yield* questions.deferPending(leaf)
     yield* Deferred.succeed(releaseRead, undefined)
     expect(yield* Fiber.join(fiber)).toEqual({ status: "deferred", itemID: expect.any(String) })
@@ -288,29 +326,17 @@ describe("automatic answer fallback uses the current family sleep state", () => 
     expect(yield* SessionReviewFold.openCount(database.db, leaf)).toBe(1)
   }))
 
-  it.effect("a post-wake Form remains pending without applying the stale answer and cancels on interruption", () => Effect.gen(function* () {
-    const autonomy = yield* family({ asleep: true })
+  it.effect("clearing defer keeps YOLO active and replaces a stale Form answer with a valid bounded fallback", () => Effect.gen(function* () {
+    const autonomy = yield* family({ deferred: true })
     yield* autonomy.set({ sessionID: root, answers: "yolo" })
     const gate = yield* holdChoice("Careful")
-    const visible = yield* Deferred.make<void>()
     const forms = yield* Form.Service
-    const events = yield* EventRuntime.Service
-    const unsubscribe = yield* events.listen((event) => event.type === Form.Event.Created.type
-      ? Deferred.succeed(visible, undefined).pipe(Effect.asVoid)
-      : Effect.void)
-    yield* Effect.addFinalizer(() => unsubscribe)
     const fiber = yield* forms.ask(planForm).pipe(Effect.forkScoped)
     yield* Deferred.await(gate.entered)
-    yield* autonomy.set({ sessionID: root, sleep: false })
+    yield* autonomy.set({ sessionID: root, defer: false })
     yield* Deferred.succeed(gate.release, undefined)
-    expect(yield* Effect.raceFirst(
-      Deferred.await(visible).pipe(Effect.as("visible")),
-      Fiber.await(fiber).pipe(Effect.as("settled")),
-    )).toBe("visible")
-    yield* TestClock.adjust("0 millis")
-    expect(yield* forms.state(planForm.id)).toEqual({ status: "pending" })
-    yield* Fiber.interrupt(fiber)
-    expect(yield* forms.state(planForm.id)).toEqual({ status: "cancelled" })
+    expect(yield* Fiber.join(fiber)).toMatchObject({ status: "answered", answer: { plan: "Fast" }, automatic: true, via: "yolo" })
+    expect(yield* forms.state(planForm.id)).toEqual({ status: "answered", answer: { plan: "Fast" } })
     expect(yield* forms.list({ sessionID: leaf })).toEqual([])
     const database = yield* Database.Service
     expect(yield* SessionReviewFold.openCount(database.db, leaf)).toBe(0)
@@ -318,7 +344,7 @@ describe("automatic answer fallback uses the current family sleep state", () => 
 
   for (const refused of [false, true]) {
     it.effect(`a converted Question publishes no phantom Asked event after ${refused ? "unsettled" : "valid"} evaluation`, () => Effect.gen(function* () {
-      const autonomy = yield* family({ asleep: false })
+      const autonomy = yield* family({ deferred: false })
       yield* autonomy.set({ sessionID: root, answers: "yolo" })
       const gate = yield* holdChoice("Careful")
       const evaluate = decide
@@ -332,18 +358,18 @@ describe("automatic answer fallback uses the current family sleep state", () => 
       yield* Effect.addFinalizer(() => unsubscribe)
       const fiber = yield* questions.ask({ sessionID: leaf, questions: [planQuestion] }).pipe(Effect.forkScoped)
       yield* Deferred.await(gate.entered)
-      yield* autonomy.set({ sessionID: root, sleep: true })
+      yield* autonomy.set({ sessionID: root, defer: true })
       yield* questions.deferPending(leaf)
       yield* Deferred.succeed(gate.release, undefined)
-      expect(yield* Fiber.join(fiber)).toEqual({ status: "deferred", itemID: expect.any(String) })
-      expect(observed).toEqual([Question.Event.Deferred.type])
+      expect(yield* Fiber.join(fiber)).toMatchObject({ status: "answered", answers: [["Fast"]], automatic: true, via: "yolo" })
+      expect(observed).toEqual([])
       expect(yield* questions.list()).toEqual([])
       const database = yield* Database.Service
-      expect(yield* SessionReviewFold.openCount(database.db, leaf)).toBe(1)
+      expect(yield* SessionReviewFold.openCount(database.db, leaf)).toBe(0)
     }))
 
-    it.effect(`a managed child sleeps during ${refused ? "unsettled" : "valid"} evaluation and receives one review`, () => Effect.gen(function* () {
-      const autonomy = yield* family({ asleep: false })
+    it.effect(`enabling defer during a managed child's ${refused ? "unsettled" : "valid"} evaluation uses a fresh bounded answer`, () => Effect.gen(function* () {
+      const autonomy = yield* family({ deferred: false })
       yield* autonomy.set({ sessionID: root, answers: "yolo" })
       const gate = yield* holdChoice("Careful")
       const evaluate = decide
@@ -351,87 +377,63 @@ describe("automatic answer fallback uses the current family sleep state", () => 
       const orchestration = yield* SessionOrchestration.Service
       const fiber = yield* orchestration.question(leaf, "Which plan?", { options: ["Fast", "Careful"] }).pipe(Effect.forkScoped)
       yield* Deferred.await(gate.entered)
-      yield* autonomy.set({ sessionID: root, sleep: true })
+      yield* autonomy.set({ sessionID: root, defer: true })
       yield* Deferred.succeed(gate.release, undefined)
       const result = yield* Fiber.join(fiber)
-      expect(result.autoAnswered).toBe(false)
-      expect(result.question.deferred).toBe(true)
-      expect(synthetic).toEqual([])
+      expect(result.autoAnswered).toBe(true)
+      expect(result.question.deferred).toBeUndefined()
+      expect(synthetic).toHaveLength(1)
+      expect(synthetic[0].text).toContain("Fast")
+      expect(synthetic[0].metadata).toMatchObject({ automatic: true, via: "yolo" })
+      expect(synthetic[0].metadata).not.toHaveProperty("confidence")
       const database = yield* Database.Service
-      expect(yield* SessionReviewFold.openCount(database.db, leaf)).toBe(1)
+      expect(yield* SessionReviewFold.openCount(database.db, leaf)).toBe(0)
     }))
   }
 
   for (const state of [
-    { name: "wakes during evaluation", asleep: true, wake: true },
-    { name: "remains asleep", asleep: true, wake: false },
-    { name: "remains awake", asleep: false, wake: false },
+    { name: "wakes during evaluation", deferred: true, wake: true },
+    { name: "remains deferred", deferred: true, wake: false },
+    { name: "remains awake", deferred: false, wake: false },
   ]) {
     for (const refused of [false, true]) {
       const name = `${state.name} with ${refused ? "an unsettled" : "a valid"} evaluation`
-      const asleepAfter = state.asleep && !state.wake
-      const automatic = !refused && !state.wake
-      const human = !asleepAfter && !automatic
-
       it.effect(`Form ${name}`, () => Effect.gen(function* () {
-        const autonomy = yield* family({ asleep: state.asleep })
+        const autonomy = yield* family({ deferred: state.deferred })
         yield* autonomy.set({ sessionID: root, answers: "yolo" })
         const gate = yield* holdChoice("Careful")
         const evaluate = decide
         if (refused) decide = (input) => evaluate(input).pipe(Effect.andThen(Effect.fail(new Decision.Error({ reason: "refused" }))))
         const forms = yield* Form.Service
-        const events = yield* EventRuntime.Service
-        const unsubscribe = yield* events.listen((event) =>
-          human && state.asleep && event.type === Form.Event.Created.type
-            ? forms.reply({ id: (event.data as { form: Form.Info }).form.id, answer: { plan: "Fast" } }).pipe(Effect.orDie)
-            : Effect.void,
-        )
-        yield* Effect.addFinalizer(() => unsubscribe)
         const fiber = yield* forms.ask(planForm).pipe(Effect.forkScoped)
         yield* Deferred.await(gate.entered)
-        if (state.wake) yield* autonomy.set({ sessionID: root, sleep: false })
-        if (human && !state.asleep) yield* forms.reply({ id: planForm.id, answer: { plan: "Fast" } })
+        if (state.wake) yield* autonomy.set({ sessionID: root, defer: false })
         yield* Deferred.succeed(gate.release, undefined)
         const result = yield* Fiber.join(fiber)
-        expect(result).toEqual(automatic
-          ? { status: "answered", answer: { plan: "Careful" }, automatic: true, via: "yolo", confidence: 0.9 }
-          : asleepAfter
-            ? { status: "deferred", itemID: expect.any(String) }
-            : { status: "answered", answer: { plan: "Fast" } })
-        const database = yield* Database.Service
-        expect(yield* SessionReviewFold.openCount(database.db, leaf)).toBe(asleepAfter && !automatic ? 1 : 0)
+        expect(result).toMatchObject({ status: "answered", answer: { plan: refused || state.wake ? "Fast" : "Careful" }, automatic: true, via: "yolo" })
+        if (refused || state.wake) expect(result).not.toHaveProperty("confidence")
+        expect(yield* SessionReviewFold.openCount((yield* Database.Service).db, leaf)).toBe(0)
       }))
 
       it.effect(`Question ${name}`, () => Effect.gen(function* () {
-        const autonomy = yield* family({ asleep: state.asleep })
+        const autonomy = yield* family({ deferred: state.deferred })
         yield* autonomy.set({ sessionID: root, answers: "yolo" })
         const gate = yield* holdChoice("Careful")
         const evaluate = decide
         if (refused) decide = (input) => evaluate(input).pipe(Effect.andThen(Effect.fail(new Decision.Error({ reason: "refused" }))))
         const questions = yield* Question.Service
-        const events = yield* EventRuntime.Service
-        const unsubscribe = yield* events.listen((event) =>
-          human && event.type === Question.Event.Asked.type
-            ? questions.reply({ requestID: (event.data as Question.Request).id, answers: [["Fast"]] }).pipe(Effect.orDie)
-            : Effect.void,
-        )
-        yield* Effect.addFinalizer(() => unsubscribe)
         const fiber = yield* questions.ask({ sessionID: leaf, questions: [planQuestion] }).pipe(Effect.forkScoped)
         yield* Deferred.await(gate.entered)
-        if (state.wake) yield* autonomy.set({ sessionID: root, sleep: false })
+        if (state.wake) yield* autonomy.set({ sessionID: root, defer: false })
         yield* Deferred.succeed(gate.release, undefined)
         const result = yield* Fiber.join(fiber)
-        expect(result).toEqual(automatic
-          ? { status: "answered", answers: [["Careful"]], automatic: true, via: "yolo", confidence: 0.9 }
-          : asleepAfter
-            ? { status: "deferred", itemID: expect.any(String) }
-            : { status: "answered", answers: [["Fast"]] })
-        const database = yield* Database.Service
-        expect(yield* SessionReviewFold.openCount(database.db, leaf)).toBe(asleepAfter && !automatic ? 1 : 0)
+        expect(result).toMatchObject({ status: "answered", answers: [[refused || state.wake ? "Fast" : "Careful"]], automatic: true, via: "yolo" })
+        if (refused || state.wake) expect(result).not.toHaveProperty("confidence")
+        expect(yield* SessionReviewFold.openCount((yield* Database.Service).db, leaf)).toBe(0)
       }))
 
       it.effect(`managed child question ${name}`, () => Effect.gen(function* () {
-        const autonomy = yield* family({ asleep: state.asleep })
+        const autonomy = yield* family({ deferred: state.deferred })
         yield* autonomy.set({ sessionID: root, answers: "yolo" })
         const gate = yield* holdChoice("Careful")
         const evaluate = decide
@@ -439,24 +441,24 @@ describe("automatic answer fallback uses the current family sleep state", () => 
         const orchestration = yield* SessionOrchestration.Service
         const fiber = yield* orchestration.question(leaf, "Which plan?", { options: ["Fast", "Careful"] }).pipe(Effect.forkScoped)
         yield* Deferred.await(gate.entered)
-        if (state.wake) yield* autonomy.set({ sessionID: root, sleep: false })
+        if (state.wake) yield* autonomy.set({ sessionID: root, defer: false })
         yield* Deferred.succeed(gate.release, undefined)
-        const result = yield* Fiber.join(fiber)
-        expect(result.autoAnswered).toBe(automatic)
-        expect(result.question.deferred).toBe(asleepAfter && !automatic ? true : undefined)
-        expect(synthetic).toHaveLength(automatic ? 1 : 0)
-        const database = yield* Database.Service
-        expect(yield* SessionReviewFold.openCount(database.db, leaf)).toBe(asleepAfter && !automatic ? 1 : 0)
+        expect((yield* Fiber.join(fiber)).autoAnswered).toBe(true)
+        expect(synthetic).toHaveLength(1)
+        expect(synthetic[0].text).toContain(refused || state.wake ? "Fast" : "Careful")
+        expect(synthetic[0].metadata).toMatchObject({ automatic: true, via: "yolo" })
+        if (refused || state.wake) expect(synthetic[0].metadata).not.toHaveProperty("confidence")
+        expect(yield* SessionReviewFold.openCount((yield* Database.Service).db, leaf)).toBe(0)
       }))
     }
   }
 })
 
 describe("a revoked inherited YOLO grant never applies a held automatic answer", () => {
-  for (const asleep of [false, true]) {
-    it.effect(`a ${asleep ? "sleeping" : "awake"} child does not apply Auto answers revoked during context lookup`, () =>
+  for (const deferred of [false, true]) {
+    it.effect(`a ${deferred ? "sleeping" : "awake"} child does not apply Auto answers revoked during context lookup`, () =>
       Effect.gen(function* () {
-        const autonomy = yield* family({ asleep })
+        const autonomy = yield* family({ deferred })
         yield* autonomy.set({ sessionID: leaf, answers: "auto" })
         const entered = yield* Deferred.make<void>()
         const release = yield* Deferred.make<void>()
@@ -470,18 +472,19 @@ describe("a revoked inherited YOLO grant never applies a held automatic answer",
         yield* Deferred.succeed(release, undefined)
         const result = yield* Fiber.join(fiber)
         expect(result.autoAnswered).toBe(false)
-        expect(result.question.deferred).toBe(asleep ? true : undefined)
+        expect(result.question.deferred).toBe(deferred ? true : undefined)
         expect(synthetic).toEqual([])
         const database = yield* Database.Service
-        expect(yield* SessionReviewFold.openCount(database.db, leaf)).toBe(asleep ? 1 : 0)
+        expect(yield* SessionReviewFold.openCount(database.db, leaf)).toBe(deferred ? 1 : 0)
       }),
     )
   }
 
   for (const revocation of revocations) {
-    it.effect(`asleep Form defers when the ${revocation.name} during evaluation`, () =>
+    const restored = revocation.name === "root ancestor turns YOLO off and on again"
+    it.effect(`deferred Form discards the held answer when the ${revocation.name} during evaluation`, () =>
       Effect.gen(function* () {
-        const autonomy = yield* family({ asleep: true })
+        const autonomy = yield* family({ deferred: true })
         yield* revocation.grant(autonomy)
         const gate = yield* holdChoice("Careful")
         const forms = yield* Form.Service
@@ -489,13 +492,18 @@ describe("a revoked inherited YOLO grant never applies a held automatic answer",
         yield* Deferred.await(gate.entered)
         yield* revocation.revoke(autonomy)
         yield* Deferred.succeed(gate.release, undefined)
-        expect(yield* Fiber.join(fiber)).toEqual({ status: "deferred", itemID: expect.any(String) })
+        const result = yield* Fiber.join(fiber)
+        if (restored) {
+          expect(result).toMatchObject({ status: "answered", answer: { plan: "Fast" }, automatic: true, via: "yolo" })
+          expect(result).not.toHaveProperty("confidence")
+          expect(gate.calls()).toBe(1)
+        } else expect(result).toEqual({ status: "deferred", itemID: expect.any(String) })
       }),
     )
 
-    it.effect(`awake Form waits for the human when the ${revocation.name} during evaluation`, () =>
+    it.effect(`awake Form discards the held answer when the ${revocation.name} during evaluation`, () =>
       Effect.gen(function* () {
-        const autonomy = yield* family({ asleep: false })
+        const autonomy = yield* family({ deferred: false })
         yield* revocation.grant(autonomy)
         const gate = yield* holdChoice("Careful")
         const forms = yield* Form.Service
@@ -503,6 +511,13 @@ describe("a revoked inherited YOLO grant never applies a held automatic answer",
         yield* Deferred.await(gate.entered)
         yield* revocation.revoke(autonomy)
         yield* Deferred.succeed(gate.release, undefined)
+        if (restored) {
+          const result = yield* Fiber.join(fiber)
+          expect(result).toMatchObject({ status: "answered", answer: { plan: "Fast" }, automatic: true, via: "yolo" })
+          expect(result).not.toHaveProperty("confidence")
+          expect(gate.calls()).toBe(1)
+          return
+        }
         yield* TestClock.adjust("0 millis")
         expect(yield* forms.state(planForm.id)).toEqual({ status: "pending" })
         yield* forms.reply({ id: planForm.id, answer: { plan: "Fast" } })
@@ -510,9 +525,9 @@ describe("a revoked inherited YOLO grant never applies a held automatic answer",
       }),
     )
 
-    it.effect(`awake Question waits for the human when the ${revocation.name} during evaluation`, () =>
+    it.effect(`awake Question discards the held answer when the ${revocation.name} during evaluation`, () =>
       Effect.gen(function* () {
-        const autonomy = yield* family({ asleep: false })
+        const autonomy = yield* family({ deferred: false })
         yield* revocation.grant(autonomy)
         const gate = yield* holdChoice("Careful")
         const questions = yield* Question.Service
@@ -529,13 +544,19 @@ describe("a revoked inherited YOLO grant never applies a held automatic answer",
         yield* Deferred.await(gate.entered)
         yield* revocation.revoke(autonomy)
         yield* Deferred.succeed(gate.release, undefined)
-        expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answers: [["Fast"]] })
+        const result = yield* Fiber.join(fiber)
+        if (restored) {
+          expect(result).toMatchObject({ status: "answered", answers: [["Fast"]], automatic: true, via: "yolo" })
+          expect(result).not.toHaveProperty("confidence")
+          expect(result.status === "answered" && result.assessment?.fields.every((field) => field.grades === undefined && field.confidence === undefined && field.recommendation === undefined)).toBe(true)
+          expect(gate.calls()).toBe(1)
+        } else expect(result).toEqual({ status: "answered", answers: [["Fast"]] })
       }),
     )
 
-    it.effect(`asleep Question defers when the ${revocation.name} during evaluation`, () =>
+    it.effect(`deferred Question discards the held answer when the ${revocation.name} during evaluation`, () =>
       Effect.gen(function* () {
-        const autonomy = yield* family({ asleep: true })
+        const autonomy = yield* family({ deferred: true })
         yield* revocation.grant(autonomy)
         const gate = yield* holdChoice("Careful")
         const questions = yield* Question.Service
@@ -543,14 +564,20 @@ describe("a revoked inherited YOLO grant never applies a held automatic answer",
         yield* Deferred.await(gate.entered)
         yield* revocation.revoke(autonomy)
         yield* Deferred.succeed(gate.release, undefined)
-        expect(yield* Fiber.join(fiber)).toEqual({ status: "deferred", itemID: expect.any(String) })
+        const result = yield* Fiber.join(fiber)
+        if (restored) {
+          expect(result).toMatchObject({ status: "answered", answers: [["Fast"]], automatic: true, via: "yolo" })
+          expect(result).not.toHaveProperty("confidence")
+          expect(result.status === "answered" && result.assessment?.fields.every((field) => field.grades === undefined && field.confidence === undefined && field.recommendation === undefined)).toBe(true)
+          expect(gate.calls()).toBe(1)
+        } else expect(result).toEqual({ status: "deferred", itemID: expect.any(String) })
       }),
     )
 
-    for (const asleep of [false, true]) {
-      it.effect(`${asleep ? "asleep" : "awake"} managed child question is not auto-answered when the ${revocation.name} during evaluation`, () =>
+    for (const deferred of [false, true]) {
+      it.effect(`${deferred ? "deferred" : "awake"} managed child question discards the held answer when the ${revocation.name} during evaluation`, () =>
         Effect.gen(function* () {
-          const autonomy = yield* family({ asleep })
+          const autonomy = yield* family({ deferred })
           yield* revocation.grant(autonomy)
           const gate = yield* holdChoice("Careful")
           const orchestration = yield* SessionOrchestration.Service
@@ -561,11 +588,20 @@ describe("a revoked inherited YOLO grant never applies a held automatic answer",
           yield* revocation.revoke(autonomy)
           yield* Deferred.succeed(gate.release, undefined)
           const result = yield* Fiber.join(fiber)
+          if (restored) {
+            expect(result.autoAnswered).toBe(true)
+            expect(synthetic).toHaveLength(1)
+            expect(synthetic[0].text).toContain("Fast")
+            expect(synthetic[0].metadata).toMatchObject({ automatic: true, via: "yolo" })
+            expect(synthetic[0].metadata).not.toHaveProperty("confidence")
+            expect(gate.calls()).toBe(1)
+            return
+          }
           expect(result.autoAnswered).toBe(false)
-          expect(result.question.deferred).toBe(asleep ? true : undefined)
+          expect(result.question.deferred).toBe(deferred ? true : undefined)
           expect(synthetic).toEqual([])
           const database = yield* Database.Service
-          expect(yield* SessionReviewFold.openCount(database.db, leaf)).toBe(asleep ? 1 : 0)
+          expect(yield* SessionReviewFold.openCount(database.db, leaf)).toBe(deferred ? 1 : 0)
         }),
       )
     }
@@ -573,7 +609,7 @@ describe("a revoked inherited YOLO grant never applies a held automatic answer",
 
   it.effect("a neighboring Session's autonomy change does not fence the inherited answer", () =>
     Effect.gen(function* () {
-      const autonomy = yield* family({ asleep: true })
+      const autonomy = yield* family({ deferred: true })
       yield* autonomy.set({ sessionID: root, answers: "yolo" })
       const gate = yield* holdChoice("Careful")
       const forms = yield* Form.Service

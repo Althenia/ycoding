@@ -13,7 +13,7 @@ import { stringWidth } from "../../util/string-width"
 import type { ProjectContext } from "../../util/coordination"
 
 type AutonomyLevel = 0 | 1 | 2 | 3
-type AutonomyPart = { text: string; tone?: "manual" | "auto" | "yolo" | "asleep" }
+type AutonomyPart = { text: string; tone?: "manual" | "auto" | "yolo" | "deferred" }
 
 export function FooterAutonomy(props: { autonomy?: SessionAutonomyView; width?: number }) {
   const { theme } = useTheme()
@@ -38,7 +38,7 @@ export function FooterAutonomy(props: { autonomy?: SessionAutonomyView; width?: 
         fg: readableForeground(theme.text.action.destructive.default, theme.background.action.destructive.default),
         bg: theme.background.action.destructive.default,
       }
-    if (tone === "asleep")
+    if (tone === "deferred")
       return {
         fg: readableForeground(theme.text.action.primary.focused, theme.background.action.primary.focused),
         bg: theme.background.action.primary.focused,
@@ -311,20 +311,7 @@ function autonomyItems(view: SessionAutonomyView | undefined, level: AutonomyLev
       ...(annotations ? [{ text: annotations }] : []),
     ]
   })
-  const sleep = typeof view?.effective?.asleep === "boolean" ? (view.effective.asleep ? "asleep" : "awake") : "unknown"
-  const sleepText =
-    sleep === "asleep"
-      ? level === 3
-        ? "sl*"
-        : "asleep"
-      : sleep === "awake"
-        ? level === 3
-          ? "sl"
-          : "sleep"
-        : level === 3
-          ? "sl?"
-          : level === 2
-            ? "sleep ?"
-            : "sleep unknown"
-  return [...categories, [{ text: padded && sleep === "asleep" ? ` ${sleepText} ` : sleepText, tone: sleep === "asleep" ? ("asleep" as const) : undefined }]]
+  const deferred = view?.effective?.deferred
+  const text = deferred === undefined ? (level === 3 ? "d?" : "defer unknown") : deferred ? (level === 3 ? "d*" : "deferred") : (level === 3 ? "d" : "defer off")
+  return [...categories, [{ text: padded && deferred ? ` ${text} ` : text, tone: deferred ? ("deferred" as const) : undefined }]]
 }

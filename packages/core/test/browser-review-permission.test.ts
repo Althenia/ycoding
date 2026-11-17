@@ -114,7 +114,7 @@ const approvalScenario = (target: Target, action: "click" | "type" | "fill") => 
     expect(Exit.isSuccess(yield* Fiber.join(acting))).toBe(true)
     return
   }
-  yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: root.id, defer: true })
   expect(Exit.isFailure(yield* act(1, "b1"))).toBe(true)
   const reviews = yield* SessionReview.Service
   const item = (yield* reviews.list(root.id))[0]

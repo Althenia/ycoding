@@ -24,10 +24,10 @@ const status = (state: KeepAwakeStatus["state"], message?: string): RemoteReques
   value: { data: { state, ...(message === undefined ? {} : { message }) } },
 })
 const answer = (mode: string): RemoteRequestOutcome => {
-  if (mode === "assertions-on" || mode === "activity-error") return { status: "ok", value: { data: { state: "on", display: "on", activity: mode === "activity-error" ? "error" : "on", lid: "held", system: "held", sleepHold: false } } }
-  if (mode === "foreign-owner") return { status: "ok", value: { data: { state: "on", lid: "held", manual: false, sleepHold: true, message: "Lid control is held by another YCoding process." } } }
-  if (mode === "sleep-held") return { status: "ok", value: { data: { state: "on", lid: "on", manual: false, sleepHold: true } } }
-  if (mode === "lid-error") return { status: "ok", value: { data: { state: "on", lid: "error", sleepHold: false } } }
+  if (mode === "assertions-on" || mode === "activity-error") return { status: "ok", value: { data: { state: "on", display: "on", activity: mode === "activity-error" ? "error" : "on", lid: "held", system: "held", deferHold: false } } }
+  if (mode === "foreign-owner") return { status: "ok", value: { data: { state: "on", lid: "held", manual: false, deferHold: true, message: "Lid control is held by another YCoding process." } } }
+  if (mode === "sleep-held") return { status: "ok", value: { data: { state: "on", lid: "on", manual: false, deferHold: true } } }
+  if (mode === "lid-error") return { status: "ok", value: { data: { state: "on", lid: "error", deferHold: false } } }
   if (mode === "old") return { status: "failed", error: { code: "unknown_operation", message: "Unknown operation" } }
   if (mode === "silent")
     return { status: "unknown", error: { code: "outcome_unknown", message: "The machine did not answer." } }

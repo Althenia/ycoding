@@ -42,6 +42,7 @@ test("review HTTP routes list family items and map decide outcomes to typed fail
     consume: () => Effect.die("unused"),
     hasOpen: () => Effect.die("unused"),
     reconcile: Effect.die("unused"),
+    reconcileAutonomy: () => Effect.die("unused"),
     list: (sessionID) =>
       sessionID === missingID
         ? Effect.fail(new Session.NotFoundError({ sessionID }))

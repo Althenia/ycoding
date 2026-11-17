@@ -23,9 +23,9 @@ export function SessionStatusDetails() {
   const remote = useRemote()
   const view = () => remote.state().view
   const modes = () => view()?.autonomy?.effective ?? view()?.autonomy
-  const asleep = () => view()?.autonomy?.effective?.asleep ?? view()?.autonomy?.sleep !== undefined
+  const deferred = () => view()?.autonomy?.effective?.deferred ?? view()?.autonomy?.defer !== undefined
   const reachable = () => remote.state().transport.kind === "open" && remote.state().connection.kind === "connected"
-  const keepAwake = createRemoteQuery(remote.store.queryClient, () => remote.queries.keepAwake(remote.scope(), asleep() && reachable()))
+  const keepAwake = createRemoteQuery(remote.store.queryClient, () => remote.queries.keepAwake(remote.scope(), deferred() && reachable()))
   const machineMaySleep = () => {
     const read = keepAwake().data
     return read?.read === "ready" && read.status !== undefined && read.status.state !== "on"
@@ -33,7 +33,7 @@ export function SessionStatusDetails() {
   const review = () => { const selected = view(); return selected === undefined ? 0 : reviewItemsInScope(selected).length }
   const statusModes = () => [
     ...(modes() === undefined ? [] : autonomySummary(modes()!).chips.filter((chip) => chip.mode !== "manual").map((chip) => ({ key: chip.key, label: chip.label, tone: chip.mode === "yolo" ? "attention" : chip.mode === "auto" ? "on" : "neutral" }))),
-    ...(asleep() ? [machineMaySleep() ? { key: "sleep", label: "asleep · machine may sleep", tone: "attention" } : { key: "sleep", label: "asleep", tone: "on" }] : []),
+    ...(deferred() ? [machineMaySleep() ? { key: "defer", label: "deferred · machine may sleep", tone: "attention" } : { key: "defer", label: "deferred", tone: "on" }] : []),
     ...(review() > 0 ? [{ key: "review", label: `review ${review()}`, tone: "attention" }] : []),
   ]
   return <div class="session-status session-status--metadata" role="group" aria-label="Session status details">

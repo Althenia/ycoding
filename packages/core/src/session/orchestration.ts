@@ -15,6 +15,7 @@ import {
   type State,
 } from "@ycoding-ai/schema/session-orchestration"
 import { Agent } from "../agent"
+import { AnswerFallback } from "../answer"
 import { Config } from "../config"
 import { Database } from "../database/database"
 import { Decision } from "../decision"
@@ -26,7 +27,7 @@ import { KeyedMutex } from "../effect/keyed-mutex"
 import { Permission } from "../permission"
 import { Hash } from "../util/hash"
 import { canonicalJSON } from "./context-manifest"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema, Stream } from "effect"
 import { SqlError } from "effect/unstable/sql/SqlError"
 import { and, asc, count, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm"
 import { Session } from "../session"
@@ -433,10 +434,12 @@ export interface Interface {
     readonly actor: "coordinator"
     readonly source: { readonly coordinatorSessionID: SessionSchema.ID; readonly groupID?: string; readonly rationale: string }
     readonly goal?: { readonly owner: SessionSchema.ID }
+    readonly autonomy?: true
     readonly answer?: { readonly text?: string; readonly data?: Schema.Json }
     readonly confidence?: number
     readonly validate: (task: Task) => Effect.Effect<boolean>
   }) => Effect.Effect<QuestionReconsiderResult, Session.ScopeUnavailableError | ServiceUnavailableError>
+  readonly reconcileAutonomy: (sessionID: SessionSchema.ID) => Effect.Effect<void, Session.ScopeUnavailableError | ServiceUnavailableError>
   readonly settle: (
     childID: SessionSchema.ID,
     result:
@@ -499,8 +502,8 @@ const layer = Layer.effect(
     const locks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
     const reconsideringQuestions = new Set<SessionSchema.ID>()
 
-    type SleepAnswerOutcome =
-      | { readonly type: "answer"; readonly text: string; readonly confidence?: number }
+    type DeferAnswerOutcome =
+      | { readonly type: "answer"; readonly text: string; readonly confidence?: number; readonly via?: "yolo" }
       | {
           readonly type: "defer"
           readonly reason: "disabled" | "free_text" | "error" | DecisionChoice.UnsettledReason
@@ -508,16 +511,23 @@ const layer = Layer.effect(
           readonly confidence?: number
         }
 
-    const sleepAnswer = Effect.fn("SessionOrchestration.sleepAnswer")(function* (input: {
+    const boundedAnswer = (data?: Schema.Json) => {
+      const options = questionOptions(data)
+      return options.find((option) => /\s\(Recommended\)$/.test(option)) ?? options[0] ?? AnswerFallback.progression
+    }
+
+    const autonomousAnswer = Effect.fn("SessionOrchestration.autonomousAnswer")(function* (input: {
       childID: SessionSchema.ID
       text: string
       data?: Schema.Json
       autoAnswer: boolean
       yolo: boolean
       questionID: string
-    }): Effect.fn.Return<SleepAnswerOutcome> {
+    }): Effect.fn.Return<DeferAnswerOutcome> {
       const options = questionOptions(input.data)
       const marked = options.filter((option) => /\s\(Recommended\)$/.test(option))
+      const fallback: DeferAnswerOutcome = { type: "answer", text: boundedAnswer(input.data), via: "yolo" }
+      if (input.yolo && marked.length === 1) return fallback
       if (input.autoAnswer && marked.length === 1 && marked[0] !== undefined) return { type: "answer", text: marked[0] }
       if (!input.yolo) return { type: "defer", reason: options.length === 0 ? "free_text" : "disabled" }
       const child = yield* sessions
@@ -525,7 +535,8 @@ const layer = Layer.effect(
         .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)))
       if (!child) return { type: "defer", reason: "error" }
       const decision = yield* Decision.Service.pipe(Effect.provide(locations.get(child.location, [LocationServiceMap.full])), Effect.exit)
-      if (decision._tag === "Failure") return { type: "defer", reason: "error" }
+      if (decision._tag === "Failure") return fallback
+      const evaluator = AnswerFallback.evaluator(decision.value)
       const call = {
         sessionID: input.childID,
         name: "subagent_question",
@@ -534,33 +545,24 @@ const layer = Layer.effect(
         invocationKey: input.questionID,
       }
       if (options.length === 0) {
-        const outcome = yield* DecisionChoice.answerText(decision.value, {
+        const outcome = yield* DecisionChoice.answerText(evaluator, {
           ...call,
           instructions:
-            "The user cannot answer this subagent's question right now. Give the bounded free-text answer that best serves the question with the evidence given. Refuse when the evidence does not support an answer; refusal defers the question to the user.",
+            "Answer the child task's question with a concrete bounded step inside the authorized scope.",
           state: { question: input.text },
         })
         if (outcome.type === "text") return { type: "answer", text: outcome.value, confidence: outcome.confidence }
-        return {
-          type: "defer",
-          reason: outcome.reason,
-          ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
-        }
+        return fallback
       }
-      const outcome = yield* DecisionChoice.chooseDetailed(decision.value, {
+      const outcome = yield* DecisionChoice.chooseDetailed(evaluator, {
         ...call,
         instructions:
-          "The user cannot answer this subagent's question right now. Choose the option that best serves the question with the evidence given. Refuse when the evidence does not support a choice; refusal defers the question to the user.",
+          "Choose the valid option that best advances the child task inside the authorized scope.",
         state: { question: input.text, options },
         choices: options.map((value) => ({ value })),
       })
       if (outcome.type === "judgment") return { type: "answer", text: outcome.value, confidence: outcome.confidence }
-      return {
-        type: "defer",
-        reason: outcome.reason,
-        ...(outcome.choice === undefined ? {} : { choice: outcome.choice }),
-        ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
-      }
+      return fallback
     })
 
     const task = Effect.fn("SessionOrchestration.task")(function* (childID: SessionSchema.ID) {
@@ -1106,8 +1108,8 @@ const layer = Layer.effect(
             const mode = yield* DecisionChoice.decisionMode(autonomy, childID, "answers")
             const autoAnswer = mode === "auto"
             const yolo = mode === "yolo"
-            const asleep = yield* autonomy
-              .isAsleep(childID)
+            const deferred = yield* autonomy
+              .isDeferred(childID)
               .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
             const child = yield* sessions.get(childID).pipe(
               Effect.mapError(() => new TaskNotFoundError({ childID })),
@@ -1116,25 +1118,27 @@ const layer = Layer.effect(
               Effect.provide(locations.get(child.location, [LocationServiceMap.full])),
               Effect.flatMap((config) => config.entries()),
             )
-            const settled: SleepAnswerOutcome | undefined = autoAnswer || yolo
-              ? yield* sleepAnswer({ childID, text, data, autoAnswer, yolo, questionID: question.id })
-              : asleep
+            const settled: DeferAnswerOutcome | undefined = autoAnswer || yolo
+              ? yield* autonomousAnswer({ childID, text, data, autoAnswer, yolo, questionID: question.id })
+              : deferred
                 ? { type: "defer" as const, reason: "disabled" as const }
                 : undefined
             const applicable = settled?.type === "answer" && (yield* DecisionChoice.autonomyUnchanged(autonomy, childID, snapshot))
-            const sleepOutcome: SleepAnswerOutcome | undefined = applicable
+            const answerOutcome: DeferAnswerOutcome | undefined = applicable
               ? settled
-              : (yield* autonomy.isAsleep(childID).pipe(Effect.mapError(() => new TaskNotFoundError({ childID }))))
+              : (yield* DecisionChoice.decisionMode(autonomy, childID, "answers")) === "yolo"
+                ? { type: "answer", text: boundedAnswer(data), via: "yolo" }
+                : (yield* autonomy.isDeferred(childID).pipe(Effect.mapError(() => new TaskNotFoundError({ childID }))))
                 ? settled?.type === "defer" ? settled : { type: "defer", reason: "disabled" }
                 : undefined
-            if (sleepOutcome?.type === "defer") {
+            if (answerOutcome?.type === "defer") {
               const limit = Config.latest(entries, "guardrails")?.max_pending_reviews ?? 16
               yield* SessionReviewFold.open(db, events, {
                 sessionID: childID,
                 kind: "subagent_question",
-                reason: sleepOutcome.reason,
-                ...(sleepOutcome.choice === undefined ? {} : { choice: sleepOutcome.choice }),
-                ...(sleepOutcome.confidence === undefined ? {} : { confidence: sleepOutcome.confidence }),
+                reason: answerOutcome.reason,
+                ...(answerOutcome.choice === undefined ? {} : { choice: answerOutcome.choice }),
+                ...(answerOutcome.confidence === undefined ? {} : { confidence: answerOutcome.confidence }),
                 origin: { questionID: question.id },
                 payload: { type: "subagent_question", text: question.text, ...(data === undefined ? {} : { data }) },
                 limit,
@@ -1147,8 +1151,8 @@ const layer = Layer.effect(
               yield* publish(childID, { type: "question_asked", question: deferredQuestion })
               return { question: deferredQuestion, autoAnswered: false }
             }
-            if (sleepOutcome?.type === "answer") {
-              const answerText = sleepOutcome.text
+            if (answerOutcome?.type === "answer") {
+              const answerText = answerOutcome.text
               yield* requireOwner
               yield* sessions
                 .synthetic({
@@ -1171,8 +1175,8 @@ const layer = Layer.effect(
                     kind: "answer",
                     questionID: question.id,
                     automatic: true,
-                    via: sleepOutcome.confidence === undefined ? "auto-answer" : "yolo",
-                    ...(sleepOutcome.confidence === undefined ? {} : { confidence: sleepOutcome.confidence }),
+                    via: answerOutcome.via ?? (answerOutcome.confidence === undefined ? "auto-answer" : "yolo"),
+                    ...(answerOutcome.confidence === undefined ? {} : { confidence: answerOutcome.confidence }),
                   },
                   delivery: "steer",
                   resume: false,
@@ -1200,8 +1204,14 @@ const layer = Layer.effect(
           const row = yield* task(input.childID)
           if (!row || row.parent_id !== input.parentID || row.state !== "waiting" || row.question_id !== input.questionID) return undefined
           const view = (yield* withReviewState(db, [taskFromRow(row)]))[0]
-          if (view.question === undefined || view.question.deferred === true || questionFingerprint(view) !== input.fingerprint) return undefined
-          if (yield* SessionReviewFold.ownsQuestion(db, input.childID, input.questionID)) return undefined
+          if (view.question === undefined || questionFingerprint(view) !== input.fingerprint) return undefined
+          if (input.autonomy) {
+            if ((yield* DecisionChoice.decisionMode(autonomy, input.childID, "answers")) !== "yolo") return undefined
+            const reviews = (yield* SessionReviewFold.fold(db, [input.childID])).filter((item) => "questionID" in item.origin && item.origin.questionID === input.questionID)
+            if (reviews.some((item) => item.kind !== "subagent_question" || !SessionReviewFold.isOpen(item))) return undefined
+          } else {
+            if (view.question.deferred === true || (yield* SessionReviewFold.ownsQuestion(db, input.childID, input.questionID))) return undefined
+          }
           const owner = yield* db.select({ archived: SessionTable.time_archived }).from(SessionTable).where(eq(SessionTable.id, input.childID)).get().pipe(Effect.orDie)
           if (!owner || owner.archived !== null) return undefined
           return { row, view, question: view.question }
@@ -1240,9 +1250,9 @@ const layer = Layer.effect(
                     }),
                   )
                   if ("outcome" in held) return held
-                  const outcome = held.fromGoal
+                  const evaluated = held.fromGoal
                     ? goalChildAnswer(held.found.question.text, held.found.question.data, input.answer)
-                    : yield* sleepAnswer({
+                    : yield* autonomousAnswer({
                         childID: input.childID,
                         text: held.found.question.text,
                         data: held.found.question.data,
@@ -1250,15 +1260,22 @@ const layer = Layer.effect(
                         yolo: held.mode === "yolo",
                         questionID: input.questionID,
                       })
-                  if (outcome.type === "defer") return escalated(outcome.reason)
+                  if (evaluated.type === "defer") return escalated(evaluated.reason)
                   return yield* locks.withLock(input.childID)(
                     Effect.gen(function* () {
+                      let outcome: Extract<DeferAnswerOutcome, { readonly type: "answer" }> = evaluated
                       const latest = yield* open
                       if (latest === undefined || latest.row.revision !== held.found.row.revision) return stale
                       const id = answerID(latest.row)
                       if ((yield* admitted(id)) !== undefined) return stale
+                      let authorization = held.snapshot
+                      if (!held.fromGoal && held.mode === "yolo" && !(yield* DecisionChoice.autonomyUnchanged(autonomy, input.childID, authorization))) {
+                        if ((yield* DecisionChoice.decisionMode(autonomy, input.childID, "answers")) !== "yolo") return escalated("stale-assessment")
+                        authorization = yield* autonomy.snapshot(input.childID, { inherited: true }).pipe(Effect.orDie)
+                        outcome = { type: "answer", text: boundedAnswer(latest.question.data), via: "yolo" }
+                      }
                       const fromGoalAnswer = held.fromGoal && input.answer !== undefined
-                      const via = fromGoalAnswer ? ("goal" as const) : outcome.confidence === undefined ? ("auto-answer" as const) : ("yolo" as const)
+                      const via = fromGoalAnswer ? ("goal" as const) : "via" in outcome && outcome.via === "yolo" ? ("yolo" as const) : outcome.confidence === undefined ? ("auto-answer" as const) : ("yolo" as const)
                       const goalAnswer = fromGoalAnswer ? { text: input.answer!.text, data: input.answer!.data } : undefined
                       const data = {
                         text: `Parent answer:\n${JSON.stringify({ questionID: input.questionID, text: outcome.text })}`,
@@ -1275,6 +1292,9 @@ const layer = Layer.effect(
                         },
                       }
                       yield* requireOwner
+                      const reviews = input.autonomy
+                        ? (yield* SessionReviewFold.fold(db, [input.childID])).filter((item) => SessionReviewFold.isOpen(item) && "questionID" in item.origin && item.origin.questionID === input.questionID)
+                        : []
                       const committed = yield* events.publishBatch(
                         [
                           {
@@ -1290,12 +1310,13 @@ const layer = Layer.effect(
                             definition: SessionEvent.Task.Updated,
                             data: { sessionID: input.childID, change: { type: "question_answered" as const, answer: { questionID: input.questionID, text: outcome.text } } },
                           },
+                          ...reviews.map((item) => ({ definition: SessionEvent.Review.Withdrawn, data: { sessionID: input.childID, itemID: item.itemID, reason: "autonomy" as const } })),
                         ],
                         {
                           when: Effect.gen(function* () {
                             const again = yield* open
                             if (again === undefined || again.row.revision !== held.found.row.revision) return false
-                            if (!(yield* DecisionChoice.autonomyUnchanged(autonomy, input.childID, held.snapshot))) return false
+                            if (!(yield* DecisionChoice.autonomyUnchanged(autonomy, input.childID, authorization))) return false
                             if ((yield* admitted(id)) !== undefined) return false
                             return yield* input.validate(again.view)
                           }),
@@ -1319,6 +1340,22 @@ const layer = Layer.effect(
           (acquired) => Effect.sync(() => void (acquired ? reconsideringQuestions.delete(input.childID) : undefined)),
         )
       },
+      reconcileAutonomy: (childID) => Effect.gen(function* () {
+        if ((yield* DecisionChoice.decisionMode(autonomy, childID, "answers")) !== "yolo") return
+        const row = yield* task(childID)
+        if (!row || row.state !== "waiting" || !row.question_id) return
+        const view = (yield* withReviewState(db, [taskFromRow(row)]))[0]!
+        yield* result.reconsiderQuestion({
+          parentID: row.parent_id,
+          childID,
+          questionID: row.question_id,
+          fingerprint: questionFingerprint(view),
+          actor: "coordinator",
+          source: { coordinatorSessionID: childID, rationale: "Current answers autonomy" },
+          autonomy: true,
+          validate: () => Effect.succeed(true),
+        })
+      }),
       settle: Effect.fn("SessionOrchestration.settle")((childID, settlement) =>
         locks.withLock(childID)(
           Effect.gen(function* () {
@@ -1517,6 +1554,12 @@ const layer = Layer.effect(
         ),
       ),
     }
+    yield* autonomy.changes.pipe(
+      Stream.runForEach((sessionID) => result.reconcileAutonomy(sessionID).pipe(
+        Effect.catchCause((cause) => Effect.logWarning("Unable to reconcile child question autonomy", { sessionID, cause })),
+      )),
+      Effect.forkScoped,
+    )
     return result
   }),
 )

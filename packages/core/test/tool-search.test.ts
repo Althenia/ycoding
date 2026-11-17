@@ -37,6 +37,7 @@ const permission = (assert: Permission.Interface["assert"] = () => Effect.void) 
     Permission.Service,
     Permission.Service.of({
       deferPending: () => Effect.void,
+      reconcileAutonomy: () => Effect.void,
       evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
       assert,
       ask: () => Effect.die("unused"),

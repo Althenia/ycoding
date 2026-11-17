@@ -49,7 +49,7 @@ const project: ProjectContext = {
 const delegated = () =>
   autonomyView(
     {},
-    { permissions: "auto", guardrails: "yolo", asleep: true, inherited: { permissions: "ses_parent", answers: "ses_root" } },
+    { permissions: "auto", guardrails: "yolo", deferred: true, inherited: { permissions: "ses_parent", answers: "ses_root" } },
   )
 
 const formats = {
@@ -200,7 +200,7 @@ for (const mode of ["dark", "light"] as const) {
       ] as const) {
         expect(spans.filter((span) => span.text.trim() && span.bg.toInts().join() === fill.toInts().join()).map((span) => span.text.trim())).toEqual([label])
       }
-      for (const span of spans.filter((span) => /Permissions Auto|Guardrails YOLO|Answers Manual|asleep/.test(span.text))) {
+      for (const span of spans.filter((span) => /Permissions Auto|Guardrails YOLO|Answers Manual|deferred/.test(span.text))) {
         expect(span.text.startsWith(" ")).toBe(true)
         expect(span.text.endsWith(" ")).toBe(true)
       }
@@ -220,7 +220,7 @@ for (const mode of ["dark", "light"] as const) {
         for (const patterns of Object.values(formats)) expect(patterns.some((pattern) => pattern.test(row))).toBe(true)
         expect(row.search(/Permissions|P[ :]/)).toBeLessThan(row.search(/Guardrails|G[ :]/))
         expect(row.search(/Guardrails|G[ :]/)).toBeLessThan(row.search(/Answers|A [AMY]|A:/))
-        expect(row).toMatch(/asleep|sl\*/)
+        expect(row).toMatch(/deferred|d\*/)
         expect(row).toMatch(/shells 0|sh0/)
         expect(row).toContain("⌃p")
         expect(row).not.toMatch(/ses_parent|ses_root/)
@@ -240,7 +240,7 @@ for (const mode of ["dark", "light"] as const) {
         expect(chip(app, theme.text.feedback.warning.default).map((span) => span.text.trim()).join("")).toMatch(/^(Guardrails YOLO|G YOLO|G:Y)$/)
         expect(chip(app, theme.text.feedback.success.default).map((span) => span.text.trim()).join("")).toMatch(/^(Answers Manual|A Manual|A:M)$/)
         expect(chip(app, theme.background.action.primary.focused).map((span) => span.text.trim())).toEqual([
-          row.includes("sl*") ? "sl*" : "asleep",
+          row.includes("d*") ? "d*" : "deferred",
         ])
         expect(chip(app, theme.background.action.destructive.default)[0].fg.toInts()).toEqual(
           readableForeground(theme.text.action.destructive.default, theme.background.action.destructive.default).toInts(),
@@ -250,7 +250,7 @@ for (const mode of ["dark", "light"] as const) {
         )
         expectReadableChrome(app, mode)
         if (width === 200) {
-          for (const label of ["◇ Master of Release train", "main", "subagents 0", "shells 0", "Permissions Auto", "Guardrails YOLO", "Answers Manual", "asleep", "⌃x p project", "usage", "⌃p commands"])
+          for (const label of ["◇ Master of Release train", "main", "subagents 0", "shells 0", "Permissions Auto", "Guardrails YOLO", "Answers Manual", "deferred", "⌃x p project", "usage", "⌃p commands"])
             expect(row.replace(/ +/g, " ")).toContain(label)
           const spans = rowSpans(app)
           const key = spans.find((span) => span.text.includes("⌃x p"))!
@@ -264,7 +264,7 @@ for (const mode of ["dark", "light"] as const) {
         }
         if (width === 32) {
           expect(row).toMatch(/P:A G:Y A:M/)
-          expect(row).toContain("sl*")
+          expect(row).toContain("d*")
         }
       } finally {
         app.renderer.destroy()
@@ -282,9 +282,9 @@ for (const mode of ["dark", "light"] as const) {
       try {
         expectOneRow(app, width)
         const unknown = footerRow(app)
-        if (width === 200) for (const label of ["Permissions unknown", "Guardrails unknown", "Answers unknown", "sleep unknown"]) expect(unknown).toContain(label)
-        else expect(unknown).toMatch(/P:\? G:\? A:\? sl\?/)
-        expect(unknown).not.toMatch(/Manual|asleep|inherited/)
+        if (width === 200) for (const label of ["Permissions unknown", "Guardrails unknown", "Answers unknown", "defer unknown"]) expect(unknown).toContain(label)
+        else expect(unknown).toMatch(/P:\? G:\? A:\? d\?/)
+        expect(unknown).not.toMatch(/Manual|deferred|inherited/)
         expect(rowSpans(app).filter((span) => span.text.trim() && span.bg.toInts().join() !== theme.background.chrome.toInts().join())).toEqual([])
         expectReadableChrome(app, mode)
 
@@ -293,9 +293,9 @@ for (const mode of ["dark", "light"] as const) {
         expectOneRow(app, width)
         const manual = footerRow(app)
         if (width === 200) {
-          for (const label of ["Permissions Manual", "Guardrails Manual", "Answers Manual", "sleep"]) expect(manual).toContain(label)
-          expect(manual).not.toContain("asleep")
-        } else expect(manual).toMatch(/P:M G:M A:M sl(?![*?])/)
+          for (const label of ["Permissions Manual", "Guardrails Manual", "Answers Manual", "defer off"]) expect(manual).toContain(label)
+          expect(manual).not.toContain("deferred")
+        } else expect(manual).toMatch(/P:M G:M A:M d(?![*?])/)
         expect(chip(app, theme.text.feedback.success.default).map((span) => span.text.trim())).toEqual(width === 200 ? ["Permissions Manual", "Guardrails Manual", "Answers Manual"] : ["P:M", "G:M", "A:M"])
         expectReadableChrome(app, mode)
 
@@ -332,10 +332,10 @@ test("FooterAutonomy picks the longest single-row format within its measured wid
   )
   app.renderer.start()
   try {
-    const full = [" Permissions Auto ", " Guardrails YOLO ", " Answers Manual ", " asleep "].join("  ")
-    const short = [" P Auto ", " G YOLO ", " A Manual ", " asleep "].join("  ")
-    const codes = [" P:A ", " G:Y ", " A:M ", " sl* "].join(" ")
-    const compact = "P:A G:Y A:M sl*"
+    const full = [" Permissions Auto ", " Guardrails YOLO ", " Answers Manual ", " deferred "].join("  ")
+    const short = [" P Auto ", " G YOLO ", " A Manual ", " deferred "].join("  ")
+    const codes = [" P:A ", " G:Y ", " A:M ", " d* "].join(" ")
+    const compact = "P:A G:Y A:M d*"
     for (const [width, expected] of [
       [200, full],
       [full.length, full],
@@ -424,8 +424,8 @@ test("footer modes remain independent from goals, family sleep, and guardrail av
       { permissions: "auto", guardrails: "yolo", answers: "yolo" },
       { permissions: "auto", guardrails: "auto", answers: "auto" },
     ] as const) {
-      setView(autonomyView({ ...modes, goal: { text: "Ship safely", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3 } }, { guardrailsEnabled: false, asleep: true }))
-      await app.waitForFrame((frame) => frame.includes("asleep") && (["permissions", "guardrails", "answers"] as const).every((category) => {
+      setView(autonomyView({ ...modes, goal: { text: "Ship safely", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3 } }, { guardrailsEnabled: false, deferred: true }))
+      await app.waitForFrame((frame) => frame.includes("deferred") && (["permissions", "guardrails", "answers"] as const).every((category) => {
         const row = category === "permissions" ? "Permissions" : category === "guardrails" ? "Guardrails" : "Answers"
         const expected = view().effective[category]
         return frame.includes(`${row} ${expected === "yolo" ? "YOLO" : expected === "auto" ? "Auto" : "Manual"}`)

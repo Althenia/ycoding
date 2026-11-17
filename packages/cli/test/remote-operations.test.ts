@@ -243,17 +243,17 @@ test("machine keep-awake forwards global backend controls without a caller Locat
   const fixture = await harness({
     sessions: [],
     results: {
-      keepAwakeGet: { state: "off", lid: "off", sleepHold: false },
-      keepAwakeSet: { state: "on", lid: "on", sleepHold: true, manual: false },
+      keepAwakeGet: { state: "off", lid: "off", deferHold: false },
+      keepAwakeSet: { state: "on", lid: "on", deferHold: true, manual: false },
     },
   })
   const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>, sessionID?: string) => executeRemoteOperation({
     request: { ...request(operation, input), ...(sessionID === undefined ? {} : { sessionID }) }, local: fixture.local,
     sessions: fixture.registry, subscriptions: fixture.subscriptions,
   })
-  expect(valueOf(await run("machine.keepAwake.get"))).toEqual({ data: { state: "off", lid: "off", sleepHold: false } })
+  expect(valueOf(await run("machine.keepAwake.get"))).toEqual({ data: { state: "off", lid: "off", deferHold: false } })
   expect(valueOf(await run("machine.keepAwake.set", { enabled: true }))).toEqual({
-    data: { state: "on", lid: "on", sleepHold: true, manual: false },
+    data: { state: "on", lid: "on", deferHold: true, manual: false },
   })
   expect(fixture.calls).toEqual([{ method: "keepAwakeGet", args: [] }, { method: "keepAwakeSet", args: [true] }])
   expect(errorOf(await run("machine.keepAwake.set", { enabled: true, directory: "/private" })).code).toBe("invalid_message")
@@ -1715,7 +1715,7 @@ describe("operation mapping", () => {
       ["session.prompt", { text: "Hello" }], ["session.command", { command: "test" }], ["session.skill", { skill: "review" }],
       ["session.compact", { id: "cmp_child" }],
       ["session.switchModel", { model: { providerID: "test", id: "model" } }], ["session.switchAgent", { agent: "general" }],
-      ["session.autonomy.set", { permissions: "yolo" }], ["session.autonomy.set", { guardrails: "auto" }], ["session.autonomy.set", { sleep: true }],
+      ["session.autonomy.set", { permissions: "yolo" }], ["session.autonomy.set", { guardrails: "auto" }], ["session.autonomy.set", { defer: true }],
       ["session.autonomy.set", { answers: "manual" }],
       ["session.goal.set", { goal: "Write code" }], ["session.goal.stop", { goal: null }],
     ] as const) expect(errorOf(await send(operation, fields)).code).toBe("subagent_read_only")
@@ -1880,18 +1880,18 @@ describe("operation mapping", () => {
       { answers: "manual" }, { answers: "yolo" }, { answers: "auto" },
       { permissions: "auto", guardrails: "manual" },
       { permissions: "yolo", guardrails: "yolo", answers: "yolo" },
-      { sleep: true }, { sleep: false },
+      { defer: true }, { defer: false },
     ]) {
       await executeRemoteOperation({ request: request("session.autonomy.set", payload), sessions: registry, subscriptions, local })
       expect(calls.at(-1)).toEqual({ method: "autonomySet", args: ["ses_1", { directory: "/work" }, payload] })
     }
 
-    for (const payload of [{ guardrailDecision: true }, { guardrailDecision: false, sleep: true },
+    for (const payload of [{ guardrailDecision: true }, { guardrailDecision: false, defer: true }, { sleep: true },
       { yolo: true }, { yolo: false }, { yolo: 2 }, { autoPermission: true }, { autoGuardrail: false }, { autoAnswer: true },
       { permissions: true }, { permissions: false }, { permissions: 1 }, { permissions: "on" }, { permissions: "" },
       { guardrails: null }, { guardrails: "AUTO" }, { answers: "true" }, { answers: ["auto"] },
-      { permissions: "auto", yolo: true }, { permissions: "auto", sleep: true }, { answers: "yolo", sleep: false },
-      { permissions: "auto", maxNoProgress: 2 }, { sleep: "yes" }, { sleep: null }]) {
+      { permissions: "auto", yolo: true }, { permissions: "auto", defer: true }, { answers: "yolo", defer: false },
+      { permissions: "auto", maxNoProgress: 2 }, { defer: "yes" }, { defer: null }]) {
       const before = calls.length
       expect(errorOf(await executeRemoteOperation({ request: request("session.autonomy.set", payload), sessions: registry, subscriptions, local })).code).toBe("invalid_message")
       expect(calls.length).toBe(before)

@@ -459,17 +459,17 @@ describe("Agent", () => {
       const native = [
         "Manual: requires an explicit decision at ask time; no helper assessment or match verification",
         "Auto: deterministic rules only, no model fallback",
-        "permissions inherit Auto across managed-task ancestry",
+        "permissions inherit YOLO over Auto over Manual across managed-task ancestry",
         "guardrails use the root family's mode",
         "answers Auto is Session-local",
-        "yolo-permission, yolo-guardrail, yolo-answer",
-        "only the answer evaluator generates free text",
-        "allow, deny or escalate",
-        "guardrails.decide_reviews", "unless explicitly false", "confidence ≥0.9",
-        "denies and custom rules are never verified",
-        "Hard and custom-rule reviews require explicit client approval",
-        "awake, ask the user; asleep, defer to the review box",
-        "Goals grant no permission or review authority; sleep grants none",
+        "hard, catastrophic, and destructive guardrails",
+        "permission denies and ceilings",
+        "all questions, free-text questions, and open questions",
+        "deterministic valid fallback",
+        "Project coordinator separation",
+        "explicit risk acceptance",
+        "User prompts do not disable defer",
+        "Goals grant no permission or review authority; defer grants none",
         "do not retry deferred actions", "normal choices and attribution",
         "/autonomous", "Only the user creates, replaces or resumes a goal",
         "get, report, complete, stop or clear", "Never change objective text",
@@ -772,7 +772,7 @@ describe("Agent", () => {
         expect(evaluator.system).toContain("exactly one JSON document")
         expect(evaluator.system).toContain("latest explicit user instructions")
         expect(evaluator.system).toContain("reversible implementation choices")
-        expect(evaluator.system).toContain("required explicit decisions")
+        expect(evaluator.system).toContain("including required explicit decisions")
         expect(evaluator.system).toContain("never human approval")
         expect(evaluator.system).toContain("Never approve actions beyond the supplied request, grant permission, certify completion, change an objective, or use tools.")
       }
@@ -805,8 +805,8 @@ describe("Agent", () => {
           "Do not demand renewed consent for the same action, target and side effects",
           "Missing or truncated context matters only when the decision depends on it",
           "Do not inflate confidence to reach a threshold",
-          "Identify the concrete missing fact, conflicting instruction or unmet consent requirement",
-          "all value fields null",
+          "always select or synthesize a concrete valid answer",
+          "never refuse or escalate",
         ]) expect(evaluator.system).toContain(instruction)
         expect(evaluator.system).toContain("Grade independently without a single pick")
         expect(evaluator.system).toContain("finite confidence in [0,1]")
@@ -826,16 +826,15 @@ describe("Agent", () => {
       const guardrail = yield* agent.get(Agent.ID.make("yolo-guardrail"))
       const answer = yield* agent.get(Agent.ID.make("yolo-answer"))
       const decision = yield* agent.get(Agent.ID.make("decision"))
-      expect(permission?.system).toContain("Assess this action, target and task scope against applicable grants and permission boundaries.")
+      expect(permission?.system).toContain("Runtime permissions YOLO allows the submitted action immediately")
       expect(permission?.system).not.toContain("resource limits")
-      expect(permission?.system).toContain("An ask rule is a request for assessment, not an explicit denial")
-      expect(permission?.system).toContain("Never reinterpret a denial, ceiling or requireExplicitDecision gate as an ask")
-      expect(guardrail?.system).toContain("A true hard or custom-rule review requires explicit client approval")
-      expect(guardrail?.system).toContain("prior task consent cannot settle that native review")
-      expect(guardrail?.system).toContain("A non-match is not approval of the action or of another rule")
-      expect(answer?.system).toContain("A missing recommendation is not a missing fact")
-      expect(answer?.system).toContain("Refuse an obsolete question rather than reviving a cancelled operation")
-      expect(answer?.system).toContain("Never answer a consent question on the client's behalf")
+      expect(permission?.system).toContain("denies and ceilings")
+      expect(permission?.system).toContain("Project coordinator separation")
+      expect(guardrail?.system).toContain("including hard, catastrophic, and destructive standard rules")
+      expect(guardrail?.system).toContain("without an evaluator")
+      expect(answer?.system).toContain("Always select or synthesize the concrete valid answer")
+      expect(answer?.system).toContain("Never refuse or escalate")
+      expect(answer?.system).toContain("explicit-decision requests without asking the user")
       expect(decision?.system).not.toContain("Purpose: permission review")
       expect(decision?.system).not.toContain("Read taskContext by source and chronology")
     }),

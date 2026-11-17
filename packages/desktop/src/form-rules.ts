@@ -493,8 +493,7 @@ const builtInSlashCommands = [
   { name: "suggest", description: "Suggest the next message" },
   { name: "prompt", description: "Generate a prompt draft" },
   { name: "cd", description: "Change the Session working directory" },
-  { name: "sleep", description: "Put autonomy decisions to sleep" },
-  { name: "wake", description: "Wake autonomy decisions" },
+  { name: "defer", description: "Toggle persistent deferral of unresolved decisions" },
   { name: "compact", aliases: ["summarize"], description: "Compact the conversation" },
   { name: "connect", description: "Connect a provider" },
   { name: "mcp", aliases: ["mcps"], description: "Manage MCP servers" },
@@ -564,7 +563,7 @@ const argumentSlashKinds: readonly string[] = ["goal", "daybreak", "rename", "fi
 
 export function composerSlash(text: string, backend: readonly string[]): SlashAction {
   const parsed = desktopSlashCommand(text, backend)
-  if (!parsed) return slashAction(text, ["sleep", "wake"], backend)
+  if (!parsed) return slashAction(text, [], backend)
   if (parsed.kind === "backend") return { kind: "backend", name: parsed.command, args: parsed.arguments }
   return { kind: "local", name: parsed.kind === "themes" ? "theme" : parsed.kind, args: "argument" in parsed ? parsed.argument ?? "" : text.replace(/^\/\S+\s*/, "") }
 }

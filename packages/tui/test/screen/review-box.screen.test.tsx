@@ -132,12 +132,12 @@ function routeFor(state: {
     if (url.pathname === `/api/session/${sessionID}/todo`) return json({ location, data: [] })
     if (url.pathname === `/api/session/${sessionID}/autonomy`) {
       if (request.method === "PUT") {
-        const value = (await request.json()) as { sleep?: boolean }
-        if (value.sleep === false) state.autonomy = localAutonomyView(autonomyState())
-        if (value.sleep === true)
+        const value = (await request.json()) as { defer?: boolean }
+        if (value.defer === false) state.autonomy = localAutonomyView(autonomyState())
+        if (value.defer === true)
           state.autonomy = {
             ...state.autonomy,
-            sleep: {},
+            defer: {},
           }
       }
       return json({ location, data: state.autonomy })
@@ -336,7 +336,7 @@ test("long grades remain scrollable with hard-review controls at 80 by 24", asyn
 
 test("waking with open review items expands the box and notifies once", async () => {
   const state = {
-    autonomy: localAutonomyView(autonomyState({ sleep: {} })),
+    autonomy: localAutonomyView(autonomyState({ defer: {} })),
     items: [guardrailItem, questionItem] as unknown[],
     decisions: [] as unknown[],
   }
@@ -348,9 +348,9 @@ test("waking with open review items expands the box and notifies once", async ()
     route: routeFor(state),
   })
   try {
-    await waitFor(() => /Answers\s+Manual/.test(screen.frame()) && screen.frame().includes("asleep") && !screen.frame().includes("Guardrail review"), "asleep autonomy with a collapsed review box")
+    await waitFor(() => /Answers\s+Manual/.test(screen.frame()) && screen.frame().includes("deferred") && !screen.frame().includes("Guardrail review"), "deferred autonomy with a collapsed review box")
     expect(screen.frame()).toMatch(/Answers\s+Manual/)
-    expect(screen.frame()).toContain("asleep")
+    expect(screen.frame()).toContain("deferred")
     expect(screen.frame()).not.toContain("Guardrail review")
     await screen.waitForEventStream()
     state.autonomy = localAutonomyView(autonomyState())
@@ -363,7 +363,7 @@ test("waking with open review items expands the box and notifies once", async ()
     } as never)
     await waitFor(() => screen.frame().includes("2 items waiting for your review"), "wake toast")
     expect(screen.frame()).toContain("Guardrail review")
-    await waitFor(() => !screen.frame().includes("asleep"), "cleared asleep marker")
+    await waitFor(() => !screen.frame().includes("deferred"), "cleared deferred marker")
     expect(screen.frame()).toMatch(/Answers\s+Manual/)
     await saveScreenCapture("review-box-wake-200", screen)
   } finally {
@@ -699,7 +699,7 @@ test("a recovery item hydrates from the durable review list and Stop settles it 
   }
 }, 30_000)
 
-test("an asleep family shows a disabled guardrail review with its configuration reason and no model attribution", async () => {
+test("a deferred family shows a disabled guardrail review with its configuration reason and no model attribution", async () => {
   const disabledItem = {
     ...guardrailItem,
     itemID: "rvw_disabled",
@@ -709,7 +709,7 @@ test("an asleep family shows a disabled guardrail review with its configuration 
     grades: undefined,
   }
   const state = {
-    autonomy: localAutonomyView(autonomyState({ sleep: {} })),
+    autonomy: localAutonomyView(autonomyState({ defer: {} })),
     items: [disabledItem] as unknown[],
     decisions: [] as unknown[],
   }

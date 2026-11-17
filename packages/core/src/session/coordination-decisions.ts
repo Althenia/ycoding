@@ -326,7 +326,7 @@ export function make(deps: Dependencies): Interface {
       ...(input.answer === undefined ? {} : { answer: input.answer }),
       ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
       validate: () => settles({ action: "question", resources: [] }),
-    })
+    }).pipe(Effect.catchTag("Form.InvalidFormError", () => Effect.succeed({ outcome: "stale" as const, settled: false as const, reason: "invalid-answer" })))
     return { ...base, ...result }
   })
 

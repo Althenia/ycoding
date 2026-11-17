@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
-import { Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
+import { Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import { eq } from "drizzle-orm"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
@@ -31,33 +31,6 @@ const current = Layer.succeed(
 )
 
 type Scores = Record<string, number>
-
-const graded = (request: Decision.Input, scores: Scores) =>
-  Schema.decodeUnknownSync(Decision.Output)({
-    provider: "agent",
-    response: {
-      model: { providerID: "test", id: "decision-model" },
-      semantics: "model-estimate",
-      version: 1,
-      answers: request.request.questions.map((question) =>
-        question.type === "choice"
-          ? {
-              name: question.name,
-              type: "choice",
-              answer: null,
-              choice: null,
-              score: null,
-              confidence: 0,
-              grades: question.choices.map((choice) => ({
-                choice: choice.value,
-                confidence: scores[String(choice.value)] ?? 0,
-                evidence: "Bounded assessment evidence",
-              })),
-            }
-          : { name: question.name, type: "refusal", answer: null, choice: null, score: null, confidence: 0 },
-      ),
-    },
-  })
 
 interface Behavior {
   readonly config?: boolean
@@ -177,7 +150,7 @@ describe("Manual permissions are human-only", () => {
     Effect.gen(function* () {
       yield* setup()
       const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.set({ sessionID, sleep: true })
+      yield* autonomy.set({ sessionID, defer: true })
       const service = yield* Permission.Service
       const exit = yield* service.assert(request()).pipe(Effect.exit)
       expect(Exit.isFailure(exit)).toBe(true)
@@ -233,20 +206,23 @@ describe("Auto permissions apply only the deterministic rule", () => {
   }
 })
 
-describe("deny rules and permission ceilings block in every mode", () => {
+describe("deny rules and permission ceilings follow the effective permission mode", () => {
   for (const mode of ["manual", "yolo", "auto"] as const) {
     const denied = harness({ decide: () => Effect.die("Explicit denies never reach the helper") })
-    denied.it.effect(`an agent deny blocks ${mode} before any helper call`, () =>
+    denied.it.effect(mode === "yolo" ? "YOLO permissions bypass an agent deny without a helper call" : `an agent deny blocks ${mode} before any helper call`, () =>
       Effect.gen(function* () {
         yield* setup([{ action: "read", resource: "*", effect: "deny" }])
         yield* setPermissions(mode)
         const service = yield* Permission.Service
-        expect(yield* service.assert(request()).pipe(Effect.flip)).toBeInstanceOf(Permission.BlockedError)
+        if (mode === "yolo") {
+          yield* service.assert(request())
+          expect(yield* facts("session.permission.assessed")).toEqual([expect.objectContaining({ outcome: "allow", via: "yolo", reply: "once" })])
+        } else expect(yield* service.assert(request()).pipe(Effect.flip)).toBeInstanceOf(Permission.BlockedError)
         expect(denied.calls).toEqual([])
       }),
     )
     const ceiling = harness({ decide: () => Effect.die("Ceiling denies never reach the helper") })
-    ceiling.it.effect(`a Session permission ceiling blocks ${mode} before any helper call`, () =>
+    ceiling.it.effect(mode === "yolo" ? "YOLO permissions bypass a Session ceiling without a helper call" : `a Session permission ceiling blocks ${mode} before any helper call`, () =>
       Effect.gen(function* () {
         yield* setup([{ action: "read", resource: "*", effect: "allow" }])
         const { db } = yield* Database.Service
@@ -258,191 +234,73 @@ describe("deny rules and permission ceilings block in every mode", () => {
           .pipe(Effect.orDie)
         yield* setPermissions(mode)
         const service = yield* Permission.Service
-        expect(yield* service.assert(request()).pipe(Effect.flip)).toBeInstanceOf(Permission.BlockedError)
+        if (mode === "yolo") {
+          yield* service.assert(request())
+          expect(yield* facts("session.permission.assessed")).toEqual([expect.objectContaining({ outcome: "allow", via: "yolo", reply: "once" })])
+        } else expect(yield* service.assert(request()).pipe(Effect.flip)).toBeInstanceOf(Permission.BlockedError)
         expect(ceiling.calls).toEqual([])
       }),
     )
   }
 })
 
-describe("YOLO permissions use only the hidden permission evaluator", () => {
+describe("YOLO permissions do not invoke a decision model", () => {
   for (const config of [undefined, true, false] as const) {
-    const run = harness({ config, decide: (input) => Effect.succeed(graded(input, { allow: 0.9 })) })
-    run.it.effect(`decide_reviews ${String(config)} makes exactly one YOLO-authority call and approves once`, () =>
+    const run = harness({ config, decide: () => Effect.never })
+    run.it.effect(`decide_reviews ${String(config)} does not affect direct YOLO permission grants`, () =>
       Effect.gen(function* () {
         yield* setup()
         yield* setPermissions("yolo")
         const service = yield* Permission.Service
         yield* service.assert(request())
         expect(yield* service.list()).toEqual([])
-        expect(run.calls).toHaveLength(1)
-        expect(run.calls[0]!.context).toMatchObject({ sessionID, purpose: "permission", authority: "yolo" })
-        const question = run.calls[0]!.request.request.questions[0]!
-        if (question.type !== "choice") throw new Error("Expected a graded choice")
-        expect(question.grade).toBe(true)
-        expect(question.choices.map((choice) => choice.value)).toEqual(["allow", "deny", "escalate"])
-        expect(yield* facts("session.permission.assessed")).toEqual([
-          expect.objectContaining({
-            outcome: "allow",
-            via: "yolo",
-            reply: "once",
-            authority: "yolo",
-            choice: "allow",
-            confidence: 0.9,
-            grades: expect.any(Array),
-          }),
-        ])
+        expect(run.calls).toEqual([])
+        expect(yield* facts("session.permission.assessed")).toEqual([expect.objectContaining({ outcome: "allow", via: "yolo", reply: "once" })])
       }),
     )
   }
 
-  const fixtures: ReadonlyArray<{
-    readonly name: string
-    readonly input: Partial<Permission.AssertInput>
-    readonly scores: Scores
-    readonly expected: "allow" | "deny" | "human"
-    readonly reason?: Guardrail.EscalationReason
-  }> = [
-    { name: "read-only file read", input: { action: "read", resources: ["README.md"] }, scores: { allow: 0.95 }, expected: "allow" },
-    { name: "version probe", input: { action: "bash", resources: ["git --version"] }, scores: { allow: 0.9 }, expected: "allow" },
-    { name: "recursive home deletion", input: { action: "bash", resources: ["rm -rf ~/Documents"] }, scores: { deny: 0.92 }, expected: "deny" },
-    { name: "credential read", input: { action: "read", resources: ["~/.ssh/synthetic_key"] }, scores: { escalate: 1 }, expected: "human", reason: "escalated" },
-    { name: "outbound upload", input: { action: "webfetch", resources: ["https://synthetic.invalid/upload"] }, scores: { allow: 0.79 }, expected: "human", reason: "low_confidence" },
-    { name: "ambiguous target", input: { action: "bash", resources: ["task-runner deploy"] }, scores: { allow: 0.9, deny: 0.85 }, expected: "human", reason: "conflicting_grades" },
-  ]
-  for (const fixture of fixtures) {
-    const run = harness({ decide: (input) => Effect.succeed(graded(input, fixture.scores)) })
-    run.it.effect(`fixture ${fixture.name} settles as ${fixture.expected}`, () =>
-      Effect.gen(function* () {
-        yield* setup()
-        yield* setPermissions("yolo")
-        const service = yield* Permission.Service
-        const fiber = yield* service.assert(request(fixture.input)).pipe(Effect.forkScoped)
-        if (fixture.expected === "allow") {
-          yield* Fiber.join(fiber)
-          expect(yield* service.list()).toEqual([])
-          return
-        }
-        if (fixture.expected === "deny") {
-          const exit = yield* Fiber.await(fiber)
-          expect(Exit.isFailure(exit)).toBe(true)
-          if (Exit.isFailure(exit)) expect(exit.cause.toString()).toContain("Permission.CorrectedError")
-          expect(yield* service.list()).toEqual([])
-          expect(yield* facts("session.permission.assessed")).toEqual([
-            expect.objectContaining({ outcome: "deny", via: "yolo", reply: "reject", authority: "yolo" }),
-          ])
-          return
-        }
-        const pending = yield* waitForPending
-        expect(pending.escalation).toMatchObject({ authority: "yolo", reason: fixture.reason, grades: expect.any(Array) })
-        expect(yield* facts("session.permission.assessed")).toEqual([
-          expect.objectContaining({ outcome: "escalate", via: "yolo", authority: "yolo", reason: fixture.reason }),
-        ])
-        yield* service.reply({ requestID: pending.id, reply: "reject" })
-        expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true)
-      }),
-    )
-  }
-
-  const reasons = [
-    "unavailable",
-    "invalid-request",
-    "provider-failed",
-    "timeout",
-    "input-too-large",
-    "invalid-output",
-    "refused",
-    "truncated-output",
-    "unsupported-output",
-  ] as const
-  for (const reason of reasons) for (const asleep of [false, true]) {
-    const run = harness({ decide: () => Effect.fail(new Decision.Error({ reason })) })
-    run.it.effect(`a ${reason} evaluator failure ${asleep ? "defers to the review box" : "asks the human with the typed reason"}`, () =>
-      Effect.gen(function* () {
-        yield* setup()
-        yield* setPermissions("yolo")
-        const autonomy = yield* SessionAutonomy.Service
-        if (asleep) yield* autonomy.set({ sessionID, sleep: true })
-        const service = yield* Permission.Service
-        const fiber = yield* service.assert(request()).pipe(Effect.forkScoped)
-        if (asleep) {
-          expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true)
-          const items = yield* SessionReviewFold.fold((yield* Database.Service).db, [sessionID])
-          expect(items).toEqual([expect.objectContaining({ kind: "permission", reason })])
-          expect(items[0]).not.toHaveProperty("grades")
-          expect(yield* facts("session.permission.assessed")).toEqual([])
-          return
-        }
-        const pending = yield* waitForPending
-        expect(pending.escalation).toEqual({ authority: "yolo", reason })
-        expect(Guardrail.escalationText(pending.escalation!)).toContain("Review this request manually")
-        yield* service.reply({ requestID: pending.id, reply: "once" })
-        yield* Fiber.join(fiber)
-      }),
-    )
-  }
-
-  const asleepAllow = harness({ decide: (input) => Effect.succeed(graded(input, { allow: 0.85 })) })
-  asleepAllow.it.effect("a confident allow applies while the family sleeps and records no review item", () =>
+  const deferred = harness({ decide: () => Effect.never })
+  deferred.it.effect("YOLO permission grants remain direct while requests are deferred", () =>
     Effect.gen(function* () {
       yield* setup()
       yield* setPermissions("yolo")
-      const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.set({ sessionID, sleep: true })
+      yield* (yield* SessionAutonomy.Service).set({ sessionID, defer: true })
       const service = yield* Permission.Service
       yield* service.assert(request())
-      expect(yield* SessionReviewFold.fold((yield* Database.Service).db, [sessionID])).toEqual([])
-    }),
-  )
-
-  const humanOnly = harness({ decide: () => Effect.die("A human-only ask never reaches the evaluator") })
-  humanOnly.it.effect("a human-only ask under YOLO asks the human without a helper call", () =>
-    Effect.gen(function* () {
-      yield* setup()
-      yield* setPermissions("yolo")
-      const service = yield* Permission.Service
-      const fiber = yield* service.assert(request({ requireExplicitDecision: true })).pipe(Effect.forkScoped)
-      const pending = yield* waitForPending
-      yield* service.reply({ requestID: pending.id, reply: "reject" })
-      expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true)
-      expect(humanOnly.calls).toEqual([])
-    }),
-  )
-
-  const interrupted = harness({
-    decide: () => Effect.never,
-  })
-  interrupted.it.effect("interrupting an assessment leaves no pending request or assessment fact", () =>
-    Effect.gen(function* () {
-      yield* setup()
-      yield* setPermissions("yolo")
-      const service = yield* Permission.Service
-      const fiber = yield* service.assert(request()).pipe(Effect.forkScoped)
-      for (let attempt = 0; attempt < 50 && interrupted.calls.length === 0; attempt++) yield* Effect.yieldNow
-      expect(interrupted.calls).toHaveLength(1)
-      yield* Fiber.interrupt(fiber)
       expect(yield* service.list()).toEqual([])
-      expect(yield* facts("session.permission.assessed")).toEqual([])
+      expect(yield* SessionReviewFold.fold((yield* Database.Service).db, [sessionID])).toEqual([])
+      expect(deferred.calls).toEqual([])
     }),
   )
 
-  const flipped = Deferred.makeUnsafe<void>()
-  const stale = harness({
-    decide: (input) => Deferred.await(flipped).pipe(Effect.as(graded(input, { allow: 0.95 }))),
-  })
-  stale.it.effect("a YOLO approval is discarded when permissions leave YOLO during the assessment", () =>
+  const explicit = harness({ decide: () => Effect.never })
+  explicit.it.effect("YOLO permission grants apply to explicit asks without a fabricated human reply", () =>
     Effect.gen(function* () {
       yield* setup()
       yield* setPermissions("yolo")
       const service = yield* Permission.Service
-      const fiber = yield* service.assert(request()).pipe(Effect.forkScoped)
-      for (let attempt = 0; attempt < 50 && stale.calls.length === 0; attempt++) yield* Effect.yieldNow
+      yield* service.assert(request({ requireExplicitDecision: true }))
+      expect(yield* service.list()).toEqual([])
+      expect(explicit.calls).toEqual([])
+      expect(yield* facts("session.permission.replied")).toEqual([])
+    }),
+  )
+
+  const changed = harness({ decide: () => Effect.never })
+  changed.it.effect("a grant under YOLO does not grant a later request after switching to Manual", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* setPermissions("yolo")
+      const service = yield* Permission.Service
+      yield* service.assert(request())
       yield* setPermissions("manual")
-      yield* Deferred.succeed(flipped, undefined)
+      const waiting = yield* service.assert(request()).pipe(Effect.exit, Effect.forkScoped)
       const pending = yield* waitForPending
-      expect(pending.escalation).toEqual({ authority: "yolo", reason: "escalated" })
-      yield* service.reply({ requestID: pending.id, reply: "once" })
-      yield* Fiber.join(fiber)
+      expect(yield* service.list()).toHaveLength(1)
+      yield* service.reply({ requestID: pending.id, reply: "reject" })
+      expect(Exit.isFailure(yield* Fiber.join(waiting))).toBe(true)
+      expect(changed.calls).toEqual([])
     }),
   )
 })

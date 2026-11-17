@@ -737,7 +737,7 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
           : value.kind === "goal" ? await remote.store.setGoal(value.input.goal)
             : value.kind === "skill" ? await remote.store.activateSkill(value.input.skill)
               : value.kind === "autonomous" ? openAutonomous()
-                : value.kind === "sleep" || value.kind === "wake" ? await remote.store.setSleep(value.kind === "sleep")
+                : value.kind === "defer" ? remote.state().view?.autonomy === undefined ? false : await remote.store.setDefer(!(remote.state().view?.autonomy?.effective?.deferred ?? (remote.state().view?.autonomy?.defer !== undefined)))
                   : value.kind === "keepAwake" ? await toggleKeepAwake()
                     : false
       if (result && remote.state().drafts[sessionID] === draft) remote.store.setDraft(sessionID, "")

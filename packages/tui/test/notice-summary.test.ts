@@ -15,9 +15,9 @@ test("summarizes Session state", () => {
 })
 
 test("summarizes active autonomy modes", () => {
-  const autonomy = { mode: "normal", permissions: "auto", guardrails: "yolo", answers: "auto", sleep: {}, goal: { status: "active" } }
+  const autonomy = { mode: "normal", permissions: "auto", guardrails: "yolo", answers: "auto", defer: {}, goal: { status: "active" } }
   expect(noticeSummary("session-state", `${sessionPrefix}${JSON.stringify({ autonomy, todos: [] })}`)).toBe(
-    "Session state · permissions auto · guardrails yolo · answers auto · goal · asleep · 0 tasks",
+    "Session state · permissions auto · guardrails yolo · answers auto · goal · deferred · 0 tasks",
   )
 })
 

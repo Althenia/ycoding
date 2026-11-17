@@ -44,8 +44,8 @@ function autonomyCategoryTitle(category: AutonomyCategory) {
   return category === "guardrails" ? "Guardrails" : "Answers"
 }
 
-export function isAsleep(state: { sleep?: unknown }): boolean {
-  return state.sleep !== undefined && state.sleep !== null
+export function isDeferred(state: { defer?: unknown }): boolean {
+  return state.defer !== undefined && state.defer !== null
 }
 
 export function localAutonomyView(state: AutonomyState): SessionAutonomyView {
@@ -56,7 +56,7 @@ export function localAutonomyView(state: AutonomyState): SessionAutonomyView {
       guardrails: state.guardrails,
       answers: state.answers,
       inherited: {},
-      asleep: isAsleep(state),
+      deferred: isDeferred(state),
       guardrailsEnabled: false,
     },
   }
@@ -79,8 +79,8 @@ export function autonomyInheritance(view: SessionAutonomyView | undefined, actio
 export function autonomyDecisionLabel(view: SessionAutonomyView | undefined, action: AutonomyAction) {
   const mode = autonomyMode(view?.effective?.[action])
   if (!mode || !view?.effective) return "unknown"
-  if (action === "guardrails" && !view.effective.guardrailsEnabled) return "disabled"
-  if (mode === "manual") return view.effective.asleep ? "review box" : "manual"
+  if (action === "guardrails" && mode !== "yolo" && !view.effective.guardrailsEnabled) return "disabled"
+  if (mode === "manual") return view.effective.deferred ? "review box" : "manual"
   return mode
 }
 
@@ -92,7 +92,7 @@ export function autonomyAutomated(view: SessionAutonomyView | undefined) {
 
 export function autonomyModeParts(view: SessionAutonomyView | undefined): readonly string[] {
   const automated = autonomyAutomated(view)
-  if (automated === undefined || !view) return ["unknown"] as const
+  if (automated === undefined || !view) return ["unknown", ...(view?.effective?.deferred ? ["deferred"] : [])] as const
   return [
     ...(automated
       ? autonomyRows(view).flatMap((row) =>
@@ -100,7 +100,7 @@ export function autonomyModeParts(view: SessionAutonomyView | undefined): readon
         )
       : ["manual"]),
     ...(view.goal?.status === "active" ? ["goal"] : []),
-    ...(view.effective.asleep ? ["asleep"] : []),
+    ...(view.effective.deferred ? ["deferred"] : []),
   ] as const
 }
 

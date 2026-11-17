@@ -65,7 +65,7 @@ export const toModelOutput = (
   if (reviewFull)
     return "The user's review box is full, so this question was not recorded. Do not guess an answer; continue independent work and stop when only blocked work remains."
   if (deferredItemID !== undefined)
-    return `The user is asleep. These questions were added to the user's review box as item ${deferredItemID}; the answer will arrive later as a user message. Do not guess the answer or act as if it were given. Continue with work that does not depend on it; if nothing else remains, summarize what waits on the user and stop.`
+    return `These questions were deferred to the user's review box as item ${deferredItemID}; the answer will arrive later. Do not guess the answer or act as if it were given. Continue with work that does not depend on it; if nothing else remains, summarize what waits on the user and stop.`
   if (timedOutAfterSeconds !== undefined)
     return "These questions closed without an answer. Obtain the required answer before continuing dependent work."
   const formatted = questions.map((question, index) =>
@@ -148,7 +148,7 @@ function toField(question: Question.Prompt, index: number): Form.Field {
     key: `q${index}`, title: question.header, description: question.question,
     type: question.multiple === true ? "multiselect" : "string",
     options: question.options.map((option) => ({ value: option.label, label: option.label, description: option.description })),
-    custom: question.custom ?? true,
+    custom: question.options.length === 0 || (question.custom ?? true),
     ...(question.options.length === 0 ? { required: true } : {}),
   }
 }

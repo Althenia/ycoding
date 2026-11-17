@@ -577,9 +577,9 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   onCleanup(() => autonomySubscriptions.forEach((unsubscribe) => unsubscribe()))
   createEffect(
     on(
-      () => autonomy()?.effective?.asleep,
-      (asleep, previous) => {
-        if (previous !== true || asleep !== false || reviewItems().length === 0) return
+      () => autonomy()?.effective?.deferred,
+      (deferred, previous) => {
+        if (previous !== true || deferred !== false || reviewItems().length === 0) return
         const count = reviewItems().length
         toast.show({
           message: `${count} item${count === 1 ? "" : "s"} waiting for your review`,
@@ -641,7 +641,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     return {
       type: "autonomy",
       elevated: autonomyAutomated(current) === true,
-      asleep: current?.effective?.asleep ?? false,
+      deferred: current?.effective?.deferred ?? false,
       machineAwake: keepAwake.status() === undefined ? undefined : keepAwake.status()?.state === "on",
       review: reviewItems().length,
       state,
@@ -2107,7 +2107,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
               <ReviewBox
                 items={reviewItems()}
                 currentSessionID={route.sessionID}
-                asleep={autonomy()?.effective?.asleep ?? false}
+                deferred={autonomy()?.effective?.deferred ?? false}
                 activeItemID={reviewActiveID()}
                 pendingItemID={reviewPendingID()}
                 failed={reviewFailed}

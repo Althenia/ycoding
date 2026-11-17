@@ -60,7 +60,6 @@ import {
   createSessionID,
   goalToggleAction,
   autonomyAutomated,
-  isAsleep,
   parseGoalCommand,
   restoreSessionSubmission,
   retainSessionSubmission,
@@ -890,63 +889,28 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Sleep (configured automation, rest to review box)",
-        name: "session.autonomy.sleep",
+        title: "Toggle deferred reviews",
+        name: "session.autonomy.defer",
         category: "Session",
         palette: true,
-        slash: { name: "sleep" },
+        slash: { name: "defer" },
         run: async () => {
           const sessionID = props.sessionID
           if (!sessionID) {
-            toast.show({ message: "Open a session to sleep", variant: "warning", duration: 3000 })
+            toast.show({ message: "Open a session to defer reviews", variant: "warning", duration: 3000 })
             return
           }
-          if (props.autonomy && isAsleep(props.autonomy)) {
-            toast.show({
-              message: "Already asleep; /wake or any prompt wakes the session",
-              variant: "info",
-              duration: 3000,
-            })
+          if (typeof props.autonomy?.effective?.deferred !== "boolean") {
+            toast.show({ message: "Deferred state unavailable", variant: "warning", duration: 3000 })
             return
           }
           try {
-            const result = await client.api.session.autonomy.set({ sessionID, payload: { sleep: true } })
+            const defer = !props.autonomy.effective.deferred
+            const result = await client.api.session.autonomy.set({ sessionID, payload: { defer } })
             props.onAutonomyUpdated?.(sessionID, result)
-            await keepAwake.refresh()
-            const awake = keepAwake.status()
-            toast.show({
-              title: "Sleep on",
-              message:
-                awake?.state === "on"
-                  ? `Configured automation applies; rest go to review box. Idle sleep held off; display ${awake.display ?? "unreported"}; activity ${awake.activity ?? "unreported"}; lid ${awake.lid ?? "unreported"}${awake.system === "on" ? "; system sleep disabled" : awake.system === "setup" ? "; system sleep not disabled, run ycoding keep-awake setup" : awake.system === "held" ? "; system sleep held by another YCoding process" : awake.system === "error" ? "; system sleep change failed" : ""}. Deliberate locks and managed policy apply. On battery this drains the battery and a closed lid traps heat.`
-                  : "Configured automation applies; rest go to review box. Keep-awake is not holding this machine; it may sleep.",
-              variant: "success",
-              duration: 6000,
-            })
+            toast.show({ message: defer ? "Reviews deferred" : "Review deferral off", variant: "success", duration: 3000 })
           } catch (error) {
-            toast.show({ title: "Failed to sleep", message: errorMessage(error), variant: "error" })
-          }
-        },
-      },
-      {
-        title: "Wake",
-        name: "session.autonomy.wake",
-        category: "Session",
-        palette: true,
-        slash: { name: "wake" },
-        run: async () => {
-          const sessionID = props.sessionID
-          if (!sessionID) {
-            toast.show({ message: "Open a session to wake", variant: "warning", duration: 3000 })
-            return
-          }
-          try {
-            const result = await client.api.session.autonomy.set({ sessionID, payload: { sleep: false } })
-            props.onAutonomyUpdated?.(sessionID, result)
-            await keepAwake.refresh()
-            toast.show({ message: "Awake; sleep mode is off", variant: "success", duration: 3000 })
-          } catch (error) {
-            toast.show({ title: "Failed to wake", message: errorMessage(error), variant: "error" })
+            toast.show({ title: "Failed to change review deferral", message: errorMessage(error), variant: "error" })
           }
         },
       },
@@ -1887,7 +1851,7 @@ export function Prompt(props: PromptProps) {
       await applyGoalCommand(normalized.slice(5).trim() || undefined)
       return true
     }
-    const autonomySlash = (["sleep", "wake", "autonomous"] as const).find((name) => normalized === `/${name}`)
+    const autonomySlash = (["defer", "autonomous"] as const).find((name) => normalized === `/${name}`)
     if (autonomySlash) {
       clearPrompt()
       const command = keymapCommands().find((item) => item.slash?.name === autonomySlash)

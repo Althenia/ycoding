@@ -190,15 +190,12 @@ describe("structured decision documentation", () => {
     const tools = findDocPage("configuration/tools")
     const text = JSON.stringify(tools?.sections)
     expect(text).toContain("Agent judgments use `decision`")
-    expect(text).toContain("during /sleep")
+    expect(text).toContain("review box while deferred")
     expect(text).not.toContain("/guardrail-decision")
-    expect(text).toContain("confidence 0.8 or higher")
-    expect(text).toContain("Answers set to Auto (Manual by default)")
-    expect(text).toContain("An active goal may resolve pending routine questions using the Goal agent in any Answers mode.")
+    expect(text).toContain("valid deterministic fallback")
+    expect(text).toContain("Answers Auto uses a valid explicit default")
     expect(text).not.toContain("auto_answer")
-    expect(text).toContain("guardrails.decide_reviews on (the default when omitted)")
     expect(text).not.toContain("decide_reviews: true (default false)")
-    expect(text).not.toContain("automatic fallback")
     expect(text).toContain("permission ceilings")
     expect(text).toContain("owner choices")
     expect(text).toContain("insufficient evidence")
@@ -216,7 +213,7 @@ describe("structured decision documentation", () => {
       ],
     } })
     expect(JSON.stringify(findDocPage("configuration/goal")?.sections)).toContain("explicit goal")
-    expect(JSON.stringify(findDocPage("configuration/guardrails")?.sections)).toContain("Denies never reach the helper")
+    expect(JSON.stringify(findDocPage("configuration/guardrails")?.sections)).toContain("Guardrails YOLO bypasses")
     const rejected = findDocPage("configuration")?.sections.flatMap((section) => section.blocks)
       .find((block) => block.kind === "code" && block.label === "Rejected keys")
     expect(rejected?.kind === "code" ? rejected.code : "").toContain("decisions")
@@ -234,35 +231,32 @@ describe("structured decision documentation", () => {
     ]) expect(guardrails).toContain(rule)
     expect(guardrails).not.toContain("standard.review.broad-deletion")
     expect(guardrails).not.toContain("standard.review.publish")
-    expect(guardrails).toContain("While awake")
+    expect(guardrails).toContain("while deferred")
     expect(guardrails).not.toContain("guardrail-decision")
     expect(guardrails).toContain("case-sensitive")
     expect(guardrails).toContain("Guardrails Auto")
     expect(guardrails).not.toMatch(/YOLO [0-9]/)
     expect(guardrails).not.toContain("0.95")
-    expect(guardrails).toContain("human handoff")
-    expect(guardrails).toContain("decision model")
-    expect(guardrails).toContain("one graded call")
+    expect(guardrails).toContain("catastrophic")
+    expect(guardrails).toContain("Guardrails YOLO bypasses")
   })
 
   test("guardrail documentation pins per-choice thresholds and the hard-review delegation setting", () => {
     const blocks = findDocPage("configuration/guardrails")?.sections.flatMap((section) => section.blocks) ?? []
-    const thresholds = blocks.find((block) => block.kind === "table" && block.head[0] === "Choice")
-    expect(thresholds?.kind === "table" ? thresholds.rows : undefined).toEqual([
-      ["Allow", "Ordinary reviews", "`0.8`", "Approve the current attempt only."],
-      ["Deny", "Ordinary and hard reviews", "`0.8`", "Reject the action."],
-    ])
-    const escalation = blocks.find((block) => block.kind === "paragraph" && block.text.startsWith("A qualifying grade does not guarantee"))
-    expect(escalation?.kind === "paragraph" ? escalation.text : "").toContain("conflicting qualifying allow and deny grades")
-    expect(escalation?.kind === "paragraph" ? escalation.text : "").toContain("visible reason and next action")
+    const tiers = blocks.find((block) => block.kind === "table" && block.head[0] === "Tier")
+    const catastrophic = tiers?.kind === "table" ? tiers.rows.filter((row) => row[0] === "Catastrophic deny") : []
+    expect(catastrophic.length).toBeGreaterThan(0)
+    for (const row of catastrophic) expect(row[3]).toContain("unless Guardrails YOLO is enabled")
+    const escalation = blocks.find((block) => block.kind === "paragraph" && block.text.startsWith("An explicit decision-tool grade"))
+    expect(escalation?.kind === "paragraph" ? escalation.text : "").toContain("does not grant permission or prove completion")
+    expect(escalation?.kind === "paragraph" ? escalation.text : "").toContain("prompts and commands do not end it")
     const settings = blocks.find((block) => block.kind === "table" && block.head[0] === "Field")
     const hard = settings?.kind === "table" ? settings.rows.find((row) => row[0] === "`guardrails.decide_hard_reviews`") : undefined
     expect(hard?.slice(0, 3)).toEqual(["`guardrails.decide_hard_reviews`", "boolean", "`true`"])
-    expect(hard?.[3]).toContain("humans while awake")
-    expect(hard?.[3]).toContain("review box while asleep")
+    expect(hard?.[3]).toContain("Guardrails YOLO bypasses blockers")
     const master = settings?.kind === "table" ? settings.rows.find((row) => row[0] === "`guardrails.decide_reviews`") : undefined
     expect(master?.slice(0, 3)).toEqual(["`guardrails.decide_reviews`", "boolean", "`true` when omitted"])
-    expect(master?.[3]).toContain("review box while asleep")
+    expect(master?.[3]).toContain("Guardrails YOLO bypasses blockers")
     const options = findDocPage("configuration")?.sections.flatMap((section) => section.blocks) ?? []
     const answer = options.flatMap((block) => (block.kind === "table" ? block.rows : [])).find((row) => row[0] === "`auto_answer`")
     expect(answer).toBeUndefined()
@@ -273,11 +267,11 @@ describe("structured decision documentation", () => {
     expect(page?.title).toBe("Autonomous mode")
     expect(findDocPage("configuration/yolo")).toBeUndefined()
     const text = JSON.stringify(page?.sections)
-    for (const required of ["`permissions`", "`guardrails`", "`answers`", "Manual", "YOLO", "Auto", "`/autonomous`", "`1`, `2`, `3`", "--permissions", "--guardrails", "--answers", "hard or custom-rule review is always yours", "local Manual never cancels inherited authority"]) expect(text).toContain(required)
+    for (const required of ["`permissions`", "`guardrails`", "`answers`", "Manual", "YOLO", "Auto", "`/autonomous`", "`1`, `2`, `3`", "--permissions", "--guardrails", "--answers", "YOLO removes every blocker", "local Manual never cancels inherited authority"]) expect(text).toContain(required)
     for (const removed of ["/yolo", "/auto-permission", "/auto-guardrail", "/auto-answer", "--yolo", "--auto-", "autoPermission", "autoAnswer"]) expect(text).not.toContain(removed)
     for (const slug of ["usage/tui", "usage/cli", "usage/remote", "usage/sessions", "configuration", "configuration/guardrails", "configuration/permissions", "configuration/tools", "getting-started"]) {
       const body = JSON.stringify(findDocPage(slug)?.sections)
-      for (const removed of ["/yolo", "/auto-permission", "/auto-guardrail", "/auto-answer", "--yolo", "--auto-permission", "autoPermission", "autoGuardrail", "autoAnswer"]) expect(body).not.toContain(removed)
+      for (const removed of ["/yolo", "/auto-permission", "/auto-guardrail", "/auto-answer", "/sleep", "/wake", "--yolo", "--auto-permission", "autoPermission", "autoGuardrail", "autoAnswer"]) expect(body).not.toContain(removed)
     }
   })
 

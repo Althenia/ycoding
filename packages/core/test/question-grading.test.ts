@@ -114,7 +114,7 @@ it.effect("multi-choice recommends one compatible set rather than every individu
   expect(result.output?.structured).toMatchObject({ answers: [["SQLite", "Backups"]], assessment: { fields: [{ recommendation: ["SQLite", "Backups"], grades }] } })
 }))
 
-it.effect("all active question fields are graded even when an earlier field needs a human, while inactive conditional fields are not", () => Effect.gen(function* () {
+it.effect("fallback answers activate dependent fields and leave inactive fields unassessed", () => Effect.gen(function* () {
   yield* seed()
   const calls: string[] = []
   evaluate = input => {
@@ -122,59 +122,43 @@ it.effect("all active question fields are graded even when an earlier field need
     return Effect.succeed(response(input, input.request.questions[0].name === "q0" ? grades.map(grade => ({ ...grade, confidence: 0.79 })) : undefined))
   }
   const forms = yield* Form.Service
-  const observed = yield* observe()
   const options = questions[0].options.map(option => ({ value: option.label, label: option.label }))
-  const fiber = yield* forms.ask({ sessionID, title: "Questions", metadata: { kind: "question" }, fields: [
+  const outcome = yield* forms.ask({ sessionID, title: "Questions", metadata: { kind: "question" }, fields: [
     { key: "q0", type: "string", options }, { key: "q1", type: "string", options },
     { key: "q2", type: "string", options, when: [{ key: "q0", op: "eq", value: "SQLite" }] },
-  ] }).pipe(Effect.forkScoped)
-  const created = yield* Deferred.await(observed.created)
-  const event = Schema.decodeUnknownSync(Form.Event.Assessed.data)(yield* Deferred.await(observed.assessed))
-  expect(calls).toEqual(["q0", "q1"])
-  expect(event.assessment.fields).toMatchObject([{ key: "q0", status: "assessed" }, { key: "q1", status: "assessed", recommendation: ["SQLite"] }, { key: "q2", status: "not_assessed" }])
-  yield* forms.reply({ id: created.id, answer: { q0: "Postgres", q1: "Postgres" } })
-  expect(yield* Fiber.join(fiber)).toMatchObject({ status: "answered", answer: { q0: "Postgres", q1: "Postgres" }, assessment: event.assessment })
+    { key: "q3", type: "string", options, when: [{ key: "q0", op: "eq", value: "Postgres" }] },
+  ] })
+  expect(calls).toEqual(["q0", "q1", "q2"])
+  expect(outcome).toMatchObject({ status: "answered", answer: { q0: "SQLite", q1: "SQLite", q2: "SQLite" }, automatic: true, via: "yolo",
+    assessment: { fields: [{ key: "q0", status: "assessed" }, { key: "q1", status: "assessed" }, { key: "q2", status: "assessed" }, { key: "q3", status: "not_assessed" }] },
+  })
+  expect(yield* forms.list()).toEqual([])
 }))
 
-it.effect("waking during sleeping question grading exposes final inconclusive evidence while preserving the unanswered human Form", () => Effect.gen(function* () {
+it.effect("disabling defer during grading still settles a YOLO fallback", () => Effect.gen(function* () {
   yield* seed()
   const forms = yield* Form.Service
   const autonomy = yield* SessionAutonomy.Service
-  yield* autonomy.set({ sessionID, sleep: true })
-  const authority = yield* autonomy.effectiveDecisions(sessionID)
+  yield* autonomy.set({ sessionID, defer: true })
   const entered = yield* Deferred.make<void>()
   const release = yield* Deferred.make<void>()
   const revised = grades.map(grade => ({ ...grade, confidence: 0.79 }))
-  const calls: Decision.Input[] = []
-  evaluate = input => {
-    calls.push(input)
-    return Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as(response(input, revised)))
-  }
+  evaluate = input => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as(response(input, revised)))
   const observed = yield* observe()
   const running = yield* invoke().pipe(Effect.forkScoped)
   yield* Deferred.await(entered)
   expect(yield* forms.list()).toEqual([])
-  yield* autonomy.set({ sessionID, sleep: false })
+  yield* autonomy.set({ sessionID, defer: false })
   yield* Deferred.succeed(release, undefined)
-  const created = yield* Deferred.await(observed.created)
-  expect(created.assessment).toMatchObject({ mode: "yolo", sourceSessionID: sessionID, fields: [{ key: "q0", status: "assessed", grades: revised }] })
-  expect(created.assessment?.fields[0]?.reason).toContain("0.8")
-  expect(created.assessment?.fields.some(field => field.status === "pending")).toBe(false)
-  expect((yield* forms.list()).map(form => form.assessment)).toEqual([created.assessment])
-  expect(yield* forms.state(created.id)).toEqual({ status: "pending" })
-  expect(observed.published.map(event => event.type)).toEqual(["form.created"])
-  expect(yield* autonomy.effectiveDecisions(sessionID)).toEqual(authority)
-  expect(yield* autonomy.isAsleep(sessionID)).toBe(false)
-  yield* forms.reply({ id: created.id, answer: { q0: "Postgres" } })
   const output = (yield* Fiber.join(running)).output
-  expect(output?.structured).toMatchObject({ answers: [["Postgres"]], assessment: created.assessment })
-  expect(output?.structured).not.toHaveProperty("automatic")
+  expect(output?.structured).toMatchObject({ answers: [["SQLite"]], automatic: true, via: "yolo", assessment: { fields: [{ status: "assessed", grades: revised }] } })
   expect(output?.structured).not.toHaveProperty("source")
-  expect(calls).toHaveLength(1)
+  expect(yield* forms.list()).toEqual([])
+  expect(observed.published.filter(event => event.type === "form.replied")).toHaveLength(1)
 }))
 
 for (const fault of ["missing", "duplicate", "extra", "low", "tie", "incompatible", "set-extra", "set-duplicate", "set-low", "error", "refused", "timeout"] as const) {
-  it.effect(`question ${fault} leaves a bounded visible reason and accepts only the human answer`, () => Effect.gen(function* () {
+  it.effect(`question ${fault} settles a valid fallback with bounded diagnostic evidence`, () => Effect.gen(function* () {
     yield* seed()
     const entered = yield* Deferred.make<void>()
     evaluate = (input) => Effect.gen(function* () {
@@ -206,14 +190,12 @@ for (const fault of ["missing", "duplicate", "extra", "low", "tie", "incompatibl
     expect(event.assessment.fields[0]?.reason.trim().length).toBeGreaterThan(0)
     expect(event.assessment.fields[0]?.reason.length).toBeLessThanOrEqual(500)
     const forms = yield* Form.Service
-    const form = (yield* forms.list({ sessionID }))[0]
-    expect((yield* forms.snapshot(form.id))?.form.assessment).toEqual(event.assessment)
-    expect(yield* forms.state(form.id)).toEqual({ status: "pending" })
-    yield* forms.reply({ id: form.id, answer: { q0: multiple ? ["Postgres"] : "Postgres" } })
+    const form = yield* Deferred.await(observed.created)
     const settled = yield* Fiber.join(fiber)
-    expect(settled.output?.structured).toMatchObject({ answers: [["Postgres"]] })
-    expect(settled.output?.structured).not.toHaveProperty("automatic")
-    expect((yield* forms.reply({ id: form.id, answer: { q0: multiple ? ["SQLite"] : "SQLite" } }).pipe(Effect.flip))._tag).toBe("Form.AlreadySettledError")
+    expect(settled.output?.structured).toMatchObject({ answers: [["SQLite"]], automatic: true, via: "yolo" })
+    expect((yield* forms.snapshot(form.id))?.form.assessment).toEqual(event.assessment)
+    expect(yield* forms.state(form.id)).toEqual({ status: "answered", answer: { q0: multiple ? ["SQLite"] : "SQLite" } })
+    expect((yield* forms.reply({ id: form.id, answer: { q0: multiple ? ["Postgres"] : "Postgres" } }).pipe(Effect.flip))._tag).toBe("Form.AlreadySettledError")
     expect(observed.published.filter(event => event.type === "form.replied")).toHaveLength(1)
   }))
 }
@@ -266,31 +248,25 @@ for (const race of ["human", "mode", "interrupt"] as const) {
 
 const coordinatorSource = { coordinatorSessionID: "ses_native_coordinator", groupID: "cgrp_native", rationale: "Evaluate the assigned storage choice." }
 
-it.effect("native coordination regrades a pending question, refreshes inconclusive evidence and preserves terminal coordinator attribution", () => Effect.gen(function* () {
-  yield* seed()
+it.effect("native coordination settles a pending question with fallback and coordinator attribution", () => Effect.gen(function* () {
+  yield* seed("manual")
   const forms = yield* Form.Service
+  const autonomy = yield* SessionAutonomy.Service
   const observed = yield* observe()
-  const first = grades.map(grade => ({ ...grade, confidence: 0.7 }))
-  evaluate = input => Effect.succeed(response(input, first))
   const running = yield* invoke().pipe(Effect.forkScoped)
   const form = yield* Deferred.await(observed.created)
-  yield* Deferred.await(observed.assessed)
   const snapshot = yield* forms.snapshot(form.id)
+  yield* autonomy.set({ sessionID, answers: "yolo" })
   const input = { id: form.id, fingerprint: snapshot!.fingerprint, actor: "coordinator" as const, source: coordinatorSource, validate: () => Effect.succeed(true) }
   expect(yield* forms.reconsider({ ...input, fingerprint: "stale" })).toMatchObject({ outcome: "stale", settled: false })
-  const revised = grades.map(grade => ({ ...grade, confidence: 0.75, evidence: `Regraded: ${grade.evidence}` }))
+  const revised = grades.map(grade => ({ ...grade, confidence: 0.75 }))
   evaluate = input => Effect.succeed(response(input, revised))
-  expect(yield* forms.reconsider(input)).toMatchObject({ outcome: "escalated", settled: false, reason: "low_confidence" })
-  expect((yield* forms.snapshot(form.id))?.form.assessment?.fields[0]?.grades).toEqual(revised)
-  expect(yield* forms.state(form.id)).toEqual({ status: "pending" })
-  evaluate = input => Effect.succeed(response(input))
   expect(yield* forms.reconsider(input)).toMatchObject({ outcome: "allowed", settled: true, via: "yolo" })
-  expect((yield* forms.snapshot(form.id))?.form.assessment).toMatchObject({ mode: "yolo", sourceSessionID: sessionID, fields: [{ key: "q0", status: "assessed", grades, recommendation: ["SQLite"], confidence: 0.96 }] })
-  expect(observed.published.map(event => event.type)).toEqual(["form.created", "form.assessed", "form.assessed", "form.assessed", "form.replied"])
-  const replied = observed.published.find(event => event.type === "form.replied")
-  expect(replied?.data).toEqual({ id: form.id, sessionID, answer: { q0: "SQLite" }, source: { kind: "coordinator", ...coordinatorSource, via: "yolo", confidence: 0.96 } })
+  expect((yield* forms.snapshot(form.id))?.form.assessment?.fields[0]?.grades).toEqual(revised)
+  expect(yield* forms.reconsider(input)).toMatchObject({ outcome: "stale", settled: false })
   const output = (yield* Fiber.join(running)).output
-  expect(output?.structured).toMatchObject({ answers: [["SQLite"]], source: { kind: "coordinator", ...coordinatorSource, via: "yolo", confidence: 0.96 }, assessment: { fields: [{ grades }] } })
+  expect(output?.structured).toMatchObject({ answers: [["SQLite"]], source: { kind: "coordinator", ...coordinatorSource, via: "yolo" } })
+  expect(observed.published.filter(event => event.type === "form.replied")).toHaveLength(1)
   const text = output?.content.find(part => part.type === "text")?.text
   expect(text).toContain("coordinator")
   expect(text).not.toContain("User has answered")
@@ -317,16 +293,14 @@ it.effect("an explicit native coordinator answer retains its source without invo
 
 for (const winner of ["human", "mode", "delegation"] as const) {
   it.effect(`native coordination ${winner} precedence discards a late regrade without replacing visible evidence`, () => Effect.gen(function* () {
-    yield* seed()
+    yield* seed("manual")
     const forms = yield* Form.Service
     const autonomy = yield* SessionAutonomy.Service
     const observed = yield* observe()
-    const first = grades.map(grade => ({ ...grade, confidence: 0.7 }))
-    evaluate = input => Effect.succeed(response(input, first))
-    const running = yield* invoke().pipe(Effect.forkScoped)
-    const form = yield* Deferred.await(observed.created)
-    yield* Deferred.await(observed.assessed)
+    const options = questions[0].options.map(option => ({ value: option.label, label: option.label }))
+    const form = yield* forms.create({ sessionID, title: "Questions", metadata: { kind: "question" }, fields: [{ key: "q0", type: "string", options }] })
     const snapshot = yield* forms.snapshot(form.id)
+    yield* autonomy.set({ sessionID, answers: "yolo" })
     const started = yield* Deferred.make<void>()
     const release = yield* Deferred.make<void>()
     let valid = true
@@ -340,14 +314,14 @@ for (const winner of ["human", "mode", "delegation"] as const) {
     expect(yield* Fiber.join(reconsidered)).toMatchObject(winner === "human"
       ? { outcome: "stale", settled: false }
       : { outcome: "escalated", settled: false, reason: winner === "mode" ? "stale-assessment" : "delegation-invalid" })
-    expect((yield* forms.snapshot(form.id))?.form.assessment?.fields[0]?.grades).toEqual(first)
-    expect(observed.published.filter(event => event.type === "form.assessed")).toHaveLength(1)
+    expect((yield* forms.snapshot(form.id))?.form.assessment).toBeUndefined()
+    expect(observed.published.filter(event => event.type === "form.assessed")).toHaveLength(0)
     if (winner === "human") {
-      expect((yield* Fiber.join(running)).output?.structured).toMatchObject({ answers: [["Postgres"]] })
+      expect(yield* forms.state(form.id)).toEqual({ status: "answered", answer: { q0: "Postgres" } })
       expect(observed.published.filter(event => event.type === "form.replied")).toHaveLength(1)
       return
     }
     expect(yield* forms.state(form.id)).toEqual({ status: "pending" })
-    yield* Fiber.interrupt(running)
+    yield* forms.cancel(form.id)
   }))
 }

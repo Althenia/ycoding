@@ -2,6 +2,12 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-11-17: Persistent defer and unrestricted YOLO categories
+
+- Autonomy state uses `defer: {}`, updates accept `{ defer: boolean }`, and effective responses expose `deferred: boolean`. Keep-awake family holds expose `deferHold`. User input preserves defer until an explicit toggle.
+- Normalize legacy persisted `sleep` markers on read and write only canonical defer state. Historical immutable `sleep_entry` events remain decodable; new reviews use `defer_entry`, and autonomy supersession withdraws stale reviews with reason `autonomy`.
+- Resolve managed permissions and answers with YOLO precedence. Permissions and guardrails YOLO allow requests immediately; answers YOLO uses valid evaluator answers or deterministic fallback. UI controls require explicit risk acceptance before enabling YOLO.
+
 ## 2026-11-17: Pinned Session filter and waiting attention
 
 - Add optional `pinned` (`true` or `false`) to the `session.list` query. The opaque list cursor carries it. Other values fail with `400`.

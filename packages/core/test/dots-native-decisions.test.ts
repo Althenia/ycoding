@@ -320,7 +320,7 @@ for (const cancel of [false, true]) it.live(`native candidate Question ${cancel 
 
 it.live("native candidate deferred Form commits synthetic input, decision and receipt before receipt notification", () => Effect.gen(function* () {
   const f = yield* nativeSetup()
-  yield* f.sessions.autonomy.set({ sessionID: f.root.id, sleep: true })
+  yield* f.sessions.autonomy.set({ sessionID: f.root.id, defer: true })
   const forms = yield* Form.Service.pipe(Effect.provide(f.located))
   expect(yield* forms.ask({ sessionID: f.root.id, title: "Deferred evidence", fields: [{ type: "string", key: "evidence", required: true }] })).toMatchObject({ status: "deferred" })
   const item = (yield* f.reviews.list(f.root.id))[0]!
@@ -342,7 +342,7 @@ it.live("native candidate deferred Form commits synthetic input, decision and re
   expect((yield* SessionReviewFold.fold(f.db.db, [f.root.id]))[0]).toMatchObject({ decision: { kind: "question", answers: { evidence: "Literal evidence" } }, source: { kind: "dots-native" } })
   yield* nativeRejects(f.channel.settle(request.handle, nativeValue("Replacement")))
   expect((yield* nativeLog(f.root.id)).filter(event => event.type === SessionEvent.DotsDecisionSettled.type)).toHaveLength(1)
-  expect((yield* f.sessions.autonomy.get(f.root.id)).sleep).toEqual({})
+  expect((yield* f.sessions.autonomy.get(f.root.id)).defer).toEqual({})
 }))
 
 it.live("native candidate child cancellation leaves the owned question unanswered and excludes another family", () => Effect.gen(function* () {
@@ -539,7 +539,7 @@ it.effect("Dots review-owned subagent dismissals retain provenance and cannot be
   const f = yield* child
   const orchestration = yield* SessionOrchestration.Service
   const question = yield* orchestration.question(f.child.id, "Need evidence")
-  yield* f.sessions.autonomy.set({ sessionID: f.root.id, sleep: true })
+  yield* f.sessions.autonomy.set({ sessionID: f.root.id, defer: true })
   expect((yield* orchestration.answer({ parentID: f.root.id, childID: f.child.id, questionID: question.question.id, text: "Parent" }).pipe(Effect.exit))._tag).toBe("Failure")
   const reviews = yield* SessionReview.Service
   const snapshot = (yield* reviews.pendingSnapshots(f.root.id))[0]
@@ -557,7 +557,7 @@ for (const kind of ["question", "permission", "guardrail"] as const) it.effect(`
   const payload = kind === "question" ? { type: "form" as const, title: "Evidence", fields: [{ key: "x", type: "string" as const, required: true }] as const }
     : kind === "permission" ? { type: "permission" as const, fingerprintVersion: 2 as const, requestID: Permission.ID.make("per_deferred"), action: "edit", resources: ["file"], fingerprint: SessionReview.fingerprint({ action: "edit", resources: ["file"], workdir: f.root.location.directory }) }
     : { type: "guardrail" as const, requestID: SessionGuardrail.RequestID.make("grq_deferred"), action: "shell", resources: ["git reset --hard"], ruleIDs: ["custom.hard"], reason: "Review", hardReview: true, directories: [], fingerprint: SessionReview.fingerprint({ action: "shell", resources: ["git reset --hard"], workdir: f.root.location.directory }) }
-  const item = yield* reviews.open({ sessionID: f.root.id, kind, reason: "sleep_entry", origin: { requestID: "native" }, payload, limit: 16 })
+  const item = yield* reviews.open({ sessionID: f.root.id, kind, reason: "defer_entry", origin: { requestID: "native" }, payload, limit: 16 })
   const snapshot = (yield* reviews.pendingSnapshots(f.root.id)).find((entry) => entry.item.itemID === item.itemID)!
   const decision = kind === "question" ? { kind, answers: { x: "Evidence" } } : { kind, reply: "once" as const }
   const input = { sessionID: f.root.id, itemID: item.itemID, decision, fingerprint: snapshot.fingerprint, source, explicitDecision: true as const, validate: () => Effect.succeed(true) }
@@ -775,7 +775,7 @@ for (const failAt of ["input", "receipt"] as const) it.effect(`Dots review admis
   const database = yield* Database.Service
   const reviews = yield* SessionReview.Service
   const seen = yield* receipts
-  const item = yield* reviews.open({ sessionID: f.root.id, kind: "question", reason: "sleep_entry", origin: { requestID: "native-question" },
+  const item = yield* reviews.open({ sessionID: f.root.id, kind: "question", reason: "defer_entry", origin: { requestID: "native-question" },
     payload: { type: "question", questions: [{ question: "Which evidence?", header: "Evidence", options: [{ label: "Report", description: "Use report" }], custom: false }] }, limit: 16 })
   const snapshot = (yield* reviews.pendingSnapshots(f.root.id))[0]
   let rejectPublication = true

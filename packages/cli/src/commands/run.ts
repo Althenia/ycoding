@@ -65,19 +65,19 @@ export const RunCommand = Spec.make("run", {
     thinking: Flag.boolean("thinking").pipe(Flag.withDescription("Show thinking blocks"), Flag.withDefault(false)),
     permissions: Flag.choice("permissions", ["manual", "yolo", "auto"]).pipe(
       Flag.withDescription(
-        "Set the durable Session permissions mode; omitted preserves it (manual: humans decide asks; auto: rules approve asks; yolo: evaluator also decides unresolved asks; denies still apply)",
+        "Set the durable Session permissions mode; omitted preserves it (manual: client decides; auto: rules decide; yolo: permission blocks disabled)",
       ),
       Flag.optional,
     ),
     guardrails: Flag.choice("guardrails", ["manual", "yolo", "auto"]).pipe(
       Flag.withDescription(
-        "Set the durable Session guardrails mode; omitted preserves it (auto: ordinary reviews approve while awake; hard and custom-rule reviews still need a human)",
+        "Set the durable Session guardrails mode; omitted preserves it (auto: deterministic rules; yolo: guardrail blockers disabled, including hard and destructive reviews)",
       ),
       Flag.optional,
     ),
     answers: Flag.choice("answers", ["manual", "yolo", "auto"]).pipe(
       Flag.withDescription(
-        "Set the durable Session answers mode; omitted preserves it (auto: exactly one Recommended or default option answers; yolo: evaluator also answers free text)",
+        "Set the durable Session answers mode; omitted preserves it (auto: deterministic choices; yolo: questions do not block progression)",
       ),
       Flag.optional,
     ),

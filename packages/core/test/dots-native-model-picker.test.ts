@@ -230,7 +230,7 @@ const setup = Effect.gen(function* () {
         Layer.mock(KeepAwake.Service, {
           hold: () => Effect.succeed({ state: "off" as const }),
           release: () => Effect.succeed({ state: "off" as const }),
-          get: Effect.succeed({ state: "off", lid: "off", sleepHold: false } as const),
+          get: Effect.succeed({ state: "off", lid: "off", deferHold: false } as const),
         }),
       ],
       [

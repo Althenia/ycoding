@@ -93,6 +93,31 @@ const gradedAssessment = { mode: "yolo", sourceSessionID: sessionID, fields: [{ 
 }] }
 
 describe("QuestionTool", () => {
+  autonomous.effect("YOLO explicitly opens empty Question options for scalar and multiselect fallback", () => Effect.gen(function* () {
+    deny = false
+    yield* seedSession
+    yield* (yield* SessionAutonomy.Service).set({ sessionID, answers: "yolo" })
+    decisionBehavior = () => Effect.fail(new Decision.Error({ reason: "refused" }))
+    let created: Form.Info | undefined
+    const unsubscribe = yield* (yield* EventRuntime.Service).listen(event => Effect.sync(() => {
+      if (event.type === Form.Event.Created.type) created = Schema.decodeUnknownSync(Form.Event.Created.data)(event.data).form
+    }))
+    yield* Effect.addFinalizer(() => unsubscribe)
+    const settled = yield* settleTool(yield* ToolRegistry.Service, { sessionID, ...toolIdentity, call: {
+      type: "tool-call", id: "open-question", name: "question", input: { questions: [
+        { header: "Next", question: "What bounded step comes next?", options: [], custom: false },
+        { header: "Steps", question: "Which bounded steps come next?", options: [], custom: false, multiple: true },
+      ] },
+    } })
+    const output = Schema.decodeUnknownSync(QuestionTool.Output)(settled.output?.structured)
+    expect(output).toMatchObject({ automatic: true, via: "yolo" })
+    expect(output.answers.every(answer => (answer[0]?.trim().length ?? 0) > 0)).toBe(true)
+    if (created === undefined) throw new Error("Question form was not created")
+    expect(created.fields.map(field => field.type === "string" || field.type === "multiselect" ? field.custom : undefined)).toEqual([true, true])
+    expect(Form.validateAnswer(created, { q0: output.answers[0]?.[0] ?? "", q1: output.answers[1] ?? [] })).toBeUndefined()
+    expect(yield* (yield* Form.Service).list()).toEqual([])
+  }))
+
   withForms.effect("holds a blocker for human review and missing evidence until the real Form is answered", () => Effect.gen(function* () {
     deny = false
     const registry = yield* ToolRegistry.Service
@@ -153,7 +178,7 @@ describe("QuestionTool", () => {
       { question: "Which environment?", header: "Environment", options: [{ label: "Dev", description: "Development" }], multiple: true },
       { question: "Anything else?", header: "Optional", options: [] },
     ]
-    expect((yield* toolDefinitions(registry)).map((definition) => definition.name)).toEqual(["question"])
+    expect((yield* toolDefinitions(registry)).map((definition) => definition.name)).toEqual(["question", "execute"])
     const text = 'User has answered your questions: "What should happen?"="Build", "Which environment?"="Dev", "Anything else?"="Unanswered". You can now continue with the user\'s answers in mind.'
     expect(yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "call-question", name: "question", input: { questions } } })).toEqual({
       result: { type: "text", value: text }, output: { structured: { answers: [["Build"], ["Dev"], []] }, content: [{ type: "text", text }] },

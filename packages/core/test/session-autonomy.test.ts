@@ -87,9 +87,9 @@ it.effect("reminds an active goal's agent of each category's decision mode and t
     const reminder = goalReminder({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal })
     expect(reminder).toContain("This Session's effective answers mode is Manual")
     expect(reminder).toContain("The autonomy modes above are effective")
-    expect(reminder).toContain("the active goal loop may use the Goal agent for pending routine questions")
-    expect(reminder).toContain("Approval of a hard or custom-rule guardrail review always requires an explicit client decision")
-    expect(reminder).toContain("a child Session's questions go to its parent Session.")
+    expect(reminder).toContain("The active goal loop may answer pending routine questions using the Goal agent.")
+    expect(reminder).toContain("Guardrails YOLO allows every action")
+    expect(reminder).toContain("ancestor Auto answers do not propagate")
     expect(reminder).toContain("Goals do not override these gates.")
     expect(goalReminder({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "auto", goal })).toContain("This Session's effective answers mode is Auto")
     expect(goalReminder({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "yolo", goal })).toContain("This Session's effective answers mode is YOLO")
@@ -400,53 +400,56 @@ it.effect("does not spend or reset the no-progress budget when ordinary progress
   }),
 )
 
-it.effect("stored autonomy ignores removed review fields and preserves sleep across goal and decision-mode updates", () =>
+it.effect("stored autonomy ignores removed review fields and preserves defer across goal and decision-mode updates", () =>
   Effect.gen(function* () {
     const service = yield* setup
     const database = yield* Database.Service
     yield* database.db.update(SessionTable).set({ autonomy: sql`${JSON.stringify({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", guardrailDecision: true,
       sleep: { priorGuardrailDecision: false } })}` }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
-    expect(yield* service.get(sessionID)).toEqual({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", sleep: {} })
+    expect(yield* service.get(sessionID)).toEqual({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", defer: {} })
     yield* service.set({ sessionID, permissions: "yolo", guardrails: "yolo", answers: "yolo" })
     yield* service.setGoal({ sessionID, text: "Verify the stored state" })
-    expect(yield* service.get(sessionID)).toMatchObject({ permissions: "yolo", guardrails: "yolo", answers: "yolo", sleep: {} })
-    expect(yield* service.set({ sessionID, sleep: false })).not.toHaveProperty("guardrailDecision")
+    expect(yield* service.get(sessionID)).toMatchObject({ permissions: "yolo", guardrails: "yolo", answers: "yolo", defer: {} })
+    const stored = yield* database.db.select({ autonomy: SessionTable.autonomy }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+    expect(stored?.autonomy).not.toHaveProperty("sleep")
+    expect(stored?.autonomy).toMatchObject({ defer: {}, goal: { text: "Verify the stored state" } })
+    expect(yield* service.set({ sessionID, defer: false })).not.toHaveProperty("guardrailDecision")
     yield* database.db.update(SessionTable).set({ autonomy: sql`${JSON.stringify({ mode: "yolo", permissions: "yolo", guardrails: "yolo", answers: "yolo", guardrailDecision: true,
-      sleep: { priorGuardrailDecision: true } })}` }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+      defer: { priorGuardrailDecision: true } })}` }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
     expect(yield* service.get(sessionID)).toEqual({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual" })
   }),
 )
 
 for (const prior of [true, false] as const) {
-  it.effect(`stored legacy sleep ${prior} decodes as a presence marker and wake clears it`, () =>
+  it.effect(`stored legacy defer ${prior} decodes as a presence marker and wake clears it`, () =>
     Effect.gen(function* () {
       const service = yield* setup
       const database = yield* Database.Service
       yield* database.db.update(SessionTable).set({ autonomy: sql`${JSON.stringify({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", guardrailDecision: prior,
         sleep: { priorGuardrailDecision: prior } })}` }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
-      const asleep = yield* service.set({ sessionID, sleep: true })
-      expect(asleep.sleep).toEqual({})
-      expect(SessionAutonomy.isAsleep(asleep)).toBe(true)
-      expect(yield* service.isAsleep(sessionID)).toBe(true)
-      const woken = yield* service.set({ sessionID, sleep: false })
-      expect(woken.sleep).toBeUndefined()
+      const deferred = yield* service.set({ sessionID, defer: true })
+      expect(deferred.defer).toEqual({})
+      expect(SessionAutonomy.isDeferred(deferred)).toBe(true)
+      expect(yield* service.isDeferred(sessionID)).toBe(true)
+      const woken = yield* service.set({ sessionID, defer: false })
+      expect(woken.defer).toBeUndefined()
       expect(woken).not.toHaveProperty("guardrailDecision")
-      expect(yield* service.isAsleep(sessionID)).toBe(false)
+      expect(yield* service.isDeferred(sessionID)).toBe(false)
     }),
   )
 }
 
-it.effect("sleep and wake preserve the existing decision modes", () =>
+it.effect("defer and wake preserve the existing decision modes", () =>
   Effect.gen(function* () {
     const service = yield* setup
-    yield* service.set({ sessionID, sleep: true })
+    yield* service.set({ sessionID, defer: true })
     yield* service.set({ sessionID, permissions: "auto", guardrails: "yolo" })
-    const woken = yield* service.set({ sessionID, sleep: false })
+    const woken = yield* service.set({ sessionID, defer: false })
     expect(woken).toMatchObject({ permissions: "auto", guardrails: "yolo", answers: "manual" })
   }),
 )
 
-it.effect("child Sessions inherit sleep from the root family", () =>
+it.effect("child Sessions inherit defer from the root family", () =>
   Effect.gen(function* () {
     const service = yield* setup
     const { db } = yield* Database.Service
@@ -489,11 +492,11 @@ it.effect("child Sessions inherit sleep from the root family", () =>
       .onConflictDoNothing()
       .run()
       .pipe(Effect.orDie)
-    expect(yield* service.isAsleep(childID)).toBe(false)
-    yield* service.set({ sessionID, sleep: true })
-    expect(yield* service.isAsleep(childID)).toBe(true)
-    yield* service.set({ sessionID, sleep: false })
-    expect(yield* service.isAsleep(childID)).toBe(false)
+    expect(yield* service.isDeferred(childID)).toBe(false)
+    yield* service.set({ sessionID, defer: true })
+    expect(yield* service.isDeferred(childID)).toBe(true)
+    yield* service.set({ sessionID, defer: false })
+    expect(yield* service.isDeferred(childID)).toBe(false)
     yield* service.set({ sessionID, answers: "auto" })
     expect(yield* service.decisionMode(sessionID, "answers")).toBe("auto")
     expect(yield* service.decisionMode(childID, "answers")).toBe("manual")
@@ -508,7 +511,7 @@ it.effect("child Sessions inherit sleep from the root family", () =>
   }),
 )
 
-it.effect("taskless family members inherit sleep without widening permission, answer, or goal authority", () =>
+it.effect("taskless family members inherit defer without widening permission, answer, or goal authority", () =>
   Effect.gen(function* () {
     const service = yield* setup
     const database = yield* Database.Service
@@ -529,8 +532,8 @@ it.effect("taskless family members inherit sleep without widening permission, an
     yield* service.setGoal({ sessionID, text: "Parent objective" })
     expect(yield* service.decisionMode(childID, "permissions")).toBe("manual")
     expect(yield* service.decisionMode(childID, "answers")).toBe("manual")
-    yield* service.set({ sessionID, sleep: true })
-    expect(yield* service.isAsleep(childID)).toBe(true)
+    yield* service.set({ sessionID, defer: true })
+    expect(yield* service.isDeferred(childID)).toBe(true)
     expect(yield* service.decisionMode(childID, "permissions")).toBe("manual")
   }),
 )

@@ -50,7 +50,7 @@ const realExecutionLayer = AppNodeBuilder.build(
     })],
     [KeepAwake.node, Layer.mock(KeepAwake.Service, {
       hold: () => Effect.succeed({ state: "off" as const }), release: () => Effect.succeed({ state: "off" as const }),
-      get: Effect.succeed({ state: "off", lid: "off", sleepHold: false } as const),
+      get: Effect.succeed({ state: "off", lid: "off", deferHold: false } as const),
     })],
     [Decision.node, Layer.mock(Decision.Service, { evaluate: () => Effect.die("Status ordering never requests a judgment") })],
   ],

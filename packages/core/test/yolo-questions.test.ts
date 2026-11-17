@@ -59,7 +59,7 @@ const seed = Effect.fnUntraced(function* (name: string, goal: string, reply: Rea
   yield* database.db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, directory: "/project", title: name }).run().pipe(Effect.orDie)
   const autonomy = yield* SessionAutonomy.Service
   yield* autonomy.set({ sessionID, permissions: "yolo", guardrails: "yolo", answers: "yolo" })
-  yield* autonomy.set({ sessionID, sleep: true })
+  yield* autonomy.set({ sessionID, defer: true })
   yield* autonomy.setGoal({ sessionID, text: goal })
   const agents = yield* Agent.Service
   yield* agents.transform((draft) => {
@@ -101,7 +101,7 @@ it.effect("YOLO repairs a malformed reply before resolving a required free-text 
   expect(yield* forms.list({ sessionID })).toEqual([])
 }))
 
-it.effect("a genuinely missing factual input stays a review without fabricated data or human attribution", () => Effect.gen(function* () {
+it.effect("a refused free-text answer progresses within scope without human attribution", () => Effect.gen(function* () {
   const sessionID = yield* seed("missing", "Prepare the approved transfer when a valid reservation is supplied", [answer("reservation")])
   const forms = yield* Form.Service
   const events = yield* EventRuntime.Service
@@ -109,8 +109,8 @@ it.effect("a genuinely missing factual input stays a review without fabricated d
   const unsubscribe = yield* events.listen((event) => Effect.sync(() => { if (event.type === Form.Event.Replied.type) replied.push(event.data) }))
   yield* Effect.addFinalizer(() => unsubscribe)
   const result = yield* forms.ask({ sessionID, title: "Transfer reservation", fields: [{ key: "reservation", type: "string", required: true }] })
-  expect(result).toMatchObject({ status: "deferred" })
-  expect(result).not.toHaveProperty("automatic")
-  expect(replied).toEqual([])
+  expect(result).toMatchObject({ status: "answered", automatic: true, via: "yolo" })
+  if (result.status === "answered") expect(String(result.answer.reservation)).toContain("bounded step")
+  expect(replied).toHaveLength(1)
   expect(requests).toHaveLength(1)
 }))

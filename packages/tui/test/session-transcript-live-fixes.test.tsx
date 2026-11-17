@@ -753,10 +753,10 @@ test("sleeping header does not warn that the machine may sleep before its keep-a
   const read = Promise.withResolvers<{ state: "off"; lid: "off" }>()
   const base = routeFor([])
   const screen = await renderScreen({
-    width: 200, height: 50, args: { sessionID }, settle: "asleep",
+    width: 200, height: 50, args: { sessionID }, settle: "deferred",
     keepAwake: { get: () => read.promise, set: async () => ({ state: "off" }) },
     route: async (url) => url.pathname === `/api/session/${sessionID}/autonomy`
-      ? Response.json({ data: localAutonomyView(autonomyState({ sleep: {} })) })
+      ? Response.json({ data: localAutonomyView(autonomyState({ defer: {} })) })
       : base(url),
   })
   try {
@@ -958,9 +958,9 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
     settle: "decision model rejected · 0.85",
     keepAwake: {
       get: async () => ({
-        state: autonomy.sleep ? "on" : "off",
-        lid: autonomy.sleep ? "on" : "off",
-        sleepHold: !!autonomy.sleep,
+        state: autonomy.defer ? "on" : "off",
+        lid: autonomy.defer ? "on" : "off",
+        deferHold: !!autonomy.defer,
       }),
       set: async (enabled) => {
         awakeWrites.push(enabled)
@@ -970,12 +970,12 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
     route: async (url, request) => {
       if (url.pathname === `/api/session/${sessionID}/autonomy`) {
         if (request.method === "PUT") {
-          const value = (await request.json()) as { sleep?: boolean }
+          const value = (await request.json()) as { defer?: boolean }
           writes.push(value)
-          if (value.sleep === true)
-            autonomy = { ...autonomy, sleep: {} }
-          if (value.sleep === false && autonomy.sleep)
-            autonomy = { ...autonomy, sleep: undefined }
+          if (value.defer === true)
+            autonomy = { ...autonomy, defer: {} }
+          if (value.defer === false && autonomy.defer)
+            autonomy = { ...autonomy, defer: undefined }
         }
         return json({ data: localAutonomyView(autonomy) })
       }
@@ -1039,28 +1039,16 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
     screen.events.emit({ id: liveDismissal.eventID, created: 99, type: "session.guardrail.dismissed", durable: { aggregateID: sessionID, seq: 99, version: 1 }, data: { sessionID, reviewSessionID: sessionID, ruleID: liveDismissal.ruleID, confidence: liveDismissal.confidence } } satisfies YCodingEvent)
     await screen.renderOnce()
     expect(screen.frame()).not.toContain("not a real match")
-    await slash("/sleep")
-    await frame("asleep")
-    await frame("Configured automation applies; rest go to review box.")
+    await slash("/defer")
+    await frame("deferred")
+    await frame("Reviews deferred")
     expect(screen.frame()).not.toContain("Decision model answers")
-    await screen.waitForEventStream()
-    autonomy = { ...autonomy, sleep: undefined }
-    screen.events.emit({
-      id: "evt_family_wake",
-      created: 100,
-      type: "session.context.observed",
-      durable: { aggregateID: sessionID, seq: 100, version: 1 },
-      data: { sessionID, source: "session-state", text: "The user is back. Sleep mode is off." },
-    } satisfies YCodingEvent)
-    const deadline = Date.now() + 3000
-    while (screen.lines()[1]?.includes("asleep") && Date.now() < deadline) await Bun.sleep(10)
-    expect(screen.lines()[1]).not.toContain("asleep")
-    await slash("/wake")
-    await frame("Awake; sleep mode is off")
-    expect(autonomy.sleep).toBeUndefined()
+    await slash("/defer")
+    await frame("Review deferral off")
+    expect(autonomy.defer).toBeUndefined()
     await slash("/keep-awake")
     await frame("Idle and lid-closed sleep held off")
-    expect(writes).toEqual([{ sleep: true }, { sleep: false }])
+    expect(writes).toEqual([{ defer: true }, { defer: false }])
     expect(awakeWrites).toEqual([true])
   } finally {
     await screen.dispose()

@@ -2020,7 +2020,7 @@ export type SessionAutonomyEffective = {
   guardrails: SessionAutonomyDecisionMode
   answers: SessionAutonomyDecisionMode
   inherited: { permissions?: string | null; guardrails?: string | null; answers?: string | null }
-  asleep: boolean
+  deferred: boolean
   guardrailsEnabled: boolean
 }
 
@@ -2049,7 +2049,7 @@ export type SessionReviewWithdrawn = {
   type: "session.review.withdrawn"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
-  data: { sessionID: string; itemID: SessionReviewID; reason: "reverted" | "task_closed" }
+  data: { sessionID: string; itemID: SessionReviewID; reason: "reverted" | "task_closed" | "autonomy" }
 }
 
 export type SessionReviewConsumed = {
@@ -2227,6 +2227,7 @@ export type SessionReviewReason =
   | "conflicting_grades"
   | "error"
   | "sleep_entry"
+  | "defer_entry"
   | "restart"
 
 export type GuardrailGrade = { choice: GuardrailDecisionChoice; confidence: number; evidence: string }
@@ -2862,7 +2863,7 @@ export type KeepAwakeStatus = {
   manual?: boolean
   lid?: "off" | "on" | "held" | "unsupported" | "error"
   system?: "off" | "on" | "held" | "setup" | "unsupported" | "error"
-  sleepHold?: boolean
+  deferHold?: boolean
   message?: string
 }
 
@@ -3257,7 +3258,7 @@ export type SessionAutonomyView = {
   guardrails: SessionAutonomyDecisionMode
   answers: SessionAutonomyDecisionMode
   goal?: SessionAutonomyGoal | null
-  sleep?: {} | null
+  defer?: {} | null
   effective: SessionAutonomyEffective
 }
 
@@ -4921,7 +4922,7 @@ export type SessionLogItem =
       type: "session.review.withdrawn"
       durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
-      data: { sessionID: string; itemID: SessionReviewID; reason: "reverted" | "task_closed" }
+      data: { sessionID: string; itemID: SessionReviewID; reason: "reverted" | "task_closed" | "autonomy" }
     }
   | {
       id: string
@@ -6607,10 +6608,11 @@ export type SessionAutonomySetInput = {
         readonly autoPermission?: never | null
         readonly autoGuardrail?: never | null
         readonly autoAnswer?: never | null
+        readonly sleep?: never | null
         readonly permissions?: never | null
         readonly guardrails?: never | null
         readonly answers?: never | null
-        readonly sleep?: never | null
+        readonly defer?: never | null
         readonly goal: string | true | null
         readonly maxNoProgress?: number | null
       }
@@ -6619,10 +6621,11 @@ export type SessionAutonomySetInput = {
         readonly autoPermission?: never | null
         readonly autoGuardrail?: never | null
         readonly autoAnswer?: never | null
+        readonly sleep?: never | null
         readonly permissions: "manual" | "yolo" | "auto"
         readonly guardrails?: ("manual" | "yolo" | "auto") | null
         readonly answers?: ("manual" | "yolo" | "auto") | null
-        readonly sleep?: never | null
+        readonly defer?: never | null
         readonly goal?: never | null
         readonly maxNoProgress?: never | null
       }
@@ -6631,10 +6634,11 @@ export type SessionAutonomySetInput = {
         readonly autoPermission?: never | null
         readonly autoGuardrail?: never | null
         readonly autoAnswer?: never | null
+        readonly sleep?: never | null
         readonly permissions?: never | null
         readonly guardrails?: never | null
         readonly answers?: never | null
-        readonly sleep: boolean
+        readonly defer: boolean
         readonly goal?: never | null
         readonly maxNoProgress?: never | null
       }
@@ -6643,10 +6647,11 @@ export type SessionAutonomySetInput = {
         readonly autoPermission?: never | null
         readonly autoGuardrail?: never | null
         readonly autoAnswer?: never | null
+        readonly sleep?: never | null
         readonly permissions?: ("manual" | "yolo" | "auto") | null
         readonly guardrails: "manual" | "yolo" | "auto"
         readonly answers?: ("manual" | "yolo" | "auto") | null
-        readonly sleep?: never | null
+        readonly defer?: never | null
         readonly goal?: never | null
         readonly maxNoProgress?: never | null
       }
@@ -6655,10 +6660,11 @@ export type SessionAutonomySetInput = {
         readonly autoPermission?: never | null
         readonly autoGuardrail?: never | null
         readonly autoAnswer?: never | null
+        readonly sleep?: never | null
         readonly permissions?: ("manual" | "yolo" | "auto") | null
         readonly guardrails?: ("manual" | "yolo" | "auto") | null
         readonly answers: "manual" | "yolo" | "auto"
-        readonly sleep?: never | null
+        readonly defer?: never | null
         readonly goal?: never | null
         readonly maxNoProgress?: never | null
       }

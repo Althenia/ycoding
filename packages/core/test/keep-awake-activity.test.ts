@@ -45,7 +45,7 @@ it.effect("a non-lid-owner renews activity while sleep-held and stops at the fin
   expect(calls).toEqual([true])
   yield* TestClock.adjust("1 second")
   expect(calls).toEqual([true, true])
-  expect(yield* awake.set(false)).toMatchObject({ state: "on", display: "on", activity: "on", manual: false, sleepHold: true })
+  expect(yield* awake.set(false)).toMatchObject({ state: "on", display: "on", activity: "on", manual: false, deferHold: true })
   expect(yield* awake.release("family")).toMatchObject({ state: "off", display: "off", activity: "off" })
   expect(calls).toEqual([true, true, false])
   yield* TestClock.adjust("2 seconds")

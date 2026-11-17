@@ -904,9 +904,9 @@ function createFixtureStore(): Fixture {
     guardrails: readMode(remoteScenarioData?.autonomy.guardrails, remoteScenarioData === undefined && !ledger ? "auto" : "manual"),
     answers: readMode(remoteScenarioData?.autonomy.answers, readMode(accountParams.get("answers"), "manual")),
   }
-  let sleep: Readonly<Record<string, never>> | undefined = accountParams.get("asleep") === "1" ? {} : undefined
+  let defer: Readonly<Record<string, never>> | undefined = accountParams.get("deferred") === "1" ? {} : undefined
   let keepAwakeManual = accountParams.get("keepAwake") === "on"
-  let keepAwakeOverride: { state: "off" | "on" | "error" | "unsupported"; lid?: "off" | "on" | "held" | "error" | "unsupported"; sleepHold?: boolean; manual?: boolean; message?: string } | undefined
+  let keepAwakeOverride: { state: "off" | "on" | "error" | "unsupported"; lid?: "off" | "on" | "held" | "error" | "unsupported"; deferHold?: boolean; manual?: boolean; message?: string } | undefined
   Object.assign(window, { remoteSetKeepAwake: (status: typeof keepAwakeOverride) => { keepAwakeOverride = status } })
   const projectChain = accountParams.get("projectEscalation") === "1"
     ? { reasons: [{ sessionID: "ses_driver_fixture", reason: "The driver has no authority to approve this." }, { sessionID, reason: "The Master cannot grant access outside the assigned worktree." }] }
@@ -920,7 +920,7 @@ function createFixtureStore(): Fixture {
       child: { agent: "general", description: "Prepare the release" }, payload: { type: "subagent_question", text: "Which changelog section?" } },
     { ...reviewBase, itemID: "rvw_hard", sessionID, sessionTitle: "Stream remote output safely", kind: "guardrail", reason: "escalated", choice: "escalate", confidence: 0.61, ...(accountParams.get("grades") === "1" ? { grades: fixtureGrades } : {}), origin: { requestID: "grq_review" },
       payload: withChain({ type: "guardrail", action: "shell", resources: ["rm -rf <build>"], ruleIDs: ["standard.hard.delete"], reason: "Deletes a project directory", hardReview: true, directories: [], fingerprint: "a".repeat(64), requestID: "grq_review" }) },
-    { ...reviewBase, itemID: "rvw_outside", sessionID, sessionTitle: "Stream remote output safely", kind: "guardrail", reason: "sleep_entry", origin: { requestID: "grq_outside" },
+    { ...reviewBase, itemID: "rvw_outside", sessionID, sessionTitle: "Stream remote output safely", kind: "guardrail", reason: "defer_entry", origin: { requestID: "grq_outside" },
       payload: withChain({ type: "guardrail", action: "write", resources: ["/etc/hosts"], ruleIDs: ["standard.review.outside"], reason: "Writes outside the repository", hardReview: false, directories: ["/etc"], fingerprint: "b".repeat(64), requestID: "grq_outside" }) },
     { ...reviewBase, itemID: "rvw_permission", sessionID, sessionTitle: "Stream remote output safely", kind: "permission", reason: "refused", origin: { requestID: "per_review" },
       payload: withChain({ type: "permission", action: permissionDisplay ? permission.action : "edit", resources: permissionDisplay ? permission.resources : ["src/remote.ts"],
@@ -938,8 +938,8 @@ function createFixtureStore(): Fixture {
       child: { agent: "general", description: "Prepare the release" },
       payload: { type: "recovery", tools: [{ messageID: "msg_restart", callID: "call_<img src=x onerror=window.recoveryEscape=1>", name: "shell<b>" }, { messageID: "msg_restart", callID: "call_2", name: "edit" }] } },
   ] : []
-  const autonomyExtras = () => sleep === undefined ? {} : { sleep }
-  const autonomyResponse = (data: Record<string, unknown>, modes: AutonomyModes = currentModes): RemoteRequestOutcome => ({ status: "ok", value: { data: { ...data, ...modes, effective: { ...modes, inherited: {}, asleep: sleep !== undefined, guardrailsEnabled: accountParams.get("guardrails") !== "off" } } } })
+  const autonomyExtras = () => defer === undefined ? {} : { defer }
+  const autonomyResponse = (data: Record<string, unknown>, modes: AutonomyModes = currentModes): RemoteRequestOutcome => ({ status: "ok", value: { data: { ...data, ...modes, effective: { ...modes, inherited: {}, deferred: defer !== undefined, guardrailsEnabled: accountParams.get("guardrails") !== "off" } } } })
   const operationCounts = new Map<string, number>()
   const workspaces = ledger ? [
     { id: "workspace_fixture", projectID: "prj_ledger", directory: ledgerDirectory, name: "ycoding" },
@@ -1452,8 +1452,8 @@ function createFixtureStore(): Fixture {
     if (operation === "session.shell.output") return shellOutputPage(input)
     if (operation === "session.autonomy.set") {
       currentModes = { permissions: readMode(input?.permissions, currentModes.permissions), guardrails: readMode(input?.guardrails, currentModes.guardrails), answers: readMode(input?.answers, currentModes.answers) }
-      if (input?.sleep === true) sleep = {}
-      if (input?.sleep === false) sleep = undefined
+      if (input?.defer === true) defer = {}
+      if (input?.defer === false) defer = undefined
       return autonomyResponse({ mode: "normal", ...autonomyExtras() })
     }
     if (operation === "session.review.list") {
@@ -1470,8 +1470,8 @@ function createFixtureStore(): Fixture {
       if (operation === "machine.keepAwake.set" && typeof input?.enabled === "boolean") keepAwakeManual = input.enabled
       if (keepAwakeOverride) return { status: "ok", value: { data: keepAwakeOverride } }
       if (accountParams.get("keepAwake") === "error" || accountParams.get("keepAwake") === "unsupported") return { status: "ok", value: { data: { state: accountParams.get("keepAwake"), message: "Machine keep-awake is unavailable" } } }
-      const held = sleep !== undefined && accountParams.get("sleepHold") !== "failed"
-      return { status: "ok", value: { data: { state: keepAwakeManual || held ? "on" : "off", lid: keepAwakeManual || held ? accountParams.get("lid") ?? "on" : "off", sleepHold: held, manual: keepAwakeManual } } }
+      const held = defer !== undefined && accountParams.get("deferHold") !== "failed"
+      return { status: "ok", value: { data: { state: keepAwakeManual || held ? "on" : "off", lid: keepAwakeManual || held ? accountParams.get("lid") ?? "on" : "off", deferHold: held, manual: keepAwakeManual } } }
     }
     if (operation === "session.goal.set") {
       if (typeof input?.goal !== "string") return { status: "failed", error: { code: "invalid_message", message: "Goal text is required" } }

@@ -161,7 +161,7 @@ test("keep-awake chrome renders on, off, sleep-held, lid-held, error, and unsupp
       for (const [params, label, tone] of [
         ["", undefined, undefined],
         ["&keepAwake=on", "keep-awake on · lid held", "success"],
-        ["&asleep=1&lid=held", "keep-awake on · lid held · sleep held", "success"],
+        ["&deferred=1&lid=held", "keep-awake on · lid held · defer held", "success"],
         ["&keepAwake=error", "keep-awake error", "danger"],
         ["&keepAwake=unsupported", "keep-awake unsupported", "attention"],
       ] as const) {
@@ -174,7 +174,7 @@ test("keep-awake chrome renders on, off, sleep-held, lid-held, error, and unsupp
         await wait(page, `document.querySelector('${selector}')?.textContent === ${JSON.stringify(label)}`)
         expect(await page.evaluate(`document.querySelector('${selector}').dataset.tone`)).toBe(tone)
         expect(await page.evaluate(`(() => { const element = document.querySelector('${selector}'); const box = element.getBoundingClientRect(); return box.width > 0 && box.right <= innerWidth && box.left >= 0 && document.documentElement.scrollWidth <= innerWidth })()`)).toBe(true)
-        if (params.includes("asleep")) await Bun.write(new URL(`../../../.cache/tmp/keep-awake-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        if (params.includes("deferred")) await Bun.write(new URL(`../../../.cache/tmp/keep-awake-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       }
     } finally { await page.close() }
   }

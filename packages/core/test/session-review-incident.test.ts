@@ -107,7 +107,7 @@ it.effect("a guardrail deferral records its escalation against the canonical Cod
     expect(yield* incidents(root.id)).toEqual([{ ...escalated, requestID: "grq_code_mode" }])
     expect(yield* deferredEvents(root.id)).toHaveLength(1)
 
-    yield* guardrailItem(root.id, "grq_sleep_entry", { origin: { messageID, callID: "call_execute" }, reason: "sleep_entry" })
+    yield* guardrailItem(root.id, "grq_sleep_entry", { origin: { messageID, callID: "call_execute" }, reason: "defer_entry" })
     yield* guardrailItem(root.id, "grq_no_source", { origin: { requestID: "grq_no_source" }, reason: "escalated" })
     const full = yield* guardrailItem(root.id, "grq_full", { origin: { messageID, callID: "call_execute" }, reason: "escalated", limit: 3 }).pipe(
       Effect.flip,
@@ -137,14 +137,14 @@ it.effect("an explicit guardrail rejection records one rejection while approvals
     const messageID = yield* codeModeCall(root.id)
     const rejected = yield* guardrailItem(root.id, "grq_reject", { origin: { messageID, callID: "call_execute" }, reason: "escalated" })
     const approved = yield* guardrailItem(root.id, "grq_approve", { origin: { messageID, callID: "call_execute" }, reason: "escalated" })
-    const unsourced = yield* guardrailItem(root.id, "grq_unsourced", { origin: { requestID: "grq_unsourced" }, reason: "sleep_entry" })
+    const unsourced = yield* guardrailItem(root.id, "grq_unsourced", { origin: { requestID: "grq_unsourced" }, reason: "defer_entry" })
     yield* guardrailItem(root.id, "grq_converted", { origin: { messageID, callID: "call_execute" }, reason: "escalated" })
-    const converted = yield* guardrailItem(root.id, "grq_converted", { origin: { requestID: "grq_converted" }, reason: "sleep_entry" })
+    const converted = yield* guardrailItem(root.id, "grq_converted", { origin: { requestID: "grq_converted" }, reason: "defer_entry" })
     const fingerprint = SessionReview.fingerprint({ action: "edit", resources: ["file"], workdir: root.location.directory })
     const permission = yield* reviews.open({
       sessionID: root.id,
       kind: "permission",
-      reason: "sleep_entry",
+      reason: "defer_entry",
       limit: 16,
       origin: { messageID, callID: "call_execute" },
       payload: { type: "permission", fingerprintVersion: 2, action: "edit", resources: ["file"], fingerprint, requestID: Permission.ID.make("per_reject") },

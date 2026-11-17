@@ -69,7 +69,7 @@ type ChildReconsiderResult = Effect.Success<ReturnType<SessionOrchestration.Inte
 
 const hooks: {
   permission?: Reconsider<Permission.ReconsiderInput, Permission.ReconsiderResult>
-  form?: Reconsider<Form.ReconsiderInput, Form.ReconsiderResult>
+  form?: Reconsider<Form.ReconsiderInput, Form.ReconsiderResult, Form.InvalidFormError>
   question?: Reconsider<Question.ReconsiderInput, Question.ReconsiderResult>
   child?: Reconsider<ChildReconsiderInput, ChildReconsiderResult, Session.ScopeUnavailableError | SessionOrchestration.ServiceUnavailableError>
 } = {}
@@ -110,7 +110,7 @@ const fixtureOverrides = [
     Layer.mock(KeepAwake.Service, {
       hold: () => Effect.succeed({ state: "off" as const }),
       release: () => Effect.succeed({ state: "off" as const }),
-      get: Effect.succeed({ state: "off", lid: "off", sleepHold: false } as const),
+      get: Effect.succeed({ state: "off", lid: "off", deferHold: false } as const),
     }),
   ],
 ] as const
@@ -874,12 +874,12 @@ it.live("a guardrail review in a sleeping family is never settled because the lo
     const f = yield* setup()
     const calls: Array<Record<string, unknown>> = []
     fakeGuardrail = fakeReview(f, calls, Effect.void)
-    yield* f.autonomy.set({ sessionID: f.root.id, guardrails: "auto", sleep: true })
+    yield* f.autonomy.set({ sessionID: f.root.id, guardrails: "auto", defer: true })
     yield* reconsidered(1)
     yield* f.loop.inspect(f.root.id)
 
     expect(calls.length).toBeGreaterThanOrEqual(1)
-    expect((yield* f.autonomy.get(f.root.id)).sleep).toEqual({})
+    expect((yield* f.autonomy.get(f.root.id)).defer).toEqual({})
     expect(outcomes(yield* receipts(f, f.root.id))).toEqual(["waiting:delegation-invalid"])
   }),
 )
@@ -1308,7 +1308,7 @@ const deferredAsk = (f: Fixture, kid: Session.Info, kind: "permission" | "guardr
     if (kind === "permission") yield* pendingAsk(f, { sessionID: kid.id })
     else yield* f.guardrails.assert({ sessionID: kid.id, action: "shell", resources: ["git reset --hard"] }).pipe(Effect.forkScoped)
     yield* awaitReceipts(f.root.id, 1)
-    yield* f.autonomy.set({ sessionID: f.root.id, sleep: true })
+    yield* f.autonomy.set({ sessionID: f.root.id, defer: true })
     if (kind === "permission") yield* f.permissions.deferPending(kid.id)
     else yield* f.guardrails.deferPending(kid.id)
     return yield* deferredItem(kind === "permission" ? Permission.Event.Deferred.type : Guardrail.Event.Deferred.type).pipe(
@@ -1323,8 +1323,8 @@ for (const kind of ["permission", "guardrail"] as const)
       const f = yield* setup()
       const kid = yield* f.sessions.create({ parentID: f.root.id })
       const itemID = yield* deferredAsk(f, kid, kind)
-      const asleep = (yield* f.autonomy.get(f.root.id)).sleep
-      expect(asleep).toEqual({})
+      const deferred = (yield* f.autonomy.get(f.root.id)).defer
+      expect(deferred).toEqual({})
 
       yield* f.reviews.decide({ sessionID: kid.id, itemID, decision: { kind, reply: "once" } })
       yield* awaitReceipts(f.root.id, 2)
@@ -1343,7 +1343,7 @@ for (const kind of ["permission", "guardrail"] as const)
       expect(tap.seen.filter((entry) => entry.type === SessionEvent.Review.Consumed.type)).toEqual([])
       expect((yield* SessionReviewFold.fold(f.db, [kid.id]))[0]).toMatchObject({ consumed: false, decision: { kind, reply: "once" } })
       expect(yield* f.permissions.list()).toEqual([])
-      expect((yield* f.autonomy.get(f.root.id)).sleep).toEqual(asleep)
+      expect((yield* f.autonomy.get(f.root.id)).defer).toEqual(deferred)
       expect(interrupts).toEqual([])
     }),
   )
@@ -1376,7 +1376,7 @@ it.live("D2 dismissing a deferred question never resumes or settles it", () =>
     const kid = yield* f.sessions.create({ parentID: f.root.id })
     yield* f.questions.ask({ sessionID: kid.id, ...explicitQuestionInput("One") }).pipe(Effect.exit, Effect.forkScoped)
     yield* awaitReceipts(f.root.id, 1)
-    yield* f.autonomy.set({ sessionID: f.root.id, sleep: true })
+    yield* f.autonomy.set({ sessionID: f.root.id, defer: true })
     yield* f.questions.deferPending(kid.id)
     const itemID = yield* deferredItem(Question.Event.Deferred.type)
 
@@ -1670,7 +1670,7 @@ const wiredLayer = AppNodeBuilder.build(
       Layer.mock(KeepAwake.Service, {
         hold: () => Effect.succeed({ state: "off" as const }),
         release: () => Effect.succeed({ state: "off" as const }),
-        get: Effect.succeed({ state: "off", lid: "off", sleepHold: false } as const),
+        get: Effect.succeed({ state: "off", lid: "off", deferHold: false } as const),
       }),
     ],
     [Decision.node, Layer.mock(Decision.Service, { evaluate: () => Effect.die("the Decision helper must not be called") })],
@@ -1998,12 +1998,33 @@ it.live("CQ3 a switch to YOLO settles a waiting child question through the scrip
   Effect.gen(function* () {
     const f = yield* setup({ goal: false })
     const waiting = yield* waitingChild(f, { options: ["Safe", "Fast"] })
-    yield* f.autonomy.set({ sessionID: waiting.child.id, answers: "yolo" })
     decide = scripted("Fast", 0.9)
-
-    expect(yield* reconsiderChild(f, waiting)).toMatchObject({ outcome: "allowed", settled: true, via: "yolo", confidence: 0.9 })
+    yield* f.autonomy.set({ sessionID: waiting.child.id, answers: "yolo" })
+    yield* tap.until(() => answeredEvents().length === 1)
+    expect((yield* f.orchestration.get(f.root.id, waiting.child.id)).state).toBe("running")
     expect(answeredEvents()).toHaveLength(1)
     expect((yield* answerInputs(f, waiting.child.id))[0]).toMatchObject({ data: { metadata: { automatic: true, via: "yolo", confidence: 0.9 } } })
+    expect(decisionCalls).toHaveLength(1)
+  }),
+)
+
+it.live("restored YOLO answers a waiting child with fresh bounded progress instead of the held old judgment", () =>
+  Effect.gen(function* () {
+    const f = yield* setup({ goal: false })
+    const waiting = yield* waitingChild(f, { options: ["Fast", "Careful"] })
+    const held = yield* heldDecision("Careful", 0.9)
+    yield* f.autonomy.set({ sessionID: waiting.child.id, answers: "yolo" })
+    yield* Deferred.await(held.entered)
+    yield* f.autonomy.set({ sessionID: waiting.child.id, answers: "manual" })
+    yield* f.autonomy.set({ sessionID: waiting.child.id, answers: "yolo" })
+    yield* Deferred.succeed(held.release, undefined)
+    yield* tap.until(() => answeredEvents().length === 1)
+    const [answer] = yield* answerInputs(f, waiting.child.id)
+    expect(answer.data.text).toContain("Fast")
+    expect(answer.data.text).not.toContain("Careful")
+    expect(answer.data.metadata).toMatchObject({ automatic: true, via: "yolo" })
+    expect(answer.data.metadata).not.toHaveProperty("confidence")
+    expect((yield* f.orchestration.get(f.root.id, waiting.child.id)).state).toBe("running")
     expect(decisionCalls).toHaveLength(1)
   }),
 )
@@ -2055,7 +2076,7 @@ it.live("CQ5 a cancelled child, a deferred question or a wrong fingerprint is ne
       },
     }).pipe(Effect.provideService(EventRuntime.TaskOwner, yield* taskOwner))
     yield* f.events.publish(SessionEvent.Task.Updated, { sessionID: slept.id, change: { type: "started" } }).pipe(Effect.provideService(EventRuntime.TaskOwner, yield* taskOwner))
-    yield* f.autonomy.set({ sessionID: f.root.id, sleep: true })
+    yield* f.autonomy.set({ sessionID: f.root.id, defer: true })
     const { question } = yield* f.orchestration.question(slept.id, "Deferred approach", approach)
     expect((yield* f.orchestration.get(f.root.id, slept.id)).question?.deferred).toBe(true)
     yield* f.autonomy.set({ sessionID: slept.id, answers: "auto" })
@@ -2074,22 +2095,23 @@ it.live("CQ5 a cancelled child, a deferred question or a wrong fingerprint is ne
   }),
 )
 
-it.live("CQ6 a mode reverted or a delegation revoked between capture and the lock never settles a child question", () =>
+it.live("CQ6 revoked Auto mode or delegation leaves a child question waiting without admitting an answer", () =>
   Effect.gen(function* () {
     const f = yield* setup({ goal: false })
-    const waiting = yield* waitingChild(f, { options: ["Safe", "Fast"] })
-    yield* f.autonomy.set({ sessionID: waiting.child.id, answers: "yolo" })
-    const held = yield* heldDecision("Fast", 0.9)
-    const running = yield* reconsiderChild(f, waiting).pipe(Effect.forkScoped)
+    const waiting = yield* waitingChild(f, { options: ["Safe (Recommended)", "Fast"] })
+    yield* f.autonomy.set({ sessionID: waiting.child.id, answers: "auto" })
+    const held = { entered: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() }
+    const running = yield* reconsiderChild(f, waiting, { answer: { text: "Fast" }, confidence: 0.9,
+      validate: () => Deferred.succeed(held.entered, undefined).pipe(Effect.andThen(Deferred.await(held.release)), Effect.as(true)),
+    }).pipe(Effect.forkScoped)
     yield* Deferred.await(held.entered)
     yield* f.autonomy.set({ sessionID: waiting.child.id, answers: "manual" })
     yield* Deferred.succeed(held.release, undefined)
 
-    expect(yield* Fiber.join(running)).toMatchObject({ outcome: "escalated", settled: false, reason: "stale-assessment" })
-    yield* f.autonomy.set({ sessionID: waiting.child.id, answers: "yolo" })
-    decide = scripted("Fast", 0.9)
+    expect(yield* Fiber.join(running)).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:manual-answers" })
+    yield* f.autonomy.set({ sessionID: waiting.child.id, answers: "auto" })
     let validations = 0
-    expect(yield* reconsiderChild(f, waiting, { validate: () => Effect.sync(() => ++validations === 1) })).toMatchObject({
+    expect(yield* reconsiderChild(f, waiting, { answer: { text: "Fast" }, confidence: 0.9, validate: () => Effect.sync(() => ++validations === 1) })).toMatchObject({
       outcome: "escalated",
       settled: false,
       reason: "stale-assessment",
@@ -2407,16 +2429,25 @@ const explicitFields = [
 
 for (const mode of ["auto", "yolo"] as const)
   for (const [name, field, rule] of explicitFields)
-    it.live(`G3 a question Form whose ${name} needs an explicit decision stays waiting under answers ${mode} without a helper call`, () =>
+    it.live(`G3 a question Form whose ${name} follows answers ${mode} without giving the goal extra authority`, () =>
       Effect.gen(function* () {
         const f = yield* setup()
-        yield* f.forms.ask(questionForm(f.root.id, field)).pipe(Effect.forkScoped)
+        const waiting = yield* f.forms.ask(questionForm(f.root.id, field)).pipe(Effect.forkScoped)
         yield* awaitReceipts(f.root.id, 1)
 
+        if (mode === "yolo") decide = () => Effect.fail(new Decision.Error({ reason: "unavailable" }))
         yield* f.autonomy.set({ sessionID: f.root.id, answers: mode })
         yield* f.loop.inspect(f.root.id)
         yield* f.loop.inspect(f.root.id)
 
+        if (mode === "yolo") {
+          yield* tap.until((seen) => seen.some((event) => event.type === Form.Event.Replied.type))
+          expect(yield* Fiber.join(waiting)).toMatchObject({ status: "answered", automatic: true, via: "yolo", answer: { q0: field.options[0]?.value ?? expect.any(String) } })
+          expect(yield* pendingCount.form(f)).toBe(0)
+          expect(tap.seen.find((event) => event.type === Form.Event.Replied.type)?.data).not.toHaveProperty("source")
+          expect(goalCalls).toEqual([])
+          return
+        }
         expect(outcomes(yield* receipts(f, f.root.id))).toEqual([`waiting:explicit-decision:${rule}`])
         expect(reconsiderCalls).toEqual([])
         expect(decisionCalls).toEqual([])

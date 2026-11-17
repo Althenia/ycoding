@@ -201,7 +201,7 @@ const subagentLayer = (database = Database.node) => AppNodeBuilder.build(
 const layer = subagentLayer()
 const it = testEffect(layer)
 
-it.live("agent delegation while asleep preserves family sleep and its hold", () =>
+it.live("agent delegation preserves family defer and its hold", () =>
   Effect.acquireRelease(
     Effect.promise(() => tmpdir()),
     (directory) => Effect.promise(() => directory[Symbol.asyncDispose]()),
@@ -214,7 +214,7 @@ it.live("agent delegation while asleep preserves family sleep and its hold", () 
           model: parentModel,
         })
         yield* withSubagent(parent.location)
-        yield* sessions.autonomy.set({ sessionID: parent.id, sleep: true })
+        yield* sessions.autonomy.set({ sessionID: parent.id, defer: true })
         const locations = yield* LocationServiceMap.Service
         const prepared = yield* SessionOrchestration.preflight(parent, {
           agent: Agent.ID.make("reviewer"),
@@ -231,10 +231,10 @@ it.live("agent delegation while asleep preserves family sleep and its hold", () 
           background: true,
           prepared,
         })
-        expect((yield* sessions.autonomy.get(parent.id)).sleep).toEqual({})
-        expect((yield* sessions.autonomy.get(child.sessionID)).sleep).toEqual({})
+        expect((yield* sessions.autonomy.get(parent.id)).defer).toEqual({})
+        expect((yield* sessions.autonomy.get(child.sessionID)).defer).toEqual({})
         const awake = yield* KeepAwake.Service
-        expect((yield* awake.get).sleepHold).toBe(true)
+        expect((yield* awake.get).deferHold).toBe(true)
       }),
     ),
   ),
@@ -305,7 +305,7 @@ it.live("acknowledges a committed child review and resumes pending work after ad
         .pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location, [LocationServiceMap.full])))
       const orchestration = (yield* PluginRuntime.Service).orchestration
       const child = yield* orchestration.launch({ parentID: parent.id, parentAssistantMessageID: SessionMessage.ID.make("msg_review_launch"), toolCallID: "call_review_launch", agent: Agent.ID.make("reviewer"), description: "hold review", prompt: "hold", background: true, prepared })
-      yield* (yield* SessionAutonomy.Service).set({ sessionID: parent.id, sleep: true, answers: "manual" })
+      yield* (yield* SessionAutonomy.Service).set({ sessionID: parent.id, defer: true, answers: "manual" })
       const question = yield* orchestration.question(child.sessionID, "Proceed?")
       expect(question.question.deferred).toBe(true)
       const reviews = yield* SessionReview.Service
@@ -662,7 +662,7 @@ describe("SubagentTool", () => {
         const input = { agent: "reviewer", description: "Approved child", prompt: "Approved task", model: childModel, timeout }
         const call = (id: string, value: typeof input) => executeTool(registry, { sessionID: parent.id, ...toolIdentity,
           call: { type: "tool-call", id, name: "subagent", input: value } }).pipe(Effect.exit)
-        yield* sessions.autonomy.set({ sessionID: parent.id, sleep: true })
+        yield* sessions.autonomy.set({ sessionID: parent.id, defer: true })
         expect((yield* call("approval-first", input))._tag).toBe("Failure")
         const reviews = yield* SessionReview.Service
         const item = (yield* reviews.list(parent.id))[0]

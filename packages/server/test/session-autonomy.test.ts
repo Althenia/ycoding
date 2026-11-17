@@ -6,7 +6,7 @@ import { Deferred, Effect } from "effect"
 import { sessionHttp } from "./session-http"
 
 const sessionID = Session.ID.make("ses_goal_http")
-const effective = { permissions: "yolo" as const, guardrails: "auto" as const, answers: "manual" as const, inherited: { permissions: Session.ID.make("ses_parent") }, asleep: false, guardrailsEnabled: true }
+const effective = { permissions: "yolo" as const, guardrails: "auto" as const, answers: "manual" as const, inherited: { permissions: Session.ID.make("ses_parent") }, deferred: false, guardrailsEnabled: true }
 
 function fixture(set: Session.Interface["autonomy"]["set"]) {
   const http = sessionHttp({ autonomy: { get: () => Effect.succeed(SessionAutonomy.defaultState), set,
@@ -18,17 +18,17 @@ function fixture(set: Session.Interface["autonomy"]["set"]) {
   }
 }
 
-test("autonomy HTTP contract accepts sleep booleans without a review toggle", async () => {
+test("autonomy HTTP contract accepts defer booleans without a review toggle", async () => {
   const received: unknown[] = []
   await using f = fixture(input => Effect.sync(() => {
     received.push(input)
-    return { ...SessionAutonomy.defaultState, ...(input.sleep ? { sleep: {} } : {}) }
+    return { ...SessionAutonomy.defaultState, ...(input.defer ? { defer: {} } : {}) }
   }))
-  for (const sleep of [true, false]) {
-    const response = await f.request({ sleep })
+  for (const defer of [true, false]) {
+    const response = await f.request({ defer })
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ data: { ...SessionAutonomy.defaultState, ...(sleep ? { sleep: {} } : {}), effective } })
-    expect(received.at(-1)).toEqual({ sessionID, sleep })
+    expect(await response.json()).toEqual({ data: { ...SessionAutonomy.defaultState, ...(defer ? { defer: {} } : {}), effective } })
+    expect(received.at(-1)).toEqual({ sessionID, defer })
   }
   expect((await f.request({ guardrailDecision: true })).status).toBe(400)
   expect(received).toHaveLength(2)

@@ -287,25 +287,47 @@ test("prompt preflight and dispatch failures or connection changes block replay"
   }
 })
 
-test("autonomy labels distinguish unknown, sleeping, uniform, mixed and active goals", async () => {
+test("autonomy labels distinguish independent defer, uniform, mixed and active goals", async () => {
   const { autonomyLabels } = await import("../src/renderer")
   expect(autonomyLabels(undefined)).toEqual({ goal: "Goal · Unknown", autonomy: "Autonomy · Unknown" })
-  const view = { effective: { permissions: "auto", guardrails: "auto", answers: "auto", asleep: false }, goal: null } as const
-  expect(autonomyLabels(view)).toEqual({ goal: "Goal · Off", autonomy: "Autonomy · Auto" })
-  expect(autonomyLabels({ ...view, goal: { text: "Example", status: "active" }, effective: { ...view.effective, asleep: true } })).toEqual({ goal: "Goal · Active", autonomy: "Autonomy · Asleep" })
-  expect(autonomyLabels({ ...view, effective: { ...view.effective, answers: "manual" } })).toEqual({ goal: "Goal · Off", autonomy: "Autonomy · Mixed" })
+  const view = { effective: { permissions: "auto", guardrails: "auto", answers: "auto", deferred: false }, goal: null } as const
+  expect(autonomyLabels(view)).toEqual({ goal: "Goal · Off", autonomy: "Autonomy · Auto · Defer off" })
+  expect(autonomyLabels({ ...view, goal: { text: "Example", status: "active" }, effective: { ...view.effective, deferred: true } })).toEqual({ goal: "Goal · Active", autonomy: "Autonomy · Auto · Defer on" })
+  expect(autonomyLabels({ ...view, effective: { ...view.effective, answers: "manual" } })).toEqual({ goal: "Goal · Off", autonomy: "Autonomy · Mixed · Defer off" })
+})
+
+test("YOLO consent names its risks and cancellation sends no autonomy update", async () => {
+  const { autonomyPrompt, createActionGuard } = await import("../src/renderer")
+  let writes = 0
+  for (const payload of [{ permissions: "yolo" }, { guardrails: "yolo" }, { answers: "yolo" }] as const) {
+    const prompt = autonomyPrompt(payload, "Change autonomy?")
+    expect(prompt).toContain("permission limits")
+    expect(prompt).toContain("hard policies and custom rules")
+    expect(prompt).toContain("send messages")
+    expect(prompt).toContain("Accept these risks")
+    const cancelled = createActionGuard(() => false, () => "connected", async () => { writes++ })
+    expect((await cancelled.run(payload, prompt)).status).toBe("cancelled")
+    expect(writes).toBe(0)
+  }
+  const accepted = createActionGuard(() => true, () => "connected", async () => { writes++ })
+  expect((await accepted.run({ answers: "yolo" }, autonomyPrompt({ answers: "yolo" }, "Change autonomy?"))).status).toBe("completed")
+  expect(writes).toBe(1)
+  expect(autonomyPrompt({ permissions: "manual", answers: "auto" }, "Change autonomy?")).toBe("Change autonomy?")
+  expect(autonomyPrompt({ defer: true }, "Enable defer?")).toBe("Enable defer?")
 })
 
 test("autonomy acknowledgements must match the submitted goal and modes", async () => {
   const { autonomyMatches, createActionGuard } = await import("../src/renderer")
-  const state = { permissions: "auto", guardrails: "manual", answers: "auto", goal: { text: "Example", status: "active", maxNoProgress: 3 }, sleep: null }
+  const state = { permissions: "auto", guardrails: "manual", answers: "auto", goal: { text: "Example", status: "active", maxNoProgress: 3 }, defer: null }
   expect(autonomyMatches(state, { permissions: "auto", guardrails: "manual", answers: "auto" })).toBe(true)
   expect(autonomyMatches(state, { permissions: "yolo" })).toBe(false)
   expect(autonomyMatches({ ...state, goal: { ...state.goal, text: "Synthesized objective" } }, { goal: "Raw user goal" })).toBe(true)
   expect(autonomyMatches({ ...state, goal: { ...state.goal, text: "Raw user goal", status: "stopped" } }, { goal: "Raw user goal" })).toBe(false)
   expect(autonomyMatches(state, { goal: true, maxNoProgress: 3 })).toBe(true)
   expect(autonomyMatches(state, { goal: true, maxNoProgress: 4 })).toBe(false)
-  expect(autonomyMatches(state, { sleep: true })).toBe(false)
+  expect(autonomyMatches(state, { defer: true })).toBe(false)
+  expect(autonomyMatches({ ...state, defer: {} }, { defer: true })).toBe(true)
+  expect(autonomyMatches({ ...state, defer: {} }, { defer: false })).toBe(false)
   let dispatched = 0
   const guard = createActionGuard(() => true, () => "connected", async () => { dispatched++; return { ...state, goal: { ...state.goal, text: "Synthesized objective" } } })
   const result = await guard.run({ goal: "Raw user goal" }, "confirm")

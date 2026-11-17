@@ -186,7 +186,7 @@ interface Candidate extends Reference {
   readonly rawForm?: Form.Info
   readonly rawQuestion?: Question.Request
   readonly rawChild?: ChildTask
-  readonly reconsider: (call: ReconsiderCall, goalAnswer?: GoalAnswer) => Effect.Effect<Settlement, ScopeUnavailableError | SessionOrchestration.ServiceUnavailableError>
+  readonly reconsider: (call: ReconsiderCall, goalAnswer?: GoalAnswer) => Effect.Effect<Settlement, ScopeUnavailableError | SessionOrchestration.ServiceUnavailableError | Form.InvalidFormError>
 }
 
 type ChildTask = Effect.Success<ReturnType<SessionOrchestration.Interface["questionSnapshots"]>>[number]["task"]
@@ -705,7 +705,7 @@ export function make(options: Options): Interface {
       yield* Effect.uninterruptible(
         record({ owner, requirement, candidate, outcome: "waiting", discriminator: key, reason: "reconsider-failed", rationale }),
       )
-      if (Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.failCause(exit.cause)
+      if (Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.failCause(exit.cause).pipe(Effect.orDie)
       yield* Effect.logWarning("Goal decision reconsideration failed", { cause: Cause.pretty(exit.cause) })
       return { settled: false as const, repeat: false as const }
     }
@@ -751,7 +751,7 @@ export function make(options: Options): Interface {
         const member = yield* row(candidate.sessionID)
         if (member === undefined || member.archived || (yield* ownerOf(candidate.sessionID)) !== owner) return false
         if (!(yield* DecisionChoice.autonomyUnchanged(autonomy, candidate.sessionID, authority))) return false
-        if (candidate.kind === "guardrail" && (yield* autonomy.isAsleep(candidate.sessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(true))))) return false
+        if (candidate.kind === "guardrail" && (yield* autonomy.isDeferred(candidate.sessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(true))))) return false
         return (yield* humanOnly(candidate.sessionID, current)) === undefined
       })
     const isQuestionLike = candidate.kind === "form" || candidate.kind === "question" || candidate.kind === "child_question"
@@ -832,8 +832,6 @@ export function make(options: Options): Interface {
     remaining === 0
       ? Effect.void
       : Effect.scoped(pass(owner)).pipe(
-          Effect.catchTag("Session.ScopeUnavailableError", (error) => Effect.logWarning("Goal decision pass could not wake Session", { owner, error }).pipe(Effect.as(false))),
-          Effect.catchTag("SessionOrchestration.ServiceUnavailableError", (error) => Effect.logWarning("Goal decision pass could not access managed task ownership", { owner, error }).pipe(Effect.as(false))),
           Effect.flatMap((again) => (again ? rounds(owner, remaining - 1) : Effect.void)),
         )
 

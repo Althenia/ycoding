@@ -2311,7 +2311,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.guardrail.reply": ["requestID", "reply"],
   "session.form.reply": ["formID", "answer"],
   "session.form.cancel": ["formID"],
-  "session.autonomy.set": ["permissions", "guardrails", "answers", "sleep"],
+  "session.autonomy.set": ["permissions", "guardrails", "answers", "defer"],
   "session.goal.set": ["goal", "maxNoProgress"],
   "session.goal.stop": ["goal"],
   "session.create": ["id", "scope", "workspace", "agent", "model", "title"],
@@ -2457,11 +2457,11 @@ function autonomyPayload(fields: Readonly<Record<string, unknown>>): LocalAutono
       : [[category, literal(fields[category], ["manual", "yolo", "auto"] as const, category)] as const],
   )
   if (modes.length > 0) {
-    if (fields.sleep !== undefined) throw new OperationError("invalid_message", "Set sleep in a separate request")
+    if (fields.defer !== undefined) throw new OperationError("invalid_message", "Set defer in a separate request")
     return Object.fromEntries(modes) as LocalAutonomyModes
   }
-  if (fields.sleep !== undefined) return { sleep: requireBoolean(fields.sleep, "sleep") }
-  throw new OperationError("invalid_message", "Autonomy changes require permissions, guardrails, answers, or sleep")
+  if (fields.defer !== undefined) return { defer: requireBoolean(fields.defer, "defer") }
+  throw new OperationError("invalid_message", "Autonomy changes require permissions, guardrails, answers, or defer")
 }
 
 function maxNoProgress(fields: Readonly<Record<string, unknown>>) {

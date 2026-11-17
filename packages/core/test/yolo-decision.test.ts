@@ -22,7 +22,7 @@ import { testEffect } from "./lib/effect"
 
 const sessionID = Session.ID.make("ses_yolo_decision_test")
 let sequence = 1
-let asleep = true
+let deferred = true
 let autoAnswer = false
 let yolo = true
 let flipSequenceOnDecision = false
@@ -63,10 +63,11 @@ const autonomyMock = Layer.mock(SessionAutonomy.Service, {
       sequence,
       digest: "test",
     }),
-  isAsleep: () => Effect.succeed(asleep),
+  isDeferred: () => Effect.succeed(deferred),
+  effectiveDecisions: () => Effect.succeed({ permissions: "manual", guardrails: "manual", answers: answersMode(), inherited: {} }),
   decisionMode: (_sessionID: Session.ID, category: "permissions" | "guardrails" | "answers") =>
     Effect.succeed(category === "answers" ? answersMode() : "manual"),
-} as never)
+})
 
 const harness = AppNodeBuilder.build(
   LayerNode.group([Config.node, Database.node, EventRuntime.node, SessionAutonomy.node, Decision.node, Question.node, Form.node]),
@@ -114,10 +115,10 @@ describe("YOLO decision helpers", () => {
     }),
   )
 
-  it.effect("YOLO answers a required free-text question asleep", () =>
+  it.effect("YOLO answers a required free-text question deferred", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = true
+      deferred = true
       autoAnswer = false
       yolo = true
       const service = yield* Question.Service
@@ -130,10 +131,10 @@ describe("YOLO decision helpers", () => {
     }),
   )
 
-  it.effect("a stale autonomy snapshot defers instead of settling the YOLO answer", () =>
+  it.effect("a stale autonomy snapshot discards the old YOLO answer and uses a fresh bounded fallback", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = true
+      deferred = true
       autoAnswer = false
       yolo = true
       flipSequenceOnDecision = true
@@ -142,7 +143,14 @@ describe("YOLO decision helpers", () => {
         sessionID,
         questions: [{ question: "What should we do?", header: "Action", options: [] }],
       })
-      expect(result.status).toBe("deferred")
+      expect(result.status).toBe("answered")
+      if (result.status === "answered") {
+        expect(result.answers[0]?.[0]).not.toBe("ship it")
+        expect(result.answers[0]?.[0]?.length).toBeGreaterThan(0)
+      }
+      expect(result).toMatchObject({ automatic: true, via: "yolo" })
+      expect(result).not.toHaveProperty("confidence")
+      expect(seen).toHaveLength(1)
     }),
   )
 
@@ -174,7 +182,7 @@ describe("YOLO decision helpers", () => {
   it.effect("a boolean form field answered false by YOLO is settled, not treated as absent", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = false
+      deferred = false
       autoAnswer = false
       yolo = true
       const service = yield* Form.Service
@@ -191,7 +199,7 @@ describe("YOLO decision helpers", () => {
   it.effect("Auto answers alone settles only an explicit valid default and never calls the helper", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = false
+      deferred = false
       autoAnswer = true
       yolo = false
       const service = yield* Form.Service
@@ -205,10 +213,10 @@ describe("YOLO decision helpers", () => {
     }),
   )
 
-  it.effect("Auto answers alone defers a required field with no default asleep without inventing an answer", () =>
+  it.effect("Auto answers alone defers a required field with no default deferred without inventing an answer", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = true
+      deferred = true
       autoAnswer = true
       yolo = false
       const service = yield* Form.Service
@@ -225,7 +233,7 @@ describe("YOLO decision helpers", () => {
   it.effect("Auto answers alone accepts only a single explicitly recommended question option", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = true
+      deferred = true
       autoAnswer = true
       yolo = false
       const service = yield* Question.Service
@@ -246,7 +254,7 @@ describe("YOLO decision helpers", () => {
   it.effect("an external consent field is never acknowledged automatically", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = true
+      deferred = true
       autoAnswer = true
       yolo = true
       const service = yield* Form.Service
@@ -267,23 +275,23 @@ describe("automatic form and question settlement provenance", () => {
     return (yield* SessionReviewFold.fold(db, [sessionID])).at(-1)?.reason
   })
 
-  it.effect("YOLO leaves a form with only omitted optional fields unsettled for the human", () =>
+  it.effect("YOLO fills an optional free-text field with bounded automatic progress", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = true
+      deferred = true
       autoAnswer = false
       yolo = true
       const service = yield* Form.Service
       const result = yield* service.ask({ sessionID, title: "Notes", fields: [{ key: "note", type: "string" }] })
-      expect(result.status).toBe("deferred")
-      expect(seen).toEqual([])
+      expect(result).toMatchObject({ status: "answered", answer: { note: expect.any(String) }, automatic: true, via: "yolo" })
+      expect(seen).toEqual([{ purpose: "answer", authority: "yolo", invocationKey: expect.any(String) }])
     }),
   )
 
   it.effect("an awake form with no obtainable value stays pending instead of submitting empty", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = false
+      deferred = false
       autoAnswer = true
       yolo = false
       const service = yield* Form.Service
@@ -301,7 +309,7 @@ describe("automatic form and question settlement provenance", () => {
   it.effect("multiselect grading redacts model-bound values and restores selected original values", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = true
+      deferred = true
       autoAnswer = false
       yolo = true
       const secret = "synthetic-grading-credential-7319"
@@ -363,10 +371,10 @@ describe("automatic form and question settlement provenance", () => {
     }),
   )
 
-  it.effect("multiselect redaction collisions defer without dispatching the helper", () =>
+  it.effect("multiselect redaction collisions select a valid fallback without dispatching the helper", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = true
+      deferred = true
       autoAnswer = false
       yolo = true
       const originals = [process.env.YCODING_TEST_GRADING_SECRET, process.env.YCODING_TEST_GRADING_TOKEN]
@@ -387,15 +395,15 @@ describe("automatic form and question settlement provenance", () => {
           { value: `environment:${process.env.YCODING_TEST_GRADING_TOKEN}`, label: "Second" },
         ] }],
       })
-      expect(result.status).toBe("deferred")
+      expect(result).toMatchObject({ status: "answered", answer: { targets: [`environment:${process.env.YCODING_TEST_GRADING_SECRET}`] }, automatic: true, via: "yolo" })
       expect(seen).toEqual([])
     }),
   )
 
-  it.effect("an optional multiselect the model grades entirely below the threshold yields no automatic submission", () =>
+  it.effect("an optional multiselect uses a valid bounded fallback after low-confidence grades", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = true
+      deferred = true
       autoAnswer = false
       yolo = true
       const service = yield* Form.Service
@@ -404,15 +412,15 @@ describe("automatic form and question settlement provenance", () => {
         title: "Features",
         fields: [{ key: "features", type: "multiselect", options: [{ value: "a", label: "A" }, { value: "b", label: "B" }] }],
       })
-      expect(result.status).toBe("deferred")
+      expect(result).toMatchObject({ status: "answered", answer: { features: ["a"] }, automatic: true, via: "yolo" })
       expect(seen).toHaveLength(1)
     }),
   )
 
-  it.effect("a default-only answer is attributed to Auto answers while YOLO answers come only from the evaluator", () =>
+  it.effect("Auto defaults and YOLO evaluated answers retain their attribution when a fallback is needed", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = false
+      deferred = false
       autoAnswer = true
       yolo = false
       const service = yield* Form.Service
@@ -434,7 +442,7 @@ describe("automatic form and question settlement provenance", () => {
           { key: "features", type: "multiselect", options: [{ value: "a", label: "A" }] },
         ],
       })
-      expect(consulted).toEqual({ status: "answered", answer: { confirm: false }, automatic: true, via: "yolo", confidence: 0.95 })
+      expect(consulted).toEqual({ status: "answered", answer: { confirm: false, features: ["a"] }, automatic: true, via: "yolo" })
       expect(seen).toHaveLength(2)
     }),
   )
@@ -442,7 +450,7 @@ describe("automatic form and question settlement provenance", () => {
   it.effect("a choice or yes/no with no default defers as disabled while a text field defers as free_text", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = true
+      deferred = true
       autoAnswer = true
       yolo = false
       const service = yield* Form.Service
@@ -463,7 +471,7 @@ describe("automatic form and question settlement provenance", () => {
   it.effect("a question with options defers as disabled and a free-text question as free_text without YOLO", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = true
+      deferred = true
       autoAnswer = true
       yolo = false
       const service = yield* Question.Service
@@ -483,7 +491,7 @@ describe("answer decision modes", () => {
   it.effect("Auto selects exactly one Recommended option of a multi-select question and never calls the helper", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = true
+      deferred = true
       autoAnswer = true
       yolo = false
       const service = yield* Question.Service
@@ -501,7 +509,7 @@ describe("answer decision modes", () => {
   it.effect("Auto selects exactly one Recommended option of a multi-select Form field and never calls the helper", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = true
+      deferred = true
       autoAnswer = true
       yolo = false
       const service = yield* Form.Service
@@ -527,7 +535,7 @@ describe("answer decision modes", () => {
   it.effect("Manual answers nothing automatically even with a valid default or a single recommendation", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = true
+      deferred = true
       autoAnswer = false
       yolo = false
       const form = yield* Form.Service
@@ -545,19 +553,19 @@ describe("answer decision modes", () => {
     }),
   )
 
-  it.effect("YOLO consults only the hidden answer evaluator, even for a Recommended option", () =>
+  it.effect("YOLO evaluates the options and uses a valid Recommended fallback after weak grades", () =>
     Effect.gen(function* () {
       yield* setup
-      asleep = true
+      deferred = true
       autoAnswer = false
       yolo = true
       const question = yield* Question.Service
-      yield* question.ask({
+      const result = yield* question.ask({
         sessionID,
         questions: [{ question: "Pick", header: "Pick", options: [{ label: "A (Recommended)", description: "a" }, { label: "B", description: "b" }] }],
       })
-      expect(seen.length).toBeGreaterThan(0)
-      expect(seen.every((call) => call.purpose === "answer" && call.authority === "yolo")).toBe(true)
+      expect(result).toMatchObject({ status: "answered", answers: [["A (Recommended)"]], automatic: true, via: "yolo" })
+      expect(seen).toEqual([{ purpose: "answer", authority: "yolo", invocationKey: expect.any(String) }])
     }),
   )
 })

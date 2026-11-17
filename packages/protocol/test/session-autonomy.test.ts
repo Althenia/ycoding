@@ -77,11 +77,11 @@ test("R7 documents typed goal resume, stale calculation, and provider failures",
 
 test("family autonomy accepts explicit switches without accepting empty or invalid requests", () => {
   const decode = Schema.decodeUnknownSync(SessionAutonomySet)
-  expect(decode({ sleep: false })).toEqual({ sleep: false })
-  expect(decode({ sleep: true })).toEqual({ sleep: true })
+  expect(decode({ defer: false })).toEqual({ defer: false })
+  expect(decode({ defer: true })).toEqual({ defer: true })
   expect(Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", guardrailDecision: true,
-    sleep: { priorGuardrailDecision: false } })).toEqual({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", sleep: {} })
-  for (const value of [{}, { goal: false }, { goal: " " }, { sleep: "true" }, { guardrailDecision: true }])
+    defer: { priorGuardrailDecision: false } })).toEqual({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", defer: {} })
+  for (const value of [{}, { goal: false }, { goal: " " }, { defer: "true" }, { sleep: true }, { sleep: false, answers: "yolo" }, { guardrailDecision: true }])
     expect(() => decode(value)).toThrow()
 })
 
@@ -95,7 +95,7 @@ test("answer mode changes independently of permissions and guardrails", () => {
     }
   }
   for (const input of [{ autoAnswer: "true" }, { autoAnswer: 1 }, { autoAnswer: null },
-    { autoAnswer: true, sleep: true }, { autoAnswer: true, goal: "Run checks" }, { autoAnswer: true, yolo: true }]) {
+    { autoAnswer: true, defer: true }, { autoAnswer: true, goal: "Run checks" }, { autoAnswer: true, yolo: true }]) {
     expect(() => decode(input)).toThrow()
   }
 })
@@ -105,12 +105,12 @@ test("autonomy responses publish effective policy separately from stored state",
   expect(document.components?.schemas?.SessionAutonomyYolo).toBeUndefined()
   expect(document.components?.schemas?.SessionAutonomyEffective).toMatchObject({
     type: "object",
-    required: ["permissions", "guardrails", "answers", "inherited", "asleep", "guardrailsEnabled"],
+    required: ["permissions", "guardrails", "answers", "inherited", "deferred", "guardrailsEnabled"],
     properties: {
       permissions: { $ref: "#/components/schemas/SessionAutonomy.DecisionMode" },
       guardrails: { $ref: "#/components/schemas/SessionAutonomy.DecisionMode" },
       answers: { $ref: "#/components/schemas/SessionAutonomy.DecisionMode" },
-      asleep: { type: "boolean" },
+      deferred: { type: "boolean" },
       guardrailsEnabled: { type: "boolean" },
       inherited: { type: "object" },
     },

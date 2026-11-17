@@ -658,6 +658,17 @@ test("desktopSlashCommand falls back to backend commands and rejects plain promp
   expect(desktopSlashCommand(" /new", [])).toBeUndefined()
 })
 
+test("defer is the canonical autonomy command without sleep or wake aliases", async () => {
+  const { composerSlash } = await import("../src/form-rules")
+  expect(desktopSlashCommand("/defer", [])).toEqual({ kind: "defer" })
+  expect(composerSlash("/defer on", [])).toEqual({ kind: "local", name: "defer", args: "on" })
+  expect(composerSlash("/defer off", [])).toEqual({ kind: "local", name: "defer", args: "off" })
+  for (const command of ["/sleep", "/wake"]) {
+    expect(desktopSlashCommand(command, [])).toBeUndefined()
+    expect(composerSlash(command, [])).toEqual({ kind: "prompt" })
+  }
+})
+
 test("built-in slash catalog backs autocomplete and parsing", () => {
   const names = DESKTOP_BUILT_IN_SLASH_COMMANDS.map((command) => command.name)
   for (const required of ["connect", "mcp", "status", "models", "agents", "skills", "themes", "rename", "fork", "move", "undo", "redo", "diff", "terminals", "browser", "autonomous", "goal", "export", "stash", "timeline", "help"]) expect(names).toContain(required)

@@ -21,8 +21,8 @@ export function AutonomousPanel(props: {
     event.preventDefault()
     props.onIntent(intent)
   }}>
-    <p class="autonomous__note">Denies and permission ceilings always apply; hard and custom-rule reviews always need you.</p>
-    <div class="autonomous__rows" role="listbox" aria-label="Autonomous settings" tabindex="0" autofocus aria-activedescendant={`autonomous-row-${rows()[props.selected]?.category}`}>
+    <p class="autonomous__note">YOLO bypasses blockers in its selected categories. Review the risk before enabling it.</p>
+    <div class="autonomous__rows" role="listbox" aria-label="Autonomous settings" tabindex="0" autofocus ref={(element) => queueMicrotask(() => element.focus())} aria-activedescendant={`autonomous-row-${rows()[props.selected]?.category}`}>
       <For each={rows()}>{(row, index) => <div
         id={`autonomous-row-${row.category}`}
         class="autonomous__row"

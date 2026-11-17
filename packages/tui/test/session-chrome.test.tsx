@@ -184,8 +184,8 @@ describe("header status", () => {
     [{ type: "autonomy", state: { type: "working", elapsed: 4.14 } }, 120, "cooking 4.1s"],
     [{ type: "autonomy", state: { type: "waiting", count: 1 }, review: 1 }, 100, "review 1 · waiting · 1 subagent"],
     [{ type: "autonomy", state: { type: "ready" }, review: 2 }, 100, "review 2 · waiting for your review"],
-    [{ type: "autonomy", asleep: true, machineAwake: false, review: 2, state: { type: "waiting", count: 2 } }, 100, "asleep · machine may sleep · review 2 · waiting · 2 subagents"],
-    [{ type: "autonomy", asleep: true, machineAwake: true, state: { type: "ready" } }, 100, "asleep · ready"],
+    [{ type: "autonomy", deferred: true, machineAwake: false, review: 2, state: { type: "waiting", count: 2 } }, 100, "deferred · review 2 · waiting · 2 subagents"],
+    [{ type: "autonomy", deferred: true, machineAwake: true, state: { type: "ready" } }, 100, "deferred · ready"],
   ]
 
   for (const [state, width, expected] of cases) {
@@ -645,14 +645,14 @@ describe("header rendering", () => {
 
   test("renders operational sleep without approval-toggle summaries at narrow and wide widths", async () => {
     for (const width of [60, 80, 200]) {
-      for (const asleep of [false, true]) {
+      for (const deferred of [false, true]) {
         const app = await renderHeader(width, {
-          type: "autonomy", elevated: true, asleep, state: { type: "ready" },
+          type: "autonomy", elevated: true, deferred, state: { type: "ready" },
         })
         try {
           expect(app.captureCharFrame()).toContain("ready")
           expect(app.captureCharFrame()).not.toMatch(/YOLO|goal/)
-          expect(app.captureCharFrame().includes("asleep")).toBe(asleep)
+          expect(app.captureCharFrame().includes("deferred")).toBe(deferred)
           expect(app.captureCharFrame()).not.toContain("machine may sleep")
         } finally {
           app.renderer.destroy()

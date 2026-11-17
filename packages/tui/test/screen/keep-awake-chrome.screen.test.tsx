@@ -68,11 +68,11 @@ const cases: { name: string; status: KeepAwakeStatus }[] = [
   { name: "manual", status: { state: "on", manual: true, lid: "off" } },
   {
     name: "sleep-held",
-    status: { state: "on", manual: false, lid: "on", sleepHold: true },
+    status: { state: "on", manual: false, lid: "on", deferHold: true },
   },
   {
     name: "lid-held",
-    status: { state: "on", manual: false, lid: "held", sleepHold: true },
+    status: { state: "on", manual: false, lid: "held", deferHold: true },
   },
   { name: "off", status: { state: "off", lid: "off" } },
   { name: "error", status: { state: "error", lid: "error" } },

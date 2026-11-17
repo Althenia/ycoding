@@ -78,6 +78,7 @@ export const layerWithCell = (cell: Cell) =>
         list: (parentID) => require(cell, (runtime) => runtime.orchestration.list(parentID)),
         questionSnapshots: () => Effect.die(new Error("Question snapshots require an authenticated device operation")),
         reconsiderQuestion: () => Effect.die(new Error("Question reconsideration requires the native goal decision loop")),
+        reconcileAutonomy: () => Effect.die(new Error("Autonomy reconciliation requires the native Session runtime")),
         page: (input) => require(cell, (runtime) => runtime.orchestration.page(input)),
         send: (input) => require(cell, (runtime) => runtime.orchestration.send(input)),
         answer: (input) => input.dots

@@ -10,7 +10,7 @@ test("Session lifecycle commands stay local rather than becoming model prompts",
 })
 
 test("TUI composition and application commands stay local and retain their arguments", async () => {
-  for (const kind of ["editor", "docs", "exit", "restart", "sleep", "wake", "processes", "background"] as const) expect(desktopSlashCommand(`/${kind}`, [kind])).toEqual({ kind })
+  for (const kind of ["editor", "docs", "exit", "restart", "defer", "processes", "background"] as const) expect(desktopSlashCommand(`/${kind}`, [kind])).toEqual({ kind })
   for (const kind of ["btw", "btw-send", "suggest", "prompt", "cd"] as const) {
     expect(desktopSlashCommand(`/${kind} synthetic input`, [kind])).toEqual({ kind, argument: "synthetic input" })
     expect(desktopSlashCommand(`/${kind}`, [])).toEqual({ kind })

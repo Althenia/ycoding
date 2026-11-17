@@ -40,7 +40,8 @@ export function reviewReasonLabel(reason: SessionReview.Reason) {
     case "unsupported-output":
       return GuardrailEscalation.text({ reason })
     case "sleep_entry":
-      return "deferred when sleep started"
+    case "defer_entry":
+      return "deferred when deferral started"
     case "restart":
       return "child restarted during tool execution"
   }
@@ -83,7 +84,7 @@ function reviewProvenance(item: SessionReviewItem) {
 export function ReviewBox(props: {
   items: SessionReviewItem[]
   currentSessionID: string
-  asleep: boolean
+  deferred: boolean
   activeItemID?: string
   pendingItemID?: string
   failed: Record<string, string>
@@ -122,9 +123,9 @@ export function ReviewBox(props: {
   })
   createEffect(
     on(
-      () => props.asleep,
-      (asleep, previous) => {
-        if (previous === undefined || previous !== asleep) setExpanded(!asleep)
+      () => props.deferred,
+      (deferred, previous) => {
+        if (previous === undefined || previous !== deferred) setExpanded(!deferred)
       },
       { defer: false },
     ),
@@ -134,7 +135,7 @@ export function ReviewBox(props: {
       () => props.activeItemID,
       (active, previous) => {
         if (active) setExpanded(false)
-        if (!active && previous && !props.asleep) setExpanded(true)
+        if (!active && previous && !props.deferred) setExpanded(true)
       },
     ),
   )

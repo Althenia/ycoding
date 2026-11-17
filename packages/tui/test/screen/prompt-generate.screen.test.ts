@@ -185,7 +185,7 @@ async function landingFixture() {
         return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
       if (createdID && url.pathname === `/api/session/${createdID}/autonomy`) {
         const mode = autonomy.length > 0 ? "yolo" : "manual"
-        return json({ data: { mode: "normal", permissions: mode, guardrails: mode, answers: mode, effective: { permissions: mode, guardrails: mode, answers: mode, inherited: {}, asleep: false, guardrailsEnabled: true } } })
+        return json({ data: { mode: "normal", permissions: mode, guardrails: mode, answers: mode, effective: { permissions: mode, guardrails: mode, answers: mode, inherited: {}, deferred: false, guardrailsEnabled: true } } })
       }
       if (createdID && url.pathname === `/api/session/${createdID}/guardrail`)
         return json({ data: { rootSessionID: createdID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })

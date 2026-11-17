@@ -19,7 +19,7 @@ type Mode = "manual" | "auto" | "yolo"
 const approval = (input: {
   readonly permissions?: Mode
   readonly guardrails?: Mode
-  readonly sleep?: boolean
+  readonly defer?: boolean
   readonly rules?: readonly Permission.Rule[]
   readonly maxPendingReviews?: number
 }) => Effect.gen(function* () {
@@ -37,7 +37,7 @@ const approval = (input: {
     sessionID,
     ...(input.permissions === undefined ? {} : { permissions: input.permissions }),
     ...(input.guardrails === undefined ? {} : { guardrails: input.guardrails }),
-    ...(input.sleep === undefined ? {} : { sleep: input.sleep }),
+    ...(input.defer === undefined ? {} : { defer: input.defer }),
   })
   const reviews = yield* SessionReview.Service
   const opened = yield* promise(() => channel(f.host))
@@ -125,15 +125,14 @@ it.live("a hard guardrail review in auto mode gets an item that cannot be approv
   expect(refused.stderr).not.toContain("approve always")
 }).pipe(Effect.scoped))
 
-it.live("yolo mode refuses with an item when its evaluator escalates", () => Effect.gen(function* () {
+it.live("YOLO permissions run an ask-rule command without a review item", () => Effect.gen(function* () {
   const a = yield* approval({ permissions: "yolo" })
-  const refused = yield* a.run("p1", "echo synthetic")
-  expect(refused.exitCode).toBe(1)
-  expect(refused.itemID).toBeDefined()
+  expect(yield* a.run("p1", "echo synthetic")).toMatchObject({ exitCode: 0, stdout: "synthetic\n" })
+  expect(yield* a.reviews.list(a.sessionID)).toEqual([])
 }).pipe(Effect.scoped))
 
-it.live("asleep behaves like manual", () => Effect.gen(function* () {
-  const a = yield* approval({ permissions: "manual", sleep: true })
+it.live("deferred behaves like manual", () => Effect.gen(function* () {
+  const a = yield* approval({ permissions: "manual", defer: true })
   const refused = yield* a.run("p1", "echo synthetic")
   expect(refused).toMatchObject({ exitCode: 1, kind: "permission" })
   expect(refused.itemID).toBeDefined()

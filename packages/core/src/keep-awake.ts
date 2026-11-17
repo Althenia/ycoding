@@ -139,7 +139,7 @@ export const make = Effect.fn("KeepAwake.make")(function* (options: Options) {
   const combined = Effect.gen(function* () {
     const base = yield* Ref.get(status)
     const lidState = yield* Ref.get(lid)
-    const sleepHold = (yield* Ref.get(holds)).size > 0
+    const deferHold = (yield* Ref.get(holds)).size > 0
     const activityState = yield* Ref.get(activity)
     const fault = yield* Ref.get(systemFault)
     const system: NonNullable<Status["system"]> = !darwin
@@ -169,10 +169,10 @@ export const make = Effect.fn("KeepAwake.make")(function* (options: Options) {
       ...base,
       display: base.state,
       activity: activityState,
-      ...(sleepHold ? { manual: yield* Ref.get(manual) } : {}),
+      ...(deferHold ? { manual: yield* Ref.get(manual) } : {}),
       lid: lidState,
       system,
-      sleepHold,
+      deferHold,
       ...(message === undefined ? {} : { message }),
     } satisfies Status
   })

@@ -64,7 +64,7 @@ export interface Folded {
   readonly payload: SessionReview.Payload
   readonly created: number
   readonly decision?: SessionReview.Decision
-  readonly withdrawn?: "reverted" | "task_closed"
+  readonly withdrawn?: "reverted" | "task_closed" | "autonomy"
   readonly consumed: boolean
   readonly revision: number
   readonly source?: Form.ClientReplySource
@@ -363,7 +363,7 @@ const openUnlocked = Effect.fnUntraced(function* (
       origin: input.origin,
       payload,
     } as SessionEvent.Review.Deferred["data"],
-    payload.type === "guardrail" && input.reason !== "sleep_entry" && input.reason !== "disabled"
+    payload.type === "guardrail" && input.reason !== "sleep_entry" && input.reason !== "defer_entry" && input.reason !== "disabled"
       ? {
           commit: () =>
             ModelIncident.recordEscalation(db, {
@@ -386,7 +386,7 @@ export const withdrawItem = Effect.fnUntraced(function* (
   events: EventRuntime.Interface,
   sessionID: Session.ID,
   itemID: ID,
-  reason: "reverted" | "task_closed",
+  reason: "reverted" | "task_closed" | "autonomy",
 ) {
   yield* events.publish(SessionEvent.Review.Withdrawn, { sessionID, itemID, reason })
 })
@@ -395,7 +395,7 @@ export const withdrawSession = Effect.fn("SessionReviewFold.withdrawSession")(fu
   db: DatabaseClient,
   events: EventRuntime.Interface,
   sessionID: Session.ID,
-  reason: "reverted" | "task_closed",
+  reason: "reverted" | "task_closed" | "autonomy",
 ) {
   const folded = yield* fold(db, [sessionID])
   yield* Effect.forEach(

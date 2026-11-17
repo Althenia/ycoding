@@ -29,7 +29,7 @@ export const reviewLayer = (database?: ReturnType<typeof Database.layer>, includ
     [SessionExecution.node, SessionExecution.noopLayer],
     [KeepAwake.node, Layer.mock(KeepAwake.Service, {
       hold: () => Effect.succeed({ state: "off" as const }), release: () => Effect.succeed({ state: "off" as const }),
-      get: Effect.succeed({ state: "off", lid: "off", sleepHold: false } as const),
+      get: Effect.succeed({ state: "off", lid: "off", deferHold: false } as const),
     })],
     [Decision.node, Layer.mock(Decision.Service, { evaluate: decision ?? ((input: Decision.Input) => Effect.succeed(Schema.decodeUnknownSync(Decision.Output)({
       provider: "agent", response: {

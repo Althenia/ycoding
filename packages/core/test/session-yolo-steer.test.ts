@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import path from "path"
 import { AttachmentStore } from "@ycoding-ai/core/attachment-store"
 import { Database } from "@ycoding-ai/core/database/database"
@@ -12,6 +12,8 @@ import { KeepAwake } from "@ycoding-ai/core/keep-awake"
 import { Permission } from "@ycoding-ai/core/permission"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { Project } from "@ycoding-ai/core/project"
 import { Question } from "@ycoding-ai/core/question"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -43,6 +45,8 @@ const projects = Layer.succeed(
 )
 
 const wakes: Session.ID[] = []
+const holds: string[] = []
+const releases: string[] = []
 const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
@@ -91,9 +95,9 @@ const it = testEffect(
       [
         KeepAwake.node,
         Layer.mock(KeepAwake.Service, {
-          hold: () => Effect.succeed({ state: "off" as const }),
-          release: () => Effect.succeed({ state: "off" as const }),
-          get: Effect.succeed({ state: "off", lid: "off", sleepHold: false } as const),
+          hold: (sessionID) => Effect.sync(() => { holds.push(sessionID); return { state: "off" as const } }),
+          release: (sessionID) => Effect.sync(() => { releases.push(sessionID); return { state: "off" as const } }),
+          get: Effect.succeed({ state: "off", lid: "off", deferHold: false } as const),
         }),
       ],
     ],
@@ -135,7 +139,9 @@ const setup = Effect.fnUntraced(function* (options: { readonly yolo?: boolean } 
     return Deferred.await(done)
   })
   wakes.length = 0
-  decide = () => Effect.fail(new Decision.Error({ reason: "unavailable" }))
+  holds.length = 0
+  releases.length = 0
+  decide = () => Effect.never
   return { session, root, forms, questions, seen, count, arrived }
 })
 
@@ -161,6 +167,94 @@ const heldHelper = Effect.fnUntraced(function* () {
 })
 
 describe("fresh human steer under effective YOLO", () => {
+  it.live("switching answers to YOLO settles an existing manual form without another prompt", () =>
+    Effect.gen(function* () {
+      const { session, root, forms, arrived } = yield* setup({ yolo: false })
+      decide = () => Effect.fail(new Decision.Error({ reason: "unavailable" }))
+      const created = yield* arrived(Form.Event.Created.type)
+      const waiting = yield* askForm(forms, root.id).pipe(Effect.forkScoped)
+      yield* created
+      yield* session.autonomy.set({ sessionID: root.id, answers: "yolo" })
+      expect(yield* Fiber.join(waiting)).toMatchObject({ status: "answered", automatic: true, via: "yolo" })
+      expect(yield* forms.list({ sessionID: root.id })).toEqual([])
+    }),
+  )
+
+  it.live("switching answers to YOLO settles an existing manual question without another prompt", () =>
+    Effect.gen(function* () {
+      const { session, root, questions, arrived } = yield* setup({ yolo: false })
+      decide = () => Effect.fail(new Decision.Error({ reason: "unavailable" }))
+      const asked = yield* arrived(Question.Event.Asked.type)
+      const waiting = yield* questions.ask({ sessionID: root.id, questions: [{ header: "Plan", question: "Choose a plan", options: [{ label: "Bounded", description: "Take one bounded step" }] }] }).pipe(Effect.forkScoped)
+      yield* asked
+      yield* session.autonomy.set({ sessionID: root.id, answers: "yolo" })
+      expect(yield* Fiber.join(waiting)).toMatchObject({ status: "answered", answers: [["Bounded"]], automatic: true, via: "yolo" })
+      expect(yield* questions.list()).toEqual([])
+    }),
+  )
+
+  it.live("YOLO answers deferred forms with synthetic attribution and retains family defer", () =>
+    Effect.gen(function* () {
+      const { session, root, forms, arrived } = yield* setup({ yolo: false })
+      decide = () => Effect.fail(new Decision.Error({ reason: "unavailable" }))
+      yield* session.autonomy.set({ sessionID: root.id, defer: true })
+      expect((yield* askForm(forms, root.id)).status).toBe("deferred")
+      const admitted = yield* arrived(SessionEvent.InputAdmitted.type)
+      yield* session.autonomy.set({ sessionID: root.id, answers: "yolo" })
+      yield* admitted
+      const reviews = yield* SessionReview.Service
+      expect(yield* reviews.list(root.id)).toEqual([])
+      const pending = yield* session.pending(root.id)
+      expect(pending).toHaveLength(1)
+      expect(pending[0]).toMatchObject({ type: "synthetic", data: { metadata: { automatic: true, via: "yolo" } } })
+      expect((yield* session.autonomy.get(root.id)).defer).toEqual({})
+    }),
+  )
+
+  it.live("managed ancestor YOLO overrides a child's Auto answers and settles its deferred task question", () =>
+    Effect.gen(function* () {
+      const { session, root, arrived } = yield* setup({ yolo: false })
+      decide = () => Effect.fail(new Decision.Error({ reason: "unavailable" }))
+      const child = yield* session.create({ parentID: root.id, model: CatalogModel.Ref.make({ providerID: Provider.ID.make("test"), id: CatalogModel.ID.make("decision-model") }) })
+      const events = yield* EventRuntime.Service
+      yield* events.publish(SessionEvent.Task.Updated, Schema.decodeUnknownSync(SessionEvent.Task.Updated.data)({
+        sessionID: child.id, change: { type: "launched", parentID: root.id,
+          parentAssistantMessageID: "msg_reconcile_parent", toolCallID: "call_reconcile_child", inputID: "msg_reconcile_input",
+          description: "Bounded child", agent: "build", model: { providerID: "test", id: "decision-model" },
+          promptDigest: "digest", background: true, delivery: "steer" },
+      }))
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
+      yield* session.autonomy.set({ sessionID: child.id, answers: "auto" })
+      yield* session.autonomy.set({ sessionID: root.id, defer: true })
+      const tasks = yield* SessionOrchestration.Service
+      expect((yield* tasks.question(child.id, "Choose a plan", { options: ["Bounded", "Broad"] })).autoAnswered).toBe(false)
+      const admitted = yield* arrived(SessionEvent.InputAdmitted.type)
+      yield* session.autonomy.set({ sessionID: root.id, answers: "yolo" })
+      yield* admitted
+      expect((yield* tasks.get(root.id, child.id)).state).toBe("running")
+      expect((yield* session.pending(child.id))[0]).toMatchObject({ type: "synthetic", data: { metadata: { automatic: true, via: "yolo" } } })
+      const reviews = yield* SessionReview.Service
+      expect(yield* reviews.list(root.id)).toEqual([])
+      expect((yield* session.autonomy.get(root.id)).defer).toEqual({})
+    }),
+  )
+
+  it.live("YOLO answers deferred questions without attributing a reply to the user", () =>
+    Effect.gen(function* () {
+      const { session, root, questions, arrived } = yield* setup({ yolo: false })
+      decide = () => Effect.fail(new Decision.Error({ reason: "unavailable" }))
+      yield* session.autonomy.set({ sessionID: root.id, defer: true })
+      const deferred = yield* questions.ask({ sessionID: root.id, questions: [{ header: "Plan", question: "Choose a bounded plan", options: [{ label: "Bounded", description: "One step" }] }] })
+      expect(deferred.status).toBe("deferred")
+      const admitted = yield* arrived(SessionEvent.InputAdmitted.type)
+      yield* session.autonomy.set({ sessionID: root.id, answers: "yolo" })
+      yield* admitted
+      const reviews = yield* SessionReview.Service
+      expect(yield* reviews.list(root.id)).toEqual([])
+      expect((yield* session.pending(root.id))[0]).toMatchObject({ type: "synthetic", data: { metadata: { automatic: true, via: "yolo" } } })
+    }),
+  )
+
   it.live("releases a paused question wait without answering it and wakes the runner", () =>
     Effect.gen(function* () {
       const { session, root, forms, count, arrived } = yield* setup()
@@ -185,12 +279,12 @@ describe("fresh human steer under effective YOLO", () => {
 
   it.live("releases a paused question service wait with a rejection", () =>
     Effect.gen(function* () {
-      const { session, root, questions, count, arrived } = yield* setup()
-      const asked = yield* arrived(Question.Event.Asked.type)
+      const { session, root, questions, count } = yield* setup()
+      const helper = yield* heldHelper()
       const waiting = yield* questions
         .ask({ sessionID: root.id, questions: [{ header: "Reservation", question: "Which reservation?", options: [] }] })
         .pipe(Effect.exit, Effect.forkScoped)
-      yield* asked
+      yield* helper.started
 
       yield* session.prompt({ sessionID: root.id, text: directive })
 
@@ -217,20 +311,24 @@ describe("fresh human steer under effective YOLO", () => {
     }),
   )
 
-  it.live("cancels an asleep-mode ask whose helper is held when the steer wakes the Session", () =>
+  it.live("cancels a deferred-mode ask without clearing defer or releasing keep-awake", () =>
     Effect.gen(function* () {
       const { session, root, forms } = yield* setup()
-      yield* session.autonomy.set({ sessionID: root.id, sleep: true })
+      yield* session.autonomy.set({ sessionID: root.id, defer: true })
       const helper = yield* heldHelper()
       const waiting = yield* askForm(forms, root.id).pipe(Effect.forkScoped)
       yield* helper.started
 
       yield* session.prompt({ sessionID: root.id, text: directive })
-      expect((yield* session.autonomy.get(root.id)).sleep).toBeUndefined()
+      expect((yield* session.autonomy.get(root.id)).defer).toEqual({})
+      expect(holds).toEqual([root.id])
+      expect(releases).toEqual([])
       yield* Deferred.succeed(helper.gate, undefined)
 
       expect(yield* Fiber.join(waiting)).toEqual({ status: "cancelled" })
       expect(yield* forms.list({ sessionID: root.id })).toEqual([])
+      yield* session.autonomy.set({ sessionID: root.id, defer: false })
+      expect(releases).toEqual([root.id])
     }),
   )
 
@@ -318,8 +416,8 @@ describe("durable question reviews under a fresh human steer", () => {
       const { session, root, forms, count } = yield* setup()
       const reviews = yield* SessionReview.Service
       const child = yield* session.create({ parentID: root.id })
-      yield* session.autonomy.set({ sessionID: root.id, sleep: true })
-      const deferred = yield* askForm(forms, root.id)
+      yield* session.autonomy.set({ sessionID: root.id, defer: true })
+      const deferred = yield* forms.ask({ sessionID: root.id, title: "Physical transfer", fields: [{ key: "external", type: "external", url: "https://example.invalid/confirm" }] })
       if (deferred.status !== "deferred") return yield* Effect.die(new Error(`Expected a deferred form, received ${deferred.status}`))
       const open = (sessionID: Session.ID, kind: "question" | "permission" | "guardrail") =>
         reviews.open({
@@ -428,12 +526,12 @@ describe("concurrent admission of the same message ID", () => {
       const { session, root, a, b, release } = yield* race()
       yield* Deferred.succeed(release.a, undefined)
       yield* Fiber.join(a)
-      yield* session.autonomy.set({ sessionID: root.id, sleep: true })
+      yield* session.autonomy.set({ sessionID: root.id, defer: true })
 
       yield* Deferred.succeed(release.b, undefined)
       yield* Fiber.join(b)
 
-      expect((yield* session.autonomy.get(root.id)).sleep).toBeDefined()
+      expect((yield* session.autonomy.get(root.id)).defer).toBeDefined()
     }),
   )
 })

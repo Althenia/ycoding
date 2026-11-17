@@ -18,7 +18,7 @@ export function autonomyView(input: Partial<State> = {}, effective: Partial<Effe
       guardrails: state.guardrails,
       answers: state.answers,
       inherited: {},
-      asleep: state.sleep !== undefined,
+      deferred: state.defer !== undefined,
       guardrailsEnabled: true,
       ...effective,
     },

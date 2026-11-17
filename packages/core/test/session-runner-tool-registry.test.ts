@@ -8,6 +8,7 @@ import { Image } from "@ycoding-ai/core/image"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionContext } from "@ycoding-ai/core/session/context"
+import { CoordinationAccess } from "@ycoding-ai/core/session/coordination-access"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolHooks } from "@ycoding-ai/core/tool/hooks"
@@ -560,6 +561,7 @@ describe("ToolRegistry", () => {
           permissions: [{ action: "*", resource: "*", effect: "allow" }],
         },
         [{ action: "edit", resource: "*", effect: "deny" }],
+        "manual",
       )
 
       expect((yield* service.materialize(permissions)).definitions.map((tool) => tool.name)).toEqual([
@@ -569,6 +571,20 @@ describe("ToolRegistry", () => {
       ])
     }),
   )
+
+  it.effect("True YOLO visibility retains capability restrictions and coordinator separation", () => Effect.gen(function* () {
+    const service = yield* ToolRegistry.Service
+    yield* service.register({ read: make(), shell: make(), edit: make(), project: make() }, { codemode: false })
+    const rules = SessionContext.toolPermissions(
+      { mode: "primary", permissions: [{ action: "*", resource: "*", effect: "deny" }] },
+      [{ action: "*", resource: "*", effect: "deny" }],
+      "yolo",
+    )
+    const permissions = [...rules, ...CoordinationAccess.visibility("executor", false)]
+    expect((yield* service.materialize(permissions, { tools: { deny: ["edit"] } })).definitions.map((tool) => tool.name))
+      .toEqual(["read", "shell", "execute"])
+    expect([...(yield* service.available(permissions, { tools: { deny: ["edit"] } }))].toSorted()).toEqual(["read", "shell"])
+  }))
 
   it.effect("hides tools excluded by capability toggles from direct and CodeMode catalogs", () =>
     Effect.gen(function* () {

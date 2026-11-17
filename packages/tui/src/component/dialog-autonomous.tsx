@@ -1,8 +1,9 @@
 import type { SessionAutonomyView } from "@ycoding-ai/client"
-import { createMemo, createSignal } from "solid-js"
+import { createMemo, createSignal, Show } from "solid-js"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
 import { DialogSelect } from "../ui/dialog-select"
+import { DialogConfirm } from "../ui/dialog-confirm"
 import { useToast } from "../ui/toast"
 import {
   allAutonomyChange,
@@ -22,15 +23,28 @@ export function DialogAutonomous(props: {
   const shortcuts = Keymap.useShortcuts()
   const [focused, setFocused] = createSignal<AutonomyCategory>("permissions")
   const [saving, setSaving] = createSignal(false)
+  const [pending, setPending] = createSignal<AutonomyChange>()
   const rows = createMemo(() => autonomyRows(props.autonomy()))
 
-  const save = (change: AutonomyChange) => {
+  const persist = async (change: AutonomyChange) => {
     if (saving()) return
     setSaving(true)
-    void props
-      .save(change)
-      .catch(toast.error)
-      .finally(() => setSaving(false))
+    try {
+      await props.save(change)
+    } catch (error) {
+      toast.error(error)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const save = (change: AutonomyChange) => {
+    if (saving() || pending()) return
+    if (rows().some((row) => change[row.category] === "yolo" && row.local !== "yolo")) {
+      setPending(change)
+      return
+    }
+    void persist(change)
   }
 
   const cycle = (direction: 1 | -1) => {
@@ -76,7 +90,7 @@ export function DialogAutonomous(props: {
   const key = (id: string) => shortcuts.get(id) ?? ""
 
   return (
-    <DialogSelect
+    <Show when={pending()} fallback={<DialogSelect
       title="Autonomous"
       options={options()}
       current={focused()}
@@ -102,6 +116,16 @@ export function DialogAutonomous(props: {
           </text>
         </box>
       }
-    />
+    />}>
+      {(change) => <DialogConfirm
+        title="Enable YOLO"
+        message="Each YOLO category disables its blockers. With all categories in YOLO, all blockers are disabled: hard, catastrophic and destructive guardrails, permission blocks, and all questions, including free-text and open questions. Progression is aggressive. You accept full responsibility for its actions."
+        label="Accept risk & enable YOLO"
+        preserveLabel
+        keepOpen
+        onConfirm={() => { const selected = change(); setPending(undefined); void persist(selected) }}
+        onCancel={() => setPending(undefined)}
+      />}
+    </Show>
   )
 }

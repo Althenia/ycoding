@@ -42,7 +42,7 @@ const catalog: CatalogView = {
   resources: [{ name: "Runbook", description: "Operational reference", uri: "mcp://docs/runbook" }],
 }
 const modesManual: AutonomyModes = { permissions: "manual", guardrails: "manual", answers: "manual" }
-const fixtureEffective = (modes: AutonomyModes, inherited: EffectiveAutonomyView["inherited"] = {}) => ({ ...modes, inherited, asleep: false, guardrailsEnabled: true })
+const fixtureEffective = (modes: AutonomyModes, inherited: EffectiveAutonomyView["inherited"] = {}) => ({ ...modes, inherited, deferred: false, guardrailsEnabled: true })
 const fixtureAutonomy = (modes: AutonomyModes, goal?: NonNullable<NonNullable<RemoteStoreState["view"]>["autonomy"]>["goal"]) => ({ mode: "normal" as const, ...modes, effective: fixtureEffective(modes), ...(goal ? { goal } : {}) })
 const requests: { operation: string; input: unknown }[] = []
 let resolveCompact: ((accepted: boolean) => void) | undefined
@@ -70,7 +70,7 @@ const setModes = (change: Partial<AutonomyModes>) => {
   const modes = { permissions: current.permissions, guardrails: current.guardrails, answers: current.answers, ...change }
   const inherited = current.effective?.inherited ?? {}
   const inEffect = { permissions: inherited.permissions === undefined ? modes.permissions : current.effective!.permissions, guardrails: inherited.guardrails === undefined ? modes.guardrails : current.effective!.guardrails, answers: inherited.answers === undefined ? modes.answers : current.effective!.answers }
-  update({ ...state(), view: { ...state().view!, autonomy: { ...current, ...modes, effective: { ...fixtureEffective(inEffect, inherited), asleep: current.effective?.asleep === true } } } })
+  update({ ...state(), view: { ...state().view!, autonomy: { ...current, ...modes, effective: { ...fixtureEffective(inEffect, inherited), deferred: current.effective?.deferred === true } } } })
 }
 Object.assign(window, {
   composerPredictionReply: (sourceMessageID: string) => update({ ...state(), view: { ...state().view!, status: "idle", prediction: undefined, messages: [{ kind: "assistant", id: sourceMessageID, created: 1, completed: 2, parts: [{ kind: "text", ordinal: 0, text: "The build is fixed." }] }] } }),

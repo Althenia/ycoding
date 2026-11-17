@@ -8,7 +8,7 @@ import { make } from "../src/effect/generated/client"
 const views = (["manual", "yolo", "auto"] as const).map(answers => ({
   mode: "normal",
   permissions: "manual", guardrails: "manual", answers,
-  effective: { permissions: "yolo", guardrails: "manual", answers, inherited: { permissions: "ses_parent" }, asleep: false, guardrailsEnabled: true },
+  effective: { permissions: "yolo", guardrails: "manual", answers, inherited: { permissions: "ses_parent" }, deferred: false, guardrailsEnabled: true },
 }))
 
 test("Promise autonomy methods preserve effective inheritance and serialize answer modes", async () => {

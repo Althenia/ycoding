@@ -80,7 +80,7 @@ export function summarizeSession(session: SessionInfoView, view: SessionView | u
     guardrails: autonomy === undefined ? undefined : (autonomy.effective ?? autonomy).guardrails,
     answers: autonomy === undefined ? undefined : (autonomy.effective ?? autonomy).answers,
     goalActive: autonomy?.goal?.status === "active",
-    asleep: autonomy?.effective?.asleep ?? (autonomy === undefined ? undefined : autonomy.sleep !== undefined),
+    deferred: autonomy?.effective?.deferred ?? (autonomy === undefined ? undefined : autonomy.defer !== undefined),
     updatedAt: session.updatedAt > 0 ? new Date(session.updatedAt).toISOString() : undefined,
   }
 }

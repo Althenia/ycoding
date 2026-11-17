@@ -54,6 +54,7 @@ describe("PluginRuntime", () => {
           list: unavailable,
           questionSnapshots: unavailable,
           reconsiderQuestion: unavailable,
+          reconcileAutonomy: unavailable,
           page: unavailable,
           send: unavailable,
           answer: unavailable,

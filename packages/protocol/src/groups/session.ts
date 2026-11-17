@@ -187,15 +187,15 @@ export const SessionAutonomyGoal = Schema.Struct({
   maxNoProgress: PositiveInt,
   lastProgressDigest: Schema.String.pipe(Schema.optional),
 }).annotate({ identifier: "SessionAutonomyGoal" })
-export const SessionAutonomySleep = Schema.Struct({}).pipe(Schema.decodeTo(Schema.Struct({}), {
+export const SessionAutonomyDefer = Schema.Struct({}).pipe(Schema.decodeTo(Schema.Struct({}), {
   decode: SchemaGetter.transform(() => ({})),
   encode: SchemaGetter.transform(() => ({})),
-})).annotate({ identifier: "SessionAutonomySleep" })
+})).annotate({ identifier: "SessionAutonomyDefer" })
 export const SessionAutonomyState = Schema.Struct({
   mode: SessionAutonomyMode,
   ...SessionAutonomy.Decisions.fields,
   goal: SessionAutonomyGoal.pipe(Schema.optional),
-  sleep: SessionAutonomySleep.pipe(Schema.optional),
+  defer: SessionAutonomyDefer.pipe(Schema.optional),
 }).annotate({ identifier: "SessionAutonomyState" })
 export const SessionAutonomyEffective = Schema.Struct({
   ...SessionAutonomy.Decisions.fields,
@@ -204,7 +204,7 @@ export const SessionAutonomyEffective = Schema.Struct({
     guardrails: Session.ID.pipe(Schema.optional),
     answers: Session.ID.pipe(Schema.optional),
   }),
-  asleep: Schema.Boolean,
+  deferred: Schema.Boolean,
   guardrailsEnabled: Schema.Boolean,
 }).annotate({ identifier: "SessionAutonomyEffective" })
 export const SessionAutonomyView = Schema.Struct({
@@ -216,10 +216,11 @@ const AutonomyControlsAbsent = {
   autoPermission: Schema.Never.pipe(Schema.optional),
   autoGuardrail: Schema.Never.pipe(Schema.optional),
   autoAnswer: Schema.Never.pipe(Schema.optional),
+  sleep: Schema.Never.pipe(Schema.optional),
   permissions: Schema.Never.pipe(Schema.optional),
   guardrails: Schema.Never.pipe(Schema.optional),
   answers: Schema.Never.pipe(Schema.optional),
-  sleep: Schema.Never.pipe(Schema.optional),
+  defer: Schema.Never.pipe(Schema.optional),
   goal: Schema.Never.pipe(Schema.optional),
   maxNoProgress: Schema.Never.pipe(Schema.optional),
 }
@@ -237,7 +238,7 @@ export const SessionAutonomySet = Schema.Union([
   }),
   Schema.Struct({
     ...AutonomyControlsAbsent,
-    sleep: Schema.Boolean,
+    defer: Schema.Boolean,
   }),
   Schema.Struct({
     ...AutonomyControlsAbsent,

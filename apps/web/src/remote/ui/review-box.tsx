@@ -116,7 +116,8 @@ const reasonLabel: Readonly<Record<ReviewReason, string>> = {
   "invalid-output": escalationText({ reason: "invalid-output" }),
   "truncated-output": escalationText({ reason: "truncated-output" }),
   "unsupported-output": escalationText({ reason: "unsupported-output" }),
-  sleep_entry: "Pending when the family went to sleep",
+  defer_entry: "Pending when the family entered defer",
+  sleep_entry: "Pending when the family entered defer",
   restart: "The service restarted while this subagent was working",
 }
 

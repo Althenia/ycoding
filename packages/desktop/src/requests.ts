@@ -32,9 +32,9 @@ export function setAutonomyInput(value: unknown): SetAutonomyInput {
     if (keys.some((key) => key !== "goal" && key !== "maxNoProgress") || !(payload.goal === null || payload.goal === true || (typeof payload.goal === "string" && payload.goal.trim().length > 0)) || (payload.maxNoProgress !== undefined && (!isRevision(payload.maxNoProgress) || payload.maxNoProgress < 1))) throw invalid()
     return { sessionID, revision, payload: { goal: payload.goal, ...(payload.maxNoProgress === undefined ? {} : { maxNoProgress: payload.maxNoProgress }) } }
   }
-  if (Object.hasOwn(payload, "sleep")) {
-    if (keys.length !== 1 || typeof payload.sleep !== "boolean") throw invalid()
-    return { sessionID, revision, payload: { sleep: payload.sleep } }
+  if (Object.hasOwn(payload, "defer")) {
+    if (keys.length !== 1 || typeof payload.defer !== "boolean") throw invalid()
+    return { sessionID, revision, payload: { defer: payload.defer } }
   }
   if (!keys.length || keys.some((key) => !["permissions", "guardrails", "answers"].includes(key)) || keys.some((key) => !decision(payload[key]))) throw invalid()
   const permissions = payload.permissions

@@ -92,7 +92,7 @@ describe("Settings Keep machine awake", () => {
       try {
         await until(page, `${label} === 'On' && !${control}.disabled`)
         expect(await page.evaluate(`${control}.checked`)).toBe(mode !== "sleep-held")
-        expect(await page.evaluate(detail)).toMatch(mode === "sleep-held" ? /Idle on; lid on.*sleeping session/ : /lid-closed keep-awake could not be armed/)
+        expect(await page.evaluate(detail)).toMatch(mode === "sleep-held" ? /Idle on; lid on.*deferred Session/ : /lid-closed keep-awake could not be armed/)
         expect(await page.evaluate(`document.getElementById('machine-awake-caveat').textContent`)).toMatch(/battery.*heat/)
       } finally {
         await page.close()

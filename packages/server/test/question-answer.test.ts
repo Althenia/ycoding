@@ -30,6 +30,7 @@ test("question validation returns a corrective client error and preserves Sessio
     reject: () => Effect.die("unused"),
     reconsider: () => Effect.die("unused"),
     deferPending: () => Effect.die("unused"),
+    reconcileAutonomy: () => Effect.die("unused"),
     cancelPending: () => Effect.die("unused"),
   })).mapUnsafe)
   const handler = HttpRouter.toWebHandler(HttpApiBuilder.layer(HttpApi.make("server").add(Api.groups["server.question"])).pipe(

@@ -34,10 +34,11 @@ import { SessionStore } from "@ycoding-ai/core/session/store"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 
+const formEvaluations: Decision.Input[] = []
 const layer = AppNodeBuilder.build(
   LayerNode.group([Config.node, Database.node, EventRuntime.node, SessionAutonomy.node, Decision.node, Form.node]),
   [
-    [Decision.node, Layer.mock(Decision.Service, { evaluate: () => Effect.die("coordinator-selected answers must not call the hidden evaluator") })],
+    [Decision.node, Layer.mock(Decision.Service, { evaluate: (input: Decision.Input) => Effect.sync(() => formEvaluations.push(input)).pipe(Effect.andThen(Effect.fail(new Decision.Error({ reason: "refused" })))) })],
     [
       Config.node,
       Layer.mock(Config.Service, {
@@ -63,6 +64,7 @@ const form = {
 } satisfies Form.CreateInput
 
 const setup = Effect.gen(function* () {
+  formEvaluations.length = 0
   const database = yield* Database.Service
   const autonomy = yield* SessionAutonomy.Service
   const directory = AbsolutePath.make("/tmp/ycoding-coordination-form")
@@ -141,12 +143,14 @@ describe("native coordinator Form reconsideration", () => {
       })
       expect(second).toMatchObject({ outcome: "stale", settled: false })
       expect(replied).toHaveLength(1)
+      expect(formEvaluations).toHaveLength(0)
     }),
   )
 
-  it.effect("invalid coordinator answers escalate without settling the pending form", () =>
+  for (const mode of ["manual", "auto", "yolo"] as const) it.effect(`invalid coordinator answers preserve membership under ${mode} answers`, () =>
     Effect.gen(function* () {
       yield* setup
+      yield* (yield* SessionAutonomy.Service).set({ sessionID, answers: mode })
       const service = yield* Form.Service
       const invalidForm = { ...form, id: Form.ID.create("frm_coord_invalid") }
       yield* service.create(invalidForm)
@@ -160,8 +164,17 @@ describe("native coordinator Form reconsideration", () => {
         confidence: 0.95,
         validate: () => Effect.succeed(true),
       })
-      expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "invalid-answer" })
-      expect(yield* service.state(invalidForm.id)).toEqual({ status: "pending" })
+      if (mode === "yolo") {
+        expect(result).toMatchObject({ outcome: "allowed", settled: true, via: "yolo", source: { kind: "coordinator", via: "yolo" } })
+        expect(yield* service.state(invalidForm.id)).toEqual({ status: "answered", answer: { branch: "safe" } })
+        expect(Form.validateAnswer(invalidForm, { branch: "safe" })).toBeUndefined()
+        expect(Form.validateAnswer(invalidForm, { branch: "missing" })).toBe("Invalid option for form field: branch")
+        expect(formEvaluations.length).toBeGreaterThan(0)
+      } else {
+        expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "invalid-answer" })
+        expect(yield* service.state(invalidForm.id)).toEqual({ status: "pending" })
+        expect(formEvaluations).toHaveLength(0)
+      }
     }),
   )
 
@@ -259,7 +272,7 @@ describe("native coordinator Form reconsideration", () => {
     }),
   )
 
-  for (const mode of ["auto", "yolo"] as const) it.effect(`${mode} answers preserve explicit human Form gates without trusting textual lookalikes`, () =>
+  for (const mode of ["auto", "yolo"] as const) it.effect(`${mode} answers apply canonical explicit Form gates without trusting textual lookalikes`, () =>
     Effect.gen(function* () {
       yield* setup
       const autonomy = yield* SessionAutonomy.Service
@@ -272,7 +285,7 @@ describe("native coordinator Form reconsideration", () => {
           fields: [{ key: "branch", title: "requireExplicitDecision", type: "string", required: true, default: "safe", options: [{ value: "safe", label: "Safe (Recommended)" }] }],
         } satisfies Form.CreateInput
         yield* service.create(explicit)
-        if (flag === true) {
+        if (flag === true && mode !== "yolo") {
           expect(yield* reconsiderForm(explicit.id)).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:request" })
           expect(yield* reconsiderForm(explicit.id, { branch: "safe" })).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:request" })
           expect(yield* service.state(explicit.id)).toEqual({ status: "pending" })
@@ -280,13 +293,20 @@ describe("native coordinator Form reconsideration", () => {
           expect(yield* service.state(explicit.id)).toEqual({ status: "answered", answer: { branch: "safe" } })
           continue
         }
+        if (flag === true) {
+          expect(yield* reconsiderForm(explicit.id)).toMatchObject({ outcome: "allowed", settled: true, via: "yolo", source: { kind: "coordinator", via: "yolo" } })
+          expect(yield* service.state(explicit.id)).toEqual({ status: "answered", answer: { branch: "safe" } })
+          expect(yield* reconsiderForm(explicit.id, { branch: "safe" })).toMatchObject({ outcome: "stale", settled: false })
+          continue
+        }
         expect(yield* reconsiderForm(explicit.id, { branch: "safe" })).toMatchObject({ outcome: "allowed", settled: true })
         expect(yield* service.state(explicit.id)).toEqual({ status: "answered", answer: { branch: "safe" } })
       }
+      expect(formEvaluations.length).toBe(mode === "yolo" ? 1 : 0)
     }),
   )
 
-  for (const mode of ["auto", "yolo"] as const) it.effect(`holds a canonical explicit-decision Form ask under ${mode} answers`, () =>
+  for (const mode of ["auto", "yolo"] as const) it.effect(`a canonical explicit-decision Form ask under ${mode} answers uses its mode authority`, () =>
     Effect.gen(function* () {
       yield* setup
       const autonomy = yield* SessionAutonomy.Service
@@ -301,10 +321,17 @@ describe("native coordinator Form reconsideration", () => {
         fields: [{ key: "branch", type: "string", required: true, default: "safe", options: [{ value: "safe", label: "Safe (Recommended)" }] }],
       }).pipe(Effect.forkScoped)
       yield* Deferred.await(created)
+      if (mode === "yolo") {
+        expect(yield* Fiber.join(waiting)).toMatchObject({ status: "answered", answer: { branch: "safe" }, automatic: true, via: "yolo" })
+        expect(yield* service.state(id)).toEqual({ status: "answered", answer: { branch: "safe" } })
+        expect(formEvaluations.length).toBeGreaterThan(0)
+        return
+      }
       yield* TestClock.adjust("1 millis")
       expect(yield* service.state(id)).toEqual({ status: "pending" })
       yield* service.reply({ id, answer: { branch: "safe" } })
       expect(yield* Fiber.join(waiting)).toEqual({ status: "answered", answer: { branch: "safe" } })
+      expect(formEvaluations).toHaveLength(0)
     }),
   )
 

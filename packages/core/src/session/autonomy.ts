@@ -35,23 +35,23 @@ export interface EffectiveDecisions extends Decisions {
 }
 
 export interface Effective extends EffectiveDecisions {
-  readonly asleep: boolean
+  readonly deferred: boolean
   readonly guardrailsEnabled: boolean
 }
 
-export const Sleep = Schema.Struct({}).pipe(
+export const Defer = Schema.Struct({}).pipe(
   Schema.decodeTo(Schema.Struct({}), {
     decode: SchemaGetter.transform(() => ({})),
     encode: SchemaGetter.transform(() => ({})),
   }),
 )
-export type Sleep = typeof Sleep.Type
+export type Defer = typeof Defer.Type
 
 export const State = Schema.Struct({
   mode: Mode,
   ...Decisions.fields,
   goal: Goal.pipe(Schema.optional),
-  sleep: Sleep.pipe(Schema.optional),
+  defer: Defer.pipe(Schema.optional),
 })
 export type State = typeof State.Type
 
@@ -75,18 +75,18 @@ export function decisions(state: State): Decisions {
 
 export function resolveDecisions(chain: ReadonlyArray<State>, root: State): Decisions {
   return {
-    permissions: chain.some((state) => state.permissions === "auto")
-      ? "auto"
-      : chain.some((state) => state.permissions === "yolo")
-        ? "yolo"
+    permissions: chain.some((state) => state.permissions === "yolo")
+      ? "yolo"
+      : chain.some((state) => state.permissions === "auto")
+        ? "auto"
         : "manual",
     guardrails: root.guardrails,
-    answers: chain[0]?.answers === "auto" ? "auto" : chain.some((state) => state.answers === "yolo") ? "yolo" : "manual",
+    answers: chain.some((state) => state.answers === "yolo") ? "yolo" : chain[0]?.answers === "auto" ? "auto" : "manual",
   }
 }
 
-export function isAsleep(state: State): boolean {
-  return state.sleep !== undefined
+export function isDeferred(state: State): boolean {
+  return state.defer !== undefined
 }
 
 export interface Interface {
@@ -98,7 +98,7 @@ export interface Interface {
   ) => Effect.Effect<{ readonly state: State; readonly sequence: number; readonly digest: string }, NotFoundError>
   readonly effectiveDecisions: (sessionID: SessionSchema.ID) => Effect.Effect<EffectiveDecisions, NotFoundError>
   readonly decisionMode: (sessionID: SessionSchema.ID, category: Category) => Effect.Effect<DecisionMode, NotFoundError>
-  readonly isAsleep: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
+  readonly isDeferred: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
   readonly setGoal: (input: {
     sessionID: SessionSchema.ID
     text: string
@@ -125,7 +125,7 @@ export interface Interface {
     goal?: string | null | true
     rawText?: string
     maxNoProgress?: number
-    sleep?: boolean
+    defer?: boolean
   }) => Effect.Effect<State, NotFoundError>
   readonly stop: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
   readonly report: (input: { sessionID: SessionSchema.ID }) => Effect.Effect<State, NotFoundError>
@@ -145,7 +145,10 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Ses
 
 export const read = (value: unknown): State => {
   if (typeof value === "object" && value !== null && removedKeys.some((key) => key in value)) return defaultState
-  const parsed = decode(value)
+  const normalized = typeof value === "object" && value !== null && "sleep" in value && value.sleep !== undefined
+    ? { ...value, defer: "defer" in value ? value.defer : value.sleep }
+    : value
+  const parsed = decode(normalized)
   return parsed._tag === "Some" ? parsed.value : defaultState
 }
 
@@ -166,8 +169,20 @@ export function make(input: {
   db: Database.Interface["db"]
   changes?: PubSub.PubSub<SessionSchema.ID>
 }): Interface {
-  const notify = (sessionID: SessionSchema.ID) =>
-    input.changes === undefined ? Effect.void : PubSub.publish(input.changes, sessionID).pipe(Effect.asVoid)
+  const notify = (sessionID: SessionSchema.ID): Effect.Effect<void> => Effect.gen(function* () {
+    if (input.changes === undefined) return
+    const pending = [sessionID]
+    const seen = new Set<SessionSchema.ID>()
+    while (pending.length > 0) {
+      const id = pending.shift()!
+      if (seen.has(id)) continue
+      seen.add(id)
+      yield* PubSub.publish(input.changes, id)
+      const family = yield* input.db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.parent_id, id)).all().pipe(Effect.orDie)
+      const managed = yield* input.db.select({ id: SessionTaskTable.session_id }).from(SessionTaskTable).where(eq(SessionTaskTable.parent_id, id)).all().pipe(Effect.orDie)
+      pending.push(...family.map((child) => child.id), ...managed.map((child) => child.id))
+    }
+  })
 
   const snapshot: Interface["snapshot"] = (sessionID, options) =>
     Effect.gen(function* () {
@@ -216,7 +231,7 @@ export function make(input: {
       const rootID = yield* familyID(sessionID)
       if (rootID === sessionID) return state
       const root = yield* load(rootID)
-      return { ...state, sleep: root.sleep }
+      return { ...state, defer: root.defer }
     })
 
   const mutate = (
@@ -318,7 +333,7 @@ export function make(input: {
   const decisionMode: Interface["decisionMode"] = (sessionID, category) =>
     effectiveDecisions(sessionID).pipe(Effect.map((effective) => effective[category]))
 
-  const isAsleepEffect: Interface["isAsleep"] = (sessionID) => familyState(sessionID).pipe(Effect.map(isAsleep))
+  const isDeferredEffect: Interface["isDeferred"] = (sessionID) => familyState(sessionID).pipe(Effect.map(isDeferred))
 
   const goalState = (state: State, text: string, rawText: string | undefined, maxNoProgress: number): State => ({
     ...state,
@@ -349,7 +364,7 @@ export function make(input: {
       return { ...state, mode: "normal", goal: { ...state.goal, status: "stopped" as const } }
     })
 
-  const set: Interface["set"] = ({ sessionID, goal, rawText, maxNoProgress, sleep, ...requested }) =>
+  const set: Interface["set"] = ({ sessionID, goal, rawText, maxNoProgress, defer, ...requested }) =>
     Effect.suspend(() => {
       const permissions = requested.permissions === undefined ? undefined : requireDecisionMode("permissions", requested.permissions)
       const guardrails = requested.guardrails === undefined ? undefined : requireDecisionMode("guardrails", requested.guardrails)
@@ -357,13 +372,13 @@ export function make(input: {
       return apply(sessionID, (state) => {
         let next: State = { ...state, mode: "normal" }
         let changed = false
-        if (sleep !== undefined) {
-          if (sleep && !next.sleep) {
-            next = { ...next, sleep: {} }
+        if (defer !== undefined) {
+          if (defer && !next.defer) {
+            next = { ...next, defer: {} }
             changed = true
           }
-          if (!sleep && next.sleep) {
-            next = { ...next, sleep: undefined }
+          if (!defer && next.defer) {
+            next = { ...next, defer: undefined }
             changed = true
           }
         }
@@ -415,7 +430,7 @@ export function make(input: {
     snapshot,
     effectiveDecisions,
     decisionMode,
-    isAsleep: isAsleepEffect,
+    isDeferred: isDeferredEffect,
     setGoal,
     setGoalIfCurrent,
     resumeGoalIfCurrent,

@@ -5,6 +5,8 @@ import { Decision } from "@ycoding-ai/core/decision"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { Question } from "@ycoding-ai/core/question"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
@@ -15,7 +17,7 @@ import { reviewLayer, reviewLocation } from "./fixture/review"
 import { testEffect } from "./lib/effect"
 
 for (const flag of [false, true]) {
-  for (const mode of ["permissions", "guardrails", "goal", "sleep"] as const) {
+  for (const mode of ["permissions", "guardrails", "goal", "defer"] as const) {
     for (const kind of ["question", "form", "subagent"] as const) {
       const calls: Decision.Input[] = []
       const it = testEffect(reviewLayer(undefined, true, (input) => {
@@ -37,7 +39,7 @@ for (const flag of [false, true]) {
         const root = yield* sessions.create({ location })
         const autonomy = yield* SessionAutonomy.Service
         if (mode === "goal") yield* autonomy.setGoal({ sessionID: root.id, text: "Finish safely" })
-        if (mode === "sleep") yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+        if (mode === "defer") yield* sessions.autonomy.set({ sessionID: root.id, defer: true })
         if (mode === "permissions") yield* autonomy.set({ sessionID: root.id, permissions: "auto" })
         if (mode === "guardrails") yield* autonomy.set({ sessionID: root.id, guardrails: "auto" })
         if (flag && kind !== "subagent") yield* autonomy.set({ sessionID: root.id, answers: "auto" })
@@ -45,7 +47,7 @@ for (const flag of [false, true]) {
         const reviews = yield* SessionReview.Service
         const events = yield* EventRuntime.Service
         if (kind === "subagent") {
-          const child = yield* sessions.create({ parentID: root.id })
+          const child = yield* sessions.create({ parentID: root.id, model: CatalogModel.Ref.make({ providerID: Provider.ID.make("test"), id: CatalogModel.ID.make("model") }) })
           yield* events.publish(SessionEvent.Task.Updated, Schema.decodeUnknownSync(SessionEvent.Task.Updated.data)({
             sessionID: child.id, change: {
               type: "launched", parentID: root.id, parentAssistantMessageID: "msg_parent", toolCallID: "call_child", inputID: "msg_child",
@@ -57,7 +59,7 @@ for (const flag of [false, true]) {
           const orchestration = yield* SessionOrchestration.Service
           const result = yield* orchestration.question(child.id, "Choose", { options: ["One (Recommended)"] })
           expect(result.autoAnswered).toBe(automatic)
-          if (!automatic && mode !== "sleep") {
+          if (!automatic && mode !== "defer") {
             expect((yield* orchestration.get(root.id, child.id)).state).toBe("waiting")
             yield* orchestration.answer({ parentID: root.id, childID: child.id, questionID: result.question.id, text: "Human" })
             expect((yield* orchestration.get(root.id, child.id)).state).toBe("running")
@@ -80,7 +82,7 @@ for (const flag of [false, true]) {
             ? questions.ask({ sessionID: root.id, questions: [{ header: "Choice", question: "Choose", options: [{ label: "One (Recommended)", description: "Synthetic option" }] }] })
             : forms.ask({ sessionID: root.id, title: "Choose", fields: [{ key: "choice", type: "string", required: true, default: "One", custom: false, options: [{ label: "One (Recommended)", value: "One" }] }] })
           const fiber = yield* request.pipe(Effect.forkScoped)
-          if (!automatic && mode !== "sleep") {
+          if (!automatic && mode !== "defer") {
             const observed = yield* Effect.raceFirst(
               Deferred.await(pending).pipe(Effect.map((id) => ({ type: "pending" as const, id }))),
               Fiber.join(fiber).pipe(Effect.map(() => ({ type: "settled" as const }))),
@@ -92,11 +94,11 @@ for (const flag of [false, true]) {
             if (kind === "question") yield* questions.reply({ requestID: Question.ID.make(observed.id), answers: [["Human"]] })
             if (kind === "form") yield* forms.reply({ id: Form.ID.make(observed.id), answer: { choice: "One" } })
           }
-          expect((yield* Fiber.join(fiber)).status).toBe(mode === "sleep" && !automatic ? "deferred" : "answered")
+          expect((yield* Fiber.join(fiber)).status).toBe(mode === "defer" && !automatic ? "deferred" : "answered")
         }
         expect(calls).toHaveLength(0)
         const items = yield* reviews.list(root.id)
-        if (mode === "sleep" && !automatic) expect(items).toEqual([expect.objectContaining({ reason: "disabled" })])
+        if (mode === "defer" && !automatic) expect(items).toEqual([expect.objectContaining({ reason: "disabled" })])
         else expect(items).toEqual([])
       }))
     }
@@ -114,7 +116,7 @@ located.effect("a subagent question reads Auto answers from the child Session on
   const root = yield* sessions.create({ location })
   yield* autonomy.set({ sessionID: root.id, permissions: "auto", guardrails: "auto", answers: "auto" })
   const ask = (index: number, childFlag: boolean) => Effect.gen(function* () {
-    const child = yield* sessions.create({ parentID: root.id })
+    const child = yield* sessions.create({ parentID: root.id, model: CatalogModel.Ref.make({ providerID: Provider.ID.make("test"), id: CatalogModel.ID.make("model") }) })
     yield* events.publish(SessionEvent.Task.Updated, Schema.decodeUnknownSync(SessionEvent.Task.Updated.data)({
       sessionID: child.id, change: {
         type: "launched", parentID: root.id, parentAssistantMessageID: "msg_parent", toolCallID: `call_child_${index}`, inputID: `msg_child_${index}`,
@@ -136,10 +138,10 @@ located.effect("effective autonomy resolves inherited modes with their source Se
   const autonomy = yield* SessionAutonomy.Service
   const root = yield* sessions.create({ location })
   const manual = { permissions: "manual", guardrails: "manual", answers: "manual" } as const
-  expect(yield* sessions.autonomy.effective(root.id)).toEqual({ ...manual, inherited: {}, asleep: false, guardrailsEnabled: true })
+  expect(yield* sessions.autonomy.effective(root.id)).toEqual({ ...manual, inherited: {}, deferred: false, guardrailsEnabled: true })
   yield* autonomy.set({ sessionID: root.id, permissions: "yolo", guardrails: "yolo", answers: "yolo" })
   expect(yield* sessions.autonomy.effective(root.id)).toEqual({
-    permissions: "yolo", guardrails: "yolo", answers: "yolo", inherited: {}, asleep: false, guardrailsEnabled: true,
+    permissions: "yolo", guardrails: "yolo", answers: "yolo", inherited: {}, deferred: false, guardrailsEnabled: true,
   })
   yield* autonomy.set({ sessionID: root.id, permissions: "auto", guardrails: "manual", answers: "manual" })
   const child = yield* sessions.create({ parentID: root.id })
@@ -150,7 +152,7 @@ located.effect("effective autonomy resolves inherited modes with their source Se
     },
   }))
   expect(yield* sessions.autonomy.effective(child.id)).toEqual({
-    ...manual, permissions: "auto", inherited: { permissions: root.id, guardrails: root.id }, asleep: false, guardrailsEnabled: true,
+    ...manual, permissions: "auto", inherited: { permissions: root.id, guardrails: root.id }, deferred: false, guardrailsEnabled: true,
   })
   yield* autonomy.set({ sessionID: child.id, guardrails: "auto" })
   expect((yield* sessions.autonomy.effective(child.id)).guardrails).toBe("manual")
@@ -158,8 +160,8 @@ located.effect("effective autonomy resolves inherited modes with their source Se
   expect(yield* sessions.autonomy.effective(child.id)).toMatchObject({
     guardrails: "auto", answers: "yolo", inherited: { permissions: root.id, guardrails: root.id, answers: root.id },
   })
-  yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
-  expect((yield* sessions.autonomy.effective(child.id)).asleep).toBe(true)
+  yield* sessions.autonomy.set({ sessionID: root.id, defer: true })
+  expect((yield* sessions.autonomy.effective(child.id)).deferred).toBe(true)
   expect((yield* sessions.autonomy.get(child.id)).answers).toBe("manual")
 }))
 
@@ -196,7 +198,7 @@ gated.effect("turning child YOLO answers off while a sleeping subagent answer is
     },
   }))
   yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
-  yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: root.id, defer: true })
   yield* autonomy.set({ sessionID: child.id, answers: "yolo" })
   const entered = yield* Deferred.make<void>()
   const release = yield* Deferred.make<void>()
@@ -218,6 +220,6 @@ located.effect("disabled ordinary guardrails report guardrailsEnabled false and 
   const sessions = yield* Session.Service
   const root = yield* sessions.create({ location })
   expect(yield* sessions.autonomy.effective(root.id)).toEqual({
-    permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, asleep: false, guardrailsEnabled: false,
+    permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, deferred: false, guardrailsEnabled: false,
   })
 }))

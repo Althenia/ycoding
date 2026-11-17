@@ -4,7 +4,6 @@ import { Context, Effect, Layer } from "effect"
 import { StandaloneConfig } from "../config/standalone"
 import { CoordinationService } from "../coordination/index"
 import { Database } from "../database/database"
-import { StandaloneDecision } from "../decision/standalone"
 import { makeLocationNode } from "../effect/app-node"
 import { EventRuntime } from "../event"
 import { Location } from "../location"
@@ -29,7 +28,7 @@ export const node = makeLocationNode({
         yield* config.assert(generation)
         return config.assert(generation)
       }),
-    }, yield* StandaloneDecision.Service)
+    })
   })),
-  deps: [EventRuntime.node, Database.node, StandaloneConfig.node, Location.node, StandaloneDecision.node, StandaloneAgent.node, SessionAutonomy.node, SessionStore.node, PermissionSaved.node, PermissionSession.node, CoordinationService.node],
+  deps: [EventRuntime.node, Database.node, StandaloneConfig.node, Location.node, StandaloneAgent.node, SessionAutonomy.node, SessionStore.node, PermissionSaved.node, PermissionSession.node, CoordinationService.node],
 })

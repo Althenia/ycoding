@@ -110,6 +110,24 @@ test("the landing palette finds commands by slash name and alias and lists confi
   }
 }, 60_000)
 
+test("the Session palette offers defer without sleep or wake aliases", async () => {
+  const { route } = fixture()
+  const screen = await renderScreen({ width: 110, height: 50, kittyKeyboard: true, args: { sessionID }, settle: "Message YCoding…", route })
+  try {
+    await openPalette(screen)
+    await search(screen, "/defer")
+    expect(screen.frame()).toContain("Toggle deferred reviews")
+    for (let index = 0; index < "/defer".length; index++) screen.input.pressBackspace()
+    await search(screen, "/sleep")
+    expect(screen.frame()).not.toContain("Toggle deferred reviews")
+    for (let index = 0; index < "/sleep".length; index++) screen.input.pressBackspace()
+    await search(screen, "/wake")
+    expect(screen.frame()).not.toContain("Toggle deferred reviews")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
 test("the landing palette offers cycles and display toggles that were keybind-only", async () => {
   const { route } = fixture()
   const screen = await renderScreen({ width: 110, height: 50, kittyKeyboard: true, settle: "Message YCoding…", route })

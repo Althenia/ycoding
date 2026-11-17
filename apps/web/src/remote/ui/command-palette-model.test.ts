@@ -77,22 +77,20 @@ describe("palette availability", () => {
     expect(ids(base)).not.toContain("session.goal.stop")
   })
 
-  test("sleep, wake, and keep-awake run their operations instead of drafting slash text", () => {
-    const loaded = { ...base, session: { ...base.session!, asleep: false } }
+  test("defer and keep-awake run their operations instead of drafting slash text", () => {
+    const loaded = { ...base, session: { ...base.session!, deferred: false } }
     const intent = (context: PaletteContext, id: string) => paletteActions(context).find((action) => action.id === id)?.intent
-    expect(intent(loaded, "session.sleep")).toEqual({ type: "sleep", sleep: true })
-    expect(ids(loaded)).not.toContain("session.wake")
-    expect(intent({ ...loaded, session: { ...loaded.session, asleep: true } }, "session.wake")).toEqual({ type: "sleep", sleep: false })
-    expect(ids({ ...loaded, session: { ...loaded.session, asleep: true } })).not.toContain("session.sleep")
+    expect(intent(loaded, "session.defer")).toEqual({ type: "defer", defer: true })
+    expect(intent({ ...loaded, session: { ...loaded.session, deferred: true } }, "session.defer")).toEqual({ type: "defer", defer: false })
     expect(paletteActions(loaded).some((action) => action.id === "session.guardrailDecision")).toBe(false)
     expect(intent(loaded, "machine.keepAwake")).toEqual({ type: "keepAwake" })
-    expect(ids(base)).not.toContain("session.sleep")
+    expect(ids(base)).not.toContain("session.defer")
     expect(ids(base)).not.toContain("session.guardrailDecision")
     expect(ids({ ...loaded, session: { ...loaded.session, managedChild: true } })).not.toContain("machine.keepAwake")
-    const commands = { ...loaded, commands: [...loaded.commands, { name: "sleep" }, { name: "wake" }, { name: "keep-awake" }] }
+    const commands = { ...loaded, commands: [...loaded.commands, { name: "defer" }, { name: "keep-awake" }] }
     expect(ids(commands).filter((id) => id.startsWith("command."))).toEqual(ids(loaded).filter((id) => id.startsWith("command.")))
     const titles = (query: string) => filterPaletteActions(paletteActions(loaded), query).map((action) => action.title)
-    expect(titles("/sleep")[0]).toBe("Sleep Session family")
+    expect(titles("/defer")[0]).toBe("Enable defer")
     expect(titles("/guardrail-decision")).toEqual([])
     expect(titles("/keep-awake")[0]).toBe("Toggle keep machine awake")
   })
@@ -120,9 +118,9 @@ describe("palette availability", () => {
     expect(titles("yolo")).toEqual(["Open Autonomous controls"])
   })
 
-  test("sleep promises only that unsettled work waits in Review, never that a model settles it", () => {
-    const description = paletteActions({ ...base, session: { ...base.session!, asleep: false } }).find((action) => action.id === "session.sleep")?.description
-    expect(description).toBe("Unsettled questions and reviews wait for you in Review")
+  test("defer holds unresolved manual decisions in Review", () => {
+    const description = paletteActions({ ...base, session: { ...base.session!, deferred: false } }).find((action) => action.id === "session.defer")?.description
+    expect(description).toBe("Unresolved manual decisions wait in Review; keep-awake is held while deferred")
     expect(description).not.toMatch(/decision model|settles|automatic/i)
   })
 

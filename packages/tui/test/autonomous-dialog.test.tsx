@@ -19,6 +19,72 @@ type Changes = Partial<Pick<SessionAutonomyView, "permissions" | "guardrails" | 
 
 const selected = [121, 184, 255, 255]
 
+test("YOLO requires risk acceptance and Escape leaves the category unchanged", async () => {
+  const { app, saved } = await mount({ initial: autonomyView() })
+  try {
+    app.mockInput.pressArrow("right")
+    await app.waitForFrame((frame) => frame.includes("Accept risk & enable YOLO"))
+    expect(saved).toEqual([])
+    app.mockInput.pressKey("escape")
+    await app.renderOnce()
+    expect(saved).toEqual([])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("accepting All YOLO persists once after the warning", async () => {
+  const { app, saved } = await mount({ initial: autonomyView({ answers: "yolo" }) })
+  try {
+    app.mockInput.pressKey("2")
+    await app.waitForFrame((frame) => frame.includes("Accept risk & enable YOLO"))
+    expect(saved).toEqual([])
+    app.mockInput.pressEnter()
+    await app.waitFor(() => saved.length === 1)
+    expect(saved).toEqual([{ permissions: "yolo", guardrails: "yolo", answers: "yolo" }])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("risk confirmation remains actionable in a narrow terminal", async () => {
+  const { app, saved } = await mount({ initial: autonomyView(), size: { width: 60, height: 50 } })
+  try {
+    app.mockInput.pressKey("2")
+    await app.waitForFrame((frame) => frame.includes("Accept risk & enable YOLO"))
+    app.mockInput.pressEnter()
+    await app.waitFor(() => saved.length === 1)
+    expect(saved[0]?.permissions).toBe("yolo")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("Cancel discards the proposed YOLO change", async () => {
+  const { app, saved, row } = await mount({ initial: autonomyView() })
+  try {
+    app.mockInput.pressKey("2")
+    await app.waitForFrame((frame) => frame.includes("Accept risk & enable YOLO"))
+    app.mockInput.pressArrow("up")
+    app.mockInput.pressEnter()
+    await app.waitForFrame(() => row("Permissions").includes("Manual"))
+    expect(saved).toEqual([])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("All YOLO does not repeat the warning when every local category is already YOLO", async () => {
+  const { app, saved } = await mount({ initial: autonomyView({ permissions: "yolo", guardrails: "yolo", answers: "yolo" }) })
+  try {
+    app.mockInput.pressKey("2")
+    await app.waitFor(() => saved.length === 1)
+    expect(app.captureCharFrame()).not.toContain("Accept risk & enable YOLO")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 async function mount(input: {
   initial: SessionAutonomyView | undefined
   effective?: (state: Changes) => Partial<SessionAutonomyView["effective"]>
@@ -69,6 +135,11 @@ async function mount(input: {
   return { app, saved, row, rows }
 }
 
+async function acceptRisk(app: Awaited<ReturnType<typeof mount>>["app"]) {
+  await app.waitForFrame((frame) => frame.includes("Accept risk & enable YOLO"))
+  app.mockInput.pressEnter()
+}
+
 test("renders the Autonomous title, three ordered rows, right-aligned mode words, and every key hint", async () => {
   const { app, row, rows } = await mount({ initial: autonomyView({ permissions: "auto", answers: "yolo" }) })
   try {
@@ -116,6 +187,7 @@ test("right and left cycle the selected row through Manual, YOLO, Auto and wrap"
   const { app, saved, row } = await mount({ initial: autonomyView() })
   try {
     app.mockInput.pressArrow("right")
+    await acceptRisk(app)
     await app.waitForFrame(() => row("Permissions").trimEnd().endsWith("YOLO"))
     app.mockInput.pressArrow("right")
     await app.waitForFrame(() => row("Permissions").trimEnd().endsWith("Auto"))
@@ -143,6 +215,7 @@ test("1, 2, and 3 set all three categories to Manual, YOLO, or Auto in one reque
   const all = (word: string) => ["Permissions", "Guardrails", "Answers"].every((title) => row(title).trimEnd().endsWith(word))
   try {
     app.mockInput.pressKey("2")
+    await acceptRisk(app)
     await app.waitForFrame(() => all("YOLO"))
     app.mockInput.pressKey("3")
     await app.waitForFrame(() => all("Auto"))
@@ -162,6 +235,7 @@ test("digits are key commands, never filter text, and arrows move once per press
   const { app, saved, row } = await mount({ initial: autonomyView() })
   try {
     app.mockInput.pressKey("2")
+    await acceptRisk(app)
     await app.waitFor(() => saved.length === 1)
     await app.waitForFrame(() => row("Permissions").includes("YOLO"))
     expect(app.captureCharFrame()).not.toContain("Search")
@@ -183,11 +257,13 @@ test("a failed save reports the error and keeps the displayed mode", async () =>
   })
   try {
     app.mockInput.pressArrow("right")
+    await acceptRisk(app)
     await app.waitForFrame((frame) => frame.includes("autonomy rejected"))
     expect(saved).toEqual([{ permissions: "yolo" }])
     expect(row("Permissions").trimEnd().endsWith("Manual")).toBe(true)
     expect(app.captureCharFrame()).not.toMatch(/Success|saved|updated/i)
     app.mockInput.pressArrow("right")
+    await acceptRisk(app)
     await app.waitFor(() => saved.length === 2)
     expect(saved[1]).toEqual({ permissions: "yolo" })
   } finally {
@@ -201,6 +277,7 @@ test("keys are ignored while a save is in flight", async () => {
   const { app, saved, row } = await mount({ initial: autonomyView(), save: () => gate })
   try {
     app.mockInput.pressArrow("right")
+    await acceptRisk(app)
     await app.waitFor(() => saved.length === 1)
     app.mockInput.pressArrow("right")
     app.mockInput.pressKey("3")
@@ -260,6 +337,7 @@ test("cycling an inherited row sets only the local mode and keeps the inherited 
   })
   try {
     app.mockInput.pressArrow("right")
+    await acceptRisk(app)
     await app.waitFor(() => saved.length === 1)
     expect(saved).toEqual([{ permissions: "yolo" }])
     await app.waitForFrame((frame) => frame.includes("this Session: YOLO"))

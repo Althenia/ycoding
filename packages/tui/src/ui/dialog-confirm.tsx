@@ -14,6 +14,8 @@ export type DialogConfirmProps = {
   onConfirm?: () => void
   onCancel?: () => void
   label?: string
+  preserveLabel?: boolean
+  keepOpen?: boolean
 }
 
 type DialogConfirmResult = boolean | undefined
@@ -45,7 +47,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
       if (choice === "confirm") props.onConfirm?.()
       if (choice === "cancel") props.onCancel?.()
     } finally {
-      if (dialog.stack.at(-1) === entry) dialog.clear()
+      if (!props.keepOpen && dialog.stack.at(-1) === entry) dialog.clear()
     }
   }
 
@@ -137,7 +139,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
                 backgroundColor={key === store.active ? theme.background.action.primary.focused : undefined}
               >
                 <text fg={key === store.active ? theme.text.action.primary.focused : theme.text.subdued}>
-                  {Locale.titlecase(key === "confirm" ? (props.label ?? key) : key)}
+                  {key === "confirm" && props.preserveLabel && props.label ? props.label : Locale.titlecase(key === "confirm" ? (props.label ?? key) : key)}
                 </text>
               </box>
             </box>

@@ -24,7 +24,7 @@ export type Kind = typeof Kind.Type
 
 export const Reason = Schema.Union([
   DecisionFailure.Reason,
-  Schema.Literals(["disabled", "free_text", "low_confidence", "escalated", "conflicting_grades", "error", "sleep_entry", "restart"]),
+  Schema.Literals(["disabled", "free_text", "low_confidence", "escalated", "conflicting_grades", "error", "sleep_entry", "defer_entry", "restart"]),
 ]).annotate({ identifier: "SessionReview.Reason" })
 export type Reason = typeof Reason.Type
 

@@ -85,7 +85,7 @@ const graph = (database?: ReturnType<typeof Database.layer>) =>
         Layer.mock(KeepAwake.Service, {
           hold: () => Effect.succeed({ state: "off" as const }),
           release: () => Effect.succeed({ state: "off" as const }),
-          get: Effect.succeed({ state: "off", lid: "off", sleepHold: false } as const),
+          get: Effect.succeed({ state: "off", lid: "off", deferHold: false } as const),
         }),
       ],
       [
@@ -365,7 +365,7 @@ it.effect("every executed tool left unsettled, including reads and provider tool
 
     const session = yield* Session.Service
     yield* session.autonomy.set({ sessionID: ids.root.id, permissions: "yolo", guardrails: "yolo", answers: "yolo" })
-    yield* session.autonomy.set({ sessionID: ids.root.id, sleep: true })
+    yield* session.autonomy.set({ sessionID: ids.root.id, defer: true })
     const answer = yield* orchestration
       .answer({ parentID: ids.root.id, childID: ids.child.id, questionID: QuestionID.make(waiting!.question_id!), text: "Continue" })
       .pipe(Effect.flip)

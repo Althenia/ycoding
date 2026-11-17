@@ -95,18 +95,18 @@ test("settings mutation accepts unsupported keep-awake capability", async () => 
 })
 
 test("keep-awake mutation confirms canonical producer replies", async () => {
-  const idle = { display: "off", activity: "off", lid: "off", system: "off", sleepHold: false }
+  const idle = { display: "off", activity: "off", lid: "off", system: "off", deferHold: false }
   const cases = [
     { name: "enable without manual", enabled: true, reply: { state: "on", ...idle, display: "on", activity: "on" }, confirmed: true },
     { name: "disable without manual", enabled: false, reply: { state: "off", ...idle }, confirmed: true },
-    { name: "enable with manual", enabled: true, reply: { state: "on", ...idle, manual: true, sleepHold: true }, confirmed: true },
-    { name: "disable under sleeping hold", enabled: false, reply: { state: "on", ...idle, manual: false, sleepHold: true }, confirmed: true },
+    { name: "enable with manual", enabled: true, reply: { state: "on", ...idle, manual: true, deferHold: true }, confirmed: true },
+    { name: "disable under defer hold", enabled: false, reply: { state: "on", ...idle, manual: false, deferHold: true }, confirmed: true },
     { name: "unsupported enable", enabled: true, reply: { state: "unsupported", ...idle, lid: "unsupported", system: "unsupported" }, confirmed: true },
     { name: "unsupported disable", enabled: false, reply: { state: "unsupported", manual: false }, confirmed: true },
     { name: "enable reports off", enabled: true, reply: { state: "off", ...idle }, confirmed: false },
     { name: "disable reports on", enabled: false, reply: { state: "on", ...idle, display: "on", activity: "on" }, confirmed: false },
-    { name: "enable with manual false", enabled: true, reply: { state: "on", ...idle, manual: false, sleepHold: true }, confirmed: false },
-    { name: "disable with manual true", enabled: false, reply: { state: "on", ...idle, manual: true, sleepHold: true }, confirmed: false },
+    { name: "enable with manual false", enabled: true, reply: { state: "on", ...idle, manual: false, deferHold: true }, confirmed: false },
+    { name: "disable with manual true", enabled: false, reply: { state: "on", ...idle, manual: true, deferHold: true }, confirmed: false },
     { name: "enable error", enabled: true, reply: { state: "error", ...idle, manual: true, message: "Synthetic failure" }, confirmed: false },
     { name: "disable error", enabled: false, reply: { state: "error", ...idle, message: "Synthetic failure" }, confirmed: false },
   ]
@@ -242,7 +242,7 @@ test.each(["settings", "project", "workspace"] as const)("%s mutation interrupte
     expect(writes).toBe(1)
   })
 })
-const autonomy = { mode: "normal", permissions: "manual", guardrails: "auto", answers: "yolo", goal: { text: "Synthetic goal", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3, lastProgressDigest: null }, sleep: null, effective: { permissions: "auto", guardrails: "manual", answers: "yolo", inherited: { permissions: "ses_parent" }, asleep: false, guardrailsEnabled: true } } as const
+const autonomy = { mode: "normal", permissions: "manual", guardrails: "auto", answers: "yolo", goal: { text: "Synthetic goal", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3, lastProgressDigest: null }, defer: null, effective: { permissions: "auto", guardrails: "manual", answers: "yolo", inherited: { permissions: "ses_parent" }, deferred: false, guardrailsEnabled: true } } as const
 
 test("autonomy reads and fenced updates project valid views without replay", async () => {
   const calls: { method: string; payload?: unknown }[] = []
@@ -254,15 +254,15 @@ test("autonomy reads and fenced updates project valid views without replay", asy
   }, async (controller, rev) => {
     expect(await controller.autonomy(id)).toEqual({ revision: rev, sessionID: id, autonomy })
     expect(await controller.setAutonomy({ sessionID: id, revision: rev, payload: { permissions: "auto", answers: "manual" } })).toEqual({ revision: rev, sessionID: id, autonomy })
-    for (const payload of [{ guardrails: "manual" }, { answers: "auto" }, { sleep: true }, { goal: "synthetic", maxNoProgress: 2 }, { goal: true }] as const)
+    for (const payload of [{ guardrails: "manual" }, { answers: "auto" }, { defer: true }, { goal: "synthetic", maxNoProgress: 2 }, { goal: true }] as const)
       await controller.setAutonomy({ sessionID: id, revision: rev, payload })
-    await expect(controller.setAutonomy({ sessionID: id, revision: rev + 1, payload: { sleep: true } })).rejects.toThrow()
-    for (const payload of [{}, { permissions: "invalid" }, { goal: " ", maxNoProgress: 2 }, { goal: true, maxNoProgress: 0 }, { sleep: true, permissions: "auto" }, { answers: "auto", extra: true }])
+    await expect(controller.setAutonomy({ sessionID: id, revision: rev + 1, payload: { defer: true } })).rejects.toThrow()
+    for (const payload of [{}, { permissions: "invalid" }, { goal: " ", maxNoProgress: 2 }, { goal: true, maxNoProgress: 0 }, { defer: true, permissions: "auto" }, { defer: "true" }, { sleep: true }, { answers: "auto", extra: true }])
       await expect(controller.setAutonomy({ sessionID: id, revision: rev, payload })).rejects.toThrow()
     view = { ...autonomy, goal: { ...autonomy.goal, maxNoProgress: 0 } }
     await expect(controller.autonomy(id)).rejects.toThrow()
     await expect(controller.setAutonomy({ sessionID: id, revision: rev, payload: { goal: null } })).rejects.toThrow("not confirmed")
-    expect(calls).toEqual([{ method: "GET" }, { method: "PUT", payload: { permissions: "auto", answers: "manual" } }, ...[{ guardrails: "manual" }, { answers: "auto" }, { sleep: true }, { goal: "synthetic", maxNoProgress: 2 }, { goal: true }].map((payload) => ({ method: "PUT", payload })), { method: "GET" }, { method: "PUT", payload: { goal: null } }])
+    expect(calls).toEqual([{ method: "GET" }, { method: "PUT", payload: { permissions: "auto", answers: "manual" } }, ...[{ guardrails: "manual" }, { answers: "auto" }, { defer: true }, { goal: "synthetic", maxNoProgress: 2 }, { goal: true }].map((payload) => ({ method: "PUT", payload })), { method: "GET" }, { method: "PUT", payload: { goal: null } }])
   })
 })
 
@@ -287,13 +287,13 @@ test("an autonomy update interrupted in flight is unconfirmed and never replayed
 
 test.each([
   ["mode", { mode: "invalid" }], ["decision", { permissions: "invalid" }],
-  ["effective", { effective: { ...autonomy.effective, asleep: "no" } }],
+  ["effective", { effective: { ...autonomy.effective, deferred: "no" } }],
   ["inherited", { effective: { ...autonomy.effective, inherited: { permissions: "bad" } } }],
   ["goal status", { goal: { ...autonomy.goal, status: "invalid" } }],
   ["goal counter", { goal: { ...autonomy.goal, iteration: -1 } }],
   ["goal maximum", { goal: { ...autonomy.goal, maxNoProgress: 0 } }],
   ["goal digest", { goal: { ...autonomy.goal, lastProgressDigest: 42 } }],
-  ["sleep", { sleep: "asleep" }],
+  ["defer", { defer: "deferred" }],
 ])("autonomy rejects malformed %s", async (_name, changed) => {
   await connected(async (route) => route.endsWith("/autonomy") ? Response.json({ data: { ...autonomy, ...changed } }) : undefined, async (controller) => {
     await expect(controller.autonomy(id)).rejects.toThrow("Autonomy could not be read")

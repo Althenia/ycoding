@@ -149,6 +149,7 @@ const permission = Layer.succeed(
   Permission.Service,
   Permission.Service.of({
     deferPending: () => Effect.void,
+    reconcileAutonomy: () => Effect.void,
     evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
     assert: (input) =>
       Effect.sync(() => assertions.push(input)).pipe(

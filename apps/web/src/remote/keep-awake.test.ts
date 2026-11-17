@@ -21,19 +21,19 @@ test("display and activity are reported independently without claiming an unlock
 })
 
 test("reports foreign lid ownership separately from local idle and sleep holds", () => {
-  const status = readKeepAwakeStatus({ data: { state: "on", lid: "held", sleepHold: true } })
+  const status = readKeepAwakeStatus({ data: { state: "on", lid: "held", deferHold: true } })
   expect(status?.lid).toBe("held")
   expect(keepAwakeView({ reachable: true, keepAwake: { read: "ready", status } }).detail).toContain("lid held by another YCoding process")
 })
 
 test("reads only the closed status shape and bounds the machine's message", () => {
   expect(readKeepAwakeStatus({ data: { state: "on" } })).toEqual({ state: "on" })
-  expect(readKeepAwakeStatus({ data: { state: "on", lid: "on", sleepHold: true } })).toEqual({
+  expect(readKeepAwakeStatus({ data: { state: "on", lid: "on", deferHold: true } })).toEqual({
     state: "on",
     lid: "on",
-    sleepHold: true,
+    deferHold: true,
   })
-  expect(readKeepAwakeStatus({ data: { state: "on", lid: "bogus", sleepHold: "yes" } })).toEqual({ state: "on" })
+  expect(readKeepAwakeStatus({ data: { state: "on", lid: "bogus", deferHold: "yes" } })).toEqual({ state: "on" })
   expect(readKeepAwakeStatus({ data: { state: "error", message: "caffeinate exited" } })).toEqual({
     state: "error",
     message: "caffeinate exited",
@@ -53,13 +53,13 @@ test("reads only the closed status shape and bounds the machine's message", () =
 })
 
 test("sleep-held effective On keeps a manual-Off switch and exposes both parts and lid failures", () => {
-  const status = { state: "on", manual: false, sleepHold: true, lid: "error" } as const
+  const status = { state: "on", manual: false, deferHold: true, lid: "error" } as const
   expect(readKeepAwakeStatus({ data: status })).toEqual(status)
   const view = keepAwakeView({ reachable: true, keepAwake: { read: "ready", status } })
   expect(view.checked).toBe(false)
   expect(view.label).toBe("On")
   expect(view.detail).toContain("Idle on; lid error")
-  expect(view.detail).toContain("sleeping session")
+  expect(view.detail).toContain("deferred Session")
   expect(view.detail).toContain("Closing the lid may sleep")
   expect(view.caveat).toContain("heat")
 })
@@ -184,11 +184,11 @@ test("a change in flight disables the switch, and a failed or unknown change kee
 
 test("a sleep-held machine explains that turning off only sets the manual preference", () => {
   const view = keepAwakeView({
-    keepAwake: { read: "ready", status: { state: "on", lid: "on", sleepHold: true } },
+    keepAwake: { read: "ready", status: { state: "on", lid: "on", deferHold: true } },
     reachable: true,
   })
   expect(view).toMatchObject({ checked: true, disabled: false, label: "On", tone: "attention" })
-  expect(view.detail).toMatch(/sleeping session/)
+  expect(view.detail).toMatch(/deferred Session/)
   expect(view.detail).toMatch(/manual preference/)
   expect(view.caveat).toMatch(/battery/)
   expect(view.caveat).toMatch(/heat/)
@@ -196,7 +196,7 @@ test("a sleep-held machine explains that turning off only sets the manual prefer
 
 test("a lid error stays visible while idle keep-awake is on", () => {
   const view = keepAwakeView({
-    keepAwake: { read: "ready", status: { state: "on", lid: "error", sleepHold: false } },
+    keepAwake: { read: "ready", status: { state: "on", lid: "error", deferHold: false } },
     reachable: true,
   })
   expect(view).toMatchObject({ checked: true, label: "On", tone: "attention", alert: true })
@@ -231,6 +231,6 @@ test("system sleep control is explained in the detail and an error needs attenti
   expect(error.tone).toBe("attention")
   expect(error.alert).toBe(true)
   expect(error.detail).toContain("could not be applied or restored")
-  expect(keepAwakeView({ reachable: true, keepAwake: { read: "ready", status: { state: "on", sleepHold: true, system: "on" } } }).detail).toContain("System sleep disabled")
+  expect(keepAwakeView({ reachable: true, keepAwake: { read: "ready", status: { state: "on", deferHold: true, system: "on" } } }).detail).toContain("System sleep disabled")
   expect(view("on").caveat).toMatch(/system sleep is On/)
 })

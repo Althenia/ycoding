@@ -7,10 +7,9 @@ export type MentionPart =
   | { readonly kind: "agent"; readonly name: string; readonly mention: { readonly start: number; readonly end: number; readonly text: string } }
   | { readonly kind: "skill"; readonly id: string; readonly mention: { readonly start: number; readonly end: number; readonly text: string } }
 export type ComposerOption = { readonly label: string; readonly description?: string; readonly kind: "command" | "file" | "agent" | "skill"; readonly value: string; readonly uri?: string }
-const unsupportedSlashActions = new Set(["cd", "editor", "skills", "btw", "btw-send", "daybreak", "move", "dots"])
+const unsupportedSlashActions = new Set(["cd", "editor", "skills", "btw", "btw-send", "daybreak", "move", "dots", "sleep", "wake"])
 const autonomyActions = {
-  sleep: { kind: "sleep", description: "Put this Session family to sleep" },
-  wake: { kind: "wake", description: "Wake this Session family" },
+  defer: { kind: "defer", description: "Toggle deferral of unresolved decisions" },
   "keep-awake": { kind: "keepAwake", description: "Toggle keeping this machine awake" },
   autonomous: { kind: "autonomous", description: "Open Autonomous controls" },
 } as const

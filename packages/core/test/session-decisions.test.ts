@@ -56,7 +56,7 @@ const decidedType = "session.review.decided.1"
 const withdrawnType = "session.review.withdrawn.1"
 const consumedType = "session.review.consumed.1"
 const deferral = (sessionID: string, itemID: unknown, text?: string) => ({
-  sessionID, itemID, kind: "subagent_question", reason: "sleep_entry", origin: { questionID: "qst_synthetic" },
+  sessionID, itemID, kind: "subagent_question", reason: "defer_entry", origin: { questionID: "qst_synthetic" },
   payload: text === undefined ? { type: "subagent_question" } : { type: "subagent_question", text },
 })
 

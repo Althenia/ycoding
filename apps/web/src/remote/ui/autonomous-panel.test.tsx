@@ -3,7 +3,7 @@ import { renderToString } from "solid-js/web"
 import type { SessionAutonomyView } from "../projection"
 import { AutonomousPanel } from "./autonomous-panel"
 
-const idle = { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, asleep: false, guardrailsEnabled: true } as const
+const idle = { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, deferred: false, guardrailsEnabled: true } as const
 const autonomy = (change: Partial<SessionAutonomyView> = {}): SessionAutonomyView => ({
   mode: "normal",
   permissions: "manual",
@@ -67,16 +67,15 @@ test("an inherited mode shows the effective word and its source, never Manual", 
 })
 
 test("a row names who decides for its effective mode", () => {
-  const html = render({ autonomy: autonomy({ effective: { ...idle, permissions: "auto", guardrails: "yolo", answers: "manual", asleep: true } }) })
+  const html = render({ autonomy: autonomy({ effective: { ...idle, permissions: "auto", guardrails: "yolo", answers: "manual", deferred: true } }) })
   expect(html).toContain("Rules approve permission asks; denies still block")
-  expect(html).toContain("YOLO evaluates reviews; hard reviews still need your approval")
-  expect(html).toContain("Review box holds each question")
+  expect(html).toContain("YOLO bypasses all guardrail blockers")
+  expect(html).toContain("Review box holds unresolved questions")
 })
 
-test("always states that denies, ceilings, and hard or custom-rule reviews stay with you", () => {
+test("warns that YOLO bypasses blockers", () => {
   const html = render()
-  expect(html).toContain("Denies and permission ceilings always apply")
-  expect(html).toContain("hard and custom-rule reviews always need you")
+  expect(html).toContain("YOLO bypasses blockers in its selected categories")
 })
 
 test("a busy request disables every arrow and set-all button and announces the wait", () => {

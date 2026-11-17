@@ -22,8 +22,8 @@ const make = (options: Omit<KeepAwake.Options, "userActivity">) => KeepAwake.mak
   userActivity: { set: (on) => on ? "on" : "off" },
 })
 
-const onStatus = { state: "on", display: "on", activity: "on", lid: "on", system: "on", sleepHold: false } as const
-const offStatus = { state: "off", display: "off", activity: "off", lid: "off", system: "off", sleepHold: false } as const
+const onStatus = { state: "on", display: "on", activity: "on", lid: "on", system: "on", deferHold: false } as const
+const offStatus = { state: "off", display: "off", activity: "off", lid: "off", system: "off", deferHold: false } as const
 
 const observation = testEffect(LayerNode.compile(KeepAwake.observationNode))
 class ControllerBindingProbe extends Context.Service<ControllerBindingProbe, unknown>()("@ycoding/KeepAwake/ControllerBinding") {}
@@ -280,7 +280,7 @@ describe("KeepAwake", () => {
         activity: "unsupported",
         lid: "unsupported",
         system: "unsupported",
-        sleepHold: false,
+        deferHold: false,
         message: "Keep machine awake is available on macOS only.",
       } as const
       expect(yield* awake.get).toEqual(unsupported)
@@ -379,7 +379,7 @@ describe("KeepAwake", () => {
         activity: "off",
         lid: "off",
         system: "off",
-        sleepHold: false,
+        deferHold: false,
         message: "The sleep inhibitor could not be started.",
       })
       expect(yield* awake.get).toEqual(failed)
@@ -409,7 +409,7 @@ describe("KeepAwake", () => {
         activity: "off",
         lid: "off",
         system: "off",
-        sleepHold: false,
+        deferHold: false,
         message: "The sleep inhibitor stopped unexpectedly (exit code 3).",
       })
       expect(yield* awake.get).toEqual({
@@ -418,7 +418,7 @@ describe("KeepAwake", () => {
         activity: "off",
         lid: "off",
         system: "off",
-        sleepHold: false,
+        deferHold: false,
         message: "The sleep inhibitor stopped unexpectedly (exit code 3).",
       })
       expect(yield* awake.set(false)).toEqual(offStatus)
@@ -662,11 +662,11 @@ describe("KeepAwake", () => {
         command: child.command,
       })
       expect(lid.calls).toEqual([])
-      expect(yield* awake.hold("ses_one")).toEqual({ ...onStatus, sleepHold: true, manual: false })
-      expect(yield* awake.hold("ses_two")).toEqual({ ...onStatus, sleepHold: true, manual: false })
+      expect(yield* awake.hold("ses_one")).toEqual({ ...onStatus, deferHold: true, manual: false })
+      expect(yield* awake.hold("ses_two")).toEqual({ ...onStatus, deferHold: true, manual: false })
       expect(child.spawned).toHaveLength(1)
-      expect(yield* awake.set(false)).toEqual({ ...onStatus, sleepHold: true, manual: false })
-      expect(yield* awake.release("ses_one")).toEqual({ ...onStatus, sleepHold: true, manual: false })
+      expect(yield* awake.set(false)).toEqual({ ...onStatus, deferHold: true, manual: false })
+      expect(yield* awake.release("ses_one")).toEqual({ ...onStatus, deferHold: true, manual: false })
       expect(yield* awake.release("ses_two")).toEqual(offStatus)
       expect(lid.calls).toEqual([true, false])
     }),
@@ -729,7 +729,7 @@ describe("KeepAwake", () => {
         command: child.command,
       })
       expect(yield* awake.set(true)).toEqual(onStatus)
-      expect(yield* awake.hold("ses_one")).toEqual({ ...onStatus, sleepHold: true, manual: true })
+      expect(yield* awake.hold("ses_one")).toEqual({ ...onStatus, deferHold: true, manual: true })
       expect(yield* awake.release("ses_one")).toEqual(onStatus)
       expect(child.spawned).toHaveLength(1)
       expect(yield* awake.set(false)).toEqual(offStatus)
@@ -754,11 +754,11 @@ describe("KeepAwake", () => {
         activity: "on",
         lid: "error",
         system: "on",
-        sleepHold: true,
+        deferHold: true,
         manual: false,
         message: "Lid-closed keep-awake could not be armed; closing the lid may sleep this machine.",
       })
-      expect(yield* awake.release("ses_one")).toMatchObject({ state: "off", sleepHold: false })
+      expect(yield* awake.release("ses_one")).toMatchObject({ state: "off", deferHold: false })
     }),
   )
 
@@ -774,12 +774,12 @@ describe("KeepAwake", () => {
         systemSleep: fakeSystem(), clamshell: fakeClamshell(),
         command: child.command,
       })
-      expect(yield* awake.hold("ses_one")).toMatchObject({ state: "unsupported", lid: "unsupported", sleepHold: true })
+      expect(yield* awake.hold("ses_one")).toMatchObject({ state: "unsupported", lid: "unsupported", deferHold: true })
       expect(yield* awake.release("ses_one")).toMatchObject({
         state: "unsupported",
         lid: "unsupported",
         system: "unsupported",
-        sleepHold: false,
+        deferHold: false,
       })
       expect(child.spawned).toEqual([])
     }),
@@ -806,7 +806,7 @@ describe("KeepAwake", () => {
         const lid = fakeClamshell()
         const system = fakeSystem()
         const awake = yield* make({ spawner, platform: "darwin", pid: process.pid, lidFile, command: child.command, clamshell: lid, systemSleep: system, reapplyInterval: "10 millis" })
-        expect(yield* awake.hold("ses_one")).toMatchObject({ state: "on", lid: "on", system: "on", sleepHold: true })
+        expect(yield* awake.hold("ses_one")).toMatchObject({ state: "on", lid: "on", system: "on", deferHold: true })
         expect(yield* record(lidFile)).toEqual({ armed: true, system: true })
         yield* eventually(() => lid.calls.length, (count) => count >= 4)
         expect(system.calls).toEqual([true])

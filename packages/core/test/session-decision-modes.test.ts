@@ -118,16 +118,16 @@ for (const permissions of modes)
         }),
       )
 
-it.effect("a partial update changes only the supplied categories and preserves goal and sleep", () =>
+it.effect("a partial update changes only the supplied categories and preserves goal and defer", () =>
   Effect.gen(function* () {
     const service = yield* setup
     yield* service.set({ sessionID: rootID, permissions: "auto", guardrails: "yolo", answers: "auto" })
     yield* service.setGoal({ sessionID: rootID, text: "Finish safely" })
-    yield* service.set({ sessionID: rootID, sleep: true })
+    yield* service.set({ sessionID: rootID, defer: true })
     const state = yield* service.set({ sessionID: rootID, guardrails: "manual" })
-    expect(state).toMatchObject({ mode: "normal", permissions: "auto", guardrails: "manual", answers: "auto", sleep: {} })
+    expect(state).toMatchObject({ mode: "normal", permissions: "auto", guardrails: "manual", answers: "auto", defer: {} })
     expect(state.goal).toMatchObject({ text: "Finish safely", status: "active" })
-    const woken = yield* service.set({ sessionID: rootID, sleep: false })
+    const woken = yield* service.set({ sessionID: rootID, defer: false })
     expect(woken).toMatchObject({ permissions: "auto", guardrails: "manual", answers: "auto" })
   }),
 )
@@ -154,13 +154,13 @@ it.effect("an active goal grants no category authority", () =>
 
 test("the stored reader accepts only the current shape and fails closed", () => {
   const goal = { text: "Finish", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } as const
-  expect(SessionAutonomy.read({ mode: "normal", permissions: "auto", guardrails: "yolo", answers: "manual", goal, sleep: {} })).toEqual({
+  expect(SessionAutonomy.read({ mode: "normal", permissions: "auto", guardrails: "yolo", answers: "manual", goal, defer: {} })).toEqual({
     mode: "normal",
     permissions: "auto",
     guardrails: "yolo",
     answers: "manual",
     goal,
-    sleep: {},
+    defer: {},
   })
   expect(
     SessionAutonomy.read({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", guardrailDecision: true }),
@@ -196,18 +196,18 @@ it.effect("a stored old-shape state reads as Manual and grants nothing", () =>
   }),
 )
 
-it.effect("permissions: Auto anywhere in the managed-task chain wins over YOLO and Manual and names its source", () =>
+it.effect("permissions: YOLO anywhere in the managed-task chain wins over Auto and Manual and names its source", () =>
   Effect.gen(function* () {
     const service = yield* setup
     yield* service.set({ sessionID: rootID, permissions: "auto" })
     yield* service.set({ sessionID: childID, permissions: "yolo" })
-    expect((yield* service.effectiveDecisions(grandchildID)).permissions).toBe("auto")
-    expect((yield* service.effectiveDecisions(grandchildID)).inherited.permissions).toBe(rootID)
-    expect((yield* service.effectiveDecisions(childID)).inherited.permissions).toBe(rootID)
+    expect((yield* service.effectiveDecisions(grandchildID)).permissions).toBe("yolo")
+    expect((yield* service.effectiveDecisions(grandchildID)).inherited.permissions).toBe(childID)
+    expect((yield* service.effectiveDecisions(childID)).inherited.permissions).toBeUndefined()
     yield* service.set({ sessionID: grandchildID, permissions: "auto" })
     const local = yield* service.effectiveDecisions(grandchildID)
-    expect(local.permissions).toBe("auto")
-    expect(local.inherited.permissions).toBeUndefined()
+    expect(local.permissions).toBe("yolo")
+    expect(local.inherited.permissions).toBe(childID)
     yield* service.set({ sessionID: rootID, permissions: "manual" })
     yield* service.set({ sessionID: grandchildID, permissions: "manual" })
     const yolo = yield* service.effectiveDecisions(grandchildID)
@@ -217,7 +217,8 @@ it.effect("permissions: Auto anywhere in the managed-task chain wins over YOLO a
     yield* service.set({ sessionID: grandchildID, permissions: "yolo" })
     expect((yield* service.effectiveDecisions(grandchildID)).inherited.permissions).toBeUndefined()
     yield* service.set({ sessionID: childID, permissions: "auto" })
-    expect(yield* service.effectiveDecisions(grandchildID)).toMatchObject({ permissions: "auto", inherited: { permissions: childID } })
+    expect(yield* service.effectiveDecisions(grandchildID)).toMatchObject({ permissions: "yolo" })
+    expect((yield* service.effectiveDecisions(grandchildID)).inherited.permissions).toBeUndefined()
   }),
 )
 
@@ -252,7 +253,7 @@ it.effect("guardrails always follow the root family and child views name the roo
   }),
 )
 
-it.effect("answers: local Auto wins, inherited YOLO stays visible under local Manual, and ancestor Auto never propagates", () =>
+it.effect("answers: inherited YOLO overrides local Auto and Manual, and ancestor Auto never propagates", () =>
   Effect.gen(function* () {
     const service = yield* setup
     yield* service.set({ sessionID: rootID, answers: "auto" })
@@ -266,8 +267,8 @@ it.effect("answers: local Auto wins, inherited YOLO stays visible under local Ma
     expect((yield* service.effectiveDecisions(rootID)).answers).toBe("auto")
     yield* service.set({ sessionID: grandchildID, answers: "auto" })
     const local = yield* service.effectiveDecisions(grandchildID)
-    expect(local.answers).toBe("auto")
-    expect(local.inherited.answers).toBeUndefined()
+    expect(local.answers).toBe("yolo")
+    expect(local.inherited.answers).toBe(childID)
     yield* service.set({ sessionID: grandchildID, answers: "yolo" })
     expect((yield* service.effectiveDecisions(grandchildID)).inherited.answers).toBeUndefined()
     yield* service.set({ sessionID: grandchildID, answers: "manual" })

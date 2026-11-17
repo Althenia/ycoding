@@ -67,7 +67,7 @@ for (const name of ["read", "question", "decision", "todowrite", "goal"] as cons
     : { todos: [{ content: changed ? "Changed task" : "Approved task", status: "pending", priority: "high" }] }
   const call = (id: string, changed: boolean) => executeTool(registry, { sessionID: root.id, ...toolIdentity,
     call: { type: "tool-call", id, name: toolName, input: input(changed) } }).pipe(Effect.exit)
-  yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: root.id, defer: true })
   expect(Exit.isFailure(yield* call("first", false))).toBe(true)
   const reviews = yield* SessionReview.Service
   const item = (yield* reviews.list(root.id))[0]

@@ -7,15 +7,23 @@ import {
   autonomyRows,
   autonomySummary,
   autonomyTone,
+  requiresYoloConfirmation,
   cycleAutonomyMode,
   type AutonomyModes,
   type EffectiveAutonomyView,
 } from "./autonomy"
 
 const manual: AutonomyModes = { permissions: "manual", guardrails: "manual", answers: "manual" }
-const effective = (change: Partial<EffectiveAutonomyView> = {}): EffectiveAutonomyView => ({ ...manual, inherited: {}, asleep: false, guardrailsEnabled: true, ...change })
+const effective = (change: Partial<EffectiveAutonomyView> = {}): EffectiveAutonomyView => ({ ...manual, inherited: {}, deferred: false, guardrailsEnabled: true, ...change })
 const key = (name: string, modifiers: Partial<{ ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }> = {}) =>
   ({ key: name, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...modifiers })
+
+test("only entering YOLO requires risk acceptance", () => {
+  expect(requiresYoloConfirmation(manual, { permissions: "yolo" })).toBe(true)
+  expect(requiresYoloConfirmation(manual, { permissions: "yolo", guardrails: "yolo", answers: "yolo" })).toBe(true)
+  expect(requiresYoloConfirmation({ ...manual, permissions: "yolo" }, { permissions: "yolo" })).toBe(false)
+  expect(requiresYoloConfirmation(manual, { guardrails: "auto" })).toBe(false)
+})
 
 describe("cycling", () => {
   test("steps Manual, YOLO, Auto in that order and wraps both ways", () => {
@@ -92,18 +100,19 @@ describe("effective rows", () => {
   test("name who decides each category by effective mode", () => {
     const decide = (modes: AutonomyModes, change: Partial<EffectiveAutonomyView> = {}) => autonomyRows({ ...modes, effective: effective({ ...modes, ...change }) }).map((row) => row.decider)
     expect(decide(manual)).toEqual(["You decide each permission ask", "You decide each review", "You answer each question"])
-    expect(decide(manual, { asleep: true })).toEqual(["Review box holds each permission ask", "Review box holds each review", "Review box holds each question"])
+    expect(decide(manual, { deferred: true })).toEqual(["Review box holds unresolved permission asks", "Review box holds unresolved reviews", "Review box holds unresolved questions"])
     expect(decide({ permissions: "yolo", guardrails: "yolo", answers: "yolo" })).toEqual([
-      "YOLO evaluates permission asks; uncertain asks reach you",
-      "YOLO evaluates reviews; hard reviews still need your approval",
-      "YOLO answers what it can validate; the rest reach you",
+      "YOLO bypasses permission blockers",
+      "YOLO bypasses all guardrail blockers",
+      "YOLO answers all questions, including free text",
     ])
     expect(decide({ permissions: "auto", guardrails: "auto", answers: "auto" })).toEqual([
       "Rules approve permission asks; denies still block",
-      "Routine reviews are approved while awake; hard reviews still need you",
+      "Routine reviews are approved; hard reviews still need you",
       "Explicit defaults or the one Recommended option answer; the rest reach you",
     ])
-    expect(decide({ permissions: "auto", guardrails: "auto", answers: "auto" }, { asleep: true })[1]).toBe("Review box holds each review while asleep")
+    expect(decide({ permissions: "auto", guardrails: "auto", answers: "auto" }, { deferred: true })[1]).toBe("Review box holds unresolved reviews while deferred")
+    expect(decide({ permissions: "auto", guardrails: "auto", answers: "auto" }, { deferred: true })[2]).toBe("Explicit defaults or the one Recommended option answer; the rest wait in Review")
     expect(decide({ permissions: "auto", guardrails: "auto", answers: "auto" }, { guardrailsEnabled: false })[1]).toBe("Ordinary reviews are disabled; hard reviews still need you")
   })
 })

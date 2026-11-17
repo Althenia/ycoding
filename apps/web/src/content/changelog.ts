@@ -22,6 +22,21 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.7",
+    date: "2026-11-17",
+    title: "Persistent defer and explicit YOLO risk",
+    tags: ["Changed"],
+    changes: [
+      { tag: "Changed", text: "`/defer` toggles decision deferral for the Session family. Prompts, steers, commands, shell input and skill input keep it enabled until you explicitly turn it off." },
+      { tag: "Changed", text: "Deferred manual decisions wait in the review box while independent work continues. The family holds machine keep-awake, including after a backend restart." },
+      { tag: "Changed", text: "Existing stored sleep markers retain their state as defer; historical review events remain readable." },
+      { tag: "Changed", text: "YOLO removes every blocker in its enabled category. Guardrails YOLO permits hard, catastrophic, destructive and custom-denied actions without review. Permissions YOLO permits denied and ceiling-limited requests; Project coordinators still delegate mutations to members." },
+      { tag: "Changed", text: "Answers YOLO handles option, multi-select, free-text, open and explicit-decision questions and Forms. A valid deterministic fallback keeps progression moving when the evaluator fails or refuses. Physical external authentication redirects remain external." },
+      { tag: "Changed", text: "YOLO takes precedence over Auto and Manual in managed-task inheritance. Enabling it settles existing waits and supersedes stale reviews without replaying actions." },
+      { tag: "Changed", text: "TUI, Web and Desktop controls require explicit risk acceptance before enabling a new YOLO category. The warning makes full user responsibility clear; Cancel or Escape saves nothing." },
+    ],
+  },
+  {
     version: "0.11.6",
     date: "2026-11-17",
     title: "Lighter Session switching and reliable recovery",

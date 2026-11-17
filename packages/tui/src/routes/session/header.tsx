@@ -38,7 +38,7 @@ export type SessionHeaderState =
   | {
       type: "autonomy"
       elevated?: boolean
-      asleep?: boolean
+      deferred?: boolean
       machineAwake?: boolean
       review?: number
       state: SessionHeaderOperationalState
@@ -173,8 +173,7 @@ export function headerStatusLabel(
   if (state.type === "autonomy") {
     const inner = headerStatusLabel(state.state, width, runningShells, now)
     return [
-      ...(state.asleep ? ["asleep"] : []),
-      ...(state.asleep && state.machineAwake === false && width >= 80 ? ["machine may sleep"] : []),
+      ...(state.deferred ? ["deferred"] : []),
       ...(state.review ? [`review ${state.review}`] : []),
       state.review && inner === "ready" ? "waiting for your review" : inner,
     ].join(" · ")

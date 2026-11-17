@@ -214,7 +214,7 @@ type AutonomyInput = {
   /** A string calculates and replaces the objective; true resumes the retained one; null stops it. */
   goal?: string | null | true
   maxNoProgress?: number
-  sleep?: boolean
+  defer?: boolean
 }
 
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
@@ -753,7 +753,7 @@ const layer = Layer.effect(
         .all()
         .pipe(Effect.orDie)
       for (const row of rows) {
-        if (SessionAutonomy.read(row.autonomy).sleep) yield* keepAwake.hold(row.id)
+        if (SessionAutonomy.read(row.autonomy).defer) yield* keepAwake.hold(row.id)
       }
     })
     const familyAutonomyLocks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
@@ -1420,15 +1420,15 @@ const layer = Layer.effect(
       return state
     })
 
-    const applyFamilySleep = Effect.fnUntraced(function* (
+    const applyFamilyDefer = Effect.fnUntraced(function* (
       sessionID: SessionSchema.ID,
-      asleep: boolean,
+      deferred: boolean,
     ): Effect.fn.Return<void> {
-      if (asleep) yield* Effect.gen(function* () {
+      if (deferred) yield* Effect.gen(function* () {
         const session = yield* result.get(sessionID)
         const located = locations.get(session.location, [LocationServiceMap.full])
         const convert = <E>(kind: string, effect: Effect.Effect<void, E>) => effect.pipe(
-          Effect.catchCause(() => Effect.logWarning("Unable to defer pending requests for sleeping Session", { sessionID, kind })),
+          Effect.catchCause(() => Effect.logWarning("Unable to defer pending requests for Session", { sessionID, kind })),
         )
         const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(located))
         yield* convert("guardrail", guardrail.deferPending(sessionID))
@@ -1449,7 +1449,7 @@ const layer = Layer.effect(
             yield* SessionReviewFold.open(db, events, {
               sessionID,
               kind: "subagent_question",
-              reason: "sleep_entry",
+              reason: "defer_entry",
               origin: { questionID: task.question_id },
               payload: {
                 type: "subagent_question",
@@ -1460,32 +1460,32 @@ const layer = Layer.effect(
               conversion: true,
             }).pipe(Effect.orDie)
         }
-      }).pipe(Effect.catchCause(() => Effect.logWarning("Unable to defer pending reviews for sleeping Session", { sessionID })))
+      }).pipe(Effect.catchCause(() => Effect.logWarning("Unable to defer pending reviews for Session", { sessionID })))
       const awake = yield* keepAwake.get
       yield* events.publish(SessionEvent.ContextObserved, {
         sessionID,
         source: "session-state",
-        text: asleep
-          ? `The user is asleep and cannot interact. Make decisions independently, do not wait for user input, and keep working until the task is done. Confident decision-model choices apply automatically; anything it cannot settle is deferred to the user's review box and decided after the user wakes. Keep-awake: idle ${awake.state}, lid ${awake.lid === "held" ? "held by another YCoding process" : awake.lid ?? "unreported"}. On battery this drains the battery and a closed lid traps heat.`
-          : "The user is back. Sleep mode is off; questions, forms, and guardrail reviews return to the user unless other autonomy settings apply. Items in the review box stay there until the user decides them.",
-      }).pipe(Effect.catchCause((cause) => asleep
-        ? Effect.logWarning("Unable to record family sleep notice", { sessionID }) : Effect.failCause(cause)))
-      const children = yield* result.list({ parentID: sessionID })
-      yield* Effect.forEach(children.data, (child) => applyFamilySleep(child.id, asleep), { discard: true })
+        text: deferred
+          ? `Defer is on. Unresolved requests go to the review box without waiting for user input. Continue independent work under the current autonomy modes; do not guess outcomes or retry deferred actions. Keep-awake: idle ${awake.state}, lid ${awake.lid === "held" ? "held by another YCoding process" : awake.lid ?? "unreported"}. On battery this drains the battery and a closed lid traps heat.`
+          : "Defer is off. Questions, forms, and guardrail reviews wait for the user unless other autonomy settings apply. Items in the review box stay there until decided.",
+      }).pipe(Effect.catchCause((cause) => deferred
+        ? Effect.logWarning("Unable to record family defer notice", { sessionID }) : Effect.failCause(cause)))
+      const children = yield* db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.parent_id, sessionID)).all().pipe(Effect.orDie)
+      yield* Effect.forEach(children, (child) => applyFamilyDefer(child.id, deferred), { discard: true })
     })
 
-    const applySleepTransition = Effect.fnUntraced(function* (
+    const applyDeferTransition = Effect.fnUntraced(function* (
       sessionID: SessionSchema.ID,
       before: SessionAutonomy.State,
       after: SessionAutonomy.State,
     ) {
-      if (!before.sleep && after.sleep) {
+      if (!before.defer && after.defer) {
         yield* keepAwake.hold(sessionID)
-        yield* applyFamilySleep(sessionID, true)
+        yield* applyFamilyDefer(sessionID, true)
       }
-      if (before.sleep && !after.sleep) {
+      if (before.defer && !after.defer) {
         yield* keepAwake.release(sessionID)
-        yield* applyFamilySleep(sessionID, false)
+        yield* applyFamilyDefer(sessionID, false)
       }
     })
 
@@ -1497,22 +1497,6 @@ const layer = Layer.effect(
         current = parent
       }
       return current?.id ?? sessionID
-    })
-
-    const wakeIfAsleep = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
-      const rootID = yield* rootSessionID(sessionID)
-      yield* familyAutonomyLocks.withLock(rootID)(
-        Effect.gen(function* () {
-          const before = yield* autonomy
-            .get(rootID)
-            .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
-          if (!before?.sleep) return
-          const after = yield* autonomy
-            .set({ sessionID: rootID, sleep: false })
-            .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
-          if (after) yield* applySleepTransition(rootID, before, after)
-        }).pipe(Effect.uninterruptible),
-      )
     })
 
     const staleQuestionReviews = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
@@ -1933,9 +1917,9 @@ const layer = Layer.effect(
               ),
             )
           const decisions = yield* autonomy.effectiveDecisions(sessionID).pipe(notFound)
-          const asleep = yield* autonomy.isAsleep(sessionID).pipe(notFound)
+          const deferred = yield* autonomy.isDeferred(sessionID).pipe(notFound)
           const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
-          return { ...decisions, asleep, guardrailsEnabled: guardrail.reviewPolicy.enabled }
+          return { ...decisions, deferred, guardrailsEnabled: guardrail.reviewPolicy.enabled }
         }),
         set: Effect.fn("Session.autonomy.set")(function* (input) {
           const session = yield* result.get(input.sessionID)
@@ -1987,13 +1971,13 @@ const layer = Layer.effect(
             if (!resumed.applied) return yield* new SessionGoal.Error({ code: "goal.stale_calculation" })
             return yield* admitGoalContinuation(input.sessionID, resumed.state, steer)
           }
-          if (input.sleep !== undefined) {
+          if (input.defer !== undefined) {
             const rootID = yield* rootSessionID(input.sessionID)
             yield* familyAutonomyLocks.withLock(rootID)(
               Effect.gen(function* () {
                 const before = yield* autonomy.get(rootID).pipe(notFound)
-                const after = yield* autonomy.set({ sessionID: rootID, sleep: input.sleep }).pipe(notFound)
-                yield* applySleepTransition(rootID, before, after)
+                const after = yield* autonomy.set({ sessionID: rootID, defer: input.defer }).pipe(notFound)
+                yield* applyDeferTransition(rootID, before, after)
               }).pipe(Effect.uninterruptible),
             )
           }
@@ -2016,7 +2000,7 @@ const layer = Layer.effect(
         const removedAutonomy = yield* autonomy
           .get(sessionID)
           .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
-        if (removedAutonomy?.sleep) yield* keepAwake.release(sessionID)
+        if (removedAutonomy?.defer) yield* keepAwake.release(sessionID)
         yield* execution.interrupt(sessionID)
         yield* execution.awaitIdle(sessionID)
         const children = yield* result.list({ parentID: sessionID })
@@ -2025,8 +2009,7 @@ const layer = Layer.effect(
         yield* events.remove(sessionID)
       }),
       archive: Effect.fn("Session.archive")(function* (sessionID) {
-        const session = yield* result.get(sessionID)
-        if (!session.parentID) yield* wakeIfAsleep(sessionID)
+        yield* result.get(sessionID)
         yield* db
           .transaction(
             () =>
@@ -2334,10 +2317,6 @@ const layer = Layer.effect(
                         }),
                       }, input.native ? { when: input.native.validate() } : undefined)
                       freshlyAdmitted = true
-                      // Waking under the inbox lock keeps the runner from promoting this input
-                      // while the family still sleeps; a reused ID never wakes.
-                      if (input.origin === undefined && created.type === "user" && created.sessionID === input.sessionID)
-                        yield* wakeIfAsleep(input.sessionID)
                       return created
                     }).pipe(
                       Effect.catchDefect((defect) =>
@@ -3165,6 +3144,25 @@ const layer = Layer.effect(
       },
     })
 
+    yield* autonomy.changes.pipe(
+      Stream.runForEach((sessionID) => Effect.gen(function* () {
+        const session = yield* store.get(sessionID)
+        if (!session || session.scope === "standalone" || session.time.archived) return
+        const located = locations.get(session.location, [LocationServiceMap.full])
+        const reconcile = <E>(kind: string, effect: Effect.Effect<void, E>) => effect.pipe(
+          Effect.catchCause((cause) => Effect.logWarning("Unable to reconcile Session autonomy", { sessionID, kind, cause })),
+        )
+        const permission = yield* Permission.Service.pipe(Effect.provide(located))
+        yield* reconcile("permission", permission.reconcileAutonomy(sessionID))
+        const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(located))
+        yield* reconcile("guardrail", guardrail.reconcileAutonomy(sessionID))
+        const questions = yield* Question.Service.pipe(Effect.provide(located))
+        yield* reconcile("question", questions.reconcileAutonomy(sessionID))
+        const forms = yield* Form.Service.pipe(Effect.provide(located))
+        yield* reconcile("form", forms.reconcileAutonomy(sessionID))
+      }).pipe(Effect.catchCause((cause) => Effect.logWarning("Unable to load Session autonomy consumers", { sessionID, cause })))),
+      Effect.forkScoped,
+    )
     return result
   }),
 )

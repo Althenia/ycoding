@@ -25,7 +25,7 @@ function railAutonomy(
   effective: Partial<SessionAutonomyView["effective"]> = {},
 ): SessionAutonomyView {
   const { sleep, ...modes } = input
-  return autonomyView({ ...modes, ...(sleep ? { sleep: {} } : {}) }, effective)
+  return autonomyView({ ...modes, ...(sleep ? { defer: {} } : {}) }, effective)
 }
 
 beforeEach(async () => {

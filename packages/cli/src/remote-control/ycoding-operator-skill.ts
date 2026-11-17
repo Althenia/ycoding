@@ -17,7 +17,7 @@ Operate YCoding through V, the exec-server executor on this Mac. Each Dots task 
 
 1. On a refusal starting “YCoding did not run this: it needs the user's decision.”, ask the user in chat, stating the action and risk. Run the supplied \`ycoding api session.review.decide\` line matching their answer, then retry the identical action. Treat “the user rejected” as final. Never rephrase or work around a refused command.
 2. Run \`ycoding decision list\` (or \`ycoding decision list --json\`) for pending decisions anywhere: permissions, guardrail asks, questions, forms and review items. To wait on one Session instead, run \`ycoding decision watch <session-id>\` (see Find and talk to an existing Session). Show each item's question and every option; accept free-text answers for open questions. Run its exact decide command for the user's answer. When “the review box is full”, list and resolve items before retrying.
-3. Inspect modes before changing them. Set permissions, guardrails and answers independently: manual requires human decisions, auto uses deterministic rules, yolo also evaluates unresolved decisions. Hard reviews still need the user. Set sleep separately; keep-awake controls the Mac, not Session approval policy.
+3. Inspect modes before changing them. Set permissions, guardrails and answers independently: manual requires human decisions, auto uses deterministic rules, and yolo disables the category's blockers. Set defer separately; keep-awake controls the Mac, not Session approval policy.
 
 ## Trigger Guardrails
 
@@ -56,8 +56,8 @@ Read \`ycoding api GET /openapi.json\` for exact operation IDs and required path
 \`\`\`sh
 ycoding api session.autonomy.get
 ycoding api session.autonomy.set -d '{"permissions":"manual","guardrails":"auto","answers":"manual"}'
-ycoding api session.autonomy.set -d '{"sleep":true}'
-ycoding api session.autonomy.set -d '{"sleep":false}'
+ycoding api session.autonomy.set -d '{"defer":true}'
+ycoding api session.autonomy.set -d '{"defer":false}'
 ycoding api keepAwake.get
 ycoding api keepAwake.set -d '{"enabled":true}'
 ycoding api keepAwake.set -d '{"enabled":false}'
@@ -132,7 +132,7 @@ Use the same selected Session/location with these local operations; remote UI al
 - Projects/directories: \`ycoding api project.list\`, \`ycoding api project.inventory --param search=<fragment> --param limit=50\` (follow cursor.next), \`ycoding api project.current\`, \`ycoding api project.directories --param projectID=<project>\`; \`ycoding api project.forget --param projectID=<project> -d '{"directory":"/approved/project"}'\` deletes that directory's Session history and children, not disk files.
 - Session lifecycle: \`ycoding api session.rename -d '{"title":"Task title"}'\`, \`ycoding api session.unarchive\`, \`ycoding api session.remove\`; remove deletes history. Use the create/fork/archive examples above rather than inventing a web-only Session.
 - Transcript/activity: \`ycoding api session.snapshot --param limit=50\` pages backward with before and returns watermark/sourceEpoch; \`ycoding api session.active\` lists executing drains, \`ycoding api session.outstanding --param failures=true\` includes pending/background work and failed/lost attention, \`ycoding api server.session.session.todo.list\`, \`ycoding api session.compaction.list\`; \`ycoding api session.compact -d '{}'\` schedules compaction.
-- Goals/sleep/modes: use autonomy get/set above; a separate \`ycoding api session.autonomy.set -d '{"goal":"Bounded outcome","maxNoProgress":3}'\` sets a goal, \`ycoding api session.autonomy.set -d '{"goal":true}'\` resumes it and \`ycoding api session.autonomy.set -d '{"goal":null}'\` stops it. Change goals only with the user's instruction; do not combine goal, sleep and mode payloads.
+- Goals/defer/modes: use autonomy get/set above; a separate \`ycoding api session.autonomy.set -d '{"goal":"Bounded outcome","maxNoProgress":3}'\` sets a goal, \`ycoding api session.autonomy.set -d '{"goal":true}'\` resumes it and \`ycoding api session.autonomy.set -d '{"goal":null}'\` stops it. Change goals only with the user's instruction; do not combine goal, defer and mode payloads.
 - Team: subagent list/message/cancel/resume above; \`ycoding api session.subagent.answer --param questionID=<question> -d '{"text":"Authorized answer"}'\` answers a child's question. \`ycoding api session.pin\` / \`ycoding api session.unpin\` target a child. Read each member's session.get and \`ycoding api session.diagnostics\` for cost/tokens/context/cache; aggregate verified members, not arbitrary Sessions.
 - Side-chat: list children with session.list parentID, select agent=btw; \`ycoding api session.create -d '{"parentID":"ses_parent","agent":"btw"}'\` creates one. The web side-chat also seeds recent parent context: read its snapshot, then \`ycoding api session.synthetic\` on the new child with fresh id, text, description, delivery=steer and resume=false before prompting; do not claim creation alone copied context.
 - Files/changes: \`ycoding api fs.list --param path=<relative-directory>\`, fs.find above, \`ycoding api session.file-change.list\` for durable changes, \`ycoding api message.capturedInputs --param after=0 --param limit=200\` for recorded prompt/edit boundaries (set after to returned next until absent); \`ycoding api vcs.status\` and \`ycoding api vcs.diff --param mode=working\` (or branch) for current Git diffs, not a historical captured-change card.

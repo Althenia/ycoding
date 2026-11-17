@@ -27,7 +27,7 @@ function sessionStateSummary(value: Record<string, unknown>) {
           ? ["manual"]
           : modes.flatMap(([category, mode]) => (mode === "manual" ? [] : [`${category} ${mode}`]))),
         ...(record(autonomy.goal)?.status === "active" ? ["goal"] : []),
-        ...(autonomy.sleep !== undefined && autonomy.sleep !== null ? ["asleep"] : []),
+        ...(autonomy.defer !== undefined && autonomy.defer !== null ? ["deferred"] : []),
       ]
   return `Session state · ${parts.join(" · ")} · ${todos} ${todos === 1 ? "task" : "tasks"}`
 }

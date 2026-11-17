@@ -57,7 +57,7 @@ it.effect("a human decision is admitted once as a user steer without waking a sl
   const session = yield* Session.Service
   const reviews = yield* SessionReview.Service
   const root = yield* session.create({ location: yield* reviewLocation })
-  yield* session.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* session.autonomy.set({ sessionID: root.id, defer: true })
   const item = yield* openQuestion(reviews, root.id)
   const input = { sessionID: root.id, itemID: item.itemID, decision: { kind: "question", answers: { plan: "A" } } } as const
   yield* reviews.decide(input)
@@ -69,7 +69,7 @@ it.effect("a human decision is admitted once as a user steer without waking a sl
   expect(admitted.delivery).toBe("steer")
   expect(admitted.data.text).toContain("A")
   expect(admitted.data.metadata).toMatchObject({ review: { itemID: item.itemID, kind: "question" } })
-  expect((yield* session.autonomy.get(root.id)).sleep).toBeDefined()
+  expect((yield* session.autonomy.get(root.id)).defer).toBeDefined()
   expect(yield* reviews.list(root.id)).toEqual([])
   expect(yield* reviews.decide({ ...input, decision: { kind: "question", answers: { plan: "B" } } }).pipe(Effect.flip)).toBeInstanceOf(SessionReview.ConflictError)
 }))
@@ -100,7 +100,7 @@ it.effect("once grants are exact, Session-bound, single-use durable consumptions
   const root = yield* session.create({ location: yield* reviewLocation })
   const child = yield* session.create({ parentID: root.id })
   const fingerprint = SessionReview.fingerprint({ action: "edit", resources: ["file"], workdir: root.location.directory })
-  const item = yield* reviews.open({ sessionID: root.id, kind: "permission", reason: "sleep_entry", limit: 16,
+  const item = yield* reviews.open({ sessionID: root.id, kind: "permission", reason: "defer_entry", limit: 16,
     origin: { requestID: "per_exact" }, payload: { type: "permission", fingerprintVersion: 2, action: "edit", resources: ["file"], fingerprint, requestID: Permission.ID.make("per_exact") } })
   yield* reviews.decide({ sessionID: root.id, itemID: item.itemID, decision: { kind: "permission", reply: "once" } })
   expect(yield* reviews.consume(child.id, "permission", fingerprint)).toBe(false)
@@ -122,7 +122,7 @@ it.effect("deferred remembered permission stays with the same Session and resour
   }))
   const request = { action: "read", resources: ["src/first.ts"], workdir: root.location.directory }
   const item = yield* reviews.open({
-    sessionID: root.id, kind: "permission", reason: "sleep_entry", limit: 16,
+    sessionID: root.id, kind: "permission", reason: "defer_entry", limit: 16,
     origin: { requestID: "per_session_scope" },
     payload: { type: "permission", fingerprintVersion: 2, ...request, save: ["src/*"], fingerprint: SessionReview.fingerprint(request), requestID: Permission.ID.make("per_session_scope") },
   })
@@ -159,11 +159,11 @@ it.effect("sleep conversion settles waiting forms but does not consume create-on
   const created = yield* forms.create({ sessionID: root.id, title: "External creator", fields: payload.fields })
   const waiting = yield* forms.ask({ sessionID: root.id, title: "Waiting caller", fields: payload.fields }).pipe(Effect.forkScoped)
   yield* Effect.yieldNow
-  yield* session.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* session.autonomy.set({ sessionID: root.id, defer: true })
   expect(yield* Fiber.join(waiting)).toMatchObject({ status: "deferred" })
   expect((yield* forms.list()).map((form) => form.id)).toEqual([created.id])
   expect(yield* reviews.list(root.id)).toHaveLength(1)
-  yield* session.autonomy.set({ sessionID: root.id, sleep: false })
+  yield* session.autonomy.set({ sessionID: root.id, defer: false })
   expect(yield* reviews.list(root.id)).toHaveLength(1)
 }))
 
@@ -177,7 +177,7 @@ it.effect("revert withdraws both open items and unconsumed grants beyond their o
   yield* session.prompt({ id: after, sessionID: root.id, text: "After", origin: "review", resume: false })
   const item = yield* reviews.open({ sessionID: root.id, kind: "question", reason: "free_text", limit: 16, origin: { messageID: after, callID: "call_after" }, payload })
   const fingerprint = SessionReview.fingerprint({ action: "edit", resources: ["file"], workdir: root.location.directory })
-  const grant = yield* reviews.open({ sessionID: root.id, kind: "permission", reason: "sleep_entry", limit: 16,
+  const grant = yield* reviews.open({ sessionID: root.id, kind: "permission", reason: "defer_entry", limit: 16,
     origin: { messageID: after, callID: "call_grant" }, payload: { type: "permission", fingerprintVersion: 2, action: "edit", resources: ["file"], fingerprint, requestID: Permission.ID.make("per_reverted") } })
   yield* reviews.decide({ sessionID: root.id, itemID: grant.itemID, decision: { kind: "permission", reply: "once" } })
   yield* reviews.withdrawAfter(root.id, before)
@@ -195,7 +195,7 @@ it.effect("a later guardrail deny blocks an identical granted request without co
   const input = { sessionID: root.id, action: "shell", resources: ["rm -rf /"] }
   const result = yield* guardrail.evaluate(input)
   const fingerprint = SessionReview.fingerprint({ ...input, workdir: root.location.directory, ruleIDs: result.ruleIDs, hardReview: result.hardReview })
-  const item = yield* reviews.open({ sessionID: root.id, kind: "guardrail", reason: "sleep_entry", limit: 16,
+  const item = yield* reviews.open({ sessionID: root.id, kind: "guardrail", reason: "defer_entry", limit: 16,
     origin: { requestID: "grq_granted" }, payload: { type: "guardrail", requestID: SessionGuardrail.RequestID.make("grq_granted"), action: input.action, resources: input.resources,
       ruleIDs: result.ruleIDs, reason: "Review", hardReview: result.hardReview, directories: [], fingerprint } })
   yield* reviews.decide({ sessionID: root.id, itemID: item.itemID, decision: { kind: "guardrail", reply: "once" } })
@@ -211,7 +211,7 @@ test("a guardrail approval survives rebuilding the runtime and is consumed once 
     const reviews = yield* SessionReview.Service
     const root = yield* sessions.create({ location: yield* reviewLocation })
     const fingerprint = SessionReview.fingerprint({ action: "shell", resources: ["git reset --hard"], workdir: root.location.directory, ruleIDs: ["review"], hardReview: true })
-    const item = yield* reviews.open({ sessionID: root.id, kind: "guardrail", reason: "sleep_entry", limit: 16,
+    const item = yield* reviews.open({ sessionID: root.id, kind: "guardrail", reason: "defer_entry", limit: 16,
       origin: { requestID: "grq_restart" }, payload: { type: "guardrail", requestID: SessionGuardrail.RequestID.make("grq_restart"), action: "shell", resources: ["git reset --hard"],
         ruleIDs: ["review"], reason: "Review", hardReview: true, directories: [], fingerprint } })
     yield* reviews.decide({ sessionID: root.id, itemID: item.itemID, decision: { kind: "guardrail", reply: "once" } })
@@ -243,7 +243,7 @@ it.effect("a deferred guardrail action runs once after approval and is reviewed 
   const session = yield* Session.Service
   const reviews = yield* SessionReview.Service
   const root = yield* session.create({ location: yield* reviewLocation })
-  yield* session.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* session.autonomy.set({ sessionID: root.id, defer: true })
   const locations = yield* LocationServiceMap.Service
   const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
   const messageID = SessionMessage.ID.make("msg_review_guardrail_call")
@@ -271,7 +271,7 @@ it.effect("a deferred permission ask runs once after approval and defers again o
   const session = yield* Session.Service
   const reviews = yield* SessionReview.Service
   const root = yield* session.create({ location: yield* reviewLocation })
-  yield* session.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* session.autonomy.set({ sessionID: root.id, defer: true })
   const locations = yield* LocationServiceMap.Service
   const agents = yield* Agent.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
   yield* agents.transform((editor) =>

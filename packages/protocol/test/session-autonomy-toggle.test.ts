@@ -38,7 +38,7 @@ describe("category autonomy controls", () => {
     for (const flag of ["yolo", "autoPermission", "autoGuardrail", "autoAnswer"])
       for (const value of [true, false, 0, "yolo"])
         expect(() => decode({ [flag]: value })).toThrow()
-    for (const input of [{ permissions: "auto", sleep: true }, { answers: "yolo", goal: true }, { permissions: "manual", yolo: true }])
+    for (const input of [{ permissions: "auto", defer: true }, { answers: "yolo", goal: true }, { permissions: "manual", yolo: true }])
       expect(() => decode(input)).toThrow()
   })
 

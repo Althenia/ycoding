@@ -19,6 +19,7 @@ import { StandaloneConfig } from "../config/standalone"
 import { AccountConnectors } from "../account-connectors"
 import { ConfigEfficiency } from "../config/efficiency"
 import { Database } from "../database/database"
+import { DecisionChoice } from "../decision-choice"
 import { CoordinationService } from "../coordination/index"
 import { CoordinationAccess } from "./coordination-access"
 import { makeLocationNode } from "../effect/app-node"
@@ -45,6 +46,7 @@ import { SessionProviderState } from "./provider-state"
 import { AttachmentStore } from "../attachment-store"
 import { SessionEffort } from "./effort"
 import { SessionSharedContext } from "./shared-context"
+import { SessionAutonomy } from "./autonomy"
 
 const retainsDisabledToolDefinitions = (model: LLMRequest["model"]) =>
   model.route.protocol === "openai-responses" ||
@@ -131,6 +133,7 @@ interface Dependencies<E> {
   readonly guard?: (input: PrepareInput) => Effect.Effect<void, E>
   readonly hooks?: PluginHooks.Interface
   readonly coordination: CoordinationService.Interface
+  readonly autonomy: SessionAutonomy.Interface
   readonly cacheRuntime: SessionCacheRuntime.Interface
   readonly continuation: SessionContinuation.Interface
   readonly providerState: SessionProviderState.Interface
@@ -168,7 +171,8 @@ const make = <E>(dependencies: Dependencies<E>, options?: SessionModelHeaders.Op
         const stepLimitReached = agent.info.steps !== undefined && input.step >= agent.info.steps
         const terminalResponseRecovery = input.terminalResponseRecovery === true
         const toolsDisabled = terminalResponseRecovery || stepLimitReached
-        const basePermissions = SessionContext.toolPermissions(agent.info, session.permissionCeiling ?? [])
+        const mode = yield* DecisionChoice.decisionMode(dependencies.autonomy, session.id, "permissions")
+        const basePermissions = SessionContext.toolPermissions(agent.info, session.permissionCeiling ?? [], mode)
         const access = yield* coordination.accessOf(session.id)
         const permissions = [...basePermissions, ...CoordinationAccess.visibility(access?.role, (yield* coordination.scopeOf(session.id)) !== undefined)]
         const executableTools = toolsDisabled && !retainsDisabledToolDefinitions(model)
@@ -585,6 +589,7 @@ export const layer = (options?: SessionModelHeaders.Options) => Layer.effect(Ser
   const hooks = yield* PluginHooks.Service
   const registry = yield* ToolRegistry.Service
   const coordination = yield* CoordinationService.Service
+  const autonomy = yield* SessionAutonomy.Service
   const config = yield* Config.Service
   const connectors = yield* AccountConnectors.Service
   const cacheRuntime = yield* SessionCacheRuntime.Service
@@ -595,7 +600,7 @@ export const layer = (options?: SessionModelHeaders.Options) => Layer.effect(Ser
   const catalog = yield* Catalog.Service
   const imageAnalyzer = yield* ImageAnalyzer.Service.pipe(Effect.orElseSucceed(() => undefined))
   return Service.of(make({
-    hooks, coordination, cacheRuntime, continuation, providerState, db, attachments, catalog, imageAnalyzer,
+    hooks, coordination, autonomy, cacheRuntime, continuation, providerState, db, attachments, catalog, imageAnalyzer,
     entries: () => config.entries(),
     materialize: (permissions, capabilities, resolved) => Effect.gen(function* () {
       const tools = yield* connectors.tools({
@@ -615,13 +620,14 @@ export const standaloneNode = makeLocationNode({
     const models = yield* StandaloneModel.Service
     const tools = yield* StandaloneTools.Service
     const coordination = yield* CoordinationService.Service
+    const autonomy = yield* SessionAutonomy.Service
     const cacheRuntime = yield* SessionCacheRuntime.Service
     const continuation = yield* SessionContinuation.Service
     const providerState = yield* SessionProviderState.Service
     const db = (yield* Database.Service).db
     const catalog = yield* Catalog.Service
     return StandaloneService.of(make<StandaloneError>({
-      coordination, cacheRuntime, continuation, providerState, db, catalog,
+      coordination, autonomy, cacheRuntime, continuation, providerState, db, catalog,
       entries: () => config.snapshot().pipe(Effect.map((snapshot) => snapshot.entries)),
       guard: (input) => Effect.gen(function* () {
         if (input.context.session.scope !== "standalone" || input.context.configGeneration === undefined || input.context.messages.some((message) => message.type === "user" && (message.files?.length ?? 0) > 0) || readToolImages(input.context.messages).length > 0)
@@ -638,7 +644,7 @@ export const standaloneNode = makeLocationNode({
       }))),
     }))
   })),
-  deps: [StandaloneConfig.node, StandaloneModel.node, StandaloneTools.node, CoordinationService.node, SessionCacheRuntime.node, SessionContinuation.node, SessionProviderState.node, Database.node, Catalog.node],
+  deps: [StandaloneConfig.node, StandaloneModel.node, StandaloneTools.node, CoordinationService.node, SessionAutonomy.node, SessionCacheRuntime.node, SessionContinuation.node, SessionProviderState.node, Database.node, Catalog.node],
 })
 
 export function configured(options?: SessionModelHeaders.Options) {
@@ -652,6 +658,7 @@ export function configured(options?: SessionModelHeaders.Options) {
       AccountConnectors.node,
       Database.node,
       CoordinationService.node,
+      SessionAutonomy.node,
       SessionCacheRuntime.node,
       SessionContinuation.node,
       SessionProviderState.node,

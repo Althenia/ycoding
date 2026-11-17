@@ -307,9 +307,9 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
             unconfirmed(`The machine answered unreadably, so the result of turning it ${verb} is unconfirmed. The state shown is what it last reported.`)
             return { reached: false, reload: true }
           }
-          const heldBySleep = !enabled && answered.state === "on" && answered.sleepHold === true
+          const heldByDefer = !enabled && answered.state === "on" && answered.deferHold === true
           const reached = answered.manual === undefined
-            ? heldBySleep || answered.state === (enabled ? "on" : "off")
+            ? heldByDefer || answered.state === (enabled ? "on" : "off")
             : answered.manual === enabled
           const mismatch = (answered.state === "on" || answered.state === "off") && !reached
           write({

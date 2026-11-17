@@ -26,7 +26,7 @@ test("the full TUI offers one Keep machine awake switch and lists its backend st
       get: async () => status,
       set: async (enabled) => {
         writes.push(enabled);
-        status = enabled ? { state: "on", display: "on", activity: "on", lid: "on", system: "on", sleepHold: false } : { state: "off", display: "off", activity: "off", lid: "off", sleepHold: false }
+        status = enabled ? { state: "on", display: "on", activity: "on", lid: "on", system: "on", deferHold: false } : { state: "off", display: "off", activity: "off", lid: "off", deferHold: false }
         return status
       },
     },
@@ -107,7 +107,7 @@ test("Status identifies the foreign lid owner without crowding its state row", a
   const screen = await renderScreen({
     width: 80, height: 24, settle: "Message YCoding…",
     keepAwake: {
-      get: async () => ({ state: "on", lid: "held", sleepHold: true, message: "Lid control is held by another YCoding process." }),
+      get: async () => ({ state: "on", lid: "held", deferHold: true, message: "Lid control is held by another YCoding process." }),
       set: async () => { throw new Error("Status must not change keep-awake") },
     },
   })

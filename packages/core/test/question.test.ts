@@ -19,7 +19,7 @@ import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
 
 let decisionBehavior: (input: Decision.Input) => Effect.Effect<Decision.Output, Decision.Error> = () =>
-  Effect.die("Questions must not request judgments unless asleep")
+  Effect.die("Questions must not request judgments unless deferred")
 const questions = AppNodeBuilder.build(
   LayerNode.group([Config.node, Database.node, EventRuntime.node, SessionAutonomy.node, Decision.node, Question.node]),
   [
@@ -109,6 +109,77 @@ const waitForAsk = Effect.fn("QuestionTest.waitForAsk")(function* (
 })
 
 describe("Question", () => {
+  for (const failure of ["provider-failed", "timeout", "refused", "invalid-output", "empty", "low-confidence"] as const) {
+    it.effect(`YOLO settles options, multiple and free text after ${failure} with defer enabled`, () => Effect.gen(function* () {
+      yield* setupAutonomy("normal")
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID, answers: "yolo", defer: true })
+      decisionBehavior = failure === "empty" ? () => Effect.succeed(Schema.decodeUnknownSync(Decision.Output)({ provider: "agent", response: {
+        model: { providerID: "test", id: "decision-model" }, semantics: "model-estimate", version: 1, answers: [],
+      } })) : failure === "low-confidence" ? decisionChoice("One", 0.1)
+        : () => Effect.fail(new Decision.Error({ reason: failure }))
+      const service = yield* Question.Service
+      const prompts: Question.Info[] = [recommended, { ...question, multiple: true }, { header: "Next", question: "Choose the next bounded step", options: [] }, { ...question, multiple: true, options: [question.options[0], { label: "Two (Recommended)", description: "Second option" }, { label: "Three (Recommended)", description: "Third option" }] }]
+      const outcome = yield* service.ask({ sessionID, questions: prompts })
+      expect(outcome).toMatchObject({ status: "answered", automatic: true, via: "yolo" })
+      if (outcome.status === "answered") {
+        expect(outcome.answers[0]).toEqual(["One (Recommended)"])
+        expect(outcome.answers[1]).toEqual(["One"])
+        expect(outcome.answers[2]?.[0]?.trim().length).toBeGreaterThan(0)
+        expect(outcome.answers[3]).toEqual(["Two (Recommended)"])
+        expect(Question.validateAnswers(prompts, outcome.answers)).toBeUndefined()
+      }
+      expect(yield* service.list()).toEqual([])
+      expect((yield* SessionReviewFold.fold((yield* Database.Service).db, [sessionID])).filter(SessionReviewFold.isOpen)).toEqual([])
+    }))
+  }
+
+  it.effect("YOLO reconciles a pending manual question exactly once", () => Effect.gen(function* () {
+    yield* setupAutonomy("normal")
+    const service = yield* Question.Service
+    const autonomy = yield* SessionAutonomy.Service
+    const pending = yield* waitForAsk(service, { sessionID, questions: [question] })
+    decisionBehavior = () => Effect.fail(new Decision.Error({ reason: "refused" }))
+    const events = yield* EventRuntime.Service
+    const replies: unknown[] = []
+    const unsubscribe = yield* events.listen(event => Effect.sync(() => { if (event.type === Question.Event.Replied.type) replies.push(event.data) }))
+    yield* Effect.addFinalizer(() => unsubscribe)
+    yield* autonomy.set({ sessionID, answers: "yolo" })
+    yield* service.reconcileAutonomy(sessionID)
+    yield* service.reconcileAutonomy(sessionID)
+    expect(yield* Fiber.join(pending.fiber)).toMatchObject({ status: "answered", answers: [["One"]], automatic: true, via: "yolo" })
+    expect(replies).toHaveLength(1)
+    expect(yield* service.list()).toEqual([])
+  }))
+
+  it.effect("YOLO free text progresses after the evaluator deadline without a review", () => Effect.gen(function* () {
+    yield* setupAutonomy("normal")
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID, answers: "yolo", defer: true })
+    const entered = yield* Deferred.make<void>()
+    decisionBehavior = () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never))
+    const service = yield* Question.Service
+    const fiber = yield* service.ask({ sessionID, questions: [{ header: "Next", question: "Choose a bounded next step", options: [] }] }).pipe(Effect.forkScoped)
+    yield* Deferred.await(entered)
+    yield* TestClock.adjust("61 seconds")
+    const outcome = yield* Fiber.join(fiber)
+    expect(outcome).toMatchObject({ status: "answered", automatic: true, via: "yolo" })
+    if (outcome.status === "answered") expect(outcome.answers[0]?.[0]?.trim().length).toBeGreaterThan(0)
+    expect(yield* service.list()).toEqual([])
+  }))
+
+  it.effect("defer entry with effective YOLO reconciles instead of creating a review", () => Effect.gen(function* () {
+    yield* setupAutonomy("normal")
+    const service = yield* Question.Service
+    const pending = yield* waitForAsk(service, { sessionID, questions: [recommended] })
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID, answers: "yolo", defer: true })
+    decisionBehavior = () => Effect.fail(new Decision.Error({ reason: "refused" }))
+    yield* service.deferPending(sessionID)
+    expect(yield* Fiber.join(pending.fiber)).toMatchObject({ status: "answered", answers: [["One (Recommended)"]], automatic: true, via: "yolo" })
+    expect((yield* SessionReviewFold.fold((yield* Database.Service).db, [sessionID])).filter(SessionReviewFold.isOpen)).toEqual([])
+  }))
+
   for (const yolo of [false] as const) {
     it.effect(`questions use explicit recommendations automatically only with Auto answers: yolo ${yolo}`, () => Effect.gen(function* () {
       yield* setupAutonomy("normal")
@@ -323,12 +394,12 @@ describe("Question", () => {
     }),
   )
 
-  it.effect("sleep answers questions through the decision model", () =>
+  it.effect("defer answers questions through the decision model", () =>
     Effect.gen(function* () {
       yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.set({ sessionID, answers: "yolo" })
-      yield* autonomy.set({ sessionID, sleep: true })
+      yield* autonomy.set({ sessionID, defer: true })
       decisionBehavior = decisionChoice("Two", 0.9)
       const service = yield* Question.Service
       const answers = yield* service.ask({
@@ -349,12 +420,12 @@ describe("Question", () => {
     }),
   )
 
-  it.effect("sleep defers to the review box when the decision model refuse or fails", () =>
+  it.effect("YOLO uses a valid option when the evaluator fails with defer enabled", () =>
     Effect.gen(function* () {
       yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.set({ sessionID, answers: "yolo" })
-      yield* autonomy.set({ sessionID, sleep: true })
+      yield* autonomy.set({ sessionID, defer: true })
       decisionBehavior = () => Effect.fail(new Decision.Error({ reason: "timeout" }))
       const service = yield* Question.Service
       const answers = yield* service.ask({
@@ -370,7 +441,7 @@ describe("Question", () => {
           },
         ],
       })
-      expect(answers.status).toBe("deferred")
+      expect(answers).toMatchObject({ status: "answered", answers: [["One"]], automatic: true, via: "yolo" })
       expect(yield* service.list()).toEqual([])
     }),
   )
@@ -405,12 +476,12 @@ describe("Question", () => {
     expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
   }))
 
-  it.effect("turning YOLO off while a sleeping answer is pending defers instead of applying it", () =>
+  it.effect("turning YOLO off while a deferred answer is pending defers instead of applying it", () =>
     Effect.gen(function* () {
       yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.set({ sessionID, answers: "yolo" })
-      yield* autonomy.set({ sessionID, sleep: true })
+      yield* autonomy.set({ sessionID, defer: true })
       const entered = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
       decisionBehavior = (input) => Deferred.succeed(entered, undefined).pipe(
@@ -440,7 +511,7 @@ describe("Question", () => {
       return published
     })
 
-    it.effect("sleep entry defers an unanswered question after 25 hours without answering it", () => Effect.gen(function* () {
+    it.effect("defer entry defers an unanswered question after 25 hours without answering it", () => Effect.gen(function* () {
       yield* setupAutonomy("normal")
       const service = yield* Question.Service
       const published = yield* observe()
@@ -521,7 +592,7 @@ describe("Question", () => {
       }),
     )
 
-    it.effect("explicit automatic answering remains available awake and asleep", () =>
+    it.effect("explicit automatic answering remains available without defer and deferred", () =>
       Effect.gen(function* () {
         yield* setupAutonomy("normal")
         const autonomy = yield* SessionAutonomy.Service
@@ -530,13 +601,13 @@ describe("Question", () => {
         decisionBehavior = () => Effect.die("Auto answers must not request judgments")
         const answered = { status: "answered", answers: [["One (Recommended)"]], automatic: true, via: "auto-answer" } as const
         expect(yield* service.ask({ sessionID, questions: [recommended] })).toEqual(answered)
-        yield* autonomy.set({ sessionID, sleep: true })
+        yield* autonomy.set({ sessionID, defer: true })
         expect(yield* service.ask({ sessionID, questions: [recommended] })).toEqual(answered)
         expect((yield* service.ask({ sessionID, questions: [question] })).status).toBe("deferred")
       }),
     )
 
-    it.effect("YOLO evaluator answers a question awake and records model provenance", () =>
+    it.effect("YOLO evaluator answers a question without defer and records model provenance", () =>
       Effect.gen(function* () {
         yield* setupAutonomy("normal")
         const autonomy = yield* SessionAutonomy.Service

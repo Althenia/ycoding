@@ -358,7 +358,7 @@ export type RemoteStore = {
   readonly replyForm: (formID: string, answer: Readonly<Record<string, string | number | boolean | readonly string[]>>) => Promise<void>
   readonly cancelForm: (formID: string) => Promise<void>
   readonly setAutonomous: (change: Partial<AutonomyModes>) => Promise<boolean>
-  readonly setSleep: (sleep: boolean) => Promise<boolean>
+  readonly setDefer: (defer: boolean) => Promise<boolean>
   readonly setNotificationFilter: (filter: NotificationFilter) => boolean
   readonly reloadNotificationFilter: () => void
   readonly externalAllowed: (sessionID: string | undefined, kind: ExternalKind | undefined) => boolean
@@ -4070,12 +4070,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     },
     reloadNotificationFilter: () => setState({ notificationFilter: readFilter(storage) }),
     externalAllowed,
-    setSleep: async (sleep) => {
+    setDefer: async (defer) => {
       const sessionID = container.state.activeSessionID
       const token = selectionToken
       if (sessionID === undefined) return false
       const outcome = await request(
-        { id: `autonomy_sleep_${now()}`, kind: "autonomy", label: sleep ? "Sleep" : "Wake", state: "sending", sessionID, operation: "session.autonomy.set", input: { sleep } },
+        { id: `autonomy_defer_${now()}`, kind: "autonomy", label: defer ? "Enable defer" : "Disable defer", state: "sending", sessionID, operation: "session.autonomy.set", input: { defer } },
         { sessionID },
       )
       applyAutonomyResponse(outcome, sessionID)

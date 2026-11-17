@@ -70,7 +70,7 @@ type AtLeastOne<T> = { [K in keyof T]: Pick<T, K> & Partial<Omit<T, K>> }[keyof 
 export type LocalAutonomy =
   | LocalAutonomyModes
   | { readonly goal: string | null; readonly maxNoProgress?: number | null }
-  | { readonly sleep: boolean }
+  | { readonly defer: boolean }
 
 export type LocalFailureKind = "not_found" | "location_unavailable" | "invalid" | "conflict" | "transport" | "too_large" | "telemetry_disabled" | "server"
 

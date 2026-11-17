@@ -3,7 +3,11 @@ export * as SessionReview from "./review"
 import { Session } from "../session"
 import { SessionReview } from "@ycoding-ai/schema/session-review"
 import { eq } from "drizzle-orm"
-import { Clock, Context, Effect, Layer, Schema } from "effect"
+import { Clock, Context, Effect, Layer, Schema, Stream } from "effect"
+import { Decision } from "../decision"
+import { DecisionChoice } from "../decision-choice"
+import { LocationServiceMap } from "../location-service-map"
+import { SessionAutonomy } from "./autonomy"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { KeyedMutex } from "../effect/keyed-mutex"
@@ -69,6 +73,7 @@ export interface Interface {
   ) => Effect.Effect<boolean>
   readonly hasOpen: (sessionID: Session.ID) => Effect.Effect<boolean>
   readonly reconcile: Effect.Effect<void>
+  readonly reconcileAutonomy: (sessionID: Session.ID) => Effect.Effect<void, Session.NotFoundError | Form.InvalidFormError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionReview") {}
@@ -83,6 +88,8 @@ const layer = Layer.effect(
     const orchestration = yield* SessionOrchestration.Service
     const permissions = yield* PermissionSession.Service
     const execution = yield* SessionExecution.Service
+    const autonomy = yield* SessionAutonomy.Service
+    const locations = yield* LocationServiceMap.Service
     const locks = KeyedMutex.makeUnsafe<ID>()
 
     const deliver = Effect.fnUntraced(function* (
@@ -325,6 +332,59 @@ const layer = Layer.effect(
 
     yield* reconcile.pipe(Effect.catchCause(() => Effect.void), Effect.forkScoped)
 
+    const reconcileAutonomy: Interface["reconcileAutonomy"] = (sessionID) => Effect.gen(function* () {
+      if ((yield* DecisionChoice.decisionMode(autonomy, sessionID, "answers")) !== "yolo") return
+      const session = yield* sessions.get(sessionID)
+      if (session.time.archived || session.revert || session.scope === "standalone") return
+      const candidates = (yield* SessionReviewFold.fold(db, [sessionID])).filter((item) => SessionReviewFold.isOpen(item) && item.kind === "question")
+      if (candidates.length === 0) return
+      const decision = yield* Decision.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
+      yield* Effect.forEach(candidates, (candidate) => Effect.gen(function* () {
+        const snapshot = yield* autonomy.snapshot(sessionID, { inherited: true }).pipe(Effect.orDie)
+        const answers = candidate.payload.type === "question"
+          ? yield* Question.yoloQuestionAnswers(decision, sessionID, candidate.payload.questions)
+          : candidate.payload.type === "form"
+            ? yield* Form.yoloFormAnswer(decision, sessionID, {
+                id: Form.ID.make(`frm_${candidate.itemID}`), sessionID,
+                title: candidate.payload.title, fields: candidate.payload.fields,
+              })
+            : undefined
+        if (answers === undefined) return
+        if (validate(candidate, { kind: "question", answers }) !== undefined) return
+        const subject = candidate.payload.type === "question" ? candidate.payload.questions.map((question) => question.question).join("; ")
+          : candidate.payload.type === "form" ? `${candidate.payload.title}: ${candidate.payload.fields.map((field) => `${field.key} (${field.description ?? field.title ?? field.key})`).join(", ")}` : ""
+        yield* locks.withLock(candidate.itemID)(Effect.gen(function* () {
+          const latest = (yield* SessionReviewFold.fold(db, [sessionID])).find((item) => item.itemID === candidate.itemID)
+          if (!latest || !SessionReviewFold.isOpen(latest) || pendingFingerprint(latest) !== pendingFingerprint(candidate)) return
+          const committed = yield* events.publishBatch([
+            { definition: SessionEvent.InputAdmitted, data: {
+              sessionID, inputID: promptID(candidate.itemID),
+              input: SessionPending.Message.make({ type: "synthetic", delivery: "steer", data: {
+                text: `YOLO answered deferred question ${candidate.itemID} ${subject}: ${JSON.stringify(answers)}. Continue with the work that depended on it.`,
+                description: "Autonomous deferred answer",
+                metadata: { automatic: true, via: "yolo", review: { itemID: candidate.itemID, kind: candidate.kind } },
+              } }),
+            } },
+            { definition: SessionEvent.Review.Withdrawn, data: { sessionID, itemID: candidate.itemID, reason: "autonomy" } },
+          ], { when: Effect.gen(function* () {
+            const current = (yield* SessionReviewFold.fold(db, [sessionID])).find((item) => item.itemID === candidate.itemID)
+            const owner = yield* sessions.get(sessionID).pipe(Effect.orDie)
+            return current !== undefined && SessionReviewFold.isOpen(current) && pendingFingerprint(current) === pendingFingerprint(candidate) &&
+              !owner.time.archived && !owner.revert && (yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot)) &&
+              (yield* SessionPending.lookup(db, sessionID, promptID(candidate.itemID))) === undefined
+          }) })
+          if (committed.length > 0) yield* execution.wake(sessionID).pipe(Effect.orDie)
+        }))
+      }), { concurrency: "unbounded", discard: true })
+    })
+
+    yield* autonomy.changes.pipe(
+      Stream.runForEach((sessionID) => reconcileAutonomy(sessionID).pipe(
+        Effect.catchCause((cause) => Effect.logWarning("Unable to reconcile deferred answers", { sessionID, cause })),
+      )),
+      Effect.forkScoped,
+    )
+
     return Service.of({
       open: (input) => SessionReviewFold.open(db, events, input),
       list: Effect.fn("SessionReview.list")(function* (sessionID) {
@@ -350,6 +410,7 @@ const layer = Layer.effect(
       consume: (sessionID, kind, expected) => SessionReviewFold.consume(db, events, sessionID, kind, expected),
       hasOpen: (sessionID) => SessionReviewFold.openCount(db, sessionID).pipe(Effect.map((count) => count > 0)),
       reconcile,
+      reconcileAutonomy,
     })
   }),
 )
@@ -387,5 +448,5 @@ function validate(item: SessionReviewFold.Folded, decision: SessionReview.Decisi
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, EventRuntime.node, Session.node, SessionOrchestration.node, PermissionSession.node, SessionExecution.node],
+  deps: [Database.node, EventRuntime.node, Session.node, SessionOrchestration.node, PermissionSession.node, SessionExecution.node, SessionAutonomy.node, LocationServiceMap.node],
 })

@@ -6,7 +6,7 @@ export type AutonomyCategory = (typeof autonomyCategories)[number]
 export type AutonomyModes = { readonly [Category in AutonomyCategory]: AutonomyMode }
 export type EffectiveAutonomyView = AutonomyModes & {
   readonly inherited: { readonly [Category in AutonomyCategory]?: string }
-  readonly asleep: boolean
+  readonly deferred: boolean
   readonly guardrailsEnabled: boolean
 }
 export type AutonomyIntent =
@@ -44,6 +44,10 @@ export function autonomyChange(intent: Exclude<AutonomyIntent, { type: "select" 
   return { [intent.category]: cycleAutonomyMode(own[intent.category], intent.step) }
 }
 
+export function requiresYoloConfirmation(own: AutonomyModes, change: Partial<AutonomyModes>) {
+  return autonomyCategories.some((category) => change[category] === "yolo" && own[category] !== "yolo")
+}
+
 export function autonomyKeyIntent(
   event: { readonly key: string; readonly ctrlKey: boolean; readonly metaKey: boolean; readonly altKey: boolean; readonly shiftKey: boolean },
   selected: number,
@@ -68,26 +72,26 @@ export function autonomyRows(autonomy: (AutonomyModes & { readonly effective?: E
       mode,
       label: modeLabels[mode],
       ...(effective?.inherited[category] === undefined ? {} : { inheritedFrom: effective.inherited[category] }),
-      decider: decider(category, mode, effective?.asleep === true, effective?.guardrailsEnabled !== false),
+      decider: decider(category, mode, effective?.deferred === true, effective?.guardrailsEnabled !== false),
     }
   })
 }
 
-function decider(category: AutonomyCategory, mode: AutonomyMode, asleep: boolean, guardrailsEnabled: boolean) {
+function decider(category: AutonomyCategory, mode: AutonomyMode, deferred: boolean, guardrailsEnabled: boolean) {
   if (category === "permissions") {
     if (mode === "auto") return "Rules approve permission asks; denies still block"
-    if (mode === "yolo") return "YOLO evaluates permission asks; uncertain asks reach you"
-    return asleep ? "Review box holds each permission ask" : "You decide each permission ask"
+    if (mode === "yolo") return "YOLO bypasses permission blockers"
+    return deferred ? "Review box holds unresolved permission asks" : "You decide each permission ask"
   }
   if (category === "guardrails") {
+    if (mode === "yolo") return "YOLO bypasses all guardrail blockers"
     if (!guardrailsEnabled) return "Ordinary reviews are disabled; hard reviews still need you"
-    if (mode === "yolo") return "YOLO evaluates reviews; hard reviews still need your approval"
-    if (mode === "auto") return asleep ? "Review box holds each review while asleep" : "Routine reviews are approved while awake; hard reviews still need you"
-    return asleep ? "Review box holds each review" : "You decide each review"
+    if (mode === "auto") return deferred ? "Review box holds unresolved reviews while deferred" : "Routine reviews are approved; hard reviews still need you"
+    return deferred ? "Review box holds unresolved reviews" : "You decide each review"
   }
-  if (mode === "auto") return "Explicit defaults or the one Recommended option answer; the rest reach you"
-  if (mode === "yolo") return "YOLO answers what it can validate; the rest reach you"
-  return asleep ? "Review box holds each question" : "You answer each question"
+  if (mode === "auto") return deferred ? "Explicit defaults or the one Recommended option answer; the rest wait in Review" : "Explicit defaults or the one Recommended option answer; the rest reach you"
+  if (mode === "yolo") return "YOLO answers all questions, including free text"
+  return deferred ? "Review box holds unresolved questions" : "You answer each question"
 }
 
 function uniformMode(modes: AutonomyModes) {

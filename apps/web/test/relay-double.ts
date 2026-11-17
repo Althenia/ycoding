@@ -143,7 +143,7 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
   const autonomyValue = (sessionID: string | undefined) => {
     const state = autonomyFor(sessionID)
     const given = typeof state.effective === "object" && state.effective !== null ? state.effective as Record<string, unknown> : undefined
-    return { data: { ...state, effective: given ?? { permissions: state.permissions, guardrails: state.guardrails, answers: state.answers, inherited: {}, asleep: state.sleep !== undefined, guardrailsEnabled: true } } }
+    return { data: { ...state, effective: given ?? { permissions: state.permissions, guardrails: state.guardrails, answers: state.answers, inherited: {}, deferred: state.defer !== undefined, guardrailsEnabled: true } } }
   }
 
   const builtInHandler = (request: RemoteRequest): ConcreteResult => {
@@ -229,7 +229,7 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
         const text = typeof request.input?.goal === "string" ? request.input.goal : undefined
         const current = autonomyFor(request.sessionID)
         setAutonomy(request.sessionID, { mode: "normal", permissions: current.permissions, guardrails: current.guardrails, answers: current.answers,
-          ...(current.sleep === undefined ? {} : { sleep: current.sleep }),
+          ...(current.defer === undefined ? {} : { defer: current.defer }),
           ...(text === undefined ? {} : { goal: { text, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }) })
         return { ok: true, value: autonomyValue(request.sessionID) }
       }
@@ -241,8 +241,8 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
           ...(typeof input.answers === "string" ? { answers: input.answers } : {}),
           ...(typeof input.goal === "string" ? { goal: { text: input.goal, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } : {}),
         }
-        if (input.sleep === true) next = { ...next, sleep: {} }
-        if (input.sleep === false) next = Object.fromEntries(Object.entries(next).filter(([key]) => key !== "sleep"))
+        if (input.defer === true) next = { ...next, defer: {} }
+        if (input.defer === false) next = Object.fromEntries(Object.entries(next).filter(([key]) => key !== "defer"))
         if (next.effective !== undefined) next = Object.fromEntries(Object.entries(next).filter(([key]) => key !== "effective"))
         setAutonomy(request.sessionID, next)
         return { ok: true, value: autonomyValue(request.sessionID) }

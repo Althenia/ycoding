@@ -106,7 +106,7 @@ export function CommandPalette(props: {
         ...(state.view?.id === sessionID && state.view.autonomy !== undefined ? { autonomous: state.view.autonomy.effective ?? state.view.autonomy } : {}),
         goalActive: state.view?.id === sessionID && state.view.autonomy?.goal?.status === "active",
         ...(state.view?.id === sessionID && state.view.autonomy !== undefined
-          ? { asleep: state.view.autonomy.effective?.asleep ?? state.view.autonomy.sleep !== undefined } : {}),
+          ? { deferred: state.view.autonomy.effective?.deferred ?? state.view.autonomy.defer !== undefined } : {}),
       },
       commands: ready?.commands ?? [],
       skills: ready?.skills.map((skill) => ({ id: skill.id, name: skill.name, description: skill.description })) ?? [],
@@ -171,7 +171,7 @@ export function CommandPalette(props: {
       case "interrupt": void remote.store.interrupt(); return
       case "stopGoal": void remote.store.stopGoal(); return
       case "autonomous": requestAutonomousDialog(); return
-      case "sleep": void remote.store.setSleep(intent.sleep); return
+      case "defer": void remote.store.setDefer(intent.defer); return
       case "dotsConnection": {
         const returnFocus = opener ?? trigger
         if (returnFocus) props.handlers.dotsConnection(returnFocus)

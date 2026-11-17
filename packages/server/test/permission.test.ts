@@ -26,6 +26,7 @@ test("request-only permission rejection preserves ownership, feedback, and missi
     ask: () => Effect.die("unused"),
     assert: () => Effect.die("unused"),
     deferPending: () => Effect.die("unused"),
+    reconcileAutonomy: () => Effect.die("unused"),
     snapshot: () => Effect.die("unused"),
     snapshots: () => Effect.die("unused"),
     reconsider: () => Effect.die("unused"),

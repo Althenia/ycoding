@@ -127,6 +127,7 @@ describe("SkillTool", () => {
             Permission.Service,
             Permission.Service.of({
               deferPending: () => Effect.void,
+              reconcileAutonomy: () => Effect.void,
               evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
               assert: (input) =>
                 Effect.sync(() => {
@@ -231,6 +232,7 @@ describe("SkillTool", () => {
               },
               orchestration: {
                 managed: unavailable,
+                reconcileAutonomy: unavailable,
                 get: unavailable,
                 launch: unavailable,
                 switchModel: unavailable,

@@ -145,18 +145,18 @@ it.effect("auto permissions still allow a deferred ask without a review item", (
   expect(yield* reviews.list(root.id)).toEqual([])
 }))
 
-it.effect("yolo permissions assess first and defer an escalation to an executor item", () => Effect.gen(function* () {
+it.effect("YOLO permissions allow executor requests without creating deferred items", () => Effect.gen(function* () {
   const { sessions, reviews, root, permission } = yield* setup
   yield* sessions.autonomy.set({ sessionID: root.id, permissions: "yolo" })
   const deferred = yield* deferPermission(permission, shellInput(root.id))
-  expect(deferred?.state).toBe("open")
+  expect(deferred).toBeUndefined()
   const items = yield* reviews.list(root.id)
-  expect(items.map((item) => [item.kind, item.origin])).toEqual([["permission", { requestID: expect.any(String), executor: true }]])
+  expect(items).toEqual([])
 }))
 
 it.effect("a sleeping Session defers a deferred ask the same way", () => Effect.gen(function* () {
   const { sessions, reviews, root, permission } = yield* setup
-  yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: root.id, defer: true })
   const deferred = yield* deferPermission(permission, shellInput(root.id))
   expect(deferred?.state).toBe("open")
   expect((yield* reviews.list(root.id))[0]?.origin).toEqual({ requestID: expect.any(String), executor: true })
@@ -179,7 +179,7 @@ it.effect("deferred and ordinary permission approvals never consume each other a
   const ordinary = { ...shellInput(root.id, volatile), defer: undefined }
   const deferredFirst = yield* deferPermission(permission, shellInput(root.id, volatile))
   yield* reviews.decide({ sessionID: root.id, itemID: deferredFirst!.itemID!, decision: { kind: "permission", reply: "once" } })
-  yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: root.id, defer: true })
   const ordinaryExit = yield* permission.assert(ordinary).pipe(Effect.timeout("2 seconds"), Effect.exit)
   expect(permissionDeferred(ordinaryExit)?.state).toBe("open")
   const ordinaryItem = (yield* reviews.list(root.id)).find((item) => !("executor" in item.origin))

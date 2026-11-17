@@ -566,7 +566,7 @@ test("derives operational status and elapsed from active work and retry state", 
   const base = { ...createSessionView("ses_a"), status: "running" as const, executionStarted: 1_000 }
   expect(sessionStatusLabel(base, 47_700)).toBe("cooking · 46.7s")
   expect(sessionStatusLabel({ ...base, autonomy: { mode: "normal", ...yoloAll } }, 47_700)).toBe("Autonomous YOLO · cooking · 46.7s")
-  expect(sessionStatusLabel({ ...base, status: "idle", autonomy: { mode: "normal", ...manualAll, sleep: {} } }, 47_700)).toBe("Autonomous Manual · asleep · ready")
+  expect(sessionStatusLabel({ ...base, status: "idle", autonomy: { mode: "normal", ...manualAll, defer: {} } }, 47_700)).toBe("Autonomous Manual · deferred · ready")
   expect(sessionStatusLabel({ ...base, messages: [{ kind: "assistant", id: "a", created: 2_000, parts: [{ kind: "reasoning", ordinal: 0, text: "…", started: 3_000 }] }] }, 49_700)).toBe("thinking · 48.7s")
   expect(sessionStatusLabel({ ...base, messages: [{ kind: "assistant", id: "a", created: 2_000, parts: [{ kind: "tool", callID: "c", name: "shell", status: "running", content: [], started: 3_000 }] }] }, 135_000)).toBe("tool running · 2m14s")
   expect(sessionStatusLabel({ ...base, messages: [{ kind: "assistant", id: "msg_retry", created: 2_000, parts: [], retry: { attempt: 2, at: 6_000, code: "rate_limit" } }] }, 4_000)).toBe("1 failed · retry 2 · in 2s")
@@ -581,7 +581,7 @@ test("derives operational status and elapsed from active work and retry state", 
 test("summarizes runtime observations without exposing raw JSON inline", () => {
   const session = "Authoritative current Session state (JSON):\n{\"autonomy\":{\"mode\":\"normal\",\"permissions\":\"yolo\",\"guardrails\":\"yolo\",\"answers\":\"yolo\",\"goal\":{\"text\":\"Ship\",\"status\":\"active\",\"iteration\":1,\"noProgress\":0,\"maxNoProgress\":3}},\"todos\":[{}]}"
   expect(noticeSummary("session-state", session)).toBe("Session state · Autonomous YOLO · goal · 1 task")
-  expect(noticeSummary("session-state", "Authoritative current Session state (JSON):\n{\"autonomy\":{\"mode\":\"normal\",\"sleep\":{},\"permissions\":\"manual\",\"guardrails\":\"manual\",\"answers\":\"manual\"},\"todos\":[]}")).toBe("Session state · Autonomous Manual · asleep · 0 tasks")
+  expect(noticeSummary("session-state", "Authoritative current Session state (JSON):\n{\"autonomy\":{\"mode\":\"normal\",\"defer\":{},\"permissions\":\"manual\",\"guardrails\":\"manual\",\"answers\":\"manual\"},\"todos\":[]}")).toBe("Session state · Autonomous Manual · deferred · 0 tasks")
   expect(noticeSummary("session-state", "Authoritative current Session state (JSON):\n{\"autonomy\":{\"mode\":\"normal\",\"yolo\":false},\"todos\":[]}")).toBe("Session state · autonomy unreported · 0 tasks")
   expect(noticeSummary("session-state", "Authoritative current Session state (JSON):\n{\"todos\":[]}")).toBe("Session state · autonomy unreported · 0 tasks")
   expect(noticeSummary("team-view", "Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless the user explicitly asks; report a failure only when it blocks the requested outcome:\n{\"children\":[{\"state\":\"running\"},{\"state\":\"running\"}]}" )).toBe("TeamView · 2 running")
@@ -1168,7 +1168,7 @@ describe("snapshot readers", () => {
     expect(parts[3]).toMatchObject({ kind: "tool", callID: "call_2", status: "failed", error: "denied" })
   })
 
-  const effective = { permissions: "auto", guardrails: "yolo", answers: "manual", inherited: { guardrails: "ses_root" }, asleep: false, guardrailsEnabled: true } as const
+  const effective = { permissions: "auto", guardrails: "yolo", answers: "manual", inherited: { guardrails: "ses_root" }, deferred: false, guardrailsEnabled: true } as const
 
   test("reads autonomy only from the required data and effective response", () => {
     const state = { mode: "normal", permissions: "auto", guardrails: "yolo", answers: "manual", goal: { text: "Ship it", status: "active", iteration: 2, noProgress: 1, maxNoProgress: 5 } } as const
@@ -1189,28 +1189,29 @@ describe("snapshot readers", () => {
     expect(readAutonomy({ data: { mode: "normal", yolo: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } } })).toBeUndefined()
     expect(readAutonomy({ data: { ...state, effective: { ...effective, inherited: { permissions: 1 } } } })).toBeUndefined()
     expect(readAutonomy({ data: { ...state, effective: { ...effective, inherited: undefined } } })).toBeUndefined()
-    expect(readAutonomy({ data: { ...state, effective: { ...effective, asleep: "no" } } })).toBeUndefined()
+    expect(readAutonomy({ data: { ...state, effective: { ...effective, deferred: "no" } } })).toBeUndefined()
     expect(readAutonomy({ data: { ...state, effective: { ...effective, guardrailsEnabled: 1 } } })).toBeUndefined()
     expect(readAutonomy({ data: { ...state }, effective })).toBeUndefined()
     expect(readAutonomy(null)).toBeUndefined()
   })
 
-  test("reads sleep presence without retaining removed autonomy fields", () => {
+  test("reads defer presence without retaining removed autonomy fields", () => {
     const modes = { permissions: "yolo", guardrails: "auto", answers: "manual" } as const
-    expect(readAutonomyState({ data: { mode: "normal", ...modes, sleep: {} } })).toEqual({ mode: "normal", ...modes, sleep: {} })
-    expect(readAutonomyState({ data: { mode: "normal", ...modes, guardrailDecision: true, sleep: { priorGuardrailDecision: true } } })).toEqual({ mode: "normal", ...modes, sleep: {} })
+    expect(readAutonomyState({ data: { mode: "normal", ...modes, defer: {} } })).toEqual({ mode: "normal", ...modes, defer: {} })
+    expect(readAutonomyState({ data: { mode: "normal", ...modes, guardrailDecision: true, defer: { priorGuardrailDecision: true } } })).toEqual({ mode: "normal", ...modes, defer: {} })
     expect(readAutonomyState({ data: { mode: "normal", ...modes, guardrailDecision: true } })).toEqual({ mode: "normal", ...modes })
-    for (const sleep of [null, false, "asleep", []]) expect(readAutonomyState({ data: { mode: "normal", ...modes, sleep } })).toEqual({ mode: "normal", ...modes })
+    for (const defer of [null, false, "deferred", []]) expect(readAutonomyState({ data: { mode: "normal", ...modes, defer } })).toEqual({ mode: "normal", ...modes })
+    expect(readAutonomyState({ data: { mode: "normal", ...modes, sleep: {} } })).toEqual({ mode: "normal", ...modes })
     for (const old of [{ yolo: true }, { yolo: 1 }, { yolo: false, autoPermission: true, autoGuardrail: true, autoAnswer: true }, { permissions: "auto" }, {}])
       expect(readAutonomyState({ data: { mode: "normal", ...old } })).toBeUndefined()
   })
 
-  test("names the effective modes before goal and sleep", () => {
+  test("names the effective modes before goal and defer", () => {
     const goal = { text: "Ship", status: "active" as const, iteration: 1, noProgress: 0, maxNoProgress: 3 }
     expect(autonomyModeParts(manualAll)).toEqual(["Autonomous Manual"])
-    expect(autonomyModeParts({ ...yoloAll, goal, sleep: {} })).toEqual(["Autonomous YOLO", "goal", "asleep"])
-    expect(autonomyModeParts({ permissions: "auto", guardrails: "yolo", answers: "manual", sleep: {} })).toEqual(["Permissions Auto", "Guardrails YOLO", "Answers Manual", "asleep"])
-    expect(autonomyModeParts({ ...manualAll, effective: { ...effective, permissions: "auto", guardrails: "auto", answers: "auto", asleep: true } })).toEqual(["Autonomous Auto", "asleep"])
+    expect(autonomyModeParts({ ...yoloAll, goal, defer: {} })).toEqual(["Autonomous YOLO", "goal", "deferred"])
+    expect(autonomyModeParts({ permissions: "auto", guardrails: "yolo", answers: "manual", defer: {} })).toEqual(["Permissions Auto", "Guardrails YOLO", "Answers Manual", "deferred"])
+    expect(autonomyModeParts({ ...manualAll, effective: { ...effective, permissions: "auto", guardrails: "auto", answers: "auto", deferred: true } })).toEqual(["Autonomous Auto", "deferred"])
     expect(autonomyModeParts({ ...yoloAll, goal: { ...goal, status: "completed" } })).toEqual(["Autonomous YOLO"])
   })
 
@@ -1243,9 +1244,11 @@ describe("snapshot readers", () => {
       { ...base, itemID: "rvw_guardrail", kind: "guardrail", payload: { type: "guardrail", action: "shell", resources: ["rm -rf x"], ruleIDs: ["r"], reason: "delete", hardReview: false, directories: [], fingerprint: "a".repeat(64), requestID: "grq_1" } },
       { ...base, itemID: "rvw_child", kind: "subagent_question", payload: { type: "subagent_question", text: "Which?" } },
       { ...base, itemID: "rvw_form", kind: "question", payload: { type: "form", title: "Release", fields: [{ key: "q0", type: "string" }] } },
+      { ...base, itemID: "rvw_defer", reason: "defer_entry", kind: "subagent_question", payload: { type: "subagent_question", text: "?" } },
+      { ...base, itemID: "rvw_legacy", reason: "sleep_entry", kind: "subagent_question", payload: { type: "subagent_question", text: "?" } },
       { ...base, itemID: "rvw_unknown", reason: "automatic", kind: "subagent_question", payload: { type: "subagent_question", text: "?" } },
     ] })
-    expect(items?.map((item) => [item.itemID, item.reason])).toEqual([["rvw_guardrail", "disabled"], ["rvw_child", "disabled"], ["rvw_form", "disabled"]])
+    expect(items?.map((item) => [item.itemID, item.reason])).toEqual([["rvw_guardrail", "disabled"], ["rvw_child", "disabled"], ["rvw_form", "disabled"], ["rvw_defer", "defer_entry"], ["rvw_legacy", "sleep_entry"]])
   })
 
   test("reads a restart recovery with its uncertain tools, owner, and child, and drops an empty, partial, or mistyped one", () => {
@@ -1279,7 +1282,7 @@ describe("snapshot readers", () => {
     const review = { status: "ready" as const, items: [item("rvw_a", "ses_child"), item("rvw_b", "ses_other")] }
     expect(reviewItemsInScope({ id: "ses_root", review }).map((entry) => entry.itemID)).toEqual(["rvw_a", "rvw_b"])
     expect(reviewItemsInScope({ id: "ses_child", review }).map((entry) => entry.itemID)).toEqual(["rvw_a"])
-    expect(sessionStatusLabel({ ...createSessionView("ses_root"), review, autonomy: { mode: "normal", ...manualAll, sleep: {} } }, 1)).toBe("Autonomous Manual · asleep · waiting for your review")
+    expect(sessionStatusLabel({ ...createSessionView("ses_root"), review, autonomy: { mode: "normal", ...manualAll, defer: {} } }, 1)).toBe("Autonomous Manual · deferred · waiting for your review")
     expect(sessionStatusLabel({ ...createSessionView("ses_root"), review }, 1, 2)).toBe("waiting for your review")
     expect(sessionStatusLabel({ ...createSessionView("ses_root"), review, status: "running", executionStarted: 0 }, 1_000)).toBe("cooking · 1.0s")
     expect(sessionStatusLabel({ ...createSessionView("ses_none"), review }, 1)).toBe("ready")

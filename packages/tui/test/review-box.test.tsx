@@ -179,7 +179,7 @@ test("Project escalation preserves the whole reason chain in the human review bo
       <ReviewBox
         items={[item]}
         currentSessionID="ses_root"
-        asleep={false}
+        deferred={false}
         failed={{}}
         onOpen={() => {}}
         onJump={() => {}}
@@ -218,7 +218,7 @@ for (const mode of ["dark", "light"] as const) {
         <ReviewBox
           items={items()}
           currentSessionID="ses_root"
-          asleep={false}
+          deferred={false}
           failed={{}}
           onOpen={(item) => opened.push(item.itemID)}
           onJump={() => {}}
@@ -254,7 +254,7 @@ test("lists items with attribution, provenance, and actions, and opens or dismis
       <ReviewBox
         items={[guardrailItem, childItem, questionItem]}
         currentSessionID="ses_root"
-        asleep={false}
+        deferred={false}
         failed={{}}
         onOpen={(item) => opened.push(item.itemID)}
         onJump={() => {}}
@@ -287,13 +287,13 @@ test("lists items with attribution, provenance, and actions, and opens or dismis
   }
 })
 
-test("starts collapsed while asleep and expands from its header", async () => {
+test("starts collapsed while deferred and expands from its header", async () => {
   const app = await mount(
     () => (
       <ReviewBox
         items={[guardrailItem]}
         currentSessionID="ses_root"
-        asleep={true}
+        deferred={true}
         failed={{}}
         onOpen={() => {}}
         onJump={() => {}}
@@ -324,7 +324,7 @@ test("pending decisions disable every item action until settlement", async () =>
       <ReviewBox
         items={[guardrailItem, questionItem]}
         currentSessionID="ses_root"
-        asleep={false}
+        deferred={false}
         pendingItemID={guardrailItem.itemID}
         failed={{}}
         onOpen={(item) => opened.push(item.itemID)}
@@ -625,7 +625,7 @@ test("recovery items list as Restart recovery with child attribution, the restar
       <ReviewBox
         items={[recoveryItem]}
         currentSessionID="ses_root"
-        asleep={false}
+        deferred={false}
         failed={{}}
         onOpen={(item) => opened.push(item.itemID)}
         onJump={() => {}}
@@ -759,7 +759,7 @@ test("a disabled review reads as configuration, not as a decision model outcome,
         <ReviewBox
           items={[disabledItem]}
           currentSessionID="ses_root"
-          asleep={true}
+          deferred={true}
           failed={{}}
           onOpen={() => {}}
           onJump={() => {}}

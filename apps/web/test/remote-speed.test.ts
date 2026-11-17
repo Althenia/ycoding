@@ -287,7 +287,7 @@ describe("opening a Session", () => {
     const test = await harness((request) => {
       if (request.operation === "session.subscribe") return { ok: false, code: "session_not_allowed", message: "refused" }
       if (request.operation === "session.snapshot") return snapshot(request.sessionID ?? "ses_a")
-      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: { mode: "normal", permissions: "auto", guardrails: "auto", answers: "manual", goal: { text: "Ship", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 }, effective: { permissions: "auto", guardrails: "auto", answers: "manual", inherited: {}, asleep: false, guardrailsEnabled: true } } } }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: { mode: "normal", permissions: "auto", guardrails: "auto", answers: "manual", goal: { text: "Ship", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 }, effective: { permissions: "auto", guardrails: "auto", answers: "manual", inherited: {}, deferred: false, guardrailsEnabled: true } } } }
       return "default"
     })
     try {

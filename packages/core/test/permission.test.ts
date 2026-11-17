@@ -20,6 +20,7 @@ import { SessionPermissionCeiling } from "@ycoding-ai/core/session/permission-ce
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
+import { SessionReviewFold } from "@ycoding-ai/core/session/review-fold"
 import { eq } from "drizzle-orm"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
@@ -118,6 +119,82 @@ function waitForRequest(input: Partial<Permission.AssertInput> = {}) {
 }
 
 describe("Permission", () => {
+  for (const effect of ["ask", "allow", "deny"] as const) it.effect(`True YOLO allows ${effect} with explicit decision and ceiling deny without evaluation`, () => Effect.gen(function* () {
+    yield* setup([{ action: "*", resource: "*", effect }])
+    const autonomy = yield* SessionAutonomy.Service
+    const service = yield* Permission.Service
+    const { db } = yield* Database.Service
+    const sessionID = Session.ID.make("ses_test")
+    yield* db.update(SessionTable).set({ permission: SessionPermissionCeiling.denyOnly([{ action: "*", resource: "*", effect: "deny" }]) })
+      .where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+    yield* autonomy.set({ sessionID, permissions: "yolo" })
+    const value = assertion({ requireExplicitDecision: true })
+    expect(yield* service.evaluateEffective({ sessionID, action: value.action, resource: value.resources[0]! })).toBe("allow")
+    expect(yield* service.ask(value)).toMatchObject({ effect: "allow" })
+    yield* service.assert({ ...value, id: Permission.ID.create() })
+    expect(yield* service.list()).toEqual([])
+    const events = yield* EventRuntime.Service
+    const facts = (yield* events.log({ aggregateID: sessionID, follow: false }).pipe(Stream.runCollect))
+      .flatMap((event) => event.type === SessionEvent.PermissionAssessed.type && "data" in event ? [event.data] : [])
+    expect(facts).toEqual(Array.from({ length: 2 }, () => expect.objectContaining({ outcome: "allow", via: "yolo", reply: "once" })))
+  }))
+
+  it.effect("True YOLO reconciles pending permissions once and supersedes deferred reviews without replay", () => Effect.gen(function* () {
+    yield* setup()
+    const autonomy = yield* SessionAutonomy.Service
+    const service = yield* Permission.Service
+    const events = yield* EventRuntime.Service
+    const { db } = yield* Database.Service
+    const sessionID = Session.ID.make("ses_test")
+    const deferred = yield* service.assert(assertion({ defer: true })).pipe(Effect.exit)
+    expect(deferred._tag).toBe("Failure")
+    const reviews = yield* SessionReviewFold.fold(db, [sessionID])
+    expect(reviews.filter(SessionReviewFold.isOpen)).toHaveLength(1)
+    const pending = yield* waitForRequest({ id: Permission.ID.create(), requireExplicitDecision: true })
+    const replies: unknown[] = []
+    const unsubscribe = yield* events.listen((event) => Effect.sync(() => {
+      if (event.type === Permission.Event.Replied.type) replies.push(event.data)
+    }))
+    yield* Effect.addFinalizer(() => unsubscribe)
+    yield* autonomy.set({ sessionID, permissions: "yolo" })
+    yield* service.reconcileAutonomy(sessionID)
+    yield* service.reconcileAutonomy(sessionID)
+    yield* Fiber.join(pending.fiber)
+    expect(yield* service.list()).toEqual([])
+    expect((yield* SessionReviewFold.fold(db, [sessionID]))[0]).toMatchObject({ withdrawn: "autonomy", consumed: false })
+    expect(replies).toEqual([expect.objectContaining({ requestID: pending.request.id, reply: "once" })])
+  }))
+
+  it.effect("True YOLO ignores a prior rejection without consuming a review grant", () => Effect.gen(function* () {
+    yield* setup()
+    const pending = yield* waitForRequest()
+    yield* pending.service.reply({ requestID: pending.request.id, reply: "reject" })
+    yield* Fiber.await(pending.fiber)
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID: pending.request.sessionID, permissions: "yolo" })
+    yield* pending.service.assert(assertion({ id: Permission.ID.create() }))
+    expect(yield* pending.service.list()).toEqual([])
+  }))
+
+  for (const reply of ["once", "reject"] as const) it.effect(`True YOLO supersedes unused deferred permission ${reply} without granting a later Manual action`, () => Effect.gen(function* () {
+    yield* setup()
+    const service = yield* Permission.Service
+    const autonomy = yield* SessionAutonomy.Service
+    const events = yield* EventRuntime.Service
+    const { db } = yield* Database.Service
+    const input = assertion({ defer: true })
+    expect((yield* service.assert(input).pipe(Effect.exit))._tag).toBe("Failure")
+    const review = (yield* SessionReviewFold.fold(db, [input.sessionID]))[0]!
+    yield* events.publish(SessionEvent.Review.Decided, { sessionID: input.sessionID, itemID: review.itemID, decision: { kind: "permission", reply } })
+    yield* autonomy.set({ sessionID: input.sessionID, permissions: "yolo" })
+    yield* service.reconcileAutonomy(input.sessionID)
+    yield* service.assert({ ...input, id: Permission.ID.create() })
+    expect((yield* SessionReviewFold.fold(db, [input.sessionID]))[0]).toMatchObject({ withdrawn: "autonomy", consumed: false })
+    yield* autonomy.set({ sessionID: input.sessionID, permissions: "manual" })
+    expect((yield* service.assert({ ...input, id: Permission.ID.create() }).pipe(Effect.exit))._tag).toBe("Failure")
+    expect((yield* SessionReviewFold.fold(db, [input.sessionID])).filter(SessionReviewFold.isOpen)).toHaveLength(1)
+  }))
+
   it.effect("reports a missing permission request when its Session disappears before approval", () => Effect.gen(function* () {
     yield* setup([{ action: "*", resource: "*", effect: "ask" }])
     const service = yield* Permission.Service
@@ -241,7 +318,7 @@ describe("Permission", () => {
       const autonomy = yield* SessionAutonomy.Service
       const service = yield* Permission.Service
       const sessionID = Session.ID.make("ses_test")
-      yield* autonomy.set({ sessionID, permissions: "yolo" })
+      yield* autonomy.set({ sessionID, permissions: "manual" })
       expect(yield* service.ask(assertion())).toEqual({ id: Permission.ID.create("per_test"), effect: "ask" })
       yield* service.reply({ requestID: Permission.ID.create("per_test"), reply: "once" })
       yield* autonomy.set({ sessionID, permissions: "auto" })
@@ -272,15 +349,15 @@ describe("Permission", () => {
     }),
   )
 
-  it.effect("preserves explicit deny rules in yolo mode", () =>
+  it.effect("True YOLO allows configured denies without retaining a prompt", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "read", resource: "*", effect: "deny" }])
       const autonomy = yield* SessionAutonomy.Service
       const service = yield* Permission.Service
       yield* autonomy.set({ sessionID: Session.ID.make("ses_test"), permissions: "yolo" })
 
-      expect(yield* service.ask(assertion())).toMatchObject({ effect: "deny" })
-      expect(yield* service.assert(assertion()).pipe(Effect.flip)).toBeInstanceOf(Permission.BlockedError)
+      expect(yield* service.ask(assertion())).toMatchObject({ effect: "allow" })
+      yield* service.assert(assertion())
       expect(yield* service.list()).toEqual([])
     }),
   )
@@ -827,6 +904,33 @@ describe("Project coordinator execution boundary", () => {
         expect(yield* outcome(sessionID, "edit", "src/a.ts")).toBe(denial("edit"))
       }
     }))
+
+  it.effect("True YOLO preserves coordinator separation while member and read-only requests ignore configured denies", () => Effect.gen(function* () {
+    yield* project
+    yield* setRules([{ action: "*", resource: "*", effect: "deny" }])
+    const autonomy = yield* SessionAutonomy.Service
+    for (const sessionID of [master, masterChild, member, memberChild]) yield* autonomy.set({ sessionID, permissions: "yolo" })
+    for (const sessionID of [master, masterChild]) {
+      expect(yield* outcome(sessionID, "edit", "src/a.ts")).toContain("Project coordinator")
+      expect(yield* outcome(sessionID, "shell", "git commit -m x")).toContain("Project coordinator")
+      expect(yield* outcome(sessionID, "shell", "git diff")).toBe("allowed")
+      expect(yield* Permission.evaluateEffective({ sessionID, action: "edit", resource: "src/a.ts" })).toBe("deny")
+    }
+    for (const sessionID of [member, memberChild]) expect(yield* outcome(sessionID, "edit", "src/a.ts")).toBe("allowed")
+  }))
+
+  it.effect("True YOLO rejects an existing permission that became coordinator-only instead of leaving it pending", () => Effect.gen(function* () {
+    yield* setup()
+    const pending = yield* waitForRequest({ action: "edit" })
+    yield* project
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID: master, permissions: "yolo" })
+    yield* pending.service.reconcileAutonomy(master)
+    const error = yield* Fiber.join(pending.fiber).pipe(Effect.flip)
+    expect(error).toBeInstanceOf(Permission.CorrectedError)
+    if (error instanceof Permission.CorrectedError) expect(error.feedback).toContain("Project coordinator")
+    expect(yield* pending.service.list()).toEqual([])
+  }))
 
   it.effect("leaves member Sessions and their descendants under their normal rules", () =>
     Effect.gen(function* () {

@@ -17,6 +17,8 @@ let pinned = false
 let pending = true
 let replyText = "Initial synthetic response"
 let running = false
+let deferred = false
+let autonomyModes = { permissions: "manual", guardrails: "manual", answers: "manual" }
 let currentVariant: string | undefined
 let stagedMessage: string | undefined
 let archived = false
@@ -59,6 +61,13 @@ const processTask = () => ({ sessionID: "ses_child", parentID: "ses_test", descr
 
 beforeAll(async () => {
   owned = await syntheticDesktop((call) => {
+    if (call.route === "/api/session/ses_test/autonomy") {
+      if (call.method === "PUT") {
+        if (typeof call.body.defer === "boolean") deferred = call.body.defer
+        for (const key of ["permissions", "guardrails", "answers"] as const) if (typeof call.body[key] === "string") autonomyModes[key] = String(call.body[key])
+      }
+      return { data: { mode: "normal", ...autonomyModes, goal: null, defer: deferred ? {} : null, effective: { ...autonomyModes, inherited: {}, deferred, guardrailsEnabled: true } } }
+    }
     if (call.route === "/api/keep-awake") return { data: { state: "off" } }
     if (call.route === "/api/permission/saved") return { data: [] }
     if (call.route === "/api/server/telemetry/consent") return { consent: { enabled: telemetryConsent, noticeVersion: 1, decidedAt: 1 }, noticeVersion: 1 }
@@ -141,7 +150,7 @@ beforeAll(async () => {
 }, 30_000)
 
 afterAll(async () => { await browser?.close(); await server?.close(); await owned?.close() })
-beforeEach(() => { ideEnabled = false; externalEdit = undefined })
+beforeEach(() => { ideEnabled = false; externalEdit = undefined; deferred = false; autonomyModes = { permissions: "manual", guardrails: "manual", answers: "manual" } })
 beforeEach(() => { presentationParts = false; questionPending = false; pending = true; pinned = false; replyText = "Initial synthetic response"; running = false; currentVariant = undefined; stagedMessage = undefined; archived = false; familyEnabled = false; failInterrupt = false; directoryStatus = false; telemetryConsent = false; globalFormPending = false; formReview = false; processControls = false; waitingTask = true; stoppedTask = true; decideGate = undefined; fileGate = undefined; clipboard.length = 0; saved.length = 0; notifications.length = 0; if (owned) owned.calls.length = 0 })
 
 const inject = `(() => {
@@ -198,6 +207,43 @@ async function confirm(page: Page, label = "Confirm") {
   await page.evaluate(`[...document.querySelectorAll('.confirm button')].find(button => button.textContent.trim() === ${JSON.stringify(label)}).focus()`)
   await page.pressKey("Enter", "Enter", 13, "\r")
 }
+
+test("defer toggles independently and YOLO requires explicit risk consent", async () => {
+  pending = false
+  const page = await open()
+  const changes = () => owned!.calls.filter((call) => call.method === "PUT" && call.route.endsWith("/autonomy"))
+  const submit = async (text: string) => {
+    await message(page, text)
+    await page.evaluate(`document.querySelector('form.composer').requestSubmit()`)
+  }
+  try {
+    await wait(page, `document.body.textContent.includes('Defer off')`)
+    await submit("/defer")
+    await confirm(page)
+    await wait(page, `document.body.textContent.includes('Defer on')`)
+    expect(changes().map((call) => call.body)).toEqual([{ defer: true }])
+    await submit("Synthetic ordinary message")
+    await wait(page, `(window.__desktopFixture.completed.prompt ?? 0) >= 1`)
+    expect(deferred).toBe(true)
+    await submit("/autonomous yolo")
+    await wait(page, `document.querySelector('.confirm[open]')?.textContent.includes('Accept these risks')`)
+    expect(await page.evaluate(`document.querySelector('.confirm').textContent`)).toContain("hard policies and custom rules")
+    await confirm(page, "Cancel")
+    expect(changes()).toHaveLength(1)
+    expect(autonomyModes).toEqual({ permissions: "manual", guardrails: "manual", answers: "manual" })
+    await submit("/autonomous yolo")
+    await confirm(page)
+    await wait(page, `document.body.textContent.includes('Autonomous YOLO · Defer on')`)
+    expect(changes()).toHaveLength(2)
+    expect(autonomyModes).toEqual({ permissions: "yolo", guardrails: "yolo", answers: "yolo" })
+    await submit("/defer")
+    await confirm(page)
+    await wait(page, `document.body.textContent.includes('Defer off')`)
+    expect(changes().map((call) => call.body)).toEqual([{ defer: true }, { permissions: "yolo", guardrails: "yolo", answers: "yolo" }, { defer: false }])
+    expect(autonomyModes.answers).toBe("yolo")
+    expect(await page.evaluate(`window.__desktopFixture.errors`)).toEqual([])
+  } finally { await page.close() }
+}, 30_000)
 
 test("layout stability keeps streaming disclosures mounted and follows only the attached reader", async () => {
   pending = false

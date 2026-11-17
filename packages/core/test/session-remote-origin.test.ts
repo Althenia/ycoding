@@ -77,7 +77,7 @@ const it = testEffect(
         Layer.mock(KeepAwake.Service, {
           hold: () => Effect.succeed({ state: "off" as const }),
           release: () => Effect.succeed({ state: "off" as const }),
-          get: Effect.succeed({ state: "off", lid: "off", sleepHold: false } as const),
+          get: Effect.succeed({ state: "off", lid: "off", deferHold: false } as const),
         }),
       ],
     ],
@@ -402,7 +402,7 @@ describe("remote MCP input does not supersede native waits", () => {
       )
       yield* Effect.addFinalizer(() => stop)
       const waiting = yield* forms
-        .ask({ sessionID: root.id, title: "Archive approval", metadata: { kind: "question" }, fields: [{ key: "q0", type: "string", required: true }] })
+        .ask({ sessionID: root.id, title: "Physical approval", metadata: { kind: "question" }, fields: [{ key: "q0", type: "external", url: "https://example.invalid/approval" }] })
         .pipe(Effect.forkScoped)
       yield* Deferred.await(created)
 
@@ -439,16 +439,16 @@ describe("remote MCP input does not supersede native waits", () => {
     }),
   )
 
-  it.live("keeps a sleeping family asleep where a native prompt wakes it", () =>
+  it.live("keeps a sleeping family deferred where a native prompt wakes it", () =>
     Effect.gen(function* () {
       const { session, root } = yield* setup()
-      yield* session.autonomy.set({ sessionID: root.id, sleep: true })
+      yield* session.autonomy.set({ sessionID: root.id, defer: true })
 
       yield* session.prompt({ ...remote(root.id), resume: true })
-      expect((yield* session.autonomy.get(root.id)).sleep).toBeDefined()
+      expect((yield* session.autonomy.get(root.id)).defer).toBeDefined()
 
       yield* session.prompt({ sessionID: root.id, text: "native wake" })
-      expect((yield* session.autonomy.get(root.id)).sleep).toBeUndefined()
+      expect((yield* session.autonomy.get(root.id)).defer).toEqual({})
     }),
   )
 })

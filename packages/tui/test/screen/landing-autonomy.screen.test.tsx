@@ -81,7 +81,7 @@ function fixture(input: {
         const payload: unknown = await request.json()
         if (typeof payload !== "object" || payload === null) throw new Error("Invalid autonomy payload")
         const goal = Reflect.get(payload, "goal")
-        const sleep = Reflect.get(payload, "sleep")
+        const defer = Reflect.get(payload, "defer")
         mutations.push("autonomy")
         autonomyRequests.push(structuredClone(payload) as Record<string, unknown>)
         if (failAutonomy) {
@@ -98,7 +98,7 @@ function fixture(input: {
         }
         autonomyState = {
           mode: "normal", permissions: mode("permissions"), guardrails: mode("guardrails"), answers: mode("answers"),
-          ...(typeof sleep === "boolean" ? (sleep ? { sleep: {} } : {}) : autonomyState.sleep ? { sleep: autonomyState.sleep } : {}),
+          ...(typeof defer === "boolean" ? (defer ? { defer: {} } : {}) : autonomyState.defer ? { defer: autonomyState.defer } : {}),
           ...(typeof goal === "string" ? { goal: { text: goal, status: "active" as const, iteration: 0, noProgress: 0, maxNoProgress: 3 } } : goal === null ? {} : autonomyState.goal ? { goal: autonomyState.goal } : {}),
         }
       }
@@ -232,10 +232,40 @@ async function chooseLanding(screen: Awaited<ReturnType<typeof renderScreen>>, k
     if (key === "down" || key === "left" || key === "right") screen.input.pressArrow(key)
     else screen.input.pressKey(key)
     await Bun.sleep(30)
+    if (screen.frame().includes("Accept risk & enable YOLO")) {
+      screen.input.pressEnter()
+      await waitFor(() => screen.frame().includes("1 all Manual"), "accepted risk")
+    }
   }
   screen.input.pressEscape()
   await waitFor(() => !screen.frame().includes("1 all Manual"), "Autonomous dialog closed")
 }
+
+test("defer toggles on and survives a later prompt until toggled off", async () => {
+  const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-landing-autonomy-"))
+  const backend = fixture()
+  const screen = await renderScreen({ width: 100, height: 40, state, route: backend.route, settle: "Message YCoding…" })
+  try {
+    await screen.input.typeText("Start session")
+    screen.input.pressEnter()
+    await waitFor(() => backend.admissionStates.length === 1, "first prompt")
+    await screen.input.typeText("/defer")
+    screen.input.pressEnter()
+    await waitFor(() => backend.current().effective.deferred, "deferred state")
+    expect(backend.autonomyRequests.at(-1)).toEqual({ defer: true })
+    await screen.input.typeText("Continue working")
+    screen.input.pressEnter()
+    await waitFor(() => backend.admissionStates.length === 2, "second prompt")
+    expect(backend.admissionStates[1]?.effective.deferred).toBe(true)
+    await screen.input.typeText("/defer")
+    screen.input.pressEnter()
+    await waitFor(() => !backend.current().effective.deferred, "deferral off")
+    expect(backend.autonomyRequests.at(-1)).toEqual({ defer: false })
+  } finally {
+    await screen.dispose()
+    await rm(state, { recursive: true, force: true })
+  }
+}, 30_000)
 
 test("landing Autonomous modes are one durable request before the first prompt and shown in chat", async () => {
   const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-landing-autonomy-"))
@@ -288,7 +318,7 @@ test("explicit landing goal creates a Session with the displayed modes, then the
       { goal: "Validate every branch" },
     ])
     expect(backend.current()).toMatchObject({ permissions: "yolo", goal: { text: "Validate every branch", status: "active" } })
-    await waitFor(() => screen.frame().includes("shells 0"), "chat footer")
+    await waitFor(() => /shells 0|sh0/.test(screen.frame()), "chat footer")
     await waitFor(() => screen.lines()[1]?.includes("ready") ?? false, "chat header")
     expect(screen.lines()[1]).not.toMatch(/YOLO|yolo|goal/)
     await screen.input.typeText("Start the work")

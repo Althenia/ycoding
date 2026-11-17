@@ -112,7 +112,7 @@ export function keepAwakeIndicator(awake: KeepAwakeState): { readonly label: str
   if (status.state === "error") return { label: "keep-awake error", tone: "danger", detail: status.message }
   if (status.state === "unsupported") return { label: "keep-awake unsupported", tone: "attention", detail: status.message }
   return {
-    label: `keep-awake on · lid ${status.lid === "on" || status.lid === "held" ? "held" : status.lid ?? "unreported"}${status.display === undefined ? "" : ` · display ${status.display}`}${status.activity === undefined ? "" : ` · activity ${status.activity}`}${status.sleepHold ? " · sleep held" : ""}`,
+    label: `keep-awake on · lid ${status.lid === "on" || status.lid === "held" ? "held" : status.lid ?? "unreported"}${status.display === undefined ? "" : ` · display ${status.display}`}${status.activity === undefined ? "" : ` · activity ${status.activity}`}${status.deferHold ? " · defer held" : ""}`,
     tone: [status.lid, status.display, status.activity].includes("error") ? "danger" : [status.lid, status.display, status.activity].includes("unsupported") ? "attention" : "success",
     detail: status.message,
   }
@@ -262,7 +262,7 @@ export type RemoteSessionSummary = {
   readonly guardrails?: AutonomyMode
   readonly answers?: AutonomyMode
   readonly goalActive?: boolean
-  readonly asleep?: boolean
+  readonly deferred?: boolean
   readonly updatedAt?: string
 }
 
@@ -480,7 +480,7 @@ export function sessionStateChips(session: RemoteSessionSummary): readonly Sessi
       else chips.push(...summary.chips.map((chip) => ({ label: chip.label, tone: chip.mode === "yolo" ? "attention" as const : "neutral" as const })))
     }
     if (session.goalActive === true) chips.push({ label: "goal", tone: "neutral" })
-    if (session.asleep === true) chips.push({ label: "asleep", tone: "success" })
+    if (session.deferred === true) chips.push({ label: "deferred", tone: "success" })
   }
 
   return chips

@@ -30,6 +30,7 @@ import { ReferenceInstructions } from "@ycoding-ai/core/reference/instructions"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
+import { SessionPermissionCeiling } from "@ycoding-ai/core/session/permission-ceiling"
 import { SessionCompaction } from "@ycoding-ai/core/session/compaction"
 import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-execution"
 import { SessionCompactionJob } from "@ycoding-ai/core/session/compaction-job"
@@ -99,6 +100,7 @@ const permission = Layer.succeed(
   Permission.Service,
   Permission.Service.of({
     deferPending: () => Effect.void,
+    reconcileAutonomy: () => Effect.void,
     evaluateEffective: () => Effect.succeed("allow"),
     assert: () => Effect.die("unused"),
     ask: () => Effect.die("unused"),
@@ -173,9 +175,17 @@ const fixtureAgents = AppNodeBuilder.build(Agent.node).pipe(
 const emptyInstructions = () => Effect.succeed(Instructions.empty)
 const systemContext = Layer.mock(InstructionBuiltIns.Service, { load: emptyInstructions })
 const instructionContext = Layer.mock(InstructionDiscovery.Service, { load: emptyInstructions })
-const skillInstructions = Layer.mock(SkillInstructions.Service, { load: emptyInstructions })
+const skillPermissions: Permission.Ruleset[] = []
+const mcpPermissions: Permission.Ruleset[] = []
+const skillInstructions = Layer.mock(SkillInstructions.Service, { load: (agent) => Effect.sync(() => {
+  skillPermissions.push(agent.info?.permissions ?? [])
+  return Instructions.empty
+}) })
 const referenceInstructions = Layer.mock(ReferenceInstructions.Service, { load: emptyInstructions })
-const mcpInstructions = Layer.mock(McpInstructions.Service, { load: emptyInstructions })
+const mcpInstructions = Layer.mock(McpInstructions.Service, { load: (agent) => Effect.sync(() => {
+  mcpPermissions.push(agent.info?.permissions ?? [])
+  return Instructions.empty
+}) })
 const projects = Layer.mock(Project.Service, {
   resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
 })
@@ -323,6 +333,7 @@ const it = testEffect(
       [Snapshot.node, snapshotLayer],
       [SessionExecution.node, execution],
       [Config.node, config],
+      [McpInstructions.node, mcpInstructions],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
       [PluginSupervisor.node, pluginSupervisor],
       [SessionCompactionExecution.node, compactionExecution],
@@ -350,6 +361,8 @@ const insertSession = (id: Session.ID, parentID?: Session.ID) =>
   })
 const setup = Effect.gen(function* () {
   requests.length = 0
+  skillPermissions.length = 0
+  mcpPermissions.length = 0
   response = replyText("Fixture response", "text-fixture")
   const { db } = yield* Database.Service
   yield* db
@@ -409,6 +422,31 @@ const requestFor = (id: Session.ID, text: string) =>
   })
 
 describe("project tool and model request materialization", () => {
+  for (const coordinating of [false, true]) it.effect(`True YOLO makes denied tools and guidance available while preserving coordinator visibility=${coordinating}`, () => Effect.gen(function* () {
+    if (coordinating) yield* setupProject
+    else yield* setup
+    const id = coordinating ? otherSessionID : sessionID
+    const { db } = yield* Database.Service
+    const agents = yield* Agent.Service
+    yield* agents.transform((editor) => editor.update(Agent.ID.make("god"), (agent) => {
+      agent.permissions = [{ action: "*", resource: "*", effect: "deny" }]
+    }))
+    yield* db.update(SessionTable).set({ agent: "god", permission: SessionPermissionCeiling.denyOnly([{ action: "*", resource: "*", effect: "deny" }]) })
+      .where(eq(SessionTable.id, id)).run().pipe(Effect.orDie)
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID: id, permissions: "yolo" })
+    const request = yield* requestFor(id, "Inspect the available tool catalog")
+    expect(toolNames(request)).toEqual(expect.arrayContaining(["shell", "read", "mcp_fixture_update"]))
+    expect(toolNames(request).includes("edit")).toBe(!coordinating)
+    expect(toolNames(request).includes("project")).toBe(coordinating)
+    expect(skillPermissions).toHaveLength(1)
+    expect(mcpPermissions).toHaveLength(1)
+    const agent = (yield* agents.get(Agent.ID.make("god")))!
+    expect(Skill.available([{ id: Skill.ID.make("synthetic-skill") }], { ...agent, permissions: skillPermissions[0]! })).toHaveLength(1)
+    expect(Permission.evaluate("execute", "*", mcpPermissions[0]!).effect).not.toBe("deny")
+    expect(Permission.evaluate("mcp_fixture_update", "*", mcpPermissions[0]!).effect).not.toBe("deny")
+  }))
+
   it.effect("ordinary Sessions keep their configured tools and model and never see the project tool", () =>
     Effect.gen(function* () {
       const session = yield* setup

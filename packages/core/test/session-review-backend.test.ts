@@ -29,7 +29,7 @@ import { reviewLayer, reviewLocation } from "./fixture/review"
 const it = testEffect(reviewLayer())
 const fields = [{ key: "text", type: "string", required: true }] as const
 
-it.effect("sleep entry converts questions, forms and permission asks across Locations without answering or expiring them", () => Effect.gen(function* () {
+it.effect("defer entry converts manual questions, forms and permission asks across Locations without answering or expiring them", () => Effect.gen(function* () {
   const sessions = yield* Session.Service
   const reviews = yield* SessionReview.Service
   const events = yield* EventRuntime.Service
@@ -53,10 +53,9 @@ it.effect("sleep entry converts questions, forms and permission asks across Loca
   yield* Effect.addFinalizer(() => stop)
   const form = yield* forms.ask({ sessionID: root.id, title: "Details", fields }).pipe(Effect.forkScoped)
   const question = yield* questions.ask({ sessionID: root.id, questions: [{ header: "Details", question: "Which details?", options: [] }] }).pipe(Effect.forkScoped)
-  yield* sessions.autonomy.set({ sessionID: child.id, permissions: "yolo" })
   const ask = yield* permission.assert({ sessionID: child.id, agent: Agent.ID.make("review-test"), action: "edit", resources: ["file"] }).pipe(Effect.forkScoped)
   yield* Deferred.await(ready)
-  yield* sessions.autonomy.set({ sessionID: child.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: child.id, defer: true })
   expect(yield* Fiber.join(form)).toMatchObject({ status: "deferred" })
   expect(yield* Fiber.join(question)).toMatchObject({ status: "deferred" })
   const exit = yield* Fiber.await(ask)
@@ -66,9 +65,9 @@ it.effect("sleep entry converts questions, forms and permission asks across Loca
   expect(yield* permission.forSession(child.id)).toEqual([])
   const items = yield* reviews.list(root.id)
   expect(items.map((item) => [item.kind, item.sessionID, item.reason])).toEqual([
-    ["question", root.id, "sleep_entry"], ["question", root.id, "sleep_entry"], ["permission", child.id, "escalated"],
+    ["question", root.id, "defer_entry"], ["question", root.id, "defer_entry"], ["permission", child.id, "defer_entry"],
   ])
-  expect(items.find((item) => item.kind === "permission")).toMatchObject({ choice: "escalate", confidence: 0.7 })
+  expect(items.find((item) => item.kind === "permission")).not.toHaveProperty("choice")
   yield* TestClock.adjust("10 minutes")
   expect((yield* reviews.list(root.id)).map((item) => item.itemID)).toEqual(items.map((item) => item.itemID))
 }))
@@ -81,7 +80,7 @@ for (const full of [false, true]) it.effect(`the registered question tool ${full
   yield* agents.transform((draft) => draft.update(toolIdentity.agent, (agent) => { agent.permissions = [{ action: "question", resource: "*", effect: "allow" }] }))
   yield* registerToolPlugin(QuestionTool.Plugin).pipe(Effect.provide(located))
   const registry = yield* ToolRegistry.Service.pipe(Effect.provide(located))
-  yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: root.id, defer: true })
   const reviews = yield* SessionReview.Service
   if (full) for (let index = 0; index < 16; index += 1) yield* reviews.open({ sessionID: root.id, kind: "question", reason: "free_text", limit: 16,
     origin: { requestID: `frm_full_${index}` }, payload: { type: "form", title: "Pending", fields } })
@@ -92,7 +91,7 @@ for (const full of [false, true]) it.effect(`the registered question tool ${full
     expect(result.output?.structured).toEqual({ answers: [[]], reviewFull: true })
     expect(result.result).toMatchObject({ type: "text", value: expect.stringContaining("review box is full") })
     expect(yield* reviews.list(root.id)).toHaveLength(16)
-    expect((yield* sessions.autonomy.get(root.id)).sleep).toEqual({})
+    expect((yield* sessions.autonomy.get(root.id)).defer).toEqual({})
     return
   }
   expect(result.output?.structured).toMatchObject({ answers: [[]], deferredItemID: expect.any(String) })
@@ -103,7 +102,7 @@ for (const full of [false, true]) it.effect(`the registered question tool ${full
   yield* reviews.decide({ sessionID: root.id, itemID: items[0].itemID, decision: { kind: "question", answers: { q0: "/literal input" } } })
   const admitted = yield* SessionPending.lookup((yield* Database.Service).db, root.id, SessionReview.promptID(items[0].itemID))
   expect(admitted?.type === "user" && admitted.data.text).toContain('"Paste the failing input"="/literal input"')
-  expect((yield* sessions.autonomy.get(root.id)).sleep).toEqual({})
+  expect((yield* sessions.autonomy.get(root.id)).defer).toEqual({})
 }))
 
 for (const implicit of [false, true]) it.effect(`${implicit ? "prompt admission" : "explicit commit"} withdraws reverted reviews and grants atomically and projects durable notices`, () => Effect.gen(function* () {
@@ -120,7 +119,7 @@ for (const implicit of [false, true]) it.effect(`${implicit ? "prompt admission"
   const removed = yield* reviews.open({ sessionID: root.id, kind: "question", reason: "free_text", limit: 16,
     origin: { messageID: boundary.id, callID: "removed" }, payload: { type: "form", title: "Removed", fields } })
   const fingerprint = SessionReview.fingerprint({ action: "edit", resources: ["file"], workdir: root.location.directory })
-  const grant = yield* reviews.open({ sessionID: root.id, kind: "permission", reason: "sleep_entry", limit: 16,
+  const grant = yield* reviews.open({ sessionID: root.id, kind: "permission", reason: "defer_entry", limit: 16,
     origin: { messageID: boundary.id, callID: "grant" }, payload: { type: "permission", fingerprintVersion: 2, requestID: Permission.ID.make("per_revert"), action: "edit", resources: ["file"], fingerprint } })
   yield* reviews.decide({ sessionID: root.id, itemID: grant.itemID, decision: { kind: "permission", reply: "once" } })
   yield* events.publish(SessionEvent.RevertEvent.Staged, { sessionID: root.id, revert: { messageID: boundary.id, files: [] } })
@@ -201,10 +200,10 @@ it.effect("sleep-entry child questions remain waiting beyond their timer and acc
   yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
   const orchestration = yield* SessionOrchestration.Service
   const question = yield* orchestration.question(child.id, "Need literal evidence")
-  yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: root.id, defer: true })
   const reviews = yield* SessionReview.Service
   const items = yield* reviews.list(root.id)
-  expect(items[0]).toMatchObject({ kind: "subagent_question", sessionID: child.id, reason: "sleep_entry", child: { agent: "build", description: "Review child" } })
+  expect(items[0]).toMatchObject({ kind: "subagent_question", sessionID: child.id, reason: "defer_entry", child: { agent: "build", description: "Review child" } })
   yield* TestClock.adjust("10 minutes")
   expect(yield* orchestration.get(root.id, child.id)).toMatchObject({ state: "waiting", question: { id: question.question.id, deferred: true } })
   expect((yield* orchestration.list(root.id))[0]?.question?.deferred).toBe(true)
@@ -214,7 +213,7 @@ it.effect("sleep-entry child questions remain waiting beyond their timer and acc
   expect(yield* orchestration.answer({ parentID: root.id, childID: child.id, questionID: question.question.id, text: "Agent answer" }).pipe(Effect.flip)).toBeInstanceOf(SessionOrchestration.ConflictError)
   yield* reviews.decide({ sessionID: root.id, itemID: items[0].itemID, decision: { kind: "subagent_question", text: "/literal review answer" } })
   expect((yield* orchestration.get(root.id, child.id)).state).toBe("running")
-  expect((yield* sessions.autonomy.get(root.id)).sleep).toEqual({})
+  expect((yield* sessions.autonomy.get(root.id)).defer).toEqual({})
   expect((yield* sessions.pending(child.id)).some((input) => input.type === "synthetic" && input.data.text.includes("/literal review answer"))).toBe(true)
 }))
 
@@ -247,16 +246,16 @@ it.effect("a failing Form conversion does not strand other pending producer kind
   yield* forms.ask({ sessionID: root.id, title: "Conversion failure", fields }).pipe(Effect.forkScoped)
   const waiting = yield* questions.ask({ sessionID: root.id, questions: [{ header: "Later", question: "Keep converting", options: [] }] }).pipe(Effect.forkScoped)
   yield* Deferred.await(ready)
-  yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: root.id, defer: true })
   expect(yield* questions.list()).toEqual([])
   expect(yield* Fiber.join(waiting)).toMatchObject({ status: "deferred" })
-  expect((yield* sessions.autonomy.get(root.id)).sleep).toEqual({})
+  expect((yield* sessions.autonomy.get(root.id)).defer).toEqual({})
 }))
 
-it.effect("a required free-text Form defers while asleep even when it carries a suggested default", () => Effect.gen(function* () {
+it.effect("a required free-text Form defers while deferred even when it carries a suggested default", () => Effect.gen(function* () {
   const sessions = yield* Session.Service
   const root = yield* sessions.create({ location: yield* reviewLocation })
-  yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+  yield* sessions.autonomy.set({ sessionID: root.id, defer: true })
   const locations = yield* LocationServiceMap.Service
   const forms = yield* Form.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
   expect(yield* forms.ask({ sessionID: root.id, title: "Literal evidence", fields: [{ key: "text", type: "string", required: true, default: "Suggested" }] })).toMatchObject({ status: "deferred" })

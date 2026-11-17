@@ -1,7 +1,7 @@
 import { describeOutcome } from "./outcome"
 import type { RemoteRequestOutcome } from "./transport"
 
-export type KeepAwakeStatus = { readonly state: "off" | "on" | "unsupported" | "error"; readonly display?: "off" | "on" | "unsupported" | "error"; readonly activity?: "off" | "on" | "unsupported" | "error"; readonly lid?: "off" | "on" | "held" | "unsupported" | "error"; readonly system?: "off" | "on" | "held" | "setup" | "unsupported" | "error"; readonly sleepHold?: boolean; readonly manual?: boolean; readonly message?: string }
+export type KeepAwakeStatus = { readonly state: "off" | "on" | "unsupported" | "error"; readonly display?: "off" | "on" | "unsupported" | "error"; readonly activity?: "off" | "on" | "unsupported" | "error"; readonly lid?: "off" | "on" | "held" | "unsupported" | "error"; readonly system?: "off" | "on" | "held" | "setup" | "unsupported" | "error"; readonly deferHold?: boolean; readonly manual?: boolean; readonly message?: string }
 
 type KeepAwakeChange = {
   readonly state: "sending" | "failed" | "unknown"
@@ -28,7 +28,7 @@ export function readKeepAwakeStatus(payload: unknown): KeepAwakeStatus | undefin
   if (message !== undefined && (typeof message !== "string" || message.length > maxMessageLength)) return undefined
   const lid = Reflect.get(data, "lid")
   const system = Reflect.get(data, "system")
-  const sleepHold = Reflect.get(data, "sleepHold")
+  const deferHold = Reflect.get(data, "deferHold")
   const manual = Reflect.get(data, "manual")
   const display = Reflect.get(data, "display")
   const activity = Reflect.get(data, "activity")
@@ -38,7 +38,7 @@ export function readKeepAwakeStatus(payload: unknown): KeepAwakeStatus | undefin
     ...(activity === "on" || activity === "off" || activity === "error" || activity === "unsupported" ? { activity } : {}),
     ...(lid === "off" || lid === "on" || lid === "held" || lid === "unsupported" || lid === "error" ? { lid } : {}),
     ...(system === "off" || system === "on" || system === "held" || system === "setup" || system === "unsupported" || system === "error" ? { system } : {}),
-    ...(typeof sleepHold === "boolean" ? { sleepHold } : {}),
+    ...(typeof deferHold === "boolean" ? { deferHold } : {}),
     ...(typeof manual === "boolean" ? { manual } : {}),
     ...(message === undefined ? {} : { message }),
   }
@@ -155,12 +155,12 @@ function baseView(input: {
     })
   if (status.state === "error")
     return view({ ...base, tone: "danger", alert: true, detail: status.message ?? "This machine reported a problem." })
-  if (status.state === "on" && status.sleepHold)
+  if (status.state === "on" && status.deferHold)
     return view({
       ...base,
       tone: "attention",
       alert: status.lid === "error",
-      detail: `Idle ${status.state}; lid ${status.lid === "held" ? "held by another YCoding process" : status.lid ?? "unreported"}. Held on by a sleeping session. The switch sets your manual preference only; the machine stays awake until the last sleeping session wakes.${status.lid === "error" ? " Closing the lid may sleep this machine." : ""}`,
+      detail: `Idle ${status.state}; lid ${status.lid === "held" ? "held by another YCoding process" : status.lid ?? "unreported"}. Held on by a deferred Session. The switch sets your manual preference only; the machine stays awake until the last deferred Session ends defer.${status.lid === "error" ? " Closing the lid may sleep this machine." : ""}`,
     })
   if (status.lid === "error")
     return view({

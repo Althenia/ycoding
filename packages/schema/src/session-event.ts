@@ -162,7 +162,7 @@ export namespace Review {
   export const Withdrawn = Event.durable({
     type: "session.review.withdrawn",
     ...options,
-    schema: { ...Base, itemID: SessionReview.ID, reason: Schema.Literals(["reverted", "task_closed"]) },
+    schema: { ...Base, itemID: SessionReview.ID, reason: Schema.Literals(["reverted", "task_closed", "autonomy"]) },
   })
   export type Withdrawn = typeof Withdrawn.Type
   export const Consumed = Event.durable({

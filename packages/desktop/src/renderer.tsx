@@ -1656,7 +1656,7 @@ function NewChat() {
           if (connection().generation !== generation) return
           if (current.revision !== revision || current.sessionID !== draft.sessionID || current.autonomy.permissions !== draft.autonomy || current.autonomy.guardrails !== draft.autonomy || current.autonomy.answers !== draft.autonomy) throw new Error("Autonomy was not confirmed. Open the Session and review its state before sending.")
         } else {
-          if (!(await confirmInPage(`Set permissions, guardrails and answers to ${draft.autonomy} before sending?`))) return
+          if (!(await confirmInPage(autonomyPrompt({ permissions: draft.autonomy, guardrails: draft.autonomy, answers: draft.autonomy }, `Set permissions, guardrails and answers to ${draft.autonomy} before sending?`)))) return
           setNewPending({ ...newPending()!, created: true, autonomyAttempted: true })
           const changed = await api.setAutonomy({ sessionID: draft.sessionID, revision, payload: { permissions: draft.autonomy, guardrails: draft.autonomy, answers: draft.autonomy } })
           if (connection().generation !== generation || connection().revision !== revision) return
@@ -1703,21 +1703,26 @@ function NewChat() {
   </section>
 }
 
-export function autonomyLabels(view: { readonly goal?: { readonly text: string; readonly status: string } | null; readonly effective: { readonly permissions: string; readonly guardrails: string; readonly answers: string; readonly asleep: boolean } } | undefined) {
-  if (!view) return { goal: "Goal · Unknown", autonomy: "Autonomy · Unknown" }
-  const mode = view.effective
-  const label = mode.asleep ? "Asleep" : mode.permissions !== mode.guardrails || mode.guardrails !== mode.answers ? "Mixed" : mode.permissions === "manual" ? "Manual" : mode.permissions === "auto" ? "Auto" : "YOLO"
-  return { goal: view.goal ? `Goal · ${view.goal.status === "active" ? "Active" : view.goal.status}` : "Goal · Off", autonomy: `Autonomy · ${label}` }
+export function autonomyPrompt(payload: SetAutonomyInput["payload"], prompt: string) {
+  if (![payload.permissions, payload.guardrails, payload.answers].includes("yolo")) return prompt
+  return `${prompt} YOLO approves every request in each selected YOLO category, bypassing permission limits, hard policies and custom rules. Answers settle automatically. Actions can modify or delete data, send messages, spend money or affect real systems. Accept these risks and enable YOLO?`
 }
 
-export function autonomyMatches(view: { readonly permissions: string; readonly guardrails: string; readonly answers: string; readonly goal?: { readonly text: string; readonly status?: string; readonly maxNoProgress?: number } | null; readonly sleep?: object | null }, payload: SetAutonomyInput["payload"]) {
+export function autonomyLabels(view: { readonly goal?: { readonly text: string; readonly status: string } | null; readonly effective: { readonly permissions: string; readonly guardrails: string; readonly answers: string; readonly deferred: boolean } } | undefined) {
+  if (!view) return { goal: "Goal · Unknown", autonomy: "Autonomy · Unknown" }
+  const mode = view.effective
+  const label = mode.permissions !== mode.guardrails || mode.guardrails !== mode.answers ? "Mixed" : mode.permissions === "manual" ? "Manual" : mode.permissions === "auto" ? "Auto" : "YOLO"
+  return { goal: view.goal ? `Goal · ${view.goal.status === "active" ? "Active" : view.goal.status}` : "Goal · Off", autonomy: `Autonomy · ${label} · Defer ${mode.deferred ? "on" : "off"}` }
+}
+
+export function autonomyMatches(view: { readonly permissions: string; readonly guardrails: string; readonly answers: string; readonly goal?: { readonly text: string; readonly status?: string; readonly maxNoProgress?: number } | null; readonly defer?: object | null }, payload: SetAutonomyInput["payload"]) {
   if (payload.permissions != null && view.permissions !== payload.permissions) return false
   if (payload.guardrails != null && view.guardrails !== payload.guardrails) return false
   if (payload.answers != null && view.answers !== payload.answers) return false
   if ((typeof payload.goal === "string" || payload.goal === true) && (!view.goal?.text.trim() || view.goal.status !== "active")) return false
   if ("goal" in payload && payload.goal === null && view.goal != null && view.goal.status !== "stopped") return false
   if (payload.maxNoProgress != null && view.goal?.maxNoProgress !== payload.maxNoProgress) return false
-  if (typeof payload.sleep === "boolean" && Boolean(view.sleep) !== payload.sleep) return false
+  if (typeof payload.defer === "boolean" && Boolean(view.defer) !== payload.defer) return false
   return true
 }
 
@@ -2258,7 +2263,7 @@ function Conversation(props: { sessionID: string }) {
     const revision = connection().revision
     if (revision === undefined || !autonomy() || !reading() || policyBusy() || policyUncertain() || typeof api.setAutonomy !== "function") return
     setPolicyBusy(true); setPolicyError(undefined)
-    const result = await policyGuard.run({ sessionID: props.sessionID, revision, payload }, prompt)
+    const result = await policyGuard.run({ sessionID: props.sessionID, revision, payload }, autonomyPrompt(payload, prompt))
     if (result.status === "completed" && result.value?.revision === revision && result.value?.sessionID === props.sessionID && autonomyMatches(result.value.autonomy, payload)) { setPolicyGoal(result.value.autonomy.goal?.text ?? ""); autonomyRead.refetch() }
     else if (result.status === "completed") { setPolicyUncertain(true); setPolicyError("The autonomy response did not match the requested change. Reopen the Session and review its state."); autonomyRead.refetch() }
     else if (result.status === "unconfirmed") { setPolicyUncertain(true); setPolicyError(failure(result.error, "The autonomy change was not confirmed. Reopen the Session and review its state.")); autonomyRead.refetch() }
@@ -2619,8 +2624,12 @@ function Conversation(props: { sessionID: string }) {
         else openPolicy()
         return true
       }
-      case "sleep": await setPolicy({ sleep: true }, "Put autonomy decisions to sleep?"); return true
-      case "wake": await setPolicy({ sleep: false }, "Wake autonomy decisions?"); return true
+      case "defer": {
+        if (action.args && action.args !== "on" && action.args !== "off") { setSlashNote("Use /defer, /defer on or /defer off."); return false }
+        const enabled = action.args === "on" || action.args !== "off" && !autonomy()?.effective.deferred
+        await setPolicy({ defer: enabled }, enabled ? "Enable persistent deferral of unresolved decisions?" : "Disable deferral of unresolved decisions?")
+        return true
+      }
       case "goal": {
         if (action.args === "stop") await setPolicy({ goal: null }, "Stop the Session goal? Its text will be retained.")
         else if (action.args) await setPolicy({ goal: action.args }, "Replace the Session goal with this text?")
@@ -2802,7 +2811,7 @@ function Conversation(props: { sessionID: string }) {
       <div class="desktop__actions">
         <Show when={unsure() && !sending()}><button type="button" onClick={() => { update(pending()?.text ?? text()); hold(undefined); promptGuard.reset(); unconfirmed.delete(props.sessionID); setUnsure(false); setRevertUncertain(false); setError(undefined); sessionRead.refetch() }}>I reviewed the Session</button></Show><Show when={pending() && !sending() && !unsure()}><button type="button" onClick={() => { update(pending()?.text ?? ""); hold(undefined); setError(undefined) }}>Edit as a new message</button></Show>
         <Show when={stopNote()}>{(note) => <span role="status" class="desktop__muted">{note()}</span>}</Show></div></>} />
-    <Show when={policyOpen()}><section class="desktop-popover rl-policy-panel" aria-label="Goal and autonomy"><div class="rl-pane-section-heading"><strong>Goal and autonomy</strong><button type="button" class="rl-btn" onClick={() => setPolicyOpen(false)}>Close</button></div><Show when={!autonomy()}><p role="status">Goal and autonomy are unavailable until the Session state is read.</p><Show when={autonomyRead.result().isError}><button type="button" class="rl-btn" onClick={autonomyRead.refetch}>Refresh</button></Show></Show><Show when={autonomy()}><p class="model-popover__label">Permissions</p><SharedRadioGroup label="Permissions" options={decisionModes} value={permissions()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setPermissions(value as "manual" | "auto" | "yolo")} /><p class="model-popover__label">Guardrails</p><SharedRadioGroup label="Guardrails" options={decisionModes} value={guardrails()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setGuardrails(value as "manual" | "auto" | "yolo")} /><p class="model-popover__label">Answers</p><SharedRadioGroup label="Answers" options={decisionModes} value={answers()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setAnswers(value as "manual" | "auto" | "yolo")} /><div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} onClick={() => void setPolicy({ permissions: permissions(), guardrails: guardrails(), answers: answers() }, `Change autonomy decisions to ${permissions()}/${guardrails()}/${answers()}?`)}>Apply autonomy</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} onClick={() => void setPolicy({ sleep: !autonomy()?.effective.asleep }, autonomy()?.effective.asleep ? "Wake autonomy decisions?" : "Put autonomy decisions to sleep?")}>{autonomy()?.effective.asleep ? "Wake" : "Sleep"}</button></div><label class="desktop__field">Goal<textarea value={policyGoal()} disabled={policyBusy() || policyUncertain()} onInput={(event) => setPolicyGoal(event.currentTarget.value)} /></label><div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || !policyGoal().trim()} onClick={() => void setPolicy({ goal: policyGoal().trim() }, "Replace the Session goal with this text?")}>Set goal</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || (!autonomy()?.goal || autonomy()?.goal?.status === "stopped")} onClick={() => void setPolicy({ goal: null }, "Stop the Session goal? Its text will be retained.")}>Stop goal</button></div></Show><Show when={policyError()}>{(error) => <p role="alert">{error()}</p>}</Show></section></Show><div class="rl-whisper" classList={{ desktop__sr: !running() }}>{running() ? "Working" : "Ready"}</div></div></div>
+    <Show when={policyOpen()}><section class="desktop-popover rl-policy-panel" aria-label="Goal and autonomy"><div class="rl-pane-section-heading"><strong>Goal and autonomy</strong><button type="button" class="rl-btn" onClick={() => setPolicyOpen(false)}>Close</button></div><Show when={!autonomy()}><p role="status">Goal and autonomy are unavailable until the Session state is read.</p><Show when={autonomyRead.result().isError}><button type="button" class="rl-btn" onClick={autonomyRead.refetch}>Refresh</button></Show></Show><Show when={autonomy()}><p class="model-popover__label">Permissions</p><SharedRadioGroup label="Permissions" options={decisionModes} value={permissions()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setPermissions(value as "manual" | "auto" | "yolo")} /><p class="model-popover__label">Guardrails</p><SharedRadioGroup label="Guardrails" options={decisionModes} value={guardrails()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setGuardrails(value as "manual" | "auto" | "yolo")} /><p class="model-popover__label">Answers</p><SharedRadioGroup label="Answers" options={decisionModes} value={answers()} disabled={policyBusy() || policyUncertain()} onChange={(value) => setAnswers(value as "manual" | "auto" | "yolo")} /><div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} onClick={() => void setPolicy({ permissions: permissions(), guardrails: guardrails(), answers: answers() }, `Change autonomy decisions to ${permissions()}/${guardrails()}/${answers()}?`)}>Apply autonomy</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading()} aria-pressed={!!autonomy()?.effective.deferred} onClick={() => void setPolicy({ defer: !autonomy()?.effective.deferred }, autonomy()?.effective.deferred ? "Disable deferral of unresolved decisions?" : "Enable persistent deferral of unresolved decisions?")}>{autonomy()?.effective.deferred ? "Defer on" : "Defer off"}</button></div><label class="desktop__field">Goal<textarea value={policyGoal()} disabled={policyBusy() || policyUncertain()} onInput={(event) => setPolicyGoal(event.currentTarget.value)} /></label><div class="rl-policy-actions"><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || !policyGoal().trim()} onClick={() => void setPolicy({ goal: policyGoal().trim() }, "Replace the Session goal with this text?")}>Set goal</button><button type="button" class="rl-btn" disabled={policyBusy() || policyUncertain() || !reading() || (!autonomy()?.goal || autonomy()?.goal?.status === "stopped")} onClick={() => void setPolicy({ goal: null }, "Stop the Session goal? Its text will be retained.")}>Stop goal</button></div></Show><Show when={policyError()}>{(error) => <p role="alert">{error()}</p>}</Show></section></Show><div class="rl-whisper" classList={{ desktop__sr: !running() }}>{running() ? "Working" : "Ready"}</div></div></div>
     <Show when={companionOpen()}><aside class="rl-companion" data-full={fullChangesOpen() && companionTab() === "Changes" ? "true" : undefined}>
       <SharedCompanionSurface
         runningContent={<RunningActivity data={activityView()} loading={activityRead.result().isPending} error={activityRead.result().isError ? failure(activityRead.result().error, "Running work could not be read.") : undefined} onRefresh={activityRead.refetch} onMore={() => void loadMoreSubagents()} loadingMore={activityMoreBusy()} moreError={activityMoreError()} onOpen={(id) => void navigate({ to: "/sessions/$sessionID", params: { sessionID: id } })} onShell={(id) => { setCompanionTab("Activity"); selectShell(id) }} />}

@@ -280,9 +280,9 @@ describe("session summary", () => {
   })
 
   test("summary modes and sleep come from effective values, naming inherited automation instead of Manual", () => {
-    const summary = summarizeSession(session({}), view({ autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "yolo", effective: { permissions: "auto", guardrails: "manual", answers: "yolo", inherited: { permissions: "ses_parent" }, asleep: true, guardrailsEnabled: true } } }))
+    const summary = summarizeSession(session({}), view({ autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "yolo", effective: { permissions: "auto", guardrails: "manual", answers: "yolo", inherited: { permissions: "ses_parent" }, deferred: true, guardrailsEnabled: true } } }))
     expect([summary.permissions, summary.guardrails, summary.answers]).toEqual(["auto", "manual", "yolo"])
-    expect(summary.asleep).toBe(true)
+    expect(summary.deferred).toBe(true)
   })
 
   test("does not take another session's live view", () => {

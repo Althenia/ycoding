@@ -198,7 +198,7 @@ async function runTransport(args: string[], options: { autonomyStatus?: number }
         if (options.autonomyStatus)
           return Response.json({ error: "autonomy update failed" }, { status: options.autonomyStatus })
         return Response.json({ data: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", ...body,
-          effective: { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, asleep: false, guardrailsEnabled: true } } })
+          effective: { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, deferred: false, guardrailsEnabled: true } } })
       }
       if (url.pathname === "/api/event")
         return new Response(

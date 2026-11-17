@@ -186,17 +186,18 @@ it.effect("QR3 a switch to YOLO settles through the scripted evaluator with conf
   }),
 )
 
-it.effect("QR4 an unsettled YOLO assessment escalates and the request stays pending for a human", () =>
+it.effect("QR4 an inconclusive YOLO assessment settles a valid fallback once", () =>
   Effect.gen(function* () {
     const f = yield* setup
     const { fiber, request } = yield* ask(f)
     yield* f.autonomy.set({ sessionID, answers: "yolo" })
     decisionBehavior = choice("One", 0.5)
 
-    expect(yield* reconsider(f, request)).toMatchObject({ outcome: "escalated", settled: false, reason: "low_confidence" })
-    expect(yield* f.service.list()).toHaveLength(1)
-    yield* f.service.reply({ requestID: request.id, answers: [["One"]] })
-    expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answers: [["One"]] })
+    expect(yield* reconsider(f, request)).toMatchObject({ outcome: "allowed", settled: true, via: "yolo" })
+    expect(yield* f.service.list()).toHaveLength(0)
+    expect(yield* Fiber.join(fiber)).toMatchObject({ status: "answered", answers: [["One"]], automatic: true, via: "yolo" })
+    expect(yield* reconsider(f, request)).toMatchObject({ outcome: "stale", settled: false })
+    expect(replies(f)).toHaveLength(1)
   }),
 )
 

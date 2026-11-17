@@ -34,14 +34,14 @@ test("labels display and activity assertions without claiming an unlocked screen
 })
 
 test("labels a foreign lid owner without claiming this process armed it", async () => {
-  const view = await renderKeepAwake(fakeServer({ state: "on", lid: "held", sleepHold: true }))
+  const view = await renderKeepAwake(fakeServer({ state: "on", lid: "held", deferHold: true }))
   try {
     view.dispatch("command.palette.show")
     await view.app.waitForFrame((frame) => frame.includes("Keep machine awake"))
     await view.app.mockInput.typeText("Keep machine awake")
     await awaitFrame(view.app, (frame) => frame.includes("lid held elsewhere"))
     expect(view.app.captureCharFrame()).toContain("Keep machine awake")
-    expect(view.app.captureCharFrame()).toContain("sleep-held")
+    expect(view.app.captureCharFrame()).toContain("defer-held")
   } finally {
     view.app.renderer.destroy()
   }

@@ -167,6 +167,7 @@ describe("MCP skill model-facing integration", () => {
             Permission.Service,
             Permission.Service.of({
               deferPending: () => Effect.void,
+              reconcileAutonomy: () => Effect.void,
               evaluateEffective: () => Effect.die("unused"),
               assert: (input) =>
                 Effect.sync(() => assertions.push(input)).pipe(
@@ -224,6 +225,7 @@ describe("MCP skill model-facing integration", () => {
               },
               orchestration: {
                 managed: unavailable,
+                reconcileAutonomy: unavailable,
                 get: unavailable,
                 launch: unavailable,
                 switchModel: unavailable,
