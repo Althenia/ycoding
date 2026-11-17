@@ -123,7 +123,11 @@ describe("Claude quota rejection attribution", () => {
     await Effect.runPromise(service.list())
     clock += 1000
     const fetcher = createClaudeCodeFetch({
-      credentials: async () => ({ accessToken: "synthetic", refreshToken: "synthetic", expiresAt: Number.MAX_SAFE_INTEGER }),
+      credentials: async () => ({
+        accessToken: "synthetic",
+        refreshToken: "synthetic",
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      }),
       reload: async () => null,
       fetch: Object.assign(
         async () =>
@@ -166,7 +170,7 @@ describe("Claude quota rejection attribution", () => {
     ).toBe(true)
   })
 
-  test("a later allowed response and a new reset release an exhausted window", async () => {
+  test("a later allowed response replaces exhaustion retained through a partial response", async () => {
     let clock = now
     const service = ProviderUsageRuntime.make({
       credentials: { all: () => Effect.succeed([limited]) },
@@ -219,5 +223,186 @@ describe("Claude quota rejection attribution", () => {
       (await Effect.runPromise(service.get({ providerID, refresh: true }))).windows.find((w) => w.id === "seven-day")
         ?.used,
     ).toBe(5)
+  })
+
+  test.each([
+    { read: "get", cache: "before" },
+    { read: "list", cache: "before" },
+    { read: "forecast", cache: "before" },
+    { read: "get", cache: "after" },
+    { read: "list", cache: "after" },
+    { read: "forecast", cache: "after" },
+  ] as const)(
+    "$read releases a still-rejected window at reset with OAuth cached $cache rejection",
+    async ({ read, cache }) => {
+      let clock = now
+      let loads = 0
+      let cachedAt = now
+      const boundary = now + 3000
+      const service = ProviderUsageRuntime.make({
+        credentials: { all: () => Effect.succeed([limited]) },
+        providers: { available: () => Effect.succeed([{ id: providerID }]) },
+        adapters: {
+          anthropic: (input) =>
+            Effect.sync(() => {
+              loads += 1
+              cachedAt = input.updatedAt
+              return oauth(5, cachedAt)
+            }),
+        },
+        now: () => clock,
+      })
+      if (cache === "before") await Effect.runPromise(service.list())
+      clock += 1000
+      await Effect.runPromise(
+        service.observe(
+          observation(
+            ClaudeUsage.normalizeHeaders({
+              providerID,
+              label: "Claude",
+              observedAt: clock,
+              status: 429,
+              headers: {
+                "anthropic-ratelimit-unified-7d-status": "rejected",
+                "anthropic-ratelimit-unified-7d-reset": String(boundary / 1000),
+              },
+            }),
+          ),
+          accountIdentityDigest(limited),
+        ),
+      )
+      if (cache === "after") {
+        clock += 1000
+        await Effect.runPromise(service.get({ providerID, refresh: true }))
+      }
+      const check = async (exhausted: boolean) => {
+        if (read === "forecast") {
+          const quota = (await Effect.runPromise(service.forecast({ localScope: "backend" }))).quotas?.find(
+            (q) => q.profile === "Limited" && q.windowID === "seven-day",
+          )
+          expect(quota).toBeDefined()
+          if (exhausted) expect(quota?.state).toBe("exhausted")
+          else {
+            expect(quota?.state).not.toBe("exhausted")
+            expect(quota?.reason).not.toBe("Quota window has expired")
+            expect(quota).toMatchObject({ source: "provider_internal_api", updatedAt: cachedAt })
+          }
+          return
+        }
+        const snapshot =
+          read === "get"
+            ? await Effect.runPromise(service.get({ providerID }))
+            : (await Effect.runPromise(service.list())).find((s) => s.profile === "Limited")
+        expect(snapshot?.windows.find((w) => w.id === "seven-day")?.used).toBe(exhausted ? 100 : 5)
+        if (!exhausted) expect(snapshot).toMatchObject({ source: "provider_internal_api", updatedAt: cachedAt })
+      }
+      await check(true)
+      clock = boundary
+      await check(false)
+      expect(loads).toBe(1)
+    },
+  )
+
+  test("a cached-only forecast omits a reset rejected window without inventing quota or loading OAuth", async () => {
+    let clock = now
+    let loads = 0
+    const service = ProviderUsageRuntime.make({
+      credentials: { all: () => Effect.succeed([limited]) },
+      providers: { available: () => Effect.succeed([{ id: providerID }]) },
+      adapters: {
+        anthropic: (input) =>
+          Effect.sync(() => {
+            loads += 1
+            return oauth(5, input.updatedAt)
+          }),
+      },
+      now: () => clock,
+    })
+    await Effect.runPromise(
+      service.observe(
+        observation(
+          ClaudeUsage.normalizeHeaders({
+            providerID,
+            label: "Claude",
+            observedAt: clock,
+            status: 429,
+            headers: { "anthropic-ratelimit-unified-reset": String((now + 1000) / 1000) },
+          }),
+        ),
+        accountIdentityDigest(limited),
+      ),
+    )
+    expect((await Effect.runPromise(service.forecast({ localScope: "backend" }))).quotas).toEqual([
+      expect.objectContaining({ windowID: "unified", state: "exhausted" }),
+    ])
+    clock += 1000
+    expect((await Effect.runPromise(service.forecast({ localScope: "backend" }))).quotas).toEqual([])
+    expect(loads).toBe(0)
+  })
+
+  test("list omits an expired account-unknown response window without assigning it to a profile", async () => {
+    let clock = now
+    const service = ProviderUsageRuntime.make({
+      credentials: { all: () => Effect.succeed([limited, healthy]) },
+      providers: { available: () => Effect.succeed([{ id: providerID }]) },
+      adapters: { anthropic: (input) => Effect.succeed(oauth(5, input.updatedAt)) },
+      now: () => clock,
+    })
+    await Effect.runPromise(
+      service.observe(
+        observation(
+          ClaudeUsage.normalizeHeaders({
+            providerID,
+            label: "Claude",
+            observedAt: clock,
+            status: 429,
+            headers: { "anthropic-ratelimit-unified-reset": String((now + 1000) / 1000) },
+          }),
+        ),
+      ),
+    )
+    expect((await Effect.runPromise(service.list())).filter((s) => s.profile === undefined)).toEqual([
+      expect.objectContaining({ windows: [expect.objectContaining({ id: "unified", used: 100 })] }),
+    ])
+    clock += 1000
+    expect((await Effect.runPromise(service.list())).filter((s) => s.profile === undefined)).toEqual([])
+  })
+
+  test("one reset removes only its response window and preserves another scoped rejection", async () => {
+    let clock = now
+    const service = ProviderUsageRuntime.make({
+      credentials: { all: () => Effect.succeed([limited]) },
+      providers: { available: () => Effect.succeed([{ id: providerID }]) },
+      adapters: { anthropic: (input) => Effect.succeed(oauth(5, input.updatedAt)) },
+      now: () => clock,
+    })
+    await Effect.runPromise(service.list())
+    clock += 1000
+    await Effect.runPromise(
+      service.observe(
+        observation(
+          ClaudeUsage.normalizeHeaders({
+            providerID,
+            label: "Claude",
+            observedAt: clock,
+            status: 429,
+            headers: {
+              "anthropic-ratelimit-unified-reset": String((now + 2000) / 1000),
+              "anthropic-ratelimit-unified-7d-sonnet-status": "rejected",
+              "anthropic-ratelimit-unified-7d-sonnet-reset": String(resetAt / 1000),
+            },
+          }),
+        ),
+        accountIdentityDigest(limited),
+      ),
+    )
+    clock += 1000
+    const snapshot = (await Effect.runPromise(service.list()))[0]!
+    expect(snapshot.windows.find((w) => w.id === "unified")).toBeUndefined()
+    expect(snapshot.windows.find((w) => w.id === "seven-day")?.used).toBe(5)
+    expect(snapshot.windows.find((w) => w.id === "seven-day-sonnet")?.used).toBe(100)
+    const quotas = (await Effect.runPromise(service.forecast({ localScope: "backend" }))).quotas
+    expect(quotas?.find((q) => q.windowID === "unified")).toBeUndefined()
+    expect(quotas?.find((q) => q.windowID === "seven-day-sonnet")?.state).toBe("exhausted")
   })
 })

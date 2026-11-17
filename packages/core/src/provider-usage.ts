@@ -165,6 +165,14 @@ export function make(input: MakeInput): Interface {
   const credentialsFor = (credentials: ReadonlyArray<Credential.Info>, providerID: Provider.ID) =>
     credentials.filter((item) => item.integrationID === Integration.ID.make(providerID))
 
+  const currentObservation = (snapshot: ProviderUsage.Snapshot | undefined) => {
+    if (!snapshot || snapshot.providerID !== "anthropic" || snapshot.source !== "response_headers") return snapshot
+    const asOf = now()
+    const windows = snapshot.windows.filter((window) => window.resetAt === undefined || window.resetAt > asOf)
+    if (windows.length === 0) return undefined
+    return windows.length === snapshot.windows.length ? snapshot : new ProviderUsage.Snapshot({ ...snapshot, windows })
+  }
+
   const load = Effect.fnUntraced(function* (
     providerID: Provider.ID,
     candidates: ReadonlyArray<Credential.Info>,
@@ -184,12 +192,13 @@ export function make(input: MakeInput): Interface {
           typeof selected.value.metadata.source === "string"))
         ? accountIdentityDigest(selected)
         : undefined
-    const observed = () =>
+    const observed = () => currentObservation(
       profileSource !== undefined
         ? accountObservations.get(`${providerID}:${profileSource}`)
         : credentialID === undefined
           ? observations.get(`${providerID}:`)
-          : undefined
+          : undefined,
+    )
     const profiled = Effect.fnUntraced(function* (snapshot: ProviderUsage.Snapshot, bound = true) {
       if (!selected) return snapshot
       const currentCandidates = credentialsFor(yield* input.credentials.all(), providerID)
@@ -295,8 +304,7 @@ export function make(input: MakeInput): Interface {
       (snapshot.status === "available" || snapshot.status === "stale"))
       return yield* profiled(mergeClaudeObservation(new ProviderUsage.Snapshot({ ...latest,
         windows: latest.windows.filter((window) =>
-          (window.resetAt === undefined || window.resetAt > now()) &&
-          (latest.updatedAt >= snapshot.updatedAt || window.unit === "percent" && window.used !== undefined && window.used >= 100),
+          latest.updatedAt >= snapshot.updatedAt || window.unit === "percent" && window.used !== undefined && window.used >= 100,
         ),
       }), snapshot))
     const fetched = yield* profiled(snapshot)
@@ -353,13 +361,12 @@ export function make(input: MakeInput): Interface {
         : []
     const available = new Set(providers.map((provider) => provider.id))
     const unknown = input.accountUnknown ? yield* input.accountUnknown(request?.refresh, request?.cachedOnly) : []
-    const unbound = [...observations].flatMap(([key, snapshot]) =>
-      key.endsWith(":") &&
-      available.has(snapshot.providerID) &&
-      credentialsFor(credentials, snapshot.providerID).length > 1
-        ? [snapshot]
-        : [],
-    )
+    const unbound = [...observations].flatMap(([key, snapshot]) => {
+      if (!key.endsWith(":") || !available.has(snapshot.providerID) ||
+        credentialsFor(credentials, snapshot.providerID).length <= 1) return []
+      const current = currentObservation(snapshot)
+      return current ? [current] : []
+    })
     return [
       ...snapshots,
       ...unbound,
