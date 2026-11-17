@@ -797,22 +797,19 @@ async function configureRuntime(
   }
   const inControlWorld = async (worldSessionId: string, frameId: string, signal: AbortSignal, run: (contextId: number) => Promise<unknown>) => {
     const key = `${worldSessionId}|${frameId}`
-    for (let attempt = 0; ; attempt++) {
-      let contextId = worlds.get(key)
-      if (contextId === undefined) {
-        const created = record(
-          await cdp.send("Page.createIsolatedWorld", { frameId, worldName: CONTROL_WORLD }, worldSessionId, signal),
-        )
-        contextId = number(created.executionContextId)
-        worlds.set(key, contextId)
-      }
-      try {
-        return await run(contextId)
-      } catch (cause) {
-        if (!isStaleContext(cause)) throw cause
-        worlds.delete(key)
-        if (attempt > 0) throw cause
-      }
+    let contextId = worlds.get(key)
+    if (contextId === undefined) {
+      const created = record(
+        await cdp.send("Page.createIsolatedWorld", { frameId, worldName: CONTROL_WORLD }, worldSessionId, signal),
+      )
+      contextId = number(created.executionContextId)
+      worlds.set(key, contextId)
+    }
+    try {
+      return await run(contextId)
+    } catch (cause) {
+      if (isStaleContext(cause)) worlds.delete(key)
+      throw cause
     }
   }
   const callElement = async (target: RefTarget, declaration: string, args: ReadonlyArray<unknown>, signal: AbortSignal) =>
@@ -1739,7 +1736,7 @@ function chromeVersion() {
         reject(error)
         return
       }
-      const match = /Google Chrome (\d+)\./.exec(stdout)
+      const match = /Google Chrome (?:for Testing )?(\d+)\./.exec(stdout)
       resolve(match ? Number(match[1]) : undefined)
     })
   })
