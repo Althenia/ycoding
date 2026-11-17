@@ -239,30 +239,33 @@ describe("responsive contract", () => {
     expect(columnSteps(remote, ".defs__row")).toEqual([{ min: 1024, tracks: 2 }])
   })
 
-  test("widens the Sessions and Usage columns at 1600, keeps Settings a fixed open column, and lets assistant prose fill the column", async () => {
+  test("keeps start-aligned route columns fluid and bounds assistant prose to its reading measure", async () => {
     const remote = await readStylesheet("remote.css")
     const listed = (selector: string, min?: number) =>
       declarationsWhere(remote, (rule) =>
-        rule.header.split(",").map((part) => part.trim()).includes(selector) &&
+        (rule.header === selector || rule.header.split(",").map((part) => part.trim()).includes(selector)) &&
         (min === undefined
           ? rule.conditions.length === 0
           : rule.conditions.some((condition) => widthThreshold(condition)?.min === min)),
       )
     for (const screen of ["sessions", "usage"]) {
       expect(listed(`.app--${screen} .workspace__scroll > .route-panel`)["max-inline-size"]).toBe("var(--yc-content-max)")
+      expect(listed(`.app--${screen} .workspace__scroll > .route-panel`)["margin-inline"]).toBe("0")
       expect(listed(`.app--${screen} .workspace__scroll > .route-panel`, 1600)["max-inline-size"]).toBe("var(--yc-content-max-wide)")
     }
     for (const block of [".app--settings .page-head", ".app--settings .pane"]) {
-      expect(listed(block)["inline-size"]).toBe("min(100%, 760px)")
-      expect(listed(block)["margin-inline"]).toBe("auto")
-      expect(listed(block, 1600)).toEqual({})
+      expect(listed(block)["inline-size"]).toBe("min(100%, var(--yc-content-max))")
+      expect(listed(block)["margin-inline"]).toBe("0")
+      expect(listed(block, 1600)["inline-size"]).toBe("min(100%, var(--yc-content-max-wide))")
     }
     expect(listed(".app--settings .workspace__scroll", 1024).padding).toBe("var(--yc-space-12) var(--yc-space-16)")
     expect(listed(".app")["--remote-column"]).toBe("720px")
-    expect(listed(".app--conversation.app--selected")["--remote-column"]).toBeUndefined()
+    expect(listed(".app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading)")["--remote-column"]).toBe("var(--yc-content-max)")
     expect(listed(".app--conversation.app--selected", 1600)).toEqual({})
     const transcript = await readStylesheet("../remote/ui/transcript.css")
-    expect(transcript.rules.filter((rule) => rule.header.includes(".transcript-md") && rule.declarations["max-inline-size"]?.includes("--yc-measure"))).toEqual([])
+    expect(transcript.rules.filter((rule) => rule.header.includes(".transcript-md") && rule.declarations["max-inline-size"] === "var(--yc-measure)")).toHaveLength(1)
+    const settings = await readStylesheet("../remote/ui/settings.css")
+    expect(declarationsWhere(settings, rule => rule.header === ".app--settings .pane p")["max-inline-size"]).toBe("var(--yc-measure)")
   })
 
   test("reserves the command palette's scrollbar gutter beside the workspace scroller", async () => {

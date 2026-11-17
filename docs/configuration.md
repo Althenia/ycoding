@@ -923,6 +923,8 @@ Inline shape:
 
 When `default_agent` is omitted, YCoding selects the maintained `god` primary agent. Agent listings place the effective default first, so a new TUI session starts with `god` while an explicit `default_agent` remains authoritative. The selectable built-in primaries are `GSD`, `architech`, `god`, and `yangi`; maintained subagents are `occam`, `omoikane`, `wittgenstein`, and `zeus`. Primaries orchestrate implementation through their own bounded subagents. `GSD` (Get shit done) emphasizes the shortest safe delivery path, early independent lanes and verified integration; coupled changes stay under one execution owner. Focused regressions and required affected checks remain mandatory. The visible `btw` advisor and hidden `compaction`, `title`, `goal`, `decision`, and `summary` helpers remain registered. `decision` is a hidden primary helper with all tools denied. `compaction` remains `mode: primary`; its internal taskless child Session does not create a managed subagent task. `build`, `plan`, `explore`, `general`, `analyze`, and `brainstorm` are not built-ins.
 
+Web Session collections and Project root choices exclude child Sessions and compaction helpers identified by the `compaction` agent or the reserved `ses_compaction_` ID prefix, not by their titles. Direct Session reads preserve child metadata, side chats and parent navigation.
+
 Agent fields:
 
 - `model`;

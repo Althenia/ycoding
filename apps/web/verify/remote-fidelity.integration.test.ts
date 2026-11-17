@@ -432,7 +432,7 @@ describe("remote responsive state behavior", () => {
     }
   }, 30_000)
 
-  test("aligns conversation decision cards with the transcript in one centered column", async () => {
+  test("aligns conversation decision cards with the transcript in one start-aligned column", async () => {
     const page = await scenario("permission-guardrail-hard-review-form-requests", 1440, "Clarify Disambiguation Query")
     const layout = await page.evaluate(`(() => {
       const transcript = document.querySelector('.transcript')

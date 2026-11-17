@@ -5,6 +5,7 @@ import type { DeviceAliasResponse, RemoteStoppedRecovery, RemoteUsageTaskCost } 
 import { displayDeviceName } from "./device-alias"
 import { externalDelivery, readFilter, writeFilter, normalizeFilter, type ExternalKind, type NotificationFilter } from "./coordination"
 import { readTaskCosts } from "./usage-read"
+import { isConversationRoot } from "./session-collection"
 import { readGuardrailDecisions, mergeGuardrailDecisions } from "./decision-grades"
 import { signInURL, type RemoteHttp, type RemoteHttpResult, type SignInProvider } from "./http"
 import {
@@ -2138,7 +2139,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (container.state.sessionQuery.trim() !== "") return rows
     const root = openRootInfo
     const workspace = container.state.sessionGroups.find((group) => group.id === container.state.selectedWorkspaceID)
-    if (!root || !workspace || root.archived || root.origin !== undefined || root.projectID !== workspace.projectID || root.directory !== workspace.directory || root.workspaceID !== workspace.workspaceID || rows.some((row) => row.id === root.id)) return rows
+    if (!root || !isConversationRoot(root) || !workspace || root.archived || root.origin !== undefined || root.projectID !== workspace.projectID || root.directory !== workspace.directory || root.workspaceID !== workspace.workspaceID || rows.some((row) => row.id === root.id)) return rows
     return sortSessions([{ ...root, ...(status ? rowStatus(status, root.id) : {}) }, ...rows])
   }
 
@@ -2257,7 +2258,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const status = container.state.sessionStatus ?? (typeof value === "object" && value !== null ? parseSessionStatus(Reflect.get(value, "status")) : undefined)
       return readSessionInfoList(value).flatMap((entry) => {
         const session = readSessionInfo(entry)
-        return session !== undefined && session.parentID === undefined ? [{ ...session, running: group === "running", attention: group === "waiting",
+        return session !== undefined ? [{ ...session, running: group === "running", attention: group === "waiting",
           ...(status === undefined ? {} : rowStatus(status, session.id, container.state.sessionStatus !== undefined)) }] : []
       })
     }

@@ -21,6 +21,37 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
 describe("transcript rendering", () => {
+  test("Markdown task checkboxes own their indicator and retain native checked, disabled and keyboard states", async () => {
+    const page = await browser!.openPage()
+    try {
+      for (const theme of ["light", "dark"]) {
+        await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?theme=${theme}`)
+        for (let i = 0; i < 60 && !await page.evaluate(`document.querySelector('.transcript-md input[type=checkbox]') !== null`); i++) await Bun.sleep(50)
+        const state = await page.evaluate(`(() => {
+          const input = document.querySelector('.transcript-md input[type=checkbox]')
+          const style = getComputedStyle(input)
+          const mark = getComputedStyle(input, '::after')
+          input.focus()
+          return { type: input.type, checked: input.checked, disabled: input.disabled, focused: document.activeElement === input, appearance: style.appearance, width: input.getBoundingClientRect().width, border: style.borderTopStyle, mark: mark.content, markWidth: parseFloat(mark.width) || 0, sameInk: mark.borderTopColor === style.borderTopColor, label: input.closest('li').textContent.trim() }
+        })()`, (value: unknown) => { const r = decodeRecord(value); return { type: decodeString(r.type), checked: decodeBoolean(r.checked), disabled: decodeBoolean(r.disabled), focused: decodeBoolean(r.focused), appearance: decodeString(r.appearance), width: decodeNumber(r.width), border: decodeString(r.border), mark: decodeString(r.mark), markWidth: decodeNumber(r.markWidth), sameInk: decodeBoolean(r.sameInk), label: decodeString(r.label) } })
+        expect(state).toMatchObject({ type: "checkbox", checked: true, disabled: true, focused: false, appearance: "none", width: 16, border: "solid", mark: '""', markWidth: 8, sameInk: true, label: "Verified task" })
+        await page.pressKey("Tab", "Tab", 9)
+        await page.evaluate(`(() => { const input = document.querySelector('.transcript-md input[type=checkbox]'); input.disabled = false; input.focus() })()`)
+        const focus = await page.evaluate(`(() => { const input = document.querySelector('.transcript-md input[type=checkbox]'); const style = getComputedStyle(input); return { focused: document.activeElement === input, visible: input.matches(':focus-visible'), outline: style.outlineStyle, width: parseFloat(style.outlineWidth) } })()`, (value: unknown) => { const r = decodeRecord(value); return { focused: decodeBoolean(r.focused), visible: decodeBoolean(r.visible), outline: decodeString(r.outline), width: decodeNumber(r.width) } })
+        expect(focus).toEqual({ focused: true, visible: true, outline: "solid", width: 2 })
+        await page.pressKey(" ", "Space", 32, " ")
+        expect(await page.evaluate(`(() => { const input = document.querySelector('.transcript-md input[type=checkbox]'); return !input.checked && getComputedStyle(input, '::after').content === 'none' })()`)).toBe(true)
+        await page.pressKey(" ", "Space", 32, " ")
+        expect(await page.evaluate(`document.querySelector('.transcript-md input[type=checkbox]').checked`)).toBe(true)
+        await page.evaluate(`document.querySelector('.transcript-md input[type=checkbox]').disabled = true`)
+        await page.pressKey(" ", "Space", 32, " ")
+        expect(await page.evaluate(`document.querySelector('.transcript-md input[type=checkbox]').checked`)).toBe(true)
+      }
+      await page.setForcedColors(true)
+      expect(await page.evaluate(`(() => { const input = document.querySelector('.transcript-md input[type=checkbox]'); const mark = getComputedStyle(input, '::after'); return input.checked && input.disabled && mark.content === '""' && mark.borderTopStyle === 'solid' && parseFloat(mark.borderTopWidth) > 0 && mark.borderTopColor !== getComputedStyle(input).backgroundColor })()`)).toBe(true)
+    } finally { await page.close() }
+  }, 20_000)
+
   test("user messages retain receipts without prompt-cost summaries or breakdowns", async () => {
     const page = await browser!.openPage()
     try {
@@ -390,14 +421,14 @@ describe("transcript rendering", () => {
 
 
 
-  test("bounds the desktop Conversation column to 120ch and aligns transcript with composer", async () => {
+  test("bounds the desktop Conversation column to 1200px and aligns transcript with composer", async () => {
     const page = await browser!.openPage()
     try {
       for (const width of [1440, 1920]) {
         await page.setViewport(width, 900)
         await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=light`)
         for (let i = 0; i < 80 && !await page.evaluate(`document.querySelector('.app--conversation.app--selected .transcript-navigation')`); i++) await Bun.sleep(50)
-        const geometry = await page.evaluate(`(() => { const app=document.querySelector('.app'), probe=document.createElement('div');probe.style.cssText='position:absolute;visibility:hidden;inline-size:120ch';app.append(probe);const measure=probe.getBoundingClientRect().width;probe.remove();const transcript = document.querySelector('.transcript-navigation').getBoundingClientRect(); const composer = document.querySelector('.composer__row').getBoundingClientRect(); return { width: transcript.width, measure, left: transcript.left, right: transcript.right, composerLeft: composer.left, composerRight: composer.right } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), measure: (decodeNumber)(record["measure"]), left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]), composerLeft: (decodeNumber)(record["composerLeft"]), composerRight: (decodeNumber)(record["composerRight"]) } })
+        const geometry = await page.evaluate(`(() => { const app=document.querySelector('.app'), probe=document.createElement('div');probe.style.cssText='position:absolute;visibility:hidden;inline-size:var(--yc-content-max)';app.append(probe);const measure=probe.getBoundingClientRect().width;probe.remove();const transcript = document.querySelector('.transcript-navigation').getBoundingClientRect(); const composer = document.querySelector('.composer__row').getBoundingClientRect(); return { width: transcript.width, measure, left: transcript.left, right: transcript.right, composerLeft: composer.left, composerRight: composer.right } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), measure: (decodeNumber)(record["measure"]), left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]), composerLeft: (decodeNumber)(record["composerLeft"]), composerRight: (decodeNumber)(record["composerRight"]) } })
         expect(geometry.width).toBeLessThanOrEqual(geometry.measure + 1)
         expect(geometry.width).toBeGreaterThan(geometry.measure * 0.5)
         if (width === 1920) expect(Math.abs(geometry.width - geometry.measure)).toBeLessThanOrEqual(1)

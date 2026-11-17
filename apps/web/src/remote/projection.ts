@@ -13,6 +13,7 @@ import { isInternalTranscriptEnvelope } from "../../../../packages/client/src/tr
 import { RemoteLimits, isSessionID, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
 import { autonomyCategories, autonomyLabels, readAutonomyMode, type AutonomyCategory, type AutonomyModes, type EffectiveAutonomyView } from "./autonomy"
 import { parseUnifiedPatch } from "./file-change-diff"
+import { isConversationRoot } from "./session-collection"
 import { readProjectEscalation, readProjectEscalationEvent, type ProjectEscalationView } from "./project-escalation"
 import { escalationText, readGuardrailProvenance, readGuardrailDecisions, mergeGuardrailDecisions, type DecisionProvenanceView, type GradeView, type GuardrailDecisionView } from "./decision-grades"
 
@@ -942,7 +943,7 @@ function readDataList(payload: unknown): readonly unknown[] {
 }
 
 export function readSessionInfoList(payload: unknown): readonly unknown[] {
-  return readDataList(payload)
+  return readDataList(payload).filter(isConversationRoot)
 }
 
 export function readMessageList(payload: unknown): readonly RemoteMessageView[] {

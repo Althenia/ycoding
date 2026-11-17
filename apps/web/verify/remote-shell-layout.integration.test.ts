@@ -223,7 +223,7 @@ describe("remote shell layout", () => {
     } finally { await page.close() }
   }, 20_000)
 
-  test("scrolls Settings from the window edge while its content stays one centered column", async () => {
+  test("scrolls Settings from the window edge with start-aligned sections and readable explanations", async () => {
     for (const [width, height] of [[1440, 900], [1920, 1080]] as const) {
       const page = await fixture("view=settings&noSelection=1", width, "System alerts", undefined, height)
       try {
@@ -231,16 +231,24 @@ describe("remote shell layout", () => {
         const layout = await page.evaluate(`(() => {
           const scroller = document.querySelector('.app--settings .workspace__scroll')
           const box = scroller.getBoundingClientRect()
-          const pane = document.querySelector('.app--settings .pane').getBoundingClientRect()
+          const pane = document.querySelector('.app--settings .workspace__scroll > .route-panel--active > .pane').getBoundingClientRect()
+          const explanation = document.querySelector('section[aria-labelledby="appearance-settings"] p')
+          if (!explanation) throw new Error('Appearance explanation missing')
+          const probe = document.createElement('span')
+          probe.style.cssText = 'display:block;inline-size:var(--yc-measure)'
+          explanation.append(probe)
+          const measure = probe.getBoundingClientRect().width
+          probe.remove()
           const edge = document.elementFromPoint(innerWidth - 24, box.top + box.height / 2)
-          return { scrollable: scroller.scrollHeight > scroller.clientHeight, left: box.left, right: box.right, viewport: innerWidth, edgeScrolls: scroller.contains(edge), column: pane.width, columnCenter: pane.left + pane.width / 2, contentCenter: box.left + scroller.clientLeft + scroller.clientWidth / 2 }
-        })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, scrollable: (decodeBoolean)(record["scrollable"]), left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]), viewport: (decodeNumber)(record["viewport"]), edgeScrolls: (decodeBoolean)(record["edgeScrolls"]), column: (decodeNumber)(record["column"]), columnCenter: (decodeNumber)(record["columnCenter"]), contentCenter: (decodeNumber)(record["contentCenter"]) } })
+          return { scrollable: scroller.scrollHeight > scroller.clientHeight, left: box.left, right: box.right, viewport: innerWidth, edgeScrolls: scroller.contains(edge), column: pane.width, startGap: pane.left - box.left - parseFloat(getComputedStyle(scroller).paddingLeft), explanation: explanation.getBoundingClientRect().width, measure }
+        })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, scrollable: (decodeBoolean)(record["scrollable"]), left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]), viewport: (decodeNumber)(record["viewport"]), edgeScrolls: (decodeBoolean)(record["edgeScrolls"]), column: (decodeNumber)(record["column"]), startGap: (decodeNumber)(record["startGap"]), explanation: (decodeNumber)(record["explanation"]), measure: (decodeNumber)(record["measure"]) } })
         expect(layout.scrollable).toBe(true)
         expect(Math.abs(layout.right - layout.viewport)).toBeLessThanOrEqual(1)
         expect(layout.edgeScrolls).toBe(true)
         // W48: Settings shares the 1200px content column, widening to 1600px from the expansive breakpoint.
         expect(layout.column).toBeLessThanOrEqual(width >= 1600 ? 1600 : 1200)
-        expect(Math.abs(layout.columnCenter - layout.contentCenter)).toBeLessThanOrEqual(1)
+        expect(Math.abs(layout.startGap)).toBeLessThanOrEqual(1)
+        expect(layout.explanation).toBeLessThanOrEqual(layout.measure + 1)
       } finally { await page.close() }
     }
   }, 30_000)

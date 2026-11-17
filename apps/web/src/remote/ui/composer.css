@@ -53,6 +53,7 @@
 .composer--collapsed .composer__row { display:none; }
 .composer-resident:has(.composer--collapsed) { min-block-size:0; }
 .composer__dock { position:static; z-index:1; order:1; align-self:end; display:flex; align-items:center; justify-content:flex-end; gap:var(--yc-space-2); }
+.app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .composer__dock { align-self:start; }
 .composer--collapsed .composer__dock { order:0; align-self:stretch; position:relative; inset:auto; min-block-size:var(--yc-hit-min); justify-content:flex-end; padding-inline:var(--yc-space-2); border:1px solid var(--yc-border-strong); border-radius:var(--yc-radius-xl); background:var(--yc-surface-raised); box-shadow:var(--yc-shadow-md); }
 [data-theme="dark"] .composer--collapsed .composer__dock { border-color:var(--yc-border); }
 .composer--collapsed .session-status > :is(.session-status__autonomous-trigger, .session-status__goal-trigger) { display:none; }

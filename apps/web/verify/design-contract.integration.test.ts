@@ -211,12 +211,12 @@ describe("web design contract inventory", () => {
     await page.close()
   }, 30_000)
 
-  test("widens the Sessions and Usage columns from 1600, keeps Settings a fixed 760px column, while Session detail is a centered 720px reading column", async () => {
+  test("start-aligns fluid route columns and caps selected Session detail at 1200px", async () => {
     const page = await requireBrowser().openPage()
     const widths = { 1599: 1200, 1600: 1600, 1920: 1600, 2000: 1600, 2560: 1600 } as const
     for (const [width, expected] of Object.entries(widths).map(([key, value]) => [Number(key), value] as const)) {
       await page.setViewport(width, 1000)
-      for (const [view, selector] of [["sessions", ".app--sessions .workspace__scroll > .route-panel"], ["usage", ".app--usage .workspace__scroll > .route-panel"], ["settings", ".app--settings .pane"], ["chat", ".transcript"]] as const) {
+      for (const [view, selector] of [["sessions", ".app--sessions .workspace__scroll > .route-panel--active"], ["usage", ".app--usage .workspace__scroll > .route-panel--active"], ["settings", ".app--settings .workspace__scroll > .route-panel--active > .pane"], ["chat", ".transcript"]] as const) {
         await page.navigate(url(`/verify/remote.html?view=${view}`))
         for (let attempt = 0; attempt < 100 && !await page.evaluate(`document.querySelector('.workspace__scroll') !== null`); attempt += 1) await Bun.sleep(50)
         for (let attempt = 0; attempt < 100 && !await page.evaluate(`document.querySelector(${JSON.stringify(selector)}) !== null`); attempt += 1) await Bun.sleep(50)
@@ -227,42 +227,24 @@ describe("web design contract inventory", () => {
           const box = element.getBoundingClientRect()
           const host = scroll.getBoundingClientRect()
           const styles = getComputedStyle(scroll)
-          const probe = document.createElement('div')
-          probe.style.width = 'var(--yc-measure-wide)'
-          element.append(probe)
-          const wide = Math.round(probe.getBoundingClientRect().width)
-          probe.style.width = 'var(--yc-space-12)'
-          const reserve = Math.round(probe.getBoundingClientRect().width)
-          probe.remove()
-          const parent = (element.closest('.conversation-pane') ?? element).parentElement
-          if (!parent) throw new Error('Route container is missing')
-          const parentStyles = getComputedStyle(parent)
-          const container = Math.round(parent.clientWidth - parseFloat(parentStyles.paddingLeft) - parseFloat(parentStyles.paddingRight))
           return {
             width: Math.round(box.width),
-            wide,
-            reserve,
-            container,
             available: Math.round(scroll.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight)),
             gutter: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-gutter')),
             overflow: document.documentElement.scrollWidth > innerWidth,
-            centered: Math.abs((box.left - host.left) - (host.right - box.right)) <= 16,
+            startAligned: Math.abs(box.left - host.left - parseFloat(styles.paddingLeft)) <= 1,
           }
-        })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), wide: (decodeNumber)(record["wide"]), reserve: (decodeNumber)(record["reserve"]), container: (decodeNumber)(record["container"]), available: (decodeNumber)(record["available"]), gutter: (decodeNumber)(record["gutter"]), overflow: (decodeBoolean)(record["overflow"]), centered: (decodeBoolean)(record["centered"]) } })
+        })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), available: (decodeNumber)(record["available"]), gutter: (decodeNumber)(record["gutter"]), overflow: (decodeBoolean)(record["overflow"]), startAligned: (decodeBoolean)(record["startAligned"]) } })
         expect(geometry.overflow, `${view} ${width}`).toBe(false)
-        expect(geometry.centered, `${view} ${width}`).toBe(true)
+        expect(geometry.startAligned, `${view} ${width}`).toBe(true)
         expect(geometry.gutter, `${view} ${width}`).toBe(width >= 1600 ? 48 : 40)
         if (view === "chat") {
-          expect(geometry.reserve, `${view} ${width}`).toBe(48)
-          expect(geometry.centered, `${view} ${width}`).toBe(true)
-          expect(geometry.container, `${view} ${width}`).toBeGreaterThanOrEqual(geometry.available - 1)
-          const column = Math.min(720, geometry.container - geometry.reserve)
+          const column = Math.min(1200, geometry.available)
           expect(geometry.width, `${view} ${width}`).toBeLessThanOrEqual(column + 1)
           expect(geometry.width, `${view} ${width}`).toBeGreaterThanOrEqual(column - 1)
           continue
         }
-        // The column is the declared cap, or the scroll area's content box when that is narrower.
-        const cap = view === "settings" ? 760 : expected
+        const cap = expected
         expect(geometry.width, `${view} ${width}`).toBeLessThanOrEqual(cap)
         expect(geometry.width, `${view} ${width}`).toBeGreaterThanOrEqual(Math.min(cap, geometry.available) - 1)
       }

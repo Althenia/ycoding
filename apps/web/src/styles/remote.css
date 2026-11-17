@@ -23,8 +23,11 @@
   block-size: 100dvh;
   overflow: hidden;
   --app-strip-h: 0px;
-  /* The selected conversation reads as one centered column. */
   --remote-column: 720px;
+}
+
+.app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) {
+  --remote-column: var(--yc-content-max);
 }
 
 .app:has(> .status-strip) {
@@ -1297,8 +1300,8 @@ form .request__actions .button--secondary {
 
 .app--settings .page-head,
 .app--settings .pane {
-  inline-size: min(100%, 760px);
-  margin-inline: auto;
+  inline-size: min(100%, var(--yc-content-max));
+  margin-inline: 0;
   padding-inline: 0;
 }
 
@@ -1374,7 +1377,7 @@ form .request__actions .button--secondary {
   display: block;
   block-size: 0;
   inline-size: min(calc(100% - 2 * var(--yc-gutter)), var(--remote-column));
-  margin-inline: auto;
+  margin-inline: var(--yc-gutter) 0;
 }
 
 .app--conversation.app--selected:not(.app--office, .app--new-session) .workspace__scroll {
@@ -1391,12 +1394,6 @@ form .request__actions .button--secondary {
   .workspace__topbar { padding-block: 0; gap: 0; }
 }
 
-@media (min-width: 1024px) {
-  .app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .conversation-jump-slot {
-    inline-size: min(calc(100% - 2 * var(--yc-gutter) - var(--yc-space-12)), var(--remote-column));
-  }
-}
-
 /* Notices, breadcrumb, transcript, pending requests, and the composer share the
    conversation column's edges at every width. */
 .app--conversation.app--selected .workspace__scroll > *,
@@ -1409,20 +1406,11 @@ form .request__actions .button--secondary {
 .app--conversation.app--selected .workspace__scroll > .remote-conversation-view { inline-size: 100%; margin-inline: 0; }
 .app--conversation.app--selected .workspace__scroll > .route-panel > .new-session-composer { inline-size: min(100%, var(--remote-column)); }
 
-@media (min-width: 1024px) {
-  .app--conversation.app--selected .workspace__scroll > *,
-  .app--conversation.app--selected .workspace__scroll > .remote-conversation-view > *,
-  .app--conversation.app--selected .composer > *,
-  .app--conversation.app--selected .todo-panel__inner {
-    inline-size: min(100%, var(--remote-column));
-  }
-  .app--conversation.app--selected .workspace__scroll > .remote-conversation-view { inline-size: 100%; margin-inline: 0; }
-}
-@media (min-width: 1280px) and (pointer: fine) {
-  .app--conversation.app--selected.app--team-open .workspace__scroll > *,
-  .app--conversation.app--selected.app--team-open .workspace__scroll > .remote-conversation-view > *,
-  .app--conversation.app--selected.app--team-open .composer > *,
-  .app--conversation.app--selected.app--team-open .todo-panel__inner { inline-size: min(100%, var(--remote-column)); }
+.app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .workspace__scroll > *,
+.app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .workspace__scroll > .remote-conversation-view > *,
+.app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .composer > *,
+.app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .todo-panel__inner {
+  margin-inline: 0;
 }
 
 /* The page already sits inside the workspace gutter; a second pane inset would
@@ -1433,12 +1421,14 @@ form .request__actions .button--secondary {
 
 .sessions-page > .page-head { display: flex; align-items: center; justify-content: space-between; gap: var(--yc-space-4); margin-block-end: var(--yc-space-5); }
 .app--sessions .workspace__scroll > .route-panel,
-.app--usage .workspace__scroll > .route-panel { max-inline-size: var(--yc-content-max); margin-inline: auto; }
+.app--usage .workspace__scroll > .route-panel { max-inline-size: var(--yc-content-max); margin-inline: 0; }
 
 /* Expansive screens widen the one content column; Session detail keeps its reading measure. */
 @media (min-width: 1600px) {
   .app--sessions .workspace__scroll > .route-panel,
   .app--usage .workspace__scroll > .route-panel { max-inline-size: var(--yc-content-max-wide); }
+  .app--settings .page-head,
+  .app--settings .pane { inline-size: min(100%, var(--yc-content-max-wide)); }
 }
 
 .sessions-page > .running-sessions { margin-block-end: var(--yc-space-5); }
