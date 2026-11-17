@@ -52,7 +52,7 @@ describe("icon-led Settings sections", () => {
   test("keeps the decorative icon outside the heading's accessible name", async () => {
     const tsx = await read("settings.tsx")
     const section = tsx.slice(tsx.indexOf("function Section("), tsx.indexOf("The account section shows"))
-    expect(section).toContain('<Icon name={sectionIcons[props.category]} size={18} />')
+    expect(section).toContain('<Icon name={sectionIcons[props.category]} size={20} />')
     expect(section).toContain("<h2 id={props.id}>{props.title}</h2>")
     expect(section).toContain("aria-labelledby={props.id}")
     expect(section).toContain('<Show when={props.hint}><p class="settings__hint">{props.hint}</p></Show>')
@@ -123,7 +123,7 @@ describe("Ledger Settings composition", () => {
   test("names the selected machine with its connection status and keeps its label for assistive technology", async () => {
     const tsx = await read("settings.tsx")
     expect(tsx).toContain('id="machine-selected-name"')
-    expect(tsx).toContain('<span class="machine-selected__status" data-tone={connection().tone}>{connection().label}<Show when={connection().tone === "online"}><Icon name="check" size={14} /></Show></span>')
+    expect(tsx).toContain('<span class="machine-selected__status" data-tone={connection().tone}>{connection().label}<Show when={connection().tone === "online"}><Icon name="check" size={16} /></Show></span>')
     expect(tsx).toContain('<span class="visually-hidden" id="machine-selected-label">Selected machine</span>')
     const css = await read("settings.css")
     expect(rule(css, ".machine-selected__name")).toContain("font: var(--yc-weight-medium) var(--yc-size-md)/var(--yc-leading-md) var(--yc-font-sans)")
