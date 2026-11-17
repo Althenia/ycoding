@@ -135,7 +135,7 @@ it.effect("fallback answers activate dependent fields and leave inactive fields 
   expect(yield* forms.list()).toEqual([])
 }))
 
-it.effect("disabling defer during grading still settles a YOLO fallback", () => Effect.gen(function* () {
+it.effect("disabling defer during grading discards stale grades and settles one YOLO fallback", () => Effect.gen(function* () {
   yield* seed()
   const forms = yield* Form.Service
   const autonomy = yield* SessionAutonomy.Service
@@ -143,7 +143,13 @@ it.effect("disabling defer during grading still settles a YOLO fallback", () => 
   const entered = yield* Deferred.make<void>()
   const release = yield* Deferred.make<void>()
   const revised = grades.map(grade => ({ ...grade, confidence: 0.79 }))
-  evaluate = input => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as(response(input, revised)))
+  let evaluations = 0
+  evaluate = input => Effect.gen(function* () {
+    evaluations += 1
+    yield* Deferred.succeed(entered, undefined)
+    yield* Deferred.await(release)
+    return response(input, revised)
+  })
   const observed = yield* observe()
   const running = yield* invoke().pipe(Effect.forkScoped)
   yield* Deferred.await(entered)
@@ -151,7 +157,9 @@ it.effect("disabling defer during grading still settles a YOLO fallback", () => 
   yield* autonomy.set({ sessionID, defer: false })
   yield* Deferred.succeed(release, undefined)
   const output = (yield* Fiber.join(running)).output
-  expect(output?.structured).toMatchObject({ answers: [["SQLite"]], automatic: true, via: "yolo", assessment: { fields: [{ status: "assessed", grades: revised }] } })
+  expect(output?.structured).toMatchObject({ answers: [["SQLite"]], automatic: true, via: "yolo", assessment: { fields: [{ key: "q0", status: "not_assessed", reason: expect.stringContaining("revoked") }] } })
+  expect(output?.structured).not.toHaveProperty("assessment.fields.0.grades")
+  expect(evaluations).toBe(1)
   expect(output?.structured).not.toHaveProperty("source")
   expect(yield* forms.list()).toEqual([])
   expect(observed.published.filter(event => event.type === "form.replied")).toHaveLength(1)

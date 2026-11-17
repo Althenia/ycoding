@@ -585,15 +585,12 @@ describe("native coordinator Permission reconsideration", () => {
     )
 
   const allowed = nativeHarness([{ escalate: 0.95 }, { allow: 0.95 }])
-  allowed.it.effect("settles a pending ask through the YOLO permission evaluator with coordinator attribution and unchanged autonomy", () =>
+  allowed.it.effect("enabling YOLO settles a Manual ask without evaluation or coordinator attribution", () =>
     Effect.gen(function* () {
       yield* nativeSetup
       const service = yield* Permission.Service
       const autonomy = yield* SessionAutonomy.Service
       const captured = yield* captureNativeEvents()
-      yield* autonomy.set({ sessionID: nativeSessionID, permissions: "yolo" })
-      const before = yield* autonomy.snapshot(nativeSessionID)
-
       const running = yield* service
         .assert({ sessionID: nativeSessionID, action: "read", resources: ["src/notes.txt"] })
         .pipe(Effect.forkScoped)
@@ -601,7 +598,7 @@ describe("native coordinator Permission reconsideration", () => {
         yield* Effect.yieldNow
       const pending = yield* service.forSession(nativeSessionID)
       expect(pending).toHaveLength(1)
-      expect(allowed.choices).toHaveLength(1)
+      expect(allowed.choices).toHaveLength(0)
       const snapshot = yield* service.snapshot(pending[0]!.id)
       expect(snapshot).toBeDefined()
 
@@ -614,7 +611,10 @@ describe("native coordinator Permission reconsideration", () => {
       })
       expect(revoked).toMatchObject({ outcome: "escalated", settled: false, reason: "delegation-invalid" })
       expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
-      expect(allowed.choices).toHaveLength(1)
+      expect(allowed.choices).toHaveLength(0)
+
+      yield* autonomy.set({ sessionID: nativeSessionID, permissions: "yolo" })
+      const before = yield* autonomy.snapshot(nativeSessionID)
 
       const result = yield* service.reconsider({
         requestID: pending[0]!.id,
@@ -625,7 +625,7 @@ describe("native coordinator Permission reconsideration", () => {
       })
       expect(result).toMatchObject({ outcome: "allowed", settled: true, via: "yolo" })
       expect(Exit.isSuccess(yield* Fiber.await(running))).toBe(true)
-      expect(allowed.choices).toHaveLength(2)
+      expect(allowed.choices).toHaveLength(0)
       const allowEvents = captured.assessed.filter((event) => event.outcome === "allow")
       expect(allowEvents).toEqual([
         expect.objectContaining({
@@ -633,13 +633,10 @@ describe("native coordinator Permission reconsideration", () => {
           outcome: "allow",
           via: "yolo",
           reply: "once",
-          choice: "allow",
-          actor: "coordinator",
-          coordinatorSessionID: coordinatorSource.coordinatorSessionID,
-          groupID: "cgrp_one",
-          rationale: "Assigned routine work.",
         }),
       ])
+      for (const key of ["choice", "actor", "coordinatorSessionID", "groupID", "rationale"])
+        expect(allowEvents[0]).not.toHaveProperty(key)
       expect(captured.permissionReplied).toEqual([{ sessionID: nativeSessionID, requestID: pending[0]!.id, reply: "once" }])
       expect((yield* autonomy.snapshot(nativeSessionID)).state).toEqual(before.state)
 
@@ -781,15 +778,12 @@ describe("native coordinator reconsideration under Manual and Auto", () => {
 
 describe("native coordinator Guardrail reconsideration", () => {
   const allowed = nativeHarness([{ escalate: 0.95 }, { allow: 0.95 }])
-  allowed.it.effect("settles an ordinary pending review through the YOLO guardrail evaluator with coordinator attribution and unchanged autonomy", () =>
+  allowed.it.effect("enabling YOLO settles a Manual review without evaluation or coordinator attribution", () =>
     Effect.gen(function* () {
       yield* nativeSetup
       const service = yield* SessionGuardrail.Service
       const autonomy = yield* SessionAutonomy.Service
       const captured = yield* captureNativeEvents()
-      yield* autonomy.set({ sessionID: nativeSessionID, guardrails: "yolo" })
-      const before = yield* autonomy.snapshot(nativeSessionID)
-
       const running = yield* service
         .assert({
           sessionID: nativeSessionID,
@@ -804,7 +798,7 @@ describe("native coordinator Guardrail reconsideration", () => {
       expect(pending).toHaveLength(1)
       expect(pending[0]!.hardReview ?? false).toBe(false)
       expect(pending[0]!.ruleIDs).toEqual(["standard.review.outside-repo"])
-      expect(allowed.choices).toHaveLength(1)
+      expect(allowed.choices).toHaveLength(0)
       const snapshot = yield* service.requestSnapshot(nativeSessionID, pending[0]!.id)
       expect(snapshot).toBeDefined()
 
@@ -818,7 +812,10 @@ describe("native coordinator Guardrail reconsideration", () => {
       })
       expect(revoked).toMatchObject({ outcome: "escalated", settled: false, reason: "delegation-invalid" })
       expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
-      expect(allowed.choices).toHaveLength(1)
+      expect(allowed.choices).toHaveLength(0)
+
+      yield* autonomy.set({ sessionID: nativeSessionID, guardrails: "yolo" })
+      const before = yield* autonomy.snapshot(nativeSessionID)
 
       const result = yield* service.reconsider({
         sessionID: nativeSessionID,
@@ -830,22 +827,20 @@ describe("native coordinator Guardrail reconsideration", () => {
       })
       expect(result).toMatchObject({ outcome: "allowed", settled: true, via: "yolo" })
       yield* (yield* Fiber.join(running)).release
-      expect(allowed.choices).toHaveLength(2)
+      expect(allowed.choices).toHaveLength(0)
       expect(captured.guardrailDecided).toEqual([
         expect.objectContaining({
           requestID: pending[0]!.id,
           reply: "once",
           authority: "yolo",
-          choice: "allow",
-          actor: "coordinator",
-          coordinatorSessionID: coordinatorSource.coordinatorSessionID,
-          groupID: "cgrp_one",
-          rationale: "Assigned routine work.",
         }),
       ])
+      for (const key of ["choice", "actor", "coordinatorSessionID", "groupID", "rationale"])
+        expect(captured.guardrailDecided[0]).not.toHaveProperty(key)
       expect(captured.guardrailReplied).toEqual([
-        expect.objectContaining({ requestID: pending[0]!.id, reply: "once", decidedBy: "decision-model" }),
+        expect.objectContaining({ requestID: pending[0]!.id, reply: "once", authority: "yolo" }),
       ])
+      expect(captured.guardrailReplied[0]).not.toHaveProperty("decidedBy")
       expect((yield* autonomy.snapshot(nativeSessionID)).state).toEqual(before.state)
 
       const second = yield* service.reconsider({
@@ -928,11 +923,9 @@ const fullChain = { reasons: [{ sessionID: driverSource.coordinatorSessionID, re
 
 describe("native coordinator Permission decline and escalation", () => {
   const declined = nativeHarness([{ escalate: 0.95 }])
-  declined.it.effect("a decline rejects the pending ask natively with coordinator audit and the rationale as member feedback", () =>
+  declined.it.effect("a decline rejects a Manual ask natively with coordinator audit and the rationale as member feedback", () =>
     Effect.gen(function* () {
       yield* nativeSetup
-      const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.set({ sessionID: nativeSessionID, permissions: "yolo" })
       const service = yield* Permission.Service
       const captured = yield* captureNativeEvents()
       const running = yield* service
@@ -950,7 +943,7 @@ describe("native coordinator Permission decline and escalation", () => {
       const error = yield* Fiber.join(running)
       expect(error).toBeInstanceOf(Permission.CorrectedError)
       expect((error as Permission.CorrectedError).feedback).toContain("Assigned routine work.")
-      expect(declined.choices).toHaveLength(1)
+      expect(declined.choices).toHaveLength(0)
       expect(captured.assessed.filter((event) => event.outcome === "deny")).toEqual([
         expect.objectContaining({
           requestID: pending[0]!.id, outcome: "deny", via: "coordination", reply: "reject", actor: "coordinator",
@@ -1037,11 +1030,9 @@ describe("native coordinator Permission decline and escalation", () => {
   )
 
   const unclassified = nativeHarness([{ escalate: 0.95 }])
-  unclassified.it.effect("a decline of an unclassified ask unblocks the waiting tool exactly once, and a stale fingerprint settles nothing", () =>
+  unclassified.it.effect("a decline of an unclassified Manual ask unblocks the waiting tool exactly once, and a stale fingerprint settles nothing", () =>
     Effect.gen(function* () {
       yield* nativeSetup
-      const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.set({ sessionID: nativeSessionID, permissions: "yolo" })
       const service = yield* Permission.Service
       const captured = yield* captureNativeEvents()
       const running = yield* service
@@ -1178,11 +1169,9 @@ describe("native coordinator Guardrail decline and escalation", () => {
   const outside = { sessionID: nativeSessionID, action: "file_mutation", resources: ["/outside/notes/today.md"], metadata: { operation: "write" } }
 
   const declined = nativeHarness([{ escalate: 0.95 }])
-  declined.it.effect("a decline rejects an ordinary review natively with coordinator audit and no model-incident escalation", () =>
+  declined.it.effect("a decline rejects a Manual review natively with coordinator audit and no model-incident escalation", () =>
     Effect.gen(function* () {
       yield* nativeSetup
-      const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.set({ sessionID: nativeSessionID, guardrails: "yolo" })
       const service = yield* SessionGuardrail.Service
       const captured = yield* captureNativeEvents()
       const chain = yield* captureEscalation()
@@ -1435,7 +1424,7 @@ describe("native owner settlement of every delegation class through Coordination
   )
 
   const explicitPermission = nativeHarness([{ allow: 0.99 }])
-  explicitPermission.it.effect("explicit human permission gates reject owner approval in every mode and retain native human settlement", () =>
+  explicitPermission.it.effect("explicit human permission gates retain native human settlement outside YOLO and autonomous provenance in YOLO", () =>
     Effect.gen(function* () {
       yield* nativeSetup
       const decisions = yield* ownerDecisions()
@@ -1444,6 +1433,14 @@ describe("native owner settlement of every delegation class through Coordination
       const captured = yield* captureNativeEvents()
       for (const mode of ["manual", "auto", "yolo"] as const) {
         yield* autonomy.set({ sessionID: nativeSessionID, permissions: mode })
+        if (mode === "yolo") {
+          yield* service.assert({ sessionID: nativeSessionID, action: "read", resources: ["src/notes.txt"], requireExplicitDecision: true })
+          expect(yield* service.forSession(nativeSessionID)).toEqual([])
+          expect(captured.assessed.at(-1)).toMatchObject({ outcome: "allow", via: "yolo", reply: "once" })
+          expect(captured.assessed.at(-1)).not.toHaveProperty("coordinatorSessionID")
+          expect((yield* autonomy.snapshot(nativeSessionID)).state.permissions).toBe(mode)
+          continue
+        }
         const pending = yield* pendingPermission({ action: "read", resources: ["src/notes.txt"], requireExplicitDecision: true })
         const before = captured.permissionReplied.length
         expect(yield* approve(decisions, "permission", pending.request.id, pending.fingerprint)).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:request" })
