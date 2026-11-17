@@ -108,7 +108,8 @@ it.effect("two Locations sharing one process-global service publish each milesto
         "windowID",
       ])
       const encoded = JSON.stringify(event)
-      for (const forbidden of ["/private", "Private profile", "fixture-private-key", "synthetic-account", "Work"])
+      expect((event.data as ProviderUsage.QuotaPaceAlert).body).toContain("Claude · Work · Session:")
+      for (const forbidden of ["/private", "Private profile", "fixture-private-key", "synthetic-account"])
         expect(encoded).not.toContain(forbidden)
     }
     expect(Schema.is(ProviderUsage.QuotaPaceAlert)(first.data)).toBe(true)

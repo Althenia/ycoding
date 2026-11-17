@@ -639,6 +639,32 @@ test.each([{ mode: "dark" as const, width: 40 }, { mode: "dark" as const, width:
   } finally { app.renderer.destroy() }
 }, 30_000)
 
+test("profile and scoped exhaustion stay visible beside another profile's remaining quota", async () => {
+  const updatedAt = Date.UTC(2026, 8, 22, 12)
+  const providers: ProviderUsageListOutput["data"] = [
+    { providerID: "anthropic", label: "Claude", profile: "Limited", status: "available", source: "response_headers", stability: "observed", updatedAt,
+      windows: [{ id: "seven-day-sonnet", label: "Sonnet weekly", unit: "percent", used: 100, resetAt: updatedAt + 3600000 }] },
+    { providerID: "anthropic", label: "Claude", profile: "Healthy", status: "available", source: "provider_internal_api", stability: "best_effort", updatedAt,
+      windows: [{ id: "seven-day", label: "All models", unit: "percent", used: 5, resetAt: updatedAt + 3600000 }] },
+  ]
+  const app = await renderUsage({ width: 100, height: 40, initialTab: "usage", snapshots: providers,
+    forecast: { asOf: updatedAt, localScope: "backend", quotas: providers.map((provider) => ({
+      providerID: provider.providerID, profile: provider.profile, windowID: provider.windows[0]!.id, unit: "percent",
+      source: provider.source, stability: provider.stability, updatedAt,
+      state: provider.profile === "Limited" ? "exhausted" : "insufficient", evidence: "low",
+    })) }, load: async (query) => page(query.group, []),
+  })
+  try {
+    await app.waitForFrame((frame) => frame.includes("Exhausted"))
+    const frame = app.captureCharFrame().replace(/\s+/g, " ")
+    expect(frame).toContain("Claude · Limited")
+    expect(frame).toContain("Claude · Healthy")
+    expect(frame).toContain("Sonnet weekly ██████████ 100% used")
+    expect(frame).toContain("All models █░░░░░░░░░ 5% used")
+    expect(frame.match(/Exhausted/g)).toHaveLength(1)
+  } finally { app.renderer.destroy() }
+})
+
 test("grouped quota windows render one heading before their pivoted rows and ungrouped rows are unchanged", async () => {
   const grouped = (id: string, label: string, group: string | undefined, used: number) => ({ id, label, ...(group === undefined ? {} : { group }), unit: "percent" as const, used, resetAt: Date.UTC(2026, 8, 25, 12) })
   const app = await renderUsage({

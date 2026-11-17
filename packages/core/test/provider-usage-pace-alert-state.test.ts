@@ -74,7 +74,7 @@ function fixture(deliver?: (alert: ProviderUsage.QuotaPaceAlert) => Effect.Effec
 }
 
 describe("quota pace alert state", () => {
-  test("delivers a payload with only the provider, window, milestone, reset, and generic copy", async () => {
+  test("delivers provider, profile, and window display copy without internal account identity", async () => {
     const value = fixture()
     await value.observe(input([window(40)]))
     await value.observe(input([window(46)]))
@@ -86,11 +86,9 @@ describe("quota pace alert state", () => {
       milestone: "cutting-it-close",
       resetAt,
       title: "Cutting it close",
-      body: "Projected quota use exceeds 90% of its limit at reset.",
+      body: "Claude · Work · Session: Projected quota use exceeds 90% of its limit at reset.",
     })
     expect(JSON.stringify(value.alerts)).not.toContain("synthetic-account")
-    expect(JSON.stringify(value.alerts)).not.toContain("Work")
-    expect(JSON.stringify(value.alerts)).not.toContain("Claude")
   })
 
   test("a held delivery serializes later observations so one edge never fires twice", async () => {

@@ -9,6 +9,7 @@ export interface NormalizeHeadersInput {
   readonly label: string
   readonly subscriptionType?: string
   readonly observedAt: number
+  readonly status?: number
   readonly headers: Headers | Readonly<Record<string, string>>
 }
 
@@ -64,9 +65,15 @@ export async function loadOAuth(input: LoadOAuthInput) {
 export function normalizeHeaders(input: NormalizeHeadersInput) {
   const headers = input.headers instanceof Headers ? input.headers : new Headers(input.headers)
   const windows = [
-    ...headerWindow(headers, "five-hour", "5-hour", "anthropic-ratelimit-unified-5h", "anthropic-ratelimit-unified-5h-reset"),
-    ...headerWindow(headers, "seven-day", "Weekly", "anthropic-ratelimit-unified-7d", "anthropic-ratelimit-unified-7d-reset"),
+    ...headerWindow(headers, "five-hour", "5-hour", "anthropic-ratelimit-unified-5h"),
+    ...headerWindow(headers, "seven-day", "Weekly", "anthropic-ratelimit-unified-7d"),
     ...headerWindow(headers, "overage", "Extra usage", "anthropic-ratelimit-unified-overage"),
+    ...[...new Set([...headers.keys()].flatMap((name) =>
+      /^anthropic-ratelimit-unified-7d-([a-z0-9-]+)-(?:utilization|limit|remaining|reset|status)$/.exec(name)?.[1] ?? [],
+    ))].toSorted().flatMap((scope) => headerWindow(
+      headers, `seven-day-${scope}`, bucketLabel(`seven_day_${scope}`), `anthropic-ratelimit-unified-7d-${scope}`,
+    )),
+    ...headerWindow(headers, "unified", "Subscription", "anthropic-ratelimit-unified", input.status),
   ]
   return new ProviderUsage.Snapshot({
     providerID: input.providerID,
@@ -158,20 +165,22 @@ function headerWindow(
   id: string,
   label: string,
   prefix: string,
-  resetHeader?: string,
+  status?: number,
 ) {
   const utilizationHeader = `${prefix}-utilization`
   const raw = headers.get(utilizationHeader)
-  const used = raw === null ? derivedPercentage(headers, prefix) : percentage(raw, utilizationHeader, true)
+  const rejected = headers.get(`${prefix}-status`) === "rejected" ||
+    status === 429 && headers.get(`${prefix}-status`) === null && headers.has(`${prefix}-reset`)
+  const used = rejected ? 100 : raw === null ? derivedPercentage(headers, prefix) : percentage(raw, utilizationHeader, true)
   if (used === undefined) return []
-  const resetAt = resetHeader ? reset(headers.get(resetHeader), resetHeader) : undefined
+  const resetAt = reset(headers.get(`${prefix}-reset`), `${prefix}-reset`)
   return [
     new ProviderUsage.Window({
       id,
       label,
       unit: "percent",
       used,
-      ...(id === "five-hour" ? { periodSeconds: 18_000 } : id === "seven-day" ? { periodSeconds: 604_800 } : {}),
+      ...(id === "five-hour" ? { periodSeconds: 18_000 } : id.startsWith("seven-day") ? { periodSeconds: 604_800 } : {}),
       ...(resetAt === undefined ? {} : { resetAt }),
     }),
   ]

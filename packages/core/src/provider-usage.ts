@@ -165,6 +165,14 @@ export function make(input: MakeInput): Interface {
   const credentialsFor = (credentials: ReadonlyArray<Credential.Info>, providerID: Provider.ID) =>
     credentials.filter((item) => item.integrationID === Integration.ID.make(providerID))
 
+  const currentObservation = (snapshot: ProviderUsage.Snapshot | undefined) => {
+    if (!snapshot || snapshot.providerID !== "anthropic" || snapshot.source !== "response_headers") return snapshot
+    const asOf = now()
+    const windows = snapshot.windows.filter((window) => window.resetAt === undefined || window.resetAt > asOf)
+    if (windows.length === 0) return undefined
+    return windows.length === snapshot.windows.length ? snapshot : new ProviderUsage.Snapshot({ ...snapshot, windows })
+  }
+
   const load = Effect.fnUntraced(function* (
     providerID: Provider.ID,
     candidates: ReadonlyArray<Credential.Info>,
@@ -184,12 +192,13 @@ export function make(input: MakeInput): Interface {
           typeof selected.value.metadata.source === "string"))
         ? accountIdentityDigest(selected)
         : undefined
-    const observed = () =>
+    const observed = () => currentObservation(
       profileSource !== undefined
         ? accountObservations.get(`${providerID}:${profileSource}`)
         : credentialID === undefined
           ? observations.get(`${providerID}:`)
-          : undefined
+          : undefined,
+    )
     const profiled = Effect.fnUntraced(function* (snapshot: ProviderUsage.Snapshot, bound = true) {
       if (!selected) return snapshot
       const currentCandidates = credentialsFor(yield* input.credentials.all(), providerID)
@@ -201,7 +210,7 @@ export function make(input: MakeInput): Interface {
       )
       if (!current) return unavailable(providerID, "unsupported", "Provider usage account changed during refresh")
       const value =
-        currentCandidates.length > 1 && current.label
+        bound && current.label && !current.label.includes("@")
           ? new ProviderUsage.Snapshot({
               providerID: snapshot.providerID,
               label: snapshot.label,
@@ -288,8 +297,17 @@ export function make(input: MakeInput): Interface {
           ),
         ),
       )
-    const fetched = yield* profiled(snapshot)
     const latest = observed()
+    if (latest && providerID === "anthropic" && profileSource && latest.source === "response_headers" &&
+      latest.windows.some((window) => window.unit === "percent" && window.used !== undefined && window.used >= 100 &&
+        window.resetAt !== undefined && window.resetAt > now()) &&
+      (snapshot.status === "available" || snapshot.status === "stale"))
+      return yield* profiled(mergeClaudeObservation(new ProviderUsage.Snapshot({ ...latest,
+        windows: latest.windows.filter((window) =>
+          latest.updatedAt >= snapshot.updatedAt || window.unit === "percent" && window.used !== undefined && window.used >= 100,
+        ),
+      }), snapshot))
+    const fetched = yield* profiled(snapshot)
     if (latest && providerID === "anthropic" && profileSource && latest.source === "response_headers" &&
       (snapshot.status === "error" || snapshot.status === "unauthorized" || snapshot.status === "unsupported"))
       return yield* profiled(new ProviderUsage.Snapshot({ providerID: latest.providerID, label: latest.label,
@@ -343,13 +361,12 @@ export function make(input: MakeInput): Interface {
         : []
     const available = new Set(providers.map((provider) => provider.id))
     const unknown = input.accountUnknown ? yield* input.accountUnknown(request?.refresh, request?.cachedOnly) : []
-    const unbound = [...observations].flatMap(([key, snapshot]) =>
-      key.endsWith(":") &&
-      available.has(snapshot.providerID) &&
-      credentialsFor(credentials, snapshot.providerID).length > 1
-        ? [snapshot]
-        : [],
-    )
+    const unbound = [...observations].flatMap(([key, snapshot]) => {
+      if (!key.endsWith(":") || !available.has(snapshot.providerID) ||
+        credentialsFor(credentials, snapshot.providerID).length <= 1) return []
+      const current = currentObservation(snapshot)
+      return current ? [current] : []
+    })
     return [
       ...snapshots,
       ...unbound,
@@ -417,19 +434,31 @@ export function make(input: MakeInput): Interface {
     }),
     observe: Effect.fn("ProviderUsage.observe")(function* (observation, profileSource) {
       yield* Effect.gen(function* () {
+        const credential = profileSource === undefined ? undefined :
+          (yield* input.credentials.all()).find((item) =>
+            item.integrationID === Integration.ID.make(observation.providerID) && accountIdentityDigest(item) === profileSource,
+          )
+        const key = `${observation.providerID}:${profileSource ?? ""}`
+        const store = profileSource === undefined ? observations : accountObservations
+        const current = store.get(key)
+        if (current && observation.observedAt < current.updatedAt) return
         const snapshot = new ProviderUsage.Snapshot({
           providerID: observation.providerID,
           label: observation.label,
+          ...(credential?.label && !credential.label.includes("@") ? { profile: credential.label } : {}),
           status: "available",
           source: observation.source,
           stability: observation.stability,
           updatedAt: observation.observedAt,
-          windows: observation.windows,
+          windows: observation.providerID === "anthropic" ? [
+            ...observation.windows,
+            ...(current?.windows ?? []).filter((window) =>
+              window.unit === "percent" && window.used !== undefined && window.used >= 100 &&
+              window.resetAt !== undefined && window.resetAt > observation.observedAt &&
+              !observation.windows.some((reported) => reported.id === window.id),
+            ),
+          ] : observation.windows,
         })
-        const key = `${observation.providerID}:${profileSource ?? ""}`
-        const store = profileSource === undefined ? observations : accountObservations
-        const current = store.get(key)
-        if (current && snapshot.updatedAt < current.updatedAt) return
         store.delete(key)
         store.set(key, snapshot)
         while (store.size > 256) store.delete(store.keys().next().value!)
