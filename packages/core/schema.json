@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "582385aa-d079-4c5a-b46d-6f2c0e3f7718",
+  "id": "8f04e957-dccc-4284-aa0a-8d013c4898fe",
   "prevIds": [
-    "aedbc9a3-76ec-41b4-b4b8-bfdb95541c84"
+    "582385aa-d079-4c5a-b46d-6f2c0e3f7718"
   ],
   "ddl": [
     {
@@ -10401,6 +10401,28 @@
     {
       "columns": [
         {
+          "value": "type",
+          "isExpression": false
+        },
+        {
+          "value": "aggregate_id",
+          "isExpression": false
+        },
+        {
+          "value": "seq",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "\"event\".\"type\" IN ('session.review.deferred.1', 'session.review.decided.1', 'session.review.withdrawn.1', 'session.review.consumed.1')",
+      "origin": "manual",
+      "name": "event_review_type_aggregate_seq_idx",
+      "entityType": "indexes",
+      "table": "event"
+    },
+    {
+      "columns": [
+        {
           "value": "id",
           "isExpression": false
         }
@@ -11559,6 +11581,24 @@
       "where": "\"session\".\"time_suspended\" is not null",
       "origin": "manual",
       "name": "session_time_suspended_idx",
+      "entityType": "indexes",
+      "table": "session"
+    },
+    {
+      "columns": [
+        {
+          "value": "time_updated",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "\"session\".\"time_pinned\" is not null",
+      "origin": "manual",
+      "name": "session_pinned_time_updated_id_idx",
       "entityType": "indexes",
       "table": "session"
     },

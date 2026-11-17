@@ -5,7 +5,7 @@ import { Event } from "@ycoding-ai/schema/event"
 import type { Model } from "@ycoding-ai/schema/model"
 import { Money } from "@ycoding-ai/schema/money"
 import { ID, type Admission, type Result } from "@ycoding-ai/schema/session-compaction"
-import { and, asc, desc, eq, gt, gte, inArray, isNull, like, lt, or, sql, type SQL } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, or, sql, type SQL } from "drizzle-orm"
 import { Project } from "../project"
 import { CoordinationService } from "../coordination/index"
 import { Workspace } from "../workspace"
@@ -153,6 +153,7 @@ const ListInputBase = {
   parentID: Schema.NullOr(SessionSchema.ID).pipe(Schema.optional),
   anchor: ListAnchor.pipe(Schema.optional),
   background: Schema.Literals(["include", "exclude"]).pipe(Schema.optional),
+  pinned: Schema.Boolean.pipe(Schema.optional),
 }
 
 const ListDirectoryInput = Schema.Struct({
@@ -515,6 +516,7 @@ export interface Interface {
     readonly running: ReadonlySet<SessionSchema.ID>
     readonly failed: ReadonlySet<SessionSchema.ID>
     readonly lost: ReadonlySet<SessionSchema.ID>
+    readonly waiting: ReadonlySet<SessionSchema.ID>
   }>
   readonly background: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | ScopeUnavailableError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError | ScopeUnavailableError>
@@ -2085,6 +2087,8 @@ const layer = Layer.effect(
         if ("directory" in input) conditions.push(eq(SessionTable.directory, input.directory))
         if (input.workspaceID) conditions.push(eq(SessionTable.workspace_id, input.workspaceID))
         if (input.background === "exclude") conditions.push(isNull(SessionTable.origin))
+        if (input.pinned !== undefined)
+          conditions.push(input.pinned ? isNotNull(SessionTable.time_pinned) : isNull(SessionTable.time_pinned))
         if ("project" in input) conditions.push(eq(SessionTable.project_id, input.project))
         if (input.search) {
           const punctuation = Object.entries({
@@ -3039,6 +3043,7 @@ const layer = Layer.effect(
         }
         const running = ancestors(runningIDs)
         const sessions = ancestors(sessionIDs)
+        const waiting = ancestors(tasks.filter((task) => task.state === "waiting").map((task) => task.sessionID))
         const lost = new Set([...(yield* ShellLedger.lostSessions(db)), ...(yield* SessionTask.lostSessions(db))])
         const failed = new Set<SessionSchema.ID>()
         for (const event of history) {
@@ -3052,7 +3057,7 @@ const layer = Layer.effect(
           if (event.type === failedType) failed.add(root)
           else failed.delete(root)
         }
-        return { sessions, running, failed, lost }
+        return { sessions, running, failed, lost, waiting }
       }),
       background: Effect.fn("Session.background")(function* (sessionID) {
         yield* result.get(sessionID)

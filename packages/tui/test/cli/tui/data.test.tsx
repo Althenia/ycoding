@@ -41,9 +41,9 @@ function emitEvent(events: ReturnType<typeof createEventStream>, event: YCodingE
   events.emit({ ...event, location: { directory } })
 }
 
-function DataProvider(props: ParentProps) {
+function DataProvider(props: ParentProps<{ selectedSessionID?: string }>) {
   return (
-    <DataProviderBase>
+    <DataProviderBase selectedSessionID={props.selectedSessionID === undefined ? undefined : () => props.selectedSessionID}>
       <LocationProvider>
         <SyncLocation />
         {props.children}
@@ -4700,7 +4700,59 @@ test("indexes a launched subagent before its session fetch resolves", async () =
   }
 })
 
-test("rehydrates durable subagent tasks for active families when the stream connects", async () => {
+test("rehydrates durable subagent tasks of the selected active family when the stream connects", async () => {
+  const events = createEventStream()
+  let requests = 0
+  const task: SessionOrchestrationTask = {
+    sessionID: "ses_child",
+    parentID: "ses_parent",
+    description: "Review implementation",
+    agent: "reviewer",
+    model: { providerID: "openai", id: "gpt-5.6", variant: "high" },
+    background: true,
+    state: "waiting",
+    question: { id: "qst_review", text: "Proceed?", time: 1 },
+    revision: 1,
+    time: { created: 1, updated: 2 },
+  }
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/session/active") return json({ data: { ses_child: { type: "running" } } })
+    if (url.pathname === "/api/session/ses_child") return json({ data: sessionInfo("ses_child", "ses_parent") })
+    if (url.pathname === "/api/session/ses_parent/subagent") {
+      requests++
+      return json(subagentPage([task]))
+    }
+  }, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider selectedSessionID="ses_parent">
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await wait(() => requests === 1)
+    await wait(() => data.session.subagent.page("ses_parent")?.data.length === 1)
+    expect(data.session.subagent.page("ses_parent")?.data[0]?.state).toBe("waiting")
+    expect(requests).toBe(1)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("does not hydrate durable subagent tasks of unselected active families when the stream connects", async () => {
   const events = createEventStream()
   let requests = 0
   const task: SessionOrchestrationTask = {
@@ -4743,10 +4795,10 @@ test("rehydrates durable subagent tasks for active families when the stream conn
   ))
 
   try {
-    await wait(() => requests === 1)
-    await wait(() => data.session.subagent.page("ses_parent")?.data.length === 1)
-    expect(data.session.subagent.page("ses_parent")?.data[0]?.state).toBe("waiting")
-    expect(requests).toBe(1)
+    await wait(() => data.session.get("ses_child")?.parentID === "ses_parent")
+    await Bun.sleep(300)
+    expect(requests).toBe(0)
+    expect(data.session.subagent.page("ses_parent")).toBeUndefined()
   } finally {
     app.renderer.destroy()
   }

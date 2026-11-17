@@ -92,6 +92,7 @@ type Endpoint5_0Input = {
   readonly search?: Endpoint5_0Request["query"]["search"]
   readonly parentID?: Endpoint5_0Request["query"]["parentID"]
   readonly background?: Endpoint5_0Request["query"]["background"]
+  readonly pinned?: Endpoint5_0Request["query"]["pinned"]
   readonly directory?: Endpoint5_0Request["query"]["directory"]
   readonly project?: Endpoint5_0Request["query"]["project"]
   readonly subpath?: Endpoint5_0Request["query"]["subpath"]
@@ -106,6 +107,7 @@ const Endpoint5_0 = (raw: RawClient["server.session"]) => (input?: Endpoint5_0In
       search: input?.["search"],
       parentID: input?.["parentID"],
       background: input?.["background"],
+      pinned: input?.["pinned"],
       directory: input?.["directory"],
       project: input?.["project"],
       subpath: input?.["subpath"],

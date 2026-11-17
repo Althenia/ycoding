@@ -30,6 +30,7 @@ import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionTable, SessionTaskNotificationTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
+import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { testEffect } from "./lib/effect"
 
 const projects = Layer.succeed(Project.Service, Project.Service.of({
@@ -108,6 +109,43 @@ it.effect("derives outstanding Sessions from pending input, active goal, tasks, 
     yield* db.update(SessionTaskNotificationTable).set({ delivered: true }).run()
     yield* jobs.noticeAdmitted(job.id)
     expect([...(yield* sessions.outstanding()).sessions].toSorted()).toEqual([executing, goal, parent, pending].toSorted())
+  }),
+)
+
+it.effect("reports waiting managed tasks with their ancestry without changing outstanding or running", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const events = yield* EventRuntime.Service
+    const owner = yield* ShellLedger.identify(yield* AppProcess.Service, process.pid)
+    const root = Session.ID.make("ses_waiting_root")
+    const parent = Session.ID.make("ses_waiting_parent")
+    const child = Session.ID.make("ses_waiting_child")
+    const sibling = Session.ID.make("ses_waiting_sibling")
+    for (const id of [executing, root]) yield* sessions.create({ id, location })
+    yield* sessions.create({ id: parent, parentID: root })
+    yield* sessions.create({ id: child, parentID: parent })
+    yield* sessions.create({ id: sibling, parentID: root })
+    const task = (sessionID: Session.ID, change: SessionEvent.Task.Updated["data"]["change"]) =>
+      events.publish(SessionEvent.Task.Updated, { sessionID, change }).pipe(Effect.provideService(EventRuntime.TaskOwner, owner))
+    for (const [sessionID, parentID] of [[parent, root], [child, parent], [sibling, root]] as const) {
+      yield* task(sessionID, { type: "launched", parentID,
+        parentAssistantMessageID: SessionMessage.ID.make(`msg_${sessionID}_parent`), toolCallID: `call_${sessionID}`,
+        inputID: SessionMessage.ID.make(`msg_${sessionID}_input`), description: "child", agent: Agent.ID.make("build"),
+        model: CatalogModel.Ref.make({ providerID: Provider.ID.make("test"), id: CatalogModel.ID.make("model") }), promptDigest: "digest", background: true,
+        delivery: "steer" })
+      yield* task(sessionID, { type: "started" })
+    }
+    const before = yield* sessions.outstanding()
+    expect([...before.waiting]).toEqual([])
+    yield* task(child, { type: "question_asked", question: { id: SessionOrchestration.QuestionID.make("qst_waiting"), text: "Which lane?", time: 1 } })
+    const waiting = yield* sessions.outstanding()
+    expect([...waiting.waiting].toSorted()).toEqual([root, parent, child].toSorted())
+    expect([...waiting.running].toSorted()).toEqual([executing, root, parent, sibling].toSorted())
+    expect([...waiting.sessions].toSorted()).toEqual([executing, root, parent, child, sibling].toSorted())
+    yield* task(child, { type: "question_answered", answer: { questionID: SessionOrchestration.QuestionID.make("qst_waiting"), text: "Left" } })
+    const answered = yield* sessions.outstanding()
+    expect([...answered.waiting]).toEqual([])
+    expect([...answered.running].toSorted()).toEqual([executing, root, parent, child, sibling].toSorted())
   }),
 )
 

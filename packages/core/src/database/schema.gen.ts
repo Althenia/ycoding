@@ -1344,6 +1344,9 @@ export default {
       )
       yield* tx.run(`CREATE UNIQUE INDEX \`event_aggregate_seq_idx\` ON \`event\` (\`aggregate_id\`,\`seq\`);`)
       yield* tx.run(`CREATE INDEX \`event_aggregate_type_seq_idx\` ON \`event\` (\`aggregate_id\`,\`type\`,\`seq\`);`)
+      yield* tx.run(
+        `CREATE INDEX \`event_review_type_aggregate_seq_idx\` ON \`event\` (\`type\`,\`aggregate_id\`,\`seq\`) WHERE "event"."type" IN ('session.review.deferred.1', 'session.review.decided.1', 'session.review.withdrawn.1', 'session.review.consumed.1');`,
+      )
       yield* tx.run(`CREATE UNIQUE INDEX \`mcp_event_outbox_id_idx\` ON \`mcp_event_outbox\` (\`id\`);`)
       yield* tx.run(`CREATE UNIQUE INDEX \`mcp_event_outbox_dedupe_idx\` ON \`mcp_event_outbox\` (\`dedupe_key\`);`)
       yield* tx.run(
@@ -1519,6 +1522,9 @@ export default {
       )
       yield* tx.run(
         `CREATE INDEX \`session_time_suspended_idx\` ON \`session\` (\`time_suspended\`) WHERE "session"."time_suspended" is not null;`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_pinned_time_updated_id_idx\` ON \`session\` (\`time_updated\`,\`id\`) WHERE "session"."time_pinned" is not null;`,
       )
       yield* tx.run(
         `CREATE UNIQUE INDEX \`session_task_notification_transition_idx\` ON \`session_task_notification\` (\`task_session_id\`,\`type\`,\`revision\`);`,

@@ -1,20 +1,18 @@
 export * as SessionDecisions from "./decisions"
 
-import { and, eq, isNull } from "drizzle-orm"
-import { Context, Effect, Layer } from "effect"
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm"
+import { Context, Effect, Layer, Schema } from "effect"
 import { Session } from "@ycoding-ai/schema/session"
 import { SessionReview } from "@ycoding-ai/schema/session-review"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
-import { EventRuntime } from "../event"
-import { EventTable } from "../event/sql"
+import { EventTable, isReviewType } from "../event/sql"
 import { LocationServiceMap } from "../location-service-map"
 import { Permission } from "../permission"
 import { Question } from "../question"
 import { Form } from "../form"
 import { SessionGuardrail } from "./guardrail"
 import { SessionReviewFold } from "./review-fold"
-import { SessionEvent } from "./event"
 import { SessionTable } from "./sql"
 
 export interface Decide {
@@ -46,14 +44,9 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
   const locations = yield* LocationServiceMap.Service
   return Service.of({ list: Effect.fn("SessionDecisions.list")(function* () {
     const loaded = yield* locations.loaded()
-    const sessions = yield* database.db.select({ id: SessionTable.id, title: SessionTable.title, directory: SessionTable.directory })
-      .from(SessionTable).where(isNull(SessionTable.time_archived)).all().pipe(Effect.orDie)
-    const owners = new Map<string, typeof sessions[number]>(sessions.map((session) => [session.id, session]))
-    const items: Item[] = []
+    const pending: { item: Omit<Item, "sessionTitle" | "directory">; directory: string }[] = []
     const add = (item: Omit<Item, "sessionTitle" | "directory">, directory: string) => {
-      const owner = owners.get(item.sessionID)
-      if (!owner && item.sessionID !== "global") return
-      items.push({ ...item, sessionTitle: owner?.title ?? "Global", directory: owner?.directory ?? directory })
+      pending.push({ item, directory })
     }
     for (const entry of loaded) {
       if (entry.built.includes(Permission.node.name)) {
@@ -98,12 +91,38 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
         }, entry.ref.directory)
       }
     }
-    const aggregates = yield* database.db.select({ aggregate: EventTable.aggregate_id }).from(EventTable)
+    const reviews = yield* database.db.select({
+      id: EventTable.id, aggregate: EventTable.aggregate_id, type: EventTable.type, created: EventTable.created, revision: EventTable.seq,
+      itemID: sql<unknown>`json_extract(${EventTable.data}, '$.itemID')`,
+      data: sql<unknown>`CASE WHEN ${EventTable.type} = ${SessionReviewFold.deferredType} THEN NULL ELSE ${EventTable.data} END`.mapWith(EventTable.data),
+    }).from(EventTable)
       .innerJoin(SessionTable, eq(SessionTable.id, EventTable.aggregate_id))
-      .where(and(eq(EventTable.type, EventRuntime.versionedType(SessionEvent.Review.Deferred.type, 1)), isNull(SessionTable.time_archived)))
+      .where(and(
+        isReviewType(EventTable.type),
+        inArray(EventTable.type, [SessionReviewFold.deferredType, SessionReviewFold.decidedType, SessionReviewFold.withdrawnType]),
+        isNull(SessionTable.time_archived),
+      ))
+      .orderBy(asc(EventTable.seq))
       .all().pipe(Effect.orDie)
-    const folded = yield* SessionReviewFold.fold(database.db, [...new Set(aggregates.map((row) => Session.ID.make(row.aggregate)))])
-    for (const item of folded.filter(SessionReviewFold.isOpen)) {
+    const deferred = reviews.filter((row) => row.type === SessionReviewFold.deferredType)
+    const aggregates = new Set(deferred.map((row) => row.aggregate))
+    const closers = reviews.filter((row) => row.type !== SessionReviewFold.deferredType && aggregates.has(row.aggregate))
+    const latest = new Map(deferred.flatMap((row) => typeof row.itemID === "string" ? [[row.itemID, row.revision] as const] : []))
+    const closed = new Set(closers.flatMap((row) => {
+      const itemID = SessionReviewFold.closedItem(row)
+      const last = itemID === undefined ? undefined : latest.get(itemID)
+      return itemID !== undefined && last !== undefined && row.revision > last ? [itemID] : []
+    }))
+    const candidates = deferred.filter((row) => typeof row.itemID === "string" && !closed.has(row.itemID))
+    const payloads = candidates.length === 0 ? [] : yield* database.db.select({ id: EventTable.id, data: EventTable.data }).from(EventTable)
+      .where(inArray(EventTable.id, candidates.map((row) => row.id))).all().pipe(Effect.orDie)
+    const data = new Map(payloads.map((row) => [row.id, row.data]))
+    const open = new Set(candidates.map((row) => row.itemID))
+    const folded = SessionReviewFold.foldRows([
+      ...candidates.map((row) => ({ ...row, data: data.get(row.id) })),
+      ...closers.filter((row) => open.has(row.itemID)),
+    ].toSorted((left, right) => left.revision - right.revision)).filter(SessionReviewFold.isOpen)
+    for (const item of folded) {
       const payload = item.payload
       const choices: { label: string; value: unknown; template?: true }[] =
         payload.type === "permission" || payload.type === "guardrail"
@@ -118,9 +137,17 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
                 ]
       add({ kind: "review", sessionID: item.sessionID, id: item.itemID, summary: reviewSummary(payload), options: payload,
         decide: choices.map((choice) => command(choice.label, "session.review.decide", item.sessionID, "itemID", item.itemID, { decision: choice.value }, choice.template)),
-      }, owners.get(item.sessionID)?.directory ?? "")
+      }, "")
     }
-    return items
+    const ids = [...new Set(pending.map((entry) => entry.item.sessionID).filter(Schema.is(Session.ID)))]
+    const sessions = ids.length === 0 ? [] : yield* database.db.select({ id: SessionTable.id, title: SessionTable.title, directory: SessionTable.directory })
+      .from(SessionTable).where(and(inArray(SessionTable.id, ids), isNull(SessionTable.time_archived))).all().pipe(Effect.orDie)
+    const owners = new Map<string, typeof sessions[number]>(sessions.map((session) => [session.id, session]))
+    return pending.flatMap(({ item, directory }): Item[] => {
+      const owner = owners.get(item.sessionID)
+      if (!owner && item.sessionID !== "global") return []
+      return [{ ...item, sessionTitle: owner?.title ?? "Global", directory: owner?.directory ?? directory }]
+    })
   }, Effect.scoped) })
 }))
 

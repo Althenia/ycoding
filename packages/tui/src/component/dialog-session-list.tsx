@@ -31,7 +31,16 @@ const REFRESH_EVENTS = new RegExp(
     String.raw`shell\.(created|exited|deleted)`,
   ].join("|")})`,
 )
-const ROOT_REFRESH_EVENTS = /^session\.(created|deleted|renamed|archived|unarchived|moved|pinned|unpinned)$/
+const ROOT_REFRESH_EVENTS = /^session\.moved$/
+const REFRESH_DELAY_MS = 100
+
+type GlobalState = {
+  decisions: ReadonlySet<string>
+  tasks: ReadonlySet<string>
+  running: ReadonlySet<string>
+}
+
+const sameSet = (a: ReadonlySet<string>, b: ReadonlySet<string>) => a.size === b.size && [...a].every((id) => b.has(id))
 
 export function DialogSessionList(
   props: {
@@ -53,47 +62,64 @@ export function DialogSessionList(
   const shortcuts = Keymap.useShortcuts()
   const [search, setSearch] = createDebouncedSignal("", 150)
   const [toDelete, setToDelete] = createSignal<string>()
-  const [global, setGlobal] = createSignal<{
-    waiting: ReadonlySet<string>
-    running: ReadonlySet<string>
-  }>({ waiting: new Set<string>(), running: new Set<string>() })
+  const [global, setGlobal] = createSignal<GlobalState>({
+    decisions: new Set<string>(),
+    tasks: new Set<string>(),
+    running: new Set<string>(),
+  })
+  const waitingRoots = createMemo(() => new Set([...global().decisions, ...global().tasks]))
   const activeProject = createMemo(() => (location.current ?? data.location.info())?.project)
   let releaseRetained: (() => void) | undefined
   let disposed = false
   let refreshing = false
   let refreshDirty = false
   let refreshRoots = false
-  let refreshSessions: Set<string> | undefined = new Set()
   let refreshTimer: ReturnType<typeof setTimeout> | undefined
   let refreshGeneration = 0
-  let candidateRoots = new Set<string>()
+  const rootCache = new Map<string, string | null>()
   const runningGutter = () => <Spinner />
 
-  async function decisionRoot(sessionID: string, stale: () => boolean) {
+  async function rootOf(sessionID: string, stale: () => boolean) {
+    const walked: string[] = []
     let current: string | undefined = sessionID
-    const seen = new Set<string>()
-    while (current && !seen.has(current) && seen.size < 16) {
+    let root: string | null | undefined
+    while (current && walked.length < 16 && !walked.includes(current)) {
       if (stale()) return undefined
-      seen.add(current)
+      const cached = rootCache.get(current)
+      if (cached !== undefined) {
+        root = cached
+        break
+      }
+      walked.push(current)
       const info: SessionInfo | undefined =
         data.session.get(current) ?? (await client.api.session.get({ sessionID: current }).catch(() => undefined))
       if (!info) return undefined
-      if (isBackgroundSession(info)) return undefined
-      if (!info.parentID) return info.id
+      if (isBackgroundSession(info)) {
+        root = null
+        break
+      }
+      if (!info.parentID) {
+        root = info.id
+        break
+      }
       current = info.parentID
     }
-    return undefined
+    if (root === undefined) return undefined
+    walked.forEach((id) => rootCache.set(id, root))
+    return root ?? undefined
   }
 
-  async function decisionRoots(
-    decisions: Awaited<ReturnType<typeof client.api.decision.list>>,
-    stale: () => boolean,
-  ) {
-    const roots = await Promise.all(decisions.map((item) => decisionRoot(item.sessionID, stale)))
+  function forgetRoot(sessionID: string) {
+    rootCache.delete(sessionID)
+    for (const [id, root] of rootCache) if (root === sessionID) rootCache.delete(id)
+  }
+
+  async function rootsOf(sessionIDs: Iterable<string>, stale: () => boolean) {
+    const roots = await Promise.all([...new Set(sessionIDs)].map((sessionID) => rootOf(sessionID, stale)))
     return new Set(roots.filter((root): root is string => root !== undefined))
   }
 
-  async function loadGlobal(generation: number, discoverRoots: boolean, sessionIDs?: ReadonlySet<string>) {
+  async function loadGlobal(generation: number, discoverRoots: boolean) {
     const stale = () => disposed || generation !== refreshGeneration
     if (discoverRoots) await data.session.syncRoots(activeProject()?.id).catch(() => undefined)
     if (stale()) return
@@ -102,78 +128,51 @@ export function DialogSessionList(
       client.api.session.outstanding(),
     ])
     if (stale()) return
-    const waiting = decisions.status === "fulfilled" ? await decisionRoots(decisions.value, stale) : global().waiting
+    const previous = global()
+    const [decisionRoots, taskRoots, runningRoots] = await Promise.all([
+      decisions.status === "fulfilled"
+        ? rootsOf(
+            decisions.value.map((item) => item.sessionID),
+            stale,
+          )
+        : previous.decisions,
+      outstanding.status === "fulfilled" ? rootsOf(outstanding.value.waiting ?? [], stale) : previous.tasks,
+      outstanding.status === "fulfilled" ? rootsOf(outstanding.value.running ?? [], stale) : previous.running,
+    ])
     if (stale()) return
-    const running = outstanding.status === "fulfilled" ? new Set(outstanding.value.running ?? []) : global().running
-    const candidates = outstanding.status === "fulfilled" ? (outstanding.value.data ?? []) : []
-    const release = data.session.retain(new Set([...waiting, ...running, ...candidates]))
+    const release = data.session.retain(new Set([...decisionRoots, ...taskRoots, ...runningRoots]))
     releaseRetained?.()
     releaseRetained = release
     await Promise.all(
-      [...waiting, ...candidates]
+      [...decisionRoots, ...taskRoots, ...runningRoots]
         .filter((sessionID) => !data.session.get(sessionID))
         .map((sessionID) => data.session.sync(sessionID).catch(() => undefined)),
     )
     if (stale()) return
-    const roots = candidates.filter((sessionID) => {
-      const session = data.session.get(sessionID)
-      return session !== undefined && !session.parentID && !isBackgroundSession(session)
-    })
-    const affected =
-      sessionIDs === undefined
-        ? undefined
-        : new Set(
-            [...sessionIDs].map((sessionID) => {
-              const root = data.session.get(data.session.root(sessionID))
-              return root && !root.parentID ? root.id : undefined
-            }),
-          )
-    await Promise.all(
-      roots
-        .filter(
-          (sessionID) =>
-            discoverRoots ||
-            affected === undefined ||
-            affected.has(undefined) ||
-            affected.has(sessionID) ||
-            !candidateRoots.has(sessionID) ||
-            !data.session.subagent.page(sessionID),
-        )
-        .map((sessionID) => data.session.subagent.sync(sessionID).catch(() => undefined)),
-    )
-    if (stale()) return
-    if (outstanding.status === "fulfilled") candidateRoots = new Set(roots)
     setGlobal((current) =>
-      current.waiting.size === waiting.size &&
-      [...waiting].every((sessionID) => current.waiting.has(sessionID)) &&
-      current.running.size === running.size &&
-      [...running].every((sessionID) => current.running.has(sessionID))
+      sameSet(current.decisions, decisionRoots) && sameSet(current.tasks, taskRoots) && sameSet(current.running, runningRoots)
         ? current
-        : { waiting, running },
+        : { decisions: decisionRoots, tasks: taskRoots, running: runningRoots },
     )
   }
 
-  function refreshGlobal(discoverRoots = false, sessionIDs?: ReadonlySet<string>) {
+  function refreshGlobal(discoverRoots = false) {
     if (disposed) return
     refreshDirty = true
     refreshRoots ||= discoverRoots
-    if (sessionIDs === undefined) refreshSessions = undefined
-    else sessionIDs.forEach((sessionID) => refreshSessions?.add(sessionID))
     if (refreshing || refreshTimer !== undefined) return
     refreshTimer = setTimeout(() => {
       refreshTimer = undefined
       if (disposed) return
       const roots = refreshRoots
-      const sessions = refreshSessions
       refreshDirty = false
       refreshRoots = false
-      refreshSessions = new Set()
       refreshing = true
-      void loadGlobal(refreshGeneration, roots, sessions).finally(() => {
+      void loadGlobal(refreshGeneration, roots).finally(() => {
         refreshing = false
-        if (refreshDirty) refreshGlobal(refreshRoots, refreshSessions)
+        if (refreshDirty) refreshGlobal(refreshRoots)
       })
-    }, 0)
+    }, REFRESH_DELAY_MS)
   }
 
   onCleanup(() => {
@@ -185,9 +184,9 @@ export function DialogSessionList(
   onCleanup(
     event.subscribe((item) => {
       if (!REFRESH_EVENTS.test(item.type)) return
-      const sessionID =
-        "sessionID" in item.data && typeof item.data.sessionID === "string" ? item.data.sessionID : undefined
-      refreshGlobal(ROOT_REFRESH_EVENTS.test(item.type), sessionID === undefined ? undefined : new Set([sessionID]))
+      if (item.type === "session.deleted") forgetRoot(item.data.sessionID)
+      if (item.type === "session.task.updated" && item.data.change.type === "progressed") return
+      refreshGlobal(ROOT_REFRESH_EVENTS.test(item.type))
     }),
   )
   createEffect(
@@ -276,7 +275,7 @@ export function DialogSessionList(
     const isWaiting = (session: SessionInfo) =>
       !session.time.archived &&
       (data.session.activity(session.id) === "waiting" ||
-        global().waiting.has(session.id) ||
+        waitingRoots().has(session.id) ||
         (data.session.subagent.summary(session.id)?.waiting ?? 0) > 0)
     const isRunning = (session: SessionInfo) =>
       !session.time.archived &&

@@ -2,6 +2,13 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-11-17: Pinned Session filter and waiting attention
+
+- Add optional `pinned` (`true` or `false`) to the `session.list` query. The opaque list cursor carries it. Other values fail with `400`.
+- Add optional `waiting: SessionID[]` to the `session.outstanding` response: Sessions whose managed task is `waiting`, with their ancestors. Servers that include this change always populate it; clients decode responses without it.
+- Migration `review-pinned-indexes` adds the partial indexes `event_review_type_aggregate_seq_idx` on `event (type, aggregate_id, seq)` for the four review event types and `session_pinned_time_updated_id_idx` on `session (time_updated, id)` for pinned Sessions. It creates indexes only and rewrites no rows.
+- Additive only. Regenerate the Promise and Effect clients from Protocol.
+
 ## 2026-11-13: Refresh, reconnect, and connection status
 
 - Add optional `status: "connected" | "expired" | "refresh_failed"` and `message` to `Connection.CredentialInfo`. Servers that include this change always populate `status` for stored-credential connections in `integration.list` and `integration.get`; `message` carries the exact refresh failure text only with `refresh_failed`. Environment connections carry no status. Refresh failures live in server memory; no database migration runs.

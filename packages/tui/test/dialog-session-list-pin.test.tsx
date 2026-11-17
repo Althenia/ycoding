@@ -153,14 +153,16 @@ async function renderPinList(input: {
   let keymap!: ReturnType<typeof Keymap.use>
   const transport = createFetch((url, request) => {
     if (url.pathname === "/api/location") return json(location)
-    if (url.pathname === "/api/session")
+    if (url.pathname === "/api/session") {
+      const live = sessions.map((session) => ({
+        ...session,
+        time: { ...session.time, ...(input.pinned[session.id] === undefined ? {} : { pinned: input.pinned[session.id] }) },
+      }))
       return json({
-        data: sessions.map((session) => ({
-          ...session,
-          time: { ...session.time, ...(input.pinned[session.id] === undefined ? {} : { pinned: input.pinned[session.id] }) },
-        })),
+        data: url.searchParams.get("pinned") === "true" ? live.filter((item) => item.time.pinned !== undefined) : live,
         cursor: {},
       })
+    }
     if (url.pathname === "/api/session/active") return json({ data: {} })
     return input.override?.(url, request)
   }, events)

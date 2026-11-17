@@ -9,7 +9,7 @@ import { Clock, Effect, Option, Schema } from "effect"
 import { Database } from "../database/database"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { EventRuntime } from "../event"
-import { EventTable } from "../event/sql"
+import { EventTable, reviewTypes } from "../event/sql"
 import { ModelIncident } from "../model-incident/index"
 import { Hash } from "../util/hash"
 import { SessionEvent } from "./event"
@@ -75,11 +75,9 @@ type DatabaseClient = Database.Interface["db"]
 const locks = KeyedMutex.makeUnsafe<Session.ID>()
 export const withFamilyLock = locks.withLock
 
-const deferredType = EventRuntime.versionedType(SessionEvent.Review.Deferred.type, 1)
-const decidedType = EventRuntime.versionedType(SessionEvent.Review.Decided.type, 1)
-const withdrawnType = EventRuntime.versionedType(SessionEvent.Review.Withdrawn.type, 1)
-const consumedType = EventRuntime.versionedType(SessionEvent.Review.Consumed.type, 1)
-const reviewTypes = [deferredType, decidedType, withdrawnType, consumedType]
+export const deferredType = EventRuntime.versionedType(SessionEvent.Review.Deferred.type, 1)
+export const decidedType = EventRuntime.versionedType(SessionEvent.Review.Decided.type, 1)
+export const withdrawnType = EventRuntime.versionedType(SessionEvent.Review.Withdrawn.type, 1)
 
 const decodeDeferred = Schema.decodeUnknownOption(SessionEvent.Review.Deferred.data)
 const decodeDecided = Schema.decodeUnknownOption(SessionEvent.Review.Decided.data)
@@ -180,6 +178,14 @@ export const familySessions = Effect.fnUntraced(function* (db: DatabaseClient, r
   return sessions
 })
 
+export interface Row {
+  readonly aggregate: string
+  readonly type: string
+  readonly data: unknown
+  readonly created: number
+  readonly revision: number
+}
+
 export const fold = Effect.fnUntraced(function* (db: DatabaseClient, sessionIDs: ReadonlyArray<Session.ID>) {
   if (sessionIDs.length === 0) return [] as Folded[]
   const rows = yield* db
@@ -189,6 +195,16 @@ export const fold = Effect.fnUntraced(function* (db: DatabaseClient, sessionIDs:
     .orderBy(asc(EventTable.seq))
     .all()
     .pipe(Effect.orDie)
+  return foldRows(rows)
+})
+
+export function closedItem(row: Pick<Row, "type" | "data">): string | undefined {
+  if (row.type === decidedType) return Option.getOrUndefined(decodeDecided(row.data))?.itemID
+  if (row.type === withdrawnType) return Option.getOrUndefined(decodeWithdrawn(row.data))?.itemID
+  return undefined
+}
+
+export function foldRows(rows: ReadonlyArray<Row>) {
   const items = new Map<string, Folded>()
   for (const row of rows) {
     if (row.type === deferredType) {
@@ -230,7 +246,7 @@ export const fold = Effect.fnUntraced(function* (db: DatabaseClient, sessionIDs:
     if (current) items.set(current.itemID, { ...current, consumed: true, revision: row.revision })
   }
   return Array.from(items.values()).toSorted((left, right) => (left.itemID < right.itemID ? -1 : 1))
-})
+}
 
 export const isOpen = (item: Folded) => item.decision === undefined && item.withdrawn === undefined
 

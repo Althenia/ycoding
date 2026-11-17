@@ -1431,6 +1431,15 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       return tasks
     }
 
+    function inSelectedFamily(parentID: string) {
+      const selected = props.selectedSessionID?.()
+      return selected !== undefined && resolveRoot(parentID) === resolveRoot(selected)
+    }
+
+    function subagentWatched(parentID: string) {
+      return store.session.subagent[parentID] !== undefined || subagentGeneration.has(parentID) || inSelectedFamily(parentID)
+    }
+
     function restoreSubagentTop(parentID: string) {
       result.session.subagent.invalidate(parentID)
       void result.session.subagent
@@ -1449,7 +1458,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     }
 
     function handleEvent(event: YCodingEvent) {
-      if (/^(session\.(execution\.|task\.updated|status|shell\.)|shell\.(created|exited|deleted))/.test(event.type)) void syncActivity()
+      const progressOnly = event.type === "session.task.updated" && event.data.change.type === "progressed"
+      if (!progressOnly && /^(session\.(execution\.|task\.updated|status|shell\.)|shell\.(created|exited|deleted))/.test(event.type)) void syncActivity()
       if (event.type === "shell.exited" || event.type === "shell.deleted") {
         const keys = event.location ? [locationKey(event.location)] : Object.keys(store.location)
         keys.forEach((key) => sync.invalidate(`location.shell:${key}`))
@@ -1497,13 +1507,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                   page.data.some((task) => task.sessionID === event.data.sessionID),
                 )?.[0] ?? store.session.info[event.data.sessionID]?.parentID)
           if (parentID) {
-            restoreSubagentTop(parentID)
+            if (subagentWatched(parentID)) restoreSubagentTop(parentID)
             break
           }
+          if (Object.keys(store.session.subagent).length === 0 && !props.selectedSessionID?.()) break
           void client.api.session
             .get({ sessionID: event.data.sessionID })
             .then((child) => {
-              if (child.parentID) restoreSubagentTop(child.parentID)
+              if (child.parentID && subagentWatched(child.parentID)) restoreSubagentTop(child.parentID)
             })
             .catch((error) => console.error("Failed to resolve durable subagent parent", error))
           break
@@ -2527,32 +2538,49 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             "session.roots",
             async (current, signal) => {
               const targetProjectID = projectID ?? store.location[locationKey(defaultLocation())]?.info?.project.id
-              const found: SessionInfo[] = []
-              let cursor: string | undefined
-              do {
-                const page = await client.api.session.list({
-                  parentID: null,
-                  background: "exclude",
-                  limit: 200,
-                  order: "desc",
-                  ...(cursor === undefined ? {} : { cursor }),
-                }, { signal })
-                if (!current()) return
-                found.push(...page.data.filter((session) => !session.parentID))
-                cursor = page.cursor.next ?? undefined
-              } while (cursor !== undefined)
-              const projectRoots = new Set(
-                found
-                  .filter((session) => session.time.pinned === undefined && session.projectID === targetProjectID)
-                  .slice(0, 50)
-                  .map((session) => session.id),
+              const pinned: SessionInfo[] = []
+              const listPinned = async () => {
+                let cursor: string | undefined
+                do {
+                  const page = await client.api.session.list(
+                    {
+                      pinned: true,
+                      parentID: null,
+                      background: "exclude",
+                      limit: 200,
+                      order: "desc",
+                      ...(cursor === undefined ? {} : { cursor }),
+                    },
+                    { signal },
+                  )
+                  if (!current()) return
+                  pinned.push(...page.data.filter((session) => !session.parentID))
+                  cursor = page.cursor.next ?? undefined
+                } while (cursor !== undefined)
+              }
+              const [, recent] = await Promise.all([
+                listPinned(),
+                targetProjectID === undefined
+                  ? undefined
+                  : client.api.session.list(
+                      { project: targetProjectID, pinned: false, parentID: null, background: "exclude", limit: 50, order: "desc" },
+                      { signal },
+                    ),
+              ])
+              if (!current()) return
+              const found = [...pinned, ...(recent?.data ?? [])]
+              const pinnedIDs = new Set(pinned.map((session) => session.id))
+              const stale = Object.values(store.session.info).filter(
+                (session) => !session.parentID && session.time.pinned !== undefined && !pinnedIDs.has(session.id),
               )
-              const kept = found.filter(
-                (session) =>
-                  session.time.pinned !== undefined ||
-                  projectRoots.has(session.id) ||
-                  store.session.info[session.id] !== undefined,
+              const refreshed = await Promise.all(
+                stale.map((session) => client.api.session.get({ sessionID: session.id }, { signal }).catch(() => undefined)),
               )
+              if (!current()) return
+              const byID = new Map<string, SessionInfo>()
+              for (const session of [...found, ...refreshed.filter((item): item is SessionInfo => item !== undefined)])
+                byID.set(session.id, session)
+              const kept = [...byID.values()].toSorted((a, b) => b.time.updated - a.time.updated)
               setStore(
                 "session",
                 "info",
@@ -3308,9 +3336,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               }
               const sessionIDs = Object.keys(statuses).filter((sessionID) => statuses[sessionID] === "running")
               setStore("session", "active", reconcile(statuses))
-              // The root preload below omits children. Resolve every active
-              // Session first, then hydrate each durable parent task list so
-              // the subagent indicator is complete immediately after restart.
               await Promise.all(
                 sessionIDs.map((sessionID) =>
                   store.session.info[sessionID]
@@ -3319,7 +3344,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 ),
               )
               const parentIDs = new Set(
-                sessionIDs.map((sessionID) => store.session.info[sessionID]?.parentID ?? sessionID),
+                sessionIDs
+                  .map((sessionID) => store.session.info[sessionID]?.parentID ?? sessionID)
+                  .filter((parentID) => store.session.subagent[parentID] === undefined && inSelectedFamily(parentID)),
               )
               await Promise.all(
                 [...parentIDs].map((parentID) => result.session.subagent.sync(parentID).catch(() => undefined)),
@@ -3336,30 +3363,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 ...store.location[key],
                 info: location,
               })
-              return client.api.session.list({
-                project: location.project.id,
-                limit: 50,
-                order: "desc",
-                parentID: null,
-                background: "exclude",
-              })
+              return location.project.id
             })
-            .then((response) => {
-              setStore(
-                "session",
-                "info",
-                produce((draft) => {
-                  for (const session of response.data) draft[session.id] = session
-                }),
-              )
-              for (const session of response.data.toReversed()) {
-                sync.complete(`session:${session.id}`)
-                registerSession(session.id)
-              }
-              pruneMetadata()
+            .catch((error) => {
+              console.error("Failed to resolve location", error)
+              return undefined
             })
+            .then((projectID) => result.session.syncRoots(projectID))
             .catch((error) => console.error("Failed to preload sessions", error))
-          void result.session.syncRoots().catch((error) => console.error("Failed to preload session roots", error))
           return
         }
         applyingSequence = "durable" in details ? details.durable.seq : undefined

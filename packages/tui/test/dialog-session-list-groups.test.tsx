@@ -35,6 +35,195 @@ let liveArchived = new Set<string>()
 let liveUnpinned = new Set<string>()
 let livePinnedAt = new Map<string, number>()
 let liveTitles = new Map<string, string>()
+let listRequests: URL[] = []
+let subagentRequests: string[] = []
+let outstandingReads = 0
+let decisionReadCount = 0
+const activityReads = () => outstandingReads + decisionReadCount + subagentRequests.length
+
+const pacing = async () => {
+  let last = -1
+  while (last !== activityReads()) {
+    last = activityReads()
+    await Bun.sleep(200)
+  }
+}
+
+test("opening the palette lists only pinned roots and the active project's recent roots, never subagent pages", async () => {
+  const { app } = await renderGroups()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Task waiting remote") && frame.includes("Pinned old remote"))
+    await pacing()
+    const bounded = listRequests.filter((url) => {
+      const pinned = url.searchParams.get("pinned") === "true"
+      const recent = url.searchParams.get("project") === "proj_test" && url.searchParams.get("limit") === "50"
+      return !pinned && !recent
+    })
+    expect(bounded.map((url) => url.search)).toEqual([])
+    const pinnedPages = listRequests.filter((url) => url.searchParams.get("pinned") === "true")
+    expect(pinnedPages.some((url) => url.searchParams.get("cursor") === "pinpage2")).toBe(true)
+    expect(pinnedPages.every((url) => url.searchParams.get("background") === "exclude")).toBe(true)
+    expect(subagentRequests).toEqual([])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("task progress leaves the palette idle across ticks while an answered question refreshes it", async () => {
+  const { app, events } = await renderGroups()
+  const taskUpdate = (id: string, sessionID: string, seq: number, change: Record<string, unknown>) =>
+    events.emit({
+      id,
+      created: now,
+      type: "session.task.updated",
+      durable: { aggregateID: sessionID, seq, version: 1 },
+      data: { sessionID, change },
+      location: { directory: "/tmp/otherproj" },
+    } as unknown as YCodingEvent)
+  try {
+    await app.waitForFrame((frame) => frame.includes("Task waiting remote"))
+    await pacing()
+    const before = { decisions: decisionReadCount, outstanding: outstandingReads, subagents: subagentRequests.length }
+    for (let index = 0; index < 12; index++) {
+      taskUpdate(`evt_progress_${index}`, index % 2 === 0 ? "ses_run_child" : "ses_task_child", 10 + index, {
+        type: "progressed",
+        progress: { text: `step ${index}` },
+      })
+      await Bun.sleep(40)
+    }
+    await Bun.sleep(300)
+    expect({ decisions: decisionReadCount, outstanding: outstandingReads, subagents: subagentRequests.length }).toEqual(before)
+
+    taskWaitState = "running"
+    liveRunning = [...liveRunning, "ses_task_wait"]
+    taskUpdate("evt_task_child_answered", "ses_task_child", 60, { type: "question_answered", answer: { text: "go" } })
+    await app.waitFor(() => decisionReadCount > before.decisions)
+    await app.waitForFrame((frame) => {
+      const running = frame.indexOf("Running")
+      const row = frame.indexOf("Task waiting remote")
+      return running >= 0 && row > running && row < frame.indexOf("Recent")
+    })
+    expect(subagentRequests).toEqual([])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a pin event for an idle cross-project root that is not resident moves it into the pinned group", async () => {
+  const { app, events } = await renderGroups()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Pinned old remote") && frame.includes("Recent local"))
+    expect(app.captureCharFrame()).not.toContain("Idle remote")
+    livePinnedAt.set("ses_idle_remote", now - 1)
+    events.emit({
+      id: "evt_pin_idle_remote",
+      created: now - 1,
+      type: "session.pinned",
+      durable: { aggregateID: "ses_idle_remote", seq: 20, version: 1 },
+      data: { sessionID: "ses_idle_remote" },
+      location: { directory: "/tmp/otherproj" },
+    })
+    await app.waitForFrame((frame) => {
+      const idle = frame.indexOf("Idle remote")
+      return idle >= 0 && idle < frame.indexOf("Waiting for action")
+    })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a root created in another project and then pinned appears in the pinned group", async () => {
+  const created = row("ses_created_remote", "Created remote", 500, remote)
+  const { app, events } = await renderGroups({
+    onRequest: (url) =>
+      url.pathname === "/api/session/ses_created_remote"
+        ? json({ data: { ...created, time: { ...created.time, pinned: livePinnedAt.get("ses_created_remote") } } })
+        : undefined,
+  })
+  try {
+    await app.waitForFrame((frame) => frame.includes("Pinned old remote") && frame.includes("Recent local"))
+    events.emit({
+      id: "evt_created_remote",
+      created: now,
+      type: "session.created",
+      durable: { aggregateID: "ses_created_remote", seq: 0, version: 1 },
+      data: {
+        sessionID: "ses_created_remote",
+        projectID: "proj_other",
+        location: { directory: "/tmp/otherproj" },
+        title: "Created remote",
+        agent: "build",
+        model: base.model,
+        created: now,
+      },
+      location: { directory: "/tmp/otherproj" },
+    } as unknown as YCodingEvent)
+    await Bun.sleep(100)
+    expect(app.captureCharFrame()).not.toContain("Created remote")
+    livePinnedAt.set("ses_created_remote", now - 1)
+    events.emit({
+      id: "evt_pin_created_remote",
+      created: now - 1,
+      type: "session.pinned",
+      durable: { aggregateID: "ses_created_remote", seq: 1, version: 1 },
+      data: { sessionID: "ses_created_remote" },
+      location: { directory: "/tmp/otherproj" },
+    })
+    await app.waitForFrame((frame) => {
+      const row = frame.indexOf("Created remote")
+      return row >= 0 && row < frame.indexOf("Waiting for action")
+    })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a deleted root id recreated as an ordinary root is not shadowed by its earlier background mapping", async () => {
+  let recycled: "background" | "ordinary" = "background"
+  let recycledReads = 0
+  const { app, events } = await renderGroups({
+    onRequest: (url) => {
+      if (url.pathname !== "/api/session/ses_recycled") return undefined
+      recycledReads++
+      return json({
+        data: row("ses_recycled", "Recycled root", 400, recycled === "background" ? { ...remote, origin: "dots-executor" } : remote),
+      })
+    },
+  })
+  const rename = (id: string, seq: number) =>
+    events.emit({
+      id,
+      created: now,
+      type: "session.renamed",
+      durable: { aggregateID: "ses_movable", seq, version: 1 },
+      data: { sessionID: "ses_movable", title: "Movable local" },
+      location: { directory: location.directory },
+    })
+  try {
+    await app.waitForFrame((frame) => frame.includes("Waiting remote"))
+    liveDecisions = [...liveDecisions, decision("ses_recycled")]
+    rename("evt_recycled_probe", 30)
+    await app.waitFor(() => recycledReads > 0)
+    await pacing()
+    expect(app.captureCharFrame()).not.toContain("Recycled root")
+
+    recycled = "ordinary"
+    events.emit({
+      id: "evt_recycled_deleted",
+      created: now,
+      type: "session.deleted",
+      durable: { aggregateID: "ses_recycled", seq: 31, version: 2 },
+      data: { sessionID: "ses_recycled" },
+      location: { directory: "/tmp/otherproj" },
+    })
+    await app.waitForFrame((frame) => {
+      const row = frame.indexOf("Recycled root")
+      return row > frame.indexOf("Waiting for action") && row < frame.indexOf("Running")
+    })
+  } finally {
+    app.renderer.destroy()
+  }
+})
 
 test("groups global pinned, waiting and running sessions above current-project recent without duplicates", async () => {
   const { app } = await renderGroups()
@@ -286,7 +475,7 @@ test("archiving a cross-workspace pinned session keeps one archived pinned row",
     },
   })
   try {
-    await app.waitForFrame((frame) => frame.includes("Pinned remote"))
+    await app.waitForFrame((frame) => frame.includes("Pinned remote") && frame.includes("Waiting remote"))
     keymap.dispatch("session.archive")
     await app.waitForFrame((frame) => frame.includes("Archive session"))
     app.mockInput.pressEnter()
@@ -299,7 +488,7 @@ test("archiving a cross-workspace pinned session keeps one archived pinned row",
       data: { sessionID: "ses_pin_remote" },
       location: { directory: "/tmp/otherproj" },
     })
-    await app.waitForFrame((frame) => frame.includes("Archived"))
+    await app.waitForFrame((frame) => frame.includes("Archived") && frame.includes("Waiting for action"))
     const frame = app.captureCharFrame()
     expect(frame.split("Pinned remote").length - 1).toBe(1)
     expect(frame.indexOf("Pinned remote")).toBeLessThan(frame.indexOf("Waiting for action"))
@@ -385,7 +574,9 @@ test("an outstanding payload without running still groups waiting roots without 
   console.error = (...args: unknown[]) => errors.push(args)
   const { app } = await renderGroups({
     onRequest: (url) =>
-      url.pathname === "/api/session/outstanding" ? json({ data: ["ses_task_wait"] }) : undefined,
+      url.pathname === "/api/session/outstanding"
+        ? json({ data: ["ses_task_wait"], waiting: ["ses_task_wait"] })
+        : undefined,
   })
   try {
     await app.waitForFrame((frame) => {
@@ -443,7 +634,12 @@ test("many newer and older foreign idle roots neither evict nor leak into the cu
   const { app, events } = await renderGroups({
     onRequest: (url) => {
       if (url.pathname === "/api/decision") decisionReads++
-      if (url.pathname !== "/api/session" || url.searchParams.get("project") || url.searchParams.get("search") !== null)
+      if (
+        url.pathname !== "/api/session" ||
+        url.searchParams.get("project") ||
+        url.searchParams.get("pinned") === "true" ||
+        url.searchParams.get("search") !== null
+      )
         return undefined
       const all = [...foreign, ...sessions.map(withLive)].toSorted((a, b) => b.time.updated - a.time.updated)
       if (url.searchParams.get("cursor") === "foreign2") return json({ data: all.slice(40), cursor: {} })
@@ -579,7 +775,15 @@ async function renderGroups(
   let slotsRead: () => readonly string[] = () => []
   let quickSwitchRun: (slot: number) => void = () => {}
   let setLocationRun: (next: { directory: string }) => void = () => {}
+  listRequests = []
+  subagentRequests = []
+  outstandingReads = 0
+  decisionReadCount = 0
   const transport = createFetch((url, request) => {
+    if (url.pathname === "/api/session" && url.searchParams.get("search") === null) listRequests.push(url)
+    if (/^\/api\/session\/[^/]+\/subagent$/.test(url.pathname)) subagentRequests.push(url.pathname)
+    if (url.pathname === "/api/session/outstanding") outstandingReads++
+    if (url.pathname === "/api/decision") decisionReadCount++
     const pin = /^\/api\/session\/(ses_[a-z_]+)\/pin$/.exec(url.pathname)?.[1]
     if (pin && request.method === "POST") {
       liveUnpinned.delete(pin)
@@ -608,9 +812,19 @@ async function renderGroups(
           ),
           cursor: {},
         })
+      if (url.searchParams.get("pinned") === "true") {
+        const pinned = live.filter((session) => session.time.pinned !== undefined)
+        if (url.searchParams.get("cursor") === "pinpage2")
+          return json({ data: pinned.filter((session) => session.id === "ses_pin_old"), cursor: {} })
+        return json({ data: pinned.filter((session) => session.id !== "ses_pin_old"), cursor: { next: "pinpage2" } })
+      }
       if (url.searchParams.get("project"))
         return json({
-          data: live.filter((session) => session.projectID === url.searchParams.get("project")),
+          data: live.filter(
+            (session) =>
+              session.projectID === url.searchParams.get("project") &&
+              (url.searchParams.get("pinned") !== "false" || session.time.pinned === undefined),
+          ),
           cursor: {},
         })
       if (url.searchParams.get("cursor") === "page2")
@@ -619,7 +833,14 @@ async function renderGroups(
     }
     if (url.pathname === "/api/session/active") return json({ data: {} })
     if (url.pathname === "/api/session/outstanding")
-      return json({ data: liveOutstanding, running: liveRunning, failed: [], lost: [] })
+      return json({
+        data: liveOutstanding,
+        running: liveRunning,
+        waiting: taskWaitState === "waiting" ? ["ses_task_wait", "ses_task_child"] : [],
+        failed: [],
+        lost: [],
+      })
+    if (url.pathname === "/api/session/ses_task_child") return json({ data: taskChild })
     if (url.pathname === "/api/decision") return json({ data: liveDecisions })
     if (url.pathname === "/api/session/ses_task_wait/subagent")
       return json({
@@ -779,6 +1000,7 @@ const sessions = [
 ]
 
 const child = row("ses_child", "Waiting child", 7_500, { ...remote, parentID: "ses_wait_parent" })
+const taskChild = row("ses_task_child", "Task child", 9_400, { ...remote, parentID: "ses_task_wait" })
 
 const decision = (sessionID: string) => ({
   kind: "permission",

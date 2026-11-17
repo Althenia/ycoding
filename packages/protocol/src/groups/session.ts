@@ -65,6 +65,13 @@ export const SessionCompletionsQuery = Schema.Struct({
   limit: Schema.NumberFromString.pipe(Schema.decodeTo(PositiveInt.check(Schema.isLessThanOrEqualTo(200))), Schema.optional),
 })
 
+const BooleanFromString = Schema.Literals(["true", "false"]).pipe(
+  Schema.decodeTo(Schema.Boolean, {
+    decode: SchemaGetter.transform((value) => value === "true"),
+    encode: SchemaGetter.transform((value): "true" | "false" => (value ? "true" : "false")),
+  }),
+)
+
 const SessionsQueryFields = {
   workspace: Workspace.ID.pipe(Schema.optional),
   limit: Schema.NumberFromString.pipe(Schema.decodeTo(PositiveInt), Schema.optional).annotate({
@@ -81,6 +88,10 @@ const SessionsQueryFields = {
         "Include or exclude background Dots executor sessions. Defaults to include; exclude is applied before ordering, cursors, and limits.",
     })
     .pipe(Schema.optional),
+  pinned: BooleanFromString.annotate({
+    description:
+      "Use true to return only pinned sessions or false to return only unpinned sessions. Omit to return both. Applied before ordering, cursors, and limits.",
+  }).pipe(Schema.optional),
 }
 
 const SessionsDirectoryQuery = Schema.Struct({
@@ -159,13 +170,6 @@ export type SubagentCursor = typeof SubagentCursor.Type
 const SessionActive = Schema.Struct({
   type: Schema.Literal("running"),
 }).annotate({ identifier: "SessionActive" })
-
-const BooleanFromString = Schema.Literals(["true", "false"]).pipe(
-  Schema.decodeTo(Schema.Boolean, {
-    decode: SchemaGetter.transform((value) => value === "true"),
-    encode: SchemaGetter.transform((value): "true" | "false" => (value ? "true" : "false")),
-  }),
-)
 
 export const SessionOutstandingQuery = Schema.Struct({ failures: BooleanFromString.pipe(Schema.optional) })
 
@@ -393,12 +397,12 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.get("session.outstanding", "/api/session/outstanding", {
         query: SessionOutstandingQuery,
-        success: Schema.Struct({ data: Schema.Array(Session.ID), running: Schema.Array(Session.ID), failed: Schema.Array(Session.ID), lost: Schema.Array(Session.ID) }),
+        success: Schema.Struct({ data: Schema.Array(Session.ID), running: Schema.Array(Session.ID), failed: Schema.Array(Session.ID), lost: Schema.Array(Session.ID), waiting: Schema.Array(Session.ID).pipe(Schema.optional) }),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "session.outstanding",
           summary: "List outstanding Session work",
-          description: "List Sessions with executing drains, admitted inputs, background shell notices, active subagent tasks or notices, or active goals in this process. Separately report Sessions with executing drains or live shell jobs as running; a settled shell awaiting notification is outstanding but not running. Optionally include roots whose latest execution failed until their family next starts. `lost` lists Sessions whose background shell completion notice a server restart lost, until that Session next starts an execution; loss is attention, not failed or outstanding work.",
+          description: "List Sessions with executing drains, admitted inputs, background shell notices, active subagent tasks or notices, or active goals in this process. Separately report Sessions with executing drains or live shell jobs as running; a settled shell awaiting notification is outstanding but not running. Optionally include roots whose latest execution failed until their family next starts. `lost` lists Sessions whose background shell completion notice a server restart lost, until that Session next starts an execution; loss is attention, not failed or outstanding work. `waiting` lists managed subagent tasks waiting for a question answer together with their ancestors up to the root; current servers always include it.",
         }),
       ),
     )

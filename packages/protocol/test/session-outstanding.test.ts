@@ -24,4 +24,7 @@ test("publishes a process-global outstanding read with bounded Session IDs and o
   expect(Schema.is(success)({ data: ["wrong"], running: [], failed: [], lost: [] })).toBe(false)
   expect(Schema.is(success)({ data: [], running: ["wrong"], failed: [], lost: [] })).toBe(false)
   expect(Schema.is(success)({ data: [], running: [], failed: [] })).toBe(false)
+  expect(Schema.is(success)({ data: ["ses_child"], running: [], failed: [], lost: [], waiting: ["ses_parent", "ses_child"] })).toBe(true)
+  expect(Schema.is(success)({ data: [], running: [], failed: [], lost: [], waiting: ["wrong"] })).toBe(false)
+  expect(Schema.is(success)({ data: [], running: [], failed: [], lost: [], waiting: "ses_parent" })).toBe(false)
 })

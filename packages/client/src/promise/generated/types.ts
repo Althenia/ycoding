@@ -6310,6 +6310,7 @@ export type SessionListInput = {
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
     readonly background?: "include" | "exclude" | undefined
+    readonly pinned?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6322,6 +6323,7 @@ export type SessionListInput = {
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
     readonly background?: "include" | "exclude" | undefined
+    readonly pinned?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6334,6 +6336,7 @@ export type SessionListInput = {
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
     readonly background?: "include" | "exclude" | undefined
+    readonly pinned?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6346,6 +6349,7 @@ export type SessionListInput = {
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
     readonly background?: "include" | "exclude" | undefined
+    readonly pinned?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6358,6 +6362,7 @@ export type SessionListInput = {
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
     readonly background?: "include" | "exclude" | undefined
+    readonly pinned?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6370,11 +6375,25 @@ export type SessionListInput = {
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
     readonly background?: "include" | "exclude" | undefined
+    readonly pinned?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
     readonly cursor?: string | undefined
   }["background"]
+  readonly pinned?: {
+    readonly workspace?: string | undefined
+    readonly limit?: number | undefined
+    readonly order?: "asc" | "desc" | undefined
+    readonly search?: string | undefined
+    readonly parentID?: string | null | undefined
+    readonly background?: "include" | "exclude" | undefined
+    readonly pinned?: boolean | undefined
+    readonly directory?: string | undefined
+    readonly project?: string | undefined
+    readonly subpath?: string | undefined
+    readonly cursor?: string | undefined
+  }["pinned"]
   readonly directory?: {
     readonly workspace?: string | undefined
     readonly limit?: number | undefined
@@ -6382,6 +6401,7 @@ export type SessionListInput = {
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
     readonly background?: "include" | "exclude" | undefined
+    readonly pinned?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6394,6 +6414,7 @@ export type SessionListInput = {
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
     readonly background?: "include" | "exclude" | undefined
+    readonly pinned?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6406,6 +6427,7 @@ export type SessionListInput = {
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
     readonly background?: "include" | "exclude" | undefined
+    readonly pinned?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6418,6 +6440,7 @@ export type SessionListInput = {
     readonly search?: string | undefined
     readonly parentID?: string | null | undefined
     readonly background?: "include" | "exclude" | undefined
+    readonly pinned?: boolean | undefined
     readonly directory?: string | undefined
     readonly project?: string | undefined
     readonly subpath?: string | undefined
@@ -6539,6 +6562,7 @@ export type SessionOutstandingOutput = {
   running: Array<string>
   failed: Array<string>
   lost: Array<string>
+  waiting?: Array<string> | undefined
 }
 
 export type SessionCompletionsInput = {

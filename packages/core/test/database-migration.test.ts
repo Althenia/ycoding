@@ -88,6 +88,7 @@ const currentMigrations = [
   { id: "20261028131454_usage-telemetry" },
   { id: "20261030011808_session-origin" },
   { id: "20261103050046_session-scope" },
+  { id: "20261117061015_review-pinned-indexes" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",

@@ -716,6 +716,7 @@ export function make(options: ClientOptions) {
               search: input?.["search"],
               parentID: input?.["parentID"],
               background: input?.["background"],
+              pinned: input?.["pinned"],
               directory: input?.["directory"],
               project: input?.["project"],
               subpath: input?.["subpath"],

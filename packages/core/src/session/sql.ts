@@ -98,6 +98,9 @@ export const SessionTable = sqliteTable(
     index("session_time_suspended_idx")
       .on(table.time_suspended)
       .where(sql`${table.time_suspended} is not null`),
+    index("session_pinned_time_updated_id_idx")
+      .on(table.time_updated, table.id)
+      .where(sql`${table.time_pinned} is not null`),
   ],
 )
 
