@@ -943,6 +943,152 @@ test("native tab sharing without audio and denied microphone recover without run
   }
 }, 240000)
 
+test.each(["failed", "denied", "pending"] as const)(
+  "local Stop releases capture while the state read is %s",
+  async (failure) => {
+    const view: MeetingView = {
+      meeting: {
+        id: "local-stop-fixture",
+        title: "Local Stop verification",
+        sessionID: "local-stop-session",
+        status: "ready",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+      meetings: [],
+      segments: [],
+      findings: [],
+      proposals: [],
+      config: {},
+      health: { status: "ready", model: "Synthetic test model", provider: "test", device: "test" },
+      audio: { bufferedSeconds: 0, processedSeconds: 0, backlog: 0 },
+      analysis: { status: "idle" },
+    }
+    const captureMessages: string[] = []
+    const controls: unknown[] = []
+    const bridge = await startBridge({
+      controlToken: "s".repeat(64),
+      onView: () => view,
+      onControl: async (input) => {
+        controls.push(input)
+        return view
+      },
+      onCapture: async (input) => {
+        captureMessages.push(input.type)
+        if (input.type === "start") view.meeting!.status = "recording"
+        if (input.type === "stop") {
+          if (failure === "failed") throw new Error("Synthetic unavailable stop acknowledgement")
+          view.meeting!.status = "stopped"
+          return { stop: true }
+        }
+        return { accepted: true }
+      },
+    })
+    const fixture = mediaFixture()
+    let browser: Awaited<ReturnType<typeof launch>> | undefined
+    let unsubscribe: (() => void) | undefined
+    try {
+      browser = await launch()
+      await openMedia(browser.cdp, fixture.port)
+      const target = string(record(await browser.cdp.send("Target.createTarget", { url: "about:blank" })).targetId)
+      const session = string(
+        record(await browser.cdp.send("Target.attachToTarget", { targetId: target, flatten: true })).sessionId,
+      )
+      await browser.cdp.send("Runtime.enable", {}, session)
+      await browser.cdp.send("Page.enable", {}, session)
+      const link = await fetch(`${bridge.url}/control`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${"s".repeat(64)}`, "content-type": "application/json" },
+        body: JSON.stringify({ action: "view" }),
+      })
+      await navigate(browser.cdp, session, string(record(await link.json()).url))
+      await waitDOM(browser.cdp, session, "document.querySelector('#connection').textContent.includes('Connected')")
+      await evaluate(
+        browser.cdp,
+        session,
+        "(()=>{const capture=navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);navigator.mediaDevices.getDisplayMedia=async options=>{const stream=await capture(options);window.fixtureTracks=stream.getTracks();return stream};return true})()",
+      )
+      await click(browser.cdp, session, "#consent")
+      await click(browser.cdp, session, "#policy")
+      await click(browser.cdp, session, "#start")
+      await waitDOM(
+        browser.cdp,
+        session,
+        "document.querySelector('#capture-feedback').textContent.includes('Recording live')",
+      )
+      const stateRead = Promise.withResolvers<void>()
+      const cdp = browser.cdp
+      unsubscribe = cdp.subscribe((event) => {
+        if (event.sessionId !== session || event.method !== "Fetch.requestPaused") return
+        stateRead.resolve()
+        if (failure === "pending") return
+        void cdp.send(
+          "Fetch.fulfillRequest",
+          {
+            requestId: event.params?.requestId,
+            responseCode: failure === "denied" ? 401 : 500,
+            responseHeaders: [{ name: "content-type", value: "application/json" }],
+            body: Buffer.from(
+              JSON.stringify({ error: failure === "denied" ? "unauthorized" : "view_failed" }),
+            ).toString("base64"),
+          },
+          session,
+        )
+      })
+      await cdp.send("Fetch.enable", { patterns: [{ urlPattern: `${bridge.url}/view/state` }] }, session)
+      await stateRead.promise
+      if (failure !== "pending")
+        await waitDOM(
+          cdp,
+          session,
+          `document.querySelector('#connection').textContent.includes(${JSON.stringify(failure === "denied" ? "key is invalid" : "unavailable")})`,
+        )
+      expect(await evaluate(cdp, session, "fixtureTracks.every(track=>track.readyState==='live')")).toBe(true)
+      expect(await evaluate(cdp, session, "document.querySelector('#stop').disabled")).toBe(false)
+      if (failure !== "pending")
+        expect(
+          await evaluate(
+            cdp,
+            session,
+            "document.querySelector('#start').disabled && document.querySelector('#ask').disabled && document.querySelector('#retry-audio').disabled",
+          ),
+        ).toBe(true)
+      await click(cdp, session, "#stop")
+      await click(cdp, session, "#confirm-stop")
+      expect(
+        await evaluate(
+          cdp,
+          session,
+          "new Promise(resolve=>{let done=false;const finish=value=>{done=true;clearTimeout(timer);resolve(value)};const timer=setTimeout(()=>finish(false),2500);const check=()=>{if(fixtureTracks.every(track=>track.readyState==='ended'))finish(true);else if(!done)requestAnimationFrame(check)};check()})",
+        ),
+      ).toBe(true)
+      if (failure !== "pending") {
+        await waitDOM(
+          cdp,
+          session,
+          "document.querySelector('#control-feedback').textContent.includes('runtime stop unconfirmed')",
+        )
+        expect(controls).toEqual([])
+      } else {
+        await waitDOM(
+          cdp,
+          session,
+          "document.querySelector('#control-feedback').textContent.includes('Capture stopped.')",
+        )
+        expect(controls).toEqual([{ action: "stop" }])
+      }
+      expect(captureMessages.filter((type) => type === "start")).toHaveLength(1)
+      expect(captureMessages.filter((type) => type === "stop")).toHaveLength(1)
+    } finally {
+      unsubscribe?.()
+      await browser?.close()
+      await fixture.stop(true)
+      await bridge.close()
+    }
+  },
+  30000,
+)
+
 async function launch(surface: "tab" | "silent" = "tab") {
   const executable = process.env.YCODING_TEST_ISOLATED_BROWSER_CHROME
   if (!executable || !(await Bun.file(executable).exists()))
@@ -1042,13 +1188,11 @@ function mediaFixture() {
 
 async function evaluate(cdp: Client, session: string, expression: string) {
   const result = record(
-    await cdp.send(
-      "Runtime.evaluate",
-      { expression, awaitPromise: true, returnByValue: true },
-      session,
-      undefined,
-      15000,
-    ),
+    await cdp
+      .send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, session, undefined, 15000)
+      .catch((cause) => {
+        throw new Error(`Chrome evaluation did not settle: ${expression.slice(0, 160)}`, { cause })
+      }),
   )
   if (result.exceptionDetails) throw new Error(`Chrome evaluation failed: ${JSON.stringify(result.exceptionDetails)}`)
   return record(result.result).value
@@ -1078,6 +1222,8 @@ function waitDOM(cdp: Client, session: string, expression: string) {
 }
 
 async function click(cdp: Client, session: string, selector: string) {
+  await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true }, session)
+  await cdp.send("Page.bringToFront", {}, session)
   const point = record(
     await evaluate(
       cdp,

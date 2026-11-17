@@ -119,7 +119,7 @@ function updateControls() {
   node("consent").disabled = capture.active()
   node("policy").disabled = capture.active()
   node("microphone").disabled = capture.active()
-  node("stop").disabled = !available || controlPending || stopPending || !view?.canStop
+  node("stop").disabled = stopPending || (!capture.active() && (!available || controlPending || !view?.canStop))
   node("stop").setAttribute(
     "aria-describedby",
     controlPending || stopPending ? "control-feedback" : !available ? "connection" : "meeting-status",
@@ -585,7 +585,8 @@ function poll() {
 }
 
 async function control(action) {
-  if (controlPending || denied || !connected) return
+  const localStop = action === "stop" && capture.active()
+  if (stopPending || (controlPending && !localStop) || (!localStop && (denied || !connected))) return
   controlPending = true
   stopPending = action === "stop"
   text(
@@ -594,9 +595,17 @@ async function control(action) {
   )
   updateControls()
   clearTimeout(polling)
-  await activeRead
   try {
-    if (action === "stop" && capture.active()) await capture.stop("user")
+    if (localStop) {
+      await capture.stop("user")
+      if (denied || !connected || captureState.phase === "error") {
+        text(
+          "control-feedback",
+          "Local sources released; runtime stop unconfirmed. Inspect the meeting in YCoding before retrying.",
+        )
+        return
+      }
+    } else await activeRead
     const value = await request("/view/control", { action })
     if (closed) return
     if (value?.error) throw new Error("operation_failed")
@@ -705,10 +714,7 @@ async function submitChatNote(event) {
     return
   }
   if (!node("chat-note-consent").checked) {
-    text(
-      "chat-note-feedback",
-      "Confirm chat consent before adding this message to meeting context.",
-    )
+    text("chat-note-feedback", "Confirm chat consent before adding this message to meeting context.")
     node("chat-note-consent").focus()
     return
   }
@@ -893,9 +899,7 @@ function renderOwnerSpeech(transcription) {
   const settings = transcription && typeof transcription === "object" ? transcription : undefined
   const provider = typeof settings?.provider === "string" && settings.provider ? settings.provider : "huggingface"
   const model =
-    typeof settings?.model === "string" && settings.model
-      ? settings.model
-      : "biodatlab/whisper-th-large-v3-combined"
+    typeof settings?.model === "string" && settings.model ? settings.model : "biodatlab/whisper-th-large-v3-combined"
   const profile = typeof settings?.openaiProfile === "string" ? settings.openaiProfile : ""
   ownerLoadedSpeech = JSON.stringify({ provider, model, ...(profile ? { openaiProfile: profile } : {}) })
   node("owner-speech-provider").value = ["huggingface", "openai"].includes(provider) ? provider : "huggingface"
