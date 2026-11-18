@@ -148,10 +148,21 @@ function SessionPicker(props: { readonly data: ProjectsData; readonly selected?:
   </div>
 }
 
-function DirectoryPicker(props: { readonly data: ProjectsData; readonly value: string; readonly onChange: (value: string) => void }) {
+export function projectDirectoryTarget(path: string, workspace: string): { readonly target: { readonly workspace: string } | { readonly directory: string } } | { readonly error: string } {
+  if (workspace) return { target: { workspace } }
+  const directory = path.trim()
+  if (!directory) return { error: "Choose a directory" }
+  if (directory.startsWith("/") || directory === "~" || directory.startsWith("~/")) return { target: { directory } }
+  return { error: "Enter an absolute path, or one starting with ~ or ~/" }
+}
+
+function DirectoryPicker(props: { readonly data: ProjectsData; readonly path: string; readonly workspace: string; readonly onChange: (path: string, workspace: string) => void }) {
   const remote = props.data.remote
   const query = createRemoteQuery(remote.store.queryClient, () => remote.queries.workspaces(remote.scope(), props.data.connected()))
-  return <div class="field"><span class="field__label">Directory</span><CustomSelect label="Directory" placeholder="Choose a directory" value={props.value} options={(query().data ?? []).map((entry) => ({ value: entry.id, label: entry.directory }))} onChange={props.onChange} /><Show when={query().isError}><p role="alert">{query().error?.message}</p></Show><p class="field__hint">Choose a directory previously opened on this machine.</p></div>
+  const known = () => query().data ?? []
+  return <div class="field"><label class="field__label" for="project-directory-path">Directory</label><input id="project-directory-path" class="input" autocomplete="off" spellcheck={false} placeholder="/path/to/folder or ~/folder" value={props.path} onInput={(event) => props.onChange(event.currentTarget.value, "")} />
+    <Show when={known().length > 0}><CustomSelect label="Known directory" placeholder="Or choose a known directory" value={props.workspace} options={known().map((entry) => ({ value: entry.id, label: entry.directory }))} onChange={(value) => props.onChange(known().find((entry) => entry.id === value)?.directory ?? "", value)} /></Show>
+    <Show when={query().isError}><p role="alert">{query().error?.message}</p></Show><p class="field__hint">Type or paste an absolute path, or start with ~. A missing folder is created on the machine.</p></div>
 }
 
 function TitleField(props: { readonly value: string; readonly onChange: (value: string) => void; readonly placeholder: string; readonly hint: string }) {
@@ -164,6 +175,7 @@ function CreateProject(props: { readonly data: ProjectsData }) {
   const [source, setSource] = createSignal<"existing" | "new">("existing")
   const [master, setMaster] = createSignal("")
   const [workspace, setWorkspace] = createSignal("")
+  const [path, setPath] = createSignal("")
   const [title, setTitle] = createSignal("")
   const [created, setCreated] = createSignal<string>()
   const [unconfirmed, setUnconfirmed] = createSignal(false)
@@ -173,27 +185,29 @@ function CreateProject(props: { readonly data: ProjectsData }) {
     const parsed = parseProjectName(name())
     if ("error" in parsed) { setError(parsed.error ?? "Project name is required"); return }
     if (source() === "existing" && !master()) { setError("Choose a master Session"); return }
-    if (source() === "new" && !workspace()) { setError("Choose a directory"); return }
+    const directory = source() === "new" && !created() ? projectDirectoryTarget(path(), workspace()) : undefined
+    if (directory && "error" in directory) { setError(directory.error); return }
     const sessionName = sessionTitle(title(), parsed.value)
     if ("error" in sessionName) { setError(sessionName.error); return }
     let id = source() === "existing" ? master() : created()
-    if (!id) {
+    if (!id && directory && "target" in directory) {
       const scope = data.remote.scope()
       if (!scope || data.pending()) return
       data.setPending(true)
-      const result = await data.remote.queries.createProjectSession(scope, workspace(), undefined, sessionName.value)
+      const result = await data.remote.queries.createProjectSession(scope, directory.target, undefined, sessionName.value)
       data.setPending(false)
       if (data.remote.scope()?.deviceID !== scope.deviceID || data.remote.scope()?.generation !== scope.generation) return
       if (!result.reached) { setUnconfirmed(result.unconfirmed === true); data.report(result, ""); return }
       id = result.sessionID
       setCreated(id)
     }
+    if (!id) return
     if (await data.run("coordination.create", createProjectInput(parsed.value, id), "Project created.")) { data.setCreating(false); data.open(id) }
     else if (data.notice()?.tone === "attention") setUnconfirmed(true)
   }
   return <form class="project-create" onSubmit={(event) => void save(event)}><header class="project-pagehead"><div><h1>New project</h1><p>Name it, then choose the master. Add other Sessions afterwards.</p></div></header><Feedback data={data} />
     <section class="project-step"><h2><span>1</span>Name</h2><label class="field"><span class="field__label">Project name</span><input autofocus class="input" maxLength={120} value={name()} onInput={(event) => setName(event.currentTarget.value)} /></label></section>
-    <section class="project-step"><h2><span>2</span>Master</h2><p>The master is an ordinary chat Session. You talk to it; it directs the members.</p><Segmented label="Master source" value={source()} options={[{ id: "existing", label: "Use an existing Session" }, { id: "new", label: "Create a new Session" }]} onChange={setSource} /><Show when={source() === "existing"} fallback={<><DirectoryPicker data={data} value={workspace()} onChange={setWorkspace} /><TitleField value={title()} onChange={setTitle} placeholder="Defaults to the Project name" hint="Optional. The Project name titles the new Master when this is blank." /></>}><SessionPicker data={data} selected={master()} onChoose={setMaster} label="Use as master" /></Show></section>
+    <section class="project-step"><h2><span>2</span>Master</h2><p>The master is an ordinary chat Session. You talk to it; it directs the members.</p><Segmented label="Master source" value={source()} options={[{ id: "existing", label: "Use an existing Session" }, { id: "new", label: "Create a new Session" }]} onChange={setSource} /><Show when={source() === "existing"} fallback={<><DirectoryPicker data={data} path={path()} workspace={workspace()} onChange={(next, id) => { setPath(next); setWorkspace(id) }} /><TitleField value={title()} onChange={setTitle} placeholder="Defaults to the Project name" hint="Optional. The Project name titles the new Master when this is blank." /></>}><SessionPicker data={data} selected={master()} onChoose={setMaster} label="Use as master" /></Show></section>
     <Show when={error()}><p class="projects__notice" data-tone="danger" role="alert">{error()}</p></Show><div class="project-actions project-actions--end"><button type="button" class="button button--ghost" onClick={() => data.setCreating(false)}>{unconfirmed() ? "Back to Projects" : "Cancel"}</button><button type="submit" class="button button--primary" disabled={data.pending() || unconfirmed()}>{data.pending() ? "Creating…" : "Create project"}</button></div>
   </form>
 }
@@ -332,6 +346,7 @@ export function ProjectsDialogs(props: { readonly data: ProjectsData }) {
   return <Show when={data.dialog()} keyed>{(entry) => {
     let close: (() => void) | undefined
     const [workspace, setWorkspace] = createSignal("")
+    const [path, setPath] = createSignal("")
     const [title, setTitle] = createSignal("")
     const [created, setCreated] = createSignal<string>()
     const [unconfirmed, setUnconfirmed] = createSignal(false)
@@ -344,22 +359,23 @@ export function ProjectsDialogs(props: { readonly data: ProjectsData }) {
       } catch (cause) { setError(cause instanceof Error ? cause.message : "The Session could not be added.") }
     }
     const create = async () => {
-      if (!workspace()) { setError("Choose a directory"); return }
+      const directory = created() ? undefined : projectDirectoryTarget(path(), workspace())
+      if (directory && "error" in directory) { setError(directory.error); return }
       const sessionName = sessionTitle(title())
       if ("error" in sessionName) { setError(sessionName.error); return }
       let id = created()
-      if (!id) {
+      if (!id && directory && "target" in directory) {
         const scope = data.remote.scope()
         if (!scope || data.pending()) return
         data.setPending(true)
-        const result = await data.remote.queries.createProjectSession(scope, workspace(), undefined, sessionName.value)
+        const result = await data.remote.queries.createProjectSession(scope, directory.target, undefined, sessionName.value)
         data.setPending(false)
         if (data.remote.scope()?.deviceID !== scope.deviceID || data.remote.scope()?.generation !== scope.generation) return
         if (!result.reached) { setUnconfirmed(result.unconfirmed === true); data.report(result, ""); return }
         id = result.sessionID
         setCreated(id)
       }
-      await choose(id)
+      if (id) await choose(id)
     }
     const remove = async () => {
       if (entry.kind === "delete-project") { if (await data.run("coordination.delete", { groupID: entry.project.id }, "Project deleted. Its Sessions keep running and keep their histories.")) close?.(); return }
@@ -372,7 +388,7 @@ export function ProjectsDialogs(props: { readonly data: ProjectsData }) {
     }
     return <Modal label={label} class="overlay--confirm project-dialog" returnFocus={entry.trigger} onClose={() => data.setDialog(undefined)} requestClose={(handler) => { close = handler }}><Feedback data={data} />
       <Show when={entry.kind === "add" || entry.kind === "master"}><SessionPicker data={data} allowProject={entry.kind === "master" ? entry.project.id : undefined} selected={entry.kind === "master" ? entry.project.master.sessionID : undefined} onChoose={(id) => void choose(id)} label={entry.kind === "master" ? "Use as master" : "Add"} /></Show>
-      <Show when={entry.kind === "new"}><DirectoryPicker data={data} value={workspace()} onChange={setWorkspace} /><TitleField value={title()} onChange={setTitle} placeholder="Optional" hint="Optional. Left blank, the Session takes its title from its first conversation." /><p>Creates the Session and adds it as a member.</p></Show>
+      <Show when={entry.kind === "new"}><DirectoryPicker data={data} path={path()} workspace={workspace()} onChange={(next, id) => { setPath(next); setWorkspace(id) }} /><TitleField value={title()} onChange={setTitle} placeholder="Optional" hint="Optional. Left blank, the Session takes its title from its first conversation." /><p>Creates the Session and adds it as a member.</p></Show>
       <Show when={entry.kind === "delete-project"}><p>Delete <strong>{entry.project.name}</strong>? Its Master and member Sessions keep running and keep their histories.</p></Show>
       <Show when={entry.kind === "delete-session"}><p>Delete <strong>{entry.session?.title}</strong> permanently? This stops any running turn and deletes the Session and its history. It cannot be undone.</p></Show>
       <Show when={error()}><p class="projects__notice" data-tone="danger" role="alert">{error()}</p></Show><div class="project-actions project-actions--end"><button class="button button--secondary" onClick={() => close?.()}>Cancel</button><Show when={entry.kind === "new"}><button class="button button--primary" disabled={data.pending() || unconfirmed()} onClick={() => void create()}>{data.pending() ? "Creating…" : created() ? "Add created Session" : "Create and add"}</button></Show><Show when={entry.kind === "delete-project" || entry.kind === "delete-session"}><button class="button button--danger" disabled={data.pending()} onClick={() => void remove()}>{data.pending() ? "Deleting…" : label}</button></Show></div>

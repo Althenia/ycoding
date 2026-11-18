@@ -1,6 +1,8 @@
 import { describe, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer } from "effect"
 import { and, asc, eq } from "drizzle-orm"
+import fs from "node:fs/promises"
+import path from "node:path"
 import { LLMClient } from "@ycoding-ai/ai"
 import { Coordination } from "@ycoding-ai/schema/coordination"
 import { Permission } from "@ycoding-ai/schema/permission"
@@ -117,8 +119,9 @@ const fixture = Effect.fn(function* () {
   yield* events.publish(SessionEvent.Task.Updated, { sessionID: owner.id, change: { type: "started" } })
   const group = yield* coordination.create({ name: "Member controls", masterSessionID: master.id, memberSessionIDs: [member.id, peer.id] })
   yield* coordination.setOwner(group.id, { sessionID: member.id, ownerSessionID: owner.id })
-  yield* db.update(ProjectTable).set({ worktree: location.directory, name: "Canonical project" }).where(eq(ProjectTable.id, master.projectID)).run().pipe(Effect.orDie)
-  return { sessions, events, db, locations, coordination, runtime, master, member, peer, outsider, owner, group, location, otherLocation }
+  const repositoryID = Project.ID.make("repository-fixture")
+  yield* db.insert(ProjectTable).values({ id: repositoryID, worktree: location.directory, vcs: "git", name: "Canonical project", sandboxes: [] }).run().pipe(Effect.orDie)
+  return { sessions, events, db, locations, coordination, runtime, master, member, peer, outsider, owner, group, location, otherLocation, repositoryID }
 })
 
 const unchangedExecution = () => {
@@ -195,7 +198,7 @@ describe("canonical project member creation", () => {
     const f = yield* fixture()
     const id = Session.ID.create()
     const model = CatalogModel.Ref.make({ ...target, profile: "Work" })
-    const result = yield* f.runtime.create(f.master.id, { id, projectID: f.master.projectID, model, agentPermissions: [] }, () => Effect.die("Canonical creation must not create a worktree"))
+    const result = yield* f.runtime.create(f.master.id, { id, projectID: f.repositoryID, model, agentPermissions: [] }, () => Effect.die("Canonical creation must not create a worktree"))
     const saved = yield* f.sessions.get(id)
     expect(result).toMatchObject({ sessionID: id, location: f.location, directory: f.location.directory, model, enrollment: { groupID: f.group.id, member: true } })
     expect(result).not.toHaveProperty("branch")
@@ -228,8 +231,8 @@ describe("canonical project member creation", () => {
 
   it.effect("rejects a missing Project or unavailable canonical directory without creating a Session", () => Effect.gen(function* () {
     const f = yield* fixture()
-    for (const projectID of [Project.ID.make("missing-project"), f.master.projectID]) {
-      if (projectID === f.master.projectID) yield* f.db.update(ProjectTable).set({ worktree: AbsolutePath.make(`${f.location.directory}/missing`) }).where(eq(ProjectTable.id, projectID)).run().pipe(Effect.orDie)
+    for (const projectID of [Project.ID.make("missing-project"), f.repositoryID]) {
+      if (projectID === f.repositoryID) yield* f.db.update(ProjectTable).set({ worktree: AbsolutePath.make(`${f.location.directory}/missing`) }).where(eq(ProjectTable.id, projectID)).run().pipe(Effect.orDie)
       const id = Session.ID.create()
       expect((yield* Effect.exit(f.runtime.create(f.master.id, { id, projectID, model: old, agentPermissions: [] }, () => Effect.die("Unexpected worktree"))))._tag).toBe("Failure")
       expect((yield* Effect.exit(f.sessions.get(id)))._tag).toBe("Failure")
@@ -237,13 +240,36 @@ describe("canonical project member creation", () => {
     unchangedExecution()
   }))
 
+  it.effect("refuses the global Project ID and directs the Master to pass directory", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const id = Session.ID.create()
+    yield* f.db.update(ProjectTable).set({ worktree: f.location.directory }).where(eq(ProjectTable.id, Project.ID.global)).run().pipe(Effect.orDie)
+    const refused = yield* Effect.flip(f.runtime.create(f.master.id, { id, projectID: Project.ID.global, model: old, agentPermissions: [] }))
+    expect(refused.message).toContain("pass directory")
+    expect((yield* Effect.exit(f.sessions.get(id)))._tag).toBe("Failure")
+  }))
+
+  it.effect("refuses relative paths and files without creating a project member", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const file = path.join(f.otherLocation.directory, "existing-file")
+    yield* Effect.promise(() => fs.writeFile(file, "untouched"))
+    for (const [directory, reason] of [["relative/path", "absolute"], [file, "not a directory"]]) {
+      const id = Session.ID.create()
+      const input = { id, directory, agentPermissions: [], model: old }
+      expect((yield* Effect.flip(f.runtime.create(f.master.id, input))).message).toContain(reason)
+      expect((yield* Effect.exit(f.sessions.get(id)))._tag).toBe("Failure")
+    }
+    expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("untouched")
+    expect((yield* f.coordination.get(f.group.id)).memberSessionIDs).toEqual(f.group.memberSessionIDs)
+  }))
+
   it.effect("reconciles an already-created canonical Session and rejects conflicting placement", () => Effect.gen(function* () {
     const f = yield* fixture()
     const existing = yield* f.sessions.create({ location: f.location, model: old, title: "Creation already committed" })
-    const result = yield* f.runtime.create(f.master.id, { id: existing.id, projectID: f.master.projectID, model: old, agentPermissions: [] })
+    const result = yield* f.runtime.create(f.master.id, { id: existing.id, projectID: f.repositoryID, model: old, agentPermissions: [] })
     expect(result).toMatchObject({ sessionID: existing.id, location: f.location, enrollment: { member: true } })
     const foreign = yield* f.sessions.create({ location: f.otherLocation, model: old })
-    expect((yield* Effect.exit(f.runtime.create(f.master.id, { id: foreign.id, projectID: f.master.projectID, model: old, agentPermissions: [] })))._tag).toBe("Failure")
+    expect((yield* Effect.exit(f.runtime.create(f.master.id, { id: foreign.id, projectID: f.repositoryID, model: old, agentPermissions: [] })))._tag).toBe("Failure")
     expect((yield* f.sessions.get(foreign.id)).location).toEqual(f.otherLocation)
     expect((yield* f.coordination.get(f.group.id)).memberSessionIDs).not.toContain(foreign.id)
     unchangedExecution()
@@ -253,7 +279,7 @@ describe("canonical project member creation", () => {
     const f = yield* fixture()
     const existing = yield* f.sessions.create({ location: f.location, model: old, title: "Archived before enrollment" })
     yield* f.events.publish(SessionEvent.Archived, { sessionID: existing.id })
-    const result = yield* f.runtime.create(f.master.id, { id: existing.id, projectID: f.master.projectID, model: old, agentPermissions: [] })
+    const result = yield* f.runtime.create(f.master.id, { id: existing.id, projectID: f.repositoryID, model: old, agentPermissions: [] })
     expect(result).toMatchObject({ sessionID: existing.id, location: f.location, model: old, enrollment: { groupID: f.group.id, member: false } })
     expect(result.enrollment.error).toEqual(expect.any(String))
     expect((yield* f.coordination.get(f.group.id)).memberSessionIDs).not.toContain(existing.id)

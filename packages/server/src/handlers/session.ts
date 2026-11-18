@@ -27,6 +27,10 @@ import {
   QuestionNotFoundError,
 } from "@ycoding-ai/protocol/errors"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
+import { FSUtil } from "@ycoding-ai/core/fs-util"
+import { Global } from "@ycoding-ai/core/global"
+import { Project } from "@ycoding-ai/core/project"
+import path from "node:path"
 import { SessionTodo } from "@ycoding-ai/core/session/todo"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { Agent } from "@ycoding-ai/core/agent"
@@ -41,6 +45,21 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
     const session = yield* Session.Service
     const orchestration = yield* SessionOrchestration.Service
     const identity = yield* ProcessIdentity
+    const project = yield* Project.Service
+    const fs = yield* FSUtil.Service
+    const global = yield* Global.Service
+    const invalidDirectory = (message: string) => new InvalidRequestError({ message, field: "location.directory" })
+    const admitDirectory = Effect.fn("SessionHandler.admitDirectory")(function* (input: string) {
+      const expanded = /^~(?=$|[\\/])/.test(input) ? path.join(global.home, input.slice(1)) : input
+      if (!path.isAbsolute(expanded)) return yield* invalidDirectory("Choose an absolute directory or one starting with ~")
+      const directory = AbsolutePath.make(path.resolve(expanded))
+      if (!(yield* fs.isDir(directory))) {
+        if (yield* fs.existsSafe(directory)) return yield* invalidDirectory("The selected path is not a directory")
+        yield* fs.ensureDir(directory).pipe(Effect.mapError(() => invalidDirectory("The selected directory could not be created")))
+      }
+      yield* project.recordOpened(directory)
+      return directory
+    })
 
     return handlers
       .handle(
@@ -96,6 +115,10 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             const parent = yield* session.get(ctx.payload.parentID).pipe(Effect.mapError(mapSessionNotFound))
             if (parent.scope === "standalone") return yield* new InvalidRequestError({ message: "Standalone Session creation is unavailable" })
           }
+          const location =
+            ctx.payload.parentID === undefined && ctx.payload.location !== undefined && ctx.payload.location.workspaceID === undefined
+              ? { directory: yield* admitDirectory(ctx.payload.location.directory) }
+              : ctx.payload.location
           return {
             data: yield* session
               .create(
@@ -112,7 +135,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                       title: ctx.payload.title,
                       agent: ctx.payload.agent,
                       model: ctx.payload.model,
-                      location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
+                      location: location ?? { directory: AbsolutePath.make(process.cwd()) },
                     },
               )
               .pipe(Effect.mapError((error) => {

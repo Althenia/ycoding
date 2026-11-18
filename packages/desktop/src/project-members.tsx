@@ -18,15 +18,19 @@ export function memberCandidates(group: Group, sessions: readonly SessionItem[])
   return sessions.filter((item) => item.parentID === undefined && item.time.archived === undefined && !taken.has(item.id))
 }
 
+export const newDirectoryProjectConfirmation = (name: string, directory: string) => `Create project ${name} with a new Master Session in ${directory}? A missing folder is created.`
+
 export function memberChange(state: MemberState, action: MemberAction): { readonly input: ProjectMutationInput; readonly confirmation: string } | { readonly error: string } | undefined {
   if (state.disabled) return undefined
   const { group, revision } = state
   const identity = { revision, groupID: group.id, groupRevision: group.revision }
   const members = group.members.map((member) => member.sessionID)
   if (action.kind === "new") {
-    if (!action.directory.startsWith("/")) return { error: "Choose a folder for the new member Session." }
+    const directory = action.directory.trim()
+    if (!directory) return { error: "Choose a folder for the new member Session." }
+    if (!directory.startsWith("/") && directory !== "~" && !directory.startsWith("~/")) return { error: "Enter an absolute folder path or one starting with ~/." }
     const title = action.title.trim()
-    return { input: { kind: "new-member", ...identity, directory: action.directory, ...(title ? { title } : {}) }, confirmation: `Create a new Session${title ? ` titled “${title}”` : ""} in ${action.directory} and add it as a member of project “${group.name}”?` }
+    return { input: { kind: "new-member", ...identity, directory, ...(title ? { title } : {}) }, confirmation: `Create a new Session${title ? ` titled “${title}”` : ""} in ${directory} and add it as a member of project “${group.name}”? A missing folder is created.` }
   }
   if (action.kind === "add") {
     const candidate = memberCandidates(group, state.sessions).find((item) => item.id === action.sessionID)
@@ -79,7 +83,7 @@ export function DesktopProjectMembers(props: { readonly group: Group; readonly r
   const browse = () => {
     if (props.disabled) return
     const owner = identity()
-    props.onBrowseFolder(directory() || props.group.master.location.directory, (chosen) => { if (identity() === owner) stage({ directory: chosen, error: undefined }) })
+    props.onBrowseFolder(directory().trim().startsWith("/") ? directory().trim() : props.group.master.location.directory, (chosen) => { if (identity() === owner) stage({ directory: chosen, error: undefined }) })
   }
   return <section class="st-section desktop-project-workflows" aria-label={`Member workflows for ${props.group.name}`}>
     <h3>Add an existing Session</h3>
@@ -89,9 +93,9 @@ export function DesktopProjectMembers(props: { readonly group: Group; readonly r
     </Show>
     <button type="button" class="rl-btn" data-action-id="project-member-add" disabled={props.disabled || !selected()} onClick={() => run({ kind: "add", sessionID: selected() })}>Add member</button>
     <h3>New member Session</h3>
-    <div class="ws-row"><p class="st-muted">{directory() ? `Folder: ${directory()}` : "No folder chosen."}</p><button type="button" class="rl-btn" data-action-id="project-member-browse" disabled={props.disabled} onClick={browse}>Choose folder…</button></div>
+    <div class="ws-row"><label class="rl-field"><span>Folder path</span><input aria-label="Member folder path" placeholder="/path/to/folder or ~/folder" value={directory()} disabled={props.disabled} onInput={(event) => stage({ directory: event.currentTarget.value, error: undefined })} /></label><button type="button" class="rl-btn" data-action-id="project-member-browse" disabled={props.disabled} onClick={browse}>Choose folder…</button></div>
     <label class="rl-field"><span>Session title (optional)</span><input value={title()} disabled={props.disabled} onInput={(event) => stage({ title: event.currentTarget.value })} /></label>
-    <button type="button" class="rl-btn" data-tone="go" data-action-id="project-member-new" disabled={props.disabled || !directory()} onClick={() => run({ kind: "new", directory: directory(), title: title() })}>Create member Session</button>
+    <button type="button" class="rl-btn" data-tone="go" data-action-id="project-member-new" disabled={props.disabled || !directory().trim()} onClick={() => run({ kind: "new", directory: directory(), title: title() })}>Create member Session</button>
     <Show when={error()}><p role="alert" data-tone="bad">{error()}</p></Show>
   </section>
 }

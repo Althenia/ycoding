@@ -37,11 +37,18 @@ test("native project definition requires kind and fingerprint for every escalati
   }
 })
 
-test("project create accepts a canonical repository project or an explicit worktree but never mixes them", () => {
+test("project create accepts exactly one placement: directory, repository Project, or worktree", () => {
   const root = { action: "create", projectID: "repository-project", ownerSessionID: "ses_owner", title: "Root member", prompt: "Inspect the project", model }
   const worktree = { action: "create", name: "member-lane", repository: "/synthetic/repository", model }
   expect(decode(root)).toEqual(root)
   expect(decode(worktree)).toEqual(worktree)
+  for (const directory of ["/synthetic/folder", "~", "~/new folder"]) {
+    const chosen = { action: "create", directory, ownerSessionID: "ses_owner", title: "New member", prompt: "Inspect the folder", model }
+    expect(decode(chosen)).toEqual(chosen)
+    for (const extra of [{ projectID: root.projectID }, { name: worktree.name }, { repository: worktree.repository }])
+      expect(() => decode({ ...chosen, ...extra })).toThrow()
+  }
+  expect(() => decode({ ...worktree, directory: "/synthetic/folder" })).toThrow()
   expect(decode({ action: "create", projectID: "repository-project" })).toEqual({ action: "create", projectID: "repository-project" })
   for (const extra of [{ name: "member-lane" }, { repository: "/synthetic/repository" }, { directory: "/synthetic/repository" }, { groupID: "cgrp_other" }, { caller: "ses_other" }, { id: "ses_injected" }])
     expect(() => decode({ ...root, ...extra })).toThrow()

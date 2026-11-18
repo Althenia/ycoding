@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, stat, symlink } from "node:fs/promises"
+import { homedir, tmpdir } from "node:os"
 import { join, posix, win32 } from "node:path"
 import { pathToFileURL } from "node:url"
 import { describe, expect, test } from "bun:test"
 import type { SessionInfo } from "@ycoding-ai/client/promise"
 import { Project } from "@ycoding-ai/schema/project"
-import { RemoteLimits, parseChunkedValue, remoteOperations, requireSession, type RemoteRequest } from "@ycoding-ai/remote"
+import { RemoteLimits, parseChunkedValue, parseRelayToAgentMessage, remoteOperations, requireSession, type RemoteRequest } from "@ycoding-ai/remote"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
 import { Schema } from "effect"
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
@@ -572,15 +573,19 @@ test("repeated references cannot expand one upload beyond the local admission by
   } finally { uploads.clear() }
 })
 
-test("existing global Sessions appear in read-only workspace groups without enabling global creation", async () => {
+test("existing global Sessions supply both their workspace group and a creation workspace", async () => {
   const directory = process.cwd()
   const session = { ...sessionInfo("ses_global", { updated: 1, directory }), projectID: Project.ID.global }
   const test = await harness({ sessions: [session], results: { projectList: [] } })
   const requestGroup = (sessionsOnly: boolean) => executeRemoteOperation({ request: request("workspace.list", { sessionsOnly }),
     local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
   expect(valueOf(await requestGroup(true))).toMatchObject({ data: [{ projectID: Project.ID.global, directory }] })
-  expect(valueOf(await requestGroup(false))).toEqual({ data: [] })
+  expect(valueOf(await requestGroup(false))).toMatchObject({ data: [{ projectID: Project.ID.global, directory }] })
 })
+
+async function exists(path: string) {
+  return stat(path).then(() => true, () => false)
+}
 
 const scratch = join(import.meta.dir, "../../../.cache/tmp")
 await mkdir(scratch, { recursive: true })
@@ -925,7 +930,7 @@ describe("workspace inventory and Session creation", () => {
     expect(test.calls.find((call) => call.method === "createSession")?.args).toEqual(["ses_chosen", { directory }, "build", model, "Release review"])
   })
 
-  test("hides temporary and global creation workspaces while listing existing global Sessions read-only", async () => {
+  test("hides temporary workspaces while listing global Sessions as workspaces", async () => {
     const directory = process.cwd()
     const sessions = [sessionInfo("ses_allowed", { updated: 1, directory }),
       { ...sessionInfo("ses_global", { updated: 2, directory }), projectID: "global" },
@@ -937,9 +942,157 @@ describe("workspace inventory and Session creation", () => {
     for (const input of [undefined, { sessionsOnly: true }]) {
       const value = arrayOf(recordOf(valueOf(await executeRemoteOperation({ request: request("workspace.list", input), local: test.local,
         sessions: test.registry, subscriptions: test.subscriptions }))).data)
-      expect(value).toHaveLength(input?.sessionsOnly ? 2 : 1)
+      expect(value).toHaveLength(2)
       expect(value.find((item) => recordOf(item).projectID === "prj_1")).toMatchObject({ projectID: "prj_1", directory, name: "cli" })
-      if (input?.sessionsOnly) expect(value.find((item) => recordOf(item).projectID === "global")).toMatchObject({ projectID: "global", directory })
+      expect(value.find((item) => recordOf(item).projectID === "global")).toMatchObject({ projectID: "global", directory })
+    }
+  })
+
+  test("lists registered and Session-derived global directories without seeding the global worktree", async () => {
+    const opened = await mkdtemp(join(scratch, "ycoding-global-opened-"))
+    const used = await mkdtemp(join(scratch, "ycoding-global-used-"))
+    const globalWorktree = await mkdtemp(join(scratch, "ycoding-global-worktree-"))
+    try {
+      const sessions: SessionInfo[] = [{ ...sessionInfo("ses_global", { updated: 1, directory: used }), projectID: Project.ID.global }]
+      const test = await harness({ sessions, results: {
+        projectList: [{ id: Project.ID.global, worktree: globalWorktree, time: { created: 1, updated: 1 }, sandboxes: [] }],
+        projectDirectories: async (projectID: string) => projectID === Project.ID.global ? [{ directory: opened }, { directory: "/tmp" }] : [],
+        projectCurrent: { id: Project.ID.global, directory: opened },
+        createSession: (id: string, location: LocalLocation) => {
+          const created = { ...sessionInfo(id, { updated: 2, directory: location.directory }), projectID: Project.ID.global }
+          sessions.push(created)
+          return created
+        },
+      } })
+      const inventory = arrayOf(recordOf(valueOf(await executeRemoteOperation({ request: request("workspace.list"), local: test.local,
+        sessions: test.registry, subscriptions: test.subscriptions }))).data).map(recordOf)
+      expect(inventory.map((item) => [item.projectID, item.directory])).toEqual([[Project.ID.global, opened], [Project.ID.global, used]].toSorted((left, right) => left[1]!.localeCompare(right[1]!)))
+      const workspace = inventory.find((item) => item.directory === opened)?.id
+      expect(valueOf(await executeRemoteOperation({ request: request("session.create", { id: "ses_global_new", workspace }), local: test.local,
+        sessions: test.registry, subscriptions: test.subscriptions }))).toMatchObject({ data: { id: "ses_global_new", projectID: Project.ID.global, location: { directory: opened } } })
+      expect(test.calls.find((call) => call.method === "createSession")?.args).toEqual(["ses_global_new", { directory: opened }, undefined, undefined, undefined])
+    } finally {
+      await Promise.all([opened, used, globalWorktree].map((path) => rm(path, { recursive: true, force: true })))
+    }
+  })
+
+  test("creates a Session at a new absolute directory registered through the local Location read", async () => {
+    const parent = await mkdtemp(join(scratch, "ycoding-remote-directory-"))
+    try {
+      const directory = join(parent, "new", "project")
+      const sessions: SessionInfo[] = [sessionInfo("ses_1", { updated: 1 })]
+      const test = await harness({ sessions, results: {
+        listPage: async () => ({ data: sessions }),
+        getSession: async (id: string) => sessions.find((session) => session.id === id),
+        locationGet: (location: LocalLocation) => ({ directory: location.directory, project: { id: Project.ID.global, directory: location.directory } }),
+        createSession: (id: string, location: LocalLocation) => {
+          const created = { ...sessionInfo(id, { updated: 2, directory: location.directory }), projectID: Project.ID.global }
+          sessions.push(created)
+          return created
+        },
+      } })
+      const create = (input: Record<string, unknown>) => executeRemoteOperation({ request: request("session.create", input), local: test.local,
+        sessions: test.registry, subscriptions: test.subscriptions })
+      const first = await create({ id: "ses_dir", directory: `${parent}/new/./project/`, title: "Folder" })
+      expect(valueOf(first)).toMatchObject({ data: { id: "ses_dir", projectID: Project.ID.global, location: { directory } } })
+      expect((await stat(directory)).isDirectory()).toBe(true)
+      expect(test.calls.filter((call) => call.method === "locationGet").map((call) => call.args)).toEqual([[{ directory }]])
+      expect(test.calls.filter((call) => call.method === "createSession").map((call) => call.args)).toEqual([["ses_dir", { directory }, undefined, undefined, "Folder"]])
+      expect(test.registry.ids()).toContain("ses_dir")
+
+      expect(valueOf(await create({ id: "ses_dir", directory }))).toMatchObject({ data: { id: "ses_dir", location: { directory } } })
+      expect(test.calls.filter((call) => call.method === "createSession")).toHaveLength(1)
+      expect(errorOf(await create({ id: "ses_dir", directory: parent })).code).toBe("invalid_message")
+      expect(test.calls.filter((call) => call.method === "createSession")).toHaveLength(1)
+
+      expect(valueOf(await create({ id: "ses_home", directory: "~" }))).toMatchObject({ data: { location: { directory: homedir() } } })
+      expect(test.calls.filter((call) => call.method === "createSession").at(-1)?.args).toEqual(["ses_home", { directory: homedir() }, undefined, undefined, undefined])
+
+      const mismatched = await harness({ sessions: [], results: {
+        locationGet: (location: LocalLocation) => ({ directory: location.directory, project: { id: "prj_1", directory: location.directory } }),
+        createSession: (id: string, location: LocalLocation) => ({ ...sessionInfo(id, { updated: 2, directory: location.directory }), projectID: Project.ID.global }),
+      } })
+      expect(errorOf(await executeRemoteOperation({ request: request("session.create", { id: "ses_mismatch", directory }), local: mismatched.local,
+        sessions: mismatched.registry, subscriptions: mismatched.subscriptions })).code).toBe("invalid_message")
+      expect(mismatched.registry.ids()).not.toContain("ses_mismatch")
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  })
+
+  test("relay frames deliver exactly one workspace or directory placement to the agent", () => {
+    const frame = (input: Record<string, unknown>) => parseRelayToAgentMessage(JSON.stringify({ type: "request", id: "req_1", operation: "session.create", input }))
+    for (const input of [
+      { id: "ses_new", directory: "/work/new" },
+      { id: "ses_new", scope: "bound", directory: "~/projects/new" },
+      { id: "ses_new", directory: "~" },
+      { id: "ses_new", workspace: "wsp_1" },
+    ]) expect(frame(input)).toEqual({ ok: true, value: { type: "request", id: "req_1", operation: "session.create", input } })
+    for (const input of [
+      { id: "ses_new", workspace: "wsp_1", directory: "/work/new" },
+      { id: "ses_new", scope: "standalone", directory: "/work/new" },
+      { id: "ses_new" },
+      { id: "ses_new", directory: "relative/new" },
+      { id: "ses_new", directory: "/work/a\u0000b" },
+      { id: "ses_new", directory: `/${"a".repeat(4096)}` },
+    ]) expect(frame(input).ok).toBe(false)
+  })
+
+  test("requires exactly one Session placement and an absolute directory before any local call", async () => {
+    const parent = await mkdtemp(join(scratch, "ycoding-remote-placement-"))
+    const file = join(parent, "file.txt")
+    await Bun.write(file, "synthetic")
+    try {
+      const test = await harness({ results: { locationGet: { directory: parent, project: { id: Project.ID.global, directory: parent } } } })
+      for (const input of [
+        { id: "ses_new" },
+        { id: "ses_new", workspace: "wsp_1", directory: parent },
+        { id: "ses_new", scope: "standalone", directory: parent },
+        { id: "ses_new", scope: "standalone" },
+        { id: "ses_new", directory: "relative/path" },
+        { id: "ses_new", directory: "~other/path" },
+        { id: "ses_new", directory: "" },
+        { id: "ses_new", directory: 42 },
+        { id: "ses_new", directory: `${parent}/a\u0000b` },
+      ]) {
+        const outcome = await executeRemoteOperation({ request: request("session.create", input), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+        expect(errorOf(outcome).code).toBe("invalid_message")
+      }
+      expect(test.calls).toEqual([])
+      const fileOutcome = await executeRemoteOperation({ request: request("session.create", { id: "ses_new", directory: file }), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+      expect(errorOf(fileOutcome).code).toBe("invalid_message")
+      expect(test.calls.some((call) => call.method === "locationGet" || call.method === "createSession")).toBe(false)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  })
+
+  test("refuses temporary and standalone directories before creating them, including through ancestor symlinks", async () => {
+    const parent = await mkdtemp(join(scratch, "ycoding-remote-excluded-"))
+    const temporary = await mkdtemp(join(tmpdir(), "ycoding-remote-excluded-target-"))
+    const standalone = join(Global.Path.state, "standalone-sessions")
+    await mkdir(standalone, { recursive: true })
+    try {
+      await symlink(temporary, join(parent, "temporary-link"))
+      await symlink(standalone, join(parent, "standalone-link"))
+      await symlink(join(parent, "missing-target"), join(parent, "dangling-link"))
+      const test = await harness({ results: { locationGet: (location: LocalLocation) => ({ directory: location.directory, project: { id: Project.ID.global, directory: location.directory } }) } })
+      const cases = [
+        [join(temporary, "lexical", "child"), join(temporary, "lexical")],
+        [join(standalone, "ses_new", "child"), join(standalone, "ses_new")],
+        [join(parent, "temporary-link", "nested", "child"), join(temporary, "nested")],
+        [join(parent, "standalone-link", "nested", "child"), join(standalone, "nested")],
+        [join(parent, "dangling-link", "child"), join(parent, "missing-target")],
+        [join("/tmp", `ycoding-remote-excluded-${process.pid}`), join("/tmp", `ycoding-remote-excluded-${process.pid}`)],
+      ] as const
+      for (const [directory, created] of cases) {
+        const outcome = await executeRemoteOperation({ request: request("session.create", { id: "ses_new", directory }), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+        expect(errorOf(outcome)).toMatchObject({ code: "invalid_message", message: expect.stringContaining("reserved") })
+        expect(await exists(created)).toBe(false)
+      }
+      expect(test.calls.some((call) => call.method === "locationGet" || call.method === "createSession")).toBe(false)
+    } finally {
+      await Promise.all([parent, temporary].map((path) => rm(path, { recursive: true, force: true })))
     }
   })
 

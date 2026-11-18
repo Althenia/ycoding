@@ -271,7 +271,7 @@ Align the composer with the transcript axis, with one input boundary and open ic
 
 ### Projects and management
 
-Keep the Project Master/member roster compact and singular. The adjacent workflow region contains add-existing and create-new controls; selected member detail remains reachable without duplicating the list. Selection and focus survive the compact Back/Escape journey. Remove from project retains the Session; Delete Session and Delete project keep their distinct confirmations. Other dialogs keep their current routes, actual capabilities, errors and focus return.
+Keep the Project Master/member roster compact and singular. The adjacent workflow region contains add-existing and create-new controls; selected member detail remains reachable without duplicating the list. Master and member creation offer a folder path field alongside the folder chooser. Accept an absolute path, `~`, or `~/…`, and create a missing folder after confirmation. The Session uses the chosen directory, including a repository subfolder or non-Git folder. Selection and focus survive the compact Back/Escape journey. Remove from project retains the Session; Delete Session and Delete project keep their distinct confirmations. Other dialogs keep their current routes, actual capabilities, errors and focus return.
 
 ## Accessibility
 

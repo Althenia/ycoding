@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { $ } from "bun"
 import fs from "node:fs/promises"
+import { homedir } from "node:os"
 import path from "node:path"
 import { Effect, Layer, Schema } from "effect"
 import { eq } from "drizzle-orm"
@@ -27,6 +28,7 @@ import { Git } from "../src/git"
 import { Global } from "../src/global"
 import { Image } from "../src/image"
 import { Location } from "../src/location"
+import { LocationMutation } from "../src/location-mutation"
 import { Permission } from "../src/permission"
 import { Project } from "../src/project"
 import { ProjectCopy } from "../src/project/copy"
@@ -255,6 +257,7 @@ const runtimeNode = makeGlobalNode({
       events: yield* EventRuntime.Service,
       coordination: yield* CoordinationService.Service,
       sessions: yield* Session.Service,
+      recordOpened: (yield* Project.Service).recordOpened,
       orchestration: yield* SessionOrchestration.Service,
       execution: yield* SessionExecution.Service,
       decisions: {
@@ -269,7 +272,7 @@ const runtimeNode = makeGlobalNode({
       jobs: { list: () => Effect.succeed([]), outstandingSessions: () => Effect.succeed(new Set<SessionSchema.ID>()) },
     }))
   })),
-  deps: [Database.node, EventRuntime.node, CoordinationService.node, Session.node, SessionOrchestration.node, SessionExecution.node],
+  deps: [Database.node, EventRuntime.node, CoordinationService.node, Project.node, Session.node, SessionOrchestration.node, SessionExecution.node],
 })
 const plugins = makeLocationNode({
   name: "test/project-tool-plugins",
@@ -277,7 +280,7 @@ const plugins = makeLocationNode({
     yield* registerToolPlugin(WorktreeTool.Plugin)
     yield* registerToolPlugin(CoordinationTool.Plugin)
   })),
-  deps: [ToolRegistry.toolsNode, Location.node, Git.node, Global.node, Project.node, ProjectCopy.node, Permission.node, SessionGuardrail.node, FSUtil.node, Agent.node, Config.node, CoordinationRuntime.node],
+  deps: [ToolRegistry.toolsNode, Location.node, Git.node, Global.node, LocationMutation.node, Project.node, ProjectCopy.node, Permission.node, SessionGuardrail.node, FSUtil.node, Agent.node, Config.node, CoordinationRuntime.node],
 })
 const project = { id: Project.ID.make("project-tool-test"), directory: source }
 const model = Model.Ref.make({ providerID: Provider.ID.make("test"), id: Model.ID.make("model") })
@@ -404,7 +407,7 @@ const godPermissions = Effect.gen(function* () {
   return god?.permissions ?? []
 }).pipe(Effect.provide(godAgents), Effect.scoped)
 
-const Created = Schema.Struct({ sessionID: SessionSchema.ID, directory: Schema.String, branch: Schema.String, owner: Schema.optional(Schema.Unknown) })
+const Created = Schema.Struct({ sessionID: SessionSchema.ID, directory: Schema.String, branch: Schema.optional(Schema.String), owner: Schema.optional(Schema.Unknown) })
 
 const projectSetup = Effect.gen(function* () {
   audit.permissions.length = 0
@@ -619,6 +622,34 @@ describe("project tool through the tool registry", () => {
       expect(yield* fixture.count()).toBe(before)
       expect(yield* fixture.exists("lane-three")).toBe(false)
       expect(yield* fixture.database.db.select().from(SessionTable).where(eq(SessionTable.directory, path.join(fixture.managed, "lane-three"))).all().pipe(Effect.orDie)).toEqual([])
+    }), 60_000)
+
+  detached.live("a chosen home-relative folder creates one registered root with inherited denies and no worktree capability", () =>
+    Effect.gen(function* () {
+      const fixture = yield* projectSetup
+      const directory = path.join(data, "chosen folder", "member")
+      const supplied = `~/${path.relative(homedir(), directory)}/.`
+      const input = { action: "create", directory: supplied, model }
+      configured.capabilities = new ConfigCapabilities.Info({ tools: { deny: ["worktree"] } })
+      yield* fixture.database.db.update(SessionTable).set({ permission: [{ action: "shell", resource: "*", effect: "deny" }] })
+        .where(eq(SessionTable.id, fixture.master.id)).run().pipe(Effect.orDie)
+      masterAgent.permissions = [{ action: "webfetch", resource: "*", effect: "deny" }]
+      const first = yield* fixture.call("chosen-folder", "project", input)
+      expect(first.type).toBe("text")
+      const created = fixture.parsed(first)
+      expect(created).toMatchObject({ directory })
+      expect(created).not.toHaveProperty("branch")
+      const member = yield* fixture.sessions.get(created.sessionID)
+      expect(member).toMatchObject({ projectID: Project.ID.global, location: { directory }, title: "member", permissionCeiling: [
+        { action: "shell", resource: "*", effect: "deny" },
+        ...masterAgent.permissions,
+      ] })
+      expect(member.parentID).toBeUndefined()
+      expect(yield* Effect.promise(async () => (await fs.stat(directory)).isDirectory())).toBe(true)
+      expect((yield* (yield* ProjectDirectories.Service).list(Project.ID.global)).map(item => item.directory)).toContain(AbsolutePath.make(directory))
+      expect(fixture.parsed(yield* fixture.call("chosen-folder", "project", input)).sessionID).toBe(created.sessionID)
+      expect((yield* fixture.coordination.get(fixture.group.id)).memberSessionIDs).toEqual([created.sessionID])
+      expect(audit.permissions.filter(entry => entry.startsWith("worktree "))).toEqual([])
     }), 60_000)
 
   integration.live("a created member's ceiling carries the Master's ceiling and the deny rules of the Master's resolved calling agent", () =>

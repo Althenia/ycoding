@@ -7,6 +7,7 @@ import type { Model } from "@ycoding-ai/schema/model"
 import { Permission } from "@ycoding-ai/schema/permission"
 import path from "node:path"
 import fs from "node:fs/promises"
+import { homedir } from "node:os"
 import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm"
 import { Cause, Context, Effect, Layer, Schema, Stream } from "effect"
 import { CoordinationDecisionRuntime } from "../coordination/decisions"
@@ -109,7 +110,11 @@ export type CreateInput = {
   readonly title?: string
   readonly prompt?: string
   readonly model?: Model.Ref
-} & ({ readonly projectID: Project.ID; readonly name?: never } | { readonly name: string; readonly projectID?: never })
+} & (
+  | { readonly directory: string; readonly projectID?: never; readonly name?: never }
+  | { readonly projectID: Project.ID; readonly directory?: never; readonly name?: never }
+  | { readonly name: string; readonly directory?: never; readonly projectID?: never }
+)
 
 export interface Worktree {
   readonly directory: AbsolutePath
@@ -198,6 +203,7 @@ export interface Interface {
     caller: SessionSchema.ID,
     input: CreateInput,
     worktree?: (name: string) => Effect.Effect<Worktree, E>,
+    authorizeMkdir?: (directory: AbsolutePath, mkdir: Effect.Effect<void, RefusedError>) => Effect.Effect<void, E | RefusedError>,
   ) => Effect.Effect<CreateResult, RefusedError | E | Session.ScopeUnavailableError | EventRuntime.TaskOwnerUnavailableError>
 }
 
@@ -222,6 +228,7 @@ export interface Options {
   readonly decisions: Pick<CoordinationDecisions.Interface, "pending" | "evaluate" | "escalate">
   readonly execution: Pick<SessionExecution.Interface, "active" | "wake" | "interrupt">
   readonly sessions: Pick<Session.Interface, "create" | "get" | "outstanding">
+  readonly recordOpened?: Project.Interface["recordOpened"]
   readonly orchestration: Pick<SessionOrchestration.Interface, "notice">
   readonly validateModel: (sessionID: SessionSchema.ID, model: Model.Ref) => Effect.Effect<void, RefusedError>
   readonly jobs: Pick<Job.Interface, "list" | "outstandingSessions">
@@ -237,6 +244,7 @@ const failedType = versionedType(SessionEvent.Execution.Failed.type, SessionEven
 
 const refuse = (message: string) => new RefusedError({ message })
 const CreationPlacement = Schema.Struct({ digest: Schema.String, directory: AbsolutePath, branch: Schema.optional(Schema.String) })
+const fileErrorCode = (error: unknown) => typeof error === "object" && error !== null && "code" in error ? error.code : undefined
 
 export const authorizeMember = Effect.fn("CoordinationRuntime.authorizeMember")(function* (
   coordination: Pick<CoordinationService.Interface, "accessOf" | "scopeOf">,
@@ -330,7 +338,7 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
     return { sessionID: input.sessionID }
   })
 
-  const create: Interface["create"] = (caller, input, worktree) =>
+  const create: Interface["create"] = (caller, input, worktree, authorizeMkdir) =>
     createLock.withLock(input.id)(Effect.gen(function* () {
       const scope = yield* underOwnership(caller, Effect.gen(function* () {
         const current = yield* scopeFor(caller)
@@ -348,8 +356,15 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
       const saved = (yield* db.select({ value: KVTable.value }).from(KVTable).where(eq(KVTable.key, key)).get().pipe(Effect.orDie))?.value
       const placement = saved === undefined ? undefined : yield* Schema.decodeUnknownEffect(CreationPlacement)(saved).pipe(Effect.mapError(() => refuse(`Creation receipt for Session ${input.id} is invalid`)))
       if (placement !== undefined && placement.digest !== digest) return yield* refuse(`Session ${input.id} creation identity was already used with different input`)
+      if (input.projectID === Project.ID.global) return yield* refuse("The global Project has no repository directory; pass directory to choose the member's folder")
       const selected = input.projectID === undefined ? undefined : yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, input.projectID)).get().pipe(Effect.orDie)
       if (input.projectID !== undefined && selected === undefined) return yield* refuse(`Project ${input.projectID} does not exist`)
+      const expanded = input.directory === "~" ? homedir() : input.directory?.startsWith("~/") ? path.join(homedir(), input.directory.slice(2)) : input.directory
+      if (expanded !== undefined && (!path.isAbsolute(expanded) || expanded.includes("\0")))
+        return yield* refuse("Choose an absolute directory path or a path starting with ~/")
+      const directory = expanded === undefined ? undefined : AbsolutePath.make(path.resolve(expanded))
+      if (directory !== undefined && placement !== undefined && directory !== placement.directory)
+        return yield* refuse(`Session ${input.id} directory changed after creation was recorded`)
       const canonical = selected === undefined ? undefined : AbsolutePath.make(selected.worktree)
       if (canonical !== undefined && placement !== undefined && canonical !== placement.directory)
         return yield* refuse(`Project ${input.projectID} canonical Location changed after creation was recorded`)
@@ -357,26 +372,46 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
         const exists = yield* Effect.tryPromise({ try: () => fs.stat(canonical), catch: () => refuse(`Project directory ${canonical} is unavailable`) })
         if (!exists.isDirectory()) return yield* refuse(`Project directory ${canonical} is not a directory`)
       }
-      if (recorded !== undefined && (recorded.parentID !== undefined || recorded.location.workspaceID !== undefined ||
-        (canonical !== undefined && recorded.location.directory !== canonical) || (placement !== undefined && recorded.location.directory !== placement.directory)))
+      const chosen = directory ?? canonical
+      const expected = chosen ?? placement?.directory
+      if (recorded !== undefined && (recorded.parentID !== undefined || recorded.scope === "standalone" || recorded.location.workspaceID !== undefined ||
+        (expected !== undefined && recorded.location.directory !== expected)))
         return yield* refuse(`Session ${input.id} already exists at a different Location`)
       if (recorded !== undefined && canonical === undefined && placement === undefined)
-        return yield* refuse(`Session ${input.id} has no matching worktree creation receipt`)
-      const created = canonical !== undefined
-        ? { directory: canonical }
+        return yield* refuse(`Session ${input.id} has no matching ${directory === undefined ? "worktree" : "directory"} creation receipt`)
+      if (directory !== undefined) {
+        const unavailable = (error: unknown) => refuse(fileErrorCode(error) === "ENOTDIR" || fileErrorCode(error) === "EEXIST"
+          ? `Project path ${directory} is not a directory`
+          : `Project directory ${directory} could not be opened or created`)
+        const stat = yield* Effect.tryPromise({
+          try: () => fs.stat(directory).catch((error: unknown) => {
+            if (fileErrorCode(error) === "ENOENT") return undefined
+            throw error
+          }),
+          catch: unavailable,
+        })
+        if (stat !== undefined && !stat.isDirectory()) return yield* refuse(`Project path ${directory} is not a directory`)
+        if (stat === undefined) {
+          const mkdir = Effect.tryPromise({ try: () => fs.mkdir(directory, { recursive: true }), catch: unavailable }).pipe(Effect.asVoid)
+          yield* (authorizeMkdir === undefined ? mkdir : authorizeMkdir(directory, mkdir))
+        }
+        if (options.recordOpened !== undefined) yield* options.recordOpened(directory)
+      }
+      const created: { readonly directory: AbsolutePath; readonly branch?: string } = chosen !== undefined
+        ? { directory: chosen }
         : placement !== undefined
           ? { directory: placement.directory, branch: placement.branch }
           : worktree !== undefined && input.name !== undefined
             ? yield* worktree(input.name)
             : yield* refuse("Explicit worktree creation requires a worktree provider")
-      if (placement === undefined) yield* db.insert(KVTable).values({ key, value: { digest, directory: created.directory, ...("branch" in created && created.branch !== undefined ? { branch: created.branch } : {}) } })
+      if (placement === undefined) yield* db.insert(KVTable).values({ key, value: { digest, directory: created.directory, ...(created.branch === undefined ? {} : { branch: created.branch }) } })
         .onConflictDoNothing().run().pipe(Effect.orDie)
       const partial = (message: string, sessionID?: SessionSchema.ID) =>
-        refuse(`Created ${"branch" in created ? `worktree ${created.directory} on branch ${created.branch}` : `Session at ${created.directory}`}${sessionID === undefined ? "" : ` and Session ${sessionID}`}, but ${message}; nothing was removed`)
+        refuse(`Created ${created.branch === undefined ? `Session placement at ${created.directory}` : `worktree ${created.directory} on branch ${created.branch}`}${sessionID === undefined ? "" : ` and Session ${sessionID}`}, but ${message}; nothing was removed`)
       const member = recorded ?? (yield* sessions.create({
         id: input.id,
         location: { directory: created.directory },
-        title: input.title ?? input.name ?? selected?.name ?? path.basename(created.directory),
+        title: input.title ?? input.name ?? selected?.name ?? (path.basename(created.directory) || created.directory),
         permissionCeiling: SessionPermissionCeiling.inherit(master.permissionCeiling, input.agentPermissions),
         ...(input.model === undefined ? {} : { model: input.model }),
       }).pipe(Effect.catch(error => sessions.get(input.id).pipe(
@@ -408,7 +443,7 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
         location: confirmed.location,
         model: confirmed.model ?? null,
         enrollment,
-        ...("branch" in created ? { branch: created.branch } : {}),
+        ...(created.branch === undefined ? {} : { branch: created.branch }),
         ...ownership(yield* ownerOf(scope.groupID, member.id)),
         ...(prompt === undefined ? {} : { prompt }),
       } satisfies CreateResult
@@ -1125,6 +1160,7 @@ const layer: Layer.Layer<
   | SessionStore.Service
   | LocationServiceMap.Service
   | Job.Service
+  | Project.Service
   | SessionStepBoundary.Service
 > = Layer.effect(
   Service,
@@ -1138,6 +1174,7 @@ const layer: Layer.Layer<
     const orchestration = yield* SessionOrchestration.Service
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap.Service
+    const { recordOpened } = yield* Project.Service
     const boundary = yield* SessionStepBoundary.Service
     const validateModel = Effect.fn("CoordinationRuntime.validateModel")(function* (sessionID: SessionSchema.ID, model: Model.Ref) {
       const session = yield* store.get(sessionID)
@@ -1155,7 +1192,7 @@ const layer: Layer.Layer<
       )
     })
     const jobs = yield* Job.Service
-    const runtime = make({ db: database.db, events, coordination, decisions, execution, sessions, orchestration, validateModel, jobs })
+    const runtime = make({ db: database.db, events, coordination, decisions, execution, sessions, orchestration, recordOpened, validateModel, jobs })
     const setModel: Interface["setModel"] = (caller, input) => boundary.withSelection(input.sessionID,
       execution.withTransition(input.sessionID, Effect.gen(function* () {
         const switchable = Effect.gen(function* () {
@@ -1203,5 +1240,5 @@ const layer: Layer.Layer<
 export const node: Node.GlobalNode<Service> = makeGlobalNode({
   service: Service,
   layer,
-  deps: [CoordinationService.node, CoordinationDecisionRuntime.node, Database.node, EventRuntime.node, SessionExecution.node, Session.node, SessionOrchestration.node, SessionStore.node, LocationServiceMap.node, Job.node, SessionStepBoundary.node],
+  deps: [CoordinationService.node, CoordinationDecisionRuntime.node, Database.node, EventRuntime.node, SessionExecution.node, Session.node, SessionOrchestration.node, SessionStore.node, LocationServiceMap.node, Job.node, Project.node, SessionStepBoundary.node],
 })

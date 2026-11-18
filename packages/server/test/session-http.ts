@@ -2,6 +2,10 @@ import { Session } from "@ycoding-ai/core/session"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionReview } from "@ycoding-ai/core/session/review"
+import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
+import { FSUtil } from "@ycoding-ai/core/fs-util"
+import { Global } from "@ycoding-ai/core/global"
+import { Project } from "@ycoding-ai/core/project"
 import { Authorization } from "@ycoding-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@ycoding-ai/protocol/middleware/schema-error"
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
@@ -16,6 +20,14 @@ import { LocationMiddleware, type LocationServices } from "../src/location"
 import { SessionLocationMiddleware } from "../src/middleware/session-location"
 import { processIdentityLayer } from "../src/process-identity"
 
+const existingDirectories = Layer.effect(
+  FSUtil.Service,
+  Effect.gen(function* () {
+    const fs = yield* FSUtil.Service
+    return FSUtil.Service.of({ ...fs, isDir: () => Effect.succeed(true) })
+  }),
+).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+
 export const sessionHttpEpoch = ServiceStatus.Epoch.make("epoch_session_http")
 
 export function sessionHttp(
@@ -24,6 +36,9 @@ export function sessionHttp(
     orchestration?: Partial<SessionOrchestration.Interface>
     guardrail?: Partial<SessionGuardrail.Interface>
     review?: Partial<SessionReview.Interface>
+    project?: Partial<Project.Interface>
+    fs?: Layer.Layer<FSUtil.Service>
+    home?: string
     onLocation?: () => void
     location?: Pick<Context.Context<never>, "mapUnsafe">
     sessionLocation?: Layer.Layer<SessionLocationMiddleware>
@@ -48,6 +63,9 @@ export function sessionHttp(
       ...options.guardrail,
     }),
     Layer.mock(SessionReview.Service, options.review ?? {}),
+    Layer.mock(Project.Service, { recordOpened: () => Effect.void, ...options.project }),
+    options.fs ?? existingDirectories,
+    Global.layerWith({ home: options.home ?? "/home/test" }),
     processIdentityLayer(sessionHttpEpoch),
     options.sessionLocation ?? Layer.succeed(
       SessionLocationMiddleware,

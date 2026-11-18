@@ -2,6 +2,10 @@ import { expect, test } from "bun:test"
 import { Session } from "@ycoding-ai/core/session"
 import { SubagentCursor } from "@ycoding-ai/protocol/groups/session"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Project } from "@ycoding-ai/core/project"
 import { Location } from "@ycoding-ai/core/location"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -118,6 +122,70 @@ test("creation forwards an explicit title for root and child Sessions", async ()
     { parentID, title: "Child review" },
     { id: otherID, location: { directory: "/work" } },
   ])
+})
+
+const realFS = LayerNode.compile(FSUtil.node)
+const isDirectory = (path: string) => stat(path).then((info) => info.isDirectory(), () => false)
+
+async function exactPathFixture() {
+  const root = await mkdtemp(join(tmpdir(), "ycoding-exact-path-"))
+  const home = join(root, "home")
+  await mkdir(home)
+  const events: string[] = []
+  const created: unknown[] = []
+  const http = sessionHttp(
+    { create: (input: unknown) => Effect.sync(() => created.push(input)).pipe(Effect.andThen(Effect.fail(new Session.NotFoundError({ sessionID: parentID })))) },
+    {
+      home,
+      fs: realFS,
+      project: { recordOpened: (directory) => Effect.promise(() => isDirectory(directory)).pipe(Effect.tap((exists) => Effect.sync(() => events.push(`${exists ? "exists" : "missing"}:${directory}`))), Effect.asVoid) },
+    },
+  )
+  return { root, home, events, created, http, [Symbol.asyncDispose]: async () => { await http[Symbol.asyncDispose](); await rm(root, { recursive: true, force: true }) } }
+}
+
+test("root creation admits an exact absolute folder, creates it when missing and records it only once it exists", async () => {
+  await using f = await exactPathFixture()
+  const target = join(f.root, "new", "deep", "project")
+  expect((await f.http.json("/api/session", "POST", { id: otherID, location: { directory: `${target}/` } })).status).toBe(404)
+  expect(await isDirectory(target)).toBe(true)
+  expect(f.events).toEqual([`exists:${target}`])
+  expect(f.created).toEqual([{ id: otherID, location: { directory: target } }])
+})
+
+test("root creation resolves ~ against the machine home before creating the folder", async () => {
+  await using f = await exactPathFixture()
+  await f.http.json("/api/session", "POST", { location: { directory: "~/Workspace/app" } })
+  await f.http.json("/api/session", "POST", { location: { directory: "~" } })
+  expect(await isDirectory(join(f.home, "Workspace", "app"))).toBe(true)
+  expect(f.events).toEqual([`exists:${join(f.home, "Workspace", "app")}`, `exists:${f.home}`])
+  expect(f.created).toEqual([
+    { id: undefined, location: { directory: join(f.home, "Workspace", "app") } },
+    { id: undefined, location: { directory: f.home } },
+  ])
+})
+
+test("root creation rejects a file or relative folder before recording or creating anything", async () => {
+  await using f = await exactPathFixture()
+  const file = join(f.root, "plain-file")
+  await writeFile(file, "x")
+  for (const directory of [file, join(file, "child"), "relative/project", "~other/project", ""]) {
+    const response = await f.http.json("/api/session", "POST", { location: { directory } })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ _tag: "InvalidRequestError", field: "location.directory" })
+  }
+  expect(f.events).toEqual([])
+  expect(f.created).toEqual([])
+  expect(await isDirectory(join("relative", "project"))).toBe(false)
+})
+
+test("workspace-scoped root creation leaves the folder untouched and forwards the Location as sent", async () => {
+  await using f = await exactPathFixture()
+  const target = join(f.root, "workspace-folder")
+  await f.http.json("/api/session", "POST", { location: { directory: target, workspaceID: "wrk_exact" } })
+  expect(await isDirectory(target)).toBe(false)
+  expect(f.events).toEqual([])
+  expect(f.created).toEqual([{ id: undefined, location: { directory: target, workspaceID: "wrk_exact" } }])
 })
 
 test("subagent list rejects malformed and cross-parent cursors before the paged read", async () => {

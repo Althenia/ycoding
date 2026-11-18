@@ -690,7 +690,7 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.autonomy.set` | yes | `session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | any of `permissions`, `guardrails`, `answers` (each `manual`, `yolo`, or `auto`) in one call, or `sleep` (boolean) alone; booleans and the former `yolo`/`autoPermission`/`autoGuardrail`/`autoAnswer` keys are invalid |
 | `session.goal.set` | yes | `session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal` (non-empty string), `maxNoProgress?` |
 | `session.goal.stop` | yes | `session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal: null` |
-| `session.create` | no | `session.create`, `project.current` | `POST /api/session`, `GET /api/project/current` | `id`, `workspace`, `agent?`, `model?`, `title?` |
+| `session.create` | no | `session.create`, `project.current` or `location.get` | `POST /api/session`, `GET /api/project/current` or `GET /api/location` | `id`, exactly one of `workspace` and `directory`, `agent?`, `model?`, `title?` |
 
 `dots.get`, `dots.set`, `dots.attach`, `dots.detach` and `dots.remove` return `{ data: { access: { enabled, revision }, configuration: { ready, profile?, message? }, connection: { state, hostname?, message? }, computer?: { state, name?, target?, message?, readiness?, usableForTasks?, dotEnvironment? } } }`. Connection state is one of `unavailable`, `off`, `connecting`, `connected`, or `error`; computer state is one of `attached`, `detached`, `unavailable`, or `removed` (only `dots.remove` returns `removed`), with an optional message of at most 500 characters. `dots.attach` attaches this computer's Dots executor to the account's Dot, leaving the user's other computers attached unless the request sets the explicit `replaceOthers: true` replacing grant, and is a mutation: an unconfirmed outcome is reported as unknown and is never replayed. `dots.detach` posts one disconnect request for this computer; `dots.remove` deletes this computer from the ChatGPT account, marks the local enrollment removed and turns Dots access off; both are mutations that are never replayed. `readiness` is `connected`, `offline` or `unknown`, `usableForTasks` is a boolean, and `dotEnvironment` is `{ status, capabilities: [{ type, status }] }` with identifier strings (lowercase letters, digits, `_` and `-`, at most 64 characters) and at most 16 capabilities; each is omitted when unknown. Optional profile and hostname values are nonempty strings of at most 256 characters; messages are nonempty strings of at most 500 characters. Display strings exclude C0 and C1 control characters. Persisted access defaults off and applies to every existing and future Session on the authenticated backend; configuration readiness and connection state are separate observations. All five operations reject Session IDs and Location fields. `dots.set` uses the displayed exact revision; stale revisions fail without retry. The browser relay exposes no other Dots operation or private Channel. Native admission and typed decisions require an explicit pinned OpenAI OAuth profile and the private server-process Host; they have no HTTP fallback. Exact candidate, source, revision, access, ownership, archive, deny, ceiling, and connection-lifetime checks remain native-owned. An indeterminate write is reported as `outcome_unknown` and is never replayed automatically.
 
@@ -816,14 +816,22 @@ agent switches, autonomy changes, and goal changes with `subagent_read_only`.
 BTW child Sessions remain promptable. Reads, interruption, permission/form/
 guardrail replies, and the owner's root Session are unaffected.
 
-`session.create` accepts `{ id, workspace, agent?, model?, title? }`. `id` is a client-generated
-Session ID; `workspace` must match an ID in a freshly rederived backend inventory.
-Before creation, the backend checks that the directory exists and that
-`project.current` reports the inventory's project ID. A mismatch or unavailable
-workspace is rejected with `invalid_message` and refresh/reopen guidance. The
-Location is derived only from the matched backend inventory; no browser path,
-parent, URL, method, or header is accepted. `agent` is an explicit choice;
-omitting it uses the runtime configured default. `model` is a validated
+`session.create` accepts a client-generated `id`, exactly one of `workspace` and
+`directory`, and optional `agent`, `model`, and `title`. `workspace` must match a
+current inventory ID. The agent verifies the selected directory exists and that
+`project.current` reports the inventory's project ID; a mismatch or unavailable
+workspace returns `invalid_message` with refresh/reopen guidance. The inventory
+includes non-Git directories recorded by a Session or ProjectDirectory, but not
+the global Project row's worktree.
+
+`directory` accepts an absolute path, `~`, or `~/…` on the connected machine. The
+agent expands and normalizes the path, rejects files and paths inside temporary
+or standalone Session storage (including symlink destinations), and creates a
+missing directory. It records the folder through `location.get` and creates the
+bound root Session at the verified directory. A folder created before a failed
+Session operation is not removed. The request accepts no parent, URL, method,
+or header. `agent` is an explicit choice; omitting it uses the runtime configured
+default. `model` is a validated
 `{ providerID, id, variant? }` reference; omitting it uses the runtime default.
 `title` is a string equal to its own trim, nonblank, at most 120 Unicode code points,
 and free of U+0000–U+001F, U+007F–U+009F, U+202A–U+202E, and U+2066–U+2069; any

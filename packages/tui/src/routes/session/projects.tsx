@@ -283,7 +283,7 @@ export function ProjectsScreenContent(props: {
                   )
                 },
               },
-              info("directory:help", "Enter to edit · ←/→ recent directories"),
+              info("directory:help", "Absolute path or ~/… · ←/→ recent directories"),
               editRow("title", "Title", title(), setTitle),
               info("title:help", "optional; defaults to the Project name"),
             ]),

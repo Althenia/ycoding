@@ -2,9 +2,9 @@ export * as RemoteOperations from "./remote-operations"
 
 import { createHash } from "node:crypto"
 import { Dots } from "@ycoding-ai/schema/dots"
-import { lstat, realpath, stat } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { basename, isAbsolute, relative, resolve, sep } from "node:path"
+import { lstat, mkdir, realpath, stat } from "node:fs/promises"
+import { homedir, tmpdir } from "node:os"
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Project } from "@ycoding-ai/schema/project"
 import type { FormAnswer, ReviewDecideInput, SessionInfo } from "@ycoding-ai/client/promise"
@@ -512,7 +512,6 @@ async function workspaceInventory(input: OperationInput): Promise<WorkspaceCandi
   const projectsByID = new Map(projects.map((project) => [project.id, project]))
   const candidates = new Map<string, WorkspaceCandidate>()
   const add = (projectID: string, recorded: string, workspaceID?: string) => {
-    if (projectID === Project.ID.global) return
     const directory = resolve(recorded)
     const location = { directory, ...(workspaceID === undefined ? {} : { workspaceID }) }
     const tuple = [projectID, directory, workspaceID ?? null] as const
@@ -586,28 +585,30 @@ async function cachedWorkspaceDirectory(directory: string, cache?: OperationCach
 }
 
 async function allowedWorkspaceDirectory(directory: string): Promise<boolean> {
+  const resolved = resolve(directory)
+  if (!(await stat(resolved).then((value) => value.isDirectory(), () => false))) return false
+  return !(await excludedDirectory(resolved))
+}
+
+async function excludedDirectory(directory: string): Promise<boolean> {
   const standalone = resolve(Global.Path.state, "standalone-sessions")
-  if (contained(standalone, resolve(directory))) return false
-  const canonical = await realpath(directory).catch(() => undefined)
-  if (canonical === undefined || !(await stat(canonical).then((value) => value.isDirectory(), () => false))) return false
-  let standaloneReal: string
-  try {
-    standaloneReal = await realpath(standalone)
-  } catch (error) {
-    if (typeof error !== "object" || error === null || Reflect.get(error, "code") !== "ENOENT") return false
-    try {
-      await lstat(standalone)
-      return false
-    } catch (missing) {
-      if (typeof missing !== "object" || missing === null || Reflect.get(missing, "code") !== "ENOENT") return false
-    }
-    try { standaloneReal = resolve(await realpath(Global.Path.state), "standalone-sessions") } catch { return false }
-  }
-  if (contained(standaloneReal, canonical)) return false
-  let temporary: string
-  try { temporary = await realpath(tmpdir()) } catch { return false }
-  if ([temporary, "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"].some((root) => contained(root, canonical))) return false
-  return !/^\/(?:private\/)?var\/folders\/[^/]+\/[^/]+\/T(?:\/|$)/.test(canonical)
+  const temporary = resolve(tmpdir())
+  const roots = [standalone, temporary, "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"]
+  const [canonical, ...canonicalRoots] = await Promise.all([directory, ...roots].map(canonicalPath))
+  if (canonical === undefined || canonicalRoots[0] === undefined || canonicalRoots[1] === undefined) return true
+  const excluded = [...roots, ...canonicalRoots].filter((root): root is string => root !== undefined)
+  return [directory, canonical].some((path) =>
+    excluded.some((root) => contained(root, path)) || /^\/(?:private\/)?var\/folders\/[^/]+\/[^/]+\/T(?:\/|$)/.test(path))
+}
+
+async function canonicalPath(path: string): Promise<string | undefined> {
+  const real = await realpath(path).then((value) => value, (error: unknown) => Reflect.get(Object(error), "code") === "ENOENT" ? null : undefined)
+  if (real !== null) return real
+  if (await lstat(path).then(() => true, () => false)) return undefined
+  const parent = dirname(path)
+  if (parent === path) return undefined
+  const base = await canonicalPath(parent)
+  return base === undefined ? undefined : join(base, basename(path))
 }
 
 export function contained(root: string, target: string, paths = { relative, isAbsolute, sep }): boolean {
@@ -738,6 +739,23 @@ async function createRootSession(input: OperationInput, id: string, workspaceID:
   return adoptOrCreateRoot(input, id, candidate, choices)
 }
 
+async function createDirectorySession(input: OperationInput, id: string, directory: string, choices: RootChoices): Promise<SessionInfo> {
+  if (await excludedDirectory(directory)) throw new OperationError("invalid_message", "Directory is reserved for temporary or standalone use")
+  const existing = await stat(directory).then((value) => value.isDirectory(), (error: unknown) => Reflect.get(Object(error), "code") === "ENOENT" ? undefined : false)
+  if (existing === false) throw new OperationError("invalid_message", "Directory path is not a directory")
+  if (existing === undefined) await mkdir(directory, { recursive: true }).catch(() => {
+    throw new OperationError("invalid_message", "Directory could not be created")
+  })
+  if (!(await allowedWorkspaceDirectory(directory))) throw new OperationError("invalid_message", "Directory is unavailable")
+  const location = await input.local.locationGet({ directory })
+  if (location.directory !== directory || location.workspaceID !== undefined)
+    throw new OperationError("invalid_message", "Directory resolved to a different Location")
+  return adoptOrCreateRoot(input, id, {
+    location: { directory },
+    info: { id: workspaceKey(location.project.id, directory), projectID: location.project.id, directory, name: basename(directory) },
+  }, choices)
+}
+
 async function adoptOrCreateRoot(input: Pick<OperationInput, "local" | "sessions" | "signal">, id: string, candidate: WorkspaceCandidate, choices: RootChoices): Promise<SessionInfo> {
   const existing = input.sessions.snapshot().find((session) => session.id === id) ?? await findSession(input.local, id)
   if (existing !== undefined) {
@@ -842,7 +860,10 @@ async function run(input: OperationInput) {
   }
   if (validated.kind === "session.create") {
     if (validated.scope === "standalone") throw new OperationError("invalid_message", "Standalone Session creation is unavailable")
-    return { data: await createRootSession(input, validated.id, validated.workspace, { agent: validated.agent, model: validated.model, title: validated.title }) }
+    const choices = { agent: validated.agent, model: validated.model, title: validated.title }
+    return { data: "directory" in validated
+      ? await createDirectorySession(input, validated.id, validated.directory, choices)
+      : await createRootSession(input, validated.id, validated.workspace, choices) }
   }
   if (validated.kind === "list") {
     const sessions = input.sessions.snapshot()
@@ -1218,7 +1239,7 @@ type Validated =
   | { readonly kind: "incident.report"; readonly input: RemoteIncidentReportInput }
   | { readonly kind: "incident.recent"; readonly input: RemoteIncidentRecentInput }
   | { readonly kind: "incident.guidance" | "incident.guidance.clear"; readonly input: RemoteIncidentGuidanceInput }
-  | ({ readonly kind: "session.create"; readonly id: string; readonly agent?: string; readonly model?: ModelSelection; readonly title?: string } & ({ readonly scope: "standalone" } | { readonly scope: "bound"; readonly workspace: string }))
+  | ({ readonly kind: "session.create"; readonly id: string; readonly agent?: string; readonly model?: ModelSelection; readonly title?: string } & ({ readonly scope: "standalone" } | { readonly scope: "bound"; readonly workspace: string } | { readonly scope: "bound"; readonly directory: string }))
   | { readonly kind: "workspace.catalog"; readonly workspace: string }
   | { readonly kind: "workspace.file.find"; readonly workspace: string; readonly query: string; readonly limit: number }
   | { readonly kind: "catalog" }
@@ -1575,12 +1596,15 @@ function validate(request: RemoteRequest): Validated {
     return { kind: "family.activity", sessionIDs: fields.sessionIDs }
   }
   if (request.operation === "session.create") {
-    if ((fields.scope !== undefined && fields.scope !== "bound" && fields.scope !== "standalone") || (fields.scope === "standalone" && fields.workspace !== undefined))
+    const placements = [fields.workspace, fields.directory].filter((value) => value !== undefined).length
+    if ((fields.scope !== undefined && fields.scope !== "bound" && fields.scope !== "standalone") || placements !== (fields.scope === "standalone" ? 0 : 1))
       throw new OperationError("invalid_message", "Invalid Session placement")
     return {
       kind: "session.create",
       id: sessionID(fields.id, "id"),
-      ...(fields.scope === "standalone" ? { scope: "standalone" as const } : { scope: "bound" as const, workspace: requireString(fields.workspace, "workspace", 128) }),
+      ...(fields.scope === "standalone" ? { scope: "standalone" as const }
+        : fields.directory === undefined ? { scope: "bound" as const, workspace: requireString(fields.workspace, "workspace", 128) }
+        : { scope: "bound" as const, directory: placementDirectory(fields.directory) }),
       ...(fields.agent === undefined ? {} : { agent: requireString(fields.agent, "agent", 128) }),
       ...(fields.model === undefined ? {} : { model: modelSelection(fields.model) }),
       ...(fields.title === undefined ? {} : { title: sessionTitle(fields.title) }),
@@ -2314,7 +2338,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.autonomy.set": ["permissions", "guardrails", "answers", "defer"],
   "session.goal.set": ["goal", "maxNoProgress"],
   "session.goal.stop": ["goal"],
-  "session.create": ["id", "scope", "workspace", "agent", "model", "title"],
+  "session.create": ["id", "scope", "workspace", "directory", "agent", "model", "title"],
 }
 
 function validateFields(request: RemoteRequest): Readonly<Record<string, unknown>> {
@@ -2611,6 +2635,13 @@ function predictionInput(fields: Readonly<Record<string, unknown>>) {
     memory: memory.filter(isPredictionScope),
     ...(fields.hint === undefined ? {} : { hint: requireString(fields.hint, "hint", 2_000, { allowEmpty: true }) }),
   }
+}
+
+function placementDirectory(value: unknown) {
+  const path = requireString(value, "directory", 4_096)
+  const expanded = path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path
+  if (path.includes("\0") || !isAbsolute(expanded)) throw new OperationError("invalid_message", "Directory must be an absolute or home-relative path")
+  return resolve(expanded)
 }
 
 function requireString(

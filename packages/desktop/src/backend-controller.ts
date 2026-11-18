@@ -155,6 +155,28 @@ async function existingDirectory(value: unknown) {
   return directory
 }
 
+const errorCode = (error: unknown) => object(error) ? error.code : undefined
+const parentIsFile = "A parent of this path is a file. Choose another folder."
+
+async function projectDirectory(value: unknown) {
+  if (typeof value !== "string" || value.includes("\0") || utf8Length(value) > 4096) throw new DesktopError("Choose an absolute folder path of at most 4096 UTF-8 bytes.")
+  const typed = value.trim()
+  const expanded = typed === "~" ? os.homedir() : typed.startsWith("~/") ? path.join(os.homedir(), typed.slice(2)) : typed
+  if (!path.isAbsolute(expanded)) throw new DesktopError("Enter an absolute folder path or one starting with ~/.")
+  const directory = path.resolve(expanded)
+  const info = await fs.stat(directory).catch((error: unknown) => {
+    const code = errorCode(error)
+    if (code === "ENOENT") return undefined
+    throw new DesktopError(code === "ENOTDIR" ? parentIsFile : code === "EACCES" || code === "EPERM" ? "This folder cannot be accessed. Check its access permissions." : "This folder is unavailable. Check its path and access permissions.")
+  })
+  if (info?.isDirectory() === false) throw new DesktopError("Choose a folder, not a file.")
+  if (info === undefined) await fs.mkdir(directory, { recursive: true }).catch((error: unknown) => {
+    const code = errorCode(error)
+    throw new DesktopError(code === "EEXIST" || code === "ENOTDIR" ? parentIsFile : code === "EACCES" || code === "EPERM" || code === "EROFS" ? "This folder cannot be created. Check the parent folder's access permissions." : "This folder could not be created. Check the path and try again.")
+  })
+  return directory
+}
+
 const hiddenFields = new Set(["auth", "password", "authorization", "headers", "environment", "token", "accesstoken", "access_token", "refreshtoken", "refresh_token", "apikey", "api_key", "credentials", "client_secret", "secret", "key", "config", "settings", "metadata"])
 
 const reportHiddenFields = new Set([...hiddenFields].filter((key) => key !== "key"))
@@ -849,6 +871,14 @@ export class BackendController {
     return { revision, directory: info.directory, projectID: info.project.id }
   }
 
+  private async prepareProjectDirectory(api: Native["api"], signal: AbortSignal, revision: number, ensureCurrent: (message: string) => void, value: unknown, changed: string) {
+    const directory = await projectDirectory(value)
+    ensureCurrent(changed)
+    await this.registerDirectory(api, signal, revision, directory).catch(() => { throw new DesktopError("The folder is ready, but registration failed. Retry to register it and create the Session.") })
+    ensureCurrent(changed)
+    return directory
+  }
+
   async openDirectory(input: unknown): Promise<OpenedDirectory> {
     checkedObject(input, { directory: directoryInput })
     const directory = await existingDirectory(input.directory)
@@ -1181,7 +1211,7 @@ export class BackendController {
       if (!groups.every((group, index) => object(group) && group.id === list[index]?.id && typeof group.name === "string" && count(group.revision) && typeof group.active === "boolean" && optional(group.pausedReason, (value) => literal(value, ["interrupted", "restart"])) && participant(group.master) && Array.isArray(group.members) && group.members.every(participant) && groupSettings(group.settings) && times(group.time))) throw new Error("Invalid coordination group")
       const projectParticipant = (entry: typeof groups[number]["master"]) => ({ ...fields(entry, ["sessionID", "title", "state", "lastActivity"]), location: fields(entry.location, ["directory", "workspaceID"]), pending: entry.pending.map((request) => fields(request, ["kind", "requestID", "fingerprint", "summary"])), ...(entry.drivenBy ? { drivenBy: fields(entry.drivenBy, ["sessionID", "title"]) } : {}), ...(entry.owner ? { owner: fields(entry.owner, ["sessionID", "title"]) } : {}) })
       const projected = groups.map((group) => ({ ...fields(group, ["id", "name", "revision", "active", "pausedReason"]), master: projectParticipant(group.master), members: group.members.map(projectParticipant), settings: { ...fields(group.settings, ["concurrency"]), ...(group.settings.delegatedDecisions ? { delegatedDecisions: fields(group.settings.delegatedDecisions, ["categories", "actions", "resources", "expiresAt"]) } : {}) }, time: fields(group.time, ["created", "updated"]) }))
-      return { revision, settings: fields(settings, ["enabled", "categories", "actions", "resources", "expiresAt"]), groups: projected, repositories: inventory.data.map((entry) => fields(entry, ["projectID", "projectName", "projectWorktree", "directory", "strategy", "sessions", "timeActive", "available"])), ...(typeof inventory.cursor?.next === "string" ? { repositoriesNext: inventory.cursor.next } : {}) }
+      return { revision, settings: fields(settings, ["enabled", "categories", "actions", "resources", "expiresAt"]), groups: projected, repositories: inventory.data.map((entry) => ({ ...fields(entry, ["projectID", "projectName", "projectWorktree", "directory", "strategy", "sessions", "timeActive", "available"]), ...(entry.projectWorktree === path.parse(entry.directory).root ? { projectWorktree: entry.directory } : {}) })), ...(typeof inventory.cursor?.next === "string" ? { repositoriesNext: inventory.cursor.next } : {}) }
     }, { revision: requested.revision })
   }
 
@@ -1242,7 +1272,7 @@ export class BackendController {
   async changeProject(input: unknown) {
     if (!object(input) || !isRevision(input.revision)) throw new DesktopError("Invalid project change.")
     if (input.kind === "create-in-directory") {
-      checkedObject(input, { kind: string, revision: isRevision, name: (value) => typeof value === "string" && value.trim().length > 0 && value.trim().length <= 120, directory: directoryInput, masterTitle: maybe((value) => typeof value === "string" && utf8Length(value) <= 4096), memberSessionIDs: (value) => Array.isArray(value) && value.every((id) => { session(id); return true }) }, "Invalid project change.")
+      checkedObject(input, { kind: string, revision: isRevision, name: (value) => typeof value === "string" && value.trim().length > 0 && value.trim().length <= 120, directory: string, masterTitle: maybe((value) => typeof value === "string" && utf8Length(value) <= 4096), memberSessionIDs: (value) => Array.isArray(value) && value.every((id) => { session(id); return true }) }, "Invalid project change.")
       const name = String(input.name).trim()
       const title = typeof input.masterTitle === "string" ? input.masterTitle.trim() || name : name
       const memberSessionIDs = decodeProjectMembers(input.memberSessionIDs)
@@ -1250,10 +1280,7 @@ export class BackendController {
       const revision = input.revision as number
       const changed = "Project creation was not confirmed. Refresh Sessions and Projects before retrying."
       return this.use(changed, async (api, signal, _revision, ensureCurrent) => {
-        const directory = await existingDirectory(input.directory)
-        ensureCurrent(changed)
-        await this.registerDirectory(api, signal, _revision, directory)
-        ensureCurrent(changed)
+        const directory = await this.prepareProjectDirectory(api, signal, _revision, ensureCurrent, input.directory, changed)
         const created = await api.session.create({ location: { directory }, title }, { signal })
         if (typeof created.id !== "string" || !sessionID(created.id)) throw new DesktopError(changed)
         try {
@@ -1271,7 +1298,7 @@ export class BackendController {
     if (input.kind === "new-member" || input.kind === "delete-member") {
       const member = input.kind === "new-member"
       checkedObject(input, member
-        ? { kind: string, revision: isRevision, groupID, groupRevision: isRevision, directory: directoryInput, title: maybe((value) => typeof value === "string" && utf8Length(value) <= 4096) }
+        ? { kind: string, revision: isRevision, groupID, groupRevision: isRevision, directory: string, title: maybe((value) => typeof value === "string" && utf8Length(value) <= 4096) }
         : { kind: string, revision: isRevision, groupID, groupRevision: isRevision, sessionID: (value) => { session(value); return true } }, "Invalid project change.")
       const target = decodeGroupID(input.groupID)
       const expected = input.groupRevision
@@ -1288,8 +1315,7 @@ export class BackendController {
           ensureCurrent(changed)
           return this.projects()
         }
-        const directory = await existingDirectory(input.directory)
-        ensureCurrent(changed)
+        const directory = await this.prepareProjectDirectory(api, signal, _revision, ensureCurrent, input.directory, changed)
         const created = await api.session.create({ location: { directory }, ...(title ? { title } : {}) }, { signal })
         if (typeof created.id !== "string" || !sessionID(created.id)) throw new DesktopError(changed)
         try {

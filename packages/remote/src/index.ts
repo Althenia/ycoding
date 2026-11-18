@@ -1100,16 +1100,22 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
   if (operation === "session.command") return isRecord(input) && typeof input.command === "string" && input.command.length > 0 &&
     Object.keys(input).every((key) => ["id", "command", "arguments", "files", "agents", "delivery"].includes(key))
   if (operation !== "session.create") return true
+  if (!isRecord(input)) return false
+  const directory = input.directory
+  const validDirectory = typeof directory === "string" && directory.length <= 4096 && !directory.includes("\0") &&
+    (directory === "~" || directory.startsWith("~/") || directory.startsWith("/") || /^[A-Za-z]:[/\\]|^\\\\/.test(directory))
+  const validPlacement = input.scope === "standalone"
+    ? input.workspace === undefined && directory === undefined
+    : (input.scope === undefined || input.scope === "bound") && (directory === undefined ? validWorkspace(input.workspace) : input.workspace === undefined && validDirectory)
   if (
-    !isRecord(input) ||
     !isSessionID(input.id) ||
-    (input.scope === "standalone" ? input.workspace !== undefined : (input.scope !== undefined && input.scope !== "bound") || !validWorkspace(input.workspace)) ||
+    !validPlacement ||
     (input.agent !== undefined && !validName(input.agent)) ||
     (input.model !== undefined && !validModel(input.model)) ||
     (input.title !== undefined && !isSessionTitle(input.title))
   )
     return false
-  return Object.keys(input).every((key) => key === "id" || key === "scope" || key === "workspace" || key === "agent" || key === "model" || key === "title")
+  return Object.keys(input).every((key) => ["id", "scope", "workspace", "directory", "agent", "model", "title"].includes(key))
 }
 
 function coordinationKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
