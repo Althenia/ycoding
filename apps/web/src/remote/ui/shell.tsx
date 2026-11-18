@@ -1766,7 +1766,7 @@ function SettingsPage(props: { readonly office: OfficeSettingsStore; readonly ph
       <div class="page-head">
         <h1 class="page-head__title">Settings</h1>
       </div>
-      <div class="pane" style={{ "padding-inline": "0" }}>
+      <div class="pane">
         <div class="settings st-ledger-settings">
           <MachineSettings />
           <AppearanceSettings />
@@ -1788,7 +1788,7 @@ function PrimaryNav(props: { readonly view: RemoteView }): JSX.Element {
   const attention = useNavigationAttention()
   return <nav class="remote-nav" aria-label="Remote workspace"><For each={WORKSPACE_DESTINATIONS}>{(item) => <Link
     to={item.route} class={`remote-nav__link remote-nav__link--${item.id}${workspaceDestination(props.view) === item.route ? " remote-nav__link--active" : ""}`}
-    ariaCurrent={workspaceDestination(props.view) === item.route ? "page" : undefined}
+    ariaCurrent={workspaceDestination(props.view) === item.route ? "page" : undefined} data-destination={item.id}
     ariaLabel={item.id === "sessions" && attention().sessions ? "Sessions, waiting for your decision" : item.label}>
     <Icon name={item.icon} size={16} /><span class="remote-nav__label">{item.label}</span><AttentionMark show={item.id === "sessions" && attention().sessions} />
   </Link>}</For></nav>
@@ -1817,6 +1817,7 @@ function BottomNav(props: { readonly view: RemoteView; readonly onNavigate?: () 
             class={`bottom-nav__item${workspaceDestination(props.view) === item.route ? " bottom-nav__item--active" : ""}`}
             ariaLabel={flagged(item.route) ? `${item.label}, waiting for your decision` : item.label}
             ariaCurrent={workspaceDestination(props.view) === item.route ? "page" : undefined}
+            data-destination={item.id}
             onClick={props.onNavigate}
           >
             <span class="bottom-nav__icon">

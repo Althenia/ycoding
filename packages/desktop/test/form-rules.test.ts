@@ -420,26 +420,23 @@ test("system messages show only with text and bare synthetic messages are hidden
   expect(classifyDesktopSynthetic(msg({ id: "u", type: "user", text: "x" }))).toBeUndefined()
 })
 
-test("subagent notifications classify status, label and excerpt", () => {
-  expect(classifyDesktopSynthetic(synthetic("a", "x", { metadata: { source: "subagent_notification", type: "completed", agent: "Review", excerpt: "  done  " } })))
-    .toEqual({ kind: "subagent", label: "Review", status: "completed", excerpt: "done" })
-  expect(classifyDesktopSynthetic(synthetic("b", "x", { metadata: { source: "subagent_notification", type: "failed", childID: "ses_1", excerpt: " " } })))
-    .toEqual({ kind: "subagent", label: "ses_1", status: "failed" })
-  expect(classifyDesktopSynthetic(synthetic("c", "x", { metadata: { source: "subagent_notification", type: "waiting", agent: "" } })))
-    .toEqual({ kind: "subagent", label: "Subagent", status: "waiting" })
-  expect(classifyDesktopSynthetic(synthetic("d", "x", { metadata: { source: "subagent_notification", type: "other" } })))
-    .toEqual({ kind: "subagent", label: "Subagent", status: "updated" })
+test("repeated subagent events do not become transcript turns", () => {
+  const events = ["completed", "failed", "waiting", "resumed"].map((type) => synthetic(type, "Subagent notification", {
+    description: "Subagent notification",
+    metadata: { source: "subagent_notification", type, childID: "ses_child", excerpt: "Child activity details" },
+  }))
+  expect(events.map(desktopMessageVisible)).toEqual([false, false, false, false])
+  expect(visibleDesktopMessages(events)).toEqual([])
 })
 
 test("project notifications classify members and reject unknown events or missing member ids", () => {
-  expect(classifyDesktopSynthetic(synthetic("a", "x", { metadata: { source: "project_notification", event: "escalated", memberSessionID: "ses_m", title: "Builder", excerpt: "stuck", escalatedBy: { sessionID: "ses_p", title: "Lead" } } })))
+  expect(classifyDesktopSynthetic(synthetic("a", "x", { description: "Project escalation", metadata: { source: "project_notification", event: "escalated", memberSessionID: "ses_m", title: "Builder", excerpt: "stuck", escalatedBy: { sessionID: "ses_p", title: "Lead" } } })))
     .toEqual({ kind: "member", label: "Builder", event: "escalated", memberSessionID: "ses_m", excerpt: "stuck", escalatedBy: "Lead" })
-  expect(classifyDesktopSynthetic(synthetic("b", "x", { metadata: { source: "project_notification", event: "started", memberSessionID: "ses_m" } })))
-    .toEqual({ kind: "member", label: "ses_m", event: "started", memberSessionID: "ses_m" })
-  expect(classifyDesktopSynthetic(synthetic("c", "x", { metadata: { source: "project_notification", event: "started", memberSessionID: "" } }))).toBeUndefined()
-  expect(classifyDesktopSynthetic(synthetic("d", "x", { metadata: { source: "project_notification", event: "bogus", memberSessionID: "ses_m" } }))).toBeUndefined()
-  expect(classifyDesktopSynthetic(synthetic("e", "x", { metadata: { source: "project_notification", event: "escalated", memberSessionID: "ses_m", escalatedBy: { sessionID: "ses_p" } } })))
-    .toEqual({ kind: "member", label: "ses_m", event: "escalated", memberSessionID: "ses_m", escalatedBy: "ses_p" })
+  for (const event of ["started", "progress", "bogus"]) expect(desktopMessageVisible(synthetic(event, "x", { description: "Project notification", metadata: { source: "project_notification", event, memberSessionID: "ses_m", title: "Builder" } }))).toBe(false)
+  expect(classifyDesktopSynthetic(synthetic("c", "x", { description: "Project notification", metadata: { source: "project_notification", event: "review", memberSessionID: "", title: "Builder" } }))).toBeUndefined()
+  expect(classifyDesktopSynthetic(synthetic("d", "x", { description: "  ", metadata: { source: "project_notification", event: "review", memberSessionID: "ses_m", title: "Builder" } }))).toBeUndefined()
+  expect(classifyDesktopSynthetic(synthetic("e", "x", { description: "Project escalation", metadata: { source: "project_notification", event: "escalated", memberSessionID: "ses_m", title: "Builder", escalatedBy: { sessionID: "ses_p" } } })))
+    .toEqual({ kind: "member", label: "Builder", event: "escalated", memberSessionID: "ses_m", escalatedBy: "ses_p" })
 })
 
 test("subagent and shell completions need a description and map states", () => {

@@ -53,7 +53,6 @@
 .composer--collapsed .composer__row { display:none; }
 .composer-resident:has(.composer--collapsed) { min-block-size:0; }
 .composer__dock { position:static; z-index:1; order:1; align-self:end; display:flex; align-items:center; justify-content:flex-end; gap:var(--yc-space-2); }
-.app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .composer__dock { align-self:start; }
 .composer--collapsed .composer__dock { order:0; align-self:stretch; position:relative; inset:auto; min-block-size:var(--yc-hit-min); justify-content:flex-end; padding-inline:var(--yc-space-2); border:1px solid var(--yc-border-strong); border-radius:var(--yc-radius-xl); background:var(--yc-surface-raised); box-shadow:var(--yc-shadow-md); }
 [data-theme="dark"] .composer--collapsed .composer__dock { border-color:var(--yc-border); }
 .composer--collapsed .session-status > :is(.session-status__autonomous-trigger, .session-status__goal-trigger) { display:none; }
@@ -184,15 +183,16 @@
 .composer__controls svg,.mini-picker__surface svg,.new-session-composer__repository svg { display:block; flex:none; inline-size:16px; block-size:16px; }
 .composer__attach,.composer__delivery-toggle,.mini-composer__send,.mini-composer__interrupt { display:grid; place-items:center; inline-size:36px; block-size:36px; min-block-size:36px; border:0; border-radius:var(--yc-radius-pill); }
 @media (prefers-reduced-motion:no-preference) { .composer__attach,.composer__delivery-toggle,.mini-composer__send,.mini-composer__interrupt { transition:background var(--yc-dur-quick) var(--yc-ease-standard); } }
-.composer__attach { background:transparent; color:var(--yc-text-muted); }
+.composer__attach { background:transparent; color:var(--yc-signal); }
 @media (hover: hover) { .composer__attach:not(:disabled):hover { background:var(--yc-surface-sunken); color:var(--yc-text); } }
 .composer__attach:disabled { opacity:.5; }
-.composer__delivery-toggle { background:transparent; color:var(--yc-text-muted); }
+.composer__delivery-toggle { background:transparent; color:var(--yc-context-tools); }
 .composer__delivery-toggle[aria-pressed="true"] { background:var(--yc-green-soft); color:var(--yc-green-strong); }
 .mini-composer__send { background:var(--yc-primary-bg); color:var(--yc-primary-fg); }
 .composer__effort { display:inline-flex; align-items:center; gap:var(--yc-space-1); flex:none; min-block-size:36px; padding-inline:var(--yc-space-3); border:1px solid var(--yc-border); border-radius:var(--yc-radius-pill); background:transparent; color:var(--yc-text); white-space:nowrap; }
 .composer__effort[aria-expanded="true"] { background:var(--yc-green-soft); }
-.composer__effort-name { color:var(--yc-text-muted); }
+.composer__effort > svg { color:var(--effort-ink, var(--yc-context-reasoning)); }
+.model-control__trigger > svg { color:var(--yc-signal); }
 .composer__effort-panel .reasoning-effort { max-inline-size:20rem; padding-inline:var(--yc-space-1); }
 :root[data-theme="light"] .composer__effort { border-color:var(--yc-border-strong); }
 .mini-composer__interrupt { background:var(--yc-danger-soft); color:var(--yc-danger); }
@@ -352,10 +352,10 @@
   .app--team-open .composer__controls .model-control { flex:1 1 var(--yc-space-16); min-inline-size:var(--yc-space-16); }
   .app--team-open .composer__controls .model-control__trigger { inline-size:100%; min-inline-size:0; }
   .app--team-open .composer__controls :is(.session-status__autonomous-trigger,.session-status__goal-trigger) { padding-inline:calc(var(--yc-space-1) / 2); }
-  .app--team-open .composer__effort-name, .app--team-open .composer__controls .session-status__autonomous-full { display:none; }
+  .app--team-open .composer__controls .session-status__autonomous-full { display:none; }
   .app--team-open .composer__controls .session-status__autonomous-word { display:inline; }
 }
-.app--conversation.app--selected .composer { padding-inline:var(--yc-gutter); }
+.app--conversation.app--selected .composer { padding-inline:var(--conversation-inset, var(--yc-gutter)); }
 @media (max-width:767px) {
   .composer--phone-summary .composer__context-controls { display:contents; }
 }

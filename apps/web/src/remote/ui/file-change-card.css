@@ -44,13 +44,13 @@
 
 .file-change-card.file-change-card--transcript { column-gap:var(--yc-space-3); border:0; border-radius:0; background:transparent; font:var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono); }
 .file-change-card.file-change-card--transcript > .file-change-card__summary { flex:0 1 auto; inline-size:auto; min-block-size:28px; padding:var(--yc-space-1) 0; gap:var(--yc-space-2); color:var(--yc-text-muted); }
-.file-change-card.file-change-card--transcript .file-change-card__icon { inline-size:auto; block-size:auto; background:transparent; color:var(--yc-text-muted); }
+.file-change-card.file-change-card--transcript .file-change-card__icon { inline-size:auto; block-size:auto; background:transparent; color:var(--yc-signal); }
 .file-change-card.file-change-card--transcript .file-change-card__title { color:var(--yc-text-muted); font-weight:var(--yc-weight-regular); }
 .file-change-card.file-change-card--transcript .file-change-card__totals { margin-inline-start:0; font-weight:var(--yc-weight-semibold); }
 .file-change-card.file-change-card--transcript .file-change-card__view { flex:none; margin:0; min-block-size:var(--yc-hit-min); padding-inline:var(--yc-space-2); border:0; border-radius:var(--yc-radius-sm); background:transparent; color:var(--yc-text-muted); font:inherit; text-decoration:underline; text-underline-offset:2px; }
 @media (hover: hover) { .file-change-card.file-change-card--transcript:not([data-open]) .file-change-card__summary:hover { border-radius:0; background:transparent; color:var(--yc-text); } .file-change-card.file-change-card--transcript .file-change-card__view:hover { color:var(--yc-text); } }
 .file-change-card.file-change-card--transcript .file-change-card__view:focus-visible { outline:2px solid var(--yc-focus); outline-offset:-2px; }
-.file-change-card.file-change-card--transcript[data-open] { outline:1px solid var(--yc-border); outline-offset:-1px; border-radius:var(--yc-radius-lg); }
+.file-change-card.file-change-card--transcript[data-open] { background:var(--yc-surface); border-radius:var(--yc-radius-lg); }
 .file-change-card.file-change-card--transcript[data-open] > .file-change-card__summary { flex:1 1 0; padding-inline:var(--yc-space-3); }
 .file-change-card.file-change-card--transcript[data-open] .file-change-card__view { margin-inline-end:var(--yc-space-2); }
 @media (max-width:767px), (pointer:coarse) { .file-change-card.file-change-card--transcript > .file-change-card__summary { min-block-size:var(--yc-hit-min); } }

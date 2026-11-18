@@ -1,5 +1,5 @@
 .app--conversation.app--selected .workspace__main { grid-template-rows:minmax(0,1fr) auto auto; }
-.todo-panel { min-inline-size:0; max-block-size:calc(min(240px,30dvh) + 80px); padding:0 var(--yc-gutter) var(--yc-space-2); overflow:hidden; opacity:1; transition:max-block-size var(--yc-dur-base) var(--yc-ease-exit),opacity var(--yc-dur-base) var(--yc-ease-exit); }
+.todo-panel { min-inline-size:0; max-block-size:calc(min(240px,30dvh) + 80px); padding:0 var(--conversation-inset, var(--yc-gutter)) var(--yc-space-2); overflow:hidden; opacity:1; transition:max-block-size var(--yc-dur-base) var(--yc-ease-exit),opacity var(--yc-dur-base) var(--yc-ease-exit); }
 .todo-panel--closing { max-block-size:0; padding-block-end:0; opacity:0; pointer-events:none; }
 .todo-panel__inner { inline-size:min(100%,var(--remote-column)); margin-inline:auto; border:0; border-radius:var(--yc-radius-lg); background:var(--yc-surface); color:var(--yc-text); overflow:hidden; }
 .todo-panel__toggle { display:flex; align-items:center; gap:var(--yc-space-2); inline-size:100%; min-block-size:40px; padding:var(--yc-space-2) var(--yc-space-3); border:0; background:transparent; color:inherit; text-align:start; font:var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-sans); }

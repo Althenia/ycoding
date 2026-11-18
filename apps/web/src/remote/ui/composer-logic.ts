@@ -80,28 +80,51 @@ export function modelSelection(models: readonly ModelOption[], selected: ModelRe
   return { model: selected }
 }
 
+const modelKey = (providerID: string, id: string) => JSON.stringify([providerID, id])
+const baseModelID = (id: string) => id.replace(/-(?:ultrafast|fast)$/, "")
+
+function indexModels(models: readonly ModelOption[]) {
+  const byKey = new Map<string, ModelOption>()
+  for (const option of models) {
+    const key = modelKey(option.providerID, option.id)
+    if (!byKey.has(key)) byKey.set(key, option)
+  }
+  return byKey
+}
+
 export function visibleModels(models: readonly ModelOption[]): ModelOption[] {
-  return models.filter((item) => modelSpeeds(models, item)?.base.id === item.id)
+  const byKey = indexModels(models)
+  return models.filter(({ providerID, id }) => {
+    const base = baseModelID(id)
+    return base === id || !byKey.has(modelKey(providerID, base)) && (!id.endsWith("-ultrafast") || !byKey.has(modelKey(providerID, `${base}-fast`)))
+  })
 }
 
 export function orderedModelOptions(models: readonly ModelOption[], recent: readonly ModelRefView[], selected: ModelRefView | undefined): (ModelOption & { readonly recentSelection?: ModelRefView })[] {
   const available = visibleModels(models)
+  const byKey = indexModels(available)
   const seenRecent = new Set<string>()
   const recentOptions = recent.flatMap((model) => {
-    const option = available.find((item) => item.providerID === model.providerID && item.id === model.id)
+    const option = byKey.get(modelKey(model.providerID, model.id))
     const key = option ? JSON.stringify([option.providerID, option.id, model.profile]) : ""
     if (!option || seenRecent.has(key)) return []
     seenRecent.add(key)
     return [{ ...option, recentSelection: model }]
   })
-  const recentKeys = new Set(recentOptions.map((item) => JSON.stringify([item.providerID, item.id])))
-  const remaining = available.filter((item) => !recentKeys.has(JSON.stringify([item.providerID, item.id])))
-  const providers = [...new Set(remaining.map((item) => item.providerID))].sort((left, right) => {
+  const recentKeys = new Set(recentOptions.map((item) => modelKey(item.providerID, item.id)))
+  const byProvider = new Map<string, ModelOption[]>()
+  for (const item of available) {
+    if (recentKeys.has(modelKey(item.providerID, item.id))) continue
+    const group = byProvider.get(item.providerID)
+    if (group) group.push(item)
+    else byProvider.set(item.providerID, [item])
+  }
+  const providers = [...byProvider.keys()].sort((left, right) => {
     if (left === selected?.providerID) return right === selected.providerID ? 0 : -1
     if (right === selected?.providerID) return 1
     return left.localeCompare(right)
   })
-  return [...recentOptions, ...providers.flatMap((provider) => remaining.filter((item) => item.providerID === provider))]
+  return [...recentOptions, ...providers.flatMap((provider) => byProvider.get(provider)!)]
 }
 
 export type ModelSpeed = "standard" | "fast" | "ultrafast"
@@ -109,7 +132,7 @@ export type ModelSpeed = "standard" | "fast" | "ultrafast"
 export function modelSpeeds(models: readonly ModelOption[], selected: ModelRefView | undefined) {
   const current = models.find((item) => item.providerID === selected?.providerID && item.id === selected.id)
   if (!current) return undefined
-  const id = current.id.replace(/-(?:ultrafast|fast)$/, "")
+  const id = baseModelID(current.id)
   const options = (["standard", "fast", "ultrafast"] as const).flatMap((speed) => {
     const model = models.find((item) => item.providerID === current.providerID && item.id === `${id}${speed === "standard" ? "" : `-${speed}`}`)
     return model ? [{ speed, label: speed === "standard" ? "Standard" : speed === "fast" ? "Fast" : "Ultrafast", model,

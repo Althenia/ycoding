@@ -239,7 +239,7 @@ describe("responsive contract", () => {
     expect(columnSteps(remote, ".defs__row")).toEqual([{ min: 1024, tracks: 2 }])
   })
 
-  test("keeps start-aligned route columns fluid and bounds assistant prose to its reading measure", async () => {
+  test("keeps Session and Settings tracks centered while directory columns retain their start edge", async () => {
     const remote = await readStylesheet("remote.css")
     const listed = (selector: string, min?: number) =>
       declarationsWhere(remote, (rule) =>
@@ -254,16 +254,20 @@ describe("responsive contract", () => {
       expect(listed(`.app--${screen} .workspace__scroll > .route-panel`, 1600)["max-inline-size"]).toBe("var(--yc-content-max-wide)")
     }
     for (const block of [".app--settings .page-head", ".app--settings .pane"]) {
-      expect(listed(block)["inline-size"]).toBe("min(100%, var(--yc-content-max))")
-      expect(listed(block)["margin-inline"]).toBe("0")
-      expect(listed(block, 1600)["inline-size"]).toBe("min(100%, var(--yc-content-max-wide))")
+      expect(listed(block)["inline-size"]).toBe("min(100%, 64rem)")
+      expect(listed(block)["margin-inline"]).toBe("auto")
+      expect(listed(block, 1600)["inline-size"]).toBeUndefined()
     }
     expect(listed(".app--settings .workspace__scroll", 1024).padding).toBe("var(--yc-space-12) var(--yc-space-16)")
     expect(listed(".app")["--remote-column"]).toBe("720px")
-    expect(listed(".app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading)")["--remote-column"]).toBe("var(--yc-content-max)")
+    const conversation = ".app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading)"
+    expect(listed(conversation)["--remote-column"]).toBe("64rem")
+    expect(listed(conversation, 1024)["--conversation-inset"]).toBe("var(--yc-space-10)")
+    expect(listed(`${conversation} .conversation-jump-slot`)["margin-inline"]).toBe("auto")
+    expect(remote.rules.filter(rule => rule.header.includes(`${conversation} .workspace__scroll > *`) && rule.declarations["margin-inline"] === "0")).toEqual([])
     expect(listed(".app--conversation.app--selected", 1600)).toEqual({})
     const transcript = await readStylesheet("../remote/ui/transcript.css")
-    expect(transcript.rules.filter((rule) => rule.header.includes(".transcript-md") && rule.declarations["max-inline-size"] === "var(--yc-measure)")).toHaveLength(1)
+    expect(transcript.rules.filter((rule) => rule.header.includes(".transcript-md") && rule.declarations["max-inline-size"] === "var(--yc-measure)")).toEqual([])
     const settings = await readStylesheet("../remote/ui/settings.css")
     expect(declarationsWhere(settings, rule => rule.header === ".app--settings .pane p")["max-inline-size"]).toBe("var(--yc-measure)")
   })

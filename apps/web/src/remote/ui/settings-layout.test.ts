@@ -52,7 +52,7 @@ describe("icon-led Settings sections", () => {
   test("keeps the decorative icon outside the heading's accessible name", async () => {
     const tsx = await read("settings.tsx")
     const section = tsx.slice(tsx.indexOf("function Section("), tsx.indexOf("The account section shows"))
-    expect(section).toContain('<Icon name={sectionIcons[props.category]} size={20} />')
+    expect(section).toContain('<Icon name={sectionIcons[props.category]} size={16} />')
     expect(section).toContain("<h2 id={props.id}>{props.title}</h2>")
     expect(section).toContain("aria-labelledby={props.id}")
     expect(section).toContain('<Show when={props.hint}><p class="settings__hint">{props.hint}</p></Show>')
@@ -138,9 +138,15 @@ describe("Ledger Settings composition", () => {
     expect(css).not.toMatch(/border-block-(start|end)/)
   })
 
-  test("keeps rows within 520px, a flat outlined Keep awake switch and a compact Review saved rules pill", async () => {
+  test("keeps one shared measure for Settings and preserves the switch and disclosure controls", async () => {
     const [css, tsx] = await Promise.all([read("settings.css"), read("settings.tsx")])
-    expect(css).toContain(".settings .list,\n.settings .settings__disclosure,\n.settings [aria-labelledby=\"keep-awake-settings\"] .defs__row {\n  max-inline-size: 520px;")
+    const shared = await readStylesheet("remote.css")
+    for (const selector of [".app--settings .page-head", ".app--settings .pane"]) {
+      expect(declared(shared, selector)).toMatchObject({ "inline-size": "min(100%, 64rem)", "margin-inline": "auto" })
+      expect(declared(shared, selector, true)["inline-size"]).toBeUndefined()
+    }
+    expect(css).not.toContain("520px")
+    expect(css).toContain("grid-template-columns: minmax(0, 1fr)")
     const toggle = rule(css, ".machine-awake .switch input")
     expect(toggle).toContain("border: 1px solid var(--yc-border-strong)")
     expect(toggle).toContain("background: transparent")

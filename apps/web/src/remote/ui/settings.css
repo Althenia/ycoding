@@ -32,6 +32,7 @@
 .app--settings .pane p { max-inline-size: var(--yc-measure); }
 
 .settings > .settings__section {
+  grid-template-columns: minmax(0, 1fr);
   padding-block-end: 0;
   gap: var(--yc-space-4);
 }
@@ -60,19 +61,18 @@
 }
 
 .settings .settings__head > svg {
-  color: var(--yc-text-muted);
+  color: var(--settings-icon-ink, var(--yc-signal));
 }
+
+.settings__section[data-category="Appearance"], .settings__section[data-category="Office"] { --settings-icon-ink: var(--yc-context-reasoning); }
+.settings__section[data-category="Notifications"], .settings__section[data-category="Diagnostics"] { --settings-icon-ink: var(--yc-yellow-strong); }
+.settings__section[data-category="Permissions"] { --settings-icon-ink: var(--yc-green-strong); }
+.settings__section[data-category="Devices"], .settings__section[data-category="Account"] { --settings-icon-ink: var(--yc-context-tools); }
 
 .settings .settings__hint {
   color: var(--yc-text-muted);
   font-size: var(--yc-size-sm);
   line-height: var(--yc-leading-sm);
-}
-
-.settings .list,
-.settings .settings__disclosure,
-.settings [aria-labelledby="keep-awake-settings"] .defs__row {
-  max-inline-size: 520px;
 }
 
 .settings .list__row {
@@ -213,66 +213,6 @@
 
 .machine-awake .switch input:disabled {
   opacity: 0.55;
-}
-
-.settings [aria-labelledby="keep-awake-settings"] .defs__row {
-  max-inline-size: 520px;
-}
-
-.settings .list__row {
-  justify-content: space-between;
-  padding-block: var(--yc-space-2);
-}
-
-.settings .list__label {
-  color: var(--yc-text);
-}
-
-.settings .scheme-select .custom-select__trigger {
-  min-block-size: var(--yc-space-8);
-  border-radius: var(--yc-radius-pill);
-}
-
-.settings__pill {
-  display: inline-flex;
-  align-items: center;
-  min-block-size: var(--yc-space-8);
-  padding-inline: 14px;
-  border: 1px solid var(--yc-border-strong);
-  border-radius: var(--yc-radius-pill);
-  background: transparent;
-  color: var(--yc-text);
-  font: var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-sans);
-}
-
-@media (hover: hover) { .settings__pill:hover { background: var(--yc-surface-sunken); } }
-.settings__pill:focus-visible { outline: 2px solid var(--yc-focus); outline-offset: 2px; }
-@media (pointer: coarse) { .settings__pill, .settings .scheme-select .custom-select__trigger { min-block-size: var(--yc-hit-min); } }
-
-.settings .settings__actions--compact {
-  margin-block-start: 0;
-}
-
-.settings__disclosure {
-  display: grid;
-  gap: var(--yc-space-1);
-  font-size: var(--yc-size-sm);
-  line-height: var(--yc-leading-sm);
-}
-
-.settings__disclosure[hidden] {
-  display: none;
-}
-
-.settings .defs__row {
-  padding-block: var(--yc-space-2);
-}
-
-.settings .defs__key {
-  font-family: var(--yc-font-sans);
-  font-size: var(--yc-size-md);
-  font-weight: var(--yc-weight-medium);
-  color: var(--yc-text);
 }
 
 .settings [aria-labelledby="keep-awake-settings"] .defs__row {

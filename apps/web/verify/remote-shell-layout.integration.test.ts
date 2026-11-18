@@ -29,6 +29,32 @@ afterAll(async () => {
 })
 
 describe("remote shell layout", () => {
+  test("Settings uses one balanced measure for machine, preference, and account rows", async () => {
+    const page = await fixture("view=settings", 1600, "Keep machine awake", "dark", 900)
+    try {
+      const measure = () => page.evaluate(`(() => {
+        const settings = document.querySelector('.app--settings .route-panel:not([inert]) .settings'), pane = settings.closest('.pane'), main = settings.closest('.workspace__scroll'), heading = settings.closest('.route-panel').querySelector('.page-head');
+        const bounds = node => node.getBoundingClientRect(), box = bounds(pane), parent = bounds(main);
+        const rows = ['.machine-row', '[aria-labelledby="keep-awake-settings"] .defs__row', '[aria-labelledby="appearance-settings"] .list'].map(selector => settings.querySelector(selector));
+        return { centered: Math.abs((box.left - parent.left) - (parent.right - box.right)) <= 16, bounded: box.width < 1050, headline: Math.abs(bounds(heading).left - box.left) <= 1, fullRows: rows.every(row => row && Math.abs(bounds(row).width - box.width) <= 1), sections: [...settings.children].filter(row => row.matches('section')).every(row => Math.abs(bounds(row).left - box.left) <= 1 && Math.abs(bounds(row).right - box.right) <= 1), fits: document.documentElement.scrollWidth <= innerWidth && main.scrollWidth <= main.clientWidth };
+      })()`, decodeRecord)
+      expect(await measure()).toEqual({ centered: true, bounded: true, headline: true, fullRows: true, sections: true, fits: true })
+      await page.setCoarsePointer(true)
+      await page.setViewport(390, 844)
+      await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+      expect(await measure()).toEqual({ centered: true, bounded: true, headline: true, fullRows: true, sections: true, fits: true })
+    } finally { await page.close() }
+  })
+
+  test("narrow Conversation keeps prose, requests, and composer inside one symmetric track", async () => {
+    const page = await fixture("view=chat&acceptedPreview=1", 390, "Stream remote output safely", "light", 844)
+    try {
+      await page.setCoarsePointer(true)
+      await page.evaluate(`new Promise((resolve, reject) => { const end = performance.now() + 5000; const frame = () => { if (document.querySelector('#pending-requests .request') && document.querySelector('.transcript-message__text .transcript-md > p')) resolve(true); else if (performance.now() > end) reject(new Error('Conversation prose or pending request not mounted')); else requestAnimationFrame(frame); }; frame(); })`)
+      expect(await page.evaluate(`(() => { const transcript = document.querySelector('.transcript-navigation'), root = transcript.closest('.workspace__scroll'); const box = transcript.getBoundingClientRect(), host = root.getBoundingClientRect(); const differences = Object.fromEntries(['#pending-requests', '.composer__row', '.conversation-jump-slot', '.transcript-message__text .transcript-md > p'].map(selector => { const rect = document.querySelector(selector)?.getBoundingClientRect(); return [selector, rect ? [Math.round(rect.left - box.left), Math.round(rect.right - box.right)] : null]; })); return { differences, balanced: Math.abs((box.left - host.left) - (host.left + root.clientWidth - box.right)) <= 1 && box.left > host.left, fits: root.scrollWidth <= root.clientWidth }; })()`, decodeRecord)).toEqual({ differences: { "#pending-requests": [0, 0], ".composer__row": [0, 0], ".conversation-jump-slot": [0, 0], ".transcript-message__text .transcript-md > p": [0, 0] }, balanced: true, fits: true })
+    } finally { await page.close() }
+  }, 20_000)
+
   test("keeps the rail home link at the canonical hit target floor", async () => {
     const page = await fixture("view=chat", 1440, "Stream remote output safely", "dark", 900)
     try {
@@ -223,7 +249,7 @@ describe("remote shell layout", () => {
     } finally { await page.close() }
   }, 20_000)
 
-  test("scrolls Settings from the window edge with start-aligned sections and readable explanations", async () => {
+  test("scrolls Settings from the window edge with centered sections and readable explanations", async () => {
     for (const [width, height] of [[1440, 900], [1920, 1080]] as const) {
       const page = await fixture("view=settings&noSelection=1", width, "System alerts", undefined, height)
       try {
@@ -240,14 +266,13 @@ describe("remote shell layout", () => {
           const measure = probe.getBoundingClientRect().width
           probe.remove()
           const edge = document.elementFromPoint(innerWidth - 24, box.top + box.height / 2)
-          return { scrollable: scroller.scrollHeight > scroller.clientHeight, left: box.left, right: box.right, viewport: innerWidth, edgeScrolls: scroller.contains(edge), column: pane.width, startGap: pane.left - box.left - parseFloat(getComputedStyle(scroller).paddingLeft), explanation: explanation.getBoundingClientRect().width, measure }
-        })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, scrollable: (decodeBoolean)(record["scrollable"]), left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]), viewport: (decodeNumber)(record["viewport"]), edgeScrolls: (decodeBoolean)(record["edgeScrolls"]), column: (decodeNumber)(record["column"]), startGap: (decodeNumber)(record["startGap"]), explanation: (decodeNumber)(record["explanation"]), measure: (decodeNumber)(record["measure"]) } })
+          return { scrollable: scroller.scrollHeight > scroller.clientHeight, left: box.left, right: box.right, viewport: innerWidth, edgeScrolls: scroller.contains(edge), column: pane.width, gapDelta: (pane.left - box.left) - (box.left + scroller.clientWidth - pane.right), explanation: explanation.getBoundingClientRect().width, measure }
+        })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, scrollable: (decodeBoolean)(record["scrollable"]), left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]), viewport: (decodeNumber)(record["viewport"]), edgeScrolls: (decodeBoolean)(record["edgeScrolls"]), column: (decodeNumber)(record["column"]), gapDelta: (decodeNumber)(record["gapDelta"]), explanation: (decodeNumber)(record["explanation"]), measure: (decodeNumber)(record["measure"]) } })
         expect(layout.scrollable).toBe(true)
         expect(Math.abs(layout.right - layout.viewport)).toBeLessThanOrEqual(1)
         expect(layout.edgeScrolls).toBe(true)
-        // W48: Settings shares the 1200px content column, widening to 1600px from the expansive breakpoint.
-        expect(layout.column).toBeLessThanOrEqual(width >= 1600 ? 1600 : 1200)
-        expect(Math.abs(layout.startGap)).toBeLessThanOrEqual(1)
+        expect(layout.column).toBeLessThanOrEqual(1024)
+        expect(Math.abs(layout.gapDelta)).toBeLessThanOrEqual(1)
         expect(layout.explanation).toBeLessThanOrEqual(layout.measure + 1)
       } finally { await page.close() }
     }

@@ -27,7 +27,7 @@ import type { DesktopAPI, DesktopSource, IntegrationMutationInput, IntegrationAt
 import { schemeStylesheet } from "../../../apps/web/src/theme/schemes"
 import { Icon as WebIcon, type IconName as WebIconName } from "../../../apps/web/src/ui/icon"
 import { ordinarySession } from "./sessions"
-import { Markdown } from "../../../apps/web/src/remote/ui/markdown"
+import { Markdown, MarkdownClipboard } from "../../../apps/web/src/remote/ui/markdown"
 import { WORKSPACE_DESTINATIONS, SharedWorkspaceFrame, SharedCompanionSurface, SharedCompanionTabs, SharedConversationHeader, SharedMessageTurn, SharedContextRingButton, SharedContextBreakdownPanel, SharedTurnHead, SharedRadioGroup, SharedCompactionDivider, SharedEditedFilesCard, SharedActivitySurface, SharedPageSurface, SharedSessionsSurface, SharedWorkspacesSurface, SharedUsageSurface, SharedSettingsSurface, SharedLoadingSkeleton } from "../../../apps/web/src/remote/ui/shared-workspace"
 import { DESKTOP_THEMES, isDesktopThemeID, resolveDesktopTheme, DESKTOP_BUILT_IN_SLASH_COMMANDS, desktopSlashCommand, validateFolderSegment, parsePromptStashes, pushPromptStash, formatQuotaProviders, formatCount, formatCompactCount, formatDurationMs, formatUsd, type DesktopThemeID, activeFields, appendPage, buildAnswer, chooseModel, chooseProfile, choiceFor, choiceProblem, composerTrigger, initialValues, insertCompletion, invalidIndexes, restoredPrompt, modelLabel, pagedItems, pagingFor, problemOf, profileLabel, railGroups, restoresFocus, sameSelection, samePaging, searchTerm, selectionFor, composerSlash, valueFor, variantsFor, visibleModels, withValue, workspaceBase, classifyDesktopSynthetic, visibleDesktopMessages, turnEditPlacements, groupAssistantParts, toolDisplaySummary, effortStopsFor, effortStopIndex, effortStopFraction, insertTextAtSelection, isEditableKeyboardTarget, isStandardEditShortcut, sessionState, type PastedText, type StashedPrompt, type Activity, type Field, type FocusAt, type MentionPick, type ModelChoice, type SlashAction, type Paging, type Value } from "./form-rules"
 import { JumpControls, PromptRail, followState, jumpBehavior, navigationTargets, pillClearance, promptTicks, type PromptTick } from "../../../apps/web/src/remote/ui/transcript-rail"
@@ -952,10 +952,14 @@ function DisplaySnapshot(props: { value: DisplayValue | undefined }): JSX.Elemen
   return <Show when={props.value !== undefined} fallback={<p class="st-muted">Not reported</p>}>
     <Show when={Array.isArray(props.value) ? props.value : undefined} fallback={
       <Show when={typeof props.value === "object" && props.value !== null ? Object.entries(props.value) : undefined} fallback={<span class="desktop-snapshot-value">{props.value === null ? "None" : String(props.value) || "Empty value"}</span>}>{entries =>
-        <dl class="desktop-snapshot"><For each={entries()} fallback={<><dt>Fields</dt><dd>No fields reported.</dd></>}>{([name, value]) => <><dt>{name.replace(/([a-z\d])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").replace(/^./, first => first.toUpperCase())}</dt><dd><DisplaySnapshot value={value} /></dd></>}</For></dl>
+        <dl class="desktop-snapshot"><For each={entries()} fallback={<><dt>Fields</dt><dd>No fields reported.</dd></>}>{([name, value]) => <div class="desktop-snapshot__field" data-nested={value !== null && typeof value === "object" || undefined}><dt>{name.replace(/([a-z\d])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").replace(/^./, first => first.toUpperCase())}</dt><dd><DisplaySnapshot value={value} /></dd></div>}</For></dl>
       }</Show>
     }>{values => <ol class="desktop-snapshot-list"><For each={values()} fallback={<li class="st-muted">No entries reported.</li>}>{value => <li><DisplaySnapshot value={value} /></li>}</For></ol>}</Show>
   </Show>
+}
+
+function ContextDetails(props: { label: string; icon: WebIconName; value: DisplayValue | undefined }) {
+  return <details class="desktop-context-details"><summary><Icon name={props.icon} /><span>{props.label}</span><span class="rl-disclosure-chev" aria-hidden="true"><Icon name="chevron-right" /></span></summary><DisplaySnapshot value={props.value} /></details>
 }
 
 function GlobalRequests(props: { directory?: string; workspace?: string }) {
@@ -1735,8 +1739,10 @@ function ModelPopover(props: { chipLabel: string; effortLabel?: string; disabled
   const [recent, setRecent] = createSignal(readRecentModels())
   const [query, setQuery] = createSignal("")
   let chip: HTMLButtonElement | undefined
+  let opener: HTMLButtonElement | undefined
   let wasTick = props.openTick ?? 0
-  createEffect(() => { const tick = props.openTick ?? 0; if (tick !== wasTick) { wasTick = tick; setOpen(true) } })
+  const show = (trigger?: HTMLButtonElement) => { opener = trigger; setQuery(""); setOpen(true) }
+  createEffect(() => { const tick = props.openTick ?? 0; if (tick !== wasTick) { wasTick = tick; show(chip) } })
   createEffect(() => { if (paletteOpen()) setOpen(false) })
   const selectedModel = () => props.models[props.choice.model]
   const variants = () => variantsFor(selectedModel(), props.choice.profile)
@@ -1769,25 +1775,45 @@ function ModelPopover(props: { chipLabel: string; effortLabel?: string; disabled
   onCleanup(() => stopDrag?.())
   const applyStop = (index: number) => { const stop = stops()[index]; if (!stop || props.busy) return; props.onPick({ ...props.choice, variant: stop.value }) }
   const effortSparkles = [{ x: 6, y: 34, delay: 0, size: 2 }, { x: 13, y: 66, delay: 0.7, size: 1.5 }, { x: 21, y: 28, delay: 1.3, size: 2.5 }, { x: 29, y: 58, delay: 0.4, size: 1.5 }, { x: 37, y: 40, delay: 1.9, size: 2 }, { x: 44, y: 70, delay: 1.1, size: 1.5 }, { x: 52, y: 30, delay: 0.2, size: 2.5 }, { x: 60, y: 62, delay: 1.6, size: 2 }, { x: 68, y: 44, delay: 0.9, size: 1.5 }, { x: 76, y: 26, delay: 1.4, size: 2 }, { x: 83, y: 64, delay: 0.5, size: 2.5 }, { x: 91, y: 38, delay: 1.8, size: 1.5 }] as const
-  const filtered = () => orderedModelOptions(props.models, recent(), selectionFor(props.models, props.choice)).flatMap((item) => {
-    const index = props.models.findIndex((model) => model.id === item.id && model.providerID === item.providerID)
-    const model = props.models[index]
-    return !model || query() && !modelLabel(model).toLowerCase().includes(query().toLowerCase()) ? [] : [{ model, index, recent: item.recentSelection !== undefined, selection: item.recentSelection ? choiceFor(props.models, item.recentSelection) : chooseModel([...props.models], index) }]
+  const key = (model: ModelSelection) => `${model.providerID}\0${model.id}`
+  const modelIndexes = createMemo(() => {
+    const indexes = new Map<string, number>()
+    props.models.forEach((model, index) => { const id = key(model); if (!indexes.has(id)) indexes.set(id, index) })
+    return indexes
   })
-  const close = () => { setOpen(false); chip?.focus() }
-  const pick = (choice: ModelChoice) => { const model = selectionFor(props.models, choice); if (model) setRecent(rememberRecentModel(undefined, model)); props.onPick(choice); setOpen(false); chip?.focus() }
+  const ordered = createMemo(() => orderedModelOptions(props.models, recent(), selectionFor(props.models, props.choice)).flatMap((item) => {
+    const index = modelIndexes().get(key(item))
+    if (index === undefined) return []
+    const label = modelLabel(props.models[index]!)
+    const saved = item.recentSelection
+    const selection = saved ? { model: index, profile: saved.profile ?? "", variant: saved.variant ?? "" } : chooseModel(props.models, index)
+    return [{ index, label, searchLabel: label.toLowerCase(), recent: saved !== undefined, providerID: item.providerID, selection }]
+  }))
+  const filtered = createMemo(() => {
+    const search = query().toLowerCase()
+    let previous: { recent: boolean; providerID: string } | undefined
+    return ordered().flatMap((row) => {
+      if (!row.searchLabel.includes(search)) return []
+      const groupHeading = !previous || previous.recent !== row.recent || !row.recent && previous.providerID !== row.providerID ? row.recent ? "Recent" : row.providerID : undefined
+      previous = row
+      return [{ ...row, groupHeading }]
+    })
+  })
+  const close = () => { setOpen(false); (opener?.isConnected ? opener : chip)?.focus({ preventScroll: true }) }
+  const toggle = (event: MouseEvent & { currentTarget: HTMLButtonElement }) => { if (open()) close(); else show(event.currentTarget) }
+  const pick = (choice: ModelChoice) => { const model = selectionFor(props.models, choice); if (model) setRecent(rememberRecentModel(undefined, model)); props.onPick(choice); close() }
   return <div class="composer-anchor" onFocusOut={(event) => { if (event.relatedTarget instanceof Node && !event.currentTarget.contains(event.relatedTarget)) setOpen(false) }} onKeyDown={(event) => {
     if (event.key === "Escape" && open()) { event.preventDefault(); close(); return }
     if (open() && (event.key === "ArrowDown" || event.key === "ArrowUp")) { const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(".model-popover__option:not(:disabled)")]; if (options.length) { event.preventDefault(); const index = options.indexOf(document.activeElement as HTMLButtonElement); options[(index + (event.key === "ArrowDown" ? 1 : options.length - 1) + options.length) % options.length]?.focus() } }
   }}>
-    <button ref={chip} type="button" class="composer-chip composer-chip--model" aria-label={props.chipLabel} data-tooltip={`Model · ${props.chipLabel}`} aria-haspopup="dialog" aria-expanded={open()} disabled={props.disabled} onClick={() => setOpen(!open())}><Icon name="cpu" /><span>{props.chipLabel}</span><Icon name="chevron-down" /></button><Show when={props.effortLabel}>{(effort) => <button type="button" class="composer-chip composer-chip--effort" aria-label={`Reasoning effort · ${effort()}`} data-tooltip={`Reasoning effort · ${effort()}`} aria-haspopup="dialog" aria-expanded={open()} disabled={props.disabled} onClick={() => setOpen(!open())}><Icon name="sparkles" /><span class="composer-chip__effort">{effort().charAt(0).toUpperCase() + effort().slice(1)}</span></button>}</Show>
+    <button ref={chip} type="button" class="composer-chip composer-chip--model" aria-label={props.chipLabel} data-tooltip={`Model · ${props.chipLabel}`} aria-haspopup="dialog" aria-expanded={open()} disabled={props.disabled} onClick={toggle}><Icon name="cpu" /><span>{props.chipLabel}</span><Icon name="chevron-down" /></button><Show when={props.effortLabel}>{(effort) => <button type="button" class="composer-chip composer-chip--effort" data-level={stops()[selectedIdx()]?.tone} aria-label={`Reasoning effort · ${effort()}`} data-tooltip={`Reasoning effort · ${effort()}`} aria-haspopup="dialog" aria-expanded={open()} disabled={props.disabled} onClick={toggle}><Icon name="sparkles" /><span class="composer-chip__effort">{effort().charAt(0).toUpperCase() + effort().slice(1)}</span></button>}</Show>
     <Show when={open()}><ResponsiveLayer class="desktop-popover model-popover" role="dialog" label="Model and reasoning effort" level={activeTone()} onClose={close}><div class="model-popover__heading"><strong>{selectedModel()?.name ?? "Choose model"}</strong><button type="button" class="rl-icon" aria-label="Close model settings" onClick={close}><Icon name="close" /></button></div>
       <label class="desktop__field model-popover__search"><span class="desktop__sr">Search models</span><input type="search" value={query()} placeholder="Search models" onInput={(event) => setQuery(event.currentTarget.value)} /></label>
       <div class="model-popover__list" role="listbox" aria-label="Model">
-        <For each={filtered()}>{({ model, index, recent, selection }, row) => <><Show when={row() === 0 || recent !== filtered()[row() - 1]?.recent || !recent && model.providerID !== filtered()[row() - 1]?.model.providerID}><h3 class="model-popover__group">{recent ? "Recent" : model.providerID}</h3></Show><button type="button" role="option" class="model-popover__option" aria-selected={props.choice.model === index && (!recent || props.choice.profile === selection.profile)} disabled={props.modelBusy ?? props.busy} onClick={() => pick(selection)}><span>{modelLabel(model)}</span><Show when={props.choice.model === index}><Icon name="check" /></Show></button></>}</For>
+        <For each={filtered()}>{({ index, label, recent, selection, groupHeading }) => <><Show when={groupHeading}><h3 class="model-popover__group">{groupHeading}</h3></Show><button type="button" role="option" class="model-popover__option" aria-selected={props.choice.model === index && (!recent || props.choice.profile === selection.profile)} disabled={props.modelBusy ?? props.busy} onClick={() => pick(selection)}><span>{label}</span><Show when={props.choice.model === index}><Icon name="check" /></Show></button></>}</For>
         <Show when={!filtered().length}><p role="status" class="desktop__muted">No models match.</p></Show>
       </div>
-      <Show when={selectedModel()?.profiles.length || props.choice.profile !== ""}><p class="model-popover__label">Profile</p><SharedRadioGroup label="Profile" options={[{ value: "", label: "No profile", disabled: !selectedModel()?.enabled }, ...(selectedModel()?.profiles ?? []).map((profile) => ({ value: profile.name, label: profileLabel(profile) }))]} value={props.choice.profile} disabled={props.modelBusy ?? props.busy} onChange={(value) => pick(chooseProfile([...props.models], props.choice, value))} /></Show>
+      <Show when={selectedModel()?.profiles.length || props.choice.profile !== ""}><p class="model-popover__label">Profile</p><SharedRadioGroup label="Profile" options={[{ value: "", label: "No profile", disabled: !selectedModel()?.enabled }, ...(selectedModel()?.profiles ?? []).map((profile) => ({ value: profile.name, label: profileLabel(profile) }))]} value={props.choice.profile} disabled={props.modelBusy ?? props.busy} onChange={(value) => pick(chooseProfile(props.models, props.choice, value))} /></Show>
       <Show when={stops().length > 1 || props.choice.variant !== ""}><div class="model-slider__head"><p class="model-popover__label">Reasoning effort</p><strong class="model-slider__badge">{stops()[dragIndex() ?? selectedIdx()]?.label ?? "Default"}</strong><button type="button" class="rl-icon-button model-slider__reset" aria-label="Reset reasoning effort" disabled={props.choice.variant === "" || props.busy} onPointerDown={(event) => event.preventDefault()} onClick={() => { slider?.focus(); props.onPick({ ...props.choice, variant: "" }) }}><Icon name="reset" /></button></div><div class="model-slider" classList={{ "model-slider--dragging": !!drag() }} ref={(element) => { slider = element }} role="slider" tabindex="0" aria-label="Reasoning effort" aria-valuemin={0} aria-valuemax={stops().length - 1} aria-valuenow={selectedIdx()} aria-valuetext={stops()[selectedIdx()]?.label ?? "Default"} aria-disabled={props.busy} onKeyDown={(event) => { const next = event.key === "Home" ? 0 : event.key === "End" ? stops().length - 1 : event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "PageUp" ? Math.min(stops().length - 1, selectedIdx() + 1) : event.key === "ArrowLeft" || event.key === "ArrowDown" || event.key === "PageDown" ? Math.max(0, selectedIdx() - 1) : undefined; if (next === undefined) return; event.preventDefault(); event.stopPropagation(); applyStop(next) }} onPointerDown={startDrag}><div class="model-slider__track" style={{ "--composer-effort-fraction": String(fraction()), "--composer-effort-glow": String(glow()) }}><span class="model-slider__ticks" aria-hidden="true"><For each={stops()}>{(_, index) => <i style={{ left: `calc(14px + ${effortStopFraction(index(), stops().length)} * (100% - 28px))` }} />}</For></span><div class="model-slider__fill" style={{ width: `calc(28px + ${fraction()} * (100% - 28px))` }}><span class="model-slider__flow" aria-hidden="true" /><For each={[props.choice.variant]}>{() => <div class="model-slider__sparkles" aria-hidden="true"><For each={[...effortSparkles.map((sparkle) => ({ ...sparkle, x: sparkle.x / 2 })), ...effortSparkles.map((sparkle) => ({ ...sparkle, x: 50 + sparkle.x / 2 }))]}>{(sparkle) => <i style={{ left: `${sparkle.x}%`, top: `${sparkle.y}%`, "--composer-sparkle-delay": `${-sparkle.delay}s`, "--composer-sparkle-size": `${sparkle.size}px` }} />}</For></div>}</For></div><span class="model-slider__thumb" style={{ left: `calc(14px + ${fraction()} * (100% - 28px))` }} /></div></div><div class="model-slider__labels"><For each={stops()}>{(stop, index) => <button type="button" class="model-slider__label" data-edge={index() === 0 ? "start" : index() === stops().length - 1 ? "end" : undefined} style={index() === 0 ? { left: "0px" } : index() === stops().length - 1 ? { right: "0px" } : { left: `calc(14px + ${effortStopFraction(index(), stops().length)} * (100% - 28px))` }} disabled={props.busy} onPointerDown={(event) => event.preventDefault()} onClick={() => { slider?.focus(); applyStop(index()) }} data-active={selectedIdx() === index() ? "true" : undefined}>{stop.label}</button>}</For></div></Show>
       {props.children}
       <div class="model-popover__foot"><button type="button" class="rl-btn" disabled={props.refreshing} onClick={props.onRefresh}>Refresh models</button></div>
@@ -1821,7 +1847,7 @@ function NewChat() {
   const [newAgent, setNewAgent] = createSignal<{ readonly id: string; readonly name: string }>()
   createEffect(() => { void newDirectory(); void scope(); setChosen(undefined); setNewAgent(undefined) })
   const data = () => { const value = catalog.result().isError ? undefined : catalog.result().data; return value && !("sessionID" in value.source) && (value.source.directory ?? "") === newDirectory().trim() && value.revision === connection().revision ? value : undefined }
-  const list = () => visibleModels(data()?.models ?? [], data()?.default)
+  const list = createMemo(() => visibleModels(data()?.models ?? [], data()?.default))
   const choice = () => chosen() ?? choiceFor(list(), data()?.default)
   const selected = () => list()[choice().model]
   const picked = () => data() ? selectionFor(list(), choice()) : undefined
@@ -2209,7 +2235,7 @@ function TurnView(props: { message: Messages[number]; continuation?: boolean }) 
       return <><span class="transcript-message__author desktop__sr">External peer</span><NativeActivityRow label={dotsPeerLabel({ dots: field(props.message.metadata, "dots") }) ? "Dots" : "Remote MCP"} identity={externalPeer()} time={message().time.created}><Markdown text={message().text} /><For each={files()}>{file => <span class="conversation__chip">{file.name ?? "Attachment"}</span>}</For></NativeActivityRow></>
     }}</Show>
     <Show when={!peerInput() && externalPeer()}>{value => <NativeActivityRow label="External peer" identity={value()}>{value()}</NativeActivityRow>}</Show>
-    <Show when={props.message.type === "user" && !peerInput() ? props.message : undefined}>{(message) => <><span class="transcript-message__author">You</span><SharedMessageTurn kind="user" markdownText={message().text} attachments={<For each={message().files}>{(file) => <span class="conversation__chip">{file.name ?? "Attachment"}</span>}</For>} receipt={new Date(message().time.created).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} receiptLabel="Message created" /></>}</Show>
+    <Show when={props.message.type === "user" && !peerInput() ? props.message : undefined}>{(message) => <SharedMessageTurn kind="user" markdownText={message().text} attachments={<For each={message().files}>{(file) => <span class="conversation__chip">{file.name ?? "Attachment"}</span>}</For>} receipt={new Date(message().time.created).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} receiptLabel="Message created" />}</Show>
     <Show when={props.message.type === "assistant" ? props.message : undefined}>{(message) => {
       const groups = createMemo(() => groupAssistantParts(message().content))
       const identity = () => <SharedTurnHead class="transcript-message__head" mark={<span class="rl-avatar transcript-message__mark"><Icon name="sparkles" /></span>}>{message().agent} · {message().model.providerID}/{message().model.id}{message().model.variant ? ` · ${message().model.variant}` : ""}{message().model.profile === undefined ? "" : ` · Profile ${message().model.profile}`}{duration(message().time.created, message().time.completed) ? ` · ${duration(message().time.created, message().time.completed)}` : ""}</SharedTurnHead>
@@ -2230,12 +2256,11 @@ function TurnView(props: { message: Messages[number]; continuation?: boolean }) 
     <Show when={props.message.type === "shell" ? props.message : undefined}>{(message) => <SharedMessageTurn kind="shell" shellHeader={<><code class="ws-card-title">$ {message().command}</code> · {message().status}{message().exit === undefined ? "" : ` · exit ${message().exit}`}</>} shellOutput={<div class="ws-shell"><pre class="ws-out"><code>{message().output?.output ?? ""}</code></pre><Show when={message().output?.truncated}><p>Shell output is truncated.</p></Show></div>} />}</Show>
     <Show when={props.message.type === "compaction" ? props.message : undefined}>{(message) => <SharedMessageTurn kind="compaction" compaction={<CompactionView message={message()} />} />}</Show>
     <Show when={props.message.type === "system" ? props.message : undefined}>{(message) => <SharedMessageTurn kind="system" content={<><span class="transcript__speaker">System</span><div class="transcript-system-card"><Markdown text={message().text} /></div></>} />}</Show>
-    <Show when={syntheticCard()}>{(card) => card().kind === "subagent" ? <Show when={card().kind === "subagent" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "subagent" }> : undefined}>{(entry) => <details class="transcript-notice-card" data-status={entry().status}><summary><Icon name={entry().status === "failed" ? "alert" : entry().status === "completed" ? "check" : "team"} /><strong>Subagent · {entry().label}</strong><span class="transcript-notice-card__status">{entry().status}</span><span class="rl-disclosure-chev"><Icon name="chevron-right" /></span></summary><Show when={entry().excerpt}>{(excerpt) => <div class="rl-disclosure-card"><Markdown text={excerpt()} /></div>}</Show></details>}</Show>
-      : card().kind === "member" ? <Show when={card().kind === "member" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "member" }> : undefined}>{(entry) => <article class="transcript-notice-card" data-kind="member"><header class="transcript-notice-card__head"><Icon name="team" /><strong>{entry().label}</strong><span class="transcript-notice-card__status">{entry().event}</span><Link to="/sessions/$sessionID" params={{ sessionID: entry().memberSessionID }} class="rl-btn transcript-notice-card__open">Open</Link></header><Show when={entry().escalatedBy}>{(by) => <p class="transcript-notice-card__meta">Escalated by {by()}</p>}</Show><Show when={entry().excerpt}>{(excerpt) => <div class="rl-disclosure-card"><Markdown text={excerpt()} /></div>}</Show></article>}</Show>
-      : card().kind === "goal" ? <Show when={card().kind === "goal" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "goal" }> : undefined}>{(entry) => <article class="transcript-notice-card" data-kind="goal"><header class="transcript-notice-card__head"><Icon name="target" /><strong>Goal · steer</strong></header><div class="rl-disclosure-card"><Markdown text={entry().text} /></div></article>}</Show>
-      : card().kind === "parent-answer" ? <Show when={card().kind === "parent-answer" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "parent-answer" }> : undefined}>{(entry) => <article class="transcript-notice-card" data-kind="parent-answer"><header class="transcript-notice-card__head"><Icon name="chat" /><strong>Parent answer</strong></header><div class="rl-disclosure-card"><Markdown text={entry().text} /></div></article>}</Show>
-      : card().kind === "completion" ? <Show when={card().kind === "completion" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "completion" }> : undefined}>{(entry) => <p class="transcript-notice-pill" data-status={entry().status}><Icon name={entry().status === "failed" ? "alert" : "check"} /><span>{entry().label} · {entry().status} — {entry().description}</span></p>}</Show>
-      : <Show when={card().kind === "note" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "note" }> : undefined}>{(entry) => <p class="transcript-notice-pill"><Icon name="bell" /><span>{entry().text}</span></p>}</Show>}</Show>
+    <Show when={syntheticCard()}>{(card) => card().kind === "member" ? <Show when={card().kind === "member" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "member" }> : undefined}>{(entry) => <article class="transcript-notice-card" data-kind="member" data-status={entry().event}><header class="transcript-notice-card__head"><Icon name={entry().event === "failed" ? "alert" : "team"} /><strong>{entry().label}</strong><span class="transcript-notice-card__status">{entry().event}</span><Link to="/sessions/$sessionID" params={{ sessionID: entry().memberSessionID }} class="rl-btn transcript-notice-card__open">Open</Link></header><Show when={entry().escalatedBy}>{(by) => <p class="transcript-notice-card__meta">Escalated by {by()}</p>}</Show><Show when={entry().excerpt}>{(excerpt) => <Markdown text={excerpt()} />}</Show></article>}</Show>
+      : card().kind === "goal" ? <Show when={card().kind === "goal" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "goal" }> : undefined}>{(entry) => <article class="transcript-notice-card" data-kind="goal"><header class="transcript-notice-card__head"><Icon name="target" /><strong>Goal · steer</strong></header><Markdown text={entry().text} /></article>}</Show>
+      : card().kind === "parent-answer" ? <Show when={card().kind === "parent-answer" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "parent-answer" }> : undefined}>{(entry) => <article class="transcript-notice-card" data-kind="parent-answer"><header class="transcript-notice-card__head"><Icon name="chat" /><strong>Parent answer</strong></header><Markdown text={entry().text} /></article>}</Show>
+      : card().kind === "completion" ? <Show when={card().kind === "completion" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "completion" }> : undefined}>{(entry) => <div class="transcript-notice-pill" data-status={entry().status}><Icon name={entry().status === "failed" ? "alert" : "check"} /><div class="transcript-notice__body"><strong>{entry().label} · {entry().status}</strong><Markdown text={entry().description} /></div></div>}</Show>
+      : <Show when={card().kind === "note" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "note" }> : undefined}>{(entry) => <div class="transcript-notice-pill"><Icon name="bell" /><Markdown text={entry().text} /></div>}</Show>}</Show>
     <Show when={props.message.type === "model-switched" ? props.message : undefined}>{(message) => <p class="transcript-notice-pill transcript-notice-pill--center"><Icon name="cpu" /><span>Model: {message().model.providerID}/{message().model.id}{message().model.variant ? ` · ${message().model.variant}` : ""}</span></p>}</Show>
     <Show when={props.message.type === "agent-switched" ? props.message : undefined}>{(message) => <p class="transcript-notice-pill transcript-notice-pill--center"><Icon name="user" /><span>Agent: {message().agent}</span></p>}</Show>
     <Show when={props.message.type === "skill" ? props.message : undefined}>{(message) => <p class="transcript-notice-pill transcript-notice-pill--center"><Icon name="sparkles" /><span>Skill: {message().name}</span></p>}</Show>
@@ -2576,14 +2601,15 @@ function ModelPicker(props: { sessionID: string; model?: ModelId; running: boole
 function RunningActivity(props: { sessionID: string; data?: import("./contract").SessionActivity; loading: boolean; error?: string; moreError?: string; onRefresh: () => void; onMore: () => void; loadingMore: boolean; onOpen: (id: string) => void; onShell: (id: string) => void }) {
   const tasks = () => props.data?.subagents.filter((task) => task.state === "running") ?? []
   const shells = () => props.data?.shells.filter((shell) => shell.status === "running") ?? []
+  const row = (icon: WebIconName, onOpen: () => void, content: JSX.Element) => <button type="button" class="rl-activity-row" data-state="active" onClick={onOpen}><span class="rl-activity-row__icon" aria-hidden="true"><Icon name={icon} /></span><span class="rl-activity-row__body">{content}</span><span class="rl-activity-row__chevron" aria-hidden="true"><Icon name="chevron-right" /></span></button>
   return <div class="rl-pane-body rl-running">
     <div class="desktop__actions"><h2>Running work</h2><button type="button" class="rl-btn" onClick={props.onRefresh}>Refresh</button></div>
     <Show when={props.loading}><p role="status">Reading running work…</p></Show>
     <Show when={props.error}>{(error) => <p role="alert">{error()}</p>}</Show>
     <Show when={props.moreError}>{(error) => <p role="alert">{error()}</p>}</Show>
     <Show when={props.data}>
-      <h3>Subagents</h3><For each={tasks()} fallback={<p>No running subagents in the loaded results.</p>}>{(task) => <button type="button" class="rl-option" onClick={() => props.onOpen(task.sessionID)}><strong>{task.description}</strong><span>{task.agent} · Running</span><Show when={task.progress}>{(progress) => <span>{progress().text}</span>}</Show></button>}</For>
-      <h3>Shells</h3><For each={shells()} fallback={<p>No running shells in the loaded results.</p>}>{(shell) => <button type="button" class="rl-option" onClick={() => props.onShell(shell.id)}><strong>{shell.command}</strong><span>Running</span></button>}</For>
+      <h3>Subagents</h3><For each={tasks()} fallback={<p>No running subagents in the loaded results.</p>}>{(task) => row("team", () => props.onOpen(task.sessionID), <><strong>{task.description}</strong><small>{task.agent} · Running</small><Show when={task.progress}>{(progress) => <small>{progress().text}</small>}</Show></>)}</For>
+      <h3>Shells</h3><For each={shells()} fallback={<p>No running shells in the loaded results.</p>}>{(shell) => row("terminal", () => props.onShell(shell.id), <><strong>{shell.command}</strong><small>Running</small></>)}</For>
       <Show when={props.data?.subagentNext}><p>More subagents and their shells may be running beyond these loaded results.</p><button type="button" class="rl-btn" disabled={props.loadingMore} onClick={props.onMore}>{props.loadingMore ? "Loading…" : "Load more subagents"}</button></Show>
       <Show when={props.data?.unattributedShellCount}><p>Shells without Session attribution are not included.</p></Show>
     </Show>
@@ -2641,7 +2667,7 @@ function Conversation(props: { sessionID: string }) {
   const policyButtons = () => <><button type="button" onClick={openPolicy}>{policyLabels().goal}</button><button type="button" onClick={openPolicy}>{policyLabels().autonomy}</button></>
   const [selectedTurn, setSelectedTurn] = createSignal<string>()
   const [linkNote, setLinkNote] = createSignal<string>()
-  const copyTranscriptLink = (event: MouseEvent) => { const anchor = (event.target as Element | null)?.closest?.("a[href]"); if (!(anchor instanceof HTMLAnchorElement)) return; event.preventDefault(); const href = anchor.href; void copyTextToClipboard(href).then(() => setLinkNote("Copied link"), () => setLinkNote("Link could not be copied")) }
+  const copyTranscriptLink = (event: MouseEvent) => { const anchor = event.target instanceof Element ? event.target.closest(".transcript-md a[href]") : undefined; if (!(anchor instanceof HTMLAnchorElement)) return; event.preventDefault(); const href = anchor.href; void copyTextToClipboard(href).then(() => setLinkNote("Copied link"), () => setLinkNote("Link could not be copied")) }
   const [fullChangesOpen, setFullChangesOpen] = createSignal(false)
   const [stagedRevert, setStagedRevert] = createSignal<StagedRevert>()
   const activeRevert = () => activeRevertOf(session(), stagedRevert())
@@ -3256,11 +3282,11 @@ function Conversation(props: { sessionID: string }) {
           <Show when={insightsRead.result().isError}><p role="alert">{failure(insightsRead.result().error, "Session insights could not be read.")}</p><button type="button" class="rl-btn" disabled={!reading()} onClick={insightsRead.refetch}>Refresh insights</button></Show>
           <Show when={insights()}>{(data) => <>
             <For each={Object.values(data().notices)}>{(notice) => <p role="status">{notice}</p>}</For>
-            <Show when={data().todos}>{(todos) => <section class="st-section"><h3>Session tasks</h3><ul><For each={todos()} fallback={<li>No Session tasks.</li>}>{(todo) => <li>{todo.content} · {todo.status} · {todo.priority}</li>}</For></ul></section>}</Show>
-            <section class="st-section"><h3>Diagnostics</h3><DisplaySnapshot value={data().diagnostics} /></section>
-            <section class="st-section"><h3>Session usage</h3><DisplaySnapshot value={data().usage} /></section>
-            <section class="st-section"><h3>Loaded child task costs</h3><DisplaySnapshot value={data().taskCosts} /></section>
-            <section class="st-section"><h3>Compaction history</h3><DisplaySnapshot value={data().compactions} /></section>
+            <section class="desktop-context-insight"><h3><Icon name="usage" />Session usage</h3><DisplaySnapshot value={data().usage} /></section>
+            <Show when={data().todos}>{(todos) => <section class="desktop-context-insight"><h3><Icon name="list" />Session tasks</h3><ul><For each={todos()} fallback={<li>No Session tasks.</li>}>{(todo) => <li>{todo.content} · {todo.status} · {todo.priority}</li>}</For></ul></section>}</Show>
+            <ContextDetails icon="terminal" label="Diagnostics" value={data().diagnostics} />
+            <ContextDetails icon="team" label="Loaded child task costs" value={data().taskCosts} />
+            <ContextDetails icon="archive" label="Compaction history" value={data().compactions} />
           </>}</Show>
         </div>}
       />
@@ -3575,5 +3601,5 @@ if (typeof document !== "undefined") {
   const router = createRouter({ routeTree: root.addChildren([workspaceRoute.addChildren([indexRoute, newChatRoute, projectsRoute, listRoute, workspacesRoute, usageRoute, settingsRoute, conversationRoute])]), history: createHashHistory() })
   const element = document.getElementById("app")
   if (!element) throw new Error("Missing desktop application root")
-  render(() => <RouterProvider router={router} />, element)
+  render(() => <MarkdownClipboard.Provider value={copyTextToClipboard}><RouterProvider router={router} /></MarkdownClipboard.Provider>, element)
 }

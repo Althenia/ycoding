@@ -18,6 +18,26 @@
 .rl-activity-row { gap:12px; }
 .rl-activity-row__icon, .rl-activity-row__chevron { display:inline-grid; place-items:center; padding:0; line-height:0; flex:none; color:var(--yc-text-muted); }
 .rl-activity-row__icon { width:20px; height:20px; }
+.rl-activity-row[data-state="active"] .rl-activity-row__icon { color:var(--yc-context-tools); }
+.rl-activity-row[data-state="done"] .rl-activity-row__icon { color:var(--yc-green-strong); }
+.rl-activity-row[data-state="failed"] .rl-activity-row__icon { color:var(--yc-danger); }
+[data-destination="projects"] { --navigation-ink:var(--yc-context-reasoning); }
+[data-destination="sessions"] { --navigation-ink:var(--yc-green-strong); }
+[data-destination="workspaces"] { --navigation-ink:var(--yc-signal); }
+[data-destination="usage"] { --navigation-ink:var(--yc-yellow-strong); }
+[data-destination="settings"] { --navigation-ink:var(--yc-context-tools); }
+.rl-pane-tab[data-tab="activity"] { --companion-ink:var(--yc-context-tools); }
+.rl-pane-tab[data-tab="running"] { --companion-ink:var(--yc-green-strong); }
+.rl-pane-tab[data-tab="changes"] { --companion-ink:var(--yc-signal); }
+.rl-pane-tab[data-tab="context"] { --companion-ink:var(--yc-context-reasoning); }
+:is(.composer__effort, .composer-chip--effort)[data-level="none"] { --effort-ink:var(--yc-effort-none); }
+:is(.composer__effort, .composer-chip--effort)[data-level="minimal"] { --effort-ink:var(--yc-effort-minimal); }
+:is(.composer__effort, .composer-chip--effort)[data-level="low"] { --effort-ink:var(--yc-effort-low); }
+:is(.composer__effort, .composer-chip--effort)[data-level="medium"] { --effort-ink:var(--yc-effort-medium); }
+:is(.composer__effort, .composer-chip--effort)[data-level="high"] { --effort-ink:var(--yc-effort-high); }
+:is(.composer__effort, .composer-chip--effort)[data-level="xhigh"] { --effort-ink:var(--yc-effort-xhigh); }
+:is(.composer__effort, .composer-chip--effort)[data-level="max"] { --effort-ink:var(--yc-effort-max); }
+:is(.transcript-md, .transcript-md__code pre, .transcript-md__code code) { user-select:text; -webkit-user-select:text; }
 .rl-changes .rl-file-jump button { align-items:center; gap:8px; border:1px solid transparent; background:transparent; }
 .rl-changes .rl-file-jump button[data-selected="true"] { border-color:var(--yc-border-strong); background:var(--yc-surface-raised); color:var(--yc-text); }
 .rl-file-jump__icon { display:inline-grid; place-items:center; padding:0; line-height:0; flex:none; color:var(--yc-text-muted); }
@@ -80,7 +100,7 @@ html[data-animations="off"] :is(.rl-ring-value, .rl-context-messages__chev) { tr
 .rl-ledger .rl-pane-tabs-row { gap: 0; padding: 0 var(--yc-space-5); border-block-end: 1px solid var(--yc-border); }
 .rl-ledger .rl-pane-tabs { gap: var(--yc-space-6); }
 .rl-ledger .rl-pane-tab { min-block-size: 36px; padding: 0; border-color: transparent; border-radius: 0; background: transparent; color: var(--yc-text-muted); transition: box-shadow var(--yc-dur-quick) var(--yc-ease-standard), color var(--yc-dur-quick) var(--yc-ease-standard); }
-.rl-ledger .rl-pane-tab[data-active="true"] { border-color: transparent; background: transparent; box-shadow: inset 0 -2px 0 var(--yc-green-strong); color: var(--yc-text); font-weight: var(--yc-weight-semibold); }
+.rl-ledger .rl-pane-tab[data-active="true"] { border-color: transparent; background: transparent; box-shadow: inset 0 -2px 0 var(--companion-ink, var(--yc-green-strong)); color: var(--yc-text); font-weight: var(--yc-weight-semibold); }
 .rl-ledger .rl-pane-tabs .rl-pane-tab > button[role="tab"] { min-block-size: 36px; color: inherit; font-size: var(--yc-size-xs); }
 .rl-pane-tabs .rl-pane-tab > button:focus-visible { outline:2px solid var(--yc-focus); outline-offset:-2px; box-shadow:none; }
 .companion .companion__header > .rl-pane-kicker { color:var(--yc-text); font:var(--yc-weight-semibold) var(--yc-size-sm)/var(--yc-leading-sm) var(--yc-font-sans); letter-spacing:0; text-transform:none; }
@@ -126,13 +146,14 @@ html[data-animations="off"] :is(.rl-ring-value, .rl-context-messages__chev) { tr
 .rl-context-messages[open] .rl-context-messages__chev { transform:rotate(90deg); }
 #companion-context .rl-context-panel .rl-context-message-list { display:grid; gap:var(--yc-space-1); padding:0 0 var(--yc-space-3) var(--yc-space-5); color:var(--yc-text-muted); font:var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-sans); overflow-wrap:anywhere; }
 .transcript-tools__button.rl-chip { display:inline-flex; align-items:center; gap:6px; max-inline-size:100%; min-inline-size:0; min-block-size:24px; margin:0; padding:2px 0; border:0; border-radius:0; background:transparent; box-shadow:none; color:var(--yc-text-muted); font:var(--yc-weight-regular) var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono); text-align:start; transition:color var(--yc-dur-quick) var(--yc-ease-standard); }
-.transcript-tools__button.rl-chip > .rl-disclosure-icon { inline-size:auto; block-size:auto; border-radius:0; background:transparent; color:inherit; }
+.transcript-tools__button.rl-chip > .rl-disclosure-icon { inline-size:auto; block-size:auto; border-radius:0; background:transparent; color:var(--yc-context-tools); }
 .transcript-tools__button.rl-chip > .rl-disclosure-chev { margin-inline-start:0; }
 .transcript-tools__button.rl-chip > .rl-chip-last { min-inline-size:0; overflow:hidden; color:var(--yc-text-subtle); font:inherit; text-overflow:ellipsis; white-space:nowrap; }
 .transcript-reasoning.rl-reason-disclosure { padding-inline:0; border:0; background:transparent; box-shadow:none; }
 .transcript-reasoning.rl-reason-disclosure > summary { display:inline-flex; align-items:center; gap:6px; min-block-size:24px; padding:2px 0; border:0; border-radius:0; background:transparent; box-shadow:none; color:var(--yc-text-muted); font:var(--yc-weight-regular) var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono); list-style:none; transition:color var(--yc-dur-quick) var(--yc-ease-standard); }
 .transcript-reasoning.rl-reason-disclosure > summary::-webkit-details-marker { display:none; }
-.transcript-reasoning.rl-reason-disclosure .transcript-reasoning__tag { display:inline-grid; place-items:center; line-height:0; color:inherit; font:inherit; }
+.transcript-reasoning.rl-reason-disclosure .transcript-reasoning__tag { display:inline-grid; place-items:center; line-height:0; color:var(--yc-context-reasoning); font:inherit; }
+.rl-edited-disclosure > svg:first-child { color:var(--yc-signal); }
 .transcript-reasoning.rl-reason-disclosure .transcript-reasoning__hint { color:var(--yc-text-subtle); font:inherit; }
 .rl-edited-card.file-change-card { display:grid; gap:var(--yc-space-2); inline-size:100%; min-inline-size:0; overflow:visible; }
 .rl-edited-card.file-change-card:not([data-panel]) { padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }

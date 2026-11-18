@@ -46,14 +46,14 @@ type AssistantMessageView = Extract<RemoteMessageView, { kind: "assistant" }>
 function SyntheticNotice(props: { readonly notice: NonNullable<ReturnType<typeof classifySyntheticNotice>> }): JSX.Element {
   const remote = useRemote()
   const notice = props.notice
-  if (notice.kind === "member") return <div class="project-event" data-event={notice.event} role="group" aria-label={`Member update: ${notice.label}`}><span class="project-event__glyph" aria-hidden="true">{notice.event === "failed" ? "×" : notice.event === "completed" ? "✓" : "△"}</span><div class="project-event__heading"><strong>{notice.label}</strong><span class="project-event__status">{notice.event}<Show when={notice.escalatedBy}> by {notice.escalatedBy}</Show></span></div><Show when={notice.excerpt}>{(excerpt) => <p class="project-event__excerpt">{excerpt()}</p>}</Show><a class="button button--ghost button--small" href={`/remote/session?session_id=${encodeURIComponent(notice.memberSessionID)}${remote.state().activeDeviceID ? `&device_id=${encodeURIComponent(remote.state().activeDeviceID!)}` : ""}`} aria-label={`Open session ${notice.label}`} onClick={(event) => {
+  if (notice.kind === "member") return <div class="project-event" data-event={notice.event} role="group" aria-label={`Member update: ${notice.label}`}><span class="project-event__glyph" aria-hidden="true"><Icon name={notice.event === "failed" ? "alert" : notice.event === "completed" ? "check" : "team"} size={16} /></span><div class="project-event__heading"><strong>{notice.label}</strong><span class="project-event__status">{notice.event}<Show when={notice.escalatedBy}> by {notice.escalatedBy}</Show></span></div><Show when={notice.excerpt}>{(excerpt) => <div class="project-event__excerpt"><Markdown text={excerpt()} /></div>}</Show><a class="button button--ghost button--small" href={`/remote/session?session_id=${encodeURIComponent(notice.memberSessionID)}${remote.state().activeDeviceID ? `&device_id=${encodeURIComponent(remote.state().activeDeviceID!)}` : ""}`} aria-label={`Open session ${notice.label}`} onClick={(event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
     event.preventDefault()
     window.dispatchEvent(new CustomEvent("ycoding:open-session", { detail: { sessionID: notice.memberSessionID, deviceID: remote.state().activeDeviceID } }))
   }}>Open<Icon name="chevron-right" size={16} /></a></div>
-  if (notice.kind === "goal") return <div class="transcript-notice transcript-notice--goal"><strong>Goal · steer</strong><p>{notice.text}</p></div>
-  if (notice.kind === "completion") return <p class={`transcript-notice transcript-notice--${notice.status}`}><strong>{notice.label} {notice.status}</strong><Show when={notice.description}> · {notice.description}</Show></p>
-  const heading = <><span class="transcript-notice__mark" aria-hidden="true">◦</span><strong>Subagent · {notice.label}</strong><span class="transcript-notice__status">{notice.status}</span></>
+  if (notice.kind === "goal") return <div class="transcript-notice transcript-notice--goal"><strong><Icon name="target" size={16} />Goal · steer</strong><Markdown text={notice.text} /></div>
+  if (notice.kind === "completion") return <div class={`transcript-notice transcript-notice--${notice.status}`}><strong><Icon name={notice.status === "failed" ? "alert" : "check"} size={16} />{notice.label} {notice.status}</strong><Show when={notice.description}>{(description) => <Markdown text={description()} />}</Show></div>
+  const heading = <><span class="transcript-notice__mark" aria-hidden="true"><Icon name={notice.status === "failed" ? "alert" : notice.status === "completed" ? "check" : "team"} size={16} /></span><strong>Subagent · {notice.label}</strong><span class="transcript-notice__status">{notice.status}</span></>
   return <Show when={notice.excerpt} fallback={<p class={`transcript-notice transcript-notice--${notice.status}`}>{heading}</p>}>
     {(excerpt) => <SubagentNotice class={`transcript-notice transcript-notice--${notice.status}`} label={`Subagent ${notice.label} ${notice.status}`} heading={heading} excerpt={excerpt()} />}
   </Show>
@@ -64,7 +64,7 @@ function SubagentNotice(props: { readonly class: string; readonly label: string;
   const id = createUniqueId()
   return <div class={props.class} data-open={open() ? "" : undefined}>
     <button type="button" class="transcript-notice__toggle" aria-label={props.label} aria-expanded={open()} aria-controls={id} onClick={() => setOpen(!open())}>{props.heading}<Icon name="chevron-right" size={16} /></button>
-    <Collapsible open={open()} id={id}><p class="transcript-notice__excerpt">{props.excerpt}</p></Collapsible>
+    <Collapsible open={open()} id={id}><div class="transcript-notice__excerpt"><Markdown text={props.excerpt} /></div></Collapsible>
   </div>
 }
 
@@ -191,6 +191,8 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
   })
   const expanded = () => toolPartExpanded({ touched: touched(), manual: manual(), status: props.part().status })
   const shellID = () => toolShellID(props.part())
+  const markdownOutput = () => props.part().name === "subagent" || props.part().name === "question"
+  const tone = () => toolTone(props.part())
   const graded = () => props.part().name === "decision" ? readGradedAnswers(props.part().structured) : []
   const statusLabel = () => {
     if (props.part().name.toLowerCase() === "subagent" && props.part().structured?.status === "running") return "Background"
@@ -201,7 +203,7 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
   }
   const duration = () => props.part().completed === undefined ? undefined : formatPartDuration(props.part().completed! - (props.part().ran ?? props.part().started ?? props.part().completed!))
   return (
-    <article class={`transcript-tool transcript-tool--${toolTone(props.part())}`}>
+    <article class={`transcript-tool transcript-tool--${tone()}`}>
       <header class="transcript-tool__header">
         <button
           type="button"
@@ -213,7 +215,7 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
             setTouched(true)
           }}
         >
-          <span class="transcript-tool__tag" aria-label={toolTone(props.part()) === "success" ? "Completed" : toolTone(props.part()) === "error" ? "Failed" : toolTone(props.part()) === "attention" ? "Needs attention" : "Running"}>{toolTone(props.part()) === "success" ? "✓" : toolTone(props.part()) === "attention" ? "Ⅱ" : toolTone(props.part()) === "error" ? "!" : <DotTrail />}</span>
+          <span class="transcript-tool__tag" aria-hidden="true">{tone() === "running" ? <DotTrail /> : <Icon name={tone() === "success" ? "check" : "alert"} size={16} />}</span>
           <span class="transcript-tool__name">{toolSummary(props.part())}</span>
           <span class="transcript-tool__status">{statusLabel()}{duration() ? ` · ${duration()}` : ""}</span>
           <Icon name={expanded() ? "chevron-down" : "chevron-right"} size={16} />
@@ -234,9 +236,7 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
             const image = () => { const current = block(); return current.kind === "image" ? current : undefined }
             const other = () => { const current = block(); return current.kind === "other" ? current : undefined }
             return key.startsWith("text:") ? (
-              <pre class="output" tabindex="0">
-                <code>{text()}</code>
-              </pre>
+              <Show when={markdownOutput()} fallback={<pre class="output" tabindex="0"><code>{text()}</code></pre>}><Markdown text={text()} /></Show>
             ) : key.startsWith("image:") ? (
               <ImagePreview src={image()?.uri ?? ""} name={image()?.name ?? "Image"} />
             ) : (
@@ -340,7 +340,7 @@ function ReasoningPart(props: { readonly text: () => string; readonly parts: () 
   }
   return (
     <div class="transcript-reasoning" data-open={open() ? "" : undefined}>
-      <button type="button" class="transcript-reasoning__toggle" aria-expanded={open()} aria-controls={bodyID} onClick={() => setOpen(!open())}><span class="transcript-reasoning__tag">{summary().done ? <span aria-hidden="true">✓</span> : <DotTrail />}</span><span>{summary().label}</span><span class="transcript-reasoning__hint">{summary().hint}</span></button>
+      <button type="button" class="transcript-reasoning__toggle" aria-expanded={open()} aria-controls={bodyID} onClick={() => setOpen(!open())}><span class="transcript-reasoning__tag">{summary().done ? <Icon name="sparkles" size={16} /> : <DotTrail />}</span><span>{summary().label}</span><span class="transcript-reasoning__hint">{summary().hint}</span></button>
       <Collapsible open={open()} id={bodyID} class="transcript-reasoning__body"><div class="transcript-reasoning__content"><Markdown text={props.text()} /></div></Collapsible>
     </div>
   )
@@ -389,8 +389,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
   }
   return (
     <Show when={kind() !== "notice"} fallback={<p class="notice">{noticeText(props.message())}</p>}>
-      <SharedMessageTurn kind={kind()} text={display().text !== "" || display().images.length > 0 || display().files.length > 0 ? <>
-            <Show when={display().text !== ""}><span class="transcript-message__bubble-text">{display().text}</span></Show>
+      <SharedMessageTurn kind={kind()} markdownText={display().text || undefined} bubbleAttachments={display().images.length > 0 || display().files.length > 0 ? <>
             <Show when={display().images.length > 0}><span class="transcript-message__images" aria-label={`${display().images.length} attached image${display().images.length === 1 ? "" : "s"}`} role="group">
               <For each={imageKeys()}>{(key) => {
                 const image = () => display().images[Number(key.slice(0, key.indexOf(":")))]!
@@ -406,7 +405,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
             <span>{mutation().state === "unknown" ? "Outcome unknown" : "Send failed"}: {mutation().detail}</span><button type="button" class="button button--secondary button--small" onClick={() => void remote.store.retryMutation(mutation().id)}>Retry send</button></div>}</Show>} head={<Show when={props.head !== false}><TurnHead><span class="transcript-message__speaker">{agent()}</span><span class="transcript-message__footer">{turnDetail()}</span></TurnHead></Show>} agent={assistantOf(props.message())?.parts.some((part) => part.kind === "text" && part.text.trim() !== "") ? agent() : undefined} body={<AssistantParts parts={() => assistantOf(props.message())?.parts ?? []} />} error={<Show when={!props.continued && assistantOf(props.message())?.error}><p class="transcript-message__error" role="status">{assistantOf(props.message())?.error}</p></Show>} fileChanges={<Show when={!props.continued && showFileChanges()}><FileChangeCard files={fileChanges} /></Show>} shellHeader={<><Icon name="terminal" size={16} /><code>{shellOf(props.message())?.command ?? ""}</code><span class="shell__status">{shellStatus(props.message())}</span></>} shellOutput={<ShellOutputSection shellID={shellOf(props.message())?.shellID ?? ""} output={shellOf(props.message())?.output} fetch={shellOf(props.message())?.outputFetch} status={shellOf(props.message())?.status} />} content={<>
         <Show when={(kind() === "system" || kind() === "synthetic") && !peer()}>
           <Show when={guardrail()} fallback={
-          <Show when={parentAnswer(props.message())} fallback={<Show when={syntheticNotice()} fallback={<Show when={observation()} fallback={<p class="transcript-message__system">{fallbackText()}</p>}>{(summary) => <details class="transcript-message__observation"><summary>{summary()}</summary><pre tabindex="0">{systemText(props.message())}</pre></details>}</Show>}>
+          <Show when={parentAnswer(props.message())} fallback={<Show when={syntheticNotice()} fallback={<Show when={observation()} fallback={<div class="transcript-message__system"><Markdown text={fallbackText()} /></div>}>{(summary) => <details class="transcript-message__observation"><summary>{summary()}</summary><pre tabindex="0">{systemText(props.message())}</pre></details>}</Show>}>
             {(notice) => <SyntheticNotice notice={notice()} />}
           </Show>}>{(answer) => <section class="request request--form" aria-label="Recorded parent answer"><header class="request__header"><Icon name="chat" size={16} /><span>Parent answer</span></header><div class="request__body"><Markdown text={answer()} /></div></section>}</Show>
           }>{(provenance) => <details class="transcript-notice transcript-notice--waiting"><summary><Icon name="chevron-right" size={16} />{fallbackText()}</summary><DecisionProvenance provenance={provenance()} /></details>}</Show>

@@ -316,7 +316,6 @@ export function workspaceBase(directory: string): string {
 }
 
 export type SyntheticCard =
-  | { readonly kind: "subagent"; readonly label: string; readonly status: "completed" | "failed" | "waiting" | "updated"; readonly excerpt?: string }
   | { readonly kind: "completion"; readonly label: string; readonly status: string; readonly description: string }
   | { readonly kind: "goal"; readonly text: string }
   | { readonly kind: "member"; readonly label: string; readonly event: string; readonly memberSessionID: string; readonly excerpt?: string; readonly escalatedBy?: string }
@@ -346,7 +345,7 @@ export function desktopPartVisible(part: AssistantContentPart): boolean {
   return !(part.name === "skill" && part.state.status === "completed" && isRecord(part.state.structured) && Reflect.get(part.state.structured, "alreadyActive") === true)
 }
 
-const memberEvents = ["started", "progress", "completed", "failed", "interrupted", "question", "permission", "review", "escalated"]
+const memberEvents = ["completed", "failed", "interrupted", "question", "permission", "review", "escalated"]
 
 function parentAnswerText(message: Extract<Messages[number], { type: "synthetic" }>): string | undefined {
   const prefix = "Parent answer:\n"
@@ -366,22 +365,18 @@ export function classifyDesktopSynthetic(message: Messages[number]): SyntheticCa
   if (message.type !== "synthetic" || isInternalTranscriptEnvelope(message)) return undefined
   const metadata = message.metadata
   const description = message.description?.trim() ?? ""
+  if (metadata?.source === "subagent_notification") return undefined
   if (metadata?.source === "subagent_parent") {
     const text = parentAnswerText(message)
     if (text !== undefined) return { kind: "parent-answer", text }
   }
   if (metadata?.source === "project_notification") {
     const memberSessionID = nonEmptyString(metadata.memberSessionID)
-    if (typeof metadata.event !== "string" || !memberEvents.includes(metadata.event) || memberSessionID === undefined) return undefined
+    if (!description || typeof metadata.event !== "string" || !memberEvents.includes(metadata.event) || !memberSessionID?.startsWith("ses_") || typeof metadata.title !== "string") return undefined
     const excerpt = trimmedString(metadata.excerpt)
     const escalated = isRecord(metadata.escalatedBy) && metadata.event === "escalated" ? nonEmptyString(metadata.escalatedBy.sessionID) : undefined
     const escalatedBy = escalated === undefined || !isRecord(metadata.escalatedBy) ? undefined : nonEmptyString(metadata.escalatedBy.title) ?? escalated
     return { kind: "member", label: nonEmptyString(metadata.title) ?? memberSessionID, event: metadata.event, memberSessionID, ...(excerpt ? { excerpt } : {}), ...(escalatedBy ? { escalatedBy } : {}) }
-  }
-  if (metadata?.source === "subagent_notification") {
-    const status = metadata.type === "completed" || metadata.type === "failed" || metadata.type === "waiting" ? metadata.type : "updated"
-    const excerpt = trimmedString(metadata.excerpt)?.trim()
-    return { kind: "subagent", label: nonEmptyString(metadata.agent) ?? nonEmptyString(metadata.childID) ?? "Subagent", status, ...(excerpt ? { excerpt } : {}) }
   }
   if ((metadata?.source === "subagent" || metadata?.source === "shell") && description) {
     const state = metadata.state

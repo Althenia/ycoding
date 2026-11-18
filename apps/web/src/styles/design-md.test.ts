@@ -185,7 +185,14 @@ describe("Web design authority", () => {
     expect(rule).not.toContain("MUST NOT add, remove or change a token")
     expect(documentedTokens(document)).toMatchObject({ "--yc-header-public-h": "56px", "--yc-public-max": "1440px" })
     expect(document).toMatch(/light and alternate themes are native product variants/i)
-    expect(document).toContain("not observed dark Stitch variants")
+    expect(document).toContain("They are not claimed as directly observed Stitch variants.")
+  })
+
+  test("Session and Settings document their centered tracks and distinct content constraints", async () => {
+    const document = await Bun.file(new URL("../../DESIGN.md", import.meta.url)).text()
+    const rule = (id: string) => document.split("\n").find(line => line.startsWith(`| ${id} | approved |`)) ?? ""
+    for (const phrase of ["track capped at 64rem", "prompt rail fits outside", "without a nested 68ch cap"]) expect(rule("W47")).toContain(phrase)
+    for (const phrase of ["track capped at 64rem", "Align Machine, Keep awake and preference rows", "explanatory prose"]) expect(rule("W48")).toContain(phrase)
   })
 
   test("the brand principles and rules state the current scoped Web contract directly", async () => {

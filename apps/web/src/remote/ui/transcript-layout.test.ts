@@ -1,12 +1,10 @@
 import { expect, test } from "bun:test"
 import { declarationsWhere, parseStylesheet } from "../../styles/css-rules"
 
-test("selected Session prose keeps its reading measure while tools and user bubbles retain their own bounds", async () => {
+test("selected Session prose fills the same track as tools while user bubbles stay bounded", async () => {
   const sheet = parseStylesheet("transcript.css", await Bun.file(new URL("./transcript.css", import.meta.url)).text())
   const capped = sheet.rules.filter((rule) => rule.header.includes("transcript-md") && Object.values(rule.declarations).some((value) => value.includes("--yc-measure")))
-  expect(capped).toHaveLength(1)
-  expect(capped[0]?.header).toBe(".app--conversation.app--selected .transcript-md :is(p,ul,ol,blockquote,h1,h2,h3,h4,h5,h6)")
-  expect(capped[0]?.declarations["max-inline-size"]).toBe("var(--yc-measure)")
+  expect(capped).toEqual([])
   const user = declarationsWhere(sheet, (rule) => rule.header === ".transcript-message--user" && rule.conditions.length === 0)
   expect(user["max-inline-size"]).toBe("min(560px,88%)")
   expect(user["justify-self"]).toBe("end")
@@ -18,10 +16,10 @@ test("selected Session prose keeps its reading measure while tools and user bubb
 
 const rulesFor = (sheet: ReturnType<typeof parseStylesheet>, header: string) => declarationsWhere(sheet, (rule) => rule.header === header && rule.conditions.length === 0)
 
-test("a user prompt is a hairline green-soft capsule with a small end-bottom corner that stays right aligned and holds its file chips", async () => {
+test("a user prompt is a borderless mint capsule that stays right aligned and keeps its attachments", async () => {
   const sheet = parseStylesheet("transcript.css", await Bun.file(new URL("./transcript.css", import.meta.url)).text())
   const bubble = rulesFor(sheet, ".transcript-message__bubble")
-  expect(bubble.border).toBe("1px solid color-mix(in srgb, var(--yc-green-strong) 25%, transparent)")
+  expect(bubble.border).toBe("0")
   expect(bubble["border-inline-end"]).toBeUndefined()
   expect(bubble["border-radius"]).toBe("var(--yc-radius-xl) var(--yc-radius-xl) var(--yc-radius-sm) var(--yc-radius-xl)")
   expect(bubble.background).toBe("var(--yc-green-soft)")
@@ -53,7 +51,7 @@ test("turn heads use a mono type step with a fixed sunken mark badge and a mediu
 test("tool and reasoning rows sit flat on the canvas until opened, notices stay borderless tonal planes, and no part keeps a block rule", async () => {
   const sheet = parseStylesheet("transcript.css", await Bun.file(new URL("./transcript.css", import.meta.url)).text())
   expect(rulesFor(sheet, ".transcript-reasoning, .transcript-tool")).toMatchObject({ border: "0", background: "transparent", "padding-inline": "0" })
-  expect(rulesFor(sheet, '.transcript-reasoning[data-open], .transcript-tool:has(> .transcript-tool__header [aria-expanded="true"])')).toMatchObject({ border: "1px solid var(--yc-border)", "padding-inline": "var(--yc-space-3)" })
+  expect(rulesFor(sheet, '.transcript-reasoning[data-open], .transcript-tool:has(> .transcript-tool__header [aria-expanded="true"])')).toMatchObject({ background: "var(--yc-surface)", "padding-inline": "var(--yc-space-3)" })
   for (const header of [".transcript-notice", ".transcript-message__observation", ".transcript-message__system"]) {
     const plane = rulesFor(sheet, header)
     expect(plane.border).toBe("0")
@@ -70,7 +68,7 @@ test("tool and reasoning rows sit flat on the canvas until opened, notices stay 
   expect(rulesFor(card, ".file-change-card.file-change-card--transcript")).toMatchObject({ border: "0", "border-radius": "0", background: "transparent", font: "var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono)" })
   expect(rulesFor(card, ".file-change-card.file-change-card--transcript > .file-change-card__summary")).toMatchObject({ padding: "var(--yc-space-1) 0" })
   const opened = rulesFor(card, ".file-change-card.file-change-card--transcript[data-open]")
-  expect(opened).toMatchObject({ outline: "1px solid var(--yc-border)", "outline-offset": "-1px", "border-radius": "var(--yc-radius-lg)" })
+  expect(opened).toMatchObject({ background: "var(--yc-surface)", "border-radius": "var(--yc-radius-lg)" })
   expect(opened.border).toBeUndefined()
   const nav = parseStylesheet("transcript-nav.css", await Bun.file(new URL("./transcript-nav.css", import.meta.url)).text())
   expect(rulesFor(nav, ".transcript-navigation__rail")["inline-size"]).toBe("28px")
@@ -111,11 +109,11 @@ test("the transcript adds no cursor, container query or screen-reader utility an
   }
 })
 
-test("markdown links and inline code, the agent label and notice marks use neutral ink, never green", async () => {
+test("Markdown and notice icons use semantic accents while the agent name remains neutral", async () => {
   const sheet = parseStylesheet("transcript.css", await Bun.file(new URL("./transcript.css", import.meta.url)).text())
-  expect(rulesFor(sheet, ".transcript-md a").color).toBe("var(--yc-text)")
-  expect(rulesFor(sheet, ".transcript-md :not(pre)>code")).toMatchObject({ background: "var(--yc-surface-sunken)", color: "var(--yc-text)" })
+  expect(rulesFor(sheet, ".transcript-md a").color).toBe("var(--yc-signal)")
+  expect(rulesFor(sheet, ".transcript-md :not(pre)>code")).toMatchObject({ background: "var(--yc-surface-sunken)", color: "var(--yc-context-tools)" })
   expect(rulesFor(sheet, ".transcript-message__agent").color).toBe("var(--yc-text)")
-  expect(rulesFor(sheet, ".transcript-notice__mark").color).toBe("var(--yc-text-muted)")
+  expect(rulesFor(sheet, ".transcript-notice__mark").color).toBe("var(--yc-context-reasoning)")
   expect(rulesFor(sheet, ".transcript-md :is(th,td)").border).toBe("0")
 })

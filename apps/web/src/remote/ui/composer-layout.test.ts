@@ -80,7 +80,7 @@ test("wide chip bar reads attach, agent, model and effort as six-pixel mono chip
   expect(wide(chips)["padding-inline"]).toBe("6px")
   expect(wide(".composer .composer__controls .mini-picker__trigger > svg:first-child:not(:last-child)").display).toBe("none")
   expect(composer.rules.some((rule) => rule.header === ".composer .composer__row" && Object.keys(rule.declarations).some((property) => property.startsWith("transition")))).toBe(false)
-  expect(base(".composer__attach")).toMatchObject({ background: "transparent", color: "var(--yc-text-muted)" })
+  expect(base(".composer__attach")).toMatchObject({ background: "transparent", color: "var(--yc-signal)" })
   expect(base(".mini-composer__send")).toMatchObject({ background: "var(--yc-primary-bg)", color: "var(--yc-primary-fg)" })
   expect(base(".mini-composer__send:disabled").opacity).toBe(".45")
   expect(wide(".composer__spacer").flex).toBe("1 1 0")
@@ -165,7 +165,7 @@ test("companion clusters reserve the actions, retain readable model width and al
   expect(companion(".app--team-open .composer .composer__controls")["flex-wrap"]).toBe("wrap")
   expect(companion(".app--team-open .composer__context-controls").flex).toBe("1 1 0")
   expect(companion(".app--team-open .composer__controls .model-control")).toMatchObject({ flex: "1 1 var(--yc-space-16)", "min-inline-size": "var(--yc-space-16)" })
-  expect(companion(".app--team-open .composer__effort-name, .app--team-open .composer__controls .session-status__autonomous-full").display).toBe("none")
+  expect(companion(".app--team-open .composer__controls .session-status__autonomous-full").display).toBe("none")
   expect(companion(".app--team-open .composer__controls .session-status__autonomous-word").display).toBe("inline")
 })
 
