@@ -781,9 +781,21 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
     return undefined
   })
 
-  const deliveredSequence = (scope: CoordinationService.Scope, member: SessionSchema.ID) =>
+  const deliveredSequence = (scope: CoordinationService.Scope, member: SessionSchema.ID, receiver: SessionSchema.ID) =>
     db.select({ sequence: sql<number | null>`max(json_extract(${EventTable.data}, '$.input.data.metadata.memberSequence'))` })
-      .from(EventTable).where(and(eq(EventTable.type, versionedType(SessionEvent.InputAdmitted.type, SessionEvent.InputAdmitted.durable.version)),
+      .from(EventTable).where(and(
+        // A receipt can live in a previous owner's Session after an ownership transfer.
+        sql`${EventTable.aggregate_id} IN (
+          SELECT ${receiver}
+          UNION
+          SELECT json_extract(ownership.data, '$.ownerSessionID')
+          FROM event AS ownership
+          WHERE ownership.aggregate_id = ${scope.groupID}
+            AND ownership.type = ${versionedType(Coordination.Event.OwnerChanged.type, Coordination.Event.OwnerChanged.durable.version)}
+            AND json_extract(ownership.data, '$.sessionID') = ${member}
+            AND json_type(ownership.data, '$.ownerSessionID') = 'text'
+        )`,
+        eq(EventTable.type, versionedType(SessionEvent.InputAdmitted.type, SessionEvent.InputAdmitted.durable.version)),
         sql`json_extract(${EventTable.data}, '$.input.data.metadata.source') = ${notice}`,
         sql`json_extract(${EventTable.data}, '$.input.data.metadata.groupID') = ${scope.groupID}`,
         sql`json_extract(${EventTable.data}, '$.input.data.metadata.memberSessionID') = ${member}`)).get()
@@ -811,7 +823,7 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
       return
     }
     const retained = yield* db.select({ sequence: EventTable.seq }).from(EventTable).where(sql`${EventTable.id} = ${identity}`).get().pipe(Effect.orDie)
-    if (!urgentEvents.has(event) && retained !== undefined && retained.sequence <= (yield* deliveredSequence(scope, member))) return
+    if (!urgentEvents.has(event) && retained !== undefined && retained.sequence <= (yield* deliveredSequence(scope, member, receiver))) return
     const routed = event !== "started" && event !== "progress" && (scope.active || urgentEvents.has(event))
     yield* deliver({ scope, member, event, identity: pending === undefined ? identity : handoffIdentity(receiver, pending), receiver, resume: wake && routed,
       detail: { ...detail, ...(pending === undefined ? {} : { fingerprint: pending.fingerprint }), ...(retained === undefined ? {} : { memberSequence: retained.sequence }) } })
@@ -835,7 +847,7 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
       yield* Effect.yieldNow
     }
     if (joined === undefined) return
-    const delivered = yield* deliveredSequence(scope, member)
+    const delivered = yield* deliveredSequence(scope, member, receiver)
     const types = [SessionEvent.Execution.Started, SessionEvent.Step.Ended, SessionEvent.Execution.Succeeded, SessionEvent.Execution.Interrupted]
       .map(definition => versionedType(definition.type, definition.durable.version))
     const held = and(eq(EventTable.aggregate_id, member), gte(EventTable.created, joined), gt(EventTable.seq, delivered), inArray(EventTable.type, types))

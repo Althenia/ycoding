@@ -1226,6 +1226,37 @@ describe("member notifications", () => {
       expect(woken).toEqual([])
     }))
 
+  it.effect("startup delivery retains prior owners' receipts and ignores receipts in unrelated Sessions", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      yield* retainSuccess(fixture, fixture.alpha.id)
+      yield* fixture.runtime.recover()
+      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(1)
+
+      yield* own(fixture, fixture.alpha.id, fixture.other.id)
+      const restarted = yield* fixture.makeRuntime
+      yield* restarted.recover()
+      expect(yield* noticesFor(fixture, fixture.other.id)).toEqual([])
+
+      yield* fixture.sessions.synthetic({
+        sessionID: fixture.outsider.id,
+        text: "Unrelated synthetic input",
+        metadata: {
+          source: CoordinationRuntime.notice,
+          groupID: fixture.group.id,
+          memberSessionID: fixture.alpha.id,
+          memberSequence: 10_000,
+        },
+        resume: false,
+      })
+      yield* retainSuccess(fixture, fixture.alpha.id)
+      yield* restarted.recover()
+      yield* restarted.recover()
+      expect(yield* noticesFor(fixture, fixture.other.id)).toHaveLength(1)
+      expect(woken).toEqual([])
+    }))
+
   it.effect("startup notification recovery starts at the current membership after removal and rejoining", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
