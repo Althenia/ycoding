@@ -38,7 +38,7 @@ const CONTROL_SETTLE_MS = 500
 const PAGE_SCRIPT_NEWLINE = String.fromCharCode(10)
 const LOCATOR = /^role=([^[\]|]{1,64})\[name=("(?:[^"\\]|\\.)*")\](?:\|nth=([1-9][0-9]{0,3}))?$/
 const SECRET_AUTOCOMPLETE = ["current-password", "new-password", "one-time-code", "cc-number", "cc-csc", "cc-exp", "cc-exp-month", "cc-exp-year"]
-const SECRET_NAME = /pass(?:word|code|phrase)|one[\s_-]?time|verification[\s_-]?code|security[\s_-]?code|card[\s_-]?(?:number|no)|(?:^|[^a-z0-9])(?:otp|totp|mfa|2fa|pin|cvv|cvc|csc|ccnum)(?:$|[^a-z0-9])/i
+const SECRET_NAME = /pass(?:word|code|phrase)|one[\s_-]?time|verification[\s_-]?code|security[\s_-]?code|card[\s_-]?(?:number|no)|(?:^|[^a-z0-9])(?:[a-z0-9]+[\s_-]?)?secret(?:$|[^a-z0-9]|key|token)|(?:^|[^a-z0-9])(?:otp|totp|mfa|2fa|pin|cvv|cvc|csc|ccnum)(?:$|[^a-z0-9])/i
 const IS_SENSITIVE = [
   `const isSensitive = (el) => {`,
   `  const tag = el.localName`,
@@ -63,6 +63,13 @@ const F_CONTROL_STATE = [
   `  if (el.localName === "input" || el.localName === "textarea") return { value: String(el.value).slice(0, 1024) }`,
   `  if (el.isContentEditable) return { value: String(el.innerText).slice(0, 1024) }`,
   `  return {}`,
+  `}`,
+].join(PAGE_SCRIPT_NEWLINE)
+const F_CONTROL_TEXT = [
+  `function () { ${IS_SENSITIVE}`,
+  `  if (isSensitive(this)) return undefined`,
+  `  const text = this.localName === "input" || this.localName === "textarea" || this.localName === "select" ? this.value : this.innerText`,
+  `  return String(text ?? "").replace(/\\s+/g, " ").trim().slice(0, 1024)`,
   `}`,
 ].join(PAGE_SCRIPT_NEWLINE)
 const F_FILL = [
@@ -128,6 +135,70 @@ const F_FOCUSED = [
   `  }`,
   `}`,
 ].join(PAGE_SCRIPT_NEWLINE)
+const ROW_LABEL = [
+  `const hiddenNode = (node) => node.hidden || node.getAttribute("aria-hidden") === "true" || getComputedStyle(node).display === "none"`,
+  `const rowLabel = (el) => {`,
+  `  const given = el.getAttribute("aria-label")`,
+  `  if (given) return given.replace(/\\s+/g, " ").trim().slice(0, 128)`,
+  `  const walker = document.createTreeWalker(el, 5, { acceptNode: (node) => node.nodeType === 1 && hiddenNode(node) ? 2 : 1 })`,
+  `  let text = ""`,
+  `  for (let node = walker.nextNode(), visited = 0; node && text.length < 256 && visited < 200; node = walker.nextNode(), visited++) if (node.nodeType === 3) text += " " + node.data`,
+  `  return text.replace(/\\s+/g, " ").trim().slice(0, 128)`,
+  `}`,
+].join(PAGE_SCRIPT_NEWLINE)
+const F_POPUP_ROWS = [
+  `function () { ${ROW_LABEL}`,
+  `  const MAX_POPUPS = 16, MAX_NODES = 2000, MAX_ROWS = 100`,
+  `  let more = false, nodes = 0`,
+  `  const owned = (owner) => (owner.getAttribute("aria-controls") || owner.getAttribute("aria-owns") || "").split(/\\s+/).filter(Boolean).map((id) => document.getElementById(id))`,
+  `  const candidates = [...document.querySelectorAll('[aria-expanded="true"]')].flatMap(owned).filter(Boolean).concat([...document.querySelectorAll('[role="listbox"],[role="menu"]')])`,
+  `  const popups = [...new Set(candidates)]`,
+  `  if (popups.length > MAX_POPUPS) more = true`,
+  `  const roled = '[role="option"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"]'`,
+  `  const blocked = 'a,button,input,select,textarea,iframe,summary,[role],[tabindex],[contenteditable]'`,
+  `  const pointer = (el) => getComputedStyle(el).cursor === "pointer"`,
+  `  const clipped = (el, x, y) => { let hops = 0; for (let a = el.parentElement; a; a = a.parentElement) { if (++hops > 64) throw new Error("depth"); if (getComputedStyle(a).overflowY === "visible") continue; const r = a.getBoundingClientRect(); if (x < r.left || x > r.right || y < r.top || y > r.bottom) return true } return false }`,
+  `  const reachable = (el) => {`,
+  `    const rect = el.getBoundingClientRect()`,
+  `    if (rect.width <= 0 || rect.height <= 0 || getComputedStyle(el).visibility !== "visible") return false`,
+  `    const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2`,
+  `    if (x < 0 || y < 0 || x > innerWidth || y > innerHeight || clipped(el, x, y)) return true`,
+  `    const top = document.elementFromPoint(x, y)`,
+  `    return !!top && (top === el || el.contains(top))`,
+  `  }`,
+  `  const hasBlocked = (el) => {`,
+  `    const walker = document.createTreeWalker(el, 1)`,
+  `    for (let node = walker.nextNode(); node; node = walker.nextNode()) {`,
+  `      if (++nodes > MAX_NODES) { more = true; return true }`,
+  `      if (node.matches(blocked)) return true`,
+  `    }`,
+  `    return false`,
+  `  }`,
+  `  const rows = new Set()`,
+  `  for (const popup of popups.slice(0, MAX_POPUPS)) {`,
+  `    const walker = document.createTreeWalker(popup, 1, { acceptNode: (node) => hiddenNode(node) ? 2 : 1 })`,
+  `    for (let el = walker.nextNode(); el && !more; el = walker.nextNode()) {`,
+  `      if (++nodes > MAX_NODES) { more = true; break }`,
+  `      try {`,
+  `        if (!pointer(el) || (el.parentElement !== popup && pointer(el.parentElement)) || el.matches(blocked) || el.closest(roled) || hasBlocked(el) || !rowLabel(el) || !reachable(el)) continue`,
+  `      } catch { more = true; continue }`,
+  `      if (rows.size >= MAX_ROWS) { more = true; break }`,
+  `      rows.add(el)`,
+  `    }`,
+  `  }`,
+  `  const found = [...rows]`,
+  `  found.more = more`,
+  `  return found`,
+  `}`,
+].join(PAGE_SCRIPT_NEWLINE)
+const F_ROW_NAME = `function () { ${ROW_LABEL}${PAGE_SCRIPT_NEWLINE}  return rowLabel(this) }`
+const F_ROW_HIT = [
+  `function () {`,
+  `  const rect = this.getBoundingClientRect()`,
+  `  const top = this.ownerDocument.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)`,
+  `  return !!top && (top === this || this.contains(top))`,
+  `}`,
+].join(PAGE_SCRIPT_NEWLINE)
 const F_DOCUMENT = `function () { return document }`
 const F_SENSITIVE_ELEMENT = [
   `function () { ${IS_SENSITIVE}`,
@@ -148,6 +219,8 @@ const interactiveRoles = new Set([
   "link",
   "listbox",
   "menuitem",
+  "menuitemcheckbox",
+  "menuitemradio",
   "option",
   "radio",
   "searchbox",
@@ -171,7 +244,7 @@ const textRoles = new Set([
   "term",
 ])
 const namedKeys = {
-  Enter: { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 },
+  Enter: { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" },
   Tab: { key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 },
   Escape: { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 },
   Backspace: { key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 },
@@ -185,8 +258,8 @@ const namedKeys = {
   End: { key: "End", code: "End", windowsVirtualKeyCode: 35 },
   PageUp: { key: "PageUp", code: "PageUp", windowsVirtualKeyCode: 33 },
   PageDown: { key: "PageDown", code: "PageDown", windowsVirtualKeyCode: 34 },
-  " ": { key: " ", code: "Space", windowsVirtualKeyCode: 32 },
-  Space: { key: " ", code: "Space", windowsVirtualKeyCode: 32 },
+  " ": { key: " ", code: "Space", windowsVirtualKeyCode: 32, text: " " },
+  Space: { key: " ", code: "Space", windowsVirtualKeyCode: 32, text: " " },
 }
 const ACTION_TYPES = new Set([
   "navigate",
@@ -1365,6 +1438,11 @@ async function observe(message) {
       if (!top) frames.push({ url, observed: true })
       const inputs = await formInputNodes(tab, target)
       const byId = new Map(tree.nodes.map((item) => [item.nodeId, item]))
+      const locatorOf = (role, name) => {
+        const base = `role=${role}[name=${JSON.stringify(name.slice(0, 128))}]`
+        const duplicates = elements.filter((candidate) => candidate.locator?.startsWith(base)).length
+        return duplicates ? `${base}|nth=${duplicates}` : base
+      }
       for (const node of tree.nodes) {
         if (node.ignored) continue
         const role = String(node.role?.value ?? "")
@@ -1405,19 +1483,29 @@ async function observe(message) {
         const attributes = attrs(described.node.attributes)
         const href = attributes.get("href")
         const destination = href ? new URL(href, url).toString() : undefined
-        const locatorBase = `role=${role}[name=${JSON.stringify(elementName.slice(0, 128))}]`
-        const duplicates = elements.filter((candidate) => candidate.locator?.startsWith(locatorBase)).length
         elements.push({
           ref,
           role,
           name: elementName,
-          locator: duplicates ? `${locatorBase}|nth=${duplicates}` : locatorBase,
+          locator: locatorOf(role, elementName),
           description: node.description?.value ? String(node.description.value) : undefined,
           disabled: node.properties?.some((item) => item.name === "disabled" && item.value?.value === true) || undefined,
           destination,
           ...elementState(node, role, isSensitiveAttributes(described.node.nodeName, attributes, elementName)),
           ...(top ? {} : { frame: url }),
         })
+      }
+      const popup = await popupRows(tab, target)
+      if (popup.more) candidateCount = MAX_ELEMENTS + 1
+      for (const row of popup.rows) {
+        const key = `${sessionId ?? ""}\0${row.backendNodeId}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        candidateCount++
+        if (elements.length >= MAX_ELEMENTS) continue
+        const ref = `b${elements.length + 1}`
+        tab.refs.set(ref, { sessionId, backendNodeId: row.backendNodeId, frameId: target.frameId, url, top, name: row.name, inferred: true })
+        elements.push({ ref, role: "clickable", name: row.name, locator: locatorOf("clickable", row.name), ...(top ? {} : { frame: url }) })
       }
     }
     const info = await tabInfo(tab)
@@ -1443,6 +1531,38 @@ async function observe(message) {
   } catch (error) {
     await abandonFresh(fresh)
     fail(message, safeError(error))
+  }
+}
+
+async function popupRows(tab, target) {
+  const rows = []
+  const frame = { sessionId: target.sessionId, frameId: target.frameId }
+  let list
+  try {
+    list = await controlEvaluate(tab, frame, F_POPUP_ROWS, [], false)
+    if (!list?.objectId) return { rows, more: false }
+    const { result } = await command(tab.chromeTabID, "Runtime.getProperties", { objectId: list.objectId, ownProperties: true }, target.sessionId)
+    const more = result.find((item) => item.name === "more")?.value?.value !== false
+    for (const member of result.filter((item) => /^[0-9]+$/.test(item.name) && item.value?.objectId)) {
+      try {
+        const { node } = await command(tab.chromeTabID, "DOM.describeNode", { objectId: member.value.objectId, depth: 0 }, target.sessionId)
+        const named = await command(
+          tab.chromeTabID,
+          "Runtime.callFunctionOn",
+          { functionDeclaration: F_ROW_NAME, objectId: member.value.objectId, returnByValue: true },
+          target.sessionId,
+        )
+        const name = named?.result?.value
+        if (typeof name === "string" && name && node?.backendNodeId) rows.push({ backendNodeId: node.backendNodeId, name })
+      } finally {
+        await command(tab.chromeTabID, "Runtime.releaseObject", { objectId: member.value.objectId }, target.sessionId).catch(() => {})
+      }
+    }
+    return { rows, more }
+  } catch {
+    return { rows: [], more: true }
+  } finally {
+    if (list?.objectId) await command(tab.chromeTabID, "Runtime.releaseObject", { objectId: list.objectId }, target.sessionId).catch(() => {})
   }
 }
 
@@ -1619,8 +1739,8 @@ async function dispatchKey(tab, action, markDispatched) {
   const named = namedKeys[action.key]
   const single = typeof action.key === "string" && action.key.length === 1
   if (!named && !single) throw new Error(`Unsupported key: ${String(action.key).slice(0, 32)}`)
-  const base = named ?? { key: action.key, code: "", windowsVirtualKeyCode: 0 }
-  const text = single && !named && !modifiers
+  const { text: namedText, ...base } = named ?? { key: action.key, code: "", windowsVirtualKeyCode: 0 }
+  const text = modifiers ? undefined : (namedText ?? (single && !named ? action.key : undefined))
   const safeNavigation =
     !(modifiers & 7) &&
     (modifiers === 8 ? action.key === "Tab" : ["Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(action.key))
@@ -1630,7 +1750,7 @@ async function dispatchKey(tab, action, markDispatched) {
     type: "keyDown",
     ...base,
     modifiers,
-    ...(text ? { text: action.key } : {}),
+    ...(text ? { text } : {}),
   })
   await command(tab.chromeTabID, "Input.dispatchKeyEvent", { type: "keyUp", ...base, modifiers })
 }
@@ -1820,6 +1940,10 @@ async function clickTarget(tab, target, markDispatched) {
   rejectProtectedInput(described.node)
   const { x, y } = await elementPoint(tab, target)
   assertCurrent(tab, documentGeneration)
+  if (target.inferred) {
+    if ((await controlCall(tab, target, F_ROW_HIT)) !== true) throw new Error("Element is covered or not clickable")
+    assertCurrent(tab, documentGeneration)
+  }
   markDispatched()
   for (const type of ["mousePressed", "mouseReleased"])
     await inputCommand(tab, { type, x, y, button: "left", clickCount: 1 })
@@ -1900,14 +2024,17 @@ async function selectListOption(tab, target, criteria, markDispatched) {
   const chosen = { label: normalizeText(option.name?.value).slice(0, 1024), index }
   if (booleanState(axProperty(option, "selected")) === true) return { control: { selected: [chosen] } }
   const optionTarget = { ...target, backendNodeId: option.backendDOMNodeId }
+  const before = role === "combobox" ? await controlCall(tab, target, F_CONTROL_TEXT) : undefined
   await clickTarget(tab, optionTarget, markDispatched)
-  const selected = await settle(
-    async () => booleanState(axProperty(await axNode(tab, optionTarget).catch(() => undefined), "selected")) === true,
-    (value) => value,
-  )
+  const selected = await settle(async () => {
+    if (await connectedNode(tab, optionTarget))
+      return booleanState(axProperty(await axNode(tab, optionTarget).catch(() => undefined), "selected")) === true
+    const after = role === "combobox" ? await controlCall(tab, target, F_CONTROL_TEXT).catch(() => undefined) : undefined
+    return typeof after === "string" && after !== before && after === chosen.label
+  }, (value) => value)
   return selected
     ? { control: { selected: [chosen] } }
-    : { control: { selected: [] }, message: "The control did not change state" }
+    : { control: { selected: [] }, message: "The selection could not be confirmed" }
 }
 
 async function setChecked(tab, action, markDispatched) {
@@ -2057,6 +2184,10 @@ async function locatorMatches(tab, locator) {
       if (String(node.name?.value ?? "").slice(0, 128) !== locator.name) continue
       matches.push({ sessionId: frame.sessionId, backendNodeId: node.backendDOMNodeId, frameId: frame.frameId, url: frame.url, top: frame.top })
     }
+    if (locator.role !== "clickable") continue
+    for (const row of (await popupRows(tab, frame)).rows)
+      if (row.name.slice(0, 128) === locator.name)
+        matches.push({ sessionId: frame.sessionId, backendNodeId: row.backendNodeId, frameId: frame.frameId, url: frame.url, top: frame.top })
   }
   return matches
 }

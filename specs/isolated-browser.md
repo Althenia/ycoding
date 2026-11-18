@@ -46,6 +46,8 @@ Routine observations retain the existing bounded accessibility projection: at mo
 
 ## Popups
 
+An in-page popup is part of its approved frame, not a new browser target. Observation exposes accessible options in open lists and menus, and may include safe pointer-operated rows without explicit roles inside open popup containers. Inferred rows expose a `clickable` role, a visible name, and a ref and locator; they do not expose DOM selectors or editable content. A covered target does not receive a click. The executor expands accessibility nodes past the initial depth within a fixed budget and reports `truncated: true` when it cannot complete the traversal within that budget. `select` reports only confirmed selected state or a matching control value, not a popup dismissal. Unmodified Enter and Space use the browser's native activation and input paths after focus verification. An `Account Code` label alone does not make a field sensitive; password, OTP, payment and secret fields remain protected.
+
 Unexpected page targets are never automatically adopted. The implementation candidate established by the local experiment is:
 
 1. Pause the new target and verify context ownership.
