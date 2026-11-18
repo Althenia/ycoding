@@ -1286,8 +1286,8 @@ test("the Edited files card belongs to the turn that captured the edit, never to
   expect(source).toContain("editPlacements().get(item().id)")
 })
 
-test("composer handles clipboard files, WKWebView text paste fallback, copy and export clipboard fallback and standard edit shortcuts", async () => {
-  const source = await read("src/renderer.tsx")
+test("composer handles clipboard files, WKWebView paste fallback, copy and export clipboard fallback and standard edit shortcuts", async () => {
+  const [source, transfer] = await Promise.all([read("src/renderer.tsx"), read("src/composer-files.ts")])
   const imported = /import \{([^}]*)\} from "\.\/form-rules"/.exec(source)?.[1] ?? ""
   for (const name of ["insertTextAtSelection", "isEditableKeyboardTarget", "isStandardEditShortcut"]) {
     expect(imported).toMatch(new RegExp(`\\b${name}\\b`))
@@ -1305,8 +1305,9 @@ test("composer handles clipboard files, WKWebView text paste fallback, copy and 
   expect(composerField).not.toContain('"ArrowLeft"')
   expect(composerField).not.toContain('"ArrowRight"')
   expect(source).toContain("clipboardData")
-  expect(source).toContain(".files")
-  expect(source).toContain(".items")
+  expect(transfer).toContain("data.files")
+  expect(transfer).toContain("data.items")
+  expect(composerField).toContain("snapshot.imageBase64")
   expect(source).toContain("api.readClipboard(")
   expect(source).toContain("insertTextAtSelection(")
   expect(source).toContain("preventDefault()")

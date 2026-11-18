@@ -33,6 +33,9 @@
   --yc-radius-lg: 4px;
   --yc-radius-xl: 6px;
   --yc-radius-2xl: 8px;
+  --yc-radius-control: 8px;
+  --yc-radius-card: 12px;
+  --yc-radius-composer: 16px;
   --rl-rail: 256px;
   --rl-rail-compact: 64px;
   --rl-companion: 320px;

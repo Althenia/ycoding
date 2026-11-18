@@ -16,6 +16,7 @@ const unbroken = "UnbrokenSyntheticSessionTitle".repeat(5)
 const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
 const clipboard: string[] = []
 let clipboardFailure = false
+let pastedClipboard: { text: string | null; imageBase64?: string; formats: readonly string[] } | undefined
 const saved: { readonly filename: string; readonly content: string }[] = []
 const notifications: unknown[] = []
 let pinned = false
@@ -205,6 +206,7 @@ beforeAll(async () => {
     return undefined
   }, { editor: { read: async () => { if (ideFailure) throw new Error("Synthetic IDE read failure"); return ideEnabled ? { status: "connected", selection: { source: "websocket", filePath: "/synthetic/repo/src/editor.ts", ranges: [{ text: "const sample = 1", selection: { start: { line: 1, character: 1 }, end: { line: 1, character: 17 } } }] } } : { status: "disabled" } }, close: () => {} }, openEditor: async () => externalEdit === undefined ? { kind: "fallback" } : { kind: "edited", text: externalEdit } })
   const rpc = createDesktopRPC(owned.controller, { path: path.join(owned.resources, "preferences"), read: async () => ({}), save: async () => {}, validate: () => ({ mode: "shared" }) }, {
+    readClipboard: () => pastedClipboard ?? { text: null, formats: [] },
     writeClipboard: (text) => { if (clipboardFailure) throw new DesktopError("Synthetic clipboard unavailable."); clipboard.push(text) },
     notify: (input) => { notifications.push(input) },
     saveExport: async (exported, current) => { if (!current()) throw new Error("Synthetic export connection changed"); if (exportFailure) throw new DesktopError("Synthetic destination denied access (EACCES). No file was written."); saved.push(exported); return { saved: true, path: `/synthetic/exports/${exported.filename}` } },
@@ -239,7 +241,7 @@ beforeEach(() => { ideEnabled = false; externalEdit = undefined; deferred = fals
 beforeEach(() => { ideEnabled = false; ideFailure = false; externalEdit = undefined; populatedKind = undefined })
 beforeEach(() => { referenceScene = false; providerScene = false; captureScene = false; sceneRead = undefined; exportFailure = false; sessionCost = 0 })
 beforeEach(() => { browseListing = undefined })
-beforeEach(() => { clipboardFailure = false })
+beforeEach(() => { clipboardFailure = false; pastedClipboard = undefined })
 beforeEach(() => { presentationParts = false; questionPending = false; pending = true; pinned = false; replyText = "Initial synthetic response"; running = false; currentVariant = undefined; stagedMessage = undefined; archived = false; familyEnabled = false; failInterrupt = false; directoryStatus = false; telemetryConsent = false; globalFormPending = false; formReview = false; processControls = false; waitingTask = true; stoppedTask = true; decideGate = undefined; fileGate = undefined; clipboard.length = 0; saved.length = 0; notifications.length = 0; if (owned) owned.calls.length = 0 })
 
 const inject = `(() => {
@@ -279,11 +281,12 @@ async function open(ready = `document.querySelector('#turn-msg_response')`) {
   }
 }
 
-async function command(page: Page, label: string) {
+async function command(page: Page, label: string, capture?: string) {
   await page.evaluate(`document.querySelector('.desktop__palette').click()`)
   await wait(page, `!![...document.querySelectorAll('.palette__option')].find(button => button.textContent.includes(${JSON.stringify(label)}))`)
   await page.evaluate(`(() => { const input = document.querySelector('.palette__input'); input.value = ${JSON.stringify(label)}; input.dispatchEvent(new InputEvent('input', { bubbles: true })); input.focus(); })()`)
   await wait(page, `document.querySelector('.palette__option[aria-selected="true"]')?.textContent.includes(${JSON.stringify(label)})`)
+  if (capture && process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, capture), Buffer.from(await page.screenshot(), "base64"))
   await page.pressKey("Enter", "Enter", 13, "\r")
 }
 
@@ -442,6 +445,52 @@ async function clickText(page: Page, selector: string, label: string) {
   await wait(page, `[...document.querySelectorAll(${JSON.stringify(selector)})].some(element => element.textContent.trim() === ${JSON.stringify(label)})`)
   await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].find(element => element.textContent.trim() === ${JSON.stringify(label)}).click()`)
 }
+
+test("Desktop provider cards switch the default credential through the existing integration route", async () => {
+  prepareImplementedSurface()
+  let active = "cred_work"
+  sceneRead = call => {
+    if (call.route === "/api/integration") return { location, data: [{ id: "synthetic", name: "Synthetic Provider", methods: [{ type: "key", label: "Synthetic API key" }, { type: "oauth", id: "browser", label: "Synthetic browser sign-in" }, { type: "oauth", id: "headless", label: "Synthetic headless sign-in" }], connections: ["work", "personal"].map(name => ({ type: "credential", id: `cred_${name}`, label: name, active: active === `cred_${name}`, kind: "oauth" })) }] }
+    if (call.method === "POST" && call.route === "/api/credential/cred_personal/activate") { active = "cred_personal"; return new Response(null, { status: 204 }) }
+    return undefined
+  }
+  const page = await openReference()
+  try {
+    await command(page, "/connect", "command-palette-connect.png")
+    await clickContaining(page, '.provider-picker button', "Synthetic Provider")
+    const cards = `[...document.querySelectorAll('.desktop-credential-card')]`
+    await wait(page, `${cards}.length === 2`)
+    expect(await page.evaluate(`${cards}.map(card => card.querySelector('.desktop-state-badge').textContent.trim())`, decodeArray(decodeString))).toEqual(["Default", "Not default"])
+    await clickText(page, '.desktop-credential-card button', "Set default")
+    await wait(page, `${cards}[1]?.querySelector('.desktop-state-badge')?.textContent.trim() === 'Default'`)
+    expect(await page.evaluate(`!document.querySelector('.desktop-credential-list').textContent.includes('· true') && !document.querySelector('.desktop-credential-list').textContent.includes('· false') && document.querySelector('input[type="password"]') !== null`, decodeBoolean)).toBe(true)
+    expect(owned!.calls.filter(call => call.method === "POST" && call.route.includes("/credential/")).map(call => call.route)).toEqual(["/api/credential/cred_personal/activate"])
+    if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "providers-default-profile.png"), Buffer.from(await page.screenshot(), "base64"))
+  } finally { await page.close() }
+}, 30_000)
+
+test("Desktop tools keep an Artifacts read failure in its tab and expose semantic Dots state", async () => {
+  prepareImplementedSurface()
+  sceneRead = call => {
+    if (call.route === "/api/artifact") return new Response(JSON.stringify({ message: "Synthetic artifact read refused" }), { status: 500, headers: { "content-type": "application/json" } })
+    return undefined
+  }
+  const page = await openReference()
+  try {
+    await command(page, "/status")
+    for (const [index, label] of ["Status & Debug", "Agents & Skills", "Browser", "Remote & Pairing", "Artifacts & Plugins", "Dots"].entries()) {
+      await page.evaluate(`[...document.querySelectorAll('dialog[open] [role="tab"]')].find(tab => tab.textContent.trim() === ${JSON.stringify(label)}).focus()`)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      const panel = `document.querySelector('dialog[open] [role="tabpanel"]')`
+      await wait(page, `${panel}?.getAttribute('aria-label') === ${JSON.stringify(label)} && !document.querySelector('dialog[open]').textContent.includes('Reading status…')`)
+      if (label === "Artifacts & Plugins") await wait(page, `${panel}?.querySelector('[role="alert"]')?.textContent.includes('Artifacts could not be read')`)
+      else expect(await page.evaluate(`!document.querySelector('dialog[open]').textContent.includes('Artifacts could not be read')`, decodeBoolean)).toBe(true)
+      if (label === "Dots") expect(await page.evaluate(`(() => { const text = document.querySelector('dialog[open] section[aria-label="Dots computer access"]').innerText.split(/\\s+/); return text.includes('Disabled') && !text.includes('true') && !text.includes('false'); })()`, decodeBoolean)).toBe(true)
+      if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, `system-tab-${index + 1}.png`), Buffer.from(await page.screenshot(), "base64"))
+    }
+    expect(owned!.calls.filter(call => call.method !== "GET" && !call.route.endsWith("/web-latency"))).toEqual([])
+  } finally { await page.close() }
+}, 40_000)
 
 async function clickContaining(page: Page, selector: string, label: string) {
   await wait(page, `[...document.querySelectorAll(${JSON.stringify(selector)})].some(element => element.textContent.includes(${JSON.stringify(label)}))`)
@@ -1185,7 +1234,7 @@ test("Stitch scene 4f5f9735ce8d45388c1034a3c8a10b1d reported running children an
     await companion(page, "Running")
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.execution.started', data: { sessionID: 'ses_test' } })`)
     await message(page, "Inspect the synthetic pagination cursor next.")
-    await captureReference(page, "4f5f9735ce8d45388c1034a3c8a10b1d", `document.querySelector('.rl-running')?.textContent.includes('ses_child_a') && document.querySelector('.rl-running')?.textContent.includes('bun test test/session-page.test.ts') && !!document.querySelector('.rl-stop')`)
+    await captureReference(page, "4f5f9735ce8d45388c1034a3c8a10b1d", `document.querySelector('.rl-running')?.textContent.includes('ses_child_a') && document.querySelector('.rl-running')?.textContent.includes('bun test test/session-page.test.ts') && !!document.querySelector('.rl-send[data-stopping="true"]')`)
   } finally { await page.close() }
 }, 30_000)
 
@@ -1228,15 +1277,18 @@ test("Desktop component chrome keeps directory inspectors and toolbar variants a
   try {
     await page.navigate(`${origin}/#/workspaces`)
     await wait(page, `document.querySelector('.ws-workspaces-detail')`)
+    if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "workspaces.png"), Buffer.from(await page.screenshot(), "base64"))
     expect(await page.evaluate(`(() => { const main = document.querySelector('.rl-main').getBoundingClientRect(), header = document.querySelector('.rl-page-head').getBoundingClientRect(), pane = document.querySelector('.ws-workspaces-detail').getBoundingClientRect(), list = document.querySelector('.ws-workspaces-list').getBoundingClientRect(); return { header: header.height, inspector: pane.width, flushRight: Math.abs(main.right - pane.right) <= 1, adjacent: Math.abs(list.right - pane.left) <= 1 }; })()`, decodeRecord)).toEqual({ header: 48, inspector: 420, flushRight: true, adjacent: true })
     await page.navigate(`${origin}/#/projects`)
     await wait(page, `document.querySelector('.desktop-project-inspector') && document.querySelector('[data-project-roster] [data-action-id="project-member-remove"]')`)
+    if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "projects.png"), Buffer.from(await page.screenshot(), "base64"))
     expect(await page.evaluate(`(() => { const main = document.querySelector('.rl-main').getBoundingClientRect(), header = document.querySelector('.rl-page-head').getBoundingClientRect(), pane = document.querySelector('.desktop-project-inspector').getBoundingClientRect(); return { header: header.height, inspector: pane.width, flushRight: Math.abs(main.right - pane.right) <= 1, memberActions: !!document.querySelector('[data-project-roster] [data-action-id="project-member-remove"]') }; })()`, decodeRecord)).toEqual({ header: 44, inspector: 400, flushRight: true, memberActions: true })
     await clickText(page, 'main button', "Coordination")
     await wait(page, `document.querySelector('[data-project-coordination]')`)
     expect(await page.evaluate(`({ header: document.querySelector('.rl-page-head').getBoundingClientRect().height, inspector: document.querySelector('[aria-label="Selected member"]').getBoundingClientRect().width })`, decodeRecord)).toEqual({ header: 56, inspector: 320 })
     await page.navigate(`${origin}/#/sessions`)
     await wait(page, `document.querySelector('.desktop-session-row')`)
+    if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "sessions.png"), Buffer.from(await page.screenshot(), "base64"))
     expect(await page.evaluate(`({ header: document.querySelector('.rl-page-head').getBoundingClientRect().height, cells: document.querySelector('.desktop-session-row').children.length, title: [...document.querySelectorAll('.desktop-session-row')].some(row => row.textContent.includes('Refactor session pagination')) })`, decodeRecord)).toEqual({ header: 40, cells: 6, title: true })
     expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
     expect(owned!.calls.filter(call => call.method !== "GET" && !call.route.endsWith("/web-latency"))).toEqual([])
@@ -2335,34 +2387,36 @@ test("Stitch observed execution status distinguishes unknown, running, idle and 
   const page = await openReference()
   try {
     const row = `[...document.querySelectorAll('.rl-session-row')].find(element => element.textContent.includes(${JSON.stringify(title)}))`
-    await wait(page, `${row}?.textContent.includes('Status unknown')`)
+    const status = `${row}?.getAttribute('aria-label')`
+    await wait(page, `${status}?.endsWith(', Status unknown')`)
     const idleCount = `document.querySelector('.rl-rail-filter[aria-label^="Idle "]')?.getAttribute('aria-label')`
     expect(await page.evaluate(idleCount, decodeString)).toBe("Idle 0")
     await page.evaluate(`document.querySelector('.rl-rail-filter[aria-label^="Idle "]').click()`)
     await wait(page, `document.querySelector('.rl-nav-scroll')?.textContent.includes('No Sessions match this filter.')`)
     expect(await page.evaluate(`document.querySelectorAll('.rl-session-row').length`, decodeNumber)).toBe(0)
     await page.evaluate(`document.querySelector('.rl-rail-filter[aria-label^="All "]').click()`)
-    await wait(page, `${row}?.textContent.includes('Status unknown')`)
+    await wait(page, `${status}?.endsWith(', Status unknown')`)
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.execution.started', data: { sessionID: 'ses_test' } })`)
-    await wait(page, `${row}?.textContent.includes('Running')`)
+    await wait(page, `${status}?.endsWith(', Running')`)
+    expect(await page.evaluate(`${row}.textContent.trim()`, decodeString)).toBe(title)
     expect(await page.evaluate(idleCount, decodeString)).toBe("Idle 0")
     expect(await page.evaluate(`!!document.querySelector('.rl-rail-filter[aria-label="Running 1"]')`, decodeBoolean)).toBe(true)
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.execution.succeeded', data: { sessionID: 'ses_test' } })`)
-    await wait(page, `${row}?.textContent.includes('Idle')`)
+    await wait(page, `${status}?.endsWith(', Idle')`)
     expect(await page.evaluate(idleCount, decodeString)).toBe("Idle 1")
     await page.evaluate(`document.querySelector('.rl-rail-filter[aria-label^="Idle "]').click()`)
-    await wait(page, `${row}?.textContent.includes('Idle')`)
+    await wait(page, `${status}?.endsWith(', Idle')`)
     expect(await page.evaluate(`document.querySelectorAll('.rl-session-row').length`, decodeNumber)).toBe(1)
     await page.evaluate(`document.querySelector('.rl-rail-filter[aria-label^="All "]').click()`)
-    expect(await page.evaluate(`${row}.textContent`, decodeString)).not.toContain("Status unknown")
+    expect(await page.evaluate(status, decodeString)).not.toContain("Status unknown")
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.execution.failed', data: { sessionID: 'ses_test', error: { type: 'synthetic', message: 'Synthetic execution failure' } } })`)
-    await wait(page, `${row}?.textContent.includes('Failed')`)
+    await wait(page, `${status}?.endsWith(', Failed')`)
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.idle', data: { sessionID: 'ses_test' } })`)
-    expect(await page.evaluate(`${row}.textContent`, decodeString)).toContain("Failed")
+    expect(await page.evaluate(status, decodeString)).toContain("Failed")
     await page.evaluate(`window.__desktopFixture.emit({ type: 'session.execution.interrupted', data: { sessionID: 'ses_test', reason: 'user' } })`)
-    await wait(page, `${row}?.textContent.includes('Idle')`)
+    await wait(page, `${status}?.endsWith(', Idle')`)
     await page.evaluate(`window.__desktopFixture.resync()`)
-    await wait(page, `${row}?.textContent.includes('Status unknown')`)
+    await wait(page, `${status}?.endsWith(', Status unknown')`)
     expect(await page.evaluate(idleCount, decodeString)).toBe("Idle 0")
     expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
   } finally { await page.close() }
@@ -2520,10 +2574,10 @@ test("Desktop visual correction long rail titles retain their names within two v
   const page = await openReference()
   try {
     expect(await page.evaluate(`(() => {
-      const title = [...document.querySelectorAll('.rl-session-row-title')].find(node => node.textContent === ${JSON.stringify(unbroken)}), row = title.closest('.workspace__row'), link = title.closest('a'), status = row.querySelector('.workspace__status');
+      const title = [...document.querySelectorAll('.rl-session-row-title')].find(node => node.textContent === ${JSON.stringify(unbroken)}), row = title.closest('.workspace__row'), link = title.closest('a'), status = row.querySelector('.rl-rail-status');
       link.focus();
       const bounds = title.getBoundingClientRect(), metadata = status.getBoundingClientRect(), pin = row.querySelector('.workspace__pin');
-      return title.textContent === ${JSON.stringify(unbroken)} && link.textContent.includes(${JSON.stringify(unbroken)}) && bounds.height <= Number.parseFloat(getComputedStyle(title).lineHeight) * 2 + 1 && metadata.top >= bounds.bottom && metadata.height > 0 && getComputedStyle(pin).visibility === 'visible';
+      return title.textContent === ${JSON.stringify(unbroken)} && link.textContent.trim() === ${JSON.stringify(unbroken)} && link.getAttribute('aria-label').startsWith(title.textContent + ', ') && bounds.height <= Number.parseFloat(getComputedStyle(title).lineHeight) * 2 + 1 && metadata.right <= bounds.left + 1 && metadata.height > 0 && getComputedStyle(pin).visibility === 'visible';
     })()`, decodeBoolean)).toBe(true)
     await page.evaluate(`[...document.querySelectorAll('.workspace__row')].find(row => row.textContent.includes(${JSON.stringify(unbroken)})).querySelector('.workspace__pin').focus()`)
     expect(await page.evaluate(`document.activeElement.matches('.workspace__pin') && !!document.activeElement.getAttribute('aria-label')`, decodeBoolean)).toBe(true)
@@ -2579,26 +2633,37 @@ test("Desktop visual correction target chooser overlays its composer entry witho
   } finally { await page.close() }
 }, 30_000)
 
-test("Desktop visual correction autonomy stays readable with fixed execution action slots", async () => {
+test("Desktop floating composer keeps one Send or Stop slot and preserves steering and reduced-motion status", async () => {
   prepareImplementedSurface()
   const page = await openReference()
   try {
     expect(await page.evaluate(`(() => { const label = document.querySelector('.composer-bar > .composer-chip[aria-haspopup="dialog"] span'); return label.textContent.includes('Mixed') && label.scrollWidth <= label.clientWidth; })()`, decodeBoolean)).toBe(true)
-    expect(await page.evaluate(`!document.querySelector('.composer-live-action--stop')?.getClientRects().length`, decodeBoolean)).toBe(true)
+    expect(await page.evaluate(`(() => { const dock = document.querySelector('.rl-dock'), style = getComputedStyle(dock); return style.backgroundColor === 'rgba(0, 0, 0, 0)' && parseFloat(style.borderTopWidth) === 0 && !dock.innerText.includes('Working') && parseFloat(getComputedStyle(dock.querySelector('.rl-capsule')).borderTopLeftRadius) === 16 && dock.querySelector('.rl-send').getAttribute('aria-label') === 'Send prompt'; })()`, decodeBoolean)).toBe(true)
+    if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "composer-ready.png"), Buffer.from(await page.screenshot(), "base64"))
     await page.evaluate(`(() => { const capsule = document.querySelector('.rl-capsule').getBoundingClientRect(); window.__fixedExecutionSlots = ['.rl-send', '.composer-bar button[aria-label="Send mode"]'].map(selector => { const rect = document.querySelector(selector).getBoundingClientRect(); return [rect.left - capsule.left, rect.top - capsule.top, rect.width, rect.height]; }); })()`)
     running = true
     await page.evaluate(`window.__desktopFixture.resync(); window.__desktopFixture.emit({ type: 'session.execution.started', data: { sessionID: 'ses_test' } })`)
-    await wait(page, `document.querySelector('.rl-stop') && document.querySelector('[aria-label="Current activity"]')`)
+    await wait(page, `document.querySelector('.rl-send[data-stopping="true"]') && document.querySelector('[aria-label="Current activity"]')`)
     expect(await page.evaluate(`(() => {
-      const capsule = document.querySelector('.rl-capsule').getBoundingClientRect(), stop = document.querySelector('.rl-stop'), bounds = stop.getBoundingClientRect(), label = document.querySelector('.composer-bar > .composer-chip[aria-haspopup="dialog"] span');
+      const capsule = document.querySelector('.rl-capsule').getBoundingClientRect(), stop = document.querySelector('.rl-send[data-stopping="true"]'), bounds = stop.getBoundingClientRect(), label = document.querySelector('.composer-bar > .composer-chip[aria-haspopup="dialog"] span');
       const selectors = ['.rl-send', '.composer-bar button[aria-label="Send mode"]'], controls = selectors.map(selector => document.querySelector(selector).getBoundingClientRect());
       const stable = JSON.stringify(window.__fixedExecutionSlots) === JSON.stringify(controls.map(rect => [rect.left - capsule.left, rect.top - capsule.top, rect.width, rect.height]));
       const contained = bounds.left >= capsule.left && bounds.right <= capsule.right && bounds.top >= capsule.top && bounds.bottom <= capsule.bottom && bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight;
-      const separate = [...controls, label.getBoundingClientRect()].every(rect => bounds.right <= rect.left || bounds.left >= rect.right || bounds.bottom <= rect.top || bounds.top >= rect.bottom);
-      const reachable = bounds.width >= 32 && bounds.height >= 32 && !stop.disabled && document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2)?.closest('.rl-stop') === stop;
-      return stable && contained && separate && reachable && label.textContent.includes('Mixed') && label.scrollWidth <= label.clientWidth && !!document.querySelector('.composer-bar button[aria-label="Send mode"]') && !!document.querySelector('[aria-label="Send and steer now"]');
+      const separate = [controls[1], label.getBoundingClientRect()].every(rect => bounds.right <= rect.left || bounds.left >= rect.right || bounds.bottom <= rect.top || bounds.top >= rect.bottom);
+      const reachable = bounds.width >= 32 && bounds.height >= 32 && !stop.disabled && document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2)?.closest('.rl-send') === stop;
+      const danger = document.createElement('span'); danger.style.color = 'var(--yc-danger)'; stop.parentElement.append(danger); const red = getComputedStyle(stop).color === getComputedStyle(danger).color; danger.remove();
+      return stable && contained && separate && reachable && red && !document.querySelector('.composer-live-action--stop') && !document.querySelector('.rl-dock').innerText.includes('Working') && label.textContent.includes('Mixed') && label.scrollWidth <= label.clientWidth && !!document.querySelector('.composer-bar button[aria-label="Send mode"]') && !!document.querySelector('[aria-label="Send and steer now"]');
     })()`, decodeBoolean)).toBe(true)
     if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "composer-readable-autonomy.png"), Buffer.from(await page.screenshot(), "base64"))
+    await page.setReducedMotion(true)
+    await wait(page, `matchMedia('(prefers-reduced-motion: reduce)').matches`)
+    expect(await page.evaluate(`(() => { const row = document.querySelector('.rl-session-row[data-state="running"]'), arc = row?.querySelector('.desktop-state__orbit'); return !!arc && getComputedStyle(arc).animationName === 'none' && row.getAttribute('aria-label').endsWith(', Running') && !row.querySelector('.workspace__status'); })()`, decodeBoolean)).toBe(true)
+    await page.evaluate(`document.querySelector('[aria-label="Stop generation"]').focus()`)
+    await page.pressKey("Enter", "Enter", 13, "\r")
+    await wait(page, `document.querySelector('.rl-dock').innerText.includes('Stop requested') || !document.querySelector('.rl-send[data-stopping="true"]')`)
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'session.execution.interrupted', data: { sessionID: 'ses_test', reason: 'user' } })`)
+    await wait(page, `!document.querySelector('.rl-send[data-stopping="true"]')`)
+    expect(owned!.calls.filter(call => call.method === "POST" && call.route.endsWith("/interrupt"))).toHaveLength(1)
     expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
   } finally { await page.close() }
 }, 30_000)
@@ -3080,15 +3145,15 @@ test("rendered rail titles keep two visible lines, complete names and keyboard-o
     const geometry = await page.evaluate(`(() => {
       const rows = [...document.querySelectorAll('.rl-nav .workspace__row')], rail = document.querySelector('.rl-nav-scroll');
       const titles = rows.map(row => row.querySelector('.rl-session-row-title'));
-      const rects = rows.map(row => { const title = row.querySelector('.rl-session-row-title'), status = row.querySelector('.workspace__status'), pin = row.querySelector('.workspace__pin'); return { row: row.getBoundingClientRect(), title: title.getBoundingClientRect(), status: status.getBoundingClientRect(), pin: pin.getBoundingClientRect(), line: parseFloat(getComputedStyle(title).lineHeight) }; });
-      return { contained: rects.every(r => r.title.left >= r.row.left && r.title.right <= r.row.right && r.title.bottom <= r.row.bottom && r.status.left >= r.row.left && r.status.right <= r.row.right && r.status.bottom <= r.row.bottom && r.pin.right <= r.row.right), separate: rects.every(r => (r.title.right <= r.status.left + 1 || r.title.bottom <= r.status.top + 1) && r.status.right <= r.pin.left + 1), clamped: rects.every(r => r.title.height > r.line && r.title.height <= r.line * 2 && r.row.height >= r.title.height), overflow: rail.scrollWidth > rail.clientWidth, fullText: ${JSON.stringify([title, unbroken])}.every(expected => titles.some(node => node.textContent === expected && (node.closest('a').getAttribute('aria-label') ?? node.closest('a').textContent).includes(expected))) };
+      const rects = rows.map(row => { const title = row.querySelector('.rl-session-row-title'), status = row.querySelector('.rl-rail-status'), pin = row.querySelector('.workspace__pin'); return { row: row.getBoundingClientRect(), title: title.getBoundingClientRect(), status: status.getBoundingClientRect(), pin: pin.getBoundingClientRect(), line: parseFloat(getComputedStyle(title).lineHeight) }; });
+      return { contained: rects.every(r => r.title.left >= r.row.left && r.title.right <= r.row.right && r.title.bottom <= r.row.bottom && r.status.left >= r.row.left && r.status.right <= r.row.right && r.status.bottom <= r.row.bottom && r.pin.right <= r.row.right), separate: rects.every(r => r.status.right <= r.title.left + 1 && r.status.right <= r.pin.left + 1), clamped: rects.every(r => r.title.height > r.line && r.title.height <= r.line * 2 && r.row.height >= r.title.height), overflow: rail.scrollWidth > rail.clientWidth, fullText: ${JSON.stringify([title, unbroken])}.every(expected => titles.some(node => node.textContent === expected && node.closest('a').getAttribute('aria-label') === expected + ', Waiting')) };
     })()`, (value: unknown) => { const result = decodeRecord(value); return { contained: (decodeBoolean)(result["contained"]), separate: (decodeBoolean)(result["separate"]), clamped: (decodeBoolean)(result["clamped"]), overflow: (decodeBoolean)(result["overflow"]), fullText: (decodeBoolean)(result["fullText"]) } })
     expect(geometry).toEqual({ contained: true, separate: true, clamped: true, overflow: false, fullText: true })
     await page.evaluate(`document.querySelector('.rl-session-row[aria-current="page"]').focus()`)
     await page.pressKey("Tab", "Tab", 9)
     expect(await page.evaluate(`document.activeElement.matches('.workspace__pin')`)).toBe(true)
     await wait(page, `Number(getComputedStyle(document.activeElement).opacity) === 1`)
-    expect(await page.evaluate(`document.activeElement.matches('.workspace__pin') && getComputedStyle(document.activeElement).visibility === 'visible' && Number(getComputedStyle(document.activeElement).opacity) === 1 && getComputedStyle(document.querySelector('.rl-session-row[aria-current="page"] .workspace__status')).visibility === 'visible'`)).toBe(true)
+    expect(await page.evaluate(`document.activeElement.matches('.workspace__pin') && getComputedStyle(document.activeElement).visibility === 'visible' && Number(getComputedStyle(document.activeElement).opacity) === 1 && getComputedStyle(document.querySelector('.rl-session-row[aria-current="page"] .rl-rail-status')).visibility === 'visible'`)).toBe(true)
     await page.pressKey("Enter", "Enter", 13, "\r")
     await wait(page, `document.querySelector('.workspace__pin[aria-label^="Unpin "]')`)
     expect(owned!.calls.filter((call) => call.method === "POST" && call.route.endsWith("/pin")).map((call) => call.route)).toEqual(["/api/session/ses_test/pin"])
@@ -3352,6 +3417,99 @@ test("rendered large pastes show a placeholder, copy, stash and restore their te
     await wait(page, `${composer}.value === ''`)
     expect(owned!.calls.filter((call) => call.method === "POST" && call.route.endsWith("/prompt")).map((call) => call.body.text)).toEqual([`Use @a.ts after ${pasted}`])
   } finally { await page.evaluate(`localStorage.removeItem('ycoding.desktop.prompt-stashes')`); await page.close() }
+}, 30_000)
+
+test("composer pastes text and a browser-owned image without requiring a host file path", async () => {
+  const page = await open()
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j6foAAAAASUVORK5CYII="
+  try {
+    await page.evaluate(`(() => {
+      const input = document.querySelector('.rl-capsule textarea');
+      const data = new DataTransfer();
+      data.setData('text/plain', 'Describe the pasted image');
+      data.items.add(new File([Uint8Array.from(atob(${JSON.stringify(png)}), c => c.charCodeAt(0))], 'clipboard.png', {type: 'image/png'}));
+      input.focus();
+      input.dispatchEvent(new ClipboardEvent('paste', {clipboardData: data, bubbles: true, cancelable: true}));
+    })()`)
+    await wait(page, `document.querySelector('[aria-label="Remove clipboard.png"]')`)
+    expect(await page.evaluate(`document.querySelector('.rl-capsule textarea').value`, decodeString)).toBe("Describe the pasted image")
+    if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "composer-paste.png"), Buffer.from(await page.screenshot(), "base64"))
+    await page.evaluate(`document.querySelector('.rl-capsule button[aria-label="Send prompt"]').click()`)
+    await wait(page, `document.querySelector('.rl-capsule textarea').value === ''`)
+    expect(owned!.calls.filter(call => call.method === "POST" && call.route.endsWith("/prompt")).map(call => call.body.files)).toEqual([[{ name: "clipboard.png", uri: `data:image/png;base64,${png}` }]])
+  } finally { await page.close() }
+}, 30_000)
+
+test("composer uses native clipboard text and image when a menu paste has no DOM payload", async () => {
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j6foAAAAASUVORK5CYII="
+  pastedClipboard = { text: "Describe the native clipboard image", imageBase64: png, formats: ["text/plain", "image/png"] }
+  const page = await open()
+  try {
+    await page.evaluate(`(() => { const input = document.querySelector('.rl-capsule textarea'); input.focus(); input.dispatchEvent(new ClipboardEvent('paste', {bubbles: true, cancelable: true})); })()`)
+    await wait(page, `document.querySelector('[aria-label="Remove Clipboard image.png"]') && document.querySelector('.rl-capsule textarea').value === 'Describe the native clipboard image'`)
+    await page.pressKey("Enter", "Enter", 13)
+    await wait(page, `document.querySelector('.rl-capsule textarea').value === ''`)
+    expect(owned!.calls.filter(call => call.method === "POST" && call.route.endsWith("/prompt")).map(call => call.body.files)).toEqual([[{ name: "Clipboard image.png", uri: `data:image/png;base64,${png}` }]])
+  } finally { await page.close() }
+}, 30_000)
+
+test("composer lights the drop target, accepts actual files and submits only retained chips", async () => {
+  const page = await open()
+  try {
+    await message(page, "Review the retained notes")
+    expect(await page.evaluate(`(() => {
+      const data = new DataTransfer(); data.items.add(new File(['outside'], 'unused.txt', {type: 'text/plain'}));
+      const event = new DragEvent('drop', {dataTransfer: data, bubbles: true, cancelable: true});
+      document.querySelector('.rl-top').dispatchEvent(event);
+      return event.defaultPrevented && !document.querySelector('[aria-label="Remove unused.txt"]');
+    })()`, decodeBoolean)).toBe(true)
+    expect(await page.evaluate(`(() => {
+      const target = document.querySelector('.rl-capsule textarea');
+      const data = new DataTransfer();
+      data.items.add(new File(['keep'], 'remove.txt', {type: 'text/plain'}));
+      data.items.add(new File(['keep'], 'notes.txt', {type: 'text/plain'}));
+      window.__desktopTestDrop = data;
+      target.dispatchEvent(new DragEvent('dragenter', {dataTransfer: data, bubbles: true, cancelable: true}));
+      const over = new DragEvent('dragover', {dataTransfer: data, bubbles: true, cancelable: true});
+      target.dispatchEvent(over);
+      const feedback = document.querySelector('.rl-capsule').innerText.includes('Drop files to attach');
+      return [over.defaultPrevented, feedback];
+    })()`, decodeArray(decodeBoolean))).toEqual([true, true])
+    if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "composer-drag-target.png"), Buffer.from(await page.screenshot(), "base64"))
+    expect(await page.evaluate(`(() => { const drop = new DragEvent('drop', {dataTransfer: window.__desktopTestDrop, bubbles: true, cancelable: true}); document.querySelector('.rl-capsule textarea').dispatchEvent(drop); delete window.__desktopTestDrop; return drop.defaultPrevented; })()`, decodeBoolean)).toBe(true)
+    await wait(page, `document.querySelector('[aria-label="Remove notes.txt"]') && document.querySelector('[aria-label="Remove remove.txt"]')`)
+    if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "composer-dropped-files.png"), Buffer.from(await page.screenshot(), "base64"))
+    await page.evaluate(`document.querySelector('.rl-capsule button[aria-label="Remove remove.txt"]').click()`)
+    expect(await page.evaluate(`document.querySelector('.rl-capsule').innerText.includes('Drop files to attach')`, decodeBoolean)).toBe(false)
+    await page.evaluate(`document.querySelector('.rl-capsule button[aria-label="Send prompt"]').click()`)
+    await wait(page, `document.querySelector('.rl-capsule textarea').value === ''`)
+    expect(owned!.calls.filter(call => call.method === "POST" && call.route.endsWith("/prompt")).map(call => call.body.files)).toEqual([[{ name: "notes.txt", uri: "data:text/plain;base64,a2VlcA==" }]])
+  } finally { await page.close() }
+}, 30_000)
+
+test("Team reveals the correct reported child from a table row and a keyboard-activated Grid card", async () => {
+  prepareImplementedSurface()
+  const now = Date.now()
+  const tasks = ["first", "second"].map((name) => ({ sessionID: `ses_child_${name}`, parentID: "ses_test", description: `Review ${name} index`, agent: `worker-${name}`, state: "supervising", model: { ...selection(), variant: "high", profile: "review" }, background: true, revision: 1, time: { created: now - 120_000, updated: now }, progress: { text: `Complete ${name} progress summary`, time: now } }))
+  sceneRead = call => call.route === "/api/session/ses_test/subagent" ? { data: tasks, summary: { total: 2, active: 2, running: 0, waiting: 0 }, cursor: {} } : undefined
+  const page = await openReference()
+  try {
+    await clickText(page, '.rl-top button', "Team")
+    await wait(page, `document.querySelectorAll('table[aria-label="Direct subagents"] tbody tr').length === 2`)
+    await page.evaluate(`document.querySelectorAll('table[aria-label="Direct subagents"] tbody tr')[1].cells[1].click()`)
+    const detail = `document.querySelector('[aria-label="Selected child"]')`
+    expect(await page.evaluate(`${detail}.innerText`, decodeString)).toContain("Complete second progress summary")
+    if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "team-table-selected.png"), Buffer.from(await page.screenshot(), "base64"))
+    await clickText(page, '[data-team-view] button', "Grid")
+    await page.evaluate(`[...document.querySelectorAll('[data-team-view] button')].find(item => item.getAttribute('aria-label')?.includes('worker-first')).focus()`)
+    await page.pressKey("Enter", "Enter", 13, "\r")
+    await wait(page, `${detail}?.innerText.includes('Complete first progress summary')`)
+    expect(await page.evaluate(`${detail}.innerText`, decodeString)).toContain("Complete first progress summary")
+    expect(await page.evaluate(`${detail}.innerText`, decodeString)).toContain("Open Dedicated Child Session")
+    if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "team-grid-selected.png"), Buffer.from(await page.screenshot(), "base64"))
+    await clickText(page, '[aria-label="Selected child"] button', "Open Dedicated Child Session")
+    await wait(page, `location.hash.endsWith('/sessions/ses_child_first')`)
+  } finally { await page.close() }
 }, 30_000)
 
 test("rendered parity sends Auto, Queue and step-boundary Steer with distinct captured admissions", async () => {

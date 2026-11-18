@@ -15,6 +15,7 @@ import { connectNative } from "./native-client"
 import { TerminalRelay, terminalSocketUrl, type TerminalSocketFactory } from "./terminal-relay"
 import { validateSelection } from "./preferences"
 import { questionAnswerError } from "./question-rules"
+import { composerByteLimit, composerFileLimit, inlineFileSize } from "./composer-files"
 import { activityInput, directoriesInput, isRevision, pageInput, requestReply, revertInput, session, setAutonomyInput, shellOutputInput, usageInput } from "./requests"
 import { bundledBackend } from "./resources"
 import { describeError, redactSecrets } from "./app-log"
@@ -284,10 +285,17 @@ function promptMention(value: unknown, text: string) {
 
 function promptFiles(value: unknown, text: string) {
   if (value === undefined) return undefined
-  if (!Array.isArray(value) || value.length > 20) throw new DesktopError("Invalid message.")
+  if (!Array.isArray(value) || value.length > composerFileLimit) throw new DesktopError("Invalid message.")
+  let inlineBytes = 0
   return value.map((item) => {
-    if (!object(item) || Object.keys(item).some((key) => !["uri", "name", "description", "mention"].includes(key)) || typeof item.uri !== "string" || item.uri.length === 0 || item.uri.length > 2048) throw new DesktopError("Invalid message.")
-    if (!/^ycoding-attachment:\/\/sha256\/[0-9a-f]{64}$/.test(item.uri)) {
+    if (!object(item) || Object.keys(item).some((key) => !["uri", "name", "description", "mention"].includes(key)) || typeof item.uri !== "string" || item.uri.length === 0) throw new DesktopError("Invalid message.")
+    if (item.uri.startsWith("data:")) {
+      const bytes = inlineFileSize(item.uri)
+      if (bytes === undefined) throw new DesktopError("Invalid attachment data.")
+      inlineBytes += bytes
+      if (inlineBytes > composerByteLimit) throw new DesktopError("Attach at most 20 MiB of file data to a message.")
+    } else if (!/^ycoding-attachment:\/\/sha256\/[0-9a-f]{64}$/.test(item.uri)) {
+      if (item.uri.length > 2048) throw new DesktopError("Invalid message.")
       let url: URL
       try { url = new URL(item.uri) } catch { throw new DesktopError("Invalid message.") }
       if (url.protocol !== "file:" || url.username || url.password || (url.hostname !== "" && url.hostname !== "localhost")) throw new DesktopError("Invalid message.")
