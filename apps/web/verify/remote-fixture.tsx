@@ -1506,6 +1506,7 @@ function createFixtureStore(): Fixture {
     }
     if (operation === "session.goal.stop") return autonomyResponse({ mode: "normal" })
     if (operation === "session.pending.list" && pendingInputs.length > 0) return { status: "ok", value: { data: pendingInputs } }
+    if (operation === "session.log") return { status: "ok", value: { data: [] } }
     return { status: "ok", value: null }
   }
 

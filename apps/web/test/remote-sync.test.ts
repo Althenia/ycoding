@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/remote/store"
-import { createRemoteTransport } from "../src/remote/transport"
+import { createRemoteTransport, type RemoteRequestTiming } from "../src/remote/transport"
 import { createSessionView, readSnapshot, type SessionView } from "../src/remote/projection"
 import { applySessionEvent } from "../src/remote/projection"
-import { startRelayDouble, waitFor, type RelayDouble, type RelayHandlerResult } from "./relay-double"
+import { startRelayDouble, waitFor, type RelayDouble, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
 
 /** `Model.Ref` from packages/schema: `{ id, providerID, variant? }`, never a plain string. */
 const model = { id: "gpt-6", providerID: "openai" } as const
@@ -36,6 +36,7 @@ async function harness(options: {
   messages?: Record<string, readonly unknown[]>
   activeSessions?: Record<string, { type: "running" }>
   fetch?: (input: string, init?: RequestInit) => Promise<Response>
+  onRequestTiming?: (timing: RemoteRequestTiming) => void
 } = {}): Promise<Harness> {
   const relay = await startRelayDouble({
     advertisedSessions: ["ses_a"],
@@ -59,8 +60,11 @@ async function harness(options: {
   }
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) =>
-      createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule }),
+    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID),
+      handlers: options.onRequestTiming === undefined ? handlers : { ...handlers, onRequestTiming: (timing) => {
+        handlers.onRequestTiming?.(timing)
+        options.onRequestTiming?.(timing)
+      } }, resetDelayMs: 10, maxDelayMs: 20, schedule }),
     schedule,
     batchMs: 20,
     now: () => 1_000,
@@ -497,6 +501,72 @@ describe("model references", () => {
   })
 })
 
+describe("selection log confirmation", () => {
+  const sessionID = "ses_a"
+  const sourceEpoch = "epoch_1"
+  const marker = (seq: number) => ({ type: "log.synced", aggregateID: sessionID, seq, sourceEpoch })
+  const ended = { id: "evt_11", created: 11, type: "session.text.ended", sourceEpoch,
+    durable: { aggregateID: sessionID, seq: 11, version: 1 }, data: { sessionID, assistantMessageID: "msg_reply", ordinal: 0, text: "Final reply", breaks: [] } }
+  const log = (data: readonly unknown[]): RelayHandlerOutcome => ({ ok: true, value: { data } })
+
+  test.each([
+    { name: "keeps one snapshot for a marker at the applied watermark", response: log([marker(10)]), snapshots: 1, live: false },
+    { name: "keeps one snapshot when live delivery applies the log entries before the reply", response: log([ended, marker(11)]), snapshots: 1, live: true },
+    { name: "repairs from a newer marker even when the filtered log carries no events", response: log([marker(11)]), snapshots: 2, live: false },
+    { name: "repairs when the log proves a public event was missed", response: log([ended, marker(11)]), snapshots: 2, live: false },
+    { name: "repairs when an input entry is malformed", response: log([{ ...ended, durable: { ...ended.durable, seq: "11" } }, marker(10)]), snapshots: 2, live: false },
+    { name: "repairs when a log entry has an unknown event type", response: log([{ ...ended, type: "session.unknown.fixture", durable: { ...ended.durable, seq: 10 } }]), snapshots: 2, live: false },
+    { name: "repairs an unknown entry despite a valid terminal marker", response: log([{ ...ended, type: "session.unknown.fixture", durable: { ...ended.durable, seq: 10 } }, marker(10)]), snapshots: 2, live: false },
+    { name: "does not retry an explicitly unsupported log operation", response: { ok: false, code: "unknown_operation", message: "Unknown operation" } satisfies RelayHandlerOutcome, snapshots: 1, live: false },
+  ])("$name", async ({ response, snapshots, live }) => {
+    const reply = Promise.withResolvers<RelayHandlerOutcome>()
+    const settled: RemoteRequestTiming[] = []
+    let snapshotReads = 0
+    const test = await harness({
+      onRequestTiming: (timing) => settled.push(timing),
+      handler: (request) => {
+        if (request.operation === "session.log") return reply.promise
+        if (request.operation !== "session.snapshot") return "default"
+        snapshotReads += 1
+        const first = snapshotReads === 1
+        return { ok: true, value: { sourceEpoch, session: { id: sessionID }, watermark: marker(first ? 10 : 11),
+          messages: [{ id: "msg_reply", type: "assistant", agent: "god", time: { created: 1 },
+            content: [{ type: "text", text: first ? "Initial reply" : "Final reply" }] }] } }
+      },
+    })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession(sessionID)
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.log"))
+      expect(test.store.state().view?.watermark).toBe(10)
+      expect(textOf(test.store.state().view)).toEqual(["Initial reply"])
+      if (live) {
+        test.relay.pushEvent(sessionID, ended)
+        await test.runUntil(() => test.store.state().view?.watermark === 11)
+        expect(textOf(test.store.state().view)).toEqual(["Final reply"])
+      }
+      reply.resolve(response)
+      await test.runUntil(() => settled.some((timing) => timing.operation === "session.log"))
+      await test.flush()
+      const logRequests = test.relay.requests.filter((request) => request.operation === "session.log")
+      const snapshotRequests = test.relay.requests.filter((request) => request.operation === "session.snapshot")
+      expect(logRequests.map(({ sessionID, input }) => ({ sessionID, input }))).toEqual([{ sessionID, input: { after: 10 } }])
+      expect(snapshotRequests.map(({ sessionID, input }) => ({ sessionID, input }))).toEqual(
+        Array.from({ length: snapshots }, () => ({ sessionID, input: { limit: 100 } })),
+      )
+      expect(new Set([...logRequests, ...snapshotRequests].map((request) => request.id)).size).toBe(1 + snapshots)
+      const advanced = live || snapshots > 1
+      await test.runUntil(() => settled.filter((timing) => timing.operation === "session.snapshot").length === snapshots)
+      expect(test.store.state().view?.watermark).toBe(advanced ? 11 : 10)
+      expect(textOf(test.store.state().view)).toEqual([advanced ? "Final reply" : "Initial reply"])
+    } finally {
+      reply.resolve("default")
+      await test.stop()
+    }
+  })
+})
+
 describe("snapshot synchronization", () => {
   test("selected Session speed and context hydrate from the snapshot and are replaced by live diagnostics without another read", async () => {
     const speed = { model: { id: "gpt-5", providerID: "openai" }, tokens: 12, durationNs: 2_000_000, tokensPerSecond: 6_000 }
@@ -882,6 +952,47 @@ describe("snapshot synchronization", () => {
       expect(test.store.state().view?.messages.map((message) => message.id)).toEqual(["msg_compact"])
     } finally {
       release?.()
+      await test.stop()
+    }
+  })
+
+  test("initial snapshot does not replay buffered text it covers but retains an uncovered fragment", async () => {
+    const reply = Promise.withResolvers<void>()
+    const test = await harness({
+      handler: async (request) => {
+        if (request.operation === "session.snapshot") await reply.promise
+        return "default" as const
+      },
+      snapshot: (sessionID) => ({
+        sourceEpoch: "epoch_1", session: { id: sessionID },
+        messages: [{ id: "msg_reply", type: "assistant", agent: "god", time: { created: 1 },
+          content: [{ type: "text", text: "Hello" }, { type: "text", text: "" }] }],
+        watermark: { type: "log.synced", aggregateID: sessionID, seq: 11 },
+      }),
+    })
+    const delta = (ordinal: number, delta: string) => test.relay.pushEvent("ses_a", {
+      type: "session.text.delta", sourceEpoch: "epoch_1", data: { sessionID: "ses_a", assistantMessageID: "msg_reply", ordinal, delta },
+    })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      const selection = test.store.selectSession("ses_a")
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.snapshot"))
+      delta(0, "lo")
+      delta(1, "Next")
+      await test.runUntil(() => textOf(test.store.state().view).includes("Next"))
+      expect(textOf(test.store.state().view)).toEqual(["lo", "Next"])
+      reply.resolve()
+      await selection
+      expect(test.store.state().view?.watermark).toBe(11)
+      expect(textOf(test.store.state().view)).toEqual(["Hello", "Next"])
+      delta(0, " stale")
+      delta(1, " part")
+      await test.runUntil(() => textOf(test.store.state().view).includes("Next part"))
+      expect(textOf(test.store.state().view)).toEqual(["Hello", "Next part"])
+      expect(test.relay.requests.filter((request) => request.operation === "session.snapshot")).toHaveLength(1)
+    } finally {
+      reply.resolve()
       await test.stop()
     }
   })

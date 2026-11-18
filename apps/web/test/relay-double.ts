@@ -247,6 +247,7 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
         setAutonomy(request.sessionID, next)
         return { ok: true, value: autonomyValue(request.sessionID) }
       }
+      if (request.operation === "session.log") return { ok: true, value: { data: [] } }
     return { ok: true, value: null }
   }
 

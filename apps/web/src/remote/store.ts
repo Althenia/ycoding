@@ -1,5 +1,6 @@
 import { replaceEqualDeep } from "@tanstack/solid-query"
 import { RemoteLimits, isRemoteLatencySample, isRemoteReviewItemID, isWellFormedBase64, noticeSequence, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, parseNoticePage, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticePage, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
+import { SessionEvent } from "../../../../packages/schema/src/session-event"
 import { catalogKey, readCatalog, readFileFind, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileFindResult } from "./catalog"
 import type { DeviceAliasResponse } from "@ycoding-ai/remote"
 import { displayDeviceName } from "./device-alias"
@@ -394,8 +395,26 @@ const unreadablePage = "The device returned an output page this client cannot re
 type HydrationWindow = {
   readonly sessionID: string
   readonly events: unknown[]
-  readonly replayed: Set<string>
   readonly streamed: ReadonlyMap<string, string>
+}
+
+const publicDurableVersions = new Map<string, number>(SessionEvent.PublicDurableDefinitions.map((definition) =>
+  [definition.type, definition.durable.version] as const))
+
+function sessionLogPosition(event: unknown, sessionID: string): number | null | undefined {
+  if (typeof event !== "object" || event === null || Array.isArray(event)) return undefined
+  const type = Reflect.get(event, "type")
+  if (typeof type !== "string") return undefined
+  const marker = type === "log.synced"
+  const position = marker ? event : Reflect.get(event, "durable")
+  if (typeof position !== "object" || position === null || Array.isArray(position) || Reflect.get(position, "aggregateID") !== sessionID) return undefined
+  if (!marker) {
+    const version = publicDurableVersions.get(type)
+    if (version === undefined || Reflect.get(position, "version") !== version) return undefined
+  }
+  const seq = Reflect.get(position, "seq")
+  if (marker && seq === undefined) return null
+  return typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0 ? seq : undefined
 }
 
 /**
@@ -917,6 +936,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     sealed = current
   }
 
+  const acceptsPartEvent = (sessionID: string, event: unknown, key: string | undefined) => {
+    if (key === undefined || sealed?.sessionID !== sessionID) return true
+    const opened = openedPartKey(event)
+    if (opened !== undefined) sealed.parts.delete(opened)
+    return !isEphemeralEvent(event) || (!sealed.parts.has(key) && !sealed.covered.has(ephemeralAssistantID(event) ?? ""))
+  }
+
   const flush = () => {
     cancelBatch = undefined
     const items = queued
@@ -937,18 +963,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const sequence = readEventSequence(item.event)
       const aggregate = readAggregateID(item.event)
       if (aggregate !== undefined && aggregate !== view.id) continue
-      const currentSeal = sealed?.sessionID === view.id ? sealed : undefined
-      const opened = openedPartKey(item.event)
-      if (opened !== undefined) currentSeal?.parts.delete(opened)
-      const key = ephemeralPartKey(item.event)
-      if (key !== undefined && isEphemeralEvent(item.event) &&
-        (currentSeal?.parts.has(key) || currentSeal?.covered.has(ephemeralAssistantID(item.event) ?? ""))) continue
       if (sequence.seq !== undefined && view.watermark !== undefined) {
         // Duplicates below the watermark are dropped. The sequence is durable and
         // per aggregate, so a gap means a lost event and forces a re-read.
         if (sequence.seq <= view.watermark) continue
         if (sequence.seq > view.watermark + 1) gap = true
       }
+      const key = ephemeralPartKey(item.event)
+      if (!acceptsPartEvent(view.id, item.event, key)) continue
       const type = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "type") : undefined
       if (type === "session.remote.oversized") {
         const data = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "data") : undefined
@@ -1032,7 +1054,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       }
       if (hydration !== undefined && hydration.sessionID === item.sessionID && key !== undefined) {
         hydration.events.push(item.event)
-        hydration.replayed.add(key)
       }
     }
     let listed: Partial<RemoteStoreState> = {}
@@ -1649,7 +1670,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * snapshot below the projection's durable watermark, is refused so the visible
    * transcript is never erased or rewound.
    */
-  const applySnapshot = (sessionID: string, payload: unknown, base: SessionView | undefined, streamed: ReadonlyMap<string, string>): { readonly view: SessionView; readonly sealedKeys: readonly string[]; readonly before?: string; readonly coveredAssistantIDs: readonly string[]; readonly parentID?: string } | "invalid" | "stale" => {
+  const applySnapshot = (owned: HydrationWindow, payload: unknown, base: SessionView | undefined): { readonly view: SessionView; readonly before?: string; readonly parentID?: string } | "invalid" | "stale" => {
+    const sessionID = owned.sessionID
     const snapshot = readSnapshot(payload)
     if (snapshot === undefined || snapshot.watermark === undefined) return "invalid"
     if (snapshot.sessionID !== undefined && snapshot.sessionID !== sessionID || snapshot.watermarkSessionID !== undefined && snapshot.watermarkSessionID !== sessionID) return "invalid"
@@ -1684,24 +1706,19 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const resident = unsynced.length === 0 ? projected : { ...projected, messages: visibleTranscript([...projected.messages, ...unsynced]) }
     const view = container.state.sessionStatus === undefined ? resident : reconcileSessionStatus(resident, container.state.sessionStatus,
       snapshot.parentID ?? (container.state.selectedSessionInfo?.id === sessionID ? container.state.selectedSessionInfo.parentID : undefined))
-    return { view: { ...view, messages: carryStreamedText(view.messages, streamed) }, sealedKeys: sealedPartKeys(view.messages), before: snapshot.before, coveredAssistantIDs: [...new Set([
+    sealed = { sessionID, parts: new Set(sealedPartKeys(view.messages)), covered: new Set([
       ...snapshot.coveredAssistantIDs,
       ...combined.flatMap((message) => message.kind === "assistant" && !view.messages.some((retained) => retained.id === message.id) ? [message.id] : []),
-    ])], parentID: snapshot.parentID }
-  }
-
-  const applyEvent = (view: SessionView, event: unknown, replaying: boolean): SessionView => {
-    const aggregate = readAggregateID(event)
-    if (aggregate !== undefined && aggregate !== view.id) return view
-    const currentSeal = sealed?.sessionID === view.id ? sealed : undefined
-    const opened = openedPartKey(event)
-    if (opened !== undefined) currentSeal?.parts.delete(opened)
-    const key = ephemeralPartKey(event)
-    if (key !== undefined && isEphemeralEvent(event) &&
-      (currentSeal?.covered.has(ephemeralAssistantID(event) ?? "") || (!replaying && currentSeal?.parts.has(key)))) return view
-    const next = applySessionEvent(view, event, now())
-    if (typeof event === "object" && event !== null && Reflect.get(event, "type") === "session.compaction.ended") recordCovered(view, next)
-    return next
+    ]) }
+    let hydrated: SessionView = { ...view, messages: carryStreamedText(view.messages, owned.streamed) }
+    let watermark = snapshot.watermark
+    for (const event of owned.events) {
+      const { seq } = readEventSequence(event)
+      if (seq !== undefined && seq <= watermark || !acceptsPartEvent(sessionID, event, ephemeralPartKey(event))) continue
+      hydrated = applySessionEvent(hydrated, event, now())
+      if (seq !== undefined) watermark = seq
+    }
+    return { view: { ...hydrated, watermark }, before: snapshot.before, parentID: snapshot.parentID }
   }
 
   const loadTodos = async (owner: RemoteTransport, sessionID: string, token: number, admitted?: Promise<boolean>) => {
@@ -2050,7 +2067,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const transcriptStarted = monotonicNow()
     const transcriptDeviceID = container.state.activeDeviceID
     const transcriptGeneration = container.state.generation
-    const owned: HydrationWindow = { sessionID, events: [], replayed: new Set(), streamed: streamedPartText(container.state.view?.id === sessionID ? container.state.view.messages : []) }
+    const owned: HydrationWindow = { sessionID, events: [], streamed: streamedPartText(container.state.view?.id === sessionID ? container.state.view.messages : []) }
     hydration = owned
     try {
       const outcome = await readSnapshotPayload(sessionID)
@@ -2061,7 +2078,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         setState({ notice: historyFailure(outcome) })
         return "unavailable"
       }
-      const applied = applySnapshot(sessionID, outcome.value, container.state.view, owned.streamed)
+      const applied = applySnapshot(owned, outcome.value, container.state.view)
       if (applied === "invalid") {
         setState({ notice: "The session snapshot was not readable, so the current history is kept." })
         return "refused"
@@ -2069,10 +2086,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (applied === "stale") {
         return "refused"
       }
-      sealed = { sessionID, parts: new Set(applied.sealedKeys), covered: new Set(applied.coveredAssistantIDs) }
-      let view = applied.view
-      for (const event of owned.events) view = applyEvent(view, event, true)
-      owned.replayed.forEach((key) => sealed?.parts.delete(key))
+      const view = applied.view
       setState({ view, history: { status: "idle", ...(hasCompactionCheckpoint(view.messages) || applied.before === undefined ? {} : { before: applied.before }) } })
       if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => requestAnimationFrame(() => {
         if (container.state.activeSessionID === sessionID && container.state.activeDeviceID === transcriptDeviceID && container.state.generation === transcriptGeneration)
@@ -2558,7 +2572,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const previous = subscribedSessionID
     subscribedSessionID = sessionID
     if (previous !== undefined && previous !== sessionID) releaseSubscription(active, previous)
-    const owned: HydrationWindow = { sessionID, events: [], replayed: new Set(), streamed: streamedPartText(container.state.view?.id === sessionID ? container.state.view.messages : []) }
+    const owned: HydrationWindow = { sessionID, events: [], streamed: streamedPartText(container.state.view?.id === sessionID ? container.state.view.messages : []) }
     hydration = owned
     const continueWithoutHistory = async (notice?: string) => {
       if (hydration === owned) hydration = undefined
@@ -2578,17 +2592,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (outcome.status !== "ok") {
         return await continueWithoutHistory(historyFailure(outcome))
       }
-      const applied = applySnapshot(sessionID, outcome.value, container.state.view, owned.streamed)
+      const applied = applySnapshot(owned, outcome.value, container.state.view)
       if (applied === "invalid") {
         return await continueWithoutHistory("The session snapshot was not readable, so the current history is kept.")
       }
       if (applied === "stale") {
         return await continueWithoutHistory()
       }
-      sealed = { sessionID, parts: new Set(applied.sealedKeys), covered: new Set(applied.coveredAssistantIDs) }
-      let view = applied.view
-      for (const event of owned.events) view = applyEvent(view, event, true)
-      owned.replayed.forEach((key) => sealed?.parts.delete(key))
+      const view = applied.view
       selectionReadyToken = token
       const teamRootID = applied.parentID ?? container.state.selectedSessionInfo?.parentID ?? sessionID
       const retained = sameFamily && teamRootID === container.state.team?.rootID
@@ -2625,30 +2636,31 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return
     }
     const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
-    if (!Array.isArray(data) || data.length === 0) return
-    const seqs = data.flatMap((event) => {
-      const durable = typeof event === "object" && event !== null ? Reflect.get(event, "durable") : undefined
-      const seq = typeof durable === "object" && durable !== null ? Reflect.get(durable, "seq") : undefined
-      return typeof seq === "number" ? [seq] : []
-    })
-    const applied = container.state.view?.watermark
-    if (seqs.length === data.length && applied !== undefined && Math.max(...seqs) <= applied) return
-    reconcileLoggedExecution(sessionID, token, data)
+    if (Array.isArray(data)) {
+      const applied = container.state.view?.watermark
+      if (data.every((event) => {
+        const seq = sessionLogPosition(event, sessionID)
+        return seq === null || seq !== undefined && applied !== undefined && seq <= applied
+      })) return
+      reconcileLoggedExecution(sessionID, token, data)
+    }
     void resyncSelected()
   }
 
   const reconcileLoggedExecution = (sessionID: string, token: number, events: readonly unknown[]) => {
     const view = container.state.view
     if (token !== selectionToken || view?.id !== sessionID) return
-    const executionType = (event: unknown) => {
+    const logged = events.flatMap((event) => {
       const type = typeof event === "object" && event !== null ? Reflect.get(event, "type") : undefined
-      return typeof type === "string" && type.startsWith("session.execution.") ? type : undefined
-    }
-    const newest = events.findLast((event) => executionType(event) !== undefined)
-    if (newest === undefined || executionType(newest) === "session.execution.started") return
-    const seqs = events.flatMap((event) => readEventSequence(event).seq ?? [])
-    if (seqs.length === 0 || view.watermark !== undefined && Math.max(...seqs) < view.watermark) return
-    setState({ view: applyEvent(view, newest, true) })
+      if (typeof type !== "string" || type === "log.synced") return []
+      const seq = sessionLogPosition(event, sessionID)
+      return typeof seq === "number" ? [{ event, type, seq }] : []
+    })
+    const newest = logged.findLast((event) => event.type.startsWith("session.execution."))
+    if (newest === undefined || newest.type === "session.execution.started") return
+    const watermark = view.watermark
+    if (watermark !== undefined && logged.every((event) => event.seq < watermark)) return
+    setState({ view: applySessionEvent(view, newest.event, now()) })
   }
 
   const reconcileLogAfter = async (owner: RemoteTransport, sessionID: string, token: number, after: number) => {
