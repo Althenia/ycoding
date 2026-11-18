@@ -390,6 +390,11 @@ const sharedExecution = [
   "Keep small or coupled work in one Session",
   "Never introduce ceremony, handoffs, slots, or resource-limitation throttling; run independent builds, typechecks, and selected checks directly in parallel",
 ]
+const placement = [
+  "As Master, use `create` with `directory` for a chosen folder or with `projectID` for an existing repository Project's canonical directory.",
+  "Use an absolute or home-relative path with `directory`, including for non-Git folders and repository subdirectories.",
+  "Use `name` with optional `repository` only for an explicitly requested managed worktree.",
+]
 const operating = [
   "Accept a member's work as complete only from verified evidence, not from a settled turn or a status claim",
   "Start ready work immediately as soon as its inputs are final, without slots, handoffs, ceremony, or resource-limitation waits",
@@ -403,9 +408,8 @@ const operating = [
   "Require each assignment to complete its feature or cohesive milestone across all affected layers, including code, tests, contracts, docs and consumers, before one consolidated verification pass, never alternating tiny edits with repeated checks, builds or tests, and to preserve required boundary reproduction and pre-implementation tests.",
   "Require batched corrections, reruns of only failed or invalidated checks, and reuse of valid evidence for unchanged sources, contracts and environment, including at integration and merge.",
   "Report progress by delivery milestones, not by mixed administrative counts",
-  "As Master, use `create` with the chosen existing Project's `projectID` to start a member Session in its canonical directory",
-  "`assign` to give an existing member Session to an owner subagent you launched",
-  "only the Master uses `release` after verification or transfers ownership with `assign`",
+  ...placement,
+  "only the Master uses `release` after verification or transfers ownership with `assign` to a supervisor it launched",
   "Supervisors cannot release themselves",
   "your task remains `supervising` until ownership ends",
   "act on each in the turn it arrives",
@@ -589,8 +593,7 @@ describe("Master hierarchy prompt assembly", () => {
       for (const id of [otherSessionID, supervisor]) {
         const system = systemText(yield* requestFor(id, "Review member state"))
         for (const text of [
-          "Select the existing Project for the work, then pass its `projectID` to `project create`; use that Project's canonical directory, AGENTS.md, skills, commands and config.",
-          "Create a managed worktree with `repository` and `name` only when the user explicitly requests a worktree.",
+          ...placement,
           "Detect stuck, hung or looping work from reported state and evidence; reconcile current state before one bounded recovery attempt through existing native controls.",
           "If recovery fails or its outcome is uncertain, report the blocker with evidence and continue independent authorized work; never poll, repeatedly wake, or replay an uncertain action.",
           "Release only settled ownership after verification; use existing non-destructive controls and never delete Session or Project history as cleanup.",
