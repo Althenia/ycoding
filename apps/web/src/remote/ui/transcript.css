@@ -73,7 +73,7 @@
 .transcript-reasoning__hint, .transcript-tool__status { margin-inline-start:auto; color:var(--yc-text-subtle); flex:none; font-size:var(--yc-size-2xs); }
 .transcript-tool__toggle { border:0; background:none; text-align:start; }
 .transcript-tool__name { flex:1; min-inline-size:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.transcript-tool__body { min-inline-size:0; }
+.transcript-tool__body { grid-template-columns:minmax(0,1fr); min-inline-size:0; }
 .transcript-tool__content { padding:var(--yc-space-2) 0 var(--yc-space-3) var(--yc-space-8); min-inline-size:0; }
 .transcript-tool__content .output, .transcript-shell-output .output { max-inline-size:100%; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }
 .transcript-tool__note { color:var(--yc-text-muted); overflow-wrap:anywhere; font-size:var(--yc-size-xs); }

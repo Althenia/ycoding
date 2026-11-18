@@ -37,7 +37,7 @@ const markdownMessages: readonly RemoteMessageView[] = [
   { kind: "synthetic", id: "msg_markdown_excerpt", text: "Subagent update", description: "Subagent notification", metadata: { source: "subagent_notification", type: "completed", childID: "ses_child", excerpt: "**Child emphasis**" }, created: 5 },
   { kind: "assistant", id: "msg_markdown_tool", agent: "build", parts: [{ kind: "tool", callID: "call_markdown", name: "subagent", status: "completed", content: [{ kind: "text", text: "**Tool emphasis**" }] }], created: 6, completed: 7 },
 ]
-const toolOutput = new URLSearchParams(location.search).has("tool-output")
+const toolOutput = new URLSearchParams(location.search).get("tool-output")
 const navigation = new URLSearchParams(location.search).has("navigation")
 const runningStep = new URLSearchParams(location.search).has("running")
 const notification = new URLSearchParams(location.search).has("notification")
@@ -101,6 +101,12 @@ const raw = "first line\n" + "x".repeat(20_000) + "\n... output truncated; full 
 const outputMessages: readonly RemoteMessageView[] = [{ kind: "assistant", id: "msg_tool", created: 1, parts: [
   { kind: "tool", callID: "call_store", name: "read", status: "completed", content: [{ kind: "text", text: raw.replace(/\.\.\. output truncated; full content saved to [^\r\n]*/g, "[full output retained on the device]"), sourceTruncated: true }], structured: { truncated: true } },
   { kind: "tool", callID: "call_shell", name: "shell", status: "completed", content: [{ kind: "text", text: "shell result\n[full output retained on the device]", sourceTruncated: true }] },
+] }]
+const longShellOutput = `result-${"y".repeat(512)}-end`
+const shellLayoutMessages: readonly RemoteMessageView[] = [{ kind: "assistant", id: "msg_shell_layout", created: 1, completed: 4, parts: [
+  { kind: "tool", callID: "call_ordinary_shell", name: "shell", status: "completed", input: { command: "echo ready" }, content: [{ kind: "text", text: "ready\nfinished" }], ran: 2, completed: 3 },
+  { kind: "tool", callID: "call_long_shell", name: "shell", status: "completed", input: { command: `sample-${"x".repeat(512)}-end` }, content: [{ kind: "text", text: longShellOutput }],
+    structured: { shellID: "sh_fixture", status: "exited" }, shellOutput: { status: "exited", text: longShellOutput, cursor: longShellOutput.length, size: longShellOutput.length, truncated: false }, ran: 3, completed: 4 },
 ] }]
 const navigationMessages: readonly RemoteMessageView[] = Array.from({ length: 12 }, (_, index): readonly RemoteMessageView[] => [
   { kind: "user", id: `prompt_${index}`, text: `Prompt ${index + 1}: ${"inspect the current work ".repeat(4)}`, state: "consumed", created: index * 2 },
@@ -194,7 +200,7 @@ const imageSnapshot = () => readSnapshot({ sourceEpoch: "epoch_1", session: { id
     ...(streamedImageText ? [{ type: "text", text: streamedImageText }] : []),
   ] },
 ] })?.messages ?? imageMessages
-const [messages, setMessages] = createSignal(markdown ? markdownMessages : longMode ? longMessages("long", 150) : synthetic ? syntheticMessages(synthetic === "compacted") : fileChangesMode ? fileChangeMessages : costsMode ? costMessages : toolOutput ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : compactionMode ? compactionMessages : initial)
+const [messages, setMessages] = createSignal(markdown ? markdownMessages : longMode ? longMessages("long", 150) : synthetic ? syntheticMessages(synthetic === "compacted") : fileChangesMode ? fileChangeMessages : costsMode ? costMessages : toolOutput === "long-lines" ? shellLayoutMessages : toolOutput !== null ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : compactionMode ? compactionMessages : initial)
 const [compactionHistory, setCompactionHistory] = createSignal(compactionMode && compactionMode !== "old" ? {
   data: [{ jobID: "cmp_old", trigger: "auto", status: "completed" as const, metrics: { ...compressionMetrics, inputTokens: 500, retainedTokens: 200 }, created: 2 }, { jobID: "cmp_live", trigger: "manual", status: "running" as const, created: 3 }],
   truncated: compactionMode === "truncated", completedBefore: compactionMode === "truncated" ? 2 : 0, completedCount: compactionMode === "truncated" ? 3 : 1, totalSavedTokens: compactionMode === "truncated" ? 900 : 300,

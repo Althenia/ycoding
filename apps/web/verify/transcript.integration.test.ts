@@ -609,12 +609,44 @@ describe("transcript rendering", () => {
     try {
       await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html`)
       for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('.transcript-tool__toggle')`); i++) await Bun.sleep(50)
-      await page.evaluate(`document.querySelector('.transcript-tool__toggle').click()`)
-      expect(await page.evaluate(`document.querySelector('.transcript-tool__toggle').getAttribute('aria-expanded') === 'true'`)).toBe(true)
-      await page.evaluate(`document.querySelector('.transcript-tool__toggle').click()`)
-      expect(await page.evaluate(`document.querySelector('.transcript-tool__toggle').getAttribute('aria-expanded') === 'false' && document.querySelector('.transcript-tool__body') !== null`)).toBe(true)
-      await Bun.sleep(260)
-      expect(await page.evaluate(`document.querySelector('.transcript-tool__body') === null`)).toBe(true)
+      const states = await page.evaluate(`(async () => {
+        const toggle = document.querySelector('.transcript-tool__toggle');
+        const panel = document.querySelector('.transcript-tool__body');
+        const id = toggle.getAttribute('aria-controls');
+        const label = toggle.textContent;
+        const state = () => ({
+          expanded: toggle.getAttribute('aria-expanded'),
+          inert: panel.inert,
+          ariaHidden: panel.getAttribute('aria-hidden'),
+          height: panel.getBoundingClientRect().height,
+        });
+        toggle.focus({ preventScroll: true });
+        toggle.click();
+        await Promise.all(panel.getAnimations().map(animation => animation.finished));
+        const opened = state();
+        toggle.click();
+        const closing = state();
+        const animations = panel.getAnimations();
+        const transitions = animations.map(animation => animation.transitionProperty).sort();
+        await Promise.all(animations.map(animation => animation.finished));
+        return {
+          opened: { ...opened, height: opened.height > 0 },
+          closing: { ...closing, height: closing.height > 0 },
+          transitions,
+          closed: state(),
+          controlRetained: document.querySelector('.transcript-tool__toggle') === toggle &&
+            document.activeElement === toggle && !toggle.disabled && label.trim() !== '' && toggle.textContent === label,
+          relationshipRetained: Boolean(id) && toggle.getAttribute('aria-controls') === id && document.getElementById(id) === panel,
+        };
+      })()`)
+      expect(states).toEqual({
+        opened: { expanded: "true", inert: false, ariaHidden: null, height: true },
+        closing: { expanded: "false", inert: true, ariaHidden: "true", height: true },
+        transitions: ["grid-template-rows", "opacity"],
+        closed: { expanded: "false", inert: true, ariaHidden: "true", height: 0 },
+        controlRetained: true,
+        relationshipRetained: true,
+      })
     } finally { await page.close() }
   })
 
