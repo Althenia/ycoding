@@ -22,6 +22,22 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.8",
+    date: "2026-11-18",
+    title: "Exact Project folders and clearer conversations",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Create Project Master and member Sessions in an absolute or home-relative folder, including a non-Git folder or a subfolder within a repository. YCoding creates missing directories and leaves the Session at the chosen path." },
+      { tag: "Added", text: "The Project tool accepts `directory` to start a member without creating a Git branch or worktree. Repository placement and explicit worktree creation remain available." },
+      { tag: "Added", text: "Web Projects accept a typed folder path alongside known folders. Non-Git workspaces appear in the picker; typed remote paths require an updated connector and Web client." },
+      { tag: "Changed", text: "Desktop and Web render Markdown in prompts, replies, and substantive notices. Copy on fenced code keeps indentation and blank lines." },
+      { tag: "Changed", text: "Desktop gives the Session Companion more room for context, activity, and running work. Routine task updates stay out of the transcript while actionable Project notices keep their Session links." },
+      { tag: "Changed", text: "Web aligns conversation prose, requests, and composer controls on one centered track. Settings headings and rows share the same width, including on narrow screens." },
+      { tag: "Fixed", text: "Desktop opens large model catalogs from either composer without stalling the picker." },
+      { tag: "Fixed", text: "Desktop keeps the connection status beside the Session title and the actions at the trailing edge. Only the Working arc rotates, and it stays still when motion is disabled." },
+    ],
+  },
+  {
     version: "0.11.7",
     date: "2026-11-18",
     title: "Desktop navigation, persistent defer and remote recovery",
