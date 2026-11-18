@@ -789,6 +789,41 @@ describe("Chrome bridge service worker", () => {
     }
   })
 
+  test("leaves an owned tab open when the user selects it during close validation", async () => {
+    harness.reset()
+    await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "g".repeat(32) })
+    const socket = harness.FakeWebSocket.instance
+    try {
+      await socket.receive({
+        type: "open", callID: "open-before-selection", tabID: "btab_owned", generation: "bridge-1",
+        url: "https://example.test/new",
+      })
+      expect(socket.outgoing.find((item) => item.callID === "open-before-selection")).toMatchObject({ type: "opened" })
+      harness.page.beforeOwnedHistory = async () => {
+        harness.page.ownedActive = true
+        await harness.tabActivations.emit({ tabId: 24 })
+      }
+      await socket.receive({ type: "close", callID: "close-during-selection", tabID: "btab_owned", generation: "bridge-1" })
+      expect(socket.outgoing.find((item) => item.callID === "close-during-selection")).toMatchObject({
+        type: "error", dispatched: false, message: "The owned tab is active and controlled by the user",
+      })
+      expect(harness.removed).toEqual([])
+      harness.page.ownedActive = undefined
+      await socket.receive({ type: "close", callID: "close-unknown-selection", tabID: "btab_owned", generation: "bridge-1" })
+      expect(socket.outgoing.find((item) => item.callID === "close-unknown-selection")).toMatchObject({
+        type: "error", dispatched: false, message: "Chrome did not confirm the owned tab is inactive",
+      })
+      expect(harness.removed).toEqual([])
+      harness.page.ownedActive = false
+      await harness.tabActivations.emit({ tabId: 17 })
+      await socket.receive({ type: "close", callID: "close-after-selection", tabID: "btab_owned", generation: "bridge-1" })
+      expect(socket.outgoing.find((item) => item.callID === "close-after-selection")).toMatchObject({ type: "closed" })
+      expect(harness.removed).toEqual([24])
+    } finally {
+      await socket.receive({ type: "control", action: "stop" })
+    }
+  })
+
   test("waits for a newly navigated background page before reading its Chrome history", async () => {
     harness.reset()
     harness.page.historyUnavailable = 2
@@ -3333,6 +3368,132 @@ describe("Chrome control marker", () => {
     }
   })
 
+  test("a rejected profile detach keeps that tab blocked until matching native confirmation", async () => {
+    const { socket, shared: [first, other] } = await connect("k", [tabAt(17, { active: true }), tabAt(18)])
+    try {
+      const observation = await observe(socket, first.tabID)
+      expect(observation).toMatchObject({ type: "observation" })
+      harness.page.beforeDetach = () => { throw new Error("Chrome refused to detach") }
+      const release = { type: "relinquish", tabID: first.tabID, generation: "bridge-1" }
+      await socket.receive({ ...release, callID: "release-rejected" })
+      expect(harness.attachedNow.has(17)).toBe(true)
+      expect(socket.outgoing.filter((item) => item.callID === "release-rejected")).toEqual([
+        expect.objectContaining({ ...release, type: "error", callID: "release-rejected", dispatched: false }),
+      ])
+      expect(harness.badges.at(-1)).toMatchObject({ tabId: 17, text: "ON" })
+
+      await socket.receive({ type: "observe", tabID: other.tabID, generation: "bridge-1", callID: "observe-unrelated",
+        controlSessionID: "ses_fixture", controlTabIDs: [first.tabID, other.tabID] })
+      const unrelated = socket.outgoing.find((item) => item.callID === "observe-unrelated")
+      expect(unrelated).toMatchObject({ type: "observation" })
+      const beforeGroup = harness.timeline.length
+      await socket.receive(action("group-uncertain-member", other.tabID, unrelated,
+        { type: "group_control", tabIDs: [other.tabID, first.tabID] }))
+      expect(socket.outgoing.at(-1)).toMatchObject({ type: "error", callID: "group-uncertain-member", dispatched: false })
+      expect(harness.timeline.slice(beforeGroup)).toEqual([])
+      await harness.nativeDetach({ tabId: 18 }, "target_closed")
+      const before = harness.timeline.length
+      expect(await observe(socket, first.tabID, "observe-uncertain")).toMatchObject({ type: "error", dispatched: false })
+      await socket.receive({ ...action("act-uncertain", first.tabID, observation, { type: "scroll", deltaY: 40 }),
+        controlSessionID: "ses_other", controlTabIDs: [first.tabID] })
+      expect(socket.outgoing.at(-1)).toMatchObject({ type: "error", callID: "act-uncertain", dispatched: false })
+      expect(harness.timeline.slice(before)).toEqual([])
+      expect(harness.attached.filter((source) => source.tabId === 17)).toHaveLength(1)
+
+      await harness.nativeDetach({ tabId: 17 }, "target_closed")
+      expect(socket.outgoing.filter((item) => item.callID === "release-rejected")).toHaveLength(1)
+      await socket.receive({ ...release, callID: "release-confirmed" })
+      expect(socket.outgoing.at(-1)).toEqual({ ...release, type: "relinquished", callID: "release-confirmed" })
+      expect(harness.timeline.slice(before).filter(([kind, id]) => kind === "detach" && id === 17)).toEqual([])
+      expect(harness.badges.at(-1)).toMatchObject({ tabId: 17, text: "" })
+      expect(await observe(socket, first.tabID, "observe-confirmed")).toMatchObject({ type: "observation" })
+    } finally {
+      harness.page.beforeDetach = undefined
+      await stopBridge()
+    }
+  })
+
+  test.each(["target_closed", "canceled_by_user"])("a native %s event during profile release confirms only the exact detach", async (reason) => {
+    const { socket, shared: [tab] } = await connect("k", [tabAt(17, { active: true })])
+    const started = Promise.withResolvers()
+    const detached = Promise.withResolvers()
+    let releasing
+    try {
+      expect(await observe(socket, tab.tabID)).toMatchObject({ type: "observation" })
+      harness.page.beforeDetach = () => {
+        started.resolve()
+        return detached.promise
+      }
+      releasing = socket.receive({ type: "relinquish", tabID: tab.tabID, generation: "bridge-1", callID: "release-in-flight" })
+      await started.promise
+      expect(socket.outgoing.some((item) => item.callID === "release-in-flight")).toBe(false)
+      expect(await observe(socket, tab.tabID, "observe-in-flight")).toMatchObject({ type: "error", dispatched: false })
+      await harness.nativeDetach({ tabId: 17 }, reason)
+      detached.reject(new Error("Chrome no longer has that debugger"))
+      await releasing
+      if (reason === "canceled_by_user") {
+        expect(socket.outgoing).toContainEqual({ type: "revoked", tabID: tab.tabID, reason: "detached", detachReason: reason })
+        expect(socket.outgoing.some((item) => item.type === "relinquished" && item.callID === "release-in-flight")).toBe(false)
+        await harness.tabUpdated.emit(17, { status: "complete" }, tabAt(17))
+        expect(socket.outgoing.filter((item) => item.type === "shared")).toHaveLength(1)
+      } else {
+        expect(socket.outgoing.at(-1)).toEqual({ type: "relinquished", tabID: tab.tabID, generation: "bridge-1", callID: "release-in-flight" })
+        expect(await observe(socket, tab.tabID, "observe-after-confirmation")).toMatchObject({ type: "observation" })
+      }
+    } finally {
+      detached.resolve()
+      await releasing
+      harness.page.beforeDetach = undefined
+      await stopBridge()
+    }
+  })
+
+  test("profile release waits for a pending native attach and detaches it without starting page work", async () => {
+    const { socket, shared: [tab] } = await connect("k", [tabAt(17, { active: true })])
+    const started = Promise.withResolvers()
+    const attaching = Promise.withResolvers()
+    let initial, releasing
+    try {
+      harness.page.beforeAttach = () => {
+        started.resolve()
+        return attaching.promise
+      }
+      initial = observe(socket, tab.tabID, "observe-pending-attach")
+      await started.promise
+      releasing = socket.receive({ type: "relinquish", tabID: tab.tabID, generation: "bridge-1", callID: "release-pending-attach" })
+      expect(await observe(socket, tab.tabID, "observe-during-release")).toMatchObject({ type: "error", dispatched: false })
+      expect(socket.outgoing.some((item) => item.callID === "release-pending-attach")).toBe(false)
+      attaching.resolve()
+      expect(await initial).toMatchObject({ type: "error", dispatched: false })
+      await releasing
+      expect(harness.attachedNow.has(17)).toBe(false)
+      expect(harness.commands).toEqual([])
+      expect(socket.outgoing).toContainEqual({ type: "relinquished", tabID: tab.tabID, generation: "bridge-1", callID: "release-pending-attach" })
+    } finally {
+      attaching.resolve()
+      await Promise.all([initial, releasing])
+      harness.page.beforeAttach = undefined
+      await stopBridge()
+    }
+  })
+
+  test("a late native detach frees failed setup without requiring release of an unclaimed tab", async () => {
+    const { socket, shared: [tab] } = await connect("k", [tabAt(17, { active: true })])
+    try {
+      harness.page.axFails = true
+      harness.page.beforeDetach = () => { throw new Error("Chrome refused to detach") }
+      expect(await observe(socket, tab.tabID, "failed-setup")).toMatchObject({ type: "error", dispatched: false })
+      expect(await observe(socket, tab.tabID, "uncertain-setup")).toMatchObject({ type: "error", dispatched: false })
+      expect(harness.attachedNow.has(17)).toBe(true)
+      await harness.nativeDetach({ tabId: 17 }, "target_closed")
+      harness.page.axFails = false
+      expect(await observe(socket, tab.tabID, "observe-after-setup-detached")).toMatchObject({ type: "observation" })
+    } finally {
+      harness.page.beforeDetach = undefined
+      await stopBridge()
+    }
+  })
+
   test("acknowledges relinquish of an unknown tab and rejects a stale generation without detaching", async () => {
     const { socket, shared } = await connect("u")
     try {
@@ -3649,6 +3810,9 @@ function createHarness() {
     ownedActive: false,
     profileTabs: undefined,
     historyUnavailable: 0,
+    beforeOwnedHistory: undefined,
+    beforeAttach: undefined,
+    beforeDetach: undefined,
     holdCreate: Promise.resolve(),
     href: undefined,
     typeRedirect: undefined,
@@ -3785,6 +3949,11 @@ function createHarness() {
     groupUpdated,
     badges,
     debuggerDetach,
+    attachedNow,
+    async nativeDetach(source, reason) {
+      attachedNow.delete(source.tabId)
+      await debuggerDetach.emit(source, reason)
+    },
     tabCreated,
     tabUpdated,
     tabRemoved,
@@ -3891,11 +4060,13 @@ function createHarness() {
         onDetach: debuggerDetach,
         onEvent: debuggerEvents,
         attach: async (source) => {
+          await page.beforeAttach?.(source)
           attachedNow.add(source.tabId)
           attached.push(source)
         },
         detach: async (source) => {
           timeline.push(["detach", source.tabId])
+          await page.beforeDetach?.(source)
           attachedNow.delete(source.tabId)
           detached.push(source)
         },
@@ -3907,6 +4078,11 @@ function createHarness() {
             throw new Error("Focus emulation unavailable")
           if (method === "Page.navigate" && source.tabId === 24) createdURL = params.url
           if (method === "Page.getNavigationHistory") {
+            if (source.tabId === 24 && page.beforeOwnedHistory) {
+              const beforeHistory = page.beforeOwnedHistory
+              page.beforeOwnedHistory = undefined
+              await beforeHistory()
+            }
             if (source.tabId === 24 && page.historyUnavailable-- > 0)
               throw new Error('{"code":-32000,"message":"Not attached to an active page"}')
             if (page.historyEntries) return { currentIndex: page.historyIndex, entries: page.historyEntries }
@@ -4112,6 +4288,9 @@ function createHarness() {
       page.active = true
       page.ownedActive = false
       page.historyUnavailable = 0
+      page.beforeOwnedHistory = undefined
+      page.beforeAttach = undefined
+      page.beforeDetach = undefined
       page.holdCreate = undefined
       page.href = undefined
       page.typeRedirect = undefined

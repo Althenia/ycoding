@@ -82,6 +82,10 @@ When the `browser` tool is given a tab ID that is not usable it names the cause 
 
 ## Mutation boundary
 
+Profile release acknowledges a handoff only after Chrome confirms debugger detachment. If detachment fails without confirmation, the Session keeps its lease and the worker rejects observations, actions, and group control for that tab. A matching late native detachment lets an explicit release retry finish without detaching again; it does not turn an earlier error into a success. Chrome's native **Cancel** revokes access for the current pairing instead of releasing the tab for another Session.
+
+Explicit close checks Chrome's selected-tab state after reading the owned tab's navigation history. If Chrome does not report the tab as inactive, YCoding leaves it open and does not retry. Automatic cleanup also requires an explicitly inactive tab. Chrome exposes separate activity-read and tab-remove operations, not an atomic close-if-inactive operation; selection can still change between those calls.
+
 Approved paired-tab navigate, click, type, fill, select, check, and hover use the tab-scoped debugger transport. Approval of the source site includes the possibility of incidental downloads; there is no separate pre-download prompt for such side effects. A known link to another site needs that destination approved before clicking; an unexpected destination revokes the tab before its metadata or content is returned. Full CDP access is not exposed; downloads, uploads, and browser history are exposed only as the typed actions and history operation described above.
 
 Every observed element also carries a stable locator of the form `role=<role>[name="<accessible name>"]` (with an `|nth=` suffix when several elements share role and name). Click, type, fill, select, check, hover, and upload accept that locator instead of a semantic ref; YCoding resolves it against the current observation before dispatch, inside the same fences, and rejects a malformed locator before dispatch. Wait also accepts a locator for an element that has not appeared yet and matches it on each poll.

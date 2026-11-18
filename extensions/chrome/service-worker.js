@@ -299,6 +299,7 @@ let reconnectAttempt = 0
 let reconnectScheduled = false
 const tabs = new Map()
 const chromeTabs = new Map()
+const profileReleases = new Map()
 const groups = new Map()
 const deniedTabs = new Set()
 const navigatedAway = new Map()
@@ -410,27 +411,38 @@ chrome.tabs.onRemoved.addListener((chromeTabID) => {
 })
 
 chrome.debugger.onDetach.addListener(async (source, reason) => {
-  if (source.tabId === undefined) return
-  const id = chromeTabs.get(source.tabId)
-  if (!id) return
-  const tab = tabs.get(id)
-  if (tab?.profile && !tab.attached) return
-  await stopGroupControl(await groupMarkers.release(source.tabId))
-  if (tab && !tab.owned) {
+  if (source.tabId === undefined || source.sessionId !== undefined) return
+  const tab = tabs.get(chromeTabs.get(source.tabId))
+  const release = profileReleases.get(source.tabId)
+  if (release) {
+    delete release.tab.attaching
+    release.tab.attached = false
+    if (!release.running && (reason !== "target_closed" || !release.handoff || tab !== release.tab))
+      profileReleases.delete(source.tabId)
+    if (reason === "target_closed") {
+      clearBadge(source.tabId)
+      return
+    }
+  }
+  if (!tab || (tab.profile && !tab.attached && !tab.attaching && !release)) return
+  delete tab.attaching
+  tab.attached = false
+  if (tab.profile) {
     deniedTabs.add(tab.chromeTabID)
     void persistDeniedTabs()
   }
   chromeTabs.delete(source.tabId)
-  tabs.delete(id)
+  tabs.delete(tab.id)
   syncRefreshTimer()
   clearBadge(source.tabId)
   send({
     type: "revoked",
-    tabID: id,
+    tabID: tab.id,
     reason: "detached",
     ...(typeof reason === "string" && reason ? { detachReason: reason.slice(0, MAX_DETACH_REASON) } : {}),
   })
-  if (tab?.owned) void removeInactive(tab.chromeTabID)
+  await stopGroupControl(await groupMarkers.release(source.tabId))
+  if (tab.owned) void removeInactive(tab.chromeTabID)
 })
 
 chrome.debugger.onEvent.addListener((source, method, params) => {
@@ -772,8 +784,7 @@ async function revokeTab(tab, reason) {
   clearBadge(tab.chromeTabID)
   if (reason === "navigated" && tab.profile) navigatedAway.set(tab.chromeTabID, tab.id)
   send({ type: "revoked", tabID: tab.id, reason })
-  await clearMarker(tab)
-  if (!tab.profile || tab.attached) await chrome.debugger.detach({ tabId: tab.chromeTabID }).catch(() => {})
+  await retireDebugger(tab)
   if (tab.owned && !tab.deliverable) await removeInactive(tab.chromeTabID)
 }
 
@@ -823,16 +834,28 @@ async function receive(raw, current = socket) {
     return
   }
   if (message.type === "observe" || message.type === "action") {
+    if (message.generation !== generation) {
+      fail(message, "Stale bridge generation")
+      return
+    }
     if (typeof message.controlSessionID !== "string" || !Array.isArray(message.controlTabIDs)) {
       fail(message, "Tab control grants are missing")
       return
     }
-    const granted = message.controlTabIDs.map((id) => tabs.get(id)).filter((tab) => tab?.profile)
+    const targets = Array.isArray(message.action?.tabIDs) ? message.action.tabIDs : []
+    if ([message.tabID, ...targets].some((id) => profileReleases.has(tabs.get(id)?.chromeTabID))) {
+      fail(message, "The profile tab is waiting for confirmed debugger detachment")
+      return
+    }
+    const granted = message.controlTabIDs.map((id) => tabs.get(id)).filter((tab) => tab?.profile && !profileReleases.has(tab.chromeTabID))
+    const retained = []
     for (const tab of tabs.values()) {
-      if (tab.controlOwner === message.controlSessionID) tab.controlOwner = undefined
+      if (tab.controlOwner !== message.controlSessionID) continue
+      if (profileReleases.has(tab.chromeTabID)) retained.push(tab.chromeTabID)
+      else tab.controlOwner = undefined
     }
     for (const tab of granted) tab.controlOwner = message.controlSessionID
-    await stopGroupControl(await groupMarkers.setGrants(message.controlSessionID, granted.map((tab) => tab.chromeTabID)))
+    await stopGroupControl(await groupMarkers.setGrants(message.controlSessionID, [...retained, ...granted.map((tab) => tab.chromeTabID)]))
   }
   if (message.type === "observe") await observe(message)
   if (message.type === "action") await act(message)
@@ -1154,7 +1177,9 @@ async function closeTab(message) {
   try {
     const tab = requireTab(message)
     if (!tab.owned) throw new Error("Only agent-created tabs can be closed")
-    if (await isActive(tab)) throw new Error("The owned tab is active and controlled by the user")
+    const active = await isActive(tab)
+    if (active === true) throw new Error("The owned tab is active and controlled by the user")
+    if (active !== false) throw new Error("Chrome did not confirm the owned tab is inactive")
     chromeTabs.delete(tab.chromeTabID)
     tabs.delete(tab.id)
     syncRefreshTimer()
@@ -1597,7 +1622,8 @@ async function formInputNodes(tab, target) {
 }
 
 async function abandonFresh(tab) {
-  if (tab && tabs.get(tab.id) === tab) await releaseControl(tab)
+  if (tab && tabs.get(tab.id) === tab && !profileReleases.has(tab.chromeTabID))
+    await releaseControl(tab).catch(() => {})
 }
 
 async function act(message) {
@@ -1693,11 +1719,21 @@ async function act(message) {
 }
 
 async function attachProfile(tab) {
-  if (!tab.profile || tab.attached) return
+  if (!tab.profile) return
+  if (profileReleases.has(tab.chromeTabID) || tab.attaching) throw new Error("Profile debugger control is changing")
+  if (tab.attached) return
   if (!pairing?.enabled || socket?.readyState !== WebSocket.OPEN) throw new Error("Profile access is unavailable")
-  await chrome.debugger.attach({ tabId: tab.chromeTabID }, PROTOCOL_VERSION)
+  const attaching = chrome.debugger.attach({ tabId: tab.chromeTabID }, PROTOCOL_VERSION)
+  tab.attaching = attaching
+  try {
+    await attaching
+    if (tab.attaching === attaching) tab.attached = true
+  } finally {
+    if (tab.attaching === attaching) delete tab.attaching
+  }
+  if (!tab.attached || profileReleases.has(tab.chromeTabID) || tabs.get(tab.id) !== tab)
+    throw new Error("Profile debugger control changed during attachment")
   await command(tab.chromeTabID, "Emulation.setFocusEmulationEnabled", { enabled: true })
-  tab.attached = true
   updateBadge(tab)
   if (tabs.get(tab.id) !== tab || !isAllowedPage(tab, (await chrome.tabs.get(tab.chromeTabID)).url)) {
     await revokeTab(tab, "navigated")
@@ -2591,34 +2627,68 @@ async function controlTabs(list, nativeMarker = true) {
   try {
     for (const tab of list) await ensureControlled(tab, nativeMarker)
   } catch (error) {
-    await Promise.all(fresh.filter((tab) => tabs.get(tab.id) === tab).map(releaseControl))
+    await Promise.all(fresh.map(abandonFresh))
     throw error
   }
 }
 
-async function releaseControl(tab) {
-  await stopGroupControl(await groupMarkers.release(tab.chromeTabID))
-  await clearMarker(tab)
+async function releaseControl(tab, handoff = false) {
+  const held = profileReleases.get(tab.chromeTabID)
+  if (held && (held.tab !== tab || held.running)) throw new Error("Profile tab detachment is already in progress")
+  const release = { tab, running: true, handoff }
+  const attaching = tab.attaching
+  profileReleases.set(tab.chromeTabID, release)
+  try {
+    await stopGroupControl(await groupMarkers.release(tab.chromeTabID))
+    await attaching?.catch(() => {})
+    if (!attaching && tabs.get(tab.id) === tab) await clearMarker(tab)
+    if (tab.attached) await detachDebugger(tab)
+    if (tabs.get(tab.id) !== tab) return
+    clearBadge(tab.chromeTabID)
+    tab.controlOwner = undefined
+    tab.revision = 0
+    tab.refs.clear()
+    tabSessions(tab).clear()
+    clearRequests(tab)
+    tab.logs = []
+  } finally {
+    release.running = false
+    if (!tab.attached) profileReleases.delete(tab.chromeTabID)
+  }
+}
+
+async function detachDebugger(tab) {
+  try {
+    await chrome.debugger.detach({ tabId: tab.chromeTabID })
+  } catch {
+    if (tab.attached) throw new Error("Chrome did not confirm debugger detachment")
+  }
   tab.attached = false
-  await chrome.debugger.detach({ tabId: tab.chromeTabID }).catch(() => {})
-  clearBadge(tab.chromeTabID)
-  tab.revision = 0
-  tab.refs.clear()
-  tabSessions(tab).clear()
-  clearRequests(tab)
-  tab.logs = []
+}
+
+async function retireDebugger(tab) {
+  const release = profileReleases.get(tab.chromeTabID)
+  if (release && (release.tab !== tab || release.running)) return
+  await tab.attaching?.catch(() => {})
+  await clearMarker(tab)
+  if (!tab.profile || tab.attached) await detachDebugger(tab).catch(() => {})
+  if (release && !tab.attached && profileReleases.get(tab.chromeTabID) === release) profileReleases.delete(tab.chromeTabID)
 }
 
 async function relinquish(message) {
+  const owner = socket
+  const bridgeGeneration = generation
+  let tab
   try {
     requireConnection()
     if (message.generation !== generation) throw new Error("Stale bridge generation")
-    const tab = tabs.get(message.tabID)
+    tab = tabs.get(message.tabID)
     if (tab && !tab.profile) throw new Error("Only paired profile tab control can be released")
-    if (tab) await releaseControl(tab)
+    if (tab) await releaseControl(tab, true)
+    if (owner !== socket || bridgeGeneration !== generation || (tab && tabs.get(tab.id) !== tab)) return
     send({ type: "relinquished", callID: message.callID, tabID: message.tabID, generation })
   } catch (error) {
-    fail(message, safeError(error))
+    if (owner === socket && bridgeGeneration === generation && (!tab || tabs.get(tab.id) === tab)) fail(message, safeError(error))
   }
 }
 
@@ -2772,8 +2842,7 @@ async function isActive(tab) {
 }
 
 async function tabInfo(tab) {
-  const info = await chrome.tabs.get(tab.chromeTabID)
-  if (!tab.owned) return info
+  if (!tab.owned) return chrome.tabs.get(tab.chromeTabID)
   let history
   for (let attempt = 0; ; attempt++) {
     try {
@@ -2787,12 +2856,13 @@ async function tabInfo(tab) {
   }
   const entry = history.entries[history.currentIndex] ?? history.entries.at(-1)
   const title = entry?.title ?? ""
-  return { active: info.active, title, url: entry?.url }
+  const { active } = await chrome.tabs.get(tab.chromeTabID)
+  return { active, title, url: entry?.url }
 }
 
 async function removeInactive(chromeTabID) {
   const info = await chrome.tabs.get(chromeTabID).catch(() => undefined)
-  if (info && !info.active) await chrome.tabs.remove(chromeTabID).catch(() => {})
+  if (info?.active === false) await chrome.tabs.remove(chromeTabID).catch(() => {})
 }
 
 async function waitForOwnedPage(tab) {
@@ -2865,8 +2935,7 @@ async function stop(disconnected) {
   syncRefreshTimer()
   for (const tab of attached) {
     clearBadge(tab.chromeTabID)
-    await clearMarker(tab)
-    if (!tab.profile || tab.attached) await chrome.debugger.detach({ tabId: tab.chromeTabID }).catch(() => {})
+    await retireDebugger(tab)
     if (tab.owned && !tab.deliverable) await removeInactive(tab.chromeTabID)
   }
   const current = socket
