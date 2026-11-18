@@ -69,6 +69,7 @@ function backend(
     malformedIdentity?: boolean
     invalidOutput?: boolean
     hosted?: boolean
+    textResult?: { structuredContent?: null; content: unknown[] }
     afterLibraryWrite?: () => Promise<void>
   } = {},
 ) {
@@ -105,7 +106,7 @@ function backend(
     }
     if (options.status) return new Response("Synthetic denied response", { status: options.status })
     if (options.onceUnauthorized && requests.length === 1) return new Response(null, { status: 401 })
-    if (options.hosted) return hosted(body)
+    if (options.hosted) return hosted(body, options.textResult)
     return handler.fetch(request)
   }
   return { requests, fetch: fetcher, close: () => handler.close() }
@@ -113,7 +114,7 @@ function backend(
 
 // The SDK server always adds `resultType`, so these replies are hand-rolled to reproduce the hosted endpoint,
 // which advertises 2026-07-28 through server/discover but answers tools/list in the earlier-revision shape.
-function hosted(body: Record<string, unknown>) {
+function hosted(body: Record<string, unknown>, textResult?: { structuredContent?: null; content: unknown[] }) {
   if (body.id === undefined) return new Response(null, { status: 202 })
   const reply = (result: Record<string, unknown>) => Response.json({ jsonrpc: "2.0", id: body.id, result })
   if (body.method === "server/discover")
@@ -131,8 +132,19 @@ function hosted(body: Record<string, unknown>) {
       serverInfo: { name: "synthetic-hosted", version: "1" },
     })
   if (body.method === "tools/call")
-    return reply({ content: [{ type: "text", text: "published" }], structuredContent: { status: "published" } })
-  return reply({ tools: [tools[0], unionOutputTool] })
+    return reply(
+      textResult ?? { content: [{ type: "text", text: "published" }], structuredContent: { status: "published" } },
+    )
+  return reply({
+    tools: textResult
+      ? [{
+          name: "public_index_search",
+          description: "Search hosted public index",
+          inputSchema: tools[0].inputSchema,
+          _meta: { connector_id: "connector_index", connector_name: "Public Index" },
+        }]
+      : [tools[0], unionOutputTool],
+  })
 }
 
 const unionOutputTool = {
@@ -565,6 +577,24 @@ describe("account connectors", () => {
         content: [{ type: "text", text: "published" }],
       })
       expect(remote.requests.map((request) => request.body.method)).not.toContain("server/discover")
+    }),
+  )
+
+  it.live("returns hosted text results to Code Mode when structured content is null or absent", () =>
+    Effect.gen(function* () {
+      for (const structured of [{ structuredContent: null }, {}]) {
+        const remote = backend({
+          hosted: true,
+          textResult: { ...structured, content: [{ type: "text", text: "synthetic result" }] },
+        })
+        const current = yield* client({ backend: remote })
+        const [, tool] = find(yield* current.service.tools({}), "Search hosted public index")
+        expect(yield* Tool.settle(tool, { input: { query: "synthetic" } }, context)).toMatchObject({
+          structured: "synthetic result",
+          content: [{ type: "text", text: "synthetic result" }],
+        })
+        expect(remote.requests.filter((request) => request.body.method === "tools/call")).toHaveLength(1)
+      }
     }),
   )
 

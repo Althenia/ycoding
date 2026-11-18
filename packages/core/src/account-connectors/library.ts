@@ -12,7 +12,7 @@ import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "../tool/tool"
 import { Hash } from "../util/hash"
 
-const ID = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9._:~-]{1,512}$/))
+const ID = Schema.String.check(Schema.isPattern(/^(?!\.{1,2}$)[A-Za-z0-9._:~-]{1,512}$/))
 const Name = Schema.String.check(Schema.isPattern(/^[^/\\\r\n]{1,255}$/))
 const Mime = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9.+-]+\/[A-Za-z0-9.+-]+$/))
 const Item = Schema.Struct({

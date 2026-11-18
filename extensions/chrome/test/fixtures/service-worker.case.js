@@ -3768,6 +3768,277 @@ describe("Chrome control marker", () => {
   })
 })
 
+describe("Chrome bridge file choosers", () => {
+  const quad = [0, 0, 10, 0, 10, 10, 0, 10]
+  const childURL = "https://child.example.test/tempo"
+  const tinyFile = "/tmp/ycoding-synthetic-tiny.txt"
+  async function stopBridge() {
+    if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
+      await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
+  }
+  async function connect(controls, { child = false } = {}) {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 17, active: false, windowId: 1, url: "https://example.test/form", title: "Form" }]
+    harness.page.controls = controls
+    if (child) harness.page.child = { url: childURL }
+    await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "u".repeat(32) })
+    const socket = harness.FakeWebSocket.instance
+    const shared = socket.outgoing.find((message) => message.type === "shared")
+    const reply = (callID) => socket.outgoing.find((message) => message.callID === callID)
+    await socket.receive({ type: "observe", callID: "chooser-attach", tabID: shared.tabID, generation: "bridge-1" })
+    if (child)
+      await harness.debuggerEvents.emit({ tabId: 17 }, "Target.attachedToTarget", {
+        sessionId: "child-1",
+        targetInfo: { targetId: "child-target", type: "iframe", url: childURL },
+        waitingForDebugger: false,
+      })
+    const observe = async (callID, frameOrigins) => {
+      await socket.receive({ type: "observe", callID, tabID: shared.tabID, generation: "bridge-1", ...(frameOrigins ? { frameOrigins } : {}) })
+      return reply(callID)
+    }
+    const run = async (callID, observation, input, frameOrigins) => {
+      await socket.receive({ ...action(callID, shared.tabID, observation, input), ...(frameOrigins ? { frameOrigins } : {}) })
+      return reply(callID)
+    }
+    return { observe, run }
+  }
+  const refOf = (observation, name) => {
+    const element = observation.elements.find((item) => item.name === name)
+    if (!element) throw new Error(`No observed element named ${name}`)
+    return element.ref
+  }
+  const since = (start) => harness.commands.slice(start)
+  const intercepts = (start, tabId = 17) =>
+    since(start)
+      .filter((item) => item.method === "Page.setInterceptFileChooserDialog" && item.source.tabId === tabId)
+      .map((item) => ({ session: item.source.sessionId, ...item.params }))
+  const position = (start, predicate) => since(start).findIndex(predicate)
+  const pressed = (item) => item.method === "Input.dispatchMouseEvent" && item.params.type === "mousePressed"
+  const setFiles = (start) => since(start).filter((item) => item.method === "DOM.setFileInputFiles")
+  const openChooser = (params, source = { tabId: 17 }) => {
+    harness.page.clickEffect = () => void harness.debuggerEvents.emit(source, "Page.fileChooserOpened", params)
+  }
+
+  test("lists file inputs missing from the accessibility tree and sets their files without a click or chooser", async () => {
+    const dom = createFakeControls()
+    const resume = dom.label("resume-label", "Resume")
+    const hidden = dom.control({ tag: "input", attributes: { type: "file" }, labels: [resume] })
+    const unnamed = dom.control({ tag: "input", attributes: { type: "file" } })
+    const { observe, run } = await connect({
+      21: { role: "button", name: "Attach", nodeName: "BUTTON", quad },
+      22: { role: "button", name: "", element: hidden, axHidden: true },
+      23: { role: "button", name: "", element: unnamed, axHidden: true },
+    })
+    try {
+      const start = harness.commands.length
+      const observation = await observe("hidden-observe")
+      expect(observation.elements).toContainEqual(
+        expect.objectContaining({ role: "button", name: "Resume", description: "Hidden file input", locator: 'role=button[name="Resume"]' }),
+      )
+      expect(observation.elements).toContainEqual(expect.objectContaining({ role: "button", name: "File input", description: "Hidden file input" }))
+      expect(intercepts(start)).toEqual([])
+      const before = harness.commands.length
+      expect(await run("hidden-upload", observation, { type: "upload", ref: refOf(observation, "Resume"), paths: [tinyFile] })).toMatchObject({
+        type: "result",
+        status: "completed",
+      })
+      expect(setFiles(before)).toEqual([expect.objectContaining({ params: { backendNodeId: 22, files: [tinyFile] } })])
+      expect(since(before).some((item) => item.method === "Input.dispatchMouseEvent")).toBe(false)
+      expect(intercepts(before).filter((item) => item.enabled && !item.cancel)).toEqual([])
+      expect(intercepts(before).at(-1)).toEqual({ session: undefined, enabled: false })
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("uploads through the chooser a profile trigger opens and returns chooser control to the user afterwards", async () => {
+    const { observe, run } = await connect({ 31: { role: "button", name: "Attach", nodeName: "BUTTON", quad } })
+    try {
+      const observation = await observe("trigger-observe")
+      openChooser({ frameId: "main-frame", mode: "selectSingle", backendNodeId: 77 })
+      const start = harness.commands.length
+      expect(await run("trigger-upload", observation, { type: "upload", ref: refOf(observation, "Attach"), paths: [tinyFile] })).toMatchObject({
+        type: "result",
+        status: "completed",
+      })
+      const click = position(start, pressed)
+      const cancelling = position(start, (item) => item.method === "Page.setInterceptFileChooserDialog" && item.params.cancel === true)
+      const accepting = position(start, (item) => item.method === "Page.setInterceptFileChooserDialog" && item.params.enabled && !item.params.cancel)
+      expect(cancelling).toBeGreaterThanOrEqual(0)
+      expect(accepting).toBeGreaterThan(cancelling)
+      expect(click).toBeGreaterThan(accepting)
+      expect(since(start).filter(pressed)).toHaveLength(1)
+      expect(setFiles(start)).toEqual([expect.objectContaining({ params: { backendNodeId: 77, files: [tinyFile] } })])
+      expect(intercepts(start).at(-1)).toEqual({ session: undefined, enabled: false })
+      expect(harness.page.profileTabs[0].active).toBe(false)
+
+      const after = harness.commands.length
+      await observe("trigger-after")
+      expect(intercepts(after)).toEqual([])
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("refuses choosers without a file input, from another frame, of the wrong arity, or that never open, without setting files or retrying", async () => {
+    const { observe, run } = await connect({
+      41: { role: "button", name: "Attach", nodeName: "BUTTON", quad },
+      42: { role: "textbox", name: "Notes", nodeName: "INPUT", attributes: ["type", "text"], quad },
+    })
+    try {
+      for (const item of [
+        { callID: "picker-api", chooser: { frameId: "main-frame", mode: "selectSingle" }, paths: [tinyFile], message: /file input/ },
+        { callID: "picker-frame", chooser: { frameId: "other-frame", mode: "selectSingle", backendNodeId: 78 }, paths: [tinyFile], message: /different frame/ },
+        {
+          callID: "picker-session",
+          chooser: { frameId: "main-frame", mode: "selectSingle", backendNodeId: 79 },
+          source: { tabId: 17, sessionId: "child-9" },
+          paths: [tinyFile],
+          message: /different frame/,
+        },
+        { callID: "picker-single", chooser: { frameId: "main-frame", mode: "selectSingle", backendNodeId: 80 }, paths: [tinyFile, `${tinyFile}.2`], message: /one file/ },
+        { callID: "picker-silent", paths: [tinyFile], message: /did not open a file chooser/ },
+      ]) {
+        const observation = await observe(`${item.callID}-observe`)
+        if (item.chooser) openChooser(item.chooser, item.source)
+        else harness.page.clickEffect = undefined
+        const start = harness.commands.length
+        const result = await run(item.callID, observation, { type: "upload", ref: refOf(observation, "Attach"), paths: item.paths })
+        expect(result).toMatchObject({ type: "error", dispatched: true })
+        expect(result.message).toMatch(item.message)
+        expect(since(start).filter(pressed)).toHaveLength(1)
+        expect(setFiles(start)).toEqual([])
+        expect(intercepts(start).at(-1)).toEqual({ session: undefined, enabled: false })
+      }
+      harness.page.clickEffect = undefined
+      const observation = await observe("picker-text-observe")
+      const start = harness.commands.length
+      expect(await run("picker-text", observation, { type: "upload", ref: refOf(observation, "Notes"), paths: [tinyFile] })).toMatchObject({
+        type: "error",
+        dispatched: false,
+      })
+      expect(since(start).some((item) => item.method === "Input.dispatchMouseEvent" || item.method === "DOM.setFileInputFiles")).toBe(false)
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("does not set files when a click replaces the target document before opening a chooser", async () => {
+    const { observe, run } = await connect({ 45: { role: "button", name: "Attach", nodeName: "BUTTON", quad } })
+    try {
+      const observation = await observe("replacement-observe")
+      const source = { tabId: 17 }
+      harness.page.clickEffect = () => {
+        void harness.debuggerEvents.emit(source, "Page.frameNavigated", { frame: { id: "main-frame", url: "https://example.test/replaced" } })
+        void harness.debuggerEvents.emit(source, "Page.fileChooserOpened", { frameId: "main-frame", mode: "selectSingle", backendNodeId: 85 })
+      }
+      const start = harness.commands.length
+      expect(await run("replacement-upload", observation, { type: "upload", ref: refOf(observation, "Attach"), paths: [tinyFile] })).toMatchObject({
+        type: "error",
+        dispatched: true,
+      })
+      expect(since(start).filter(pressed)).toHaveLength(1)
+      expect(setFiles(start)).toEqual([])
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("releases the profile debugger when Chrome will not restore normal file choosers", async () => {
+    const { observe, run } = await connect({ 46: { role: "button", name: "Attach", nodeName: "BUTTON", quad } })
+    const send = harness.chrome.debugger.sendCommand
+    try {
+      const observation = await observe("restore-observe")
+      harness.chrome.debugger.sendCommand = async (source, method, params) => {
+        if (method === "Page.setInterceptFileChooserDialog" && !params.enabled) throw new Error("Chrome refused to disable interception")
+        return send(source, method, params)
+      }
+      expect(await run("restore-click", observation, { type: "click", ref: refOf(observation, "Attach") })).toMatchObject({
+        type: "error",
+        dispatched: true,
+      })
+      expect(harness.detached).toContainEqual({ tabId: 17 })
+    } finally {
+      harness.chrome.debugger.sendCommand = send
+      await stopBridge()
+    }
+  })
+
+  test("cancels page choosers opened by managed profile input in every frame and reports them without native dialogs", async () => {
+    const { observe, run } = await connect({ 51: { role: "button", name: "Choose", nodeName: "BUTTON", quad } }, { child: true })
+    try {
+      const frameOrigins = ["https://child.example.test"]
+      const observation = await observe("cancel-observe", frameOrigins)
+      openChooser({ frameId: "main-frame", mode: "selectSingle", backendNodeId: 81 })
+      const start = harness.commands.length
+      const result = await run("cancel-click", observation, { type: "click", ref: refOf(observation, "Choose") }, frameOrigins)
+      expect(result).toMatchObject({ type: "result", status: "completed" })
+      expect(result.message).toMatch(/upload/)
+      const click = position(start, pressed)
+      expect(intercepts(start).slice(0, 2)).toEqual(
+        expect.arrayContaining([
+          { session: undefined, enabled: true, cancel: true },
+          { session: "child-1", enabled: true, cancel: true },
+        ]),
+      )
+      expect(position(start, (item) => item.method === "Page.setInterceptFileChooserDialog" && item.source.sessionId === "child-1")).toBeLessThan(click)
+      expect(intercepts(start).slice(-2)).toEqual(
+        expect.arrayContaining([
+          { session: undefined, enabled: false },
+          { session: "child-1", enabled: false },
+        ]),
+      )
+      expect(setFiles(start)).toEqual([])
+
+      const send = harness.chrome.debugger.sendCommand
+      harness.chrome.debugger.sendCommand = async (source, method, params) => {
+        if (method === "Page.setInterceptFileChooserDialog" && source.sessionId === "child-1" && params.enabled)
+          throw new Error("synthetic interception failure")
+        return send(source, method, params)
+      }
+      try {
+        const next = await observe("cancel-observe-2", frameOrigins)
+        const before = harness.commands.length
+        expect(await run("cancel-unavailable", next, { type: "click", ref: refOf(next, "Choose") }, frameOrigins)).toMatchObject({
+          type: "error",
+          dispatched: false,
+        })
+        expect(since(before).some(pressed)).toBe(false)
+      } finally {
+        harness.chrome.debugger.sendCommand = send
+      }
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("keeps owned tabs and their child frames intercepting choosers for the whole attachment", async () => {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 17, active: true, windowId: 1, url: "https://example.test/form", title: "Form" }]
+    await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "w".repeat(32) })
+    const socket = harness.FakeWebSocket.instance
+    try {
+      await socket.receive({ type: "open", callID: "owned-chooser", tabID: "btab_owned_chooser", generation: "bridge-1", url: "https://example.test/owned" })
+      await waitFor(() => socket.outgoing.some((message) => message.callID === "owned-chooser"))
+      expect(socket.outgoing.find((message) => message.callID === "owned-chooser")).toMatchObject({ type: "opened" })
+      const navigate = position(0, (item) => item.method === "Page.navigate" && item.source.tabId === 24)
+      const intercept = position(0, (item) => item.method === "Page.setInterceptFileChooserDialog" && item.source.tabId === 24)
+      expect(intercept).toBeGreaterThanOrEqual(0)
+      expect(intercept).toBeLessThan(navigate)
+      expect(intercepts(0, 24)).toEqual([{ session: undefined, enabled: true, cancel: true }])
+      await harness.debuggerEvents.emit({ tabId: 24 }, "Target.attachedToTarget", {
+        sessionId: "owned-child",
+        targetInfo: { targetId: "owned-child-target", type: "iframe", url: "https://example.test/inner" },
+        waitingForDebugger: false,
+      })
+      await waitFor(() => intercepts(0, 24).length === 2)
+      expect(intercepts(0, 24)[1]).toEqual({ session: "owned-child", enabled: true, cancel: true })
+    } finally {
+      await stopBridge()
+    }
+  })
+})
+
 function createHarness() {
   const runtimeMessages = listeners()
   const runtimeStartup = listeners()
@@ -4173,7 +4444,7 @@ function createHarness() {
           if (page.controls && method === "Accessibility.getFullAXTree")
             return {
               nodes: Object.entries(page.controls)
-                .filter(([, item]) => item.session === source.sessionId && !item.detached)
+                .filter(([, item]) => item.session === source.sessionId && !item.detached && !item.axHidden)
                 .filter(([, item]) => item.frame === (params.frameId === "same-frame" ? "same-frame" : undefined))
                 .map(([id, item]) => axNode(Number(id), item)),
             }
@@ -4184,7 +4455,7 @@ function createHarness() {
               nodeIds: Object.entries(page.controls)
                 .filter(([, item]) => item.session === source.sessionId && item.element?.localName === "input")
                 .filter(([, item]) => item.frame === (params.nodeId === 5000 ? "same-frame" : undefined))
-                .filter(([, item]) => ["date", "time", "datetime-local", "month", "week", "color", "range"].includes(item.element.type))
+                .filter(([, item]) => params.selector.includes(`input[type="${item.element.type}" i]`))
                 .map(([id]) => 1000 + Number(id)),
             }
           if (control && method === "Accessibility.queryAXTree")

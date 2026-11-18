@@ -205,9 +205,19 @@ const F_SENSITIVE_ELEMENT = [
   `  return isSensitive(this)`,
   `}`,
 ].join(PAGE_SCRIPT_NEWLINE)
+const F_FILE_INPUT_NAME = [
+  `function () {`,
+  `  const text = (value) => String(value || "").replace(/\\s+/g, " ").trim().slice(0, 128)`,
+  `  return text(this.getAttribute("aria-label")) || text([...(this.labels || [])].map((label) => label.textContent).join(" ")) || text(this.getAttribute("title")) || "File input"`,
+  `}`,
+].join(PAGE_SCRIPT_NEWLINE)
 const FORM_INPUT_SELECTOR = ["date", "time", "datetime-local", "month", "week", "color", "range"]
   .map((type) => `input[type="${type}" i]`)
   .join(", ")
+const FILE_INPUT_SELECTOR = `input[type="file" i]`
+const CHOOSER_WAIT_MS = 2000
+const CHOOSER_ACTIONS = new Set(["click", "type", "key", "fill", "select", "check", "upload", "webmcp_invoke"])
+const CANCELLED_CHOOSER = "The page opened a file chooser, which YCoding cancelled; use upload on the element that opens it"
 const WAIT_STATES = new Set(["attached", "visible", "hidden", "detached"])
 const LOAD_STATES = new Set(["domcontentloaded", "load", "networkidle"])
 const NETWORK_EVENTS = new Set(["Network.requestWillBeSent", "Network.loadingFinished", "Network.loadingFailed"])
@@ -479,6 +489,12 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   }
   if (method === "Page.javascriptDialogClosed") {
     delete tab.dialog
+    return
+  }
+  if (method === "Page.fileChooserOpened") {
+    if (tab.chooserWaiter)
+      tab.chooserWaiter({ sessionId: source.sessionId, frameId: params?.frameId, mode: params?.mode, backendNodeId: params?.backendNodeId })
+    else tab.cancelledChooser = true
     return
   }
   if (method === "Runtime.consoleAPICalled") {
@@ -1083,6 +1099,8 @@ function registerChildSession(tab, params) {
       command(tab.chromeTabID, "Accessibility.enable", {}, sessionId),
       command(tab.chromeTabID, "Runtime.enable", {}, sessionId),
     ])
+    if (tab.interceptingChoosers)
+      await command(tab.chromeTabID, "Page.setInterceptFileChooserDialog", { enabled: true, cancel: true }, sessionId)
     await command(tab.chromeTabID, "Target.setAutoAttach", autoAttachParams(), sessionId).catch(() => {})
   })().catch(() => {
     session.failed = true
@@ -1117,6 +1135,7 @@ async function openTab(message) {
     await chrome.debugger.attach({ tabId: chromeTabID }, PROTOCOL_VERSION)
     await command(chromeTabID, "Emulation.setFocusEmulationEnabled", { enabled: true })
     await enableTab({ chromeTabID })
+    await command(chromeTabID, "Page.setInterceptFileChooserDialog", { enabled: true, cancel: true })
     if (socket !== owner || generation !== bridgeGeneration || owner.readyState !== WebSocket.OPEN)
       throw new Error("Chrome bridge changed while opening a tab")
     const tab = {
@@ -1125,6 +1144,7 @@ async function openTab(message) {
       windowID: created.windowId,
       owned: true,
       attached: true,
+      interceptingChoosers: true,
       documentGeneration: 1,
       revision: 0,
       refs: new Map(),
@@ -1461,7 +1481,7 @@ async function observe(message) {
         continue
       }
       if (!top) frames.push({ url, observed: true })
-      const inputs = await formInputNodes(tab, target)
+      const { inputs, files } = await formInputNodes(tab, target)
       const byId = new Map(tree.nodes.map((item) => [item.nodeId, item]))
       const locatorOf = (role, name) => {
         const base = `role=${role}[name=${JSON.stringify(name.slice(0, 128))}]`
@@ -1531,6 +1551,18 @@ async function observe(message) {
         const ref = `b${elements.length + 1}`
         tab.refs.set(ref, { sessionId, backendNodeId: row.backendNodeId, frameId: target.frameId, url, top, name: row.name, inferred: true })
         elements.push({ ref, role: "clickable", name: row.name, locator: locatorOf("clickable", row.name), ...(top ? {} : { frame: url }) })
+      }
+      for (const backendNodeId of files) {
+        const key = `${sessionId ?? ""}\0${backendNodeId}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        candidateCount++
+        if (elements.length >= MAX_ELEMENTS) continue
+        const name = await controlCall(tab, { sessionId, frameId: target.frameId, backendNodeId }, F_FILE_INPUT_NAME).catch(() => undefined)
+        if (typeof name !== "string" || !name) continue
+        const ref = `b${elements.length + 1}`
+        tab.refs.set(ref, { sessionId, backendNodeId, frameId: target.frameId, url, top, name })
+        elements.push({ ref, role: "button", name, locator: locatorOf("button", name), description: "Hidden file input", ...(top ? {} : { frame: url }) })
       }
     }
     const info = await tabInfo(tab)
@@ -1605,20 +1637,23 @@ async function frameDocumentNode(tab, target) {
 
 async function formInputNodes(tab, target) {
   const { sessionId } = target
-  const backendNodeIds = new Set()
+  const inputs = new Set()
+  const files = []
   try {
     const { nodeIds } = await command(
       tab.chromeTabID,
       "DOM.querySelectorAll",
-      { nodeId: await frameDocumentNode(tab, target), selector: FORM_INPUT_SELECTOR },
+      { nodeId: await frameDocumentNode(tab, target), selector: `${FORM_INPUT_SELECTOR}, ${FILE_INPUT_SELECTOR}` },
       sessionId,
     )
     for (const nodeId of (nodeIds ?? []).slice(0, MAX_ELEMENTS)) {
       const { node } = await command(tab.chromeTabID, "DOM.describeNode", { nodeId, depth: 0 }, sessionId)
-      if (node?.backendNodeId) backendNodeIds.add(node.backendNodeId)
+      if (!node?.backendNodeId) continue
+      if ((attrs(node.attributes).get("type") ?? "").toLowerCase() === "file") files.push(node.backendNodeId)
+      else inputs.add(node.backendNodeId)
     }
   } catch {}
-  return backendNodeIds
+  return { inputs, files }
 }
 
 async function abandonFresh(tab) {
@@ -1658,27 +1693,37 @@ async function act(message) {
     )
       tab.downloadSince = Date.now() - 1000
     const markDispatched = () => (dispatched = true)
+    const intercepting = CHOOSER_ACTIONS.has(message.action.type)
     let outcome = {}
-    if (message.action.type === "navigate") await navigate(tab, message.action.url, markDispatched)
-    if (message.action.type === "click") await click(tab, message.action.ref, markDispatched)
-    if (message.action.type === "type") await typeText(tab, message.action.ref, message.action.text, markDispatched)
-    if (message.action.type === "fill") outcome = await fill(tab, message.action.ref, message.action.text, markDispatched)
-    if (message.action.type === "select") outcome = await selectOptions(tab, message.action, markDispatched)
-    if (message.action.type === "check") outcome = await setChecked(tab, message.action, markDispatched)
-    if (message.action.type === "hover") await hover(tab, message.action.ref, markDispatched)
-    if (message.action.type === "scroll") await scroll(tab, message.action.deltaY, () => (dispatched = true))
-    if (message.action.type === "back") await history(tab, -1, () => (dispatched = true))
-    if (message.action.type === "forward") await history(tab, 1, () => (dispatched = true))
-    if (message.action.type === "reload") {
-      dispatched = true
-      await command(tab.chromeTabID, "Page.reload", {})
+    let peripheral = {}
+    let captured
+    try {
+      if (intercepting) await interceptChoosers(tab, true)
+      if (message.action.type === "navigate") await navigate(tab, message.action.url, markDispatched)
+      if (message.action.type === "click") await click(tab, message.action.ref, markDispatched)
+      if (message.action.type === "type") await typeText(tab, message.action.ref, message.action.text, markDispatched)
+      if (message.action.type === "fill") outcome = await fill(tab, message.action.ref, message.action.text, markDispatched)
+      if (message.action.type === "select") outcome = await selectOptions(tab, message.action, markDispatched)
+      if (message.action.type === "check") outcome = await setChecked(tab, message.action, markDispatched)
+      if (message.action.type === "hover") await hover(tab, message.action.ref, markDispatched)
+      if (message.action.type === "scroll") await scroll(tab, message.action.deltaY, () => (dispatched = true))
+      if (message.action.type === "back") await history(tab, -1, () => (dispatched = true))
+      if (message.action.type === "forward") await history(tab, 1, () => (dispatched = true))
+      if (message.action.type === "reload") {
+        dispatched = true
+        await command(tab.chromeTabID, "Page.reload", {})
+      }
+      if (message.action.type === "key") await dispatchKey(tab, message.action, () => (dispatched = true))
+      if (message.action.type === "wait") outcome = await waitAction(tab, message.action)
+      if (["clipboard_read", "clipboard_write", "upload", "download", "logs", "export", "webmcp_list", "webmcp_invoke", "dialog"].includes(message.action.type))
+        peripheral = await peripheralAction(tab, message.action, () => (dispatched = true))
+      if (message.action.type === "capture") captured = await capture(tab, message.action)
+      if (intercepting && dispatched && !tab.dialog) await settleChoosers(tab)
+    } finally {
+      if (intercepting && tab.profile) await interceptChoosers(tab, false)
     }
-    if (message.action.type === "key") await dispatchKey(tab, message.action, () => (dispatched = true))
-    if (message.action.type === "wait") outcome = await waitAction(tab, message.action)
-    const peripheral = ["clipboard_read", "clipboard_write", "upload", "download", "logs", "export", "webmcp_list", "webmcp_invoke", "dialog"].includes(message.action.type)
-      ? await peripheralAction(tab, message.action, () => (dispatched = true))
-      : {}
-    const captured = message.action.type === "capture" ? await capture(tab, message.action) : undefined
+    if (intercepting && tab.cancelledChooser && message.action.type !== "upload")
+      outcome = { ...outcome, message: outcome.message ?? CANCELLED_CHOOSER }
     await isActive(tab)
     const info = await tabInfo(tab)
     if (tabs.get(tab.id) !== tab || !isAllowedPage(tab, info.url)) {
@@ -2437,25 +2482,21 @@ async function peripheralAction(tab, action, markDispatched) {
     return {}
   }
   if (action.type === "upload") {
-    const target = requireRef(tab, action.ref)
-    const described = await command(
-      tab.chromeTabID,
-      "DOM.describeNode",
-      { backendNodeId: target.backendNodeId, depth: 0 },
-      target.sessionId,
-    )
-    const type = (attrs(described.node.attributes).get("type") ?? "").toLowerCase()
-    if (String(described.node.nodeName).toLowerCase() !== "input" || type !== "file")
-      throw new Error("Upload target is not a file input")
     if (!Array.isArray(action.paths) || !action.paths.length || action.paths.length > MAX_UPLOAD_FILES)
       throw new Error("Upload requires between one and eight files")
-    markDispatched()
-    await command(
-      tab.chromeTabID,
-      "DOM.setFileInputFiles",
-      { backendNodeId: target.backendNodeId, files: action.paths },
-      target.sessionId,
-    )
+    const documentGeneration = tab.documentGeneration
+    const target = requireRef(tab, action.ref)
+    const described = await describeTarget(tab, target)
+    assertCurrent(tab, documentGeneration)
+    if (tab.refs.get(action.ref) !== target) throw new Error("The shared tab observation is stale")
+    const nodeName = String(described.node.nodeName).toLowerCase()
+    if (nodeName === "input" && (attrs(described.node.attributes).get("type") ?? "").toLowerCase() === "file") {
+      markDispatched()
+      await command(tab.chromeTabID, "DOM.setFileInputFiles", { backendNodeId: target.backendNodeId, files: action.paths }, target.sessionId)
+      return {}
+    }
+    if (["input", "textarea", "select"].includes(nodeName)) throw new Error("Upload target is not a file input or an element that opens one")
+    await uploadThroughChooser(tab, action.ref, target, action.paths, markDispatched)
     return {}
   }
   if (action.type === "download") {
@@ -2537,6 +2578,61 @@ async function peripheralAction(tab, action, markDispatched) {
     return { text }
   }
   return {}
+}
+
+async function interceptChoosers(tab, enabled) {
+  tab.interceptingChoosers = enabled
+  if (enabled) tab.cancelledChooser = false
+  const children = [...tabSessions(tab).entries()]
+  await Promise.all(children.map(([, session]) => session.ready).filter(Boolean))
+  const sessions = [undefined, ...children.map(([sessionId]) => sessionId)]
+  const sent = sessions.map((sessionId) =>
+    command(tab.chromeTabID, "Page.setInterceptFileChooserDialog", enabled ? { enabled: true, cancel: true } : { enabled: false }, sessionId),
+  )
+  const settled = await Promise.allSettled(sent)
+  if (!tab.attached || !settled.some((item, index) =>
+    item.status === "rejected" && (sessions[index] === undefined || tabSessions(tab).has(sessions[index])),
+  )) return
+  if (enabled) throw new Error("File chooser interception is unavailable on this page")
+  await releaseControl(tab)
+  throw new Error("Chrome did not restore normal file choosers; debugger control was released")
+}
+
+function settleChoosers(tab) {
+  return Promise.allSettled(
+    [undefined, ...tabSessions(tab).keys()].map((sessionId) =>
+      command(tab.chromeTabID, "Runtime.evaluate", { expression: "0", returnByValue: true }, sessionId),
+    ),
+  )
+}
+
+async function uploadThroughChooser(tab, ref, target, paths, markDispatched) {
+  const documentGeneration = tab.documentGeneration
+  const opened = Promise.withResolvers()
+  const intercept = (params) => command(tab.chromeTabID, "Page.setInterceptFileChooserDialog", params, target.sessionId)
+  const assertTarget = () => {
+    assertCurrent(tab, documentGeneration)
+    if (tab.refs.get(ref) !== target) throw new Error("The shared tab observation is stale")
+  }
+  try {
+    await intercept({ enabled: true })
+    assertTarget()
+    await clickTarget(tab, target, () => {
+      assertTarget()
+      tab.chooserWaiter = opened.resolve
+      markDispatched()
+    })
+    const chooser = await bounded(opened.promise, CHOOSER_WAIT_MS, "The element did not open a file chooser")
+    assertTarget()
+    if (chooser.sessionId !== target.sessionId || !target.frameId || chooser.frameId !== target.frameId)
+      throw new Error("A file chooser opened in a different frame; no files were set")
+    if (!chooser.backendNodeId) throw new Error("The page opened a file picker without a file input element; Chrome cannot set its files")
+    if (chooser.mode !== "selectMultiple" && paths.length > 1) throw new Error("The file chooser accepts only one file")
+    await command(tab.chromeTabID, "DOM.setFileInputFiles", { backendNodeId: chooser.backendNodeId, files: paths }, target.sessionId)
+  } finally {
+    delete tab.chooserWaiter
+    await intercept({ enabled: true, cancel: true }).catch(() => {})
+  }
 }
 
 function bounded(promise, milliseconds, message) {

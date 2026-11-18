@@ -74,16 +74,17 @@ export const make = Effect.fn("AccountConnectorTools.make")(function* (input: {
               metadata: { operationDigest },
             })
             const result = yield* input.call(entry.id, tool.name, valid.data).pipe(Effect.ensuring(reservation.release))
+            const text = result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
             if (result.isError)
               return yield* new Tool.Failure({
                 message:
-                  result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n") ||
+                  text ||
                   "Account connector tool failed. Check authorization and consent in the account's connector settings.",
               })
             if (validateOutput && !validateOutput(result.structured).valid)
               return yield* new Tool.Failure({ message: "Account connector result does not match its output schema" })
             return {
-              structured: result.structured,
+              structured: validateOutput || text === "" ? result.structured : (result.structured ?? text),
               content: result.content.map((part) =>
                 part.type === "text" ? part : { type: "file" as const, data: part.data, mime: part.mimeType },
               ),

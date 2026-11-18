@@ -1308,6 +1308,10 @@ The client uses only YCoding's stored ChatGPT credential and existing refresh fl
 
 Only tools returned by the authenticated catalog are available. Install or reconnect a connector and complete additional consent in ChatGPT. YCoding does not automatically initiate connector setup or grant consent. When catalog discovery fails, including missing profiles, required authorization, backend rejection, unsupported schemas, and listings that violate the negotiated MCP revision, that provider's tools are unavailable for the model request and the Session continues without them. The backend log records the warning `account connector tools unavailable` with the connector server (`chatgpt-account-connectors` or `claude-account-connectors`) and the failure message, never credentials. Each later model request retries discovery. Connector requests do not change model reasoning, prompt-cache policy, usage accounting, or quota reporting.
 
+Hosted tools that declare no output schema return their text to Code Mode when structured content is null or absent. Tools that declare an output schema must return structured content that matches it.
+
+Connector-hosted file references are separate from Library IDs and managed attachment URIs. For example, Google Drive `upload_file` takes a `file_uri` with a connector `file_id` and `download_url`, not a local path or a Library upload receipt. If the authorized flow cannot supply the reference required by the receiving tool, stop without sending the file.
+
 #### Native Library files
 
 The native Library surface calls ChatGPT's first-party file APIs directly; it does not pass through the hosted MCP catalog. A hosted catalog failure does not remove these tools when their selected profile and managed attachment storage remain available.

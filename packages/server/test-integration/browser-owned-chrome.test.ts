@@ -1368,7 +1368,7 @@ async function startFormBridge(prefix: string, fixtureFetch: (request: Request) 
         return listed.find((item) => item.mode === "profile" && item.page.path === path)
       }, `listed profile tab ${path}`)
     }
-    return { origin, observe, act, completed, refused, openOwned, openProfile, close }
+    return { origin, observe, act, completed, refused, openOwned, openProfile, close, cdp: client, popupSession }
   } catch (error) {
     await close()
     throw error
@@ -2571,6 +2571,119 @@ function findNode(node: DomNode, match: (node: DomNode) => boolean): DomNode | u
     if (found) return found
   }
   return undefined
+}
+
+test.each(["source", "packaged"] as const)(
+  "%s extension uploads through hidden inputs and page-opened choosers without native dialogs and leaves profile choosers to the user",
+  (variant) => withExtension(variant, chooserJourney),
+  120_000,
+)
+
+async function chooserJourney(extensionDirectory: string) {
+  const events: string[] = []
+  const report = "async function report(kind,input){const file=input.files[0];fetch('/event?kind='+kind+'&file='+encodeURIComponent(file.name+':'+await file.text()))}"
+  const transient =
+    "const i=document.createElement('input');i.type='file';i.onchange=()=>report('transient',i);i.addEventListener('cancel',()=>fetch('/event?kind=transient-cancel'));i.click()"
+  const plain =
+    "const i=document.createElement('input');i.type='file';i.onchange=()=>fetch('/event?kind=plain-change');i.addEventListener('cancel',()=>fetch('/event?kind=plain-cancel'));i.click()"
+  const bridge = await startFormBridge("choosers", (request) => {
+    const url = new URL(request.url)
+    if (url.pathname === "/event") {
+      events.push([url.searchParams.get("kind"), url.searchParams.get("file")].filter(Boolean).join(":"))
+      return new Response("recorded")
+    }
+    return new Response(
+      "<!doctype html><title>Upload fixture</title>" +
+        `<script>${report}</script>` +
+        "<label>Resume<input type='file' style='display:none' onchange=\"report('hidden',this)\"></label>" +
+        `<button aria-label='Attach transient' onclick="${transient}">Attach</button>` +
+        "<button aria-label='Open picker' onclick=\"showOpenFilePicker().then(()=>fetch('/event?kind=picker-opened'),(e)=>fetch('/event?kind=picker-'+e.name))\">Pick</button>" +
+        `<button aria-label='Plain chooser' onclick="${plain}">Plain</button>`,
+      { headers: { "content-type": "text/html" } },
+    )
+  }, extensionDirectory)
+  const directory = await mkdtemp(join(tmpdir(), "ycoding-chooser-files-"))
+  try {
+    const tiny = join(directory, "tiny.txt")
+    await Bun.write(tiny, "tiny")
+    const ref = (observation: Browser.Observation, name: string) => {
+      const element = observation.elements.find((item) => item.name === name)
+      if (!element) throw new Error(`Element ${name} was not observed`)
+      return element.ref
+    }
+    const settled = async (expected: string) => {
+      await eventually(async () => (events.includes(expected) ? true : undefined), expected)
+    }
+
+    const tab = await bridge.openOwned("/upload", "choosers-open")
+    const hidden = await bridge.observe(tab, "choosers-observe-hidden")
+    expect(hidden.elements).toContainEqual(expect.objectContaining({ role: "button", name: "Resume", description: "Hidden file input" }))
+    await bridge.completed(await bridge.act(hidden, "choosers-hidden", { type: "upload", ref: ref(hidden, "Resume"), paths: [tiny] }))
+    await settled("hidden:tiny.txt:tiny")
+
+    const trigger = await bridge.observe(tab, "choosers-observe-trigger")
+    await bridge.completed(
+      await bridge.act(trigger, "choosers-transient", { type: "upload", ref: ref(trigger, "Attach transient"), paths: [tiny] }),
+    )
+    await settled("transient:tiny.txt:tiny")
+
+    const plainClick = await bridge.observe(tab, "choosers-observe-plain")
+    const cancelled = await bridge.completed(await bridge.act(plainClick, "choosers-plain", { type: "click", ref: ref(plainClick, "Plain chooser") }))
+    expect(cancelled.message).toContain("use upload")
+    await settled("plain-cancel")
+    expect(events).toEqual(["hidden:tiny.txt:tiny", "transient:tiny.txt:tiny", "plain-cancel"])
+
+    events.length = 0
+    const pickerTab = await bridge.openOwned("/upload-picker", "choosers-open-picker")
+    const picker = await bridge.observe(pickerTab, "choosers-observe-picker")
+    const refusal = await bridge.refused(await bridge.act(picker, "choosers-picker", { type: "upload", ref: ref(picker, "Open picker"), paths: [tiny] }))
+    expect(refusal).toContain('"status":"uncertain"')
+    expect(refusal).toContain("without a file input element")
+    await settled("picker-AbortError")
+    expect(events).toEqual(["picker-AbortError"])
+
+    events.length = 0
+    const activeBefore = await activeTabIDs(bridge.cdp, bridge.popupSession)
+    const profile = await bridge.openProfile("/upload-profile")
+    const profileTrigger = await bridge.observe(profile, "choosers-profile-observe")
+    await bridge.completed(
+      await bridge.act(profileTrigger, "choosers-profile-transient", { type: "upload", ref: ref(profileTrigger, "Attach transient"), paths: [tiny] }),
+    )
+    await settled("transient:tiny.txt:tiny")
+    expect(await activeTabIDs(bridge.cdp, bridge.popupSession)).toEqual(activeBefore)
+
+    const targets = record(await bridge.cdp.send("Target.getTargets")).targetInfos
+    const page = Array.isArray(targets) ? targets.map(record).find((info) => info.type === "page" && String(info.url).endsWith("/upload-profile")) : undefined
+    if (!page) throw new Error("Profile fixture target was not found")
+    const user = string(record(await bridge.cdp.send("Target.attachToTarget", { targetId: string(page.targetId), flatten: true })).sessionId)
+    const opened: Array<{ mode: unknown; backendNodeId: unknown }> = []
+    const unsubscribe = bridge.cdp.subscribe((event) => {
+      if (event.method === "Page.fileChooserOpened" && event.sessionId === user)
+        opened.push({ mode: event.params?.mode, backendNodeId: event.params?.backendNodeId })
+    })
+    try {
+      await bridge.cdp.send("Page.enable", {}, user)
+      await bridge.cdp.send("Page.setInterceptFileChooserDialog", { enabled: true }, user)
+      await bridge.cdp.send(
+        "Runtime.evaluate",
+        { expression: "document.querySelector('[aria-label=\"Plain chooser\"]').click()", userGesture: true },
+        user,
+      )
+      const chooser = await eventually(async () => opened[0], "user-opened chooser")
+      expect(chooser.mode).toBe("selectSingle")
+      expect(typeof chooser.backendNodeId).toBe("number")
+      await bridge.cdp.send("DOM.setFileInputFiles", { backendNodeId: chooser.backendNodeId, files: [tiny] }, user)
+      await settled("plain-change")
+      expect(opened).toHaveLength(1)
+      expect(events).toEqual(["transient:tiny.txt:tiny", "plain-change"])
+    } finally {
+      unsubscribe()
+      await bridge.cdp.send("Target.detachFromTarget", { sessionId: user }).catch(() => {})
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+    await bridge.close()
+  }
 }
 
 async function platformFonts(cdp: Client, sessionID: string, match: (node: DomNode) => boolean) {

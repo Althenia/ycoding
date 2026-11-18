@@ -34,6 +34,7 @@ import {
   type OAuthClientProvider,
   type PriorDiscovery,
   type RequestId,
+  type specTypeSchemas,
   type TransportSendOptions,
 } from "@modelcontextprotocol/client"
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio"
@@ -308,6 +309,7 @@ export interface Connection {
   readonly callTool: (input: {
     readonly name: string
     readonly args?: Record<string, unknown>
+    readonly resultSchema?: typeof specTypeSchemas.CallToolResult
   }) => Effect.Effect<CallToolResult, Error>
   readonly onClose: (callback: () => void) => void
   /** Registers a callback fired when the server emits an MCP logging notification. */
@@ -713,12 +715,14 @@ export const connect = Effect.fnUntraced(function* (
         ),
       callTool: (input) =>
         Effect.tryPromise({
-          try: (signal) =>
-            client.callTool(
-              { name: input.name, arguments: input.args ?? {} },
-              // Keep progress tokens available while enforcing a hard wall-clock execution timeout.
-              { signal, timeout: executionTimeout, onprogress: () => {} },
-            ),
+          try: (signal) => {
+            const params = { name: input.name, arguments: input.args ?? {} }
+            // Keep progress tokens available while enforcing a hard wall-clock execution timeout.
+            const options = { signal, timeout: executionTimeout, onprogress: () => {} }
+            return input.resultSchema
+              ? client.request({ method: "tools/call", params }, input.resultSchema, options)
+              : client.callTool(params, options)
+          },
           catch: (error) => (error instanceof Error ? error : new Error(String(error))),
         }).pipe(
           Effect.map((result) => ({

@@ -1,6 +1,6 @@
 export * as AccountConnectors from "./account-connectors"
 
-import type { FetchLike } from "@modelcontextprotocol/client"
+import { specTypeSchemas, type FetchLike } from "@modelcontextprotocol/client"
 import { Agent } from "./agent"
 import { Credential } from "@ycoding-ai/schema/credential"
 import { Context, Effect, Layer } from "effect"
@@ -470,7 +470,11 @@ export function make(options: {
         guardrail: options.guardrail,
         current,
         call: (id, name, args) =>
-          Effect.scoped(connect(id).pipe(Effect.flatMap((client) => client.callTool({ name, args })))),
+          Effect.scoped(
+            connect(id).pipe(
+              Effect.flatMap((client) => client.callTool({ name, args, resultSchema: specTypeSchemas.CallToolResult })),
+            ),
+          ),
       })
     }),
   }

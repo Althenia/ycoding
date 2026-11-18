@@ -287,6 +287,8 @@ describe("native account Library", () => {
     for (const [name, input] of [
       ["list", { limit: 101 }],
       ["download", { fileID: "https://evil.invalid" }],
+      ["download", { fileID: ".." }],
+      ["download", { fileID: "." }],
       ["materialize", { fileID: "file-local", name: "fixture.txt" }],
       ["upload", { attachmentURI: "file:///secret", name: "fixture.txt" }],
     ] as const) {
