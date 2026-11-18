@@ -22,6 +22,22 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.11",
+    date: "2026-11-18",
+    title: "Desktop composer refresh and safer Chrome ownership",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Browser uploads can set files on hidden file inputs or through a file chooser without switching tabs. Paired tabs keep normal chooser behavior afterward." },
+      { tag: "Changed", text: "Desktop keeps the composer directly above the conversation, replaces Send with Stop while work runs, and accepts pasted and dropped files. Sessions show named states with icons, tool errors stay on their own tabs, and Team rows and cards open the same child inspector." },
+      { tag: "Changed", text: "Built-in agents and Project roles resolve routine decisions from live evidence and recover within their authority. When work cannot proceed, they name the verified action, target, and remaining decision." },
+      { tag: "Fixed", text: "Hosted connector calls keep their text when a response has no structured data, and Library file IDs that would change the download endpoint are rejected." },
+      { tag: "Fixed", text: "Chrome no longer closes a tab you selected while YCoding owned it, and a paired tab stays blocked after a debugger detach that could not be confirmed." },
+      { tag: "Fixed", text: "Remote transcripts no longer fetch an extra snapshot at the applied watermark or repeat text the snapshot already contains." },
+      { tag: "Fixed", text: "Expanded shell output stays inside its tool card in Web; long lines scroll within the output block instead of widening the transcript." },
+      { tag: "Fixed", text: "Project recovery finds member notification receipts through the existing event index, including across ownership transfers, so large databases reach readiness sooner." },
+    ],
+  },
+  {
     version: "0.11.10",
     date: "2026-11-18",
     title: "Project Session attachment and browser dropdowns",

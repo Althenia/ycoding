@@ -477,7 +477,8 @@ test("new chats send standalone or with an explicitly selected repository", asyn
   expect(source).toContain('!newDirectory() || available().some((item) => item.directory === newDirectory())')
   expect(source).toContain('api.createSession({ sessionID: draft.sessionID, ...(draft.directory ? { directory: draft.directory } : {}), ...(draft.agent ? { agent: draft.agent } : {}) })')
   expect(source).toContain('No Project or filesystem Workspace is required.')
-  expect(source).toContain('locked={!!newPending()}')
+  expect(source).toContain('<WorkspaceTargetPicker directory={newDirectory()} locked={!!newPending() || busy()}')
+  expect(source).toContain('value={newPending()?.text ?? newText()} locked={!!newPending() || busy()}')
 })
 
 test("the workspace has a Ledger rail, dock, companion and source geometry", async () => {
@@ -607,7 +608,10 @@ test("sending keeps the prompt identity and locks unconfirmed drafts", async () 
   expect(source).toContain("promptID: `msg_${crypto.randomUUID()}`")
   expect(source).toContain("sessionID: `ses_${crypto.randomUUID()}`")
   expect(source).toContain("readOnly={props.locked}")
-  expect(source).toContain('disabled={sending() || !reading() || unsure() || revertBusy() || revertUncertain() || !!stagedModel() && running() || (!pending() && !text().trim())}')
+  expect(source).toContain('value={pending()?.text ?? text()} locked={!!pending() || sending()}')
+  expect(source).toContain('type={running() ? "button" : "submit"} class="rl-send desktop__primary"')
+  expect(source).toContain('disabled={running() ? stopping() || !reading() : sending() || !reading() || unsure() || revertBusy() || revertUncertain() || (!pending() && !text().trim())}')
+  expect(source).toContain('if (running() && (pending()?.model || stagedModel()))')
   expect(source).toContain("pendings.set(props.sessionID, value)")
 })
 
