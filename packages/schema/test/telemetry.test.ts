@@ -32,6 +32,13 @@ test("accepts every incident operation name", () => {
   for (const operation of names) expect(Schema.decodeUnknownSync(Telemetry.Operation)(operation)).toBe(operation as never)
 })
 
+test("accepts request telemetry for attaching and detaching Project members", () => {
+  for (const operation of ["coordination.attach", "coordination.detach"] as const) {
+    expect(Schema.decodeUnknownSync(Telemetry.Operation)(operation)).toBe(operation)
+    expect(Schema.decodeUnknownSync(Telemetry.Sample)({ ...request, operation })).toEqual({ ...request, operation })
+  }
+})
+
 test("accepts telemetry for deleting a Session through the remote operation", () => {
   expect(Schema.decodeUnknownSync(Telemetry.Operation)("session.delete")).toBe("session.delete")
   expect(Schema.decodeUnknownSync(Telemetry.Sample)({ ...request, operation: "session.delete" })).toMatchObject({

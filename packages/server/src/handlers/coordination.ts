@@ -22,5 +22,7 @@ export const CoordinationHandler = HttpApiBuilder.group(Api, "server.coordinatio
     .handle("coordination.get", (ctx) => response(runtime.get(ctx.params.groupID)))
     .handle("coordination.create", (ctx) => response(coordination.create(ctx.payload).pipe(Effect.flatMap((group) => runtime.get(group.id)))))
     .handle("coordination.update", (ctx) => response(coordination.update(ctx.params.groupID, ctx.payload).pipe(Effect.flatMap((group) => runtime.get(group.id)))))
+    .handle("coordination.attach", (ctx) => response(runtime.get(ctx.params.groupID).pipe(Effect.flatMap((group) => runtime.attach(group.master.sessionID, ctx.payload, { groupID: ctx.params.groupID })))))
+    .handle("coordination.detach", (ctx) => response(runtime.get(ctx.params.groupID).pipe(Effect.flatMap((group) => runtime.remove(group.master.sessionID, { sessionID: ctx.params.sessionID }, { groupID: ctx.params.groupID })))))
     .handle("coordination.delete", (ctx) => coordination.delete(ctx.params.groupID).pipe(Effect.mapError(failed)))
 }))

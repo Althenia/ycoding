@@ -2830,6 +2830,32 @@ type Endpoint38_5Input = { readonly groupID: Endpoint38_5Request["params"]["grou
 const Endpoint38_5 = (raw: RawClient["server.coordination"]) => (input: Endpoint38_5Input) =>
   raw["coordination.delete"]({ params: { groupID: input["groupID"] } }).pipe(Effect.mapError(mapClientError))
 
+type Endpoint38_6Request = Parameters<RawClient["server.coordination"]["coordination.attach"]>[0]
+type Endpoint38_6Input = {
+  readonly groupID: Endpoint38_6Request["params"]["groupID"]
+  readonly sessionID: Endpoint38_6Request["payload"]["sessionID"]
+  readonly ownerSessionID?: Endpoint38_6Request["payload"]["ownerSessionID"]
+}
+const Endpoint38_6 = (raw: RawClient["server.coordination"]) => (input: Endpoint38_6Input) =>
+  raw["coordination.attach"]({
+    params: { groupID: input["groupID"] },
+    payload: { sessionID: input["sessionID"], ownerSessionID: input["ownerSessionID"] },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint38_7Request = Parameters<RawClient["server.coordination"]["coordination.detach"]>[0]
+type Endpoint38_7Input = {
+  readonly groupID: Endpoint38_7Request["params"]["groupID"]
+  readonly sessionID: Endpoint38_7Request["params"]["sessionID"]
+}
+const Endpoint38_7 = (raw: RawClient["server.coordination"]) => (input: Endpoint38_7Input) =>
+  raw["coordination.detach"]({ params: { groupID: input["groupID"], sessionID: input["sessionID"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
 const adaptGroup38 = (raw: RawClient["server.coordination"]) => ({
   settings: Endpoint38_0(raw),
   list: Endpoint38_1(raw),
@@ -2837,6 +2863,8 @@ const adaptGroup38 = (raw: RawClient["server.coordination"]) => ({
   get: Endpoint38_3(raw),
   update: Endpoint38_4(raw),
   delete: Endpoint38_5(raw),
+  attach: Endpoint38_6(raw),
+  detach: Endpoint38_7(raw),
 })
 
 const Endpoint39_0 = (raw: RawClient["server.dots"]) => () =>

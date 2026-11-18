@@ -21,6 +21,8 @@ export type TelemetryRequestSample = {
     | "coordination.get"
     | "coordination.update"
     | "coordination.delete"
+    | "coordination.attach"
+    | "coordination.detach"
     | "workspace.list"
     | "session.list"
     | "session.active"
@@ -2601,6 +2603,14 @@ export type FormFieldAssessment = {
   grades?: Array<FormOptionGrade>
   recommendation?: Array<string>
   confidence?: number
+}
+
+export type CoordinationAttachResult = {
+  groupID: CoordinationGroupID
+  sessionID: string
+  location: LocationRef
+  ownerSessionID: string
+  reconciled: boolean
 }
 
 export type CoordinationEventDeleted = {
@@ -6158,6 +6168,8 @@ export type ServerTelemetryAppendInput = {
             | "coordination.get"
             | "coordination.update"
             | "coordination.delete"
+            | "coordination.attach"
+            | "coordination.detach"
             | "workspace.list"
             | "session.list"
             | "session.active"
@@ -13209,6 +13221,21 @@ export type CoordinationUpdateOutput = { data: CoordinationInfo }["data"]
 export type CoordinationDeleteInput = { readonly groupID: { readonly groupID: string }["groupID"] }
 
 export type CoordinationDeleteOutput = void
+
+export type CoordinationAttachInput = {
+  readonly groupID: { readonly groupID: string }["groupID"]
+  readonly sessionID: { readonly sessionID: string; readonly ownerSessionID?: string }["sessionID"]
+  readonly ownerSessionID?: { readonly sessionID: string; readonly ownerSessionID?: string }["ownerSessionID"]
+}
+
+export type CoordinationAttachOutput = { data: CoordinationAttachResult }["data"]
+
+export type CoordinationDetachInput = {
+  readonly groupID: { readonly groupID: string; readonly sessionID: string }["groupID"]
+  readonly sessionID: { readonly groupID: string; readonly sessionID: string }["sessionID"]
+}
+
+export type CoordinationDetachOutput = { data: { sessionID: string; removed: true } }["data"]
 
 export type DotsGetOutput = { data: DotsNativeStatus }["data"]
 

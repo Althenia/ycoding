@@ -1142,6 +1142,188 @@ describe("real isolated Chrome executor", () => {
       await fixture.stop(true)
     }
   }, 60_000)
+
+  test("operates open ARIA popups, inferred popup rows, and keyboard selection without exposing secrets", async () => {
+    const state: Record<string, number> = {}
+    let cover = false
+    const fixture = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const path = new URL(request.url).pathname
+        if (path === "/state") return Response.json({ cover })
+        if (path.endsWith("-marker")) {
+          state[path] = (state[path] ?? 0) + 1
+          return new Response("marked")
+        }
+        return new Response(popupFixture(), { headers: { "content-type": "text/html" } })
+      },
+    })
+    const origin = `http://127.0.0.1:${fixture.port}`
+    const runtime = await launch(`${origin}/popups`)
+    const observe = () => Effect.runPromise(runtime.observe)
+    const act = async (action: Browser.Schema.Action) => {
+      const exit = await Effect.runPromiseExit(runtime.action(action, [origin]))
+      if (Exit.isFailure(exit)) throw new Error(`${JSON.stringify(action)}: ${messageOf(Cause.squash(exit.cause))}`)
+      return exit.value
+    }
+    const on = async (name: string, make: (ref: Browser.Schema.Element["ref"]) => Browser.Schema.Action) =>
+      act(make(requireElement(await observe(), name).ref))
+    const expectWaitTimeout = async (action: Browser.Schema.Action) => {
+      const exit = await Effect.runPromiseExit(runtime.action(action, [origin]))
+      expectFailurePhase(exit, "predispatch", JSON.stringify(action))
+      if (Exit.isFailure(exit)) expect(messageOf(Cause.squash(exit.cause))).toContain("Timed out")
+    }
+    const refusedKey = async (key: string, label: string) => {
+      const exit = await Effect.runPromiseExit(runtime.action(keyAction(key), [origin]))
+      expectFailurePhase(exit, "predispatch", label)
+      if (Exit.isFailure(exit)) expect(messageOf(Cause.squash(exit.cause)), label).toContain("sensitive field")
+    }
+    try {
+      const initial = await observe()
+      expect(requireElement(initial, "Account Code")).toMatchObject({ role: "combobox", expanded: false })
+      expect(requireElement(initial, "Account Code").sensitive).toBeUndefined()
+      expect(initial.elements.some((element) => element.name.startsWith("ACC-"))).toBe(false)
+
+      await on("Account Code", (ref) => ({ type: "click", ref }))
+      const opened = await observe()
+      const again = await observe()
+      expect(requireElement(opened, "Account Code").expanded).toBe(true)
+      const options = opened.elements.filter((element) => element.role === "option" && element.name.startsWith("ACC-"))
+      expect(options.map((element) => element.name)).toEqual(Array.from({ length: 12 }, (_, index) => `ACC-${index}`))
+      expect(requireElement(opened, "ACC-9").locator).toBe('role=option[name="ACC-9"]')
+      expect(again.elements.map((element) => [element.ref, element.locator])).toEqual(
+        opened.elements.map((element) => [element.ref, element.locator]),
+      )
+      expect(opened.truncated).toBe(false)
+
+      await act({ type: "click", ref: requireElement(opened, "ACC-9").ref })
+      expect(state["/pick-9-marker"]).toBe(1)
+      const picked = await observe()
+      expect(requireElement(picked, "Account Code")).toMatchObject({ value: "ACC-9", expanded: false })
+      expect(picked.elements.some((element) => element.name.startsWith("ACC-"))).toBe(false)
+
+      await on("Account Code", (ref) => ({ type: "click", ref }))
+      expect((await on("Account Code", (ref) => ({ type: "select", ref, labels: ["ACC-4"] }))).control).toEqual({
+        selected: [{ label: "ACC-4", index: 4 }],
+      })
+      expect(state["/pick-4-marker"]).toBe(1)
+      expect(requireElement(await observe(), "Account Code").value).toBe("ACC-4")
+
+      await on("Account Code", (ref) => ({ type: "click", ref }))
+      const unconfirmed = await on("Account Code", (ref) => ({ type: "select", ref, labels: ["ACC-11"] }))
+      expect(state["/pick-11-marker"]).toBe(1)
+      expect(unconfirmed.control).toEqual({ selected: [] })
+      expect(unconfirmed.message).toBe("The selection could not be confirmed")
+      expect(requireElement(await observe(), "Account Code")).toMatchObject({ value: "ACC-4", expanded: false })
+
+      await on("Account Code", (ref) => ({ type: "click", ref }))
+      await act(keyAction("ArrowDown"))
+      await act(keyAction("ArrowDown"))
+      await act(keyAction("Enter"))
+      expect(state["/pick-1-marker"]).toBe(1)
+      expect(requireElement(await observe(), "Account Code")).toMatchObject({ value: "ACC-1", expanded: false })
+
+      await on("Done", (ref) => ({ type: "click", ref }))
+      await act(keyAction("Enter"))
+      await act(keyAction(" "))
+
+      await on("Medium", (ref) => ({ type: "click", ref }))
+      await act(keyAction("ArrowDown"))
+      await act(keyAction("Enter"))
+      const sizes = await observe()
+      expect(requireElement(sizes, "Large").selected).toBe(true)
+      expect(requireElement(sizes, "Medium").selected).toBe(false)
+
+      await on("Vanilla", (ref) => ({ type: "click", ref }))
+      await act(keyAction("ArrowDown"))
+      await act(keyAction("Enter"))
+      expect(requireElement(await observe(), "Mint").selected).toBe(true)
+
+      await on("Actions", (ref) => ({ type: "click", ref }))
+      const menu = await observe()
+      expect(requireElement(menu, "Archive").locator).toBe('role=menuitem[name="Archive"]')
+      await act(keyAction("ArrowDown"))
+      await act(keyAction("Enter"))
+      expect(state["/menu-Delete-marker"]).toBe(1)
+
+      await on("Region", (ref) => ({ type: "click", ref }))
+      const regions = await observe()
+      const north = requireElement(regions, "North region")
+      expect(north).toMatchObject({ role: "clickable", locator: 'role=clickable[name="North region"]' })
+      expect(requireElement(regions, "South region").locator).toBe('role=clickable[name="South region"]')
+      expect(await act({ type: "wait", locator: north.locator ?? "", timeoutMs: 1_000 })).toMatchObject({ rejected: undefined })
+      await expectWaitTimeout({ type: "wait", locator: 'role=clickable[name="Outside row"]', timeoutMs: 300 })
+      await expectWaitTimeout({ type: "wait", locator: 'role=clickable[name="Covered row"]', timeoutMs: 300 })
+      const names = regions.elements.map((element) => element.name)
+      for (const hidden of ["Covered row", "Outside row", "Token row", "Shadow row"])
+        expect(names.some((name) => name.includes(hidden)), hidden).toBe(false)
+      expect(JSON.stringify(regions)).not.toContain("private-input-value")
+      expect((await observe()).elements.map((element) => element.locator)).toEqual(regions.elements.map((element) => element.locator))
+      const south = requireElement(await observe(), "South region")
+      cover = true
+      await waitFor(() => state["/covered-marker"] === 1, "covered South row")
+      const covered = await Effect.runPromiseExit(runtime.action({ type: "click", ref: south.ref }, [origin]))
+      expectFailurePhase(covered, "predispatch", "covered inferred row")
+      if (Exit.isFailure(covered)) expect(messageOf(Cause.squash(covered.cause))).toContain("not visible at its click point")
+      expect(state["/row-South-marker"] ?? 0).toBe(0)
+      await act({ type: "click", ref: north.ref })
+      expect(state["/row-North-marker"]).toBe(1)
+      await act({ type: "wait", locator: north.locator ?? "", state: "detached", timeoutMs: 1_000 })
+      const chosen = await observe()
+      expect(requireElement(chosen, "Region: North").expanded).toBe(false)
+      expect(chosen.elements.some((element) => element.name === "South region")).toBe(false)
+
+      await on("Search", (ref) => ({ type: "click", ref }))
+      for (const key of ["a", " ", "b"]) await act(keyAction(key))
+      expect(requireElement(await observe(), "Search").value).toBe("a b")
+      await act(keyAction("Enter"))
+      expect(state["/search-submit-marker"]).toBe(1)
+      await act(keyAction("Tab"))
+      await act(keyAction("Enter"))
+      expect(state["/apply-click-marker"]).toBe(1)
+
+      const secrets = await observe()
+      for (const name of ["Login code", "Card number", "Client secret", "Vault password"]) {
+        expect(requireElement(secrets, name).sensitive, name).toBe(true)
+        expect(requireElement(secrets, name).value, name).toBeUndefined()
+        const fill = await Effect.runPromiseExit(
+          runtime.action({ type: "fill", ref: requireElement(await observe(), name).ref, text: "typed-secret" }, [origin]),
+        )
+        expectFailurePhase(fill, "predispatch", `fill ${name}`)
+        if (name === "Vault password") await act(keyAction("Tab"))
+        else await on(name, (ref) => ({ type: "click", ref }))
+        await refusedKey("Enter", name)
+        await refusedKey(" ", name)
+        await refusedKey("x", name)
+      }
+      await on("Focus closed", (ref) => ({ type: "click", ref }))
+      await refusedKey("Enter", "closed shadow")
+      await Bun.sleep(300)
+      expect(state["/secret-key-marker"] ?? 0).toBe(0)
+      expect(state["/body-enter-marker"]).toBe(1)
+      expect(state["/body-space-marker"]).toBe(1)
+
+      await on("Many", (ref) => ({ type: "click", ref }))
+      const many = await observe()
+      expect(many.elements.filter((element) => element.name === "Bulk")).toHaveLength(3)
+      expect(many.elements.length).toBeLessThan(Browser.Schema.MAX_OBSERVATION_ELEMENTS)
+      expect(many.texts?.length ?? 0).toBeLessThan(Browser.Schema.MAX_OBSERVATION_TEXTS)
+      expect(many.truncated).toBe(true)
+      expect(JSON.stringify(many)).not.toContain("private-input-value")
+
+      await on("Wide", (ref) => ({ type: "click", ref }))
+      const wide = await observe()
+      expect(wide.elements.some((element) => element.name === "Early row")).toBe(true)
+      expect(wide.elements.some((element) => element.name === "Late row")).toBe(false)
+      expect(wide.elements.length).toBeLessThan(Browser.Schema.MAX_OBSERVATION_ELEMENTS)
+      expect(wide.texts?.length ?? 0).toBeLessThan(Browser.Schema.MAX_OBSERVATION_TEXTS)
+      expect(wide.truncated).toBe(true)
+    } finally {
+      await Effect.runPromise(runtime.close)
+      await fixture.stop(true)
+    }
+  }, 120_000)
 })
 
 async function launch(url: string) {
@@ -1397,6 +1579,143 @@ function formFixture() {
     <button aria-label="Hover target" onmouseover="document.getElementById('menu').hidden = false" onclick="fetch('/hover-click-marker')">Hover target</button>
     <ul id="menu" hidden><li><button>Revealed</button></li></ul>
     <script>function pick(option) { fetch('/pick-' + option.textContent + '-marker'); for (const item of option.parentElement.children) item.setAttribute('aria-selected', String(item === option)) }</script>`
+}
+
+function popupFixture() {
+  return `<!doctype html><title>Popup fixture</title>
+    <style>.row{cursor:pointer;padding:4px}#acct-list{max-height:60px;overflow:auto}</style>
+    <form onsubmit="fetch('/search-submit-marker'); return false"><input aria-label="Search"></form>
+    <button onclick="fetch('/apply-click-marker')">Apply</button>
+    <label id="acct-label">Account Code</label>
+    <input id="acct" role="combobox" aria-labelledby="acct-label" aria-expanded="false" aria-controls="acct-list" aria-autocomplete="list" autocomplete="off">
+    <button onclick="this.blur()">Done</button>
+    <div role="listbox" aria-label="Sizes" tabindex="0" id="sizes" aria-activedescendant="size-m">
+      <div role="option" id="size-s" aria-selected="false">Small</div>
+      <div role="option" id="size-m" aria-selected="true">Medium</div>
+      <div role="option" id="size-l" aria-selected="false">Large</div>
+    </div>
+    <div role="listbox" aria-label="Flavors" id="flavors">
+      <div role="option" tabindex="-1" aria-selected="false">Vanilla</div>
+      <div role="option" tabindex="-1" aria-selected="false">Mint</div>
+    </div>
+    <button id="actions" aria-haspopup="menu" aria-expanded="false" aria-controls="actions-menu">Actions</button>
+    <button id="region" aria-haspopup="listbox" aria-expanded="false" aria-controls="region-popup">Region</button>
+    <div class="row">Outside row</div>
+    <input aria-label="Login code" autocomplete="one-time-code" value="private-input-value">
+    <input aria-label="Card number" autocomplete="cc-number" value="private-input-value">
+    <input aria-label="Client secret" name="client_secret" value="private-input-value">
+    <input type="password" aria-label="Vault password" value="private-input-value">
+    <button onclick="closedField.focus()">Focus closed</button>
+    <button onclick="portal.innerHTML = '<div role=listbox aria-label=Wide><div class=row>Early row</div>' + '<div></div>'.repeat(2100) + '<div class=row>Late row</div></div>'">Wide</button>
+    <button onclick="portal.innerHTML = deep('<div role=listbox aria-label=Many>' + '<div role=option>Bulk</div>'.repeat(3) + '<div role=group aria-label=Branch><div role=group aria-label=Leaf></div></div>'.repeat(300) + '</div>')">Many</button>
+    <div id="closed-host"></div>
+    <div id="portal"></div>
+    <script>
+      const deep = (html) => '<section aria-label="Layer">'.repeat(40) + html + '</section>'.repeat(40)
+      const portal = document.getElementById('portal')
+      const acct = document.getElementById('acct')
+      const sizes = document.getElementById('sizes')
+      const flavors = document.getElementById('flavors')
+      const region = document.getElementById('region')
+      const closedRoot = document.getElementById('closed-host').attachShadow({ mode: 'closed' })
+      closedRoot.innerHTML = '<input aria-label="Closed field">'
+      const closedField = closedRoot.firstChild
+      for (const field of [...document.querySelectorAll('[value="private-input-value"]'), closedField])
+        field.addEventListener('keydown', (event) => event.key !== 'Tab' && fetch('/secret-key-marker'))
+      document.addEventListener('keydown', (event) => {
+        if (event.target !== document.body) return
+        if (event.key === 'Enter') fetch('/body-enter-marker')
+        if (event.key === ' ') fetch('/body-space-marker')
+      })
+      let active = -1
+      setInterval(async () => {
+        const row = document.querySelector('[data-region=South]')
+        if (!row || row.dataset.covered || !(await (await fetch('/state')).json()).cover) return
+        row.dataset.covered = 'true'
+        const box = row.getBoundingClientRect()
+        const overlay = document.createElement('div')
+        overlay.style.cssText = 'position:fixed;background:#fff;left:' + box.left + 'px;top:' + box.top + 'px;width:' + box.width + 'px;height:' + box.height + 'px'
+        document.body.append(overlay)
+        fetch('/covered-marker')
+      }, 50)
+      function closePortal() {
+        portal.innerHTML = ''
+        for (const control of [acct, region, document.getElementById('actions')]) control.setAttribute('aria-expanded', 'false')
+        acct.removeAttribute('aria-activedescendant')
+      }
+      function openAccounts() {
+        active = -1
+        acct.setAttribute('aria-expanded', 'true')
+        portal.innerHTML = deep('<div role="listbox" id="acct-list" aria-label="Account codes">' +
+          Array.from({ length: 12 }, (_, index) => '<div role="option" id="acct-' + index + '" aria-selected="false" data-index="' + index + '"><span><span>ACC-' + index + '</span></span></div>').join('') + '</div>')
+      }
+      function pick(index) {
+        fetch('/pick-' + index + '-marker')
+        if (index !== 11) acct.value = 'ACC-' + index
+        closePortal()
+      }
+      acct.addEventListener('click', openAccounts)
+      acct.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault()
+          if (acct.getAttribute('aria-expanded') !== 'true') openAccounts()
+          active = Math.min(active + 1, 11)
+          acct.setAttribute('aria-activedescendant', 'acct-' + active)
+        }
+        if (event.key === 'Enter' && active >= 0) {
+          event.preventDefault()
+          pick(active)
+        }
+      })
+      function selectSize(option) {
+        for (const item of sizes.children) item.setAttribute('aria-selected', String(item === option))
+        sizes.setAttribute('aria-activedescendant', option.id)
+      }
+      sizes.addEventListener('click', (event) => event.target.closest('[role=option]') && selectSize(event.target.closest('[role=option]')))
+      sizes.addEventListener('keydown', (event) => {
+        const current = document.getElementById(sizes.getAttribute('aria-activedescendant'))
+        if (event.key === 'ArrowDown') sizes.setAttribute('aria-activedescendant', (current.nextElementSibling ?? current).id)
+        if (event.key === 'Enter') selectSize(current)
+      })
+      flavors.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowDown') document.activeElement.nextElementSibling?.focus()
+        if (event.key === 'Enter') for (const item of flavors.children) item.setAttribute('aria-selected', String(item === document.activeElement))
+      })
+      document.getElementById('actions').addEventListener('click', (event) => {
+        event.currentTarget.setAttribute('aria-expanded', 'true')
+        portal.innerHTML = deep('<div role="menu" id="actions-menu" aria-label="Actions menu"><div role="menuitem" tabindex="-1">Archive</div><div role="menuitem" tabindex="-1">Delete</div></div>')
+        portal.querySelector('[role=menuitem]').focus()
+      })
+      region.addEventListener('click', () => {
+        region.setAttribute('aria-expanded', 'true')
+        portal.innerHTML = deep('<div id="region-popup">' +
+          '<div class="row" data-region="North"><div>North</div><div>region</div></div>' +
+          '<div class="row" data-region="South"><span><b>South</b> <span>region</span></span></div>' +
+          '<div style="position:relative"><div class="row" data-region="Covered">Covered row</div><div style="position:absolute;inset:0;background:#fff"></div></div>' +
+          '<div class="row" data-region="Token"><span>Token row</span> <input type="password" aria-label="Token" value="private-input-value"></div>' +
+          '<div class="row" data-region="Shadow" id="shadow-row">Shadow row</div></div>')
+        document.getElementById('shadow-row').attachShadow({ mode: 'closed' }).innerHTML = '<slot></slot><input type="password" aria-label="Shadow token">'
+      })
+      portal.addEventListener('click', (event) => {
+        const option = event.target.closest('[role=option][data-index]')
+        if (option) pick(Number(option.dataset.index))
+        const row = event.target.closest('[data-region]')
+        if (row) {
+          fetch('/row-' + row.dataset.region + '-marker')
+          region.textContent = 'Region: ' + row.dataset.region
+          closePortal()
+        }
+      })
+      portal.addEventListener('keydown', (event) => {
+        const item = event.target.closest('[role=menuitem]')
+        if (!item) return
+        if (event.key === 'ArrowDown') item.nextElementSibling?.focus()
+        if (event.key === 'Enter') {
+          fetch('/menu-' + item.textContent + '-marker')
+          closePortal()
+        }
+      })
+    </script>`
 }
 
 const editingKeys = [

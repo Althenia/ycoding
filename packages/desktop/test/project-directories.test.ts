@@ -8,6 +8,7 @@ import { syntheticDesktop, type SyntheticCall } from "./synthetic-desktop"
 const participant = (sessionID: string) => ({ sessionID, title: sessionID, location: { directory: "/synthetic/repo" }, state: "idle", lastActivity: 1, pending: [] })
 const group = { id: "cgrp_team", name: "Team", revision: 5, active: true, master: participant("ses_parent"), members: [participant("ses_child")], settings: { concurrency: null }, time: { created: 1, updated: 2 } }
 const session = (directory: string) => ({ id: "ses_new", title: "Created", location: { directory }, time: { created: 1, updated: 2 }, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0 })
+const backendDirectory = (typed: string) => typed.startsWith("~") ? `/home/backend${typed.slice(1)}` : typed
 const routes = (calls: readonly SyntheticCall[]) => calls.filter((call) => call.route === "/api/location" || (call.route === "/api/session" && call.method === "POST")).map((call) => call.route === "/api/location" ? `location ${call.query.get("location[directory]")}` : `session ${(call.body.location as { directory: string }).directory}`)
 
 const flows = [
@@ -15,17 +16,16 @@ const flows = [
   ["new-member", (revision: number, directory: string) => ({ kind: "new-member", revision, groupID: "cgrp_team", groupRevision: 5, directory, title: "Helper" })],
 ] as const
 
-async function scenario(run: (owned: Awaited<ReturnType<typeof syntheticDesktop>>, options: { registration: "ok" | "fail" }) => Promise<void>) {
-  const options = { registration: "ok" as "ok" | "fail" }
+async function scenario(run: (owned: Awaited<ReturnType<typeof syntheticDesktop>>) => Promise<void>) {
   const owned = await syntheticDesktop((call) => {
-    if (call.route === "/api/location") return options.registration === "fail" ? new Response(null, { status: 500 }) : { directory: call.query.get("location[directory]"), project: { id: "prj_test" } }
-    if (call.route === "/api/session" && call.method === "POST") return { data: session((call.body.location as { directory: string }).directory) }
+    if (call.route === "/api/session" && call.method === "POST") return { data: session(backendDirectory((call.body.location as { directory: string }).directory)) }
+    if (call.route === "/api/coordination/cgrp_team/members" && call.method === "POST") return { data: { groupID: "cgrp_team", sessionID: call.body.sessionID, location: { directory: "/synthetic/repo" }, ownerSessionID: "ses_parent", reconciled: false } }
     if (call.route === "/api/coordination/cgrp_team") return { data: call.method === "GET" ? group : { ...group, revision: 6 } }
     if (call.route === "/api/coordination" && call.method === "POST") return { data: { ...group, master: participant("ses_new") } }
     return undefined
   })
   const home = spyOn(os, "homedir").mockReturnValue(owned.resources)
-  try { await run(owned, options) }
+  try { await run(owned) }
   finally {
     home.mockRestore()
     await fs.chmod(path.join(owned.resources, "locked"), 0o700).catch(() => undefined)
@@ -35,73 +35,47 @@ async function scenario(run: (owned: Awaited<ReturnType<typeof syntheticDesktop>
 
 const isDirectory = (target: string) => fs.stat(target).then((info) => info.isDirectory(), () => false)
 
-test.each(flows)("%s expands ~, normalizes the path, creates missing folders and registers before creating the root Session", async (_name, input) => {
+test.each(flows)("%s sends the typed placement unchanged to session.create with no local folder probe, registration or creation", async (_name, input) => {
   await scenario(async (owned) => {
-    const nested = path.join(owned.resources, "work", "team", "app")
-    await owned.controller.changeProject(input(owned.revision, "~/work/team/../team/app/"))
-    expect(await isDirectory(nested)).toBe(true)
-    expect(routes(owned.calls)).toEqual([`location ${nested}`, `session ${nested}`])
-    await owned.controller.changeProject(input(owned.revision, "~"))
-    expect(routes(owned.calls).slice(2)).toEqual([`location ${owned.resources}`, `session ${owned.resources}`])
-    const plain = path.join(owned.resources, "plain")
-    await fs.mkdir(plain)
-    await owned.controller.changeProject(input(owned.revision, `${plain}//`))
-    expect(routes(owned.calls).slice(4)).toEqual([`location ${plain}`, `session ${plain}`])
+    const typed = ["~/work/team/../team/app/", "~", `${owned.resources}//`, "/srv/new app", "C:\\Work\\Repo", "d:/Work/Repo", "\\\\fileserver\\share\\Team Plan", "~\\notes"]
+    for (const directory of typed) await owned.controller.changeProject(input(owned.revision, `  ${directory}  `))
+    expect(routes(owned.calls)).toEqual(typed.map((directory) => `session ${directory}`))
+    expect(await isDirectory(path.join(owned.resources, "work"))).toBe(false)
+    expect(await isDirectory(path.join(owned.resources, "notes"))).toBe(false)
+    expect(await isDirectory(path.join(process.cwd(), "d:"))).toBe(false)
   })
 })
 
-test.each(flows)("%s keeps the exact Git subfolder instead of the repository root", async (_name, input) => {
+test.each(flows)("%s keeps the exact Git subfolder and creates no folder on this machine", async (_name, input) => {
   await scenario(async (owned) => {
-    const root = path.join(owned.resources, "repo")
-    const subfolder = path.join(root, "packages", "app")
-    await fs.mkdir(path.join(root, ".git"), { recursive: true })
-    await fs.mkdir(subfolder, { recursive: true })
+    const subfolder = path.join(owned.resources, "repo", "packages", "app", "new", "leaf")
     await owned.controller.changeProject(input(owned.revision, subfolder))
-    expect(routes(owned.calls)).toEqual([`location ${subfolder}`, `session ${subfolder}`])
-    await owned.controller.changeProject(input(owned.revision, path.join(subfolder, "new", "leaf")))
-    expect(await isDirectory(path.join(subfolder, "new", "leaf"))).toBe(true)
-    expect(await isDirectory(path.join(root, "new"))).toBe(false)
+    expect(routes(owned.calls)).toEqual([`session ${subfolder}`])
+    expect(await isDirectory(path.join(owned.resources, "repo"))).toBe(false)
   })
 })
 
-test.each(flows)("%s rejects relative, empty, files and inaccessible paths before any backend write", async (_name, input) => {
+test.each(flows)("%s rejects relative, drive-relative, incomplete UNC, device and empty paths before any backend write", async (_name, input) => {
   await scenario(async (owned) => {
-    const file = path.join(owned.resources, "file.txt")
-    await fs.writeFile(file, "synthetic")
-    await fs.mkdir(path.join(owned.resources, "locked"))
-    await fs.chmod(path.join(owned.resources, "locked"), 0o500)
-    const rejected: [string, string][] = [
-      ["relative/path", "Enter an absolute folder path or one starting with ~/."],
-      ["./here", "Enter an absolute folder path or one starting with ~/."],
-      ["~someone/work", "Enter an absolute folder path or one starting with ~/."],
-      ["   ", "Enter an absolute folder path or one starting with ~/."],
-      [file, "Choose a folder, not a file."],
-      [path.join(file, "child"), "A parent of this path is a file. Choose another folder."],
-      [path.join(owned.resources, "locked", "child"), "This folder cannot be created. Check the parent folder's access permissions."],
-    ]
-    for (const [directory, expected] of rejected) expect(await message(owned.controller.changeProject(input(owned.revision, directory)))).toBe(expected)
-    expect(routes(owned.calls)).toEqual([])
+    const message_ = "Enter an absolute folder path on the backend machine (such as /srv/app, C:\\Work or \\\\server\\share\\dir), or one starting with ~."
+    for (const directory of ["relative/path", "./here", "~someone/work", "   ", "C:work", "C:", "work\\repo", "\\\\fileserver", "\\\\fileserver\\", "\\\\?\\C:\\x", "\\\\.\\pipe\\x", `/${"a".repeat(4096)}`])
+      expect(await message(owned.controller.changeProject(input(owned.revision, directory)))).toBe(message_)
     expect(owned.calls.some((call) => call.method !== "GET")).toBe(false)
-    expect(await isDirectory(path.join(owned.resources, "locked", "child"))).toBe(false)
   })
 })
 
-test.each(flows)("%s makes no folder when the connection revision is stale", async (_name, input) => {
+test.each(flows)("%s makes no backend write when the connection revision is stale", async (_name, input) => {
   await scenario(async (owned) => {
-    const target = path.join(owned.resources, "stale", "leaf")
-    await expect(owned.controller.changeProject(input(owned.revision + 1, target))).rejects.toThrow()
-    expect(await isDirectory(path.join(owned.resources, "stale"))).toBe(false)
+    await expect(owned.controller.changeProject(input(owned.revision + 1, "/srv/stale"))).rejects.toThrow()
     expect(routes(owned.calls)).toEqual([])
   })
 })
 
-test.each(flows)("%s stops before creating a Session when registration fails and says the folder exists", async (_name, input) => {
-  await scenario(async (owned, options) => {
-    options.registration = "fail"
-    const target = path.join(owned.resources, "registered", "leaf")
-    expect(await message(owned.controller.changeProject(input(owned.revision, target)))).toContain("registration failed")
-    expect(await isDirectory(target)).toBe(true)
-    expect(routes(owned.calls)).toEqual([`location ${target}`])
+test.each(flows)("%s accepts the backend's authoritative Location without comparing it to the typed spelling", async (_name, input) => {
+  await scenario(async (owned) => {
+    await expect(owned.controller.changeProject(input(owned.revision, "~/typed"))).resolves.toBeDefined()
+    expect(routes(owned.calls)).toEqual(["session ~/typed"])
+    expect(owned.calls.some((call) => call.method === "POST" && call.route.startsWith("/api/coordination"))).toBe(true)
   })
 })
 

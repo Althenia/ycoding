@@ -98,3 +98,22 @@ test("Project IDs retain cgrp_ and only Project lifecycle and member ownership f
     "coordination.group.created", "coordination.group.changed", "coordination.group.deleted", "coordination.member.owner.changed",
   ])
 })
+
+test("attach names one Session with an optional owner and returns the bound membership receipt", () => {
+  const decodeInput = Schema.decodeUnknownSync(Coordination.AttachInput, { onExcessProperty: "error" })
+  expect(decodeInput({ sessionID: "ses_member" })).toEqual({ sessionID: "ses_member" } as never)
+  expect(decodeInput({ sessionID: "ses_member", ownerSessionID: "ses_owner" })).toEqual({ sessionID: "ses_member", ownerSessionID: "ses_owner" } as never)
+  expect(Schema.encodeSync(Coordination.AttachInput)({ sessionID: decodeInput({ sessionID: "ses_member" }).sessionID, ownerSessionID: undefined })).toEqual({ sessionID: "ses_member" })
+  for (const input of [{}, { ownerSessionID: "ses_owner" }, { sessionID: "msg_member" }, { sessionID: "ses_member", ownerSessionID: "msg_owner" },
+    { sessionID: "ses_member", groupID: "cgrp_other" }, { sessionID: "ses_member", directory: "/elsewhere" }, { sessionID: "ses_member", caller: "ses_other" }])
+    expect(() => decodeInput(input)).toThrow()
+  const decodeResult = Schema.decodeUnknownSync(Coordination.AttachResult, { onExcessProperty: "error" })
+  const result = { groupID: "cgrp_one", sessionID: "ses_member", location: { directory: "/any/recorded/path", workspaceID: "wrk_one" }, ownerSessionID: "ses_master", reconciled: false }
+  expect(decodeResult(result)).toEqual(result as never)
+  expect(decodeResult({ ...result, reconciled: true }).reconciled).toBe(true)
+  for (const key of ["groupID", "sessionID", "location", "ownerSessionID", "reconciled"] as const) {
+    const { [key]: _, ...missing } = result
+    expect(() => decodeResult(missing)).toThrow()
+  }
+  expect(() => decodeResult({ ...result, removed: true })).toThrow()
+})

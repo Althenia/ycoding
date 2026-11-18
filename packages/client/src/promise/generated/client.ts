@@ -419,6 +419,10 @@ import type {
   CoordinationUpdateOutput,
   CoordinationDeleteInput,
   CoordinationDeleteOutput,
+  CoordinationAttachInput,
+  CoordinationAttachOutput,
+  CoordinationDetachInput,
+  CoordinationDetachOutput,
   DotsGetOutput,
   DotsSetInput,
   DotsSetOutput,
@@ -3454,6 +3458,29 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+      attach: (input: CoordinationAttachInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationAttachOutput }>(
+          {
+            method: "POST",
+            path: `/api/coordination/${encodeURIComponent(input.groupID)}/members`,
+            body: { sessionID: input["sessionID"], ownerSessionID: input["ownerSessionID"] },
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      detach: (input: CoordinationDetachInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationDetachOutput }>(
+          {
+            method: "DELETE",
+            path: `/api/coordination/${encodeURIComponent(input.groupID)}/members/${encodeURIComponent(input.sessionID)}`,
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
     },
     dots: {
       get: (requestOptions?: RequestOptions) =>

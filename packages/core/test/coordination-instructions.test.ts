@@ -225,9 +225,10 @@ test("the Master can place a member at a chosen path and creates a worktree only
   for (const instruction of [
     "Use an absolute or home-relative path with `directory`, including for non-Git folders and repository subdirectories.",
     "Use `name` with optional `repository` only for an explicitly requested managed worktree.",
-    "Never create a project work Session under the Master Session as a child or descendant; member Sessions are standalone root Sessions, and only lightweight supervisor subagents live under the Master.",
+    "Never create a project work Session under the Master Session as a child or descendant; member Sessions are independently bound root Sessions, and only lightweight supervisor subagents live under the Master.",
   ]) once(CoordinationInstructions.content, instruction)
   expect(CoordinationInstructions.content).not.toContain("start a member Session in its own managed worktree")
+  expect(CoordinationInstructions.content).not.toContain("member Sessions are standalone root Sessions")
 })
 
 test("controller recovery reconciles uncertain work once without polling or replay loops", () => {
@@ -267,4 +268,21 @@ test("the Master role line directs removal of settled members and the supervisor
   expect(master).toContain("ending recorded ownership")
   expect(master).toContain("preserving Session and Project histories")
   expect(prefix(await read("supervisor"))).not.toContain("remove")
+})
+
+
+test("the Master attaches existing root Sessions and keeps standalone storage out of Projects", async () => {
+  const read = async (role: "master" | "supervisor" | "executor") =>
+    Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value)
+  for (const text of [
+    "As Master, use `attach` with `sessionID` and optional `ownerSessionID` to bring an existing root Session into the Project at its recorded directory instead of creating a duplicate; it keeps its Location, model, history, autonomy modes and running work, and an outside directory still needs its native `external_directory` approval.",
+    "Only the Master attaches Sessions; supervisors cannot attach members.",
+    "`remove` is the non-destructive detach: it leaves the Session, its work and its history intact.",
+    "Sessions with `scope: standalone` are internal restricted storage, never Project members.",
+  ]) once(CoordinationInstructions.content, text)
+  const prefix = (value: string) => value.slice(0, value.indexOf("Coordinate and supervise only"))
+  const master = prefix(await read("master"))
+  expect(master).toContain("attach existing root Sessions with `attach`")
+  expect(prefix(await read("supervisor"))).not.toContain("`attach`")
+  expect(await read("executor")).not.toContain("`attach`")
 })

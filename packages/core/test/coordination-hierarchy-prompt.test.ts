@@ -409,6 +409,7 @@ const operating = [
   "Require batched corrections, reruns of only failed or invalidated checks, and reuse of valid evidence for unchanged sources, contracts and environment, including at integration and merge.",
   "Report progress by delivery milestones, not by mixed administrative counts",
   ...placement,
+  "As Master, use `attach` with `sessionID` and optional `ownerSessionID` to bring an existing root Session into the Project at its recorded directory instead of creating a duplicate",
   "only the Master uses `release` after verification or transfers ownership with `assign` to a supervisor it launched",
   "Supervisors cannot release themselves",
   "your task remains `supervising` until ownership ends",
@@ -584,7 +585,7 @@ describe("Master hierarchy prompt assembly", () => {
     }),
   )
 
-  it.effect("Master and supervisor prompts preserve canonical placement and bounded recovery without history deletion", () =>
+  it.effect("Master and supervisor prompts distinguish exact placement and bound recovery without history deletion", () =>
     Effect.gen(function* () {
       const { coordination, group } = yield* setupProject
       const supervisor = Session.ID.make("ses_coord_recovery_supervisor")
@@ -594,6 +595,7 @@ describe("Master hierarchy prompt assembly", () => {
         const system = systemText(yield* requestFor(id, "Review member state"))
         for (const text of [
           ...placement,
+          "Only the Master attaches Sessions; supervisors cannot attach members.",
           "Detect stuck, hung or looping work from reported state and evidence; reconcile current state before one bounded recovery attempt through existing native controls.",
           "If recovery fails or its outcome is uncertain, report the blocker with evidence and continue independent authorized work; never poll, repeatedly wake, or replay an uncertain action.",
           "Release only settled ownership after verification; use existing non-destructive controls and never delete Session or Project history as cleanup.",

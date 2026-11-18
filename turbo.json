@@ -32,8 +32,18 @@
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/infra/cloudflare/src/**",
         "$TURBO_ROOT$/infra/cloudflare/test/**",
-        "$TURBO_ROOT$/infra/cloudflare/worker-configuration.d.ts"
+        "$TURBO_ROOT$/infra/cloudflare/worker-configuration.d.ts",
+        "$TURBO_ROOT$/packages/cli/src/remote-operations.ts",
+        "$TURBO_ROOT$/packages/core/src/host-directory.ts"
       ]
+    },
+    "@ycoding-ai/desktop#typecheck": {
+      "dependsOn": ["^typecheck-inputs"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/remote/src/session-directory.ts"]
+    },
+    "@ycoding-ai/tui#typecheck": {
+      "dependsOn": ["^typecheck-inputs"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/remote/src/session-directory.ts"]
     },
     "build": {
       "dependsOn": [],

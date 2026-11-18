@@ -28,6 +28,11 @@ const ACTION_SETTLE_MS = 150
 const CONTROL_WORLD = "ycoding-control"
 const CONTROL_STATE_POLL_MS = 500
 const NETWORK_IDLE_QUIET_MS = 500
+const AX_EXPANSION_CALLS = 256
+const POPUP_CONTAINERS = 16
+const POPUP_ROW_DEPTH = 8
+const POPUP_ROW_NODES = 64
+const POPUP_SCAN_NODES = 2_000
 const STALE_CONTEXT = /Cannot find context|Execution context was destroyed|Inspected target navigated/
 
 const valueRoles = new Set(["textbox", "searchbox", "combobox", "spinbutton", "slider", "Date", "InputTime", "DateTime", "ColorWell"])
@@ -53,6 +58,9 @@ const interactiveRoles = new Set([
 
 const editableRoles = new Set(["textbox", "searchbox", "combobox", "spinbutton"])
 
+const popupRoles = new Set(["listbox", "menu", "tree", "grid"])
+const blockedRowTags = new Set(["input", "textarea", "select", "button", "iframe", "frame", "object", "embed"])
+
 const textRoles = new Set([
   "StaticText",
   "caption",
@@ -66,8 +74,8 @@ const textRoles = new Set([
   "term",
 ])
 
-const namedKeys: Readonly<Record<string, { key: string; code: string; windowsVirtualKeyCode: number }>> = {
-  Enter: { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 },
+const namedKeys: Readonly<Record<string, { key: string; code: string; windowsVirtualKeyCode: number; text?: string }>> = {
+  Enter: { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" },
   Tab: { key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 },
   Escape: { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 },
   Backspace: { key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 },
@@ -81,11 +89,11 @@ const namedKeys: Readonly<Record<string, { key: string; code: string; windowsVir
   PageUp: { key: "PageUp", code: "PageUp", windowsVirtualKeyCode: 33 },
   PageDown: { key: "PageDown", code: "PageDown", windowsVirtualKeyCode: 34 },
   Insert: { key: "Insert", code: "Insert", windowsVirtualKeyCode: 45 },
-  " ": { key: " ", code: "Space", windowsVirtualKeyCode: 32 },
-  Space: { key: " ", code: "Space", windowsVirtualKeyCode: 32 },
+  " ": { key: " ", code: "Space", windowsVirtualKeyCode: 32, text: " " },
+  Space: { key: " ", code: "Space", windowsVirtualKeyCode: 32, text: " " },
 }
 
-type RefTarget = { sessionId: string; backendNodeId: number; frameId?: string; url?: string }
+type RefTarget = { sessionId: string; backendNodeId: number; frameId?: string; url?: string; inferred?: true }
 
 export class Error extends Schema.TaggedErrorClass<Error>()("IsolatedBrowser.ExecutorError", {
   message: Schema.String,
@@ -557,6 +565,146 @@ async function configureRuntime(
   initialized = true
   if (safetyFailure) throw new Error({ message: safetyFailure, phase: "predispatch" })
 
+  const axTree = async (treeSessionId: string, frameId: string | undefined, signal?: AbortSignal) => {
+    const frameParams = frameId ? { frameId } : {}
+    const ax = record(
+      await cdp.send("Accessibility.getFullAXTree", { depth: Browser.MAX_AX_DEPTH, ...frameParams }, treeSessionId, signal),
+    )
+    const nodes = Array.isArray(ax.nodes) ? ax.nodes.filter(isRecord) : []
+    const known = new Set(nodes.flatMap((node) => stringMaybe(node.nodeId) ?? []))
+    const unexpanded = (node: Readonly<Record<string, unknown>>) =>
+      stringMaybe(recordMaybe(node.role)?.value) !== "StaticText" &&
+      Array.isArray(node.childIds) &&
+      node.childIds.some((id) => typeof id === "string" && !known.has(id))
+    let frontier = nodes.filter(unexpanded)
+    let calls = 0
+    for (let level = 0; frontier.length > 0 && level < Browser.MAX_AX_DEPTH; level++) {
+      const next: Readonly<Record<string, unknown>>[] = []
+      for (const parent of frontier) {
+        if (calls++ >= AX_EXPANSION_CALLS) return { nodes, truncated: true }
+        const children = record(
+          await cdp.send("Accessibility.getChildAXNodes", { id: string(parent.nodeId), ...frameParams }, treeSessionId, signal),
+        )
+        for (const child of Array.isArray(children.nodes) ? children.nodes.filter(isRecord) : []) {
+          const id = stringMaybe(child.nodeId)
+          if (!id || known.has(id)) continue
+          known.add(id)
+          nodes.push(child)
+          next.push(child)
+        }
+      }
+      frontier = next.filter(unexpanded)
+    }
+    return { nodes, truncated: frontier.length > 0 }
+  }
+
+  const popupRows = async (
+    rowSessionId: string,
+    frameId: string | undefined,
+    nodes: ReadonlyArray<Readonly<Record<string, unknown>>>,
+    signal?: AbortSignal,
+  ) => {
+    const names = new Map<number, string>()
+    const containers = [
+      ...new Set(
+        nodes.flatMap((node) => {
+          if (node.ignored === true) return []
+          const own =
+            popupRoles.has(stringMaybe(recordMaybe(node.role)?.value) ?? "") && typeof node.backendDOMNodeId === "number"
+              ? [node.backendDOMNodeId]
+              : []
+          if (axBoolean(node, "expanded") !== true) return own
+          return [
+            ...own,
+            ...["controls", "owns"].flatMap((name) => {
+              const related = recordMaybe(axProperty(node, name)?.value)?.relatedNodes
+              return (Array.isArray(related) ? related.filter(isRecord) : []).flatMap((entry) =>
+                typeof entry.backendDOMNodeId === "number" ? [entry.backendDOMNodeId] : [],
+              )
+            }),
+          ]
+        }),
+      ),
+    ]
+    if (!frameId) return { names, truncated: false }
+    let truncated = containers.length > POPUP_CONTAINERS
+    for (const container of containers.slice(0, POPUP_CONTAINERS)) {
+      const limit = Browser.MAX_OBSERVATION_ELEMENTS - names.size
+      if (limit <= 0) return { names, truncated: true }
+      await tolerateStale(() =>
+        inControlWorld(rowSessionId, frameId, signal, async (executionContextId) => {
+          try {
+            const resolved = record(
+              await cdp.send(
+                "DOM.resolveNode",
+                { backendNodeId: container, executionContextId, objectGroup: CONTROL_WORLD },
+                rowSessionId,
+                signal,
+              ),
+            )
+            const listed = record(
+              await cdp.send(
+                "Runtime.callFunctionOn",
+                {
+                  functionDeclaration: IsolatedPageSafety.F_POPUP_ROWS,
+                  objectId: string(record(resolved.object).objectId),
+                  arguments: [{ value: limit }, { value: POPUP_ROW_NODES }, { value: POPUP_SCAN_NODES }],
+                  returnByValue: false,
+                  objectGroup: CONTROL_WORLD,
+                },
+                rowSessionId,
+                signal,
+              ),
+            )
+            unwrapEvaluation(listed)
+            const ownProperties = async (objectId: string) => {
+              const response = record(
+                await cdp.send("Runtime.getProperties", { objectId, ownProperties: true }, rowSessionId, signal),
+              )
+              return new Map(
+                (Array.isArray(response.result) ? response.result.filter(isRecord) : []).map((property) => [
+                  String(property.name),
+                  recordMaybe(property.value),
+                ]),
+              )
+            }
+            const scan = await ownProperties(string(record(listed.result).objectId))
+            if (scan.get("truncated")?.value !== false) truncated = true
+            const rowsId = scan.get("rows")?.objectId
+            const rows =
+              typeof rowsId === "string"
+                ? [...(await ownProperties(rowsId)).entries()].flatMap(([name, value]) =>
+                    /^\d+$/.test(name) && typeof value?.objectId === "string" ? [value.objectId] : [],
+                  )
+                : []
+            for (const objectId of rows.slice(0, limit)) {
+              const dom = record(
+                record(
+                  await cdp.send("DOM.describeNode", { objectId, depth: POPUP_ROW_DEPTH, pierce: true }, rowSessionId, signal),
+                ).node,
+              )
+              if (typeof dom.backendNodeId !== "number" || !rowContentSafe(dom)) continue
+              const name = unwrapEvaluation(
+                record(
+                  await cdp.send(
+                    "Runtime.callFunctionOn",
+                    { functionDeclaration: IsolatedPageSafety.F_ROW_NAME, objectId, returnByValue: true },
+                    rowSessionId,
+                    signal,
+                  ),
+                ),
+              )
+              if (typeof name === "string" && name) names.set(dom.backendNodeId, bounded(name, Browser.MAX_NAME_LENGTH))
+            }
+          } finally {
+            await cdp.send("Runtime.releaseObjectGroup", { objectGroup: CONTROL_WORLD }, rowSessionId).catch(() => {})
+          }
+        }),
+      )
+    }
+    return { names, truncated }
+  }
+
   const snapshot = async (includeElements: boolean, actionSignal?: AbortSignal): Promise<Snapshot> => {
     if (paused)
       throw new Error({ message: safetyFailure ?? "Isolated browser control is paused", phase: "predispatch" })
@@ -590,6 +738,7 @@ async function configureRuntime(
     const seen = new Set<string>()
     let candidateCount = 0
     let textCount = 0
+    let treeTruncated = false
     const collect = (node: Readonly<Record<string, unknown>>, output: { id?: string; url?: string }[]) => {
       const frame = recordMaybe(node.frame)
       if (!frame) return
@@ -617,23 +766,19 @@ async function configureRuntime(
           if (page) frames.push({ page, observed: false })
           continue
         }
-        let ax: Readonly<Record<string, unknown>>
+        let tree: Awaited<ReturnType<typeof axTree>>
         try {
-          ax = record(
-            await cdp.send(
-              "Accessibility.getFullAXTree",
-              { depth: Browser.MAX_AX_DEPTH, ...(frame.id ? { frameId: frame.id } : {}) },
-              session.id,
-              actionSignal,
-            ),
-          )
+          tree = await axTree(session.id, frame.id, actionSignal)
         } catch (cause) {
           if (top) throw cause
           if (page) frames.push({ page, observed: false })
           continue
         }
         if (!top && page) frames.push({ page, observed: true })
-        const nodes = Array.isArray(ax.nodes) ? ax.nodes.filter(isRecord) : []
+        const nodes = tree.nodes
+        if (tree.truncated) treeTruncated = true
+        const rows = await popupRows(session.id, frame.id, nodes, actionSignal)
+        if (rows.truncated) treeTruncated = true
         const byId = new Map(nodes.flatMap((item) => {
           const id = stringMaybe(item.nodeId)
           return id ? [[id, item] as const] : []
@@ -689,17 +834,18 @@ async function configureRuntime(
           const ref = `b${elements.length + 1}`
           refs.set(ref, { sessionId: session.id, backendNodeId, frameId: frame.id, url: frameURL })
           const elementName = bounded(stringMaybe(recordMaybe(node.name)?.value) ?? "", Browser.MAX_NAME_LENGTH)
+          const elementRole = bounded(role, 64)
           const sensitive = IsolatedPageSafety.isSensitiveAttributes(
             String(dom.nodeName),
             attributes,
             stringMaybe(recordMaybe(node.name)?.value) ?? "",
           )
-          const locatorBase = BrowserOperation.makeLocator({ role: bounded(role, 64), name: elementName })
+          const locatorBase = BrowserOperation.makeLocator({ role: elementRole, name: elementName })
           const duplicates = elements.filter((candidate) => candidate.locator?.startsWith(locatorBase)).length
           const element = {
             ref: Browser.Element.fields.ref.make(ref),
-            locator: duplicates ? BrowserOperation.makeLocator({ role: bounded(role, 64), name: elementName }, duplicates) : locatorBase,
-            role: bounded(role, 64),
+            locator: duplicates ? BrowserOperation.makeLocator({ role: elementRole, name: elementName }, duplicates) : locatorBase,
+            role: elementRole,
             name: elementName,
             ...(boundedMaybe(stringMaybe(recordMaybe(node.description)?.value), Browser.MAX_NAME_LENGTH)
               ? {
@@ -724,6 +870,25 @@ async function configureRuntime(
             identity: BrowserOperation.elementIdentity(frameURL, element, destination ? new URL(destination, frameURL).toString() : undefined),
           })
         }
+        for (const [backendNodeId, name] of rows.names) {
+          const key = `${session.id}\0${backendNodeId}`
+          if (seen.has(key)) continue
+          seen.add(key)
+          candidateCount++
+          if (elements.length >= Browser.MAX_OBSERVATION_ELEMENTS) continue
+          const ref = `b${elements.length + 1}`
+          refs.set(ref, { sessionId: session.id, backendNodeId, frameId: frame.id, url: frameURL, inferred: true })
+          const locatorBase = BrowserOperation.makeLocator({ role: "clickable", name })
+          const duplicates = elements.filter((candidate) => candidate.locator?.startsWith(locatorBase)).length
+          const element = {
+            ref: Browser.Element.fields.ref.make(ref),
+            locator: duplicates ? BrowserOperation.makeLocator({ role: "clickable", name }, duplicates) : locatorBase,
+            role: "clickable",
+            name,
+            ...(top || !page ? {} : { frame: page }),
+          } satisfies Browser.Element
+          elements.push({ ...element, identity: BrowserOperation.elementIdentity(frameURL, element) })
+        }
       }
     }
     revision++
@@ -736,6 +901,7 @@ async function configureRuntime(
       texts,
       frames: frames.slice(0, Browser.MAX_OBSERVATION_FRAMES),
       truncated:
+        treeTruncated ||
         candidateCount > Browser.MAX_OBSERVATION_ELEMENTS ||
         textCount > Browser.MAX_OBSERVATION_TEXTS ||
         frames.length > Browser.MAX_OBSERVATION_FRAMES,
@@ -795,7 +961,7 @@ async function configureRuntime(
     const tree = record(await cdp.send("Page.getFrameTree", {}, target.sessionId, signal))
     return string(record(record(tree.frameTree).frame).id)
   }
-  const inControlWorld = async (worldSessionId: string, frameId: string, signal: AbortSignal, run: (contextId: number) => Promise<unknown>) => {
+  const inControlWorld = async (worldSessionId: string, frameId: string, signal: AbortSignal | undefined, run: (contextId: number) => Promise<unknown>) => {
     const key = `${worldSessionId}|${frameId}`
     let contextId = worlds.get(key)
     if (contextId === undefined) {
@@ -902,6 +1068,8 @@ async function configureRuntime(
       throw new globalThis.Error("Link destination is not approved")
     if (protectedInput(dom)) throw new globalThis.Error("Protected inputs are unsupported")
     const { x, y } = await elementPoint(target, signal)
+    if (target.inferred && (await callElement(target, IsolatedPageSafety.F_HIT_TESTABLE, [], signal)) !== true)
+      throw new globalThis.Error("The inferred row is not visible at its click point")
     onDispatch()
     await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 }, sessionId, signal)
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 }, sessionId, signal)
@@ -983,13 +1151,14 @@ async function configureRuntime(
             ? tree.nodes.filter(isRecord).find((candidate) => candidate.backendDOMNodeId === dom.backendNodeId)
             : undefined
           const accessibleName = recordMaybe(node?.name)?.value
-          if (typeof accessibleName !== "string") return true
+          const attributes = attributesOf(dom.attributes)
+          if (typeof accessibleName !== "string" && IsolatedPageSafety.isEditableField(dom.nodeName, attributes)) return true
           const sensitive =
             fileInput(dom) ||
             IsolatedPageSafety.isSensitiveAttributes(
               dom.nodeName,
-              attributesOf(dom.attributes),
-              accessibleName,
+              attributes,
+              typeof accessibleName === "string" ? accessibleName : "",
             )
           return IsolatedPageSafety.refusesEditingKey({ sensitive, closedShadowRoot })
         } finally {
@@ -1097,13 +1266,23 @@ async function configureRuntime(
       : options[criteria.indexes?.[0] ?? -1]
     if (!wanted) throw new globalThis.Error("Option not found")
     if (axBoolean(wanted.node, "disabled") === true) throw new globalThis.Error("Option is disabled")
-    const selectedState = (selected: boolean) => ({ control: { selected: selected ? [{ label: wanted.label, index: wanted.index }] : [] } })
+    const selectedState = (selected: boolean) => ({
+      control: { selected: selected ? [{ label: wanted.label, index: wanted.index }] : [] },
+      ...(selected ? {} : { message: "The selection could not be confirmed" }),
+    })
     if (axBoolean(wanted.node, "selected") === true) return selectedState(true)
     const optionTarget = { ...target, backendNodeId: wanted.backendNodeId }
     await clickTarget(optionTarget, signal, onDispatch)
     let selected = false
     await settled(signal, async () => {
-      selected = axBoolean(await axNodeOf(optionTarget, signal), "selected") === true
+      const option = await axNodeOf(optionTarget, signal).catch(() => undefined)
+      selected = option !== undefined && axBoolean(option, "selected") === true
+      if (selected || role !== "combobox") return selected
+      const combobox = await axNodeOf(target, signal)
+      const detached = (await callElement(optionTarget, IsolatedPageSafety.F_CONNECTED, [], signal).catch(() => false)) !== true
+      if (axBoolean(combobox, "expanded") === true && !detached) return false
+      const value = recordMaybe(combobox.value)?.value
+      selected = typeof value === "string" && normalizeSpace(value) === wanted.label
       return selected
     })
     return selectedState(selected)
@@ -1205,20 +1384,24 @@ async function configureRuntime(
           const seen = new Set<string>()
           let matched = 0
           for (const frame of await approvedFrames(signal)) {
-            const ax = record(
-              await cdp
-                .send("Accessibility.getFullAXTree", { depth: Browser.MAX_AX_DEPTH, frameId: frame.frameId }, frame.sessionId, signal)
-                .catch(() => ({})),
-            )
-            for (const node of Array.isArray(ax.nodes) ? ax.nodes.filter(isRecord) : []) {
-              if (node.ignored === true || typeof node.backendDOMNodeId !== "number") continue
-              if (stringMaybe(recordMaybe(node.role)?.value) !== parsed.role) continue
-              if (!BrowserOperation.locatorNameMatches(parsed.name, stringMaybe(recordMaybe(node.name)?.value) ?? "")) continue
-              const key = `${frame.sessionId}\0${node.backendDOMNodeId}`
+            const tree = await axTree(frame.sessionId, frame.frameId, signal).catch(() => ({ nodes: [] }))
+            const rows = parsed.role === "clickable" ? (await popupRows(frame.sessionId, frame.frameId, tree.nodes, signal)).names : undefined
+            const candidates = rows
+              ? [...rows].map(([backendNodeId, name]) => ({ backendNodeId, name }))
+              : tree.nodes.flatMap((node) =>
+                  node.ignored !== true &&
+                  typeof node.backendDOMNodeId === "number" &&
+                  stringMaybe(recordMaybe(node.role)?.value) === parsed.role
+                    ? [{ backendNodeId: node.backendDOMNodeId, name: stringMaybe(recordMaybe(node.name)?.value) ?? "" }]
+                    : [],
+                )
+            for (const candidate of candidates) {
+              if (!BrowserOperation.locatorNameMatches(parsed.name, candidate.name)) continue
+              const key = `${frame.sessionId}\0${candidate.backendNodeId}`
               if (seen.has(key)) continue
               seen.add(key)
               if (matched++ !== parsed.nth) continue
-              target = { sessionId: frame.sessionId, backendNodeId: node.backendDOMNodeId, frameId: frame.frameId }
+              target = { sessionId: frame.sessionId, backendNodeId: candidate.backendNodeId, frameId: frame.frameId }
               page = frame.top ? undefined : frame.page
             }
           }
@@ -1364,11 +1547,12 @@ async function configureRuntime(
             if (!named && !single) throw new globalThis.Error(`Unsupported key: ${action.key.slice(0, 32)}`)
             if (!IsolatedPageSafety.isSafeNavigationKey(action.key, action.modifiers) && (await focusedFieldRefused(actionSignal)))
               throw new globalThis.Error("The focused element cannot be proven free of sensitive fields; keyboard text input is refused")
-            const base = named ?? { key: action.key, code: "", windowsVirtualKeyCode: 0 }
+            const { text: namedText, ...base } = named ?? { key: action.key, code: "", windowsVirtualKeyCode: 0 }
+            const text = modifiers ? undefined : (namedText ?? (single && !named ? action.key : undefined))
             dispatched = true
             await cdp.send(
               "Input.dispatchKeyEvent",
-              { type: "keyDown", ...base, modifiers, ...(single && !named && !modifiers ? { text: action.key } : {}) },
+              { type: "keyDown", ...base, modifiers, ...(text ? { text } : {}) },
               sessionId,
               actionSignal,
             )
@@ -1666,6 +1850,30 @@ function controlStateOf(input: unknown): Browser.ControlState {
     ...(typeof value.value === "string" ? { value: bounded(value.value, Browser.MAX_NAME_LENGTH) } : {}),
     ...(selected ? { selected } : {}),
   }
+}
+
+function rowContentSafe(root: Readonly<Record<string, unknown>>) {
+  const pending = [root]
+  let count = 0
+  while (pending.length > 0) {
+    const node = pending.pop()
+    if (!node || ++count > POPUP_ROW_NODES) return false
+    const attributes = attributesOf(node.attributes)
+    if (
+      node.nodeType === 1 &&
+      (blockedRowTags.has(String(node.nodeName).toLowerCase()) ||
+        node.contentDocument !== undefined ||
+        (attributes.has("contenteditable") && attributes.get("contenteditable") !== "false") ||
+        interactiveRoles.has(attributes.get("role") ?? "") ||
+        (Array.isArray(node.shadowRoots) &&
+          node.shadowRoots.some((shadowRoot) => !isRecord(shadowRoot) || shadowRoot.shadowRootType !== "user-agent")))
+    )
+      return false
+    const children = Array.isArray(node.children) ? node.children.filter(isRecord) : []
+    if (typeof node.childNodeCount === "number" && node.childNodeCount > children.length) return false
+    pending.push(...children)
+  }
+  return true
 }
 
 function protectedInput(node: Readonly<Record<string, unknown>>) {

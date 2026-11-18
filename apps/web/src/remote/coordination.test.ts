@@ -247,11 +247,11 @@ describe("project input", () => {
     expect(createProjectInput("Billing", ses("lead"))).toEqual({ name: "Billing", masterSessionID: ses("lead"), memberSessionIDs: [] })
   })
 
-  test("every update carries the revision it was opened with and only the changed field", () => {
+  test("every update carries the revision it was opened with and only the changed field; member attach and detach name the group and Session alone", () => {
     const project = detail()
     expect(renameInput(project, "Renamed")).toEqual({ groupID: "cgrp_1", revision: 4, name: "Renamed" })
-    expect(addMemberInput(project, ses("d"))).toEqual({ groupID: "cgrp_1", revision: 4, memberSessionIDs: [ses("a"), ses("b"), ses("c"), ses("d")] })
-    expect(removeMemberInput(project, ses("b"))).toEqual({ groupID: "cgrp_1", revision: 4, memberSessionIDs: [ses("a"), ses("c")] })
+    expect(addMemberInput(project, ses("d"))).toEqual({ groupID: "cgrp_1", sessionID: ses("d") })
+    expect(removeMemberInput(project, ses("b"))).toEqual({ groupID: "cgrp_1", sessionID: ses("b") })
     expect(settingsInput(project, { concurrency: null })).toEqual({ groupID: "cgrp_1", revision: 4, settings: { concurrency: null } })
     expect(settingsInput(project, { concurrency: 2, delegatedDecisions: { categories: ["review"] } }).settings).toEqual({ concurrency: 2, delegatedDecisions: { categories: ["review"] } })
   })

@@ -161,6 +161,7 @@ test("the Projects tab runs the roster actions and leaves no hidden-tab keyboard
     await until(screen, () => !screen.frame().includes("Remove Docs worker from Release train?"), "confirmation closed")
     screen.input.pressKey("a")
     await waitForFrame(screen, "ADD SESSION")
+    expect(screen.frame()).toContain("Attach without restarting")
     screen.input.pressEnter()
     await until(screen, () => screen.renderer.currentFocusedEditor instanceof InputRenderable, "Find editor")
     await screen.input.typeText("planning")
@@ -233,7 +234,10 @@ for (const [width, height] of [
       const y = rows.findIndex((row) => row.includes("Planning"))
       await screen.mouse.click(rows[y]!.indexOf("Planning"), y)
       await until(screen, () => server.state.projects[0]!.memberSessionIDs.includes(planningID), "mouse attachment")
-      expect(server.state.writes.filter((write) => write.method === "PATCH")).toHaveLength(1)
+      expect(server.state.writes.filter((write) => write.path.endsWith("/members"))).toEqual([
+        { method: "POST", path: `/api/coordination/${groupID}/members`, body: { sessionID: planningID } },
+      ])
+      expect(server.state.writes.some((write) => write.method === "PATCH")).toBe(false)
     } finally {
       await screen.dispose()
     }

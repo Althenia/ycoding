@@ -26,7 +26,9 @@
 
 /** Envelope revision. Bump only with a coordinated relay/agent/client release. */
 import { parseProviderAuthInput, providerAuthOperations } from "./provider-auth.ts"
+import { isSessionDirectoryPath } from "./session-directory.ts"
 export { parseProviderAuthInput, providerAuthOperations, isProviderAuthorizationURL, type ProviderAuthOperation, type ProviderAuthInput, type ProviderAuthTarget, type ProviderAuthInfo, type ProviderAuthAttempt, type ProviderAuthStatus, type ProviderAuthRefresh, type ProviderAuthPrompt } from "./provider-auth.ts"
+export { isSessionDirectoryPath } from "./session-directory.ts"
 
 export const RemoteProtocolVersion = 4
 
@@ -121,6 +123,8 @@ export const remoteOperations = [
   "coordination.get",
   "coordination.update",
   "coordination.delete",
+  "coordination.attach",
+  "coordination.detach",
   "machine.keepAwake.get",
   "machine.keepAwake.set",
   "machine.telemetry.consent.get",
@@ -384,6 +388,8 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "coordination.get": "read",
   "coordination.update": "mutation",
   "coordination.delete": "mutation",
+  "coordination.attach": "mutation",
+  "coordination.detach": "mutation",
   "machine.keepAwake.get": "read",
   "machine.keepAwake.set": "mutation",
   "machine.telemetry.consent.get": "read",
@@ -1102,8 +1108,7 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
   if (operation !== "session.create") return true
   if (!isRecord(input)) return false
   const directory = input.directory
-  const validDirectory = typeof directory === "string" && directory.length <= 4096 && !directory.includes("\0") &&
-    (directory === "~" || directory.startsWith("~/") || directory.startsWith("/") || /^[A-Za-z]:[/\\]|^\\\\/.test(directory))
+  const validDirectory = isSessionDirectoryPath(directory)
   const validPlacement = input.scope === "standalone"
     ? input.workspace === undefined && directory === undefined
     : (input.scope === undefined || input.scope === "bound") && (directory === undefined ? validWorkspace(input.workspace) : input.workspace === undefined && validDirectory)
@@ -1166,6 +1171,11 @@ function validCoordinationInput(operation: RemoteOperation, input: unknown): boo
   if (!coordinationID(input.groupID, "cgrp_")) return false
   if (operation === "coordination.get" || operation === "coordination.delete")
     return coordinationKeys(input, ["groupID"])
+  if (operation === "coordination.attach")
+    return coordinationKeys(input, ["groupID", "sessionID", "ownerSessionID"]) && isSessionID(input.sessionID) &&
+      (input.ownerSessionID === undefined || isSessionID(input.ownerSessionID))
+  if (operation === "coordination.detach")
+    return coordinationKeys(input, ["groupID", "sessionID"]) && isSessionID(input.sessionID)
   if (operation === "coordination.update")
     return coordinationKeys(input, ["groupID", "revision", "name", "masterSessionID", "memberSessionIDs", "settings"]) &&
       coordinationInt(input.revision, 0, Number.MAX_SAFE_INTEGER) &&

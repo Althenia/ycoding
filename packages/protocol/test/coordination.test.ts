@@ -18,6 +18,8 @@ test("local coordination operations are the closed Project set, authenticated an
     ["get", "get", "/api/coordination/{groupID}"],
     ["update", "patch", "/api/coordination/{groupID}"],
     ["delete", "delete", "/api/coordination/{groupID}"],
+    ["attach", "post", "/api/coordination/{groupID}/members"],
+    ["detach", "delete", "/api/coordination/{groupID}/members/{sessionID}"],
   ] as const
   expect(Object.keys(group.endpoints).sort()).toEqual(expected.map(([name]) => `coordination.${name}`).sort())
   for (const [name, method, path] of expected) {
@@ -44,4 +46,15 @@ test("create and update payloads carry the Master, members, and settings without
   expect(() => update({ revision: 2, settings: { concurrency: 0 } })).toThrow()
   expect(() => update({ name: "x" })).toThrow()
   expect(() => update({ revision: 2, policy: {} })).toThrow()
+})
+
+test("attach carries one Session and an optional owner and detach carries no body", () => {
+  const attach = Schema.decodeUnknownSync(Coordination.AttachInput, { onExcessProperty: "error" })
+  const input = { sessionID: "ses_member", ownerSessionID: "ses_owner" }
+  expect(Schema.encodeSync(Coordination.AttachInput)(attach(input))).toEqual(input as never)
+  expect(attach({ sessionID: "ses_member" })).toEqual({ sessionID: "ses_member" } as never)
+  for (const body of [{}, { sessionID: "bad" }, { ...input, ownerSessionID: "bad" }, { ...input, groupID: "cgrp_1" }, { ...input, directory: "/tmp" }])
+    expect(() => attach(body)).toThrow()
+  const detach = OpenApi.fromApi(ClientApi).paths["/api/coordination/{groupID}/members/{sessionID}"]?.delete
+  expect(detach?.requestBody).toBeUndefined()
 })

@@ -2458,3 +2458,31 @@ describe("supervising owner handback wakes", () => {
       expect((yield* ownerState(fixture))?.state).toBe("supervising")
     }))
 })
+
+describe("project attach routing", () => {
+  for (const owner of ["subagent", "master"] as const)
+    it.effect(`an attached root's pending request and later events reach its ${owner} owner through ownership routing without touching the root`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup
+        yield* activate(fixture)
+        const ownerSessionID = owner === "subagent" ? fixture.subagent.id : fixture.master.id
+        const root = fixture.outsider.id
+        pendingByTarget.set(root, [{ kind: "permission", fingerprint: "fp_attach", request: { id: "per_attach", sessionID: root, action: "edit", resources: ["src/a.ts"] } }])
+        const events = (sessionID: SessionSchema.ID) => noticesFor(fixture, sessionID).pipe(Effect.map((rows) => rows.map(noticeMetadata)))
+        const result = yield* fixture.runtime.attach(fixture.master.id, owner === "subagent" ? { sessionID: root, ownerSessionID } : { sessionID: root })
+        expect(result).toEqual({ groupID: fixture.group.id, sessionID: root, location: fixture.outsider.location, ownerSessionID, reconciled: false })
+        expect(yield* recordedOwner(fixture, root)).toBe(ownerSessionID)
+        yield* ownerChanged(fixture, root, ownerSessionID, `evt_attach_${owner}`)
+        yield* ownerChanged(fixture, root, ownerSessionID, `evt_attach_${owner}`)
+        expect(yield* events(ownerSessionID)).toEqual([
+          { source: "project_notification", groupID: fixture.group.id, memberSessionID: root, title: "outsider", event: "permission", requestID: "per_attach", fingerprint: "fp_attach", excerpt: "edit src/a.ts" },
+        ])
+        yield* emit(fixture, SessionEvent.Execution.Failed, { sessionID: root, error: { type: "provider.error", message: "after attach" } }, `evt_attach_failure_${owner}`)
+        expect((yield* events(ownerSessionID)).map((data) => data.event)).toEqual(["permission", "failed"])
+        for (const sessionID of [fixture.master.id, fixture.subagent.id, fixture.other.id].filter((id) => id !== ownerSessionID))
+          expect(yield* events(sessionID)).toEqual([])
+        expect(yield* pendingFor(fixture, root)).toEqual([])
+        expect(woken).not.toContain(root)
+        expect(interrupted).toEqual([])
+      }))
+})

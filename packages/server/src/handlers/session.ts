@@ -28,9 +28,9 @@ import {
 } from "@ycoding-ai/protocol/errors"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
+import { hostDirectory } from "@ycoding-ai/core/host-directory"
 import { Global } from "@ycoding-ai/core/global"
 import { Project } from "@ycoding-ai/core/project"
-import path from "node:path"
 import { SessionTodo } from "@ycoding-ai/core/session/todo"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { Agent } from "@ycoding-ai/core/agent"
@@ -50,9 +50,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
     const global = yield* Global.Service
     const invalidDirectory = (message: string) => new InvalidRequestError({ message, field: "location.directory" })
     const admitDirectory = Effect.fn("SessionHandler.admitDirectory")(function* (input: string) {
-      const expanded = /^~(?=$|[\\/])/.test(input) ? path.join(global.home, input.slice(1)) : input
-      if (!path.isAbsolute(expanded)) return yield* invalidDirectory("Choose an absolute directory or one starting with ~")
-      const directory = AbsolutePath.make(path.resolve(expanded))
+      const admitted = hostDirectory(input, global.home)
+      if (admitted === undefined) return yield* invalidDirectory("Choose an absolute directory or one starting with ~")
+      const directory = AbsolutePath.make(admitted)
       if (!(yield* fs.isDir(directory))) {
         if (yield* fs.existsSafe(directory)) return yield* invalidDirectory("The selected path is not a directory")
         yield* fs.ensureDir(directory).pipe(Effect.mapError(() => invalidDirectory("The selected directory could not be created")))

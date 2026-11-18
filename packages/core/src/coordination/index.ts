@@ -66,7 +66,7 @@ export interface Interface {
   readonly setOwner: (groupID: Coordination.GroupID, input: OwnerInput) => Effect.Effect<void, NotFoundError>
   readonly addMember: (
     groupID: Coordination.GroupID,
-    input: { readonly sessionID: Session.ID; readonly ownerSessionID?: Session.ID },
+    input: { readonly sessionID: Session.ID; readonly ownerSessionID?: Session.ID; readonly preserveAutonomy?: boolean },
   ) => Effect.Effect<Group, NotFoundError | IneligibleSessionError>
   readonly removeMember: (
     groupID: Coordination.GroupID,
@@ -515,7 +515,7 @@ export const layer = Layer.effect(
                 ? []
                 : [{ definition: Coordination.Event.OwnerChanged, data: { groupID, revision, sessionID: input.sessionID, ownerSessionID: input.ownerSessionID } }]),
             ])
-            yield* inheritMasterAutonomy(current.master_session_id, [input.sessionID])
+            if (input.preserveAutonomy !== true) yield* inheritMasterAutonomy(current.master_session_id, [input.sessionID])
             yield* updated(groupID, revision)
             return yield* groupOf(yield* row(groupID))
           }),

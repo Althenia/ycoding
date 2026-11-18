@@ -369,22 +369,51 @@ test("credential refresh reports refreshed and failed outcomes separately from k
   } finally { await owned.close() }
 })
 
+test("Project members attach and detach through the named endpoints without rewriting the member list", async () => {
+  const participant = (sessionID: string) => ({ sessionID, title: sessionID, location: { directory: repo }, state: "idle", lastActivity: 1, pending: [] })
+  const group = { id: "cgrp_team", name: "Team", revision: 5, active: true, master: participant(parent), members: [participant(child)], settings: { concurrency: null }, time: { created: 1, updated: 2 } }
+  let fail = false
+  const owned = await syntheticDesktop((call) => {
+    if (call.route === "/api/coordination/cgrp_team" && call.method === "GET") return { data: group }
+    if (call.route === "/api/coordination/cgrp_team/members" && call.method === "POST") return fail ? new Response(JSON.stringify({ message: hidden }), { status: 409 }) : { data: { groupID: "cgrp_team", sessionID: call.body.sessionID, location: { directory: "/plain/folder" }, ownerSessionID: call.body.ownerSessionID ?? parent, reconciled: false } }
+    if (call.route === `/api/coordination/cgrp_team/members/${child}` && call.method === "DELETE") return { data: { sessionID: child, removed: true } }
+    return undefined
+  })
+  try {
+    await owned.controller.changeProject({ kind: "attach-member", revision: owned.revision, groupID: "cgrp_team", sessionID: "ses_plain" })
+    await owned.controller.changeProject({ kind: "attach-member", revision: owned.revision, groupID: "cgrp_team", sessionID: "ses_owned", ownerSessionID: child })
+    await owned.controller.changeProject({ kind: "detach-member", revision: owned.revision, groupID: "cgrp_team", sessionID: child })
+    expect(writes(owned.calls)).toEqual(["POST /api/coordination/cgrp_team/members", "POST /api/coordination/cgrp_team/members", `DELETE /api/coordination/cgrp_team/members/${child}`])
+    expect(owned.calls.filter((call) => call.method === "POST").map((call) => call.body)).toEqual([{ sessionID: "ses_plain" }, { sessionID: "ses_owned", ownerSessionID: child }])
+    expect(owned.calls.some((call) => call.method === "PATCH")).toBe(false)
+    const before = writes(owned.calls).length
+    expect(await message(owned.controller.changeProject({ kind: "attach-member", revision: owned.revision + 1, groupID: "cgrp_team", sessionID: "ses_plain" }))).toContain("out of date")
+    expect(await message(owned.controller.changeProject({ kind: "detach-member", revision: owned.revision, groupID: "cgrp_team", sessionID: "ses_plain", groupRevision: 5 }))).toContain("Invalid project change")
+    expect(await message(owned.controller.changeProject({ kind: "attach-member", revision: owned.revision, groupID: "team", sessionID: "ses_plain" }))).toContain("Invalid project change")
+    expect(writes(owned.calls)).toHaveLength(before)
+    fail = true
+    const failure = await message(owned.controller.changeProject({ kind: "attach-member", revision: owned.revision, groupID: "cgrp_team", sessionID: "ses_plain" }))
+    expect(failure).not.toContain(hidden)
+    expect(writes(owned.calls)).toHaveLength(before + 1)
+  } finally { await owned.close() }
+})
+
 test("Project members are created and deleted against the current coordination revision", async () => {
   const participant = (sessionID: string) => ({ sessionID, title: sessionID, location: { directory: repo }, state: "idle", lastActivity: 1, pending: [] })
   const group = { id: "cgrp_team", name: "Team", revision: 5, active: true, master: participant(parent), members: [participant(child)], settings: { concurrency: null }, time: { created: 1, updated: 2 } }
   let failUpdate = false
   const owned = await syntheticDesktop((call) => {
     if (call.route === "/api/coordination/cgrp_team" && call.method === "GET") return { data: group }
-    if (call.route === "/api/coordination/cgrp_team" && call.method === "PATCH") return failUpdate ? new Response(JSON.stringify({ message: hidden }), { status: 409 }) : { data: { ...group, revision: 6 } }
+    if (call.route === "/api/coordination/cgrp_team/members" && call.method === "POST") return failUpdate ? new Response(JSON.stringify({ message: hidden }), { status: 409 }) : { data: { groupID: "cgrp_team", sessionID: "ses_new", location: { directory: owned.resources }, ownerSessionID: parent, reconciled: false } }
     if (call.route === "/api/location") return { directory: call.query.get("location[directory]"), project: { id: "prj_test" } }
     if (call.route === "/api/session" && call.method === "POST") return { data: info("ses_new", { location: { directory: owned.resources } }) }
     return undefined
   })
   try {
     await owned.controller.changeProject({ kind: "new-member", revision: owned.revision, groupID: "cgrp_team", groupRevision: 5, directory: owned.resources, title: " Helper " })
-    expect(writes(owned.calls)).toEqual(["POST /api/session", "PATCH /api/coordination/cgrp_team"])
-    expect(owned.calls.find((call) => call.method === "POST")?.body).toEqual({ location: { directory: owned.resources }, title: "Helper" })
-    expect(owned.calls.find((call) => call.method === "PATCH")?.body).toEqual({ revision: 5, memberSessionIDs: [child, "ses_new"] })
+    expect(writes(owned.calls)).toEqual(["POST /api/session", "POST /api/coordination/cgrp_team/members"])
+    expect(owned.calls.find((call) => call.route === "/api/session")?.body).toEqual({ location: { directory: owned.resources }, title: "Helper" })
+    expect(owned.calls.find((call) => call.route === "/api/coordination/cgrp_team/members")?.body).toEqual({ sessionID: "ses_new" })
     failUpdate = true
     const failure = await message(owned.controller.changeProject({ kind: "new-member", revision: owned.revision, groupID: "cgrp_team", groupRevision: 5, directory: owned.resources }))
     expect(failure).toContain("Session created: ses_new. Project membership not confirmed")

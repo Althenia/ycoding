@@ -49,6 +49,8 @@ export const Operation = Schema.Literals([
   "coordination.get",
   "coordination.update",
   "coordination.delete",
+  "coordination.attach",
+  "coordination.detach",
   "workspace.list",
   "session.list",
   "session.active",

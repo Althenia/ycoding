@@ -5,7 +5,9 @@ import {
   F_CONTROL_STATE,
   F_FILL,
   F_FRAME_UNREACHABLE,
+  F_POPUP_ROWS,
   F_REFUSE_FIELD,
+  F_ROW_NAME,
   F_SELECT,
   F_TEXT_PRESENT,
   IS_SENSITIVE,
@@ -13,6 +15,7 @@ import {
   SECRET_NAME,
   createNetworkIdleTracker,
   globMatch,
+  isEditableField,
   isSafeNavigationKey,
   isSensitiveAttributes,
   refusesEditingKey,
@@ -58,6 +61,9 @@ describe("isolated page safety", () => {
       ["placeholder", "Card number"],
       ["name", "pin"],
       ["id", "cvv"],
+      ["name", "client_secret"],
+      ["id", "apiSecret"],
+      ["aria-label", "Shared secrets"],
     ] as const)
       expect(isSensitiveAttributes("input", attributes({ [key]: value }), ""), `${key}=${value}`).toBe(true)
     expect(isSensitiveAttributes("textarea", attributes({ name: "passphrase" }), "")).toBe(true)
@@ -65,6 +71,8 @@ describe("isolated page safety", () => {
     expect(isSensitiveAttributes("input", attributes({ type: "text", name: "email", autocomplete: "email" }), "Email")).toBe(false)
     expect(isSensitiveAttributes("input", attributes({ name: "spinning" }), "")).toBe(false)
     expect(SECRET_NAME.test("shipping address")).toBe(false)
+    expect(SECRET_NAME.test("Secretary name")).toBe(false)
+    expect(SECRET_NAME.test("Account Code")).toBe(false)
   })
 
   test("isSensitiveAttributes flags an editable field whose accessible name is Password or One-time code", () => {
@@ -82,6 +90,21 @@ describe("isolated page safety", () => {
     expect(isSensitiveAttributes("a", attributes({ name: "otp" }), "One-time code")).toBe(false)
     expect(isSensitiveAttributes("div", attributes({ contenteditable: "false", "aria-label": "Password" }), "Password")).toBe(false)
     expect(isSensitiveAttributes("div", attributes({ role: "textbox" }), "Password")).toBe(false)
+  })
+
+  test("inferred row names normalize every whitespace run in the page", () => {
+    expect(pageFunction(F_ROW_NAME).call({ innerText: "  North\n\t region  " })).toBe("North region")
+    expect(pageFunction(F_ROW_NAME).call({ innerText: "Sessions list" })).toBe("Sessions list")
+    expect(F_POPUP_ROWS).toContain(".replace(/\\s+/g")
+  })
+
+  test("isEditableField limits name-dependent classification to inputs, textareas and contenteditable hosts", () => {
+    expect(isEditableField("INPUT", attributes({ type: "password" }))).toBe(true)
+    expect(isEditableField("textarea", attributes({}))).toBe(true)
+    expect(isEditableField("div", attributes({ contenteditable: "" }))).toBe(true)
+    expect(isEditableField("div", attributes({ contenteditable: "false" }))).toBe(false)
+    expect(isEditableField("body", attributes({}))).toBe(false)
+    expect(isEditableField("div", attributes({ role: "option" }))).toBe(false)
   })
 
   test("page-side sensitivity matches attribute, label and aria-labelledby signals and refuses before any write", () => {

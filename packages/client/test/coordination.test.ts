@@ -54,3 +54,41 @@ test("Effect client sends Project create, update, and delete", async () => {
     { method: "DELETE", url: "http://localhost:3000/api/coordination/cgrp_client", body: undefined },
   ])
 })
+
+test("Promise client sends Project attach and detach", async () => {
+  const requests: Request[] = []
+  const attached = { groupID, sessionID: "ses_new", location: { directory: "/work" }, ownerSessionID: "ses_owner", reconciled: false }
+  const client = YCoding.make({ baseUrl: "http://localhost:3000", fetch: async (request, init) => {
+    const value = request instanceof Request ? request : new Request(request, init)
+    requests.push(value)
+    return Response.json({ data: value.method === "DELETE" ? { sessionID: "ses_member", removed: true } : attached })
+  } })
+  expect(await client.coordination.attach({ groupID, sessionID: "ses_new", ownerSessionID: "ses_owner" } as never)).toEqual(attached as never)
+  expect(await client.coordination.detach({ groupID, sessionID: "ses_member" } as never)).toEqual({ sessionID: "ses_member", removed: true } as never)
+  expect(await requests[0]!.json()).toEqual({ sessionID: "ses_new", ownerSessionID: "ses_owner" })
+  expect(requests[1]!.body).toBeNull()
+  expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
+    ["POST", "/api/coordination/cgrp_client/members"], ["DELETE", "/api/coordination/cgrp_client/members/ses_member"],
+  ])
+})
+
+test("Effect client sends Project attach and detach", async () => {
+  const { YCoding } = await import("../src/effect/index")
+  const requests: { method: string; url: string; body: unknown }[] = []
+  const attached = { groupID, sessionID: "ses_new", location: { directory: "/work" }, ownerSessionID: "ses_owner", reconciled: false }
+  const http = HttpClient.make((request) => {
+    requests.push({ method: request.method, url: request.url,
+      body: request.body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(request.body.body)) : undefined })
+    return Effect.succeed(HttpClientResponse.fromWeb(request,
+      Response.json({ data: request.method === "DELETE" ? { sessionID: "ses_member", removed: true } : attached })))
+  })
+  await Effect.gen(function* () {
+    const client = yield* YCoding.make({ baseUrl: "http://localhost:3000" })
+    yield* client.coordination.attach({ groupID, sessionID: "ses_new", ownerSessionID: "ses_owner" } as never)
+    yield* client.coordination.detach({ groupID, sessionID: "ses_member" } as never)
+  }).pipe(Effect.provideService(HttpClient.HttpClient, http), Effect.runPromise)
+  expect(requests).toEqual([
+    { method: "POST", url: "http://localhost:3000/api/coordination/cgrp_client/members", body: { sessionID: "ses_new", ownerSessionID: "ses_owner" } },
+    { method: "DELETE", url: "http://localhost:3000/api/coordination/cgrp_client/members/ses_member", body: undefined },
+  ])
+})

@@ -272,16 +272,13 @@ test("a new master takes an explicit title over the Project name", async () => {
   }
 })
 
-test("a new master directory beginning with ~ resolves against the TUI home before the Session is created", async () => {
+test("a typed master directory reaches session.create exactly as typed, trimmed only, for POSIX, home, Windows and UNC spellings", async () => {
   const server = backend()
   const { app, coordination } = await mount(server)
   try {
-    await coordination().service.create({ name: "Home project", master: { directory: "~/Workspace/app" } })
-    await coordination().service.create({ name: "Bare home", master: { directory: "~" } })
-    expect(server.state.writes.filter((write) => write.path === "/api/session").map((write) => write.body)).toEqual([
-      { location: { directory: "/tmp/ycoding/home/Workspace/app" }, title: "Home project" },
-      { location: { directory: "/tmp/ycoding/home" }, title: "Bare home" },
-    ])
+    const typed = ["~/Workspace/app", "~", "~\\notes", "/srv/new app", "C:\\Work\\Repo", "d:/Work/Repo", "\\\\fileserver\\share\\Team Plan"]
+    for (const directory of typed) await coordination().service.create({ name: directory, master: { directory: `  ${directory}  ` } })
+    expect(server.state.writes.filter((write) => write.path === "/api/session").map((write) => (write.body as { location: { directory: string } }).location.directory)).toEqual(typed)
   } finally {
     app.renderer.destroy()
   }
@@ -292,6 +289,8 @@ test("a relative directory is rejected before Session creation and a corrected d
   const { app, coordination } = await mount(server)
   try {
     const input = { name: "Relative project", master: { directory: "Workspace/app" } }
+    for (const directory of ["C:work", "C:", "work\\repo", "\\\\fileserver", "\\\\fileserver\\", "\\\\?\\C:\\x", "   "])
+      await expect(coordination().service.create({ name: "Rejected", master: { directory } })).rejects.toThrow("Choose an absolute directory")
     const rejected = await coordination()
       .service.create(input)
       .catch((cause: unknown) => cause)
@@ -313,7 +312,7 @@ test("a relative directory is rejected before Session creation and a corrected d
   }
 })
 
-test("a new member directory resolves ~ and rejects a relative path before Session creation", async () => {
+test("a new member directory is sent as typed and a relative path is rejected before Session creation", async () => {
   const server = backend()
   const { app, coordination } = await mount(server)
   try {
@@ -324,7 +323,7 @@ test("a new member directory resolves ~ and rejects a relative path before Sessi
     const created = await coordination().service.newMember(groupID, "~/Workspace/new", "Fresh")
     expect(server.state.writes[0]).toMatchObject({
       path: "/api/session",
-      body: { location: { directory: "/tmp/ycoding/home/Workspace/new" }, title: "Fresh" },
+      body: { location: { directory: "~/Workspace/new" }, title: "Fresh" },
     })
     expect(server.state.projects.find((project) => project.id === groupID)?.memberSessionIDs).toContain(created)
   } finally {
@@ -385,27 +384,67 @@ test("choosing another master moves the old master to the members and keeps ever
   }
 })
 
-test("adding, creating and removing members rewrite only the member list", async () => {
+test("adding, creating and removing members use the named attach and detach endpoints", async () => {
   const server = backend()
   const { app, coordination } = await mount(server)
   try {
     await coordination().service.addMember(groupID, scratchID)
     const created = await coordination().service.newMember(groupID, "/home/dev/Workspace/new", "Fresh")
     await coordination().service.removeMember(groupID, docsID)
-    expect(
-      writes(server)
-        .filter(([method]) => method === "PATCH")
-        .map(([, , body]) => body),
-    ).toEqual([
-      { revision: 7, memberSessionIDs: [docsID, apiID, infraID, designID, scratchID] },
-      { revision: 8, memberSessionIDs: [docsID, apiID, infraID, designID, scratchID, created] },
-      { revision: 9, memberSessionIDs: [apiID, infraID, designID, scratchID, created] },
+    expect(writes(server)).toEqual([
+      ["POST", `/api/coordination/${groupID}/members`, { sessionID: scratchID }],
+      [
+        "POST",
+        "/api/session",
+        { location: { directory: "/home/dev/Workspace/new" }, title: "Fresh" },
+      ],
+      ["POST", `/api/coordination/${groupID}/members`, { sessionID: created }],
+      ["DELETE", `/api/coordination/${groupID}/members/${docsID}`, {}],
     ])
-    expect(server.state.writes[1]).toMatchObject({
-      path: "/api/session",
-      body: { location: { directory: "/home/dev/Workspace/new" } },
-    })
+    expect(server.state.projects[0]!.memberSessionIDs).toEqual([apiID, infraID, designID, scratchID, created])
     expect(server.state.sessions[docsID]).toBeDefined()
+    expect(server.state.sessions[scratchID]).toBeDefined()
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a non-Git directory attaches an existing Session and creates a new one at its exact path", async () => {
+  const server = backend()
+  server.state.sessions[scratchID]!.directory = "/srv/scratch/not-a-repository"
+  const { app, coordination } = await mount(server)
+  try {
+    await until(() => coordination().sessions().length > 0, "root sessions")
+    expect(coordination().sessions().find((session) => session.sessionID === scratchID)?.directory).toBe(
+      "/srv/scratch/not-a-repository",
+    )
+    await coordination().service.addMember(groupID, scratchID)
+    const created = await coordination().service.newMember(groupID, "/srv/scratch/another-plain-folder", "Plain")
+    expect(server.state.sessions[created]?.directory).toBe("/srv/scratch/another-plain-folder")
+    expect(server.state.sessions[scratchID]?.directory).toBe("/srv/scratch/not-a-repository")
+    expect(writes(server).filter(([, path]) => path.endsWith("/members"))).toHaveLength(2)
+    await until(
+      () =>
+        coordination()
+          .projects()![0]!
+          .members.some((member) => member.sessionID === created && member.directory === "/srv/scratch/another-plain-folder"),
+      "attached plain folder Session",
+    )
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("an attach rejected by the Project owner surfaces the reason and is not repeated", async () => {
+  const server = backend()
+  const { app, coordination } = await mount(server)
+  try {
+    server.state.failWrite = "Only the Master can attach Sessions"
+    await expect(coordination().service.addMember(groupID, scratchID)).rejects.toThrow(
+      "Only the Master can attach Sessions",
+    )
+    expect(writes(server)).toEqual([["POST", `/api/coordination/${groupID}/members`, { sessionID: scratchID }]])
+    expect(server.state.projects[0]!.memberSessionIDs).not.toContain(scratchID)
   } finally {
     app.renderer.destroy()
   }
@@ -498,7 +537,10 @@ test("a mutation waits for the latest overlapping Project refresh before the nex
     await Promise.all([mutation, refresh])
     expect(settledBeforeLatestRead).toBe(false)
     await coordination().service.addMember(groupID, scratchID)
-    expect(server.state.writes.at(-1)?.body).toMatchObject({ revision: 8 })
+    expect(server.state.writes.at(-1)).toMatchObject({
+      path: `/api/coordination/${groupID}/members`,
+      body: { sessionID: scratchID },
+    })
     expect(
       coordination()
         .projects()![0]!

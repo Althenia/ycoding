@@ -886,6 +886,24 @@ function createFixtureStore(): Fixture {
       group.revision += 1
       return { status: "ok", value: { data: coordinationInfo(group) } }
     })
+    if (operation === "coordination.attach") return mutate(() => {
+      if (group === undefined) return missing
+      const id = String(input?.sessionID)
+      const present = group.memberSessionIDs.includes(id)
+      if (!present) {
+        const refused = ineligible(group.id, group.masterSessionID, [...group.memberSessionIDs, id])
+        if (refused) return refused
+        group.memberSessionIDs.push(id)
+        group.revision += 1
+      }
+      return { status: "ok", value: { data: { groupID: group.id, sessionID: id, location: participant(id).location, ownerSessionID: String(input?.ownerSessionID ?? group.masterSessionID), reconciled: present } } }
+    })
+    if (operation === "coordination.detach") return mutate(() => {
+      if (group === undefined) return missing
+      group.memberSessionIDs = group.memberSessionIDs.filter((entry) => entry !== input?.sessionID)
+      group.revision += 1
+      return { status: "ok", value: { data: { sessionID: String(input?.sessionID), removed: true } } }
+    })
     if (operation === "coordination.delete") return mutate(() => { coordinationGroups = coordinationGroups.filter((entry) => entry.id !== input?.groupID); return { status: "ok", value: undefined } })
     return { status: "failed", error: { code: "unknown_operation", message: "Unsupported coordination operation" } }
   }
@@ -1192,10 +1210,12 @@ function createFixtureStore(): Fixture {
     }
     if (operation === "session.create") {
       const workspace = workspaces.find((item) => item.id === input?.workspace)
-      if (!workspace || typeof input?.id !== "string") return { status: "failed", error: { code: "invalid_message", message: "Unknown workspace" } }
+      const chosenPath = typeof input?.directory === "string" && input.directory.length > 0 ? input.directory : undefined
+      if (typeof input?.id !== "string" || (workspace === undefined) === (chosenPath === undefined)) return { status: "failed", error: { code: "invalid_message", message: "Choose a known workspace or an absolute path" } }
+      const directory = workspace?.directory ?? chosenPath!
       if (accountParams.get("creation") === "failed") return { status: "failed", error: { code: "invalid_message", message: "Workspace directory is unavailable" } }
       const existing = createdSessions.get(input.id)
-      const created = existing ?? { id: input.id, title: typeof input.title === "string" ? input.title : "New session", projectID: workspace.projectID, location: { directory: workspace.directory }, time: { created: Date.now(), updated: Date.now() },
+      const created = existing ?? { id: input.id, title: typeof input.title === "string" ? input.title : "New session", projectID: workspace?.projectID ?? "global", location: { directory }, time: { created: Date.now(), updated: Date.now() },
         ...(typeof input.agent === "string" ? { agent: input.agent } : {}), ...(input.model === undefined ? {} : { model: input.model }) }
       createdSessions.set(created.id, created)
       if (existing === undefined) setTimeout(() => handlers?.onSessions?.(), 0)

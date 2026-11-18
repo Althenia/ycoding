@@ -143,6 +143,8 @@ export type LocalServer = {
   readonly coordinationGet: (input: Parameters<YCodingClient["coordination"]["get"]>[0]) => ReturnType<YCodingClient["coordination"]["get"]>
   readonly coordinationUpdate: (input: Parameters<YCodingClient["coordination"]["update"]>[0]) => ReturnType<YCodingClient["coordination"]["update"]>
   readonly coordinationDelete: (input: Parameters<YCodingClient["coordination"]["delete"]>[0]) => ReturnType<YCodingClient["coordination"]["delete"]>
+  readonly coordinationAttach: (input: Parameters<YCodingClient["coordination"]["attach"]>[0]) => ReturnType<YCodingClient["coordination"]["attach"]>
+  readonly coordinationDetach: (input: Parameters<YCodingClient["coordination"]["detach"]>[0]) => ReturnType<YCodingClient["coordination"]["detach"]>
   readonly agentList: (location: LocalLocation) => Promise<readonly AgentInfo[]>
   readonly modelList: (location: LocalLocation) => Promise<readonly ModelInfo[]>
   readonly modelDefault: (location: LocalLocation) => Promise<ModelDefault | null>
@@ -333,6 +335,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     coordinationGet: (input) => call(() => client.coordination.get(input, { signal: AbortSignal.timeout(timeoutMs) })),
     coordinationUpdate: (input) => call(() => client.coordination.update(input, { signal: AbortSignal.timeout(timeoutMs) })),
     coordinationDelete: (input) => call(() => client.coordination.delete(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationAttach: (input) => call(() => client.coordination.attach(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationDetach: (input) => call(() => client.coordination.detach(input, { signal: AbortSignal.timeout(timeoutMs) })),
     agentList: (location) => call(async () => (await client.agent.list({}, request(location, timeoutMs))).data),
     modelList: (location) => call(async () => (await client.model.list({}, request(location, timeoutMs))).data),
     modelDefault: (location) => call(async () => (await client.model.default({}, request(location, timeoutMs))).data),

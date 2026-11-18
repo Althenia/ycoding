@@ -1,3 +1,4 @@
+import { isSessionDirectoryPath } from "@ycoding-ai/remote"
 import { For, Show, createEffect, createMemo, createSignal, createUniqueId, onCleanup, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
@@ -152,8 +153,8 @@ export function projectDirectoryTarget(path: string, workspace: string): { reado
   if (workspace) return { target: { workspace } }
   const directory = path.trim()
   if (!directory) return { error: "Choose a directory" }
-  if (directory.startsWith("/") || directory === "~" || directory.startsWith("~/")) return { target: { directory } }
-  return { error: "Enter an absolute path, or one starting with ~ or ~/" }
+  if (isSessionDirectoryPath(directory)) return { target: { directory } }
+  return { error: "Enter an absolute path (such as /srv/app, C:\\Work or \\\\server\\share\\dir), or one starting with ~" }
 }
 
 function DirectoryPicker(props: { readonly data: ProjectsData; readonly path: string; readonly workspace: string; readonly onChange: (path: string, workspace: string) => void }) {
@@ -162,7 +163,7 @@ function DirectoryPicker(props: { readonly data: ProjectsData; readonly path: st
   const known = () => query().data ?? []
   return <div class="field"><label class="field__label" for="project-directory-path">Directory</label><input id="project-directory-path" class="input" autocomplete="off" spellcheck={false} placeholder="/path/to/folder or ~/folder" value={props.path} onInput={(event) => props.onChange(event.currentTarget.value, "")} />
     <Show when={known().length > 0}><CustomSelect label="Known directory" placeholder="Or choose a known directory" value={props.workspace} options={known().map((entry) => ({ value: entry.id, label: entry.directory }))} onChange={(value) => props.onChange(known().find((entry) => entry.id === value)?.directory ?? "", value)} /></Show>
-    <Show when={query().isError}><p role="alert">{query().error?.message}</p></Show><p class="field__hint">Type or paste an absolute path, or start with ~. A missing folder is created on the machine.</p></div>
+    <Show when={query().isError}><p role="alert">{query().error?.message}</p></Show><p class="field__hint">Type or paste an absolute path on the connected machine (such as /srv/app, C:\Work or \\server\share\dir), or start with ~. A missing folder is created there.</p></div>
 }
 
 function TitleField(props: { readonly value: string; readonly onChange: (value: string) => void; readonly placeholder: string; readonly hint: string }) {
@@ -252,7 +253,7 @@ export function ProjectPanel(props: { readonly data: ProjectsData; readonly proj
     const returnFocus = props.onManage?.() ?? trigger
     data.setDialog({ kind, project, trigger: returnFocus, session })
   }
-  const remove = async (entry: ParticipantView) => { if (await data.run("coordination.update", removeMemberInput(props.project, entry.sessionID), `${entry.title} removed. The Session keeps running and keeps its history.`)) setRemoved(entry) }
+  const remove = async (entry: ParticipantView) => { if (await data.run("coordination.detach", removeMemberInput(props.project, entry.sessionID), `${entry.title} removed. The Session keeps running and keeps its history.`)) setRemoved(entry) }
   return <><section class="project-panel" aria-label="Project panel"><div class="project-panel__body"><Feedback data={data} />
     <div class="project-phone project-actions"><ProjectStatus project={props.project} /><button type="button" class="button button--ghost button--small" disabled={data.query().isFetching} onClick={data.refresh}><Icon name="refresh" size={16} />Refresh project</button></div>
     <button type="button" class="button button--secondary button--small" aria-label="Expand project coordination" onClick={(event) => setExpanded(event.currentTarget)}><Icon name="team" size={16} />Project coordination<Icon name="external" size={16} /></button>
@@ -260,7 +261,7 @@ export function ProjectPanel(props: { readonly data: ProjectsData; readonly proj
     <Collapsible id={`${sectionsID}-sessions`} open={sessionsOpen()}><div class="project-section-body">
       <div class="project-summary"><div class="project-actions"><For each={["running", "waiting", "idle", "failed"] as const}>{(state) => <span class="project-live" data-state={state}><span aria-hidden="true">{state === "running" ? "●" : state === "waiting" ? "△" : state === "failed" ? "×" : "○"}</span>{counts()[state]} {state}</span>}</For></div><Meter project={props.project} /><Sparkline project={props.project} now={data.now()} /></div>
       <div class="project-actions"><button class="button button--primary button--small" disabled={data.pending() || props.project.members.length >= maxMembers} onClick={(event) => manage("new", event.currentTarget)}><Icon name="plus" size={16} />New session…</button><button class="button button--secondary button--small" disabled={data.pending() || props.project.members.length >= maxMembers} onClick={(event) => manage("add", event.currentTarget)}><Icon name="plus" size={16} />Add session…</button></div>
-      <Show when={removed()}>{(entry) => <button class="button button--ghost button--small" disabled={data.pending()} onClick={async () => { if (await data.run("coordination.update", addMemberInput(props.project, entry().sessionID), "Session restored to the Project.")) setRemoved(undefined) }}>Undo removal of {entry().title}</button>}</Show>
+      <Show when={removed()}>{(entry) => <button class="button button--ghost button--small" disabled={data.pending()} onClick={async () => { if (await data.run("coordination.attach", addMemberInput(props.project, entry().sessionID), "Session restored to the Project.")) setRemoved(undefined) }}>Undo removal of {entry().title}</button>}</Show>
       <ul class="project-members" aria-label={`Sessions in ${props.project.name}`}><For each={[...participants().keys()]}>{(id) => {
         const entry = () => participants().get(id)!
         return <ProjectMember entry={entry()} master={id === props.project.master.sessionID} data={data} onOpen={() => { props.onManage?.(); data.open(id) }} onRemove={() => void remove(entry())} onDelete={(trigger) => manage("delete-session", trigger, entry())} />
@@ -354,8 +355,10 @@ export function ProjectsDialogs(props: { readonly data: ProjectsData }) {
     const label = entry.kind === "delete-project" ? "Delete project" : entry.kind === "delete-session" ? "Delete Session" : entry.kind === "new" ? "New session in this project" : entry.kind === "master" ? "Change master" : "Add an existing Session"
     const choose = async (id: string) => {
       try {
-        const input = entry.kind === "master" ? changeMasterInput(entry.project, id) : addMemberInput(entry.project, id)
-        if (await data.run("coordination.update", input, entry.kind === "master" ? "Master changed. The previous Master remains a member." : "Session added.")) close?.()
+        const changed = entry.kind === "master"
+          ? await data.run("coordination.update", changeMasterInput(entry.project, id), "Master changed. The previous Master remains a member.")
+          : await data.run("coordination.attach", addMemberInput(entry.project, id), "Session attached. It keeps running and keeps its history.")
+        if (changed) close?.()
       } catch (cause) { setError(cause instanceof Error ? cause.message : "The Session could not be added.") }
     }
     const create = async () => {
@@ -387,8 +390,9 @@ export function ProjectsDialogs(props: { readonly data: ProjectsData }) {
       if (data.report(result, "Session deleted.")) close?.()
     }
     return <Modal label={label} class="overlay--confirm project-dialog" returnFocus={entry.trigger} onClose={() => data.setDialog(undefined)} requestClose={(handler) => { close = handler }}><Feedback data={data} />
+      <Show when={entry.kind === "add"}><p>Attach a running root Session from any directory without restarting it.</p></Show>
       <Show when={entry.kind === "add" || entry.kind === "master"}><SessionPicker data={data} allowProject={entry.kind === "master" ? entry.project.id : undefined} selected={entry.kind === "master" ? entry.project.master.sessionID : undefined} onChoose={(id) => void choose(id)} label={entry.kind === "master" ? "Use as master" : "Add"} /></Show>
-      <Show when={entry.kind === "new"}><DirectoryPicker data={data} path={path()} workspace={workspace()} onChange={(next, id) => { setPath(next); setWorkspace(id) }} /><TitleField value={title()} onChange={setTitle} placeholder="Optional" hint="Optional. Left blank, the Session takes its title from its first conversation." /><p>Creates the Session and adds it as a member.</p></Show>
+      <Show when={entry.kind === "new"}><DirectoryPicker data={data} path={path()} workspace={workspace()} onChange={(next, id) => { setPath(next); setWorkspace(id) }} /><TitleField value={title()} onChange={setTitle} placeholder="Optional" hint="Optional. Left blank, the Session takes its title from its first conversation." /><p>Creates the Session in the exact folder, Git repository or not, and adds it as a member.</p></Show>
       <Show when={entry.kind === "delete-project"}><p>Delete <strong>{entry.project.name}</strong>? Its Master and member Sessions keep running and keep their histories.</p></Show>
       <Show when={entry.kind === "delete-session"}><p>Delete <strong>{entry.session?.title}</strong> permanently? This stops any running turn and deletes the Session and its history. It cannot be undone.</p></Show>
       <Show when={error()}><p class="projects__notice" data-tone="danger" role="alert">{error()}</p></Show><div class="project-actions project-actions--end"><button class="button button--secondary" onClick={() => close?.()}>Cancel</button><Show when={entry.kind === "new"}><button class="button button--primary" disabled={data.pending() || unconfirmed()} onClick={() => void create()}>{data.pending() ? "Creating…" : created() ? "Add created Session" : "Create and add"}</button></Show><Show when={entry.kind === "delete-project" || entry.kind === "delete-session"}><button class="button button--danger" disabled={data.pending()} onClick={() => void remove()}>{data.pending() ? "Deleting…" : label}</button></Show></div>

@@ -1185,7 +1185,7 @@ test("observes and acts inside a cross-origin out-of-process iframe and captures
   }
 }, 120_000)
 
-async function startFormBridge(prefix: string, fixtureFetch: (request: Request) => Response | Promise<Response>) {
+async function startFormBridge(prefix: string, fixtureFetch: (request: Request) => Response | Promise<Response>, extensionDirectory = extension) {
   if (!chrome) throw new Error("Set YCODING_TEST_ISOLATED_BROWSER_CHROME to an installed Chrome for Testing executable")
   if (!(await Bun.file(chrome).exists())) throw new Error("Chrome for Testing executable is unavailable")
   const directory = await mkdtemp(join(tmpdir(), `ycoding-${prefix}-chrome-`))
@@ -1290,8 +1290,8 @@ async function startFormBridge(prefix: string, fixtureFetch: (request: Request) 
         "--disable-component-update",
         "--disable-sync",
         "--disable-breakpad",
-        `--disable-extensions-except=${extension}`,
-        `--load-extension=${extension}`,
+        `--disable-extensions-except=${extensionDirectory}`,
+        `--load-extension=${extensionDirectory}`,
         "about:blank",
       ],
       { detached: true, stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] },
@@ -1471,6 +1471,299 @@ test("fills, selects, checks, hovers, and waits in a background owned tab under 
     await bridge.close()
   }
 }, 120_000)
+
+const dropdownPage = `<!doctype html><title>Dropdown fixture</title>
+<style>body{margin:0;height:3000px}#portal-host{position:fixed;top:40px;right:20px;width:220px;max-height:140px;overflow:auto;border:1px solid #000;background:#fff}.row{display:flex;height:32px;align-items:center}</style>
+<label>Account Code <input id="account" name="account_code" placeholder="Account Code"></label>
+<form id="account-form"><label>Reference <input id="reference"></label></form>
+<label>Password <input id="password" type="password"></label>
+<label>Login <input id="otp" autocomplete="one-time-code" aria-label="Login"></label>
+<label>Payment <input id="card" autocomplete="cc-number" aria-label="Payment"></label>
+<label>Integration <input id="apiSecret" name="client_secret"></label>
+<button id="native" aria-label="Native action">Native</button>
+<button id="trigger-active" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-active" aria-label="Active descendant">Choose</button>
+<button id="trigger-list" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-list" aria-label="List focus">Choose</button>
+<button id="trigger-option" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-option" aria-label="Option focus">Choose</button>
+<button id="trigger-reject" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-reject" aria-label="Rejecting">Choose</button>
+<button id="trigger-plain" aria-expanded="false" aria-controls="plain-list" aria-label="Plain rows">Rows</button>
+<button id="trigger-many" aria-expanded="false" aria-controls="many-list" aria-label="Many rows">Many</button>
+<button id="trigger-deep" aria-expanded="false" aria-controls="deep-list" aria-label="Deep rows">Deep</button>
+<button id="trigger-menu" aria-haspopup="menu" aria-expanded="false" aria-controls="menu" aria-label="Actions">Actions</button>
+<p id="status" role="status"></p>
+<script>
+const names = ["Alpha","Bravo","Charlie","Delta","Echo","Foxtrot","Golf","Hotel","India","Juliet","Kilo","Lima"]
+const status = document.getElementById("status")
+const say = (text) => { status.textContent = text }
+let portal
+const open = (kind) => {
+  const trigger = document.getElementById("trigger-" + kind)
+  portal = document.createElement("div")
+  portal.id = "portal-host"
+  const list = document.createElement("div")
+  list.id = "list-" + kind
+  list.setAttribute("role", "listbox")
+  list.setAttribute("aria-label", kind + " options")
+  portal.append(list)
+  let active = -1
+  const choose = (index) => {
+    if (kind === "reject") { trigger.textContent = "Invalid " + names[index] + " item"; trigger.setAttribute("aria-expanded", "false"); portal.remove(); return }
+    say(kind + " picked " + names[index] + (portal.scrollTop > 0 ? " from scrolled popup" : "") + (window.scrollY > 0 ? " page moved" : ""))
+    options[index].setAttribute("aria-selected", "true")
+    trigger.textContent = names[index] + " item"
+    trigger.setAttribute("aria-expanded", "false")
+    portal.remove()
+    trigger.focus()
+  }
+  const options = names.map((name, index) => {
+    const option = document.createElement("div")
+    option.id = kind + "-opt-" + index
+    option.setAttribute("role", "option")
+    option.setAttribute("aria-selected", "false")
+    if (kind === "option") option.tabIndex = -1
+    option.innerHTML = "<span class='row'><span aria-hidden='true'>*</span><span><b>" + name + "</b> item</span></span>"
+    option.onclick = () => choose(index)
+    list.append(option)
+    return option
+  })
+  const move = (to) => {
+    active = Math.max(0, Math.min(options.length - 1, to))
+    if (kind === "active") trigger.setAttribute("aria-activedescendant", options[active].id)
+    if (kind === "list") list.setAttribute("aria-activedescendant", options[active].id)
+    if (kind === "option") options[active].focus()
+    options[active].scrollIntoView({ block: "nearest" })
+  }
+  const keys = (event) => {
+    if (event.key === "ArrowDown") move(active + 1)
+    else if (event.key === "Enter" && active >= 0) choose(active)
+    else return
+    event.preventDefault()
+  }
+  if (kind === "active") trigger.onkeydown = keys
+  if (kind === "list") { portal.tabIndex = 0; portal.onkeydown = keys }
+  if (kind === "option") list.onkeydown = keys
+  document.body.append(portal)
+  trigger.setAttribute("aria-expanded", "true")
+  if (kind === "list") portal.focus()
+  if (kind === "option") move(0)
+}
+for (const kind of ["active", "list", "option", "reject"]) document.getElementById("trigger-" + kind).onclick = () => open(kind)
+document.getElementById("trigger-active").onkeydown = (event) => {
+  if (event.key === "ArrowDown" && !document.getElementById("list-active")) { open("active"); event.preventDefault() }
+}
+document.getElementById("trigger-menu").onclick = () => {
+  const menu = document.createElement("div")
+  menu.id = "menu"
+  menu.setAttribute("role", "menu")
+  menu.setAttribute("aria-label", "Actions menu")
+  for (const name of ["Rename", "Duplicate"]) {
+    const item = document.createElement("div")
+    item.setAttribute("role", "menuitem")
+    item.innerHTML = "<span><span><b>" + name + "</b></span></span>"
+    item.onclick = () => { say("menu picked " + name); menu.remove() }
+    menu.append(item)
+  }
+  const radio = document.createElement("div")
+  radio.setAttribute("role", "menuitemradio")
+  radio.setAttribute("aria-checked", "false")
+  radio.innerHTML = "<span><span>Compact</span></span>"
+  radio.onclick = () => { radio.setAttribute("aria-checked", "true"); say("menu picked Compact") }
+  menu.append(radio)
+  document.body.append(menu)
+  document.getElementById("trigger-menu").setAttribute("aria-expanded", "true")
+}
+document.getElementById("trigger-plain").onclick = () => {
+  const list = document.createElement("div")
+  list.id = "plain-list"
+  list.style = "position:fixed;top:40px;left:300px;width:240px;background:#fff;border:1px solid #000"
+  for (const name of ["Alpha", "Bravo", "Charlie"]) {
+    const row = document.createElement("div")
+    row.style = "cursor:pointer;height:28px"
+    row.innerHTML = "<span><i aria-hidden='true'>.</i><span>Plain " + name + "</span></span>"
+    row.onclick = () => { say("plain picked " + name); list.remove() }
+    list.append(row)
+  }
+  const covered = document.createElement("div")
+  covered.style = "cursor:pointer;height:28px;position:relative"
+  covered.innerHTML = "<span>Plain Covered</span>"
+  covered.onclick = () => say("covered picked")
+  const overlay = document.createElement("div")
+  overlay.style = "position:absolute;top:84px;left:0;right:0;height:28px;background:#fff;cursor:default"
+  const field = document.createElement("div")
+  field.style = "cursor:pointer;height:28px"
+  field.innerHTML = "<span>Plain Field <input aria-label='Custom value'></span>"
+  const nested = document.createElement("div")
+  nested.style = "cursor:pointer;height:28px"
+  nested.innerHTML = "<span>Plain Action <button>Go</button></span>"
+  list.append(covered, field, nested, overlay)
+  document.body.append(list)
+  document.getElementById("trigger-plain").setAttribute("aria-expanded", "true")
+}
+document.getElementById("trigger-many").onclick = () => {
+  const open = document.getElementById("many-list")
+  if (open) { open.remove(); document.getElementById("trigger-many").setAttribute("aria-expanded", "false"); return }
+  const list = document.createElement("div")
+  list.id = "many-list"
+  list.style = "position:fixed;top:40px;left:300px;width:240px;height:200px;overflow:auto;background:#fff;border:1px solid #000"
+  for (let index = 0; index < 120; index++) {
+    const row = document.createElement("div")
+    row.style = "cursor:pointer;height:28px"
+    row.textContent = "Many " + index
+    list.append(row)
+  }
+  document.body.append(list)
+  document.getElementById("trigger-many").setAttribute("aria-expanded", "true")
+}
+document.getElementById("trigger-deep").onclick = () => {
+  let host = document.body
+  for (let depth = 0; depth < 45; depth++) { const wrapper = document.createElement("div"); host.append(wrapper); host = wrapper }
+  const list = document.createElement("div")
+  list.id = "deep-list"
+  list.setAttribute("role", "listbox")
+  list.setAttribute("aria-label", "Deep options")
+  for (const name of ["North", "South"]) {
+    const option = document.createElement("div")
+    option.setAttribute("role", "option")
+    option.setAttribute("aria-selected", "false")
+    option.innerHTML = "<span>Deep " + name + "</span>"
+    option.onclick = () => { say("deep picked " + name); list.remove() }
+    list.append(option)
+  }
+  host.append(list)
+  document.getElementById("trigger-deep").setAttribute("aria-expanded", "true")
+}
+let natives = 0
+document.getElementById("native").onclick = () => say("native activated " + ++natives)
+document.getElementById("account-form").onsubmit = (event) => { event.preventDefault(); say("submitted " + document.getElementById("reference").value) }
+document.getElementById("apiSecret").onkeydown = () => say("secret key reached")
+document.getElementById("apiSecret").oninput = () => say("secret input reached")
+document.getElementById("account").onkeydown = (event) => { if (event.key === "Enter") say("account " + event.target.value) }
+</script>`
+
+async function dropdownFlow(extensionDirectory: string) {
+  const bridge = await startFormBridge("dropdown", () => new Response(dropdownPage, { headers: { "content-type": "text/html" } }), extensionDirectory)
+  try {
+    const tab = await bridge.openOwned("/dropdown", "dropdown-open")
+    let calls = 0
+    const find = (observation: Browser.Observation, role: string, name: string) => {
+      const element = observation.elements.find((item) => item.role === role && item.name === name)
+      if (!element) throw new Error(`${role} ${name} was not observed`)
+      return element
+    }
+    const status = async () => {
+      const observation = await bridge.observe(tab, `dropdown-status-${++calls}`)
+      return { observation, text: (observation.texts ?? []).map((item) => item.name).find((name) => /^(account |\w+ picked|native activated|submitted|secret )/.test(name)) }
+    }
+    const step = async (action: (observation: Browser.Observation) => Browser.Schema.Action) => {
+      const observation = await bridge.observe(tab, `dropdown-observe-${++calls}`)
+      return bridge.completed(await bridge.act(observation, `dropdown-act-${calls}`, action(observation)))
+    }
+    const key = (name: string) => step(() => ({ type: "key", key: name }))
+
+    const account = find(await bridge.observe(tab, "dropdown-first"), "textbox", "Account Code")
+    expect(account.sensitive).toBeUndefined()
+    const typed = await step((observation) => ({ type: "fill", ref: find(observation, "textbox", "Account Code").ref, text: "AC-1001" }))
+    expect(typed.control).toEqual({ value: "AC-1001" })
+    await step((observation) => ({ type: "click", ref: find(observation, "textbox", "Account Code").ref }))
+    await key("Enter")
+    expect((await status()).text).toBe("account AC-1001")
+
+    const first = await bridge.observe(tab, "dropdown-secrets")
+    expect(find(first, "textbox", "Password")).toMatchObject({ sensitive: true })
+    expect(find(first, "textbox", "Login")).toMatchObject({ sensitive: true })
+    expect(find(first, "textbox", "Payment")).toMatchObject({ sensitive: true })
+    expect(find(first, "textbox", "Integration")).toMatchObject({ sensitive: true })
+    for (const name of ["Password", "Login", "Payment", "Integration"])
+      await bridge.refused(
+        await bridge.act(first, `dropdown-secret-${name}`, { type: "fill", ref: find(first, "textbox", name).ref, text: "synthetic-secret" }),
+      )
+    const focused = await step((observation) => ({ type: "click", ref: find(observation, "textbox", "Login").ref }))
+    expect(focused.status).toBe("completed")
+    const blockedKey = await bridge.observe(tab, "dropdown-secret-key")
+    await bridge.refused(await bridge.act(blockedKey, "dropdown-secret-enter", { type: "key", key: "Enter" }))
+    await step((observation) => ({ type: "click", ref: find(observation, "textbox", "Integration").ref }))
+    const blockedSecret = await bridge.observe(tab, "dropdown-secret-name-key")
+    await bridge.refused(await bridge.act(blockedSecret, "dropdown-secret-name-enter", { type: "key", key: "Enter" }))
+    await bridge.refused(await bridge.act(blockedSecret, "dropdown-secret-name-type", { type: "type", ref: find(blockedSecret, "textbox", "Integration").ref, text: "synthetic-secret" }))
+    expect((await status()).text).toBe("account AC-1001")
+
+    await step((observation) => ({ type: "click", ref: find(observation, "button", "Native action").ref }))
+    await key("Enter")
+    expect((await status()).text).toBe("native activated 2")
+
+    await step((observation) => ({ type: "click", ref: find(observation, "combobox", "Active descendant").ref }))
+    const opened = await bridge.observe(tab, "dropdown-opened")
+    expect(find(opened, "combobox", "Active descendant")).toMatchObject({ expanded: true })
+    const alpha = find(opened, "option", "Alpha item")
+    expect(alpha.locator).toBe('role=option[name="Alpha item"]')
+    expect(opened.elements.filter((item) => item.role === "option")).toHaveLength(12)
+    await key("ArrowDown")
+    await key("ArrowDown")
+    await key("Enter")
+    expect((await status()).text).toBe("active picked Bravo")
+
+    await step((observation) => ({ type: "click", ref: find(observation, "combobox", "Active descendant").ref }))
+    const selected = await step((observation) => ({ type: "select", ref: find(observation, "combobox", "Active descendant").ref, labels: ["Kilo item"] }))
+    expect(selected.control?.selected).toEqual([{ label: "Kilo item", index: 10 }])
+    expect(selected.message).toBeUndefined()
+    expect((await status()).text).toBe("active picked Kilo from scrolled popup")
+
+    await step((observation) => ({ type: "click", ref: find(observation, "combobox", "List focus").ref }))
+    await key("ArrowDown")
+    await key("Enter")
+    expect((await status()).text).toBe("list picked Alpha")
+
+    await step((observation) => ({ type: "click", ref: find(observation, "combobox", "Option focus").ref }))
+    await key("ArrowDown")
+    await key("Enter")
+    expect((await status()).text).toBe("option picked Bravo")
+
+    await step((observation) => ({ type: "click", ref: find(observation, "combobox", "Rejecting").ref }))
+    const unconfirmed = await step((observation) => ({ type: "select", ref: find(observation, "combobox", "Rejecting").ref, labels: ["Delta item"] }))
+    expect(unconfirmed.control?.selected).toEqual([])
+    expect(unconfirmed.message).toBe("The selection could not be confirmed")
+    await step((observation) => ({ type: "click", ref: find(observation, "combobox", "List focus").ref }))
+    await step((observation) => ({ type: "click", ref: find(observation, "option", "Lima item").ref }))
+    expect((await status()).text).toBe("list picked Lima from scrolled popup")
+
+    await step((observation) => ({ type: "click", ref: find(observation, "button", "Plain rows").ref }))
+    const plain = await bridge.observe(tab, "dropdown-plain")
+    const rows = plain.elements.filter((item) => item.role === "clickable").map((item) => item.name)
+    expect(rows).toEqual(["Plain Alpha", "Plain Bravo", "Plain Charlie"])
+    expect(plain.elements.find((item) => item.name === "Plain Charlie")?.locator).toBe('role=clickable[name="Plain Charlie"]')
+    expect(plain.truncated).toBe(false)
+    await bridge.completed(
+      await bridge.act(plain, "dropdown-plain-wait", { type: "wait", locator: 'role=clickable[name="Plain Charlie"]', timeoutMs: 3000 }),
+    )
+    await step((observation) => ({ type: "click", ref: find(observation, "clickable", "Plain Charlie").ref }))
+    expect((await status()).text).toBe("plain picked Charlie")
+
+    await step((observation) => ({ type: "click", ref: find(observation, "button", "Many rows").ref }))
+    const many = await bridge.observe(tab, "dropdown-many")
+    expect(many.elements.filter((item) => item.role === "clickable")).toHaveLength(100)
+    expect(many.truncated).toBe(true)
+    await step((observation) => ({ type: "click", ref: find(observation, "button", "Many rows").ref }))
+    await step((observation) => ({ type: "click", ref: find(observation, "button", "Deep rows").ref }))
+    const deep = await bridge.observe(tab, "dropdown-deep")
+    expect(deep.elements.filter((item) => item.role === "option" && item.name.startsWith("Deep")).map((item) => item.name)).toEqual(["Deep North", "Deep South"])
+    await bridge.completed(await bridge.act(deep, "dropdown-deep-click", { type: "click", ref: find(deep, "option", "Deep South").ref }))
+    expect((await status()).text).toBe("deep picked South")
+
+    await step((observation) => ({ type: "click", ref: find(observation, "button", "Actions").ref }))
+    const menu = await bridge.observe(tab, "dropdown-menu")
+    expect(menu.elements.filter((item) => item.role.startsWith("menuitem")).map((item) => item.name)).toEqual(["Rename", "Duplicate", "Compact"])
+    const chosen = await bridge.act(menu, "dropdown-menu-click", { type: "click", locator: 'role=menuitem[name="Duplicate"]' })
+    await bridge.completed(chosen)
+    expect((await status()).text).toBe("menu picked Duplicate")
+  } finally {
+    await bridge.close()
+  }
+}
+
+test.each(["source", "packaged"] as const)(
+  "%s extension drives custom dropdowns, portal menus, and keyboard selection while sensitive fields stay refused",
+  (variant) => withExtension(variant, dropdownFlow),
+  120_000,
+)
 
 test("waits for networkidle on a profile tab attached after load using requests started after attach", async () => {
   let releaseBefore: (() => void) | undefined

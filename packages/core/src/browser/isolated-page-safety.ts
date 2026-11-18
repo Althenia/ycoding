@@ -12,7 +12,7 @@ export const SECRET_AUTOCOMPLETE: ReadonlyArray<string> = [
 ]
 
 export const SECRET_NAME =
-  /pass(?:word|code|phrase)|one[\s_-]?time|verification[\s_-]?code|security[\s_-]?code|card[\s_-]?(?:number|no)|(?:^|[^a-z0-9])(?:otp|totp|mfa|2fa|pin|cvv|cvc|csc|ccnum)(?:$|[^a-z0-9])/i
+  /pass(?:word|code|phrase)|one[\s_-]?time|verification[\s_-]?code|security[\s_-]?code|card[\s_-]?(?:number|no)|secrets?(?![a-z])|(?:^|[^a-z0-9])(?:otp|totp|mfa|2fa|pin|cvv|cvc|csc|ccnum)(?:$|[^a-z0-9])/i
 
 const ACCESSIBLE_NAME_LENGTH = 256
 
@@ -21,9 +21,8 @@ export function isSensitiveAttributes(
   attributes: ReadonlyMap<string, string>,
   accessibleName = "",
 ) {
+  if (!isEditableField(nodeName, attributes)) return false
   const tag = nodeName.toLowerCase()
-  const editable = attributes.has("contenteditable") && attributes.get("contenteditable") !== "false"
-  if (tag !== "input" && tag !== "textarea" && !editable) return false
   if (tag === "input" && (attributes.get("type") ?? "text").toLowerCase() === "password") return true
   if (
     (attributes.get("autocomplete") ?? "")
@@ -34,6 +33,11 @@ export function isSensitiveAttributes(
     return true
   if (["name", "id", "aria-label", "placeholder"].some((key) => SECRET_NAME.test(attributes.get(key) ?? ""))) return true
   return SECRET_NAME.test(accessibleName.replace(/\s+/g, " ").trim().slice(0, ACCESSIBLE_NAME_LENGTH))
+}
+
+export function isEditableField(nodeName: string, attributes: ReadonlyMap<string, string>) {
+  const tag = nodeName.toLowerCase()
+  return tag === "input" || tag === "textarea" || (attributes.has("contenteditable") && attributes.get("contenteditable") !== "false")
 }
 
 export interface FocusedLeaf {
@@ -219,6 +223,54 @@ export const F_REFUSE_FIELD = `function () { ${IS_SENSITIVE}
 export const F_FRAME_UNREACHABLE = `function () {
   const el = this
   return ["iframe", "frame", "object", "embed"].includes(el.localName)
+}`
+
+const ROW_INTERACTIVE = [
+  "a[href]", "button", "input", "select", "textarea", "summary", "iframe", "frame", "object", "embed",
+  "[contenteditable]:not([contenteditable='false'])",
+  ...["button", "checkbox", "combobox", "link", "listbox", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "radio",
+    "searchbox", "slider", "spinbutton", "switch", "tab", "textbox"].map((role) => `[role=${role}]`),
+].join(",")
+
+const HIT_TEST = `const hitTestable = (el) => {
+  const box = el.getBoundingClientRect()
+  const view = el.ownerDocument.defaultView
+  const x = box.left + box.width / 2, y = box.top + box.height / 2
+  if (!view || box.width <= 0 || box.height <= 0 || x < 0 || y < 0 || x >= view.innerWidth || y >= view.innerHeight) return false
+  const hit = el.ownerDocument.elementFromPoint(x, y)
+  return Boolean(hit && el.contains(hit))
+}`
+
+export const F_POPUP_ROWS = `function (limit, nodes, visits) { ${HIT_TEST}
+  const container = this
+  const interactive = ${JSON.stringify(ROW_INTERACTIVE)}
+  const view = container.ownerDocument.defaultView
+  const pointer = (el) => view.getComputedStyle(el).cursor === "pointer"
+  const plain = (el) => {
+    const inner = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_ELEMENT)
+    let count = 0
+    for (let node = inner.nextNode(); node; node = inner.nextNode()) if (++count >= nodes || node.matches(interactive)) return false
+    return true
+  }
+  const walker = container.ownerDocument.createTreeWalker(container, NodeFilter.SHOW_ELEMENT)
+  const rows = []
+  let visited = 0
+  for (let el = walker.nextNode(); el; el = walker.nextNode()) {
+    if (++visited > visits) return { rows, truncated: true }
+    if (!pointer(el) || (el.parentElement !== container && pointer(el.parentElement))) continue
+    const owner = el.closest(interactive)
+    if ((owner && owner !== container && container.contains(owner)) || el.closest("[aria-hidden=true],[inert]")) continue
+    if (!plain(el) || !String(el.innerText).replace(/\\s+/g, " ").trim() || !hitTestable(el)) continue
+    if (rows.length >= limit) return { rows, truncated: true }
+    rows.push(el)
+  }
+  return { rows, truncated: false }
+}`
+
+export const F_ROW_NAME = `function () { return String(this.innerText).replace(/\\s+/g, " ").trim().slice(0, 1024) }`
+
+export const F_HIT_TESTABLE = `function () { ${HIT_TEST}
+  return this.isConnected && hitTestable(this)
 }`
 
 export const F_CONNECTED = `function () { return this.isConnected }`

@@ -93,7 +93,7 @@ for (const viewport of viewports) {
         await waitFor(screen, () => mounted.server.state.writes.length === 1)
         expect(mounted.server.state.writes).toHaveLength(1)
         expect(mounted.server.state.writes[0]).toMatchObject(action === "remove"
-          ? { method: "PATCH", path: `/api/coordination/${groupID}` }
+          ? { method: "DELETE", path: `/api/coordination/${groupID}/members/${docsID}` }
           : { method: "DELETE", path: `/api/coordination/${groupID}` })
       } finally { await screen.dispose() }
     }, 30000)

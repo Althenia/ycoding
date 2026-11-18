@@ -271,12 +271,50 @@ export function backend(overrides: { projects?: FixtureProject[]; sessions?: Rec
       state.projects.push(project)
       return json({ data: info(project) })
     }
-    const project = state.projects.find((item) => path === `/api/coordination/${item.id}`)
-    if (!project)
-      return json(
+    const notFound = () =>
+      json(
         { _tag: "CoordinationError", reason: "Coordination.NotFoundError", message: "Project not found" },
         { status: 409 },
       )
+    const membership = /^\/api\/coordination\/([^/]+)\/members(?:\/([^/]+))?$/.exec(path)
+    if (membership) {
+      const target = state.projects.find((item) => item.id === membership[1])
+      if (!target) return notFound()
+      if (request.method === "POST" && !membership[2]) {
+        const body = await request.json()
+        record(request, url, body)
+        if (state.failWrite) return conflict(state.failWrite)
+        const session = state.sessions[body.sessionID]
+        if (!session) return notFound()
+        const owner = state.projects.find(
+          (item) => item.masterSessionID === body.sessionID || item.memberSessionIDs.includes(body.sessionID),
+        )
+        if (owner && owner.id !== target.id) return conflict("The Session belongs to another Project")
+        if (!owner) {
+          target.memberSessionIDs.push(body.sessionID)
+          target.revision += 1
+        }
+        return json({
+          data: {
+            groupID: target.id,
+            sessionID: body.sessionID,
+            location: { directory: session.directory },
+            ownerSessionID: body.ownerSessionID ?? target.masterSessionID,
+            reconciled: owner !== undefined,
+          },
+        })
+      }
+      if (request.method === "DELETE" && membership[2]) {
+        record(request, url, {})
+        if (state.failWrite) return conflict(state.failWrite)
+        target.memberSessionIDs = target.memberSessionIDs.filter((member) => member !== membership[2])
+        target.revision += 1
+        return json({ data: { sessionID: membership[2], removed: true } })
+      }
+      return notFound()
+    }
+    const project = state.projects.find((item) => path === `/api/coordination/${item.id}`)
+    if (!project) return notFound()
     if (request.method === "GET") return json({ data: info(project) })
     if (request.method === "DELETE") {
       record(request, url, {})

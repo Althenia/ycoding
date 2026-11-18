@@ -1097,6 +1097,7 @@ describe("Chrome bridge service worker", () => {
       const shared = socket.outgoing.find((message) => message.type === "shared")
       await socket.receive({ type: "observe", tabID: shared.tabID, generation: "bridge-1", callID: "observe-hidden-input" })
       const observation = socket.outgoing.find((message) => message.callID === "observe-hidden-input")
+      const beforeInput = harness.commands.length
       await socket.receive(action("hidden-click", shared.tabID, observation, { type: "click", ref: "b1" }))
       const clickResult = socket.outgoing.find((item) => item.callID === "hidden-click")
       expect(clickResult).toMatchObject({ type: "result", status: "completed" })
@@ -1107,7 +1108,7 @@ describe("Chrome bridge service worker", () => {
       expect(scrollResult).not.toHaveProperty("input")
       expect(harness.commands.filter((item) => item.method === "Input.dispatchMouseEvent").map((item) => item.params.type))
         .toEqual(["mousePressed", "mouseReleased", "mouseWheel"])
-      expect(harness.commands.some((item) => item.method === "Runtime.callFunctionOn")).toBe(false)
+      expect(harness.commands.slice(beforeInput).some((item) => item.method === "Runtime.callFunctionOn")).toBe(false)
       expect(harness.commands.some((item) => item.method === "Runtime.evaluate" && item.params.expression.includes("scrollBy")))
         .toBe(false)
       expect(harness.commands[0]).toEqual({
@@ -3236,14 +3237,14 @@ describe("Chrome control marker", () => {
     const { socket, shared } = await connect("n")
     try {
       await observe(socket, shared[0].tabID)
-      expect(harness.commands.filter((item) => item.method === "Page.createIsolatedWorld")).toHaveLength(1)
+      expect(harness.commands.filter((item) => item.method === "Page.createIsolatedWorld" && item.params.worldName === "ycoding-agent-marker")).toHaveLength(1)
       harness.cursorDOM.navigate()
       harness.cursorDOM.setPageTitle("Next")
       await harness.debuggerEvents.emit({ tabId: 17 }, "Page.frameNavigated", { frame: { url: "https://example.test/next" } })
       await flush()
       expect(harness.cursorDOM.document.title).toBe("Next")
       expect(harness.cursorDOM.iconLinks()[0]?.getAttribute("href")).toStartWith("data:image/svg+xml,")
-      expect(harness.commands.filter((item) => item.method === "Page.createIsolatedWorld")).toHaveLength(2)
+      expect(harness.commands.filter((item) => item.method === "Page.createIsolatedWorld" && item.params.worldName === "ycoding-agent-marker")).toHaveLength(2)
     } finally {
       await stopBridge()
     }
@@ -3255,10 +3256,10 @@ describe("Chrome control marker", () => {
       const observation = await observe(socket, shared[0].tabID)
       await socket.receive(action("world-scroll-1", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
       await socket.receive(action("world-scroll-2", shared[0].tabID, observation, { type: "scroll", deltaY: 10 }))
-      expect(harness.commands.filter((item) => item.method === "Page.createIsolatedWorld")).toHaveLength(1)
+      expect(harness.commands.filter((item) => item.method === "Page.createIsolatedWorld" && item.params.worldName === "ycoding-agent-marker")).toHaveLength(1)
       harness.page.staleContext = 1
       await refresh().callback()
-      expect(harness.commands.filter((item) => item.method === "Page.createIsolatedWorld")).toHaveLength(2)
+      expect(harness.commands.filter((item) => item.method === "Page.createIsolatedWorld" && item.params.worldName === "ycoding-agent-marker")).toHaveLength(2)
       expect(harness.cursorDOM.markers()).toHaveLength(1)
     } finally {
       await stopBridge()
@@ -3277,7 +3278,7 @@ describe("Chrome control marker", () => {
       expect(harness.cursorDOM.markers()).toHaveLength(1)
       expect(harness.cursorDOM.document.title).toBe("Inbox")
       expect(harness.cursorDOM.iconLinks()[0]?.getAttribute("href")).toStartWith("data:image/svg+xml,")
-      expect(harness.commands.filter((item) => item.method === "Page.createIsolatedWorld")).toHaveLength(1)
+      expect(harness.commands.filter((item) => item.method === "Page.createIsolatedWorld" && item.params.worldName === "ycoding-agent-marker")).toHaveLength(1)
 
       harness.cursorDOM.clock.advance(timing.expiry - 1)
       expect(harness.cursorDOM.markers()).toHaveLength(1)

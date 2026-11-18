@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import { $ } from "bun"
 import { Deferred, Effect, Fiber, Layer } from "effect"
 import { and, asc, eq } from "drizzle-orm"
 import fs from "node:fs/promises"
@@ -12,6 +13,7 @@ import { LayerNode } from "../src/effect/layer-node"
 import { LayerNodePlatform } from "../src/effect/app-node-platform"
 import { Catalog } from "../src/catalog"
 import { Credential } from "../src/credential"
+import { Form } from "../src/form"
 import { CoordinationService } from "../src/coordination/index"
 import { CoordinationMemberTable } from "../src/coordination/sql"
 import { Database } from "../src/database/database"
@@ -35,6 +37,7 @@ import { SessionExecution } from "../src/session/execution"
 import { SessionMessage } from "../src/session/message"
 import { SessionOrchestration } from "../src/session/orchestration"
 import { SessionStepBoundary } from "../src/session/step-boundary"
+import { SessionAutonomy } from "../src/session/autonomy"
 import { SessionTable, SessionTaskTable } from "../src/session/sql"
 import { fixtureModels } from "./lib/models"
 import { testEffect } from "./lib/effect"
@@ -70,8 +73,25 @@ const client = Layer.succeed(LLMClient.Service, LLMClient.Service.of({
 }))
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([
   Database.node, EventRuntime.node, Credential.node, LocationServiceMap.node, Session.node,
-  SessionOrchestration.node, SessionExecution.node, SessionStepBoundary.node, CoordinationService.node, CoordinationRuntime.node,
+  SessionOrchestration.node, SessionExecution.node, SessionStepBoundary.node, CoordinationService.node, CoordinationRuntime.node, SessionAutonomy.node,
 ]), [fixtureModels, [SessionExecution.node, execution], [SessionStepBoundary.node, boundaries], [LayerNodePlatform.llmClient, client]]))
+
+const prepareCatalog = (locations: LocationServiceMap.Interface, location: Location.Ref) => Effect.gen(function* () {
+  const plugins = yield* PluginSupervisor.Service
+  yield* plugins.flush
+  const catalog = yield* Catalog.Service
+  yield* catalog.transform(draft => {
+    draft.provider.update(provider, item => { item.package = Provider.aisdk("@ai-sdk/openai") })
+    for (const model of [old, target]) draft.model.update(provider, model.id, item => {
+      item.limit = { context: 128_000, output: 4096 }
+      item.capabilities = { tools: true, input: ["text"], output: ["text"] }
+      item.variants = [{ id: CatalogModel.VariantID.make("high") }]
+    })
+    draft.model.update(provider, CatalogModel.ID.make("tiny"), item => { item.limit = { context: 1, output: 1 } })
+  })
+  const integrations = yield* Integration.Service
+  yield* integrations.transform(draft => draft.update(Integration.ID.make(provider), info => { info.name = "Member selection fixture" }))
+}).pipe(Effect.provide(locations.get(location, [LocationServiceMap.full])))
 
 const fixture = Effect.fn(function* () {
   running.clear()
@@ -88,22 +108,7 @@ const fixture = Effect.fn(function* () {
   const locations = yield* LocationServiceMap.Service
   const coordination = yield* CoordinationService.Service
   const runtime = yield* CoordinationRuntime.Service
-  yield* Effect.gen(function* () {
-    const plugins = yield* PluginSupervisor.Service
-    yield* plugins.flush
-    const catalog = yield* Catalog.Service
-    yield* catalog.transform(draft => {
-      draft.provider.update(provider, item => { item.package = Provider.aisdk("@ai-sdk/openai") })
-      for (const model of [old, target]) draft.model.update(provider, model.id, item => {
-        item.limit = { context: 128_000, output: 4096 }
-        item.capabilities = { tools: true, input: ["text"], output: ["text"] }
-        item.variants = [{ id: CatalogModel.VariantID.make("high") }]
-      })
-      draft.model.update(provider, CatalogModel.ID.make("tiny"), item => { item.limit = { context: 1, output: 1 } })
-    })
-    const integrations = yield* Integration.Service
-    yield* integrations.transform(draft => draft.update(Integration.ID.make(provider), info => { info.name = "Member selection fixture" }))
-  }).pipe(Effect.provide(locations.get(location, [LocationServiceMap.full])))
+  yield* prepareCatalog(locations, location)
   const credentials = yield* Credential.Service
   yield* credentials.create({ integrationID: Integration.ID.make(provider), label: "Work", value: Credential.Key.make({ type: "key", key: "synthetic-member-key" }) })
   const master = yield* sessions.create({ location, title: "Master", model: old })
@@ -253,7 +258,7 @@ describe("canonical project member creation", () => {
     const f = yield* fixture()
     const file = path.join(f.otherLocation.directory, "existing-file")
     yield* Effect.promise(() => fs.writeFile(file, "untouched"))
-    for (const [directory, reason] of [["relative/path", "absolute"], [file, "not a directory"]]) {
+    for (const [directory, reason] of [["relative/path", "absolute"], ["~\\member", "absolute"], ["C:\\member", "absolute"], [file, "not a directory"]]) {
       const id = Session.ID.create()
       const input = { id, directory, agentPermissions: [], model: old }
       expect((yield* Effect.flip(f.runtime.create(f.master.id, input))).message).toContain(reason)
@@ -620,4 +625,314 @@ describe("project member removal ownership fence", () => {
     expect((yield* f.coordination.get(f.group.id)).memberSessionIDs).toEqual([])
     unchangedExecution()
   }).pipe(Effect.timeout("10 seconds")))
+})
+
+const masterOnlyAttach = "Only the Project's Master attaches Sessions"
+const otherOwner = (sessionID: Session.ID) => `Session ${sessionID} is already a member of this Project with a different owner; use assign to change its owner`
+const ownerEvents = (f: Fixture) => f.db.select().from(EventTable)
+  .where(and(eq(EventTable.aggregate_id, f.group.id), eq(EventTable.type, versionedType(Coordination.Event.OwnerChanged.type, Coordination.Event.OwnerChanged.durable.version))))
+  .orderBy(asc(EventTable.seq)).all().pipe(Effect.orDie)
+
+const independentRoot = Effect.fn(function* (f: Fixture, title = "Independent root") {
+  const session = yield* f.sessions.create({ location: f.otherLocation, title, model: target })
+  yield* queueInput(f, session.id)
+  return session
+})
+
+const untouched = Effect.fn(function* (f: Fixture, sessionID: Session.ID) {
+  return { row: yield* sessionRow(f, sessionID), history: yield* f.events.sequences([sessionID]), pending: yield* f.sessions.pending(sessionID) }
+})
+
+const refusedAttach = Effect.fn(function* (f: Fixture, caller: Session.ID, input: Coordination.AttachInput, message?: string) {
+  const before = { membership: yield* membership(f), owners: (yield* ownerEvents(f)).length, project: yield* f.coordination.memberOf(input.sessionID) }
+  const error = yield* Effect.flip(f.runtime.attach(caller, input))
+  expect(error).toBeInstanceOf(CoordinationRuntime.RefusedError)
+  if (message !== undefined) expect(error).toMatchObject({ message })
+  expect(yield* membership(f)).toEqual(before.membership)
+  expect((yield* ownerEvents(f)).length).toBe(before.owners)
+  expect(yield* f.coordination.memberOf(input.sessionID)).toEqual(before.project)
+})
+
+describe("project member attach", () => {
+  it.effect("attaches a running root at any recorded directory with the Master as default owner, leaving its Session, history and work in place", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const away = yield* independentRoot(f)
+    running.add(away.id)
+    const before = yield* untouched(f, away.id)
+    expect(before.pending).toHaveLength(1)
+    const previous = yield* membership(f)
+    const owners = (yield* ownerEvents(f)).length
+    const result = yield* f.runtime.attach(f.master.id, { sessionID: away.id })
+    expect(result).toEqual({ groupID: f.group.id, sessionID: away.id, location: f.otherLocation, ownerSessionID: f.master.id, reconciled: false })
+    const after = yield* membership(f)
+    expect(Number(after.revision)).toBe(Number(previous.revision) + 1)
+    expect(new Set(after.members)).toEqual(new Set([...previous.members, away.id]))
+    expect(after.changes).toBe(previous.changes + 1)
+    expect((yield* ownerEvents(f)).slice(owners).map(row => row.data)).toEqual([expect.objectContaining({ groupID: f.group.id, sessionID: away.id, ownerSessionID: f.master.id })])
+    expect(yield* memberRow(f, away.id)).toMatchObject({ owner_session_id: f.master.id })
+    expect(yield* f.coordination.accessOf(away.id)).toMatchObject({ role: "executor", ownerSessionID: f.master.id, scope: { groupID: f.group.id } })
+    expect(yield* untouched(f, away.id)).toEqual(before)
+    const session = yield* f.sessions.get(away.id)
+    expect(session).toMatchObject({ id: away.id, location: f.otherLocation, model: target, title: "Independent root" })
+    expect(session.parentID).toBeUndefined()
+    expect(running.has(away.id)).toBe(true)
+    expect(woken).not.toContain(away.id)
+    expect(interrupted).toEqual([])
+  }))
+
+  it.effect("reconciles the same binding without changes and refuses a different owner for an existing member", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const away = yield* independentRoot(f)
+    expect(yield* f.runtime.attach(f.master.id, { sessionID: away.id, ownerSessionID: f.owner.id }))
+      .toEqual({ groupID: f.group.id, sessionID: away.id, location: f.otherLocation, ownerSessionID: f.owner.id, reconciled: false })
+    expect((yield* f.coordination.accessOf(f.owner.id))?.ownedSessionIDs).toContain(away.id)
+    const settled = { membership: yield* membership(f), owners: (yield* ownerEvents(f)).length, session: yield* untouched(f, away.id) }
+    expect(yield* f.runtime.attach(f.master.id, { sessionID: away.id, ownerSessionID: f.owner.id }))
+      .toEqual({ groupID: f.group.id, sessionID: away.id, location: f.otherLocation, ownerSessionID: f.owner.id, reconciled: true })
+    expect({ membership: yield* membership(f), owners: (yield* ownerEvents(f)).length, session: yield* untouched(f, away.id) }).toEqual(settled)
+    yield* refusedAttach(f, f.master.id, { sessionID: away.id }, otherOwner(away.id))
+    yield* refusedAttach(f, f.master.id, { sessionID: f.member.id, ownerSessionID: f.master.id }, otherOwner(f.member.id))
+    yield* refusedAttach(f, f.master.id, { sessionID: f.peer.id }, otherOwner(f.peer.id))
+    yield* refusedAttach(f, f.master.id, { sessionID: f.peer.id, ownerSessionID: f.owner.id }, otherOwner(f.peer.id))
+    expect(yield* f.runtime.attach(f.master.id, { sessionID: f.member.id, ownerSessionID: f.owner.id }))
+      .toEqual({ groupID: f.group.id, sessionID: f.member.id, location: f.location, ownerSessionID: f.owner.id, reconciled: true })
+    expect(yield* memberRow(f, f.peer.id)).toMatchObject({ owner_session_id: null })
+    unchangedExecution()
+  }))
+
+  it.effect("keeps the attached Session's own autonomy modes while a created member still takes the Master's", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID: f.master.id, permissions: "yolo", guardrails: "yolo", answers: "yolo" })
+    const away = yield* independentRoot(f)
+    yield* autonomy.set({ sessionID: away.id, permissions: "auto", answers: "manual" })
+    const state = yield* autonomy.get(away.id)
+    const effective = yield* autonomy.effectiveDecisions(away.id)
+    expect(effective).toMatchObject({ permissions: "auto", guardrails: "manual", answers: "manual" })
+    const before = yield* untouched(f, away.id)
+    expect((yield* f.runtime.attach(f.master.id, { sessionID: away.id })).reconciled).toBe(false)
+    expect(yield* autonomy.get(away.id)).toEqual(state)
+    expect(yield* autonomy.effectiveDecisions(away.id)).toEqual(effective)
+    expect(yield* untouched(f, away.id)).toEqual(before)
+    const created = yield* f.runtime.create(f.master.id, { id: Session.ID.create(), projectID: f.repositoryID, model: old, agentPermissions: [] })
+    expect(created.enrollment.member).toBe(true)
+    expect(yield* autonomy.effectiveDecisions(created.sessionID)).toMatchObject({ permissions: "yolo", guardrails: "yolo", answers: "yolo" })
+    expect(woken).not.toContain(away.id)
+    expect(interrupted).toEqual([])
+  }))
+
+  it.effect("serializes concurrent attaches of one Session through the Project ownership fence", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const away = yield* independentRoot(f)
+    const results = yield* Effect.all([0, 1].map(() => f.runtime.attach(f.master.id, { sessionID: away.id })), { concurrency: "unbounded" })
+    expect(results.filter(result => result.reconciled)).toHaveLength(1)
+    expect((yield* f.coordination.get(f.group.id)).memberSessionIDs.filter(id => id === away.id)).toHaveLength(1)
+    unchangedExecution()
+  }).pipe(Effect.timeout("10 seconds")))
+
+  it.effect("lets only the Project's Master attach", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const away = yield* independentRoot(f)
+    const executor = yield* f.sessions.create({ parentID: f.owner.id, title: "Owner executor", model: old })
+    for (const caller of [f.owner.id, executor.id, f.member.id, f.peer.id, f.outsider.id, away.id])
+      yield* refusedAttach(f, caller, { sessionID: away.id }, masterOnlyAttach)
+    expect(yield* untouched(f, away.id)).toMatchObject({ pending: [expect.anything()] })
+    unchangedExecution()
+  }))
+
+  it.effect("refuses itself, child, archived, unknown and standalone Sessions and any Session of another Project, paused or not", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const away = yield* independentRoot(f)
+    const child = yield* f.sessions.create({ parentID: away.id, title: "Independent child", model: old })
+    const archived = yield* independentRoot(f, "Archived root")
+    yield* f.events.publish(SessionEvent.Archived, { sessionID: archived.id })
+    const standalone = yield* f.sessions.create({ scope: "standalone", title: "Standalone root" })
+    const otherMaster = yield* f.sessions.create({ location: f.location, title: "Other Master", model: old })
+    const taken = yield* independentRoot(f, "Other member")
+    const other = yield* f.coordination.create({ name: "Paused Project", masterSessionID: otherMaster.id, memberSessionIDs: [taken.id] })
+    yield* f.coordination.pause(other.id)
+    const otherBefore = yield* f.coordination.get(other.id)
+    for (const sessionID of [f.master.id, f.owner.id, child.id, archived.id, Session.ID.create(), standalone.id, taken.id, otherMaster.id])
+      yield* refusedAttach(f, f.master.id, { sessionID })
+    expect(yield* f.coordination.get(other.id)).toEqual(otherBefore)
+    expect(otherBefore).toMatchObject({ active: false, pausedReason: "interrupted", memberSessionIDs: [taken.id] })
+    expect((yield* f.sessions.get(standalone.id)).scope).toBe("standalone")
+    expect((yield* f.sessions.get(archived.id)).time.archived).toBeDefined()
+    unchangedExecution()
+  }))
+
+  it.effect("refuses an owner that is not the Master or its live directly launched subagent", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const away = yield* independentRoot(f)
+    const memberWorker = yield* launchUnder(f, f.peer.id)
+    const nested = yield* launchUnder(f, f.owner.id)
+    const archivedOwner = yield* launchUnder(f, f.master.id)
+    yield* f.events.publish(SessionEvent.Archived, { sessionID: archivedOwner.id })
+    const failedOwner = yield* launchUnder(f, f.master.id)
+    yield* f.db.update(SessionTaskTable).set({ state: "failed" }).where(eq(SessionTaskTable.session_id, failedOwner.id)).run().pipe(Effect.orDie)
+    for (const ownerSessionID of [f.outsider.id, f.peer.id, away.id, memberWorker.id, nested.id, archivedOwner.id, failedOwner.id, Session.ID.create()])
+      yield* refusedAttach(f, f.master.id, { sessionID: away.id, ownerSessionID })
+    unchangedExecution()
+  }))
+
+  it.effect("rechecks the target after waiting for the Project ownership fence and refuses a Session archived meanwhile", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const away = yield* independentRoot(f)
+    const before = yield* membership(f)
+    const entered = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    const attempted = yield* Deferred.make<void>()
+    const holder = yield* f.coordination.withOwnership(f.group.id, Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))).pipe(Effect.forkChild)
+    yield* Deferred.await(entered)
+    const attach = yield* Deferred.succeed(attempted, undefined).pipe(Effect.andThen(Effect.flip(f.runtime.attach(f.master.id, { sessionID: away.id }))), Effect.forkChild)
+    yield* Deferred.await(attempted)
+    yield* f.events.publish(SessionEvent.Archived, { sessionID: away.id })
+    yield* Deferred.succeed(release, undefined)
+    yield* Fiber.join(holder)
+    expect(yield* Fiber.join(attach)).toBeInstanceOf(CoordinationRuntime.RefusedError)
+    expect(yield* membership(f)).toEqual(before)
+    expect(yield* f.coordination.memberOf(away.id)).toBeUndefined()
+    unchangedExecution()
+  }).pipe(Effect.timeout("10 seconds")))
+})
+
+describe("project attach and remove bindings", () => {
+  const notMaster = (caller: Session.ID, groupID: Coordination.GroupID) => `Session ${caller} is not the Master of Project ${groupID}`
+
+  it.effect("binds attach and remove to an expected Project and refuses another Project's identity under its fence", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const away = yield* independentRoot(f)
+    const otherMaster = yield* f.sessions.create({ location: f.location, title: "Other Master", model: old })
+    const other = yield* f.coordination.create({ name: "Other Project", masterSessionID: otherMaster.id, memberSessionIDs: [] })
+    const otherBefore = yield* f.coordination.get(other.id)
+    const before = yield* membership(f)
+    expect(yield* Effect.flip(f.runtime.attach(f.master.id, { sessionID: away.id }, { groupID: other.id }))).toMatchObject({ message: notMaster(f.master.id, other.id) })
+    expect(yield* Effect.flip(f.runtime.remove(f.master.id, { sessionID: f.peer.id }, { groupID: other.id }))).toMatchObject({ message: notMaster(f.master.id, other.id) })
+    expect(yield* membership(f)).toEqual(before)
+    expect(yield* f.coordination.get(other.id)).toEqual(otherBefore)
+    expect((yield* f.runtime.attach(f.master.id, { sessionID: away.id }, { groupID: f.group.id })).groupID).toBe(f.group.id)
+    expect(yield* f.runtime.remove(f.master.id, { sessionID: f.peer.id }, { groupID: f.group.id })).toEqual({ sessionID: f.peer.id, removed: true })
+    expect((yield* f.coordination.get(f.group.id)).memberSessionIDs).toContain(away.id)
+    unchangedExecution()
+  }))
+
+  it.effect("authorizes the exact recorded Location outside the ownership fence and skips it for a reconciled binding", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const away = yield* independentRoot(f)
+    const authorized: Array<Location.Ref> = []
+    const authorizeLocation = (location: Location.Ref) => f.coordination.withOwnership(f.group.id, Effect.sync(() => { authorized.push(location) })).pipe(Effect.forkChild, Effect.flatMap(Fiber.join))
+    const result = yield* f.runtime.attach(f.master.id, { sessionID: away.id }, { authorizeLocation })
+    expect(result).toMatchObject({ sessionID: away.id, location: f.otherLocation, reconciled: false })
+    expect(authorized).toEqual([f.otherLocation])
+    expect((yield* f.runtime.attach(f.master.id, { sessionID: away.id }, { authorizeLocation })).reconciled).toBe(true)
+    expect(authorized).toHaveLength(1)
+    unchangedExecution()
+  }).pipe(Effect.timeout("10 seconds")))
+
+  it.effect("a refused authorization enrolls nothing", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const away = yield* independentRoot(f)
+    const before = { membership: yield* membership(f), session: yield* untouched(f, away.id) }
+    const refusal = new CoordinationRuntime.RefusedError({ message: "external_directory denied" })
+    expect(yield* Effect.flip(f.runtime.attach(f.master.id, { sessionID: away.id }, { authorizeLocation: () => Effect.fail(refusal) }))).toBe(refusal)
+    expect({ membership: yield* membership(f), session: yield* untouched(f, away.id) }).toEqual(before)
+    unchangedExecution()
+  }))
+
+  it.effect("rechecks identity and binding after authorization and refuses a Session archived or bound elsewhere meanwhile", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const archived = yield* independentRoot(f, "Archived during approval")
+    const before = yield* membership(f)
+    const archive = () => f.events.publish(SessionEvent.Archived, { sessionID: archived.id }).pipe(Effect.asVoid)
+    expect(yield* Effect.flip(f.runtime.attach(f.master.id, { sessionID: archived.id }, { authorizeLocation: archive }))).toBeInstanceOf(CoordinationRuntime.RefusedError)
+    expect(yield* membership(f)).toEqual(before)
+    const raced = yield* independentRoot(f, "Bound elsewhere during approval")
+    const bindElsewhere = () => f.runtime.attach(f.master.id, { sessionID: raced.id, ownerSessionID: f.owner.id }).pipe(Effect.asVoid)
+    expect(yield* Effect.flip(f.runtime.attach(f.master.id, { sessionID: raced.id }, { authorizeLocation: bindElsewhere }))).toMatchObject({ message: otherOwner(raced.id) })
+    expect(yield* memberRow(f, raced.id)).toMatchObject({ owner_session_id: f.owner.id })
+    unchangedExecution()
+  }).pipe(Effect.timeout("10 seconds")))
+})
+
+describe("project management outside every Git worktree", () => {
+  const outsideGit = (directory: string) => Effect.promise(() => $`git -C ${directory} rev-parse --is-inside-work-tree`.nothrow().quiet().then(result => result.exitCode))
+  const historyOf = (f: Fixture, sessionID: Session.ID) => f.db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).orderBy(asc(EventTable.seq)).all().pipe(Effect.orDie)
+  const groupEvents = (f: Fixture) => f.db.select({ type: EventTable.type, data: EventTable.data }).from(EventTable).where(eq(EventTable.aggregate_id, f.group.id)).orderBy(asc(EventTable.seq)).all().pipe(Effect.orDie)
+
+  it.effect("creates at an exact non-Git path, attaches an independent non-Git root with its history, and manages both through every Project control", () => Effect.gen(function* () {
+    const f = yield* fixture()
+    const root = yield* Effect.acquireRelease(Effect.promise(() => tmpdir("ycoding-non-git-project-")), value => Effect.promise(() => value[Symbol.asyncDispose]()))
+    const createdDirectory = AbsolutePath.make(path.join(root.path, "created member"))
+    const attachedDirectory = AbsolutePath.make(path.join(root.path, "attached root"))
+    yield* Effect.promise(() => fs.mkdir(attachedDirectory))
+    for (const directory of [root.path, attachedDirectory]) expect(yield* outsideGit(directory)).not.toBe(0)
+
+    const attachedLocation = Location.Ref.make({ directory: attachedDirectory })
+    const attached = yield* f.sessions.create({ location: attachedLocation, title: "Independent non-Git root", model: old })
+    const earlier = SessionMessage.ID.create()
+    yield* f.events.publish(SessionEvent.InputAdmitted, { sessionID: attached.id, inputID: earlier,
+      input: { type: "user", delivery: "queue", data: { text: "Work started outside the Project", metadata: { inputOrigin: "direct" } } } })
+    yield* f.events.publish(SessionEvent.InputPromoted, { sessionID: attached.id, inputID: earlier })
+    yield* f.events.publish(SessionEvent.Execution.Succeeded, { sessionID: attached.id })
+    const attachedHistory = yield* historyOf(f, attached.id)
+    expect(attachedHistory.length).toBeGreaterThan(2)
+    const projectHistory = (yield* groupEvents(f)).length
+
+    const created = yield* f.runtime.create(f.master.id, { id: Session.ID.create(), directory: createdDirectory, ownerSessionID: f.master.id, title: "Non-Git member", model: old, agentPermissions: [] })
+    const createdLocation = Location.Ref.make({ directory: createdDirectory })
+    expect(created).toMatchObject({ directory: createdDirectory, location: createdLocation, model: old, enrollment: { groupID: f.group.id, member: true }, owner: { sessionID: f.master.id } })
+    expect(created).not.toHaveProperty("branch")
+    expect((yield* Effect.promise(() => fs.stat(createdDirectory))).isDirectory()).toBe(true)
+    expect(yield* Effect.promise(() => fs.readdir(createdDirectory))).toEqual([])
+    expect(yield* outsideGit(createdDirectory)).not.toBe(0)
+
+    expect(yield* f.runtime.attach(f.master.id, { sessionID: attached.id }))
+      .toEqual({ groupID: f.group.id, sessionID: attached.id, location: attachedLocation, ownerSessionID: f.master.id, reconciled: false })
+
+    const roster = yield* f.runtime.roster(f.master.id)
+    for (const [sessionID, location] of [[created.sessionID, createdLocation], [attached.id, attachedLocation]] as const)
+      expect(roster.members.find(member => member.sessionID === sessionID)).toMatchObject({ location, state: "idle", owner: { sessionID: f.master.id } })
+
+    yield* f.coordination.activate(f.group.id)
+    const sent = yield* f.runtime.send(f.master.id, { sessionID: attached.id, text: "Continue in your own folder" })
+    expect(sent).toMatchObject({ sessionID: attached.id, reconciled: false })
+    expect(woken).toContain(attached.id)
+    yield* f.events.publish(SessionEvent.InputPromoted, { sessionID: attached.id, inputID: sent.messageID })
+
+    const forms = yield* Form.Service.pipe(Effect.provide(f.locations.get(attachedLocation, [Form.node])))
+    const question = { id: Form.ID.create("frm_non_git"), sessionID: attached.id, title: "Choose the output folder",
+      fields: [{ key: "folder", type: "string", required: true, options: [{ value: "reports", label: "Reports" }] }] } satisfies Form.CreateInput
+    yield* forms.create(question)
+    const pending = (yield* f.runtime.roster(f.master.id)).members.find(member => member.sessionID === attached.id)?.pending ?? []
+    expect(pending).toMatchObject([{ kind: "question", requestID: question.id }])
+    expect(yield* f.runtime.inspect(f.master.id, { sessionID: attached.id, requestID: question.id })).toMatchObject({ kind: "question", requestID: question.id, title: "Choose the output folder" })
+    expect(yield* f.runtime.answer(f.master.id, { sessionID: attached.id, requestID: question.id, kind: "question", fingerprint: pending[0]!.fingerprint,
+      rationale: "The assignment names the reports folder.", answer: { folder: "reports" } })).toMatchObject({ settled: true })
+    expect(yield* forms.state(question.id)).toEqual({ status: "answered", answer: { folder: "reports" } })
+
+    yield* prepareCatalog(f.locations, createdLocation)
+    expect(yield* f.runtime.member(f.master.id, { sessionID: created.sessionID })).toMatchObject({ location: createdLocation, model: old, owner: { sessionID: f.master.id } })
+    expect((yield* f.runtime.setModel(f.master.id, { sessionID: created.sessionID, expectedModel: old, model: target })).model).toEqual(target)
+
+    expect(yield* f.runtime.release(f.master.id, { sessionID: attached.id, reason: "completed" })).toEqual({ sessionID: attached.id })
+    expect(yield* memberRow(f, attached.id)).toMatchObject({ owner_session_id: null })
+    expect(yield* f.runtime.remove(f.master.id, { sessionID: attached.id })).toEqual({ sessionID: attached.id, removed: true })
+
+    expect(yield* f.coordination.memberOf(attached.id)).toBeUndefined()
+    const after = yield* f.sessions.get(attached.id)
+    expect(after).toMatchObject({ id: attached.id, location: attachedLocation, model: old })
+    expect(after.time.archived).toBeUndefined()
+    const history = yield* historyOf(f, attached.id)
+    expect(history.slice(0, attachedHistory.length)).toEqual(attachedHistory)
+    expect(history.length).toBeGreaterThan(attachedHistory.length)
+    expect(yield* f.coordination.memberOf(created.sessionID)).toMatchObject({ groupID: f.group.id })
+    expect(yield* f.sessions.get(created.sessionID)).toMatchObject({ location: createdLocation, model: target })
+    expect(yield* memberRow(f, created.sessionID)).toMatchObject({ owner_session_id: f.master.id })
+    const recorded = (yield* groupEvents(f)).slice(projectHistory).map(row => row.type)
+    expect(recorded.filter(type => type.startsWith(Coordination.Event.Changed.type))).toHaveLength(3)
+    expect(recorded.filter(type => type.startsWith(Coordination.Event.OwnerChanged.type))).toHaveLength(3)
+    for (const directory of [root.path, createdDirectory, attachedDirectory]) expect(yield* outsideGit(directory)).not.toBe(0)
+    for (const directory of [createdDirectory, attachedDirectory]) expect(yield* Effect.promise(() => fs.readdir(directory))).not.toContain(".git")
+    expect(interrupted).toEqual([])
+  }).pipe(Effect.timeout("30 seconds")))
 })
