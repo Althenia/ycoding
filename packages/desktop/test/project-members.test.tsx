@@ -7,7 +7,7 @@ const jsxRuntime = () => ({ jsxDEV: (type: unknown, props: unknown) => ({ type, 
 mock.module("solid-js/jsx-dev-runtime", jsxRuntime)
 mock.module("solid-js/jsx-runtime", jsxRuntime)
 
-const { DesktopProjectMembers, DesktopProjectRoster, memberCandidates, memberChange } = await import("../src/project-members")
+const { DesktopProjectMembers, DesktopProjectRoster, memberCandidates, memberChange, newDirectoryProjectConfirmation } = await import("../src/project-members")
 const { For, Show } = await import("solid-js")
 
 type Group = ProjectsSnapshot["groups"][number]
@@ -46,8 +46,14 @@ test("member changes carry connection revision, group identity and accurate conf
   expect(memberChange(state, { kind: "remove", sessionID: "ses_a" })).toEqual({ input: { kind: "update", revision: 3, groupID: "cgrp_team", groupRevision: 7, memberSessionIDs: ["ses_b"] }, confirmation: "Remove “Alpha” from project “Team”? The Session and its stored data stay available in Sessions." })
   const deleted = memberChange(state, { kind: "delete", sessionID: "ses_b" })
   expect(deleted).toEqual({ input: { kind: "delete-member", revision: 3, groupID: "cgrp_team", groupRevision: 7, sessionID: "ses_b" }, confirmation: "Delete member Session “Beta”? This permanently deletes its stored Session data, including its transcript, and removes it from project “Team”." })
-  expect(memberChange(state, { kind: "new", directory: "/synthetic/work", title: "  Helper  " })).toEqual({ input: { kind: "new-member", revision: 3, groupID: "cgrp_team", groupRevision: 7, directory: "/synthetic/work", title: "Helper" }, confirmation: "Create a new Session titled “Helper” in /synthetic/work and add it as a member of project “Team”?" })
-  expect(memberChange(state, { kind: "new", directory: "/synthetic/work", title: " " })).toEqual({ input: { kind: "new-member", revision: 3, groupID: "cgrp_team", groupRevision: 7, directory: "/synthetic/work" }, confirmation: "Create a new Session in /synthetic/work and add it as a member of project “Team”?" })
+  expect(memberChange(state, { kind: "new", directory: "/synthetic/work", title: "  Helper  " })).toEqual({ input: { kind: "new-member", revision: 3, groupID: "cgrp_team", groupRevision: 7, directory: "/synthetic/work", title: "Helper" }, confirmation: "Create a new Session titled “Helper” in /synthetic/work and add it as a member of project “Team”? A missing folder is created." })
+  expect(memberChange(state, { kind: "new", directory: "/synthetic/work", title: " " })).toEqual({ input: { kind: "new-member", revision: 3, groupID: "cgrp_team", groupRevision: 7, directory: "/synthetic/work" }, confirmation: "Create a new Session in /synthetic/work and add it as a member of project “Team”? A missing folder is created." })
+})
+
+test("typed member folders accept absolute and home addresses unchanged and trimmed", () => {
+  const state = { group: group(), revision: 3, sessions, disabled: false }
+  for (const directory of ["~", "~/work/new", "/synthetic/a b"]) expect(memberChange(state, { kind: "new", directory: `  ${directory}  `, title: "" })).toMatchObject({ input: { kind: "new-member", directory } })
+  expect(newDirectoryProjectConfirmation("Team", "~/work")).toBe("Create project Team with a new Master Session in ~/work? A missing folder is created.")
 })
 
 test("master, stale candidates, non-members and missing folders are refused", () => {
@@ -55,7 +61,8 @@ test("master, stale candidates, non-members and missing folders are refused", ()
   for (const kind of ["remove", "delete"] as const) expect(memberChange(state, { kind, sessionID: "ses_master" })).toEqual({ error: "The master Session cannot be removed or deleted here. Change the master in project settings first." })
   for (const kind of ["remove", "delete"] as const) expect(memberChange(state, { kind, sessionID: "ses_c" })).toEqual({ error: "This Session is no longer a member of the project. Refresh projects." })
   for (const sessionID of ["ses_a", "ses_master", "ses_child", "ses_old", "ses_missing", ""]) expect(memberChange(state, { kind: "add", sessionID })).toEqual({ error: "Choose a loaded Session that is not already in the project." })
-  for (const directory of ["", "relative/path"]) expect(memberChange(state, { kind: "new", directory, title: "" })).toEqual({ error: "Choose a folder for the new member Session." })
+  for (const directory of ["", "   "]) expect(memberChange(state, { kind: "new", directory, title: "" })).toEqual({ error: "Choose a folder for the new member Session." })
+  for (const directory of ["relative/path", "./here", "~someone/work", "../up"]) expect(memberChange(state, { kind: "new", directory, title: "" })).toEqual({ error: "Enter an absolute folder path or one starting with ~/." })
   expect(memberChange({ ...state, disabled: true }, { kind: "remove", sessionID: "ses_a" })).toBeUndefined()
 })
 
@@ -87,14 +94,14 @@ test("rendered controls dispatch exact changes, never offer master actions and s
     ;(action(tree, "project-member-browse")[0]!.props.onClick as () => void)()
     expect(browse?.[0]).toBe("/synthetic/repo")
     browse?.[1]("/synthetic/new")
-    ;(nodes(tree).find((node) => node.type === "input")!.props.onInput as (event: unknown) => void)({ currentTarget: { value: "Helper" } })
+    ;(nodes(tree).find((node) => node.type === "input" && node.props["aria-label"] !== "Member folder path")!.props.onInput as (event: unknown) => void)({ currentTarget: { value: "Helper" } })
     const count = changes.length
     setDisabled(true)
     for (const id of ["project-member-new", "project-member-add", "project-member-remove", "project-member-delete"]) for (const node of action(tree, id)) (node.props.onClick as () => void)()
     expect(changes).toHaveLength(count)
     setDisabled(false)
     ;(action(tree, "project-member-new")[0]!.props.onClick as () => void)()
-    expect(changes.at(-1)).toEqual([{ kind: "new-member", revision: 3, groupID: "cgrp_team", groupRevision: 7, directory: "/synthetic/new", title: "Helper" }, "Create a new Session titled “Helper” in /synthetic/new and add it as a member of project “Team”?"])
+    expect(changes.at(-1)).toEqual([{ kind: "new-member", revision: 3, groupID: "cgrp_team", groupRevision: 7, directory: "/synthetic/new", title: "Helper" }, "Create a new Session titled “Helper” in /synthetic/new and add it as a member of project “Team”? A missing folder is created."])
     dispose()
   })
 })
@@ -115,5 +122,24 @@ test("staged input clears when the Project identity or revision changes", () => 
     pick("ses_c")
     ;(action(tree, "project-member-add")[0]!.props.onClick as () => void)()
     expect(changes).toEqual([{ kind: "update", revision: 3, groupID: "cgrp_other", groupRevision: 1, memberSessionIDs: ["ses_a", "ses_b", "ses_c"] }])
+  } finally { dispose() }
+})
+
+test("the member folder field mirrors the Master path entry, accepts typed paths and sits beside Choose folder…", () => {
+  const changes: [ProjectMutationInput, string][] = []
+  const { tree, dispose } = createRoot((dispose) => ({ tree: DesktopProjectMembers({ group: group(), revision: 3, sessions, disabled: false, onChange: (input, confirmation) => { changes.push([input, confirmation]) }, onBrowseFolder: () => {} }), dispose }))
+  try {
+    const field = nodes(tree).find((node) => node.type === "input" && node.props["aria-label"] === "Member folder path")!
+    expect(field.props.placeholder).toBe("/path/to/folder or ~/folder")
+    expect(text(tree)).toContain("Folder path")
+    expect(text(action(tree, "project-member-browse")[0])).toBe("Choose folder…")
+    ;(action(tree, "project-member-new")[0]!.props.onClick as () => void)()
+    expect(changes).toEqual([])
+    ;(field.props.onInput as (event: unknown) => void)({ currentTarget: { value: "~/projects/helper" } })
+    ;(action(tree, "project-member-new")[0]!.props.onClick as () => void)()
+    expect(changes.at(-1)).toEqual([{ kind: "new-member", revision: 3, groupID: "cgrp_team", groupRevision: 7, directory: "~/projects/helper" }, "Create a new Session in ~/projects/helper and add it as a member of project “Team”? A missing folder is created."])
+    ;(field.props.onInput as (event: unknown) => void)({ currentTarget: { value: "relative/dir" } })
+    ;(action(tree, "project-member-new")[0]!.props.onClick as () => void)()
+    expect(changes).toHaveLength(1)
   } finally { dispose() }
 })

@@ -212,46 +212,48 @@ test("creating with a new master creates the Session in the directory, titles it
   }
 })
 
-test("Project Master creation resolves the selected directory to its canonical Project root without redirecting members", async () => {
+test("Project Master and member creation use the exact selected directory without a Project root lookup", async () => {
   const server = backend()
   const selected = "/home/dev/copies/feature/packages/api"
-  const canonical = "/home/dev/projects/api"
+  let lookups = 0
   const { app, coordination } = await mount(server, {
-    respond: (url) => url.pathname === "/api/location"
-      ? json({ directory: selected, project: { id: "proj_api", directory: canonical } })
-      : undefined,
+    respond: (url) => {
+      if (url.pathname !== "/api/location") return undefined
+      lookups++
+      return json({ directory: selected, project: { id: "proj_api", directory: "/home/dev/projects/api" } })
+    },
   })
   try {
-    const masterID = await coordination().service.create({ name: "Canonical project", master: { directory: selected } })
+    const masterID = await coordination().service.create({ name: "Exact project", master: { directory: selected } })
     const memberID = await coordination().service.newMember(groupID, selected, "Explicit worktree member")
-    expect(server.state.sessions[masterID]?.directory).toBe(canonical)
+    expect(server.state.sessions[masterID]?.directory).toBe(selected)
     expect(server.state.sessions[memberID]?.directory).toBe(selected)
     expect(server.state.writes.filter((write) => write.path === "/api/session").map((write) => write.body)).toEqual([
-      { location: { directory: canonical }, title: "Canonical project" },
+      { location: { directory: selected }, title: "Exact project" },
       { location: { directory: selected }, title: "Explicit worktree member" },
     ])
+    expect(lookups).toBe(0)
   } finally {
     app.renderer.destroy()
   }
 })
 
-test("Project Master location failure creates nothing and permits a corrected retry", async () => {
+test("Project Master and member creation send a missing directory as typed and surface a server rejection for correction", async () => {
   const server = backend()
-  let unavailable = true
+  let rejecting = true
   const { app, coordination } = await mount(server, {
-    respond: (url) => url.pathname === "/api/location"
-      ? unavailable
-        ? json({ _tag: "InvalidRequestError", message: "Selected directory unavailable" }, { status: 400 })
-        : json({ directory: "/home/dev/copies/api", project: { id: "proj_api", directory: "/home/dev/projects/api" } })
-      : undefined,
+    respond: (url, request) =>
+      rejecting && url.pathname === "/api/session" && request.method === "POST"
+        ? json({ _tag: "InvalidRequestError", message: "Selected path is a file" }, { status: 400 })
+        : undefined,
   })
   try {
-    const input = { name: "Canonical project", master: { directory: "/home/dev/copies/api" } }
-    await expect(coordination().service.create(input)).rejects.toThrow()
-    expect(server.state.writes).toEqual([])
-    unavailable = false
+    const input = { name: "Exact project", master: { directory: "/home/dev/new/project" } }
+    await expect(coordination().service.create(input)).rejects.toMatchObject({ _tag: "InvalidRequestError" })
+    expect(server.state.created).toBe(0)
+    rejecting = false
     const masterID = await coordination().service.create(input)
-    expect(server.state.sessions[masterID]?.directory).toBe("/home/dev/projects/api")
+    expect(server.state.sessions[masterID]?.directory).toBe("/home/dev/new/project")
     expect(server.state.created).toBe(1)
   } finally {
     app.renderer.destroy()

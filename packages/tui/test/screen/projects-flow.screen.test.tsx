@@ -40,21 +40,25 @@ async function openBoundaryCreation(view: Mounted, member: boolean) {
 
 const boundaryText = (screen: Screen) => screen.frame().replace(/│/g, "").replace(/\s+/g, " ")
 
-test("Projects new Master form creates at the selected canonical Project root", async () => {
+test("Projects new Master form creates at the exact selected directory", async () => {
+  let lookups = 0
   const view = await mountCoordination({
-    respond: (url) => url.pathname === "/api/location" && url.searchParams.get("location[directory]") === "/home/dev/boundary"
-      ? json({ directory: "/home/dev/boundary", project: { id: "proj_boundary", directory: "/home/dev/canonical" } })
-      : undefined,
+    respond: (url) => {
+      if (url.pathname !== "/api/location" || url.searchParams.get("location[directory]") !== "/home/dev/boundary") return undefined
+      lookups++
+      return json({ directory: "/home/dev/boundary", project: { id: "proj_boundary", directory: "/home/dev/canonical" } })
+    },
   })
   try {
     await openBoundaryCreation(view, false)
     view.screen.input.pressKey("c")
-    await until(view.screen, () => view.server.state.created === 1, "canonical Master creation")
-    expect(view.server.state.sessions.ses_new00000001?.directory).toBe("/home/dev/canonical")
+    await until(view.screen, () => view.server.state.created === 1, "exact Master creation")
+    expect(view.server.state.sessions.ses_new00000001?.directory).toBe("/home/dev/boundary")
     expect(view.server.state.writes.find((write) => write.path === "/api/session")?.body).toEqual({
-      location: { directory: "/home/dev/canonical" },
+      location: { directory: "/home/dev/boundary" },
       title: "Boundary project",
     })
+    expect(lookups).toBe(0)
   } finally {
     await view.screen.dispose()
   }

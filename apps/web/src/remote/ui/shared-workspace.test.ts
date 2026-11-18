@@ -517,6 +517,15 @@ test("an existing-Session project submits the chosen Master Session and members 
   expect(created).toEqual([{ name: "Release", masterSessionID: "s1", memberSessionIDs: ["s3"] }])
 })
 
+test("a typed absolute or home folder is trimmed and submitted unchanged without browsing", () => {
+  const created: SharedProjectDirectoryInput[] = []
+  const form = createSharedProjectForm({ name: "Release", onCreateProjectInDirectory: (input: SharedProjectDirectoryInput) => created.push(input), onBrowseFolder: () => {} })
+  form.setSource("directory")
+  for (const typed of ["  ~/work/new  ", "~", "/work/app"]) { form.setDirectory(typed); form.submit() }
+  expect(created.map((input) => input.directory)).toEqual(["~/work/new", "~", "/work/app"])
+  expect(form.error()).toBeUndefined()
+})
+
 test("a new-folder project browses for a folder and submits the directory, title and members", () => {
   const created: SharedProjectDirectoryInput[] = []
   const browsed: string[] = []
@@ -531,7 +540,7 @@ test("a new-folder project browses for a folder and submits the directory, title
   expect(form.directory()).toBe("/work/new-folder")
   const html = renderToString(() => createComponent(SharedProjectsSurface, { ...projectBase, ...options, directories: [{ directory: "/work/app", name: "app" }], form }))
   expect(html).toMatch(/aria-checked="true"[^>]*>[\s\S]*?<span>New Session in folder<\/span>/)
-  expect(html).toMatch(/<input[^>]*aria-label="Project folder path"[^>]*placeholder="\/path\/to\/folder"[^>]*value="\/work\/new-folder"/)
+  expect(html).toMatch(/<input[^>]*aria-label="Project folder path"[^>]*placeholder="\/path\/to\/folder or ~\/folder"[^>]*value="\/work\/new-folder"/)
   expect(html).toMatch(/<svg[^>]*><path d="M3 5\.5h6l2 2h10v11H3z"><\/path><path d="M12 10\.5v5"[\s\S]*?<\/svg> Browse \/ New folder…<\/button>/)
   expect(html).toContain('placeholder="Defaults to project name"')
   expect(html).toContain(">app</button>")

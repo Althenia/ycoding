@@ -13,7 +13,9 @@ import { Effect, Schema } from "effect"
 import { Agent } from "../agent"
 import { Config } from "../config"
 import { ConfigCapabilities } from "../config/capabilities"
+import { LocationMutation } from "../location-mutation"
 import { Permission } from "../permission"
+import { SessionGuardrail } from "../session/guardrail"
 import { CoordinationRuntime } from "../session/coordination-runtime"
 import { AbsolutePath } from "../schema"
 import { CoordinationAccess } from "../session/coordination-access"
@@ -69,6 +71,11 @@ export const Input = Schema.Union([
   Schema.Struct({ action: Schema.Literal("remove"), ...target }),
   Schema.Struct({
     action: Schema.Literal("create"),
+    directory: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
+    ...creation,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("create"),
     name: WorktreeTool.Name,
     repository: AbsolutePath.check(Schema.isMinLength(1), Schema.isMaxLength(4096)).pipe(Schema.optional),
     ...creation,
@@ -100,8 +107,10 @@ export const description = [
   "assign: Master only. Give a member Session to a live subagent the Master launched (not cancelling, cancelled, failed, lost or archived); that supervisor owns it until released, and reassigning transfers it. Idle, a failed turn, or a settled turn never ends ownership.",
   "release: Master only. The Master ends ownership, with reason completed (work verified complete) or released. Removing the member from the Project or deleting the owner also ends it.",
   "remove: Master only. Detach a settled, verified-complete member whose delivery is integrated or finished: this ends its recorded ownership and its Project membership. It never deletes the Session and preserves the Session and Project histories; release only parks ownership and keeps the member attached.",
-  "create: Master only. Create a managed worktree named name on branch name under the same permission, guardrail and existing-name rules as the worktree tool, start a root member Session there under your session's permission ceiling plus your agent's effective deny rules (agent denies not covered by a later non-deny agent rule with the same action or \"*\" and the same resource or \"*\") with title (default name) and optional model, and add it to the Project; the member takes your effective permissions, guardrails and answers modes when it joins. An optional repository (absolute directory path inside a Git repository) creates the worktree for that repository instead of the current Location's, so a Master outside any repository can create members; the managed parent, permission, guardrail, existing-name and branch rules are the worktree tool's, and a path outside any Git repository fails naming the path. ownerSessionID is yourself or a live subagent you launched; omit it to leave routine state held and material items escalated to the Master. An optional prompt is sent as its first message after it joins; a refused prompt is returned without undoing the member. A failure after the worktree exists names the worktree and branch; nothing is removed.",
-  "create with projectID: create a root member at an existing repository Project's canonical directory without creating a worktree. projectID is a repository Project ID, not the coordination group's ID; do not combine it with name or repository. The same Master, owner, permission ceiling, model validation and enrollment rules apply. Its title defaults to the repository Project's name or canonical-directory basename. Both routes return the actual location, directory, saved model (null when unset) and enrollment receipt; branch is present only for a worktree. An enrollment failure preserves the created Session and reports enrollment.member false with its error. Retrying the same native invocation retains its creation identity.",
+  "create: Master only. Choose exactly one placement: directory for a chosen folder, projectID for an existing repository Project's canonical directory, or name with optional repository for an explicit managed worktree. Start a root member Session under your session's permission ceiling plus your agent's effective deny rules (agent denies not covered by a later non-deny agent rule with the same action or \"*\" and the same resource or \"*\") with title and optional model, and add it to the Project. The member takes your effective permissions, guardrails and answers modes when it joins. ownerSessionID is yourself or a live subagent you launched; omit it to leave routine state held and material items escalated to the Master. An optional prompt is sent after enrollment; refusal does not undo the member.",
+  "create with directory: use an absolute path, ~ or ~/path. The Session uses that folder, including a repository subdirectory or a non-Git folder. Missing directories are created subject to filesystem permission and guardrail checks. No branch or worktree is created. The title defaults to the directory's basename, or the full path if it has no basename. With projectID, use the repository Project ID, not the coordination group ID; for the global Project, pass directory instead. Its title defaults to the repository Project name or basename.",
+  "create with name: create a managed worktree named name on branch name under the worktree tool's rules. The title defaults to name. An optional repository (absolute directory path inside a Git repository) creates the worktree for that repository instead of the current Location's, so a Master outside any repository can create members; the managed parent, permission, guardrail, existing-name and branch rules are the worktree tool's, and a path outside any Git repository fails naming the path.",
+  "Every placement returns the actual location, directory, saved model (null when unset) and enrollment receipt. Only worktrees return a branch. An enrollment failure preserves the Session and reports enrollment.member false with its error. Retrying the same native invocation retains its creation identity. Failures do not delete created folders, worktrees or Sessions.",
   "model: read a member's saved model with sessionID. To replace it, supply both model and expectedModel, using the exact saved reference from the read, or null when unset. References contain providerID, id, optional profile and optional variant; omitted profile or variant clears that field rather than inheriting it. The native runtime validates the target and compares the expected selection at its safe boundary without interrupting or waking a turn; a conflict requires a fresh read, not a blind retry. This persistent selection is separate from send's per-turn override and returns the member's actual location, state and saved model.",
   "Member events (execution start, settled-step progress, turn settled with no background work left, failure, interruption, question, form, permission ask, guardrail review) go only to the member's live recorded owner as Project notifications. Unowned routine events remain held for the next owner; material requests and failures reach the Master as Project escalations, never as member notifications. Questions, forms, permission asks and guardrail reviews raised by a member's descendant Sessions are member events whose notifications carry requestSessionID. A member's completed notification is sent only when its turn settled with no background work left and the member has no pending input of any kind (steer, queue or compaction barrier). The notification does not read the member's goal state, open reviews, an active revert or pending rows of descendant Sessions; its behavior with an active goal has not been verified. A supervising or completed owner resumes only when the notification wakes its receiver (urgent, or the Project is active), no review is open on that owner and the owner Session has no active revert. A settled owner stays supervising without a parent completion while it owns attached members. Started and progress notices never wake their owner. Waiting and starting owners keep notifications pending until they run. Cancelling, cancelled, failed and lost owners never receive member notifications. An owner in one of those states, or archived, is released, routine state stays held and material items escalate to the Master. Attach delivers one compact held state and pending requests; paused Projects wake owners only for urgent items. Do not poll. Message text never settles a control.",
 ].join("\n")
@@ -113,6 +122,9 @@ export const Plugin = {
     const agents = yield* Agent.Service
     const config = yield* Config.Service
     const worktree = yield* WorktreeTool.creator
+    const mutation = yield* LocationMutation.Service
+    const permission = yield* Permission.Service
+    const guardrail = yield* SessionGuardrail.Service
     yield* ctx.tool.transform((draft) => draft.add(name, Tool.make({
       description,
       input: Input,
@@ -170,6 +182,19 @@ export const Plugin = {
           }
           return { action: "create" as const, ...(yield* runtime.create(caller, creation,
             "name" in input ? (worktreeName) => worktree(worktreeName, context, input.repository) : undefined,
+            "directory" in input ? (directory, mkdir) => Effect.gen(function* () {
+              const target = yield* mutation.resolve({ path: directory, kind: "directory" })
+              const source = { type: "tool" as const, messageID: context.messageID, callID: context.callID }
+              const metadata = { operation: "create_project_directory", operationDigest: Hash.json(input) }
+              if (target.externalDirectory !== undefined) yield* permission.assert({
+                ...LocationMutation.externalDirectoryPermission(target.externalDirectory),
+                sessionID: caller, agent: context.agent, source, metadata,
+              })
+              const reservation = yield* guardrail.assert({ source, sessionID: caller, action: "file_mutation", resources: [target.canonical], metadata })
+                .pipe(Effect.mapError(error => new ToolFailure({ message: SessionGuardrail.reviewMessage(error) ?? "Session guardrail rejected directory creation", error })))
+              yield* mkdir.pipe(Effect.ensuring(reservation.release))
+            }).pipe(Effect.mapError(error => error instanceof ToolFailure || error instanceof CoordinationRuntime.RefusedError
+              ? error : new ToolFailure({ message: error.message, error }))) : undefined,
           )) }
         }
         return { action: "interrupt" as const, ...(yield* runtime.interrupt(caller, input)) }

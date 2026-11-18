@@ -97,7 +97,7 @@ test("the Master owns members directly by default and adds a supervisor only for
     "launch a supervisor subagent only when coordinating more than three long-running parallel members",
     "The Project hierarchy is Master → recorded owner → executor",
     "Directly manage Sessions owned by the Master",
-    "use `create` with the chosen existing Project's `projectID` to start a member Session in its canonical directory",
+    "use `create` with `directory` for a chosen folder or with `projectID` for an existing repository Project's canonical directory",
     "for supervisor-owned Sessions, route everything through their recorded supervisor rather than relaying their routine events, and handle only their escalations and integration",
     "keep advancing independent work",
   ]) expect(CoordinationInstructions.content).toContain(instruction)
@@ -221,10 +221,10 @@ test("controller and executor guidance share one consolidated-verification pract
   }
 })
 
-test("the Master uses the existing canonical Project and creates a worktree only when explicitly requested", () => {
+test("the Master can place a member at a chosen path and creates a worktree only when explicitly requested", () => {
   for (const instruction of [
-    "Select the existing Project for the work, then pass its `projectID` to `project create`; use that Project's canonical directory, AGENTS.md, skills, commands and config.",
-    "Create a managed worktree with `repository` and `name` only when the user explicitly requests a worktree.",
+    "Use an absolute or home-relative path with `directory`, including for non-Git folders and repository subdirectories.",
+    "Use `name` with optional `repository` only for an explicitly requested managed worktree.",
     "Never create a project work Session under the Master Session as a child or descendant; member Sessions are standalone root Sessions, and only lightweight supervisor subagents live under the Master.",
   ]) once(CoordinationInstructions.content, instruction)
   expect(CoordinationInstructions.content).not.toContain("start a member Session in its own managed worktree")

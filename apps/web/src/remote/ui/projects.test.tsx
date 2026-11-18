@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
+import { QueryClient, QueryObserver } from "@tanstack/solid-query"
 import { renderToString } from "solid-js/web"
-import { ProjectPanel, type ProjectsData } from "./projects"
+import { ProjectPanel, projectDirectoryTarget, type ProjectsData } from "./projects"
 import type { ProjectDetail } from "../coordination"
 
 const project: ProjectDetail = {
@@ -12,11 +13,15 @@ const project: ProjectDetail = {
 }
 
 test("Project rows keep waiting requests and navigation visible while details mount on demand", () => {
+  const query = new QueryObserver<NonNullable<ReturnType<ProjectsData["query"]>["data"]>>(new QueryClient(), {
+    queryKey: ["project-panel"], enabled: false,
+    queryFn: async () => { throw new Error("Initial Project rows do not start queries") },
+  })
   const data: ProjectsData = {
     now: () => 1, notice: () => undefined, pending: () => false,
     freshness: () => ({ stale: false, text: "Updated just now" }),
     get remote(): never { throw new Error("Initial Project rows do not read the connection") },
-    get query(): never { throw new Error("Initial Project rows do not start queries") },
+    query: () => query.getCurrentResult(),
     connected: () => true,
     ready: () => undefined,
     groups: () => [],
@@ -48,4 +53,14 @@ test("closed Project context gives its entire column back to chat and wraps row 
   const css = await Bun.file(new URL("projects.css", import.meta.url)).text()
   expect(css).toMatch(/\.workspace\.workspace--project-closed\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/)
   expect(css).toMatch(/\.project-member strong[^}]*white-space:\s*normal/)
+})
+
+test("typed paths become directory targets and known choices keep their workspace", () => {
+  expect(projectDirectoryTarget("  /srv/new app ", "")).toEqual({ target: { directory: "/srv/new app" } })
+  expect(projectDirectoryTarget("~", "")).toEqual({ target: { directory: "~" } })
+  expect(projectDirectoryTarget("~/code/x", "")).toEqual({ target: { directory: "~/code/x" } })
+  expect(projectDirectoryTarget("/known", "wsp_known")).toEqual({ target: { workspace: "wsp_known" } })
+  expect(projectDirectoryTarget("", "")).toEqual({ error: "Choose a directory" })
+  expect(projectDirectoryTarget("relative/dir", "")).toEqual({ error: "Enter an absolute path, or one starting with ~ or ~/" })
+  expect(projectDirectoryTarget("~other/x", "")).toEqual({ error: "Enter an absolute path, or one starting with ~ or ~/" })
 })

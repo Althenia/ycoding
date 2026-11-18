@@ -118,6 +118,7 @@ export type LocalServer = {
   readonly projectList: () => Promise<readonly Project[]>
   readonly projectDirectories: (projectID: string) => Promise<readonly ProjectDirectory[]>
   readonly projectCurrent: (location: LocalLocation) => Promise<{ readonly id: string; readonly directory: string }>
+  readonly locationGet: (location: LocalLocation) => Promise<{ readonly directory: string; readonly workspaceID?: string; readonly project: { readonly id: string; readonly directory: string } }>
   readonly createSession: (id: string, location: LocalLocation, agent?: string, model?: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string }, title?: string) => Promise<SessionInfo>
   readonly getSession: (sessionID: string, location: LocalLocation, signal?: AbortSignal) => Promise<SessionInfo>
   /** Process-wide running status; the caller filters it to the current inventory. */
@@ -278,6 +279,7 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
         await requireDirectory(location)
         return client.project.current({}, request(location, timeoutMs))
       }),
+    locationGet: (location) => call(() => client.location.get({}, request(location, timeoutMs))),
     createSession: (id, location, agent, model, title) =>
       call(() =>
         client.session.create(

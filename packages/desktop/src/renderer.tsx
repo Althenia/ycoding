@@ -17,7 +17,7 @@ import { KEYBOARD_ACTIONS, desktopShortcut, keyboardBindings, parseKeyboardOverr
 import { KeyboardSettings } from "./keyboard-settings"
 import { COMPANION_DOCKED_QUERY, DEFAULT_PRESENTATION, PRESENTATION_STORAGE_KEY, parsePresentationSettings, startupCompanionOpen, toolDisclosures, withCompanion, withThinking, withToolGrouping, type PresentationSettings } from "./presentation-settings"
 import { acceptsHistoryEvent, reconcileSessionHistory } from "./session-history"
-import { DesktopProjectMembers, DesktopProjectRoster } from "./project-members"
+import { DesktopProjectMembers, DesktopProjectRoster, newDirectoryProjectConfirmation } from "./project-members"
 import { DesktopProjectsSurface } from "./projects-surface"
 import { DesktopStateIndicator } from "./state-indicator"
 import { TerminalInspector } from "./terminal-inspector"
@@ -3420,7 +3420,7 @@ function Destination(props: { name: "Projects" | "Sessions" | "Workspaces" | "Us
         directories={workspaces.result().data ?? []}
         onBrowseFolder={(curr, choose) => openFolderPicker({ title: "Choose folder for new Master Session", mode: "directory", initialDirectory: curr || undefined, onPick: choose })}
         onCreateProject={(input) => performProject({ kind: "create", revision: data().revision, name: input.name, masterSessionID: input.masterSessionID, memberSessionIDs: input.memberSessionIDs }, `Create project ${input.name} with ${input.masterSessionID} as its master Session?`)}
-        onCreateProjectInDirectory={(input) => performProject({ kind: "create-in-directory", revision: data().revision, name: input.name, directory: input.directory, ...(input.masterTitle ? { masterTitle: input.masterTitle } : {}), memberSessionIDs: input.memberSessionIDs }, `Create project ${input.name} with a new Master Session in ${input.directory}?`)}
+        onCreateProjectInDirectory={(input) => performProject({ kind: "create-in-directory", revision: data().revision, name: input.name, directory: input.directory, ...(input.masterTitle ? { masterTitle: input.masterTitle } : {}), memberSessionIDs: input.memberSessionIDs }, newDirectoryProjectConfirmation(input.name, input.directory))}
         projects={data().groups.map((group) => ({ id: group.id, name: group.name, masterTitle: group.master.title, active: group.active, statusText: group.active ? "Active" : "Paused", revision: group.revision, master: group.master, members: group.members, delegatedText: group.settings.delegatedDecisions ? [group.settings.delegatedDecisions.categories.join(", "), ...(group.settings.delegatedDecisions.actions?.length ? [`actions: ${group.settings.delegatedDecisions.actions.join(", ")}`] : []), ...(group.settings.delegatedDecisions.resources?.length ? [`resources: ${group.settings.delegatedDecisions.resources.join(", ")}`] : []), ...(group.settings.delegatedDecisions.expiresAt ? [`expires ${new Date(group.settings.delegatedDecisions.expiresAt).toLocaleString()}`] : [])].join(" · ") : "None reported", concurrency: group.settings.concurrency == null ? "none" : String(group.settings.concurrency), openNote: "Open the master Session" }))}
         selectedID={selectedGroup()?.id} refreshing={projects.result().isFetching} busy={actionBusy() || actionUncertain()} notice={surfaceNotices.projects(data())}
         creating={creating()} name={projectName()} candidates={sessionRows().map((row) => ({ id: row.id, title: row.title, selected: members().includes(row.id) }))}

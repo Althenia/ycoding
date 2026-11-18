@@ -376,6 +376,7 @@ test("Project members are created and deleted against the current coordination r
   const owned = await syntheticDesktop((call) => {
     if (call.route === "/api/coordination/cgrp_team" && call.method === "GET") return { data: group }
     if (call.route === "/api/coordination/cgrp_team" && call.method === "PATCH") return failUpdate ? new Response(JSON.stringify({ message: hidden }), { status: 409 }) : { data: { ...group, revision: 6 } }
+    if (call.route === "/api/location") return { directory: call.query.get("location[directory]"), project: { id: "prj_test" } }
     if (call.route === "/api/session" && call.method === "POST") return { data: info("ses_new", { location: { directory: owned.resources } }) }
     return undefined
   })
