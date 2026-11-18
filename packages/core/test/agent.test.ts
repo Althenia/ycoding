@@ -359,6 +359,42 @@ describe("Agent", () => {
     }),
   )
 
+  it.effect("keeps primary and child agents working through recoverable obstacles within their authority", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
+        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
+      )
+
+      for (const id of ["GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein", "zeus"]) {
+        const item = yield* agent.get(Agent.ID.make(id))
+        if (!item?.system) throw new Error(`expected ${id} with a system prompt`)
+        const shared = item.system.slice(0, item.system.indexOf("You are "))
+        for (const rule of [
+          "Use live evidence and permitted tools to settle routine choices and recover from errors, conflicts and failing checks within your authority.",
+          "Do not add approval gates or wait for status nudges to continue authorized work.",
+          "Keep independent authorized work moving while a dependency or approval is pending.",
+          "After reasonable recovery, report the blocked action and target, what you checked and found, and the decision or input needed.",
+          "Honor explicit user pauses and cancellations.",
+          "Respect enforced permissions, denies, ceilings, guardrails and hard reviews.",
+          "Use native controls for required approvals and human decisions; never bypass a refusal or treat silence as consent.",
+          "Protect secrets and stay within authorized side effects.",
+        ]) expect(shared.split(rule)).toHaveLength(2)
+
+        const primary = item.mode === "primary"
+        const recovery = primary
+          ? "Work with the assigned owner to resolve recoverable conflicts and failing checks before escalating."
+          : "Resolve recoverable conflicts and failing checks in your scope before escalating."
+        const escalation = primary
+          ? "Escalate only overlapping file conflicts or failing checks, preserving native approval gates."
+          : "escalate overlapping file conflicts or failing checks to the parent."
+        const controls = item.system.slice(item.system.indexOf(primary ? "Main-session controls:" : "Subagent controls:"))
+        expect(controls.split(recovery)).toHaveLength(2)
+        expect(controls.indexOf(recovery)).toBeLessThan(controls.indexOf(escalation))
+      }
+    }),
+  )
+
   it.effect("keeps goals and delegated autonomy inside user constraints for controllers, children and the goal helper", () =>
     Effect.gen(function* () {
       const agent = yield* Agent.Service

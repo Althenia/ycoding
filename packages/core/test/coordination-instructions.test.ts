@@ -72,6 +72,28 @@ test("coordination and executor policies keep evidence in messages and bound ver
   }
 })
 
+test("Project owners and executors recover within their roles before escalating unresolved work", async () => {
+  for (const role of ["master", "supervisor", "executor"] as const) {
+    const value = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value)
+    for (const rule of [
+      "Use live evidence and permitted tools to settle routine choices within your authority.",
+      "Keep independent authorized work moving while an affected lane waits.",
+      "Report a blocker only after reasonable recovery, naming the blocked action and target, verified evidence, and the decision or input needed.",
+      "Honor explicit pauses and cancellations.",
+      "Preserve model, provider, profile, tool, toolchain and filesystem limits, protect secrets, and stay within authorized side effects.",
+      "Honor permission rules, denies, ceilings, guardrails and hard reviews.",
+      "Use native controls for required approvals and human decisions; never bypass a refusal or treat silence as consent.",
+      "Never replay an uncertain action.",
+    ]) once(value, rule)
+
+    const recovery = role === "executor"
+      ? "Resolve recoverable conflicts and failing checks before escalating. Drive the assignment to verified completion without waiting for status nudges or extra approvals."
+      : "Have member owners resolve recoverable conflicts and failing checks before escalating. Drive assignments to verified completion without status nudges or extra approvals."
+    once(value, recovery)
+    expect(value.indexOf(recovery)).toBeLessThan(value.indexOf("and escalate overlapping file conflicts or failing checks."))
+  }
+})
+
 test("controllers start ready work immediately and hold no member on ceremony, handoffs, slots or resource limitations", () => {
   for (const instruction of [
     "Start ready work immediately as soon as its inputs are final, without slots, handoffs, ceremony, or resource-limitation waits.",
