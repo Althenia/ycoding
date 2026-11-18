@@ -1753,7 +1753,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 51)).toEqual([
+    expect(versions.slice(0, 52)).toEqual([
+      "0.11.9",
       "0.11.8",
       "0.11.7",
       "0.11.6",
