@@ -66,14 +66,15 @@ const valid = {
   assign: { action: "assign", sessionID: "ses_member", ownerSessionID: "ses_owner" },
   release: { action: "release", sessionID: "ses_member", reason: "completed" },
   remove: { action: "remove", sessionID: "ses_member" },
+  attach: { action: "attach", sessionID: "ses_member" },
   create: { action: "create", name: "lane-one" },
   model: { action: "model", sessionID: "ses_member" },
 } as const
 
-test("project exposes only list, inspect, send, answer, escalate, interrupt, assign, release, remove, create and model without caller or group overrides", () => {
+test("project exposes only list, inspect, send, answer, escalate, interrupt, assign, release, remove, attach, create and model without caller or group overrides", () => {
   expect(CoordinationTool.name).toBe("project")
   for (const payload of Object.values(valid)) expect(decode(payload)).toEqual(payload as never)
-  expect(Object.keys(valid)).toEqual(["list", "inspect", "send", "answer", "escalate", "interrupt", "assign", "release", "remove", "create", "model"])
+  expect(Object.keys(valid)).toEqual(["list", "inspect", "send", "answer", "escalate", "interrupt", "assign", "release", "remove", "attach", "create", "model"])
   const complete = { sessionID: "ses_member", requestID: "per_one", ownerSessionID: "ses_owner", reason: "completed", text: "Inspect", kind: "permission", fingerprint: "fp", rationale: "In scope" }
   for (const action of ["update", "delete", "get", "arm", "stop", "complete", "claim", "dispatch", "receipts", "wait", "cancelWait", "capacity", "decide", "transfer", "unassign"])
     expect(() => decode({ action, ...complete })).toThrow()
@@ -86,6 +87,14 @@ test("remove names one member Session and nothing else", () => {
   for (const invalid of [{ sessionID: "msg_member" }, { sessionID: "" }, { reason: "released" }, { ownerSessionID: "ses_owner" }, { groupID: "cgrp_other" }, { caller: "ses_other" }])
     expect(() => decode({ ...valid.remove, ...invalid })).toThrow()
   expect(() => decode({ action: "remove" })).toThrow()
+})
+
+test("attach names one Session with an optional owner and nothing else", () => {
+  expect(decode({ ...valid.attach, ownerSessionID: "ses_owner" })).toEqual({ ...valid.attach, ownerSessionID: "ses_owner" } as never)
+  for (const invalid of [{ sessionID: "msg_member" }, { sessionID: "" }, { ownerSessionID: "msg_owner" }, { directory: "/elsewhere" }, { reason: "released" }, { groupID: "cgrp_other" }, { caller: "ses_other" }])
+    expect(() => decode({ ...valid.attach, ...invalid })).toThrow()
+  expect(() => decode({ action: "attach" })).toThrow()
+  expect(() => decode({ action: "attach", ownerSessionID: "ses_owner" })).toThrow()
 })
 
 test("inspect reads one pending request by native identity and nothing else", () => {
@@ -168,6 +177,8 @@ test("the tool description names the supervision chain", () => {
     "create: Master only.",
     "An optional repository (absolute directory path inside a Git repository) creates the worktree for that repository instead of the current Location's, so a Master outside any repository can create members; the managed parent, permission, guardrail, existing-name and branch rules are the worktree tool's, and a path outside any Git repository fails naming the path.",
     "release: Master only. The Master",
+    "attach: Master only. Add an existing root Session at any recorded directory to the Project by sessionID, owned by you or by ownerSessionID, a live subagent you launched.",
+    "Attaching the same Session with the same owner again returns reconciled true and changes nothing; a different owner is refused, so use assign to change it.",
     "remove: Master only. Detach a settled, verified-complete member whose delivery is integrated or finished: this ends its recorded ownership and its Project membership. It never deletes the Session and preserves the Session and Project histories; release only parks ownership and keeps the member attached.",
     "go only to the member's live recorded owner as Project notifications. Unowned routine events remain held for the next owner; material requests and failures reach the Master as Project escalations, never as member notifications.",
     "A member's completed notification is sent only when its turn settled with no background work left and the member has no pending input of any kind (steer, queue or compaction barrier).",
@@ -284,7 +295,7 @@ const plugins = makeLocationNode({
 })
 const project = { id: Project.ID.make("project-tool-test"), directory: source }
 const model = Model.Ref.make({ providerID: Provider.ID.make("test"), id: Model.ID.make("model") })
-const integrationAt = (active: Location.Interface, replacement = runtimeNode) => testEffect(AppNodeBuilder.build(
+const integrationAt = (active: Location.Interface, replacement = runtimeNode, mockedPermission = true) => testEffect(AppNodeBuilder.build(
   LayerNode.group([
     ToolRegistry.node, ToolRegistry.toolsNode, plugins, ProjectCopy.node, Database.node, EventRuntime.node, ProjectDirectories.node, Git.node, FSUtil.node,
     LayerNodePlatform.filesystem, LayerNodePlatform.path, SessionProjector.node, Session.node, SessionExecution.node, SessionOrchestration.node,
@@ -293,7 +304,7 @@ const integrationAt = (active: Location.Interface, replacement = runtimeNode) =>
   [
     [Location.node, Layer.succeed(Location.Service, Location.Service.of(active))],
     [Global.node, Global.layerWith({ data })],
-    [Permission.node, permission],
+    ...(mockedPermission ? [[Permission.node, permission] as const] : []),
     [SessionGuardrail.node, guardrail],
     [Agent.node, agents],
     [Config.node, config],
@@ -304,6 +315,7 @@ const integrationAt = (active: Location.Interface, replacement = runtimeNode) =>
   ],
 ))
 const integration = integrationAt({ directory: source, project })
+const enforced = integrationAt({ directory: source, project }, runtimeNode, false)
 const detached = integrationAt({ directory: AbsolutePath.make(data), project: { id: Project.ID.make("project-tool-detached"), directory: AbsolutePath.make(data) } })
 
 const boundaryCalls: Array<{ method: string; caller: SessionSchema.ID; input?: unknown; worktree?: boolean }> = []
@@ -354,6 +366,10 @@ const boundaryRuntime = {
   remove: (caller: SessionSchema.ID, input: { sessionID: SessionSchema.ID }) => Effect.sync(() => {
     boundaryCalls.push({ method: "remove", caller, input })
     return { sessionID: input.sessionID, removed: true as const }
+  }),
+  attach: (caller: SessionSchema.ID, input: Coordination.AttachInput) => Effect.sync(() => {
+    boundaryCalls.push({ method: "attach", caller, input })
+    return { groupID: boundaryGroup, sessionID: input.sessionID, location: { directory: source }, ownerSessionID: input.ownerSessionID ?? SessionSchema.ID.make("ses_boundary_master"), reconciled: false }
   }),
   member: (caller: SessionSchema.ID, input: { sessionID: SessionSchema.ID }) => Effect.sync(() => {
     boundaryCalls.push({ method: "member", caller, input })
@@ -441,6 +457,70 @@ const projectSetup = Effect.gen(function* () {
   return { sessions, events, coordination, git, database, master, group, call, parsed, managed, count, exists }
 })
 
+const attachOutside = path.join(data, "attach-outside")
+const attachElsewhere = path.join(data, "attach-elsewhere")
+await fs.mkdir(attachOutside)
+await fs.mkdir(attachElsewhere)
+
+describe("project attach authorizes the recorded Location", () => {
+  const deny = (action: string, resource = "*") => ({ action, resource, effect: "deny" as const })
+  const allow = (action: string, resource = "*") => ({ action, resource, effect: "allow" as const })
+  const rootAt = (fixture: Effect.Success<typeof projectSetup>, directory: string, title: string) =>
+    fixture.sessions.create({ location: { directory: AbsolutePath.make(directory) }, title, model })
+  const members = (fixture: Effect.Success<typeof projectSetup>) => fixture.coordination.get(fixture.group.id).pipe(Effect.map((group) => group.memberSessionIDs))
+  const receipt = (fixture: Effect.Success<typeof projectSetup>, sessionID: SessionSchema.ID, directory: string) =>
+    ({ type: "text" as const, value: JSON.stringify({ action: "attach", groupID: fixture.group.id, sessionID, location: { directory }, ownerSessionID: fixture.master.id, reconciled: false }) })
+
+  integration.live("an outside recorded directory asks external_directory approval for that exact directory and enrolls without creating anything", () =>
+    Effect.gen(function* () {
+      const fixture = yield* projectSetup
+      const away = yield* rootAt(fixture, attachOutside, "Outside root")
+      const files = yield* Effect.promise(() => fs.readdir(attachOutside))
+      expect(yield* fixture.call("attach-outside", "project", { action: "attach", sessionID: away.id })).toEqual(receipt(fixture, away.id, attachOutside))
+      expect(audit).toEqual({ permissions: [`external_directory ${attachOutside}/*`], guardrails: [] })
+      expect(yield* members(fixture)).toContain(away.id)
+      expect(yield* Effect.promise(() => fs.readdir(attachOutside))).toEqual(files)
+      expect((yield* fixture.sessions.get(away.id)).location).toEqual({ directory: AbsolutePath.make(attachOutside) })
+    }), 60_000)
+
+  integration.live("a recorded directory inside the Master's Location needs no external approval", () =>
+    Effect.gen(function* () {
+      const fixture = yield* projectSetup
+      const inside = yield* rootAt(fixture, source, "Inside root")
+      expect(yield* fixture.call("attach-inside", "project", { action: "attach", sessionID: inside.id })).toEqual(receipt(fixture, inside.id, source))
+      expect(audit).toEqual({ permissions: [], guardrails: [] })
+    }), 60_000)
+
+  enforced.live("agent denies and the Master's permission ceiling refuse an outside recorded directory before enrollment", () =>
+    Effect.gen(function* () {
+      const fixture = yield* projectSetup
+      const away = yield* rootAt(fixture, attachOutside, "Denied root")
+      const before = yield* fixture.sessions.get(away.id)
+      masterAgent.permissions = [deny("external_directory")]
+      expect((yield* fixture.call("attach-agent-deny", "project", { action: "attach", sessionID: away.id })).type).toBe("error")
+      expect(yield* members(fixture)).not.toContain(away.id)
+      masterAgent.permissions = [allow("external_directory")]
+      yield* fixture.database.db.update(SessionTable).set({ permission: [deny("external_directory", `${attachOutside}/*`)] }).where(eq(SessionTable.id, fixture.master.id)).run().pipe(Effect.orDie)
+      expect((yield* fixture.call("attach-ceiling-deny", "project", { action: "attach", sessionID: away.id })).type).toBe("error")
+      expect(yield* members(fixture)).not.toContain(away.id)
+      expect(yield* fixture.sessions.get(away.id)).toEqual(before)
+      expect(yield* fixture.coordination.memberOf(away.id)).toBeUndefined()
+    }), 60_000)
+
+  enforced.live("only the exact allowed external directory is enrolled", () =>
+    Effect.gen(function* () {
+      const fixture = yield* projectSetup
+      const allowed = yield* rootAt(fixture, attachOutside, "Allowed root")
+      const other = yield* rootAt(fixture, attachElsewhere, "Other root")
+      masterAgent.permissions = [deny("external_directory"), allow("external_directory", `${attachOutside}/*`)]
+      expect(yield* fixture.call("attach-exact", "project", { action: "attach", sessionID: allowed.id })).toEqual(receipt(fixture, allowed.id, attachOutside))
+      expect((yield* fixture.call("attach-other", "project", { action: "attach", sessionID: other.id })).type).toBe("error")
+      const roster = yield* members(fixture)
+      expect(roster).toContain(allowed.id)
+      expect(roster).not.toContain(other.id)
+    }), 60_000)
+})
+
 describe("project tool through the tool registry", () => {
   afterAll(async () => {
     await repository[Symbol.asyncDispose]()
@@ -460,15 +540,18 @@ describe("project tool through the tool registry", () => {
         { action: "assign", sessionID: boundaryMember.sessionID, ownerSessionID: "ses_owner" },
         { action: "release", sessionID: boundaryMember.sessionID, reason: "released" },
         { action: "remove", sessionID: boundaryMember.sessionID },
+        { action: "attach", sessionID: boundaryMember.sessionID, ownerSessionID: "ses_owner" },
       ]
       for (const input of inputs) {
         const result = yield* fixture.call(`boundary-${input.action}`, "project", input)
         expect(result.type).toBe("text")
         if (input.action === "remove") expect(result).toEqual({ type: "text", value: JSON.stringify({ action: "remove", sessionID: boundaryMember.sessionID, removed: true }) })
+        if (input.action === "attach") expect(result).toEqual({ type: "text", value: JSON.stringify({ action: "attach", groupID: boundaryGroup, sessionID: boundaryMember.sessionID, location: { directory: source }, ownerSessionID: "ses_owner", reconciled: false }) })
       }
-      expect(boundaryCalls.map((call) => call.method)).toEqual(["roster", "inspect", "send", "answer", "escalate", "interrupt", "assign", "release", "remove"])
+      expect(boundaryCalls.map((call) => call.method)).toEqual(["roster", "inspect", "send", "answer", "escalate", "interrupt", "assign", "release", "remove", "attach"])
       for (const call of boundaryCalls) expect(call.caller).toBe(fixture.master.id)
       expect(boundaryCalls.find((call) => call.method === "remove")?.input).toEqual({ sessionID: boundaryMember.sessionID })
+      expect(boundaryCalls.find((call) => call.method === "attach")?.input).toEqual({ sessionID: boundaryMember.sessionID, ownerSessionID: "ses_owner" })
       for (const input of inputs.slice(1)) {
         const call = boundaryCalls.find((item) => item.method === input.action)
         expect(call?.input).toMatchObject(Object.fromEntries(Object.entries(input).filter(([key]) => key !== "action")))
@@ -781,5 +864,42 @@ describe("project tool through the tool registry", () => {
       expect(yield* fixture.count()).toBe(before)
       expect(audit).toEqual({ permissions: [], guardrails: [] })
       expect((yield* fixture.coordination.get(fixture.group.id)).memberSessionIDs).toEqual([])
+    }), 60_000)
+
+  detached.live("a Master outside every Git worktree creates, lists, attaches and removes non-Git members through the native tool", () =>
+    Effect.gen(function* () {
+      const fixture = yield* projectSetup
+      const outsideGit = (directory: string) => Effect.promise(() => $`git -C ${directory} rev-parse --is-inside-work-tree`.nothrow().quiet().then((result) => result.exitCode))
+      const created = path.join(data, "non-git created member")
+      const attachedDirectory = path.join(data, "non-git attached root")
+      yield* Effect.promise(() => fs.mkdir(attachedDirectory))
+      for (const directory of [data, attachedDirectory]) expect(yield* outsideGit(directory)).not.toBe(0)
+      const member = fixture.parsed(yield* fixture.call("non-git-create", "project", { action: "create", directory: created, model }))
+      expect(member.directory).toBe(created)
+      expect(member.branch).toBeUndefined()
+      expect((yield* fixture.sessions.get(member.sessionID)).location).toEqual({ directory: AbsolutePath.make(created) })
+      const attached = yield* fixture.sessions.create({ location: { directory: AbsolutePath.make(attachedDirectory) }, title: "Independent non-Git root", model })
+      const independent = SessionMessage.ID.create()
+      yield* fixture.events.publish(SessionEvent.InputAdmitted, { sessionID: attached.id, inputID: independent,
+        input: { type: "user", delivery: "queue", data: { text: "Independent history", metadata: { inputOrigin: "direct" } } } })
+      const history = yield* fixture.events.sequences([attached.id])
+      expect(yield* fixture.call("non-git-attach", "project", { action: "attach", sessionID: attached.id })).toEqual({ type: "text", value: JSON.stringify({
+        action: "attach", groupID: fixture.group.id, sessionID: attached.id, location: { directory: attachedDirectory }, ownerSessionID: fixture.master.id, reconciled: false,
+      }) })
+      const listed = yield* fixture.call("non-git-list", "project", { action: "list" })
+      expect(listed.type).toBe("text")
+      const roster = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ members: Schema.Array(Schema.Struct({ sessionID: Schema.String, location: Schema.Struct({ directory: Schema.String }) })) })))(listed.value)
+      expect(roster.members.map((item) => [item.sessionID, item.location.directory])).toEqual(expect.arrayContaining([[member.sessionID, created], [attached.id, attachedDirectory]]))
+      yield* fixture.events.publish(SessionEvent.InputPromoted, { sessionID: attached.id, inputID: independent })
+      expect(yield* fixture.call("non-git-remove", "project", { action: "remove", sessionID: attached.id })).toEqual({ type: "text", value: JSON.stringify({ action: "remove", sessionID: attached.id, removed: true }) })
+      expect((yield* fixture.coordination.get(fixture.group.id)).memberSessionIDs).toEqual([member.sessionID])
+      expect((yield* fixture.sessions.get(attached.id)).location).toEqual({ directory: AbsolutePath.make(attachedDirectory) })
+      expect(Number((yield* fixture.events.sequences([attached.id])).get(attached.id))).toBeGreaterThanOrEqual(Number(history.get(attached.id)))
+      expect(audit.permissions).toEqual([])
+      expect(audit.guardrails).toEqual([`file_mutation create_project_directory ${created}`])
+      for (const directory of [created, attachedDirectory]) {
+        expect(yield* outsideGit(directory)).not.toBe(0)
+        expect(yield* Effect.promise(() => fs.readdir(directory))).not.toContain(".git")
+      }
     }), 60_000)
 })

@@ -1,6 +1,7 @@
 import { createMemo, createSignal, For, Show, type JSX } from "solid-js"
 import { SharedRadioGroup } from "../../../apps/web/src/remote/ui/shared-workspace"
 import { Icon } from "../../../apps/web/src/ui/icon"
+import { isSessionDirectoryPath } from "../../remote/src/session-directory"
 import { DesktopStateIndicator } from "./state-indicator"
 import type { ProjectMutationInput, ProjectsSnapshot, SessionItem } from "./contract"
 import { formatCount } from "./form-rules"
@@ -24,23 +25,22 @@ export function memberChange(state: MemberState, action: MemberAction): { readon
   if (state.disabled) return undefined
   const { group, revision } = state
   const identity = { revision, groupID: group.id, groupRevision: group.revision }
-  const members = group.members.map((member) => member.sessionID)
   if (action.kind === "new") {
     const directory = action.directory.trim()
     if (!directory) return { error: "Choose a folder for the new member Session." }
-    if (!directory.startsWith("/") && directory !== "~" && !directory.startsWith("~/")) return { error: "Enter an absolute folder path or one starting with ~/." }
+    if (!isSessionDirectoryPath(directory)) return { error: "Enter an absolute folder path on the backend machine (such as /srv/app, C:\\Work or \\\\server\\share\\dir), or one starting with ~." }
     const title = action.title.trim()
     return { input: { kind: "new-member", ...identity, directory, ...(title ? { title } : {}) }, confirmation: `Create a new Session${title ? ` titled “${title}”` : ""} in ${directory} and add it as a member of project “${group.name}”? A missing folder is created.` }
   }
   if (action.kind === "add") {
     const candidate = memberCandidates(group, state.sessions).find((item) => item.id === action.sessionID)
     if (!candidate) return { error: "Choose a loaded Session that is not already in the project." }
-    return { input: { kind: "update", ...identity, memberSessionIDs: [...members, candidate.id] }, confirmation: `Add “${candidate.title}” as a member of project “${group.name}”?` }
+    return { input: { kind: "attach-member", revision, groupID: group.id, sessionID: candidate.id }, confirmation: `Attach “${candidate.title}” as a member of project “${group.name}”? The Session keeps running and keeps its history; it is not restarted.` }
   }
   if (action.sessionID === group.master.sessionID) return { error: "The master Session cannot be removed or deleted here. Change the master in project settings first." }
   const member = group.members.find((item) => item.sessionID === action.sessionID)
   if (!member) return { error: "This Session is no longer a member of the project. Refresh projects." }
-  if (action.kind === "remove") return { input: { kind: "update", ...identity, memberSessionIDs: members.filter((id) => id !== member.sessionID) }, confirmation: `Remove “${member.title}” from project “${group.name}”? The Session and its stored data stay available in Sessions.` }
+  if (action.kind === "remove") return { input: { kind: "detach-member", revision, groupID: group.id, sessionID: member.sessionID }, confirmation: `Remove “${member.title}” from project “${group.name}”? The Session and its stored data stay available in Sessions.` }
   return { input: { kind: "delete-member", ...identity, sessionID: member.sessionID }, confirmation: `Delete member Session “${member.title}”? This permanently deletes its stored Session data, including its transcript, and removes it from project “${group.name}”.` }
 }
 
@@ -87,13 +87,14 @@ export function DesktopProjectMembers(props: { readonly group: Group; readonly r
   }
   return <section class="st-section desktop-project-workflows" aria-label={`Member workflows for ${props.group.name}`}>
     <h3>Add an existing Session</h3>
-    <p class="st-muted">{formatCount(candidates().length)} eligible of {formatCount(props.sessions.length)} Sessions loaded in the rail. Load more Sessions in the rail to add others.</p>
+    <p class="st-muted">Attach a running root Session from any directory without restarting it. {formatCount(candidates().length)} eligible of {formatCount(props.sessions.length)} Sessions loaded in the rail. Load more Sessions in the rail to add others.</p>
     <Show when={candidates().length} fallback={<p class="st-muted">No loaded Session can be added.</p>}>
       <SharedRadioGroup label="Session to add" value={selected()} disabled={props.disabled} options={candidates().map((item) => ({ value: item.id, label: item.title }))} onChange={(value) => stage({ selected: value, error: undefined })} />
     </Show>
     <button type="button" class="rl-btn" data-action-id="project-member-add" disabled={props.disabled || !selected()} onClick={() => run({ kind: "add", sessionID: selected() })}>Add member</button>
     <h3>New member Session</h3>
     <div class="ws-row"><label class="rl-field"><span>Folder path</span><input aria-label="Member folder path" placeholder="/path/to/folder or ~/folder" value={directory()} disabled={props.disabled} onInput={(event) => stage({ directory: event.currentTarget.value, error: undefined })} /></label><button type="button" class="rl-btn" data-action-id="project-member-browse" disabled={props.disabled} onClick={browse}>Choose folder…</button></div>
+    <p class="st-muted">Any folder works, Git repository or not. The Session uses the exact path.</p>
     <label class="rl-field"><span>Session title (optional)</span><input value={title()} disabled={props.disabled} onInput={(event) => stage({ title: event.currentTarget.value })} /></label>
     <button type="button" class="rl-btn" data-tone="go" data-action-id="project-member-new" disabled={props.disabled || !directory().trim()} onClick={() => run({ kind: "new", directory: directory(), title: title() })}>Create member Session</button>
     <Show when={error()}><p role="alert" data-tone="bad">{error()}</p></Show>

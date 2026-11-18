@@ -69,6 +69,7 @@ export const Input = Schema.Union([
   Schema.Struct({ action: Schema.Literal("assign"), ...target, ownerSessionID: Session.ID }),
   Schema.Struct({ action: Schema.Literal("release"), ...target, reason: Coordination.ReleaseReason }),
   Schema.Struct({ action: Schema.Literal("remove"), ...target }),
+  Schema.Struct({ action: Schema.Literal("attach"), ...target, ownerSessionID: Session.ID.pipe(Schema.optional) }),
   Schema.Struct({
     action: Schema.Literal("create"),
     directory: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
@@ -107,8 +108,9 @@ export const description = [
   "assign: Master only. Give a member Session to a live subagent the Master launched (not cancelling, cancelled, failed, lost or archived); that supervisor owns it until released, and reassigning transfers it. Idle, a failed turn, or a settled turn never ends ownership.",
   "release: Master only. The Master ends ownership, with reason completed (work verified complete) or released. Removing the member from the Project or deleting the owner also ends it.",
   "remove: Master only. Detach a settled, verified-complete member whose delivery is integrated or finished: this ends its recorded ownership and its Project membership. It never deletes the Session and preserves the Session and Project histories; release only parks ownership and keeps the member attached.",
+  "attach: Master only. Add an existing root Session at any recorded directory to the Project by sessionID, owned by you or by ownerSessionID, a live subagent you launched. The Session keeps its ID, saved model, Location, conversation, permission ceiling, its own permissions, guardrails and answers modes, and its running or pending work; nothing is moved, recreated, woken, interrupted or settled. A recorded directory outside your Location needs its external_directory approval, and deny rules and your permission ceiling still refuse it. Attaching the same Session with the same owner again returns reconciled true and changes nothing; a different owner is refused, so use assign to change it. Your own Session, child Sessions, archived, unknown and standalone Sessions, and Sessions of any other Project, paused or not, are refused. Its pending requests and later events reach its owner like any member's. Returns groupID, sessionID, location, ownerSessionID and reconciled.",
   "create: Master only. Choose exactly one placement: directory for a chosen folder, projectID for an existing repository Project's canonical directory, or name with optional repository for an explicit managed worktree. Start a root member Session under your session's permission ceiling plus your agent's effective deny rules (agent denies not covered by a later non-deny agent rule with the same action or \"*\" and the same resource or \"*\") with title and optional model, and add it to the Project. The member takes your effective permissions, guardrails and answers modes when it joins. ownerSessionID is yourself or a live subagent you launched; omit it to leave routine state held and material items escalated to the Master. An optional prompt is sent after enrollment; refusal does not undo the member.",
-  "create with directory: use an absolute path, ~ or ~/path. The Session uses that folder, including a repository subdirectory or a non-Git folder. Missing directories are created subject to filesystem permission and guardrail checks. No branch or worktree is created. The title defaults to the directory's basename, or the full path if it has no basename. With projectID, use the repository Project ID, not the coordination group ID; for the global Project, pass directory instead. Its title defaults to the repository Project name or basename.",
+  "create with directory: use an absolute path in the host machine's form, ~, ~/path, or ~\\path on a Windows host; a path in another machine's form is refused. The Session uses that folder, including a repository subdirectory or a non-Git folder. Missing directories are created subject to filesystem permission and guardrail checks. No branch or worktree is created. The title defaults to the directory's basename, or the full path if it has no basename. With projectID, use the repository Project ID, not the coordination group ID; for the global Project, pass directory instead. Its title defaults to the repository Project name or basename.",
   "create with name: create a managed worktree named name on branch name under the worktree tool's rules. The title defaults to name. An optional repository (absolute directory path inside a Git repository) creates the worktree for that repository instead of the current Location's, so a Master outside any repository can create members; the managed parent, permission, guardrail, existing-name and branch rules are the worktree tool's, and a path outside any Git repository fails naming the path.",
   "Every placement returns the actual location, directory, saved model (null when unset) and enrollment receipt. Only worktrees return a branch. An enrollment failure preserves the Session and reports enrollment.member false with its error. Retrying the same native invocation retains its creation identity. Failures do not delete created folders, worktrees or Sessions.",
   "model: read a member's saved model with sessionID. To replace it, supply both model and expectedModel, using the exact saved reference from the read, or null when unset. References contain providerID, id, optional profile and optional variant; omitted profile or variant clears that field rather than inheriting it. The native runtime validates the target and compares the expected selection at its safe boundary without interrupting or waking a turn; a conflict requires a fresh read, not a blind retry. This persistent selection is separate from send's per-turn override and returns the member's actual location, state and saved model.",
@@ -166,6 +168,23 @@ export const Plugin = {
           return { action: "release" as const, ...(yield* runtime.release(caller, { sessionID: input.sessionID, reason: input.reason })) }
         if (input.action === "remove")
           return { action: "remove" as const, ...(yield* runtime.remove(caller, { sessionID: input.sessionID })) }
+        if (input.action === "attach")
+          return { action: "attach" as const, ...(yield* runtime.attach(caller, {
+            sessionID: input.sessionID, ...(input.ownerSessionID === undefined ? {} : { ownerSessionID: input.ownerSessionID }),
+          }, {
+            authorizeLocation: (location) => Effect.gen(function* () {
+              const target = yield* mutation.resolve({ path: location.directory, kind: "directory" }).pipe(
+                Effect.catchTag("LocationMutation.PathError", () => Effect.fail(new ToolFailure({ message: `Session ${input.sessionID} directory ${location.directory} cannot be authorized` }))),
+              )
+              if (target.externalDirectory === undefined) return
+              yield* permission.assert({
+                ...LocationMutation.externalDirectoryPermission(target.externalDirectory),
+                sessionID: caller, agent: context.agent,
+                source: { type: "tool" as const, messageID: context.messageID, callID: context.callID },
+                metadata: { operation: "attach_project_session", operationDigest: Hash.json(input) },
+              })
+            }),
+          })) }
         if (input.action === "model")
           return { action: "model" as const, ...("model" in input
             ? yield* runtime.setModel(caller, { sessionID: input.sessionID, expectedModel: input.expectedModel, model: input.model })

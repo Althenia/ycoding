@@ -351,11 +351,11 @@ describe("Projects reads and changes", () => {
   test("each change sends once with its operation name, keeps a refusal reason, and rereads the overview", async () => {
     const { calls, client, queries } = incidents(answers())
     await client.fetchQuery(queries.coordination(scope, true))
-    for (const operation of ["coordination.create", "coordination.update", "coordination.delete"] as const) {
+    for (const operation of ["coordination.create", "coordination.update", "coordination.delete", "coordination.attach", "coordination.detach"] as const) {
       expect(await queries.changeCoordination(scope, operation, { groupID: "cgrp_1", revision: 4 })).toEqual({ reached: true })
       expect(calls.filter((call) => call.operation === operation)).toHaveLength(1)
     }
-    expect(calls.filter((call) => call.operation === "coordination.list")).toHaveLength(4)
+    expect(calls.filter((call) => call.operation === "coordination.list")).toHaveLength(6)
     const refused = incidents(answers({ "coordination.update": { status: "failed", error: { code: "invalid_message", message: "Project revision changed" } } }))
     await refused.client.fetchQuery(refused.queries.coordination(scope, true))
     expect(await refused.queries.changeCoordination(scope, "coordination.update", { groupID: "cgrp_1", revision: 3 })).toEqual({ reached: false, message: "Projects: Project revision changed" })

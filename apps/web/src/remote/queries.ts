@@ -71,7 +71,7 @@ export const remoteKeys = {
 export type CoordinationOverview =
   | { readonly status: "ready"; readonly groups: readonly ProjectBundle[]; readonly central: CentralPolicy | undefined }
   | { readonly status: "unsupported" }
-export type CoordinationOperation = "coordination.create" | "coordination.update" | "coordination.delete"
+export type CoordinationOperation = "coordination.create" | "coordination.update" | "coordination.delete" | "coordination.attach" | "coordination.detach"
 export type CoordinationFailure = { readonly reached: false; readonly message: string; readonly unconfirmed?: true }
 export type CoordinationChange = { readonly reached: true } | CoordinationFailure
 

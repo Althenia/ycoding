@@ -34,6 +34,12 @@ async function open(width = 1440, extra = "", theme = "light") {
 const button = (name: string) => `[...document.querySelectorAll('button,a')].filter(e=>e.getClientRects().length && !e.closest('[inert]')).find(e=>(e.getAttribute('aria-label')||e.textContent).trim()===${JSON.stringify(name)})`
 const click = (page: Page, name: string) => page.evaluate(`${button(name)}.click()`)
 const setField = (page: Page, label: string, value: string) => page.evaluate(`(()=>{const el=[...document.querySelectorAll('label')].find(e=>e.textContent.includes(${JSON.stringify(label)})).querySelector('input,textarea');el.value=${JSON.stringify(value)};el.dispatchEvent(new InputEvent('input',{bubbles:true}))})()`)
+async function chooseKnownDirectory(page: Page) {
+  await until(page, `!!${button("Known directory")}`)
+  await click(page, "Known directory")
+  await page.evaluate(`[...document.querySelectorAll('[role=option]')].find(option=>option.textContent.trim()==='/workspace/ycoding').click()`)
+}
+const typeDirectory = (page: Page, value: string) => page.evaluate(`(()=>{const field=document.getElementById('project-directory-path');field.value=${JSON.stringify(value)};field.dispatchEvent(new InputEvent('input',{bubbles:true}))})()`)
 const mutations = (page: Page, operation: string) => page.evaluate(`window.remoteMutationReport().filter(x=>x.operation===${JSON.stringify(operation)})`, decodeArray((value: unknown) => { const record = decodeRecord(value); return { ...record, input: (decodeRecord)(record["input"]) } }))
 const sessionCounts = (page: Page) => page.evaluate(`(()=>{
   const root=document.querySelector('.project-desktop .project-panel')
@@ -207,8 +213,7 @@ describe("Projects", () => {
       await click(page, "New project")
       await setField(page, "Project name", "New master project")
       await click(page, "Create a new Session")
-      await click(page, "Directory")
-      await page.evaluate(`document.querySelector('[role=option]').click()`)
+      await chooseKnownDirectory(page)
       await click(page, "Create project")
       await until(page, `document.querySelector('.project-context')?.textContent.includes('New master project')`)
       expect(await mutations(page, "session.create")).toHaveLength(1)
@@ -237,8 +242,7 @@ describe("Projects", () => {
       await click(page, "New project")
       await setField(page, "Project name", "Fresh project")
       await click(page, "Create a new Session")
-      await click(page, "Directory")
-      await page.evaluate(`document.querySelector('[role=option]').click()`)
+      await chooseKnownDirectory(page)
       await click(page, "Create project")
       await until(page, `document.querySelector('.project-context')?.textContent.includes('Master of Fresh project')`)
       const created = await mutations(page, "session.create")
@@ -255,16 +259,16 @@ describe("Projects", () => {
       expect(await sessionCounts(page)).toEqual({ tab: 2, rows: 2, live: { running: 0, waiting: 0, idle: 2, failed: 0 } })
 
       await click(page, "New session…")
-      await click(page, "Directory")
-      await page.evaluate(`document.querySelector('[role=option]').click()`)
+      await chooseKnownDirectory(page)
       await click(page, "Create and add")
       await until(page, `!document.querySelector('dialog[open]') && document.querySelectorAll('${panel(1440)} .project-member').length===3`)
       expect(await sessionCounts(page)).toEqual({ tab: 3, rows: 3, live: { running: 0, waiting: 0, idle: 3, failed: 0 } })
       expect(await page.evaluate(`document.querySelector('${panel(1440)} [role=meter]')?.getAttribute('aria-valuetext') ?? document.querySelector('${panel(1440)} .project-meter strong').textContent`)).toBe("0 · no limit")
 
-      const members = await mutations(page, "coordination.update")
-      expect(members.map((entry) => entry.input.memberSessionIDs)).toEqual([["ses_available"], ["ses_available", expect.stringMatching(/^ses_/)]])
-      expect(members.map((entry) => entry.input.revision)).toEqual([0, 1])
+      const members = await mutations(page, "coordination.attach")
+      expect(members.map((entry) => entry.input.sessionID)).toEqual(["ses_available", expect.stringMatching(/^ses_/)])
+      expect(members.every((entry) => !("memberSessionIDs" in entry.input) && !("revision" in entry.input))).toBe(true)
+      expect(await mutations(page, "coordination.update")).toHaveLength(0)
       const sessionCreates = await mutations(page, "session.create")
       expect(sessionCreates).toHaveLength(2)
       expect(sessionCreates[1]?.input).not.toHaveProperty("title")
@@ -285,8 +289,7 @@ describe("Projects", () => {
         await click(page, "Create a new Session")
         expect(await page.evaluate(`[...document.querySelectorAll('label')].find(e=>e.textContent.includes('Session title')).querySelector('input').placeholder`)).toBe("Defaults to the Project name")
         if (typed) await setField(page, "Session title", typed)
-        await click(page, "Directory")
-        await page.evaluate(`document.querySelector('[role=option]').click()`)
+        await chooseKnownDirectory(page)
         await click(page, "Create project")
         const expected = typed.trim() || "Billing migration"
         await until(page, `document.querySelector('.project-context')?.textContent.includes('Master of Billing migration')`)
@@ -302,15 +305,13 @@ describe("Projects", () => {
       await openProject(page)
       await click(page, "New session…")
       await setField(page, "Session title", "Docs member")
-      await click(page, "Directory")
-      await page.evaluate(`document.querySelector('[role=option]').click()`)
+      await chooseKnownDirectory(page)
       await click(page, "Create and add")
       await until(page, `!document.querySelector('dialog[open]') && document.querySelectorAll('${panel(1440)} .project-member').length===6`)
       expect((await mutations(page, "session.create"))[0]?.input).toMatchObject({ title: "Docs member" })
       expect(await page.evaluate(`[...document.querySelectorAll('${panel(1440)} .project-member strong')].at(-1).textContent`)).toBe("Docs member")
       await click(page, "New session…")
-      await click(page, "Directory")
-      await page.evaluate(`document.querySelector('[role=option]').click()`)
+      await chooseKnownDirectory(page)
       await click(page, "Create and add")
       await until(page, `!document.querySelector('dialog[open]') && document.querySelectorAll('${panel(1440)} .project-member').length===7`)
       expect((await mutations(page, "session.create"))[1]?.input).not.toHaveProperty("title")
@@ -323,13 +324,15 @@ describe("Projects", () => {
     try {
       await openProject(page)
       await click(page, "Add session…")
+      expect(await page.evaluate(`document.querySelector('dialog[open]').textContent`)).toContain("Attach a running root Session from any directory without restarting it.")
       await click(page, "Add Triage flaky tests")
       await until(page, `!document.querySelector('dialog[open]')`)
-      expect((await mutations(page, "coordination.update"))[0]?.input.memberSessionIDs).toContain("ses_available")
+      expect((await mutations(page, "coordination.attach"))[0]?.input).toEqual({ groupID: "cgrp_release", sessionID: "ses_available" })
       await click(page, "Details for Triage flaky tests")
       await click(page, "Remove Triage flaky tests from project")
-      await until(page, `window.remoteMutationReport().filter(x=>x.operation==='coordination.update').length===2`)
-      expect((await mutations(page, "coordination.update"))[1]?.input.memberSessionIDs).not.toContain("ses_available")
+      await until(page, `window.remoteMutationReport().filter(x=>x.operation==='coordination.detach').length===1`)
+      expect((await mutations(page, "coordination.detach"))[0]?.input).toEqual({ groupID: "cgrp_release", sessionID: "ses_available" })
+      expect(await mutations(page, "coordination.update")).toHaveLength(0)
       await click(page, "Details for Audit dashboards")
       await click(page, "Delete session Audit dashboards")
       expect(await mutations(page, "session.delete")).toHaveLength(0)
@@ -339,19 +342,71 @@ describe("Projects", () => {
     } finally { await page.close() }
   }, 30_000)
 
-  test("creates and adds a member once", async () => {
+  test("creates and attaches a member once at the typed non-Git directory", async () => {
     const page = await open()
     try {
       await openProject(page)
       await click(page, "New session…")
-      await click(page, "Directory")
-      await page.evaluate(`document.querySelector('[role=option]').click()`)
+      await page.evaluate(`(()=>{const field=document.getElementById('project-directory-path');field.value='/external/review-notes';field.dispatchEvent(new InputEvent('input',{bubbles:true}))})()`)
       await click(page, "Create and add")
       await until(page, `!document.querySelector('dialog[open]')`)
-      expect(await mutations(page, "session.create")).toHaveLength(1)
-      expect(await mutations(page, "coordination.update")).toHaveLength(1)
+      const created = await mutations(page, "session.create")
+      expect(created.map((request) => request.input)).toEqual([{ id: expect.stringMatching(/^ses_/), directory: "/external/review-notes" }])
+      expect((await mutations(page, "coordination.attach")).map((request) => request.input)).toEqual([{ groupID: "cgrp_release", sessionID: created[0]?.input.id }])
+      expect(await mutations(page, "coordination.update")).toHaveLength(0)
+      await click(page, "Details for New session")
+      expect(await page.evaluate(`document.querySelector('${panel(1440)} .project-member:last-child .project-member__details').textContent`)).toContain("/external/review-notes")
     } finally { await page.close() }
   }, 30_000)
+
+  test("a typed Windows, home or UNC member directory reaches the remote payload exactly, with only outer whitespace trimmed", async () => {
+    for (const typed of ["  C:\\Work\\Repo  ", "D:/Work/Repo", "\\\\fileserver\\share\\Team\\Plan", "~\\notes", "  /srv/new app  "]) {
+      const page = await open()
+      try {
+        await openProject(page)
+        await click(page, "New session…")
+        await typeDirectory(page, typed)
+        await click(page, "Create and add")
+        await until(page, `!document.querySelector('dialog[open]')`)
+        const created = await mutations(page, "session.create")
+        expect(created.map((request) => request.input)).toEqual([{ id: expect.stringMatching(/^ses_/), directory: typed.trim() }])
+        expect((await mutations(page, "coordination.attach")).map((request) => request.input)).toEqual([{ groupID: "cgrp_release", sessionID: created[0]?.input.id }])
+        expect(await mutations(page, "coordination.update")).toHaveLength(0)
+      } finally { await page.close() }
+    }
+  }, 120_000)
+
+  test("a new Project Master at a typed Windows directory is created exactly as typed", async () => {
+    const page = await open()
+    try {
+      await until(page, `document.querySelectorAll('.project-card').length===2`)
+      await click(page, "New project")
+      await setField(page, "Project name", "Windows project")
+      await click(page, "Create a new Session")
+      await typeDirectory(page, "  C:\\Work\\Repo  ")
+      await click(page, "Create project")
+      await until(page, `document.querySelector('.project-context')?.textContent.includes('Master of Windows project')`)
+      const created = await mutations(page, "session.create")
+      expect(created.map((request) => request.input)).toEqual([{ id: expect.stringMatching(/^ses_/), directory: "C:\\Work\\Repo", title: "Windows project" }])
+      expect((await mutations(page, "coordination.create"))[0]?.input).toEqual({ name: "Windows project", masterSessionID: created[0]?.input.id, memberSessionIDs: [] })
+    } finally { await page.close() }
+  }, 30_000)
+
+  test("a drive-relative, bare relative or incomplete UNC directory is refused with no remote write", async () => {
+    for (const typed of ["C:work", "C:", "work\\repo", "relative/path", "\\\\fileserver", "\\\\fileserver\\", "\\\\?\\C:\\x"]) {
+      const page = await open()
+      try {
+        await openProject(page)
+        await click(page, "New session…")
+        await typeDirectory(page, typed)
+        await click(page, "Create and add")
+        await until(page, `[...document.querySelectorAll('dialog[open] [role=alert]')].some(alert=>alert.textContent.includes('Enter an absolute path'))`)
+        expect(await mutations(page, "session.create")).toHaveLength(0)
+        expect(await mutations(page, "coordination.attach")).toHaveLength(0)
+        expect(await mutations(page, "coordination.update")).toHaveLength(0)
+      } finally { await page.close() }
+    }
+  }, 120_000)
 
   test("opens a member and returns to the master, including inline event links", async () => {
     const page = await open()
@@ -437,13 +492,12 @@ describe("Projects", () => {
     try {
       await openProject(page)
       await click(page, "New session…")
-      await click(page, "Directory")
-      await page.evaluate(`document.querySelector('[role=option]').click()`)
+      await chooseKnownDirectory(page)
       await click(page, "Create and add")
       await until(page, `document.querySelector('dialog').textContent.includes('may already exist')`)
       expect(await page.evaluate(`${button("Create and add")}.disabled`)).toBe(true)
       expect(await mutations(page, "session.create")).toHaveLength(1)
-      expect(await mutations(page, "coordination.update")).toHaveLength(0)
+      expect(await mutations(page, "coordination.attach")).toHaveLength(0)
     } finally { await page.close() }
   }, 30_000)
 

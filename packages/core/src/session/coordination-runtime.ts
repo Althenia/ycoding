@@ -14,6 +14,8 @@ import { CoordinationDecisionRuntime } from "../coordination/decisions"
 import { CoordinationService } from "../coordination/index"
 import { CoordinationMemberTable } from "../coordination/sql"
 import { Database } from "../database/database"
+import { FSUtil } from "../fs-util"
+import { hostDirectory } from "../host-directory"
 import { makeGlobalNode, type Node } from "../effect/app-node"
 import { Job } from "../job"
 import { KVTable } from "../kv/sql"
@@ -198,13 +200,19 @@ export interface Interface {
   readonly escalate: (caller: SessionSchema.ID, input: EscalateInput) => Effect.Effect<EscalateResult, RefusedError | Session.ScopeUnavailableError | SessionOrchestration.ServiceUnavailableError>
   readonly assign: (caller: SessionSchema.ID, input: AssignInput) => Effect.Effect<OwnershipResult, RefusedError | EventRuntime.TaskOwnerUnavailableError>
   readonly release: (caller: SessionSchema.ID, input: ReleaseInput) => Effect.Effect<OwnershipResult, RefusedError>
-  readonly remove: (caller: SessionSchema.ID, input: { readonly sessionID: SessionSchema.ID }) => Effect.Effect<{ readonly sessionID: SessionSchema.ID; readonly removed: true }, RefusedError | EventRuntime.TaskOwnerUnavailableError>
+  readonly remove: (caller: SessionSchema.ID, input: { readonly sessionID: SessionSchema.ID }, options?: { readonly groupID?: Coordination.GroupID }) => Effect.Effect<{ readonly sessionID: SessionSchema.ID; readonly removed: true }, RefusedError | EventRuntime.TaskOwnerUnavailableError>
+  readonly attach: <E = never>(caller: SessionSchema.ID, input: Coordination.AttachInput, options?: AttachOptions<E>) => Effect.Effect<Coordination.AttachResult, RefusedError | EventRuntime.TaskOwnerUnavailableError | E>
   readonly create: <E = never>(
     caller: SessionSchema.ID,
     input: CreateInput,
     worktree?: (name: string) => Effect.Effect<Worktree, E>,
     authorizeMkdir?: (directory: AbsolutePath, mkdir: Effect.Effect<void, RefusedError>) => Effect.Effect<void, E | RefusedError>,
   ) => Effect.Effect<CreateResult, RefusedError | E | Session.ScopeUnavailableError | EventRuntime.TaskOwnerUnavailableError>
+}
+
+export interface AttachOptions<E> {
+  readonly groupID?: Coordination.GroupID
+  readonly authorizeLocation?: (location: Coordination.AttachResult["location"]) => Effect.Effect<void, E>
 }
 
 export interface MemberResult {
@@ -359,10 +367,10 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
       if (input.projectID === Project.ID.global) return yield* refuse("The global Project has no repository directory; pass directory to choose the member's folder")
       const selected = input.projectID === undefined ? undefined : yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, input.projectID)).get().pipe(Effect.orDie)
       if (input.projectID !== undefined && selected === undefined) return yield* refuse(`Project ${input.projectID} does not exist`)
-      const expanded = input.directory === "~" ? homedir() : input.directory?.startsWith("~/") ? path.join(homedir(), input.directory.slice(2)) : input.directory
-      if (expanded !== undefined && (!path.isAbsolute(expanded) || expanded.includes("\0")))
+      const admitted = input.directory === undefined ? undefined : hostDirectory(input.directory, homedir())
+      if (input.directory !== undefined && admitted === undefined)
         return yield* refuse("Choose an absolute directory path or a path starting with ~/")
-      const directory = expanded === undefined ? undefined : AbsolutePath.make(path.resolve(expanded))
+      const directory = admitted === undefined ? undefined : AbsolutePath.make(admitted)
       if (directory !== undefined && placement !== undefined && directory !== placement.directory)
         return yield* refuse(`Session ${input.id} directory changed after creation was recorded`)
       const canonical = selected === undefined ? undefined : AbsolutePath.make(selected.worktree)
@@ -653,10 +661,18 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
     return { sessionID: input.sessionID, state: yield* stateOf(scope, input.sessionID) }
   })
 
-  const remove: Interface["remove"] = Effect.fn("CoordinationRuntime.remove")(function* (caller, input) {
+  const fenced = <A, E, R>(caller: SessionSchema.ID, groupID: Coordination.GroupID | undefined, effect: Effect.Effect<A, E, R>) =>
+    groupID === undefined ? underOwnership(caller, effect) : coordination.withOwnership(groupID, effect)
+
+  const masterScope = Effect.fnUntraced(function* (caller: SessionSchema.ID, groupID: Coordination.GroupID | undefined, refusal: string) {
     const access = yield* coordination.accessOf(caller)
-    if (access?.role !== "master") return yield* refuse("Only the Project's Master removes member Sessions")
-    const scope = access.scope
+    if (groupID !== undefined && (access?.role !== "master" || access.scope.groupID !== groupID)) return yield* refuse(`Session ${caller} is not the Master of Project ${groupID}`)
+    if (access?.role !== "master") return yield* refuse(refusal)
+    return access.scope
+  })
+
+  const remove: Interface["remove"] = Effect.fn("CoordinationRuntime.remove")(function* (caller, input, options) {
+    const scope = yield* masterScope(caller, options?.groupID, "Only the Project's Master removes member Sessions")
     if (!scope.memberSessionIDs.includes(input.sessionID)) return yield* refuse(`Session ${input.sessionID} is not a member of this Project`)
     if ((yield* execution.active).has(input.sessionID) || (yield* workRemains(input.sessionID)) || (yield* familyPending(scope, caller, input.sessionID)).length > 0)
       return yield* refuse(`Session ${input.sessionID} has active work or pending requests; wait for it to settle or interrupt it before removing it from the Project`)
@@ -664,6 +680,40 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
     yield* SessionTask.completeUnownedSupervisors(db, events)
     return { sessionID: input.sessionID, removed: true as const }
   })
+
+  const planAttach = Effect.fnUntraced(function* (caller: SessionSchema.ID, input: Coordination.AttachInput, groupID: Coordination.GroupID | undefined) {
+    const scope = yield* masterScope(caller, groupID, "Only the Project's Master attaches Sessions")
+    const ownerSessionID = input.ownerSessionID ?? scope.masterSessionID
+    const problem = yield* ownerProblem(scope, ownerSessionID)
+    if (problem !== undefined) return yield* refuse(problem)
+    if (input.sessionID === scope.masterSessionID) return yield* refuse("The Project's Master cannot attach itself as a member")
+    const session = yield* sessions.get(input.sessionID).pipe(Effect.mapError(() => refuse(`Session ${input.sessionID} does not exist`)))
+    if (session.parentID !== undefined) return yield* refuse(`Session ${session.id} is a child Session, not a root`)
+    if (session.time.archived !== undefined) return yield* refuse(`Session ${session.id} is archived`)
+    if (session.scope === "standalone") return yield* refuse(`Session ${session.id} is a standalone Session and cannot join a Project`)
+    const receipt = { groupID: scope.groupID, sessionID: session.id, location: session.location, ownerSessionID }
+    if (!scope.memberSessionIDs.includes(session.id)) return { receipt, member: false }
+    if ((yield* ownerOf(scope.groupID, session.id))?.sessionID !== ownerSessionID)
+      return yield* refuse(`Session ${session.id} is already a member of this Project with a different owner; use assign to change its owner`)
+    return { receipt, member: true }
+  })
+
+  const attach: Interface["attach"] = (caller, input, options) => Effect.gen(function* () {
+    const planned = yield* fenced(caller, options?.groupID, planAttach(caller, input, options?.groupID))
+    if (planned.member) return { ...planned.receipt, reconciled: true }
+    if (options?.authorizeLocation !== undefined) yield* options.authorizeLocation(planned.receipt.location)
+    return yield* coordination.withOwnership(planned.receipt.groupID, Effect.gen(function* () {
+      const current = yield* planAttach(caller, input, options?.groupID)
+      if (current.receipt.groupID !== planned.receipt.groupID || current.receipt.location.directory !== planned.receipt.location.directory ||
+        current.receipt.location.workspaceID !== planned.receipt.location.workspaceID)
+        return yield* refuse(`Session ${input.sessionID} or the caller's Project changed during authorization; read the Project again before retrying`)
+      if (current.member) return { ...current.receipt, reconciled: true }
+      yield* coordination.addMember(current.receipt.groupID, { sessionID: input.sessionID, ownerSessionID: current.receipt.ownerSessionID, preserveAutonomy: true })
+        .pipe(Effect.mapError((error) => refuse(error.message)))
+      yield* SessionTask.superviseAttached(db, events, current.receipt.ownerSessionID)
+      return { ...current.receipt, reconciled: false }
+    }))
+  }).pipe(Effect.withSpan("CoordinationRuntime.attach"))
 
   const excerptOf = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
     const assistant = yield* SessionHistory.latest(db, sessionID, "assistant")
@@ -1073,7 +1123,8 @@ export function make(options: Options): Omit<Interface, "setModel"> & { readonly
     inspect: (caller, input) => underOwnership(caller, inspect(caller, input)),
     assign: (caller, input) => underOwnership(caller, assign(caller, input)),
     release: (caller, input) => underOwnership(caller, release(caller, input)),
-    remove: (caller, input) => underOwnership(caller, remove(caller, input)),
+    remove: (caller, input, options) => fenced(caller, options?.groupID, remove(caller, input, options)),
+    attach,
     create,
     member,
     handle: (event) =>

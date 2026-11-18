@@ -16,6 +16,8 @@ export const coordinationOperations = [
   "coordination.get",
   "coordination.update",
   "coordination.delete",
+  "coordination.attach",
+  "coordination.detach",
 ] as const
 
 const reads = ["coordination.settings", "coordination.list", "coordination.get"]
@@ -52,6 +54,22 @@ test("coordination requests accept only bounded ordinary-object inputs without a
     expect(parseClientMessage(frame("coordination.update", { ...update, ...fields })).ok).toBe(false)
   expect(parseClientMessage(frame("coordination.delete", { groupID: "cgrp_1" })).ok).toBe(true)
   expect(parseClientMessage(frame("coordination.delete", update)).ok).toBe(false)
+})
+
+test("coordination attach and detach accept only exact Project and Session identities", () => {
+  const attach = { groupID: "cgrp_1", sessionID: "ses_member" }
+  const detach = { groupID: "cgrp_1", sessionID: "ses_member" }
+  for (const input of [attach, { ...attach, ownerSessionID: "ses_owner" }])
+    expect(parseClientMessage(frame("coordination.attach", input)).ok).toBe(true)
+  expect(parseClientMessage(frame("coordination.detach", detach)).ok).toBe(true)
+  for (const fields of [{ groupID: "grp_1" }, { groupID: undefined }, { sessionID: "bad" }, { sessionID: undefined }, { ownerSessionID: "bad" }, { directory: "/tmp" }, { workspace: "wrk_1" }, { masterSessionID: "ses_master" }, { revision: 1 }])
+    expect(parseClientMessage(frame("coordination.attach", { ...attach, ...fields })).ok).toBe(false)
+  for (const fields of [{ groupID: "grp_1" }, { groupID: undefined }, { sessionID: "bad" }, { sessionID: undefined }, { ownerSessionID: "ses_owner" }, { directory: "/tmp" }, { revision: 1 }])
+    expect(parseClientMessage(frame("coordination.detach", { ...detach, ...fields })).ok).toBe(false)
+  for (const operation of ["coordination.attach", "coordination.detach"]) {
+    expect(parseClientMessage(frame(operation)).ok).toBe(false)
+    expect(parseClientMessage(frame(operation, attach, "ses_member")).ok).toBe(false)
+  }
 })
 
 test("Session deletion is a scoped mutation with no caller-provided placement", () => {

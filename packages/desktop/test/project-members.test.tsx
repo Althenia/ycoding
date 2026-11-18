@@ -36,14 +36,16 @@ test("candidates are loaded root Sessions outside the Project and the catalog st
   createRoot((dispose) => {
     const tree = DesktopProjectMembers({ group: group(), revision: 3, sessions, disabled: false, onChange: () => {}, onBrowseFolder: () => {} })
     expect(text(tree)).toContain("1 eligible of 5 Sessions loaded in the rail")
+    expect(text(tree)).toContain("Attach a running root Session from any directory without restarting it.")
+    expect(text(tree)).toContain("Any folder works, Git repository or not.")
     dispose()
   })
 })
 
 test("member changes carry connection revision, group identity and accurate confirmations", () => {
   const state = { group: group(), revision: 3, sessions, disabled: false }
-  expect(memberChange(state, { kind: "add", sessionID: "ses_c" })).toEqual({ input: { kind: "update", revision: 3, groupID: "cgrp_team", groupRevision: 7, memberSessionIDs: ["ses_a", "ses_b", "ses_c"] }, confirmation: "Add “Gamma” as a member of project “Team”?" })
-  expect(memberChange(state, { kind: "remove", sessionID: "ses_a" })).toEqual({ input: { kind: "update", revision: 3, groupID: "cgrp_team", groupRevision: 7, memberSessionIDs: ["ses_b"] }, confirmation: "Remove “Alpha” from project “Team”? The Session and its stored data stay available in Sessions." })
+  expect(memberChange(state, { kind: "add", sessionID: "ses_c" })).toEqual({ input: { kind: "attach-member", revision: 3, groupID: "cgrp_team", sessionID: "ses_c" }, confirmation: "Attach “Gamma” as a member of project “Team”? The Session keeps running and keeps its history; it is not restarted." })
+  expect(memberChange(state, { kind: "remove", sessionID: "ses_a" })).toEqual({ input: { kind: "detach-member", revision: 3, groupID: "cgrp_team", sessionID: "ses_a" }, confirmation: "Remove “Alpha” from project “Team”? The Session and its stored data stay available in Sessions." })
   const deleted = memberChange(state, { kind: "delete", sessionID: "ses_b" })
   expect(deleted).toEqual({ input: { kind: "delete-member", revision: 3, groupID: "cgrp_team", groupRevision: 7, sessionID: "ses_b" }, confirmation: "Delete member Session “Beta”? This permanently deletes its stored Session data, including its transcript, and removes it from project “Team”." })
   expect(memberChange(state, { kind: "new", directory: "/synthetic/work", title: "  Helper  " })).toEqual({ input: { kind: "new-member", revision: 3, groupID: "cgrp_team", groupRevision: 7, directory: "/synthetic/work", title: "Helper" }, confirmation: "Create a new Session titled “Helper” in /synthetic/work and add it as a member of project “Team”? A missing folder is created." })
@@ -52,7 +54,7 @@ test("member changes carry connection revision, group identity and accurate conf
 
 test("typed member folders accept absolute and home addresses unchanged and trimmed", () => {
   const state = { group: group(), revision: 3, sessions, disabled: false }
-  for (const directory of ["~", "~/work/new", "/synthetic/a b"]) expect(memberChange(state, { kind: "new", directory: `  ${directory}  `, title: "" })).toMatchObject({ input: { kind: "new-member", directory } })
+  for (const directory of ["~", "~/work/new", "/synthetic/a b", "C:\\Work\\Repo", "d:/Work/Repo", "\\\\fileserver\\share\\Team Plan", "~\\notes"]) expect(memberChange(state, { kind: "new", directory: `  ${directory}  `, title: "" })).toMatchObject({ input: { kind: "new-member", directory } })
   expect(newDirectoryProjectConfirmation("Team", "~/work")).toBe("Create project Team with a new Master Session in ~/work? A missing folder is created.")
 })
 
@@ -62,7 +64,7 @@ test("master, stale candidates, non-members and missing folders are refused", ()
   for (const kind of ["remove", "delete"] as const) expect(memberChange(state, { kind, sessionID: "ses_c" })).toEqual({ error: "This Session is no longer a member of the project. Refresh projects." })
   for (const sessionID of ["ses_a", "ses_master", "ses_child", "ses_old", "ses_missing", ""]) expect(memberChange(state, { kind: "add", sessionID })).toEqual({ error: "Choose a loaded Session that is not already in the project." })
   for (const directory of ["", "   "]) expect(memberChange(state, { kind: "new", directory, title: "" })).toEqual({ error: "Choose a folder for the new member Session." })
-  for (const directory of ["relative/path", "./here", "~someone/work", "../up"]) expect(memberChange(state, { kind: "new", directory, title: "" })).toEqual({ error: "Enter an absolute folder path or one starting with ~/." })
+  for (const directory of ["relative/path", "./here", "~someone/work", "../up", "C:work", "C:", "work\\repo", "\\\\fileserver", "\\\\fileserver\\", "\\\\?\\C:\\x"]) expect(memberChange(state, { kind: "new", directory, title: "" })).toEqual({ error: "Enter an absolute folder path on the backend machine (such as /srv/app, C:\\Work or \\\\server\\share\\dir), or one starting with ~." })
   expect(memberChange({ ...state, disabled: true }, { kind: "remove", sessionID: "ses_a" })).toBeUndefined()
 })
 
@@ -81,7 +83,7 @@ test("rendered controls dispatch exact changes, never offer master actions and s
     expect(action(tree, "project-member-delete").map((node) => node.props["aria-label"])).toEqual(["Delete member Session Alpha", "Delete member Session Beta"])
     expect(nodes(roster).some(node => node.type === "small" && text(node) === "Master")).toBe(true)
     ;(action(tree, "project-member-remove")[1]!.props.onClick as () => void)()
-    expect(changes.at(-1)?.[0]).toEqual({ kind: "update", revision: 3, groupID: "cgrp_team", groupRevision: 7, memberSessionIDs: ["ses_a"] })
+    expect(changes.at(-1)?.[0]).toEqual({ kind: "detach-member", revision: 3, groupID: "cgrp_team", sessionID: "ses_b" })
     ;(action(tree, "project-member-delete")[0]!.props.onClick as () => void)()
     expect(changes.at(-1)?.[0]).toMatchObject({ kind: "delete-member", sessionID: "ses_a" })
 
@@ -89,7 +91,7 @@ test("rendered controls dispatch exact changes, never offer master actions and s
     expect((picker.props.options as { value: string }[]).map((option) => option.value)).toEqual(["ses_c"])
     ;(picker.props.onChange as (value: string) => void)("ses_c")
     ;(action(tree, "project-member-add")[0]!.props.onClick as () => void)()
-    expect(changes.at(-1)?.[0]).toEqual({ kind: "update", revision: 3, groupID: "cgrp_team", groupRevision: 7, memberSessionIDs: ["ses_a", "ses_b", "ses_c"] })
+    expect(changes.at(-1)?.[0]).toEqual({ kind: "attach-member", revision: 3, groupID: "cgrp_team", sessionID: "ses_c" })
 
     ;(action(tree, "project-member-browse")[0]!.props.onClick as () => void)()
     expect(browse?.[0]).toBe("/synthetic/repo")
@@ -121,7 +123,7 @@ test("staged input clears when the Project identity or revision changes", () => 
     expect(changes).toEqual([])
     pick("ses_c")
     ;(action(tree, "project-member-add")[0]!.props.onClick as () => void)()
-    expect(changes).toEqual([{ kind: "update", revision: 3, groupID: "cgrp_other", groupRevision: 1, memberSessionIDs: ["ses_a", "ses_b", "ses_c"] }])
+    expect(changes).toEqual([{ kind: "attach-member", revision: 3, groupID: "cgrp_other", sessionID: "ses_c" }])
   } finally { dispose() }
 })
 

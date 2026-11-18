@@ -98,3 +98,22 @@ test("native project definition exposes remove with exactly action and sessionID
 test("project description distinguishes settled history-preserving removal from release parking", () => {
   expect(CoordinationTool.description).toContain("remove: Master only. Detach a settled, verified-complete member whose delivery is integrated or finished: this ends its recorded ownership and its Project membership. It never deletes the Session and preserves the Session and Project histories; release only parks ownership and keeps the member attached.")
 })
+
+test("native project definition exposes attach with exactly action, sessionID and an optional owner", () => {
+  const branches = records(definition().inputSchema).filter((branch) => {
+    const properties = branch.properties
+    if (!Schema.is(record)(properties)) return false
+    return records(properties.action).some((item) => item.const === "attach" || (Array.isArray(item.enum) && item.enum.includes("attach")))
+  })
+  expect(branches).toHaveLength(1)
+  expect(branches[0]?.required).toEqual(["action", "sessionID"])
+  expect(Object.keys(Schema.decodeUnknownSync(record)(branches[0]?.properties)).sort()).toEqual(["action", "ownerSessionID", "sessionID"])
+  expect(branches[0]?.additionalProperties).toBe(false)
+  const input = { action: "attach", sessionID: "ses_member" }
+  expect(decode(input)).toEqual(input)
+  expect(decode({ ...input, ownerSessionID: "ses_owner" })).toEqual({ ...input, ownerSessionID: "ses_owner" })
+  for (const extra of [{ directory: "/synthetic/elsewhere" }, { location: { directory: "/synthetic/elsewhere" } }, { workspaceID: "wrk_other" }, { groupID: "cgrp_other" }, { caller: "ses_other" }, { actor: { kind: "human" } }, { reconciled: true }])
+    expect(() => decode({ ...input, ...extra })).toThrow()
+  expect(() => decode({ action: "attach" })).toThrow()
+  expect(CoordinationTool.description).toContain("attach: Master only. Add an existing root Session at any recorded directory to the Project by sessionID")
+})

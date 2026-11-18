@@ -41,14 +41,16 @@ async function openBoundaryCreation(view: Mounted, member: boolean) {
 const boundaryText = (screen: Screen) => screen.frame().replace(/│/g, "").replace(/\s+/g, " ")
 
 test("Projects new Master form creates at the exact selected directory", async () => {
-  let lookups = 0
+  let lookupsBeforeCreation = 0
+  let createdSessions = () => 0
   const view = await mountCoordination({
     respond: (url) => {
       if (url.pathname !== "/api/location" || url.searchParams.get("location[directory]") !== "/home/dev/boundary") return undefined
-      lookups++
+      lookupsBeforeCreation += createdSessions() === 0 ? 1 : 0
       return json({ directory: "/home/dev/boundary", project: { id: "proj_boundary", directory: "/home/dev/canonical" } })
     },
   })
+  createdSessions = () => view.server.state.created
   try {
     await openBoundaryCreation(view, false)
     view.screen.input.pressKey("c")
@@ -58,7 +60,7 @@ test("Projects new Master form creates at the exact selected directory", async (
       location: { directory: "/home/dev/boundary" },
       title: "Boundary project",
     })
-    expect(lookups).toBe(0)
+    expect(lookupsBeforeCreation).toBe(0)
   } finally {
     await view.screen.dispose()
   }
@@ -482,6 +484,7 @@ test("creating a Project with a new Master in a chosen directory, then adding an
     await openProjectsTab(screen, "MEMBERS 0 + MASTER")
     screen.input.pressKey("a")
     await waitForFrame(screen, "ADD SESSION")
+    expect(screen.frame()).toContain("Attach without restarting")
     screen.input.pressEnter()
     await until(screen, () => editing(screen), "Find editor")
     await screen.input.typeText("planning")
@@ -494,17 +497,19 @@ test("creating a Project with a new Master in a chosen directory, then adding an
     await waitForFrame(screen, "MEMBERS 1 + MASTER")
     screen.input.pressKey("n")
     await waitForFrame(screen, "NEW SESSION")
+    expect(screen.frame()).toContain("Git or not")
     await until(screen, () => editing(screen), "Directory editor")
     await screen.input.typeText("/home/dev/second")
     screen.input.pressEnter()
     await settle(screen)
     screen.input.pressKey("c")
     await waitForFrame(screen, "MEMBERS 2 + MASTER")
-    const patches = server.state.writes.filter((write) => write.method === "PATCH").map((write) => write.body)
-    expect(patches).toEqual([
-      { revision: 1, memberSessionIDs: [planningID] },
-      { revision: 2, memberSessionIDs: [planningID, "ses_new00000002"] },
+    const attaches = server.state.writes.filter((write) => write.path.endsWith("/members"))
+    expect(attaches.map((write) => [write.method, write.body])).toEqual([
+      ["POST", { sessionID: planningID }],
+      ["POST", { sessionID: "ses_new00000002" }],
     ])
+    expect(server.state.writes.some((write) => write.method === "PATCH")).toBe(false)
     expect(screen.frame()).not.toContain("Failed to")
   } finally {
     await screen.dispose()
@@ -550,7 +555,7 @@ test("a relative Project directory shows an absolute-directory correction withou
       [
         "POST",
         "/api/session",
-        { location: { directory: `${process.env.YCODING_TEST_HOME}/work/dots` }, title: "Dots" },
+        { location: { directory: "~/work/dots" }, title: "Dots" },
       ],
       ["POST", "/api/coordination", { name: "Dots", masterSessionID: "ses_new00000001", memberSessionIDs: [] }],
     ])
@@ -720,8 +725,8 @@ for (const [width, height] of [
         respond: (url, request) => {
           if (
             apply &&
-            (member ? request.method === "PATCH" : request.method === "POST") &&
-            url.pathname.startsWith("/api/coordination")
+            request.method === "POST" &&
+            (member ? url.pathname.endsWith("/members") : url.pathname === "/api/coordination")
           ) {
             calls++
             const current = apply

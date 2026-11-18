@@ -4,6 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import { capturedPartPatches } from "@ycoding-ai/client/file-change-summary"
 import { Service, type Endpoint } from "@ycoding-ai/client/service"
+import { isSessionDirectoryPath } from "../../remote/src/session-directory"
 import { BackendRestart, type RestartPorts } from "./restart"
 import { DesktopEditor, openDesktopEditor, type DraftEditorResult } from "./editor-integration"
 import type { YCodingEvent } from "@ycoding-ai/client"
@@ -155,26 +156,11 @@ async function existingDirectory(value: unknown) {
   return directory
 }
 
-const errorCode = (error: unknown) => object(error) ? error.code : undefined
-const parentIsFile = "A parent of this path is a file. Choose another folder."
 
-async function projectDirectory(value: unknown) {
-  if (typeof value !== "string" || value.includes("\0") || utf8Length(value) > 4096) throw new DesktopError("Choose an absolute folder path of at most 4096 UTF-8 bytes.")
-  const typed = value.trim()
-  const expanded = typed === "~" ? os.homedir() : typed.startsWith("~/") ? path.join(os.homedir(), typed.slice(2)) : typed
-  if (!path.isAbsolute(expanded)) throw new DesktopError("Enter an absolute folder path or one starting with ~/.")
-  const directory = path.resolve(expanded)
-  const info = await fs.stat(directory).catch((error: unknown) => {
-    const code = errorCode(error)
-    if (code === "ENOENT") return undefined
-    throw new DesktopError(code === "ENOTDIR" ? parentIsFile : code === "EACCES" || code === "EPERM" ? "This folder cannot be accessed. Check its access permissions." : "This folder is unavailable. Check its path and access permissions.")
-  })
-  if (info?.isDirectory() === false) throw new DesktopError("Choose a folder, not a file.")
-  if (info === undefined) await fs.mkdir(directory, { recursive: true }).catch((error: unknown) => {
-    const code = errorCode(error)
-    throw new DesktopError(code === "EEXIST" || code === "ENOTDIR" ? parentIsFile : code === "EACCES" || code === "EPERM" || code === "EROFS" ? "This folder cannot be created. Check the parent folder's access permissions." : "This folder could not be created. Check the path and try again.")
-  })
-  return directory
+function projectDirectory(value: unknown) {
+  const typed = typeof value === "string" ? value.trim() : ""
+  if (!isSessionDirectoryPath(typed)) throw new DesktopError("Enter an absolute folder path on the backend machine (such as /srv/app, C:\\Work or \\\\server\\share\\dir), or one starting with ~.")
+  return typed
 }
 
 const hiddenFields = new Set(["auth", "password", "authorization", "headers", "environment", "token", "accesstoken", "access_token", "refreshtoken", "refresh_token", "apikey", "api_key", "credentials", "client_secret", "secret", "key", "config", "settings", "metadata"])
@@ -871,14 +857,6 @@ export class BackendController {
     return { revision, directory: info.directory, projectID: info.project.id }
   }
 
-  private async prepareProjectDirectory(api: Native["api"], signal: AbortSignal, revision: number, ensureCurrent: (message: string) => void, value: unknown, changed: string) {
-    const directory = await projectDirectory(value)
-    ensureCurrent(changed)
-    await this.registerDirectory(api, signal, revision, directory).catch(() => { throw new DesktopError("The folder is ready, but registration failed. Retry to register it and create the Session.") })
-    ensureCurrent(changed)
-    return directory
-  }
-
   async openDirectory(input: unknown): Promise<OpenedDirectory> {
     checkedObject(input, { directory: directoryInput })
     const directory = await existingDirectory(input.directory)
@@ -1280,11 +1258,11 @@ export class BackendController {
       const revision = input.revision as number
       const changed = "Project creation was not confirmed. Refresh Sessions and Projects before retrying."
       return this.use(changed, async (api, signal, _revision, ensureCurrent) => {
-        const directory = await this.prepareProjectDirectory(api, signal, _revision, ensureCurrent, input.directory, changed)
+        const directory = projectDirectory(input.directory)
         const created = await api.session.create({ location: { directory }, title }, { signal })
         if (typeof created.id !== "string" || !sessionID(created.id)) throw new DesktopError(changed)
         try {
-          if (created.location.directory !== directory || created.scope === "standalone") throw new DesktopError("The backend returned a different Session placement")
+          if (typeof created.location.directory !== "string" || created.scope === "standalone") throw new DesktopError("The backend returned an invalid Session placement")
           ensureCurrent("The backend connection changed")
           decodeGroup(await api.coordination.create({ name, masterSessionID: created.id, memberSessionIDs }, { signal }))
         } catch (error) {
@@ -1294,6 +1272,25 @@ export class BackendController {
         ensureCurrent(changed)
         return this.projects()
       }, { revision, changed })
+    }
+    if (input.kind === "attach-member" || input.kind === "detach-member") {
+      const attach = input.kind === "attach-member"
+      checkedObject(input, { kind: string, revision: isRevision, groupID, sessionID: (value) => { session(value); return true }, ...(attach ? { ownerSessionID: maybe((value) => { session(value); return true }) } : {}) }, "Invalid project change.")
+      const target = decodeGroupID(input.groupID)
+      const member = String(input.sessionID)
+      const changed = attach ? "Member attachment was not confirmed. Refresh Projects before retrying." : "Member removal was not confirmed. Refresh Projects before retrying."
+      return this.use(changed, async (api, signal, _revision, ensureCurrent) => {
+        ensureCurrent(changed)
+        if (attach) {
+          const result = await api.coordination.attach({ groupID: target, sessionID: member, ...(input.ownerSessionID === undefined ? {} : { ownerSessionID: String(input.ownerSessionID) }) }, { signal })
+          if (result.groupID !== target || result.sessionID !== member) throw new DesktopError(changed)
+        } else {
+          const result = await api.coordination.detach({ groupID: target, sessionID: member }, { signal })
+          if (result.sessionID !== member || result.removed !== true) throw new DesktopError(changed)
+        }
+        ensureCurrent(changed)
+        return this.projects()
+      }, { revision: input.revision as number, unsent: "Projects are out of date. Refresh before changing them.", changed })
     }
     if (input.kind === "new-member" || input.kind === "delete-member") {
       const member = input.kind === "new-member"
@@ -1315,13 +1312,14 @@ export class BackendController {
           ensureCurrent(changed)
           return this.projects()
         }
-        const directory = await this.prepareProjectDirectory(api, signal, _revision, ensureCurrent, input.directory, changed)
+        const directory = projectDirectory(input.directory)
         const created = await api.session.create({ location: { directory }, ...(title ? { title } : {}) }, { signal })
         if (typeof created.id !== "string" || !sessionID(created.id)) throw new DesktopError(changed)
         try {
-          if (created.location.directory !== directory || created.scope === "standalone") throw new DesktopError("the backend returned a different Session placement")
+          if (typeof created.location.directory !== "string" || created.scope === "standalone") throw new DesktopError("the backend returned an invalid Session placement")
           ensureCurrent("the backend connection changed")
-          decodeGroup(await api.coordination.update({ groupID: target, revision: current.revision, memberSessionIDs: [...members, created.id] }, { signal }))
+          const attached = await api.coordination.attach({ groupID: target, sessionID: created.id }, { signal })
+          if (attached.groupID !== target || attached.sessionID !== created.id) throw new DesktopError("the backend did not confirm the membership")
         } catch (error) {
           const reason = error instanceof DesktopError ? error.message : "the backend did not confirm the membership"
           throw new DesktopError(`Session created: ${created.id}. Project membership not confirmed: ${reason}. Add the existing Session instead of creating another.`)

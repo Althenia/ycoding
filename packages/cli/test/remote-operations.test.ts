@@ -22,6 +22,7 @@ import {
   listPage,
   parseListQuery,
   attentionDetails,
+  placementDirectory,
   sessionStatus,
   successFrames,
 } from "../src/remote-operations"
@@ -1026,6 +1027,9 @@ describe("workspace inventory and Session creation", () => {
       { id: "ses_new", directory: "/work/new" },
       { id: "ses_new", scope: "bound", directory: "~/projects/new" },
       { id: "ses_new", directory: "~" },
+      { id: "ses_new", directory: "~\\projects\\new" },
+      { id: "ses_new", directory: "D:\\Client Work\\New" },
+      { id: "ses_new", directory: "\\\\server\\share\\new" },
       { id: "ses_new", workspace: "wsp_1" },
     ]) expect(frame(input)).toEqual({ ok: true, value: { type: "request", id: "req_1", operation: "session.create", input } })
     for (const input of [
@@ -1033,6 +1037,11 @@ describe("workspace inventory and Session creation", () => {
       { id: "ses_new", scope: "standalone", directory: "/work/new" },
       { id: "ses_new" },
       { id: "ses_new", directory: "relative/new" },
+      { id: "ses_new", directory: "C:" },
+      { id: "ses_new", directory: "C:work" },
+      { id: "ses_new", directory: "\\\\server" },
+      { id: "ses_new", directory: "\\\\?\\C:\\work" },
+      { id: "ses_new", directory: "\\\\.\\pipe\\x" },
       { id: "ses_new", directory: "/work/a\u0000b" },
       { id: "ses_new", directory: `/${"a".repeat(4096)}` },
     ]) expect(frame(input).ok).toBe(false)
@@ -1065,6 +1074,32 @@ describe("workspace inventory and Session creation", () => {
     } finally {
       await rm(parent, { recursive: true, force: true })
     }
+  })
+
+  test("keeps the host path semantics for portable placements and expands a backslash home only on Windows", async () => {
+    expect(placementDirectory("~", { platform: "win32", home: "C:\\Users\\v" })).toBe("C:\\Users\\v")
+    expect(placementDirectory("~\\Work\\New", { platform: "win32", home: "C:\\Users\\v" })).toBe("C:\\Users\\v\\Work\\New")
+    expect(placementDirectory("~/Work/New", { platform: "win32", home: "C:\\Users\\v" })).toBe("C:\\Users\\v\\Work\\New")
+    expect(placementDirectory("D:/Work/../New", { platform: "win32", home: "C:\\Users\\v" })).toBe("D:\\New")
+    expect(placementDirectory("\\\\server\\share\\a", { platform: "win32", home: "C:\\Users\\v" })).toBe("\\\\server\\share\\a")
+    expect(placementDirectory("~/Work/New", { platform: "darwin", home: "/Users/v" })).toBe("/Users/v/Work/New")
+    expect(placementDirectory("/Work/./New/", { platform: "linux", home: "/home/v" })).toBe("/Work/New")
+    for (const platform of ["darwin", "linux"] as const)
+      for (const value of ["~\\Work\\New", "C:\\Work", "D:/Work", "\\\\server\\share\\a"])
+        expect(() => placementDirectory(value, { platform, home: "/home/v" }), `${platform} ${value}`).toThrow("Directory must be an absolute or home-relative path")
+    for (const value of ["C:", "C:work", "relative", "\\\\?\\C:\\x", "~other", ""])
+      expect(() => placementDirectory(value, { platform: "win32", home: "C:\\Users\\v" }), value).toThrow("Directory must be an absolute or home-relative path")
+  })
+
+  test("rejects portable placements that are not absolute on the backend host before any local call or folder creation", async () => {
+    const test = await harness({ results: {} })
+    const rejected = process.platform === "win32" ? ["/ycoding-portable-placement", "//server"]
+      : ["~\\ycoding-portable-placement", "C:\\ycoding-portable-placement", "\\\\server\\share\\ycoding"]
+    for (const directory of rejected) {
+      const outcome = await executeRemoteOperation({ request: request("session.create", { id: "ses_new", directory }), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+      expect(errorOf(outcome).code).toBe("invalid_message")
+    }
+    expect(test.calls).toEqual([])
   })
 
   test("refuses temporary and standalone directories before creating them, including through ancestor symlinks", async () => {

@@ -291,11 +291,11 @@ export function renameInput(detail: ProjectDetail, name: string) {
 export function addMemberInput(detail: ProjectDetail, id: string) {
   if (id === detail.master.sessionID || memberIDs(detail).includes(id)) throw new Error("That Session is already in this Project")
   if (detail.members.length >= maxMembers) throw new Error(`A Project holds at most ${maxMembers} member Sessions`)
-  return { ...update(detail), memberSessionIDs: [...memberIDs(detail), id] }
+  return { groupID: detail.id, sessionID: id }
 }
 
 export function removeMemberInput(detail: ProjectDetail, id: string) {
-  return { ...update(detail), memberSessionIDs: memberIDs(detail).filter((entry) => entry !== id) }
+  return { groupID: detail.id, sessionID: id }
 }
 
 export function changeMasterInput(detail: ProjectDetail, id: string) {

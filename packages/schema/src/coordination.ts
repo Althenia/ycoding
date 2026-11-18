@@ -95,6 +95,21 @@ export const UpdateInput = Schema.Struct({
   settings: GroupSettings.pipe(optional),
 }).annotate({ identifier: "Coordination.UpdateInput" })
 
+export interface AttachInput extends Schema.Schema.Type<typeof AttachInput> {}
+export const AttachInput = Schema.Struct({
+  sessionID: SessionID,
+  ownerSessionID: SessionID.pipe(optional),
+}).annotate({ identifier: "Coordination.AttachInput" })
+
+export interface AttachResult extends Schema.Schema.Type<typeof AttachResult> {}
+export const AttachResult = Schema.Struct({
+  groupID: GroupID,
+  sessionID: SessionID,
+  location: Location.Ref,
+  ownerSessionID: SessionID,
+  reconciled: Schema.Boolean,
+}).annotate({ identifier: "Coordination.AttachResult" })
+
 export interface PendingRequest extends Schema.Schema.Type<typeof PendingRequest> {}
 export const PendingRequest = Schema.Struct({
   kind: RequestKind,

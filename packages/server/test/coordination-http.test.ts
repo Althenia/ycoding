@@ -115,6 +115,63 @@ test("a stale revision and an ineligible Session return typed conflicts", async 
   expect(await missing.json()).toMatchObject({ reason: "Coordination.NotFoundError" })
 })
 
+const attachedResult = () => Schema.decodeUnknownSync(Coordination.AttachResult)({
+  groupID: "cgrp_http", sessionID: "ses_new", location: { directory: "/elsewhere" }, ownerSessionID: "ses_owner", reconciled: false,
+})
+
+test("attach and detach bind the group's Master and URL group through the runtime without Location input", async () => {
+  const received: unknown[] = []
+  await using http = fixture({
+    delete: () => Effect.sync(() => { received.push(["delete"]) }),
+  }, {
+    attach: (caller, input, options) => Effect.sync(() => { received.push(["attach", caller, input, options]); return attachedResult() }),
+    remove: (caller, input, options) => Effect.sync(() => { received.push(["remove", caller, input, options]); return { sessionID: input.sessionID, removed: true as const } }),
+  })
+  const attach = await http.json("/cgrp_http/members", "POST", { sessionID: "ses_new", ownerSessionID: "ses_owner" })
+  expect(attach.status).toBe(200)
+  expect(await attach.json()).toEqual({ data: JSON.parse(JSON.stringify(attachedResult())) })
+  expect((await http.json("/cgrp_http/members", "POST", { sessionID: "ses_new" })).status).toBe(200)
+  const detach = await http.json("/cgrp_http/members/ses_member", "DELETE")
+  expect(detach.status).toBe(200)
+  expect(await detach.json()).toEqual({ data: { sessionID: "ses_member", removed: true } })
+  expect(received).toEqual([
+    ["attach", "ses_master", { sessionID: "ses_new", ownerSessionID: "ses_owner" }, { groupID: "cgrp_http" }],
+    ["attach", "ses_master", { sessionID: "ses_new" }, { groupID: "cgrp_http" }],
+    ["remove", "ses_master", { sessionID: "ses_member" }, { groupID: "cgrp_http" }],
+  ])
+  expect(http.authorized()).toBe(3)
+})
+
+test("attach and detach reject malformed identities before reaching the runtime", async () => {
+  let reached = 0
+  await using http = fixture({}, {
+    attach: () => Effect.sync(() => { reached += 1; return attachedResult() }),
+    remove: () => Effect.sync(() => { reached += 1; return { sessionID: info.members[0]!.sessionID, removed: true as const } }),
+  })
+  for (const body of [{}, { sessionID: "bad" }, { sessionID: "ses_new", ownerSessionID: "bad" }])
+    expect((await http.json("/cgrp_http/members", "POST", body)).status).toBe(400)
+  expect((await http.json("/cgrp_http/members/bad", "DELETE")).status).toBe(400)
+  expect((await http.json("/bad/members/ses_member", "DELETE")).status).toBe(400)
+  expect(reached).toBe(0)
+})
+
+test("attach and detach refusals and unknown Projects return typed conflicts", async () => {
+  const refused = new CoordinationRuntime.RefusedError({ message: "Session ses_member has active work or pending requests" })
+  await using http = fixture({}, {
+    attach: () => Effect.fail(refused),
+    remove: () => Effect.fail(refused),
+    get: (groupID) => groupID === info.id ? Effect.succeed(info) : Effect.fail(new CoordinationService.NotFoundError({ message: `Project ${groupID} does not exist` })),
+  })
+  for (const [path, method, body] of [["/cgrp_http/members", "POST", { sessionID: "ses_new" }], ["/cgrp_http/members/ses_member", "DELETE", undefined]] as const) {
+    const response = await http.json(path, method, body)
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ _tag: "CoordinationError", reason: "Coordination.RefusedError", message: refused.message })
+  }
+  const missing = await http.json("/cgrp_missing/members/ses_member", "DELETE")
+  expect(missing.status).toBe(409)
+  expect(await missing.json()).toMatchObject({ reason: "Coordination.NotFoundError" })
+})
+
 test("removed lifecycle, claim, dispatch, and wait routes are not served", async () => {
   await using http = fixture({})
   for (const [path, method] of [["/cgrp_http/arm", "POST"], ["/cgrp_http/dispatch", "POST"], ["/cgrp_http/claim", "POST"], ["/cgrp_http/wait", "POST"], ["/cgrp_http/members", "PUT"], ["/cgrp_http/capacity", "GET"]] as const)

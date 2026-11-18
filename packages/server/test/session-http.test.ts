@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { Session } from "@ycoding-ai/core/session"
 import { SubagentCursor } from "@ycoding-ai/protocol/groups/session"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
@@ -177,6 +177,18 @@ test("root creation rejects a file or relative folder before recording or creati
   expect(f.events).toEqual([])
   expect(f.created).toEqual([])
   expect(await isDirectory(join("relative", "project"))).toBe(false)
+})
+
+test("root creation on a POSIX host refuses Windows path forms instead of rewriting them into local folders", async () => {
+  await using f = await exactPathFixture()
+  for (const directory of ["~\\Workspace\\app", "C:\\Users\\me\\project", "C:project", "\\\\server\\share\\project"]) {
+    const response = await f.http.json("/api/session", "POST", { location: { directory } })
+    expect([directory, response.status]).toEqual([directory, 400])
+    expect(await response.json()).toMatchObject({ _tag: "InvalidRequestError", field: "location.directory" })
+  }
+  expect(await readdir(f.home)).toEqual([])
+  expect(f.events).toEqual([])
+  expect(f.created).toEqual([])
 })
 
 test("workspace-scoped root creation leaves the folder untouched and forwards the Location as sent", async () => {

@@ -918,6 +918,8 @@ describe("remote operations", () => {
       "coordination.get",
       "coordination.update",
       "coordination.delete",
+      "coordination.attach",
+      "coordination.detach",
       "machine.keepAwake.get",
     "machine.keepAwake.set",
     "machine.telemetry.consent.get",

@@ -65,6 +65,36 @@ test("Project mutations verify supplied Session identities and preserve partial 
   expect(fixture.calls.at(-1)).toEqual({ method: "coordinationDelete", args: [{ groupID: "cgrp_1" }] })
 })
 
+test("Project attach and detach target one verified Session without a caller-provided actor", async () => {
+  const attached = { groupID: "cgrp_1", sessionID: "ses_member", location: { directory: "/work" }, ownerSessionID: "ses_master", reconciled: false }
+  const detached = { sessionID: "ses_member", removed: true }
+  const fixture = await harness({ coordinationAttach: attached, coordinationDetach: detached })
+  const attach = { groupID: "cgrp_1", sessionID: "ses_member" }
+  expect(await fixture.run("coordination.attach", attach)).toEqual(success({ data: attached }))
+  const owned = { ...attach, ownerSessionID: "ses_master" }
+  expect(await fixture.run("coordination.attach", owned)).toEqual(success({ data: attached }))
+  expect(await fixture.run("coordination.detach", attach)).toEqual(success({ data: detached }))
+  expect(fixture.calls.filter((call) => call.method.startsWith("coordination"))).toEqual([
+    { method: "coordinationAttach", args: [attach] },
+    { method: "coordinationAttach", args: [owned] },
+    { method: "coordinationDetach", args: [attach] },
+  ])
+})
+
+test("Project attach verifies the Session and owner while detach leaves removal checks to the backend", async () => {
+  const fixture = await harness({ coordinationAttach: {}, coordinationDetach: {} })
+  const attach = { groupID: "cgrp_1", sessionID: "ses_member" }
+  expect(await fixture.run("coordination.attach", { ...attach, sessionID: "ses_missing" })).toEqual(failure("session_not_allowed"))
+  expect(await fixture.run("coordination.attach", { ...attach, ownerSessionID: "ses_missing" })).toEqual(failure("session_not_allowed"))
+  for (const fields of [{ groupID: "grp_1" }, { sessionID: "bad" }, { ownerSessionID: "bad" }, { directory: "/tmp" }, { masterSessionID: "ses_master" }])
+    expect(await fixture.run("coordination.attach", { ...attach, ...fields })).toEqual(failure("invalid_message"))
+  for (const fields of [{ groupID: "grp_1" }, { sessionID: "bad" }, { ownerSessionID: "ses_master" }, { directory: "/tmp" }])
+    expect(await fixture.run("coordination.detach", { ...attach, ...fields })).toEqual(failure("invalid_message"))
+  expect(await fixture.run("coordination.attach", attach, "ses_member")).toEqual(failure("invalid_message"))
+  expect(await fixture.run("coordination.detach", attach, "ses_member")).toEqual(failure("invalid_message"))
+  expect(fixture.calls.filter((call) => call.method.startsWith("coordinationAttach") || call.method.startsWith("coordinationDetach"))).toEqual([])
+})
+
 test("Session deletion resolves its Location from backend inventory", async () => {
   const fixture = await harness()
   expect(await fixture.run("session.delete", undefined, "ses_member")).toEqual(success({}))
@@ -85,6 +115,8 @@ test("unconfirmed Project and Session mutations are never replayed", async () =>
     ["coordination.create", "coordinationCreate", { name: "Project", masterSessionID: "ses_master", memberSessionIDs: [] }, undefined],
     ["coordination.update", "coordinationUpdate", { groupID: "cgrp_1", revision: 3 }, undefined],
     ["coordination.delete", "coordinationDelete", { groupID: "cgrp_1" }, undefined],
+    ["coordination.attach", "coordinationAttach", { groupID: "cgrp_1", sessionID: "ses_member" }, undefined],
+    ["coordination.detach", "coordinationDetach", { groupID: "cgrp_1", sessionID: "ses_member" }, undefined],
     ["session.delete", "deleteSession", undefined, "ses_member"],
   ] as const) {
     const fixture = await harness({ [method]: new LocalFailure("transport", "Socket closed") })

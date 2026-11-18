@@ -254,6 +254,7 @@ export function ProjectMembers(props: {
   const rows = createMemo<Row[]>(() =>
     mode() === "add"
       ? [
+          { key: "attach:help", kind: "info", label: "Attach without restarting · any directory" },
           ...sessionPickerRows({
             sessions: props.sessions(),
             query: search(),
@@ -291,6 +292,7 @@ export function ProjectMembers(props: {
             },
           },
           { key: "directory:help", kind: "info", label: "Enter to edit · ←/→ recent directories" },
+          { key: "directory:any", kind: "info", label: "Absolute path or ~/…, Git or not" },
           {
             key: "title",
             kind: "item",

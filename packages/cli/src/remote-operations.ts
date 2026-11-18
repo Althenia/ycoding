@@ -10,6 +10,7 @@ import { Project } from "@ycoding-ai/schema/project"
 import type { FormAnswer, ReviewDecideInput, SessionInfo } from "@ycoding-ai/client/promise"
 import { capturedChildSessionIDs, summarizeCapturedChanges } from "@ycoding-ai/client/file-change-summary"
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
+import { hostDirectory } from "@ycoding-ai/core/host-directory"
 import { Global } from "@ycoding-ai/core/global"
 import {
   RemoteLimits,
@@ -17,6 +18,7 @@ import {
   alertTitle,
   isRemoteLatencySample,
   isRemoteReviewItemID,
+  isSessionDirectoryPath,
   isSessionID,
   isSessionTitle,
   remoteError,
@@ -1370,6 +1372,10 @@ function coordinationPayload(operation: RemoteOperation, fields: Readonly<Record
     return { name: requireString(fields.name, "name", 120), masterSessionID: sessionID(fields.masterSessionID, "masterSessionID"), memberSessionIDs: coordinationMemberSessionIDs(fields.memberSessionIDs) }
   const groupID = coordinationIDOf(fields.groupID, "cgrp_", "groupID")
   if (operation === "coordination.get" || operation === "coordination.delete") return { groupID }
+  if (operation === "coordination.attach")
+    return { groupID, sessionID: sessionID(fields.sessionID, "sessionID"),
+      ...(fields.ownerSessionID === undefined ? {} : { ownerSessionID: sessionID(fields.ownerSessionID, "ownerSessionID") }) }
+  if (operation === "coordination.detach") return { groupID, sessionID: sessionID(fields.sessionID, "sessionID") }
   const revision = coordinationInteger(fields.revision, "revision", 0, Number.MAX_SAFE_INTEGER)
   if (operation === "coordination.update")
     return { groupID, revision,
@@ -1394,6 +1400,13 @@ async function executeCoordination(input: OperationInput, operation: RemoteOpera
       ? local.coordinationCreate(payload as Parameters<LocalServer["coordinationCreate"]>[0])
       : local.coordinationUpdate(payload as Parameters<LocalServer["coordinationUpdate"]>[0])
   }
+  if (operation === "coordination.attach") {
+    for (const id of [payload.sessionID, payload.ownerSessionID])
+      if (typeof id === "string" && await input.sessions.verify(id, input.signal) === undefined)
+        throw new OperationError("session_not_allowed", "A Project Session is not available at its recorded location")
+    return local.coordinationAttach(payload as Parameters<LocalServer["coordinationAttach"]>[0])
+  }
+  if (operation === "coordination.detach") return local.coordinationDetach(payload as Parameters<LocalServer["coordinationDetach"]>[0])
   if (operation === "coordination.get") return local.coordinationGet(payload as Parameters<LocalServer["coordinationGet"]>[0])
   if (operation === "coordination.delete") return local.coordinationDelete(payload as Parameters<LocalServer["coordinationDelete"]>[0])
   return unknownOperation()
@@ -2280,6 +2293,8 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "coordination.get": ["groupID"],
   "coordination.update": ["groupID", "revision", "name", "masterSessionID", "memberSessionIDs", "settings"],
   "coordination.delete": ["groupID"],
+  "coordination.attach": ["groupID", "sessionID", "ownerSessionID"],
+  "coordination.detach": ["groupID", "sessionID"],
   "session.status": [],
   "session.catalog": [],
   "workspace.catalog": ["workspace"],
@@ -2362,6 +2377,8 @@ const mutations: ReadonlySet<string> = new Set([
   "coordination.create",
   "coordination.update",
   "coordination.delete",
+  "coordination.attach",
+  "coordination.detach",
   "session.delete",
   "session.fork",
   "session.compact",
@@ -2637,11 +2654,10 @@ function predictionInput(fields: Readonly<Record<string, unknown>>) {
   }
 }
 
-function placementDirectory(value: unknown) {
-  const path = requireString(value, "directory", 4_096)
-  const expanded = path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path
-  if (path.includes("\0") || !isAbsolute(expanded)) throw new OperationError("invalid_message", "Directory must be an absolute or home-relative path")
-  return resolve(expanded)
+export function placementDirectory(value: unknown, host: { readonly platform: NodeJS.Platform; readonly home: string } = { platform: process.platform, home: homedir() }) {
+  const directory = isSessionDirectoryPath(value) ? hostDirectory(value, host.home, host.platform) : undefined
+  if (directory === undefined) throw new OperationError("invalid_message", "Directory must be an absolute or home-relative path")
+  return directory
 }
 
 function requireString(

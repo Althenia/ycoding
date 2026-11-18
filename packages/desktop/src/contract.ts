@@ -68,6 +68,8 @@ export type ProjectMutationInput =
   | { readonly kind: "delete"; readonly revision: number; readonly groupID: string }
   | { readonly kind: "new-member"; readonly revision: number; readonly groupID: string; readonly groupRevision: number; readonly directory: string; readonly title?: string }
   | { readonly kind: "delete-member"; readonly revision: number; readonly groupID: string; readonly groupRevision: number; readonly sessionID: string }
+  | { readonly kind: "attach-member"; readonly revision: number; readonly groupID: string; readonly sessionID: string; readonly ownerSessionID?: string }
+  | { readonly kind: "detach-member"; readonly revision: number; readonly groupID: string; readonly sessionID: string }
 export type WorkspaceMutationInput =
   | { readonly kind: "create-copy"; readonly revision: number; readonly projectID: string; readonly sourceDirectory: string; readonly directory: string; readonly strategy?: string; readonly name?: string }
   | { readonly kind: "refresh-copies"; readonly revision: number; readonly projectID: string; readonly directory: string }

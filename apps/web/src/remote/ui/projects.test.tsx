@@ -61,6 +61,14 @@ test("typed paths become directory targets and known choices keep their workspac
   expect(projectDirectoryTarget("~/code/x", "")).toEqual({ target: { directory: "~/code/x" } })
   expect(projectDirectoryTarget("/known", "wsp_known")).toEqual({ target: { workspace: "wsp_known" } })
   expect(projectDirectoryTarget("", "")).toEqual({ error: "Choose a directory" })
-  expect(projectDirectoryTarget("relative/dir", "")).toEqual({ error: "Enter an absolute path, or one starting with ~ or ~/" })
-  expect(projectDirectoryTarget("~other/x", "")).toEqual({ error: "Enter an absolute path, or one starting with ~ or ~/" })
+  for (const rejected of ["relative/dir", "~other/x", "C:work", "C:", "work\\repo", "\\\\fileserver", "\\\\fileserver\\", "\\\\?\\C:\\x"])
+    expect(projectDirectoryTarget(rejected, "")).toMatchObject({ error: expect.stringContaining("Enter an absolute path") })
+})
+
+test("Windows, UNC and backslash home paths reach the target exactly as typed, trimming only the outer whitespace", () => {
+  for (const typed of ["C:\\Work\\Repo", "d:/Work/Repo", "C:\\", "\\\\fileserver\\share\\Team Plan\\", "~\\notes", "~/notes", "/srv/new app"]) {
+    expect(projectDirectoryTarget(typed, "")).toEqual({ target: { directory: typed } })
+    expect(projectDirectoryTarget(`\t  ${typed}  \n`, "")).toEqual({ target: { directory: typed } })
+  }
+  expect(projectDirectoryTarget("C:\\Work\\ Repo ", "")).toEqual({ target: { directory: "C:\\Work\\ Repo" } })
 })

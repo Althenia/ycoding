@@ -1,8 +1,7 @@
 import type { CoordinationInfo, CoordinationParticipant, CoordinationUpdateInput } from "@ycoding-ai/client"
-import path from "path"
+import { isSessionDirectoryPath } from "../../../remote/src/session-directory"
 import { createContext, createMemo, createSignal, onCleanup, onMount, useContext, type ParentProps } from "solid-js"
 import { useClient } from "./client"
-import { useTuiPaths } from "./runtime"
 import { useConfig } from "../config"
 import {
   externalNotificationAllowed,
@@ -48,10 +47,10 @@ function memberView(participant: CoordinationParticipant, role: ProjectMemberVie
   }
 }
 
-function absoluteDirectory(input: string, home: string) {
-  const expanded = input === "~" ? home : input.startsWith("~/") ? path.join(home, input.slice(2)) : input
-  if (!path.isAbsolute(expanded)) throw new Error("Choose an absolute directory")
-  return expanded
+function typedDirectory(input: string) {
+  const directory = input.trim()
+  if (!isSessionDirectoryPath(directory)) throw new Error("Choose an absolute directory")
+  return directory
 }
 
 function projectView(info: CoordinationInfo): ProjectView {
@@ -72,7 +71,6 @@ function projectView(info: CoordinationInfo): ProjectView {
 function createCoordination() {
   const client = useClient()
   const config = useConfig()
-  const paths = useTuiPaths()
   const [projects, setProjects] = createSignal<ProjectView[]>()
   const [roots, setRoots] = createSignal<readonly RootSession[]>([])
   const [error, setError] = createSignal<string>()
@@ -192,7 +190,7 @@ function createCoordination() {
     return created.id
   }
   const createForProject = async (key: string, input: string, title?: string) => {
-    const directory = absoluteDirectory(input, paths.home)
+    const directory = typedDirectory(input)
     const prior = creations.get(key)
     if (prior?.sessionID) return prior.sessionID
     if (prior)
@@ -286,7 +284,7 @@ function createCoordination() {
     addMember: (projectID, sessionID) => {
       if (roster(projectView(record(projectID))).some((member) => member.sessionID === sessionID))
         return Promise.reject(new Error("A Session can belong to a Project once"))
-      return update(projectID, { memberSessionIDs: [...memberIDs(projectID), sessionID] }).then(() => undefined)
+      return mutate(() => client.api.coordination.attach({ groupID: projectID, sessionID })).then(() => undefined)
     },
     newMember: async (projectID, directory, title) => {
       const key = JSON.stringify(["member", projectID, directory, title])
@@ -299,7 +297,7 @@ function createCoordination() {
         )
         if (owner && (owner.id !== projectID || owner.master.sessionID === sessionID))
           throw new Error("The Session belongs to another Project")
-        if (!owner) await update(projectID, { memberSessionIDs: [...memberIDs(projectID), sessionID] })
+        if (!owner) await mutate(() => client.api.coordination.attach({ groupID: projectID, sessionID }))
         creations.delete(key)
         return sessionID
       } catch (cause) {
@@ -309,9 +307,7 @@ function createCoordination() {
     removeMember: (projectID, sessionID) => {
       if (record(projectID).master.sessionID === sessionID)
         return Promise.reject(new Error("Change the Master in Settings before removing it"))
-      return update(projectID, { memberSessionIDs: memberIDs(projectID).filter((id) => id !== sessionID) }).then(
-        () => undefined,
-      )
+      return mutate(() => client.api.coordination.detach({ groupID: projectID, sessionID })).then(() => undefined)
     },
     deleteMember: (projectID, sessionID) => {
       if (!memberIDs(projectID).includes(sessionID))

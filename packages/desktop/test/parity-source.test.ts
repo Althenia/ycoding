@@ -184,10 +184,13 @@ test("source prerequisite: Project members have reachable create, remove and del
   const renderer = await desktop("renderer.tsx")
   expect(renderer).toContain("<DesktopProjectMembers")
   const members = await desktop("project-members.tsx")
-  for (const label of ["Create member Session", "Remove member", "Delete member"]) expect(members).toContain(label)
+  for (const label of ["Create member Session", "Add member", "Remove ${member.title} from project", "Delete member Session ${member.title}"]) expect(members).toContain(label)
+  for (const id of ["project-member-new", "project-member-add", "project-member-remove", "project-member-delete"]) expect(members).toContain(`data-action-id="${id}"`)
   expect(members).toMatch(/kind:\s*"new-member"/)
   expect(members).toMatch(/kind:\s*"delete-member"/)
-  expect(members).toContain("memberSessionIDs")
+  expect(members).toMatch(/kind:\s*"attach-member"/)
+  expect(members).toMatch(/kind:\s*"detach-member"/)
+  expect(members).not.toContain("memberSessionIDs")
 })
 
 test("source contract: stopped subagent continuation uses its recovery review, not a fabricated resume route", async () => {
