@@ -22,6 +22,17 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.10",
+    date: "2026-11-18",
+    title: "Project Session attachment and browser dropdowns",
+    tags: ["Added", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Attach an existing root Session to a Project from the TUI, Desktop, or Web without moving or restarting it. Detaching a settled member preserves its Session and history." },
+      { tag: "Fixed", text: "Project folder pickers accept Windows drive and network-share paths for Windows backends. Home-relative paths resolve on the selected backend rather than on the client." },
+      { tag: "Fixed", text: "Browser controls find options in open dropdowns and confirm the selected value before reporting success. Enter and Space activate focused controls, and fields labeled Account Code are not mistaken for one-time-code fields." },
+    ],
+  },
+  {
     version: "0.11.9",
     date: "2026-11-18",
     title: "Reliable background server startup",
