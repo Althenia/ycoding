@@ -56,7 +56,7 @@ test("destination surfaces render supplied data, states and actions", () => {
   const settings = renderToString(() => createComponent(SharedSettingsSurface, { animations: true, keepAwakeChecked: false, keepAwakeDetail: "Off", telemetryConsent: "undecided", telemetryNote: "Not decided", onToggleAnimations: () => {}, onToggleKeepAwake: () => {}, onDecideTelemetry: () => {}, onToggleNotifications: () => {}, onToggleSavedPermissions: () => {}, onToggleCloseApp: () => {} }))
   for (const text of ["Appearance", "Keep awake", "Latency diagnostics", "Notifications", "Permissions", "Close app"]) expect(settings).toContain(text)
   const tabs = renderToString(() => createComponent(SharedCompanionTabs, { active: "activity", onSelect: () => {}, onCloseTab: () => {} }))
-  for (const text of ['class="rl-pane-tabs"', 'class="rl-pane-tab" data-active="true"', 'class="rl-pane-tab-close"']) expect(tabs).toContain(text)
+  for (const text of ['class="rl-pane-tabs"', 'data-tab="activity" data-active="true"', 'class="rl-pane-tab-close"']) expect(tabs).toContain(text)
 })
 
 test("destination states distinguish empty, preparing, disabled and settled controls", async () => {
@@ -220,7 +220,7 @@ test("shared conversation and composer compositions render their semantic contai
   expect(header).toContain('class="workspace__topbar"')
   expect(header).toContain("<h1")
   expect(header).toContain('class="conversation-header__actions"')
-  const user = renderToString(() => createComponent(SharedMessageTurn, { kind: "user", text: "Hello", receipt: "Sent" }))
+  const user = renderToString(() => createComponent(SharedMessageTurn, { kind: "user", markdownText: "Hello", receipt: "Sent" }))
   expect(user).toContain('class="transcript-message transcript-message--user"')
   expect(user).toContain('class="transcript-message__bubble"')
   expect(user).toContain('class="transcript-message__receipt"')
@@ -358,13 +358,13 @@ test("expanded disclosures render Markdown cards and every disclosure control us
   expect(page).toMatch(/data-action-id="page-back"[^>]*><svg class="rl-ico rl-ico--back"[\s\S]*?<path d="M19 12H5"/)
 })
 
-test("user turns render supplied Markdown and keep plain text turns unchanged", () => {
+test("user turns render Markdown and do not add empty text to attachment-only bubbles", () => {
   const markdown = renderToString(() => createComponent(SharedMessageTurn, { kind: "user", markdownText: "Use **bold** and `code`" }))
-  expect(markdown).toMatch(/<div class="transcript-message__bubble"><div class="transcript-md"><p>Use <strong>bold<\/strong> and <code>code<\/code>/)
+  expect(markdown).toMatch(/<div class="transcript-message__bubble"><div class="transcript-message__bubble-text"><div class="transcript-md"><p>Use <strong>bold<\/strong> and <code>code<\/code>/)
   expect(markdown).not.toContain('<p class="transcript-message__bubble">')
-  const plain = renderToString(() => createComponent(SharedMessageTurn, { kind: "user", text: "**Hello**" }))
-  expect(plain).toContain('<p class="transcript-message__bubble">**Hello**</p>')
-  expect(plain).not.toContain("transcript-md")
+  const attachment = renderToString(() => createComponent(SharedMessageTurn, { kind: "user", bubbleAttachments: "Attached diagram" }))
+  expect(attachment).toContain('<div class="transcript-message__bubble">Attached diagram</div>')
+  expect(attachment).not.toContain("transcript-md")
 })
 
 test("settings offer an icon-led theme choice and expanded sections render as cards", () => {
@@ -702,7 +702,7 @@ test("the context panel ends in full-width usage and retained-message rows and k
 test("collapsed transcript disclosures and edited files stay one quiet row until expanded", async () => {
   const files = [{ path: "a.ts", patch: "", additions: 40, deletions: 10 }, { path: "b.ts", patch: "", additions: 8, deletions: 9 }]
   const closed = renderToString(() => createComponent(SharedEditedFilesCard, { files }))
-  expect(closed).toMatch(/<button type="button" class="rl-edited-disclosure" aria-expanded="false"><svg[^>]*width="14"[\s\S]*?<\/svg><span class="rl-edited-title">2 files changed<\/span><span class="rl-diff-total"><span class="ws-add">\+48<\/span><span class="ws-del">−19<\/span><\/span>/)
+  expect(closed).toMatch(/<button type="button" class="rl-edited-disclosure" aria-expanded="false"><svg[^>]*width="16"[\s\S]*?<\/svg><span class="rl-edited-title">2 files changed<\/span><span class="rl-diff-total"><span class="ws-add">\+48<\/span><span class="ws-del">−19<\/span><\/span>/)
   for (const text of ["data-panel", "data-open", "rl-edited-files"]) expect(closed).not.toContain(text)
   expect(renderToString(() => createComponent(SharedEditedFilesCard, { files, title: "Edited files" }))).toContain('<span class="rl-edited-title">Edited files</span>')
   const opened = renderToString(() => createComponent(SharedEditedFilesCard, { files, defaultOpen: true }))

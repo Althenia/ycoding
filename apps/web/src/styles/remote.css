@@ -27,7 +27,13 @@
 }
 
 .app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) {
-  --remote-column: var(--yc-content-max);
+  --remote-column: 64rem;
+}
+
+@media (min-width: 1024px) {
+  .app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) {
+    --conversation-inset: var(--yc-space-10);
+  }
 }
 
 .app:has(> .status-strip) {
@@ -281,7 +287,8 @@ body:has(.app) {
 
 @media (hover: hover) { .remote-nav__link--settings.remote-nav__link--active:hover { background: var(--yc-green-soft); } }
 
-.remote-nav__link > svg { flex: none; color: var(--yc-text-subtle); }
+.remote-nav__link > svg { flex: none; color: var(--navigation-ink, var(--yc-text-subtle)); }
+.bottom-nav__item:not([aria-current="page"]) .bottom-nav__icon > svg { color: var(--navigation-ink, var(--yc-text-subtle)); }
 .remote-nav__link--active > svg { color: var(--yc-signal); }
 .remote-nav__link--settings.remote-nav__link--active > svg { color: var(--yc-green-strong); }
 .remote-nav__link:focus-visible { outline: 2px solid var(--yc-focus); outline-offset: -2px; }
@@ -436,6 +443,10 @@ body:has(.app) {
   padding: var(--yc-space-5) var(--yc-gutter) var(--yc-space-8);
   min-inline-size: 0;
   min-block-size: 0;
+}
+
+.app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .workspace__scroll {
+  padding-inline: var(--conversation-inset, var(--yc-gutter));
 }
 
 .route-panel { position: relative; min-block-size: 100%; opacity: 1; transition: opacity var(--yc-dur-quick) var(--yc-ease-standard); }
@@ -1300,8 +1311,9 @@ form .request__actions .button--secondary {
 
 .app--settings .page-head,
 .app--settings .pane {
-  inline-size: min(100%, var(--yc-content-max));
-  margin-inline: 0;
+  inline-size: min(100%, 64rem);
+  min-inline-size: 0;
+  margin-inline: auto;
   padding-inline: 0;
 }
 
@@ -1376,8 +1388,8 @@ form .request__actions .button--secondary {
   position: relative;
   display: block;
   block-size: 0;
-  inline-size: min(calc(100% - 2 * var(--yc-gutter)), var(--remote-column));
-  margin-inline: var(--yc-gutter) 0;
+  inline-size: min(calc(100% - 2 * var(--conversation-inset, var(--yc-gutter))), var(--remote-column));
+  margin-inline: auto;
 }
 
 .app--conversation.app--selected:not(.app--office, .app--new-session) .workspace__scroll {
@@ -1406,13 +1418,6 @@ form .request__actions .button--secondary {
 .app--conversation.app--selected .workspace__scroll > .remote-conversation-view { inline-size: 100%; margin-inline: 0; }
 .app--conversation.app--selected .workspace__scroll > .route-panel > .new-session-composer { inline-size: min(100%, var(--remote-column)); }
 
-.app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .workspace__scroll > *,
-.app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .workspace__scroll > .remote-conversation-view > *,
-.app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .composer > *,
-.app--conversation.app--selected:not(.app--office, .app--new-session, .app--selected-loading) .todo-panel__inner {
-  margin-inline: 0;
-}
-
 /* The page already sits inside the workspace gutter; a second pane inset would
    indent it past every other screen's edge. */
 .sessions-page {
@@ -1423,12 +1428,10 @@ form .request__actions .button--secondary {
 .app--sessions .workspace__scroll > .route-panel,
 .app--usage .workspace__scroll > .route-panel { max-inline-size: var(--yc-content-max); margin-inline: 0; }
 
-/* Expansive screens widen the one content column; Session detail keeps its reading measure. */
+/* Expansive screens widen Sessions and Usage without stretching Settings or Conversation. */
 @media (min-width: 1600px) {
   .app--sessions .workspace__scroll > .route-panel,
   .app--usage .workspace__scroll > .route-panel { max-inline-size: var(--yc-content-max-wide); }
-  .app--settings .page-head,
-  .app--settings .pane { inline-size: min(100%, var(--yc-content-max-wide)); }
 }
 
 .sessions-page > .running-sessions { margin-block-end: var(--yc-space-5); }
@@ -1940,10 +1943,6 @@ form .request__actions .button--secondary {
   grid-column: 1 / -1;
 }
 
-.settings__category {
-  display: none;
-}
-
 .settings__head h2 {
   font-size: var(--yc-size-md);
   line-height: var(--yc-leading-md);
@@ -2392,9 +2391,9 @@ form .request__actions .button--secondary {
 .companion .companion__tabs.rl-pane-tabs { gap: var(--yc-space-6); overflow-y: hidden; }
 .companion .rl-pane-tabs .rl-pane-tab { min-block-size: var(--yc-control-h-dense); padding: 0; border: 0; border-radius: 0; background: transparent; }
 .companion .rl-pane-tabs .rl-pane-tab > button[role="tab"] { min-block-size: var(--yc-control-h-dense); padding: 0; border-radius: 0; color: var(--yc-text-muted); font: var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-sans); }
-.companion .rl-pane-tabs .rl-pane-tab[data-active="true"] > button[role="tab"] { color: var(--yc-text); box-shadow: inset 0 -2px 0 var(--yc-green-strong); }
+.companion .rl-pane-tabs .rl-pane-tab[data-active="true"] > button[role="tab"] { color: var(--yc-text); box-shadow: inset 0 -2px 0 var(--companion-ink, var(--yc-green-strong)); }
 #companion-changes > p { margin:0 0 var(--yc-space-2); color:var(--yc-text-muted); font:var(--yc-size-sm)/var(--yc-leading-sm) var(--yc-font-sans); }
-#companion-context .companion__context-total { color:var(--yc-text); font:var(--yc-weight-bold) 28px/36px var(--yc-font-mono); font-variant-numeric: tabular-nums; letter-spacing: var(--yc-tracking-tight); }
+#companion-context .companion__context-total { color:var(--yc-green-strong); font:var(--yc-weight-bold) 28px/36px var(--yc-font-mono); font-variant-numeric: tabular-nums; letter-spacing: var(--yc-tracking-tight); }
 .companion__context-bar-segment[data-category="system"], .companion__context-swatch[data-category="system"] { background:var(--yc-context-system); }
 .companion__context-bar-segment[data-category="tools"], .companion__context-swatch[data-category="tools"] { background:var(--yc-context-tools); }
 .companion__context-bar-segment[data-category="user"], .companion__context-swatch[data-category="user"] { background:var(--yc-green-strong); }
@@ -2678,7 +2677,7 @@ form .request__actions .button--secondary {
       grid-column: 1;
     }
 
-    .app--conversation.app--selected .workspace__main > :is(.workspace__scroll, .subagent-resident) {
+    .app--conversation.app--selected .workspace__main > .workspace__scroll {
       grid-column: 1 / -1;
     }
 

@@ -335,6 +335,26 @@ function themeOf(themes: Record<string, Declarations>, name: string): Declaratio
   return tokens
 }
 
+test("transcript accents stay readable on the surfaces that carry them", async () => {
+  const { themes } = await stylesheets()
+  const transcript = await stylesheet("../remote/ui/transcript.css")
+  for (const [theme, tokens] of Object.entries(themes)) {
+    const foreground = (selector: string) => resolveColor(value(declarations(transcript, selector), "color"), tokens)
+    const floor = HIGH_CONTRAST_NAMES.includes(theme) ? AAA_NORMAL_TEXT : AA_NORMAL_TEXT
+    for (const surface of ["--yc-bg", "--yc-surface", "--yc-surface-raised"]) {
+      const background = required(tokens, surface)
+      const bubble = composite(required(tokens, "--yc-green-soft"), background)
+      for (const selector of [".transcript-md a", ".transcript-md__heading"]) {
+        expect(contrastRatio(foreground(selector), background), `${theme} ${selector} on ${surface}`).toBeGreaterThanOrEqual(floor)
+        expect(contrastRatio(foreground(selector), bubble), `${theme} ${selector} on mint`).toBeGreaterThanOrEqual(floor)
+      }
+      for (const selector of [".transcript-tool__tag", ".transcript-reasoning__tag"]) expect(contrastRatio(foreground(selector), background), `${theme} ${selector}`).toBeGreaterThanOrEqual(3)
+    }
+    expect(contrastRatio(foreground(".transcript-md :not(pre)>code"), required(tokens, "--yc-surface-sunken")), `${theme} inline code`).toBeGreaterThanOrEqual(AA_NORMAL_TEXT)
+    for (const selector of [".transcript-md__code-head", ".transcript-md__code-head button"]) expect(contrastRatio(foreground(selector), required(tokens, "--yc-terminal-bg")), `${theme} ${selector}`).toBeGreaterThanOrEqual(AA_NORMAL_TEXT)
+  }
+})
+
 function required(tokens: Declarations, token: string): string {
   const declared = tokens[token]
   if (declared === undefined) throw new Error(`undefined token ${token}`)

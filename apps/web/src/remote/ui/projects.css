@@ -87,14 +87,17 @@
 .project-sheet .overlay__body { padding:0; display:grid; min-block-size:0; overflow:hidden; }
 .project-sheet .project-panel { max-block-size:75dvh; }
 .project-event { display:grid; grid-template-columns:auto minmax(0,1fr) auto; grid-template-areas:"glyph heading open" "excerpt excerpt excerpt"; align-items:start; column-gap:var(--yc-space-2); row-gap:var(--yc-space-1); min-inline-size:0; padding:var(--yc-space-2) var(--yc-space-3); background:var(--yc-surface); border:0; border-radius:var(--yc-radius-lg); font-size:var(--yc-size-xs); line-height:var(--yc-leading-xs); }
-.project-event__glyph { grid-area:glyph; }
+.project-event__glyph { grid-area:glyph; display:inline-flex; color:var(--yc-context-reasoning); }
+.project-event[data-event="completed"] .project-event__glyph { color:var(--yc-green-strong); }
+.project-event[data-event="failed"] .project-event__glyph { color:var(--yc-danger); }
+.project-event:is([data-event="question"],[data-event="permission"],[data-event="review"],[data-event="escalated"]) .project-event__glyph { color:var(--yc-yellow-strong); }
 .project-event__heading { grid-area:heading; min-inline-size:0; display:grid; }
 .project-event__heading > strong { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; overflow-wrap:anywhere; }
 .project-event__status { color:var(--yc-text-muted); overflow-wrap:anywhere; }
 .project-event > a { grid-area:open; align-self:start; }
 .project-event[data-event="failed"] { background:var(--yc-danger-soft); }
 .project-event[data-event="question"],.project-event[data-event="permission"],.project-event[data-event="review"] { background:var(--yc-yellow-soft); }
-.project-event__excerpt { grid-area:excerpt; min-inline-size:0; margin:0; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; overflow:hidden; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--yc-text-muted); }
+.project-event__excerpt { grid-area:excerpt; min-inline-size:0; margin:0; overflow-wrap:anywhere; color:var(--yc-text-muted); }
 .project-paused { color:var(--yc-yellow-strong); border-radius:var(--yc-radius-lg); background:var(--yc-yellow-soft); padding:var(--yc-space-2) var(--yc-space-3); font-size:var(--yc-size-xs); }
 @media (min-width:1024px) {
   .workspace.workspace--project { grid-template-columns:minmax(0,1fr) minmax(0,calc(var(--yc-rail-w) + var(--yc-space-16))); }

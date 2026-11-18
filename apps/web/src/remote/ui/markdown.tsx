@@ -1,5 +1,8 @@
-import { For, Show, createMemo, createSignal, type JSX } from "solid-js"
+import { For, Show, createContext, createMemo, createSignal, useContext, type JSX } from "solid-js"
 import { marked, type Token } from "marked"
+import { Icon } from "../../ui/icon"
+
+export const MarkdownClipboard = createContext<(text: string) => Promise<void>>()
 
 export function safeHref(href: string): string | undefined {
   try {
@@ -74,20 +77,33 @@ function tokenKey(token: Token, index: number): string {
 }
 
 function FencedCode(props: { readonly text: string; readonly language?: string }) {
-  const [copyState, setCopyState] = createSignal("Copy code")
+  const nativeCopy = useContext(MarkdownClipboard)
+  const [result, setResult] = createSignal<{ text: string; label: string }>()
+  const [copying, setCopying] = createSignal(false)
+  const label = () => {
+    const value = result()
+    return copying() ? "Copying…" : value?.text === props.text ? value.label : "Copy"
+  }
   const copy = async () => {
-    if (!navigator.clipboard) {
-      setCopyState("Clipboard unavailable")
+    if (copying()) return
+    const text = props.text
+    const clipboard = nativeCopy ? undefined : navigator.clipboard
+    const write = nativeCopy ?? clipboard?.writeText?.bind(clipboard)
+    if (!write) {
+      setResult({ text, label: "Clipboard unavailable" })
       return
     }
+    setCopying(true)
     try {
-      await navigator.clipboard.writeText(props.text)
-      setCopyState("Copied")
+      await write(text)
+      setResult({ text, label: "Copied" })
     } catch {
-      setCopyState("Copy failed")
+      setResult({ text, label: "Copy failed" })
+    } finally {
+      setCopying(false)
     }
   }
-  return <div class="transcript-md__code"><div class="transcript-md__code-head"><span>{props.language || "text"}</span><button type="button" onClick={() => void copy()}>{copyState()}</button></div><pre tabindex="0"><code>{props.text}</code></pre></div>
+  return <div class="transcript-md__code"><div class="transcript-md__code-head"><span>{props.language?.trim() || "text"}</span><button type="button" aria-live="polite" aria-busy={copying()} onClick={() => void copy()}><Icon name={label() === "Copied" ? "check" : "copy"} size={16} /><span>{label()}</span></button></div><pre tabindex="0"><code>{props.text}</code></pre></div>
 }
 
 export function Markdown(props: { readonly text: string }): JSX.Element {

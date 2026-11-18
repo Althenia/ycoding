@@ -3,16 +3,12 @@ import path from "node:path"
 
 const read = (file: string) => Bun.file(path.join(import.meta.dir, "..", file)).text()
 
-test("Desktop approved Stitch typography and semantic palette replace inherited presentation values", async () => {
-  const [css, design, mapping] = await Promise.all([read("src/tokens.css"), read("DESIGN.md"), read("../../.stitch/DESIGN.md")])
+test("Desktop owns its typography and semantic palette", async () => {
+  const [css, design] = await Promise.all([read("src/tokens.css"), read("DESIGN.md")])
   expect(css).toContain('font-family: "JetBrains Mono"')
   expect(css).toContain('--yc-font-mono: "JetBrains Mono", monospace')
   for (const value of ["--yc-border: #263039", "--yc-text-muted: #99A2AD", "--yc-surface-sunken: #0E151A", "--yc-info-strong: #79B8FF"]) expect(css).toContain(value)
-  expect(design).toContain("5038403086787961002")
   expect(design).toContain("JetBrains Mono")
-  expect(design).not.toContain("Review Home")
-  expect(mapping).not.toContain("15933380309160575156")
-  expect(mapping).not.toContain("specimen values")
 })
 
 test("Desktop design tokens and every owned theme declaration agree in both directions", async () => {
@@ -61,16 +57,22 @@ test("Desktop palette loads after shared tokens and before component styles", as
   expect(renderer.indexOf('import "./style.css"')).toBeGreaterThan(renderer.indexOf('import "./tokens.css"'))
 })
 
-test("Desktop source conflicts retain the unapproved shared-chrome decision", async () => {
+test("Desktop documents the icon-led conversation and Companion as binding rules", async () => {
   const design = await read("DESIGN.md")
-  expect(design).toContain("Leave override unapproved")
-  expect(design).toContain("unwaived")
-  expect(design).not.toContain("takes precedence")
-  expect(design).not.toContain("Approval: explicit shared-chrome design decision")
-  expect(design).not.toContain("approved Conversation Idle shared-chrome selection")
-  const mapping = await read("../../.stitch/DESIGN.md")
-  expect(mapping).toContain("surface: web")
-  expect(mapping).toContain("10627183425669399580")
+  for (const [id, terms] of [
+    ["D9", ["16px", "surface-raised", "surface-sunken", "pending decisions", "destructive"]],
+    ["D34", ["trailing edge", "78%", "42rem", "author label"]],
+    ["D35", ["subagent_notification", "started", "progress", "parent answers", "goal steers"]],
+    ["D36", ["full inner width", "scrollWidth <= clientWidth", "Diagnostics", "Compaction history"]],
+    ["D37", ["Working", "360°", "reduced motion"]],
+    ["D38", ["session title", "connection status", "trailing"]],
+    ["D39", ["600 models", "focus return"]],
+    ["D40", ["Markdown", "language", "Copy", "native clipboard"]],
+  ] as const) {
+    const rule = design.split("\n").find(line => line.startsWith(`| ${id} | approved |`))
+    expect(rule).toBeDefined()
+    for (const term of terms) expect(rule).toContain(term)
+  }
 })
 
 test("Desktop component chrome has distinct toolbar and inspector tokens", async () => {

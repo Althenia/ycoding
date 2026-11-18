@@ -372,11 +372,11 @@ test("Stitch reference geometry preserves the rail, transcript, dock and inspect
     if (process.env.YCODING_DESKTOP_CAPTURE_DIR) await Bun.write(path.join(process.env.YCODING_DESKTOP_CAPTURE_DIR, "stitch-streaming.png"), Buffer.from(await page.screenshot(), "base64"))
     const geometry = await page.evaluate(`(() => {
       const rect = selector => document.querySelector(selector).getBoundingClientRect();
-      const rail = rect('.rl-nav'), brand = rect('.rl-nav-brand'), newChat = rect('.rl-new-chat'), head = rect('.rl-top'), companion = rect('.rl-companion'), capsule = rect('.rl-capsule'), dock = rect('.rl-dock'), column = rect('.conversation__column'), user = rect('.rl-me'), assistant = rect('.rl-them');
-      return { rail: rail.width, separateNewChat: newChat.top >= brand.bottom, header: head.height, companion: companion.width, fullColumnComposer: Math.abs(capsule.width - column.width) <= 1, dockedSurface: getComputedStyle(document.querySelector('.rl-dock')).backgroundColor !== 'rgba(0, 0, 0, 0)', leftAlignedTurns: Math.abs(user.left - assistant.left) <= 1, metadataVisible: getComputedStyle(document.querySelector('.workspace__status')).visibility === 'visible', connectionFooter: !!document.querySelector('.workspace__rail-footer')?.textContent.includes('Connected') };
+      const rail = rect('.rl-nav'), brand = rect('.rl-nav-brand'), newChat = rect('.rl-new-chat'), head = rect('.rl-top'), companion = rect('.rl-companion'), capsule = rect('.rl-capsule'), column = rect('.conversation__column'), user = rect('.rl-me .transcript-message__bubble'), assistant = rect('.rl-them');
+      return { rail: rail.width, separateNewChat: newChat.top >= brand.bottom, header: head.height, companion: companion.width, fullColumnComposer: Math.abs(capsule.width - column.width) <= 1, dockedSurface: getComputedStyle(document.querySelector('.rl-dock')).backgroundColor !== 'rgba(0, 0, 0, 0)', trailingBubble: Math.abs(user.right - assistant.right) <= 1 && user.left > assistant.left, metadataVisible: getComputedStyle(document.querySelector('.workspace__status')).visibility === 'visible', connectionFooter: !!document.querySelector('.workspace__rail-footer')?.textContent.includes('Connected') };
     })()`)
     console.log("Stitch geometry", JSON.stringify(geometry))
-    expect(geometry).toEqual({ rail: 256, separateNewChat: true, header: 40, companion: 320, fullColumnComposer: true, dockedSurface: true, leftAlignedTurns: true, metadataVisible: true, connectionFooter: true })
+    expect(geometry).toEqual({ rail: 256, separateNewChat: true, header: 40, companion: 320, fullColumnComposer: true, dockedSurface: true, trailingBubble: true, metadataVisible: true, connectionFooter: true })
     expect(await page.evaluate(`['.rl-nav-brand', '.desktop-companion-head'].map(selector => document.querySelector(selector).getBoundingClientRect().height)`, decodeArray(decodeNumber))).toEqual([40, 40])
     expect(await page.evaluate(`(() => { const pane = document.querySelector('.rl-companion').getBoundingClientRect(); return [...document.querySelectorAll('.rl-companion .companion__header button, .rl-companion [role="tab"]')].every(element => { const bounds = element.getBoundingClientRect(); return bounds.left >= pane.left && bounds.right <= pane.right; }); })()`, decodeBoolean)).toBe(true)
     expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
@@ -453,6 +453,163 @@ async function companion(page: Page, tab: string) {
   await clickText(page, '.rl-companion [role="tab"]', tab)
   await wait(page, `document.querySelector('.rl-companion [role="tab"][aria-selected="true"]')?.textContent.trim() === ${JSON.stringify(tab)}`)
 }
+
+test("Desktop shows the full Companion breakdown and wraps long Activity rows", async () => {
+  referenceScene = true
+  captureScene = true
+  pending = false
+  const long = "UnbrokenActivityDescription".repeat(16)
+  sceneRead = call => {
+    if (call.route === "/api/shell") return { location, data: [{ id: "sh_synthetic", status: "running", command: `bun test ${long}`, cwd: `/synthetic/${long}`, shell: "sh", file: "output", time: { started: 1 }, metadata: { sessionID: "ses_test" } }] }
+    if (call.route.endsWith("/subagent")) return { data: [{ ...processTask(), description: long, state: "running", question: undefined, progress: { text: long, time: 2 } }], summary: { total: 1, active: 1 }, cursor: {} }
+    if (call.route.endsWith("/diagnostics")) return { data: { model: selection(), context: { total: 12_000, limit: 200_000 }, tokens: { uncachedInput: 4000, output: 600, reasoning: 200, cacheRead: 8000, cacheWrite: 0 }, cache: { eligible: 8000, mechanism: "provider-reported", readReported: true, writeReported: true } } }
+    return undefined
+  }
+  const page = await open()
+  try {
+    await companion(page, "Context")
+    await wait(page, `document.querySelector('.companion__context-breakdown') && document.querySelector('#companion-context').textContent.includes('Session usage')`)
+    expect(await page.evaluate(`(() => {
+      const pane = document.querySelector('#companion-context .rl-pane-body'), dl = pane.querySelector('.companion__context-breakdown');
+      const room = pane.clientWidth - parseFloat(getComputedStyle(pane).paddingLeft) - parseFloat(getComputedStyle(pane).paddingRight);
+      return dl.clientWidth >= room - 1 && [pane, dl].every(el => el.scrollWidth <= el.clientWidth) && [...dl.children].every(row => [...row.children].every(cell => cell.clientWidth > 0 && cell.scrollWidth <= cell.clientWidth));
+    })()`, decodeBoolean)).toBe(true)
+    const diagnostics = `([...document.querySelectorAll('#companion-context summary')].find(row => row.textContent.trim() === 'Diagnostics'))`
+    expect(await page.evaluate(`['Diagnostics', 'Loaded child task costs', 'Compaction history'].every(label => [...document.querySelectorAll('#companion-context details:not([open]) > summary')].some(row => row.textContent.trim() === label && row.querySelector('svg')))`, decodeBoolean)).toBe(true)
+    await page.evaluate(`${diagnostics}.focus()`)
+    await page.pressKey("Enter", "Enter", 13, "\r")
+    await wait(page, `${diagnostics}.parentElement.open`)
+    expect(await page.evaluate(`(() => { const body = ${diagnostics}.parentElement; const value = [...body.querySelectorAll('dt')].find(term => term.textContent === 'Context')?.nextElementSibling; return !!value && value.textContent.includes('200000') && value.clientWidth >= body.clientWidth * .8 && value.scrollWidth <= value.clientWidth && body.scrollWidth <= body.clientWidth; })()`, decodeBoolean)).toBe(true)
+    for (const tab of ["Activity", "Running"]) {
+      await companion(page, tab)
+      const panel = JSON.stringify(`#companion-${tab.toLowerCase()}`)
+      await wait(page, `document.querySelector(${panel}).textContent.includes(${JSON.stringify(long)})`)
+      expect(await page.evaluate(`(() => { const panel = document.querySelector(${panel}), rows = [...panel.querySelectorAll('.rl-activity-row')]; return rows.length >= 2 && [panel, ...rows].every(el => el.scrollWidth <= el.clientWidth) && rows.every(row => row.querySelector('svg') && getComputedStyle(row).borderTopWidth === '0px') && [...panel.querySelectorAll('.rl-activity-row :is(strong, small)')].every(text => getComputedStyle(text).whiteSpace === 'normal' && text.scrollWidth <= text.clientWidth); })()`, decodeBoolean)).toBe(true)
+    }
+  } finally { await page.close() }
+}, 30_000)
+
+test("Desktop transcript omits routine notices and keeps actionable messages and trailing prompts", async () => {
+  referenceScene = true
+  pending = false
+  const long = "UnbrokenPrompt".repeat(90)
+  const notice = (id: string, text: string, description: string | undefined, metadata: Record<string, unknown>) => ({ id, type: "synthetic", sessionID: "ses_test", text, description, metadata, time: { created: 503 } })
+  sceneRead = call => call.route === "/api/session/ses_test/snapshot" ? {
+    sourceEpoch: "synthetic", session: session("ses_test"), watermark: { type: "log.synced", aggregateID: "ses_test", seq: 1000 },
+    messages: [...transcript().map(entry => entry.type === "user" ? { ...entry, text: `\`\`\`txt\n${long}\n\`\`\`` } : entry),
+      notice("msg_repeated_child", "Subagent notification", "Subagent notification", { source: "subagent_notification", type: "completed", childID: "ses_child" }),
+      notice("msg_project_progress", "Project notification", "Project notification", { source: "project_notification", event: "progress", memberSessionID: "ses_other", title: "Builder" }),
+      notice("msg_project_review", "Project notification", "Project notification", { source: "project_notification", event: "review", memberSessionID: "ses_other", title: "Builder" }),
+      notice("msg_parent_answer", 'Parent answer:\n{"questionID":"q1","text":"Use the retained cursor"}', "Parent answer", { source: "subagent_parent", kind: "answer", questionID: "q1" }),
+      notice("msg_goal_steer", "Verify the new cursor", "Goal steer", { autonomy: { goal: true } }),
+    ],
+  } : undefined
+  const page = await open()
+  try {
+    await wait(page, `document.querySelector('#turn-msg_goal_steer')`)
+    expect(await page.evaluate(`!document.querySelector('#turn-msg_repeated_child, #turn-msg_project_progress') && document.querySelector('#turn-msg_project_review a')?.getAttribute('href').endsWith('/sessions/ses_other') && document.querySelector('#turn-msg_parent_answer').textContent.includes('Use the retained cursor') && document.querySelector('#turn-msg_goal_steer').textContent.includes('Verify the new cursor')`, decodeBoolean)).toBe(true)
+    expect(await page.evaluate(`(() => {
+      const turn = document.querySelector('#turn-msg_prompt_239[data-speaker="user"]'), bubble = turn.querySelector('.transcript-message__bubble'), attachment = turn.querySelector('.conversation__chip'), receipt = turn.querySelector('[aria-label="Message created"]'), right = element => element.getBoundingClientRect().right;
+      return { noAuthor: !turn.querySelector('.transcript-message__author'), sized: bubble.clientWidth <= turn.clientWidth * .78 + 1, trailing: [bubble, attachment, receipt].map(el => Math.abs(right(el) - right(turn)) <= 1), fits: [turn, bubble, bubble.querySelector('pre')].map(el => el.scrollWidth <= el.clientWidth), attachment: attachment.textContent, border: getComputedStyle(bubble).borderTopWidth };
+    })()`, decodeRecord)).toEqual({ noAuthor: true, sized: true, trailing: [true, true, true], fits: [true, true, true], attachment: "restored-notes.txt", border: "0px" })
+    const header = await page.evaluate(`(() => { const title = document.querySelector('.rl-top .rl-title'), status = document.querySelector('.rl-presence'), actions = document.querySelector('.rl-top-actions'), head = document.querySelector('.rl-top'); const range = document.createRange(); range.selectNodeContents(status); const ink = range.getBoundingClientRect(), bounds = status.getBoundingClientRect(); return { connected: status.textContent.includes('Connected · Shared backend'), gap: Math.round(bounds.left - title.getBoundingClientRect().right), overflow: ink.right - bounds.right, rendered: bounds.width, scroll: status.scrollWidth, trailing: Math.round(head.getBoundingClientRect().right - actions.getBoundingClientRect().right - parseFloat(getComputedStyle(head).paddingRight)) }; })()`, decodeRecord)
+    expect(header).toMatchObject({ connected: true, gap: 12, trailing: 0 })
+    expect(decodeNumber(header.overflow), JSON.stringify(header)).toBeLessThanOrEqual(0.5)
+    await clickText(page, '#turn-msg_project_review a', 'Open')
+    await wait(page, `location.hash === '#/sessions/ses_other'`)
+    expect(clipboard).toEqual([])
+  } finally { await page.close() }
+}, 30_000)
+
+test("Desktop rotates only the Working arc and keeps it static when motion is disabled", async () => {
+  referenceScene = true
+  pending = false
+  running = true
+  const page = await open()
+  try {
+    await page.setReducedMotion(false)
+    await page.evaluate(`document.documentElement.dataset.animations = 'on'`)
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'session.execution.started', data: { sessionID: 'ses_test' } })`)
+    const strip = `.desktop-transient-activity`
+    const icon = `${strip} .desktop-native-badge svg`
+    await wait(page, `document.querySelector('${icon}')`)
+    expect(await page.evaluate(`(() => { const strip = document.querySelector('${strip}'), icon = document.querySelector('${icon}'); const animations = strip.getAnimations({ subtree: true }); const motion = animations.find(item => item.effect.target === icon); if (!motion) return { name: getComputedStyle(icon).animationName }; motion.pause(); motion.currentTime = motion.effect.getComputedTiming().duration / 4; const turn = new DOMMatrix(getComputedStyle(icon).transform); return { name: getComputedStyle(icon).animationName, turn: Math.abs(turn.a) < .001 && Math.abs(turn.b - 1) < .001 && Math.abs(turn.c + 1) < .001 && Math.abs(turn.d) < .001, onlyArc: animations.length === 1, continuous: motion.effect.getComputedTiming().iterations === Infinity }; })()`, decodeRecord)).toEqual({ name: "desktop-spin", turn: true, onlyArc: true, continuous: true })
+    await page.setReducedMotion(true)
+    await wait(page, `getComputedStyle(document.querySelector('${icon}')).animationName === 'none'`)
+    await page.setReducedMotion(false)
+    await page.evaluate(`document.documentElement.dataset.animations = 'off'`)
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('${icon}')).animationName`, decodeString)).toBe("none")
+  } finally { await page.close() }
+}, 30_000)
+
+test("Desktop copies fenced code through native clipboard without a browser clipboard", async () => {
+  referenceScene = true
+  pending = false
+  const code = "  function cursor() {\n\n    return retained\n  }"
+  replyText = `# Safe sample\n\n\`\`\`typescript\n${code}\n\`\`\``
+  const page = await open()
+  try {
+    const button = `document.querySelector('#turn-msg_response .transcript-md__code-head button')`
+    await page.evaluate(`Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })`)
+    expect(await page.evaluate(`(() => { const pre = document.querySelector('#turn-msg_response .transcript-md__code pre'); return pre.textContent === ${JSON.stringify(code)} && [pre, pre.querySelector('code'), pre.closest('.transcript-md')].every(el => getComputedStyle(el).userSelect === 'text') && ${button}.querySelector('svg') !== null; })()`, decodeBoolean)).toBe(true)
+    clipboardFailure = true
+    await page.evaluate(`${button}.focus()`)
+    await page.pressKey("Enter", "Enter", 13, "\r")
+    await wait(page, `${button}.textContent.trim() === 'Copy failed'`)
+    expect(clipboard).toEqual([])
+    clipboardFailure = false
+    await page.pressKey("Enter", "Enter", 13, "\r")
+    await wait(page, `${button}.textContent.trim() === 'Copied'`)
+    expect(clipboard).toEqual([code])
+  } finally { await page.close() }
+}, 30_000)
+
+test("Desktop opens a 600-model catalog from both composer chips and applies selections", async () => {
+  pending = false
+  currentVariant = "low"
+  const catalog = [model, ...Array.from({ length: 599 }, (_, index) => ({ ...model, id: `model-${index}`, modelID: `model-${index}`, name: `Catalog model ${index}`, providerID: `provider-${index % 12}` }))]
+  let selected: { id: string; providerID: string; variant?: string } = selection()
+  sceneRead = call => {
+    if (call.route === "/api/model") return { location, data: catalog }
+    if (call.route === "/api/session/ses_test") return { data: { ...session("ses_test"), model: selected } }
+    if (call.method === "POST" && call.route === "/api/session/ses_test/model") {
+      const value = decodeRecord(call.body.model)
+      selected = { id: decodeString(value.id), providerID: decodeString(value.providerID), ...(typeof value.variant === "string" ? { variant: value.variant } : {}) }
+      return new Response(null, { status: 204 })
+    }
+    return undefined
+  }
+  const page = await open()
+  try {
+    const openCatalog = async (chip: "model" | "effort", expected: number) => {
+      const selector = `.composer-chip--${chip}`
+      await wait(page, `document.querySelector('${selector}:enabled')`)
+      const elapsed = await page.evaluate(`new Promise(resolve => { const chip = document.querySelector('${selector}'); chip.focus(); const start = performance.now(); chip.click(); requestAnimationFrame(() => resolve(performance.now() - start)); })`, decodeNumber)
+      expect(elapsed).toBeLessThan(1000)
+      expect(await page.evaluate(`document.querySelectorAll('.model-popover [role="option"]').length`, decodeNumber)).toBe(expected)
+    }
+    await openCatalog("effort", 600)
+    await page.pressEscape()
+    await wait(page, `!document.querySelector('.model-popover') && document.activeElement.matches('.composer-chip--effort')`)
+    await openCatalog("model", 600)
+    await page.evaluate(`(() => { const input = document.querySelector('.model-popover input'); input.focus(); input.value = 'Catalog model 598'; input.dispatchEvent(new InputEvent('input', { bubbles: true })); })()`)
+    await clickText(page, '.model-popover [role="option"]', 'Catalog model 598')
+    await wait(page, `!document.querySelector('.model-popover') && document.querySelector('.composer-chip--model').textContent.includes('Catalog model 598')`)
+    expect(selected).toEqual({ id: "model-598", providerID: "provider-10" })
+    await page.navigate(`${origin}/#/chat`)
+    await wait(page, `document.querySelector('[data-new-chat] .composer-chip--model')?.textContent.includes('Synthetic Model')`)
+    await openCatalog("model", 600)
+    await page.pressEscape()
+    await wait(page, `!document.querySelector('.model-popover') && document.activeElement.matches('.composer-chip--model')`)
+    await openCatalog("effort", 600)
+    await page.evaluate(`document.querySelector('.model-popover [role="slider"]').focus()`)
+    await page.pressKey("End", "End", 35)
+    await wait(page, `document.querySelector('.composer-chip--effort').textContent.includes('High')`)
+    expect(await page.evaluate(`document.activeElement.matches('.model-popover [role="slider"]')`, decodeBoolean)).toBe(true)
+    expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
+    expect(owned!.calls.filter(call => call.method === "POST" && call.route.endsWith("/model"))).toHaveLength(1)
+  } finally { await page.close() }
+}, 30_000)
 
 async function tools(page: Page, tab: string) {
   await command(page, "Open shell, editor context, side-chat and prompt tools")
@@ -572,7 +729,7 @@ const referenceCases: readonly ReferenceCase[] = [
   },
   {
     id: "2c66dd75095b4881a87b9a76eb7374b6", label: "reported goal and autonomy without applying changes",
-    show: async page => { await clickContaining(page, '.rl-capsule button', "Autonomous") },
+    show: async page => { await wait(page, `document.querySelector('.composer-policy-chip')`); await page.evaluate(`document.querySelector('.composer-policy-chip').click()`) },
     expected: `document.body.textContent.includes('Apply autonomy') && [...document.querySelectorAll('input,textarea')].some(input => input.value === sceneGoal)`.replace("sceneGoal", JSON.stringify(sceneAutonomy.goal.text)),
   },
   {
@@ -803,7 +960,7 @@ test("Desktop ordinary directories exclude leaked helpers and off-page children 
     await page.evaluate(`[...document.querySelectorAll('.rl-companion button, .rl-companion a')].find(element => element.textContent.includes('Direct ses_loaded_fork')).click()`)
     await wait(page, `location.hash === '#/sessions/ses_loaded_fork' && document.querySelector('#conversation-title')?.textContent === 'Direct ses_loaded_fork'`)
     await command(page, "Open the parent Session")
-    await wait(page, `location.hash === '#/sessions/ses_loaded_btw'`)
+    await wait(page, `location.hash === '#/sessions/ses_loaded_btw' && document.querySelector('#conversation-title')?.textContent === 'Direct ses_loaded_btw'`)
     await command(page, "Open the parent Session")
     await wait(page, `location.hash === '#/sessions/ses_test'`)
     await companion(page, "Activity")
@@ -1073,8 +1230,8 @@ test("Desktop component chrome keeps directory inspectors and toolbar variants a
     await wait(page, `document.querySelector('.ws-workspaces-detail')`)
     expect(await page.evaluate(`(() => { const main = document.querySelector('.rl-main').getBoundingClientRect(), header = document.querySelector('.rl-page-head').getBoundingClientRect(), pane = document.querySelector('.ws-workspaces-detail').getBoundingClientRect(), list = document.querySelector('.ws-workspaces-list').getBoundingClientRect(); return { header: header.height, inspector: pane.width, flushRight: Math.abs(main.right - pane.right) <= 1, adjacent: Math.abs(list.right - pane.left) <= 1 }; })()`, decodeRecord)).toEqual({ header: 48, inspector: 420, flushRight: true, adjacent: true })
     await page.navigate(`${origin}/#/projects`)
-    await wait(page, `document.querySelector('.desktop-project-inspector')`)
-    expect(await page.evaluate(`(() => { const main = document.querySelector('.rl-main').getBoundingClientRect(), header = document.querySelector('.rl-page-head').getBoundingClientRect(), pane = document.querySelector('.desktop-project-inspector').getBoundingClientRect(); return { header: header.height, inspector: pane.width, flushRight: Math.abs(main.right - pane.right) <= 1, memberActions: !!pane.width && !!document.querySelector('.desktop-project-inspector [data-action-id="project-member-remove"]') }; })()`, decodeRecord)).toEqual({ header: 44, inspector: 400, flushRight: true, memberActions: true })
+    await wait(page, `document.querySelector('.desktop-project-inspector') && document.querySelector('[data-project-roster] [data-action-id="project-member-remove"]')`)
+    expect(await page.evaluate(`(() => { const main = document.querySelector('.rl-main').getBoundingClientRect(), header = document.querySelector('.rl-page-head').getBoundingClientRect(), pane = document.querySelector('.desktop-project-inspector').getBoundingClientRect(); return { header: header.height, inspector: pane.width, flushRight: Math.abs(main.right - pane.right) <= 1, memberActions: !!document.querySelector('[data-project-roster] [data-action-id="project-member-remove"]') }; })()`, decodeRecord)).toEqual({ header: 44, inspector: 400, flushRight: true, memberActions: true })
     await clickText(page, 'main button', "Coordination")
     await wait(page, `document.querySelector('[data-project-coordination]')`)
     expect(await page.evaluate(`({ header: document.querySelector('.rl-page-head').getBoundingClientRect().height, inspector: document.querySelector('[aria-label="Selected member"]').getBoundingClientRect().width })`, decodeRecord)).toEqual({ header: 56, inspector: 320 })
@@ -1356,7 +1513,10 @@ function r8ConversationFailures(geometry: R7Geometry, name: string, width: numbe
   else {
     if (width === 1440 && Math.abs(reading.outer.width - maximum) > 1) failures.push(`${name}: wide outer track is ${reading.outer.width}px, expected the documented ${maximum}px maximum`)
     for (const kind of ['assistant head', 'Thought', 'Ran tools', 'Step provenance', 'Shell finished', 'user bubble', 'markdown', 'prose']) if (!reading.rows.some(row => row.kind === kind)) failures.push(`${name}: required ${kind} row is missing`)
-    for (const row of reading.rows) if (Math.abs(row.bounds.x - reading.outer.x) > 1 || Math.abs(row.bounds.right - reading.outer.right) > 1) failures.push(`${name}: ${row.kind} ${row.turn} bounds ${row.bounds.x}..${row.bounds.right} differ from composer ${reading.outer.x}..${reading.outer.right}`)
+    for (const row of reading.rows) {
+      const leftFits = row.kind === 'user bubble' ? row.bounds.width <= reading.outer.width * .78 + 1 : Math.abs(row.bounds.x - reading.outer.x) <= 1
+      if (!leftFits || Math.abs(row.bounds.right - reading.outer.right) > 1) failures.push(`${name}: ${row.kind} ${row.turn} bounds ${row.bounds.x}..${row.bounds.right} do not fit the track ${reading.outer.x}..${reading.outer.right}`)
+    }
     if (!reading.controls.some(control => control.kind.includes('rl-disclosure-time')) || !reading.controls.some(control => control.kind.includes('rl-disclosure-chev'))) failures.push(`${name}: duration/chevron controls are missing`)
     for (const control of reading.controls) if (control.bounds.x < reading.outer.x || control.bounds.right > reading.outer.right || Math.abs(reading.outer.x - control.row.x) > 1 || Math.abs(reading.outer.right - control.row.right) > 1) failures.push(`${name}: duration/chevron is detached from the outer track: ${JSON.stringify(control)}`)
     for (const floating of reading.floating) if (floating.bounds.x < reading.outer.right && floating.bounds.right > reading.outer.x && floating.bounds.y < reading.viewport.bottom && floating.bounds.bottom > reading.viewport.y) failures.push(`${name}: floating ${floating.label} overlaps the reading track: ${JSON.stringify(floating.bounds)}`)
@@ -2082,7 +2242,7 @@ test("Stitch implemented surface ba7c7489375448f99efdeacb0b49b3ea native inline 
     expect(await page.evaluate(`(() => { const tail = document.querySelector('[aria-label="Current activity"]'), row = tail.querySelector('.desktop-native-activity-row'); return !!row && row.getBoundingClientRect().height <= 48 && !tail.querySelector('.rl-indeterminate') && tail.textContent.includes('Writing'); })()`, decodeBoolean)).toBe(true)
     expect(await page.evaluate(`document.querySelector('#turn-msg_dots [data-dots-message]')?.textContent`, decodeString)).toContain("Dot synthetic-dot · external peer · synthetic-thread")
     expect(await page.evaluate(`document.querySelector('#turn-msg_exchange [data-dots-message]')?.textContent`, decodeString)).toContain("Synthetic attachment · external peer · Remote MCP · user-chosen name")
-    expect(await page.evaluate(`['msg_exchange', 'msg_prompt_239'].map(id => document.querySelector('#turn-' + id + ' .transcript-message__author')?.textContent)`, decodeArray(decodeNullable(decodeString)))).toEqual(["External peer", "You"])
+    expect(await page.evaluate(`['msg_exchange', 'msg_prompt_239'].map(id => document.querySelector('#turn-' + id + ' .transcript-message__author')?.textContent ?? null)`, decodeArray(decodeNullable(decodeString)))).toEqual(["External peer", null])
     expect(await page.evaluate(`!document.querySelector('#turn-msg_not_peer [data-dots-message]') && !document.body.textContent.includes('invented-operation') && !document.body.textContent.includes('invented-path') && !document.body.textContent.includes('invented-process')`, decodeBoolean)).toBe(true)
     expect(await page.evaluate(`['msg_dots', 'msg_exchange'].every(id => { const turn = document.querySelector('#turn-' + id), row = turn.querySelector('[data-dots-message]'); return turn.dataset.layout === 'activity' && row.matches('.desktop-native-activity-row') && row.getBoundingClientRect().height <= 48 && !turn.querySelector('.transcript-message--user, .transcript-notice-pill'); })`, decodeBoolean)).toBe(true)
     expect(await page.evaluate(`[...document.querySelectorAll('[data-dots-message] .desktop-native-badge')].map(badge => badge.textContent)`, decodeArray(decodeString))).toEqual(["Dots", "Remote MCP"])
@@ -2283,7 +2443,7 @@ test("Desktop pairing keeps a synthetic issued secret masked until reveal and re
   const page = await openReference()
   try {
     await command(page, "/remote")
-    await clickText(page, 'dialog[open] button', "Pair browser")
+    await clickText(page, 'dialog[open] button:not(:disabled)', "Pair browser")
     await confirm(page)
     await wait(page, `document.querySelector('code[aria-label="Pairing secret"]')`)
     expect(await page.evaluate(`document.querySelector('code[aria-label="Pairing secret"]').textContent === '••••••••••••••••' && !document.querySelector('dialog[open]').textContent.includes(${JSON.stringify(secret)})`, decodeBoolean)).toBe(true)

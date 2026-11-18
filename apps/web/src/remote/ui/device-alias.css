@@ -88,6 +88,7 @@
 .machine-row__edit svg {
   display: block;
   flex: none;
+  color: var(--yc-signal);
 }
 
 .machine-row__empty,

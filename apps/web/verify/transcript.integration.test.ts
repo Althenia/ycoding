@@ -21,6 +21,23 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
 describe("transcript rendering", () => {
+  test("Web renders Markdown in prompts and notices and copies fenced code verbatim", async () => {
+    const page = await browser!.openPage()
+    try {
+      await page.injectOnNewDocument(`Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.copiedMarkdown = text; } } })`)
+      await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?markdown`)
+      await page.evaluate(`new Promise((resolve, reject) => { const until = performance.now() + 5000; const ready = () => { if (document.querySelector('[data-message-id="msg_markdown_tool"]')) resolve(true); else if (performance.now() >= until) reject(new Error('Markdown turns did not render')); else requestAnimationFrame(ready); }; ready(); })`)
+      await page.evaluate(`(() => { for (const selector of ['.transcript-notice__toggle', '.transcript-tool__toggle[aria-expanded="false"]']) document.querySelector(selector)?.click(); })()`)
+      expect(await page.evaluate(`Object.fromEntries([...document.querySelectorAll('[data-message-id^="msg_markdown_"]')].map(row => [row.dataset.messageId, row.querySelector('.transcript-md strong')?.textContent ?? '']))`, decodeRecord)).toEqual({ msg_markdown_user: "User emphasis", msg_markdown_system: "System emphasis", msg_markdown_goal: "Goal emphasis", msg_markdown_member: "Member emphasis", msg_markdown_excerpt: "Child emphasis", msg_markdown_tool: "Tool emphasis" })
+      const code = `  const line = '${"longCode".repeat(90)}'\n\n    return line`
+      expect(await page.evaluate(`(() => { const block = document.querySelector('.transcript-md__code'), pre = block.querySelector('pre'), code = pre.querySelector('code'), head = block.querySelector('.transcript-md__code-head'), copy = head.querySelector('button'); return { language: head.firstElementChild.textContent, label: copy.textContent.trim(), icon: !!copy.querySelector('svg'), mono: getComputedStyle(code).fontFamily.includes('JetBrains Mono'), text: code.textContent, selectable: [block.closest('.transcript-md'), pre, code].every(el => getComputedStyle(el).userSelect === 'text'), outerFits: [document.documentElement, block, block.closest('.transcript-message__bubble')].every(el => el.scrollWidth <= el.clientWidth), scrollsInside: pre.scrollWidth > pre.clientWidth && getComputedStyle(pre).overflowX === 'auto' }; })()`, decodeRecord)).toEqual({ language: "ts", label: "Copy", icon: true, mono: true, text: code, selectable: true, outerFits: true, scrollsInside: true })
+      await page.evaluate(`document.querySelector('.transcript-md__code-head button').focus()`)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      expect(await page.evaluate(`window.copiedMarkdown`, decodeString)).toBe(code)
+      expect(await page.evaluate(`document.querySelector('.transcript-md__code-head button').textContent.trim()`, decodeString)).toBe("Copied")
+    } finally { await page.close() }
+  }, 20_000)
+
   test("Markdown task checkboxes own their indicator and retain native checked, disabled and keyboard states", async () => {
     const page = await browser!.openPage()
     try {
@@ -421,22 +438,18 @@ describe("transcript rendering", () => {
 
 
 
-  test("bounds the desktop Conversation column to 1200px and aligns transcript with composer", async () => {
+  test("centers Web Conversation prose, composer and jump controls on a 64rem track", async () => {
     const page = await browser!.openPage()
     try {
       for (const width of [1440, 1920]) {
         await page.setViewport(width, 900)
-        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?theme=light`)
-        for (let i = 0; i < 80 && !await page.evaluate(`document.querySelector('.app--conversation.app--selected .transcript-navigation')`); i++) await Bun.sleep(50)
-        const geometry = await page.evaluate(`(() => { const app=document.querySelector('.app'), probe=document.createElement('div');probe.style.cssText='position:absolute;visibility:hidden;inline-size:var(--yc-content-max)';app.append(probe);const measure=probe.getBoundingClientRect().width;probe.remove();const transcript = document.querySelector('.transcript-navigation').getBoundingClientRect(); const composer = document.querySelector('.composer__row').getBoundingClientRect(); return { width: transcript.width, measure, left: transcript.left, right: transcript.right, composerLeft: composer.left, composerRight: composer.right } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), measure: (decodeNumber)(record["measure"]), left: (decodeNumber)(record["left"]), right: (decodeNumber)(record["right"]), composerLeft: (decodeNumber)(record["composerLeft"]), composerRight: (decodeNumber)(record["composerRight"]) } })
-        expect(geometry.width).toBeLessThanOrEqual(geometry.measure + 1)
-        expect(geometry.width).toBeGreaterThan(geometry.measure * 0.5)
-        if (width === 1920) expect(Math.abs(geometry.width - geometry.measure)).toBeLessThanOrEqual(1)
-        expect(Math.abs(geometry.left - geometry.composerLeft)).toBeLessThanOrEqual(1)
-        expect(Math.abs(geometry.right - geometry.composerRight)).toBeLessThanOrEqual(1)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&acceptedPreview=1&theme=light`)
+        await page.evaluate(`new Promise((resolve, reject) => { const end = performance.now() + 5000; const frame = () => { if (document.querySelector('.transcript-message__text .transcript-md > p') && document.querySelector('.composer__row')) resolve(true); else if (performance.now() > end) reject(new Error('Conversation prose or composer not mounted')); else requestAnimationFrame(frame); }; frame(); })`)
+        const geometry = await page.evaluate(`(() => { const nav = document.querySelector('.transcript-navigation'), root = nav.closest('.workspace__scroll'), box = nav.getBoundingClientRect(), parent = root.getBoundingClientRect(); const left = box.left - parent.left, right = parent.left + root.clientWidth - box.right; const differences = Object.fromEntries(['.composer__row', '.conversation-jump-slot', '.transcript-message__text .transcript-md > p'].map(selector => { const rect = document.querySelector(selector)?.getBoundingClientRect(); return [selector, rect ? [Math.round(rect.left - box.left), Math.round(rect.right - box.right)] : null]; })); const rail = nav.querySelector('.transcript-navigation__rail'); return { width: Math.round(box.width), balanced: Math.abs(left - right) <= 1 && Math.min(left, right) >= 36, differences, railFits: !rail || rail.getBoundingClientRect().right <= parent.left + root.clientWidth, overflow: root.scrollWidth > root.clientWidth }; })()`, decodeRecord)
+        expect(geometry).toEqual({ width: 1024, balanced: true, differences: { ".composer__row": [0, 0], ".conversation-jump-slot": [0, 0], ".transcript-message__text .transcript-md > p": [0, 0] }, railFits: true, overflow: false })
       }
     } finally { await page.close() }
-  })
+  }, 20_000)
 
   test("places a compact prompt rail to the right with an inward preview", async () => {
     const page = await browser!.openPage()
@@ -560,10 +573,12 @@ describe("transcript rendering", () => {
       expect(summary.text).toContain("completed")
       expect(summary.raw).toBe(false)
       expect(summary.bubbles).toBe(1)
-      expect(await page.evaluate(`document.querySelector('[data-message-id="msg_notification"] summary svg') !== null`)).toBe(true)
-      await page.evaluate(`document.querySelector('[data-message-id="msg_notification"] summary').click()`)
+      const toggle = `document.querySelector('[data-message-id="msg_notification"] button[aria-expanded="false"][aria-controls]')`
+      expect(await page.evaluate(`!!${toggle}?.querySelector('svg')`, decodeBoolean)).toBe(true)
+      await page.evaluate(`${toggle}.focus()`)
+      await page.pressKey("Enter", "Enter", 13, "\r")
       expect(await page.evaluate(`document.querySelector('[data-message-id="msg_notification"]')?.textContent ?? ''`)).toContain("Tests pass and the repair is verified.")
-      await Bun.write(new URL("../../../.cache/tmp/transcript-notification-light-390x844.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      if (process.env.YCODING_WEB_CAPTURE_DIR) await Bun.write(`${process.env.YCODING_WEB_CAPTURE_DIR}/transcript-notification-light-390x844.png`, Buffer.from(await page.screenshot(), "base64"))
     } finally { await page.close() }
   })
 

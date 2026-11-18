@@ -376,10 +376,9 @@ function Section(props: {
   readonly children: JSX.Element
 }): JSX.Element {
   return (
-    <section class="settings__section" aria-labelledby={props.id}>
+    <section class="settings__section" data-category={props.category} aria-labelledby={props.id}>
       <div class="settings__head">
-        <p class="settings__category">{props.category}</p>
-        <Icon name={sectionIcons[props.category]} size={20} />
+        <Icon name={sectionIcons[props.category]} size={16} />
         <h2 id={props.id}>{props.title}</h2>
         <Show when={props.hint}><p class="settings__hint">{props.hint}</p></Show>
       </div>

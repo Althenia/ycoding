@@ -28,6 +28,15 @@ const initial: readonly RemoteMessageView[] = [
   { kind: "synthetic", id: "msg_state", text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","permissions":"auto","guardrails":"manual","answers":"manual","goal":{"text":"Ship","status":"active","iteration":0,"noProgress":0,"maxNoProgress":3}},"todos":[{}]}', source: "session-state", created: 5_100 },
 ]
 const synthetic = new URLSearchParams(location.search).get("synthetic")
+const markdown = new URLSearchParams(location.search).has("markdown")
+const markdownMessages: readonly RemoteMessageView[] = [
+  { kind: "user", id: "msg_markdown_user", text: `**User emphasis**\n\n\`\`\`ts\n  const line = '${"longCode".repeat(90)}'\n\n    return line\n\`\`\``, state: "consumed", created: 1 },
+  { kind: "system", id: "msg_markdown_system", text: "**System emphasis**", created: 2 },
+  { kind: "synthetic", id: "msg_markdown_goal", text: "**Goal emphasis**", description: "Goal steer", metadata: { autonomy: { goal: true } }, created: 3 },
+  { kind: "synthetic", id: "msg_markdown_member", text: "Project member update", description: "Project notification", metadata: { source: "project_notification", event: "review", memberSessionID: "ses_child", title: "Reviewer", excerpt: "**Member emphasis**" }, created: 4 },
+  { kind: "synthetic", id: "msg_markdown_excerpt", text: "Subagent update", description: "Subagent notification", metadata: { source: "subagent_notification", type: "completed", childID: "ses_child", excerpt: "**Child emphasis**" }, created: 5 },
+  { kind: "assistant", id: "msg_markdown_tool", agent: "build", parts: [{ kind: "tool", callID: "call_markdown", name: "subagent", status: "completed", content: [{ kind: "text", text: "**Tool emphasis**" }] }], created: 6, completed: 7 },
+]
 const toolOutput = new URLSearchParams(location.search).has("tool-output")
 const navigation = new URLSearchParams(location.search).has("navigation")
 const runningStep = new URLSearchParams(location.search).has("running")
@@ -185,7 +194,7 @@ const imageSnapshot = () => readSnapshot({ sourceEpoch: "epoch_1", session: { id
     ...(streamedImageText ? [{ type: "text", text: streamedImageText }] : []),
   ] },
 ] })?.messages ?? imageMessages
-const [messages, setMessages] = createSignal(longMode ? longMessages("long", 150) : synthetic ? syntheticMessages(synthetic === "compacted") : fileChangesMode ? fileChangeMessages : costsMode ? costMessages : toolOutput ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : compactionMode ? compactionMessages : initial)
+const [messages, setMessages] = createSignal(markdown ? markdownMessages : longMode ? longMessages("long", 150) : synthetic ? syntheticMessages(synthetic === "compacted") : fileChangesMode ? fileChangeMessages : costsMode ? costMessages : toolOutput ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : compactionMode ? compactionMessages : initial)
 const [compactionHistory, setCompactionHistory] = createSignal(compactionMode && compactionMode !== "old" ? {
   data: [{ jobID: "cmp_old", trigger: "auto", status: "completed" as const, metrics: { ...compressionMetrics, inputTokens: 500, retainedTokens: 200 }, created: 2 }, { jobID: "cmp_live", trigger: "manual", status: "running" as const, created: 3 }],
   truncated: compactionMode === "truncated", completedBefore: compactionMode === "truncated" ? 2 : 0, completedCount: compactionMode === "truncated" ? 3 : 1, totalSavedTokens: compactionMode === "truncated" ? 900 : 300,
