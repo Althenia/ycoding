@@ -22,6 +22,16 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.9",
+    date: "2026-11-18",
+    title: "Reliable background server startup",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Running `ycoding` reuses a healthy registered background server, even when the terminal and server versions differ." },
+      { tag: "Fixed", text: "The terminal and Desktop shared mode start a managed server on a free port when the preferred port is occupied. Concurrent launches share one server. An explicit `ycoding serve --service --port <port>` still requires that port." },
+    ],
+  },
+  {
     version: "0.11.8",
     date: "2026-11-18",
     title: "Exact Project folders and clearer conversations",

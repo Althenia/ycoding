@@ -512,35 +512,114 @@ test("configured managed service port overrides the channel default", async () =
   }
 }, 30_000)
 
-test("unrelated managed port occupancy reports an actionable conflict", async () => {
+test("the default terminal launch uses the registered server when versions differ", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-tui-service-reuse-"))
+  const registration = path.join(root, "state", "ycoding", "service-local.json")
+  const password = "terminal-reuse-test"
+  const version = "0.11.8"
+  const requests: string[] = []
+  using listener = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      if (request.headers.get("authorization") !== "Basic " + btoa(`ycoding:${password}`))
+        return new Response(null, { status: 401 })
+      const route = new URL(request.url).pathname
+      requests.push(route)
+      if (route === "/api/health")
+        return Response.json({ healthy: true, version, pid: process.pid, sourceEpoch: "source_test" })
+      // End startup at the first TUI data request without requiring a renderer.
+      return new Response(null, { status: 409 })
+    },
+  })
+  await fs.mkdir(path.dirname(registration), { recursive: true })
+  await fs.writeFile(
+    registration,
+    JSON.stringify({ id: "existing-service", version, url: listener.url, pid: process.pid, password }),
+  )
+  const client = Bun.spawn([process.execPath, "--conditions=browser", path.join(import.meta.dir, "../src/tui.ts"), root], {
+    env: serviceEnv(root),
+    timeout: 10_000,
+    stderr: "pipe",
+    stdout: "ignore",
+  })
+  try {
+    const output = await new Response(client.stderr).text()
+    await client.exited
+    expect(requests, output).toContain("/api/fs/list")
+    expect(requests).not.toContain("/api/service/stop")
+    expect((await waitForInfo(registration)).id).toBe("existing-service")
+  } finally {
+    client.kill("SIGTERM")
+    await client.exited
+    await fs.rm(root, { recursive: true, force: true })
+  }
+}, 15_000)
+
+test("concurrent managed starts share a free port when the configured port is occupied", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-service-port-fallback-"))
+  using listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("unrelated") })
+  const registration = path.join(root, "state", "ycoding", "service-local.json")
+  const config = path.join(root, "config", "ycoding", "service-local.json")
+  await fs.mkdir(path.dirname(config), { recursive: true })
+  await fs.writeFile(config, JSON.stringify({ port: listener.port }))
+  const command = [process.execPath, path.join(import.meta.dir, "../src/index.ts"), "service", "start"]
+  const launch = () => Bun.spawn(command, { env: serviceEnv(root), stdout: "pipe", stderr: "pipe" })
+  const starters = [launch(), launch()]
+  try {
+    for (const starter of starters) {
+      const error = await new Response(starter.stderr).text()
+      expect(await starter.exited, error).toBe(0)
+    }
+    const info = await waitForInfo(registration)
+    expect(new URL(info.url).port).not.toBe(String(listener.port))
+    expect(await healthStatus(info)).toBe(200)
+    expect((await Bun.file(config).json()).port).toBe(listener.port)
+    expect(await fetch(listener.url).then((response) => response.text())).toBe("unrelated")
+    for (const starter of starters) {
+      expect((await new Response(starter.stdout).text()).trim()).toBe(info.url)
+    }
+    const later = launch()
+    starters.push(later)
+    expect(await later.exited).toBe(0)
+    expect((await new Response(later.stdout).text()).trim()).toBe(info.url)
+    expect((await waitForInfo(registration)).id).toBe(info.id)
+  } finally {
+    for (const starter of starters) starter.kill("SIGTERM")
+    await Promise.all(starters.map((starter) => starter.exited))
+    await Effect.runPromise(Service.stop({ file: registration }).pipe(Effect.provide(NodeFileSystem.layer)))
+    await fs.rm(root, { recursive: true, force: true })
+  }
+}, 45_000)
+
+test("explicit managed port occupancy reports an actionable conflict", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-service-conflict-"))
   const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("unrelated") })
   const port = listener.port
   const registration = path.join(root, "state", "ycoding", "service-local.json")
   await fs.mkdir(path.join(root, "config", "ycoding"), { recursive: true })
   await fs.writeFile(path.join(root, "config", "ycoding", "service-local.json"), JSON.stringify({ port }))
-  const contender = Bun.spawn([process.execPath, path.join(import.meta.dir, "../src/index.ts"), "serve", "--service"], {
-    env: serviceEnv(root),
-    stderr: "pipe",
-    stdout: "pipe",
-  })
+  const contender = Bun.spawn(
+    [process.execPath, path.join(import.meta.dir, "../src/index.ts"), "serve", "--service", "--port", String(port)],
+    { env: serviceEnv(root), stderr: "pipe", stdout: "pipe" },
+  )
   try {
     expect(await contender.exited).not.toBe(0)
     const output = (await new Response(contender.stdout).text()) + (await new Response(contender.stderr).text())
     expect(output).toContain(`Managed service port ${port} on 127.0.0.1 is already in use by another process`)
-    expect(output).toContain("Set `port` in service-local.json under the YCoding config directory")
+    expect(output).toContain("Omit `--port` to select a free port automatically")
     expect(output).toContain("ycoding --standalone")
     expect(output).not.toContain("ycoding service set")
     expect(await Bun.file(registration).exists()).toBe(false)
   } finally {
-    listener.stop(true)
+    await listener.stop(true)
     contender.kill("SIGTERM")
     await contender.exited
     await fs.rm(root, { recursive: true, force: true })
   }
 }, 30_000)
 
-test("unresponsive managed port occupancy reports a bounded conflict", async () => {
+test("unresponsive occupancy of an explicit managed port reports a bounded conflict", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-service-unresponsive-conflict-"))
   const recognizing = Promise.withResolvers<void>()
   const requests = { count: 0 }
@@ -563,16 +642,15 @@ test("unresponsive managed port occupancy reports a bounded conflict", async () 
   const stale = {
     id: "stale",
     version: InstallationVersion,
-    url: "http://127.0.0.1:1",
+    url: listener.url.toString(),
     pid: process.pid,
     password: "stale",
   }
   await fs.writeFile(registration, JSON.stringify(stale))
-  const contender = Bun.spawn([process.execPath, path.join(import.meta.dir, "../src/index.ts"), "serve", "--service"], {
-    env: serviceEnv(root),
-    stderr: "pipe",
-    stdout: "pipe",
-  })
+  const contender = Bun.spawn(
+    [process.execPath, path.join(import.meta.dir, "../src/index.ts"), "serve", "--service", "--port", String(listener.port)],
+    { env: serviceEnv(root), stderr: "pipe", stdout: "pipe" },
+  )
 
   try {
     await recognizing.promise
@@ -613,7 +691,7 @@ test("port contender recognizes an incumbent registered during the bind race", a
     JSON.stringify({
       id: "stale",
       version: InstallationVersion,
-      url: "http://127.0.0.1:1",
+      url: listener.url.toString(),
       pid: 2_147_483_647,
       password: "stale",
     }),
