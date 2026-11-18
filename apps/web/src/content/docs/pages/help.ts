@@ -91,7 +91,7 @@ export const helpPages: readonly DocPage[] = [
             items: [
               "**Symptom:** Startup reports that it cannot obtain the database lock. **Cause:** Another YCoding process is writing the same database, or the write lock is unavailable during startup. **Fix:** Close other YCoding processes that use the database, then run `ycoding` again. Startup retries the conversion on the next run; it does not silently skip it.",
               "**Symptom:** The first start after an upgrade takes longer or needs more disk space. **Cause:** SQLite may convert auto-vacuum mode using a one-time database rebuild that needs temporary free disk space. **Fix:** Keep a backup, close other database writers, free disk space up to twice the database size, and retry `ycoding`. Do not delete the database to resolve the delay.",
-              "**Symptom:** The managed service cannot bind its configured port. **Cause:** Another process is using that port. **Fix:** Choose another port in the channel service configuration, or run `ycoding --standalone` for a private server.",
+              "YCoding selects a free port if its preferred managed-service port is busy. Omit `--port` from `ycoding serve --service` to allow automatic port selection, or run `ycoding --standalone` for a private server.",
             ],
           },
           {

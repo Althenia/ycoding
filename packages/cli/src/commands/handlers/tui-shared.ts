@@ -25,6 +25,7 @@ export const runTui = Effect.fnUntraced(function* (input: Input) {
   const server = yield* ServerConnection.resolve({
     server: Option.getOrUndefined(input.server),
     standalone: input.standalone,
+    mismatch: "ignore",
     onStart: (reason, previousVersion) => {
       if (reason === "version-mismatch" && preflight.begin(previousVersion)) return
       process.stderr.write(

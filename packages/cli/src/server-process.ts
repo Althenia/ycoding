@@ -57,12 +57,15 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
       const config = options.mode === "service" ? yield* ServiceConfig.read() : {}
       const hostname = options.hostname ?? config.hostname ?? "127.0.0.1"
       const port = options.port ?? config.port ?? (options.mode === "service" ? ServiceConfig.defaultPort() : undefined)
-      if (
-        serviceOptions !== undefined &&
-        port !== undefined &&
-        (yield* Service.incumbent({ ...serviceOptions, url: serviceURL(hostname, port) })) !== undefined
-      )
-        return
+      const discovery = serviceOptions && { file: serviceOptions.file }
+      if (discovery) {
+        // Starts that share a registration can fall back to different ports.
+        const claimed = yield* ProcessLock.acquire(discovery.file + ".service.lock").pipe(
+          Effect.as(true),
+          Effect.catchTag("ProcessLockHeldError", () => Effect.succeed(false)),
+        )
+        if (!claimed || (yield* Service.incumbent(discovery)) !== undefined) return
+      }
       const { start } = yield* Effect.promise(() => import("@ycoding-ai/server/process"))
       const environmentPassword = yield* Env.password
       // Keep the lease credential out of the environment inherited by tools.
@@ -82,7 +85,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
       const services = yield* Effect.context<FileSystem.FileSystem | Global.Service>()
       const logRemoteDiagnostic = yield* FiberSet.makeRuntime()
       yield* MemoryDiagnostics.start(Logging.minimumLogLevel() === "Debug")
-      const server = yield* start(
+      const startAtPort = (port: number | undefined) => start(
         {
           client: process.env.YCODING_CLIENT ?? "cli",
           hostname,
@@ -169,24 +172,20 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
             onDiagnostic: (message) => { logRemoteDiagnostic(Effect.logWarning("Dots remote connector diagnostic", { detail: message })) },
           })
         },
-      ).pipe(
-        Effect.catch((error) => {
-          if (serviceOptions === undefined || port === undefined || !addressInUse(error)) return Effect.fail(error)
-          return recognizeIncumbent(serviceOptions, hostname, port).pipe(
-            Effect.flatMap((found) =>
-              found
-                ? Effect.void
-                : Effect.fail(
-                    new Error(
-                      `Managed service port ${port} on ${hostname} is already in use by another process. ` +
-                        `Set \`port\` in ${ServiceConfig.filename()} under the YCoding config directory, ` +
-                        "or start with `ycoding --standalone`.",
-                      { cause: error },
-                    ),
-                  ),
+      )
+      const server = yield* startAtPort(port).pipe(
+        Effect.catch(Effect.fnUntraced(function* (error) {
+          if (!discovery || port === undefined || !addressInUse(error)) return yield* Effect.fail(error)
+          if (yield* recognizeIncumbent(discovery)) return undefined
+          if (options.port === undefined) return yield* startAtPort(0)
+          return yield* Effect.fail(
+            new Error(
+              `Managed service port ${port} on ${hostname} is already in use by another process. ` +
+                "Omit `--port` to select a free port automatically, or start with `ycoding --standalone`.",
+              { cause: error },
             ),
           )
-        }),
+        })),
       )
       if (server === undefined) return
       const url = HttpServer.formatAddress(server.address)
@@ -247,18 +246,14 @@ const register = Effect.fnUntraced(function* (
   )
 })
 
-const recognizeIncumbent = Effect.fnUntraced(function* (options: DiscoverOptions, hostname: string, port: number) {
-  const found = yield* Service.incumbent({ ...options, url: serviceURL(hostname, port) }).pipe(
+const recognizeIncumbent = Effect.fnUntraced(function* (options: DiscoverOptions) {
+  const found = yield* Service.incumbent(options).pipe(
     Effect.filterOrFail((value) => value !== undefined),
     Effect.retry(Schedule.spaced("100 millis")),
     Effect.timeoutOption("15 seconds"),
   )
   return Option.isSome(found)
 })
-
-function serviceURL(hostname: string, port: number) {
-  return `http://${hostname.includes(":") ? `[${hostname}]` : hostname}:${port}`
-}
 
 function truthy(value?: string) {
   return value === "1" || value?.toLowerCase() === "true"
