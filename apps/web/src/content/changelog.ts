@@ -22,6 +22,23 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.12.0",
+    date: "2026-11-19",
+    title: "Desktop window bounds, inset Settings, and Dot prompt bubbles",
+    tags: ["Changed"],
+    changes: [
+      { tag: "Changed", text: "Project coordination and default project prompts require the coordinator master to delegate all project work (including single-member work) through the appropriate supervisor or owner and remove conflicting direct-master defaults and three-member supervisor thresholds, so the master never performs project work or directly creates, steers, updates, or manages member sessions." },
+      { tag: "Changed", text: "Web New chat places the primary repository selector directly beside the composer and highlights it when a repository is required, uses one concise helper line for required or optional repository state, preserves typed drafts while choosing a repository, trims the extra floating header stack above the landing composer, and gives the mobile landing composer the same compact agent and model controls as chat." },
+      { tag: "Changed", text: "Web Settings groups Machine, Appearance, Notifications, Permissions, and App into inset cards with aligned headings and controls. Machine uses a vertical list across desktop and phone widths and places the full Keep machine awake guidance inside a `Keep-awake safety details` disclosure on phones while keeping the battery and heat caution visible." },
+      { tag: "Changed", text: "Connect provider places each profile's type and connection status beside its name when space allows and wraps cleanly on smaller screens while keeping actions reachable." },
+      { tag: "Changed", text: "Device-removal confirmation dialogs add breathing room between the warning text and action buttons, and phone Team and companion views align insets so the Back focus outline stays visible while scrolling." },
+      { tag: "Changed", text: "Web transcripts render genuine Dot-originated steer prompts using the right-aligned prompt bubble with cleaned user-facing steer text and `Dot steer` provenance, without inventing text for empty steers or altering non-steer notices." },
+      { tag: "Changed", text: "Desktop enforces an 800×600 native minimum window content size via frame clamping and AppKit `setContentMinSize:`, preventing resizes below 800×600 and clamping undersized launches while keeping explicit minimize and restore available." },
+      { tag: "Changed", text: "Desktop management surfaces are refined and verified at 800×600 and 1440×900 with padded Settings cards, clearer Projects layout without member-inspector overlap, an unclipped Context tab, readable Provider, MCP, Commands, and Model dialogs, Escape dismissal that returns focus to the opening control, reduced-motion behavior, and an opt-in isolated ephemeral-profile test mode." },
+      { tag: "Changed", text: "Desktop transcripts render genuine Dot-originated steer prompts as right-aligned prompt bubbles with cleaned steer text, `Dot steer` provenance, and prompt-rail ticks, matching Web while keeping empty steers hidden and non-steer synthetic notices unchanged." },
+    ],
+  },
+  {
     version: "0.11.12",
     date: "2026-11-19",
     title: "More room for Project conversations",
