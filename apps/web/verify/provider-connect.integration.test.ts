@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { launchBrowser } from "./cdp"
+import { decodeNumber, decodeRecord, launchBrowser } from "./cdp"
 
 const port = 4752
 const executable = process.env.YCODING_WEB_CHROME
@@ -43,6 +43,39 @@ async function input(page: Page, id: string, value: string) {
   await page.evaluate(`(() => { const field=document.getElementById(${JSON.stringify(id)});field.value=${JSON.stringify(value)};field.dispatchEvent(new InputEvent('input',{bubbles:true})) })()`)
 }
 
+test("connected profiles fit more whole cards on wide screens and keep complete status on phones", async () => {
+  for (const [width, height] of [[1440, 900], [390, 844]] as const) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, height)
+      await page.setCoarsePointer(width === 390)
+      await page.setReducedMotion(true)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&presentation=conversation&team=two&childTranscript=ready&childQuestion=1`)
+      await wait(page, `!!window.providerAuthFixture && !!document.querySelector('.app-header__palette')`)
+      await page.evaluate(`window.providerAuthFixture.report().profiles.push(...Array.from({length:9},(_,i)=>({name:'Example profile '+(i+1),active:false,kind:'oauth',status:'connected'})))`)
+      await palette(page)
+      await choose(page, "Provider", "OpenAI")
+      const geometry = await page.evaluate(`(() => {
+        const body = document.querySelector('dialog[aria-label="Connect provider"] .overlay__body');
+        body.scrollTop = 0;
+        const box = node => node.getBoundingClientRect();
+        const top = box(body).top + body.clientTop, bottom = top + body.clientHeight;
+        const cards = [...body.querySelectorAll('.provider-profile')];
+        const sample = cards[1], name = box(sample.querySelector('.provider-profile__name')), kind = box(sample.querySelector('.provider-profile__kind'));
+        const state = sample.querySelector('.provider-profile__state');
+        return { cards: cards.length, full: cards.filter(card => box(card).top >= top && box(card).bottom <= bottom).length,
+          inline: name.top < kind.bottom && kind.top < name.bottom,
+          status: state.textContent, kind: sample.querySelector('.provider-profile__kind').textContent,
+          contained: box(state).right <= box(sample).right && body.scrollWidth <= body.clientWidth && body.scrollHeight > body.clientHeight,
+          inset: name.left - box(sample).left,
+          hit: [...sample.querySelectorAll('button')].every(button => box(button).height >= (innerWidth < 768 ? 44 : 36)) };
+      })()`, decodeRecord)
+      expect(geometry).toMatchObject({ cards: 10, inline: width === 1440, status: "Connected", kind: "OAuth", contained: true, inset: width === 1440 ? 16 : 12, hit: true })
+      if (width === 1440) expect(decodeNumber(geometry["full"])).toBeGreaterThanOrEqual(5)
+    } finally { await page.close() }
+  }
+}, 30000)
+
 test("palette provider connection adds a named key profile to the Session's machine and keeps secrets out of state and request records", async () => {
   for (const width of [390, 1440]) {
     const page = await browser!.openPage()
@@ -67,7 +100,7 @@ test("palette provider connection adds a named key profile to the Session's mach
           actionsContained: bounds(actions).right <= bounds(card).right && bounds(actions).bottom <= bounds(card).bottom,
           fits: body.scrollWidth <= body.clientWidth,
         };
-      })()`)).toEqual({ nameInset: width === 390 ? 12 : 16, metadataBelowName: true, actionsContained: true, fits: true })
+      })()`)).toMatchObject({ nameInset: width === 390 ? 12 : 16, ...(width === 390 ? { metadataBelowName: true } : {}), actionsContained: true, fits: true })
       await choose(page, "Authentication method", "API key")
       await input(page, "provider-profile-name", "Web profile")
       await input(page, "provider-api-key", "synthetic-test-key")

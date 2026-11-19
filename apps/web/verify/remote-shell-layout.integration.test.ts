@@ -57,6 +57,15 @@ describe("remote shell layout", () => {
       })()`)
       const desktop = await rhythm()
       expect(await measure()).toEqual({ centered: true, bounded: true, headline: true, fullRows: true, sections: true, fits: true })
+      expect(await page.evaluate(`(() => {
+        const rows = [...document.querySelectorAll('.machine-row__item')];
+        return rows.length > 0 && rows.every(row => {
+          const name = row.querySelector('.machine-row__name'), range = document.createRange();
+          range.selectNodeContents(name);
+          const edit = row.querySelector('.machine-row__edit').getBoundingClientRect();
+          return edit.left - range.getBoundingClientRect().right <= 24 && edit.height >= 44 && row.querySelector('.machine-row__connect').getBoundingClientRect().height >= 44;
+        });
+      })()`)).toBe(true)
       await page.setCoarsePointer(true)
       await page.setViewport(390, 844)
       await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)

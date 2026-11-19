@@ -1799,7 +1799,7 @@ function SettingsPage(props: { readonly office: OfficeSettingsStore; readonly ph
       </div>
       <div class="pane">
         <div class="settings st-ledger-settings">
-          <MachineSettings />
+          <MachineSettings phoneLayout={props.phoneLayout} />
           <AppearanceSettings />
           <NotificationSettings />
           <PermissionSettings />

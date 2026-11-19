@@ -26,6 +26,13 @@
   background: var(--yc-green-soft);
 }
 
+@media (min-width: 768px) {
+  .machine-row__item:not([data-editing]) {
+    grid-template-columns: minmax(0, max-content) auto auto;
+    justify-content: start;
+  }
+}
+
 .machine-row__item:not([aria-current="true"]):focus-within { background: var(--yc-surface-sunken); }
 @media (hover: hover) { .machine-row__item:not([aria-current="true"]):hover { background: var(--yc-surface-sunken); } }
 

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { launchBrowser, decodeNumber, decodeString, type Page } from "./cdp"
+import { launchBrowser, decodeNumber, decodeRecord, decodeString, type Page } from "./cdp"
 
 const port = 4423
 const executable = process.env.YCODING_WEB_CHROME
@@ -36,6 +36,8 @@ afterAll(async () => {
 const control = `document.querySelector('input[aria-labelledby="machine-awake-label"]')`
 const label = `${control}.nextElementSibling.textContent`
 const detail = `document.getElementById('machine-awake-status').textContent`
+const help = `document.querySelector('button[aria-controls="machine-awake-safety"]')`
+const caution = `(document.getElementById('machine-awake-summary') ?? document.getElementById('machine-awake-caveat'))`
 const count = (operation: "get" | "set") =>
   `window.keepAwakeFixture.calls.filter(call => call.operation === 'machine.keepAwake.${operation}').length`
 
@@ -47,10 +49,10 @@ async function until(page: Pick<Page, "evaluate">, expression: string) {
   throw new Error(`Timed out waiting for ${expression}`)
 }
 
-async function open(read = "held", theme = "light", width = 1440) {
+async function open(read = "held", theme = "light", width = 1440, height = 900) {
   if (!browser) throw new Error("Browser not started")
   const page = await browser.openPage()
-  await page.setViewport(width, 900)
+  await page.setViewport(width, height)
   await page.setCoarsePointer(width < 768)
   await page.setReducedMotion(true)
   await page.navigate(`http://127.0.0.1:${port}/verify/keep-awake-settings-fixture.html?read=${read}&theme=${theme}`)
@@ -59,12 +61,49 @@ async function open(read = "held", theme = "light", width = 1440) {
 }
 
 describe("Settings Keep machine awake", () => {
+  test("phone safety help exposes the whole desktop explanation without changing the switch", async () => {
+    for (const theme of ["light", "dark"]) {
+      const wide = await open("off", theme)
+      const phone = await open("off", theme, 390, 844)
+      try {
+        await until(wide, `${label} === 'Off'`)
+        await until(phone, `${label} === 'Off'`)
+        const explanation = await wide.evaluate(`document.getElementById('machine-awake-caveat').textContent`, decodeString)
+        expect(await wide.evaluate(`(() => {
+          const box = node => node.getBoundingClientRect(), label = document.createRange();
+          label.selectNodeContents(document.getElementById('machine-awake-label'));
+          const caveat = document.getElementById('machine-awake-caveat'), probe = document.createElement('span');
+          probe.style.cssText = 'position:absolute;width:68ch'; caveat.append(probe);
+          const result = { nearby: box(${control}.closest('label')).left - box(label).right <= 16, measure: Math.abs(box(caveat).width - box(probe).width) <= 1 };
+          probe.remove(); return result;
+        })()`)).toEqual({ nearby: true, measure: true })
+        expect(await phone.evaluate(`(() => {
+          const button = ${help}, region = document.getElementById('machine-awake-safety');
+          return { name: button?.textContent.trim(), expanded: button?.getAttribute('aria-expanded'), hidden: region?.inert, visibleWarning: ${control}.getAttribute('aria-describedby')?.split(' ').some(id => /battery.*heat/.test(document.getElementById(id)?.innerText ?? '')) };
+        })()`)).toEqual({ name: "Keep-awake safety details", expanded: "false", hidden: true, visibleWarning: true })
+        await phone.evaluate(`${help}.focus()`)
+        await phone.pressKey("Enter", "Enter", 13, "\r")
+        expect(await phone.evaluate(`(() => {
+          const button = ${help}, region = document.getElementById('machine-awake-safety'), box = button.getBoundingClientRect(), style = getComputedStyle(button);
+          const clearance = parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset);
+          return { focused: document.activeElement === button && button.matches(':focus-visible') && style.outlineStyle === 'solid', expanded: button.getAttribute('aria-expanded'), accessible: !region.inert && !region.hasAttribute('aria-hidden'), height: box.height, clearance: box.left >= clearance && box.right <= innerWidth - clearance && box.top >= clearance && box.bottom <= innerHeight - clearance, text: document.getElementById('machine-awake-caveat').innerText, requests: ${count("set")}, checked: ${control}.checked, fits: document.documentElement.scrollWidth <= innerWidth };
+        })()`, decodeRecord)).toMatchObject({ focused: true, expanded: "true", accessible: true, height: 44, clearance: true, text: explanation, requests: 0, checked: false, fits: true })
+        await phone.pressKey(" ", "Space", 32)
+        expect(await phone.evaluate(`({ expanded: ${help}.getAttribute('aria-expanded'), focused: document.activeElement === ${help}, hidden: document.getElementById('machine-awake-safety').inert, requests: ${count("set")} })`)).toEqual({ expanded: "false", focused: true, hidden: true, requests: 0 })
+      } finally {
+        await phone.close()
+        await wide.close()
+      }
+    }
+  }, 30000)
+
   test("renders display and activity states without claiming unlock across sizes and themes", async () => {
     for (const width of [320, 390, 1440]) for (const theme of ["light", "dark"]) for (const mode of ["assertions-on", "activity-error"]) {
       const page = await open(mode, theme, width)
       try {
         await until(page, `${label} === 'On'`)
         expect(await page.evaluate(detail)).toContain(`Display on; activity ${mode === "activity-error" ? "error" : "on"}`)
+        await page.evaluate(`${help}?.click()`)
         expect(await page.evaluate(`document.getElementById('machine-awake-caveat').textContent`)).toContain("deliberate locks and managed policy")
         expect(await page.evaluate(`document.getElementById('machine-awake-status').dataset.tone`)).toBe(mode === "activity-error" ? "attention" : "neutral")
         expect(await page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")).toBe(true)
@@ -93,7 +132,7 @@ describe("Settings Keep machine awake", () => {
         await until(page, `${label} === 'On' && !${control}.disabled`)
         expect(await page.evaluate(`${control}.checked`)).toBe(mode !== "sleep-held")
         expect(await page.evaluate(detail)).toMatch(mode === "sleep-held" ? /Idle on; lid on.*deferred Session/ : /lid-closed keep-awake could not be armed/)
-        expect(await page.evaluate(`document.getElementById('machine-awake-caveat').textContent`)).toMatch(/battery.*heat/)
+        expect(await page.evaluate(`${caution}.textContent`)).toMatch(/battery.*heat/)
       } finally {
         await page.close()
       }
@@ -110,19 +149,19 @@ describe("Settings Keep machine awake", () => {
             ),
           ).toEqual({ label: "Checking", disabled: true, checked: false })
           const before = await page.evaluate("JSON.stringify(localStorage)", decodeString)
-          expect(await page.evaluate(`document.getElementById('machine-awake-caveat').textContent`)).toMatch(
-            /macOS.*idle sleep and lid-closed sleep.*battery.*stops or restarts/,
+          expect(await page.evaluate(`${caution}.textContent`)).toMatch(
+            width < 768 ? /battery.*heat/ : /macOS.*idle sleep and lid-closed sleep.*battery.*stops or restarts/,
           )
           await page.evaluate(`window.keepAwakeFixture.releaseRead('off')`)
           await until(page, `${label} === 'Off' && !${control}.disabled`)
           expect(
             await page.evaluate(
-              `({ gap: document.getElementById('machine-awake-caveat').getBoundingClientRect().top - document.getElementById('machine-awake-status').getBoundingClientRect().bottom, clipped: document.getElementById('machine-awake-status').scrollHeight > document.getElementById('machine-awake-status').clientHeight })`,
+              `({ gap: ${caution}.getBoundingClientRect().top - document.getElementById('machine-awake-status').getBoundingClientRect().bottom, clipped: document.getElementById('machine-awake-status').scrollHeight > document.getElementById('machine-awake-status').clientHeight })`,
             ),
           ).toEqual({ gap: expect.any(Number), clipped: false })
           expect(
             await page.evaluate(
-              `document.getElementById('machine-awake-caveat').getBoundingClientRect().top - document.getElementById('machine-awake-status').getBoundingClientRect().bottom`,
+              `${caution}.getBoundingClientRect().top - document.getElementById('machine-awake-status').getBoundingClientRect().bottom`,
             ),
           ).toBeLessThanOrEqual(24)
           expect(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)

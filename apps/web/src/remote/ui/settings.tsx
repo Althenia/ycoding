@@ -5,6 +5,7 @@ import { deviceAliasLimit, type RemoteLatencySample } from "@ycoding-ai/remote"
 import { Icon, type IconName } from "../../ui/icon"
 import { Link } from "../../ui/link"
 import { CustomSelect } from "../../ui/custom-select"
+import { Collapsible } from "../../ui/collapsible"
 import { Modal } from "../../ui/modal"
 import { pwaInstall } from "../../pwa/install"
 import { InstallPWAButton } from "../../pwa/install-button"
@@ -14,7 +15,7 @@ import { SCHEMES, SCHEME_IDS } from "../../theme/schemes"
 import { useRemote } from "../context"
 import { filterSummary, pushFilterWire, readFilter } from "../coordination"
 import { createRemoteQuery } from "../query"
-import { keepAwakeView } from "../keep-awake"
+import { keepAwakeBatteryCaution, keepAwakeView } from "../keep-awake"
 import { keepAwakeState } from "../queries"
 import { createPushHttp, createRemoteHttp } from "../http"
 import { browserPushPlatform, disablePush, enablePush, pushStatusView, savePushCategories, syncPushState, type PushPlatform, type PushStatus } from "../push"
@@ -50,7 +51,8 @@ const themeOptions: readonly { readonly id: ThemePreference; readonly label: str
 
 const schemeOptions = SCHEME_IDS.map((id) => ({ value: id, label: SCHEMES[id].label }))
 
-export function MachineSettings(): JSX.Element {
+export function MachineSettings(props: { readonly phoneLayout: boolean }): JSX.Element {
+  const [safetyOpen, setSafetyOpen] = createSignal(false)
   const remote = useRemote()
   const state = () => remote.state()
   const [editing, setEditing] = createSignal<string>()
@@ -167,10 +169,10 @@ export function MachineSettings(): JSX.Element {
     <Show when={note() !== ""}><p class="machine-row__note field__hint" role="status">{note()}</p></Show>
     <p id="machine-row-scope" class="machine-row__scope field__hint">Names are shared across your account's browsers.</p>
     <div class="defs__row machine-awake" aria-busy={awake().busy}>
-      <span class="defs__key" id="machine-awake-label">Keep machine awake</span>
-      <span class="defs__value">
+      <div class="machine-awake__heading">
+        <span class="defs__key" id="machine-awake-label">Keep machine awake</span>
         <label class="switch">
-          <input type="checkbox" role="switch" aria-labelledby="machine-awake-label" aria-describedby="machine-awake-status machine-awake-caveat"
+          <input type="checkbox" role="switch" aria-labelledby="machine-awake-label" aria-describedby={`machine-awake-status ${props.phoneLayout ? "machine-awake-summary" : "machine-awake-caveat"}`}
             checked={awake().checked} disabled={awake().disabled}
             onChange={(event) => {
               setKeepAwake.mutate(event.currentTarget.checked)
@@ -182,9 +184,18 @@ export function MachineSettings(): JSX.Element {
           <button type="button" class="button button--secondary button--small" aria-label="Retry Keep machine awake"
             onClick={() => void keepAwake().refetch()}>Retry</button>
         </Show>
-        <span id="machine-awake-status" class="field__hint machine-awake__status" data-tone={awake().tone} role="status" aria-live="polite">{awake().detail}</span>
-        <span id="machine-awake-caveat" class="field__hint machine-awake__caveat">{awake().caveat}</span>
-      </span>
+      </div>
+      <p id="machine-awake-status" class="field__hint machine-awake__status" data-tone={awake().tone} role="status" aria-live="polite">{awake().detail}</p>
+      <Show when={props.phoneLayout}>
+        <p id="machine-awake-summary" class="field__hint machine-awake__caveat">{keepAwakeBatteryCaution}</p>
+        <button type="button" class="button button--ghost machine-awake__help" aria-expanded={safetyOpen()} aria-controls="machine-awake-safety"
+          onClick={() => setSafetyOpen((open) => !open)}>
+          Keep-awake safety details<Icon name="chevron-down" size={16} />
+        </button>
+      </Show>
+      <Collapsible id="machine-awake-safety" open={!props.phoneLayout || safetyOpen()}>
+        <p id="machine-awake-caveat" class="field__hint machine-awake__caveat">{awake().caveat}</p>
+      </Collapsible>
     </div>
   </Section>
 }

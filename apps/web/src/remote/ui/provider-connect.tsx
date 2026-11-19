@@ -82,9 +82,14 @@ export function ProviderConnect(props: { readonly target: CatalogTarget; readonl
             const view = () => providerProfileView(profile)
             const available = () => providerProfileMethod(profile, methods()) !== undefined
             return <li class="provider-profile">
-              <span class="provider-profile__name">{profile.name}{profile.active ? " (provider default)" : ""}</span>
-              <span class="provider-profile__kind">{view().kind}</span>
-              <span class={`provider-profile__state provider-profile__state--${view().tone}`}>{view().state}</span>
+              <span class="provider-profile__identity">
+                <span class="provider-profile__name">{profile.name}{profile.active ? " (provider default)" : ""}</span>
+                <span class="provider-profile__metadata">
+                  <span class="provider-profile__kind">{view().kind}</span>
+                  <span class="provider-profile__kind" aria-hidden="true">·</span>
+                  <span class={`provider-profile__state provider-profile__state--${view().tone}`}>{view().state}</span>
+                </span>
+              </span>
               <span class="provider-profile__actions">
                 <Show when={view().canRefresh}><button type="button" class="button button--secondary button--small" aria-label={`Refresh ${profile.name}`} disabled={!idle()} onClick={() => void auth?.refresh(integrationID(), profile.name)}>Refresh</button></Show>
                 <Show when={view().canRefresh} fallback={<button type="button" class="button button--secondary button--small" aria-label={`Replace key for ${profile.name}`} disabled={!idle() || !available()} onClick={() => replaceKey(profile)}>Replace key</button>}><button type="button" class="button button--secondary button--small" aria-label={`Reconnect ${profile.name}`} disabled={!idle() || !available()} onClick={() => reconnect(profile)}>Reconnect</button></Show>

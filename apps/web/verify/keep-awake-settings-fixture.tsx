@@ -107,7 +107,7 @@ render(
     <RemoteProvider createStore={() => store}>
       <main class="pane settings">
         <Show when={visible()}>
-          <MachineSettings />
+          <MachineSettings phoneLayout={getComputedStyle(document.documentElement).getPropertyValue("--yc-phone-layout").trim() === "1"} />
         </Show>
         <p id="following-settings">Following settings remain in place.</p>
       </main>

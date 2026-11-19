@@ -115,7 +115,7 @@ describe("Ledger Settings composition", () => {
   test("renders Machine, Appearance, Notifications, Permissions and App first in document order", async () => {
     const shell = await Bun.file(new URL("./shell.tsx", import.meta.url)).text()
     const page = shell.slice(shell.indexOf("function SettingsPage"))
-    const positions = ["<MachineSettings />", "<AppearanceSettings />", "<NotificationSettings />", "<PermissionSettings />", "<AppSettings />", "<LatencySettings />", "<AccountSettings />", "<DeviceSettings />", "<OfficeSettings office={props.office} />", "<ExternalNotificationSettings />"].map((element) => page.indexOf(element))
+    const positions = ["<MachineSettings phoneLayout={props.phoneLayout} />", "<AppearanceSettings />", "<NotificationSettings />", "<PermissionSettings />", "<AppSettings />", "<LatencySettings />", "<AccountSettings />", "<DeviceSettings />", "<OfficeSettings office={props.office} />", "<ExternalNotificationSettings />"].map((element) => page.indexOf(element))
     expect(positions.every((position, index) => position > -1 && (index === 0 || position > positions[index - 1]!))).toBe(true)
     expect(await read("settings.css")).not.toMatch(/(^|[\s;{])order\s*:/m)
   })

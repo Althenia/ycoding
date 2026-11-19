@@ -218,22 +218,37 @@
 }
 
 .settings .machine-awake {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  column-gap: var(--yc-space-3);
   row-gap: var(--yc-space-1);
+  padding-block: 0;
 }
 
-.machine-awake > .defs__value {
-  display: contents;
+.machine-awake__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yc-space-1) var(--yc-space-3);
 }
 
 .settings .machine-awake__status,
 .settings .machine-awake__caveat {
-  grid-column: 1 / -1;
+  max-inline-size: var(--yc-measure);
+  margin: 0;
   color: var(--yc-text-subtle);
   font-size: var(--yc-size-xs);
   line-height: var(--yc-leading-xs);
+}
+
+.machine-awake__help {
+  justify-self: start;
+  min-block-size: var(--yc-hit-min);
+  margin-inline-start: calc(-1 * var(--yc-space-2));
+  padding-inline: var(--yc-space-2);
+}
+
+.machine-awake__help[aria-expanded="true"] svg {
+  rotate: 180deg;
 }
 
 .settings .machine-awake__status[data-tone="danger"] {
