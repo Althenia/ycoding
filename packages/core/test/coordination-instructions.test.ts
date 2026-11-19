@@ -169,8 +169,13 @@ test("supervisors stay responsible for controlled Sessions until verified comple
     "act on each in the turn it arrives",
     "Supervisors cannot release themselves.",
   ]) expect(CoordinationInstructions.content).toContain(instruction)
+  const supervisorContentBoundary =
+    "A supervisor cannot call the `project` tool's Master-only create, attach, assign (including transfers), release, or remove operations; within authorized routes, a supervisor reuses a suitable owned member when available and steers, updates, or acts on owned member Sessions via `send`, `model`, `answer`, `inspect`, `escalate`, `interrupt`, and `list`."
   const entries = await Effect.runPromise(Instructions.read(CoordinationInstructions.make("supervisor")))
-  expect(entries[0]?.value).toContain("You cannot assign, transfer or release ownership or create members.")
+  expect(entries[0]?.value).toContain(supervisorContentBoundary)
+  expect(entries[0]?.value).toContain("you cannot call the `project` tool's Master-only create, attach, assign (including transfers), release, or remove operations.")
+  expect(entries[0]?.value).not.toContain("You cannot assign, transfer or release ownership or create members.")
+  expect(entries[0]?.value).not.toContain("Supervisors cannot create, attach, assign, transfer, release, or remove Project members.")
   once(Schema.decodeUnknownSync(Schema.String)(entries[0]?.value), [
     "As a supervisor, resolve your members' routine issues and judgment calls yourself within your existing authority, including scope inside the assignment, ordering, check scheduling, retries, and member requests through `answer`.",
     "As a supervisor, take to the Master only a real blocker you cannot resolve within that authority or a coordination need across members, with evidence and a recommendation.",
@@ -300,14 +305,16 @@ test("controller recovery reconciles uncertain work once without polling or repl
 test("coordination instructions enforce owner-routed boundaries, preserve histories, and claim no unsupported supervisor capabilities", async () => {
   const content = CoordinationInstructions.content
   for (const text of [
-    "Supervisors cannot create, attach, assign, transfer, release, or remove Project members.",
+    "A supervisor cannot call the `project` tool's Master-only create, attach, assign (including transfers), release, or remove operations; within authorized routes, a supervisor reuses a suitable owned member when available and steers, updates, or acts on owned member Sessions via `send`, `model`, `answer`, `inspect`, `escalate`, `interrupt`, and `list`.",
     "Coordinate all Project work through the established authorized owner route rather than directly creating, steering, updating, attaching, releasing, or removing member Sessions at the Master; use `assign` only to establish or transfer supervisor ownership to a live supervisor subagent the Master launched, and keep read-only oversight, escalations, and integration review at the Master.",
     "preserve Session and Project histories intact without deleting history as cleanup",
     "a completed child or `task_complete` is not whole delivery completion",
     "unfinished member work or pending family requests stay open with their recorded owner until settled",
   ]) once(content, text)
   const supervisor = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("supervisor"))))[0]?.value)
-  expect(supervisor).toContain("Supervisors cannot create, attach, assign, transfer, release, or remove Project members.")
+  expect(supervisor).toContain("A supervisor cannot call the `project` tool's Master-only create, attach, assign (including transfers), release, or remove operations;")
+  expect(supervisor).toContain("within authorized routes, a supervisor reuses a suitable owned member when available")
+  expect(supervisor).not.toContain("Supervisors cannot create, attach, assign, transfer, release, or remove Project members.")
   const executor = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("executor"))))[0]?.value)
   expect(executor).not.toContain("Coordinate all Project work through the established authorized owner route")
 })
@@ -324,7 +331,9 @@ test("the Master role line directs owner-routed supervision, escalation and hist
   expect(master).toContain("handle escalations and integration for delegated work")
   expect(master).toContain("preserving Session and Project histories without deleting history or cancelling active work")
   for (const directMutation of ["`attach`", "`remove`", "`release`", "`create`", "Create members"]) expect(master).not.toContain(directMutation)
-  expect(prefix(await read("supervisor"))).not.toContain("remove")
+  const supervisorPrefix = prefix(await read("supervisor"))
+  expect(supervisorPrefix).toContain("reuse a suitable owned member when available and steer or update owned member Sessions within authorized routes; you cannot call the `project` tool's Master-only create, attach, assign (including transfers), release, or remove operations.")
+  for (const forbiddenOp of ["`attach`", "`remove`", "`release`", "`create`"]) expect(supervisorPrefix).not.toContain(forbiddenOp)
 })
 
 

@@ -429,7 +429,7 @@ const operating = [
   "Require batched corrections, reruns of only failed or invalidated checks, and reuse of valid evidence for unchanged sources, contracts and environment, including at integration and merge.",
   "Report progress by delivery milestones, not by mixed administrative counts",
   ...placement,
-  "Supervisors cannot create, attach, assign, transfer, release, or remove Project members.",
+  "A supervisor cannot call the `project` tool's Master-only create, attach, assign (including transfers), release, or remove operations; within authorized routes, a supervisor reuses a suitable owned member when available and steers, updates, or acts on owned member Sessions via `send`, `model`, `answer`, `inspect`, `escalate`, `interrupt`, and `list`.",
   "Coordinate all Project work through the established authorized owner route rather than directly creating, steering, updating, attaching, releasing, or removing member Sessions at the Master; use `assign` only to establish or transfer supervisor ownership to a live supervisor subagent the Master launched, and keep read-only oversight, escalations, and integration review at the Master.",
   "Supervisors cannot release themselves",
   "your task remains `supervising` until ownership ends",
@@ -579,7 +579,8 @@ describe("Master hierarchy prompt assembly", () => {
       yield* coordination.setOwner(group.id, { sessionID, ownerSessionID: supervisor })
       const owned = systemText(yield* requestFor(supervisor, "Supervise the member"))
       expect(owned).toContain("Project role: supervisor")
-      expect(owned).toContain("You cannot assign, transfer or release ownership or create members")
+      expect(owned).toContain("reuse a suitable owned member when available and steer or update owned member Sessions within authorized routes; you cannot call the `project` tool's Master-only create, attach, assign (including transfers), release, or remove operations.")
+      expect(owned).not.toContain("You cannot assign, transfer or release ownership or create members")
       expect(owned).toContain("Do not execute a member's task, take over its tools, or control its subagents.")
       expect(owned).toContain(JSON.stringify(CoordinationInstructions.content).slice(1, -1))
       for (const text of hierarchy) expect(owned).toContain(text)
@@ -616,7 +617,7 @@ describe("Master hierarchy prompt assembly", () => {
         const system = systemText(yield* requestFor(id, "Review member state"))
         for (const text of [
           ...placement,
-          "Supervisors cannot create, attach, assign, transfer, release, or remove Project members.",
+          "A supervisor cannot call the `project` tool's Master-only create, attach, assign (including transfers), release, or remove operations; within authorized routes, a supervisor reuses a suitable owned member when available and steers, updates, or acts on owned member Sessions via `send`, `model`, `answer`, `inspect`, `escalate`, `interrupt`, and `list`.",
           "Detect stuck, hung or looping work from reported state and evidence; reconcile current state before one bounded recovery attempt through existing native controls.",
           "If recovery fails or its outcome is uncertain, report the blocker with evidence and continue independent authorized work; never poll, repeatedly wake, or replay an uncertain action.",
           "Keep every ownership and lifecycle boundary non-destructive and preserve Session and Project histories intact without deleting history as cleanup; a completed child or `task_complete` is not whole delivery completion, and unfinished member work or pending family requests stay open with their recorded owner until settled.",
