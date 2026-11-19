@@ -377,9 +377,7 @@ const hierarchy = [
   "The Project hierarchy is Master → recorded owner → executor",
   "When the coordinator is instructed to do project work, delegate it. The master coordinates and delegates to the appropriate supervisor/owner; that supervisor creates, updates, or steers suitable member sessions, and those members execute, verify, and deliver. The master does not do project work or directly create, steer, update, or manage member sessions.",
   "As Master, coordinate assignments, decide escalations, review integration evidence, and keep advancing independent work",
-  "As Master, decompose the user's work into independent scopes without waiting to be asked",
-  "Default to direct Master → member ownership",
-  "launch a supervisor subagent only when coordinating more than three long-running parallel members",
+  "As Master, decompose the user's work into independent scopes without waiting to be asked and delegate each scope (including single-member work) to the appropriate supervisor/owner, using `assign` to establish or transfer supervisor ownership.",
   "As a supervisor, stay responsible for every Session you control until its work is verified complete",
   "keep supervising after each turn settles",
   "As a supervisor, resolve your members' routine issues and judgment calls yourself within your existing authority",
@@ -392,9 +390,21 @@ const sharedExecution = [
   "Never introduce ceremony, handoffs, slots, or resource-limitation throttling; run independent builds, typechecks, and selected checks directly in parallel",
 ]
 const placement = [
-  "As Master, use `create` with `directory` for a chosen folder or with `projectID` for an existing repository Project's canonical directory.",
+  "When member placement is specified, use `directory` for a chosen folder or `projectID` for an existing repository Project's canonical directory.",
   "Use an absolute or home-relative path with `directory`, including for non-Git folders and repository subdirectories.",
   "Use `name` with optional `repository` only for an explicitly requested managed worktree.",
+]
+const conflictingDirectMaster = [
+  "Default to direct Master",
+  "Master -> member by default",
+  "Master → member by default",
+  "more than three long-running parallel members",
+  "launch a supervisor subagent only",
+  "Directly manage Sessions owned by the Master",
+  "give each scope its own member Session through `create`",
+  "Create members or attach",
+  "manage directly owned Sessions",
+  "As Master, use `create`",
 ]
 const operating = [
   "Accept a member's work as complete only from verified evidence, not from a settled turn or a status claim",
@@ -410,7 +420,7 @@ const operating = [
   "Require batched corrections, reruns of only failed or invalidated checks, and reuse of valid evidence for unchanged sources, contracts and environment, including at integration and merge.",
   "Report progress by delivery milestones, not by mixed administrative counts",
   ...placement,
-  "As Master, use `attach` with `sessionID` and optional `ownerSessionID` to bring an existing root Session into the Project at its recorded directory instead of creating a duplicate",
+  "As Master, use `attach` with `sessionID` and supervisor `ownerSessionID` to bring an existing root Session into the Project under that supervisor at its recorded directory instead of creating a duplicate",
   "only the Master uses `release` after verification or transfers ownership with `assign` to a supervisor it launched",
   "Supervisors cannot release themselves",
   "your task remains `supervising` until ownership ends",
@@ -528,14 +538,15 @@ describe("Master hierarchy prompt assembly", () => {
     }),
   )
 
-  it.effect("the Master manages its own Sessions and directs supervisor-owned work through its recorded supervisor", () =>
+  it.effect("the Master delegates all member work (including single-member work) through recorded supervisors without direct member management", () =>
     Effect.gen(function* () {
       yield* setupProject
       const system = systemText(yield* requestFor(otherSessionID, "Coordinate the team"))
-      expect(system).toContain("Directly manage Sessions owned by the Master")
+      expect(system).toContain("including single-member work")
       expect(system).not.toContain("launch an owner subagent for each")
       expect(system).not.toContain("require five subagents")
-      expect(system).toContain("for supervisor-owned Sessions, route everything through their recorded supervisor rather than relaying their routine events, and handle only their escalations and integration")
+      expect(system).toContain("For supervisor-owned Sessions, route everything through their recorded supervisor rather than directly creating, steering, updating, or managing member sessions or relaying routine events, and handle only their escalations and integration")
+      for (const text of conflictingDirectMaster) expect(system).not.toContain(text)
       expect(system).not.toContain("Main")
       expect(system).toContain("Do not execute a member's task, take over its tools, or control its subagents.")
       expect(system).toContain("Verify assignments and completion evidence against the user's current direction.")

@@ -112,17 +112,14 @@ test("Master instructions require supervision, evidence review and reasoned esca
   for (const text of removed) expect([text, CoordinationInstructions.content.includes(text)]).toEqual([text, false])
 })
 
-test("the Master owns members directly by default and adds a supervisor only for sustained parallel work", async () => {
+test("the Master delegates all project work through supervisors (including a single member) with no direct-master default or three-member threshold", async () => {
   const delegationRule =
     "When the coordinator is instructed to do project work, delegate it. The master coordinates and delegates to the appropriate supervisor/owner; that supervisor creates, updates, or steers suitable member sessions, and those members execute, verify, and deliver. The master does not do project work or directly create, steer, update, or manage member sessions."
   for (const instruction of [
-    "As Master, decompose the user's work into independent scopes without waiting to be asked",
-    "Default to direct Master → member ownership",
-    "launch a supervisor subagent only when coordinating more than three long-running parallel members",
+    "As Master, decompose the user's work into independent scopes without waiting to be asked and delegate each scope (including single-member work) to the appropriate supervisor/owner, using `assign` to establish or transfer supervisor ownership.",
     "The Project hierarchy is Master → recorded owner → executor",
-    "Directly manage Sessions owned by the Master",
-    "use `create` with `directory` for a chosen folder or with `projectID` for an existing repository Project's canonical directory",
-    "for supervisor-owned Sessions, route everything through their recorded supervisor rather than relaying their routine events, and handle only their escalations and integration",
+    "When member placement is specified, use `directory` for a chosen folder or `projectID` for an existing repository Project's canonical directory.",
+    "For supervisor-owned Sessions, route everything through their recorded supervisor rather than directly creating, steering, updating, or managing member sessions or relaying routine events, and handle only their escalations and integration",
     "keep advancing independent work",
   ]) expect(CoordinationInstructions.content).toContain(instruction)
   once(CoordinationInstructions.content, delegationRule)
@@ -131,6 +128,20 @@ test("the Master owns members directly by default and adds a supervisor only for
       (await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value,
     )
     once(value, delegationRule)
+    for (const conflicting of [
+      "Default to direct Master",
+      "Master -> member by default",
+      "Master → member by default",
+      "more than three long-running parallel members",
+      "launch a supervisor subagent only",
+      "Directly manage Sessions owned by the Master",
+      "give each scope its own member Session through `create`",
+      "Create members or attach",
+      "manage directly owned Sessions",
+      "As Master, use `create`",
+      "optional `ownerSessionID`",
+      "Send member messages yourself.",
+    ]) expect(value).not.toContain(conflicting)
   }
   for (const coordinating of [false, true]) {
     const value = Schema.decodeUnknownSync(Schema.String)(
@@ -199,7 +210,7 @@ test("controller guidance separates orchestration from member execution and nati
     once(value, [
       "Do not execute a member's task, take over its tools, or control its subagents.",
       "As Master or supervisor, coordinate only: never edit files, apply patches, commit, run builds or commands that change the Project, or otherwise change a member's work; the runtime withholds `edit`, `write` and `patch` from you and allows you only read-only shell commands, and member Sessions make every Project change.",
-      "Coordination stays yours: create and assign members, `send`, `list` and `inspect`, `answer` and `escalate` through native controls, inspect files, diffs, logs and state read-only, and schedule the checks members run.",
+      "Coordination stays yours within your recorded role: assign supervisor ownership at the Master, create, update, or steer owned member Sessions as supervisor, `list` and `inspect`, `answer` and `escalate` through native controls, inspect files, diffs, logs and state read-only, and schedule the checks members run.",
     ].join(" "))
     expect(entries[0]?.value).toContain("Verify assignments and completion evidence against the user's current direction.")
     expect(entries[0]?.value).toContain("Decide escalations only within recorded authority and the native decision policy.")
@@ -312,7 +323,7 @@ test("the Master attaches existing root Sessions and keeps standalone storage ou
   const read = async (role: "master" | "supervisor" | "executor") =>
     Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value)
   for (const text of [
-    "As Master, use `attach` with `sessionID` and optional `ownerSessionID` to bring an existing root Session into the Project at its recorded directory instead of creating a duplicate; it keeps its Location, model, history, autonomy modes and running work, and an outside directory still needs its native `external_directory` approval.",
+    "As Master, use `attach` with `sessionID` and supervisor `ownerSessionID` to bring an existing root Session into the Project under that supervisor at its recorded directory instead of creating a duplicate; it keeps its Location, model, history, autonomy modes and running work, and an outside directory still needs its native `external_directory` approval.",
     "Only the Master attaches Sessions; supervisors cannot attach members.",
     "`remove` is the non-destructive detach: it leaves the Session, its work and its history intact.",
     "Sessions with `scope: standalone` are internal restricted storage, never Project members.",
