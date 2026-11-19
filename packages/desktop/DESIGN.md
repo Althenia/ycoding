@@ -123,6 +123,8 @@ layout:
   workspace-toolbar: "48px"
   coordination-toolbar: "56px"
   dialog-header: "40px"
+  window-min-width: "800px"
+  window-min-height: "600px"
 motion:
   duration:
     instant: "80ms"
@@ -139,7 +141,9 @@ motion:
 
 ## Overview
 
-YCoding Desktop centers the conversation between navigation and an optional Session Companion. Lead with owned icons, readable labels, and tonal surfaces. Keep ongoing work and secondary detail close to the conversation without giving routine events the weight of chat turns.
+YCoding Desktop centers a readable conversation between the Session rail and an optional Companion. Project coordination and Settings use the same navigation rhythm, ink, and spacing as chat, with wider work areas for rosters and forms. Management dialogs keep their title and actions separate from scrollable detail. Nothing in these surfaces changes where a Session runs or how its data is stored.
+
+The parent `DESIGN.md` owns brand and cross-surface accessibility. Desktop owns its palette and geometry in `src/tokens.css` and this document. Approved rules govern behavior and appearance. `Implemented` rules describe local geometry, not a new brand requirement. The inspected Settings, Keyboard Shortcuts, Connect Providers, and Master-Session Team Stitch screens inform grouping and alignment. Their illustrative runtime states and actions are not product capabilities. A `proposal` does not bind the implementation.
 
 ## Principles
 
@@ -195,6 +199,13 @@ YCoding Desktop centers the conversation between navigation and an optional Sess
 | D40 | approved | User and assistant turns, reasoning, substantive notices and narrative tool output MUST use Markdown. Fenced code MUST preserve indentation and line breaks; show its language or `text` and an icon-led Copy action that writes the rendered code text through the native clipboard. Text must remain selectable and any code scrollbar must stay inside the code viewport. | `test/renderer.integration.test.ts` |
 | D41 | approved | Use the control, card and composer corner roles consistently across navigation, views and overlays. Use the canvas for the reading track, raised cards for coherent control/inspector groups, and semantic ink for state. Keep existing pane boundaries, routes and named actions. Provider profiles MUST show labelled default and connection state rather than raw booleans. System tool notices MUST appear only on their owning tab. | `test/ledger-design.test.ts`; `test/renderer.integration.test.ts` |
 | D42 | approved | A composer MUST paste text and attach clipboard or drop files through the existing prompt file contract. Show a visible file drop target, removable attachment chips, and recoverable limits or read errors before submission. Drop outside the composer MUST NOT navigate the window. No asynchronous transfer may change a locked or replaced draft. | `test/renderer.integration.test.ts` |
+| D43 | approved | Project titles and roster actions MUST use the available main pane up to its normal inspector gutter. Align concurrency and delegated decisions in the footer and folder inputs with chooser buttons; wrap controls rather than crowding them. | `test/renderer.integration.test.ts` |
+| D44 | approved | The context ring, token count and percentage MUST remain visible in one named header control. Rail links and Settings section buttons retain distinct roles and share icon geometry, label insets and current-state treatment. Settings cards MUST use `--yc-space-5` insets, `--yc-space-4` at or below 700px, and a 1px `--yc-border` frame. Align Machine and Updates at the top; let each frame follow its content. Below 701px the Keep machine awake switch retains a centered 32×18px pill and 12px thumb in its interaction box; the coarse target MUST be at least 44×44px. Shortcut actions MUST stay beside the field within their own grouped track, with distinct focus, selection, hover and unassigned states. | `test/renderer.integration.test.ts` |
+| D45 | approved | Management dialogs MUST share Desktop headings, spacing, close/focus behavior and scroll boundaries. MCP moves refresh into its header and nests resources beneath their server. Connect providers MUST keep search and refresh inline when they fit; wrap names and identifiers, stack the two columns at or below 700px, and keep `scrollWidth <= clientWidth` in both. Pad the provider, credential, authorization and custom URL surfaces and separate Add provider from the input. | `test/renderer.integration.test.ts` |
+| D46 | approved | Escape MUST dismiss the focused layer without minimizing the window. Restore focus to that layer's invoking control, unless it leaves the screen or is unavailable. The native Window menu and window button retain explicit minimize. | `test/renderer.integration.test.ts`, `test/host-contract.test.ts`, `SCENARIOS.md` |
+| D47 | implemented | Regular-width provider dialogs MUST cap their width at 880px and place the registry beside the connection form. Compact windows stack those regions within the same dialog. The header meter MUST use the compact 24px control step for the ring and retain 12px visible values. | `test/renderer.integration.test.ts` |
+| D48 | approved | Team MUST reserve space for the floating Master composer while the table and inspector scroll. At the list boundary the final row and its action remain visible. The Team scroll-to-top control and its side tooltip MUST NOT cover the composer or progress card on hover or keyboard focus. The action never targets the hidden transcript. Align table headers with their cells and use `--yc-space-4` insets in the blocker summary and inspector cards. | `test/renderer.integration.test.ts` |
+| D49 | approved | Native desktop windows MUST enforce a minimum content size of 800×600px (`window-min-width` and `window-min-height`), clamping any smaller initial or programmatic bounds to at least 800×600px while allowing free resizing at or above that floor and preserving traffic lights, explicit Minimize/Restore, focus return, Escape and reduced motion. | `test/window-bounds.test.ts`; `test/isolated-mode.test.ts`; `SCENARIOS.md` |
 
 ## Colors
 
@@ -206,7 +217,7 @@ Use self-hosted Geist for interface prose and JetBrains Mono Regular, Medium and
 
 ## Layout
 
-The 256px rail and optional 320px Companion bound the conversation pane. Center the transcript and composer in one track with equal inline gutters and a 1024px cap. Wide gutters begin at 24px; compact gutters use 12px. Assistant prose and tool detail use the full track. Local user bubbles, attachments and timestamp receipts align at the trailing edge. Keep the title and workspace/connection status together at the leading edge of the 40px conversation header, with actions at the trailing edge.
+The 256px rail and optional 320px Companion bound the conversation pane. Center transcript and composer in one track with equal inline gutters and a 1024px cap. Use 24px wide gutters and 12px compact gutters. Assistant prose and tool detail use the full track. Local user bubbles, attachments and timestamp receipts align at the trailing edge. Keep the title and workspace or connection status together at the leading edge of the 40px conversation header. Group the trailing Team, context, Companion and menu controls; show the context values beside the ring, not in a second control or a tooltip alone.
 
 Keep the composer footer compact. Place the flexible spacer before the metrics/autonomy/send cluster, not between Auto and Send. Keep their control-box gap at 8–10px and Send's trailing and bottom card insets at 10–12px, matching the left attachment/model treatment. Reflow controls on compact windows without losing any control or shrinking coarse targets. Tighten turn, activity-step and composer spacing together without removing content or reducing text sizes.
 
@@ -214,7 +225,7 @@ Give every flex/grid child that contains long content a shrinkable track. Wrap p
 
 Diff lines retain their original whitespace and existing `Wrap diff lines` control. Stored `word` wraps code within the available width without a horizontal bar. Stored `none` keeps no-wrap lines and intentional horizontal scrolling inside the bounded inner diff/code viewport. Keep that viewport shrinkable and contained; its scroll must not widen the page, pane, transcript or composer. Preserve preference values/defaults, line numbers, content, copy actions, reviewed state and split/unified controls.
 
-Coordination uses a project inventory, one Master/member roster and a separate Add-existing/New-member workflow sidebar. Stretch the sidebar surface and left separator to the pane bottom, independently of its form content. The left main pane fills the same height as a min-height:0 flex column. Its list region takes the remaining space and owns vertical scrolling; the concurrency and Delegated decisions footer stays at the bottom with a top border. Short lists leave open list-region space without stretching rows. Long lists scroll without displacing the footer or forcing the sidebar to grow. Preserve selection, explicit member actions and create/add workflows without dummy rows or duplicated membership.
+Coordination uses a project inventory, one Master/member roster and a separate Add-existing/New-member workflow sidebar. Both panes reach the bottom of the window. Stretch the roster and its header across the main pane, with actions facing the workflow divider. Keep row heights natural. The list region owns vertical scrolling above the pinned footer. In the footer, align the concurrency label and picker with a labelled delegation summary. Pair a folder field and chooser along their control baseline; wrap the chooser below the input when the form track cannot fit both.
 
 ### Surface geometry
 
@@ -223,18 +234,20 @@ Coordination uses a project inventory, one Master/member roster and a separate A
 | Workspaces | 48px toolbar, 420px detail |
 | Projects | 44px toolbar, 400px workflow inspector |
 | Sessions | 40px toolbar |
-| Team | 40px toolbar, 320px selected detail |
+| Team | 40px toolbar, 320px selected detail; one scrolling content track at or below 1000px |
 | Coordination | 56px toolbar, 320px selected detail |
 | Agents & Skills | 1080×720 dialog; 48px header; 320px agent and 360px skill tracks |
 | Browser | 960×640 dialog, 48px header |
 | Status & Debug | 980×650 dialog, 48px header plus 40px tabs |
 | Session actions | 920×680 dialog, 48px header |
 | Git diff | 1080×720 dialog, 57px border-inclusive header, 340px files |
-| Provider connection | 660px width, 44px header |
-| Folder chooser | 580px width, content-height title with 14px vertical padding |
+| Provider connection | Up to 880px, standard dialog header, shrinkable registry and detail tracks |
+| Folder chooser | Up to 580px, shared title and close controls |
 | Prompt stashes / editor / export | 740px / 680px / 520px widths, bounded content height |
 | Appearance / command palette | 560px / 640px widths; palette search 48px |
 | Captured-file confirmation | 460px width |
+
+Desktop enforces a native minimum window content size of `800×600px` (`window-min-width: 800px`, `window-min-height: 600px`) and opens new windows at `1360×860px` with no persisted window-bounds file (`preferences.ts` stores only backend `mode` and `sharedEndpoint`). Baseline evidence for `800×600px`: `800px` remains above the `700px` compact drawer breakpoint so the `256px` persistent navigation rail (`layout.rail`) sits beside a `544px` main pane (`448px` centered track with `24px` gutters), side-by-side title/status header (`D38`), `--yc-space-5` Settings card insets (`D44`), `min(320px, 100%)` overlay Companion leaving main-pane context visible, 2-column Connect providers (`D45`/`D47`), and the `752px` (`100dvw - 48px`) modal track for `640px` palette, `680px` editor, `740px` stashes and `768px` default dialogs; `600px` exceeds the `36rem` (`576px`) compact-height dialog rule in `src/style.css` (`552px` modal height, `560px` body below the `40px` header) and aligns with Electrobun's `BrowserWindow` `800×600` baseline.
 
 The composer recognizes `/btw`, `/btw-send`, `/suggest`, `/prompt`, `/cd`, `/editor`, `/docs`, `/exit` and `/defer` as local commands. Side-chat and prompt-assistance commands open a reviewable dialog with the supplied text; they do not submit that text as an ordinary prompt. `/btw-send` is restricted to a BTW side chat with a parent. `/prompt` from New chat creates a Session only after confirmation and opens prompt assistance without sending a prompt. `/editor` opens the draft through `VISUAL`, then `EDITOR`, using a private temporary file and argument parsing without a shell. Missing or unsuccessful external editors open the owned draft dialog instead. Saving preserves file and agent attachments; an empty edited draft is valid. `/docs` opens the documentation in the external browser. `/exit` confirms before disconnecting and quitting; a failed disconnect prevents quitting.
 
@@ -284,11 +297,15 @@ Place the context ring beside the window summary, above a full-width category br
 
 Align the composer with the transcript axis, with one input boundary and open icon-led controls. Model, reasoning, autonomy and delivery retain their menus, values and validation. Metrics remain labelled and distinct from Send/Stop. Attachments and context chips wrap without pushing the pane wider. Sidebar titles retain full accessible names; grouping, status filters, paging and pinning keep bounded connection-scoped reads.
 
-Group the rail as Needs action, Running, Pinned, Recent. On startup, use the saved connection and open the last available Session or New chat. The Settings **Machine & Backend** section owns configuration and reconnect actions.
+Group the rail as Needs action, Running, Pinned, Recent. On startup, use the saved connection and open the last available Session or New chat. Machine & Backend owns configuration and reconnect actions. Route links and section buttons share 16px icons, the control inset and tonal selection, with `aria-current="page"` for routes and `aria-current="location"` for sections. Machine and Updates share equal-width tracks and a top edge, with content-height frames. Settings switches to one content column below 1280px. Session display, Keyboard shortcuts, Permissions, Models & Providers, and MCP retain the same raised card, inset and frame. Provider and MCP cards open the existing management dialogs. At 700px, keep Command, Shortcut and its action group on one baseline; below 520px, Command takes a full row and actions stay beside Shortcut. Show chords in mono pills. The selected row has a tonal surface and inset marker; keyboard focus is distinct from selection.
 
 ### Projects and management
 
-Keep the Project Master/member roster compact and singular. The adjacent workflow region contains add-existing and create-new controls; selected member detail remains reachable without duplicating the list. Master and member creation offer a folder path field alongside the folder chooser. Accept an absolute POSIX, drive or UNC path, `~`, `~/…` or `~\…`, send it to the backend as typed without probing this machine's filesystem, and create a missing folder on the backend after confirmation. The Session uses the chosen directory, including a repository subfolder or non-Git folder, and the field states that a Git repository is not required. Selection and focus survive the compact Back/Escape journey. Remove from project retains the Session; Delete Session and Delete project keep their distinct confirmations. Use icons, labels and tonal selection for Settings and dialog list rows. Keep the dialog boundary and error states; avoid framing every row inside it.
+Keep the Project Master/member roster singular. Master and member creation accept an absolute POSIX, drive or UNC path, `~`, `~/…` or `~\…`. Send it to the backend as typed without probing this machine's filesystem; create a missing folder after confirmation. Back and Escape preserve selection and return focus in compact views. Remove from project retains the Session; Delete Session and Delete project keep their distinct confirmations.
+
+Team uses separate roster and selected-child scrollports above the composer at regular widths. In stacked mode the Team view owns their scroll; at 700px the selected-child inspector uses the compact panel. The scroll-to-top action lives on the composer caption row. Its tooltip opens toward the caption, within a reserved inline slot and outside both scrollports and the composer field. Hover and keyboard focus use the same geometry without moving the caption. The blocker summary and inspector cards share a 16px content inset. Preserve long progress text, row selection, the keyboard path to the last member, and the selected child's request boundary.
+
+Use the Desktop modal shell for a named title, compact header actions, visible Close, scrollable content and, where needed, a footer. Keep inner navigation and confirmation actions keyboard reachable. MCP shows state beside the server name, groups actions at the trailing edge or below, and nests the resource cards within that server. Connect providers uses a bounded vertical registry with separate wrapping name and identifier lines. At regular widths the registry stays visible while the dialog scrolls through authorization details; at compact widths it returns to flow above the detail. Use 16px card insets and an 8px minimum input-to-action gap for Add provider. Keep focus visible and restore it on dismissal; reduced motion preserves that interaction without travel.
 
 ### Bridge gaps
 
@@ -300,7 +317,7 @@ Keep semantic landmarks, names, visible focus and keyboard operation. Normal tex
 
 ## Verification
 
-`SCENARIOS.md` maps the populated layout, execution hierarchy, long-content containment, Project sizing and motion journeys to selected local tests and separate native observations. Record before/after wide and compact screenshots plus DOM widths, gutters, centers and scrollbar geometry. Use realistic synthetic multi-agent, tool-heavy and thought-heavy data for local tests; use only existing populated Sessions for native navigation.
+`SCENARIOS.md` maps populated layout, execution hierarchy, long-content containment, Project sizing and motion to selected local tests and separate native observations. Record before/after wide and compact screenshots plus relevant DOM widths, gutters, centers and scrollbar geometry. Use existing synthetic sessions and managed data for isolated QA; do not mutate a live backend or use real provider accounts to populate validation states.
 
 Run strict `design_md.py lint` on this file and its brand parent. Use `test/ledger-design.test.ts` for token drift and binding rules, `test/form-rules.test.ts` for transcript visibility, and `test/renderer.integration.test.ts` for rendered geometry, keyboard controls, motion and model selection. Keep native acceptance separate: browser fixtures do not establish native-window behavior, saved-endpoint readback or a crash-free packaged app.
 

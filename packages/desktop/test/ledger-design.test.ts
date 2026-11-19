@@ -76,8 +76,9 @@ test("Desktop documents the icon-led conversation and Companion as binding rules
 })
 
 test("Desktop component chrome has distinct toolbar and inspector tokens", async () => {
-  const css = await read("src/tokens.css")
-  for (const [name, value] of Object.entries({ header: 40, "workspace-inspector": 420, "project-inspector": 400, "diff-files": 340, "diff-header": 57, "team-inspector": 320, "session-toolbar": 40, "team-toolbar": 40, "project-toolbar": 44, "workspace-toolbar": 48, "coordination-toolbar": 56, "dialog-header": 40, "system-header": 48 })) expect(css).toContain(`--rl-${name}: ${value}px;`)
+  const [css, design] = await Promise.all([read("src/tokens.css"), read("DESIGN.md")])
+  for (const [name, value] of Object.entries({ header: 40, "workspace-inspector": 420, "project-inspector": 400, "diff-files": 340, "diff-header": 57, "team-inspector": 320, "session-toolbar": 40, "team-toolbar": 40, "project-toolbar": 44, "workspace-toolbar": 48, "coordination-toolbar": 56, "dialog-header": 40, "system-header": 48, "window-min-width": 800, "window-min-height": 600 })) expect(css).toContain(`--rl-${name}: ${value}px;`)
+  expect(design).toContain("| D49 | approved |")
 })
 
 test("Desktop component styles consume owned palette roles without raw colors", async () => {

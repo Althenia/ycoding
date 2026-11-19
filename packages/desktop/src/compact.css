@@ -11,7 +11,7 @@ dialog:is(.desktop-popover, .rl-owned-menu, .desktop-target-picker) { inset-bloc
 [data-responsive-layer]::backdrop { background: color-mix(in srgb, var(--yc-terminal-bg) 55%, transparent); }
 @media (max-width: 700px), (pointer: coarse) {
   .desktop.rl-ledger :is(button, summary, a, [role="option"], [role="tab"]) { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
-  .desktop.rl-ledger :is(button, summary, [role="option"], [role="tab"], .rl-nav-item, .rl-session-row) { min-block-size: var(--yc-hit-min); }
+  .desktop.rl-ledger :is(button, summary, [role="option"], [role="tab"], .rl-nav-item, .rl-session-row), .desktop.rl-ledger .relay-settings.st-stack.st-ledger-settings .st-actions > .rl-btn { min-block-size: var(--yc-hit-min); }
   .desktop.rl-ledger :is(.rl-icon, .rl-icon-button, .rl-mobile-menu, .rl-drawer-close, .workspace__pin, .rl-companion-toggle) { min-inline-size: var(--yc-hit-min); min-block-size: var(--yc-hit-min); }
   .desktop.rl-ledger :is(button, summary, [role="option"], .rl-nav-item):active:not(:disabled) { transform: none; background: var(--yc-surface-sunken); box-shadow: inset 0 0 0 1px var(--yc-focus); }
   .desktop.rl-ledger input, .desktop.rl-ledger textarea, .desktop.rl-ledger .rl-capsule textarea, .desktop.rl-ledger .model-popover input { font-size: var(--yc-size-md); }

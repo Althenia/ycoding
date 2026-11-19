@@ -55,6 +55,8 @@
   --rl-workspace-toolbar: 48px;
   --rl-coordination-toolbar: 56px;
   --rl-dialog-header: 40px;
+  --rl-window-min-width: 800px;
+  --rl-window-min-height: 600px;
   --yc-brand-trace: #67D7A4;
   --yc-brand-frost: #F2F3F5;
   --yc-brand-attention: #F0BE62;

@@ -716,7 +716,7 @@ async function captureReference(page: Page, id: string, expected: string, writes
     "d870471b750a42df8e17ff0fb5d29e67": [[".rl-top", "height", 40], [".desktop-selected-inspector", "width", 320]],
     "adedc0ab360c471d9996962413cf247d": [[".rl-page-head", "height", 56], [".desktop-selected-inspector", "width", 320]],
     "37f0351447f34e448556eb9d7b6276c9": [[".desktop-dialog__head", "height", 48], [".desktop-dialog", "width", 1080], [".desktop-agent-list", "width", 320]],
-    "80928cfab4bc4b20b3042c2f089574ef": [[".desktop-dialog__head", "height", 44], [".desktop-dialog", "width", 660]],
+    "80928cfab4bc4b20b3042c2f089574ef": [[".desktop-dialog__head", "height", 40], [".desktop-dialog", "width", 880]],
     "d584aabe84d942089c45a938ed4d4c8c": [[".desktop-dialog__head", "height", 48], [".desktop-dialog", "width", 960]],
     "6fc8e392a42b4433a08a7a1564e4b7d3": [[".desktop-dialog__head", "height", 88], [".desktop-dialog", "width", 980]],
     "f4476b36068c4c41adbb0f97a88e33d8": [[".desktop-dialog", "width", 580]],
@@ -1206,6 +1206,45 @@ for (const scene of referenceCases) test(`Stitch scene ${scene.id} ${scene.label
   } finally { await page.close() }
 }, 30_000)
 
+const narrowReviewScenes = new Set([
+  "247859938ae742cea7c31d352e62ea80", "2ff9628be7764a1080d725abc44e8591", "fb201f4e896b4fe4be502d02228c6766",
+  "309bc47fe0d642a2a9775391b92c1451", "936d17691f6241e3819c91d4870c9aa6", "2c66dd75095b4881a87b9a76eb7374b6",
+  "9715087f99c9431a938a353cb05ca9a9", "70ca078090f64321b1f264ab4cdc88e2", "4bff4148cf26491587127a52f9570dcf",
+  "6fc8e392a42b4433a08a7a1564e4b7d3", "37f0351447f34e448556eb9d7b6276c9", "072ae46f74714289a7e13cb9bec036ac",
+  "35bf71933d5945eeb63ac9605785664d", "bf4de94bc265448a87ae20d91c0c5109", "fea2212a85a649968cdb4852537cec6d",
+  "6ac6a9dd73b6451fa41dfa46d4d18b8b", "825f05dcc7724e0fb83ffb3667c0d627", "359f63a0638846f6b5f764c0a9e44c38",
+])
+
+for (const scene of referenceCases.filter(scene => narrowReviewScenes.has(scene.id))) test(`Desktop compact surface ${scene.id} ${scene.label}`, async () => {
+  prepareImplementedSurface()
+  scene.prepare?.()
+  const page = await openReference(scene.ready)
+  try {
+    await polishTheme(page, "light")
+    await page.setViewport(700, 900)
+    await page.setReducedMotion(true)
+    const opener = '.conversation .desktop__palette'
+    const fromConversation = await page.evaluate(`!!document.querySelector(${JSON.stringify(opener)})`, decodeBoolean)
+    if (fromConversation) await page.evaluate(`document.querySelector(${JSON.stringify(opener)}).focus({preventScroll:true})`)
+    await scene.show(page)
+    await wait(page, scene.expected)
+    await settleR7(page)
+    const geometry = await page.evaluate(`(() => {
+      const all = [...document.querySelectorAll('.rl-shell, main, dialog:modal, dialog:modal .desktop-dialog__body, dialog:modal .desktop-dialog__head, .model-popover, .rl-policy-panel')].filter(node=>node.getClientRects().length);
+      return {regions:all.map(node=>({class:node.className, client:node.clientWidth, scroll:node.scrollWidth, rect:node.getBoundingClientRect().toJSON()})), visibleModal:!!document.querySelector('dialog:modal'), rootOverflow:document.documentElement.scrollWidth - innerWidth, errors:window.__desktopFixture.errors};
+    })()`, decodeRecord)
+    await polishGeometry(page, `${scene.id}-light-700`, geometry)
+    const spill = decodeArray(decodeRecord)(geometry.regions).filter(zone => decodeNumber(zone.client) > 0 && decodeNumber(zone.scroll) > decodeNumber(zone.client))
+    expect({ spill, rootOverflow: geometry.rootOverflow, errors: geometry.errors }).toEqual({spill: [], rootOverflow: 0, errors: []})
+    if (geometry.visibleModal) {
+      await page.pressEscape()
+      await wait(page, '!document.querySelector("dialog:modal")')
+    }
+    const writes = owned!.calls.filter(call => call.method !== "GET" && !call.route.endsWith("/web-latency"))
+    expect<readonly string[]>(writes.map(call => `${call.method} ${call.route}`)).toEqual(scene.writes ?? [])
+  } finally { await page.close() }
+}, 40_000)
+
 test("Stitch scene 207018d81f6940b0ad9fcc75e1b6a8c4 transcript loading before the snapshot resolves", async () => {
   pending = false
   captureScene = true
@@ -1321,6 +1360,10 @@ test("Desktop component chrome stacks directory inspectors at their breakpoint a
       expect(await page.evaluate(`(() => { const list = document.querySelector(${JSON.stringify(list)}).getBoundingClientRect(), pane = document.querySelector(${JSON.stringify(inspector)}).getBoundingClientRect(); return Math.abs(list.right - pane.left) <= 1 && pane.width > 0; })()`, decodeBoolean)).toBe(true)
       await page.setViewport(1100, 900)
       expect(await page.evaluate(`(() => { const list = document.querySelector(${JSON.stringify(list)}).getBoundingClientRect(), pane = document.querySelector(${JSON.stringify(inspector)}).getBoundingClientRect(); return pane.top >= list.bottom && Math.abs(list.left - pane.left) <= 1; })()`, decodeBoolean)).toBe(true)
+      if (route === "projects") {
+        await page.setViewport(800, 600)
+        expect(await page.evaluate(`(() => { const list = document.querySelector(${JSON.stringify(list)}).getBoundingClientRect(), pane = document.querySelector(${JSON.stringify(inspector)}).getBoundingClientRect(); return pane.top >= list.bottom && list.height >= 200 && Math.abs(list.left - pane.left) <= 1; })()`, decodeBoolean)).toBe(true)
+      }
     }
     await page.navigate(`${origin}/#/sessions/ses_test`)
     await wait(page, `document.querySelector('#turn-msg_response')`)
@@ -1752,6 +1795,10 @@ test("Desktop r7 sparse and populated Projects keep natural member rows and comp
       failures.push(...r8CoordinationFailures(geometry, name, width))
       const roster = geometry.roster
       if (!roster || roster.rowHeights.some(height => height > 96)) failures.push(`${name}: member rows stretch beyond natural height: ${JSON.stringify(roster)}`)
+      if (width === 1440) {
+        const gap = await page.evaluate(`(() => { const row = document.querySelector('[data-project-roster] > li'); return document.querySelector('.desktop-project-inspector').getBoundingClientRect().left - row.lastElementChild.getBoundingClientRect().right; })()`, decodeNumber)
+        if (gap < 0 || gap > 32) failures.push(`${name}: member actions end ${gap}px from the inspector`)
+      }
       if (geometry.coordination && geometry.coordination.listScrollHeight > geometry.coordination.listClientHeight) {
         const before = geometry.coordination.footer.bottom
         expect(await page.evaluate(`(() => { const footer = document.querySelector('.desktop-project-options'); for (let node = document.querySelector('[data-project-roster]'); node && node !== document.querySelector('.desktop-project-overview'); node = node.parentElement) { if (!node.contains(footer) && ['auto', 'scroll'].includes(getComputedStyle(node).overflowY)) { node.scrollTop = node.scrollHeight; return node.scrollTop > 0; } } return false; })()`, decodeBoolean)).toBe(true)
@@ -2003,6 +2050,38 @@ test("compact 320px boundary contains page, composer, code and sheet overflow", 
       await page.navigate(`${origin}/#/${route}`); await wait(page, `document.querySelector('main[data-surface="${route}"]')`)
       await compactCapture(page, `${route}-320`)
     }
+  } finally { await page.close() }
+}, 30_000)
+
+test("compact 360px Workspaces, Coordination Manage members, and Settings hit-targets stay inset and bounded", async () => {
+  prepareImplementedSurface()
+  sceneRead = call => call.route === "/api/server/telemetry/consent" ? { noticeVersion: 1 } : undefined
+  const page = await openReference()
+  try {
+    await page.setViewport(360, 780)
+    await page.navigate(`${origin}/#/workspaces`)
+    await wait(page, `document.querySelector('[data-part="ws-folder-actions"] button')`)
+    expect(await page.evaluate(`(() => { const bar = document.querySelector('[data-part="ws-folder-actions"]').getBoundingClientRect(), btn = document.querySelector('[data-part="ws-folder-actions"] button').getBoundingClientRect(); return { left: Math.round(bar.left), btnLeft: Math.round(btn.left), right: Math.round(bar.right), overflow: document.documentElement.scrollWidth > innerWidth }; })()`, decodeRecord)).toEqual({ left: 12, btnLeft: 12, right: 348, overflow: false })
+
+    await page.navigate(`${origin}/#/projects`)
+    await wait(page, `document.querySelector('.desktop-coordination-switch button')`)
+    await clickText(page, '.desktop-coordination-switch button', "Coordination")
+    await wait(page, `document.querySelector('.desktop-coordination')`)
+    const closed = await page.evaluate(`(() => { const details = [...document.querySelectorAll('.rl-page-content > details.st-section')].find(el => el.textContent.includes('Manage members')); const r = details.getBoundingClientRect(), s = details.querySelector('summary').getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right), summaryHeight: Math.round(s.height), overflow: document.documentElement.scrollWidth > innerWidth }; })()`, decodeRecord)
+    expect(closed).toEqual({ left: 12, right: 348, summaryHeight: 44, overflow: false })
+    await page.evaluate(`([...document.querySelectorAll('.rl-page-content > details.st-section')].find(el => el.textContent.includes('Manage members'))).open = true`)
+    await wait(page, `document.querySelector('.desktop-project-workflows')`)
+    expect(await page.evaluate(`(() => { const wf = document.querySelector('.desktop-project-workflows').getBoundingClientRect(); return { left: Math.round(wf.left), right: Math.round(wf.right), overflow: document.documentElement.scrollWidth > innerWidth }; })()`, decodeRecord)).toEqual({ left: 12, right: 348, overflow: false })
+
+    await page.navigate(`${origin}/#/settings`)
+    await wait(page, `document.querySelector('[data-action-id="st-open-notifications"]')`)
+    const compactSettings = await page.evaluate(`(() => { const labels = ['Open notifications', 'Review saved rules', 'Close app', "Don't share"]; const nodes = [...document.querySelectorAll('.st-ledger .st-actions > .rl-btn')].filter(el => labels.includes(el.textContent.trim())); return { count: nodes.length, heights: nodes.map(el => Math.round(el.getBoundingClientRect().height)), overflow: document.documentElement.scrollWidth > innerWidth }; })()`, decodeRecord)
+    expect(compactSettings).toEqual({ count: 4, heights: [44, 44, 44, 44], overflow: false })
+
+    await page.setViewport(1440, 900)
+    await settleR7(page)
+    const desktopSettings = await page.evaluate(`(() => { const labels = ['Open notifications', 'Review saved rules', 'Close app', "Don't share"]; const nodes = [...document.querySelectorAll('.st-ledger .st-actions > .rl-btn')].filter(el => labels.includes(el.textContent.trim())); return { count: nodes.length, heights: nodes.map(el => Math.round(el.getBoundingClientRect().height)) }; })()`, decodeRecord)
+    expect(desktopSettings).toEqual({ count: 4, heights: [36, 36, 36, 36] })
   } finally { await page.close() }
 }, 30_000)
 
@@ -2448,6 +2527,289 @@ test("Stitch Settings navigation scrolls and focuses sections and opens its owne
     expect(await page.evaluate(`window.__desktopFixture.errors`, decodeArray((value: unknown) => value))).toEqual([])
   } finally { await page.close() }
 }, 30_000)
+
+test("Desktop polish keeps visible context values in a compact meter", async () => {
+  prepareImplementedSurface()
+  const page = await openReference()
+  try {
+    const meter = '.rl-context-ring'
+    await wait(page, `document.querySelector('${meter} small')?.textContent.includes('%')`)
+    const cells: unknown[] = []
+    for (const width of [1440, 650]) {
+      await page.setViewport(width, 900)
+      await captureR7(page, `polish-meter-${width}`)
+      cells.push(await page.evaluate(`(() => { const meter = document.querySelector('${meter}'), ring = meter.querySelector('svg'), amount = meter.querySelector('strong'), percent = meter.querySelector('small'); return { smallRing: ring.getBoundingClientRect().width <= 24, valuesVisible: [amount, percent].every(node => node?.textContent && node.getBoundingClientRect().width > 0), named: !!meter.getAttribute('aria-label'), overflow: meter.scrollWidth > meter.clientWidth }; })()`))
+    }
+    expect(cells).toEqual(Array.from({ length: 2 }, () => ({ smallRing: true, valuesVisible: true, named: true, overflow: false })))
+  } finally { await page.close() }
+}, 30_000)
+
+test("Desktop polish aligns Settings navigation and keeps the shortcut editor compact", async () => {
+  prepareImplementedSurface()
+  const page = await openReference()
+  try {
+    await page.navigate(`${origin}/#/settings`)
+    await wait(page, `document.querySelector('.desktop-keyboard-editor input')`)
+    const cells: unknown[] = []
+    for (const width of [1440, 650]) {
+      await page.setViewport(width, 900)
+      await captureR7(page, `polish-settings-${width}`)
+      cells.push(await page.evaluate(`(() => {
+        const route = document.querySelector('.rl-nav-item[data-destination="settings"]'), section = document.querySelector('.st-settings-nav [aria-current="location"]'), editor = document.querySelector('.desktop-keyboard-editor'), card = editor.closest('.st-section'), control = editor.querySelector('button[aria-haspopup]'), input = editor.querySelector('input');
+        const css = getComputedStyle, px = node => node.getBoundingClientRect();
+        return { icons: css(route.querySelector('svg')).width === css(section.querySelector('svg')).width, inset: css(route).paddingInlineStart === css(section).paddingInlineStart, card: parseFloat(css(card).paddingInlineStart) >= 12, compact: px(input).width <= 320 && Math.abs(px(input).bottom - px(control).bottom) <= 1, overflow: editor.scrollWidth > editor.clientWidth };
+      })()`))
+    }
+    expect(cells).toEqual(Array.from({ length: 2 }, () => ({ icons: true, inset: true, card: true, compact: true, overflow: false })))
+  } finally { await page.close() }
+}, 30_000)
+
+test("Desktop polish fits provider columns and returns focus from management dialogs", async () => {
+  prepareImplementedSurface()
+  const longID = "synthetic-provider-" + "catalog".repeat(24)
+  sceneRead = call => call.route === "/api/integration" ? { location, data: [{ id: longID, name: "Synthetic Provider " + "Catalog".repeat(18), methods: [{ type: "key", label: "Synthetic API key", env: ["SYNTHETIC_" + "KEY".repeat(30)] }], connections: [] }] } : undefined
+  const page = await openReference()
+  try {
+    await page.navigate(`${origin}/#/settings`)
+    const nav = 'nav[aria-label="Settings sections"] button'
+    const open = async (label: string) => {
+      await wait(page, `document.querySelector(${JSON.stringify(nav)})`)
+      await page.evaluate(`(() => { const button = [...document.querySelectorAll(${JSON.stringify(nav)})].find(button => button.textContent.trim() === ${JSON.stringify(label)}); button.focus(); button.click(); })()`)
+      await wait(page, `document.querySelector('dialog[open]')`)
+    }
+    await open("Models & Providers")
+    await clickContaining(page, '.provider-picker button', "Synthetic Provider")
+    await wait(page, `document.querySelector('[aria-label="Provider connection"] input[type="password"]')`)
+    const providerCells: unknown[] = []
+    for (const width of [1440, 650]) {
+      await page.setViewport(width, 900)
+      await captureR7(page, `polish-providers-${width}`)
+      providerCells.push(await page.evaluate(`(() => {
+        const dialog = document.querySelector('dialog[open]'), list = dialog.querySelector('[aria-label="Provider list"]'), detail = dialog.querySelector('[aria-label="Provider connection"]'), bounds = el => el.getBoundingClientRect();
+        return { geometry: innerWidth > 700 ? bounds(dialog).width >= 840 && bounds(list).right <= bounds(detail).left : bounds(list).bottom <= bounds(detail).top, overflow: [list, detail, list.firstElementChild].some(el => el.scrollWidth > el.clientWidth) };
+      })()`))
+    }
+    await page.pressEscape()
+    await wait(page, `!document.querySelector('dialog[open]') && document.activeElement.textContent.trim() === 'Models & Providers'`)
+    await open("MCP")
+    await wait(page, `document.querySelector('.desktop-mcp-server li')`)
+    const mcp: unknown[] = []
+    for (const width of [1440, 650]) {
+      await page.setViewport(width, 900)
+      await page.setReducedMotion(width === 650)
+      await captureR7(page, `polish-mcp-${width}`)
+      mcp.push(await page.evaluate(`(() => { const dialog = document.querySelector('dialog[open]'), refresh = dialog.querySelector('header button[aria-label="Refresh servers"]'), rows = Array.from(dialog.querySelectorAll('.desktop-mcp-server > header')); return { header: !!refresh && refresh.getBoundingClientRect().width <= 44, rows: rows.length === 2 && rows.every(row => row.scrollWidth <= row.clientWidth), reduced: !matchMedia('(prefers-reduced-motion: reduce)').matches || getComputedStyle(dialog).transitionDuration.split(', ').every(value => parseFloat(value) <= .15) }; })()`))
+    }
+    const serverType = 'button[aria-label="Server type"]'
+    await tap(page, serverType)
+    await wait(page, `document.querySelector('[role="listbox"][aria-label="Server type"]')`)
+    await page.pressEscape()
+    await wait(page, `document.querySelector('dialog[data-kind="mcp"][open]') && !document.querySelector('[role="listbox"][aria-label="Server type"]') && document.activeElement.matches(${JSON.stringify(serverType)})`)
+    await page.pressEscape()
+    await wait(page, `!document.querySelector('dialog[open]') && document.activeElement.textContent.trim() === 'MCP'`)
+    for (const width of [1440, 700]) {
+      await page.setViewport(width, 900)
+      await open("Appearance")
+      const geometry = await captureR7(page, `polish-appearance-${width}`)
+      expect(geometry.overflow).toEqual([])
+      await page.pressEscape()
+      await wait(page, `!document.querySelector('dialog[open]') && document.activeElement.textContent.trim() === 'Appearance'`)
+    }
+    expect(providerCells).toEqual(Array.from({ length: 2 }, () => ({ geometry: true, overflow: false })))
+    expect(mcp).toEqual(Array.from({ length: 2 }, () => ({ header: true, rows: true, reduced: true })))
+    expect(owned!.calls.filter(call => call.method !== "GET" && !call.route.endsWith("/web-latency"))).toEqual([])
+  } finally { await page.close() }
+}, 30_000)
+
+test("Desktop polish closes Goal and autonomy and Commands with Escape and restores focus at 800x600 and 1440x900", async () => {
+  prepareImplementedSurface()
+  const page = await openReference()
+  try {
+    for (const [width, height] of [[800, 600], [1440, 900]] as const) {
+      await page.setViewport(width, height)
+      await settleR7(page)
+      await page.evaluate(`document.querySelector('.composer-policy-chip').click()`)
+      await wait(page, `document.querySelector('.rl-policy-panel') && document.querySelector('.rl-policy-panel').contains(document.activeElement)`)
+      await page.pressEscape()
+      await wait(page, `!document.querySelector('.rl-policy-panel') && document.activeElement?.matches('.composer-policy-chip')`)
+      await page.evaluate(`document.querySelector('.desktop__palette').click()`)
+      await wait(page, `document.querySelector('.palette[open]') && document.activeElement?.matches('.palette__input')`)
+      await page.pressEscape()
+      await wait(page, `!document.querySelector('.palette[open]') && document.activeElement?.matches('.desktop__palette')`)
+    }
+    expect(owned!.calls.filter(call => call.method !== "GET" && !call.route.endsWith("/web-latency"))).toEqual([])
+  } finally { await page.close() }
+}, 30_000)
+
+async function polishTheme(page: Page, theme: "light" | "dark") {
+  if (theme === "dark") return
+  await page.evaluate(`localStorage.setItem('ycoding.desktop.theme', 'light'); location.reload()`)
+  await wait(page, `document.documentElement.dataset.theme === 'light' && document.fonts.status === 'loaded'`)
+}
+
+async function polishGeometry(page: Page, name: string, metrics: unknown) {
+  const output = process.env.YCODING_DESKTOP_CAPTURE_DIR
+  if (!output) return
+  await Bun.write(path.join(output, `${name}.png`), Buffer.from(await page.screenshot(), "base64"))
+  await Bun.write(path.join(output, `${name}.geometry.json`), JSON.stringify(metrics, null, 2))
+}
+
+const pseudoBox = `((element, pseudo) => {
+  const box = element.getBoundingClientRect(), style = getComputedStyle(element, pseudo), host = getComputedStyle(element), number = value => parseFloat(value) || 0;
+  const outer = (axis, start, end) => number(style[axis]) + (style.boxSizing === 'border-box' ? 0 : number(style['padding' + start]) + number(style['padding' + end]) + number(style['border' + start + 'Width']) + number(style['border' + end + 'Width']));
+  const width = outer('width', 'Left', 'Right'), height = outer('height', 'Top', 'Bottom'), transform = new DOMMatrixReadOnly(style.transform === 'none' ? undefined : style.transform);
+  const left = (style.left === 'auto' ? box.right - number(host.borderRightWidth) - number(style.right) - width : box.left + number(host.borderLeftWidth) + number(style.left)) + transform.m41;
+  const top = (style.top === 'auto' ? box.bottom - number(host.borderBottomWidth) - number(style.bottom) - height : box.top + number(host.borderTopWidth) + number(style.top)) + transform.m42;
+  return {left, top, right:left+width, bottom:top+height, width,height,radius:number(style.borderTopLeftRadius), shown: style.display !== 'none' && style.content !== 'none'};
+})`
+
+test("Desktop v0.11.12 Settings cards share framed insets and align shortcut controls", async () => {
+  prepareImplementedSurface()
+  const failures: string[] = []
+  for (const theme of ["dark", "light"] as const) {
+    const page = await openReference()
+    try {
+      await polishTheme(page, theme)
+      await page.navigate(`${origin}/#/settings`)
+      await wait(page, `document.querySelector('[data-part="st-permissions"]') && document.querySelector('.desktop-shortcut-list kbd')`)
+      for (const width of [1440, 700]) {
+        await page.setViewport(width, 900)
+        await page.evaluate(`document.querySelector('.desktop-keyboard-editor input').focus({ preventScroll: true })`)
+        await settleR7(page)
+        const metrics = await page.evaluate(`(() => {
+          const names = ['Machine & Backend','Updates','Keyboard shortcuts','Session display','Permissions','Models & Providers','MCP'];
+          const rect = el => { const r = el.getBoundingClientRect(); return { left:r.left, right:r.right, top:r.top, bottom:r.bottom, width:r.width }; };
+          const cards = names.map(name => { const el = [...document.querySelectorAll('.st-ledger .st-section')].find(el => el.getAttribute('aria-label') === name || el.querySelector('h3')?.textContent.trim() === name); if (!el) return {name}; const css = getComputedStyle(el); return { name, inset: parseFloat(css.paddingInlineStart), frame: css.borderInlineStartWidth, color: css.borderInlineStartColor, rect: rect(el) }; });
+          const editor = document.querySelector('.desktop-keyboard-editor'), command = editor.querySelector('button[aria-haspopup]'), shortcut = editor.querySelector('input'), selected = document.querySelector('.desktop-shortcut-list [aria-pressed="true"]'), pill = selected.querySelector('kbd');
+          const updates = document.querySelector('.st-updates'), last = Math.max(...[...updates.children].map(el => rect(el).bottom));
+          return { cards, updatesTail: Math.round(rect(updates).bottom - last), overflow: editor.scrollWidth - editor.clientWidth, controlDelta: Math.abs(rect(command).bottom - rect(shortcut).bottom), focused: document.activeElement === shortcut, selectedMark: getComputedStyle(selected).backgroundColor !== 'rgba(0, 0, 0, 0)', pillRadius: parseFloat(getComputedStyle(pill).borderRadius) };
+        })()`, value => { const obj = decodeRecord(value); return { cards: decodeArray(decodeRecord)(obj.cards), updatesTail: decodeNumber(obj.updatesTail), overflow: decodeNumber(obj.overflow), controlDelta: decodeNumber(obj.controlDelta), focused: decodeBoolean(obj.focused), selectedMark: decodeBoolean(obj.selectedMark), pillRadius: decodeNumber(obj.pillRadius) } })
+        const name = `settings-${theme}-${width}`
+        await polishGeometry(page, name, metrics)
+        const expected = width === 1440 ? 20 : 16
+        if (metrics.cards.some(card => card.inset !== expected || card.frame !== "1px")) failures.push(`${name}: ${JSON.stringify(metrics.cards.map(({name, inset, frame}) => ({name, inset, frame})))}`)
+        const left = decodeRecord(metrics.cards[0]?.rect), right = decodeRecord(metrics.cards[1]?.rect)
+        if (width === 1440 && (left.top !== right.top || left.width !== right.width || metrics.updatesTail !== 21)) failures.push(`${name}: Machine/Updates row ${JSON.stringify([left, right])}; Updates tail ${metrics.updatesTail}px`)
+        if (metrics.overflow !== 0 || metrics.controlDelta > 1 || !metrics.focused || !metrics.selectedMark || metrics.pillRadius < 12) failures.push(`${name}: shortcut controls ${JSON.stringify(metrics)}`)
+        if (width === 700) {
+          await page.setCoarsePointer(true)
+          await page.setReducedMotion(true)
+          await page.evaluate(`document.querySelector('.st-switch').focus({preventScroll:true})`)
+          await settleR7(page)
+          const narrow = await page.evaluate(`(() => {
+            const box = el => el.getBoundingClientRect(), center = r => (r.top+r.bottom)/2, button = document.querySelector('.st-switch'), track = ${pseudoBox}(button,'::before'), thumb = button.querySelector('i'), field = document.querySelector('.desktop-keyboard-editor input'), editor = field.closest('.desktop-keyboard-editor');
+            const actions = [...editor.querySelectorAll('.desktop-dialog__actions button')].map(el=>({name:el.getAttribute('aria-label'), ...box(el).toJSON()}));
+            return {hit:[box(button).width,box(button).height], track:[track.width,track.height,track.radius], centering:[center(track)-center(box(button)),center(box(thumb))-center(track)], switchFocused:button.matches(':focus-visible'), reduced:!getComputedStyle(thumb).transitionProperty.includes('transform'), actions, field:box(field).toJSON(), overflow:editor.scrollWidth-editor.clientWidth};
+          })()`, decodeRecord)
+          await polishGeometry(page, `${name}-coarse`, narrow)
+          const actions = decodeArray(decodeRecord)(narrow.actions), field = decodeRecord(narrow.field), first = actions[0]!
+          if (decodeArray(decodeNumber)(narrow.hit).some(size=>size<44) || JSON.stringify(narrow.track)!==JSON.stringify([32,18,999]) || decodeArray(decodeNumber)(narrow.centering).some(delta=>Math.abs(delta)>.5) || !narrow.switchFocused || !narrow.reduced || narrow.overflow!==0 || actions.length!==3 || actions.some(action=>!action.name || decodeNumber(action.width)<44 || decodeNumber(action.height)<44 || Math.abs(decodeNumber(action.bottom)-decodeNumber(field.bottom))>1) || decodeNumber(first.left)-decodeNumber(field.right)>16 || decodeNumber(first.left)<decodeNumber(field.right)) failures.push(`${name}: coarse switch and shortcut actions ${JSON.stringify(narrow)}`)
+          await page.setCoarsePointer(false)
+        }
+      }
+      if (theme === "light") for (const [name, kind] of [["Models & Providers", "providers"], ["MCP", "mcp"]]) {
+        const trigger = `.st-ledger section[aria-label="${name}"] button`
+        await page.evaluate(`(() => { const button = document.querySelector(${JSON.stringify(trigger)}); if (!button) return; button.focus(); button.click(); })()`)
+        await wait(page, `document.querySelector('dialog[data-kind="${kind}"][open]')`)
+        await page.pressEscape()
+        await wait(page, `!document.querySelector('dialog[open]') && document.activeElement.matches(${JSON.stringify(trigger)})`)
+      }
+    } finally { await page.close() }
+  }
+  expect(failures).toEqual([])
+}, 40_000)
+
+test("Desktop v0.11.12 providers keep search inline and contain long identity and form content", async () => {
+  prepareImplementedSurface()
+  sceneRead = call => call.route === "/api/integration" ? { location, data: [{ id: "synthetic-" + "registry".repeat(24), name: "Synthetic Provider " + "Registry".repeat(14), methods: [{ type: "key", label: "Synthetic API key" }], connections: [{ type: "credential", id: "cred_scene", label: "Synthetic credential", active: true, kind: "key" }] }] } : undefined
+  const failures: string[] = []
+  for (const theme of ["dark", "light"] as const) {
+    const page = await openReference()
+    try {
+      await polishTheme(page, theme)
+      await command(page, "Connect providers")
+      await clickContaining(page, '.provider-picker button', "Synthetic Provider")
+      await wait(page, `document.querySelector('.desktop-credential-card')`)
+      for (const width of [1440, 700]) {
+        await page.setViewport(width, 900)
+        await page.evaluate(`document.querySelector('dialog[data-kind="providers"] input[type="search"]').focus({ preventScroll:true })`)
+        await settleR7(page)
+        const metrics = await page.evaluate(`(() => {
+          const dialog = document.querySelector('dialog[data-kind="providers"]'), list = dialog.querySelector('.desktop-provider-list'), detail = dialog.querySelector('.desktop-provider-detail'), search = dialog.querySelector('input[type="search"]'), refresh = dialog.querySelector('.desktop-provider-tools button'), add = detail.querySelector('input[type="url"]').closest('form'), ref = el => el.getBoundingClientRect(), rect = el => { const r = ref(el); return [r.left,r.top,r.right,r.bottom]; };
+          return { width: ref(dialog).width, columns: [rect(list), rect(detail)], stacks: ref(list).bottom <= ref(detail).top, inline: Math.abs(ref(search).bottom-ref(refresh).bottom)<=1 && ref(search).right < ref(refresh).left, overflow: [list, detail, list.firstElementChild, list.querySelector('button')].map(el=>[el.clientWidth,el.scrollWidth]), pads: [detail.querySelector('.st-section'), detail.querySelector('.desktop-credential-card'), add].map(el=>parseFloat(getComputedStyle(el).paddingInlineStart)), addGap: ref(add.querySelector('button')).top-ref(add.querySelector('input')).bottom, focused: search === document.activeElement };
+        })()`, decodeRecord)
+        const name = `providers-${theme}-${width}`
+        await polishGeometry(page, name, metrics)
+        const overflows = decodeArray(decodeArray(decodeNumber))(metrics.overflow)
+        if ((width === 1440 ? metrics.width !== 880 || metrics.stacks : !metrics.stacks) || !metrics.inline || !metrics.focused || overflows.some(([client, scroll]) => (scroll ?? 0) > (client ?? 0)) || decodeNumber(metrics.addGap) < 8 || decodeArray(decodeNumber)(metrics.pads).some(pad => pad < 16)) failures.push(`${name}: ${JSON.stringify(metrics)}`)
+      }
+    } finally { await page.close() }
+  }
+  expect(failures).toEqual([])
+}, 40_000)
+
+test("Desktop v0.11.12 Team clears the last row and progress card at the scroll boundary", async () => {
+  prepareImplementedSurface()
+  referenceScene = false
+  const now = Date.now()
+  const tasks = Array.from({ length: 18 }, (_, index) => ({ sessionID: `ses_child_${index}`, parentID: "ses_test", description: `Review synthetic pagination sample ${index + 1} and report the last check.`, agent: `worker-${index + 1}`, state: "supervising", model: selection(), background: true, revision: 1, time: { created: now - 120_000, updated: now }, progress: { text: `Synthetic progress for sample ${index + 1}. ` + "The cursor and retained results scroll without hiding the next action. ".repeat(21), time: now } }))
+  sceneRead = call => call.route === "/api/session/ses_test/subagent" ? { data: tasks, summary: { total: tasks.length, active: tasks.length, running: 0, waiting: 0 }, cursor: {} } : undefined
+  const failures: string[] = []
+  for (const theme of ["dark", "light"] as const) {
+    const page = await openReference()
+    try {
+      await polishTheme(page, theme)
+      await wait(page, `document.querySelector('#turn-msg_response')`)
+      await page.evaluate(`(() => { const pane = document.querySelector('.conversation__scroll'); pane.scrollTop = pane.scrollHeight; })()`)
+      await clickText(page, '.rl-top button', "Team")
+      await wait(page, `document.querySelectorAll('.desktop-team tbody tr').length === 18 && document.querySelector('.desktop-child-progress')`)
+      for (const width of [1440, 900]) {
+        await page.setViewport(width, 900)
+        await page.setReducedMotion(width === 900)
+        await page.evaluate(`(() => { const row = document.querySelector('.desktop-team tbody tr:last-child'); row.scrollIntoView({block:'end'}); row.querySelector('button').focus({preventScroll:true}); })()`)
+        await page.pressKey("Enter", "Enter", 13, "\r")
+        await wait(page, `document.querySelector('.desktop-child-progress')?.textContent.includes('sample 18')`)
+        await page.evaluate(`(() => { const team = document.querySelector('.desktop-team'), main = team.querySelector('.desktop-team-main'); const owner = main.scrollHeight > main.clientHeight && getComputedStyle(main).overflowY === 'auto' ? main : team; if (innerWidth > 1000) owner.scrollTop = owner.scrollHeight; else document.querySelector('.desktop-team tbody tr:last-child').scrollIntoView({block:'center'}); })()`)
+        await settleR7(page)
+        const row = await page.evaluate(`(() => { const team = document.querySelector('.desktop-team'), row = team.querySelector('tbody tr:last-child'), main = team.querySelector('.desktop-team-main'), dock = document.querySelector('.rl-dock'), rect = el => el.getBoundingClientRect(), headers = [...team.querySelectorAll('th')], cells = [...row.cells], edge = el => rect(el).left + parseFloat(getComputedStyle(el).paddingLeft); return { gap: Math.min(rect(team).bottom, rect(main).bottom, rect(dock).top)-rect(row).bottom, aligned: headers.map((header, i)=>Math.abs(edge(header)-edge(cells[i]))), selected: row.getAttribute('aria-selected'), focus:row.contains(document.activeElement) }; })()`, decodeRecord)
+        const name = `team-${theme}-${width}`
+        await polishGeometry(page, `${name}-last-row`, row)
+        await page.evaluate(`document.querySelector('.desktop-child-progress').closest('section').scrollIntoView({block:'end'})`)
+        await settleR7(page)
+        const progress = await page.evaluate(`(() => { const card = document.querySelector('.desktop-child-progress').closest('section'), jump = document.querySelector('button[aria-label="Scroll Team to top"]') ?? document.querySelector('.transcript-navigation__controls--visible button[aria-label="Jump to top"]'), r = el => el.getBoundingClientRect(), a = r(card), b = jump && r(jump); return { button: jump?.getAttribute('aria-label') ?? null, intersects: !!b && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top, gap: b ? b.top - a.bottom : null, insets: [document.querySelector('.desktop-blockers > summary'),...document.querySelectorAll('.desktop-selected-inspector section:nth-of-type(n+2):nth-of-type(-n+4)')].map(el=>parseFloat(getComputedStyle(el).paddingInlineStart)) }; })()`, decodeRecord)
+        await polishGeometry(page, `${name}-progress`, progress)
+        if (decodeNumber(row.gap) < 16 || decodeArray(decodeNumber)(row.aligned).some(delta => delta > 1) || row.selected !== "true" || !row.focus || progress.button !== "Scroll Team to top" || progress.intersects || decodeArray(decodeNumber)(progress.insets).some(pad => pad !== 16)) failures.push(`${name}: ${JSON.stringify({ row, progress })}`)
+        if (progress.button === "Scroll Team to top") {
+          const jump = 'button[aria-label="Scroll Team to top"]'
+          if (width === 900) {
+            const center = await page.evaluate(`(() => { const r=document.querySelector(${JSON.stringify(jump)}).getBoundingClientRect(); return [r.x+r.width/2,r.y+r.height/2]; })()`, decodeArray(decodeNumber))
+            await page.mouse("mouseMoved", center[0]!, center[1]!)
+            for (const state of ["hover", "focus"] as const) {
+              if (state === "focus") {
+                await page.mouse("mouseMoved", 0, 0)
+                await page.evaluate(`document.querySelector('.desktop-child-open').focus({preventScroll:true})`)
+                await page.pressKey("Tab", "Tab", 9)
+              }
+              await settleR7(page)
+              const paint = await page.evaluate(`(() => { const button=document.querySelector(${JSON.stringify(jump)}), composer=document.querySelector('.rl-capsule').getBoundingClientRect(), tip=${pseudoBox}(button,'::after'), overlap = (a,b)=>a.left<b.right && a.right>b.left && a.top<b.bottom && a.bottom>b.top; return {tip, button:button.getBoundingClientRect().toJSON(), composer:composer.toJSON(), intersects:overlap(tip,composer), buttonIntersects:overlap(button.getBoundingClientRect(),composer), hovered:button.matches(':hover'), focused:button.matches(':focus-visible'), color:getComputedStyle(button,'::after').backgroundColor}; })()`, decodeRecord)
+              await polishGeometry(page, `${name}-tooltip-${state}`, paint)
+              if (!decodeRecord(paint.tip).shown || paint.intersects || paint.buttonIntersects || (state === "hover" ? !paint.hovered : !paint.focused || paint.hovered)) failures.push(`${name} ${state}: ${JSON.stringify(paint)}`)
+            }
+          }
+          await tap(page, jump)
+          await wait(page, `[...document.querySelectorAll('.desktop-team,.desktop-team-main')].every(pane => pane.scrollTop <= 1)`)
+        }
+      }
+      await page.navigate(`${origin}/#/projects`)
+      await wait(page, `document.querySelector('[data-project-roster] > li')`)
+      for (const width of [1440, 900]) {
+        await page.setViewport(width, 900)
+        await captureR7(page, `projects-${theme}-${width}`)
+      }
+    } finally { await page.close() }
+  }
+  expect(failures).toEqual([])
+}, 40_000)
 
 test("Desktop structured correction system diagnostics expose reported labels without raw primary JSON", async () => {
   prepareImplementedSurface()

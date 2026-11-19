@@ -428,7 +428,7 @@ test("buildDesktopApplicationMenu defines macOS App, File, Edit, View, and Windo
   const windowMenu = byLabel("Window")
   expect(windowMenu).toBeDefined()
   expect(windowMenu?.submenu ?? []).toEqual(expect.arrayContaining([
-    expect.objectContaining({ role: "minimize" }),
+    { role: "minimize" },
     expect.objectContaining({ role: "zoom" }),
     expect.objectContaining({ role: "bringAllToFront" }),
   ]))
