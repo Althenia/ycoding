@@ -238,7 +238,7 @@ test("Workspaces detail closes back to the retained list and opens its genuine S
   } finally { await page.close() }
 }, 45_000)
 
-test("Usage and Settings keep stacked figures, detail sheets, machine snapping and touch switches", async () => {
+test("Usage and Settings keep stacked figures, detail sheets, full machine rows and touch switches", async () => {
   const page = await open("view=usage&spend=large", 320)
   try {
     for (const width of [320, 390]) {
@@ -256,11 +256,21 @@ test("Usage and Settings keep stacked figures, detail sheets, machine snapping a
     }
     await page.evaluate(`document.querySelector('.app > .bottom-nav a[href="/remote/settings"]').click()`)
     await until(page, `!!document.querySelector('.machine-row')`)
-    expect(await page.evaluate(`getComputedStyle(document.querySelector('.machine-row')).scrollSnapType`)).toBe("x")
-    expect(await page.evaluate(`getComputedStyle(document.querySelector('.machine-row')).overscrollBehaviorX`)).toBe("contain")
-    const machine = await page.evaluate(`(()=>{const row=document.querySelector('.machine-row');row.scrollIntoView({block:'center'});const box=row.getBoundingClientRect();return {x:box.right-30,y:box.top+box.height/2}})()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]) } })
-    await swipe(page, machine.x, machine.y, -160, 0)
-    await until(page, `document.querySelector('.machine-row').scrollLeft>0`)
+    expect(await page.evaluate(`(() => {
+      const list = document.querySelector('.machine-row');
+      const owner = list.getBoundingClientRect();
+      const rows = [...list.querySelectorAll('li')];
+      return { noHorizontalScroll: list.scrollWidth === list.clientWidth, rows: rows.map((row, index) => {
+        const box = row.getBoundingClientRect();
+        const name = row.querySelector('.machine-row__name');
+        const action = row.querySelector('.machine-row__connect');
+        const button = action.getBoundingClientRect();
+        return { name: name.textContent, action: action.textContent, stacked: index === 0 || box.top > rows[index - 1].getBoundingClientRect().bottom, visible: box.left >= owner.left && box.right <= owner.right && button.right <= box.right && name.scrollWidth <= name.clientWidth && button.height >= 44 };
+      }) };
+    })()`)).toEqual({ noHorizontalScroll: true, rows: [
+      { name: "Studio Mac", action: "Connected", stacked: true, visible: true },
+      { name: "Laptop", action: "Connect", stacked: true, visible: true },
+    ] })
     const matrix = await page.evaluate(`(()=>{const table=document.querySelector('.notification-table');return {headers:[...table.querySelectorAll('thead th')].slice(1).map(el=>{const range=document.createRange();range.selectNodeContents(el);return range.getClientRects().length}),targets:[...table.querySelectorAll('label.switch')].map(el=>el.getBoundingClientRect().height)}})()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, headers: (decodeArray(decodeNumber))(record["headers"]), targets: (decodeArray(decodeNumber))(record["targets"]) } })
     expect(Math.min(...matrix.targets)).toBeGreaterThanOrEqual(44)
     expect(matrix.headers.every(lines => lines === 1)).toBe(true)

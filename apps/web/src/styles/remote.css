@@ -1592,8 +1592,8 @@ form .request__actions .button--secondary {
   border-radius: var(--yc-radius-lg);
 }
 
-.device-table .device:focus-within { background: var(--yc-surface); }
-@media (hover: hover) { .device-table .device:hover { background: var(--yc-surface); } }
+.device-table .device:focus-within { background: var(--yc-surface-sunken); }
+@media (hover: hover) { .device-table .device:hover { background: var(--yc-surface-sunken); } }
 
 .device__registration,
 .device__connection,
@@ -1930,16 +1930,6 @@ form .request__actions .button--secondary {
   .settings {
     gap: var(--yc-space-6);
   }
-}
-
-.settings__section {
-  display: grid;
-  gap: var(--yc-space-4);
-  padding-block-end: var(--yc-space-8);
-}
-
-.settings__section:last-child {
-  padding-block-end: 0;
 }
 
 .overlay--pwa-install .overlay__body {

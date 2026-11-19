@@ -31,7 +31,7 @@ describe("machine and device presentation", () => {
     const css = await read("device-alias.css")
     const list = rule(css, ".machine-row")
     expect(list).toContain("flex-direction: column")
-    expect(list).not.toMatch(/overflow-x|scroll-snap/)
+    expect(css).not.toMatch(/overflow-x|scroll-snap/)
     const item = rule(css, ".machine-row__item")
     expect(item).toContain("grid-template-columns")
     expect(item).not.toMatch(/flex:|max-inline-size|scroll-snap/)

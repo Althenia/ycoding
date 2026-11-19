@@ -66,7 +66,7 @@ const laptopRequests = (page: Page) => page.evaluate(`window.remoteDeviceRequest
 describe("machine row", () => {
   test("lists every owned machine as a vertical list of compact rows with its connection state and no dropdown", async () => {
     for (const width of [320, 390, 1440]) for (const theme of ["light", "dark"] as const) {
-      const page = await open(width, "view=settings&machines=distinct", { theme })
+      const page = await open(width, "view=settings&machines=distinct", { theme, coarse: width < 768 })
       try {
         expect(await page.evaluate(`document.querySelector('${section} [aria-label="Machine"], ${section} [role="listbox"], ${section} .custom-select, #device-display-name') === null`)).toBe(true)
         expect(await names(page)).toEqual(["Studio Mac", "Laptop", "Sleeping Mac"])
@@ -97,8 +97,6 @@ describe("machine row", () => {
         const colors = await page.evaluate(`(() => ({ background: getComputedStyle(document.querySelector('${section} .machine-row__item')).backgroundColor, border: getComputedStyle(document.querySelector('${section} .machine-row__item:not([aria-current])')).borderTopColor, current: getComputedStyle(document.querySelector('${section} .machine-row__item[aria-current]')).borderTopColor }))()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, background: (decodeString)(record["background"]), border: (decodeString)(record["border"]), current: (decodeString)(record["current"]) } })
         expect(colors.background).not.toBe("rgba(0, 0, 0, 0)")
         expect(colors.current).not.toBe(colors.border)
-        await Bun.sleep(600)
-        await Bun.write(new URL(`../../../.cache/tmp/machine-row-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       } finally { await page.close() }
     }
   }, 120_000)
@@ -161,6 +159,7 @@ describe("machine row", () => {
     try {
       await page.evaluate(`window.rowNodes = [...document.querySelectorAll('${section} .machine-row__item')]; ${item("Laptop")}.querySelector('.machine-row__edit').focus()`)
       expect(await page.evaluate(`document.activeElement.getAttribute('aria-label')`)).toBe("Edit name of Laptop")
+      expect(await page.evaluate(`(() => { const row = document.activeElement.closest('.machine-row__item'); return getComputedStyle(row).backgroundColor !== getComputedStyle(row.closest('section')).backgroundColor; })()`)).toBe(true)
       await page.pressKey("Enter", "Enter", 13, "\r")
       await until(page, `document.activeElement === document.querySelector('${section} .machine-row__input')`)
       expect(await page.evaluate(`document.querySelector('${section} .machine-row__input').value`)).toBe("Laptop")

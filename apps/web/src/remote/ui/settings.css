@@ -28,9 +28,20 @@
 .app--settings .pane p { max-inline-size: var(--yc-measure); }
 
 .settings > .settings__section {
+  display: grid;
   grid-template-columns: minmax(0, 1fr);
-  padding-block-end: 0;
   gap: var(--yc-space-4);
+  min-inline-size: 0;
+  padding: var(--yc-space-5);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-lg);
+  background: var(--yc-surface);
+}
+
+@media (max-width: 767px), (max-height: 599px) and (pointer: coarse) {
+  .settings > .settings__section {
+    padding: var(--yc-space-4);
+  }
 }
 
 .settings .settings__head {

@@ -296,8 +296,6 @@ describe("responsive contract", () => {
       "min-height": "var(--yc-bottom-nav-h)",
     })
     expect(base(remote, ".bottom-nav__label").display).toBe("block")
-    const machines = await readStylesheet("../remote/ui/device-alias.css")
-    expect(declarationsWhere(machines, (rule) => rule.header === ".machine-row")["scroll-snap-type"]).toBe("x proximity")
   })
 
   test("keeps the header connection label readable to assistive technology when the row has no room for it", async () => {

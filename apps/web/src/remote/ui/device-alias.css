@@ -16,16 +16,18 @@
   gap: var(--yc-space-2);
   min-inline-size: 0;
   padding: var(--yc-space-2) var(--yc-space-3);
-  border: 0;
+  border: var(--yc-border-width) solid transparent;
   border-radius: var(--yc-radius-lg);
   background: transparent;
 }
 
 .machine-row__item[aria-current="true"] {
+  border-color: var(--yc-green-strong);
   background: var(--yc-green-soft);
 }
 
-@media (hover: hover) { .machine-row__item:not([aria-current="true"]):is(:hover, :focus-within) { background: var(--yc-surface); } }
+.machine-row__item:not([aria-current="true"]):focus-within { background: var(--yc-surface-sunken); }
+@media (hover: hover) { .machine-row__item:not([aria-current="true"]):hover { background: var(--yc-surface-sunken); } }
 
 .machine-row__item[data-editing] .machine-row__identity {
   grid-column: 1 / -1;
@@ -95,20 +97,4 @@
 .machine-row__note,
 .machine-row__scope {
   margin: 0;
-}
-
-@media (pointer: coarse) {
-  .machine-row {
-    flex-direction: row;
-    align-items: stretch;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    -webkit-overflow-scrolling: touch;
-    scroll-snap-type: x proximity;
-  }
-
-  .machine-row__item {
-    flex: 0 0 min(300px, max(220px, 72vw));
-    scroll-snap-align: start;
-  }
 }

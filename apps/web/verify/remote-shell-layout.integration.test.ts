@@ -30,13 +30,16 @@ afterAll(async () => {
 
 describe("remote shell layout", () => {
   test("Settings uses one balanced measure for machine, preference, and account rows", async () => {
-    const page = await fixture("view=settings", 1600, "Keep machine awake", "dark", 900)
+    const page = await fixture("view=settings", 1440, "Keep machine awake", "dark", 900)
     try {
       const measure = () => page.evaluate(`(() => {
         const settings = document.querySelector('.app--settings .route-panel:not([inert]) .settings'), pane = settings.closest('.pane'), main = settings.closest('.workspace__scroll'), heading = settings.closest('.route-panel').querySelector('.page-head');
         const bounds = node => node.getBoundingClientRect(), box = bounds(pane), parent = bounds(main);
         const rows = ['.machine-row', '.machine-awake', '[aria-labelledby="appearance-settings"] .list'].map(selector => settings.querySelector(selector));
-        return { centered: Math.abs((box.left - parent.left) - (parent.right - box.right)) <= 16, bounded: box.width < 1050, headline: Math.abs(bounds(heading).left - box.left) <= 1, fullRows: rows.every(row => row && Math.abs(bounds(row).width - box.width) <= 1), sections: [...settings.children].filter(row => row.matches('section')).every(row => Math.abs(bounds(row).left - box.left) <= 1 && Math.abs(bounds(row).right - box.right) <= 1), fits: document.documentElement.scrollWidth <= innerWidth && main.scrollWidth <= main.clientWidth };
+        const inset = innerWidth < 768 ? 17 : 21;
+        const cards = [...settings.children].filter(node => node.matches('section'));
+        const cardEdges = cards.map(card => ({ card: bounds(card), head: bounds(card.querySelector('.settings__head')), ink: getComputedStyle(card) }));
+        return { centered: Math.abs((box.left - parent.left) - (parent.right - box.right)) <= 16, bounded: box.width < 1050, headline: Math.abs(bounds(heading).left - box.left) <= 1, fullRows: rows.every(row => row && Math.abs(bounds(row).left - box.left - inset) <= 1 && Math.abs(box.right - bounds(row).right - inset) <= 1), sections: cardEdges.every(({ card, head, ink }) => Math.abs(card.left - box.left) <= 1 && Math.abs(card.right - box.right) <= 1 && head.left - card.left === inset && head.top - card.top === inset && ink.backgroundColor !== 'rgba(0, 0, 0, 0)' && ink.borderTopWidth === '1px'), fits: document.documentElement.scrollWidth <= innerWidth && main.scrollWidth <= main.clientWidth };
       })()`, decodeRecord)
       const rhythm = () => page.evaluate(`(() => {
         const machine = document.getElementById('machine-settings').closest('section');
@@ -47,7 +50,7 @@ describe("remote shell layout", () => {
         return {
           awakeInMachine: machine.contains(awake),
           awakeGap: rect(awake).top - rect(document.getElementById('machine-row-scope')).bottom,
-          sectionGap: rect(document.getElementById('appearance-settings').closest('section')).top - rect(awake).bottom,
+          sectionGap: rect(document.getElementById('appearance-settings').closest('section')).top - rect(machine).bottom,
           deviceInset: rect(device.firstElementChild).left - rect(device).left,
           deviceColumnAligned: !deviceHead.getClientRects().length || Math.abs(rect(deviceHead.firstElementChild).left - rect(device.firstElementChild).left) <= 1,
         };
