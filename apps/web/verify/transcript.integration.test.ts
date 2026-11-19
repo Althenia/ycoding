@@ -354,17 +354,26 @@ describe("transcript rendering", () => {
       expect(await page.evaluate(`Boolean(document.querySelector('[data-message-id="msg_image"] .transcript-image__unavailable button'))`)).toBe(true)
     } finally { await page.close() }
   })
-  test("omits internal TeamView and Session state rows without leaving blank transcript slots", async () => {
+  test("omits internal observations and Project lifecycle cards while keeping visible cards and prompt ticks in order", async () => {
     const page = await browser!.openPage()
     try {
+      await page.setViewport(1440, 900)
       await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?visibility=1`)
-      for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('[data-message-id="msg_notification"]')`); i++) await Bun.sleep(50)
-      const state = await page.evaluate(`(() => ({ ids: [...document.querySelectorAll('.transcript-navigation__item')].map(row => row.dataset.messageId), ticks: document.querySelectorAll('.transcript-navigation__tick').length, raw: document.body.innerText.includes('TeamView ·') || document.body.innerText.includes('Session state ·') }))()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, ids: (decodeArray(decodeString))(record["ids"]), ticks: (decodeNumber)(record["ticks"]), raw: (decodeBoolean)(record["raw"]) } })
-      expect(state.ids).toEqual(["msg_ordinary", "msg_notification"])
-      expect(state.ticks).toBe(1)
-      expect(state.raw).toBe(false)
+      for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('[data-message-id="msg_follow_up"]')`); i++) await Bun.sleep(50)
+      const state = await page.evaluate(`(() => ({
+        ids: [...document.querySelectorAll('.transcript-navigation__item')].map(row => row.dataset.messageId),
+        cards: [...document.querySelectorAll('.project-event')].map(card => [card.dataset.event, card.querySelector('strong').textContent]),
+        ticks: [...document.querySelectorAll('.transcript-navigation__tick')].filter(tick => tick.getBoundingClientRect().width > 0).map(tick => tick.getAttribute('aria-label')),
+        raw: document.body.innerText.includes('TeamView ·') || document.body.innerText.includes('Session state ·'),
+      }))()`)
+      expect(state).toEqual({
+        ids: ["msg_ordinary", "msg_notification", "msg_project_1", "msg_project_4", "msg_follow_up"],
+        cards: [["completed", "Fixture worker"], ["failed", "Fixture worker"]],
+        ticks: ["Go to prompt: Check the repair", "Go to prompt: Review the result"],
+        raw: false,
+      })
     } finally { await page.close() }
-  })
+  }, 20_000)
 
   test("keeps five labeled accessible destinations in one phone navigation row", async () => {
     const page = await browser!.openPage()

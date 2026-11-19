@@ -624,8 +624,10 @@ test("classifies a Project notification as a member event with its target, event
   const message = { kind: "synthetic" as const, id: "n", text: `Project notification:\n${JSON.stringify(metadata)}`, description: "Project notification", metadata, created: 1 }
   expect(classifySyntheticNotice(message)).toEqual({ kind: "member", label: "Audit dashboards", event: "question", memberSessionID: "ses_w1", requestID: "q1", excerpt: "Which column?" })
   expect(transcriptMessageVisible(message)).toBe(true)
-  for (const event of ["started", "progress", "completed", "failed", "interrupted", "permission", "review"] as const) {
-    expect(classifySyntheticNotice({ ...message, metadata: { ...metadata, event, requestID: undefined, excerpt: undefined } })).toEqual({ kind: "member", label: "Audit dashboards", event, memberSessionID: "ses_w1" })
+  for (const event of ["completed", "failed", "interrupted", "permission", "review", "escalated"] as const) {
+    const member = { ...message, metadata: { ...metadata, event, requestID: undefined, excerpt: undefined } }
+    expect(transcriptMessageVisible(member)).toBe(true)
+    expect(classifySyntheticNotice(member)).toEqual({ kind: "member", label: "Audit dashboards", event, memberSessionID: "ses_w1" })
   }
   const hydrated = readMessageList({ data: [{ id: "n", type: "synthetic", text: message.text, description: "Project notification", metadata, time: { created: 1 } }] })
   expect(classifySyntheticNotice(hydrated[0]!)).toMatchObject({ kind: "member", memberSessionID: "ses_w1" })

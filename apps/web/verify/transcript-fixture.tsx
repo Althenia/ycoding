@@ -118,12 +118,18 @@ const notificationMessages: readonly RemoteMessageView[] = [
   { kind: "user", id: "msg_ordinary", text: "Check the repair", state: "consumed", created: 1 },
   { kind: "synthetic", id: "msg_notification", text: `Subagent notification:\n${JSON.stringify(notificationMetadata)}`, description: "Subagent notification", metadata: notificationMetadata, created: 2 },
 ]
+const projectVisibilityMessages = ["started", "completed", "progress", "progress", "failed"].map((event, index) => {
+  const metadata = { source: "project_notification", groupID: "cgrp_sample", memberSessionID: "ses_member", title: "Fixture worker", event, memberSequence: index + 1 }
+  return { kind: "synthetic" as const, id: `msg_project_${index}`, text: `Project notification:\n${JSON.stringify(metadata)}`, description: "Project notification", metadata, created: index + 6 }
+})
 const visibilityMessages: readonly RemoteMessageView[] = [
   notificationMessages[0]!,
   { kind: "system", id: "msg_internal_state", text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","permissions":"manual","guardrails":"manual","answers":"manual"},"todos":[]}', source: "session-state", created: 2 },
   { kind: "synthetic", id: "msg_internal_team", text: 'Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless the user explicitly asks; report a failure only when it blocks the requested outcome:\n{"children":[{"state":"running"}]}', description: "TeamView update", source: "team-view", created: 3 },
   { kind: "synthetic", id: "msg_empty_synthetic", text: "Internal", description: " ", created: 4 },
   notificationMessages[1]!,
+  ...projectVisibilityMessages,
+  { kind: "user", id: "msg_follow_up", text: "Review the result", state: "consumed", created: 11 },
 ]
 const plot = document.createElement("canvas")
 plot.width = 320

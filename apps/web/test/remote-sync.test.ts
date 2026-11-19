@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport, type RemoteRequestTiming } from "../src/remote/transport"
-import { createSessionView, readSnapshot, type SessionView } from "../src/remote/projection"
+import { createSessionView, readMessageList, readSnapshot, visibleTranscriptMessages, type SessionView } from "../src/remote/projection"
 import { applySessionEvent } from "../src/remote/projection"
 import { startRelayDouble, waitFor, type RelayDouble, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
 
@@ -87,6 +87,79 @@ describe("windowed history", () => {
     sourceEpoch: "epoch_1", session: { id: sessionID, title: "Window" }, messages,
     watermark: { type: "log.synced", aggregateID: sessionID, seq },
     ...(before === undefined ? {} : { before }),
+  })
+
+  const projectNotice = (id: string, event: string, seq: number) => {
+    const metadata = { source: "project_notification", groupID: "cgrp_sample", memberSessionID: "ses_member", title: "Fixture worker", event, memberSequence: seq }
+    return { id, type: "synthetic", text: `Project notification:\n${JSON.stringify(metadata)}`, description: "Project notification", metadata, time: { created: seq } }
+  }
+
+  test("Project lifecycle notices stay out of the live transcript through admission and promotion", async () => {
+    const progress = projectNotice("msg_project_progress", "progress", 2)
+    const done = projectNotice("msg_project_done", "completed", 3)
+    const started = projectNotice("msg_project_started", "started", 4)
+    const test = await harness({ snapshot: (sessionID) => page(sessionID, [message("msg_user_1")], undefined, 1) })
+    const rows = () => test.store.state().view?.messages ?? []
+    const emit = (seq: number, type: string, data: Record<string, unknown>, id = `evt_fixture_${seq}`) => test.relay.pushEvent("ses_a", {
+      id, type, data: { sessionID: "ses_a", ...data }, created: seq, durable: { aggregateID: "ses_a", seq, version: 1 },
+    })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      for (const notice of [progress, done]) {
+        emit(notice.time.created, "session.input.admitted", { inputID: notice.id, input: { type: "synthetic", delivery: "steer", data: { text: notice.text, description: notice.description, metadata: notice.metadata } } })
+      }
+      emit(4, "session.synthetic", { text: started.text, description: started.description, metadata: started.metadata }, "evt_project_started")
+      await test.runUntil(() => test.store.state().view?.watermark === 4)
+      expect(rows().map((row) => row.id)).toEqual(["msg_user_1", progress.id, done.id, "evt_project_started"])
+      expect(rows().slice(1)).toMatchObject([{ pending: true, metadata: progress.metadata }, { pending: true, metadata: done.metadata }, { metadata: started.metadata }])
+      const pendingVisible = visibleTranscriptMessages(rows()).map((row) => row.id)
+
+      emit(5, "session.input.promoted", { inputID: progress.id })
+      emit(6, "session.input.promoted", { inputID: done.id })
+      await test.runUntil(() => test.store.state().view?.watermark === 6)
+      expect(rows().map((row) => row.id)).toEqual(["msg_user_1", progress.id, done.id, "evt_project_started"])
+      expect(rows().slice(1, 3)).toMatchObject([{ pending: false, metadata: progress.metadata }, { pending: false, metadata: done.metadata }])
+      expect([pendingVisible, visibleTranscriptMessages(rows()).map((row) => row.id)]).toEqual([
+        ["msg_user_1", done.id], ["msg_user_1", done.id],
+      ])
+    } finally { await test.stop() }
+  })
+
+  test("Project lifecycle notices stay in raw snapshot history and replay without becoming rows", async () => {
+    const progress = projectNotice("msg_project_progress", "progress", 2)
+    const completed = projectNotice("msg_project_completed", "completed", 3)
+    const legacy = { ...progress, id: "msg_legacy", metadata: { event: "progress" } }
+    const noMetadata = { ...progress, id: "msg_generic", metadata: undefined }
+    const started = { ...progress, id: "msg_minimal_start", metadata: { source: "project_notification", event: "started" } }
+    const unknown = projectNotice("msg_unknown", "unknown", 4)
+    const escalationMetadata = { source: "project_escalation", groupID: "cgrp_sample", memberSessionID: "ses_member", event: "escalated", reason: "Needs coordinator input" }
+    const escalation = { id: "msg_escalation", type: "synthetic", text: `Project escalation:\n${JSON.stringify(escalationMetadata)}`, description: "Project escalation", metadata: escalationMetadata, time: { created: 5 } }
+    const history = [message("msg_user_1"), progress, completed, legacy, noMetadata, started, unknown, escalation,
+      { id: "msg_reply", type: "assistant", content: [{ type: "text", text: "The fixture is ready." }], time: { created: 6 } }]
+    const failed = projectNotice("msg_project_failed", "failed", 11)
+    const replayed = projectNotice("msg_project_replayed", "progress", 12)
+    const test = await harness({ snapshot: (sessionID) => page(sessionID, history, undefined, 10) })
+    try {
+      expect(readMessageList({ data: history }).map((row) => row.id)).toEqual(history.map((row) => row.id))
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      for (const notice of [progress, failed, replayed]) {
+        const seq = notice.time.created
+        test.relay.pushEvent("ses_a", { id: `evt_fixture_${seq}`, type: "session.input.admitted", created: seq,
+          data: { sessionID: "ses_a", inputID: notice.id, input: { type: "synthetic", delivery: "steer", data: { text: notice.text, description: notice.description, metadata: notice.metadata } } },
+          durable: { aggregateID: "ses_a", seq, version: 1 } })
+      }
+      await test.runUntil(() => test.store.state().view?.watermark === 12)
+      const view = test.store.state().view!
+      expect(view.watermark).toBe(12)
+      expect(view.messages.map((row) => row.id)).toEqual([...history.map((row) => row.id), failed.id, replayed.id])
+      expect(visibleTranscriptMessages(view.messages).map((row) => row.id)).toEqual([
+        "msg_user_1", completed.id, legacy.id, noMetadata.id, unknown.id, escalation.id, "msg_reply", failed.id,
+      ])
+    } finally { await test.stop() }
   })
 
   test("reads the newest window and prepends older pages without changing the live watermark", async () => {

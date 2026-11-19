@@ -489,6 +489,8 @@ The public source header is 56px high with a 1440px outer content cap and 32px g
 
 The remote shell has a 256px Session rail, a full-width 56px conversation header, and a centered conversation track capped at 64rem. Assistant prose fills the track and user bubbles align to its trailing edge. Decisions, changes and the composer share the same edges. Keep clearance for the prompt rail outside the track. Session names wrap in measured rows and share a minimum height and a common end edge.
 
+Project start and step-progress notifications stay in Session history without occupying transcript rows. Keep terminal outcomes, requests and escalations visible in transcript order. The prompt rail indexes user prompts, not Project notifications.
+
 Activity docks below the conversation header at 380px; Context and Changes retain the 448px companion. Expanded Team keeps a flat master summary, direct children, reported blockers and a 320px selected-child inspector flush to the workspace end edge. Project coordination uses reported ownership, members and pending summaries without adopting the source's invented leases or event history.
 
 The documentation index uses open topic groups in three desktop columns, with a wider Configuration group and two link columns. Documentation and changelog search share the sole site-header trigger; article navigation and release filtering stay in content and mobile sheets. Articles retain their navigation and contents rails. Documentation search uses a 600px desktop surface and a scrolling results list capped at 380px; total height follows real results within the visual viewport.

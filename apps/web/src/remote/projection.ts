@@ -615,7 +615,11 @@ export function transcriptPartVisible(part: AssistantPart): boolean {
 export function transcriptMessageVisible(message: RemoteMessageView): boolean {
   if ((message.kind === "system" || message.kind === "synthetic") && isInternalTranscriptEnvelope({ type: message.kind, text: message.text, metadata: { ...message.metadata, ...(message.source ? { contextSource: message.source } : {}) } })) return false
   if (isCheckpointSummary(message)) return false
-  if (message.kind === "synthetic") return Boolean(message.description?.trim())
+  if (message.kind === "synthetic") {
+    const metadata = message.metadata
+    if (metadata?.source === "project_notification" && (metadata.event === "started" || metadata.event === "progress")) return false
+    return Boolean(message.description?.trim())
+  }
   if (message.kind === "compaction") return message.status === "running" || message.status === "completed" || message.status === "failed" && (message.failureCode === "cancelled" || message.failureCode === "superseded" || message.jobID === undefined && message.failureCode === "aborted")
   if (message.kind === "assistant") return message.parts.some(transcriptPartVisible) || message.completed !== undefined || message.error !== undefined || message.retry !== undefined
   return true
@@ -667,7 +671,7 @@ export function reconcilePendingInputs(view: SessionView, pending: readonly Remo
   return { ...view, messages: visibleTranscript([...retained.filter((message) => !admitted.some((item) => item.id === message.id)), ...admitted]) }
 }
 
-const memberEventKinds = ["started", "progress", "completed", "failed", "interrupted", "question", "permission", "review", "escalated"] as const
+const memberEventKinds = ["completed", "failed", "interrupted", "question", "permission", "review", "escalated"] as const
 export type MemberEventKind = (typeof memberEventKinds)[number]
 
 export function classifySyntheticNotice(message: RemoteMessageView):
