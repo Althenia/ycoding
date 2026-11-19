@@ -112,7 +112,9 @@ test("Master instructions require supervision, evidence review and reasoned esca
   for (const text of removed) expect([text, CoordinationInstructions.content.includes(text)]).toEqual([text, false])
 })
 
-test("the Master owns members directly by default and adds a supervisor only for sustained parallel work", () => {
+test("the Master owns members directly by default and adds a supervisor only for sustained parallel work", async () => {
+  const delegationRule =
+    "When the coordinator is instructed to do project work, delegate it. The master coordinates and delegates to the appropriate supervisor/owner; that supervisor creates, updates, or steers suitable member sessions, and those members execute, verify, and deliver. The master does not do project work or directly create, steer, update, or manage member sessions."
   for (const instruction of [
     "As Master, decompose the user's work into independent scopes without waiting to be asked",
     "Default to direct Master → member ownership",
@@ -123,6 +125,19 @@ test("the Master owns members directly by default and adds a supervisor only for
     "for supervisor-owned Sessions, route everything through their recorded supervisor rather than relaying their routine events, and handle only their escalations and integration",
     "keep advancing independent work",
   ]) expect(CoordinationInstructions.content).toContain(instruction)
+  once(CoordinationInstructions.content, delegationRule)
+  for (const role of ["master", "supervisor"] as const) {
+    const value = Schema.decodeUnknownSync(Schema.String)(
+      (await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value,
+    )
+    once(value, delegationRule)
+  }
+  for (const coordinating of [false, true]) {
+    const value = Schema.decodeUnknownSync(Schema.String)(
+      (await Effect.runPromise(Instructions.read(CoordinationInstructions.make("executor", coordinating))))[0]?.value,
+    )
+    expect(value).not.toContain(delegationRule)
+  }
   expect(CoordinationInstructions.content).not.toContain("launch an owner subagent for each")
   expect(CoordinationInstructions.content).not.toContain("Main")
 })

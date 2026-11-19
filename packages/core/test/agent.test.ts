@@ -565,6 +565,7 @@ describe("Agent", () => {
         expect(item?.system).toContain("Project ownership is separate from parent-child ownership")
         expect(item?.system).toContain("Keep Project ownership directly Master -> member by default")
         expect(item?.system).toContain("launch a supervisor subagent only for more than three long-running parallel members, within supported modes and permissions")
+        expect(item?.system?.split("When the coordinator is instructed to do project work, delegate it. The master coordinates and delegates to the appropriate supervisor/owner; that supervisor creates, updates, or steers suitable member sessions, and those members execute, verify, and deliver. The master does not do project work or directly create, steer, update, or manage member sessions.")).toHaveLength(2)
       }
       const child = yield* agent.get(Agent.ID.make("zeus"))
       expect(child?.system).toContain("Escalate unresolved decisions to your parent with evidence and a recommendation; never treat its reply as native approval.")

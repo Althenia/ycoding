@@ -375,6 +375,7 @@ const requestFor = (id: Session.ID, text: string) =>
 const systemText = (request: LLMRequest | undefined) => JSON.stringify(request?.system)
 const hierarchy = [
   "The Project hierarchy is Master → recorded owner → executor",
+  "When the coordinator is instructed to do project work, delegate it. The master coordinates and delegates to the appropriate supervisor/owner; that supervisor creates, updates, or steers suitable member sessions, and those members execute, verify, and deliver. The master does not do project work or directly create, steer, update, or manage member sessions.",
   "As Master, coordinate assignments, decide escalations, review integration evidence, and keep advancing independent work",
   "As Master, decompose the user's work into independent scopes without waiting to be asked",
   "Default to direct Master → member ownership",
