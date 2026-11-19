@@ -405,6 +405,15 @@ const conflictingDirectMaster = [
   "Create members or attach",
   "manage directly owned Sessions",
   "As Master, use `create`",
+  "As Master, use `attach`",
+  "Only the Master attaches Sessions",
+  "only the Master uses `release`",
+  "Only the Master removes a Project member",
+  "attach existing root Sessions with `attach`",
+  "Remove a settled, verified-complete member that is integrated or finished with `remove`",
+  "supervisors attach",
+  "supervisors remove",
+  "supervisors release",
 ]
 const operating = [
   "Accept a member's work as complete only from verified evidence, not from a settled turn or a status claim",
@@ -420,8 +429,8 @@ const operating = [
   "Require batched corrections, reruns of only failed or invalidated checks, and reuse of valid evidence for unchanged sources, contracts and environment, including at integration and merge.",
   "Report progress by delivery milestones, not by mixed administrative counts",
   ...placement,
-  "As Master, use `attach` with `sessionID` and supervisor `ownerSessionID` to bring an existing root Session into the Project under that supervisor at its recorded directory instead of creating a duplicate",
-  "only the Master uses `release` after verification or transfers ownership with `assign` to a supervisor it launched",
+  "Supervisors cannot create, attach, assign, transfer, release, or remove Project members.",
+  "Coordinate all Project work through the established authorized owner route rather than directly creating, steering, updating, attaching, releasing, or removing member Sessions at the Master; use `assign` only to establish or transfer supervisor ownership to a live supervisor subagent the Master launched, and keep read-only oversight, escalations, and integration review at the Master.",
   "Supervisors cannot release themselves",
   "your task remains `supervising` until ownership ends",
   "act on each in the turn it arrives",
@@ -607,10 +616,10 @@ describe("Master hierarchy prompt assembly", () => {
         const system = systemText(yield* requestFor(id, "Review member state"))
         for (const text of [
           ...placement,
-          "Only the Master attaches Sessions; supervisors cannot attach members.",
+          "Supervisors cannot create, attach, assign, transfer, release, or remove Project members.",
           "Detect stuck, hung or looping work from reported state and evidence; reconcile current state before one bounded recovery attempt through existing native controls.",
           "If recovery fails or its outcome is uncertain, report the blocker with evidence and continue independent authorized work; never poll, repeatedly wake, or replay an uncertain action.",
-          "Release only settled ownership after verification; use existing non-destructive controls and never delete Session or Project history as cleanup.",
+          "Keep every ownership and lifecycle boundary non-destructive and preserve Session and Project histories intact without deleting history as cleanup; a completed child or `task_complete` is not whole delivery completion, and unfinished member work or pending family requests stay open with their recorded owner until settled.",
           ...gates,
         ]) expect(system).toContain(text)
         expect(system).not.toContain("start a member Session in its own managed worktree")

@@ -139,8 +139,17 @@ test("the Master delegates all project work through supervisors (including a sin
       "Create members or attach",
       "manage directly owned Sessions",
       "As Master, use `create`",
+      "As Master, use `attach`",
+      "Only the Master attaches Sessions",
+      "only the Master uses `release`",
+      "Only the Master removes a Project member",
+      "attach existing root Sessions with `attach`",
+      "Remove a settled, verified-complete member that is integrated or finished with `remove`",
       "optional `ownerSessionID`",
       "Send member messages yourself.",
+      "supervisors attach",
+      "supervisors remove",
+      "supervisors release",
     ]) expect(value).not.toContain(conflicting)
   }
   for (const coordinating of [false, true]) {
@@ -210,7 +219,7 @@ test("controller guidance separates orchestration from member execution and nati
     once(value, [
       "Do not execute a member's task, take over its tools, or control its subagents.",
       "As Master or supervisor, coordinate only: never edit files, apply patches, commit, run builds or commands that change the Project, or otherwise change a member's work; the runtime withholds `edit`, `write` and `patch` from you and allows you only read-only shell commands, and member Sessions make every Project change.",
-      "Coordination stays yours within your recorded role: assign supervisor ownership at the Master, create, update, or steer owned member Sessions as supervisor, `list` and `inspect`, `answer` and `escalate` through native controls, inspect files, diffs, logs and state read-only, and schedule the checks members run.",
+      "Coordination stays yours within your recorded role: assign supervisor ownership at the Master, steer and update owned member Sessions as supervisor, `list` and `inspect`, `answer` and `escalate` through native controls, inspect files, diffs, logs and state read-only, and coordinate the checks members run.",
     ].join(" "))
     expect(entries[0]?.value).toContain("Verify assignments and completion evidence against the user's current direction.")
     expect(entries[0]?.value).toContain("Decide escalations only within recorded authority and the native decision policy.")
@@ -283,54 +292,52 @@ test("controller recovery reconciles uncertain work once without polling or repl
   for (const instruction of [
     "Detect stuck, hung or looping work from reported state and evidence; reconcile current state before one bounded recovery attempt through existing native controls.",
     "If recovery fails or its outcome is uncertain, report the blocker with evidence and continue independent authorized work; never poll, repeatedly wake, or replay an uncertain action.",
-    "Release only settled ownership after verification; use existing non-destructive controls and never delete Session or Project history as cleanup.",
+    "Keep every ownership and lifecycle boundary non-destructive and preserve Session and Project histories intact without deleting history as cleanup",
     "Reconcile an uncertain action before repeating it: re-read state with `list` or `inspect` and never replay a create, send, or decision whose outcome is unknown.",
   ]) once(CoordinationInstructions.content, instruction)
 })
 
-test("the Master removes settled completed members while keeping histories and refusing unfinished work", async () => {
+test("coordination instructions enforce owner-routed boundaries, preserve histories, and claim no unsupported supervisor capabilities", async () => {
   const content = CoordinationInstructions.content
   for (const text of [
-    "Only the Master removes a Project member",
-    "supervisors cannot remove members",
-    "preserves its Session and Project histories",
-    "A completed child or `task_complete` is not whole delivery completion",
-    "Keep `release` as parking ownership while the member stays on the roster",
-    "Refuse removal while the member has unfinished work or any request is pending anywhere in its family",
+    "Supervisors cannot create, attach, assign, transfer, release, or remove Project members.",
+    "Coordinate all Project work through the established authorized owner route rather than directly creating, steering, updating, attaching, releasing, or removing member Sessions at the Master; use `assign` only to establish or transfer supervisor ownership to a live supervisor subagent the Master launched, and keep read-only oversight, escalations, and integration review at the Master.",
+    "preserve Session and Project histories intact without deleting history as cleanup",
+    "a completed child or `task_complete` is not whole delivery completion",
+    "unfinished member work or pending family requests stay open with their recorded owner until settled",
   ]) once(content, text)
   const supervisor = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("supervisor"))))[0]?.value)
-  expect(supervisor).toContain("supervisors cannot remove members")
+  expect(supervisor).toContain("Supervisors cannot create, attach, assign, transfer, release, or remove Project members.")
   const executor = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("executor"))))[0]?.value)
-  expect(executor).not.toContain("removes a Project member")
+  expect(executor).not.toContain("Coordinate all Project work through the established authorized owner route")
 })
 
-test("the Master role line directs removal of settled members and the supervisor line does not", async () => {
+test("the Master role line directs owner-routed supervision, escalation and history preservation without direct member mutations", async () => {
   const read = async (role: "master" | "supervisor") =>
     Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value)
   const prefix = (value: string) => value.slice(0, value.indexOf("Coordinate and supervise only"))
   const master = prefix(await read("master"))
   expect(master).toContain("Project role: Master.")
-  expect(master).toContain("remove")
-  expect(master).toContain("verified-complete")
-  expect(master).toContain("integrated or finished")
-  expect(master).toContain("ending recorded ownership")
-  expect(master).toContain("preserving Session and Project histories")
+  expect(master).toContain("Coordinate through the established authorized owner route without directly creating, steering, updating, attaching, releasing, or removing member Sessions")
+  expect(master).toContain("assign and transfer supervisor ownership")
+  expect(master).toContain("keep read-only oversight")
+  expect(master).toContain("handle escalations and integration for delegated work")
+  expect(master).toContain("preserving Session and Project histories without deleting history or cancelling active work")
+  for (const directMutation of ["`attach`", "`remove`", "`release`", "`create`", "Create members"]) expect(master).not.toContain(directMutation)
   expect(prefix(await read("supervisor"))).not.toContain("remove")
 })
 
 
-test("the Master attaches existing root Sessions and keeps standalone storage out of Projects", async () => {
+test("coordination instructions keep standalone storage out of Projects and never instruct direct Master attach", async () => {
   const read = async (role: "master" | "supervisor" | "executor") =>
     Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value)
   for (const text of [
-    "As Master, use `attach` with `sessionID` and supervisor `ownerSessionID` to bring an existing root Session into the Project under that supervisor at its recorded directory instead of creating a duplicate; it keeps its Location, model, history, autonomy modes and running work, and an outside directory still needs its native `external_directory` approval.",
-    "Only the Master attaches Sessions; supervisors cannot attach members.",
-    "`remove` is the non-destructive detach: it leaves the Session, its work and its history intact.",
     "Sessions with `scope: standalone` are internal restricted storage, never Project members.",
   ]) once(CoordinationInstructions.content, text)
-  const prefix = (value: string) => value.slice(0, value.indexOf("Coordinate and supervise only"))
-  const master = prefix(await read("master"))
-  expect(master).toContain("attach existing root Sessions with `attach`")
-  expect(prefix(await read("supervisor"))).not.toContain("`attach`")
+  const master = await read("master")
+  expect(master).not.toContain("`attach`")
+  expect(master).not.toContain("`remove`")
+  expect(master).not.toContain("`release`")
+  expect(await read("supervisor")).not.toContain("`attach`")
   expect(await read("executor")).not.toContain("`attach`")
 })

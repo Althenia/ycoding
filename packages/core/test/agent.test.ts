@@ -573,6 +573,9 @@ describe("Agent", () => {
           "Master → member by default",
           "more than three long-running parallel members",
           "launch a supervisor subagent only",
+          "As Master, use `attach`",
+          "only the Master uses `release`",
+          "Only the Master removes a Project member",
         ]) expect(item?.system).not.toContain(conflicting)
       }
       const child = yield* agent.get(Agent.ID.make("zeus"))
