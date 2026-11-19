@@ -15,6 +15,7 @@ import { App } from "../src/app"
 import { pwaInstall } from "../src/pwa/install"
 import { readAutonomyMode, type AutonomyMode, type AutonomyModes } from "../src/remote/autonomy"
 import { createRemoteStore, type RemoteStore } from "../src/remote/store"
+import { createSessionView } from "../src/remote/projection"
 import { remoteKeys } from "../src/remote/queries"
 import { createRemoteTransport } from "../src/remote/transport"
 import { OFFICE_PREFERENCES_KEY, WORKSPACE_PRESENTATION_KEY } from "../src/remote/office/storage"
@@ -1708,9 +1709,32 @@ function createFixtureStore(): Fixture {
     if (!pushDelivered) handlers?.onNotices?.({ type: "notice.present", items: added.map((notice) => ({ kind: "notice", notice })) })
   }
 
+  const repositoryOptional = accountParams.get("repositoryOptional") === "1"
+  const exposedStore: RemoteStore = repositoryOptional ? {
+    ...store,
+    repositoryRequired: false,
+    createSession: async (input) => {
+      if (input.workspaceID !== undefined) return store.createSession(input)
+      const id = `ses_standalone_${Date.now()}`
+      const created = { id, title: "Standalone chat", projectID: "global", location: { directory: "/workspace/standalone" }, time: { created: Date.now(), updated: Date.now() }, ...(input.agent ? { agent: input.agent } : {}), ...(input.model ? { model: input.model } : {}) }
+      createdSessions.set(id, created)
+      requestLog.push({ at: Math.round(performance.now()), operation: "session.create", input: { id, directory: "/workspace/standalone", ...(input.agent ? { agent: input.agent } : {}), ...(input.model ? { model: input.model } : {}), ...(input.prompt ? { prompt: input.prompt } : {}) } })
+      const promptText = input.prompt && "text" in input.prompt ? input.prompt.text : undefined
+      store.container.setState((state) => ({
+        ...state,
+        activeSessionID: id,
+        selectedSessionInfo: { id, title: created.title, directory: created.location.directory, updatedAt: created.time.updated, archived: false, ...(input.agent ? { agent: input.agent } : {}), ...(input.model ? { model: input.model } : {}) },
+        view: { ...createSessionView(id), messages: promptText ? [{ kind: "user", id: "msg_standalone", text: promptText, state: "pending", created: Date.now() }] : [] },
+        sessions: [{ id, title: created.title, directory: created.location.directory, updatedAt: created.time.updated, archived: false }, ...state.sessions],
+      }))
+      handlers?.onSessions?.()
+      return id
+    },
+  } : store
+
   return {
     noticeFrame: (frame: RemoteNoticeFrame) => handlers?.onNotices?.(frame),
-    store, drop, stream, team, invalidateSessions: () => handlers?.onSessions?.(), missTerminal: () => {
+    store: exposedStore, drop, stream, team, invalidateSessions: () => handlers?.onSessions?.(), missTerminal: () => {
       emitEvent(sessionID, { type: "session.execution.started", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { sessionID } })
       statusRunning = new Set()
       snapshotWatermark = nextSeq++

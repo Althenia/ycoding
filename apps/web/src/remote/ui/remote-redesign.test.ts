@@ -255,6 +255,20 @@ describe("session summary", () => {
     expect(sessionChips(pinned, active, { role: "member", name: "Atlas" })).toContainEqual({ label: "Member · Atlas", tone: "neutral" })
     expect(sessionChips(pinned, active).map((chip) => chip.label)).toEqual(["Pinned", "Autonomous Manual"])
   })
+    test("new-session composer trims the floating hero brand stack, highlights required repository triggers, and aligns picker text", async () => {
+    const newSessionSource = await Bun.file(new URL("./new-session.tsx", import.meta.url)).text()
+    expect(newSessionSource).not.toContain("new-session-composer__brand")
+    expect(newSessionSource).not.toContain("A LITTLE CONTEXT. A CLEAR NEXT STEP.")
+    expect(newSessionSource).not.toContain("Start a standalone draft")
+    expect(newSessionSource).toContain("phoneSummary")
+
+    const composerCss = parseStylesheet("composer.css", await Bun.file(new URL("./composer.css", import.meta.url)).text())
+    const requiredButton = declarationsWhere(composerCss, (rule) => rule.header === ".new-session-composer__repository--required .mini-picker__trigger")
+    expect(requiredButton.background).toBe("var(--yc-primary-bg)")
+    expect(requiredButton.color).toBe("var(--yc-primary-fg)")
+    const labelAlign = declarationsWhere(composerCss, (rule) => rule.header === ".new-session-composer__repository .mini-picker__trigger span")
+    expect(labelAlign["text-align"]).toBe("start")
+  })
   test("keeps archived ahead of the live report", () => {
     expect(summarizeSession(session({ archived: true, running: true }), undefined).status).toBe("archived")
   })

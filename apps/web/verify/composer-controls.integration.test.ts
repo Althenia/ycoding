@@ -831,14 +831,15 @@ test("Conversation autonomy controls issue Session-scoped relay operations", asy
   }
 }, 45_000)
 
-test("brand, new-session heading and repository actions remain visible", async () => {
+test("new-session heading, repository picker and refresh action remain visible", async () => {
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
-    await wait(page, `document.querySelector('.new-session-composer__brand') !== null`)
-    expect(await page.evaluate(`document.querySelector('.new-session-composer__brand')?.textContent`)).toContain("YCoding")
+    await wait(page, `document.querySelector('.new-session-composer h2') !== null`)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer__brand')`)).toBeNull()
     expect(await page.evaluate(`document.querySelector('.new-session-composer h2').innerText`)).toBe("Start with a conversation.")
     expect(await page.evaluate(`document.querySelector('.new-session-composer h2').getBoundingClientRect().height > 0`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Repository"]') !== null`)).toBe(true)
     expect(await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Refresh repositories"] svg') !== null`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)

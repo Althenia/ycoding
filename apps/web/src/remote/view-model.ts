@@ -878,6 +878,130 @@ export function cachedSessionsView(connection: RemoteConnectionState, sessionCou
   return { note: `Last session list from ${connection.deviceName}. Sessions are read-only until it reconnects.` }
 }
 
+export type NewSessionDisplayInput = {
+  readonly connected: boolean
+  readonly workspaceStatus: "idle" | "loading" | "ready" | "error"
+  readonly workspaceCount: number
+  readonly selectedWorkspaceName?: string
+  readonly originUnavailable: boolean
+  readonly repositoryRequired: boolean
+  readonly errorMessage?: string
+  readonly creating: boolean
+}
+
+export type NewSessionDisplayView = {
+  readonly sendBlocked: boolean
+  readonly sendBlockedReason?: string
+  readonly repositoryPlaceholder: string
+  readonly repositoryHighlight: boolean
+  readonly refreshHighlight: boolean
+  readonly messageTone: "status" | "alert"
+  readonly message: string
+}
+
+export function newSessionDisplayView(input: NewSessionDisplayInput): NewSessionDisplayView {
+  if (!input.connected) {
+    return {
+      sendBlocked: true,
+      sendBlockedReason: "Connect to an online machine to send.",
+      repositoryPlaceholder: "Choose repository",
+      repositoryHighlight: false,
+      refreshHighlight: false,
+      messageTone: "status",
+      message: "Connect to an online machine to start a chat.",
+    }
+  }
+  if (input.workspaceStatus === "error") {
+    const blocked = input.repositoryRequired || input.originUnavailable
+    const message = input.errorMessage ?? "Repositories could not be loaded."
+    return {
+      sendBlocked: blocked,
+      ...(blocked ? { sendBlockedReason: message } : {}),
+      repositoryPlaceholder: input.repositoryRequired ? "Choose repository" : "Choose repository (optional)",
+      repositoryHighlight: false,
+      refreshHighlight: blocked,
+      messageTone: "alert",
+      message,
+    }
+  }
+  if (input.originUnavailable) {
+    const message = "The originating repository is unavailable on this machine."
+    return {
+      sendBlocked: true,
+      sendBlockedReason: message,
+      repositoryPlaceholder: "Repository unavailable",
+      repositoryHighlight: false,
+      refreshHighlight: false,
+      messageTone: "alert",
+      message,
+    }
+  }
+  if (input.repositoryRequired) {
+    if ((input.workspaceStatus === "idle" || input.workspaceStatus === "loading") && !input.selectedWorkspaceName) {
+      return {
+        sendBlocked: true,
+        sendBlockedReason: "Loading repositories from this machine.",
+        repositoryPlaceholder: "Loading repositories…",
+        repositoryHighlight: false,
+        refreshHighlight: false,
+        messageTone: "status",
+        message: "Loading repositories from this machine…",
+      }
+    }
+    if (!input.selectedWorkspaceName) {
+      if (input.workspaceCount > 0) {
+        return {
+          sendBlocked: true,
+          sendBlockedReason: "Choose a repository before sending.",
+          repositoryPlaceholder: "Choose repository",
+          repositoryHighlight: true,
+          refreshHighlight: false,
+          messageTone: "status",
+          message: "Choose a repository to send; sending to this machine requires selecting a repository. Your draft stays here.",
+        }
+      }
+      return {
+        sendBlocked: true,
+        sendBlockedReason: "No repositories available. Open one locally, then refresh.",
+        repositoryPlaceholder: "No repositories available",
+        repositoryHighlight: false,
+        refreshHighlight: true,
+        messageTone: "status",
+        message: "No previously opened repositories found. Open one locally once, then refresh; your draft stays here.",
+      }
+    }
+    return {
+      sendBlocked: input.creating,
+      ...(input.creating ? { sendBlockedReason: "Creating session…" } : {}),
+      repositoryPlaceholder: "Choose repository",
+      repositoryHighlight: false,
+      refreshHighlight: false,
+      messageTone: "status",
+      message: `Starting in ${input.selectedWorkspaceName} · Coordination Projects stay optional.`,
+    }
+  }
+  if (input.selectedWorkspaceName) {
+    return {
+      sendBlocked: input.creating,
+      ...(input.creating ? { sendBlockedReason: "Creating session…" } : {}),
+      repositoryPlaceholder: "Choose repository (optional)",
+      repositoryHighlight: false,
+      refreshHighlight: false,
+      messageTone: "status",
+      message: `Starting in ${input.selectedWorkspaceName} (optional repository).`,
+    }
+  }
+  return {
+    sendBlocked: input.creating,
+    ...(input.creating ? { sendBlockedReason: "Creating session…" } : {}),
+    repositoryPlaceholder: input.workspaceStatus === "ready" && input.workspaceCount === 0 ? "No repositories (optional)" : "Choose repository (optional)",
+    repositoryHighlight: false,
+    refreshHighlight: false,
+    messageTone: "status",
+    message: "Repository is optional — send now for a standalone chat, or choose one for project context.",
+  }
+}
+
 export type TranscriptActivity = { readonly kind: "typing"; readonly label: string } | { readonly kind: "status"; readonly tone: "attention" | "danger"; readonly label: string }
 
 export function transcriptActivity(input: {

@@ -328,7 +328,8 @@ export type RemoteStore = {
   readonly setDraft: (sessionID: string, text: string) => void
   readonly loadCatalog: (target: CatalogTarget, options?: { readonly refresh?: boolean }) => Promise<void>
   readonly findFiles: (target: CatalogTarget, query: string, limit?: number) => Promise<FileFindResult>
-  readonly createSession: (input: { readonly workspaceID: string; readonly agent?: string; readonly model?: ModelRefView; readonly prompt?: SessionCreation["prompt"] }) => Promise<string | undefined>
+  readonly repositoryRequired?: boolean
+  readonly createSession: (input: { readonly workspaceID?: string; readonly agent?: string; readonly model?: ModelRefView; readonly prompt?: SessionCreation["prompt"] }) => Promise<string | undefined>
   readonly retrySessionCreation: () => Promise<string | undefined>
   readonly dismissSessionCreation: () => void
   readonly reloadMessages: () => Promise<void>
@@ -3689,7 +3690,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (container.state.sessionCreation?.status === "creating" || container.state.sessionCreation?.status === "unknown") return undefined
       const scope = currentScope()
       const listed = scope === undefined ? undefined : queryClient.getQueryState<readonly RemoteWorkspaceInfo[]>(remoteKeys.workspaces(scope))
-      const workspace = listed?.status === "success" && listed.fetchStatus === "idle" ? listed.data?.find((item) => item.id === input.workspaceID) : undefined
+      const workspace = input.workspaceID !== undefined && listed?.status === "success" && listed.fetchStatus === "idle" ? listed.data?.find((item) => item.id === input.workspaceID) : undefined
       const deviceID = container.state.activeDeviceID
       if (!workspace || !deviceID) {
         setState({ notice: "Select an available workspace from the connected machine." })

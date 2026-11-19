@@ -293,18 +293,20 @@ describe("quiet workspace", () => {
     } finally { await page.close() }
   }, 30_000)
 
-  test("new chat hero keeps its brand and copy within the phone viewport", async () => {
+  test("new chat keeps its compact heading, repository bar, and phone summary within the phone viewport", async () => {
     const page = await requireBrowser().openPage()
     try {
       await page.setViewport(390, 844)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1`)
-      await until(page, `[...document.querySelectorAll('[aria-label="New chat"]')].some(button => button.getClientRects().length)`)
-      await page.evaluate(`[...document.querySelectorAll('[aria-label="New chat"]')].find(button => button.getClientRects().length).click()`)
+      await until(page, `document.querySelector('[aria-label="Open sessions"]') !== null`)
+      await page.evaluate(`document.querySelector('[aria-label="Open sessions"]').click()`)
+      await until(page, `document.querySelector('.overlay--sessions-sheet .new-session__trigger:not([disabled])') !== null`)
+      await page.evaluate(`document.querySelector('.overlay--sessions-sheet .new-session__trigger').click()`)
       await until(page, `document.querySelector('.new-session-composer__header h2') !== null`)
-      const result = await page.evaluate(`(() => { const header = document.querySelector('.new-session-composer__header'), brand = header.querySelector('.brand__name'), children = [...header.children].map(e => e.getBoundingClientRect()); return { brand: !!brand && brand.textContent==='YCoding' && brand.getBoundingClientRect().width > 0 && !header.querySelector('.brand__mark'), vertical: children.every((r, i) => i === 0 || r.top >= children[i-1].bottom), overflow: children.some(r => r.left < 0 || r.right > innerWidth) } })()`)
-      expect(result).toEqual({ brand: true, vertical: true, overflow: false })
-      const copy = await page.evaluate(`(() => { const section = document.querySelector('.new-session-composer'), paragraphs = [...section.children].filter(e => e.tagName === 'P'), agent = section.querySelector('.composer__controls .mini-picker__trigger'); return { aligned: paragraphs.every(e => getComputedStyle(e).textAlign === 'center'), agentFits: !!agent && agent.scrollWidth <= agent.clientWidth && [...agent.querySelectorAll('*')].every(e => e.scrollWidth <= e.clientWidth) } })()`)
-      expect(copy).toEqual({ aligned: true, agentFits: true })
+      const result = await page.evaluate(`(() => { const header = document.querySelector('.new-session-composer__header'), children = [...header.children].map(e => e.getBoundingClientRect()); return { heading: header.querySelector('h2')?.textContent ?? '', noBrand: !header.querySelector('.new-session-composer__brand'), overflow: children.some(r => r.left < 0 || r.right > innerWidth) } })()`)
+      expect(result).toEqual({ heading: "Start with a conversation.", noBrand: true, overflow: false })
+      const copy = await page.evaluate(`(() => { const section = document.querySelector('.new-session-composer'), helper = section.querySelector('.new-session-composer__helper'), summary = section.querySelector('.composer__mobile-trigger'), nav = document.querySelector('.bottom-nav').getBoundingClientRect(), sectionRect = section.getBoundingClientRect(); return { helperAligned: getComputedStyle(helper).textAlign === 'start', singleHelper: section.querySelectorAll(':scope > p').length === 1, summaryFits: !!summary && summary.scrollWidth <= summary.clientWidth && summary.getBoundingClientRect().height >= 44, fitsAboveNav: helper.getBoundingClientRect().bottom <= nav.top, noOverflow: document.documentElement.scrollWidth <= innerWidth, sectionWidthOk: sectionRect.width <= innerWidth } })()`)
+      expect(copy).toEqual({ helperAligned: true, singleHelper: true, summaryFits: true, fitsAboveNav: true, noOverflow: true, sectionWidthOk: true })
     } finally { await page.close() }
   }, 30_000)
   test("pinned Session status and pin remain on one desktop row", async () => {
@@ -373,8 +375,10 @@ describe("quiet workspace", () => {
     try {
       await page.setViewport(390, 844)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&team=two&acceptedPreview=1`)
-      await until(page, `[...document.querySelectorAll('[aria-label="New chat"]')].some(button => button.getClientRects().length > 0)`)
-      await page.evaluate(`[...document.querySelectorAll('[aria-label="New chat"]')].find(button => button.getClientRects().length > 0).click()`)
+      await until(page, `document.querySelector('[aria-label="Open sessions"]') !== null`)
+      await page.evaluate(`document.querySelector('[aria-label="Open sessions"]').click()`)
+      await until(page, `document.querySelector('.overlay--sessions-sheet .new-session__trigger:not([disabled])') !== null`)
+      await page.evaluate(`document.querySelector('.overlay--sessions-sheet .new-session__trigger').click()`)
       await until(page, `document.body.innerText.includes('Start with a conversation.')`)
       expect(await page.evaluate(`document.body.innerText`)).toContain('requires selecting a repository')
     } finally { await page.close() }

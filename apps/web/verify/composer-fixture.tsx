@@ -196,7 +196,7 @@ function Fixture() {
       <aside id="session-companion-panel" aria-label="Session companion"><SessionStatusDetails /></aside>
       <ToastLayer sessionID="ses_fixture" onOpenSession={() => {}} />
       <div class="transcript" aria-label="Fixture transcript"><For each={current().view?.messages ?? []}>{(message) => <MessageRow message={() => message} />}</For><TranscriptActivityRow /></div>
-      <NewSessionComposer onCreated={setCreated} />
+      <NewSessionComposer repositoryRequired={new URLSearchParams(location.search).get("repositoryOptional") !== "1"} onCreated={setCreated} />
       <Show when={created()}><output>Created {created()}</output></Show>
     </main>
   </RemoteProvider>

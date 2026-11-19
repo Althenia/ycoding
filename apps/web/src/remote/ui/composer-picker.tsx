@@ -83,7 +83,12 @@ export function ComposerPicker(props: {
     if (!open() || compact() || !trigger || !surface) return
     const rect = trigger.getBoundingClientRect()
     const width = Math.min(Math.max(rect.width, 280), window.innerWidth - 16)
-    setPosition({ left: Math.min(Math.max(8, rect.left), window.innerWidth - width - 8), top: Math.max(8, rect.top - surface.offsetHeight - 8), width })
+    const spaceAbove = rect.top - 8
+    const spaceBelow = window.innerHeight - rect.bottom - 8
+    const top = spaceAbove >= surface.offsetHeight || spaceAbove >= spaceBelow
+      ? Math.max(8, rect.top - surface.offsetHeight - 8)
+      : rect.bottom + 8
+    setPosition({ left: Math.min(Math.max(8, rect.left), window.innerWidth - width - 8), top, width })
   }
   onMount(() => {
     const media = window.matchMedia("(max-width: 767px), (max-height: 599px) and (pointer: coarse)")

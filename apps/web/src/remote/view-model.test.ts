@@ -37,6 +37,7 @@ import {
   summarizeConnection,
   workspaceLabels,
   workspaceDestination,
+  newSessionDisplayView,
   type AccountReadState,
   type RemoteConnectionState,
   type RemoteSessionSummary,
@@ -931,5 +932,71 @@ describe("Dots computer detachment view", () => {
     expect(view({ state: "attached" }).executor).toEqual({ label: "Attached" })
     expect(view({ state: "attached", readiness: "offline", usableForTasks: false, dotEnvironment: { status: "offline", capabilities: [{ type: "remote_desktop", status: "starting" }] } }).executor)
       .toEqual({ label: "Attached", readiness: "Offline", usableForTasks: "Not usable", dotEnvironment: "offline · remote_desktop starting" })
+  })
+})
+
+describe("newSessionDisplayView", () => {
+  const base = {
+    connected: true,
+    workspaceStatus: "ready" as const,
+    workspaceCount: 2,
+    originUnavailable: false,
+    repositoryRequired: true,
+    creating: false,
+  }
+
+  test("highlights repository selection and explains why send is blocked when a repository is required", () => {
+    const view = newSessionDisplayView(base)
+    expect(view.sendBlocked).toBe(true)
+    expect(view.sendBlockedReason).toContain("Choose a repository")
+    expect(view.repositoryHighlight).toBe(true)
+    expect(view.refreshHighlight).toBe(false)
+    expect(view.repositoryPlaceholder).toBe("Choose repository")
+    expect(view.messageTone).toBe("status")
+    expect(view.message).toContain("requires selecting a repository")
+    expect(view.message).toContain("draft stays here")
+  })
+
+  test("highlights refresh when required repositories are empty", () => {
+    const view = newSessionDisplayView({ ...base, workspaceCount: 0 })
+    expect(view.sendBlocked).toBe(true)
+    expect(view.repositoryHighlight).toBe(false)
+    expect(view.refreshHighlight).toBe(true)
+    expect(view.repositoryPlaceholder).toBe("No repositories available")
+    expect(view.message).toContain("refresh")
+    expect(view.message).toContain("draft stays here")
+  })
+
+  test("clears the repository gate and names the chosen repository once selected", () => {
+    const view = newSessionDisplayView({ ...base, selectedWorkspaceName: "YCoding" })
+    expect(view.sendBlocked).toBe(false)
+    expect(view.sendBlockedReason).toBeUndefined()
+    expect(view.repositoryHighlight).toBe(false)
+    expect(view.refreshHighlight).toBe(false)
+    expect(view.message).toContain("Starting in YCoding")
+    expect(view.message).not.toContain("requires selecting")
+  })
+
+  test("keeps send enabled and never emits required copy when repository selection is optional", () => {
+    const unselected = newSessionDisplayView({ ...base, repositoryRequired: false })
+    expect(unselected.sendBlocked).toBe(false)
+    expect(unselected.repositoryHighlight).toBe(false)
+    expect(unselected.refreshHighlight).toBe(false)
+    expect(unselected.repositoryPlaceholder).toBe("Choose repository (optional)")
+    expect(unselected.message).toContain("optional")
+    expect(unselected.message).not.toMatch(/requires selecting/i)
+
+    const selected = newSessionDisplayView({ ...base, repositoryRequired: false, selectedWorkspaceName: "YCoding" })
+    expect(selected.sendBlocked).toBe(false)
+    expect(selected.message).toContain("YCoding")
+    expect(selected.message).toContain("optional")
+    expect(selected.message).not.toMatch(/requires selecting/i)
+  })
+
+  test("surfaces disconnected, loading, error, and unavailable origin states truthfully", () => {
+    expect(newSessionDisplayView({ ...base, connected: false })).toMatchObject({ sendBlocked: true, repositoryHighlight: false, messageTone: "status" })
+    expect(newSessionDisplayView({ ...base, workspaceStatus: "loading", workspaceCount: 0 })).toMatchObject({ sendBlocked: true, repositoryHighlight: false, messageTone: "status" })
+    expect(newSessionDisplayView({ ...base, workspaceStatus: "error", errorMessage: "Inventory down" })).toMatchObject({ sendBlocked: true, refreshHighlight: true, messageTone: "alert", message: "Inventory down" })
+    expect(newSessionDisplayView({ ...base, repositoryRequired: false, originUnavailable: true })).toMatchObject({ sendBlocked: true, messageTone: "alert" })
   })
 })

@@ -8,20 +8,62 @@ if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromi
 let server: ReturnType<typeof Bun.spawn> | undefined
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
 
-test("new chat identifies standalone scope and retains its own draft", async () => {
+test("new chat retains its draft across navigation and preserves it when choosing a required repository", async () => {
   const page = await browser!.openPage()
   try {
-    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
-    await wait(page, `document.querySelector('.workspace-new-session button[aria-label="New chat"]') !== null`)
-    await page.evaluate(`document.querySelector('.workspace-new-session button[aria-label="New chat"]').click()`)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1`)
     await wait(page, `document.querySelector('.new-session-composer textarea') !== null`)
-    expect(await page.evaluate(`document.querySelector('.new-session-composer__scope-note').textContent`)).toContain("standalone")
+    expect(await page.evaluate(`document.querySelectorAll('.new-session-composer > p').length`)).toBe(1)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer__helper').textContent`)).toContain("requires selecting a repository")
+    expect(await page.evaluate(`document.querySelector('.new-session-composer__repository').classList.contains('new-session-composer__repository--required')`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]').disabled`)).toBe(true)
     await type(page, ".new-session-composer textarea", "Separate draft")
-    await page.evaluate(`document.querySelector('.workspace-resume').click()`)
-    await wait(page, `document.querySelector('.composer-resident:not([inert]) textarea') !== null`)
-    await page.evaluate(`document.querySelector('.workspace-new-session button[aria-label="New chat"]').click()`)
-    await wait(page, `document.querySelector('.new-session-composer textarea') !== null`)
+    await pickLandingRepository(page, "YCoding")
     expect(await page.evaluate(`document.querySelector('.new-session-composer textarea').value`)).toBe("Separate draft")
+    expect(await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]').disabled`)).toBe(false)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer__helper').textContent`)).toContain("Starting in YCoding")
+    await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]').click()`)
+    await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.create')`)
+    await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.prompt' && item.input?.text === 'Separate draft')`)
+    expect(await page.evaluate(`window.remoteMutationReport().find(item => item.operation === 'session.prompt' && item.input?.text === 'Separate draft')?.input?.text`)).toBe("Separate draft")
+  } finally { await page.close() }
+}, 30_000)
+
+test("keyboard repository selection preserves the draft and sends with Enter", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1`)
+    await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]:not([disabled])') !== null`)
+    await type(page, ".new-session-composer textarea", "Keyboard flow draft")
+    await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Repository"]').focus()`)
+    await page.pressKey("ArrowDown", "ArrowDown", 40)
+    await wait(page, `document.querySelector('.mini-picker__surface [role="option"]') !== null`)
+    await page.pressKey("Enter", "Enter", 13)
+    await wait(page, `document.querySelector('.mini-picker__surface') === null`)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Repository"]')?.textContent?.trim()`)).toBe("Other repository")
+    expect(await page.evaluate(`document.activeElement === document.querySelector('.new-session-composer button[aria-label="Repository"]')`)).toBe(true)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer textarea').value`)).toBe("Keyboard flow draft")
+    await page.evaluate(`document.querySelector('.new-session-composer textarea').focus()`)
+    await page.pressKey("Enter", "Enter", 13)
+    await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.create')`)
+    await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.prompt' && item.input?.text === 'Keyboard flow draft')`)
+    expect(await page.evaluate(`window.remoteMutationReport().find(item => item.operation === 'session.create')?.input`)).toMatchObject({ workspace: "workspace_other" })
+  } finally { await page.close() }
+}, 30_000)
+
+test("new chat with optional repository keeps send ready and never emits required copy", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1&repositoryOptional=1`)
+    await wait(page, `document.querySelector('.new-session-composer textarea') !== null`)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer__repository').classList.contains('new-session-composer__repository--required')`)).toBe(false)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer__helper').textContent`)).toContain("optional")
+    expect(await page.evaluate(`document.querySelector('.new-session-composer__helper').textContent`)).not.toMatch(/requires selecting/i)
+    expect(await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]').disabled`)).toBe(false)
+    await type(page, ".new-session-composer textarea", "Standalone optional draft")
+    await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]').click()`)
+    await wait(page, `window.requestLog.some(item => item.operation === 'session.create')`)
+    expect(await page.evaluate(`window.requestLog.find(item => item.operation === 'session.create')?.input`)).toMatchObject({ directory: "/workspace/standalone", prompt: { text: "Standalone optional draft" } })
   } finally { await page.close() }
 }, 30_000)
 
@@ -35,11 +77,13 @@ test("a draft and attachments remain editable without an available repository", 
     await page.evaluate(`(() => { const input=document.querySelector('.new-session-composer input[type=file]'); const files=new DataTransfer(); files.items.add(new File(['hello'],'draft.txt')); input.files=files.files; input.dispatchEvent(new Event('change',{bubbles:true})); })()`)
     await wait(page, `document.querySelector('.new-session-composer .composer__attachments-summary')`)
     expect(await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="New chat"]').disabled`)).toBe(true)
-    expect(await page.evaluate(`document.querySelector('.new-session-composer [role="status"]').textContent`)).toContain("your draft stays here until a repository is chosen")
+    expect(await page.evaluate(`document.querySelector('.new-session-composer [role="status"]').textContent`)).toContain("draft stays here")
     await page.pressKey("Enter", "Enter", 13)
     expect(await page.evaluate(`document.querySelector('.new-session-composer textarea').value`)).toBe("Keep this draft")
     expect(await page.evaluate(`window.requestLog.filter(item => item.operation === 'session.create').length`)).toBe(0)
     await page.evaluate(`window.remoteExposeWorkspaces(); document.querySelector('[aria-label="Refresh repositories"]').click()`)
+    await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]:not([disabled])') !== null`)
+    await pickLandingRepository(page, "YCoding")
     await wait(page, `document.querySelector('.new-session-composer button[aria-label="New chat"]:not([disabled])')`)
     expect(await page.evaluate(`document.querySelector('.new-session-composer textarea').value`)).toBe("Keep this draft")
     expect(await page.evaluate(`document.querySelector('.new-session-composer .composer__attachments-summary') !== null`)).toBe(true)
@@ -54,7 +98,8 @@ test("a file still being read survives repository selection", async () => {
     await page.evaluate(`(() => { const original = File.prototype.arrayBuffer; File.prototype.arrayBuffer = function() { return new Promise(resolve => { window.releaseFile = () => { File.prototype.arrayBuffer = original; void original.call(this).then(resolve) } }) }; const input = document.querySelector('.new-session-composer input[type=file]'), files = new DataTransfer(); files.items.add(new File(['hello'], 'draft.txt')); input.files = files.files; input.dispatchEvent(new Event('change', { bubbles: true })); })()`)
     await wait(page, `typeof window.releaseFile === 'function'`)
     await page.evaluate(`window.remoteExposeWorkspaces(); document.querySelector('[aria-label="Refresh repositories"]').click()`)
-    await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]')?.textContent.includes('YCoding')`)
+    await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]:not([disabled])') !== null`)
+    await pickLandingRepository(page, "YCoding")
     await page.evaluate(`window.releaseFile()`)
     await wait(page, `document.querySelector('.new-session-composer .composer__attachments-summary')`)
     expect(await page.evaluate(`document.querySelector('.new-session-composer .composer__attachments-summary').textContent`)).toContain("1/64 files")
@@ -259,6 +304,8 @@ for (const command of [false, true]) test(`first ${command ? "command" : "prompt
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&noSelection=1&attachmentGate=1`)
+    await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]:not([disabled])') !== null`)
+    await pickLandingRepository(page, "YCoding")
     await wait(page, `document.querySelector('.new-session-composer button[aria-label="New chat"]:not([disabled])') !== null`)
     await type(page, ".new-session-composer textarea", command ? "/plan Inspect screenshot" : "Inspect screenshot")
     await page.evaluate(`(() => { const transfer = new DataTransfer(); transfer.items.add(new File([new Uint8Array(30_000)], 'capture.png', { type: 'image/png' })); document.querySelector('.new-session-composer .composer__row').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer })); })()`)
@@ -277,35 +324,34 @@ for (const command of [false, true]) test(`first ${command ? "command" : "prompt
   } finally { await page.evaluate(`window.remoteReleaseAttachments?.()`); await page.close() }
 }, 30_000)
 
-test("new-session hero centers in both Conversation placements and remains top-scrollable on a short phone", async () => {
+test("new-session landing centers on desktop, stays compact on phone, and remains top-scrollable on a short phone", async () => {
   for (const noSelection of [false, true]) for (const [width, height] of [[1440, 900], [820, 1180], [390, 844]]) for (const theme of ["light", "dark"]) {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width!, height!)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&theme=${theme}${noSelection ? "&noSelection=1" : ""}`)
       if (!noSelection) {
-        const plus = width! < 768 ? ".overlay--sessions-sheet .pane__head--sessions button" : ".workspace__rail .pane__head--sessions button"
-        if (width! < 768) await page.evaluate(`document.querySelector('[aria-label="Open sessions"]')?.click()`)
-        await wait(page, `document.querySelector(${JSON.stringify(plus)}+':not([disabled])') !== null`)
-        await page.evaluate(`document.querySelector(${JSON.stringify(plus)})?.click()`)
+        if (width! < 768) {
+          await page.evaluate(`document.querySelector('[aria-label="Open sessions"]')?.click()`)
+          await wait(page, `document.querySelector('.overlay--sessions-sheet .new-session__trigger:not([disabled])') !== null`)
+          await page.evaluate(`document.querySelector('.overlay--sessions-sheet .new-session__trigger')?.click()`)
+        } else {
+          await wait(page, `document.querySelector('.workspace__rail .workspace__new-chat:not([disabled])') !== null`)
+          await page.evaluate(`document.querySelector('.workspace__rail .workspace__new-chat')?.click()`)
+        }
       }
       await wait(page, `document.querySelector('.workspace__scroll .new-session-composer textarea') !== null`)
-      if (width === 390 || width === 1440) expect(await page.evaluate(`document.querySelector('.new-session-composer__close, .new-session-composer [aria-label="Close new session"]') === null`)).toBe(true)
-      const measure = () => page.evaluate(`(() => { const scroll=document.querySelector('.workspace__scroll'), block=scroll.querySelector('.new-session-composer'), brand=block.querySelector('.new-session-composer__brand'), repository=block.querySelector('.new-session-composer__repository'), card=block.querySelector('.composer__row'), mark=brand.querySelector('img'), name=brand.querySelector('.brand__name'), descriptor=brand.querySelector('.brand__descriptor'), s=scroll.getBoundingClientRect(), b=block.getBoundingClientRect(), a=brand.getBoundingClientRect(), c=card.getBoundingClientRect(), r=repository.getBoundingClientRect(); return { centerX:Math.abs((b.left+b.right-s.left-s.right)/2), centerY:Math.abs((a.top+c.bottom-s.top-s.bottom)/2), repositoryEdge:Math.abs(r.left-c.left), heroRatio:a.width/c.width, mark:mark.getBoundingClientRect().height, name:parseFloat(getComputedStyle(name).fontSize), fullLockup:!!descriptor && descriptor.getBoundingClientRect().height>0, ordered:a.bottom<=r.top && r.bottom<=c.top, overflow:document.documentElement.scrollWidth>innerWidth || scroll.scrollWidth>scroll.clientWidth+1 } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, centerX: (decodeNumber)(record["centerX"]), centerY: (decodeNumber)(record["centerY"]), repositoryEdge: (decodeNumber)(record["repositoryEdge"]), heroRatio: (decodeNumber)(record["heroRatio"]), mark: (decodeNumber)(record["mark"]), name: (decodeNumber)(record["name"]), fullLockup: (decodeBoolean)(record["fullLockup"]), ordered: (decodeBoolean)(record["ordered"]), overflow: (decodeBoolean)(record["overflow"]) } })
+      if (width === 390 || width === 1440) expect(await page.evaluate(`document.querySelector('.new-session-composer__close, .new-session-composer [aria-label="Close new session"], .new-session-composer__brand') === null`)).toBe(true)
+      const measure = () => page.evaluate(`(() => { const scroll=document.querySelector('.workspace__scroll'), block=scroll.querySelector('.new-session-composer'), header=block.querySelector('.new-session-composer__header'), repository=block.querySelector('.new-session-composer__repository'), card=block.querySelector('.composer__row'), helper=block.querySelector('.new-session-composer__helper'), s=scroll.getBoundingClientRect(), b=block.getBoundingClientRect(), h=header.getBoundingClientRect(), c=card.getBoundingClientRect(), r=repository.getBoundingClientRect(), hp=helper.getBoundingClientRect(); return { centerX:Math.abs((b.left+b.right-s.left-s.right)/2), centerY:Math.abs((h.top+hp.bottom-s.top-s.bottom)/2), repositoryEdge:Math.abs(r.left-c.left), ordered:h.bottom<=r.top && r.bottom<=c.top && c.bottom<=hp.top, overflow:document.documentElement.scrollWidth>innerWidth || scroll.scrollWidth>scroll.clientWidth+1 } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, centerX: (decodeNumber)(record["centerX"]), centerY: (decodeNumber)(record["centerY"]), repositoryEdge: (decodeNumber)(record["repositoryEdge"]), ordered: (decodeBoolean)(record["ordered"]), overflow: (decodeBoolean)(record["overflow"]) } })
       const layout = await measure()
       expect(layout.centerX).toBeLessThanOrEqual(8)
-      expect(layout.centerY).toBeLessThanOrEqual(8)
+      if (width! >= 768) expect(layout.centerY).toBeLessThanOrEqual(8)
       expect(layout.repositoryEdge).toBeLessThanOrEqual(1)
-      expect(layout.mark).toBeGreaterThanOrEqual(width! < 480 ? 40 : 56)
-      expect(layout.name).toBeGreaterThanOrEqual(width! < 480 ? 32 : 40)
-      expect(layout.fullLockup).toBe(true)
-      expect(layout.heroRatio).toBeGreaterThanOrEqual(width! < 480 ? .5 : .6)
       expect(layout.ordered).toBe(true)
       expect(layout.overflow).toBe(false)
-      if (!noSelection) await Bun.write(new URL(`../../../.cache/tmp/new-session-hero-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       if (width !== 390) continue
       await page.setViewport(390, 320)
-      const short = await page.evaluate(`(() => { const scroll=document.querySelector('.workspace__scroll'), brand=scroll.querySelector('.new-session-composer__brand'), card=scroll.querySelector('.new-session-composer .composer__row'); const top=brand.getBoundingClientRect().top-scroll.getBoundingClientRect().top; const scrollable=scroll.scrollHeight>scroll.clientHeight; scroll.scrollTop=scroll.scrollHeight; return { top, scrollTop:scroll.scrollTop, scrollable, composerReachable:card.getBoundingClientRect().bottom<=scroll.getBoundingClientRect().bottom-8, overflow:document.documentElement.scrollWidth>innerWidth } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, top: (decodeNumber)(record["top"]), scrollTop: (decodeNumber)(record["scrollTop"]), scrollable: (decodeBoolean)(record["scrollable"]), composerReachable: (decodeBoolean)(record["composerReachable"]), overflow: (decodeBoolean)(record["overflow"]) } })
+      const short = await page.evaluate(`(() => { const scroll=document.querySelector('.workspace__scroll'), header=scroll.querySelector('.new-session-composer__header'), card=scroll.querySelector('.new-session-composer .composer__row'); const top=header.getBoundingClientRect().top-scroll.getBoundingClientRect().top; const scrollable=scroll.scrollHeight>scroll.clientHeight; scroll.scrollTop=scroll.scrollHeight; return { top, scrollTop:scroll.scrollTop, scrollable, composerReachable:card.getBoundingClientRect().bottom<=scroll.getBoundingClientRect().bottom-8, overflow:document.documentElement.scrollWidth>innerWidth } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, top: (decodeNumber)(record["top"]), scrollTop: (decodeNumber)(record["scrollTop"]), scrollable: (decodeBoolean)(record["scrollable"]), composerReachable: (decodeBoolean)(record["composerReachable"]), overflow: (decodeBoolean)(record["overflow"]) } })
       expect(short.top).toBeGreaterThanOrEqual(8)
       expect(short.top).toBeLessThanOrEqual(48)
       expect(short.scrollable).toBe(true)
@@ -443,6 +489,13 @@ test("phone Sessions sheet returns focus to its opener and opens Conversation fr
   }
 }, 90_000)
 
+async function pickLandingRepository(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, label: string) {
+  await wait(page, `document.querySelector('.new-session-composer button[aria-label="Repository"]:not([disabled])') !== null`)
+  await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Repository"]').click()`)
+  await wait(page, `document.querySelector('.mini-picker__surface [role="option"]') !== null`)
+  await page.evaluate(`[...document.querySelectorAll('.mini-picker__surface [role="option"]')].find(item => item.textContent.trim() === ${JSON.stringify(label)})?.click()`)
+  await wait(page, `document.querySelector('.mini-picker__surface') === null`)
+}
 async function type(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, selector: string, text: string) {
   await page.evaluate(`(() => { const field = document.querySelector(${JSON.stringify(selector)}); field.focus(); field.value = ${JSON.stringify(text)}; field.dispatchEvent(new InputEvent('input', { bubbles: true })); })()`)
 }
