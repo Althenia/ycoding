@@ -24,8 +24,8 @@
 .project-live[data-state="waiting"] { color:var(--yc-yellow-strong); }
 .project-live[data-state="failed"] { color:var(--yc-danger); }
 .project-live .transcript-dot-trail { gap:var(--yc-space-1); }
-.project-meter,.project-summary { display:grid; gap:var(--yc-space-3); }
-.project-meter { gap:var(--yc-space-1); }
+.project-summary { display:grid; gap:var(--yc-space-3); padding-block-start:var(--yc-space-3); }
+.project-meter { display:grid; gap:var(--yc-space-1); }
 .project-meter__label { display:flex; justify-content:space-between; gap:var(--yc-space-2); color:var(--yc-text-muted); font:var(--yc-size-2xs)/var(--yc-leading-xs) var(--yc-font-mono); }
 .project-meter__label strong { color:var(--yc-text); font:var(--yc-weight-semibold) var(--yc-size-sm)/var(--yc-leading-sm) var(--yc-font-sans); font-variant-numeric:tabular-nums; }
 .project-meter__track { display:flex; gap:2px; block-size:8px; }

@@ -454,7 +454,7 @@ test("completed output and snapshot refresh leave trusted typing, agent/model co
     await page.pressEscape()
     await wait(page, `document.querySelector('[role="listbox"][aria-label="Agent"]')===null`)
     await click('.composer-resident [aria-label="Model"]')
-    await wait(page, `!!document.querySelector('[role="dialog"][aria-label="Model settings"]')`)
+    await wait(page, `!!document.querySelector('[role="dialog"][aria-label="Choose model"]')`)
     await click('[aria-label="Close model picker"]')
     await click('.remote-nav [href="/remote/sessions"]')
     await wait(page, `!!document.querySelector('.route-panel--active .sessions-page')`)

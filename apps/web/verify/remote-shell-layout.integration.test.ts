@@ -1362,19 +1362,34 @@ describe("remote shell layout", () => {
     const page = await fixture("view=chat&largeCatalog=1", width, "Stream remote output safely")
     try {
       for (const creating of [false, true]) {
-        if (creating) await page.evaluate(`document.querySelector('${width < 768 ? ".app-header__new-chat" : ".workspace__rail .workspace__new-chat"}').click()`)
+        if (creating) {
+          if (width === 390) {
+            await page.evaluate(`document.querySelector('.bottom-nav a[href="/remote/sessions"]').click()`)
+            for (let attempt = 0; attempt < 80 && !await page.evaluate(`document.querySelector('.sessions-page > .page-head .new-session__trigger:not([disabled])') !== null`); attempt++) await Bun.sleep(25)
+          }
+          await page.evaluate(`document.querySelector('${width === 390 ? ".sessions-page > .page-head .new-session__trigger" : ".workspace__rail .workspace__new-chat"}').click()`)
+          const repository = `.route-panel:not([inert]) .new-session-composer button[aria-label="Repository"]:not([disabled])`
+          for (let attempt = 0; attempt < 80 && !await page.evaluate(`document.querySelector(${JSON.stringify(repository)}) !== null`); attempt++) await Bun.sleep(25)
+          await page.evaluate(`document.querySelector(${JSON.stringify(repository)}).click()`)
+          await page.evaluate(`[...document.querySelectorAll('.mini-picker__surface [role="option"]')].find(option => option.textContent.includes('Other repository')).click()`)
+        }
         const root = creating ? ".new-session-composer" : ".mini-composer__mount"
         for (let attempt = 0; attempt < 80 && !await page.evaluate(`document.querySelector('${root} .model-control__trigger')?.disabled === false`); attempt++) await Bun.sleep(25)
         expect(await page.evaluate(`document.querySelector('${root} .model-control__trigger')?.disabled`)).toBe(false)
         if (!creating && width === 390) await page.evaluate(`document.querySelector('.composer__mobile-trigger').click()`)
         const picker = !creating && width === 390 ? ".composer__selection-sheet" : root
-        await page.evaluate(`document.querySelector('${picker} .model-control__trigger').click(); document.querySelector('.model-control__switch').click()`)
+        await page.evaluate(`document.querySelector('${picker} .model-control__trigger').click()`)
         expect(await page.evaluate(`document.querySelectorAll('.model-control__model').length`)).toBe(553)
         await page.evaluate(`(() => { const search=document.querySelector('[aria-label="Search models"]'); search.value='Catalog model 552'; search.dispatchEvent(new InputEvent('input',{bubbles:true})); })()`)
         expect(await page.evaluate(`document.querySelectorAll('.model-control__model').length`)).toBe(1)
         await page.evaluate(`document.querySelector('.model-control__model').click()`)
         expect(await page.evaluate(`document.querySelector('${root} .model-control__name').textContent`)).toBe("Catalog model 552")
-        if (!creating && width === 390) await page.evaluate(`document.querySelector('[aria-label="Close agent and model picker"]').click()`)
+        if (!creating && width === 390) {
+          const chooser = `dialog[aria-label="Choose agent and model"]`
+          for (let attempt = 0; attempt < 80 && await page.evaluate(`document.querySelector('dialog.overlay--model-control') !== null`); attempt++) await Bun.sleep(25)
+          await page.evaluate(`document.querySelector('${chooser} .overlay__close').click()`)
+          for (let attempt = 0; attempt < 80 && await page.evaluate(`document.querySelector('${chooser}') !== null`); attempt++) await Bun.sleep(25)
+        }
       }
     } finally { await page.close() }
   }, 30_000)

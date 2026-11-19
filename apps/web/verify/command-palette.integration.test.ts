@@ -199,7 +199,7 @@ for (const viewport of ["desktop", "phone"] as const) {
       await search(page, "/models")
       await page.pressKey("Enter", "Enter", 13)
       await wait(page, `document.querySelector('dialog.overlay--command-palette [aria-label="Search models"]') !== null`)
-      expect(await page.evaluate(`document.querySelector('[role=dialog][aria-label="Model settings"], .composer__selection-sheet') === null`)).toBe(true)
+      expect(await page.evaluate(`document.querySelector('.model-control__surface, .composer__selection-sheet') === null`)).toBe(true)
       expect(await page.evaluate(`document.querySelector('.composer-resident .composer__input').value`)).toBe("Keep this draft")
       expect(await page.evaluate(`window.remoteMutationReport().some((item) => ['session.switchModel','session.prompt','session.command'].includes(item.operation))`)).toBe(false)
       await page.pressKey("Escape", "Escape", 27)

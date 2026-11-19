@@ -10,12 +10,19 @@ import { ToastLayer } from "../src/remote/ui/notifications"
 import { catalogKey, type CatalogView } from "../src/remote/catalog"
 import { createRemoteHttp } from "../src/remote/http"
 import { remoteKeys, type RemoteLink } from "../src/remote/queries"
+import { rememberRecentModel } from "../src/remote/preferences"
 import { createRemoteStore, type RemoteStore, type RemoteStoreState } from "../src/remote/store"
 import type { AutonomyModes, EffectiveAutonomyView } from "../src/remote/autonomy"
 import { applySessionEvent, createSessionView } from "../src/remote/projection"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 import "../src/styles/remote.css"
+
+const modelScenario = new URLSearchParams(location.search).get("model")
+const widthProfile = `SyntheticProfile${"WideAccount".repeat(12)}`
+const widthProvider = { providerID: "synthetic", providerName: `SyntheticProvider${"LongProvider".repeat(12)}` }
+const widthModel = { providerID: "synthetic", id: `synthetic-${"longmodelidentifier".repeat(12)}`, profile: widthProfile, variant: "high" }
+if (modelScenario === "picker-width") rememberRecentModel(undefined, widthModel)
 
 const catalog: CatalogView = {
   status: "ready", defaultModel: { providerID: "anthropic", id: "claude-opus-5-5", variant: "high" },
@@ -26,6 +33,10 @@ const catalog: CatalogView = {
     { id: "btw", name: "BTW", mode: "subagent", hidden: false },
   ],
   models: [
+    ...(modelScenario === "picker-width" ? [
+      { ...widthProvider, id: widthModel.id, name: "Synthetic width model", variants: ["high"], profiles: [{ name: widthProfile, active: true, variants: ["high"] }] },
+      ...Array.from({ length: 16 }, (_, index) => ({ ...widthProvider, id: `synthetic-model-${index}`, name: `Synthetic model ${index}`, variants: [] })),
+    ] : []),
     { providerID: "anthropic", providerName: "Anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5", variants: ["high", "max"] },
     { providerID: "anthropic", providerName: "Anthropic", id: "claude-opus-5-5-fast", name: "Claude Opus 5.5 Fast", variants: ["medium", "high"] },
     { providerID: "openai", providerName: "OpenAI", id: "gpt-6-sol", name: "GPT-6 Sol", variants: ["low", "medium", "high"] },
@@ -52,7 +63,7 @@ const base = createRemoteStore({ http: createRemoteHttp(), createTransport: () =
 const seed: RemoteStoreState = {
   ...base.state(),
   connection: { kind: "connected", deviceName: "Fixture" }, transport: { kind: "open" }, activeDeviceID: "dev_fixture",
-  selectedSessionInfo: { id: "ses_fixture", title: "Fixture", agent: "gsd", model: new URLSearchParams(location.search).get("model") === "spectrum" ? { providerID: "openai", id: "effort-spectrum", variant: "medium" } : { providerID: "openai", id: new URLSearchParams(location.search).get("model") === "fast" ? "gpt-6-sol-fast" : "gpt-6-sol", variant: "high" }, updatedAt: 1, archived: false },
+  selectedSessionInfo: { id: "ses_fixture", title: "Fixture", agent: "gsd", model: modelScenario === "picker-width" ? widthModel : modelScenario === "spectrum" ? { providerID: "openai", id: "effort-spectrum", variant: "medium" } : { providerID: "openai", id: modelScenario === "fast" ? "gpt-6-sol-fast" : "gpt-6-sol", variant: "high" }, updatedAt: 1, archived: false },
   activeSessionID: "ses_fixture", drafts: {}, mutations: [], mutationToasts: [], catalogs: { [catalogKey({ sessionID: "ses_fixture" })]: catalog, [catalogKey({ workspaceID: "work_one" })]: catalog, [catalogKey({ workspaceID: "work_two" })]: catalog },
   view: { ...createSessionView("ses_fixture"), autonomy: fixtureAutonomy(modesManual) },
   devices: [], advertised: [], sessions: [], sessionGroups: [], sessionQuery: "", sessionFilter: "all", sessionListStatus: "ready", sessionPageLoading: false, sessionHasNext: false, sessionHasPrevious: false,

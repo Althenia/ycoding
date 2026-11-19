@@ -150,11 +150,12 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
       expect(await h.page.evaluate(`document.body.textContent.includes('Review items could not be loaded')`)).toBe(false)
       if (width < 768) {
         await h.page.evaluate(`document.querySelector('[aria-label="Open sessions"]').click()`)
-        await h.wait(`document.querySelector('.overlay--sessions-sheet') !== null`)
-        await h.page.pressEscape()
+        await h.wait(`document.querySelector('.overlay--sessions-sheet[open] .overlay__close') !== null`)
+        await h.page.evaluate(`document.querySelector('.overlay--sessions-sheet .overlay__close').click()`)
         await h.wait(`document.querySelector('.overlay--sessions-sheet') === null`)
+        await h.page.evaluate(`document.querySelector('.bottom-nav a[href="/remote/sessions"]').click()`)
       }
-      const newSession = width < 768 ? '.conversation-header__actions .new-session__trigger[aria-label^="New chat"]' : ".workspace-new-session button"
+      const newSession = width < 768 ? ".sessions-page > .page-head .new-session__trigger" : ".workspace__rail .workspace__new-chat"
       await h.wait(`document.querySelector(${JSON.stringify(newSession)})?.getBoundingClientRect().width > 0`)
       if (width < 768) {
         const hit = await h.page.evaluate(`(() => { const button=document.querySelector(${JSON.stringify(newSession)}), rect=button.getBoundingClientRect(), x=rect.left+rect.width/2, y=rect.top+rect.height/2; return { x, y, reachable: rect.width > 0 && rect.height > 0 && !button.disabled && !button.closest('[inert], [aria-hidden="true"]') && x >= 0 && x < innerWidth && y >= 0 && y < innerHeight && button.contains(document.elementFromPoint(x,y)) } })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, x: (decodeNumber)(record["x"]), y: (decodeNumber)(record["y"]), reachable: (decodeBoolean)(record["reachable"]) } })
@@ -167,7 +168,7 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
       await h.wait(`location.pathname === '/remote/sessions'`)
       await h.wait(`document.querySelector('.sessions-table__row[data-session-id="ses_a"]')?.textContent.includes('Master · Atlas')`)
       await h.wait(`document.querySelector('.sessions-table__row[data-session-id="ses_b"]')?.textContent.includes('Member · Atlas')`)
-      expect(await h.page.evaluate(`[...document.querySelectorAll('.session-filters button')].filter(item => item.getBoundingClientRect().width > 0).map(item => item.textContent.trim())`)).toEqual(["All (2)", "Waiting (0)", "Running (0)", "Idle (2)"])
+      expect(await h.page.evaluate(`[...document.querySelectorAll('.route-panel:not([inert]) .sessions-page .session-filters button')].filter(item => item.getBoundingClientRect().width > 0).map(item => item.textContent.trim())`)).toEqual(["All (2)", "Waiting (0)", "Running (0)", "Idle (2)"])
       await h.page.evaluate(`document.querySelector('.sessions-table__row[data-session-id="ses_a"] .sessions-table__select').click()`)
       await h.wait(`location.pathname === '/remote/session' && document.querySelector('.composer-resident:not([inert]) .composer__input')`)
       await h.wait(`document.querySelector('[aria-label="Open Team"]:not([inert])')?.getBoundingClientRect().width > 0`)
@@ -176,9 +177,12 @@ for (const [width, height] of [[1440, 900], [390, 844]] as const) {
         await mkdir(directory, { recursive: true })
         await Bun.write(join(directory, `accepted-ui-${width}-${crypto.randomUUID()}.png`), Buffer.from(await h.page.screenshot(), "base64"))
       }
+      const modelPicker = width < 768 ? ".composer__selection-sheet" : ".composer-resident:not([inert])"
       if (width < 768) await h.page.evaluate(`document.querySelector('.composer-resident:not([inert]) .composer__mobile-trigger').click()`)
-      await h.wait(`document.querySelector('.composer-resident:not([inert]) .model-control__trigger:not([disabled])')`)
-      await h.page.evaluate(`document.querySelector('.composer-resident:not([inert]) .model-control__trigger').click(); document.documentElement.dataset.motion='off'`)
+      await h.wait(`document.querySelector('${modelPicker} .model-control__trigger:not([disabled])')`)
+      await h.page.evaluate(`document.querySelector('${modelPicker} .model-control__trigger').click(); document.documentElement.dataset.motion='off'`)
+      await h.wait(`document.querySelector('button[aria-label="Model settings"]')`)
+      await h.page.evaluate(`document.querySelector('button[aria-label="Model settings"]').click()`)
       await h.wait(`document.querySelector('.model-control__surface .model-control__sparkles i')`)
       const animations = await h.page.evaluate(`[...document.querySelectorAll('.model-control__surface .model-control__sparkles,.model-control__surface .model-control__sparkles i')].map(item=>getComputedStyle(item).animationName)`, decodeArray(decodeString))
       expect(animations.length).toBeGreaterThan(1)

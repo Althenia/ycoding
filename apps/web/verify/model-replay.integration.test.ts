@@ -82,14 +82,18 @@ async function harness(initial: ModelRefView | null = { providerID: "openai", id
   return { page, relay, current: () => current, refuse: () => { refused = true }, rejectNextPrompt: () => { promptRejected = true }, refreshSessionInfo: () => relay.pushSessions(["ses_a"]), setCatalogModels: (next: readonly ModelOption[]) => { catalogModels = next }, external: (model: ModelRefView) => { current = model; relay.pushEvent("ses_a", { type: "session.model.selected", data: { sessionID: "ses_a", model } }) }, close: async () => { await page.close(); await relay.stop() } }
 }
 async function choose(page: Page, name: string) {
-  await page.evaluate(`document.querySelector('.model-control__trigger').click()`)
-  await page.evaluate(`document.querySelector('.model-control__switch').click()`)
+  await openModelList(page)
   await page.evaluate(`[...document.querySelectorAll('.model-control__model')].find(option=>option.textContent.startsWith(${JSON.stringify(name)})).click()`)
-  await page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
+  await wait(page, `!document.querySelector('.model-control__surface')`)
 }
-async function openModelList(page: Page) {
-  await page.evaluate(`document.querySelector('.model-control__trigger').click()`)
-  await page.evaluate(`document.querySelector('.model-control__switch').click()`)
+async function openModelList(page: Page, chip = '.model-control__trigger[aria-label="Model"]') {
+  await page.evaluate(`document.querySelector(${JSON.stringify(chip)}).click()`)
+  await wait(page, `document.activeElement === document.querySelector('[aria-label="Search models"]')`)
+}
+async function openModelSettings(page: Page, chip?: string) {
+  await openModelList(page, chip)
+  await page.evaluate(`document.querySelector('button[aria-label="Model settings"]').click()`)
+  await wait(page, `!document.querySelector('[aria-label="Search models"]') && document.querySelector('.model-control__switch')?.getClientRects().length > 0`)
 }
 async function send(page: Page, text: string) {
   await page.evaluate(`(() => { const field=document.querySelector('.mini-composer__mount textarea'); field.value=${JSON.stringify(text)}; field.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('[aria-label="Send prompt"]').click(); })()`)
@@ -102,7 +106,7 @@ async function waitForOperation(relay: Awaited<ReturnType<typeof startRelayDoubl
   throw new Error(`Timed out waiting for ${operation}`)
 }
 async function effort(page: Page, value: string) {
-  await page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+  await openModelSettings(page)
   await page.evaluate(`document.querySelector('[aria-label="Clear reasoning effort override"]').click()`)
   if (value !== "Model settings") {
     await page.evaluate(`document.querySelector('[role="slider"]').focus()`)
@@ -110,6 +114,95 @@ async function effort(page: Page, value: string) {
   }
   await page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
 }
+
+test("Choose model returns focus to its model chip and Effort/Profile invokers", async () => {
+  for (const width of [1440, 390]) {
+    const h = await harness({ providerID: "openai", id: "model-a", variant: "high", profile: "profileA" }, undefined, undefined, [width, 900])
+    try {
+      const page = h.page
+      const chip = width === 390 ? '.composer__selection-sheet .model-control__trigger[aria-label="Model"]' : '.model-control__trigger[aria-label="Model"]'
+      const search = 'document.querySelector(\'input[aria-label="Search models"]\')'
+      const settings = 'document.querySelector(\'button[aria-label="Model settings"]\')'
+      const back = 'document.querySelector(\'button[aria-label="Back to model settings"]\')'
+      const switchModel = 'document.querySelector(\'.model-control__switch[aria-label="Choose model"]\')'
+      const closes = width === 390 ? '[aria-label="Close Choose model"]' : '[aria-label="Close model picker"]'
+      const chipFocused = `!document.querySelector('.model-control__surface') && document.activeElement === window.modelChip`
+      const draft = "Keep this unsent model draft"
+      await page.evaluate(`(() => { window.modelDraft = document.querySelector('textarea[aria-label="Message your agent"]'); window.modelDraft.focus(); window.modelDraft.value = ${JSON.stringify(draft)}; window.modelDraft.dispatchEvent(new InputEvent('input', {bubbles:true})); })()`)
+      if (width === 390) {
+        await page.evaluate(`window.selectionTrigger = document.querySelector('.composer__mobile-trigger'); window.selectionTrigger.focus(); window.selectionTrigger.click()`)
+        await wait(page, `document.querySelector(${JSON.stringify(chip)})?.disabled === false`)
+        await page.evaluate(`window.selectionSheet = document.querySelector('.composer__selection-sheet').closest('dialog')`)
+      }
+      await page.evaluate(`window.modelChip = document.querySelector(${JSON.stringify(chip)}); window.modelChip.focus()`)
+      const requests = () => h.relay.requests.filter((request) => ["session.switchModel", "session.prompt", "session.command", "integration.activate"].includes(request.operation))
+      const before = requests().length
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      expect(await page.evaluate(`!!document.querySelector('[role="dialog"][aria-label="Choose model"],dialog[aria-label="Choose model"][open]')`)).toBe(true)
+      await wait(page, `${search} && document.activeElement === ${search}`)
+      expect(await page.evaluate(`!!${settings} && !${back}`)).toBe(true)
+      const active = () => page.evaluate(`(() => {const field = ${search}; return field && document.getElementById(field.getAttribute('aria-activedescendant'))?.getAttribute('aria-label');})()`)
+      const first = await active()
+      expect(first).toBe("Model A · OpenAI · model-a · profile profileA")
+      await page.pressKey("ArrowDown", "ArrowDown", 40)
+      expect(await active()).toContain("Model B · OpenAI · model-b")
+      await page.pressKey("ArrowUp", "ArrowUp", 38)
+      expect(await active()).toBe(first)
+      expect(await page.evaluate(`document.activeElement === ${search}`)).toBe(true)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      await wait(page, chipFocused)
+      expect(await page.evaluate('window.modelChip.getAttribute("aria-expanded")')).toBe("false")
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      await wait(page, `${search} && document.activeElement === ${search}`)
+      await page.pressEscape()
+      await wait(page, chipFocused)
+      if (width === 390) expect(await page.evaluate(`window.selectionSheet.matches(':modal') && window.selectionSheet.contains(document.activeElement)`)).toBe(true)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      await wait(page, `${search} && document.activeElement === ${search}`)
+      await page.evaluate(`document.querySelector(${JSON.stringify(closes)}).click()`)
+      await wait(page, chipFocused)
+
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      await wait(page, `!!${settings}`)
+      await page.evaluate(`${settings}.click()`)
+      await wait(page, `!!${switchModel}`)
+      expect(await page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("High")
+      expect(await page.evaluate(`document.querySelector('button[aria-label="Profile"]').textContent`)).toContain("profileA")
+      await page.evaluate(`window.modelSwitch = ${switchModel}; window.modelSwitch.focus()`)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      await wait(page, `${search} && document.activeElement === ${search}`)
+      expect(await page.evaluate(`window.modelSwitch.getClientRects().length === 0 || !!window.modelSwitch.closest('[inert]')`)).toBe(true)
+      expect(await page.evaluate(`!!${back}`)).toBe(true)
+      await page.evaluate(`(() => { const field = ${search}; field.value = 'Claude'; field.dispatchEvent(new InputEvent('input', {bubbles:true})); })()`)
+      expect(await page.evaluate(`document.querySelectorAll('.model-control__model').length`)).toBe(2)
+      await page.pressEscape()
+      await wait(page, `!${search} && document.activeElement === window.modelSwitch`)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      await wait(page, `${search} && document.activeElement === ${search}`)
+      expect(await page.evaluate(`${search}.value`)).toBe("")
+      await page.evaluate(`${back}.click()`)
+      await wait(page, `!${search} && document.activeElement === window.modelSwitch`)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      await wait(page, `${search} && document.activeElement === ${search}`)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      await wait(page, `!${search} && document.activeElement === window.modelSwitch`)
+      expect(await page.evaluate(`document.activeElement === window.modelChip`)).toBe(false)
+      expect(await page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("High")
+      expect(await page.evaluate(`document.querySelector('button[aria-label="Profile"]').textContent`)).toContain("profileA")
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      await wait(page, `${search} && document.activeElement === ${search}`)
+      await page.evaluate(`document.querySelector(${JSON.stringify(closes)}).click()`)
+      await wait(page, chipFocused)
+      if (width === 390) {
+        expect(await page.evaluate(`window.selectionSheet.matches(':modal')`)).toBe(true)
+        await page.pressEscape()
+        await wait(page, `!window.selectionSheet.open && document.activeElement === window.selectionTrigger`)
+      }
+      expect(await page.evaluate(`window.modelDraft === document.querySelector('textarea[aria-label="Message your agent"]') && window.modelDraft.value`)).toBe(draft)
+      expect(requests()).toHaveLength(before)
+    } finally { await h.close() }
+  }
+}, 45_000)
 
 test("composer effort slider submits a provider-offered variant", async () => {
   const h = await harness({ providerID: "openai", id: "model-a" })
@@ -146,7 +239,11 @@ test("models without adjustable effort explain their settings in the picker", as
   for (const viewport of [[390, 844], [1440, 900]] as const) {
     const h = await harness({ providerID: "openai", id: "model-plain" }, undefined, undefined, viewport)
     try {
-      await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+      if (viewport[0] === 390) {
+        await h.page.evaluate(`document.querySelector('.composer__mobile-trigger').click()`)
+        await wait(h.page, `document.querySelector('.composer__selection-sheet .model-control__trigger')?.disabled === false`)
+      }
+      await openModelSettings(h.page, viewport[0] === 390 ? '.composer__selection-sheet .model-control__trigger' : undefined)
       expect(await h.page.evaluate(`document.querySelector('.model-control__surface')?.textContent ?? null`)).toContain("This model has no adjustable effort; it uses its own settings.")
       expect(await h.page.evaluate(`document.querySelector('.model-control__surface [role="slider"]') === null`)).toBe(true)
       expect(h.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(0)
@@ -157,7 +254,7 @@ test("models without adjustable effort explain their settings in the picker", as
     h.setCatalogModels(models.map((item) => item.id === "model-a" ? { ...item, profiles: [{ name: "no-effort", active: true, variants: [] }] } : item))
     await h.page.evaluate(`window.modelReplayStore.loadCatalog({sessionID:'ses_a'}, {refresh:true})`)
     await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.find(item=>item.id==='model-a')?.profiles?.[0]?.name === 'no-effort'`)
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     expect(await h.page.evaluate(`document.querySelector('.model-control__surface').textContent`)).toContain("This model has no adjustable effort; it uses its own settings.")
     expect(await h.page.evaluate(`document.querySelector('.model-control__surface [role="slider"]') === null`)).toBe(true)
   } finally { await h.close() }
@@ -167,7 +264,7 @@ test("omitted effort is not an offered slider stop and clearing stays separate f
   const h = await harness({ providerID: "openai", id: "model-a" })
   try {
     expect(await h.page.evaluate(`document.querySelector('.model-control__effort').textContent`)).toBe("Model settings")
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["Low", "High", "Max"])
     expect(await h.page.evaluate(`document.querySelector('[role="slider"]').getAttribute('aria-valuetext')`)).toBe("No effort override")
     await h.page.evaluate(`document.querySelector('[role="slider"]').focus()`)
@@ -185,7 +282,7 @@ test("provider-offered none and default remain selectable explicit variants", as
   const h = await harness()
   try {
     await choose(h.page, "Model D")
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["None", "Default"])
     await h.page.evaluate(`document.querySelector('[role="slider"]').focus()`)
     await h.page.pressKey("Home", "Home", 36)
@@ -202,7 +299,7 @@ test("provider-offered none and default remain selectable explicit variants", as
 test("explicit provider profiles switch before prompts, fail closed, and never activate a global integration", async () => {
   const h = await harness({ providerID: "openai", id: "model-a" })
   try {
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
     expect(await h.page.evaluate(`document.querySelector('.model-control__trigger').textContent`)).toContain("profileA")
@@ -216,7 +313,7 @@ test("explicit provider profiles switch before prompts, fail closed, and never a
   const failed = await harness({ providerID: "openai", id: "model-a" })
   try {
     failed.refuse()
-    await failed.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(failed.page)
     await failed.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await failed.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileB')).click()`)
     await send(failed.page, "Do not send after failed switch")
@@ -230,7 +327,7 @@ test("explicit provider profiles switch before prompts, fail closed, and never a
 test("compact Profile Default row opens full choices inside the same model panel", async () => {
   const h = await harness({ providerID: "openai", id: "model-a" })
   try {
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     expect(await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').textContent`)).toBe("Profile · Default")
     await h.page.evaluate(`window.profileSurface=document.querySelector('.model-control__surface'); document.querySelector('[aria-label="Profile"]').click()`)
     expect(await h.page.evaluate(`window.profileSurface === document.querySelector('.model-control__surface') && window.profileSurface.contains(document.querySelector('[role="option"]'))`)).toBe(true)
@@ -257,7 +354,7 @@ test("catalog speeds and Cursor effort labels submit their exact original IDs", 
     h.setCatalogModels([...models, ...["", "-fast", "-ultrafast"].map((suffix) => ({ providerID: "cursor", providerName: "Cursor", id: `grok-4.7${suffix}`, name: `Grok 4.7${suffix === "" ? "" : suffix === "-fast" ? " Fast" : " Ultrafast"}`, variants: suffix === "" ? ["Grok 4.7 Low", "medium", "high", "xhigh"] : ["low", "high", "xhigh"] }))])
     await h.page.evaluate(`window.modelReplayStore.loadCatalog({sessionID:'ses_a'}, {refresh:true})`)
     await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.some(item=>item.id==='grok-4.7-ultrafast')`)
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["Low", "Medium", "High", "Extra High"])
     expect(await h.page.evaluate(`document.querySelector('.model-control__switch strong').textContent`)).toBe("Low")
     await send(h.page, "Retain prefixed ID")
@@ -279,7 +376,7 @@ test("catalog speeds and Cursor effort labels submit their exact original IDs", 
 test("effort particles actually move within the fill and every automatic animation finishes within five seconds", async () => {
   const h = await harness()
   try {
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     const motion = await h.page.evaluate(`(async () => { const field=document.querySelector('.model-control__sparkles'), before=getComputedStyle(field).transform, animations=field.getAnimations({subtree:true}); await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))); const moved=getComputedStyle(field).transform!==before; return { moved, bounded:animations.every(animation=>animation.effect.getComputedTiming().endTime<=5000), clipped:getComputedStyle(field.parentElement).overflow==='hidden' }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, moved: (decodeBoolean)(record["moved"]), bounded: (decodeBoolean)(record["bounded"]), clipped: (decodeBoolean)(record["clipped"]) } })
     expect(motion.moved).toBe(true)
     expect(motion.clipped).toBe(true)
@@ -294,8 +391,11 @@ test("verified Cursor raw IDs render cleanly, retain cancellation and keyboard f
       h.setCatalogModels([...models, ...cursorModels])
       await h.page.evaluate(`window.modelReplayStore.loadCatalog({sessionID:'ses_a'}, {refresh:true}); document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
       await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.some(item=>item.id==='grok-4.7-500k-fast')`)
-      if (width < 480) await h.page.evaluate(`document.querySelector('.composer__mobile-trigger').click()`)
-      await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+      if (width < 480) {
+        await h.page.evaluate(`document.querySelector('.composer__mobile-trigger').click()`)
+        await wait(h.page, `document.querySelector('.composer__selection-sheet .model-control__trigger')?.disabled === false`)
+      }
+      await openModelSettings(h.page, width < 480 ? '.composer__selection-sheet .model-control__trigger' : undefined)
       expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["Low", "Medium", "High", "Extra High"])
       expect(await h.page.evaluate(`document.querySelector('.model-control__switch strong').textContent`)).toBe("High")
       await h.page.evaluate(`document.querySelector('[role="slider"]').focus()`)
@@ -311,7 +411,7 @@ test("verified Cursor raw IDs render cleanly, retain cancellation and keyboard f
       expect(geometry).toMatchObject({ overflow: false, contained: true, focus: true, activeMotion: 0 })
       expect(geometry.profileHeight).toBeGreaterThanOrEqual(44)
       expect(geometry.sliderHeight).toBeGreaterThanOrEqual(44)
-      if (width === 390 || width === 1440) await Bun.write(new URL(`../../../.cache/tmp/model-controls-${theme}-${width}.png`, import.meta.url), Buffer.from(await h.page.screenshot(), "base64"))
+      if ((width === 390 || width === 1440) && process.env.YCODING_WEB_CAPTURE_DIR) await Bun.write(`${process.env.YCODING_WEB_CAPTURE_DIR}/model-controls-${theme}-${width}.png`, Buffer.from(await h.page.screenshot(), "base64"))
       await h.page.setReducedMotion(true)
       await h.page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`)
       await h.page.pressKey("Home", "Home", 36)
@@ -326,13 +426,14 @@ test("verified Cursor raw IDs render cleanly, retain cancellation and keyboard f
       expect(await h.page.evaluate(`document.activeElement===document.querySelector('[aria-label="Profile"]')`)).toBe(true)
       expect(await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').textContent`)).toBe("Profile · Research and development account")
       await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
-      if (width === 390 || width === 1440) await Bun.write(new URL(`../../../.cache/tmp/model-profiles-${theme}-${width}.png`, import.meta.url), Buffer.from(await h.page.screenshot(), "base64"))
+      if ((width === 390 || width === 1440) && process.env.YCODING_WEB_CAPTURE_DIR) await Bun.write(`${process.env.YCODING_WEB_CAPTURE_DIR}/model-profiles-${theme}-${width}.png`, Buffer.from(await h.page.screenshot(), "base64"))
       await h.page.pressKey("Escape", "Escape", 27)
       await h.page.evaluate(`document.querySelector('[aria-label="Model speed"]').click()`)
       expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__choices [role="option"]')].map(node=>node.childNodes[0].textContent)`)).toEqual(["Standard", "Fast"])
       await h.page.pressKey("Escape", "Escape", 27)
       expect(await h.page.evaluate(`document.activeElement===document.querySelector('[aria-label="Model speed"]')`)).toBe(true)
-      await h.page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
+      await h.page.evaluate(`document.querySelector(${JSON.stringify(width < 768 ? '[aria-label="Close Model settings"]' : '[aria-label="Close model picker"]')}).click()`)
+      await wait(h.page, `!document.querySelector('.model-control__surface')`)
       expect(await h.page.evaluate(`document.querySelector('.model-control__sparkles')===null`)).toBe(true)
       expect(h.relay.requests.some((request) => request.operation === "session.switchModel")).toBe(false)
     } finally { await h.close() }
@@ -345,7 +446,7 @@ test("verified Cursor fast zero-width IDs survive an explicit effort choice and 
     h.setCatalogModels([...models, ...cursorModels])
     await h.page.evaluate(`window.modelReplayStore.loadCatalog({sessionID:'ses_a'}, {refresh:true})`)
     await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.some(item=>item.id==='grok-4.7-500k-fast')`)
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     await h.page.evaluate(`document.querySelector('[role="slider"]').focus()`)
     await h.page.pressKey("End", "End", 35)
     await h.page.evaluate(`document.querySelector('[aria-label="Close model picker"]').click()`)
@@ -358,7 +459,7 @@ test("verified Cursor fast zero-width IDs survive an explicit effort choice and 
 test("profile selection precedes remote command admission with the same Model.Ref", async () => {
   const h = await harness({ providerID: "openai", id: "model-a" })
   try {
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileB')).click()`)
     await send(h.page, "/plan review")
@@ -377,7 +478,8 @@ test("a speed without the selected profile is unavailable until an explicit elig
       : item.id === "model-a-fast" ? { ...item, profiles: [{ name: "profileB", active: false, variants: ["low"] }] } : item))
     await h.page.evaluate(`window.modelReplayStore.loadCatalog({sessionID:'ses_a'}, {refresh:true})`)
     await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.find(item=>item.id==='model-a-fast')?.profiles?.[0]?.name === 'profileB'`)
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click(); document.querySelector('[aria-label="Model speed"]').click()`)
+    await openModelSettings(h.page)
+    await h.page.evaluate(`document.querySelector('[aria-label="Model speed"]').click()`)
     expect(await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.startsWith('Fast')).disabled`)).toBe(true)
     await h.page.pressKey("Escape", "Escape", 27)
     expect(await h.page.evaluate(`document.querySelector('.model-control__trigger').textContent`)).toContain("profileA")
@@ -394,7 +496,7 @@ test("a speed without the selected profile is unavailable until an explicit elig
 test("an unavailable saved profile remains truthful and sends nothing until explicit eligible recovery", async () => {
   const h = await harness({ providerID: "openai", id: "model-a", profile: "Removed profile", variant: "high" })
   try {
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     expect(await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').textContent`)).toBe("Profile · Unavailable: Removed profile")
     expect(await h.page.evaluate(`document.querySelector('[role="slider"]')===null`)).toBe(true)
     await send(h.page, "Keep this draft")
@@ -414,7 +516,7 @@ test("profile variants, effort choices, and remembered values stay profile-speci
     await h.page.evaluate(`window.modelReplayStore.loadCatalog({sessionID:'ses_a'}, {refresh:true})`)
     await wait(h.page, `window.modelReplayStore.state().catalogs['session:ses_a']?.models.some(item=>item.id==='claude-profiles')`)
     await choose(h.page, "Profile variants")
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('Work')).click()`)
     expect(await h.page.evaluate(`[...document.querySelectorAll('.model-control__labels span')].map(node=>node.textContent)`)).toEqual(["High"])
@@ -441,7 +543,7 @@ test("profile variants, effort choices, and remembered values stay profile-speci
 test("reselecting the current named profile forces one confirmed rebind before prompt admission", async () => {
   const h = await harness({ providerID: "openai", id: "model-a", profile: "profileA" })
   try {
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
     await send(h.page, "Rebind this profile")
@@ -453,7 +555,7 @@ test("reselecting the current named profile forces one confirmed rebind before p
   const refused = await harness({ providerID: "openai", id: "model-a", profile: "profileA" })
   try {
     refused.refuse()
-    await refused.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(refused.page)
     await refused.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await refused.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
     await send(refused.page, "Do not bypass a failed rebind")
@@ -467,7 +569,7 @@ test("a confirmed same-profile rebind is not repeated when retrying rejected pro
   const h = await harness({ providerID: "openai", id: "model-a", profile: "profileA" })
   try {
     h.rejectNextPrompt()
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
     await send(h.page, "Retry admission only")
@@ -486,7 +588,7 @@ test("a retry fails closed if another client changes the model after the confirm
   const h = await harness({ providerID: "openai", id: "model-a", profile: "profileA" })
   try {
     h.rejectNextPrompt()
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
     await send(h.page, "Do not retry under a different profile")
@@ -504,7 +606,7 @@ test("a retry fails closed if another client changes the model after the confirm
 test("a refreshed equal Session Model.Ref cannot clear an unsubmitted profile rebind", async () => {
   const h = await harness({ providerID: "openai", id: "model-a", profile: "profileA" })
   try {
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
     const updatedAt = await h.page.evaluate(`window.modelReplayStore.state().selectedSessionInfo.updatedAt`, decodeNumber)
@@ -545,11 +647,13 @@ test("two Sessions retain independent profile picks and drafts across composer s
     await wait(page, `window.modelReplayStore?.state().transport.kind === 'open' && window.modelReplayStore.state().sessions.length === 2`)
     await page.evaluate(`window.modelReplayStore.selectSession('ses_a')`)
     await wait(page, `window.modelReplayStore.state().activeSessionID === 'ses_a' && document.querySelector('.model-control__trigger')?.disabled === false`)
-    await page.evaluate(`document.querySelector('.model-control__trigger').click(); document.querySelector('[aria-label="Profile"]').click(); [...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
+    await openModelSettings(page)
+    await page.evaluate(`document.querySelector('[aria-label="Profile"]').click(); [...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
     await page.evaluate(`(() => { const field=document.querySelector('textarea'); field.value='draft A'; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
     await page.evaluate(`window.modelReplayStore.selectSession('ses_b')`)
     await wait(page, `window.modelReplayStore.state().activeSessionID === 'ses_b' && document.querySelector('textarea')?.value === '' && document.querySelector('.model-control__trigger')?.disabled === false`)
-    await page.evaluate(`document.querySelector('.model-control__trigger').click(); document.querySelector('[aria-label="Profile"]').click(); [...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileB')).click()`)
+    await openModelSettings(page)
+    await page.evaluate(`document.querySelector('[aria-label="Profile"]').click(); [...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileB')).click()`)
     await page.evaluate(`(() => { const field=document.querySelector('textarea'); field.value='draft B'; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
     await page.evaluate(`window.modelReplayStore.selectSession('ses_a')`)
     await wait(page, `window.modelReplayStore.state().activeSessionID === 'ses_a' && document.querySelector('textarea')?.value === 'draft A'`)
@@ -594,7 +698,7 @@ test("invalid incoming effort blocks ordinary sends until an explicit clear inte
   try {
     expect(await h.page.evaluate(`document.querySelector('.model-control__effort').textContent`)).toContain("Unavailable")
     expect(await h.page.evaluate(`document.querySelector('.composer__model-warning').textContent`)).toContain("max")
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     expect(await h.page.evaluate(`({hero:document.querySelector('.model-control__switch strong').textContent,slider:document.querySelector('[role="slider"]')!==null})`)).toEqual({ hero: "Unavailable: max", slider: false })
     expect(h.current()?.variant).toBe("max")
     expect(await h.page.evaluate(`window.modelReplayStore.state().selectedSessionInfo.model.variant`)).toBe("max")
@@ -650,7 +754,8 @@ test("a no-effort model needs explicit clear intent for obsolete effort and a fa
   } finally { await plain.close() }
   const fast = await harness()
   try {
-    await fast.page.evaluate(`document.querySelector('.model-control__trigger').click(); document.querySelector('[aria-label="Model speed"]').click(); [...document.querySelectorAll('[role="option"]')].find(option=>option.textContent==='Fast').click(); document.querySelector('[aria-label="Close model picker"]').click()`)
+    await openModelSettings(fast.page)
+    await fast.page.evaluate(`document.querySelector('[aria-label="Model speed"]').click(); [...document.querySelectorAll('[role="option"]')].find(option=>option.textContent==='Fast').click(); document.querySelector('[aria-label="Close model picker"]').click()`)
     await send(fast.page, "Use fast model")
     await wait(fast.page, `document.querySelector('textarea').value === ''`)
     expect(fast.relay.requests.find((request) => request.operation === "session.switchModel")?.input?.model).toEqual({ providerID: "openai", id: "model-a-fast" })
@@ -681,7 +786,7 @@ test("an existing Session without a model uses the catalog default identity, not
     expect(await h.page.evaluate(`document.querySelector('.model-control__name').textContent`)).toBe("Model A")
     expect(await h.page.evaluate(`document.querySelector('.model-control__effort').textContent`)).toBe("profileA")
     expect(await h.page.evaluate(`JSON.parse(localStorage.getItem('ycoding.remote.preferred-model'))`)).toEqual(preferred)
-    await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
+    await openModelSettings(h.page)
     expect(await h.page.evaluate(`document.querySelector('.model-control__switch strong').textContent`)).toBe("High")
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
@@ -707,11 +812,12 @@ test("named profile choices replace the body inside the same content-sized model
     await wait(h.page, `document.querySelector('.composer__mobile-trigger')?.getAttribute('aria-expanded') === 'true'`)
     await wait(h.page, `document.querySelector('.composer__selection-sheet') !== null`)
     await wait(h.page, `document.querySelector('.composer__selection-sheet .model-control__trigger')?.disabled === false`)
-    await h.page.evaluate(`document.querySelector('.composer__selection-sheet .model-control__trigger')?.click()`)
+    await openModelSettings(h.page, '.composer__selection-sheet .model-control__trigger')
     await wait(h.page, `document.querySelector('.model-control__profile [aria-label="Profile"]') !== null`)
     expect(await h.page.evaluate(`(() => { const surface=document.querySelector('.model-control__surface'); document.querySelector('.model-control__profile [aria-label="Profile"]').click(); return surface === document.querySelector('.model-control__surface'); })()`)).toBe(true)
-    await wait(h.page, `document.querySelector('.model-control__surface[role="dialog"][aria-label="Choose profile"]') !== null`)
-    const geometry = await h.page.evaluate(`(() => { const surface=document.querySelector('.model-control__surface[aria-label="Choose profile"]'),rect=surface.getBoundingClientRect(),options=[...surface.querySelectorAll('[role="option"]')],viewport=visualViewport; return { width:rect.width, height:rect.height, bottom:rect.bottom, viewportWidth:viewport?.width ?? innerWidth, viewportHeight:viewport?.height ?? innerHeight, viewportBottom:(viewport?.offsetTop ?? 0)+(viewport?.height ?? innerHeight), modal:surface.getAttribute('aria-modal'), panels:document.querySelectorAll('.model-control__surface').length, options:options.length, optionsVisible:options.every(option=>{const item=option.getBoundingClientRect();return item.height>0&&item.top>=rect.top&&item.bottom<=rect.bottom}) }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]), bottom: (decodeNumber)(record["bottom"]), viewportWidth: (decodeNumber)(record["viewportWidth"]), viewportHeight: (decodeNumber)(record["viewportHeight"]), viewportBottom: (decodeNumber)(record["viewportBottom"]), modal: (decodeNullable(decodeString))(record["modal"]), panels: (decodeNumber)(record["panels"]), options: (decodeNumber)(record["options"]), optionsVisible: (decodeBoolean)(record["optionsVisible"]) } })
+    await wait(h.page, `document.querySelector('dialog[aria-label="Choose profile"]:modal .model-control__surface') !== null`)
+    await h.page.evaluate(`Promise.all(document.querySelector('dialog[aria-label="Choose profile"]:modal .overlay__surface').getAnimations().map(animation => animation.finished))`)
+    const geometry = await h.page.evaluate(`(() => { const dialog=document.querySelector('dialog[aria-label="Choose profile"]:modal'),surface=dialog.querySelector('.overlay__surface'),rect=surface.getBoundingClientRect(),options=[...surface.querySelectorAll('[role="option"]')],viewport=visualViewport; return { width:rect.width, height:rect.height, bottom:rect.bottom, viewportWidth:viewport?.width ?? innerWidth, viewportHeight:viewport?.height ?? innerHeight, viewportBottom:(viewport?.offsetTop ?? 0)+(viewport?.height ?? innerHeight), modal:dialog.getAttribute('aria-modal'), panels:document.querySelectorAll('.model-control__surface').length, options:options.length, optionsVisible:options.every(option=>{const item=option.getBoundingClientRect();return item.height>0&&item.top>=rect.top&&item.bottom<=rect.bottom}) }; })()`, (value: unknown) => { const record = decodeRecord(value); return { ...record, width: (decodeNumber)(record["width"]), height: (decodeNumber)(record["height"]), bottom: (decodeNumber)(record["bottom"]), viewportWidth: (decodeNumber)(record["viewportWidth"]), viewportHeight: (decodeNumber)(record["viewportHeight"]), viewportBottom: (decodeNumber)(record["viewportBottom"]), modal: (decodeNullable(decodeString))(record["modal"]), panels: (decodeNumber)(record["panels"]), options: (decodeNumber)(record["options"]), optionsVisible: (decodeBoolean)(record["optionsVisible"]) } })
     expect(geometry.modal).toBe("true")
     expect(geometry.panels).toBe(1)
     expect(geometry.width).toBeGreaterThanOrEqual(geometry.viewportWidth - 16)

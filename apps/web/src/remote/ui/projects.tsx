@@ -37,11 +37,18 @@ export function createProjectsData(enabled: () => boolean, open: (sessionID: str
   const [pending, setPending] = createSignal(false)
   const [notice, setNotice] = createSignal<Notice>()
   const [dialog, setDialog] = createSignal<ProjectDialog>()
+  const [closedOverviews, setClosedOverviews] = createSignal<ReadonlySet<string>>(new Set())
+  const overviewOpen = (id: string) => !closedOverviews().has(id)
+  const toggleOverview = (id: string) => setClosedOverviews((closed) => {
+    const next = new Set(closed)
+    if (!next.delete(id)) next.add(id)
+    return next
+  })
   let previousScope = ""
   createEffect(() => {
     const scope = remote.scope()
     const key = `${scope?.deviceID}:${scope?.generation}`
-    if (previousScope && key !== previousScope) { setDialog(undefined); setCreating(false); setNotice(undefined) }
+    if (previousScope && key !== previousScope) { setDialog(undefined); setCreating(false); setNotice(undefined); setClosedOverviews(new Set<string>()) }
     previousScope = key
   })
   const report = (result: CoordinationChange, success: string) => {
@@ -62,7 +69,7 @@ export function createProjectsData(enabled: () => boolean, open: (sessionID: str
   const refresh = () => { const scope = remote.scope(); if (scope) void remote.queries.refreshCoordination(scope) }
   const membership = () => projectOf(groups(), remote.state().activeSessionID ?? "")
   const freshness = () => freshnessLabel({ updatedAt: query().dataUpdatedAt, failedAt: query().isError ? query().errorUpdatedAt : undefined }, now())
-  return { remote, query, connected, ready, groups, now, creating, setCreating, pending, setPending, notice, setNotice, dialog, setDialog, run, report, refresh, membership, freshness, open }
+  return { remote, query, connected, ready, groups, now, creating, setCreating, pending, setPending, notice, setNotice, dialog, setDialog, overviewOpen, toggleOverview, run, report, refresh, membership, freshness, open }
 }
 export type ProjectsData = ReturnType<typeof createProjectsData>
 
@@ -231,6 +238,7 @@ function ProjectMember(props: { readonly entry: ParticipantView; readonly master
 
 export function ProjectPanel(props: { readonly data: ProjectsData; readonly project: ProjectDetail; readonly onManage?: () => HTMLElement | undefined }) {
   const data = props.data
+  const overviewOpen = () => data.overviewOpen(props.project.id)
   const [sessionsOpen, setSessionsOpen] = createSignal(true)
   const [settingsOpen, setSettingsOpen] = createSignal(false)
   const sectionsID = createUniqueId()
@@ -257,9 +265,12 @@ export function ProjectPanel(props: { readonly data: ProjectsData; readonly proj
   return <><section class="project-panel" aria-label="Project panel"><div class="project-panel__body"><Feedback data={data} />
     <div class="project-phone project-actions"><ProjectStatus project={props.project} /><button type="button" class="button button--ghost button--small" disabled={data.query().isFetching} onClick={data.refresh}><Icon name="refresh" size={16} />Refresh project</button></div>
     <button type="button" class="button button--secondary button--small" aria-label="Expand project coordination" onClick={(event) => setExpanded(event.currentTarget)}><Icon name="team" size={16} />Project coordination<Icon name="external" size={16} /></button>
+    <div>
+      <h2 class="project-section-heading"><button type="button" class="project-tab" aria-label="Project overview details" aria-expanded={overviewOpen()} aria-controls={`${sectionsID}-overview`} onClick={() => data.toggleOverview(props.project.id)}>Overview details<Icon name={overviewOpen() ? "chevron-up" : "chevron-down"} size={16} /></button></h2>
+      <Collapsible id={`${sectionsID}-overview`} open={overviewOpen()}><div class="project-summary"><div class="project-actions"><For each={["running", "waiting", "idle", "failed"] as const}>{(state) => <span class="project-live" data-state={state}><span aria-hidden="true">{state === "running" ? "●" : state === "waiting" ? "△" : state === "failed" ? "×" : "○"}</span>{counts()[state]} {state}</span>}</For></div><Meter project={props.project} /><Sparkline project={props.project} now={data.now()} /></div></Collapsible>
+    </div>
     <h2 class="project-section-heading"><button ref={sessionsTrigger} type="button" class="project-tab" aria-label="Project sessions" aria-expanded={sessionsOpen()} aria-controls={`${sectionsID}-sessions`} onClick={() => setSessionsOpen((value) => !value)}>Sessions <span>{props.project.members.length + 1}</span>{" "}<span class="project-live" data-state="waiting">{counts().waiting} waiting</span><Icon name={sessionsOpen() ? "chevron-up" : "chevron-down"} size={16} /></button></h2>
     <Collapsible id={`${sectionsID}-sessions`} open={sessionsOpen()}><div class="project-section-body">
-      <div class="project-summary"><div class="project-actions"><For each={["running", "waiting", "idle", "failed"] as const}>{(state) => <span class="project-live" data-state={state}><span aria-hidden="true">{state === "running" ? "●" : state === "waiting" ? "△" : state === "failed" ? "×" : "○"}</span>{counts()[state]} {state}</span>}</For></div><Meter project={props.project} /><Sparkline project={props.project} now={data.now()} /></div>
       <div class="project-actions"><button class="button button--primary button--small" disabled={data.pending() || props.project.members.length >= maxMembers} onClick={(event) => manage("new", event.currentTarget)}><Icon name="plus" size={16} />New session…</button><button class="button button--secondary button--small" disabled={data.pending() || props.project.members.length >= maxMembers} onClick={(event) => manage("add", event.currentTarget)}><Icon name="plus" size={16} />Add session…</button></div>
       <Show when={removed()}>{(entry) => <button class="button button--ghost button--small" disabled={data.pending()} onClick={async () => { if (await data.run("coordination.attach", addMemberInput(props.project, entry().sessionID), "Session restored to the Project.")) setRemoved(undefined) }}>Undo removal of {entry().title}</button>}</Show>
       <ul class="project-members" aria-label={`Sessions in ${props.project.name}`}><For each={[...participants().keys()]}>{(id) => {

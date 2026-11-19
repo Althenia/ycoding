@@ -55,7 +55,126 @@ async function openProject(page: Page, width = 1440) {
   await until(page, `document.querySelectorAll('${panel(width)} .project-member').length===5`)
 }
 
+const identity = "Project identity details"
+const overview = "Project overview details"
+const controlled = (name: string) => `document.getElementById(${button(name)}?.getAttribute('aria-controls'))`
+const expanded = (name: string) => `${button(name)}?.getAttribute('aria-expanded')`
+const usable = (name: string) => `!!${button(name)} && !${button(name)}.disabled`
+
+async function disclosure(page: Page, name: string, open: boolean) {
+  expect(await page.evaluate(expanded(name)), name).toBe(String(open))
+  await until(page, `${controlled(name)}?.inert === ${!open} && ${controlled(name)}.getAnimations({subtree:true}).every(animation => animation.playState !== 'running')`)
+  const id = await page.evaluate(`${button(name)}.getAttribute('aria-controls')`)
+  expect(id).toBeTruthy()
+  expect(await page.evaluate(`[...document.querySelectorAll('[id]')].filter(node => node.id === ${JSON.stringify(id)}).length`)).toBe(1)
+  return id
+}
+
 describe("Projects", () => {
+  test("Project identity collapse grows the existing transcript", async () => {
+    const page = await open()
+    try {
+      await openProject(page)
+      const transcript = "Prepare the release, update the checkout API and draft rollout notes."
+      await until(page, `document.querySelector('.transcript')?.textContent.includes(${JSON.stringify(transcript)}) && !!document.querySelector('[aria-label="Message your agent"]')`)
+      const id = await disclosure(page, identity, true)
+      await disclosure(page, overview, true)
+      const geometry = () => page.evaluate(`(() => { const scroller = document.querySelector('.workspace__scroll'); return {top:scroller.getBoundingClientRect().top,height:scroller.clientHeight,bottom:scroller.getBoundingClientRect().bottom}; })()`, (value: unknown) => {
+        const record = decodeRecord(value)
+        return { top: decodeNumber(record.top), height: decodeNumber(record.height), bottom: decodeNumber(record.bottom) }
+      })
+      await page.evaluate(`(() => { window.identityScroll = document.querySelector('.workspace__scroll'); window.identityTranscript = document.querySelector('.transcript'); window.identityDraft = document.querySelector('[aria-label="Message your agent"]'); window.identityDraft.focus(); window.identityDraft.value = 'Keep this release draft'; window.identityDraft.dispatchEvent(new InputEvent('input', {bubbles:true})); })()`)
+      const before = await geometry()
+      const route = await page.evaluate("location.href")
+      const requests = await page.evaluate("window.remoteMutationReport()")
+      await page.evaluate(`${button(identity)}.focus({preventScroll:true})`)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      expect(await disclosure(page, identity, false)).toBe(id)
+      const collapsed = await geometry()
+      expect(collapsed.height, JSON.stringify({ before, collapsed })).toBeGreaterThan(before.height)
+      expect(collapsed.top).toBeLessThan(before.top)
+      expect(collapsed.bottom).toBeCloseTo(before.bottom, 0)
+      expect(await page.evaluate(`document.activeElement === ${button(identity)}`)).toBe(true)
+      expect(await page.evaluate(`window.identityScroll === document.querySelector('.workspace__scroll') && window.identityTranscript === document.querySelector('.transcript') && window.identityDraft === document.querySelector('[aria-label="Message your agent"]')`)).toBe(true)
+      expect(await page.evaluate(`window.identityTranscript.textContent`)).toContain(transcript)
+      expect(await page.evaluate(`window.identityDraft.value`)).toBe("Keep this release draft")
+      expect(await page.evaluate(`document.querySelector('.project-topbar h1').textContent`)).toBe("Release train")
+      const header = await page.evaluate(`document.querySelector('.project-topbar').innerText`)
+      expect(header).toContain("Master")
+      expect(header).toContain("Active")
+      for (const action of ["Projects", "Refresh", "Hide project context", "Open Team"]) expect(await page.evaluate(usable(action)), action).toBe(true)
+      expect(await page.evaluate(expanded(overview))).toBe("true")
+      await page.pressKey(" ", "Space", 32, " ")
+      expect(await disclosure(page, identity, true)).toBe(id)
+      expect((await geometry()).height).toBeCloseTo(before.height, 0)
+      expect(await page.evaluate("location.href")).toBe(route)
+      expect(await page.evaluate("window.remoteMutationReport()")).toEqual(requests)
+      console.log("Project identity transcript geometry", JSON.stringify({ before, collapsed }))
+    } finally { await page.close() }
+  }, 30_000)
+
+  test("Project overview keeps member controls and remains independent", async () => {
+    for (const width of [1440, 390]) {
+      const page = await open(width)
+      try {
+        await openProject(page, width)
+        const overviewID = await disclosure(page, overview, true)
+        if (width === 390) { await page.pressEscape(); await until(page, `!document.querySelector('dialog.project-sheet')`) }
+        const identityID = await disclosure(page, identity, true)
+        if (width === 390) { await click(page, "Sessions 5"); await until(page, `!!${button(overview)}`) }
+        const currentOverviewID = await disclosure(page, overview, true)
+        if (width === 1440) expect(currentOverviewID).toBe(overviewID)
+        expect(currentOverviewID).not.toBe(identityID)
+        expect(await page.evaluate(`${controlled(overview)}.querySelector('[role="meter"]').getAttribute('aria-valuetext')`)).toBe("1 of 2 running")
+        const requests = await page.evaluate("window.remoteMutationReport()")
+        const memberDetails = "Details for Update checkout API"
+        const memberOpen = "Open session Update checkout API"
+        await click(page, memberDetails)
+        expect(await page.evaluate(expanded(memberDetails))).toBe("true")
+        await click(page, overview)
+        expect(await disclosure(page, overview, false)).toBe(currentOverviewID)
+        for (const action of ["Expand project coordination", "Project sessions", "Project settings", "New session…", "Add session…", memberDetails, memberOpen]) expect(await page.evaluate(usable(action)), action).toBe(true)
+        expect(await page.evaluate(`${button("Project sessions")}.innerText`)).toMatch(/Sessions\s+5\s+1 waiting/)
+        expect(await page.evaluate(expanded("Project sessions"))).toBe("true")
+        expect(await page.evaluate(expanded(memberDetails))).toBe("true")
+        expect(await page.evaluate(`!!${button("Remove Update checkout API from project")}`)).toBe(true)
+        await click(page, "Project sessions")
+        expect(await page.evaluate(expanded("Project sessions"))).toBe("false")
+        await click(page, "Project sessions")
+        expect(await page.evaluate(expanded(overview))).toBe("false")
+        expect(await page.evaluate(expanded(memberDetails))).toBe("true")
+
+        if (width === 1440) {
+          await click(page, "Hide project context")
+          expect(await page.evaluate(expanded("Show project context"))).toBe("false")
+        } else {
+          await page.pressEscape()
+          await until(page, `!document.querySelector('dialog.project-sheet')`)
+        }
+        expect(await disclosure(page, identity, true)).toBe(identityID)
+        await click(page, identity)
+        expect(await disclosure(page, identity, false)).toBe(identityID)
+        await click(page, width === 1440 ? "Show project context" : "Sessions 5")
+        await until(page, `!!${button(overview)}`)
+        const reopenedID = await disclosure(page, overview, false)
+        if (width === 1440) expect(reopenedID).toBe(currentOverviewID)
+        expect(await page.evaluate(usable(memberOpen))).toBe(true)
+        await click(page, overview)
+        expect(await disclosure(page, overview, true)).toBe(reopenedID)
+        expect(await page.evaluate(`${controlled(overview)}.querySelector('[role="meter"]').getAttribute('aria-valuetext')`)).toBe("1 of 2 running")
+        if (width === 390) { await page.pressEscape(); await until(page, `!document.querySelector('dialog.project-sheet')`) }
+        expect(await disclosure(page, identity, false)).toBe(identityID)
+        expect(await page.evaluate("window.remoteMutationReport()")).toEqual(requests)
+        await click(page, identity)
+        await disclosure(page, identity, true)
+        if (width === 1440) await click(page, memberOpen)
+        else { await click(page, "Sessions 5"); await until(page, `!!${button(memberOpen)}`); await click(page, memberOpen) }
+        await until(page, `new URL(location.href).searchParams.get('session_id') === 'ses_api' && document.querySelector('.project-topbar h1')?.textContent === 'Update checkout API'`)
+        expect(await page.evaluate("window.remoteMutationReport()")).toEqual(requests)
+      } finally { await page.close() }
+    }
+  }, 45_000)
+
   test("Project context collapse reclaims chat width independently and retains the preference and waiting count", async () => {
     const page = await open(1024)
     try {

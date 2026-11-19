@@ -31,6 +31,8 @@ test("Project rows keep waiting requests and navigation visible while details mo
     setNotice: () => { throw new Error("Unexpected notice change") },
     dialog: () => undefined,
     setDialog: () => { throw new Error("Unexpected dialog change") },
+    overviewOpen: () => true,
+    toggleOverview: () => { throw new Error("Unexpected overview change") },
     run: async () => false,
     report: (result): result is { readonly reached: true } => result.reached,
     refresh: () => { throw new Error("Unexpected refresh") },
@@ -44,6 +46,7 @@ test("Project rows keep waiting requests and navigation visible while details mo
   expect(html).toContain('aria-expanded="false"')
   expect(html).not.toContain("/workspace/member")
   expect(html).not.toContain('aria-label="Delete session Member"')
+  expect(html).toContain('aria-label="Project overview details" aria-expanded="true"')
   expect(html).toContain('aria-label="Project sessions" aria-expanded="true"')
   expect(html).toContain('aria-label="Project settings" aria-expanded="false"')
   expect(html).not.toContain("Save name")

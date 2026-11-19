@@ -84,7 +84,7 @@ textarea::-webkit-resizer {
 }
 
 :where(.team-control__phone .team-view__sheet),
-:where(dialog[data-cursor="action"], .team-control__phone .team-view__sheet)::backdrop {
+:where(dialog[data-cursor="action"], .team-control__phone .team-view__sheet, .overlay--agent-model, .overlay--model-control)::backdrop {
   cursor: var(--yc-cursor-action);
 }
 
