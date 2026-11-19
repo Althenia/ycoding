@@ -22,6 +22,17 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.12",
+    date: "2026-11-19",
+    title: "More room for Project conversations",
+    tags: ["Changed"],
+    changes: [
+      { tag: "Changed", text: "Collapse the Project header details or hide the context sidebar to make more room for the conversation. Project navigation and conversation controls stay available." },
+      { tag: "Changed", text: "Search for a model in a picker that fits the available screen space. Closing the picker returns focus to the model control." },
+      { tag: "Changed", text: "Project start and progress updates appear as plain notices in the Web transcript, as in the terminal. They do not create member cards, Open buttons, or prompt ticks." },
+    ],
+  },
+  {
     version: "0.11.11",
     date: "2026-11-18",
     title: "Desktop composer refresh and safer Chrome ownership",
