@@ -341,16 +341,16 @@ themes:
 
 ## Overview
 
-The public site and remote workspace implement the approved Web screens in Stitch project `10627183425669399580`. The inspected HTML and PNG exports supply the dark palette, Geist prose, JetBrains Mono metadata, plain wordmark and screen compositions. `.stitch/DESIGN.md` indexes the source screens and their component owners. This surface extends `../../DESIGN.md`; its scoped Web exceptions leave Chrome extension and TUI rules unchanged.
+The public site and the enrolled-machine workspace share the Web palette, Geist prose, JetBrains Mono metadata, and plain YCoding wordmark. Web composition follows Stitch `projects/10627183425669399580`; `.stitch/DESIGN.md` indexes the inspected sources. Settings uses `90ef806b96884717a9403ab5092cd412` for stacked sections and `a2e160a2713f41bfa82e1d55132018c5` for the neighboring phone filter sheet. Team uses `e913f34cc3c04b7983000a381da06cf7`; coordination uses `b8ac4f46a3b547bfbc1d8589d6cd785a` and the layout in the local HTML export of `e60b24bb256b42048b498ac92f47139f`. That last export supplies structure, not a verified raster comparison. Neither the Desktop project nor its local controls govern Web.
 
-`src/styles/tokens.css` implements the values in this front matter. The light palette, alternate schemes, accessible controls and runtime states remain product contracts where the dark source has no corresponding state. They are not claimed as directly observed Stitch variants. `src/styles/design-md.test.ts` compares every root and dark token in both directions, every alternate palette and the reduced-motion mapping.
+`src/styles/tokens.css` implements the base and dark values in this front matter; `src/theme/schemes.ts` owns alternate palettes. Light and alternate themes are native product variants. They are not claimed as directly observed Stitch variants. The bidirectional drift test compares base and dark roles, alternate palettes, and the reduced-motion mapping.
 
 ## Principles
 
-- Use the approved source's composition and type at the owning token or component.
-- Render reported state through existing routes and operations; a drawn control establishes no backend capability.
-- Keep controls named, keyboard reachable and touch usable; distinguish loading, absent, failed and unknown values.
-- Keep source, real implementation capture, technical results and visual acceptance separate.
+- Use the source for composition and the Web tokens for executable type, color, spacing, and density.
+- Lay out reported state and real actions. Open records use space and tone, not a frame for every row.
+- Keep names, focus, and touch targets through wrapping and reflow. Distinguish loading, absent, failed, and unknown values.
+- Keep a source export, a rendered fixture, a technical check, and visual acceptance separate.
 
 ## Rules
 
@@ -493,6 +493,22 @@ Render each Project start or step-progress description as an ordinary transcript
 
 Activity docks below the conversation header at 380px; Context and Changes retain the 448px companion. Expanded Team keeps a flat master summary, direct children, reported blockers and a 320px selected-child inspector flush to the workspace end edge. Project coordination uses reported ownership, members and pending summaries without adopting the source's invented leases or event history.
 
+### Settings
+
+Align the page heading and section edges on one centered track, capped at 64rem. Leave Account and preference records open; their zero inline inset is intentional. Keep the existing selected-machine cards at 8px block and 12px inline, including the horizontally snapping coarse-pointer inventory. Place the named Keep machine awake row after the chooser and its shared-name note inside Machine. Use the section's 16px flow gap, with no pulled-up section or duplicate heading. Keep the effective text and named switch aligned, and let the state and caveat take full rows below. The control, status, and explanatory text remain present on the same track while reads or changes settle.
+
+Separate sections by 32px on wide layouts and 24px on phone layouts, with no extra gap for an absent section. Device records retain open backgrounds and receive 16px inline padding alongside the aligned table headings. At a Device table width through 767px, place the state in the existing stacked arrangement and use 12px card padding. Preserve the Notifications matrix, owned switches, permission disclosure, Account actions, and the single Settings scroll owner. Keep explanations at their existing readable measure rather than making a second page column.
+
+### Provider connection
+
+Connect provider is the same shared Modal from both an attached Session and a selected new-chat Location. Keep title and fields on a common start edge: 20px in the desktop dialog and 16px in the phone sheet. Each existing profile is a borderless tonal card with 16px padding in the dialog and 12px in the sheet. Show the name and provider-default label above kind and reported connection state. Keep actions at the end alongside the identity from 768px and below the metadata at narrower widths. Wrap long names, reported status and action groups inside their card. Keep fields, scroll bounds, meaningful buttons, one Close, and visible focus and focus return with the Modal and picker owners. A provider default on the connected machine does not change a Session's selected profile.
+
+### Project coordination and Team
+
+Keep the Project conversation identity and context overview as separate disclosures (W112). The overview's existing sidebar/sheet has its own 16px block and 12px inline padding; member rows use 12px inside that panel. Do not add a Project frame around the transcript. Align the expanded coordination header, Master card, Member sessions and Pending requests with a 24px wide-layout start inset, plus 24px above the first card and below the last section. Master and pending cards keep 20px and 16px internal padding respectively; selectable member rows keep 12px inside the boundary. The 300px selected-member inspector stays at the end edge from 1024px with 20px padding. On phones the shared body and header use 16px insets, and Back replaces inspector content with the retained list rather than stacking the two views.
+
+Keep expanded Team's master summary at 16px and blockers at 16px inside their own surfaces. Direct-child cards use 16px padding on wide layouts and 12px on phones; place their four accounting slots after an 8px gap, clear of the inspection button's focus outline. Use two rows of slots within a `team-panel` of 480px or less, keeping the inclusive labels, order, and selected child. The 320px Team inspector has 20px padding on wide layouts and uses the shared 16px phone body inset in the Back view. Keep Activity's compact task cards distinct from the expanded Team roster. Do not turn Project start or progress into a card or an Open action.
+
 The documentation index uses open topic groups in three desktop columns, with a wider Configuration group and two link columns. Documentation and changelog search share the sole site-header trigger; article navigation and release filtering stay in content and mobile sheets. Articles retain their navigation and contents rails. Documentation search uses a 600px desktop surface and a scrolling results list capped at 380px; total height follows real results within the visual viewport.
 
 ### Office
@@ -532,12 +548,13 @@ Use the existing 24-unit SVG registry and semantic currentColor roles. Material 
 | Changelog and not found | `src/ui/changelog.tsx`, `src/ui/site.tsx`, `src/styles/site.css` | Actual release content, filters and recovery links |
 | Conversation, rail and companion | `src/remote/ui/shell.tsx`, `src/remote/ui/shared-workspace.tsx`, `src/styles/remote.css` | Attached Session, reader anchor, drafts, Goal and autonomy controls |
 | Requests and recorded answers | `src/remote/ui/form-request.tsx`, `src/remote/ui/shared-workspace.tsx` | Owned options, real pending requests and typed actions; displaying a recommendation settles nothing |
-| Expanded Team and child inspector | `src/remote/ui/team-view.tsx`, `src/remote/ui/team-conversation.tsx`, `src/remote/queries.ts` | Bounded latest 40-message snapshot, Session/watermark validation and explicit refresh without leaving the master |
+| Expanded Team and child inspector | `src/remote/ui/team-view.tsx`, `src/remote/ui/team-view.css`, `src/remote/ui/team-conversation.tsx`, `src/remote/queries.ts` | Bounded latest 40-message snapshot, Session/watermark validation and explicit refresh without leaving the master |
 | Projects and coordination | `src/remote/ui/projects.tsx`, `src/remote/ui/projects.css` | Actual membership, ownership, counts, pending summaries and owner-Session navigation |
 | Captured Changes | `src/remote/ui/file-change-card.tsx`, `src/remote/ui/file-change-card.css` | Recorded paths, counts and bounded unified diffs; no unsupported Git revert action |
 | Usage and incidents | `src/remote/ui/usage.tsx`, `src/remote/ui/usage-model.ts` | Real reports, independent quota states, units and forecast provenance |
 | Pickers, command palette and Dots | `src/ui/custom-select.tsx`, `src/remote/ui/command-palette.tsx` | Advertised model/profile choices, explicit decisions, focus and draft preservation |
-| Settings, notifications, sign-in and invitation | `src/remote/ui/settings.tsx`, `src/remote/ui/notifications.tsx`, `src/remote/ui/shell.tsx`, `src/remote/ui/invite.tsx` | Account/machine distinction, actual mutation outcomes and supported enrollment |
+| Settings, notifications, sign-in and invitation | `src/remote/ui/settings.tsx`, `src/remote/ui/settings.css`, `src/styles/remote.css`, `src/remote/ui/notifications.tsx`, `src/remote/ui/shell.tsx`, `src/remote/ui/invite.tsx` | Account/machine distinction, Settings spacing by role, actual mutation outcomes and supported enrollment |
+| Provider connection and profiles | `src/remote/ui/provider-connect.tsx`, `src/remote/ui/provider-connect.css`, `src/ui/modal.tsx` | Scoped profile actions, reported metadata, bounded dialog/sheet and focus ownership |
 
 Reuse shared Modal, Collapsible, buttons, fields, progress parts, notices, code blocks and scrollbars. Keep their leaf stylesheet ownership; moving component styles requires removing superseded global rules. Activity's four accounting slots retain inclusive labels and separate loading, unreported, value and unsupported-cost states. Empty/error inventories never appear alongside populated task rows.
 
@@ -583,9 +600,11 @@ Use the existing synthetic remote fixture, published local routes and pinned Chr
 
 Boundary/state-transition checks cover touch, keyboard, cancellation and retained state. Existing selected tests cover unavailable reads, staged selection, uncertain mutations and streaming scroll-away. Authentication, persistence, retries and concurrency retain their existing contracts; no new backend behavior is specified. Browser emulation proves rendered responses, not an iOS keyboard, physical safe area or device certification.
 
-Run `python3 ~/.agents/skills/ui-design/scripts/design_md.py lint DESIGN.md --strict`, the same command for `apps/web/DESIGN.md` and `.stitch/DESIGN.md`, the raw CSS scanner and the explicit `audit:css` profile. Profile exceptions retain their raw finding and current ownership evidence; raw warnings are not passing findings.
+Run `python3 ~/.agents/skills/ui-design/scripts/design_md.py lint <file> --strict` on each changed canonical file and its inherited chain. Use the repository `audit:css` profile and run the raw scanner on affected CSS with `src/styles/base.css` for shared scrollbar ownership, `src/styles/tokens.css` for tokens, and this file for the design contract. Raw warnings fail.
 
 Run `bun test --cwd apps/web src/styles/design-md.test.ts src/styles/tokens.test.ts src/styles/contrast.test.ts src/styles/typography.test.ts src/styles/composition.test.ts` and explicitly selected affected source/browser cases. Browser cases use the executable provisioned by `script/chrome-for-testing.ts .cache/chrome-for-testing`; no installed-browser substitute is evidence. Only the scrollbar suite enables visible scrollbars.
+
+For Settings, provider, and coordination/Team geometry, use the synthetic fixtures in `verify/remote-shell-layout.integration.test.ts`, `verify/provider-connect.integration.test.ts`, `verify/workspace-rail-team.integration.test.ts`, and `verify/mobile-native.integration.test.ts`. Compare the same state at 1440×900 and 390×844 in light and dark, using keyboard focus. Record content insets and aligned edges, section and status gaps, scroll extent, visible focus and its clearance from neighboring content. Verify the Project disclosures and the shared model search and focus-return behavior with their owning cases; fixture reads and UI actions establish no live-account state.
 
 Capture every indexed source scene from the real deterministic Web fixture or public route, with source and implementation images kept distinct. Record direct comparisons, source/runtime differences, commands, revisions and console/network outcomes in TOON. Validate with Aphrodite, run Web typecheck, scoped oxlint, build and `git diff --check`, then verify the local review and all linked resources. Keep visual acceptance blocked until Volk reviews it; technical passes are not acceptance.
 

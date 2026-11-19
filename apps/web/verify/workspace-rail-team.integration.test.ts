@@ -375,6 +375,16 @@ test("Project coordination inspects members and reported requests without switch
     await page.evaluate(`document.querySelector('[aria-label="Expand project coordination"]').click()`)
     expect(await page.evaluate(`document.querySelectorAll('.project-coordination [data-action="inspect-member"]').length`)).toBe(5)
     expect(await page.evaluate(`document.querySelector('[aria-label="Project pending requests"]').textContent`)).toContain("Which column should checkout read?")
+    await page.evaluate(`Promise.allSettled(document.querySelector('.overlay--project-coordination .overlay__surface').getAnimations().map(animation => animation.finished)).then(() => true)`)
+    expect(await page.evaluate(`(() => {
+      const dialog = document.querySelector('.overlay--project-coordination');
+      const bounds = selector => dialog.querySelector(selector).getBoundingClientRect();
+      const body = bounds('.overlay__body');
+      const master = bounds('.project-coordination__master');
+      const members = bounds('.project-coordination__members');
+      const pending = bounds('.project-coordination__pending');
+      return { start: master.left - body.left, top: master.top - body.top, aligned: master.left === members.left && members.left === pending.left };
+    })()`)).toEqual({ start: 24, top: 24, aligned: true })
     await page.evaluate(`document.querySelectorAll('.project-coordination [data-action="inspect-member"]')[1].click()`)
     expect(await page.evaluate(`!!document.querySelector('[aria-label="Selected project member"]')`)).toBe(true)
     expect(await page.evaluate("location.href")).toBe(before)
@@ -392,6 +402,19 @@ test("expanded Team keeps four reported children and a flush 320px inspector bes
     await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
     for (let attempt = 0; attempt < 80 && !await page.evaluate(`!!document.querySelector('.team-view__task')`); attempt++) await Bun.sleep(50)
     await page.evaluate(`document.querySelector('[aria-label="Expand Team"]').click()`)
+    await page.pressKey("Tab", "Tab", 9)
+    await page.evaluate(`document.querySelector('.team-overview [data-action="inspect-child"]').focus()`)
+    expect(await page.evaluate(`(() => {
+      const control = document.activeElement;
+      const card = control.closest('.team-overview__child');
+      const ink = getComputedStyle(control);
+      const button = control.getBoundingClientRect();
+      const usage = card.querySelector('.team-view__usage').getBoundingClientRect();
+      return {
+        inset: button.left - card.getBoundingClientRect().left,
+        focusClear: control.matches(':focus-visible') && ink.outlineStyle === 'solid' && button.bottom + parseFloat(ink.outlineWidth) + parseFloat(ink.outlineOffset) < usage.top,
+      };
+    })()`)).toEqual({ inset: 17, focusClear: true })
     await page.evaluate(`document.querySelector('.team-overview [data-action="inspect-child"]').click()`)
     const result = await page.evaluate(`(()=>{const inspector=document.querySelector('.team-overview__inspector'),box=inspector.getBoundingClientRect();return{children:document.querySelectorAll('.team-overview__child').length,width:box.width,right:box.right,border:getComputedStyle(document.querySelector('.team-overview__master')).borderTopWidth,state:document.querySelector('.team-overview__child .team-view__state').textContent.trim()}})()`)
     expect(result).toEqual({ children: 4, width: 320, right: 1440, border: "0px", state: "running" })

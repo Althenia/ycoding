@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { launchBrowser, decodeNumber, decodeRecord, decodeString, type Page } from "./cdp"
+import { launchBrowser, decodeNumber, decodeString, type Page } from "./cdp"
 
 const port = 4423
 const executable = process.env.YCODING_WEB_CHROME
@@ -109,9 +109,7 @@ describe("Settings Keep machine awake", () => {
               `({ label: ${label}, disabled: ${control}.disabled, checked: ${control}.checked })`,
             ),
           ).toEqual({ label: "Checking", disabled: true, checked: false })
-          const before = await page.evaluate(
-            `({ storage: JSON.stringify(localStorage) })`, (value: unknown) => { const record = decodeRecord(value); return { ...record, storage: (decodeString)(record["storage"]), gap: (decodeNumber)(record["gap"]), status: (decodeNumber)(record["status"]) } },
-          )
+          const before = await page.evaluate("JSON.stringify(localStorage)", decodeString)
           expect(await page.evaluate(`document.getElementById('machine-awake-caveat').textContent`)).toMatch(
             /macOS.*idle sleep and lid-closed sleep.*battery.*stops or restarts/,
           )
@@ -149,7 +147,7 @@ describe("Settings Keep machine awake", () => {
               `window.keepAwakeFixture.calls.find(call => call.operation === 'machine.keepAwake.set').request.input`,
             ),
           ).toEqual({ enabled: true })
-          expect(await page.evaluate(`JSON.stringify(localStorage)`)).toBe(before.storage)
+          expect(await page.evaluate(`JSON.stringify(localStorage)`)).toBe(before)
         } finally {
           await page.close()
         }

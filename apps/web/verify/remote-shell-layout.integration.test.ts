@@ -35,14 +35,33 @@ describe("remote shell layout", () => {
       const measure = () => page.evaluate(`(() => {
         const settings = document.querySelector('.app--settings .route-panel:not([inert]) .settings'), pane = settings.closest('.pane'), main = settings.closest('.workspace__scroll'), heading = settings.closest('.route-panel').querySelector('.page-head');
         const bounds = node => node.getBoundingClientRect(), box = bounds(pane), parent = bounds(main);
-        const rows = ['.machine-row', '[aria-labelledby="keep-awake-settings"] .defs__row', '[aria-labelledby="appearance-settings"] .list'].map(selector => settings.querySelector(selector));
+        const rows = ['.machine-row', '.machine-awake', '[aria-labelledby="appearance-settings"] .list'].map(selector => settings.querySelector(selector));
         return { centered: Math.abs((box.left - parent.left) - (parent.right - box.right)) <= 16, bounded: box.width < 1050, headline: Math.abs(bounds(heading).left - box.left) <= 1, fullRows: rows.every(row => row && Math.abs(bounds(row).width - box.width) <= 1), sections: [...settings.children].filter(row => row.matches('section')).every(row => Math.abs(bounds(row).left - box.left) <= 1 && Math.abs(bounds(row).right - box.right) <= 1), fits: document.documentElement.scrollWidth <= innerWidth && main.scrollWidth <= main.clientWidth };
       })()`, decodeRecord)
+      const rhythm = () => page.evaluate(`(() => {
+        const machine = document.getElementById('machine-settings').closest('section');
+        const awake = document.querySelector('.machine-awake');
+        const device = document.querySelector('.device-table .device');
+        const deviceHead = document.querySelector('.device-table__head');
+        const rect = node => node.getBoundingClientRect();
+        return {
+          awakeInMachine: machine.contains(awake),
+          awakeGap: rect(awake).top - rect(document.getElementById('machine-row-scope')).bottom,
+          sectionGap: rect(document.getElementById('appearance-settings').closest('section')).top - rect(awake).bottom,
+          deviceInset: rect(device.firstElementChild).left - rect(device).left,
+          deviceColumnAligned: !deviceHead.getClientRects().length || Math.abs(rect(deviceHead.firstElementChild).left - rect(device.firstElementChild).left) <= 1,
+        };
+      })()`)
+      const desktop = await rhythm()
       expect(await measure()).toEqual({ centered: true, bounded: true, headline: true, fullRows: true, sections: true, fits: true })
       await page.setCoarsePointer(true)
       await page.setViewport(390, 844)
       await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
       expect(await measure()).toEqual({ centered: true, bounded: true, headline: true, fullRows: true, sections: true, fits: true })
+      expect([desktop, await rhythm()]).toEqual([
+        { awakeInMachine: true, awakeGap: 16, sectionGap: 32, deviceInset: 16, deviceColumnAligned: true },
+        { awakeInMachine: true, awakeGap: 16, sectionGap: 24, deviceInset: 12, deviceColumnAligned: true },
+      ])
     } finally { await page.close() }
   })
 

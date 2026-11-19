@@ -25,27 +25,12 @@
   letter-spacing: var(--yc-tracking-tight);
 }
 
-.settings {
-  gap: var(--yc-space-8);
-}
-
 .app--settings .pane p { max-inline-size: var(--yc-measure); }
 
 .settings > .settings__section {
   grid-template-columns: minmax(0, 1fr);
   padding-block-end: 0;
   gap: var(--yc-space-4);
-}
-
-.settings > [aria-labelledby="keep-awake-settings"] { margin-block-start: calc(-1 * var(--yc-space-5)); }
-
-.settings > [aria-labelledby="keep-awake-settings"] > .settings__head {
-  position: absolute;
-  inline-size: 1px;
-  block-size: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
 }
 
 .settings .settings__head {
@@ -137,6 +122,7 @@
   align-items: center;
   gap: var(--yc-space-2) var(--yc-space-3);
   min-inline-size: 0;
+  padding-block: 0;
   line-height: 1.25;
 }
 
@@ -215,34 +201,31 @@
   opacity: 0.55;
 }
 
-.settings [aria-labelledby="keep-awake-settings"] .defs__row {
+.settings .machine-awake {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   column-gap: var(--yc-space-3);
+  row-gap: var(--yc-space-1);
 }
 
-.settings [aria-labelledby="keep-awake-settings"] .defs__value {
+.machine-awake > .defs__value {
   display: contents;
 }
 
-.settings [aria-labelledby="keep-awake-settings"] .machine-awake__status,
-.settings [aria-labelledby="keep-awake-settings"] .machine-awake__caveat {
+.settings .machine-awake__status,
+.settings .machine-awake__caveat {
   grid-column: 1 / -1;
   color: var(--yc-text-subtle);
   font-size: var(--yc-size-xs);
   line-height: var(--yc-leading-xs);
 }
 
-.settings [aria-labelledby="keep-awake-settings"] .machine-awake__status[data-tone="danger"] {
+.settings .machine-awake__status[data-tone="danger"] {
   color: var(--yc-danger);
 }
 
-.settings [aria-labelledby="keep-awake-settings"] .machine-awake__status[data-tone="attention"] {
+.settings .machine-awake__status[data-tone="attention"] {
   color: var(--yc-yellow-strong);
-}
-
-.settings [aria-labelledby="keep-awake-settings"] .defs__row {
-  row-gap: var(--yc-space-1);
 }
 
 .settings .machine-awake .defs__key {

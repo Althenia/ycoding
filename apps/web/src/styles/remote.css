@@ -1563,6 +1563,7 @@ form .request__actions .button--secondary {
 .overlay--confirm .overlay__body { padding: var(--yc-space-4); }
 
 .device-table {
+  container: device-table / inline-size;
   display: grid;
 }
 
@@ -1576,7 +1577,7 @@ form .request__actions .button--secondary {
 }
 
 .device-table__head {
-  padding: var(--yc-space-2) 0;
+  padding: var(--yc-space-2) var(--yc-space-4);
   background: transparent;
   color: var(--yc-text-muted);
   font-family: var(--yc-font-mono);
@@ -1587,10 +1588,11 @@ form .request__actions .button--secondary {
 }
 
 .device-table .device {
-  padding-inline: 0;
+  padding-inline: var(--yc-space-4);
   border-radius: var(--yc-radius-lg);
 }
 
+.device-table .device:focus-within { background: var(--yc-surface); }
 @media (hover: hover) { .device-table .device:hover { background: var(--yc-surface); } }
 
 .device__registration,
@@ -1717,21 +1719,22 @@ form .request__actions .button--secondary {
     grid-column: 1 / -1;
   }
 
-
-  .device-table__head {
-    display: none;
-  }
-
   .device-table {
     gap: var(--yc-space-2);
     border: 0;
     overflow: visible;
   }
+}
+
+@container device-table (max-width: 767px) {
+  .device-table__head {
+    display: none;
+  }
 
   .device-table .device {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: var(--yc-space-2);
-    padding: var(--yc-space-3) 0;
+    padding: var(--yc-space-3);
   }
 
   .device__registration {
@@ -1759,10 +1762,6 @@ form .request__actions .button--secondary {
 
   .device__action .button {
     inline-size: 100%;
-  }
-
-  .settings {
-    gap: var(--yc-space-6);
   }
 }
 
@@ -1925,6 +1924,12 @@ form .request__actions .button--secondary {
   display: grid;
   gap: var(--yc-space-8);
   inline-size: 100%;
+}
+
+@media (max-width: 767px), (max-height: 599px) and (pointer: coarse) {
+  .settings {
+    gap: var(--yc-space-6);
+  }
 }
 
 .settings__section {

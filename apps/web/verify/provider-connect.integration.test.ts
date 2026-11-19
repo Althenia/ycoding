@@ -53,6 +53,21 @@ test("palette provider connection adds a named key profile to the Session's mach
       await wait(page, `document.querySelector('.composer-resident:not([inert]) .composer__input') !== null`)
       await palette(page)
       await choose(page, "Provider", "OpenAI")
+      await page.evaluate(`Promise.allSettled(document.querySelector('.overlay--provider-connect .overlay__surface').getAnimations().map(animation => animation.finished)).then(() => true)`)
+      expect(await page.evaluate(`(() => {
+        const card = document.querySelector('.provider-profile');
+        const name = card.querySelector('.provider-profile__name');
+        const kind = card.querySelector('.provider-profile__kind');
+        const actions = card.querySelector('.provider-profile__actions');
+        const bounds = node => node.getBoundingClientRect();
+        const body = card.closest('.overlay__body');
+        return {
+          nameInset: bounds(name).left - bounds(card).left,
+          metadataBelowName: bounds(kind).top >= bounds(name).bottom,
+          actionsContained: bounds(actions).right <= bounds(card).right && bounds(actions).bottom <= bounds(card).bottom,
+          fits: body.scrollWidth <= body.clientWidth,
+        };
+      })()`)).toEqual({ nameInset: width === 390 ? 12 : 16, metadataBelowName: true, actionsContained: true, fits: true })
       await choose(page, "Authentication method", "API key")
       await input(page, "provider-profile-name", "Web profile")
       await input(page, "provider-api-key", "synthetic-test-key")

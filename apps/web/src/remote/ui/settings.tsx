@@ -109,9 +109,9 @@ export function MachineSettings(): JSX.Element {
     stopEditing(item)
   }
   const connection = () => summarizeConnection(state().connection)
-  return <><Section id="machine-settings" category="Machine" title="Machine">
+  return <Section id="machine-settings" category="Machine" title="Machine">
     <span class="visually-hidden" id="machine-selected-label">Selected machine</span>
-    <div class="machine-selected">
+    <div class="defs__row machine-selected">
       <Icon name="devices" size={16} class="machine-selected__icon" />
       <span id="machine-selected-name" class="machine-selected__name" aria-labelledby="machine-selected-label">{selectedMachineName()}</span>
       <span class="machine-selected__status" data-tone={connection().tone}>{connection().label}<Show when={connection().tone === "online"}><Icon name="check" size={16} /></Show></span>
@@ -166,7 +166,6 @@ export function MachineSettings(): JSX.Element {
     </Show>
     <Show when={note() !== ""}><p class="machine-row__note field__hint" role="status">{note()}</p></Show>
     <p id="machine-row-scope" class="machine-row__scope field__hint">Names are shared across your account's browsers.</p>
-  </Section><Section id="keep-awake-settings" category="Machine" title="Keep awake" hint="Keep the connected machine awake while Sessions run.">
     <div class="defs__row machine-awake" aria-busy={awake().busy}>
       <span class="defs__key" id="machine-awake-label">Keep machine awake</span>
       <span class="defs__value">
@@ -187,7 +186,7 @@ export function MachineSettings(): JSX.Element {
         <span id="machine-awake-caveat" class="field__hint machine-awake__caveat">{awake().caveat}</span>
       </span>
     </div>
-  </Section></>
+  </Section>
 }
 
 export function ExternalNotificationSettings(): JSX.Element {

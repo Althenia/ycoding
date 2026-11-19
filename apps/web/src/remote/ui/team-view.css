@@ -112,7 +112,7 @@
 .team-overview__section-heading h3 { margin:0; font-size:var(--yc-size-sm); }
 .team-overview { display:grid; align-items:start; gap:var(--yc-space-6); min-inline-size:0; grid-template-areas:"master" "children" "blockers"; }
 .team-overview__master { grid-area:master; margin:var(--yc-space-6) var(--yc-space-6) 0; }
-.team-overview__children { grid-area:children; margin-inline:var(--yc-space-6); }
+.team-overview__children { grid-area:children; container:team-panel / inline-size; margin-inline:var(--yc-space-6); }
 .team-overview__blockers { grid-area:blockers; display:grid; gap:var(--yc-space-3); min-inline-size:0; margin:0 var(--yc-space-6) var(--yc-space-6); }
 .team-overview__blockers > h3 { margin:0; font-size:var(--yc-size-md); }
 .team-overview__blocker { display:grid; gap:var(--yc-space-3); padding:var(--yc-space-4); border:1px solid var(--yc-border); border-radius:var(--yc-radius-sm); background:var(--yc-surface); }
@@ -127,12 +127,13 @@
 .team-overview__eyebrow { color:var(--yc-green-strong); font:var(--yc-weight-medium) var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono); letter-spacing:var(--yc-tracking-wide); text-transform:uppercase; }
 .team-overview code { overflow-wrap:anywhere; color:var(--yc-text-muted); font-size:var(--yc-size-2xs); }
 .team-overview__list { display:grid; gap:var(--yc-space-3); margin:0; padding:0; list-style:none; }
-.team-overview__child { min-inline-size:0; padding:var(--yc-space-3); border:1px solid transparent; border-radius:var(--yc-radius-sm); background:var(--yc-surface); }
+.team-overview__child { min-inline-size:0; padding:var(--yc-space-4); border:1px solid transparent; border-radius:var(--yc-radius-sm); background:var(--yc-surface); }
 .team-overview__child[data-selected="true"] { background:var(--yc-green-soft); }
 .team-overview__child > button { display:grid; gap:var(--yc-space-2); inline-size:100%; min-block-size:var(--yc-hit-min); padding:0; border:0; background:transparent; color:var(--yc-text); text-align:start; overflow-wrap:anywhere; }
-.team-overview__child > button:focus-visible { outline:2px solid var(--yc-focus); outline-offset:var(--yc-space-2); }
+.team-overview__child > button:focus-visible { outline:2px solid var(--yc-border-strong); outline-offset:2px; }
 .team-overview__child strong { font-size:var(--yc-size-md); }
 .team-overview__child small { color:var(--yc-text-muted); font-family:var(--yc-font-mono); }
+.team-overview__child .team-view__usage { margin-block-start:var(--yc-space-2); padding-block-start:0; }
 .team-overview__inspector { container:team-panel / inline-size; grid-area:inspector; max-block-size:calc(100dvh - var(--yc-header-h) + var(--yc-space-1)); overflow:auto; padding:var(--yc-space-5); border-inline-start:1px solid var(--yc-border); background:var(--yc-bg); }
 .team-overview__back { display:none; }
 .team-overview .team-view__button { min-block-size:var(--yc-hit-min); }
@@ -152,12 +153,12 @@
   .team-overview--inspecting { grid-template-columns:minmax(0,1fr) 320px; column-gap:0; grid-template-areas:"master inspector" "children inspector" "blockers inspector"; }
   .team-overview__child > button { grid-template-columns:minmax(0,1fr) minmax(0,2fr) minmax(0,1fr) auto; align-items:center; }
   .team-overview__child > button > .team-view__state { order:4; }
-  .team-overview__child .team-view__usage { grid-template-columns:repeat(4,minmax(0,1fr)); }
   .team-overview__child .team-view__usage-cell { display:flex; flex-wrap:wrap; align-items:baseline; gap:var(--yc-space-1); }
-  .team-overview__child .team-view__usage { padding-block-start:0; }
 }
 @media (max-width:767px), (max-height:599px) and (pointer:coarse) {
+  .overlay--team-overview .overlay__head { padding-inline:var(--yc-space-4); }
   .overlay--team-overview .overlay__body { padding:var(--yc-space-4); }
+  .team-overview__child { padding:var(--yc-space-3); }
   .team-overview__master { margin:0; }
   .team-overview__children,.team-overview__blockers { margin-inline:0; }
   .team-overview--inspecting { grid-template-columns:minmax(0,1fr); grid-template-areas:"inspector"; }

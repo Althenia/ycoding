@@ -74,7 +74,7 @@ describe("icon-led Settings sections", () => {
     expect(declared(css, ".settings__section")["counter-increment"]).toBeUndefined()
     expect(declared(css, ".settings__ordinal::before")).toEqual({})
     const tsx = await read("settings.tsx")
-    expect(tsx.match(/<Section\b/g)?.length).toBe(11)
+    expect(tsx.match(/<Section\b/g)?.length).toBe(10)
     const shell = await Bun.file(new URL("./shell.tsx", import.meta.url)).text()
     expect(shell).toContain("<Show when={!props.phoneLayout}><OfficeSettings office={props.office} /></Show>")
     expect(shell).not.toMatch(/settings-accordion|aria-expanded[^\n]*settings__section/)
@@ -112,7 +112,7 @@ describe("open Settings surfaces", () => {
 })
 
 describe("Ledger Settings composition", () => {
-  test("renders Machine, Keep awake, Appearance, Notifications, Permissions and App first in document order", async () => {
+  test("renders Machine, Appearance, Notifications, Permissions and App first in document order", async () => {
     const shell = await Bun.file(new URL("./shell.tsx", import.meta.url)).text()
     const page = shell.slice(shell.indexOf("function SettingsPage"))
     const positions = ["<MachineSettings />", "<AppearanceSettings />", "<NotificationSettings />", "<PermissionSettings />", "<AppSettings />", "<LatencySettings />", "<AccountSettings />", "<DeviceSettings />", "<OfficeSettings office={props.office} />", "<ExternalNotificationSettings />"].map((element) => page.indexOf(element))

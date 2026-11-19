@@ -333,6 +333,14 @@ test("phone Team inspection has an explicit return to the retained direct-child 
     await touchTargets(page,'dialog[open] .companion__pill')
     await click(page, "Expand Team")
     await until(page, `!!document.querySelector('dialog[open][aria-label="Team overview"] [data-action="inspect-child"]')`)
+    expect(await page.evaluate(`(() => {
+      const usage = document.querySelector('dialog[open][aria-label="Team overview"] .team-overview__child .team-view__usage');
+      const labels = [...usage.querySelectorAll('dt')];
+      return {
+        stacked: labels[2].getBoundingClientRect().top > labels[0].getBoundingClientRect().top,
+        readable: labels.every(label => label.scrollWidth <= label.clientWidth),
+      };
+    })()`)).toEqual({ stacked: true, readable: true })
     await page.evaluate(`document.querySelector('dialog[aria-label="Team overview"] [data-action="inspect-child"]').click()`)
     await until(page, `!!document.querySelector('.team-overview__inspector')`)
     expect(await page.evaluate(`!document.querySelector('.team-overview__children').getClientRects().length`)).toBe(true)

@@ -1,9 +1,9 @@
-.overlay--provider-connect .overlay__body {
-  padding: var(--yc-space-5);
+.overlay--provider-connect .overlay__head {
+  padding-inline: var(--yc-space-5);
 }
 
-.overlay--provider-connect .overlay__body > .stack {
-  gap: var(--yc-space-4);
+.overlay--provider-connect .overlay__body {
+  padding: var(--yc-space-5);
 }
 
 .overlay--provider-connect .field {
@@ -33,23 +33,35 @@
 }
 
 .provider-profile {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  grid-template-areas: "name name actions" "kind state actions";
   align-items: center;
-  gap: var(--yc-space-2) var(--yc-space-3);
+  gap: var(--yc-space-1) var(--yc-space-3);
+  min-inline-size: 0;
   overflow-wrap: anywhere;
-  padding-block: var(--yc-space-3);
+  padding: var(--yc-space-4);
+  border-radius: var(--yc-radius-lg);
+  background: var(--yc-surface);
 }
 
 .provider-profile__name {
-  font-weight: 600;
+  grid-area: name;
+  font-weight: var(--yc-weight-semibold);
 }
 
 .provider-profile__kind {
+  grid-area: kind;
   color: var(--yc-text-muted);
   font-size: var(--yc-size-2xs);
   letter-spacing: var(--yc-tracking-wide);
   text-transform: uppercase;
+}
+
+.provider-profile__state {
+  grid-area: state;
+  font-size: var(--yc-size-xs);
+  line-height: var(--yc-leading-xs);
 }
 
 .provider-profile__state--warning {
@@ -61,19 +73,28 @@
 }
 
 .provider-profile__actions {
+  grid-area: actions;
   display: flex;
   flex-wrap: wrap;
   gap: var(--yc-space-2);
-  margin-inline-start: auto;
 }
 
 @media (max-width: 767px) {
+  .overlay--provider-connect .overlay__head {
+    padding-inline: var(--yc-space-4);
+  }
+
   .overlay--provider-connect .overlay__body {
     padding: var(--yc-space-4);
   }
 
+  .provider-profile {
+    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-areas: "name name" "kind state" "actions actions";
+    padding: var(--yc-space-3);
+  }
+
   .provider-profile__actions {
-    inline-size: 100%;
-    margin-inline-start: 0;
+    margin-block-start: var(--yc-space-2);
   }
 }

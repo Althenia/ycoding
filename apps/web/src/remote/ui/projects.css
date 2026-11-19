@@ -132,14 +132,18 @@
 .project-coordination__request p { margin:0; overflow-wrap:anywhere; font-size:var(--yc-size-sm); }
 .project-coordination__request button { justify-self:end; }
 .project-coordination__inspector { grid-area:inspector; display:grid; align-content:start; gap:var(--yc-space-4); padding:var(--yc-space-5); min-inline-size:0; border-inline-start:1px solid var(--yc-border); background:var(--yc-surface); overflow-wrap:anywhere; }
-@media (min-width:1024px) { .project-coordination--inspecting { grid-template-columns:minmax(0,1fr) 300px; grid-template-areas:"master inspector" "members inspector" "pending inspector"; } }
-@media (max-width:1023px) { .project-coordination--inspecting { grid-template-areas:"master" "inspector" "members" "pending"; } .project-coordination__inspector { border:1px solid var(--yc-border); border-radius:var(--yc-radius-sm); } }
+.project-coordination__master, .project-coordination__members, .project-coordination__pending { margin-inline:var(--yc-space-6); }
+.project-coordination__master { margin-block-start:var(--yc-space-6); }
+.project-coordination__pending { margin-block-end:var(--yc-space-6); }
+@media (min-width:1024px) { .project-coordination--inspecting { grid-template-columns:minmax(0,1fr) 300px; column-gap:0; grid-template-areas:"master inspector" "members inspector" "pending inspector"; } }
+@media (max-width:1023px) { .project-coordination--inspecting { grid-template-areas:"master" "inspector" "members" "pending"; } .project-coordination__inspector { margin-inline:var(--yc-space-6); border:1px solid var(--yc-border); border-radius:var(--yc-radius-sm); } }
 @media (max-width:767px), (max-height:599px) and (pointer:coarse) {
   .project-card__name,.project-coordination__close { display:none; }
   .project-card__inspect { display:inline-flex; align-items:center; gap:var(--yc-space-2); min-block-size:var(--yc-hit-min); padding:0; border:0; background:transparent; color:inherit; font:inherit; text-align:start; }
   .project-card__inspect:focus-visible { outline:2px solid var(--yc-border-strong); outline-offset:2px; }
   .project-coordination__back { display:inline-flex; justify-self:start; }
+  .project-coordination__master, .project-coordination__members, .project-coordination__pending { margin:0; }
   .project-coordination--inspecting { grid-template-columns:minmax(0,1fr); grid-template-areas:"inspector"; }
   .project-coordination--inspecting > :not(.project-coordination__inspector) { display:none; }
-  .project-coordination__inspector { border:0; padding:0; }
+  .project-coordination__inspector { margin:0; border:0; padding:0; }
 }

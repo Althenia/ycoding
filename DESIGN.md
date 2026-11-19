@@ -1,7 +1,7 @@
 ---
 version: alpha
 name: YCoding brand
-description: Terminal-first coding agent identity shared by its TUI, web client, and marks.
+description: Shared identity and interaction contract for the YCoding terminal, Web, Desktop, and marks.
 surface: brand
 colors:
   trace: "#67D7A4"
@@ -16,16 +16,14 @@ colors:
 
 ## Overview
 
-YCoding is a terminal-first coding agent. Its TUI is the behavioral reference; the SolidJS web client is a presentation and remote-control surface for the same runtime. The visual signature is a branching Y with a warm execution junction, quiet neutral surfaces, restrained status color, and explicit state. The public site, remote workspace, terminal, icons, and offline/error states belong to one identity, not interchangeable dashboard templates. Sources: `docs/product-direction.md`, `assets/brand/README.md`, `packages/tui/src/theme/assets/ycoding.json`, `apps/web/src/styles/tokens.css`.
+YCoding is a terminal-first coding agent. The TUI is the behavioral reference. The public Web site explains the product; the Web workspace and Desktop present and control the same runtime through their own routes and controls. The branching Y and its warm execution junction are the shared signature. Quiet neutral planes, semantic status ink, and explicit state connect the clients, marks, and recovery views without prescribing one layout for every host.
 
 ## Principles
 
-- Put execution and durable state in the local runtime; presentation mirrors TUI behavior rather than inventing a second workflow (`docs/product-direction.md`, `docs/runtime.md`).
-- Own appearance with semantic tokens and components while retaining native keyboard, focus, and input behavior (`apps/web/src/styles/base.css`, `packages/tui/DESIGN.md`).
-- Keep physical control geometry stable and adapt composition at content breakpoints; reserve async geometry to preserve reading position (`apps/web/src/styles/tokens.css`, `apps/web/verify/loading.integration.test.ts`).
-- Favor a calm, legible work surface: use status color for meaning, text for recovery, and motion for continuity (`apps/web/src/styles/base.css`, `apps/web/src/remote/ui/loading.css`).
-- Build Web hierarchy from the inspected Stitch composition, readable type and semantic planes. Keep source-defined structural boundaries and native field, focus and request boundaries at their component owners (`apps/web/DESIGN.md` W46, W83, W93, W98–W103).
-- Web composition follows approved Stitch project `10627183425669399580`: a 256px Session rail, a single-baseline conversation header, open transcript prose, one rounded composer, the Session companion and the source-specific public layouts. `apps/web/DESIGN.md` and `.stitch/DESIGN.md` own this mapping; it establishes no Desktop, Chrome extension or TUI direction.
+- Keep execution, durable state, and decision authority in the runtime. A specimen supplies composition, not a capability or a source of state.
+- Use type, whitespace, and semantic planes for hierarchy. Keep boundaries where they identify a field, a floating layer, a pending request, danger, or focus.
+- Give each host an owned composition, stable controls, and predictable keyboard navigation. Adapt to the space the component has; reserve async geometry to protect the reader's position.
+- Use color to reinforce named state, recovery copy to explain the next action, and motion only to carry state across a change.
 
 ## Rules
 
@@ -54,7 +52,17 @@ The mark's Trace, Frost, Attention, dark Surface, Rule, and Canvas are SVG asset
 
 Geist Sans (`Geist`) is the GUI family for titles, prose and interface labels. R9 assigns self-hosted JetBrains Mono to browser Web code and compact metadata, and Geist Mono to extension code and terminal specimens. Use unmodified licensed variable fonts and owned platform fallbacks for unavailable fonts and unsupported glyphs. The extension keeps its embedded Geist faces and existing archive contract. Preserve each surface's sizes, line heights, and weights; hierarchy comes from weight, position, and semantic ink before decoration (`packages/tui/DESIGN.md`, `apps/web/src/styles/base.css`, `apps/web/src/styles/remote.css`).
 
-The terminal renders whole cells in the user's selected monospace font and size. Geist Mono is the reference face for terminal specimens, not a setting the TUI can enforce. Native browser-owned badge typography also remains browser-controlled. Canonical mark geometry remains unchanged.
+Desktop uses its own Geist and JetBrains Mono sizes and density (`packages/desktop/DESIGN.md`). The terminal renders whole cells in the user's selected monospace font and size. Geist Mono is the reference face for terminal specimens, not a host setting the TUI can enforce. Browser-owned badge typography remains browser-controlled. Canonical mark geometry stays the same across surfaces.
+
+## Layout
+
+| Surface | Composition and behavior | Owner and design evidence |
+| --- | --- | --- |
+| Web | A 256px Session rail and aligned conversation header frame open transcript prose and a centered composer. The browser workspace has a single scrolling Settings track, an enrolled-machine selector, and a provider dialog for the current relay target. Coordination and Team use the Session rail and responsive inspection, retaining the attached Session until an explicit Open action. Described Project start and progress stay ordinary transcript notices. | `apps/web/DESIGN.md`, `.stitch/DESIGN.md`; Stitch `projects/10627183425669399580`, including Settings `90ef806b96884717a9403ab5092cd412`, Team `e913f34cc3c04b7983000a381da06cf7`, and coordination `b8ac4f46a3b547bfbc1d8589d6cd785a` and `e60b24bb256b42048b498ac92f47139f`. |
+| Desktop | Denser, icon-led chrome bounds a centered conversation and its optional companion. Section navigation separates connection, presentation, keyboard and other native settings. Provider connection keeps its own dialog; coordination keeps its own roster and workflow inspector. Desktop filters Project start/progress from its reading path; it preserves reported activity and actionable member outcomes at their owners. | `packages/desktop/DESIGN.md`, `packages/desktop/src/renderer.tsx`, `packages/desktop/src/project-members.tsx`; Stitch `projects/5038403086787961002` Settings `09480302c43e44bb981b64720de7ad76`, providers `80928cfab4bc4b20b3042c2f089574ef`, Team `3d6b39b792e74d699ea93d0ab9d1fc24`, and coordination `35c98a608b9c40628e6e2c9bd1182e74` are Desktop composition references only. |
+| TUI and extensions | Terminal geometry follows cells and the active theme. Extension popup and Meeting presentation retain their host-owned control, capture, and status boundaries. | `packages/tui/DESIGN.md`, `extensions/chrome/DESIGN.md`, `extensions/meeting/view/DESIGN.md`. |
+
+Use the nearest surface owner for component geometry, focus, responsive behavior, and verification. Do not import Desktop settings sections, host actions, or density into the Web workspace, or use a Web capture as evidence of Desktop window behavior.
 
 ## Motion
 
@@ -90,7 +98,7 @@ Use WCAG 2.2 AA floors: normal text 4.5:1, large text and meaningful non-text bo
 
 ## Verification
 
-R1, R2 and R12 require code and rendered-state review. R3–R5 use their named browser integration suites; R6 uses `bun test` in `packages/simulation` targeting `test/brand-assets.test.ts` and `bun run check:ycoding-brand`; R7 uses `bun test --cwd apps/web src/styles/design-md.test.ts`; R8 uses keyboard/contrast review and the named design-contract suite. R10 requires reviewing each showcase image against its capture source. Run `python3 ~/.agents/skills/daedalus/scripts/design_md.py lint` with `--strict` on each changed rule file and its inherited chain. Browser integration suites need their configured Chrome executable; a unit-suite pass does not imply these suites ran.
+R1, R2, R11 and R12 require source and rendered-state review at the surface owner. R3–R5 use their named browser integration suites; R6 uses `bun test --cwd packages/simulation test/brand-assets.test.ts` and `bun run check:ycoding-brand`; R7 uses `bun test --cwd apps/web src/styles/design-md.test.ts`; R8 uses keyboard and contrast review and the named design-contract suite. R9 uses the named typography checks and terminal host review. Review R10 captures against the actual fixture and screen harness. Run `python3 ~/.agents/skills/ui-design/scripts/design_md.py lint DESIGN.md --strict` and strict lint on each changed surface file and its chain. A source test is not rendered browser or native window evidence.
 
 ## Maintenance
 
