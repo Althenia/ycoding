@@ -562,7 +562,7 @@ export function DeviceSettings(): JSX.Element {
       <Show when={removal()} keyed>
         {(selected) => {
           let close: (() => void) | undefined
-          return <Modal class="overlay--confirm" label={selected.id === undefined ? "Remove all revoked devices" : "Remove revoked device"}
+          return <Modal class="overlay--confirm overlay--device-cleanup" label={selected.id === undefined ? "Remove all revoked devices" : "Remove revoked device"}
             returnFocus={selected.trigger} onClose={() => setRemoval(undefined)} requestClose={(handoff) => { close = handoff }}>
             <p>{selected.id === undefined
               ? "Remove all revoked machines from this account? Enrolled machines stay registered."

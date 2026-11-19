@@ -179,6 +179,45 @@ describe("remote responsive state behavior", () => {
     } finally { await page.close() }
   }, 30_000)
 
+  test("spaces device removal copy and actions while Cancel retains keyboard clearance", async () => {
+    const observations = []
+    for (const [width, height] of [[1440, 900], [390, 844]] as const) for (const theme of ["light", "dark"] as const) {
+      const page = await fixture("view=settings&deviceCleanup=two", width, "Remove all revoked devices", theme, height)
+      try {
+        await page.setCoarsePointer(width === 390)
+        await page.setReducedMotion(true)
+        const trigger = `document.querySelector('button[aria-label="Remove all revoked devices"]')`
+        await page.evaluate(`${trigger}.focus()`)
+        await page.pressKey("Enter", "Enter", 13, "\r")
+        await page.pressKey("Tab", "Tab", 9)
+        const geometry = await page.evaluate(`(() => {
+          const dialog = document.querySelector('dialog[open][aria-label="Remove all revoked devices"]');
+          const body = dialog.querySelector('.overlay__body');
+          const surface = dialog.querySelector('.overlay__surface');
+          const actions = body.querySelector('.device-cleanup-actions');
+          const copy = body.querySelector('p');
+          const cancel = actions.querySelector('button');
+          const rect = node => node.getBoundingClientRect();
+          const focus = getComputedStyle(cancel);
+          const ring = parseFloat(focus.outlineWidth) + parseFloat(focus.outlineOffset);
+          return {
+            gap: rect(actions).top - rect(copy).bottom,
+            bottom: rect(surface).bottom - rect(actions).bottom,
+            focusClearance: rect(surface).bottom - rect(cancel).bottom - ring,
+            cancelFocused: document.activeElement === cancel && cancel.textContent === 'Cancel' && cancel.matches(':focus-visible'),
+            controlsFit: body.scrollWidth === body.clientWidth && [...actions.children].every(button => rect(button).height >= 44 && rect(button).right <= rect(body).right),
+          };
+        })()`)
+        await page.pressEscape()
+        const dismissed = await page.evaluate(`!document.querySelector('dialog[open]') && document.activeElement === ${trigger} && window.remoteCleanupReport().length === 0`)
+        observations.push({ width, theme, geometry, dismissed })
+      } finally { await page.close() }
+    }
+    expect(observations).toEqual(([1440, 390] as const).flatMap(width => (["light", "dark"] as const).map(theme => ({
+      width, theme, geometry: { gap: 16, bottom: 16, focusClearance: 12, cancelFocused: true, controlsFit: true }, dismissed: true,
+    }))))
+  }, 30_000)
+
   test("returns device-removal focus to the clicked control without a focused click", async () => {
     const page = await fixture("scenario=devices-enrollment-390&deviceCleanup=two", 390, "Legacy-MacBook")
     try {

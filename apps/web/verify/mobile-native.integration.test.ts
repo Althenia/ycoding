@@ -336,8 +336,9 @@ test("native visual-viewport events keep focused controls above an occluded view
 }, 45_000)
 
 test("phone Team inspection has an explicit return to the retained direct-child list", async () => {
-  const page = await open("view=chat&paletteAcceptance=1&team=two&childTranscript=1")
+  const page = await open("view=chat&paletteAcceptance=1&team=two&childTranscript=ready&childQuestion=1")
   try {
+    await page.setReducedMotion(true)
     await click(page, "Open Team")
     await until(page, `!!document.querySelector('dialog[open][aria-label="Team"]')`)
     await touchTargets(page,'dialog[open] .companion__pill')
@@ -351,18 +352,54 @@ test("phone Team inspection has an explicit return to the retained direct-child 
         readable: labels.every(label => label.scrollWidth <= label.clientWidth),
       };
     })()`)).toEqual({ stacked: true, readable: true })
-    await page.evaluate(`document.querySelector('dialog[aria-label="Team overview"] [data-action="inspect-child"]').click()`)
-    await until(page, `!!document.querySelector('.team-overview__inspector')`)
+    await page.evaluate(`document.querySelector('dialog[aria-label="Team overview"] [data-action="inspect-child"]').focus()`)
+    await page.pressKey("Enter", "Enter", 13, "\r")
+    await until(page, `document.querySelector('.team-overview__inspector .team-conversation__message') !== null && document.activeElement === document.querySelector('.team-overview__back')`)
     expect(await page.evaluate(`!document.querySelector('.team-overview__children').getClientRects().length`)).toBe(true)
+    const inspectorGeometry = await page.evaluate(`(() => {
+      const inspector = document.querySelector('.team-overview__inspector');
+      const body = inspector.closest('.overlay__body');
+      const focus = document.activeElement;
+      const style = getComputedStyle(focus);
+      const ringStart = focus.getBoundingClientRect().left - parseFloat(style.outlineWidth) - parseFloat(style.outlineOffset);
+      return {
+        ringVisible: focus.matches(':focus-visible') && style.outlineStyle === 'solid' && [inspector, body].every(node => getComputedStyle(node).overflowX === 'visible' || ringStart >= node.getBoundingClientRect().left + node.clientLeft),
+        verticalOwners: [inspector, body].filter(node => node.scrollHeight > node.clientHeight && ['auto', 'scroll'].includes(getComputedStyle(node).overflowY)).length,
+      };
+    })()`)
+    const headerTop = `document.querySelector('dialog[aria-label="Team overview"] .overlay__head').getBoundingClientRect().top`
+    const fixedHeader = await page.evaluate(headerTop)
+    await page.pressKey("End", "End", 35)
+    await until(page, `(() => {
+      const inspector = document.querySelector('.team-overview__inspector');
+      return [inspector, inspector.closest('.overlay__body')].some(node => node.scrollTop > 0 && node.scrollHeight - node.clientHeight - node.scrollTop <= 1);
+    })()`)
+    const reachedEnd = await page.evaluate(`(() => {
+      const inspector = document.querySelector('.team-overview__inspector');
+      const body = inspector.closest('.overlay__body');
+      return body.scrollTop > 0 && inspector.scrollTop === 0 && inspector.lastElementChild.getBoundingClientRect().bottom <= body.getBoundingClientRect().top + body.clientHeight + 1;
+    })()`)
+    expect(await page.evaluate(headerTop)).toBe(fixedHeader)
+    await page.pressKey("Home", "Home", 36)
     await click(page, "Back to children")
     await until(page, `!document.querySelector('.team-overview__inspector')`)
     expect(await page.evaluate(`document.activeElement?.getAttribute('data-action')`)).toBe("inspect-child")
     await page.pressEscape()
     await until(page, `!document.querySelector('dialog[open][aria-label="Team overview"]')`)
     await settled(page)
-    await click(page, "Back to chat")
+    const activity = await page.evaluate(`(() => {
+      const body = document.querySelector('dialog[open][aria-label="Team"] .overlay__body');
+      const start = body.getBoundingClientRect().left + body.clientLeft;
+      return {
+        fits: body.scrollWidth === body.clientWidth && [...body.querySelectorAll('.companion__header, .rl-pane-tabs-row')].every(band => { const box = band.getBoundingClientRect(); return box.left >= start && box.right <= start + body.clientWidth; }),
+        focused: document.activeElement === body.querySelector('[aria-label="Expand Team"]') && document.activeElement.matches(':focus-visible'),
+      };
+    })()`)
+    await page.pressEscape()
     await until(page, `!document.querySelector('dialog[open]')`)
+    expect(await page.evaluate(`document.activeElement?.getAttribute('aria-label')`)).toBe("Open Team")
     await noOverflow(page)
+    expect({ inspectorGeometry, reachedEnd, activity }).toEqual({ inspectorGeometry: { ringVisible: true, verticalOwners: 1 }, reachedEnd: true, activity: { fits: true, focused: true } })
   } finally { await page.close() }
 }, 45_000)
 

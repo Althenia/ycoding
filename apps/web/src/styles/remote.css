@@ -2397,6 +2397,7 @@ form .request__actions .button--secondary {
   .companion__close { inline-size: var(--yc-hit-min); block-size: var(--yc-hit-min); }
 }
 .companion .rl-pane-tabs-row { margin-inline: calc(-1 * var(--yc-space-5)); padding: 0 var(--yc-space-5); border-block-end: 1px solid var(--yc-border); }
+.team-view__sheet .companion > :is(.companion__header, .rl-pane-tabs-row) { margin-inline: calc(-1 * var(--yc-space-4)); padding-inline: var(--yc-space-4); }
 .companion .companion__tabs.rl-pane-tabs { gap: var(--yc-space-6); overflow-y: hidden; }
 .companion .rl-pane-tabs .rl-pane-tab { min-block-size: var(--yc-control-h-dense); padding: 0; border: 0; border-radius: 0; background: transparent; }
 .companion .rl-pane-tabs .rl-pane-tab > button[role="tab"] { min-block-size: var(--yc-control-h-dense); padding: 0; border-radius: 0; color: var(--yc-text-muted); font: var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-sans); }

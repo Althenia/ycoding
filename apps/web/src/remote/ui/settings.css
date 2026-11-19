@@ -27,6 +27,11 @@
 
 .app--settings .pane p { max-inline-size: var(--yc-measure); }
 
+.overlay--device-cleanup .overlay__body {
+  display: grid;
+  gap: var(--yc-space-4);
+}
+
 .settings > .settings__section {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
