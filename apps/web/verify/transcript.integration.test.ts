@@ -354,7 +354,7 @@ describe("transcript rendering", () => {
       expect(await page.evaluate(`Boolean(document.querySelector('[data-message-id="msg_image"] .transcript-image__unavailable button'))`)).toBe(true)
     } finally { await page.close() }
   })
-  test("omits internal observations and Project lifecycle cards while keeping visible cards and prompt ticks in order", async () => {
+  test("renders Project lifecycle descriptions as ordinary notices without Open actions or prompt ticks", async () => {
     const page = await browser!.openPage()
     try {
       await page.setViewport(1440, 900)
@@ -362,13 +362,15 @@ describe("transcript rendering", () => {
       for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('[data-message-id="msg_follow_up"]')`); i++) await Bun.sleep(50)
       const state = await page.evaluate(`(() => ({
         ids: [...document.querySelectorAll('.transcript-navigation__item')].map(row => row.dataset.messageId),
-        cards: [...document.querySelectorAll('.project-event')].map(card => [card.dataset.event, card.querySelector('strong').textContent]),
+        notices: [...document.querySelectorAll('[data-message-id^="msg_project_"] .transcript-message__system')].map(notice => [notice.textContent.trim(), !!notice.closest('li').querySelector('a, button')]),
+        cards: [...document.querySelectorAll('.project-event')].map(card => [card.dataset.event, card.querySelector('strong').textContent, card.querySelector('a').textContent.trim()]),
         ticks: [...document.querySelectorAll('.transcript-navigation__tick')].filter(tick => tick.getBoundingClientRect().width > 0).map(tick => tick.getAttribute('aria-label')),
-        raw: document.body.innerText.includes('TeamView ·') || document.body.innerText.includes('Session state ·'),
+        raw: /TeamView ·|Session state ·|memberSequence/.test(document.body.innerText),
       }))()`)
       expect(state).toEqual({
-        ids: ["msg_ordinary", "msg_notification", "msg_project_1", "msg_project_4", "msg_follow_up"],
-        cards: [["completed", "Fixture worker"], ["failed", "Fixture worker"]],
+        ids: ["msg_ordinary", "msg_notification", "msg_project_0", "msg_project_1", "msg_project_2", "msg_project_3", "msg_project_4", "msg_follow_up"],
+        notices: [["Project notification", false], ["Project notification", false], ["Project notification", false]],
+        cards: [["completed", "Fixture worker", "Open"], ["failed", "Fixture worker", "Open"]],
         ticks: ["Go to prompt: Check the repair", "Go to prompt: Review the result"],
         raw: false,
       })

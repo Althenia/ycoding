@@ -119,7 +119,7 @@ const notificationMessages: readonly RemoteMessageView[] = [
   { kind: "synthetic", id: "msg_notification", text: `Subagent notification:\n${JSON.stringify(notificationMetadata)}`, description: "Subagent notification", metadata: notificationMetadata, created: 2 },
 ]
 const projectVisibilityMessages = ["started", "completed", "progress", "progress", "failed"].map((event, index) => {
-  const metadata = { source: "project_notification", groupID: "cgrp_sample", memberSessionID: "ses_member", title: "Fixture worker", event, memberSequence: index + 1 }
+  const metadata = { source: "project_notification", groupID: "cgrp_sample", memberSessionID: "ses_member", title: "Fixture worker", event, memberSequence: [2, 3, 4, 8, 9][index], ...(index === 3 ? { held: { count: 2 } } : {}) }
   return { kind: "synthetic" as const, id: `msg_project_${index}`, text: `Project notification:\n${JSON.stringify(metadata)}`, description: "Project notification", metadata, created: index + 6 }
 })
 const visibilityMessages: readonly RemoteMessageView[] = [

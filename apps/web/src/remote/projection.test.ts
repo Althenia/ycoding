@@ -631,6 +631,12 @@ test("classifies a Project notification as a member event with its target, event
   }
   const hydrated = readMessageList({ data: [{ id: "n", type: "synthetic", text: message.text, description: "Project notification", metadata, time: { created: 1 } }] })
   expect(classifySyntheticNotice(hydrated[0]!)).toMatchObject({ kind: "member", memberSessionID: "ses_w1" })
+  const routine = [["started", 2], ["progress", 4]].map(([event, memberSequence]) => {
+    const metadata = { source: "project_notification", groupID: "cgrp_sample", memberSessionID: "ses_member", title: "Fixture worker", event, memberSequence }
+    return { ...message, text: `Project notification:\n${JSON.stringify(metadata)}`, metadata }
+  })
+  expect(routine.map(classifySyntheticNotice)).toEqual([undefined, undefined])
+  expect(routine.map(transcriptMessageVisible)).toEqual([true, true])
   expect(classifySyntheticNotice({ ...message, metadata: { ...metadata, event: "exploded" } })).toBeUndefined()
   expect(classifySyntheticNotice({ ...message, metadata: { ...metadata, memberSessionID: 5 } })).toBeUndefined()
 })
