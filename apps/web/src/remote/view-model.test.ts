@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { ShellOutputFetch, ShellOutputView } from "./projection"
+import { dotSteerDisplay, type ShellOutputFetch, type ShellOutputView } from "./projection"
 import {
   familyTaskActivity,
   latestPromptProcessing,
@@ -30,6 +30,7 @@ import {
   providerProfileView,
   attachConfirmationValid,
   detachConfirmationValid,
+  dotSteerReceipt,
   dotsConnectionView,
   shellOutputPaging,
   sessionProjectLabel,
@@ -998,5 +999,45 @@ describe("newSessionDisplayView", () => {
     expect(newSessionDisplayView({ ...base, workspaceStatus: "loading", workspaceCount: 0 })).toMatchObject({ sendBlocked: true, repositoryHighlight: false, messageTone: "status" })
     expect(newSessionDisplayView({ ...base, workspaceStatus: "error", errorMessage: "Inventory down" })).toMatchObject({ sendBlocked: true, refreshHighlight: true, messageTone: "alert", message: "Inventory down" })
     expect(newSessionDisplayView({ ...base, repositoryRequired: false, originUnavailable: true })).toMatchObject({ sendBlocked: true, messageTone: "alert" })
+  })
+})
+
+describe("Dot-originated steer display and receipts", () => {
+  test("strips transport markup and preserves code blocks without inventing absent text", () => {
+    const clean = dotSteerDisplay({
+      kind: "synthetic",
+      id: "msg_v_argo",
+      description: "Install and verify the pinned official Argo CD MCP in Work project config",
+      text: "<shared-context>\nUser evidence:\nfoo\n</shared-context>\n\n<system-update>{\"autonomy\":{\"mode\":\"normal\"}}</system-update>\n<transcript_evidence>\nUser: check Argo CD\n</transcript_evidence>\n\nKeep `<system-update>` inside code and run `argocd mcp`.\n<!-- trace:123 -->",
+      created: 1,
+    })
+    expect(clean?.text).toBe("User: check Argo CD\n\nKeep `<system-update>` inside code and run `argocd mcp`.")
+    expect(dotSteerDisplay({
+      kind: "synthetic",
+      id: "msg_v_empty",
+      description: "Short title",
+      text: "<system-update>{}</system-update>\n<!-- comment -->",
+      created: 2,
+    })).toBeUndefined()
+  })
+
+  test("excludes non-steer synthetic records and formats Dot steer receipts without human authorship", () => {
+    expect(dotSteerDisplay({ kind: "synthetic", id: "m1", description: "Parent session history snapshot", text: "Recent parent session history:\nHi", created: 1 })).toBeUndefined()
+    expect(dotSteerDisplay({ kind: "synthetic", id: "m2", description: "Goal · steer", text: "Continue", metadata: { autonomy: { goal: true } }, created: 1 })).toBeUndefined()
+    expect(dotSteerDisplay({ kind: "synthetic", id: "m3", description: "Project notification", text: "Started", metadata: { source: "project_notification" }, created: 1 })).toBeUndefined()
+    expect(dotSteerDisplay({ kind: "synthetic", id: "m4", description: "Subagent message", text: "From parent", metadata: { source: "subagent_parent", kind: "message" }, created: 1 })).toBeUndefined()
+    expect(dotSteerDisplay({ kind: "synthetic", id: "m5", description: "Peer", text: "Hi", metadata: { dots: { origin: "dots-peer", profile: "p", dotID: "d", threadID: "t", itemID: "i" } }, created: 1 })).toBeUndefined()
+    expect(dotSteerDisplay({ kind: "synthetic", id: "m6", description: "Audit", text: "Read 1 B", metadata: { dots: { operation: "read" } }, created: 1 })).toBeUndefined()
+    expect(dotSteerDisplay({ kind: "synthetic", id: "m7", text: "No description internal steer", created: 1 })).toBeUndefined()
+    expect(dotSteerDisplay({ kind: "synthetic", id: "m8", description: "Queued", text: "Later", delivery: "queue", pending: true, created: 1 })).toBeUndefined()
+
+    expect(dotSteerReceipt(false, undefined, false)).toEqual({ label: "Dot steer prompt", text: "Dot steer", mark: "✓" })
+    expect(dotSteerReceipt(true, "steer", false)).toEqual({ label: "Processing Dot steer prompt", text: "Processing · steer", mark: "◷" })
+    expect(dotSteerReceipt(false, undefined, true)).toEqual({ label: "Processing Dot steer prompt", text: "Processing · Dot steer", mark: "◷" })
+
+    const steerMsg = { kind: "synthetic" as const, id: "msg_dot", description: "Steer", text: "Inspect Argo CD", created: 2 }
+    expect(latestPromptProcessing("running", [{ kind: "user", id: "msg_u", text: "Hi", state: "consumed", created: 1 }, steerMsg], "msg_dot")).toBe(true)
+    expect(latestPromptProcessing("running", [{ kind: "user", id: "msg_u", text: "Hi", state: "consumed", created: 1 }, steerMsg], "msg_u")).toBe(false)
+    expect(capturedChangesVisible("running", [{ kind: "assistant", id: "msg_a", parts: [], created: 1 }, steerMsg], "msg_a")).toBe(true)
   })
 })

@@ -15,7 +15,7 @@ import type { ProviderAuthState } from "./provider-auth"
 import type { RemoteRequestOutcome, RemoteTransportStatus } from "./transport"
 import { describeOutcome } from "./outcome"
 import type { PendingMutation } from "./store"
-import { formatPartDuration, transcriptPartVisible, type FormAnswerView, type FormFieldView, type FormView, type MessageAttachment, type RemoteMessageView, type SessionView, type ShellOutputFetch, type ShellOutputView } from "./projection"
+import { dotSteerDisplay, formatPartDuration, transcriptPartVisible, type FormAnswerView, type FormFieldView, type FormView, type MessageAttachment, type RemoteMessageView, type SessionView, type ShellOutputFetch, type ShellOutputView } from "./projection"
 
 export type FormDraft = Readonly<Record<string, FormAnswerView[string] | undefined>>
 
@@ -142,9 +142,14 @@ export function telemetryConsentNoticeView(consent: { readonly status: string; r
   return consent.status === "undecided" && connected
 }
 
-export function latestPromptProcessing(status: SessionView["status"] | undefined, messages: readonly { readonly kind: string; readonly id: string }[], messageID: string) {
+function isPromptMessage(message: { readonly kind: string; readonly id: string } | RemoteMessageView): boolean {
+  if (message.kind === "user") return true
+  return "text" in message && dotSteerDisplay(message) !== undefined
+}
+
+export function latestPromptProcessing(status: SessionView["status"] | undefined, messages: readonly ({ readonly kind: string; readonly id: string } | RemoteMessageView)[], messageID: string) {
   if (status !== "running") return false
-  return messages.findLast((message) => message.kind === "user")?.id === messageID
+  return messages.findLast(isPromptMessage)?.id === messageID
 }
 
 export function promptReceipt(state: "pending" | "promoted" | "consumed" | undefined, delivery: "steer" | "queue" | undefined, mutation?: Pick<PendingMutation, "state">, processing = false) {
@@ -155,6 +160,14 @@ export function promptReceipt(state: "pending" | "promoted" | "consumed" | undef
   if (state === "pending") return { label: delivery === "queue" ? "Queued for processing" : "Processing prompt", text: delivery === "queue" ? "Queued" : "Processing · steer", mark: "◷" }
   if (processing) return { label: "Processing prompt", text: "Processing", mark: "◷" }
   return { label: "Sent, not yet read", text: "Sent", mark: "✓" }
+}
+
+export function dotSteerReceipt(pending: boolean | undefined, delivery: "steer" | "queue" | undefined, processing = false) {
+  if (pending) return delivery === "queue"
+    ? { label: "Dot steer prompt queued for processing", text: "Queued · Dot steer", mark: "◷" }
+    : { label: "Processing Dot steer prompt", text: "Processing · steer", mark: "◷" }
+  if (processing) return { label: "Processing Dot steer prompt", text: "Processing · Dot steer", mark: "◷" }
+  return { label: "Dot steer prompt", text: "Dot steer", mark: "✓" }
 }
 
 export function formInputState(form: FormView, draft: FormDraft) {
@@ -344,11 +357,11 @@ export type SessionChip = {
   readonly tone: "neutral" | "attention" | "success" | "danger"
 }
 
-export function capturedChangesVisible(status: SessionView["status"] | undefined, messages: readonly { readonly id: string; readonly kind: string }[], placementMessageID: string): boolean {
+export function capturedChangesVisible(status: SessionView["status"] | undefined, messages: readonly ({ readonly id: string; readonly kind: string } | RemoteMessageView)[], placementMessageID: string): boolean {
   if (status === undefined) return false
   if (status !== "running") return true
   const placement = messages.findIndex((message) => message.id === placementMessageID)
-  return placement >= 0 && messages.slice(placement + 1).some((message) => message.kind === "user")
+  return placement >= 0 && messages.slice(placement + 1).some(isPromptMessage)
 }
 
 export function sessionProjectLabel(session: { readonly projectID?: string; readonly directory?: string }): string {
@@ -1013,8 +1026,8 @@ export function transcriptActivity(input: {
   readonly sending: boolean
   readonly lastError?: string
 }): TranscriptActivity | undefined {
-  const turn = input.messages.filter((message) => message.kind === "user" || message.kind === "assistant")
-  const last = turn.findLast((message) => message.kind !== "user" || message.state !== "pending")
+  const turn = input.messages.filter((message) => message.kind === "user" || message.kind === "assistant" || dotSteerDisplay(message) !== undefined)
+  const last = turn.findLast((message) => message.kind === "user" ? message.state !== "pending" : message.kind === "synthetic" ? message.pending !== true : true)
   const accepted = input.sending
   if (input.status !== "running" && !accepted) {
     if (input.status !== "failed") return undefined

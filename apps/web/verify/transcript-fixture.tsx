@@ -50,6 +50,18 @@ const pendingOversized = new URLSearchParams(location.search).get("oversized") =
 const compactionMode = new URLSearchParams(location.search).get("compaction")
 const fileChangesMode = new URLSearchParams(location.search).get("file-changes")
 const costsMode = new URLSearchParams(location.search).has("costs")
+const dotSteerMode = new URLSearchParams(location.search).has("dot-steer")
+const dotSteerMessages: readonly RemoteMessageView[] = [
+  { kind: "user", id: "msg_human", text: "Check the claim decisions and readiness log.", state: "consumed", created: 1 },
+  { kind: "assistant", id: "msg_reply_before", agent: "god", model: { providerID: "anthropic", id: "claude-opus-5-5", variant: "high" }, parts: [{ kind: "text", ordinal: 0, text: "This session can't write files, so today's work log isn't updated." }], created: 2, completed: 3_000 },
+  { kind: "synthetic", id: "msg_subagent_notice", text: "Subagent updated", description: "Subagent updated", metadata: { source: "subagent_notification", type: "updated", childID: "ses_task_c6de7f60e010244c053d4832" }, created: 3_500 },
+  { kind: "synthetic", id: "msg_dot_steer_argo", description: "Install and verify the pinned official Argo CD MCP in Work project config", text: "<system-update>{\"autonomy\":{\"mode\":\"normal\"}}</system-update>\nInstall and verify the pinned official Argo CD MCP in Work project config by checking the project settings and docs first.", created: 4_000 },
+  { kind: "synthetic", id: "msg_dot_steer_empty", description: "Hidden empty steer title", text: "<system-update>{}</system-update>", created: 4_100 },
+  { kind: "synthetic", id: "msg_goal_steer", description: "Goal · steer", text: "Continue remaining work", metadata: { autonomy: { goal: true } }, created: 4_200 },
+  { kind: "synthetic", id: "msg_dot_peer", description: "Peer message", text: "Room peer message", metadata: { dots: { origin: "dots-peer", profile: "synthetic", dotID: "dot-1", threadID: "thread-1", itemID: "item-1" } }, created: 4_300 },
+  { kind: "synthetic", id: "msg_side_snapshot", description: "Parent session history snapshot", text: "Recent parent session history:\nUser: Earlier context", created: 4_400 },
+  { kind: "assistant", id: "msg_reply_after", agent: "god", model: { providerID: "anthropic", id: "claude-opus-5-5", variant: "high" }, parts: [{ kind: "reasoning", ordinal: 0, text: "Inspecting project config", started: 4_500, completed: 8_500 }, { kind: "tool", callID: "call_project", name: "project", status: "completed", content: [{ kind: "text", text: "Checked" }], started: 8_500, completed: 8_520 }, { kind: "text", ordinal: 1, text: "Verified the pinned Argo CD MCP configuration." }], created: 4_500, completed: 10_500 },
+]
 const costUnit = (inputID: string, partial: boolean) => {
   const task = accountedTask("ses_a", 0.25, 20)
   const cost = partial ? { known: 0.25, pricedRequests: 1, unpricedRequests: 1, provenance: "recorded" as const } : task.total.cost
@@ -206,7 +218,7 @@ const imageSnapshot = () => readSnapshot({ sourceEpoch: "epoch_1", session: { id
     ...(streamedImageText ? [{ type: "text", text: streamedImageText }] : []),
   ] },
 ] })?.messages ?? imageMessages
-const [messages, setMessages] = createSignal(markdown ? markdownMessages : longMode ? longMessages("long", 150) : synthetic ? syntheticMessages(synthetic === "compacted") : fileChangesMode ? fileChangeMessages : costsMode ? costMessages : toolOutput === "long-lines" ? shellLayoutMessages : toolOutput !== null ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : compactionMode ? compactionMessages : initial)
+const [messages, setMessages] = createSignal(markdown ? markdownMessages : dotSteerMode ? dotSteerMessages : longMode ? longMessages("long", 150) : synthetic ? syntheticMessages(synthetic === "compacted") : fileChangesMode ? fileChangeMessages : costsMode ? costMessages : toolOutput === "long-lines" ? shellLayoutMessages : toolOutput !== null ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : compactionMode ? compactionMessages : initial)
 const [compactionHistory, setCompactionHistory] = createSignal(compactionMode && compactionMode !== "old" ? {
   data: [{ jobID: "cmp_old", trigger: "auto", status: "completed" as const, metrics: { ...compressionMetrics, inputTokens: 500, retainedTokens: 200 }, created: 2 }, { jobID: "cmp_live", trigger: "manual", status: "running" as const, created: 3 }],
   truncated: compactionMode === "truncated", completedBefore: compactionMode === "truncated" ? 2 : 0, completedCount: compactionMode === "truncated" ? 3 : 1, totalSavedTokens: compactionMode === "truncated" ? 900 : 300,

@@ -1,4 +1,4 @@
-import { contextWindowDisplay, modelLabel, type ModelRefView, type RemoteMessageView, type SessionView } from "../projection"
+import { contextWindowDisplay, dotSteerDisplay, modelLabel, type ModelRefView, type RemoteMessageView, type SessionView } from "../projection"
 import { autonomySummary } from "../autonomy"
 import type { SessionInfoView } from "../store"
 import type { RemoteTransportStatus } from "../transport"
@@ -152,9 +152,13 @@ export function transcriptContextMessages(messages: readonly RemoteMessageView[]
     const line = text.replace(/\s+/g, " ").trim()
     return line.length === 0 ? "No text" : line.length > 96 ? `${line.slice(0, 95)}…` : line
   }
-  return messages.flatMap((message) => message.kind === "user" ? [{ id: message.id, role: "User", summary: excerpt(message.text) }]
-    : message.kind === "assistant" ? [{ id: message.id, role: message.agent ?? "Assistant", summary: excerpt(message.parts.flatMap((part) => part.kind === "text" ? [part.text] : []).join(" ")) }]
-    : [])
+  return messages.flatMap((message) => {
+    if (message.kind === "user") return [{ id: message.id, role: "User", summary: excerpt(message.text) }]
+    const steer = dotSteerDisplay(message)
+    if (steer !== undefined) return [{ id: message.id, role: "Dot steer", summary: excerpt(steer.text) }]
+    if (message.kind === "assistant") return [{ id: message.id, role: message.agent ?? "Assistant", summary: excerpt(message.parts.flatMap((part) => part.kind === "text" ? [part.text] : []).join(" ")) }]
+    return []
+  })
 }
 
 export type PresenceEntry<T> = { readonly key: string; readonly item: T; readonly open: boolean }

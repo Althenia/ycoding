@@ -7,6 +7,8 @@ import { useRemote } from "../context"
 import {
   formatPartDuration,
   guardrailContextAvailable,
+  isDotSteerSynthetic,
+  dotSteerDisplay,
   permissionDisplay,
   classifySyntheticNotice,
   noticeSummary,
@@ -24,7 +26,7 @@ import {
   type ShellOutputView,
   type ToolContentBlock,
 } from "../projection"
-import { capturedChangesVisible, familyTaskActivity, latestPromptProcessing, promptReceipt, reasoningSummary, shellOutputPaging, transcriptActivity, userMessageDisplay } from "../view-model"
+import { capturedChangesVisible, dotSteerReceipt, familyTaskActivity, latestPromptProcessing, promptReceipt, reasoningSummary, shellOutputPaging, transcriptActivity, userMessageDisplay } from "../view-model"
 import { parentAnswer, questionAnswerState, questionHistory } from "../question-history"
 import { FormAssessment } from "./form-request"
 import { FormRequest } from "./form-request"
@@ -370,11 +372,18 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
   }
   const syntheticNotice = () => classifySyntheticNotice(props.message())
   const peer = () => { const message = props.message(); return message.kind === "synthetic" ? remoteDotsPeerLabel(message.metadata) : undefined }
+  const steer = createMemo(() => dotSteerDisplay(props.message()))
+  const hiddenEmptySteer = () => isDotSteerSynthetic(props.message()) && steer() === undefined
   const guardrail = () => { const message = props.message(); return message.kind === "system" ? message.guardrail : undefined }
   const display = createMemo(() => { const message = props.message(); return message.kind === "user" ? userMessageDisplay(message) : userMessageDisplay({ text: "" }) })
   const sendMutation = () => remote.state().mutations.find((mutation) => (mutation.kind === "prompt" || mutation.kind === "command") && mutation.id === props.message().id && mutation.sessionID === remote.state().activeSessionID)
   const promptMutation = () => sendMutation()?.state !== "sending" ? sendMutation() : undefined
-  const receipt = () => promptReceipt(userState(props.message()), userDelivery(props.message()), sendMutation(), latestPromptProcessing(selectedView()?.status, selectedView()?.messages ?? [], props.message().id))
+  const receipt = () => {
+    const message = props.message()
+    const processing = latestPromptProcessing(selectedView()?.status, selectedView()?.messages ?? [], message.id)
+    if (steer() !== undefined && message.kind === "synthetic") return dotSteerReceipt(message.pending, message.delivery, processing)
+    return promptReceipt(userState(message), userDelivery(message), sendMutation(), processing)
+  }
   const turnDetail = () => {
     const message = assistantOf(props.message())
     if (!message) return ""
@@ -387,9 +396,14 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
     const message = props.message()
     return message.kind === "synthetic" && message.description ? message.description : systemText(message)
   }
+  const steerDeliveryState = () => {
+    const message = props.message()
+    return steer() !== undefined && message.kind === "synthetic" && message.pending ? (message.delivery ?? "steer") : undefined
+  }
   return (
     <Show when={kind() !== "notice"} fallback={<p class="notice">{noticeText(props.message())}</p>}>
-      <SharedMessageTurn kind={kind()} markdownText={display().text || undefined} bubbleAttachments={display().images.length > 0 || display().files.length > 0 ? <>
+      <Show when={!hiddenEmptySteer()}>
+      <SharedMessageTurn kind={kind()} bubble={steer() !== undefined} articleLabel={steer() !== undefined ? "Dot steer prompt" : undefined} deliveryState={steerDeliveryState()} markdownText={steer()?.text ?? (display().text || undefined)} bubbleAttachments={display().images.length > 0 || display().files.length > 0 ? <>
             <Show when={display().images.length > 0}><span class="transcript-message__images" aria-label={`${display().images.length} attached image${display().images.length === 1 ? "" : "s"}`} role="group">
               <For each={imageKeys()}>{(key) => {
                 const image = () => display().images[Number(key.slice(0, key.indexOf(":")))]!
@@ -412,6 +426,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
         </Show>
 
       </>} unavailable={oversized()?.state === "error" ? "Content too large or unavailable" : oversized()?.state === "pending" ? "Waiting for content" : "Loading content"} onRetry={oversized()?.state === "error" ? () => void remote.store.loadOversizedMessage(props.message().id) : undefined} peerLabel={peer()} peerText={systemText(props.message())} compaction={<CompactionDivider message={props.message} />} />
+      </Show>
     </Show>
   )
 }

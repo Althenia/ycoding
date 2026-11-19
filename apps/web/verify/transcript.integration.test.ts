@@ -875,4 +875,68 @@ describe("transcript rendering", () => {
       expect(coarse.overflow).toBe(false)
     } finally { await page.close() }
   }, 60_000)
+
+  test("renders genuine Dot-originated steer prompts as right-aligned prompt bubbles while keeping non-steer notices unchanged", async () => {
+    const page = await browser!.openPage()
+    try {
+      for (const theme of ["dark", "light"] as const) {
+        for (const [width, height] of [[1440, 900], [390, 844]] as const) {
+          await page.setViewport(width, height)
+          await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?dot-steer=1&theme=${theme}`)
+          for (let i = 0; i < 40 && !await page.evaluate(`document.querySelector('[data-message-id="msg_dot_steer_argo"] .transcript-message__bubble')`); i++) await Bun.sleep(50)
+          const state = await page.evaluate(`(() => {
+            const human = document.querySelector('[data-message-id="msg_human"] article')
+            const humanBubble = human.querySelector('.transcript-message__bubble')
+            const steer = document.querySelector('[data-message-id="msg_dot_steer_argo"] article')
+            const steerBubble = steer.querySelector('.transcript-message__bubble')
+            const track = document.querySelector('.transcript').getBoundingClientRect()
+            const hRect = humanBubble.getBoundingClientRect()
+            const sRect = steerBubble.getBoundingClientRect()
+            const goal = document.querySelector('[data-message-id="msg_goal_steer"] article')
+            const peer = document.querySelector('[data-message-id="msg_dot_peer"] article')
+            const snapshot = document.querySelector('[data-message-id="msg_side_snapshot"] article')
+            const ticks = [...document.querySelectorAll('.transcript-navigation__tick')].map(tick => tick.getAttribute('aria-label'))
+            return {
+              steerClasses: [...steer.classList],
+              steerLabel: steer.getAttribute('aria-label'),
+              steerText: steerBubble.textContent.trim(),
+              steerReceipt: steer.querySelector('.transcript-message__receipt')?.textContent?.trim() ?? '',
+              steerBg: getComputedStyle(steerBubble).backgroundColor,
+              humanBg: getComputedStyle(humanBubble).backgroundColor,
+              steerRightDelta: Math.abs(sRect.right - hRect.right),
+              trackRightDelta: Math.abs(sRect.right - track.right),
+              steerWidthLessThanTrack: sRect.width < track.width,
+              hasSystemRow: steer.querySelector('.transcript-message__system') !== null,
+              hasHiddenEmpty: document.querySelector('[data-message-id="msg_dot_steer_empty"]') !== null,
+              goalNotice: goal.querySelector('.transcript-notice--goal') !== null && goal.querySelector('.transcript-message__bubble') === null,
+              peerSection: peer.querySelector('h3')?.textContent?.includes('external peer') && peer.querySelector('.transcript-message__bubble') === null,
+              snapshotSystem: snapshot.querySelector('.transcript-message__system')?.textContent?.trim() === 'Parent session history snapshot',
+              ticks,
+              overflow: document.documentElement.scrollWidth > innerWidth,
+            }
+          })()`, decodeRecord)
+          expect(state["steerClasses"]).toContain("transcript-message--synthetic")
+          expect(state["steerClasses"]).toContain("transcript-message--user")
+          expect(state["steerLabel"]).toBe("Dot steer prompt")
+          expect(state["steerText"]).toBe("Install and verify the pinned official Argo CD MCP in Work project config by checking the project settings and docs first.")
+          expect(state["steerReceipt"]).toBe("Dot steer")
+          expect(state["steerBg"]).toBe(state["humanBg"])
+          expect(decodeNumber(state["steerRightDelta"])).toBeLessThanOrEqual(1)
+          expect(decodeNumber(state["trackRightDelta"])).toBeLessThanOrEqual(1)
+          expect(state["steerWidthLessThanTrack"]).toBe(true)
+          expect(state["hasSystemRow"]).toBe(false)
+          expect(state["hasHiddenEmpty"]).toBe(false)
+          expect(state["goalNotice"]).toBe(true)
+          expect(state["peerSection"]).toBe(true)
+          expect(state["snapshotSystem"]).toBe(true)
+          expect(state["ticks"]).toEqual([
+            "Go to prompt: Check the claim decisions and readiness log.",
+            "Go to prompt: Install and verify the pinned official Argo CD MCP in Work project config by checking the…",
+          ])
+          expect(state["overflow"]).toBe(false)
+          await Bun.write(new URL(`../../../.cache/tmp/dot-steer-bubble-${theme}-${width}x${height}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        }
+      }
+    } finally { await page.close() }
+  }, 30_000)
 })

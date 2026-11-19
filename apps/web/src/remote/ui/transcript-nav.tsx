@@ -3,7 +3,7 @@ import { Portal } from "solid-js/web"
 import { TranscriptActivityRow } from "./conversation"
 import { createDebouncer, createThrottler } from "@tanstack/solid-pacer"
 import { useRemote } from "../context"
-import { hasCompactionCheckpoint, type RemoteMessageView } from "../projection"
+import { dotSteerDisplay, hasCompactionCheckpoint, type RemoteMessageView } from "../projection"
 import type { GuardrailDecisionView } from "../decision-grades"
 import { MessageRow } from "./conversation"
 import { GuardrailDecisionRows } from "./decision-grades"
@@ -17,7 +17,7 @@ import "./transcript-nav.css"
 export function estimateRowHeight(message: RemoteMessageView | undefined): number {
   if (message === undefined) return 120
   if (message.kind === "compaction") return 196
-  if (message.kind === "user") return 64
+  if (message.kind === "user" || dotSteerDisplay(message) !== undefined) return 64
   return 176
 }
 
@@ -38,7 +38,12 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   const checkpoint = createMemo(() => hasCompactionCheckpoint(props.messages()))
   const ids = createMemo(() => rows().map((row) => row.id), [], { equals: sameKeys })
   const byKey = createMemo(() => new Map(rows().map((entry) => [entry.id, entry])))
-  const ticks = createMemo(() => promptTicks(rows(), (row) => row.kind === "message" && row.message.kind === "user" ? { id: row.id, text: row.message.text } : undefined))
+  const ticks = createMemo(() => promptTicks(rows(), (row) => {
+    if (row.kind !== "message") return undefined
+    if (row.message.kind === "user") return { id: row.id, text: row.message.text }
+    const steer = dotSteerDisplay(row.message)
+    return steer === undefined ? undefined : { id: row.id, text: steer.text }
+  }))
   let wrapper: HTMLDivElement | undefined
   let list: HTMLOListElement | undefined
   let scrollRoot: HTMLElement | undefined
@@ -314,7 +319,8 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
         const decision = () => { const current = item(); return current.kind === "decision" ? current.decision : undefined }
         const continued = () => { const current = item(); return current.kind === "message" && current.continued }
         const first = () => { const current = message(); return current !== undefined && current.id === id }
-        return <li class="transcript-navigation__item" classList={{ "motion-enter": !settled && message()?.kind !== "compaction" }} data-message-id={id} data-index={row.index()} data-settled={settled ? "" : undefined} data-prompt-id={message()?.kind === "user" ? id : undefined} tabindex={message()?.kind === "user" ? -1 : undefined} style={{ "inset-block-start": `${row.top()}px` }}
+        const prompt = () => { const current = message(); return current !== undefined && (current.kind === "user" || dotSteerDisplay(current) !== undefined) }
+        return <li class="transcript-navigation__item" classList={{ "motion-enter": !settled && message()?.kind !== "compaction" }} data-message-id={id} data-index={row.index()} data-settled={settled ? "" : undefined} data-prompt-id={prompt() ? id : undefined} tabindex={prompt() ? -1 : undefined} style={{ "inset-block-start": `${row.top()}px` }}
           onFocusOut={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) virtual.release(id) }}
           ref={(element) => {
             row.measure(element)

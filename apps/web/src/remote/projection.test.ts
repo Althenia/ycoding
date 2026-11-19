@@ -1710,3 +1710,47 @@ test("ignores settled receipts without their existing execute part and reads sna
     { type: "tool", id: "outer", name: "execute", state: { status: "completed", input: {}, structured: { toolCalls: [invocation] }, content: [] }, time: { created: 1, ran: 1, completed: 2 } },
   ] })).toMatchObject({ parts: [{ structured: { toolCalls: [invocation] } }] })
 })
+
+test("preserves synthetic delivery and hides empty Dot steers without inventing text", () => {
+  const admitted = apply(createSessionView("ses_a"), "session.input.admitted", {
+    inputID: "msg_dot_steer",
+    input: {
+      type: "synthetic",
+      delivery: "steer",
+      data: {
+        description: "Install and verify the pinned official Argo CD MCP in Work project config",
+        text: "Install and verify by inspecting Work config.",
+      },
+    },
+  })
+  expect(admitted.messages[0]).toMatchObject({
+    kind: "synthetic",
+    id: "msg_dot_steer",
+    delivery: "steer",
+    pending: true,
+    description: "Install and verify the pinned official Argo CD MCP in Work project config",
+    text: "Install and verify by inspecting Work config.",
+  })
+  expect(transcriptMessageVisible(admitted.messages[0]!)).toBe(true)
+
+  const pending = readPendingInputs({
+    data: [{
+      id: "msg_dot_pending",
+      sessionID: "ses_a",
+      type: "synthetic",
+      delivery: "steer",
+      timeCreated: 10,
+      data: { description: "Pending steer", text: "Check logs" },
+    }],
+  }, "ses_a")
+  expect(pending?.[0]).toMatchObject({ kind: "synthetic", delivery: "steer", pending: true })
+
+  const emptySteer = readProjectedMessage({
+    id: "msg_dot_empty",
+    type: "synthetic",
+    description: "Only a title",
+    text: "<system-update>{\"autonomy\":{}}</system-update>",
+    time: { created: 11 },
+  })!
+  expect(transcriptMessageVisible(emptySteer)).toBe(false)
+})

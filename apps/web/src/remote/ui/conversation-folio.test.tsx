@@ -85,3 +85,67 @@ test("a hard review keeps its danger class while other requests render as floati
   expect(soft).not.toContain("request--hard")
   expect(soft).toContain("request request--guardrail")
 })
+
+test("genuine Dot-originated steer prompts render as user-styled bubbles with cleaned steer text and non-human provenance", () => {
+  const steer: RemoteMessageView = {
+    kind: "synthetic",
+    id: "msg_v_0120_dot_steer",
+    description: "Install and verify the pinned official Argo CD MCP in Work project config",
+    text: "<shared-context>\nUser evidence:\nprior turn\n</shared-context>\n\n<system-update>{\"autonomy\":{\"mode\":\"normal\"}}</system-update>\nInstall and verify the pinned official Argo CD MCP by checking Work project config first.\n<!-- hidden:trace -->",
+    created: 3,
+  }
+  const html = render(() => <MessageRow message={() => steer} />)
+  expect(html).toContain("transcript-message--synthetic")
+  expect(html).toContain("transcript-message--user")
+  expect(html).toContain('aria-label="Dot steer prompt"')
+  expect(html).toContain('class="transcript-message__bubble"')
+  expect(html).toContain("Install and verify the pinned official Argo CD MCP by checking Work project config first.")
+  expect(html).not.toContain("<shared-context>")
+  expect(html).not.toContain("<system-update>")
+  expect(html).not.toContain("hidden:trace")
+  expect(html).not.toContain("transcript-message__system")
+  expect(html).toContain("Dot steer")
+  expect(html).not.toContain("Read by YCoding")
+
+  const pendingSteer: RemoteMessageView = {
+    kind: "synthetic",
+    id: "msg_v_pending_steer",
+    description: "Pending steer title",
+    text: "Run the targeted suite now.",
+    pending: true,
+    created: 4,
+  }
+  const pendingHtml = render(() => <MessageRow message={() => pendingSteer} />)
+  expect(pendingHtml).toContain('class="transcript-message__bubble"')
+  expect(pendingHtml).toContain("Run the targeted suite now.")
+  expect(pendingHtml).toContain("Processing · steer")
+  expect(pendingHtml).not.toContain("Read by YCoding")
+
+  const emptySteer: RemoteMessageView = {
+    kind: "synthetic",
+    id: "msg_v_empty_steer",
+    description: "Title that must not become fake user text",
+    text: "<system-update>{\"autonomy\":{}}</system-update>",
+    created: 5,
+  }
+  const emptyHtml = render(() => <MessageRow message={() => emptySteer} />)
+  expect(emptyHtml).not.toContain('class="transcript-message__bubble"')
+  expect(emptyHtml).not.toContain("Title that must not become fake user text")
+})
+
+test("non-steer synthetic notices keep their notice or system rendering", () => {
+  const notices: readonly RemoteMessageView[] = [
+    { kind: "synthetic", id: "msg_peer", description: "Peer", text: "Hello from room", metadata: { dots: { origin: "dots-peer", profile: "synthetic", dotID: "dot-1", threadID: "thread-1", itemID: "item-1" } }, created: 1 },
+    { kind: "synthetic", id: "msg_audit", description: "Read 12 bytes from config.ts", text: "Read 12 bytes from config.ts", metadata: { dots: { operation: "read", path: "config.ts", bytes: 12 } }, created: 2 },
+    { kind: "synthetic", id: "msg_goal", description: "Goal · steer", text: "Continue the goal", metadata: { autonomy: { goal: true } }, created: 3 },
+    { kind: "synthetic", id: "msg_project", description: "Project notification", text: "Project notification", metadata: { source: "project_notification", event: "started", memberSessionID: "ses_member", title: "Worker" }, created: 4 },
+    { kind: "synthetic", id: "msg_subagent", description: "Subagent notification", text: "Subagent notification", metadata: { source: "subagent_notification", type: "completed", childID: "ses_child" }, created: 5 },
+    { kind: "synthetic", id: "msg_parent_msg", description: "Parent subagent message", text: "Parent message", metadata: { source: "subagent_parent", kind: "message" }, created: 6 },
+    { kind: "synthetic", id: "msg_snapshot", description: "Parent session history snapshot", text: "Recent parent session history:\nUser: Hi", created: 7 },
+  ]
+  for (const notice of notices) {
+    const html = render(() => <MessageRow message={() => notice} />)
+    expect(html).not.toContain('class="transcript-message__bubble"')
+    expect(html).not.toContain('aria-label="Dot steer prompt"')
+  }
+})

@@ -72,11 +72,13 @@ describe("transcript context messages", () => {
   test("lists loaded user and assistant turns with a one-line excerpt and skips other entries", () => {
     expect(transcriptContextMessages([
       { kind: "user", id: "msg_u", text: "Fix the\n  header", state: "consumed", created: 1 },
+      { kind: "synthetic", id: "msg_dot", description: "Steer title", text: "Inspect Work config", created: 1.5 },
       { kind: "assistant", id: "msg_a", agent: "build", parts: [{ kind: "reasoning", ordinal: 0, text: "hidden" }, { kind: "text", ordinal: 1, text: "Moved both" }, { kind: "text", ordinal: 2, text: "into one row." }], created: 2 },
       { kind: "assistant", id: "msg_b", parts: [], created: 3 },
       { kind: "system", id: "msg_s", text: "Notice", created: 4 },
     ])).toEqual([
       { id: "msg_u", role: "User", summary: "Fix the header" },
+      { id: "msg_dot", role: "Dot steer", summary: "Inspect Work config" },
       { id: "msg_a", role: "build", summary: "Moved both into one row." },
       { id: "msg_b", role: "Assistant", summary: "No text" },
     ])

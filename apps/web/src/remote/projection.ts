@@ -299,6 +299,7 @@ export type RemoteMessageView =
       readonly description?: string
       readonly source?: string
       readonly metadata?: Readonly<Record<string, unknown>>
+      readonly delivery?: "steer" | "queue"
       readonly pending?: boolean
       readonly created: number
     }
@@ -613,12 +614,63 @@ export function transcriptPartVisible(part: AssistantPart): boolean {
 }
 
 export function transcriptMessageVisible(message: RemoteMessageView): boolean {
-  if ((message.kind === "system" || message.kind === "synthetic") && isInternalTranscriptEnvelope({ type: message.kind, text: message.text, metadata: { ...message.metadata, ...(message.source ? { contextSource: message.source } : {}) } })) return false
   if (isCheckpointSummary(message)) return false
+  if (isDotSteerSynthetic(message)) return dotSteerDisplay(message) !== undefined
+  if ((message.kind === "system" || message.kind === "synthetic") && isInternalTranscriptEnvelope({ type: message.kind, text: message.text, metadata: { ...message.metadata, ...(message.source ? { contextSource: message.source } : {}) } })) return false
   if (message.kind === "synthetic") return Boolean(message.description?.trim())
   if (message.kind === "compaction") return message.status === "running" || message.status === "completed" || message.status === "failed" && (message.failureCode === "cancelled" || message.failureCode === "superseded" || message.jobID === undefined && message.failureCode === "aborted")
   if (message.kind === "assistant") return message.parts.some(transcriptPartVisible) || message.completed !== undefined || message.error !== undefined || message.retry !== undefined
   return true
+}
+
+const steerTransportBlockPattern = /<(system-update|conversation-checkpoint|shared-context|hidden-metadata|transport-metadata|dots-metadata|internal-context)\b[^>]*>[\s\S]*?<\/\1>/gi
+const steerHtmlCommentPattern = /<!--[\s\S]*?-->/g
+const steerTransportTagPattern = /<\/?(?:transcript_evidence|steer|user_prompt)\b[^>]*>/gi
+const steerControlCharPattern = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g
+
+export function stripSteerTransportMarkup(raw: string): string {
+  const cleaned = raw
+    .split(/(```[\s\S]*?```|`[^`\n]+`)/g)
+    .map((segment, index) => index % 2 === 1
+      ? segment.replace(steerControlCharPattern, "")
+      : segment
+          .replace(steerControlCharPattern, "")
+          .replace(steerTransportBlockPattern, "")
+          .replace(steerHtmlCommentPattern, "")
+          .replace(steerTransportTagPattern, ""))
+    .join("")
+  return cleaned.replace(/\n{3,}/g, "\n\n").trim()
+}
+
+export function isDotSteerSynthetic(message: RemoteMessageView): boolean {
+  if (message.kind !== "synthetic") return false
+  if (message.source !== undefined) return false
+  if (message.delivery === "queue") return false
+  if (!message.description?.trim()) return false
+  if (message.description === "Parent session history snapshot" || message.text.startsWith("Recent parent session history")) return false
+  const metadata = message.metadata
+  if (metadata !== undefined && (
+    metadata.contextSource !== undefined ||
+    metadata.source !== undefined ||
+    metadata.dots !== undefined ||
+    metadata.autonomy !== undefined ||
+    metadata.goalDecision !== undefined ||
+    metadata.review !== undefined ||
+    metadata.instruction !== undefined ||
+    metadata.compactionCheckpoint !== undefined ||
+    metadata.projectArtifactsEnded !== undefined ||
+    metadata.decisionInputID !== undefined
+  )) return false
+  if (classifySyntheticNotice(message) !== undefined) return false
+  const stripped = stripSteerTransportMarkup(message.text)
+  if (stripped !== "" && isInternalTranscriptEnvelope({ type: "synthetic", text: stripped, metadata })) return false
+  return true
+}
+
+export function dotSteerDisplay(message: RemoteMessageView): { readonly text: string } | undefined {
+  if (!isDotSteerSynthetic(message) || message.kind !== "synthetic") return undefined
+  const text = stripSteerTransportMarkup(message.text)
+  return text === "" ? undefined : { text }
 }
 
 export function visibleTranscriptMessages(messages: readonly RemoteMessageView[]): readonly RemoteMessageView[] {
@@ -647,7 +699,7 @@ export function readPendingInputs(payload: unknown, sessionID: string): readonly
     const text = stringField(item.data.text)
     if (text === undefined) return []
     const metadata = recordField(item.data.metadata)
-    return [{ kind: "synthetic", id, text, pending: true, created,
+    return [{ kind: "synthetic", id, text, delivery, pending: true, created,
       ...(stringField(item.data.description) === undefined ? {} : { description: stringField(item.data.description) }),
       ...(metadata === undefined ? {} : { metadata }),
       ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}) }]
@@ -1632,10 +1684,12 @@ function applyAdmitted(view: SessionView, data: Record<string, unknown>, now: nu
   const payload = isRecord(pending.data) ? pending.data : pending
   if (pending.type === "synthetic") {
     const metadata = recordField(payload.metadata)
+    const delivery = deliveryField(pending.delivery)
     const message: RemoteMessageView = {
       kind: "synthetic",
       id,
       text: stringField(payload.text) ?? "",
+      ...(delivery === undefined ? {} : { delivery }),
       ...(stringField(payload.description) ? { description: stringField(payload.description) } : {}),
       ...(metadata === undefined ? {} : { metadata }),
       ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}),
