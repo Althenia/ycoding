@@ -316,6 +316,7 @@ export function workspaceBase(directory: string): string {
 }
 
 export type SyntheticCard =
+  | { readonly kind: "dot-steer"; readonly text: string }
   | { readonly kind: "completion"; readonly label: string; readonly status: string; readonly description: string }
   | { readonly kind: "goal"; readonly text: string }
   | { readonly kind: "member"; readonly label: string; readonly event: string; readonly memberSessionID: string; readonly excerpt?: string; readonly escalatedBy?: string }
@@ -361,11 +362,40 @@ function parentAnswerText(message: Extract<Messages[number], { type: "synthetic"
   }
 }
 
-export function classifyDesktopSynthetic(message: Messages[number]): SyntheticCard | undefined {
-  if (message.type !== "synthetic" || isInternalTranscriptEnvelope(message)) return undefined
+const steerTransportBlockPattern = /<(system-update|conversation-checkpoint|shared-context|hidden-metadata|transport-metadata|dots-metadata|internal-context)\b[^>]*>[\s\S]*?<\/\1>/gi
+const steerHtmlCommentPattern = /<!--[\s\S]*?-->/g
+const steerTransportTagPattern = /<\/?(?:transcript_evidence|steer|user_prompt)\b[^>]*>/gi
+const steerControlCharPattern = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g
+
+export function stripSteerTransportMarkup(raw: string): string {
+  const cleaned = raw
+    .split(/(```[\s\S]*?```|`[^`\n]+`)/g)
+    .map((segment, index) => index % 2 === 1
+      ? segment.replace(steerControlCharPattern, "")
+      : segment
+          .replace(steerControlCharPattern, "")
+          .replace(steerTransportBlockPattern, "")
+          .replace(steerHtmlCommentPattern, "")
+          .replace(steerTransportTagPattern, ""))
+    .join("")
+  return cleaned.replace(/\n{3,}/g, "\n\n").trim()
+}
+
+type SyntheticSteerInput =
+  | Messages[number]
+  | {
+      readonly id: string
+      readonly type: string
+      readonly text?: string
+      readonly description?: string
+      readonly metadata?: Readonly<Record<string, unknown>>
+      readonly source?: string
+      readonly delivery?: "steer" | "queue"
+    }
+
+function classifySyntheticNotice(message: Extract<Messages[number], { type: "synthetic" }>): Exclude<SyntheticCard, { kind: "dot-steer" | "note" }> | undefined {
   const metadata = message.metadata
   const description = message.description?.trim() ?? ""
-  if (metadata?.source === "subagent_notification") return undefined
   if (metadata?.source === "subagent_parent") {
     const text = parentAnswerText(message)
     if (text !== undefined) return { kind: "parent-answer", text }
@@ -384,6 +414,60 @@ export function classifyDesktopSynthetic(message: Messages[number]): SyntheticCa
     return { kind: "completion", label: metadata.source === "shell" ? "Shell" : nonEmptyString(metadata.agent) ?? "Subagent", status, description }
   }
   if (isRecord(metadata?.autonomy) && Reflect.get(metadata.autonomy, "goal") === true && message.text.trim()) return { kind: "goal", text: message.text }
+  return undefined
+}
+
+export function isDotSteerSynthetic(message: SyntheticSteerInput): boolean {
+  if (message.type !== "synthetic" || typeof message.text !== "string") return false
+  if ("source" in message && message.source !== undefined) return false
+  if ("delivery" in message && message.delivery === "queue") return false
+  if (!message.description?.trim()) return false
+  if (message.description === "Parent session history snapshot" || message.text.startsWith("Recent parent session history")) return false
+  const metadata = message.metadata
+  if (metadata !== undefined && (
+    metadata.contextSource !== undefined ||
+    metadata.source !== undefined ||
+    metadata.dots !== undefined ||
+    metadata.autonomy !== undefined ||
+    metadata.goalDecision !== undefined ||
+    metadata.review !== undefined ||
+    metadata.instruction !== undefined ||
+    metadata.compactionCheckpoint !== undefined ||
+    metadata.projectArtifactsEnded !== undefined ||
+    metadata.decisionInputID !== undefined
+  )) return false
+  const stripped = stripSteerTransportMarkup(message.text)
+  if (stripped !== "" && isInternalTranscriptEnvelope({ type: "synthetic", text: stripped })) return false
+  return true
+}
+
+export function dotSteerDisplay(message: SyntheticSteerInput): { readonly text: string } | undefined {
+  if (!isDotSteerSynthetic(message) || message.type !== "synthetic" || typeof message.text !== "string") return undefined
+  const text = stripSteerTransportMarkup(message.text)
+  return text === "" ? undefined : { text }
+}
+
+export function dotSteerReceipt(pending: boolean | undefined, delivery: "steer" | "queue" | undefined, processing = false) {
+  if (pending) return delivery === "queue"
+    ? { label: "Dot steer prompt queued for processing", text: "Queued · Dot steer", mark: "◷" }
+    : { label: "Processing Dot steer prompt", text: "Processing · steer", mark: "◷" }
+  if (processing) return { label: "Processing Dot steer prompt", text: "Processing · Dot steer", mark: "◷" }
+  return { label: "Dot steer prompt", text: "Dot steer", mark: "✓" }
+}
+
+export function classifyDesktopSynthetic(message: Messages[number]): SyntheticCard | undefined {
+  if (message.type !== "synthetic") return undefined
+  if (isDotSteerSynthetic(message)) {
+    const steer = dotSteerDisplay(message)
+    return steer === undefined ? undefined : { kind: "dot-steer", text: steer.text }
+  }
+  if (isInternalTranscriptEnvelope(message)) return undefined
+  const metadata = message.metadata
+  const description = message.description?.trim() ?? ""
+  if (metadata?.source === "subagent_notification") return undefined
+  if (metadata?.source === "project_notification") return classifySyntheticNotice(message)
+  const notice = classifySyntheticNotice(message)
+  if (notice !== undefined) return notice
   return description ? { kind: "note", text: description } : undefined
 }
 
@@ -392,9 +476,9 @@ function compactionFailureCode(message: Extract<Messages[number], { type: "compa
 }
 
 export function desktopMessageVisible(message: Messages[number]): boolean {
+  if (message.type === "synthetic") return classifyDesktopSynthetic(message) !== undefined
   if (isInternalTranscriptEnvelope(message)) return false
   if (message.type === "system") return Boolean(message.text.trim())
-  if (message.type === "synthetic") return classifyDesktopSynthetic(message) !== undefined
   if (message.type === "compaction") {
     if (message.status === "running" || message.status === "completed") return true
     if (message.status !== "failed") return false
@@ -604,6 +688,10 @@ export function formatSessionExportMarkdown(input: { readonly title: string; rea
   const header = [`# ${input.title}`, "", `- Session: ${input.sessionID}`, `- Directory: ${input.directory}`, ...(input.updatedAt === undefined ? [] : [`- Updated: ${new Date(input.updatedAt).toISOString()}`])]
   const sections = visibleDesktopMessages(input.messages).flatMap((message): string[] => {
     if (message.type === "user") return [`## You\n\n${message.text}`]
+    if (message.type === "synthetic") {
+      const steer = dotSteerDisplay(message)
+      return steer === undefined ? [] : [`## Dot steer\n\n${steer.text}`]
+    }
     if (message.type === "system") return [message.text]
     if (message.type === "shell") return [`## Shell\n\n\`\`\`sh\n${message.command}\n\`\`\``]
     if (message.type !== "assistant") return []
@@ -836,17 +924,18 @@ export function formatQuotaProviders(quotas: readonly RawQuotaSnapshot[], now?: 
 
 export type TurnEdit = { readonly turnID: string; readonly files: readonly { readonly path: string; readonly patch: string; readonly additions: number; readonly deletions: number }[] }
 
-export function turnEditPlacements(messages: readonly { readonly id: string; readonly type: string }[], turns: SessionFileChanges["turns"]): ReadonlyMap<string, TurnEdit> {
+export function turnEditPlacements(messages: readonly { readonly id: string; readonly type: string; readonly text?: string; readonly description?: string; readonly metadata?: Readonly<Record<string, unknown>> }[], turns: SessionFileChanges["turns"]): ReadonlyMap<string, TurnEdit> {
   const placements = new Map<string, TurnEdit>()
   if (!turns?.length) return placements
   const byID = new Map(turns.map((turn) => [turn.id, turn] as const))
+  const isPromptTurn = (entry: (typeof messages)[number]) => entry.type === "user" || (entry.type === "synthetic" && typeof entry.text === "string" && dotSteerDisplay(entry) !== undefined)
   let current: string | undefined
   let seenUser = false
   messages.forEach((message, index) => {
-    if (message.type === "user") { seenUser = true; current = byID.has(message.id) ? message.id : undefined }
+    if (isPromptTurn(message)) { seenUser = true; current = byID.has(message.id) ? message.id : undefined }
     else if (!seenUser && current === undefined && byID.has(message.id)) current = message.id
     const turn = current === undefined ? undefined : byID.get(current)
-    if (!turn || !turn.files.length || (messages[index + 1] && messages[index + 1]!.type !== "user")) return
+    if (!turn || !turn.files.length || (messages[index + 1] && !isPromptTurn(messages[index + 1]!))) return
     const merged = new Map<string, { path: string; patch: string; additions: number; deletions: number }>()
     for (const file of turn.files) {
       const previous = merged.get(file.path)

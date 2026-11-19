@@ -1415,3 +1415,27 @@ test("Stitch Direction A Ledger structure and token rules preserve desktop geome
   expect(component.filter((line) => /#[0-9a-fA-F]{3,8}\b|rgba?\(/.test(line))).toEqual([])
   expect(workspaceShell.split("\n").filter((line) => /#[0-9a-fA-F]{3,8}\b|rgba?\(/.test(line))).toEqual([])
 })
+
+test("Dot steer prompts join prompt ticks and clean transcript text without claiming human authorship", async () => {
+  const { desktopPromptTicks, transcriptText } = await import("../src/renderer")
+  const { formatSessionExportMarkdown, turnEditPlacements } = await import("../src/form-rules")
+  const turns = [
+    { id: "msg_u1", type: "user", text: "Human prompt", time: { created: 1 } },
+    { id: "msg_dot_steer", type: "synthetic", description: "Argo CD MCP steer", text: "<system-update>{\"autonomy\":{}}</system-update>\nInstall and verify Argo CD MCP.", time: { created: 2 } },
+    { id: "msg_dot_empty", type: "synthetic", description: "Empty steer", text: "<system-update>{}</system-update>", time: { created: 3 } },
+    { id: "msg_goal_steer", type: "synthetic", description: "Goal · steer", text: "Continue work", metadata: { autonomy: { goal: true } }, time: { created: 4 } },
+    { id: "msg_a1", type: "assistant", agent: "god", model: { providerID: "synthetic", id: "echo" }, content: [{ type: "text", text: "Done." }], time: { created: 5, completed: 6 } },
+  ] as unknown as Parameters<typeof desktopPromptTicks>[0]
+  expect(desktopPromptTicks(turns)).toEqual([
+    { id: "msg_u1", text: "Human prompt" },
+    { id: "msg_dot_steer", text: "Install and verify Argo CD MCP." },
+  ])
+  expect(transcriptText(turns[1]!)).toBe("Install and verify Argo CD MCP.")
+  const md = formatSessionExportMarkdown({ title: "Steer", sessionID: "ses_1", directory: "/synthetic/repo", messages: turns })
+  expect(md).toContain("## You\n\nHuman prompt")
+  expect(md).toContain("## Dot steer\n\nInstall and verify Argo CD MCP.")
+  expect(md).not.toContain("Empty steer")
+  expect(md).not.toContain("<system-update>")
+  const placements = turnEditPlacements(turns, [{ id: "msg_dot_steer", type: "synthetic", files: [{ path: "a.ts", patch: "a", additions: 1, deletions: 0 }] }])
+  expect(placements.get("msg_a1")?.turnID).toBe("msg_dot_steer")
+})

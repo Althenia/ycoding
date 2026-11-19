@@ -30,7 +30,7 @@ import { Icon as WebIcon, type IconName as WebIconName } from "../../../apps/web
 import { ordinarySession } from "./sessions"
 import { Markdown, MarkdownClipboard } from "../../../apps/web/src/remote/ui/markdown"
 import { WORKSPACE_DESTINATIONS, SharedWorkspaceFrame, SharedCompanionSurface, SharedCompanionTabs, SharedConversationHeader, SharedMessageTurn, SharedContextRingButton, SharedContextBreakdownPanel, SharedTurnHead, SharedRadioGroup, SharedCompactionDivider, SharedEditedFilesCard, SharedActivitySurface, SharedPageSurface, SharedSessionsSurface, SharedWorkspacesSurface, SharedUsageSurface, SharedSettingsSurface, SharedLoadingSkeleton } from "../../../apps/web/src/remote/ui/shared-workspace"
-import { DESKTOP_THEMES, isDesktopThemeID, resolveDesktopTheme, DESKTOP_BUILT_IN_SLASH_COMMANDS, desktopSlashCommand, validateFolderSegment, parsePromptStashes, pushPromptStash, formatQuotaProviders, formatCount, formatCompactCount, formatDurationMs, formatUsd, type DesktopThemeID, activeFields, appendPage, buildAnswer, chooseModel, chooseProfile, choiceFor, choiceProblem, composerTrigger, initialValues, insertCompletion, invalidIndexes, restoredPrompt, modelLabel, pagedItems, pagingFor, problemOf, profileLabel, railGroups, restoresFocus, sameSelection, samePaging, searchTerm, selectionFor, composerSlash, valueFor, variantsFor, visibleModels, withValue, workspaceBase, classifyDesktopSynthetic, visibleDesktopMessages, turnEditPlacements, groupAssistantParts, toolDisplaySummary, effortStopsFor, effortStopIndex, effortStopFraction, insertTextAtSelection, isEditableKeyboardTarget, isStandardEditShortcut, sessionState, type PastedText, type StashedPrompt, type Activity, type Field, type FocusAt, type MentionPick, type ModelChoice, type SlashAction, type Paging, type Value } from "./form-rules"
+import { DESKTOP_THEMES, isDesktopThemeID, resolveDesktopTheme, DESKTOP_BUILT_IN_SLASH_COMMANDS, desktopSlashCommand, validateFolderSegment, parsePromptStashes, pushPromptStash, formatQuotaProviders, formatCount, formatCompactCount, formatDurationMs, formatUsd, type DesktopThemeID, activeFields, appendPage, buildAnswer, chooseModel, chooseProfile, choiceFor, choiceProblem, composerTrigger, initialValues, insertCompletion, invalidIndexes, restoredPrompt, modelLabel, pagedItems, pagingFor, problemOf, profileLabel, railGroups, restoresFocus, sameSelection, samePaging, searchTerm, selectionFor, composerSlash, valueFor, variantsFor, visibleModels, withValue, workspaceBase, classifyDesktopSynthetic, dotSteerDisplay, dotSteerReceipt, visibleDesktopMessages, turnEditPlacements, groupAssistantParts, toolDisplaySummary, effortStopsFor, effortStopIndex, effortStopFraction, insertTextAtSelection, isEditableKeyboardTarget, isStandardEditShortcut, sessionState, type PastedText, type StashedPrompt, type Activity, type Field, type FocusAt, type MentionPick, type ModelChoice, type SlashAction, type Paging, type Value } from "./form-rules"
 import { JumpControls, PromptRail, followState, jumpBehavior, navigationTargets, pillClearance, promptTicks, type PromptTick } from "../../../apps/web/src/remote/ui/transcript-rail"
 import { orderedModelOptions } from "../../../apps/web/src/remote/ui/composer-logic"
 import { readRecentModels, rememberRecentModel } from "../../../apps/web/src/remote/preferences"
@@ -779,7 +779,11 @@ function StashDialog(props: { options: StashOptions }) {
 }
 
 export function transcriptText(message: Messages[number]) {
-  return message.type === "assistant" ? groupAssistantParts(message.content).flatMap((group) => group.kind === "text" ? [group.text] : []).join("\n\n") : message.type === "user" || message.type === "system" || message.type === "synthetic" ? message.text : message.type === "shell" ? `${message.command}\n${message.output?.output ?? ""}` : ""
+  if (message.type === "assistant") return groupAssistantParts(message.content).flatMap((group) => group.kind === "text" ? [group.text] : []).join("\n\n")
+  if (message.type === "synthetic") return dotSteerDisplay(message)?.text ?? message.text
+  if (message.type === "user" || message.type === "system") return message.text
+  if (message.type === "shell") return `${message.command}\n${message.output?.output ?? ""}`
+  return ""
 }
 
 let restartingBackend = false
@@ -2288,7 +2292,11 @@ function CompactionView(props: { message: Extract<Messages[number], { type: "com
 }
 
 export function desktopPromptTicks(messages: readonly Messages[number][]): readonly PromptTick[] {
-  return promptTicks(messages, (message) => message.type === "user" ? { id: message.id, text: message.text } : undefined)
+  return promptTicks(messages, (message) => {
+    if (message.type === "user") return { id: message.id, text: message.text }
+    const steer = dotSteerDisplay(message)
+    return steer === undefined ? undefined : { id: message.id, text: steer.text }
+  })
 }
 
 function DesktopComposerSurface(props: { readonly formClass: string; readonly busy: boolean; readonly onSubmit: (event: SubmitEvent) => void; readonly field: JSX.Element; readonly feedback: JSX.Element }) {
@@ -2382,6 +2390,8 @@ function TurnView(props: { message: Messages[number]; continuation?: boolean }) 
   const externalPeer = () => dotsPeerLabel(props.message.metadata)
   const peerInput = () => externalPeer() && (props.message.type === "user" || props.message.type === "synthetic") ? props.message : undefined
   const syntheticCard = () => props.message.type === "synthetic" && !peerInput() ? classifyDesktopSynthetic(props.message) : undefined
+  const steer = () => { const card = syntheticCard(); return card?.kind === "dot-steer" ? card : undefined }
+  const steerReceipt = () => dotSteerReceipt(false, undefined, false)
   const layout = () => {
     if (peerInput()) return "activity"
     const type = role()
@@ -2389,13 +2399,14 @@ function TurnView(props: { message: Messages[number]; continuation?: boolean }) 
     const card = syntheticCard()
     return card && (card.kind === "completion" || card.kind === "note") ? "pill" : "block"
   }
-  return <li id={`turn-${props.message.id}`} class={`transcript__turn ${role() === "user" ? "rl-me" : role() === "assistant" ? "rl-them" : "rl-sys"}`} data-speaker={role()} data-layout={layout()} tabindex={role() === "user" ? -1 : undefined}>
+  return <li id={`turn-${props.message.id}`} class={`transcript__turn ${role() === "user" || steer() !== undefined ? "rl-me" : role() === "assistant" ? "rl-them" : "rl-sys"}`} data-speaker={role()} data-layout={layout()} tabindex={role() === "user" || steer() !== undefined ? -1 : undefined}>
     <Show when={peerInput()}>{message => {
       const files = () => { const input = message(); return input.type === "user" ? input.files : undefined }
       return <><span class="transcript-message__author desktop__sr">External peer</span><NativeActivityRow label={dotsPeerLabel({ dots: field(props.message.metadata, "dots") }) ? "Dots" : "Remote MCP"} identity={externalPeer()} time={message().time.created}><Markdown text={message().text} /><For each={files()}>{file => <span class="conversation__chip">{file.name ?? "Attachment"}</span>}</For></NativeActivityRow></>
     }}</Show>
     <Show when={!peerInput() && externalPeer()}>{value => <NativeActivityRow label="External peer" identity={value()}>{value()}</NativeActivityRow>}</Show>
     <Show when={props.message.type === "user" && !peerInput() ? props.message : undefined}>{(message) => <SharedMessageTurn kind="user" markdownText={message().text} attachments={<For each={message().files}>{(file) => <span class="conversation__chip">{file.name ?? "Attachment"}</span>}</For>} receipt={new Date(message().time.created).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} receiptLabel="Message created" />}</Show>
+    <Show when={steer()}>{(entry) => <SharedMessageTurn kind="synthetic" content={<div class="transcript-message--user" aria-label="Dot steer prompt"><div class="transcript-message__bubble"><div class="transcript-message__bubble-text"><Markdown text={entry().text} /></div></div><span class="transcript-message__receipt" role="status" aria-label={steerReceipt().label}>{steerReceipt().text}</span></div>} />}</Show>
     <Show when={props.message.type === "assistant" ? props.message : undefined}>{(message) => {
       const groups = createMemo(() => groupAssistantParts(message().content))
       const identity = () => <SharedTurnHead class="transcript-message__head" mark={<span class="rl-avatar transcript-message__mark"><Icon name="sparkles" /></span>}>{message().agent} · {message().model.providerID}/{message().model.id}{message().model.variant ? ` · ${message().model.variant}` : ""}{message().model.profile === undefined ? "" : ` · Profile ${message().model.profile}`}{duration(message().time.created, message().time.completed) ? ` · ${duration(message().time.created, message().time.completed)}` : ""}</SharedTurnHead>
@@ -2416,7 +2427,7 @@ function TurnView(props: { message: Messages[number]; continuation?: boolean }) 
     <Show when={props.message.type === "shell" ? props.message : undefined}>{(message) => <SharedMessageTurn kind="shell" shellHeader={<><code class="ws-card-title">$ {message().command}</code> · {message().status}{message().exit === undefined ? "" : ` · exit ${message().exit}`}</>} shellOutput={<div class="ws-shell"><pre class="ws-out"><code>{message().output?.output ?? ""}</code></pre><Show when={message().output?.truncated}><p>Shell output is truncated.</p></Show></div>} />}</Show>
     <Show when={props.message.type === "compaction" ? props.message : undefined}>{(message) => <SharedMessageTurn kind="compaction" compaction={<CompactionView message={message()} />} />}</Show>
     <Show when={props.message.type === "system" ? props.message : undefined}>{(message) => <SharedMessageTurn kind="system" content={<><span class="transcript__speaker">System</span><div class="transcript-system-card"><Markdown text={message().text} /></div></>} />}</Show>
-    <Show when={syntheticCard()}>{(card) => card().kind === "member" ? <Show when={card().kind === "member" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "member" }> : undefined}>{(entry) => <article class="transcript-notice-card" data-kind="member" data-status={entry().event}><header class="transcript-notice-card__head"><Icon name={entry().event === "failed" ? "alert" : "team"} /><strong>{entry().label}</strong><span class="transcript-notice-card__status">{entry().event}</span><Link to="/sessions/$sessionID" params={{ sessionID: entry().memberSessionID }} class="rl-btn transcript-notice-card__open">Open</Link></header><Show when={entry().escalatedBy}>{(by) => <p class="transcript-notice-card__meta">Escalated by {by()}</p>}</Show><Show when={entry().excerpt}>{(excerpt) => <Markdown text={excerpt()} />}</Show></article>}</Show>
+    <Show when={syntheticCard() && syntheticCard()!.kind !== "dot-steer" ? syntheticCard() : undefined}>{(card) => card().kind === "member" ? <Show when={card().kind === "member" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "member" }> : undefined}>{(entry) => <article class="transcript-notice-card" data-kind="member" data-status={entry().event}><header class="transcript-notice-card__head"><Icon name={entry().event === "failed" ? "alert" : "team"} /><strong>{entry().label}</strong><span class="transcript-notice-card__status">{entry().event}</span><Link to="/sessions/$sessionID" params={{ sessionID: entry().memberSessionID }} class="rl-btn transcript-notice-card__open">Open</Link></header><Show when={entry().escalatedBy}>{(by) => <p class="transcript-notice-card__meta">Escalated by {by()}</p>}</Show><Show when={entry().excerpt}>{(excerpt) => <Markdown text={excerpt()} />}</Show></article>}</Show>
       : card().kind === "goal" ? <Show when={card().kind === "goal" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "goal" }> : undefined}>{(entry) => <article class="transcript-notice-card" data-kind="goal"><header class="transcript-notice-card__head"><Icon name="target" /><strong>Goal · steer</strong></header><Markdown text={entry().text} /></article>}</Show>
       : card().kind === "parent-answer" ? <Show when={card().kind === "parent-answer" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "parent-answer" }> : undefined}>{(entry) => <article class="transcript-notice-card" data-kind="parent-answer"><header class="transcript-notice-card__head"><Icon name="chat" /><strong>Parent answer</strong></header><Markdown text={entry().text} /></article>}</Show>
       : card().kind === "completion" ? <Show when={card().kind === "completion" ? card() as Extract<ReturnType<typeof classifyDesktopSynthetic>, { kind: "completion" }> : undefined}>{(entry) => <div class="transcript-notice-pill" data-status={entry().status}><Icon name={entry().status === "failed" ? "alert" : "check"} /><div class="transcript-notice__body"><strong>{entry().label} · {entry().status}</strong><Markdown text={entry().description} /></div></div>}</Show>
@@ -2981,7 +2992,7 @@ function Conversation(props: { sessionID: string }) {
   let measureFrame: number | undefined
   let visibility: ReturnType<typeof createPromptVisibility> | undefined
   const ticks = createMemo(() => desktopPromptTicks(turns()))
-  const syncVisibility = () => { if (scroller) visibility?.sync([...scroller.querySelectorAll<HTMLElement>('.transcript__turn[data-speaker="user"][id]')].map((node) => ({ id: node.id.slice(5), node }))) }
+  const syncVisibility = () => { if (scroller) visibility?.sync([...scroller.querySelectorAll<HTMLElement>('.transcript__turn.rl-me[id]')].map((node) => ({ id: node.id.slice(5), node }))) }
   createEffect(on(() => ticks().map((tick) => tick.id).join("\0"), () => queueMicrotask(syncVisibility)))
   const targets = () => navigationTargets(scrollTop(), following())
   const toEnd = () => { if (scroller) scroller.scrollTop = scroller.scrollHeight }

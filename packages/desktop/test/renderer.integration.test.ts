@@ -2641,6 +2641,106 @@ test("Desktop polish closes Goal and autonomy and Commands with Escape and resto
   } finally { await page.close() }
 }, 30_000)
 
+test("Desktop polish renders genuine Dot steer events as right-aligned prompt bubbles without fallback cards or markup leakage", async () => {
+  prepareImplementedSurface()
+  const peer = { origin: "dots-peer", profile: "synthetic", dotID: "dot-1", threadID: "thread-1", itemID: "item-1" }
+  const dotMessages = [
+    { id: "msg_human", type: "user", sessionID: "ses_test", text: "Check the claim decisions and readiness log.", time: { created: 1 } },
+    { id: "msg_reply_before", type: "assistant", sessionID: "ses_test", agent: "god", model: { providerID: "synthetic", id: "echo" }, content: [{ type: "text", text: "Checked the claim log." }], time: { created: 2, completed: 3 } },
+    { id: "msg_subagent_notice", type: "synthetic", sessionID: "ses_test", text: "Subagent updated", description: "Subagent updated", metadata: { source: "subagent_notification", type: "updated", childID: "ses_task_c6de7f60e010244c053d4832" }, time: { created: 4 } },
+    { id: "msg_dot_steer_argo", type: "synthetic", sessionID: "ses_test", description: "Install and verify the pinned official Argo CD MCP in Work project config", text: "<shared-context>\nUser evidence:\nprior turn\n</shared-context>\n\n<system-update>{\"autonomy\":{\"mode\":\"normal\"}}</system-update>\nInstall and verify the pinned official Argo CD MCP in Work project config by checking the project settings and docs first.\n<!-- hidden:trace -->", time: { created: 5 } },
+    { id: "msg_dot_steer_empty", type: "synthetic", sessionID: "ses_test", description: "Hidden empty steer title", text: "<system-update>{}</system-update>", time: { created: 6 } },
+    { id: "msg_goal_steer", type: "synthetic", sessionID: "ses_test", description: "Goal · steer", text: "Continue remaining work", metadata: { autonomy: { goal: true } }, time: { created: 7 } },
+    { id: "msg_dot_peer", type: "synthetic", sessionID: "ses_test", description: "Peer message", text: "Room peer message", metadata: { dots: peer }, time: { created: 8 } },
+    { id: "msg_shell_done", type: "synthetic", sessionID: "ses_test", description: "Shell command completed", text: "Shell command completed", metadata: { source: "shell", state: "completed" }, time: { created: 9 } },
+    { id: "msg_reply_after", type: "assistant", sessionID: "ses_test", agent: "god", model: { providerID: "synthetic", id: "echo" }, content: [{ type: "text", text: "Verified the pinned Argo CD MCP configuration." }], time: { created: 10, completed: 11 } },
+  ]
+  sceneRead = call => call.route === "/api/session/ses_test/snapshot"
+    ? { sourceEpoch: "synthetic", session: session("ses_test"), watermark: { type: "log.synced", aggregateID: "ses_test", seq: 1000 }, messages: dotMessages }
+    : undefined
+  const page = await open("document.querySelector('#turn-msg_reply_after')")
+  try {
+    for (const [width, height] of [[1440, 900], [800, 600]] as const) {
+      await page.setViewport(width, height)
+      await settleR7(page)
+      await wait(page, `document.querySelector('#turn-msg_dot_steer_argo .transcript-message__bubble')`)
+      const state = await page.evaluate(`(() => {
+        const human = document.querySelector('#turn-msg_human')
+        const humanArticle = human?.querySelector('article')
+        const humanBubble = human?.querySelector('.transcript-message__bubble')
+        const steer = document.querySelector('#turn-msg_dot_steer_argo')
+        const steerArticle = steer?.querySelector('article')
+        const steerLabeled = steerArticle?.querySelector('[aria-label="Dot steer prompt"]')
+        const steerBubble = steer?.querySelector('.transcript-message__bubble')
+        const track = document.querySelector('.transcript')?.getBoundingClientRect()
+        const hRect = humanBubble?.getBoundingClientRect()
+        const sRect = steerBubble?.getBoundingClientRect()
+        const goal = document.querySelector('#turn-msg_goal_steer')
+        const peerTurn = document.querySelector('#turn-msg_dot_peer')
+        const shellTurn = document.querySelector('#turn-msg_shell_done')
+        const ticks = [...document.querySelectorAll('.transcript-navigation__ticks .transcript-navigation__tick')].map(btn => btn.getAttribute('aria-label') ?? '')
+        return {
+          steerTurnClass: steer?.className ?? '',
+          steerSpeaker: steer?.getAttribute('data-speaker') ?? '',
+          steerLayout: steer?.getAttribute('data-layout') ?? '',
+          steerArticleClasses: steerArticle ? [...steerArticle.classList] : [],
+          steerHasUserClass: Boolean(steerArticle?.classList.contains('transcript-message--user') || steerLabeled?.classList.contains('transcript-message--user')),
+          steerLabel: (steerArticle?.getAttribute('aria-label') || steerLabeled?.getAttribute('aria-label')) ?? '',
+          steerText: steerBubble?.textContent?.trim() ?? '',
+          steerReceipt: steer?.querySelector('.transcript-message__receipt')?.textContent?.trim() ?? '',
+          steerReceiptLabel: steer?.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') ?? '',
+          steerBg: steerBubble ? getComputedStyle(steerBubble).backgroundColor : '',
+          humanBg: humanBubble ? getComputedStyle(humanBubble).backgroundColor : '',
+          steerRightDelta: hRect && sRect ? Math.abs(sRect.right - hRect.right) : 999,
+          trackRightDelta: track && sRect ? Math.abs(sRect.right - track.right) : 999,
+          steerWidthLessThanTrack: Boolean(track && sRect && sRect.width < track.width),
+          hasPill: steer?.querySelector('.transcript-notice-pill') !== null,
+          hasNoticeCard: steer?.querySelector('.transcript-notice-card') !== null,
+          hasHiddenEmpty: document.querySelector('#turn-msg_dot_steer_empty') !== null,
+          hasSubagentNotice: document.querySelector('#turn-msg_subagent_notice') !== null,
+          goalCard: Boolean(goal?.querySelector('.transcript-notice-card[data-kind="goal"]') && !goal?.querySelector('.transcript-message__bubble')),
+          peerRow: Boolean(peerTurn?.dataset.layout === 'activity' && peerTurn?.querySelector('[data-dots-message]') && !peerTurn?.querySelector('.transcript-message__bubble')),
+          shellPill: Boolean(shellTurn?.querySelector('.transcript-notice-pill') && !shellTurn?.querySelector('.transcript-message__bubble')),
+          humanAuthorHidden: !humanArticle?.querySelector('.transcript-message__author'),
+          steerAuthorHidden: !steerArticle?.querySelector('.transcript-message__author'),
+          ticks,
+          overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        }
+      })()`, decodeRecord)
+      expect(state.steerTurnClass).toContain("rl-me")
+      expect(state.steerSpeaker).toBe("synthetic")
+      expect(state.steerLayout).toBe("block")
+      expect(state.steerArticleClasses).toContain("transcript-message--synthetic")
+      expect(state.steerHasUserClass).toBe(true)
+      expect(state.steerLabel).toBe("Dot steer prompt")
+      expect(state.steerText).toBe("Install and verify the pinned official Argo CD MCP in Work project config by checking the project settings and docs first.")
+      expect(state.steerText).not.toContain("<shared-context>")
+      expect(state.steerText).not.toContain("<system-update>")
+      expect(state.steerText).not.toContain("hidden:trace")
+      expect(state.steerReceipt).toBe("Dot steer")
+      expect(state.steerReceiptLabel).toBe("Dot steer prompt")
+      expect(state.steerBg).toBe(state.humanBg)
+      expect(decodeNumber(state.steerRightDelta)).toBeLessThanOrEqual(1)
+      expect(decodeNumber(state.trackRightDelta)).toBeLessThanOrEqual(1)
+      expect(state.steerWidthLessThanTrack).toBe(true)
+      expect(state.hasPill).toBe(false)
+      expect(state.hasNoticeCard).toBe(false)
+      expect(state.hasHiddenEmpty).toBe(false)
+      expect(state.hasSubagentNotice).toBe(false)
+      expect(state.goalCard).toBe(true)
+      expect(state.peerRow).toBe(true)
+      expect(state.shellPill).toBe(true)
+      expect(state.humanAuthorHidden).toBe(true)
+      expect(state.steerAuthorHidden).toBe(true)
+      expect(decodeArray(decodeString)(state.ticks)).toEqual([
+        "Go to prompt: Check the claim decisions and readiness log.",
+        "Go to prompt: Install and verify the pinned official Argo CD MCP in Work project config by checking the…",
+      ])
+      expect(state.overflow).toBe(false)
+    }
+  } finally { await page.close() }
+}, 30_000)
+
 async function polishTheme(page: Page, theme: "light" | "dark") {
   if (theme === "dark") return
   await page.evaluate(`localStorage.setItem('ycoding.desktop.theme', 'light'); location.reload()`)

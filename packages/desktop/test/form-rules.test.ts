@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { Messages, ModelOption, SessionItem, Sessions } from "../src/contract"
 import { DESKTOP_BUILT_IN_SLASH_COMMANDS, DESKTOP_THEMES, desktopSlashCommand, formatSessionExportMarkdown, isDesktopThemeID, parsePromptStashes, pushPromptStash, resolveDesktopTheme, validateFolderSegment, type DesktopThemeID } from "../src/form-rules"
-import { classifyDesktopSynthetic, desktopMessageVisible, desktopPartVisible, effortStopFraction, effortStopIndex, effortStopsFor, groupAssistantParts, isInternalTranscriptEnvelope, toolDisplaySummary, visibleDesktopMessages, type AssistantContentPart, activeFields, answerOf, appendPage, buildAnswer, choiceProblem, composerTrigger, insertCompletion, invalidIndexes, mentionPayload, restoresFocus, samePaging, slashAction, visibleModels, workspaceBase, mergeItems, pagedItems, pagingFor, railGroups, searchLimit, searchTerm, chooseModel, chooseProfile, choiceFor, initialValues, matches, modelLabel, problemOf, profileLabel, sameSelection, selectionFor, valueFor, variantsFor, withValue, type Field } from "../src/form-rules"
+import { classifyDesktopSynthetic, desktopMessageVisible, desktopPartVisible, dotSteerDisplay, dotSteerReceipt, effortStopFraction, effortStopIndex, effortStopsFor, groupAssistantParts, isDotSteerSynthetic, isInternalTranscriptEnvelope, stripSteerTransportMarkup, toolDisplaySummary, visibleDesktopMessages, type AssistantContentPart, activeFields, answerOf, appendPage, buildAnswer, choiceProblem, composerTrigger, insertCompletion, invalidIndexes, mentionPayload, restoresFocus, samePaging, slashAction, visibleModels, workspaceBase, mergeItems, pagedItems, pagingFor, railGroups, searchLimit, searchTerm, chooseModel, chooseProfile, choiceFor, initialValues, matches, modelLabel, problemOf, profileLabel, sameSelection, selectionFor, valueFor, variantsFor, withValue, type Field } from "../src/form-rules"
 
 import { formatCompactCount, formatCount, formatDurationMs, formatPercent, formatQuotaProviders, formatQuotaWindow, formatUsd } from "../src/form-rules"
 
@@ -453,12 +453,66 @@ test("subagent and shell completions need a description and map states", () => {
   expect(classifyDesktopSynthetic(synthetic("f", "x", { metadata: { source: "shell", state: "completed" } }))).toBeUndefined()
 })
 
-test("goal synthetic messages show their text and a described synthetic becomes a note", () => {
+test("goal synthetic messages show their text and a described synthetic with non-steer metadata becomes a note", () => {
   expect(classifyDesktopSynthetic(synthetic("a", "Ship it", { metadata: { autonomy: { goal: true } } }))).toEqual({ kind: "goal", text: "Ship it" })
   expect(classifyDesktopSynthetic(synthetic("b", "  ", { metadata: { autonomy: { goal: true } } }))).toBeUndefined()
-  expect(classifyDesktopSynthetic(synthetic("c", "x", { description: " Context loaded " }))).toEqual({ kind: "note", text: "Context loaded" })
+  expect(classifyDesktopSynthetic(synthetic("c", "x", { description: " Context loaded ", metadata: { instruction: { paths: ["AGENTS.md"] } } }))).toEqual({ kind: "note", text: "Context loaded" })
+  expect(classifyDesktopSynthetic(synthetic("c2", "x", { description: "Parent session history snapshot" }))).toEqual({ kind: "note", text: "Parent session history snapshot" })
+  expect(classifyDesktopSynthetic(synthetic("c3", "x", { description: "Dots deferred decision", metadata: { review: { itemID: "rvw_1" }, dotsSource: {} } }))).toEqual({ kind: "note", text: "Dots deferred decision" })
+  expect(classifyDesktopSynthetic(synthetic("c4", "x", { description: "Goal · decision", metadata: { goalDecision: true } }))).toEqual({ kind: "note", text: "Goal · decision" })
   expect(classifyDesktopSynthetic(synthetic("d", "x", { description: "  " }))).toBeUndefined()
-  expect(desktopMessageVisible(synthetic("e", "x", { description: "Note" }))).toBe(true)
+  expect(desktopMessageVisible(synthetic("e", "x", { description: "Note", metadata: { instruction: { paths: ["README.md"] } } }))).toBe(true)
+})
+
+test("genuine Dot steers strip transport markup, hide empty steers, format Dot steer receipts, and never over-match non-steer notices", () => {
+  const argoText = "<shared-context>\nUser evidence:\nfoo\n</shared-context>\n\n<system-update>{\"autonomy\":{\"mode\":\"normal\"}}</system-update>\n<transcript_evidence>\nUser: check Argo CD\n</transcript_evidence>\n\nKeep `<system-update>` inside code and run `argocd mcp`.\n<!-- trace:123 -->"
+  const argo = synthetic("msg_v_argo", argoText, {
+    description: "Install and verify the pinned official Argo CD MCP in Work project config",
+  })
+  expect(isDotSteerSynthetic(argo)).toBe(true)
+  expect(stripSteerTransportMarkup(argoText)).toBe("User: check Argo CD\n\nKeep `<system-update>` inside code and run `argocd mcp`.")
+  expect(dotSteerDisplay(argo)).toEqual({ text: "User: check Argo CD\n\nKeep `<system-update>` inside code and run `argocd mcp`." })
+  expect(classifyDesktopSynthetic(argo)).toEqual({ kind: "dot-steer", text: "User: check Argo CD\n\nKeep `<system-update>` inside code and run `argocd mcp`." })
+  expect(desktopMessageVisible(argo)).toBe(true)
+
+  const leadingEnvelopeSteer = synthetic("msg_dot_steer_argo", "<system-update>{\"autonomy\":{\"mode\":\"normal\"}}</system-update>\nInstall and verify the pinned official Argo CD MCP in Work project config.", {
+    description: "Install and verify the pinned official Argo CD MCP in Work project config",
+  })
+  expect(classifyDesktopSynthetic(leadingEnvelopeSteer)).toEqual({
+    kind: "dot-steer",
+    text: "Install and verify the pinned official Argo CD MCP in Work project config.",
+  })
+  expect(desktopMessageVisible(leadingEnvelopeSteer)).toBe(true)
+
+  const emptySteer = synthetic("msg_dot_steer_empty", "<system-update>{}</system-update>\n<!-- comment -->", {
+    description: "Title that must not become fake user text",
+  })
+  expect(isDotSteerSynthetic(emptySteer)).toBe(true)
+  expect(dotSteerDisplay(emptySteer)).toBeUndefined()
+  expect(classifyDesktopSynthetic(emptySteer)).toBeUndefined()
+  expect(desktopMessageVisible(emptySteer)).toBe(false)
+
+  const wrappedEnvelope = synthetic("msg_dot_wrapped_env", "<system-update>{}</system-update>\nAuthoritative current Session state (JSON):\n{}", {
+    description: "Wrapped envelope",
+  })
+  expect(isDotSteerSynthetic(wrappedEnvelope)).toBe(false)
+  expect(classifyDesktopSynthetic(wrappedEnvelope)).toBeUndefined()
+  expect(desktopMessageVisible(wrappedEnvelope)).toBe(false)
+
+  expect(isDotSteerSynthetic(synthetic("m1", "Recent parent session history:\nHi", { description: "Parent session history snapshot" }))).toBe(false)
+  expect(isDotSteerSynthetic(synthetic("m2", "Continue", { description: "Goal · steer", metadata: { autonomy: { goal: true } } }))).toBe(false)
+  expect(isDotSteerSynthetic(synthetic("m3", "Started", { description: "Project notification", metadata: { source: "project_notification" } }))).toBe(false)
+  expect(isDotSteerSynthetic(synthetic("m4", "From parent", { description: "Subagent message", metadata: { source: "subagent_parent", kind: "message" } }))).toBe(false)
+  expect(isDotSteerSynthetic(synthetic("m5", "Hi", { description: "Peer", metadata: { dots: { origin: "dots-peer", profile: "p", dotID: "d", threadID: "t", itemID: "i" } } }))).toBe(false)
+  expect(isDotSteerSynthetic(synthetic("m6", "Read 1 B", { description: "Audit", metadata: { dots: { operation: "read" } } }))).toBe(false)
+  expect(isDotSteerSynthetic(synthetic("m7", "No description internal steer"))).toBe(false)
+  expect(isDotSteerSynthetic({ ...synthetic("m8", "Later", { description: "Queued" }), delivery: "queue" })).toBe(false)
+  expect(isDotSteerSynthetic({ ...synthetic("m9", "Sourced", { description: "Sourced" }), source: "session-state" })).toBe(false)
+
+  expect(dotSteerReceipt(false, undefined, false)).toEqual({ label: "Dot steer prompt", text: "Dot steer", mark: "✓" })
+  expect(dotSteerReceipt(true, "steer", false)).toEqual({ label: "Processing Dot steer prompt", text: "Processing · steer", mark: "◷" })
+  expect(dotSteerReceipt(true, "queue", false)).toEqual({ label: "Dot steer prompt queued for processing", text: "Queued · Dot steer", mark: "◷" })
+  expect(dotSteerReceipt(false, undefined, true)).toEqual({ label: "Processing Dot steer prompt", text: "Processing · Dot steer", mark: "◷" })
 })
 
 test("parent answers combine text and data only for the matching question", () => {

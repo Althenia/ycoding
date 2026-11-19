@@ -1370,7 +1370,7 @@ details[open] > summary > .rl-disclosure-chev { transform: rotate(90deg); }
 
 .rl-ledger .rl-them .rl-bubble { padding: 0; border: 0; border-radius: 0; background: transparent; }
 .rl-ledger .rl-me { align-items: flex-end; }
-.rl-ledger .rl-me .transcript-message--user { inline-size: 100%; min-inline-size: 0; }
+.rl-ledger .rl-me :is(.transcript-message--user, .transcript-message--synthetic) { inline-size: 100%; min-inline-size: 0; }
 .rl-ledger .rl-me .transcript-message__bubble { inline-size: fit-content; max-inline-size: min(78%, 42rem); min-inline-size: 0; margin: 0; margin-inline-start: auto; padding: var(--yc-space-3) var(--yc-space-4); border: 0; border-radius: var(--yc-radius-2xl); background: color-mix(in srgb, var(--yc-green-strong) 9%, var(--yc-surface-raised)); overflow-wrap: anywhere; }
 .rl-ledger .rl-me .conversation__chip > svg { color: var(--yc-info-strong); }
 .rl-ledger .rl-me .transcript-message--user > .conversation__chip { align-self: flex-end; max-inline-size: 100%; min-inline-size: 0; white-space: normal; overflow-wrap: anywhere; }
