@@ -163,7 +163,6 @@ describe("OpenAI Responses route", () => {
 
       expect(prepared.body.previous_response_id).toBe("resp_previous_1")
       expect(prepared.body.input).toEqual([
-        { role: "system", content: "Use the current tool contract." },
         { type: "function_call_output", call_id: "call_weather_1", output: '{"temperature":22}' },
       ])
       expect(prepared.body.tools).toHaveLength(1)

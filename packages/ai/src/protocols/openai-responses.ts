@@ -655,9 +655,9 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
                 : ProviderShared.joinText(request.system),
           },
         ]
-  const input: OpenAIResponsesInputItem[] = [...system]
   const store = OpenAIOptions.store(request)
   const previousResponseId = store === true ? OpenAIOptions.previousResponseId(request) : undefined
+  const input: OpenAIResponsesInputItem[] = previousResponseId === undefined ? [...system] : []
   const continuationInputStart =
     previousResponseId === undefined ? 0 : Math.min(OpenAIOptions.continuationInputStart(request) ?? 0, request.messages.length)
 

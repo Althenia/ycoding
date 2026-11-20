@@ -1,5 +1,5 @@
 import { expect } from "bun:test"
-import { LLM, LLMClient, Message, SystemPart } from "@ycoding-ai/ai"
+import { LLM, LLMClient, Message, SystemPart, ToolDefinition } from "@ycoding-ai/ai"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { RequestExecutor } from "@ycoding-ai/ai/route"
 import { CatalogModel } from "@ycoding-ai/core/model"
@@ -12,8 +12,11 @@ import { it } from "./lib/effect"
 
 type Body = {
   readonly model: string
+  readonly store?: boolean
+  readonly previous_response_id?: string
   readonly prompt_cache_key: string
   readonly prompt_cache_options: { readonly mode: "implicit" | "explicit"; readonly ttl: string }
+  readonly tools?: ReadonlyArray<{ readonly name: string }>
   readonly input: ReadonlyArray<{
     readonly role: string
     readonly content: ReadonlyArray<{
@@ -142,3 +145,107 @@ for (const mode of ["auto", "explicit"] as const) {
     )
   }
 }
+
+it.effect("stored continuation keeps one system prompt in the provider-side conversation", () =>
+  Effect.gen(function* () {
+    const providerID = Provider.ID.make("openai")
+    const id = CatalogModel.ID.make("gpt-6-luna")
+    const model = yield* SessionRunnerModel.fromCatalogModel(
+      CatalogModel.Info.make({
+        ...CatalogModel.Info.empty(providerID, id),
+        modelID: id,
+        package: Provider.aisdk("@ai-sdk/openai"),
+        settings: { apiKey: "fixture-key", baseURL: "https://api.openai.com/v1" },
+      }),
+    )
+    expect(model.route.id).toBe("openai-responses")
+    const system = [SystemPart.make("stable synthetic reference material ".repeat(4000))]
+    const tools = [
+      ToolDefinition.make({
+        name: "lookup",
+        description: "Look up a synthetic fixture value",
+        inputSchema: { type: "object", properties: { key: { type: "string" } }, required: ["key"] },
+      }),
+    ]
+    const cache = SessionRunnerCache.providerOptions({
+      projectID: "project",
+      directory: "/fixture",
+      providerID,
+      modelID: id,
+      apiModelID: id,
+      sessionID: "session",
+      accountIdentityDigest: "a".repeat(64),
+      policyRevision: CACHE_POLICY_REVISION,
+      permissions: [],
+      system,
+      tools,
+      routeID: model.route.id,
+      endpointBaseURL: model.route.endpoint.baseURL,
+      openaiMode: "auto",
+    })
+    const encode = (
+      messages: ReadonlyArray<Message>,
+      continuation?: { readonly previousResponseId: string; readonly continuationInputStart: number },
+    ) =>
+      Effect.gen(function* () {
+        const bodies: Body[] = []
+        yield* LLMClient.generate(
+          LLM.request({
+            model,
+            system,
+            messages,
+            tools,
+            cache: cache.cache,
+            providerOptions: {
+              ...cache.providerOptions,
+              openai: { ...cache.providerOptions.openai, store: true, ...continuation },
+            },
+          }),
+        ).pipe(
+          Effect.provide(LLMClient.configured()),
+          Effect.provideService(RequestExecutor.Service, {
+            execute: (http) =>
+              Effect.sync(() => {
+                if (http.body._tag !== "Uint8Array") throw new Error("Expected encoded JSON")
+                bodies.push(JSON.parse(new TextDecoder().decode(http.body.body)))
+                return HttpClientResponse.fromWeb(http, new Response("fixture", { status: 400 }))
+              }),
+          }),
+          Effect.flip,
+        )
+        expect(bodies).toHaveLength(1)
+        return bodies[0]
+      })
+    const first = Message.user("Observation 1")
+    const reply = Message.assistant("Reply 1")
+    const second = Message.user("Observation 2")
+    const full = yield* encode([first])
+    const replay = yield* encode([first, reply, second])
+    const continued = yield* encode([first, reply, second], {
+      previousResponseId: "resp_fixture_1",
+      continuationInputStart: 2,
+    })
+    const systemItems = (input: Body["input"]) => input.filter((item) => item.role === "system")
+
+    expect(full.store).toBe(true)
+    expect(full.previous_response_id).toBeUndefined()
+    expect(systemItems(full.input)).toHaveLength(1)
+    expect(full.input[0]?.role).toBe("system")
+    expect(systemItems(replay.input)).toHaveLength(1)
+    expect(prefix(replay, 1)).toBe(prefix(full, 1))
+
+    expect(continued.previous_response_id).toBe("resp_fixture_1")
+    expect(continued.input.map((item) => item.role)).toEqual(["user"])
+    expect(continued.input[0]?.content.map((part) => part.text)).toEqual(["Observation 2"])
+    expect(continued.tools?.map((tool) => tool.name)).toEqual(full.tools?.map((tool) => tool.name))
+    expect(continued.prompt_cache_key).toBe(full.prompt_cache_key)
+    expect(continued.prompt_cache_options).toEqual(full.prompt_cache_options)
+    expect(
+      systemItems([
+        ...full.input,
+        { role: "assistant", content: [{ type: "output_text", text: "Reply 1" }] },
+        ...continued.input,
+      ]),
+    ).toHaveLength(1)
+  }),
+)
