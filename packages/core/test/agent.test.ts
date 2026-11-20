@@ -511,12 +511,14 @@ describe("Agent", () => {
         "get, report, complete, stop or clear", "Never change objective text",
         "notifications", "do not poll", "serialize only for a real dependency, shared file, or approval, never for ceremony, handoffs, slots, or resource limitations",
         "git worktree remove <path>", "never --force",
+        "As part of completion or integration, leave nothing behind: remove unused temporary files, remove completed or merged worktrees with git worktree remove <path> (never --force) and prune dead registrations with git worktree prune, and delete completed or merged local branches with git branch -d (never force-delete unmerged unique work); preserve dirty, active or unmerged unique work.",
         "bounded judgments", "not approval, a user answer or completion evidence",
       ]
       for (const id of ["GSD", "architech", "god", "yangi"]) {
         const item = yield* agent.get(Agent.ID.make(id))
         for (const obligation of native) expect(item?.system).toContain(obligation)
         expect(item?.system).not.toContain("You orchestrate; you do not execute")
+        expect(item?.system).not.toContain("keep the branch")
       }
       const helpers = {
         compaction: ["TOON", "conversation_memory", "in_progress", "pending", "blocked", "accepted", "rejected", "superseded", "active skills", "empty collections", "not a conversation reply"],
