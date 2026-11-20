@@ -325,14 +325,25 @@ test.each([
   ["0.12.4$(printf unexpected)", "preview", "branch", null],
   ["", "v0.12.4/invalid", "tag", null],
 ])("release version validates the selected input before environment export (%j, %j, %s)", (requested, ref, type, expected) => {
-  const result = Bun.spawnSync(["bash", "script/release-version.sh"], {
-    cwd: path.join(import.meta.dir, ".."),
-    env: { ...process.env, REQUESTED_RELEASE_VERSION: requested, RELEASE_REF_NAME: ref, RELEASE_REF_TYPE: type, GITHUB_ENV: "/dev/stdout" },
-    stdout: "pipe", stderr: "pipe",
-  })
-  expect(result.exitCode).toBe(expected === null ? 1 : 0)
-  expect(result.stdout.toString()).toBe(expected === null ? "" : `RELEASE_VERSION=${expected}\nYCODING_VERSION=${expected}\n`)
-  expect(result.stderr.toString()).toBe(expected === null ? "Invalid release version\n" : "")
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-version-"))
+  try {
+    const envFile = path.join(directory, "github-env")
+    const initial = "EXISTING=value\n"
+    fs.writeFileSync(envFile, initial)
+    const result = Bun.spawnSync(["bash", "script/release-version.sh"], {
+      cwd: path.join(import.meta.dir, ".."),
+      env: { ...process.env, REQUESTED_RELEASE_VERSION: requested, RELEASE_REF_NAME: ref, RELEASE_REF_TYPE: type, GITHUB_ENV: envFile },
+      stdout: "pipe", stderr: "pipe",
+    })
+    expect(result.exitCode, result.stderr.toString()).toBe(expected === null ? 1 : 0)
+    expect(result.stdout.toString()).toBe("")
+    expect(result.stderr.toString()).toBe(expected === null ? "Invalid release version\n" : "")
+    expect(fs.readFileSync(envFile, "utf8")).toBe(
+      expected === null ? initial : `${initial}RELEASE_VERSION=${expected}\nYCODING_VERSION=${expected}\n`,
+    )
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test("release workflow verifies the web application and relay before the Cloudflare build", () => {
