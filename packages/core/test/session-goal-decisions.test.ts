@@ -830,6 +830,7 @@ it.live("reconsider without a groupID keeps the exact fingerprint, validation, m
 const fakeReview = (f: Fixture, calls: Array<Record<string, unknown>>, beforeValidate: Effect.Effect<void>) => {
   const request = new Guardrail.Request({
     id: Guardrail.RequestID.make("grq_synthetic_review"),
+    created: 1,
     rootSessionID: f.root.id,
     sessionID: f.root.id,
     action: "edit",

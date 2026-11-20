@@ -35,6 +35,7 @@ import { JumpControls, PromptRail, followState, jumpBehavior, navigationTargets,
 import { orderedModelOptions } from "../../../apps/web/src/remote/ui/composer-logic"
 import { readRecentModels, rememberRecentModel } from "../../../apps/web/src/remote/preferences"
 import openaiMark from "../../../apps/web/src/assets/providers/openai.svg"
+import { guardrailClosedNotice, guardrailWaiting } from "../../../apps/web/src/remote/guardrail-wait"
 import "../../../apps/web/src/styles/tokens.css"
 import "../../../apps/web/src/styles/workspace-shell.css"
 import "./tokens.css"
@@ -260,7 +261,7 @@ function GuardrailHistory(props: { readonly value?: DisplayValue; readonly rootS
     const resources = () => strings(field(row, "resources"))
     const confidence = () => field(row, "confidence")
     const grades = () => { const value = field(row, "grades"); return Array.isArray(value) ? value : [] }
-    return <article data-decision={reply()}><header><time>{typeof created() === "number" && Number.isFinite(created()) ? new Date(created() as number).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "Time unrecorded"}</time><strong>{reply() === "once" ? "Allowed once" : reply() === "always" ? "Always allowed" : reply() === "reject" ? "Rejected" : "Decision unrecorded"}</strong></header><p>{word(field(row, "action")) || "Action unrecorded"}</p><dl><dt>Rule</dt><dd>{rules().join(", ") || "Rule unrecorded"}</dd><dt>Scope</dt><dd>{word(field(row, "scope")) || "Scope unrecorded"}</dd><dt>Resources</dt><dd>{resources().join(", ") || "Resources unrecorded"}</dd></dl><details><summary>Decision details</summary><dl><dt>Session</dt><dd>{word(field(row, "sessionID")) || "Unrecorded"}</dd><dt>Request</dt><dd>{word(field(row, "requestID")) || "Unrecorded"}</dd><dt>Authority</dt><dd>{word(field(row, "authority")) || "Unrecorded"}</dd><dt>Confidence</dt><dd>{typeof confidence() === "number" && Number.isFinite(confidence()) ? `${formatCount(Math.round((confidence() as number) * 100))}%` : "Unrecorded"}</dd><dt>Source message</dt><dd>{word(field(field(row, "source"), "messageID")) || "Unrecorded"}</dd><dt>Tool call</dt><dd>{word(field(field(row, "source"), "callID")) || "Unrecorded"}</dd></dl><For each={grades()}>{grade => <p>{word(field(grade, "choice"))} · {word(field(grade, "evidence"))}</p>}</For></details></article>
+    return <article data-decision={reply()}><header><time>{typeof created() === "number" && Number.isFinite(created()) ? new Date(created() as number).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "Time unrecorded"}</time><strong>{field(row, "reason") === "expired" ? "Expired · did not run" : field(row, "reason") === "cancelled" ? "Cancelled · did not run" : reply() === "once" ? "Allowed once" : reply() === "always" ? "Always allowed" : reply() === "reject" ? "Rejected" : "Decision unrecorded"}</strong></header><p>{word(field(row, "action")) || "Action unrecorded"}</p><dl><dt>Rule</dt><dd>{rules().join(", ") || "Rule unrecorded"}</dd><dt>Scope</dt><dd>{word(field(row, "scope")) || "Scope unrecorded"}</dd><dt>Resources</dt><dd>{resources().join(", ") || "Resources unrecorded"}</dd></dl><details><summary>Decision details</summary><dl><dt>Session</dt><dd>{word(field(row, "sessionID")) || "Unrecorded"}</dd><dt>Request</dt><dd>{word(field(row, "requestID")) || "Unrecorded"}</dd><dt>Authority</dt><dd>{word(field(row, "authority")) || "Unrecorded"}</dd><dt>Confidence</dt><dd>{typeof confidence() === "number" && Number.isFinite(confidence()) ? `${formatCount(Math.round((confidence() as number) * 100))}%` : "Unrecorded"}</dd><dt>Source message</dt><dd>{word(field(field(row, "source"), "messageID")) || "Unrecorded"}</dd><dt>Tool call</dt><dd>{word(field(field(row, "source"), "callID")) || "Unrecorded"}</dd></dl><For each={grades()}>{grade => <p>{word(field(grade, "choice"))} · {word(field(grade, "evidence"))}</p>}</For></details></article>
   }}</For></Show></section>
 }
 
@@ -631,7 +632,7 @@ export async function pickDesktopPath(options: FolderOptions, path: string, brid
 }
 
 let dialogIDs = 0
-function DesktopDialog(props: { title: string; kind?: "folder" | "providers" | "diff" | "system" | "agents" | "browser" | "session" | "stash" | "editor" | "export" | "appearance" | "mcp"; navigation?: JSX.Element; headerActions?: JSX.Element; footer?: JSX.Element; onClose: () => void; children: JSX.Element }) {
+function DesktopDialog(props: { title: string; kind?: "folder" | "providers" | "diff" | "system" | "agents" | "browser" | "session" | "stash" | "editor" | "export" | "appearance" | "mcp" | "image"; navigation?: JSX.Element; headerActions?: JSX.Element; footer?: JSX.Element; onClose: () => void; children: JSX.Element }) {
   const titleID = `desktop-dialog-${++dialogIDs}`
   const opener = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
   let dialog: HTMLDialogElement | undefined
@@ -2422,7 +2423,22 @@ function DeliveryStatus(props: { readonly state: keyof typeof deliveryLabels; re
 function SentImage(props: { readonly sessionID: string; readonly file: { readonly name?: string; readonly content: { readonly digest: string } } }) {
   const attachment = observe(() => ({ queryKey: ["attachment", ...scope(), props.sessionID, props.file.content.digest] as const, queryFn: () => api.sessionAttachment({ sessionID: props.sessionID, digest: props.file.content.digest }), enabled: reading() }))
   const source = () => { const file = attachment.result().data; return file ? `data:${file.mime};base64,${file.data}` : undefined }
-  return <Show when={source()} fallback={<span class="conversation__chip">{props.file.name ?? "Image attachment"}</span>}>{(url) => <img class="transcript-message__image" src={url()} alt={props.file.name ?? "Image attachment"} title={props.file.name} draggable={false} />}</Show>
+  const name = () => props.file.name ?? "Image attachment"
+  const [open, setOpen] = createSignal(false)
+  return <Show when={source()} fallback={<span class="conversation__chip">{name()}</span>}>{(url) => <>
+    <button type="button" class="transcript-message__image-button" aria-label={`Open image ${name()}`} aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus({ preventScroll: true }); setOpen(true) }}><img class="transcript-message__image" src={url()} alt={name()} draggable={false} /></button>
+    <Show when={open()}><DesktopDialog title={`Image: ${name()}`} kind="image" onClose={() => setOpen(false)}><img class="desktop-image-preview" src={url()} alt={name()} draggable={false} /></DesktopDialog></Show>
+  </>}</Show>
+}
+
+function DotOrigin(props: { readonly steer: boolean }) {
+  return <><span class="transcript-message__origin" role="img" aria-label="ChatGPT" title="Sent via ChatGPT" style={{ "--origin-mark": `url("${openaiMark}")` }} /><Show when={props.steer}><span class="transcript-message__steer">Steer</span></Show></>
+}
+
+function dotsDelivery(metadata: unknown) {
+  const input = field(metadata, "dotsInput")
+  const delivery = field(input, "delivery")
+  return field(input, "origin") === "dots-native" && (delivery === "steer" || delivery === "queue") ? delivery : undefined
 }
 
 function intermediateAssistant(message: Messages[number] | undefined): message is Extract<Messages[number], { type: "assistant" }> {
@@ -2453,12 +2469,13 @@ function TurnView(props: { sessionID: string; message: Messages[number]; continu
     <Show when={!peerInput() && externalPeer()}>{value => <NativeActivityRow label="External peer" identity={value()}>{value()}</NativeActivityRow>}</Show>
     <Show when={props.message.type === "user" && !peerInput() ? props.message : undefined}>{(message) => {
       const images = () => message().files?.filter((file) => file.mime.startsWith("image/")) ?? []
-      return <SharedMessageTurn kind="user" markdownText={message().text} bubbleAttachments={images().length ? <div class="transcript-message__images"><For each={images()}>{(file) => <SentImage sessionID={props.sessionID} file={file} />}</For></div> : undefined} attachments={<>
+      const dots = () => dotsDelivery(message().metadata)
+      return <SharedMessageTurn kind="user" markdownText={message().text} bubbleAttachments={images().length || dots() ? <><Show when={dots()}>{(delivery) => <DotOrigin steer={delivery() === "steer"} />}</Show><Show when={images().length}><div class="transcript-message__images"><For each={images()}>{(file) => <SentImage sessionID={props.sessionID} file={file} />}</For></div></Show></> : undefined} attachments={<>
         <For each={message().files?.filter((file) => !file.mime.startsWith("image/"))}>{(file) => <span class="conversation__chip">{file.name ?? "Attachment"}</span>}</For>
         <div class="transcript-message__meta"><CopyMessageButton text={message().text} /><DeliveryStatus state={props.delivery ?? "sent"} time={message().time.created} /></div>
       </>} />
     }}</Show>
-    <Show when={steer()}>{(entry) => <SharedMessageTurn kind="synthetic" content={<div class="transcript-message--user" aria-label="Dot steer prompt"><div class="transcript-message__bubble" data-origin="chatgpt"><span class="transcript-message__origin" role="img" aria-label="ChatGPT" title="Sent via ChatGPT" style={{ "--origin-mark": `url("${openaiMark}")` }} /><div class="transcript-message__bubble-text"><Markdown text={entry().text} /></div></div><div class="transcript-message__meta"><CopyMessageButton text={entry().text} /></div></div>} />}</Show>
+    <Show when={steer()}>{(entry) => <SharedMessageTurn kind="synthetic" content={<div class="transcript-message--user" aria-label="Dot steer prompt"><div class="transcript-message__bubble" data-origin="chatgpt"><DotOrigin steer /><div class="transcript-message__bubble-text"><Markdown text={entry().text} /></div></div><div class="transcript-message__meta"><CopyMessageButton text={entry().text} /></div></div>} />}</Show>
     <Show when={props.message.type === "assistant" ? props.message : undefined}>{(message) => {
       const groups = createMemo(() => groupAssistantParts(message().content))
       const identity = () => <SharedTurnHead class="transcript-message__head" mark={<span class="rl-avatar transcript-message__mark"><Icon name="sparkles" /></span>}>{message().agent} · {message().model.providerID}/{message().model.id}{message().model.variant ? ` · ${message().model.variant}` : ""}{message().model.profile === undefined ? "" : ` · Profile ${message().model.profile}`}{duration(message().time.created, message().time.completed) ? ` · ${duration(message().time.created, message().time.completed)}` : ""}</SharedTurnHead>
@@ -2660,8 +2677,12 @@ export function pendingRequestIDs(data: { readonly permissions: readonly { reado
   return [...data.permissions.map((item) => item.id), ...data.forms.map((item) => item.id), ...(data.questions ?? []).map((item) => item.id), ...(data.guardrails ?? []).map((item) => item.id), ...(data.reviews ?? []).map((item) => item.itemID)]
 }
 
-function GuardrailCard(props: { item: NonNullable<PendingRequests["guardrails"]>[number]; locked: boolean; notice?: string; onReply: (reply: "once" | "reject") => void }) {
-  return <article class="request rl-decision-card"><div class="request__head"><Icon name="shield" /><h2>Guardrail · {props.item.hardReview ? "Hard review" : props.item.standard ? "Standard" : "Custom"}</h2></div><h3>{props.item.action}</h3><p>{props.item.reason}</p><ul class="request__resources"><For each={props.item.resources}>{(pattern) => <li><code>{pattern}</code></li>}</For></ul><p>Rules: {props.item.ruleIDs.join(", ")}</p><Show when={props.notice}><p role="alert">{props.notice}</p></Show><div class="desktop__actions"><button type="button" class="rl-btn" data-tone="go" disabled={props.locked} onClick={() => props.onReply("once")}>Approve</button><button type="button" class="rl-btn" data-tone="danger" disabled={props.locked} onClick={() => props.onReply("reject")}>Deny</button></div></article>
+function GuardrailCard(props: { item: NonNullable<PendingRequests["guardrails"]>[number]; locked: boolean; notice?: string; onReply: (reply: "once" | "reject") => void; onRecover: (action: "cancel" | "retry") => void }) {
+  const [clock, setClock] = createSignal(Date.now())
+  const ticker = setInterval(() => setClock(Date.now()), 15_000)
+  onCleanup(() => clearInterval(ticker))
+  const waiting = () => guardrailWaiting(props.item.created, clock())
+  return <article class="request rl-decision-card" data-guardrail-request={props.item.id}><div class="request__head"><Icon name="shield" /><h2>Guardrail · {props.item.hardReview ? "Hard review" : props.item.standard ? "Standard" : "Custom"}</h2></div><h3>{props.item.action}</h3><Show when={waiting()}>{(age) => <p class="request__waiting"><span data-guardrail-age>{age().label}</span><Show when={age().stale}><span class="request__badge" data-tone="stale" data-guardrail-stale>Stale</span></Show></p>}</Show><p>{props.item.reason}</p><ul class="request__resources"><For each={props.item.resources}>{(pattern) => <li><code>{pattern}</code></li>}</For></ul><p>Rules: {props.item.ruleIDs.join(", ")}</p><dl class="request__ids"><dt>Owning Session</dt><dd><code>{props.item.sessionID}</code></dd><dt>Request</dt><dd><code>{props.item.id}</code></dd></dl><Show when={props.notice}><p role="alert">{props.notice}</p></Show><div class="request__footer"><div class="request__recovery" role="group" aria-label="Review recovery"><button type="button" class="rl-btn" disabled={props.locked} onClick={() => props.onRecover("cancel")}>Cancel</button><button type="button" class="rl-btn" disabled={props.locked} onClick={() => props.onRecover("retry")}>Retry</button></div><div class="desktop__actions"><button type="button" class="rl-btn" data-tone="go" disabled={props.locked} onClick={() => props.onReply("once")}>Approve</button><button type="button" class="rl-btn" data-tone="danger" disabled={props.locked} onClick={() => props.onReply("reject")}>Deny</button></div></div></article>
 }
 
 function ReviewCard(props: { item: ReviewItem; locked: boolean; notice?: string; onDecision: (decision: ReviewDecision) => void }) {
@@ -2699,7 +2720,17 @@ function Requests(props: { data: PendingRequests; updatedAt: number; refetch: ()
   const [working, setWorking] = createSignal(false)
   const [held, setHeld] = createSignal<ReadonlyMap<string, { readonly message?: string; readonly at: number }>>(new Map())
   const [lost, setLost] = createSignal<string>()
+  const [closed, setClosed] = createSignal<string>()
   let answered: string | undefined
+  let shownGuardrails = new Set<string>()
+  createEffect(() => {
+    const current = new Set((props.data.guardrails ?? []).map((item) => item.id))
+    const gone = new Set([...shownGuardrails].filter((id) => !current.has(id)))
+    shownGuardrails = current
+    const decisions = Array.isArray(props.data.guardrailDecisions) ? props.data.guardrailDecisions : []
+    const ended = decisions.filter((row) => gone.has(word(field(row, "requestID")) ?? "") && field(row, "reason") !== undefined).at(-1)
+    if (ended !== undefined) setClosed(guardrailClosedNotice(field(ended, "reason")))
+  })
   const waiting = (id: string) => props.updatedAt <= (held().get(id)?.at ?? -1)
   const locked = (id: string) => working() || waiting(id)
   const notice = (id: string) => {
@@ -2743,7 +2774,9 @@ function Requests(props: { data: PendingRequests; updatedAt: number; refetch: ()
     <For each={props.data.questions}>{(request) => <ActiveQuestionCard request={request} locked={locked(request.id)} notice={notice(request.id)}
       onAnswer={(answers) => void answer(request.id, { kind: "question", sessionID: props.data.sessionID, revision: props.data.revision, requestID: request.id, answers })}
       onReject={() => void answer(request.id, { kind: "question-reject", sessionID: props.data.sessionID, revision: props.data.revision, requestID: request.id })} />}</For>
-    <For each={props.data.guardrails}>{(item) => <GuardrailCard item={item} locked={locked(item.id)} notice={notice(item.id)} onReply={(reply) => void answer(item.id, { kind: "guardrail", sessionID: props.data.sessionID, revision: props.data.revision, requestID: item.id, reply })} />}</For>
+    <Show when={closed()}>{(message) => <p role="status" class="request__closed" data-guardrail-closed>{message()}</p>}</Show>
+    <For each={props.data.guardrails}>{(item) => <GuardrailCard item={item} locked={locked(item.id)} notice={notice(item.id)} onReply={(reply) => void answer(item.id, { kind: "guardrail", sessionID: props.data.sessionID, revision: props.data.revision, requestID: item.id, reply })}
+      onRecover={(action) => void answer(item.id, { kind: "guardrail-recovery", sessionID: props.data.sessionID, revision: props.data.revision, requestID: item.id, action })} />}</For>
     <For each={props.data.reviews}>{(item) => <ReviewCard item={item} locked={locked(item.itemID)} notice={notice(item.itemID)} onDecision={(decision) => void answer(item.itemID, { kind: "review", sessionID: props.data.sessionID, revision: props.data.revision, itemID: item.itemID, decision })} />}</For>
   </section>
 }

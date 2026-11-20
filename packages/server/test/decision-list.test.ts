@@ -102,7 +102,7 @@ async function fixture() {
   ]
   const guardrails = [false, true].map((hardReview, index) => new Guardrail.Request({
     id: Guardrail.RequestID.make(`grq_${index}`), sessionID: owners[index]!.id, rootSessionID: owners[index]!.id,
-    action: "shell", resources: ["synthetic"], reason: "Review command", ruleIDs: ["standard.review"], standard: true, hardReview,
+    created: 1, action: "shell", resources: ["synthetic"], reason: "Review command", ruleIDs: ["standard.review"], standard: true, hardReview,
   }))
   const settled = new Set<string>()
   const contexts = await Promise.all(owners.slice(0, 2).map((owner) => Effect.runPromise(Effect.scoped(Layer.build(Layer.mergeAll(

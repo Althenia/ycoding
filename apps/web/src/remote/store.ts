@@ -358,6 +358,8 @@ export type RemoteStore = {
   readonly requestPromptGenerate: (input: { readonly mode: "start" | "steer" | "queue" | "goal"; readonly intent: string; readonly memory: readonly ("repository" | "knowledge")[]; readonly workspaceID?: string; readonly agent?: string; readonly model?: ModelRefView }) => Promise<boolean>
   readonly replyPermission: (id: string, reply: "once" | "always" | "reject") => Promise<void>
   readonly replyGuardrail: (id: string, reply: "once" | "always" | "reject") => Promise<void>
+  readonly cancelGuardrail: (id: string) => Promise<void>
+  readonly retryGuardrail: (id: string) => Promise<void>
   readonly replyForm: (formID: string, answer: Readonly<Record<string, string | number | boolean | readonly string[]>>) => Promise<void>
   readonly cancelForm: (formID: string) => Promise<void>
   readonly setAutonomous: (change: Partial<AutonomyModes>) => Promise<boolean>
@@ -1047,7 +1049,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         if (todoRead?.sessionID === item.sessionID) todoRead.live = todos
       }
       if (type === "permission.asked" || type === "permission.replied" ||
-        type === "guardrail.asked" || type === "guardrail.replied" ||
+        type === "guardrail.asked" || type === "guardrail.replied" || type === "guardrail.cancelled" ||
         type === "form.created" || type === "form.assessed" || type === "form.replied" || type === "form.cancelled" || type === "form.timed_out" ||
         type === "permission.deferred" || type === "guardrail.deferred" || type === "form.deferred") {
         for (const read of requestReads) {
@@ -3996,39 +3998,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       )
       if (token === selectionToken && container.state.activeSessionID === sessionID && owner !== undefined && isCurrentConnection(owner)) settleRequest(id, outcome)
     },
-    replyGuardrail: async (id, reply) => {
-      const sessionID = container.state.activeSessionID
-      if (sessionID === undefined) return
-      const pending = container.state.view?.id === sessionID ? container.state.view.requests.find((entry) => entry.kind === "guardrail" && entry.id === id) : undefined
-      if (pending?.kind !== "guardrail" || !canReplyToRequest(pending, sessionID)) {
-        setState({ notice: "This review is no longer pending in the selected Session's family. Reload before replying." })
-        return
-      }
-      if (pending.hardReview && reply === "always") {
-        setState({ notice: "This hard review accepts Approve once or Reject; Always is unavailable." })
-        return
-      }
-      if (reply !== "reject" && !guardrailContextAvailable(pending)) {
-        setState({ notice: "This review has no concrete targets or command to inspect. Reject it or reload before approving." })
-        return
-      }
-      if (container.state.mutations.some((entry) => entry.kind === "guardrail" && entry.input.requestID === id && entry.state === "sending")) return
-      const token = selectionToken
-      const owner = transport
-      const outcome = await request(
-        {
-          id: `guardrail_${id}_${reply}`,
-          kind: "guardrail",
-          label: `Guardrail ${reply}`,
-          state: "sending",
-          sessionID,
-          operation: "session.guardrail.reply",
-          input: { requestID: id, reply },
-        },
-        { sessionID },
-      )
-      if (token === selectionToken && container.state.activeSessionID === sessionID && owner !== undefined && isCurrentConnection(owner)) settleRequest(id, outcome)
-    },
+    replyGuardrail: (id, reply) => sendGuardrail(id, reply),
+    cancelGuardrail: (id) => sendGuardrail(id, "cancel"),
+    retryGuardrail: (id) => sendGuardrail(id, "retry"),
     replyForm: async (formID, answer) => {
       const sessionID = container.state.activeSessionID
       if (sessionID === undefined || !ownsPendingForm(formID, sessionID)) return
@@ -4199,6 +4171,59 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (container.state.view?.id === sessionID && container.state.view.requests.some((request) => request.kind === "form" && request.id === formID && request.form.sessionID === sessionID)) return true
     setState({ notice: "This form is no longer pending or belongs to another session." })
     return false
+  }
+
+  const guardrailOperations = { cancel: "session.guardrail.cancel", retry: "session.guardrail.retry" } as const
+  const sendGuardrail = async (id: string, action: "once" | "always" | "reject" | "cancel" | "retry") => {
+    const sessionID = container.state.activeSessionID
+    if (sessionID === undefined) return
+    const pending = container.state.view?.id === sessionID ? container.state.view.requests.find((entry) => entry.kind === "guardrail" && entry.id === id) : undefined
+    if (pending?.kind !== "guardrail" || !canReplyToRequest(pending, sessionID)) {
+      setState({ notice: "This review is no longer pending in the selected Session's family. Reload before replying." })
+      return
+    }
+    if (pending.hardReview && action === "always") {
+      setState({ notice: "This hard review accepts Approve once or Reject; Always is unavailable." })
+      return
+    }
+    if ((action === "once" || action === "always") && !guardrailContextAvailable(pending)) {
+      setState({ notice: "This review has no concrete targets or command to inspect. Reject it or reload before approving." })
+      return
+    }
+    if (container.state.mutations.some((entry) => entry.kind === "guardrail" && entry.input.requestID === id && entry.state === "sending")) return
+    const token = selectionToken
+    const owner = transport
+    const recovery = action === "cancel" || action === "retry"
+    const mutationID = `guardrail_${id}_${action}`
+    const outcome = await request(
+      {
+        id: mutationID,
+        kind: "guardrail",
+        label: `Guardrail ${action}`,
+        state: "sending",
+        sessionID,
+        operation: recovery ? guardrailOperations[action] : "session.guardrail.reply",
+        input: recovery ? { requestID: id } : { requestID: id, reply: action },
+      },
+      { sessionID },
+    )
+    if (token !== selectionToken || container.state.activeSessionID !== sessionID || owner === undefined || !isCurrentConnection(owner)) return
+    const view = container.state.view
+    if (view === undefined) return
+    if (outcome.status === "failed" && outcome.error.code === "not_found") {
+      setState({
+        view: replaceRequests(view, view.requests.filter((entry) => entry.id !== id)),
+        mutations: container.state.mutations.filter((entry) => entry.id !== mutationID),
+        notice: "This review is no longer pending. Nothing was approved.",
+      })
+      return
+    }
+    if (outcome.status !== "ok" || action === "retry") return
+    if (action === "cancel") {
+      setState({ view: applySessionEvent(view, { type: "guardrail.cancelled", data: { requestID: id, reason: "cancelled" } }, now()) })
+      return
+    }
+    settleRequest(id, outcome)
   }
 
   const settleRequest = (requestID: string, outcome: RemoteRequestOutcome) => {

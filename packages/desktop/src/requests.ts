@@ -1,7 +1,7 @@
 import { DesktopError, utf8Length, type FormAnswer, type RequestReply, type PageInput, type RevertInput, type SetAutonomyInput, type ShellOutputInput, type WorkspaceDirectoriesInput, type UsageRange, type RequestLocation } from "./contract"
 import path from "node:path"
 
-type ClassicReply = Exclude<RequestReply, { readonly kind: "guardrail" | "review" }>
+type ClassicReply = Exclude<RequestReply, { readonly kind: "guardrail" | "guardrail-recovery" | "review" }>
 const invalid = "This answer is invalid. Refresh requests and answer again."
 const fields: Record<ClassicReply["kind"], readonly string[]> = {
   question: ["kind", "answers", "requestID", "revision", "sessionID"],

@@ -140,6 +140,7 @@ export type RequestReply =
   | { readonly kind: "question"; readonly sessionID: string; readonly revision: number; readonly requestID: string; readonly answers: readonly (readonly string[])[] }
   | { readonly kind: "question-reject"; readonly sessionID: string; readonly revision: number; readonly requestID: string }
   | { readonly kind: "guardrail"; readonly sessionID: string; readonly revision: number; readonly requestID: string; readonly reply: Parameters<YCodingClient["guardrail"]["request"]["reply"]>[0]["reply"] }
+  | { readonly kind: "guardrail-recovery"; readonly sessionID: string; readonly revision: number; readonly requestID: string; readonly action: "cancel" | "retry" }
   | { readonly kind: "review"; readonly sessionID: string; readonly revision: number; readonly itemID: string; readonly decision: Parameters<YCodingClient["review"]["decide"]>[0]["decision"] }
   | { readonly kind: "permission"; readonly sessionID: string; readonly revision: number; readonly requestID: string; readonly reply: PermissionDecision; readonly message?: string }
   | { readonly kind: "form"; readonly sessionID: string; readonly revision: number; readonly formID: string; readonly answer: FormAnswer; readonly location?: RequestLocation }

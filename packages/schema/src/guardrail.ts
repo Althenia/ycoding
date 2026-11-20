@@ -111,8 +111,14 @@ export const Risk = Schema.Struct({
   metric: Schema.Literals(["confidence", "probability"]),
 }).annotate({ identifier: "Guardrail.Risk" })
 
+export const staleAfterMs = 900_000
+
+export const ClosedReason = Schema.Literals(["cancelled", "expired"]).annotate({ identifier: "Guardrail.ClosedReason" })
+export type ClosedReason = typeof ClosedReason.Type
+
 export class Request extends Schema.Class<Request>("Guardrail.Request")({
   id: RequestID,
+  created: NonNegativeInt.pipe(optional),
   rootSessionID: SessionID,
   sessionID: SessionID,
   action: Schema.String,
@@ -166,6 +172,7 @@ export class Status extends Schema.Class<Status>("Guardrail.Status")({
       grades: Schema.Array(Grade).pipe(optional),
       ruleIDs: Schema.Array(Schema.String).pipe(optional),
       source: Source.pipe(optional),
+      reason: ClosedReason.pipe(optional),
     }),
   ).pipe(optional),
 }) {}
@@ -204,5 +211,8 @@ const Deferred = ephemeral({
   type: "guardrail.deferred",
   schema: { rootSessionID: SessionID, sessionID: SessionID, requestID: RequestID, itemID: SessionReviewID },
 })
-const Cancelled = ephemeral({ type: "guardrail.cancelled", schema: { rootSessionID: SessionID, sessionID: SessionID, requestID: RequestID } })
+const Cancelled = ephemeral({
+  type: "guardrail.cancelled",
+  schema: { rootSessionID: SessionID, sessionID: SessionID, requestID: RequestID, reason: ClosedReason.pipe(optional) },
+})
 export const Event = { Asked, Replied, Decided, Deferred, Cancelled, Definitions: inventory(Asked, Replied, Decided, Deferred, Cancelled) }

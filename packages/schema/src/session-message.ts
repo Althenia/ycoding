@@ -12,6 +12,7 @@ import { FinishReason } from "./llm.js"
 import { SessionError } from "./session-error.js"
 import { SessionCacheDiagnostics } from "./session-cache-diagnostics.js"
 import { Agent } from "./agent.js"
+import { SessionDelivery } from "./session-delivery.js"
 import { Skill as SkillSchema } from "./skill.js"
 import { Money } from "./money.js"
 import { Snapshot } from "./snapshot.js"
@@ -69,6 +70,12 @@ export const ModelSelected = Schema.Struct({
   model: Model.Ref,
   previous: Model.Ref.pipe(optional),
 }).annotate({ identifier: "Session.Message.ModelSelected" })
+
+export interface DotsInput extends Schema.Schema.Type<typeof DotsInput> {}
+export const DotsInput = Schema.Struct({
+  origin: Schema.Literal("dots-native"),
+  delivery: SessionDelivery.Delivery,
+}).annotate({ identifier: "Session.Message.DotsInput" })
 
 export interface User extends Schema.Schema.Type<typeof User> {}
 export const User = Schema.Struct({

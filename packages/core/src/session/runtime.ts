@@ -2330,12 +2330,12 @@ const layer = Layer.effect(
                       : undefined
                     const metadata = {
                       ...(shared
-                        ? { ...Object.fromEntries(Object.entries(input.metadata ?? {}).filter(([key]) => key !== "remoteMcp" && key !== "nativeSource")), sharedContext: shared.sharedContext }
+                        ? { ...Object.fromEntries(Object.entries(input.metadata ?? {}).filter(([key]) => key !== "remoteMcp" && key !== "nativeSource" && key !== "dotsInput")), sharedContext: shared.sharedContext }
                         : Object.fromEntries(
-                            Object.entries(input.metadata ?? {}).filter(([key]) => key !== "sharedContext" && key !== "remoteMcp" && key !== "nativeSource"),
+                            Object.entries(input.metadata ?? {}).filter(([key]) => key !== "sharedContext" && key !== "remoteMcp" && key !== "nativeSource" && key !== "dotsInput"),
                           )),
                       inputOrigin: input.origin ?? "direct",
-                      ...(input.native ? { nativeSource: input.native.source } : {}),
+                      ...(input.native ? { nativeSource: input.native.source, dotsInput: SessionMessage.DotsInput.make({ origin: "dots-native", delivery: input.delivery ?? "steer" }) } : {}),
                     }
                     const admitted = yield* Effect.gen(function* () {
                       const existing = yield* SessionPending.lookup(db, input.sessionID, messageID)

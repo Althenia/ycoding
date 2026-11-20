@@ -80,6 +80,8 @@ Effective native configuration combines the trusted profile gate with global acc
 
 Channels carry native source receipts with exact profile, credential, account generation, environment, connection, client, stream, root, global access revision, and request identity. Lifetime checks fence asynchronous reads and writes against connection retirement and global access changes. Managed-child ownership remains parent-only.
 
+A native prompt admits one user input whose message metadata carries the source receipt as `nativeSource` and `dotsInput: { origin: "dots-native", delivery: "steer" | "queue" }` (`SessionMessage.DotsInput`). The promoted user message keeps both, so clients identify a Dot-originated steer from `metadata.dotsInput` without reading the source receipt. Core strips caller-supplied `nativeSource` and `dotsInput` from every other prompt.
+
 Decision candidates bind an exact typed source and revision. Native projection stages single-pick choices rather than granting ambient approval. Permissions, hard/custom guardrails, Forms, Questions, managed-child questions, deferred reviews, and recovery retain their existing typed outcomes and validators. Explicit denies, ceilings, ownership, archive state, and live access are rechecked at settlement. Replaced candidates and retired lifetimes cannot settle. Uncertain mutation outcomes are not replayed.
 
 Prompt text cannot establish a typed decision, native source receipt, or delegation. Ordinary configured external MCP servers, provider tools, and elicitation retain their separate runtime paths.

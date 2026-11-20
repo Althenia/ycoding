@@ -215,10 +215,10 @@ function attemptResult(value: unknown, kind: IntegrationAttempt["kind"], attempt
 }
 
 function projectGuardrail(value: unknown) {
-  if (!object(value) || !idInput(value.id) || typeof value.sessionID !== "string" || typeof value.rootSessionID !== "string" || typeof value.action !== "string" || typeof value.reason !== "string" || !Array.isArray(value.resources) || !value.resources.every(string) || !Array.isArray(value.ruleIDs) || !value.ruleIDs.every(string) || typeof value.standard !== "boolean") throw new DesktopError("The backend returned an invalid guardrail request.")
+  if (!object(value) || !idInput(value.id) || typeof value.sessionID !== "string" || typeof value.rootSessionID !== "string" || typeof value.action !== "string" || typeof value.reason !== "string" || (value.created !== undefined && !count(value.created)) || !Array.isArray(value.resources) || !value.resources.every(string) || !Array.isArray(value.ruleIDs) || !value.ruleIDs.every(string) || typeof value.standard !== "boolean") throw new DesktopError("The backend returned an invalid guardrail request.")
   session(value.sessionID)
   session(value.rootSessionID)
-  return displayFields(value, ["id", "sessionID", "rootSessionID", "action", "resources", "ruleIDs", "reason", "standard", "hardReview", "risk", "escalation", "coordinationEscalation", "source"]) as NonNullable<import("./contract").PendingRequests["guardrails"]>[number]
+  return displayFields(value, ["id", "created", "sessionID", "rootSessionID", "action", "resources", "ruleIDs", "reason", "standard", "hardReview", "risk", "escalation", "coordinationEscalation", "source"]) as NonNullable<import("./contract").PendingRequests["guardrails"]>[number]
 }
 
 function projectReview(value: unknown) {
@@ -1751,24 +1751,26 @@ export class BackendController {
       if (guardrails !== undefined && !Array.isArray(guardrails)) throw new DesktopError("The backend returned invalid guardrail requests.")
       if (reviews !== undefined && !Array.isArray(reviews)) throw new DesktopError("The backend returned invalid review items.")
       const decided = object(status) && familyID(status.rootSessionID) && optional(status.decisions, (items) => Array.isArray(items) && items.length <= 1000 && items.every((item) => object(item) && familyID(item.sessionID) && count(item.created) && nonempty(item.requestID) && string(item.reply)))
-        ? { rootSessionID: status.rootSessionID, guardrailDecisions: ((status.decisions ?? []) as unknown[]).map((item) => displayFields(item, ["sessionID", "created", "requestID", "reply", "authority", "choice", "confidence", "grades", "ruleIDs", "source"])) }
+        ? { rootSessionID: status.rootSessionID, guardrailDecisions: ((status.decisions ?? []) as unknown[]).map((item) => displayFields(item, ["sessionID", "created", "requestID", "reply", "authority", "choice", "confidence", "grades", "ruleIDs", "source", "reason"])) }
         : {}
       return { sessionID, revision, permissions, forms, ...(questions.length ? { questions } : {}), ...(guardrails?.length ? { guardrails: guardrails.map(projectGuardrail) } : {}), ...(reviews?.length ? { reviews: reviews.map(projectReview) } : {}), ...decided }
     })
   }
 
   async reply(input: unknown) {
-    if (object(input) && (input.kind === "guardrail" || input.kind === "review")) {
-      const answer = mutation<Extract<RequestReply, { kind: "guardrail" | "review" }>>(input, { guardrail: { requestID: idInput, reply: (value) => literal(value, ["once", "always", "reject"]) }, review: { itemID: idInput, decision: reviewDecision } }, { sessionID: (value) => { session(value); return true } })
+    if (object(input) && (input.kind === "guardrail" || input.kind === "guardrail-recovery" || input.kind === "review")) {
+      const answer = mutation<Extract<RequestReply, { kind: "guardrail" | "guardrail-recovery" | "review" }>>(input, { guardrail: { requestID: idInput, reply: (value) => literal(value, ["once", "always", "reject"]) }, "guardrail-recovery": { requestID: idInput, action: (value) => literal(value, ["cancel", "retry"]) }, review: { itemID: idInput, decision: reviewDecision } }, { sessionID: (value) => { session(value); return true } })
       const changed = "The answer was not confirmed before the connection changed. Refresh requests to see whether it was applied."
       await this.use("The answer was not confirmed. Refresh requests to see whether it was applied.", async (api, signal, _revision, ensureCurrent) => {
-        const target = answer.kind === "guardrail"
+        const target = answer.kind !== "review"
           ? (await api.guardrail.request.list({ sessionID: answer.sessionID }, { signal })).find((item) => item.id === answer.requestID)
           : (await api.review.list({ sessionID: answer.sessionID }, { signal })).find((item) => item.itemID === answer.itemID)
         if (!target) throw new DesktopError("This request is no longer pending. Refresh requests.")
         session(target.sessionID)
         ensureCurrent(unsent)
         if (answer.kind === "guardrail") await api.guardrail.request.reply({ sessionID: target.sessionID, requestID: answer.requestID, reply: answer.reply }, { signal })
+        else if (answer.kind === "guardrail-recovery" && answer.action === "cancel") await api.guardrail.request.cancel({ sessionID: target.sessionID, requestID: answer.requestID }, { signal })
+        else if (answer.kind === "guardrail-recovery") await api.guardrail.request.retry({ sessionID: target.sessionID, requestID: answer.requestID }, { signal })
         else await api.review.decide({ sessionID: target.sessionID, itemID: answer.itemID, decision: answer.decision }, { signal })
       }, { revision: answer.revision, changed })
       return null

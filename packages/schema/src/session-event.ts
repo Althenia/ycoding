@@ -187,6 +187,7 @@ export const GuardrailDecided = Event.durable({
     confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
     ruleIDs: Schema.Array(Schema.String).pipe(optional),
     source: Guardrail.Source.pipe(optional),
+    reason: Guardrail.ClosedReason.pipe(optional),
     actor: Schema.Literal("coordinator").pipe(optional),
     coordinatorSessionID: SessionID.pipe(optional),
     groupID: Schema.String.pipe(optional),

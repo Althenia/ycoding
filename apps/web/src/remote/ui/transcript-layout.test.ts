@@ -61,7 +61,7 @@ test("tool and reasoning rows sit flat on the canvas until opened, notices stay 
   for (const name of ["transcript.css", "transcript-nav.css", "file-change-card.css", "todo-panel.css", "subagent-bar.css"]) {
     const parsed = parseStylesheet(name, await Bun.file(new URL(`./${name}`, import.meta.url)).text())
     const ruled = parsed.rules.filter((rule) => Object.entries(rule.declarations).some(([property, value]) => /^border-block-(start|end)$/.test(property) && value !== "0" && value !== "none"))
-    expect(ruled.map((rule) => rule.header)).toEqual(name === "transcript.css" ? [".conversation-pane .request:not(.request--hard) .request__header", ".conversation-pane .request:not(.request--hard) .request__actions"] : [])
+    expect(ruled.map((rule) => rule.header)).toEqual(name === "transcript.css" ? [".conversation-pane .request:not(.request--hard) .request__header", ".conversation-pane .request:not(.request--hard) .request__actions", ".conversation-pane .request:not(.request--hard) .request__footer"] : [])
     expect(ruled.flatMap((rule) => Object.entries(rule.declarations).filter(([property]) => /^border-block-(start|end)$/.test(property)).map(([, value]) => value))).toEqual(ruled.map(() => "var(--yc-border-width) solid var(--yc-line-divider)"))
   }
   const card = parseStylesheet("file-change-card.css", await Bun.file(new URL("./file-change-card.css", import.meta.url)).text())

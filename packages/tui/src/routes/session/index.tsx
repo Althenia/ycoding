@@ -105,7 +105,7 @@ import { projectedPromptInput } from "../../prompt/codec"
 import { useEpilogue } from "../../context/epilogue"
 import { normalizePath } from "../../util/path"
 import { PermissionPrompt } from "./permission"
-import { GuardrailPrompt, activeGuardrail } from "./guardrail"
+import { GuardrailPrompt, activeGuardrail, guardrailClosedNotice } from "./guardrail"
 import { FormAssessment, FormPrompt } from "./form"
 import { ReviewBox, ReviewItemEditor } from "./review-box"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
@@ -414,6 +414,11 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       if (revision === skillReadRevision && route.sessionID === sessionID && client.connection.status() === "connected")
         setCurrentSkillIDs(new Set(skills.filter((skill) => skill.state === "active").map((skill) => skill.id)))
     }).catch(() => undefined)
+  }))
+  onCleanup(data.on("guardrail.cancelled", (event) => {
+    if (event.data.rootSessionID !== data.session.root(route.sessionID)) return
+    const message = guardrailClosedNotice(event.data.reason)
+    if (message) toast.show({ message, variant: "warning", duration: 5000 })
   }))
   onCleanup(data.on("session.skill.activated", (event) => {
     if (event.data.sessionID !== route.sessionID) return
@@ -2117,7 +2122,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 onFocusChange={setReviewFocused}
               />
               <Switch>
-                <Match when={activeGuardrailRequest()}>{(request) => <GuardrailPrompt request={request()} guardrailsMode={autonomy()?.effective?.guardrails} />}</Match>
+                <Match when={activeGuardrailRequest()}>{(request) => <GuardrailPrompt request={request()} guardrailsMode={autonomy()?.effective?.guardrails} onClosed={() => data.session.guardrail.remove(route.sessionID, request().id)} onRetried={() => void data.session.guardrail.refresh(route.sessionID).catch(() => undefined)} />}</Match>
                 <Match when={permissions().length > 0}>
                   <Show when={permissions()[0]?.id} keyed>
                     {(_) => {

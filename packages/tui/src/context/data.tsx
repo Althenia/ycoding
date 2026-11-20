@@ -2269,6 +2269,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         }
         case "guardrail.deferred":
+        case "guardrail.cancelled":
           setStore(
             "session",
             "guardrail",
@@ -2845,6 +2846,19 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           invalidate(sessionID: string) {
             sync.invalidate(`session.guardrail:${sessionID}`)
           },
+          refresh(sessionID: string) {
+            sync.invalidate(`session.guardrail:${sessionID}`)
+            return result.session.guardrail.sync(sessionID)
+          },
+          remove(sessionID: string, requestID: string) {
+            const rootID = resolveRoot(sessionID)
+            setStore(
+              "session",
+              "guardrail",
+              rootID,
+              (store.session.guardrail[rootID] ?? []).filter((request) => request.id !== requestID),
+            )
+          },
         },
         review: {
           list(sessionID: string) {
@@ -3337,6 +3351,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         if (details.type === "server.connected") {
           void syncActivity()
           sourceEpoch = details.sourceEpoch
+          Object.keys(store.session.guardrail).forEach((rootID) => {
+            void result.session.guardrail.refresh(rootID).catch(() => undefined)
+          })
           const mutations = new Map<string, DataSessionStatus>()
           activeSnapshot = mutations
           // Durable task state is broader than execution activity: waiting and cancelling children

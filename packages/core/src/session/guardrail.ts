@@ -69,6 +69,11 @@ export interface ReplyInput {
   readonly reply: Guardrail.Reply
 }
 
+export interface RequestInput {
+  readonly sessionID: Session.ID
+  readonly requestID: Guardrail.RequestID
+}
+
 export interface Snapshot {
   readonly sequence: number
   readonly digest: string
@@ -178,6 +183,8 @@ export interface Interface {
   readonly evaluate: (input: EvaluateInput) => Effect.Effect<Evaluation, SessionErrors.NotFoundError>
   readonly assert: (input: EvaluateInput) => Effect.Effect<Reservation, AssertError>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, RequestNotFoundError | SessionErrors.NotFoundError>
+  readonly cancel: (input: RequestInput) => Effect.Effect<void, RequestNotFoundError | SessionErrors.NotFoundError>
+  readonly retry: (input: RequestInput) => Effect.Effect<Guardrail.Request, RequestNotFoundError | SessionErrors.NotFoundError>
   readonly requestSnapshot: (
     sessionID: Session.ID,
     requestID: Guardrail.RequestID,
@@ -214,6 +221,7 @@ export class Observation extends Context.Service<Observation, ObservationInterfa
 
 interface Pending {
   request: Guardrail.Request
+  readonly created: number
   readonly deferred: Deferred.Deferred<void, DeclinedError | DeferredError>
   readonly review: ManagedReservation
   readonly directories: ReadonlyArray<string>
@@ -476,6 +484,7 @@ export const layer = Layer.effect(
     })
     const counters = authority.counters
     const shellWait = Duration.seconds(settings?.shell_wait_seconds ?? 60)
+    const hardReviewExpiryMinutes = settings?.hard_review_expiry_minutes ?? 1440
     const pending = authority.pending
     const reconsidering = new Set<Guardrail.RequestID>()
     const approvals = authority.approvals
@@ -806,8 +815,9 @@ export const layer = Layer.effect(
               return { type: "allowed" as const, reservation }
             }
             const review = yield* reserveUnlocked(result.rootSessionID, "review")
+            const created = yield* Clock.currentTimeMillis
             const request = new Guardrail.Request({
-              id: Guardrail.RequestID.create(), rootSessionID: result.rootSessionID, sessionID: input.sessionID,
+              id: Guardrail.RequestID.create(), created, rootSessionID: result.rootSessionID, sessionID: input.sessionID,
               action: input.action, resources: [...input.resources], ruleIDs: [...result.ruleIDs],
               reason: result.reason ?? "Session guardrail review required", standard: result.standard,
               ...(result.hardReview ? { hardReview: true } : {}), ...(result.risk ? { risk: result.risk } : {}),
@@ -815,7 +825,7 @@ export const layer = Layer.effect(
               ...(input.source === undefined ? {} : { source: input.source }),
             })
             const item: Pending = {
-              request, review, directories: classification.directories,
+              request, created, review, directories: classification.directories,
               deferred: yield* Deferred.make<void, DeclinedError | DeferredError>(), deferring: deferred || input.defer === true,
               ...(input.source ? { source: input.source } : {}),
             }
@@ -863,7 +873,15 @@ export const layer = Layer.effect(
             })
             yield* Deferred.fail(item.deferred, deferredError(item.request, "open", opened.itemID))
           })).pipe(Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))))
-          yield* Deferred.await(item.deferred)
+          if (!item.request.hardReview) return yield* Deferred.await(item.deferred)
+          const remaining = item.created + hardReviewExpiryMinutes * 60_000 - (yield* Clock.currentTimeMillis)
+          yield* Deferred.await(item.deferred).pipe(Effect.timeoutOrElse({
+            duration: Duration.millis(Math.max(0, remaining)),
+            orElse: () => withRootLock(rootSessionID, Effect.suspend(() => {
+              const current = pending.get(item.request.id)
+              return current === undefined || current.deferring ? Effect.void : closeUnlocked(current, "expired")
+            })).pipe(Effect.andThen(Deferred.await(item.deferred))),
+          }))
         }), (admission) => admission.type === "allowed" ? Effect.void : locks.withLock(rootSessionID)(
           cancelPendingUnlocked(admission.item.request.id).pipe(Effect.ensuring(admission.item.review.releaseUnlocked)),
         ))
@@ -936,6 +954,53 @@ export const layer = Layer.effect(
         yield* Deferred.succeed(item.deferred, undefined)
         return yield* Effect.void
       })
+
+    const closeUnlocked = (item: Pending, reason: Guardrail.ClosedReason) => {
+      const rootSessionID = item.request.rootSessionID
+      removePendingUnlocked(item.request.id)
+      return Effect.all([
+        events.publish(Guardrail.Event.Cancelled, { rootSessionID, sessionID: item.request.sessionID, requestID: item.request.id, reason }),
+        events.publish(SessionEvent.GuardrailDecided, {
+          sessionID: rootSessionID,
+          reviewSessionID: item.request.sessionID,
+          requestID: item.request.id,
+          reply: "reject",
+          reason,
+          ruleIDs: [...item.request.ruleIDs],
+          ...(item.source ? { source: item.source } : {}),
+        }),
+      ], { discard: true }).pipe(Effect.ensuring(Deferred.fail(item.deferred, new DeclinedError({
+        requestID: item.request.id,
+        message: reason === "expired"
+          ? `Guardrail review expired after ${hardReviewExpiryMinutes} minutes without a decision. This action did not run.`
+          : "Guardrail review was cancelled. This action did not run.",
+      })).pipe(Effect.andThen(item.review.releaseUnlocked))))
+    }
+
+    const pendingFor = (rootSessionID: Session.ID, input: RequestInput) => {
+      const item = pending.get(input.requestID)
+      return item === undefined || item.deferring || item.request.rootSessionID !== rootSessionID
+        ? Effect.fail(new RequestNotFoundError({ requestID: input.requestID }))
+        : Effect.succeed(item)
+    }
+
+    const cancel = Effect.fn("SessionGuardrail.cancel")(function* (input: RequestInput) {
+      if (!pending.has(input.requestID)) return yield* new RequestNotFoundError({ requestID: input.requestID })
+      const rootSessionID = yield* root(input.sessionID)
+      return yield* withRootLock(rootSessionID, Effect.gen(function* () {
+        yield* closeUnlocked(yield* pendingFor(rootSessionID, input), "cancelled")
+      }))
+    })
+
+    const retry = Effect.fn("SessionGuardrail.retry")(function* (input: RequestInput) {
+      if (!pending.has(input.requestID)) return yield* new RequestNotFoundError({ requestID: input.requestID })
+      const rootSessionID = yield* root(input.sessionID)
+      return yield* withRootLock(rootSessionID, Effect.gen(function* () {
+        const item = yield* pendingFor(rootSessionID, input)
+        yield* events.publish(Guardrail.Event.Asked, item.request)
+        return item.request
+      }))
+    })
 
     const delegatedGate = (item: Pending, reply: "once" | "reject") =>
       !item.deferring && item.request.standard && item.request.hardReview !== true && item.request.ruleIDs.every((rule) => rule.startsWith("standard.")) &&
@@ -1127,6 +1192,12 @@ export const layer = Layer.effect(
                           ruleIDs: [...ruleIDs],
                           decision,
                         })
+                        yield* events.publish(Guardrail.Event.Replied, {
+                          rootSessionID,
+                          sessionID: item.request.sessionID,
+                          requestID: item.request.id,
+                          reply: decision === "allow" ? "once" : "reject",
+                        })
                         if (decision === "allow") yield* Deferred.succeed(item.deferred, undefined)
                         else yield* Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))
                         return {
@@ -1179,6 +1250,12 @@ export const layer = Layer.effect(
                             ruleIDs: [...current.ruleIDs],
                             decision: "allow",
                           })
+                          yield* events.publish(Guardrail.Event.Replied, {
+                            rootSessionID,
+                            sessionID: item.request.sessionID,
+                            requestID: item.request.id,
+                            reply: "once",
+                          })
                           yield* events.publish(SessionEvent.GuardrailDecided, {
                             sessionID: rootSessionID,
                             reviewSessionID: item.request.sessionID,
@@ -1219,6 +1296,12 @@ export const layer = Layer.effect(
                             action: item.request.action,
                             ruleIDs: [...result.ruleIDs],
                             decision: "allow",
+                          })
+                          yield* events.publish(Guardrail.Event.Replied, {
+                            rootSessionID,
+                            sessionID: item.request.sessionID,
+                            requestID: item.request.id,
+                            reply: "once",
                           })
                           yield* events.publish(SessionEvent.GuardrailDecided, {
                             sessionID: rootSessionID,
@@ -1387,7 +1470,7 @@ export const layer = Layer.effect(
                 Option.match(decode(row.data), {
                   onNone: () => [],
                   onSome: (data) => [
-                    { sessionID: data.reviewSessionID, created: row.created, requestID: data.requestID, reply: data.reply, authority: data.authority, choice: data.choice, confidence: data.confidence, grades: data.grades, ruleIDs: data.ruleIDs, source: data.source },
+                    { sessionID: data.reviewSessionID, created: row.created, requestID: data.requestID, reply: data.reply, authority: data.authority, choice: data.choice, confidence: data.confidence, grades: data.grades, ruleIDs: data.ruleIDs, source: data.source, reason: data.reason },
                   ],
                 }),
               )
@@ -1410,7 +1493,7 @@ export const layer = Layer.effect(
       withSnapshot(sessionID, Effect.succeed),
     )
 
-    return Service.of({ reviewPolicy, evaluate, assert, reply: (input) => reply(input), replyDelegated, delegatedEligible, requestSnapshot, reconsider, escalate, requestSnapshots, reconcileAutonomy, deferPending, forSession, list, status, snapshot, withSnapshot })
+    return Service.of({ reviewPolicy, evaluate, assert, reply: (input) => reply(input), cancel, retry, replyDelegated, delegatedEligible, requestSnapshot, reconsider, escalate, requestSnapshots, reconcileAutonomy, deferPending, forSession, list, status, snapshot, withSnapshot })
   }),
 ).pipe(Layer.provide(authorityLayer))
 

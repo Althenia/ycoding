@@ -91,6 +91,8 @@ export const Operation = Schema.Literals([
   "session.guardrail.status",
   "session.guardrail.request.list",
   "session.guardrail.reply",
+  "session.guardrail.cancel",
+  "session.guardrail.retry",
   "session.review.list",
   "session.review.decide",
   "session.form.list",

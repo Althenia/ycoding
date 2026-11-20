@@ -1757,6 +1757,7 @@ Defer converts unresolved manual waits across family Locations into durable revi
     "shell_wait_seconds": 60,
     "max_concurrent_subagents": 8,
     "max_pending_reviews": 16,
+    "hard_review_expiry_minutes": 1440,
   },
 }
 ```
@@ -1770,6 +1771,7 @@ Defer converts unresolved manual waits across family Locations into durable revi
 | `guardrails.shell_wait_seconds`       | positive integer | `60`                | How long a shell over the cap waits, first come first served, before failing with the limit.                                                                                                                                                                     |
 | `guardrails.max_concurrent_subagents` | positive integer | `8`                 | Running-subagent cap per root Session family.                                                                                                                                                                                                                    |
 | `guardrails.max_pending_reviews`      | positive integer | `16`                | Cap on pending live reviews plus open review-box items of every kind per root Session family. Defer-entry conversion and restart recovery holds are exempt.                                                                                                      |
+| `guardrails.hard_review_expiry_minutes` | positive integer | `1440` | Minutes after its first ask that a pending hard review expires. Expiry rejects the review with reason `expired`, fails the waiting action without running it, and records no model incident. |
 
 Temporary-path exemptions apply only to outside-repository scope. Deny filesystem-root, exact user-home, and system-directory deletion. Require hard review for project/ancestor and direct home-child deletion, destructive Git, force push, and destructive database statements. Destructive Git and force-push rules match each command of a compound command separately, including Git directory options; flags of another command, such as a later `rm -f`, never count toward a Git command. Require ordinary review for outside-repository mutations. Reviews follow the guardrails mode, YOLO evaluator, graded delegation, and hard-review configuration rules above. Exempt every checkout of this repository sharing its Git common directory, temporary roots, recognized read-only shell commands (including `cd`, `exit`, `ps`, `pgrep`, `lsof`), read-only compound segments without outside redirection, and YCoding's global config/data/cache/state/tmp/bin/log/repos descendants from ordinary review. Treat interpreter script arguments and non-shell heredoc bodies as executed code, not outside operands; a non-exempt outside working directory still requires review. Effective `external_directory: allow` paths use the same directory-glob and `~` expansion as permissions; `ask` and `deny` do not otherwise exempt them. Mixed non-exempt targets stay reviewed. These exemptions never weaken hard reviews or denies. Publication, production deployment, security-policy changes, and MCP execution have no standard guardrail rule.
 

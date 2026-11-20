@@ -1027,6 +1027,38 @@ body:has(.app) {
   padding: var(--yc-space-2) var(--yc-space-3);
 }
 
+.request__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yc-space-2);
+}
+
+.request__footer > .request__actions {
+  margin-inline-start: auto;
+}
+
+.request__recovery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-2);
+  padding: var(--yc-space-2) var(--yc-space-3);
+}
+
+.request__waiting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yc-space-2);
+}
+
+.request__badge--stale {
+  margin-inline-start: 0;
+  background: var(--yc-amber-tonal);
+  color: var(--yc-amber-ink);
+}
+
 .request--hard {
   border: 2px solid var(--yc-coral-ink);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--yc-coral-ink) 18%, transparent);

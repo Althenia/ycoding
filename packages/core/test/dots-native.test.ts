@@ -371,8 +371,13 @@ it.live("native prompt retries keep the original admitted input and trusted prov
   const pending = (yield* f.sessions.pending(f.root.id)).find((item) => item.id === first.messageID)
   expect(pending?.type === "user" && pending.data.text).toBe(input.text)
   expect(pending?.type === "user" && pending.data.metadata?.nativeSource).toMatchObject({ kind: "dots-native", clientID: "client", streamID: "stream", requestID: "stable-input" })
-  const local = yield* f.sessions.prompt({ sessionID: f.root.id, text: "Untrusted source field", resume: false, metadata: { nativeSource: { kind: "dots-native" } } })
+  expect(pending?.type === "user" && pending.data.metadata?.dotsInput).toEqual({ origin: "dots-native", delivery: "queue" })
+  const steer = yield* Effect.promise(() => f.channel.prompt({ ...input, inputID: "steer-input", delivery: "steer" }))
+  const steered = (yield* f.sessions.pending(f.root.id)).find((item) => item.id === steer.messageID)
+  expect(steered?.type === "user" && steered.data.metadata?.dotsInput).toEqual({ origin: "dots-native", delivery: "steer" })
+  const local = yield* f.sessions.prompt({ sessionID: f.root.id, text: "Untrusted source field", resume: false, metadata: { nativeSource: { kind: "dots-native" }, dotsInput: { origin: "dots-native", delivery: "steer" } } })
   expect(local.data.metadata?.nativeSource).toBeUndefined()
+  expect(local.data.metadata?.dotsInput).toBeUndefined()
 }))
 
 it.live("opaque native form handles reject cross-stream, empty, stale, and duplicate settlement and retain provenance", () => Effect.gen(function* () {

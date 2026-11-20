@@ -938,9 +938,32 @@ const Endpoint6_2 = (raw: RawClient["server.guardrail"]) => (input: Endpoint6_2I
     payload: { reply: input["reply"] },
   }).pipe(Effect.mapError(mapClientError))
 
+type Endpoint6_3Request = Parameters<RawClient["server.guardrail"]["session.guardrail.request.cancel"]>[0]
+type Endpoint6_3Input = {
+  readonly sessionID: Endpoint6_3Request["params"]["sessionID"]
+  readonly requestID: Endpoint6_3Request["params"]["requestID"]
+}
+const Endpoint6_3 = (raw: RawClient["server.guardrail"]) => (input: Endpoint6_3Input) =>
+  raw["session.guardrail.request.cancel"]({
+    params: { sessionID: input["sessionID"], requestID: input["requestID"] },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint6_4Request = Parameters<RawClient["server.guardrail"]["session.guardrail.request.retry"]>[0]
+type Endpoint6_4Input = {
+  readonly sessionID: Endpoint6_4Request["params"]["sessionID"]
+  readonly requestID: Endpoint6_4Request["params"]["requestID"]
+}
+const Endpoint6_4 = (raw: RawClient["server.guardrail"]) => (input: Endpoint6_4Input) =>
+  raw["session.guardrail.request.retry"]({
+    params: { sessionID: input["sessionID"], requestID: input["requestID"] },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
 const adaptGroup6 = (raw: RawClient["server.guardrail"]) => ({
   status: Endpoint6_0(raw),
-  request: { list: Endpoint6_1(raw), reply: Endpoint6_2(raw) },
+  request: { list: Endpoint6_1(raw), reply: Endpoint6_2(raw), cancel: Endpoint6_3(raw), retry: Endpoint6_4(raw) },
 })
 
 type Endpoint7_0Request = Parameters<RawClient["server.message"]["session.messages"]>[0]

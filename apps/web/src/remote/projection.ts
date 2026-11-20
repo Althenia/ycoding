@@ -15,6 +15,7 @@ import { autonomyCategories, autonomyLabels, readAutonomyMode, type AutonomyCate
 import { parseUnifiedPatch } from "./file-change-diff"
 import { isConversationRoot } from "./session-collection"
 import { readProjectEscalation, readProjectEscalationEvent, type ProjectEscalationView } from "./project-escalation"
+import { guardrailClosedNotice } from "./guardrail-wait"
 import { escalationText, readGuardrailProvenance, readGuardrailDecisions, mergeGuardrailDecisions, type DecisionProvenanceView, type GradeView, type GuardrailDecisionView } from "./decision-grades"
 
 /** `packages/schema` `Model.Ref`: an object, never a plain string. */
@@ -277,6 +278,7 @@ export type RemoteMessageView =
       readonly attachments?: readonly MessageAttachment[]
       /** Absent when the projection does not carry a delivery mode. */
       readonly delivery?: "steer" | "queue"
+      readonly dotsDelivery?: "steer" | "queue"
       readonly state: "pending" | "promoted" | "consumed"
       readonly created: number
     }
@@ -332,7 +334,7 @@ export type RemoteMessageView =
   | {
       readonly kind: "notice"
       readonly id: string
-      readonly notice: "agent-switched" | "model-switched" | "skill" | "revert"
+      readonly notice: "agent-switched" | "model-switched" | "skill" | "revert" | "guardrail-closed"
       readonly text: string
       readonly created: number
     }
@@ -366,6 +368,7 @@ export type PendingRequestView =
       readonly escalation?: DecisionProvenanceView
       readonly projectEscalation?: ProjectEscalationView
       readonly metadata?: Readonly<Record<string, unknown>>
+      readonly created?: number
       readonly askedAt: number
     }
   | {
@@ -694,7 +697,7 @@ export function readPendingInputs(payload: unknown, sessionID: string): readonly
       if (text === undefined) return []
       const attachments = readAttachments(item.data.files)
       return [{ kind: "user", id, text, delivery, state: "pending", created,
-        ...(attachments.length === 0 ? {} : { attachments }) }]
+        ...(attachments.length === 0 ? {} : { attachments }), ...dotsInputOf(item.data.metadata) }]
     }
     if (item.type !== "synthetic") return []
     const text = stringField(item.data.text)
@@ -1336,9 +1339,15 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         hardReview: data.hardReview === true,
         ...(readGuardrailProvenance(data.escalation) === undefined ? {} : { escalation: readGuardrailProvenance(data.escalation) }),
         ...(isRecord(data.metadata) ? { metadata: data.metadata } : {}),
+        ...(numberField(data.created) === undefined ? {} : { created: numberField(data.created) }),
         ...projectEscalationOf(data),
         askedAt: now,
       })
+    case "guardrail.cancelled": {
+      const requestID = stringField(data.requestID)
+      if (!view.requests.some((request) => request.kind === "guardrail" && request.id === requestID)) return removeRequest(view, requestID)
+      return pushNotice(removeRequest(view, requestID), "guardrail-closed", guardrailClosedNotice(data.reason), now)
+    }
     case "guardrail.replied":
       return { ...removeRequest(view, stringField(data.requestID)), ...(data.decidedBy === "decision-model" ? {
         guardrailDecisions: mergeGuardrailDecisions(view.guardrailDecisions ?? [], readGuardrailDecisions({ data: { decisions: [{ ...data, created: event.created ?? now }] } }, view.id) ?? []),
@@ -1713,6 +1722,7 @@ function applyAdmitted(view: SessionView, data: Record<string, unknown>, now: nu
     text,
     ...(attachments.length > 0 ? { attachments } : existing?.kind === "user" && existing.attachments ? { attachments: existing.attachments } : {}),
     delivery: deliveryField(pending.delivery),
+    ...dotsInputOf(payload.metadata),
     state: existing?.kind === "user" ? existing.state : "pending",
     created: existing?.kind === "user" ? existing.created : now,
   }
@@ -2014,6 +2024,7 @@ export function readProjectedMessage(value: unknown): RemoteMessageView | undefi
       id,
       text: stringField(value.text) ?? "",
       ...(attachments.length === 0 ? {} : { attachments }),
+      ...dotsInputOf(value.metadata),
       state: numberField(time.consumed) === undefined ? "promoted" : "consumed",
       created,
     }
@@ -2101,6 +2112,12 @@ function readGoal(value: Record<string, unknown>): NonNullable<SessionAutonomyVi
     noProgress: numberField(value.noProgress) ?? 0,
     maxNoProgress: numberField(value.maxNoProgress) ?? 0,
   }
+}
+
+function dotsInputOf(metadata: unknown): { readonly dotsDelivery?: "steer" | "queue" } {
+  const input = isRecord(metadata) ? recordField(metadata.dotsInput) : undefined
+  if (input?.origin !== "dots-native" || (input.delivery !== "steer" && input.delivery !== "queue")) return {}
+  return { dotsDelivery: input.delivery }
 }
 
 function deliveryField(value: unknown): "steer" | "queue" {
@@ -2380,6 +2397,7 @@ export function readGuardrailRequests(payload: unknown, now: number): readonly P
         hardReview: item.hardReview === true,
         ...(readGuardrailProvenance(item.escalation) === undefined ? {} : { escalation: readGuardrailProvenance(item.escalation) }),
         ...(isRecord(item.metadata) ? { metadata: item.metadata } : {}),
+        ...(numberField(item.created) === undefined ? {} : { created: numberField(item.created) }),
         ...projectEscalationOf(item),
         askedAt: now,
       },

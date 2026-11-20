@@ -42,7 +42,7 @@ const request = {
   resources: ["rm -rf packages/one packages/two"],
   ruleIDs: ["standard.review.broad-deletion"],
   reason: "Recursive deletion includes the current project, one of its ancestors, or multiple targets",
-  standard: true,
+  standard: true, created: 1_000,
 }
 const childRequest = { ...request, id: "grq_child_surface", sessionID: childID }
 const task = {

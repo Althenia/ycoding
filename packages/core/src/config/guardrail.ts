@@ -15,6 +15,9 @@ export class Info extends Schema.Class<Info>("Config.Guardrail")({
   shell_wait_seconds: PositiveInt.pipe(Schema.optional),
   max_concurrent_subagents: PositiveInt.pipe(Schema.optional),
   max_pending_reviews: PositiveInt.pipe(Schema.optional),
+  hard_review_expiry_minutes: PositiveInt.pipe(Schema.optional).annotate({
+    description: "Minutes a pending hard review waits for a decision before it expires and its action fails without running (default: 1440)",
+  }),
 }) {}
 
 export interface Document {

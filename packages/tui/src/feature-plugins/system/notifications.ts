@@ -431,6 +431,9 @@ export function createNotifications(
         context.data.on("guardrail.replied", (event) =>
           clearRequest("guardrail", event.data.rootSessionID, event.data.requestID),
         ),
+        context.data.on("guardrail.cancelled", (event) =>
+          clearRequest("guardrail", event.data.rootSessionID, event.data.requestID),
+        ),
         context.data.on("session.execution.started", (event) => {
           const current = terminals.get(event.data.sessionID)
           if (current?.state === "active" || current?.state === "waiting") {

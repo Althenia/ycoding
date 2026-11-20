@@ -1197,6 +1197,13 @@ async function run(input: OperationInput) {
       await requireOwnedReview(input, sessionID, location, validated.requestID)
       await input.local.guardrailReply(sessionID, location, validated.requestID, validated.reply)
       return null
+    case "guardrail.cancel":
+      await requireOwnedReview(input, sessionID, location, validated.requestID)
+      await input.local.guardrailCancel(sessionID, location, validated.requestID)
+      return null
+    case "guardrail.retry":
+      await requireOwnedReview(input, sessionID, location, validated.requestID)
+      return { data: await input.local.guardrailRetry(sessionID, location, validated.requestID) }
     case "form.reply":
       await requireOwnedForm(input, sessionID, location, validated.formID)
       await input.local.formReply(sessionID, location, validated.formID, validated.answer)
@@ -1296,6 +1303,8 @@ type Validated =
   | { readonly kind: "promptGenerate"; readonly mode: "start" | "steer" | "queue" | "goal"; readonly intent: string; readonly memory: readonly ("repository" | "knowledge")[] }
   | { readonly kind: "permission.reply"; readonly requestID: string; readonly reply: Reply; readonly message?: string }
   | { readonly kind: "guardrail.reply"; readonly requestID: string; readonly reply: Reply }
+  | { readonly kind: "guardrail.cancel"; readonly requestID: string }
+  | { readonly kind: "guardrail.retry"; readonly requestID: string }
   | { readonly kind: "form.reply"; readonly formID: string; readonly answer: FormAnswer }
   | { readonly kind: "form.cancel"; readonly formID: string }
   | { readonly kind: "autonomy.set"; readonly payload: LocalAutonomy }
@@ -1696,6 +1705,10 @@ function validate(request: RemoteRequest): Validated {
       }
     case "session.guardrail.reply":
       return { kind: "guardrail.reply", requestID: requestIDOf(fields.requestID, "grq_"), reply: reply(fields.reply) }
+    case "session.guardrail.cancel":
+      return { kind: "guardrail.cancel", requestID: requestIDOf(fields.requestID, "grq_") }
+    case "session.guardrail.retry":
+      return { kind: "guardrail.retry", requestID: requestIDOf(fields.requestID, "grq_") }
     case "session.form.reply":
       return { kind: "form.reply", formID: formID(fields.formID), answer: formAnswer(fields.answer) }
     case "session.form.cancel":
@@ -2361,6 +2374,8 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.promptGenerate": ["mode", "intent", "memory"],
   "session.permission.reply": ["requestID", "reply", "message"],
   "session.guardrail.reply": ["requestID", "reply"],
+  "session.guardrail.cancel": ["requestID"],
+  "session.guardrail.retry": ["requestID"],
   "session.form.reply": ["formID", "answer"],
   "session.form.cancel": ["formID"],
   "session.autonomy.set": ["permissions", "guardrails", "answers", "defer"],
@@ -2416,6 +2431,8 @@ const mutations: ReadonlySet<string> = new Set([
   "session.promptGenerate",
   "session.permission.reply",
   "session.guardrail.reply",
+  "session.guardrail.cancel",
+  "session.guardrail.retry",
   "session.review.decide",
   "session.form.reply",
   "session.form.cancel",
@@ -2432,6 +2449,8 @@ const reviewReplies: ReadonlySet<string> = new Set([
   "session.review.decide",
   "session.permission.reply",
   "session.guardrail.reply",
+  "session.guardrail.cancel",
+  "session.guardrail.retry",
   "session.form.reply",
   "session.form.cancel",
 ])

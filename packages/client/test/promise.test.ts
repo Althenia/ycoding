@@ -191,8 +191,8 @@ test("exposes every standard HTTP API group", () => {
     "dots",
     "decision",
   ])
-  expect(Object.keys(client.coordination)).toEqual(["settings", "list", "create", "get", "update", "delete"])
-  expect(Object.keys(client.dots)).toEqual(["get", "set", "attach"])
+  expect(Object.keys(client.coordination)).toEqual(["settings", "list", "create", "get", "update", "delete", "attach", "detach"])
+  expect(Object.keys(client.dots)).toEqual(["get", "set", "attach", "detach", "remove", "threads", "task", "thread", "resume"])
   expect(Object.keys(client.keepAwake)).toEqual(["get", "set"])
   expect(Object.keys(client.incident)).toEqual(["report", "recent", "guidance"])
   expect(Object.keys(client.incident.guidance)).toEqual(["get", "clear"])
@@ -213,7 +213,7 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.project)).toEqual(["list", "inventory", "current", "directories", "forget"])
   expect(Object.keys(client.session.subagent)).toEqual(["list", "launch", "message", "answer", "cancel", "switchModel", "resume"])
   expect(Object.keys(client.guardrail)).toEqual(["status", "request"])
-  expect(Object.keys(client.guardrail.request)).toEqual(["list", "reply"])
+  expect(Object.keys(client.guardrail.request)).toEqual(["list", "reply", "cancel", "retry"])
   expect(Object.keys(client.providerUsage)).toEqual(["forecast", "list", "get"])
   expect(Object.keys(client.browser)).toEqual([
     "status",
@@ -465,6 +465,7 @@ test("guardrail methods use the public HTTP contract", async () => {
   }
   const review = {
     id: "grq_1",
+    created: 1_000,
     rootSessionID: "ses_parent",
     sessionID: "ses_child",
     action: "shell",
@@ -478,6 +479,7 @@ test("guardrail methods use the public HTTP contract", async () => {
     fetch: async (input, init) => {
       const request = input instanceof Request ? input : new Request(input, init)
       requests.push(request)
+      if (request.method === "POST" && request.url.endsWith("/retry")) return Response.json({ data: review })
       if (request.method === "POST") return new Response(null, { status: 204 })
       return Response.json({ data: request.url.endsWith("/request") ? [review] : status })
     },
@@ -486,11 +488,15 @@ test("guardrail methods use the public HTTP contract", async () => {
   expect(await client.guardrail.status({ sessionID: "ses_child" })).toEqual(status)
   expect(await client.guardrail.request.list({ sessionID: "ses_parent" })).toEqual([review])
   await client.guardrail.request.reply({ sessionID: "ses_parent", requestID: "grq_1", reply: "once" })
+  expect(await client.guardrail.request.retry({ sessionID: "ses_parent", requestID: "grq_1" })).toEqual(review)
+  await client.guardrail.request.cancel({ sessionID: "ses_parent", requestID: "grq_1" })
 
   expect(requests.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
     "GET /api/session/ses_child/guardrail",
     "GET /api/session/ses_parent/guardrail/request",
     "POST /api/session/ses_parent/guardrail/request/grq_1/reply",
+    "POST /api/session/ses_parent/guardrail/request/grq_1/retry",
+    "POST /api/session/ses_parent/guardrail/request/grq_1/cancel",
   ])
   expect(await requests[2]?.json()).toEqual({ reply: "once" })
 })

@@ -31,6 +31,35 @@ test("health.get decodes the readiness response", async () => {
   expect(result).toEqual({ healthy: true, version: "old", pid: 123, sourceEpoch })
 })
 
+test("guardrail request list decodes a v0.12.2 response without created and retry returns the same request", async () => {
+  const legacy = {
+    id: "grq_legacy", rootSessionID: "ses_root", sessionID: "ses_child", action: "shell", resources: ["git reset --hard"],
+    ruleIDs: ["standard.review.git-destructive"], reason: "Destructive Git", standard: true, hardReview: true,
+  }
+  const paths: string[] = []
+  const httpClient = HttpClient.make((request) => {
+    paths.push(`${request.method} ${new URL(request.url).pathname}`)
+    return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ data: request.method === "GET" ? [legacy] : legacy })))
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* YCoding.make({ baseUrl: "http://localhost:3000" })
+    const listed = yield* client.guardrail.request.list({ sessionID: Session.ID.make("ses_root") })
+    const retried = yield* client.guardrail.request.retry({ sessionID: Session.ID.make("ses_root"), requestID: listed[0]!.id })
+    const after = yield* client.guardrail.request.list({ sessionID: Session.ID.make("ses_root") })
+    return { listed, retried, after }
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(result.listed.map((request) => ({ ...request }))).toEqual([legacy])
+  expect(result.listed[0]!.created).toBeUndefined()
+  expect({ ...result.retried }).toEqual(legacy)
+  expect(result.after.map((request) => ({ ...request }))).toEqual([legacy])
+  expect(paths).toEqual([
+    "GET /api/session/ses_root/guardrail/request",
+    "POST /api/session/ses_root/guardrail/request/grq_legacy/retry",
+    "GET /api/session/ses_root/guardrail/request",
+  ])
+})
+
 test("session.get returns the decoded Effect projection", async () => {
   const httpClient = HttpClient.make((request) =>
     Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(session))),

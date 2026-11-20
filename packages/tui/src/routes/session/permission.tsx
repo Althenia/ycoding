@@ -452,6 +452,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
   title: string
   kind?: "permission" | "guardrail" | "recovery"
   semanticLabel?: string
+  headerNote?: JSX.Element
   instance: string
   body: JSX.Element
   footer?: JSX.Element
@@ -645,7 +646,8 @@ export function Prompt<const T extends Record<string, string>>(props: {
         justifyContent="space-between"
         onSizeChange={measure}
       >
-        <text fg={theme.text.default}>{props.title}</text>
+        <text flexShrink={0} fg={theme.text.default}>{props.title}</text>
+        {props.headerNote}
         <box flexGrow={1} />
         <box width={3} flexShrink={0}>
           <text

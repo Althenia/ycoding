@@ -1754,3 +1754,41 @@ test("preserves synthetic delivery and hides empty Dot steers without inventing 
   })!
   expect(transcriptMessageVisible(emptySteer)).toBe(false)
 })
+
+test("guardrail reviews carry their creation time and a cancelled or expired event removes the card with a did-not-run notice", () => {
+  const review = { id: "grq_a", sessionID: "ses_a", action: "shell", resources: ["rm -rf trash"], reason: "Deletion", hardReview: true, created: 1_000 }
+  expect(readGuardrailRequests({ data: [review] }, 9)[0]).toMatchObject({ id: "grq_a", created: 1_000, askedAt: 9 })
+  const asked = apply(createSessionView("ses_a"), "guardrail.asked", review)
+  expect(asked.requests[0]).toMatchObject({ kind: "guardrail", created: 1_000 })
+  for (const reason of ["cancelled", "expired", undefined] as const) {
+    const closed = apply(asked, "guardrail.cancelled", { rootSessionID: "ses_a", sessionID: "ses_a", requestID: "grq_a", ...(reason ? { reason } : {}) }, 5)
+    expect(closed.requests).toEqual([])
+    expect(closed.messages.at(-1)).toMatchObject({ kind: "notice", notice: "guardrail-closed", text: reason === "expired" ? "Guardrail review expired. The action did not run." : "Guardrail review cancelled. The action did not run." })
+  }
+  expect(apply(createSessionView("ses_a"), "guardrail.cancelled", { requestID: "grq_unknown", reason: "expired" }).messages).toEqual([])
+})
+
+test("only Dots native input metadata marks a user message as Dot-originated with its delivery", () => {
+  const dotsInput = (origin: string, delivery: string) => ({ dotsInput: { origin, delivery } })
+  expect(readProjectedMessage({ id: "msg_a", type: "user", text: "a", metadata: dotsInput("dots-native", "steer"), time: { created: 1 } })).toMatchObject({ dotsDelivery: "steer" })
+  expect(readProjectedMessage({ id: "msg_b", type: "user", text: "b", metadata: dotsInput("dots-native", "queue"), time: { created: 1 } })).toMatchObject({ dotsDelivery: "queue" })
+  for (const metadata of [undefined, dotsInput("remote", "steer"), dotsInput("dots-native", "later"), { nativeSource: { kind: "dots-native" } }])
+    expect(readProjectedMessage({ id: "msg_c", type: "user", text: "c", metadata, time: { created: 1 } })).not.toHaveProperty("dotsDelivery")
+  const admitted = apply(createSessionView("ses_a"), "session.input.admitted", { inputID: "msg_d", input: { type: "user", data: { text: "d", metadata: dotsInput("dots-native", "steer") }, delivery: "steer" } })
+  expect(admitted.messages[0]).toMatchObject({ kind: "user", dotsDelivery: "steer", delivery: "steer" })
+  expect(readPendingInputs({ data: [{ id: "msg_e", sessionID: "ses_a", type: "user", timeCreated: 1, delivery: "queue", data: { text: "e", metadata: dotsInput("dots-native", "queue") } }] }, "ses_a")?.[0]).toMatchObject({ dotsDelivery: "queue" })
+})
+
+test("a guardrail review without a creation time keeps its identity, reason and actions and a re-published ask keeps one pending card", () => {
+  const legacy = { id: "grq_old", sessionID: "ses_a", rootSessionID: "ses_a", action: "shell", resources: ["rm -rf trash"], reason: "Deletion", hardReview: true }
+  const listed = readGuardrailRequests({ data: [legacy, { ...legacy, id: "grq_bad", created: "soon" }] }, 9)
+  expect(listed).toMatchObject([{ kind: "guardrail", id: "grq_old", sessionID: "ses_a", reason: "Deletion", hardReview: true, resources: ["rm -rf trash"] }, { id: "grq_bad" }])
+  expect(listed.map((request) => "created" in request)).toEqual([false, false])
+  const asked = apply(createSessionView("ses_a"), "guardrail.asked", legacy)
+  expect(asked.requests).toHaveLength(1)
+  expect(asked.requests[0]).not.toHaveProperty("created")
+  const timed = apply(createSessionView("ses_a"), "guardrail.asked", { ...legacy, created: 1_000 })
+  const retried = apply(timed, "guardrail.asked", { ...legacy, created: 1_000 }, 7)
+  expect(retried.requests).toMatchObject([{ id: "grq_old", created: 1_000 }])
+  expect(retried.messages).toEqual(timed.messages)
+})

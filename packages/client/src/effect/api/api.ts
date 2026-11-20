@@ -727,11 +727,35 @@ export type Endpoint6_2Output = EffectValue<
 >
 export type GuardrailRequestReplyOperation<E = never> = (input: Endpoint6_2Input) => Effect.Effect<Endpoint6_2Output, E>
 
+type Endpoint6_3Request = Parameters<RawClient["server.guardrail"]["session.guardrail.request.cancel"]>[0]
+export type Endpoint6_3Input = {
+  readonly sessionID: Endpoint6_3Request["params"]["sessionID"]
+  readonly requestID: Endpoint6_3Request["params"]["requestID"]
+}
+export type Endpoint6_3Output = EffectValue<
+  ReturnType<RawClient["server.guardrail"]["session.guardrail.request.cancel"]>
+>
+export type GuardrailRequestCancelOperation<E = never> = (
+  input: Endpoint6_3Input,
+) => Effect.Effect<Endpoint6_3Output, E>
+
+type Endpoint6_4Request = Parameters<RawClient["server.guardrail"]["session.guardrail.request.retry"]>[0]
+export type Endpoint6_4Input = {
+  readonly sessionID: Endpoint6_4Request["params"]["sessionID"]
+  readonly requestID: Endpoint6_4Request["params"]["requestID"]
+}
+export type Endpoint6_4Output = EffectValue<
+  ReturnType<RawClient["server.guardrail"]["session.guardrail.request.retry"]>
+>["data"]
+export type GuardrailRequestRetryOperation<E = never> = (input: Endpoint6_4Input) => Effect.Effect<Endpoint6_4Output, E>
+
 export interface GuardrailApi<E = never> {
   readonly status: GuardrailStatusOperation<E>
   readonly request: {
     readonly list: GuardrailRequestListOperation<E>
     readonly reply: GuardrailRequestReplyOperation<E>
+    readonly cancel: GuardrailRequestCancelOperation<E>
+    readonly retry: GuardrailRequestRetryOperation<E>
   }
 }
 

@@ -229,6 +229,8 @@ export type LocalServer = {
     requestID: string,
     reply: string,
   ) => Promise<void>
+  readonly guardrailCancel: (sessionID: string, location: LocalLocation, requestID: string) => Promise<void>
+  readonly guardrailRetry: (sessionID: string, location: LocalLocation, requestID: string) => Promise<unknown>
   readonly formReply: (
     sessionID: string,
     location: LocalLocation,
@@ -506,6 +508,20 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
           request(location, timeoutMs),
         )
       }),
+    guardrailCancel: (sessionID, location, requestID) =>
+      call(async () => {
+        await client.guardrail.request.cancel(
+          { sessionID, requestID } as Parameters<YCodingClient["guardrail"]["request"]["cancel"]>[0],
+          request(location, timeoutMs),
+        )
+      }),
+    guardrailRetry: (sessionID, location, requestID) =>
+      call(async () =>
+        client.guardrail.request.retry(
+          { sessionID, requestID } as Parameters<YCodingClient["guardrail"]["request"]["retry"]>[0],
+          request(location, timeoutMs),
+        ),
+      ),
     formReply: (sessionID, location, formID, answer) =>
       call(async () => {
         await client.form.reply({ sessionID, formID, answer }, request(location, timeoutMs))

@@ -685,6 +685,8 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.guardrail.status` | yes | `session.guardrail.status` | `GET /api/session/:sessionID/guardrail` | — |
 | `session.guardrail.request.list` | yes | `session.guardrail.request.list` | `GET /api/session/:sessionID/guardrail/request` | — |
 | `session.guardrail.reply` | yes | `session.guardrail.request.reply` | `POST /api/session/:sessionID/guardrail/request/:requestID/reply` | `requestID`, `reply` |
+| `session.guardrail.cancel` | yes | `session.guardrail.request.cancel` | `POST /api/session/:sessionID/guardrail/request/:requestID/cancel` | `requestID` |
+| `session.guardrail.retry` | yes | `session.guardrail.request.retry` | `POST /api/session/:sessionID/guardrail/request/:requestID/retry` | `requestID` |
 | `session.form.list` | yes | `session.form.list` | `GET /api/session/:sessionID/form` | — |
 | `session.form.reply` | yes | `session.form.reply` | `POST /api/session/:sessionID/form/:formID/reply` | `formID`, `answer` |
 | `session.form.cancel` | yes | `session.form.cancel` | `POST /api/session/:sessionID/form/:formID/cancel` | `formID` |
@@ -983,8 +985,9 @@ instead of relying on ephemeral events.
 reports running state for that same inventory. The authenticated enrolled-device
 owner is the authorization boundary.
 
-`session.permission.reply` and `session.guardrail.reply` map a `requestID` path
-parameter. `session.form.reply` and `session.form.cancel` map a `formID` path
+`session.permission.reply`, `session.guardrail.reply`, `session.guardrail.cancel`,
+and `session.guardrail.retry` map a `requestID` path parameter. `session.guardrail.retry` follows the
+local retry contract: Retry re-presents the same pending review. It re-publishes guardrail.asked for the unchanged request (same id, same created) and returns it. It never approves, rejects or settles the review and never runs its command. The review stays pending until a reply, cancel or expiry. `session.form.reply` and `session.form.cancel` map a `formID` path
 parameter. The corresponding identifier is therefore explicit in each mutation's
 `input`.
 

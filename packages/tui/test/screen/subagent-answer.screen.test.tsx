@@ -108,7 +108,7 @@ function fixture(input?: {
                     resources: ["review-target"],
                     reason: "Human review required",
                     ruleIDs: ["standard.review.shell"],
-                    standard: true,
+                    standard: true, created: 1_000,
                     hardReview: true,
                   },
                 ]
@@ -426,7 +426,7 @@ test("a hard review arriving during a parent answer preserves the answer and own
         resources: ["review-target"],
         reason: "Human review required",
         ruleIDs: ["standard.review.shell"],
-        standard: true,
+        standard: true, created: 1_000,
         hardReview: true,
       },
     })

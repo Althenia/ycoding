@@ -1,18 +1,19 @@
 /** @jsxImportSource @opentui/solid */
-import { expect, test } from "bun:test"
+import { expect, test, vi } from "bun:test"
 import { BoxRenderable, Renderable, ScrollBoxRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { createSignal } from "solid-js"
 import type { GuardrailRequest } from "../../../src/routes/session/guardrail"
 import type { GuardrailStatusOutput } from "@ycoding-ai/client"
+import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { ClientProvider } from "../../../src/context/client"
 import { ThemeProvider } from "../../../src/context/theme"
 import { Keymap } from "../../../src/context/keymap"
 import { ConfigProvider } from "../../../src/config"
-import { ToastProvider } from "../../../src/ui/toast"
+import { Toast, ToastProvider } from "../../../src/ui/toast"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
-import { createApi, createFetch } from "../../fixture/tui-client"
+import { createApi, createFetch, json } from "../../fixture/tui-client"
 
 const module = await import("../../../src/feature-plugins/sidebar/guardrails")
 const prompt = await import("../../../src/routes/session/guardrail")
@@ -89,7 +90,7 @@ test("renders a decision-failed human review without claiming the model escalate
                       resources: ["git reset --hard"],
                       ruleIDs: ["standard.review.git-destructive"],
                       reason: "Destructive Git operation",
-                      standard: true,
+                      standard: true, created: 1_000,
                       escalation: { reason: "unsupported-output" as const },
                     }}
                   />
@@ -129,7 +130,7 @@ test("attributes child reviews to their root family", () => {
     resources: ["git reset --hard"],
     ruleIDs: ["standard.review.git-destructive"],
     reason: "Destructive Git operation",
-    standard: true,
+    standard: true, created: 1_000,
   }
   expect(prompt.guardrailPresentation(request)).toEqual({
     title: "Guardrail blocked",
@@ -157,7 +158,7 @@ test("renders a model-escalated human review with ordinary choices", async () =>
     resources: ["git reset --hard"],
     ruleIDs: ["standard.review.git-destructive"],
     reason: "Destructive Git operation",
-    standard: true,
+    standard: true, created: 1_000,
     escalation: { choice: "escalate" as const, confidence: 0.2 },
   }
   const app = await testRender(
@@ -196,7 +197,8 @@ test("renders a model-escalated human review with ordinary choices", async () =>
     expect(frame).not.toContain("standard.review.git-destructive")
     app.mockInput.pressKey("\u001b[6~")
     await app.waitForFrame((frame) => frame.includes("Action: shell"))
-    app.mockInput.pressArrow("left")
+    app.mockInput.pressArrow("right")
+    app.mockInput.pressArrow("right")
     app.mockInput.pressEnter()
     expect(await replyReceived.promise).toEqual({
       path: "/api/session/ses_root/guardrail/request/grq_review/reply",
@@ -233,7 +235,7 @@ test("renders a hard review with one-time approval or rejection only", async () 
                       resources: ["rm -rf ."],
                       ruleIDs: ["standard.review.broad-deletion"],
                       reason: "Recursive deletion includes the current project",
-                      standard: true,
+                      standard: true, created: 1_000,
                       hardReview: true,
                     }}
                   />
@@ -254,7 +256,7 @@ test("renders a hard review with one-time approval or rejection only", async () 
     expect(frame).toContain("Allow once")
     expect(frame).toContain("Deny")
     expect(frame).not.toContain("Allow for this session")
-    app.mockInput.pressArrow("left")
+    app.mockInput.pressArrow("right")
     app.mockInput.pressEnter()
     expect(await replyReceived.promise).toEqual({
       path: "/api/session/ses_root/guardrail/request/grq_hard_review/reply",
@@ -393,7 +395,7 @@ for (const decision of ["once", "reject"] as const) {
       () => {
         const [request, setRequest] = createSignal<GuardrailRequest>({
           id: "grq_first", rootSessionID: "ses_root", sessionID: "ses_root", action: "shell",
-          resources: [long], reason: "Review display-only details", ruleIDs: [], standard: true,
+          resources: [long], reason: "Review display-only details", ruleIDs: [], standard: true, created: 1_000,
         })
         replace = setRequest
         return (
@@ -421,15 +423,16 @@ for (const decision of ["once", "reject"] as const) {
         await app.renderOnce()
       }
       expect(app.captureCharFrame()).toContain("FINAL_COMMAND_SENTINEL")
-      app.mockInput.pressArrow("left")
+      app.mockInput.pressArrow("right")
+      app.mockInput.pressArrow("right")
       await app.renderOnce()
       expect(descendants(app.renderer.root).some((item) => item.id === "session.guardrail.action.always.band")).toBe(true)
       replace({
         id: "grq_hard_replacement", rootSessionID: "ses_root", sessionID: "ses_root", action: "shell",
         resources: [`NEW_COMMAND_START ${"display-only text ".repeat(200)} NEW_COMMAND_END`],
-        reason: "Hard display-only review", ruleIDs: [], standard: true, hardReview: true,
+        reason: "Hard display-only review", ruleIDs: [], standard: true, created: 1_000, hardReview: true,
       })
-      app.renderer.resize(50, 10)
+      app.renderer.resize(50, 12)
       await app.renderOnce()
       expect(details.scrollTop).toBe(0)
       const frame = app.captureCharFrame()
@@ -464,3 +467,255 @@ for (const decision of ["once", "reject"] as const) {
     }
   })
 }
+
+const minute = 60_000
+
+const waiting = (overrides: Partial<GuardrailRequest> = {}): GuardrailRequest => ({
+  id: "grq_waiting",
+  rootSessionID: "ses_root",
+  sessionID: "ses_child",
+  action: "shell",
+  resources: ["rm -rf ."],
+  ruleIDs: ["standard.review.broad-deletion"],
+  reason: "Recursive deletion includes the current project",
+  standard: true,
+  hardReview: true,
+  created: Date.now() - Guardrail.staleAfterMs - 5 * minute,
+  ...overrides,
+})
+
+async function mountWaiting(
+  request: GuardrailRequest,
+  handlers: { onClosed?: () => void; onRetried?: () => void } = {},
+  respond: Parameters<typeof createFetch>[0] = async () => undefined,
+) {
+  const transport = createFetch(respond)
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <Keymap.Provider>
+            <ClientProvider api={createApi(transport.fetch)}>
+              <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+                <ToastProvider>
+                  <prompt.GuardrailPrompt request={request} {...handlers} />
+                  <Toast />
+                </ToastProvider>
+              </ThemeProvider>
+            </ClientProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 110, height: 30, kittyKeyboard: true },
+  )
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes("Guardrail blocked"))
+  return app
+}
+
+const normalized = (frame: string) => frame.replace(/\s+/g, " ")
+
+test("formats how long a review has waited and when it turns stale", () => {
+  expect(prompt.guardrailWait(0, 0)).toEqual({ waited: "0s", stale: false })
+  expect(prompt.guardrailWait(0, 59_900)).toEqual({ waited: "59s", stale: false })
+  expect(prompt.guardrailWait(0, 65_000)).toEqual({ waited: "1m 5s", stale: false })
+  expect(prompt.guardrailWait(0, Guardrail.staleAfterMs - 1).stale).toBe(false)
+  expect(prompt.guardrailWait(0, Guardrail.staleAfterMs)).toEqual({ waited: "15m 0s", stale: true })
+  expect(prompt.guardrailWait(0, 25 * 60 * minute + 2 * minute)).toEqual({ waited: "25h 2m", stale: true })
+  expect(prompt.guardrailWait(10_000, 5_000)).toEqual({ waited: "0s", stale: false })
+})
+
+test("a stale waiting review shows its age, Stale marker, reason, session and request IDs", async () => {
+  const app = await mountWaiting(waiting())
+  try {
+    const frame = normalized(app.captureCharFrame())
+    expect(frame).toMatch(/waited 20m \d+s/)
+    expect(frame).toContain("Stale")
+    expect(frame).toContain("Recursive deletion includes the current project")
+    expect(frame).toContain("Session ses_child")
+    expect(frame).toContain("Request grq_waiting")
+    expect(frame).toContain("hard review · only you can approve")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a fresh waiting review shows its age without a Stale marker and keeps counting", async () => {
+  const app = await mountWaiting(waiting({ created: Date.now() - 1_500 }))
+  try {
+    expect(normalized(app.captureCharFrame())).toMatch(/waited [12]s/)
+    expect(app.captureCharFrame()).not.toContain("Stale")
+    for (let attempt = 0; attempt < 100 && !/waited [3-9]s/.test(app.captureCharFrame()); attempt++) {
+      await Bun.sleep(50)
+      await app.renderOnce()
+    }
+    expect(normalized(app.captureCharFrame())).toMatch(/waited [3-9]s/)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a hard review offers Deny, Allow once, Retry and Cancel but never Always", async () => {
+  const app = await mountWaiting(waiting())
+  try {
+    const frame = app.captureCharFrame()
+    for (const label of ["Deny", "Allow once", "Retry (show again)", "Cancel"]) expect(frame).toContain(label)
+    expect(frame).not.toContain("Allow for this session")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("an ordinary review offers Allow for this session beside Retry and Cancel", async () => {
+  const app = await mountWaiting(waiting({ hardReview: undefined }))
+  try {
+    const frame = app.captureCharFrame()
+    for (const label of ["Deny", "Allow once", "Allow for this session", "Retry (show again)", "Cancel"]) expect(frame).toContain(label)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("Cancel posts the cancel operation and never a reply", async () => {
+  const calls: string[] = []
+  const app = await mountWaiting(waiting(), {}, async (url, request) => {
+    if (request.method === "POST") calls.push(`${request.method} ${url.pathname}`)
+    return new Response(null, { status: 204 })
+  })
+  try {
+    app.mockInput.pressArrow("left")
+    app.mockInput.pressEnter()
+    await app.waitForFrame(() => calls.length > 0)
+    expect(calls).toEqual(["POST /api/session/ses_root/guardrail/request/grq_waiting/cancel"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("Retry only re-presents the review: one retry call, no reply or cancel, the card stays pending with its age and no toast", async () => {
+  const calls: string[] = []
+  const created = Date.now() - Guardrail.staleAfterMs - 5 * minute
+  const retried = Promise.withResolvers<void>()
+  const closed = vi.fn()
+  const app = await mountWaiting(waiting({ created }), { onRetried: () => retried.resolve(), onClosed: closed }, async (url, request) => {
+    if (request.method === "POST") calls.push(`${request.method} ${url.pathname}`)
+    return json(waiting({ created }))
+  })
+  try {
+    app.mockInput.pressArrow("left")
+    app.mockInput.pressArrow("left")
+    app.mockInput.pressEnter()
+    await retried.promise
+    await Bun.sleep(100)
+    await app.renderOnce()
+    expect(calls).toEqual(["POST /api/session/ses_root/guardrail/request/grq_waiting/retry"])
+    expect(closed).not.toHaveBeenCalled()
+    const frame = normalized(app.captureCharFrame())
+    expect(frame).toContain("Guardrail blocked")
+    expect(frame).toMatch(/waited 20m \d+s/)
+    expect(frame).toContain("Stale")
+    expect(frame).toContain("Allow once")
+    for (const toast of ["Success", "Info", "Warning", "Error", "approved", "rejected", "denied"]) expect(frame).not.toContain(toast)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+const legacy = (overrides: Partial<GuardrailRequest> = {}): GuardrailRequest => ({
+  id: "grq_legacy",
+  rootSessionID: "ses_root",
+  sessionID: "ses_child",
+  action: "shell",
+  resources: ["rm -rf ."],
+  ruleIDs: ["standard.review.broad-deletion"],
+  reason: "Recursive deletion includes the current project",
+  standard: true,
+  hardReview: true,
+  ...overrides,
+})
+
+test("a review without created renders no age or Stale marker and keeps its IDs, reason and every action", async () => {
+  const app = await mountWaiting(legacy())
+  try {
+    const frame = normalized(app.captureCharFrame())
+    expect(frame).not.toContain("waited")
+    expect(frame).not.toContain("Stale")
+    expect(frame).not.toContain("NaN")
+    expect(frame).toContain("Session ses_child")
+    expect(frame).toContain("Request grq_legacy")
+    expect(frame).toContain("Recursive deletion includes the current project")
+    for (const label of ["Deny", "Allow once", "Retry (show again)", "Cancel"]) expect(frame).toContain(label)
+    expect(frame).not.toContain("Allow for this session")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a review without created can still be cancelled", async () => {
+  const calls: string[] = []
+  const closed = Promise.withResolvers<void>()
+  const app = await mountWaiting(legacy({ hardReview: undefined }), { onClosed: () => closed.resolve() }, async (url, request) => {
+    if (request.method === "POST") calls.push(`${request.method} ${url.pathname}`)
+    return new Response(null, { status: 204 })
+  })
+  try {
+    expect(normalized(app.captureCharFrame())).toContain("Allow for this session")
+    app.mockInput.pressArrow("left")
+    app.mockInput.pressEnter()
+    await closed.promise
+    expect(calls).toEqual(["POST /api/session/ses_root/guardrail/request/grq_legacy/cancel"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+for (const [label, presses, operation] of [
+  ["Deny", 0, "reply"],
+  ["Cancel", 1, "cancel"],
+  ["Retry", 2, "retry"],
+] as const) {
+  test(`${label} on a review that was settled elsewhere removes it without approving`, async () => {
+    const calls: string[] = []
+    const gone = Promise.withResolvers<void>()
+    const app = await mountWaiting(waiting(), { onClosed: () => gone.resolve() }, async (url, request) => {
+      if (request.method === "POST") calls.push(`${request.method} ${url.pathname}`)
+      return json({ _tag: "GuardrailRequestNotFoundError", message: "Guardrail request not found" }, { status: 404 })
+    })
+    try {
+      for (let press = 0; press < presses; press++) app.mockInput.pressArrow("left")
+      app.mockInput.pressEnter()
+      await gone.promise
+      expect(calls).toEqual([`POST /api/session/ses_root/guardrail/request/grq_waiting/${operation}`])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+}
+
+test("a failed cancel keeps the review open", async () => {
+  let closed = false
+  const attempted = Promise.withResolvers<void>()
+  const app = await mountWaiting(waiting(), { onClosed: () => (closed = true) }, async (_url, request) => {
+    if (request.method !== "POST") return undefined
+    attempted.resolve()
+    return json({ _tag: "UnknownError", message: "backend unavailable" }, { status: 500 })
+  })
+  try {
+    app.mockInput.pressArrow("left")
+    app.mockInput.pressEnter()
+    await attempted.promise
+    await Bun.sleep(50)
+    await app.renderOnce()
+    expect(closed).toBe(false)
+    expect(app.captureCharFrame()).toContain("Guardrail blocked")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("closed-review notices say the action did not run", () => {
+  expect(prompt.guardrailClosedNotice("cancelled")).toBe("Guardrail review cancelled. The action did not run.")
+  expect(prompt.guardrailClosedNotice("expired")).toBe("Guardrail review expired. The action did not run.")
+  expect(prompt.guardrailClosedNotice(undefined)).toBeUndefined()
+})

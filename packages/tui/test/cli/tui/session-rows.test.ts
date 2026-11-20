@@ -41,7 +41,7 @@ test.each(["root", "child"])(
           resources: [],
           ruleIDs: [],
           reason: "Still pending",
-          standard: true,
+          standard: true, created: 1_000,
         },
       ],
     })
@@ -101,6 +101,25 @@ test("guardrail provenance detail reads the linked resident tool call", () => {
   ])
 })
 
+test("decision history shows a closed review without a model outcome and keeps entries without a reason unchanged", () => {
+  const rows = reduceSessionRows([{ type: "user", id: "first", text: "Run it", time: { created: 10 } }], new Set(), false, {
+    sessionID: "root",
+    decisions: [
+      { sessionID: "root", created: 20, requestID: "model-rejected", reply: "reject", confidence: 0.9 },
+      { sessionID: "root", created: 30, requestID: "closed-expired", reply: "reject", reason: "expired" },
+      { sessionID: "root", created: 40, requestID: "closed-cancelled", reply: "reject", reason: "cancelled" },
+    ],
+    pending: [],
+  })
+  const outcome = (requestID: string) => {
+    const row = rows.find((item) => item.type === "guardrail" && item.requestID === requestID)
+    return row?.type === "guardrail" ? row.decided : undefined
+  }
+  expect(outcome("model-rejected")).toBe("decision model rejected · 0.9")
+  expect(outcome("closed-expired")).toBe("expired · action did not run")
+  expect(outcome("closed-cancelled")).toBe("cancelled · action did not run")
+})
+
 test("settled reviews precede untimed text after a completed tool on replay", () => {
   const message = assistant("assistant-ordered", [
     { type: "reasoning", text: "Inspecting", time: { created: 2, completed: 3 } },
@@ -129,7 +148,7 @@ test("compaction replay omits covered audit history but keeps retained outcomes 
     { type: "user", id: "later-chat", text: "Later", time: { created: 50 } },
   ], new Set(), false, {
     sessionID: "root", decisions,
-    pending: [{ id: "pending-family", rootSessionID: "root", sessionID: "child", action: "shell", resources: ["fixture"], ruleIDs: [], reason: "Needs a decision", standard: false, hardReview: true }],
+    pending: [{ id: "pending-family", rootSessionID: "root", sessionID: "child", action: "shell", resources: ["fixture"], ruleIDs: [], reason: "Needs a decision", standard: false, created: 1_000, hardReview: true }],
   })
   expect(rows.map((row) => row.type === "guardrail" ? row.requestID : row.type === "message" ? row.messageID : row.type))
     .toEqual(["retained-chat", "retained", "later-chat", "pending-family"])
@@ -554,7 +573,7 @@ test("settled rejections wait for resident chat while pending reviews render", (
   const rows = reduceSessionRows([], new Set(), false, {
     sessionID: "root",
     decisions: [{ sessionID: "root", created: 5, requestID: "settled", reply: "reject", choice: "deny", confidence: 0.9 }],
-    pending: [{ id: "pending", rootSessionID: "root", sessionID: "root", action: "shell", resources: [], ruleIDs: [], reason: "Needs you", standard: true }],
+    pending: [{ id: "pending", rootSessionID: "root", sessionID: "root", action: "shell", resources: [], ruleIDs: [], reason: "Needs you", standard: true, created: 1_000 }],
   })
   expect(rows).toEqual([{ type: "guardrail", requestID: "pending", reason: "Needs you" }])
   expect(reduceSessionRows([{ type: "user", id: "later", text: "Later", time: { created: 9 } }], new Set(), false, {

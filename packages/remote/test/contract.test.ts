@@ -129,6 +129,24 @@ test("one-message stream requests accept only an indexed Session message ID", ()
     expect(parseClientMessage(JSON.stringify({ ...frame, input })).ok).toBe(false)
 })
 
+test("a v0.12.2 guardrail request list response without created crosses the relay unchanged", () => {
+  const legacy = { id: "grq_legacy", rootSessionID: "ses_1", sessionID: "ses_1", action: "shell", resources: ["git reset --hard"], ruleIDs: ["standard.review.git-destructive"], reason: "Destructive Git", standard: true, hardReview: true }
+  const frame = { type: "response" as const, id: "req_list", ok: true as const, value: { data: [legacy] } }
+  expect(parseAgentMessage(serializeResponse(frame))).toEqual({ ok: true, value: frame })
+  expect(parseRelayToClientMessage(serializeResponse(frame))).toEqual({ ok: true, value: frame })
+})
+
+test("guardrail review cancel and retry are Session-scoped mutations", () => {
+  for (const operation of ["session.guardrail.cancel", "session.guardrail.retry"] as const) {
+    const frame = { type: "request", id: "req_guardrail", operation, sessionID: "ses_1", input: { requestID: "grq_1" } }
+    expect(remoteOperationAccess[operation]).toBe("mutation")
+    expect(requireSession(operation)).toBe(true)
+    expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+    expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
+    expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: undefined }))).toMatchObject({ ok: false, error: { code: "session_required" } })
+  }
+})
+
 test("pending input controls are Session-scoped mutations that accept only an indexed message ID", () => {
   for (const operation of ["session.pending.remove", "session.pending.steer"] as const) {
     const frame = { type: "request", id: "req_pending", operation, sessionID: "ses_1", input: { messageID: "msg_1" } }
@@ -891,6 +909,8 @@ describe("remote operations", () => {
       "session.guardrail.status",
       "session.guardrail.request.list",
       "session.guardrail.reply",
+      "session.guardrail.cancel",
+      "session.guardrail.retry",
       "session.review.list",
       "session.review.decide",
       "session.form.list",

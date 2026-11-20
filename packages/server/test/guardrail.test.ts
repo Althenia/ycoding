@@ -25,6 +25,7 @@ const status: GuardrailStatus = new Guardrail.Status({
 
 const request: GuardrailRequest = new Guardrail.Request({
   id: requestID,
+  created: 1_000,
   rootSessionID: parentID,
   sessionID: childID,
   action: "shell",
@@ -73,6 +74,14 @@ test("guardrail HTTP routes preserve family ownership, normalized output, and ty
             : Effect.void,
         ),
       ),
+    cancel: (input) =>
+      Effect.sync(() => calls.push(["cancel", input])).pipe(
+        Effect.andThen(input.sessionID === unrelatedID ? Effect.fail(new SessionGuardrail.RequestNotFoundError({ requestID: input.requestID })) : Effect.void),
+      ),
+    retry: (input) =>
+      Effect.sync(() => calls.push(["retry", input])).pipe(
+        Effect.andThen(input.sessionID === unrelatedID ? Effect.fail(new SessionGuardrail.RequestNotFoundError({ requestID: input.requestID })) : Effect.succeed(request)),
+      ),
   })
 
   await using http = sessionHttp({}, { guardrail: service })
@@ -86,6 +95,17 @@ test("guardrail HTTP routes preserve family ownership, normalized output, and ty
   const denied = await http.json(`/api/session/${unrelatedID}/guardrail/request/${requestID}/reply`, "POST", { reply: "reject" })
   expect(denied.status).toBe(404)
   expect(await denied.json()).toMatchObject({ _tag: "GuardrailRequestNotFoundError", requestID })
+  const retried = await http.request(`/api/session/${parentID}/guardrail/request/${requestID}/retry`, { method: "POST" })
+  expect(retried.status).toBe(200)
+  expect(await retried.json()).toEqual({ data: request })
+  const afterRetry = await http.request(`/api/session/${parentID}/guardrail/request`)
+  expect(await afterRetry.json()).toEqual({ data: [request] })
+  expect((await http.request(`/api/session/${parentID}/guardrail/request/${requestID}/cancel`, { method: "POST" })).status).toBe(204)
+  for (const route of ["cancel", "retry"]) {
+    const gone = await http.request(`/api/session/${unrelatedID}/guardrail/request/${requestID}/${route}`, { method: "POST" })
+    expect(gone.status).toBe(404)
+    expect(await gone.json()).toMatchObject({ _tag: "GuardrailRequestNotFoundError", requestID })
+  }
   const missing = await http.request(`/api/session/${unrelatedID}/guardrail`)
   expect(missing.status).toBe(404)
   expect(await missing.json()).toMatchObject({ _tag: "SessionNotFoundError", sessionID: unrelatedID })
@@ -94,5 +114,10 @@ test("guardrail HTTP routes preserve family ownership, normalized output, and ty
     ["list", parentID],
     ["reply", { sessionID: parentID, requestID, reply: "always" }],
     ["reply", { sessionID: unrelatedID, requestID, reply: "reject" }],
+    ["retry", { sessionID: parentID, requestID }],
+    ["list", parentID],
+    ["cancel", { sessionID: parentID, requestID }],
+    ["cancel", { sessionID: unrelatedID, requestID }],
+    ["retry", { sessionID: unrelatedID, requestID }],
   ])
 })

@@ -270,3 +270,109 @@ test("a permission ask the baseline assessment could not settle names its reason
     } finally { await page.close(); await relay.stop() }
   }
 })
+
+const fixtureURL = (relay: Awaited<ReturnType<typeof startRelayDouble>>) => `http://127.0.0.1:${port}/verify/guardrail-family-fixture.html?relay=${encodeURIComponent(relay.wsURL("dev_1"))}&http=${encodeURIComponent(relay.httpURL)}`
+const recoveryButtons = `[...document.querySelectorAll('.request--hard .request__recovery button')].map(button => button.textContent.trim())`
+
+test("a stale hard review shows its waiting age, reason and IDs, retries without deciding and cancels so the action does not run", async () => {
+  const stale = { ...review, created: Date.now() - 16 * 60_000 }
+  let pending: readonly unknown[] = [stale]
+  const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], handler: (request) => {
+    if (request.operation === "session.guardrail.request.list") return { ok: true, value: { data: pending } }
+    if (request.operation === "session.guardrail.retry") return { ok: true, value: { data: stale } }
+    if (request.operation === "session.guardrail.cancel") { pending = []; return { ok: true, value: null } }
+    return "default"
+  } })
+  const page = await browser.openPage()
+  try {
+    await page.navigate(fixtureURL(relay))
+    await wait(page, `document.querySelector('.request--hard [data-guardrail-age]') !== null`)
+    expect(await page.evaluate(`(() => { const card = document.querySelector('.request--hard'); return { age: card.querySelector('[data-guardrail-age]').textContent.trim(), stale: card.querySelector('[data-guardrail-stale]')?.textContent.trim() ?? '', shown: ["Deletion requires review", "ses_child", "grq_child"].filter(text => card.textContent.includes(text)), actions: [...card.querySelectorAll('.request__actions button')].map(button => button.textContent.trim()) } })()`)).toEqual({
+      age: "Waiting 16 min", stale: "Stale", shown: ["Deletion requires review", "ses_child", "grq_child"], actions: ["Approve once", "Reject"],
+    })
+    expect(await page.evaluate(recoveryButtons)).toEqual(["Cancel", "Retry"])
+    await page.evaluate(`[...document.querySelectorAll('.request--hard .request__recovery button')].find(button => button.textContent.trim() === 'Retry').click()`)
+    await wait(page, `!document.querySelector('.request--hard .request__recovery button').disabled`)
+    expect(relay.requests.filter((request) => request.operation === "session.guardrail.retry")).toMatchObject([{ sessionID: "ses_a", input: { requestID: "grq_child" } }])
+    const askedAt = await page.evaluate(`window.guardrailStore.state().view.requests.find(request => request.id === 'grq_child').askedAt`)
+    relay.pushEvent("ses_a", { type: "guardrail.asked", created: Date.now(), data: stale })
+    await wait(page, `window.guardrailStore.state().view.requests.find(request => request.id === 'grq_child')?.askedAt !== ${JSON.stringify(askedAt)}`)
+    expect(await page.evaluate(`(() => { const cards = document.querySelectorAll('.request--hard'); return { cards: cards.length, age: cards[0]?.querySelector('[data-guardrail-age]')?.textContent.trim() ?? '', stale: cards[0]?.querySelector('[data-guardrail-stale]')?.textContent.trim() ?? '', notices: [...document.querySelectorAll('.notice')].map(node => node.textContent).filter(text => /did not run|approved/i.test(text)), storeNotice: window.guardrailStore.state().notice ?? '' } })()`)).toEqual({ cards: 1, age: "Waiting 16 min", stale: "Stale", notices: [], storeNotice: "" })
+    expect(relay.requests.filter((request) => request.operation === "session.guardrail.reply")).toEqual([])
+    await page.evaluate(`[...document.querySelectorAll('.request--hard .request__recovery button')].find(button => button.textContent.trim() === 'Cancel').click()`)
+    await wait(page, `document.querySelector('.request') === null`)
+    expect(relay.requests.filter((request) => request.operation === "session.guardrail.cancel")).toMatchObject([{ sessionID: "ses_a", input: { requestID: "grq_child" } }])
+    relay.pushEvent("ses_a", { type: "guardrail.cancelled", created: Date.now(), data: { rootSessionID: "ses_a", sessionID: "ses_child", requestID: "grq_child", reason: "cancelled" } })
+    await wait(page, `document.body.textContent.includes('did not run')`)
+    expect(relay.requests.filter((request) => request.operation === "session.guardrail.reply")).toEqual([])
+  } finally { await page.close(); await relay.stop() }
+})
+
+test("a fresh review shows its waiting age without the Stale marker", async () => {
+  const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], guardrailRequests: [{ ...review, created: Date.now() - 2 * 60_000 }] })
+  const page = await browser.openPage()
+  try {
+    await page.navigate(fixtureURL(relay))
+    await wait(page, `document.querySelector('.request--hard [data-guardrail-age]') !== null`)
+    expect(await page.evaluate(`document.querySelector('[data-guardrail-age]').textContent.trim()`)).toBe("Waiting 2 min")
+    expect(await page.evaluate(`document.querySelector('[data-guardrail-stale]')`)).toBeNull()
+  } finally { await page.close(); await relay.stop() }
+})
+
+for (const reason of ["cancelled", "expired"] as const) test(`a ${reason} review event removes its card with a notice that the action did not run`, async () => {
+  const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], guardrailRequests: [{ ...review, created: Date.now() }] })
+  const page = await browser.openPage()
+  try {
+    await page.navigate(fixtureURL(relay))
+    await wait(page, `document.querySelector('.request--hard') !== null`)
+    relay.pushEvent("ses_a", { type: "guardrail.cancelled", created: Date.now(), data: { rootSessionID: "ses_a", sessionID: "ses_child", requestID: "grq_child", reason } })
+    await wait(page, `document.querySelector('.request') === null`)
+    const notice = await page.evaluate(`[...document.querySelectorAll('.notice')].map(node => node.textContent).join(' ')`)
+    expect(notice).toContain(reason === "expired" ? "expired" : "cancelled")
+    expect(notice).toContain("did not run")
+    expect(notice).not.toContain("approved")
+  } finally { await page.close(); await relay.stop() }
+})
+
+for (const operation of ["session.guardrail.reply", "session.guardrail.cancel", "session.guardrail.retry"] as const) test(`not found from ${operation} removes the card without treating the review as approved`, async () => {
+  const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], guardrailRequests: [{ ...review, created: Date.now() }], handler: (request) => request.operation === operation ? { ok: false, code: "not_found", message: "Guardrail request not found" } : "default" })
+  const page = await browser.openPage()
+  try {
+    await page.navigate(fixtureURL(relay))
+    await wait(page, `document.querySelector('.request--hard') !== null`)
+    const target = operation === "session.guardrail.reply" ? `document.querySelector('.request--hard .request__actions button')` : `[...document.querySelectorAll('.request--hard .request__recovery button')].find(button => button.textContent.trim() === ${JSON.stringify(operation.endsWith("cancel") ? "Cancel" : "Retry")})`
+    await page.evaluate(`${target}.click()`)
+    await wait(page, `document.querySelector('.request') === null`)
+    expect(await page.evaluate(`window.guardrailStore.state().notice`)).toBe("This review is no longer pending. Nothing was approved.")
+    expect(await page.evaluate(`window.guardrailStore.state().mutations.filter(mutation => mutation.kind === 'guardrail').length`)).toBe(0)
+  } finally { await page.close(); await relay.stop() }
+})
+
+test("a reconnect re-lists pending reviews so a review settled while offline leaves no Waiting card", async () => {
+  let pending: readonly unknown[] = [{ ...review, created: Date.now() }]
+  const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], handler: (request) => request.operation === "session.guardrail.request.list" ? { ok: true, value: { data: pending } } : "default" })
+  const page = await browser.openPage()
+  try {
+    await page.navigate(fixtureURL(relay))
+    await wait(page, `document.querySelector('.request--hard') !== null`)
+    const lists = relay.requests.filter((request) => request.operation === "session.guardrail.request.list").length
+    pending = []
+    relay.dropConnections(1012, "restart")
+    for (let i = 0; i < 400 && await page.evaluate(`document.querySelector('.request') !== null`); i++) await Bun.sleep(25)
+    expect(await page.evaluate(`document.querySelector('.request') === null`)).toBe(true)
+    expect(relay.requests.filter((request) => request.operation === "session.guardrail.request.list").length).toBeGreaterThan(lists)
+  } finally { await page.close(); await relay.stop() }
+})
+
+test("a pending hard review without a creation time from an older backend shows its reason, IDs and actions without a waiting age", async () => {
+  const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], guardrailRequests: [review] })
+  const page = await browser.openPage()
+  try {
+    await page.injectOnNewDocument(`window.__pageErrors = []; addEventListener('error', event => __pageErrors.push(String(event.message))); addEventListener('unhandledrejection', event => __pageErrors.push(String(event.reason)))`)
+    await page.navigate(fixtureURL(relay))
+    await wait(page, `document.querySelector('.request--hard') !== null`)
+    expect(await page.evaluate(`(() => { const card = document.querySelector('.request--hard'); return { age: card.querySelector('[data-guardrail-age]') !== null, stale: card.querySelector('[data-guardrail-stale]') !== null, shown: ["Deletion requires review", "ses_child", "grq_child"].filter(text => card.textContent.includes(text)), actions: [...card.querySelectorAll('.request__actions button')].map(button => button.textContent.trim()), recovery: [...card.querySelectorAll('.request__recovery button')].map(button => button.textContent.trim()), errors: window.__pageErrors } })()`)).toEqual({
+      age: false, stale: false, shown: ["Deletion requires review", "ses_child", "grq_child"], actions: ["Approve once", "Reject"], recovery: ["Cancel", "Retry"], errors: [],
+    })
+  } finally { await page.close(); await relay.stop() }
+})

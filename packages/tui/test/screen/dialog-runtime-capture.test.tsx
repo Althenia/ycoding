@@ -56,6 +56,7 @@ const guardrailRequest = {
   ruleIDs: ["standard.review.shell"],
   reason: "bash wants to write outside the workspace",
   standard: true,
+  created: Date.now(),
 }
 
 test("captures runtime dialog frames at reference dimensions", async () => {
@@ -89,7 +90,7 @@ test("captures complete bounded command and edit reviews without nested scroll o
         <RuntimeProviders>
           {action === "guardrail" ? <GuardrailPrompt request={{
             id: "guardrail_long", rootSessionID: "session_capture", sessionID: "session_capture", action: "shell",
-            resources: [lines.join("\n")], reason: "Review complete display-only command", ruleIDs: [], standard: true,
+            resources: [lines.join("\n")], reason: "Review complete display-only command", ruleIDs: [], standard: true, created: 1_000,
           }} /> : <PermissionPrompt request={{
             id: `permission_long_${action}`, sessionID: "session_capture", action,
             resources: [action === "shell" ? lines.join("\n") : "display-only.txt"],
@@ -260,9 +261,11 @@ function assertGuardrailGrammar(root: Renderable, rows: string[], width: number)
   expectAt(rows, choose.row + 1, title.column + 3, "Deny")
   expectAt(rows, choose.row + 3, title.column + 3, "Allow once")
   expectAt(rows, choose.row + 5, title.column + 3, "Allow for this session")
-  expectAt(rows, choose.row + 8, title.column + 3, "pgup/pgdn review")
-  expectAt(rows, choose.row + 9, title.column + 3, "you decide this review")
-  expect(choose.row + 9).toBeLessThan(rows.length)
+  expectAt(rows, choose.row + 7, title.column + 3, "Retry")
+  expectAt(rows, choose.row + 9, title.column + 3, "Cancel")
+  expectAt(rows, choose.row + 12, title.column + 3, "pgup/pgdn review")
+  expectAt(rows, choose.row + 13, title.column + 3, "you decide this review")
+  expect(choose.row + 13).toBeLessThan(rows.length)
   expectCenteredSelectionBand(panel, root, "session.guardrail.action.reject")
 }
 

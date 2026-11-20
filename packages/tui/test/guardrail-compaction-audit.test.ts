@@ -27,7 +27,7 @@ const dismissals: NonNullable<GuardrailStatusOutput["dismissals"]> = [0.98, 0.94
 }))
 const pending = {
   id: "grq_audit_pending", rootSessionID: sessionID, sessionID, action: "shell", resources: ["fixture action"],
-  ruleIDs: ["custom.review.fixture"], reason: "CURRENT PENDING HARD REVIEW", standard: false, hardReview: true,
+  ruleIDs: ["custom.review.fixture"], reason: "CURRENT PENDING HARD REVIEW", standard: false, created: 1_000, hardReview: true,
 }
 const covered: SessionMessageInfo = { type: "user", id: "msg_audit_covered", text: "COVERED CHAT", time: { created: 1 } }
 const retained: SessionMessageInfo = { type: "user", id: "msg_audit_retained", text: "RETAINED CHAT", time: { created: 100 } }

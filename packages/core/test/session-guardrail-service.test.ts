@@ -29,6 +29,7 @@ import { SessionStore } from "@ycoding-ai/core/session/store"
 import { ConfigAgentPlugin } from "@ycoding-ai/core/config/plugin/agent"
 import { asc, sql } from "drizzle-orm"
 import { ModelIncidentTable } from "@ycoding-ai/core/model-incident/sql"
+import { EventSequenceTable, EventTable } from "@ycoding-ai/core/event/sql"
 import { Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
@@ -96,6 +97,7 @@ function harness(input?: {
   const dismissals: unknown[] = []
   const replies: unknown[] = []
   const decisions: unknown[] = []
+  const ruleDecisions: unknown[] = []
   const escalations: unknown[] = []
   const asked: Guardrail.Request[] = []
   let replyGated = false
@@ -128,6 +130,7 @@ function harness(input?: {
           if (definition.type === Guardrail.Event.Replied.type && input?.failReply) return Effect.die("Reply publication failed")
           if (definition.type === Guardrail.Event.Replied.type) replies.push(data)
           if (definition.type === "session.guardrail.decided") decisions.push(data)
+          if (definition.type === Guardrail.Event.Decided.type) ruleDecisions.push(data)
           if (definition.type === "session.guardrail.dismissed") dismissals.push(data)
           if (definition.type === "session.guardrail.escalated") escalations.push(data)
           if (definition.type === "guardrail.asked") asked.push(Schema.decodeUnknownSync(Guardrail.Request)(data))
@@ -242,6 +245,7 @@ function harness(input?: {
     dismissals,
     replies,
     decisions,
+    ruleDecisions,
     escalations,
     asked,
     it: testEffect(Layer.mergeAll(SessionGuardrail.layer, seed).pipe(Layer.provideMerge(dependencies))),
@@ -730,6 +734,7 @@ describe("SessionGuardrail coordinator approval", () => {
       expect(yield* decide(service, standard.request)).toMatchObject({ outcome: "allowed", settled: true, via: "coordination" })
       yield* (yield* Fiber.join(standard.fiber)).release
       expect(yield* service.forSession(parentID)).toEqual([])
+      expect(owned.replies).toEqual([expect.objectContaining({ requestID: standard.request.id, reply: "once" })])
       const cases = [
         ["custom reviewed", { ruleIDs: ["custom-ask"], standard: false }, "explicit-decision:custom-review"],
         ["custom hard", { ruleIDs: ["custom-hard"], hardReview: true }, "explicit-decision:hard-review"],
@@ -765,6 +770,7 @@ describe("SessionGuardrail coordinator approval", () => {
       expect(yield* decide(service, pending.request)).toMatchObject({ outcome: "denied", settled: true, via: "guardrail-rules" })
       expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
       expect(yield* service.forSession(parentID)).toEqual([])
+      expect(denied.replies).toEqual([expect.objectContaining({ requestID: pending.request.id, reply: "reject" })])
     }),
   )
 
@@ -1859,3 +1865,190 @@ for (const reply of ["once", "always", "reject"] as const) {
     expect(native.choices).toEqual([])
   }))
 }
+
+describe("SessionGuardrail stuck review recovery", () => {
+  const failureText = (exit: Exit.Exit<unknown, unknown>) => Exit.isFailure(exit) ? exit.cause.toString() : ""
+  const incidents = Effect.gen(function* () {
+    const database = yield* Database.Service
+    return yield* database.db.select().from(ModelIncidentTable).all().pipe(Effect.orDie)
+  })
+
+  const stuck = harness({ guardrails: "auto" })
+  stuck.it.effect("a hard review under Auto stays pending without a reply and records its first-ask time", () =>
+    Effect.gen(function* () {
+      const service = yield* SessionGuardrail.Service
+      yield* TestClock.adjust("5 seconds")
+      const pending = yield* waitForRequest(service, hardReviewInput)
+      expect(pending.request).toMatchObject({ hardReview: true, created: 5_000 })
+      yield* TestClock.adjust("1 hour")
+      expect(pending.fiber.pollUnsafe()).toBeUndefined()
+      expect(yield* service.forSession(parentID)).toEqual([pending.request])
+      expect(yield* service.list()).toEqual([pending.request])
+      yield* service.cancel({ sessionID: parentID, requestID: pending.request.id })
+      expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
+    }),
+  )
+
+  const cancelled = harness({ guardrails: "manual", realAutonomy: true })
+  cancelled.it.effect("cancel fails the waiting action closed, records a durable cancelled decision, and adds no rejection", () =>
+    Effect.gen(function* () {
+      yield* cancelled.seed
+      const service = yield* SessionGuardrail.Service
+      const pending = yield* waitForRequest(service, { ...hardReviewInput, sessionID: childID })
+      yield* service.cancel({ sessionID: childID, requestID: pending.request.id })
+      const exit = yield* Fiber.await(pending.fiber)
+      expect(failureText(exit)).toContain("Guardrail review was cancelled. This action did not run.")
+      expect(yield* service.forSession(parentID)).toEqual([])
+      expect(cancelled.replies).toEqual([])
+      expect(cancelled.decisions).toEqual([{
+        sessionID: parentID, reviewSessionID: childID, requestID: pending.request.id, reply: "reject", reason: "cancelled",
+        ruleIDs: ["standard.review.project-deletion"],
+      }])
+      expect((yield* service.status(parentID)).decisions).toEqual([expect.objectContaining({ requestID: pending.request.id, reply: "reject", reason: "cancelled" })])
+      expect(yield* incidents).toEqual([])
+      expect((yield* service.cancel({ sessionID: childID, requestID: pending.request.id }).pipe(Effect.flip))._tag).toBe("Guardrail.RequestNotFoundError")
+
+      const again = yield* waitForRequest(service, { ...hardReviewInput, sessionID: childID })
+      expect(again.request.id).not.toBe(pending.request.id)
+      expect(again.fiber.pollUnsafe()).toBeUndefined()
+      yield* service.reply({ sessionID: childID, requestID: again.request.id, reply: "once" })
+      yield* (yield* Fiber.join(again.fiber)).release
+
+      const ordinary = yield* waitForRequest(service, ordinaryReview)
+      yield* service.cancel({ sessionID: parentID, requestID: ordinary.request.id })
+      expect(Exit.isFailure(yield* Fiber.await(ordinary.fiber))).toBe(true)
+      const repeated = yield* waitForRequest(service, ordinaryReview)
+      const snapshot = (yield* service.requestSnapshot(parentID, repeated.request.id))!
+      expect(yield* service.delegatedEligible({ sessionID: parentID, requestID: repeated.request.id, fingerprint: snapshot.fingerprint, reply: "once" })).toBe(true)
+      yield* service.cancel({ sessionID: parentID, requestID: repeated.request.id })
+      expect(Exit.isFailure(yield* Fiber.await(repeated.fiber))).toBe(true)
+      expect(yield* incidents).toEqual([])
+    }),
+  )
+
+  const unknown = harness({ guardrails: "manual" })
+  unknown.it.effect("cancel and retry refuse a request that is not pending", () =>
+    Effect.gen(function* () {
+      const service = yield* SessionGuardrail.Service
+      const requestID = Guardrail.RequestID.create("grq_guardrail_unknown")
+      expect((yield* service.cancel({ sessionID: parentID, requestID }).pipe(Effect.flip))._tag).toBe("Guardrail.RequestNotFoundError")
+      expect((yield* service.retry({ sessionID: parentID, requestID }).pipe(Effect.flip))._tag).toBe("Guardrail.RequestNotFoundError")
+    }),
+  )
+
+  const expiring = harness({
+    realAutonomy: true,
+    guardrails: "manual",
+    entries: [new Config.Document({ type: "document", info: Schema.decodeUnknownSync(Config.Info)({ guardrails: { hard_review_expiry_minutes: 2 } }) })],
+  })
+  expiring.it.effect("an unanswered hard review expires after the configured age and fails closed", () =>
+    Effect.gen(function* () {
+      yield* expiring.seed
+      const service = yield* SessionGuardrail.Service
+      const ordinary = yield* waitForRequest(service, ordinaryReview)
+      const hardFiber = yield* service.assert({ ...hardReviewInput, sessionID: childID }).pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+      const pending = { fiber: hardFiber, request: (yield* service.forSession(parentID)).find((request) => request.hardReview)! }
+      expect(pending.request).toBeDefined()
+      yield* TestClock.adjust("119 seconds")
+      expect(pending.fiber.pollUnsafe()).toBeUndefined()
+      yield* TestClock.adjust("1 second")
+      const exit = yield* Fiber.await(pending.fiber)
+      expect(failureText(exit)).toContain("Guardrail review expired after 2 minutes without a decision. This action did not run.")
+      expect(expiring.decisions).toEqual([expect.objectContaining({ requestID: pending.request.id, reply: "reject", reason: "expired" })])
+      expect(yield* incidents).toEqual([])
+      expect((yield* service.forSession(parentID)).map((request) => request.id)).toEqual([ordinary.request.id])
+      yield* TestClock.adjust("1 hour")
+      expect(ordinary.fiber.pollUnsafe()).toBeUndefined()
+      yield* service.reply({ sessionID: parentID, requestID: ordinary.request.id, reply: "reject" })
+      expect(Exit.isFailure(yield* Fiber.await(ordinary.fiber))).toBe(true)
+    }),
+  )
+
+  const defaultExpiry = harness({ guardrails: "manual" })
+  defaultExpiry.it.effect("hard reviews expire after 1440 minutes by default", () =>
+    Effect.gen(function* () {
+      const service = yield* SessionGuardrail.Service
+      const pending = yield* waitForRequest(service, hardReviewInput)
+      yield* TestClock.adjust("1439 minutes")
+      expect(pending.fiber.pollUnsafe()).toBeUndefined()
+      yield* TestClock.adjust("1 minute")
+      expect(failureText(yield* Fiber.await(pending.fiber))).toContain("expired after 1440 minutes")
+    }),
+  )
+
+  const retried = harness({ guardrails: "manual", realAutonomy: true })
+  retried.it.effect("retry re-presents the same pending review without settling it, and a later once reply settles it exactly once", () =>
+    Effect.gen(function* () {
+      yield* retried.seed
+      const service = yield* SessionGuardrail.Service
+      yield* TestClock.adjust("3 seconds")
+      const pending = yield* waitForRequest(service, hardReviewInput)
+      expect(pending.request.created).toBe(3_000)
+      const before = yield* service.status(parentID)
+      const ruleDecisionsBefore = retried.ruleDecisions.length
+      yield* TestClock.adjust("20 minutes")
+      for (const _ of [1, 2]) expect(yield* service.retry({ sessionID: parentID, requestID: pending.request.id })).toEqual(pending.request)
+      expect(retried.asked).toEqual([pending.request, pending.request, pending.request])
+      expect(retried.asked.map((request) => [request.id, request.created])).toEqual(Array(3).fill([pending.request.id, 3_000]))
+      expect(pending.fiber.pollUnsafe()).toBeUndefined()
+      expect(yield* service.forSession(parentID)).toEqual([pending.request])
+      expect(retried.replies).toEqual([])
+      expect(retried.ruleDecisions).toHaveLength(ruleDecisionsBefore)
+      expect(retried.decisions).toEqual([])
+      const after = yield* service.status(parentID)
+      expect(after.decisions).toBeUndefined()
+      expect({ approvals: after.approvals, blocked: after.blocked, counters: after.counters })
+        .toEqual({ approvals: before.approvals, blocked: before.blocked, counters: before.counters })
+      expect(yield* incidents).toEqual([])
+      yield* service.reply({ sessionID: parentID, requestID: pending.request.id, reply: "once" })
+      yield* (yield* Fiber.join(pending.fiber)).release
+      expect(retried.replies).toEqual([expect.objectContaining({ requestID: pending.request.id, reply: "once" })])
+      expect((yield* service.status(parentID)).approvals).toBe(before.approvals + 1)
+      expect((yield* service.reply({ sessionID: parentID, requestID: pending.request.id, reply: "once" }).pipe(Effect.flip))._tag).toBe("Guardrail.RequestNotFoundError")
+      expect((yield* service.retry({ sessionID: parentID, requestID: pending.request.id }).pipe(Effect.flip))._tag).toBe("Guardrail.RequestNotFoundError")
+      expect(retried.replies).toHaveLength(1)
+    }),
+  )
+
+  const legacy = harness({ guardrails: "manual", realAutonomy: true })
+  legacy.it.effect("v0.12.2 decided and review-item rows without created or reason replay through status and the review fold", () =>
+    Effect.gen(function* () {
+      yield* legacy.seed
+      const database = yield* Database.Service
+      const service = yield* SessionGuardrail.Service
+      const decided = {
+        sessionID: parentID, reviewSessionID: childID, requestID: "grq_legacy_decided", reply: "reject",
+        ruleIDs: ["standard.review.git-destructive"], source: { messageID: "msg_legacy", callID: "call_legacy" },
+      }
+      const deferred = {
+        sessionID: childID, itemID: "rvw_legacy", kind: "guardrail", reason: "defer_entry", origin: { requestID: "grq_legacy_review" },
+        payload: {
+          type: "guardrail", action: "shell", resources: ["git reset --hard"], ruleIDs: ["standard.review.git-destructive"],
+          reason: "Destructive Git", hardReview: true, directories: [], fingerprint: "a".repeat(64), requestID: "grq_legacy_review",
+        },
+      }
+      yield* database.db.insert(EventSequenceTable).values([{ aggregate_id: parentID, seq: 10_000 }, { aggregate_id: childID, seq: 10_000 }])
+        .onConflictDoNothing().run().pipe(Effect.orDie)
+      yield* database.db.insert(EventTable).values([
+        { id: "evt_legacy_decided" as EventRuntime.ID, aggregate_id: parentID, seq: 10_000, created: 5_000, type: EventRuntime.versionedType(SessionEvent.GuardrailDecided.type, 1), data: decided },
+        { id: "evt_legacy_review" as EventRuntime.ID, aggregate_id: childID, seq: 10_000, created: 6_000, type: EventRuntime.versionedType(SessionEvent.Review.Deferred.type, 1), data: deferred },
+      ]).run().pipe(Effect.orDie)
+      const status = yield* service.status(parentID)
+      expect(status.decisions).toHaveLength(1)
+      expect<unknown>(Object.fromEntries(Object.entries(status.decisions![0]!).filter(([, value]) => value !== undefined))).toEqual({
+        sessionID: childID, created: 5_000, requestID: "grq_legacy_decided", reply: "reject",
+        ruleIDs: ["standard.review.git-destructive"], source: { messageID: "msg_legacy", callID: "call_legacy" },
+      })
+      expect<unknown>(Schema.encodeSync(Guardrail.Status)(status).decisions).toEqual([{
+        sessionID: childID, created: 5_000, requestID: "grq_legacy_decided", reply: "reject",
+        ruleIDs: ["standard.review.git-destructive"], source: { messageID: "msg_legacy", callID: "call_legacy" },
+      }])
+      const items = yield* SessionReviewFold.fold(database.db, [childID])
+      expect<unknown>(items).toEqual([{
+        itemID: "rvw_legacy", sessionID: childID, kind: "guardrail", reason: "defer_entry", origin: { requestID: "grq_legacy_review" },
+        payload: deferred.payload, created: 6_000, consumed: false, revision: 10_000,
+      }])
+    }),
+  )
+})

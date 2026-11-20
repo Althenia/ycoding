@@ -34,6 +34,7 @@ import { humanReviewText, readGradedAnswers } from "../decision-grades"
 import { DecisionGrades, DecisionProvenance } from "./decision-grades"
 import { ProjectEscalationNote } from "./project-escalation"
 import { guardrailHeading } from "./guardrail-label"
+import { guardrailWaiting } from "../guardrail-wait"
 import { Markdown } from "./markdown"
 import { DotTrail } from "./dot-trail"
 import { SharedCompactionDivider, SharedDeliveryStatus, SharedMessageTurn, SharedTurnHead } from "./shared-workspace"
@@ -406,6 +407,8 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
     const message = props.message()
     return message.kind === "synthetic" && message.description ? message.description : systemText(message)
   }
+  const dotsDelivery = () => { const message = props.message(); return message.kind === "user" ? message.dotsDelivery : undefined }
+  const dotOrigin = () => steer() !== undefined || dotsDelivery() !== undefined
   const steerDeliveryState = () => {
     const message = props.message()
     return steer() !== undefined && message.kind === "synthetic" && message.pending ? (message.delivery ?? "steer") : undefined
@@ -413,7 +416,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
   return (
     <Show when={kind() !== "notice"} fallback={<p class="notice">{noticeText(props.message())}</p>}>
       <Show when={!hiddenEmptySteer()}>
-      <SharedMessageTurn kind={kind()} bubble={steer() !== undefined} origin={steer() !== undefined ? "chatgpt" : undefined} copyText={copyText()} articleLabel={steer() !== undefined ? "Dot steer prompt" : undefined} deliveryState={steerDeliveryState()} markdownText={steer()?.text ?? (display().text || undefined)} bubbleAttachments={display().images.length > 0 || display().files.length > 0 ? <>
+      <SharedMessageTurn kind={kind()} bubble={steer() !== undefined} origin={dotOrigin() ? "chatgpt" : undefined} steer={steer() !== undefined || dotsDelivery() === "steer"} copyText={copyText()} articleLabel={steer() !== undefined ? "Dot steer prompt" : undefined} deliveryState={steerDeliveryState()} markdownText={steer()?.text ?? (display().text || undefined)} bubbleAttachments={display().images.length > 0 || display().files.length > 0 ? <>
             <Show when={display().images.length > 0}><span class="transcript-message__images" aria-label={`${display().images.length} attached image${display().images.length === 1 ? "" : "s"}`} role="group">
               <For each={imageKeys()}>{(key) => {
                 const image = () => display().images[Number(key.slice(0, key.indexOf(":")))]!
@@ -457,6 +460,10 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
   const review = () => { const request = props.request(); return request.kind === "guardrail" ? request : undefined }
   const permission = () => { const request = props.request(); return request.kind === "permission" ? request : undefined }
   const permissionView = () => { const request = permission(); return request ? permissionDisplay(request) : undefined }
+  const [clock, setClock] = createSignal(Date.now())
+  const ticker = setInterval(() => setClock(Date.now()), 15_000)
+  onCleanup(() => clearInterval(ticker))
+  const waiting = () => guardrailWaiting(review()?.created, clock())
 
   return (
     <article class={`request request--${props.request().kind}${isHardReview(props.request()) ? " request--hard" : ""}`} aria-live="polite">
@@ -517,7 +524,8 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
         </p>
         <Show when={review()?.escalation}>{(escalation) => <><p class="request__note" role="status">{humanReviewText(escalation())}</p><Show when={escalation().grades?.length}><DecisionGrades grades={escalation().grades ?? []} selected={escalation().choice} /></Show></>}</Show>
         <Show when={review()?.projectEscalation}>{(escalation) => <ProjectEscalationNote escalation={escalation()} />}</Show>
-        <p class="request__note">Owning Session: <code>{review()?.sessionID}</code></p>
+        <Show when={waiting()}>{(age) => <p class="request__note request__waiting"><span data-guardrail-age>{age().label}</span><Show when={age().stale}><span class="request__badge request__badge--stale" data-guardrail-stale>Stale</span></Show></p>}</Show>
+        <p class="request__note">Owning Session: <code>{review()?.sessionID}</code> · Request: <code>{review()?.id}</code></p>
         <Show when={review()?.resources.length}><p class="request__body">Targets / command: <For each={review()?.resources}>{(resource) => <code>{resource}</code>}</For></p></Show>
         <Show when={review()?.metadata}><details class="request__body"><summary>Review details</summary><pre class="output">{JSON.stringify(review()?.metadata, null, 2)}</pre></details></Show>
         <Show when={!canReply()}>
@@ -525,6 +533,11 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
         </Show>
         <Show when={!guardrailContextAvailable(props.request())}><p class="request__note">No concrete targets or command are reported. Reject this review or reload before approving.</p></Show>
         <Show when={reply()}><p class="request__note" role="status">{reply()?.state === "sending" ? "Sending human decision…" : reply()?.detail}</p></Show>
+        <div class="request__footer">
+        <div class="request__recovery" role="group" aria-label="Review recovery">
+          <button type="button" class="button button--secondary button--small" disabled={disabled()} onClick={() => void remote.store.cancelGuardrail(props.request().id)}>Cancel</button>
+          <button type="button" class="button button--ghost button--small" disabled={disabled()} onClick={() => void remote.store.retryGuardrail(props.request().id)}>Retry</button>
+        </div>
         <div class="request__actions">
           <button
             type="button"
@@ -552,6 +565,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
           >
             Reject
           </button>
+        </div>
         </div>
       </Show>
 

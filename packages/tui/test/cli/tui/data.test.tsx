@@ -2220,7 +2220,7 @@ test("hydrates and updates root-family guardrail reviews", async () => {
     resources: ["git reset --hard"],
     ruleIDs: ["standard.review.git-destructive"],
     reason: "Destructive Git operation",
-    standard: true,
+    standard: true, created: 1_000,
   }
   const calls = createFetch((url) => {
     if (url.pathname === "/api/session/ses_root/guardrail/request") return json({ data: [initial] })
@@ -2278,7 +2278,7 @@ test("hydrates and updates root-family guardrail reviews", async () => {
         resources: ["npm publish"],
         ruleIDs: ["standard.review.release"],
         reason: "Package publishing",
-        standard: true,
+        standard: true, created: 1_000,
       },
     })
     await wait(() => data.session.guardrail.list("ses_root").length === 2)
@@ -2298,6 +2298,144 @@ test("hydrates and updates root-family guardrail reviews", async () => {
     expect(data.session.guardrail.list("ses_root")[0]?.id).toBe("grq_live")
   } finally {
     app.renderer.destroy()
+  }
+})
+
+function guardrailStatus(rootSessionID: string) {
+  return json({
+    data: { rootSessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [], decisions: [] },
+  })
+}
+
+function waitingGuardrail(id: string, rootSessionID = "ses_root", created = 1_000) {
+  return {
+    id,
+    rootSessionID,
+    sessionID: rootSessionID,
+    action: "shell",
+    resources: ["rm -rf ."],
+    ruleIDs: ["standard.review.broad-deletion"],
+    reason: "Recursive deletion includes the current project",
+    standard: true,
+    hardReview: true,
+    created,
+  }
+}
+
+async function mountGuardrails(respond: (url: URL) => Response | undefined) {
+  const events = createEventStream()
+  const calls = createFetch((url) => respond(url), events)
+  let data!: ReturnType<typeof useData>
+  let client!: ReturnType<typeof useClient>
+  function Probe() {
+    data = useData()
+    client = useClient()
+    return <box />
+  }
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+  await wait(() => client.connection.status() === "connected")
+  return { app, events, data: () => data }
+}
+
+for (const reason of [undefined, "cancelled", "expired"] as const) {
+  test(`guardrail.cancelled ${reason === undefined ? "without a reason" : `for ${reason}`} removes the waiting review and keeps the others`, async () => {
+    const pending = [waitingGuardrail("grq_one"), waitingGuardrail("grq_two")]
+    const view = await mountGuardrails((url) =>
+      url.pathname === "/api/session/ses_root/guardrail/request"
+        ? json({ data: pending })
+        : url.pathname === "/api/session/ses_root/guardrail"
+          ? guardrailStatus("ses_root")
+          : undefined,
+    )
+    try {
+      await view.data().session.guardrail.sync("ses_root")
+      expect(view.data().session.guardrail.list("ses_root").map((request) => request.id)).toEqual(["grq_one", "grq_two"])
+      emitEvent(view.events, {
+        id: "evt_guardrail_cancelled",
+        created: 0,
+        type: "guardrail.cancelled",
+        data: { rootSessionID: "ses_root", sessionID: "ses_root", requestID: "grq_one", ...(reason ? { reason } : {}) },
+      })
+      await wait(() => view.data().session.guardrail.list("ses_root").length === 1)
+      expect(view.data().session.guardrail.list("ses_root")[0]?.id).toBe("grq_two")
+    } finally {
+      view.app.renderer.destroy()
+    }
+  })
+}
+
+test("reconnect re-lists pending guardrail reviews for every cached root so a missed event leaves no ghost card", async () => {
+  let pending = [waitingGuardrail("grq_ghost", "ses_other")]
+  const view = await mountGuardrails((url) =>
+    url.pathname === "/api/session/ses_other/guardrail/request"
+      ? json({ data: pending })
+      : url.pathname === "/api/session/ses_other/guardrail"
+        ? guardrailStatus("ses_other")
+        : undefined,
+  )
+  try {
+    await view.data().session.guardrail.sync("ses_other")
+    expect(view.data().session.guardrail.list("ses_other").map((request) => request.id)).toEqual(["grq_ghost"])
+    pending = []
+    emitEvent(view.events, { id: "evt_reconnected", type: "server.connected", sourceEpoch: "test_epoch", data: {} })
+    await wait(() => view.data().session.guardrail.list("ses_other").length === 0)
+  } finally {
+    view.app.renderer.destroy()
+  }
+})
+
+test("re-presenting a pending review keeps one card with its original age, with or without created", async () => {
+  const withAge = waitingGuardrail("grq_aged", "ses_root", 1_000)
+  const { created: _created, ...legacy } = waitingGuardrail("grq_legacy", "ses_root")
+  const view = await mountGuardrails((url) =>
+    url.pathname === "/api/session/ses_root/guardrail/request"
+      ? json({ data: [withAge, legacy] })
+      : url.pathname === "/api/session/ses_root/guardrail"
+        ? guardrailStatus("ses_root")
+        : undefined,
+  )
+  try {
+    await view.data().session.guardrail.sync("ses_root")
+    emitEvent(view.events, { id: "evt_asked_again", created: 5_000, type: "guardrail.asked", data: withAge })
+    emitEvent(view.events, { id: "evt_asked_legacy_again", created: 5_001, type: "guardrail.asked", data: legacy })
+    await view.data().session.guardrail.refresh("ses_root")
+    const list = view.data().session.guardrail.list("ses_root")
+    expect(list.map((request) => request.id)).toEqual(["grq_aged", "grq_legacy"])
+    expect(list[0]?.created).toBe(1_000)
+    expect(list[1]).not.toHaveProperty("created")
+  } finally {
+    view.app.renderer.destroy()
+  }
+})
+
+test("remove drops one settled review without touching the others and refresh re-reads the pending list", async () => {
+  let pending = [waitingGuardrail("grq_one"), waitingGuardrail("grq_two")]
+  const view = await mountGuardrails((url) =>
+    url.pathname === "/api/session/ses_root/guardrail/request"
+      ? json({ data: pending })
+      : url.pathname === "/api/session/ses_root/guardrail"
+        ? guardrailStatus("ses_root")
+        : undefined,
+  )
+  try {
+    await view.data().session.guardrail.sync("ses_root")
+    view.data().session.guardrail.remove("ses_root", "grq_one")
+    expect(view.data().session.guardrail.list("ses_root").map((request) => request.id)).toEqual(["grq_two"])
+    pending = [waitingGuardrail("grq_two", "ses_root", 9_000)]
+    await view.data().session.guardrail.refresh("ses_root")
+    expect(view.data().session.guardrail.list("ses_root")[0]?.created).toBe(9_000)
+  } finally {
+    view.app.renderer.destroy()
   }
 })
 
@@ -2602,7 +2740,7 @@ test("hydrates review items, follows review events, and drops deferred live requ
     resources: ["rm -rf build"],
     ruleIDs: ["standard.review.outside-repository"],
     reason: "Outside work",
-    standard: true,
+    standard: true, created: 1_000,
   }
   const calls = createFetch(async (url) => {
     if (url.pathname === "/api/session/ses_root") {

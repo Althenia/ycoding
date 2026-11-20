@@ -68,7 +68,7 @@ const guardrailRequest = {
   resources: ["/etc/hosts"],
   ruleIDs: ["workspace"],
   reason: "write outside workspace",
-  standard: true,
+  standard: true, created: 1_000,
 }
 
 const yoloGoal: SessionAutonomyView = localAutonomyView(autonomyState({ permissions: "yolo", guardrails: "yolo", answers: "yolo", goal: { text: "Keep todos in the sidebar", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 } }))
@@ -795,7 +795,7 @@ test.each([sessionID, "ses_provenance_child"])("renders only %s rejections in ti
           { sessionID: "ses_provenance_child", created: 40, eventID: "evt_child_order", ruleID: "standard.review.project-deletion", confidence: 0.96 },
         ],
       } })
-      if (/\/guardrail\/request$/.test(url.pathname)) return json({ data: [{ id: "grq_family_pending", rootSessionID: sessionID, sessionID: "ses_provenance_child", action: "shell", resources: ["pending"], ruleIDs: ["custom-pending"], reason: "FAMILY PENDING REVIEW", standard: false }] })
+      if (/\/guardrail\/request$/.test(url.pathname)) return json({ data: [{ id: "grq_family_pending", rootSessionID: sessionID, sessionID: "ses_provenance_child", action: "shell", resources: ["pending"], ruleIDs: ["custom-pending"], reason: "FAMILY PENDING REVIEW", standard: false, created: 1_000 }] })
       const mapped = new URL(url)
       mapped.pathname = mapped.pathname.replace(viewID, sessionID)
       return base(mapped)

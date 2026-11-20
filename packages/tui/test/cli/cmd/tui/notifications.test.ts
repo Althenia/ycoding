@@ -313,7 +313,7 @@ function guardrail(
     resources: [],
     ruleIDs: [],
     reason: "Guardrail review",
-    standard: true,
+    standard: true, created: 1_000,
   }
 }
 

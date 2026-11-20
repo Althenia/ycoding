@@ -63,6 +63,8 @@ export type TelemetryRequestSample = {
     | "session.guardrail.status"
     | "session.guardrail.request.list"
     | "session.guardrail.reply"
+    | "session.guardrail.cancel"
+    | "session.guardrail.retry"
     | "session.review.list"
     | "session.review.decide"
     | "session.form.list"
@@ -373,6 +375,8 @@ export type DecisionFailureReason =
 export type GuardrailDecisionChoice = "allow" | "deny" | "escalate" | "approve_all" | "approve" | "reject"
 
 export type GuardrailReply = "once" | "always" | "reject"
+
+export type GuardrailClosedReason = "cancelled" | "expired"
 
 export type PermissionReply = "once" | "always" | "reject"
 
@@ -1498,16 +1502,6 @@ export type PermissionCancelled = {
   data: { sessionID: string; requestID: string }
 }
 
-export type GuardrailCancelled = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "guardrail.cancelled"
-  location?: LocationRef
-  data: { rootSessionID: string; sessionID: string; requestID: string }
-}
-
 export type PluginAdded = {
   id: string
   created: number
@@ -2257,6 +2251,16 @@ export type SessionReviewReason =
   | "restart"
 
 export type GuardrailGrade = { choice: GuardrailDecisionChoice; confidence: number; evidence: string }
+
+export type GuardrailCancelled = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "guardrail.cancelled"
+  location?: LocationRef
+  data: { rootSessionID: string; sessionID: string; requestID: string; reason?: GuardrailClosedReason }
+}
 
 export type PermissionReplied = {
   id: string
@@ -3344,6 +3348,7 @@ export type SessionGuardrailDecided = {
     confidence?: number
     ruleIDs?: Array<string>
     source?: GuardrailSource
+    reason?: GuardrailClosedReason
     actor?: "coordinator"
     coordinatorSessionID?: string
     groupID?: string
@@ -3917,6 +3922,7 @@ export type GuardrailAsked = {
   location?: LocationRef
   data: {
     id: string
+    created?: number
     rootSessionID: string
     sessionID: string
     action: string
@@ -4850,6 +4856,7 @@ export type SessionLogItem =
         confidence?: number
         ruleIDs?: Array<string>
         source?: GuardrailSource
+        reason?: GuardrailClosedReason
         actor?: "coordinator"
         coordinatorSessionID?: string
         groupID?: string
@@ -6265,6 +6272,8 @@ export type ServerTelemetryAppendInput = {
             | "session.guardrail.status"
             | "session.guardrail.request.list"
             | "session.guardrail.reply"
+            | "session.guardrail.cancel"
+            | "session.guardrail.retry"
             | "session.review.list"
             | "session.review.decide"
             | "session.form.list"
@@ -8192,6 +8201,7 @@ export type GuardrailStatusOutput = {
       grades?: Array<GuardrailGrade>
       ruleIDs?: Array<string>
       source?: GuardrailSource
+      reason?: GuardrailClosedReason
     }>
   }
 }["data"]
@@ -8201,6 +8211,7 @@ export type GuardrailRequestListInput = { readonly sessionID: { readonly session
 export type GuardrailRequestListOutput = {
   data: Array<{
     id: string
+    created?: number
     rootSessionID: string
     sessionID: string
     action: string
@@ -8224,6 +8235,38 @@ export type GuardrailRequestReplyInput = {
 }
 
 export type GuardrailRequestReplyOutput = void
+
+export type GuardrailRequestCancelInput = {
+  readonly sessionID: { readonly sessionID: string; readonly requestID: string }["sessionID"]
+  readonly requestID: { readonly sessionID: string; readonly requestID: string }["requestID"]
+}
+
+export type GuardrailRequestCancelOutput = void
+
+export type GuardrailRequestRetryInput = {
+  readonly sessionID: { readonly sessionID: string; readonly requestID: string }["sessionID"]
+  readonly requestID: { readonly sessionID: string; readonly requestID: string }["requestID"]
+}
+
+export type GuardrailRequestRetryOutput = {
+  data: {
+    id: string
+    created?: number
+    rootSessionID: string
+    sessionID: string
+    action: string
+    resources: Array<string>
+    ruleIDs: Array<string>
+    reason: string
+    standard: boolean
+    hardReview?: boolean
+    risk?: GuardrailRisk
+    escalation?: GuardrailEscalation
+    coordinationEscalation?: CoordinationEscalation
+    metadata?: { [x: string]: JsonValue }
+    source?: GuardrailSource
+  }
+}["data"]
 
 export type MessageListInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 

@@ -147,6 +147,10 @@ import type {
   GuardrailRequestListOutput,
   GuardrailRequestReplyInput,
   GuardrailRequestReplyOutput,
+  GuardrailRequestCancelInput,
+  GuardrailRequestCancelOutput,
+  GuardrailRequestRetryInput,
+  GuardrailRequestRetryOutput,
   MessageListInput,
   MessageListOutput,
   MessageCapturedInputsInput,
@@ -1564,6 +1568,28 @@ export function make(options: ClientOptions) {
             },
             requestOptions,
           ),
+        cancel: (input: GuardrailRequestCancelInput, requestOptions?: RequestOptions) =>
+          request<GuardrailRequestCancelOutput>(
+            {
+              method: "POST",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/guardrail/request/${encodeURIComponent(input.requestID)}/cancel`,
+              successStatus: 204,
+              declaredStatuses: [404, 400, 401],
+              empty: true,
+            },
+            requestOptions,
+          ),
+        retry: (input: GuardrailRequestRetryInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: GuardrailRequestRetryOutput }>(
+            {
+              method: "POST",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/guardrail/request/${encodeURIComponent(input.requestID)}/retry`,
+              successStatus: 200,
+              declaredStatuses: [404, 400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
       },
     },
     message: {

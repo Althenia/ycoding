@@ -8,25 +8,29 @@ export function ImagePreview(props: { readonly src: string; readonly name: strin
   const [failed, setFailed] = createSignal(false)
   const [open, setOpen] = createSignal(false)
   const source = createMemo(() => props.src)
+  let trigger: HTMLButtonElement | undefined
   createEffect(() => { source(); setFailed(false) })
   return <>
     <Show when={!failed()} fallback={<div class="transcript-image__unavailable" role="status">Image unavailable <button type="button" onClick={() => setFailed(false)}>Retry {props.name}</button></div>}>
-      <button type="button" class="transcript-image" data-cursor="zoom-in" aria-label={`Open image ${props.name}`} onClick={() => setOpen(true)}>
+      <button ref={trigger} type="button" class="transcript-image" data-cursor="zoom-in" aria-label={`Open image ${props.name}`} onClick={() => setOpen(true)}>
         <img src={props.src} alt={props.name} loading="lazy" onError={() => setFailed(true)} />
       </button>
     </Show>
-    <Show when={open()}><ImageLightbox src={props.src} name={props.name} onClose={() => setOpen(false)} /></Show>
+    <Show when={open()}><ImageLightbox src={props.src} name={props.name} opener={trigger} onClose={() => setOpen(false)} /></Show>
   </>
 }
 
-function ImageLightbox(props: { readonly src: string; readonly name: string; readonly onClose: () => void }) {
+function ImageLightbox(props: { readonly src: string; readonly name: string; readonly opener?: HTMLElement; readonly onClose: () => void }) {
+  const opener = props.opener
   let dialog: HTMLDialogElement | undefined
   let closeButton: HTMLButtonElement | undefined
   onMount(() => dialog?.showModal())
-  onCleanup(() => { if (dialog?.open) dialog.close() })
-  return <dialog ref={dialog} class="overlay overlay--dialog transcript-lightbox" data-cursor="action" aria-label={`Image: ${props.name}`} onCancel={props.onClose} onClose={props.onClose} onClick={(event) => { if (event.target === event.currentTarget) props.onClose() }} onKeyDown={(event) => { if (event.key === "Tab") { event.preventDefault(); closeButton?.focus() } }}>
+  let disposed = false
+  const close = () => { if (!disposed) props.onClose() }
+  onCleanup(() => { disposed = true; if (dialog?.open) dialog.close(); if (opener?.isConnected) opener.focus({ preventScroll: true }) })
+  return <dialog ref={dialog} class="overlay overlay--dialog transcript-lightbox" data-cursor="action" role="dialog" aria-modal="true" aria-label={`Image: ${props.name}`} onCancel={close} onClose={close} onClick={(event) => { if (event.target === event.currentTarget) close() }} onKeyDown={(event) => { if (event.key === "Tab") { event.preventDefault(); closeButton?.focus() } }}>
     <div class="overlay__surface" data-cursor="surface">
-      <div class="overlay__head"><span class="overlay__title">Image: {props.name}</span><button ref={closeButton} type="button" class="button button--ghost button--icon overlay__close" aria-label="Close image" onClick={props.onClose}><Icon name="close" /></button></div>
+      <div class="overlay__head"><span class="overlay__title">Image: {props.name}</span><button ref={closeButton} type="button" class="button button--ghost button--icon overlay__close" aria-label="Close image" onClick={close}><Icon name="close" /></button></div>
       <div class="overlay__body"><img src={props.src} alt={props.name} /></div>
     </div>
   </dialog>

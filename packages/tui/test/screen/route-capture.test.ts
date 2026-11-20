@@ -65,7 +65,7 @@ const guardrails = [
     resources: ["../provider-cache.md"],
     ruleIDs: ["workspace-write"],
     reason: "write outside workspace",
-    standard: true,
+    standard: true, created: 1_000,
   },
 ]
 const subagents = [

@@ -34,6 +34,22 @@ export const replyGuardrail = (service: SessionGuardrail.Interface, input: Sessi
     }),
   )
 
+export const cancelGuardrail = (service: SessionGuardrail.Interface, input: SessionGuardrail.RequestInput) =>
+  service.cancel(input).pipe(
+    Effect.catchTags({
+      "Session.NotFoundError": sessionNotFound,
+      "Guardrail.RequestNotFoundError": () => requestNotFound(input.requestID),
+    }),
+  )
+
+export const retryGuardrail = (service: SessionGuardrail.Interface, input: SessionGuardrail.RequestInput) =>
+  service.retry(input).pipe(
+    Effect.catchTags({
+      "Session.NotFoundError": sessionNotFound,
+      "Guardrail.RequestNotFoundError": () => requestNotFound(input.requestID),
+    }),
+  )
+
 export const GuardrailHandler = HttpApiBuilder.group(Api, "server.guardrail", (handlers) =>
   Effect.gen(function* () {
     return handlers
@@ -61,6 +77,21 @@ export const GuardrailHandler = HttpApiBuilder.group(Api, "server.guardrail", (h
             reply: ctx.payload.reply,
           })
           return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
+        "session.guardrail.request.cancel",
+        Effect.fn(function* (ctx) {
+          const guardrail = yield* SessionGuardrail.Service
+          yield* cancelGuardrail(guardrail, { sessionID: ctx.params.sessionID, requestID: ctx.params.requestID })
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
+        "session.guardrail.request.retry",
+        Effect.fn(function* (ctx) {
+          const guardrail = yield* SessionGuardrail.Service
+          return { data: yield* retryGuardrail(guardrail, { sessionID: ctx.params.sessionID, requestID: ctx.params.requestID }) }
         }),
       )
   }),

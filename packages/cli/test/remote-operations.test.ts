@@ -2530,6 +2530,31 @@ describe("family-wide guardrail reviews", () => {
       args: ["ses_1", { directory: "/work" }, "grq_child", "reject"],
     })
   })
+
+  test("cancels and re-presents only a review pending for the verified Session family", async () => {
+    const review = { id: "grq_mine", created: 1, sessionID: "ses_1", rootSessionID: "ses_1" }
+    const { local, registry, subscriptions, calls } = await harness({
+      results: {
+        guardrailRequestList: async () => ({ data: [review] }),
+        guardrailCancel: async () => undefined,
+        guardrailRetry: async () => review,
+      },
+    })
+    for (const operation of ["session.guardrail.cancel", "session.guardrail.retry"] as const) {
+      const before = calls.length
+      const unknown = await executeRemoteOperation({ request: request(operation, { requestID: "grq_missing" }), sessions: registry, subscriptions, local })
+      expect(errorOf(unknown).code).toBe("invalid_message")
+      expect(calls.slice(before).some((call) => call.method === "guardrailCancel" || call.method === "guardrailRetry")).toBe(false)
+      const extra = await executeRemoteOperation({ request: request(operation, { requestID: "grq_mine", reply: "once" }), sessions: registry, subscriptions, local })
+      expect(errorOf(extra).code).toBe("invalid_message")
+    }
+    const retried = await executeRemoteOperation({ request: request("session.guardrail.retry", { requestID: "grq_mine" }), sessions: registry, subscriptions, local })
+    expect(valueOf(retried)).toEqual({ data: review })
+    expect(calls.at(-1)).toEqual({ method: "guardrailRetry", args: ["ses_1", { directory: "/work" }, "grq_mine"] })
+    const cancelled = await executeRemoteOperation({ request: request("session.guardrail.cancel", { requestID: "grq_mine" }), sessions: registry, subscriptions, local })
+    expect(valueOf(cancelled)).toBeNull()
+    expect(calls.at(-1)).toEqual({ method: "guardrailCancel", args: ["ses_1", { directory: "/work" }, "grq_mine"] })
+  })
 })
 
 describe("session review box", () => {

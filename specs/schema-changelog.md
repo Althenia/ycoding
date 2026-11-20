@@ -2,6 +2,14 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-11-20: Guardrail review recovery and Dot input origin
+
+- `Guardrail.Request` accepts optional `created` (epoch milliseconds of the first ask); this runtime always sets it, and requests from earlier backends decode without it. Add `Guardrail.staleAfterMs` (900 000) and `Guardrail.ClosedReason` (`"cancelled" | "expired"`). `guardrail.cancelled`, `session.guardrail.decided` and `Guardrail.Status.decisions[]` accept optional `reason: ClosedReason`.
+- Add `session.guardrail.request.cancel` (`POST /api/session/:sessionID/guardrail/request/:requestID/cancel`, `204`) and `session.guardrail.request.retry` (`POST .../retry`, `200 { data: Guardrail.Request }`), both `404 GuardrailRequestNotFoundError`. Retry re-presents the same pending review. It re-publishes guardrail.asked for the unchanged request (same id, same created) and returns it. It never approves, rejects or settles the review and never runs its command. The review stays pending until a reply, cancel or expiry. Add relay operations `session.guardrail.cancel` and `session.guardrail.retry` with input `{ requestID }` and add both to `Telemetry.Operation`.
+- Add `guardrails.hard_review_expiry_minutes` (positive integer, default 1440).
+- Add `SessionMessage.DotsInput` (`{ origin: "dots-native", delivery }`), carried as `metadata.dotsInput` on native Dots prompts.
+- Regenerate the Promise and Effect clients from Protocol.
+
 ## 2026-11-20: Pending input withdrawal and steer
 
 - Add durable `session.input.withdrawn.1` and `session.input.steered.1` (`{ sessionID, inputID }`). Withdrawal deletes the unconsumed user `session_pending` row; steering sets its delivery to `steer`.

@@ -77,7 +77,7 @@ const sceneParticipant = (sessionID: string) => ({ sessionID, title: sessionID =
 const sceneGroup = { id: "cgrp_synthetic", name: "Synthetic project", revision: 1, active: true, master: sceneParticipant("ses_test"), members: [sceneParticipant("ses_other")], settings: { concurrency: 2 }, time: { created: 1, updated: 2 } }
 const sceneAutonomy = { mode: "normal", permissions: "manual", guardrails: "auto", answers: "manual", goal: { text: "Verify the synthetic pagination change", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3, lastProgressDigest: null }, defer: null, effective: { permissions: "manual", guardrails: "auto", answers: "manual", inherited: {}, deferred: false, guardrailsEnabled: true } }
 const scenePermission = { id: "per_scene", sessionID: "ses_test", action: "edit", resources: ["src/pagination.ts"], save: ["src/**"] }
-const sceneGuardrail = { id: "grq_scene", rootSessionID: "ses_test", sessionID: "ses_test", action: "shell", resources: ["bun test test/pagination.test.ts"], ruleIDs: ["synthetic.review"], reason: "Review the synthetic verification command", standard: true, hardReview: true }
+const sceneGuardrail = { id: "grq_scene", created: 1, rootSessionID: "ses_test", sessionID: "ses_test", action: "shell", resources: ["bun test test/pagination.test.ts"], ruleIDs: ["synthetic.review"], reason: "Review the synthetic verification command", standard: true, hardReview: true }
 const scenePatch = { path: "src/pagination.ts", patch: "@@ -1 +1 @@\n-const pageSize = 10\n+const pageSize = 20", additions: 1, deletions: 1 }
 const scenePty = { id: "pty_scene", title: "Synthetic terminal", command: "sh", args: [], cwd: "/synthetic/repo", sessionID: "ses_test", status: "running", pid: 101, generation: 1, size: { rows: 24, cols: 80 }, control: { owner: "user", fence: 1 }, output: { startOffset: 0, endOffset: 27, truncated: false }, limits: { maxRuntimeSeconds: 60, maxRetainedBytes: 1024, maxInputBytes: 1024 } }
 
@@ -2705,7 +2705,8 @@ test("Desktop polish renders genuine Dot steer events as right-aligned prompt bu
           steerArticleClasses: steerArticle ? [...steerArticle.classList] : [],
           steerHasUserClass: Boolean(steerArticle?.classList.contains('transcript-message--user') || steerLabeled?.classList.contains('transcript-message--user')),
           steerLabel: (steerArticle?.getAttribute('aria-label') || steerLabeled?.getAttribute('aria-label')) ?? '',
-          steerText: steerBubble?.textContent?.trim() ?? '',
+          steerText: steerBubble?.querySelector('.transcript-message__bubble-text')?.textContent?.trim() ?? '',
+          steerMarker: steerBubble?.querySelector('.transcript-message__steer')?.textContent?.trim() ?? '',
           steerReceipt: steer?.querySelector('.transcript-message__receipt')?.textContent?.trim() ?? '',
           steerReceiptLabel: steer?.querySelector('.transcript-message__receipt')?.getAttribute('aria-label') ?? '',
           steerBg: steerBubble ? getComputedStyle(steerBubble).backgroundColor : '',
@@ -2732,6 +2733,7 @@ test("Desktop polish renders genuine Dot steer events as right-aligned prompt bu
       expect(state.steerArticleClasses).toContain("transcript-message--synthetic")
       expect(state.steerHasUserClass).toBe(true)
       expect(state.steerLabel).toBe("Dot steer prompt")
+      expect(state.steerMarker).toBe("Steer")
       expect(state.steerText).toBe("Install and verify the pinned official Argo CD MCP in Work project config by checking the project settings and docs first.")
       expect(state.steerText).not.toContain("<shared-context>")
       expect(state.steerText).not.toContain("<system-update>")
@@ -4248,3 +4250,121 @@ test("rendered parity discards a file lookup after its mention closes and never 
     expect(await page.evaluate(`document.querySelector('.composer-suggestions').textContent.includes('src/slow.ts')`)).toBe(false)
   } finally { slow.resolve(); fast.resolve(); fileGate = undefined; await page.close() }
 }, 30_000)
+
+const desktopSnapshot = (messages: readonly unknown[]) => ({ sourceEpoch: "synthetic", session: session("ses_test"), watermark: { type: "log.synced", aggregateID: "ses_test", seq: 1000 }, messages })
+const desktopReply = { id: "msg_response", type: "assistant", sessionID: "ses_test", agent: "god", model: { providerID: "synthetic", id: "echo" }, content: [{ type: "text", text: "Reviewed." }], time: { created: 90, completed: 91 } }
+
+test("Desktop sent image thumbnails open a modal full-size preview that closes by button, backdrop and Escape and returns focus to the thumbnail", async () => {
+  prepareImplementedSurface()
+  const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"><rect width="640" height="400" fill="#2f7a55"/></svg>`).toString("base64")
+  const digest = "c".repeat(64)
+  sceneRead = call => call.route === "/api/session/ses_test/snapshot"
+    ? desktopSnapshot([{ id: "msg_image", type: "user", sessionID: "ses_test", text: "See the screenshot", files: [{ content: { type: "managed", digest, bytes: 128, path: `attachments/sha256/cc/${digest}` }, mime: "image/svg+xml", name: "screen.svg" }], time: { created: 1 } }, desktopReply])
+    : call.route === `/api/session/ses_test/attachment/${digest}` ? { mime: "image/svg+xml", bytes: 128, data: svg } : undefined
+  const page = await open(`document.querySelector('#turn-msg_image .transcript-message__image-button img')?.complete`)
+  try {
+    await page.setViewport(1440, 900)
+    const opened = `document.querySelector('dialog.desktop-dialog[data-kind="image"][open] .desktop-image-preview')?.complete`
+    const thumbnail = `document.querySelector('#turn-msg_image .transcript-message__image-button')`
+    expect(await page.evaluate(`(() => { const button = ${thumbnail}; return { label: button.getAttribute('aria-label'), popup: button.getAttribute('aria-haspopup'), alt: button.querySelector('img').alt } })()`, decodeRecord)).toEqual({ label: "Open image screen.svg", popup: "dialog", alt: "screen.svg" })
+    for (const dismiss of ["close", "backdrop", "escape"] as const) {
+      await page.evaluate(`${thumbnail}.click()`)
+      await wait(page, opened)
+      expect(await page.evaluate(`(() => { const dialog = document.querySelector('dialog.desktop-dialog[data-kind="image"]'); const image = dialog.querySelector('.desktop-image-preview'); return { name: document.getElementById(dialog.getAttribute('aria-labelledby')).textContent, modal: dialog.matches(':modal'), alt: image.alt, natural: [image.naturalWidth, image.naturalHeight], shown: [image.width, image.height] } })()`, decodeRecord)).toEqual({ name: "Image: screen.svg", modal: true, alt: "screen.svg", natural: [640, 400], shown: [640, 400] })
+      if (dismiss === "close") await page.evaluate(`document.querySelector('dialog.desktop-dialog[data-kind="image"] .desktop-dialog__close').click()`)
+      if (dismiss === "backdrop") { await page.mouse("mousePressed", 6, 6); await page.mouse("mouseReleased", 6, 6) }
+      if (dismiss === "escape") await page.pressKey("Escape", "Escape", 27, "")
+      await wait(page, `!document.querySelector('dialog.desktop-dialog[data-kind="image"]') && document.activeElement === ${thumbnail}`)
+    }
+    expect(await page.evaluate(`window.__desktopFixture.errors`)).toEqual([])
+  } finally { await page.close() }
+})
+
+test("Desktop marks Dot-originated steer prompts with a Steer marker beside the Dot mark while queued Dot input and ordinary prompts stay unmarked", async () => {
+  prepareImplementedSurface()
+  const dots = (delivery: string, origin = "dots-native") => ({ inputOrigin: "direct", dotsInput: { origin, delivery } })
+  sceneRead = call => call.route === "/api/session/ses_test/snapshot" ? desktopSnapshot([
+    { id: "msg_human", type: "user", sessionID: "ses_test", text: "Ordinary typed prompt", time: { created: 1 } },
+    { id: "msg_dot_steer", type: "user", sessionID: "ses_test", text: "Steer from the Dot", metadata: dots("steer"), time: { created: 2 } },
+    { id: "msg_dot_queue", type: "user", sessionID: "ses_test", text: "Queued from the Dot", metadata: dots("queue"), time: { created: 3 } },
+    { id: "msg_forged", type: "user", sessionID: "ses_test", text: "Caller-supplied origin", metadata: dots("steer", "remote"), time: { created: 4 } },
+    { id: "msg_dot_synthetic", type: "synthetic", sessionID: "ses_test", description: "Dot steer", text: "Synthetic Dot steer text", time: { created: 5 } },
+    desktopReply,
+  ]) : undefined
+  const page = await open()
+  try {
+    await page.setViewport(1440, 900)
+    await settleR7(page)
+    expect(await page.evaluate(`Object.fromEntries(["msg_human", "msg_dot_steer", "msg_dot_queue", "msg_forged", "msg_dot_synthetic"].map(id => {
+      const row = document.getElementById('turn-' + id)
+      const avatar = row?.querySelector('.transcript-message__origin'), marker = row?.querySelector('.transcript-message__steer')
+      const a = avatar?.getBoundingClientRect(), m = marker?.getBoundingClientRect()
+      return [id, { avatar: avatar?.getAttribute('aria-label') ?? null, marker: marker?.textContent.trim() ?? null, text: row?.querySelector('.transcript-message__bubble-text')?.textContent.trim() ?? null, beside: Boolean(a && m && m.left >= a.right && m.left - a.right <= 8 && Math.abs((m.top + m.bottom) / 2 - (a.top + a.bottom) / 2) <= 1) }]
+    }))`, decodeRecord)).toEqual({
+      msg_human: { avatar: null, marker: null, text: "Ordinary typed prompt", beside: false },
+      msg_dot_steer: { avatar: "ChatGPT", marker: "Steer", text: "Steer from the Dot", beside: true },
+      msg_dot_queue: { avatar: "ChatGPT", marker: null, text: "Queued from the Dot", beside: false },
+      msg_forged: { avatar: null, marker: null, text: "Caller-supplied origin", beside: false },
+      msg_dot_synthetic: { avatar: "ChatGPT", marker: "Steer", text: "Synthetic Dot steer text", beside: true },
+    })
+  } finally { await page.close() }
+})
+
+test("Desktop hard review cards show waiting age, stale state and identities, recover by Retry and Cancel, and drop on not-found and cancellation", async () => {
+  prepareImplementedSurface()
+  const stale = { ...sceneGuardrail, id: "grq_stale", created: Date.now() - 16 * 60_000 }
+  let guardrails: unknown[] = [stale]
+  let decisions: unknown[] = []
+  sceneRead = call => {
+    if (call.method === "GET" && call.route === "/api/session/ses_test/guardrail/request") return { data: guardrails }
+    if (call.method === "GET" && call.route === "/api/session/ses_test/guardrail") return { data: { rootSessionID: "ses_test", profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [], decisions } }
+    if (call.method === "POST" && call.route === "/api/session/ses_test/guardrail/request/grq_stale/retry") return { data: stale }
+    if (call.method === "POST" && call.route === "/api/session/ses_test/guardrail/request/grq_stale/cancel") { guardrails = []; decisions = [{ sessionID: "ses_test", created: 3, requestID: "grq_stale", reply: "reject", reason: "cancelled", ruleIDs: ["synthetic.review"] }]; return new Response(null, { status: 204 }) }
+    return undefined
+  }
+  const card = `document.querySelector('[data-guardrail-request="grq_stale"]')`
+  const posts = () => owned!.calls.filter(call => call.method === "POST" && call.route.includes("/guardrail/request/")).map(call => call.route)
+  const page = await open(card)
+  try {
+    expect(await page.evaluate(`(() => { const card = ${card}; return { age: card.querySelector('[data-guardrail-age]').textContent.trim(), stale: card.querySelector('[data-guardrail-stale]')?.textContent.trim() ?? '', ids: [...card.querySelectorAll('.request__ids dd')].map(item => item.textContent.trim()), recovery: [...card.querySelectorAll('.request__recovery button')].map(button => button.textContent.trim()), decisions: [...card.querySelectorAll('.desktop__actions button')].map(button => button.textContent.trim()) } })()`, decodeRecord)).toEqual({ age: "Waiting 16 min", stale: "Stale", ids: ["ses_test", "grq_stale"], recovery: ["Cancel", "Retry"], decisions: ["Approve", "Deny"] })
+    const recover = (label: string) => page.evaluate(`[...${card}.querySelectorAll('.request__recovery button')].find(button => button.textContent.trim() === ${JSON.stringify(label)}).click()`)
+    await recover("Retry")
+    await wait(page, `${card} && [...${card}.querySelectorAll('.request__recovery button')].every(button => !button.disabled)`)
+    expect(posts()).toEqual(["/api/session/ses_test/guardrail/request/grq_stale/retry"])
+    const reads = await page.evaluate(`window.__desktopFixture.completed.requests`)
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'guardrail.asked', data: ${JSON.stringify(stale)} })`)
+    await wait(page, `window.__desktopFixture.completed.requests > ${JSON.stringify(reads)}`)
+    expect(await page.evaluate(`(() => { const cards = document.querySelectorAll('[data-guardrail-request="grq_stale"]'); return { cards: cards.length, age: cards[0]?.querySelector('[data-guardrail-age]')?.textContent.trim() ?? '', stale: cards[0]?.querySelector('[data-guardrail-stale]')?.textContent.trim() ?? '', notices: [...document.querySelectorAll('.requests [role="status"], .requests [role="alert"]')].map(item => item.textContent) } })()`, decodeRecord)).toEqual({ cards: 1, age: "Waiting 16 min", stale: "Stale", notices: [] })
+    await recover("Cancel")
+    await wait(page, `!${card} && document.querySelector('[data-guardrail-closed]')?.textContent === 'Guardrail review cancelled. The action did not run.'`)
+    expect(posts()).toEqual(["/api/session/ses_test/guardrail/request/grq_stale/retry", "/api/session/ses_test/guardrail/request/grq_stale/cancel"])
+
+    guardrails = [stale]; decisions = []
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'guardrail.asked', data: { ...${JSON.stringify(stale)} } })`)
+    await wait(page, card)
+    guardrails = []
+    await recover("Cancel")
+    await wait(page, `!${card} && [...document.querySelectorAll('.requests [role="status"]')].some(item => item.textContent.includes('no longer pending'))`)
+    expect(posts()).toHaveLength(2)
+
+    guardrails = [stale]
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'guardrail.asked', data: { ...${JSON.stringify(stale)} } })`)
+    await wait(page, card)
+    guardrails = []
+    await page.evaluate(`window.__desktopFixture.emit({ type: 'guardrail.cancelled', data: { rootSessionID: 'ses_test', sessionID: 'ses_test', requestID: 'grq_stale' } })`)
+    await wait(page, `!${card}`)
+    expect(posts()).toHaveLength(2)
+    expect(await page.evaluate(`window.__desktopFixture.errors`)).toEqual([])
+  } finally { await page.close() }
+})
+
+test("Desktop renders a pending hard review without a creation time with its reason, IDs and actions and no waiting age", async () => {
+  prepareImplementedSurface()
+  const { created: _created, ...legacy } = { ...sceneGuardrail, id: "grq_legacy" }
+  sceneRead = call => call.method === "GET" && call.route === "/api/session/ses_test/guardrail/request" ? { data: [legacy] } : undefined
+  const card = `document.querySelector('[data-guardrail-request="grq_legacy"]')`
+  const page = await open(card)
+  try {
+    expect(await page.evaluate(`(() => { const card = ${card}; return { age: card.querySelector('[data-guardrail-age]') !== null, stale: card.querySelector('[data-guardrail-stale]') !== null, reason: card.textContent.includes('Review the synthetic verification command'), ids: [...card.querySelectorAll('.request__ids dd')].map(item => item.textContent.trim()), recovery: [...card.querySelectorAll('.request__recovery button')].map(button => button.textContent.trim()), decisions: [...card.querySelectorAll('.desktop__actions button')].map(button => button.textContent.trim()), errors: window.__desktopFixture.errors } })()`, decodeRecord)).toEqual({ age: false, stale: false, reason: true, ids: ["ses_test", "grq_legacy"], recovery: ["Cancel", "Retry"], decisions: ["Approve", "Deny"], errors: [] })
+  } finally { await page.close() }
+})

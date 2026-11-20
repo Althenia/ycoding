@@ -400,8 +400,9 @@ export function reduceSessionRows(
     )
     .map((item) => {
       const model = item.authority === "baseline" ? "baseline decision model" : item.authority === "yolo" ? "YOLO decision model" : "decision model"
-      const decided =
-        item.choice === "approve" || item.choice === "approve_all" || item.choice === "allow"
+      const decided = item.reason
+        ? `${item.reason} · action did not run`
+        : item.choice === "approve" || item.choice === "approve_all" || item.choice === "allow"
           ? `${model} ${item.choice.replaceAll("_", " ")} · ${item.confidence?.toString() ?? "unreported"} · rejected`
           : `${model} rejected · ${item.confidence?.toString() ?? "confidence unreported"}`
       return {

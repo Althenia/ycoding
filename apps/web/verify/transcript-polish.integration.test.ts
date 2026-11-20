@@ -79,6 +79,28 @@ describe("inline images", () => {
       expect(await page.evaluate(`document.querySelector('dialog.transcript-lightbox').getAttribute('aria-label')`)).toBe("Image: layout-1.png")
     } finally { await page.close() }
   }, 30_000)
+
+  test("a sent thumbnail opens the full-size image fitted to the viewport and Close, Escape and the backdrop dismiss it back to the thumbnail", async () => {
+    const page = await open("light", "&images=1")
+    try {
+      const thumbnail = `document.querySelector('.transcript-message__bubble .transcript-image')`
+      const opened = `document.querySelector('dialog.transcript-lightbox[open]')`
+      await page.evaluate(`${thumbnail}.scrollIntoView({ block: 'center' })`)
+      await until(page, `${thumbnail}?.querySelector('img')?.complete === true`)
+      for (const dismiss of ["close", "escape", "backdrop"] as const) {
+        await page.evaluate(`${thumbnail}.focus(); ${thumbnail}.click()`)
+        await until(page, `${opened}?.querySelector('.overlay__body img')?.complete === true`)
+        await until(page, `${opened}.getAnimations({ subtree: true }).every((animation) => animation.playState !== 'running')`)
+        const dialog = await page.evaluate(`(() => { const d = ${opened}; const image = d.querySelector('.overlay__body img'); const box = image.getBoundingClientRect(); return { role: d.getAttribute('role'), modal: d.getAttribute('aria-modal'), label: d.getAttribute('aria-label'), close: d.querySelector('.overlay__close')?.getAttribute('aria-label') ?? '', fitted: box.width <= innerWidth && box.height <= innerHeight && (box.width >= Math.min(image.naturalWidth, innerWidth * 0.9) || box.height >= Math.min(image.naturalHeight, innerHeight * 0.75)), full: image.src === ${thumbnail}.querySelector('img').src } })()`)
+        expect(dialog).toEqual({ role: "dialog", modal: "true", label: "Image: layout-1.png", close: "Close image", fitted: true, full: true })
+        if (dismiss === "close") await page.evaluate(`${opened}.querySelector('.overlay__close').click()`)
+        if (dismiss === "escape") await page.pressEscape()
+        if (dismiss === "backdrop") await page.evaluate(`${opened}.dispatchEvent(new MouseEvent('click', { bubbles: true }))`)
+        await until(page, `${opened} === null`)
+        expect(await page.evaluate(`document.activeElement === ${thumbnail}`)).toBe(true)
+      }
+    } finally { await page.close() }
+  }, 30_000)
 })
 
 describe("disclosure motion", () => {

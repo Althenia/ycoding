@@ -175,24 +175,54 @@ test("Session lifecycle routes preserve explicit targets, project forks and reje
   } finally { await owned.close() }
 })
 
-test("guardrail and review replies re-read pending identity and use the owning Session without echoing metadata", async () => {
+test("guardrail replies, recovery and review decisions re-read pending identity and use the owning Session without echoing metadata", async () => {
   const owned = await syntheticDesktop((call) => {
     if (call.route.endsWith("/permission") || call.route.endsWith("/form") || call.route.endsWith("/question")) return { data: [] }
-    if (call.route.endsWith("/guardrail/request")) return { data: [{ id: "grq_test", sessionID: "ses_child", rootSessionID: "ses_test", action: "edit", resources: [], ruleIDs: [], reason: "Review", standard: true, metadata: extra, ...extra }] }
+    if (call.route.endsWith("/guardrail/request")) return { data: [{ id: "grq_test", created: 1, sessionID: "ses_child", rootSessionID: "ses_test", action: "edit", resources: [], ruleIDs: [], reason: "Review", standard: true, metadata: extra, ...extra }] }
+    if (call.route.endsWith("/grq_test/cancel")) return new Response(null, { status: 204 })
+    if (call.route.endsWith("/grq_test/retry")) return { data: { id: "grq_test", created: 1, sessionID: "ses_child", rootSessionID: "ses_test", action: "edit", resources: [], ruleIDs: [], reason: "Review", standard: true } }
     if (call.route.endsWith("/review")) return { data: [{ itemID: "rvw_test", sessionID: "ses_child", rootSessionID: "ses_test", sessionTitle: "Child", kind: "recovery", reason: "restart", created: 1, origin: { requestID: "recovery" }, payload: { type: "recovery", tools: [{ messageID: "msg_test", callID: "call", name: "shell" }] }, ...extra }] }
     return undefined
   })
   try {
     const pending = await owned.controller.requests("ses_test")
     expect(pending.guardrails?.[0]?.id).toBe("grq_test")
+    expect(pending.guardrails?.[0]?.created).toBe(1)
     expect(pending.reviews?.[0]?.itemID).toBe("rvw_test")
     safe(pending)
     await owned.controller.reply({ kind: "guardrail", sessionID: "ses_test", revision: owned.revision, requestID: "grq_test", reply: "reject" })
+    await owned.controller.reply({ kind: "guardrail-recovery", sessionID: "ses_test", revision: owned.revision, requestID: "grq_test", action: "retry" })
+    await owned.controller.reply({ kind: "guardrail-recovery", sessionID: "ses_test", revision: owned.revision, requestID: "grq_test", action: "cancel" })
+    await expect(owned.controller.reply({ kind: "guardrail-recovery", sessionID: "ses_test", revision: owned.revision, requestID: "grq_missing", action: "cancel" })).rejects.toThrow("This request is no longer pending. Refresh requests.")
+    await expect(owned.controller.reply({ kind: "guardrail-recovery", sessionID: "ses_test", revision: owned.revision, requestID: "grq_test", action: "approve" })).rejects.toThrow()
     await owned.controller.reply({ kind: "review", sessionID: "ses_test", revision: owned.revision, itemID: "rvw_test", decision: { kind: "recovery", choice: "stop" } })
     expect(owned.calls.filter((call) => call.method === "POST").map((call) => [call.route, call.body])).toEqual([
       ["/api/session/ses_child/guardrail/request/grq_test/reply", { reply: "reject" }],
+      ["/api/session/ses_child/guardrail/request/grq_test/retry", {}],
+      ["/api/session/ses_child/guardrail/request/grq_test/cancel", {}],
       ["/api/session/ses_child/review/rvw_test/decide", { decision: { kind: "recovery", choice: "stop" } }],
     ])
+  } finally { await owned.close() }
+})
+
+test("a guardrail request without a creation time is accepted, an invalid one is rejected, and recovery never posts a reply", async () => {
+  let created: unknown
+  const request = () => ({ id: "grq_old", ...(created === undefined ? {} : { created }), sessionID: "ses_test", rootSessionID: "ses_test", action: "shell", resources: ["rm -rf trash"], ruleIDs: ["standard.review"], reason: "Deletion", standard: true, hardReview: true })
+  const owned = await syntheticDesktop((call) => {
+    if (call.route.endsWith("/permission") || call.route.endsWith("/form") || call.route.endsWith("/question") || call.route.endsWith("/review")) return { data: [] }
+    if (call.route.endsWith("/guardrail/request")) return { data: [request()] }
+    if (call.route.endsWith("/grq_old/retry")) return { data: request() }
+    if (call.route.endsWith("/grq_old/cancel")) return new Response(null, { status: 204 })
+    return undefined
+  })
+  try {
+    expect((await owned.controller.requests("ses_test")).guardrails).toEqual([{ id: "grq_old", sessionID: "ses_test", rootSessionID: "ses_test", action: "shell", resources: ["rm -rf trash"], ruleIDs: ["standard.review"], reason: "Deletion", standard: true, hardReview: true }])
+    created = -1
+    await expect(owned.controller.requests("ses_test")).rejects.toThrow("The backend returned an invalid guardrail request.")
+    created = undefined
+    await owned.controller.reply({ kind: "guardrail-recovery", sessionID: "ses_test", revision: owned.revision, requestID: "grq_old", action: "retry" })
+    await owned.controller.reply({ kind: "guardrail-recovery", sessionID: "ses_test", revision: owned.revision, requestID: "grq_old", action: "cancel" })
+    expect(owned.calls.filter((call) => call.method === "POST").map((call) => call.route)).toEqual(["/api/session/ses_test/guardrail/request/grq_old/retry", "/api/session/ses_test/guardrail/request/grq_old/cancel"])
   } finally { await owned.close() }
 })
 
