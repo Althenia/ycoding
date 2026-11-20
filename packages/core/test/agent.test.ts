@@ -275,6 +275,29 @@ describe("Agent", () => {
     }),
   )
 
+  it.effect("states done-includes-cleanup once in the shared guidance of every maintained built-in agent", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
+        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
+      )
+
+      const rule =
+        "- Done includes cleanup: remove the completed task's unused outputs, files, caches and temporary files. After verifying its merge with git merge-base --is-ancestor <branch> <target> and a clean git status, remove that task's worktree with git worktree remove <path> (never --force) and its branch with git branch -d (never force-delete). Preserve active, shared and unmerged work and a recovery path for everything removed."
+      for (const id of ["zeus", "GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein"]) {
+        const item = yield* agent.get(Agent.ID.make(id))
+        if (!item?.system) throw new Error(`expected ${id} with a system prompt`)
+        expect(item.system.split(rule)).toHaveLength(2)
+        expect(item.system.indexOf(rule)).toBeGreaterThan(item.system.indexOf("Evidence and delivery:"))
+        expect(item.system.indexOf(rule)).toBeLessThan(item.system.indexOf("Tools and recovery:"))
+        expect(item.system).not.toContain("leave nothing behind")
+        expect(item.system).not.toContain("git worktree prune")
+        expect(item.system.split("git worktree remove")).toHaveLength(2)
+        expect(item.system.split("git branch -d")).toHaveLength(2)
+      }
+    }),
+  )
+
   it.effect("places each shared guidance paragraph once before the role in every maintained built-in agent", () =>
     Effect.gen(function* () {
       const agent = yield* Agent.Service
@@ -511,7 +534,6 @@ describe("Agent", () => {
         "get, report, complete, stop or clear", "Never change objective text",
         "notifications", "do not poll", "serialize only for a real dependency, shared file, or approval, never for ceremony, handoffs, slots, or resource limitations",
         "git worktree remove <path>", "never --force",
-        "As part of completion or integration, leave nothing behind: remove unused temporary files, remove completed or merged worktrees with git worktree remove <path> (never --force) and prune dead registrations with git worktree prune, and delete completed or merged local branches with git branch -d (never force-delete unmerged unique work); preserve dirty, active or unmerged unique work.",
         "bounded judgments", "not approval, a user answer or completion evidence",
       ]
       for (const id of ["GSD", "architech", "god", "yangi"]) {
