@@ -22,6 +22,20 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.12.3",
+    date: "2026-11-20",
+    title: "Recover stuck hard reviews",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Hard reviews show how long they have been waiting and flag stale requests. The TUI shows the review reason, Session ID, and request ID." },
+      { tag: "Added", text: "Retry shows the same pending hard review again without approving or running the action. Cancel closes the review without running the action." },
+      { tag: "Added", text: "Click a sent image thumbnail on Web or Desktop to open a full-size preview. Use Close, press Escape, or click the backdrop to dismiss it." },
+      { tag: "Changed", text: "On Web and Desktop, prompts steered through Dots show a Steer label beside the ChatGPT badge. Ordinary Dot messages do not show the label." },
+      { tag: "Fixed", text: "Unanswered hard reviews expire after 24 hours by default without running the action. Set `guardrails.hard_review_expiry_minutes` to change the limit." },
+      { tag: "Fixed", text: "Settled guardrail reviews clear from the waiting list. The TUI refreshes pending reviews when it reconnects." },
+    ],
+  },
+  {
     version: "0.12.2",
     date: "2026-11-20",
     title: "Queued message tray, Markdown code cards and a steadier composer",
